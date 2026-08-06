@@ -5,6 +5,9 @@ node_modules/
 dist/
 test-results/
 
+# Python venv created by setup.ps1
+.venv/
+
 # StarCraft binaries/assets — NEVER commit game files (hard project rule)
 game/
 *.exe

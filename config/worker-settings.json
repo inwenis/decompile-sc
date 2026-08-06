@@ -1,0 +1,98 @@
+{
+  "statusLine": {
+    "type": "command",
+    "command": "pwsh -NoProfile -File C:/git/decompile-sc/config/worker-statusline.ps1"
+  },
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Edit",
+      "Write",
+      "NotebookEdit",
+      "Bash",
+      "PowerShell",
+      "WebFetch",
+      "WebSearch",
+      "ToolSearch",
+      "Task",
+      "TodoWrite",
+      "EnterWorktree",
+      "ExitWorktree",
+      "Monitor",
+      "mcp__claude-in-chrome"
+    ],
+    "ask": [
+      "Bash(rm:*)",
+      "Bash(rmdir:*)",
+      "Bash(del:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean:*)",
+      "Bash(git branch -D:*)",
+      "Bash(git worktree remove:*)",
+      "Bash(gh repo delete:*)",
+      "Bash(gh pr merge:*)",
+      "PowerShell(Remove-Item:*)",
+      "PowerShell(rm:*)",
+      "PowerShell(del:*)",
+      "PowerShell(rd:*)",
+      "PowerShell(Stop-Process:*)",
+      "PowerShell(kill:*)",
+      "PowerShell(taskkill:*)",
+      "PowerShell(Clear-Content:*)",
+      "PowerShell(Stop-Computer:*)",
+      "PowerShell(Restart-Computer:*)",
+      "PowerShell(git push --force:*)",
+      "PowerShell(git push -f:*)",
+      "PowerShell(git reset --hard:*)",
+      "PowerShell(git clean:*)",
+      "PowerShell(git branch -D:*)",
+      "PowerShell(git worktree remove:*)",
+      "PowerShell(gh repo delete:*)",
+      "PowerShell(gh pr merge:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -File C:/git/decompile-sc/config/guard-destructive.ps1"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -File C:/git/decompile-sc/config/guard-scope.ps1"
+          }
+        ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -File C:/git/decompile-sc/config/guard-no-terminal-questions.ps1"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -File C:/git/decompile-sc/config/heartbeat.ps1 -Phase Pre"
+          }
+        ]
+      }
+    ]
+  }
+}
