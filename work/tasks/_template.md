@@ -19,6 +19,11 @@ pr: -
   or message the conductor first.
 - NEVER delete/overwrite anything under C:/git/decompile-sc/work/messages/
   (2026-07-17 data-loss incident class — real user messages live there).
+- C:/git/conductor and C:/git/conductor-task* are ANOTHER LIVE SYSTEM (a
+  separate orchestrator with in-flight agents and real user messages).
+  NEVER read, modify, cd into, or run git/gh against them — off-limits
+  absolutely (guard hooks also enforce this). Your world is
+  C:/git/decompile-sc and your own worktree only.
 
 ## Game-file rules (project hard rules)
 

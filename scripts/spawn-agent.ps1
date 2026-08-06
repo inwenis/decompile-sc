@@ -49,9 +49,12 @@ if (-not $Title) { $Title = [IO.Path]::GetFileNameWithoutExtension($taskPath) }
 # ground rule 6: a worktree is one command from working -- if WorkDir is a
 # worktree that has never been set up, run setup.ps1 there before the worker
 # starts so it opens productive instead of discovering the gap itself.
-$nodeModulesExists = Test-Path -LiteralPath (Join-Path $WorkDir 'node_modules')
-if (Test-NeedsSetup -WorkDir $WorkDir -ConductorRepo $conductorRepo -NodeModulesExists $nodeModulesExists) {
-    Write-Host "spawn-agent: $WorkDir has no node_modules -- running setup.ps1 there first"
+# Sentinel is the .venv python setup.ps1 creates (this repo has no Node
+# build -- the upstream node_modules sentinel never appeared here, so setup
+# re-ran on every spawn; bootstrap review).
+$setupSentinelExists = Test-Path -LiteralPath (Join-Path $WorkDir '.venv/Scripts/python.exe')
+if (Test-NeedsSetup -WorkDir $WorkDir -ConductorRepo $conductorRepo -SetupSentinelExists $setupSentinelExists) {
+    Write-Host "spawn-agent: $WorkDir has no .venv -- running setup.ps1 there first"
     Push-Location $WorkDir
     try { & (Join-Path $WorkDir 'setup.ps1') }
     finally { Pop-Location }
@@ -89,15 +92,24 @@ $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command)
 
 $pwshPid = Start-WtTabResolvePid -Title $Title -WorkDir $WorkDir -Encoded $encoded -NewWindow:$NewWindow
 
+# PID-reuse guard (bootstrap review): record the live process's StartTime so
+# stop-agent/reap-agent can verify pid identity before tree-killing -- a
+# reboot/crash leaves a stale pid Windows may hand to an unrelated process.
+$pwshStartTime = $null
+if ($pwshPid) {
+    try { $pwshStartTime = (Get-Process -Id $pwshPid -ErrorAction Stop).StartTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ') } catch {}
+}
+
 # record the tab so it can be stopped/resumed later
 $regPath = Get-AgentRegistryPath -Root (Get-DataRoot -RepoRoot $conductorRepo) -Task $taskId
 Write-AgentRegistryEntry -Path $regPath -Entry @{
-    task      = $taskId
-    taskFile  = $taskPathFwd
-    workDir   = ($WorkDir -replace '\\', '/')
-    pwshPid   = $pwshPid
-    sessionId = $sessionId
-    spawnedAt = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+    task          = $taskId
+    taskFile      = $taskPathFwd
+    workDir       = ($WorkDir -replace '\\', '/')
+    pwshPid       = $pwshPid
+    pwshStartTime = $pwshStartTime
+    sessionId     = $sessionId
+    spawnedAt     = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
 }
 
 Write-Host "spawned tab '$Title'"

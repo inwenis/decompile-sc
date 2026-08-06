@@ -22,6 +22,31 @@ game/
 *.grp
 *.dat.bin
 
+# MPQ extraction output (audio/video/gfx/fonts/string tables/data tables)
+extracted/
+assets/
+*.wav
+*.smk
+*.pcx
+*.fnt
+*.tbl
+*.spk
+*.lo?
+*.dat
+
+# maps
+*.scm
+*.scx
+
+# memory dumps / raw binary blobs
+*.dmp
+*.bin
+*.mem
+
+# IDA databases (embed the analyzed binary byte-for-byte)
+*.idb
+*.i64
+
 # Ghidra
 ghidra_projects/
 *.gpr

@@ -51,9 +51,15 @@ if ($IfDone) {
 }
 
 $pwshPid = $entry.pwshPid
-if ($pwshPid -and (Test-ProcessAlive -ProcessId ([int]$pwshPid))) {
+# Identity check before killing (bootstrap review): a stale registry pid may
+# have been reused by an UNRELATED process after a crash/reboot -- never
+# tree-kill without confirming it is still the recorded pwsh.
+if ($pwshPid -and (Test-ProcessMatchesRegistryEntry -ProcessId ([int]$pwshPid) -Entry $entry)) {
     Write-Host "killing pwsh tree PID $pwshPid (tab closes) ..."
     Stop-ProcessTree -ProcessId ([int]$pwshPid) | ForEach-Object { Write-Host "  $_" }
+}
+elseif ($pwshPid -and (Test-ProcessAlive -ProcessId ([int]$pwshPid))) {
+    Write-Host "pwsh PID $pwshPid exists but does NOT match the registry entry (pid reuse after crash/reboot?) -- refusing to kill it; marking entry stopped."
 }
 else {
     Write-Host "pwsh PID $pwshPid already gone (or unrecorded) -- nothing to kill."

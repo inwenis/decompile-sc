@@ -96,14 +96,22 @@ $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command)
 $title = "$taskId-resumed"
 $pwshPid = Start-WtTabResolvePid -Title $title -WorkDir $workDir -Encoded $encoded -NewWindow:$NewWindow
 
+# PID-reuse guard (bootstrap review): record StartTime for identity checks,
+# same as spawn-agent.ps1.
+$pwshStartTime = $null
+if ($pwshPid) {
+    try { $pwshStartTime = (Get-Process -Id $pwshPid -ErrorAction Stop).StartTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ') } catch {}
+}
+
 Write-AgentRegistryEntry -Path $regPath -Entry @{
-    task      = $entry.task
-    taskFile  = $entry.taskFile
-    workDir   = $workDir
-    pwshPid   = $pwshPid
-    spawnedAt = $entry.spawnedAt
-    sessionId = $sessionId
-    resumedAt = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+    task          = $entry.task
+    taskFile      = $entry.taskFile
+    workDir       = $workDir
+    pwshPid       = $pwshPid
+    pwshStartTime = $pwshStartTime
+    spawnedAt     = $entry.spawnedAt
+    sessionId     = $sessionId
+    resumedAt     = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
 }
 
 Write-Host "resumed task $taskId"

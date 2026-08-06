@@ -31,9 +31,12 @@
 #     - its worktree            C:/git/decompile-sc-taskNNN/**
 #     - its task file           C:/git/decompile-sc/work/tasks/NNN-*.md
 #     - its report              C:/git/decompile-sc/work/reports/NNN-*.md
-#     - messaging (any spelling) **/messages/**
-#     - scratch (any spelling)  **/scratch/**
+#     - messaging               C:/git/decompile-sc/work/messages/** (new files only)
+#     - scratch                 C:/git/decompile-sc/work/scratch/**
 #     everything else -> DENY.
+#   ALL lanes: C:/git/conductor + C:/git/conductor-task* (the LIVE conductor
+#   system) are hard-denied, and existing files under any messages/ tree are
+#   never edited/overwritten (2026-07-17 incident class).
 #   conductor (no AGENT_TASK, no EXPLORER_RUN_DIR):
 #     - product code in the MAIN checkout: C:/git/decompile-sc/src/**,
 #       C:/git/decompile-sc/e2e/** -> DENY ("cut a task", ground rule 8)
@@ -74,6 +77,40 @@ try {
     $repoRoot = 'C:/git/decompile-sc'
     $agentTask = $env:AGENT_TASK
 
+    # HARD FENCE, every lane (bootstrap review): C:/git/conductor and its
+    # worktrees are ANOTHER LIVE SYSTEM with ~25 in-flight agents and real
+    # user messages. No agent in this repo ever writes there.
+    if ($normalized -match '(^|/)git/conductor($|[-/])') {
+        @{
+            hookSpecificOutput = @{
+                hookEventName            = 'PreToolUse'
+                permissionDecision       = 'deny'
+                permissionDecisionReason = "guard-scope: '$filePath' is inside C:/git/conductor (or one of its worktrees) -- that is the LIVE conductor system, off-limits from decompile-sc. Touching it is a data-loss incident."
+            }
+        } | ConvertTo-Json -Depth 5
+        exit 0
+    }
+
+    # messages/ never-overwrite rule, every lane (2026-07-17 incident class):
+    # real user messages live under messages/ trees. Editing an existing
+    # message file, or Write-ing over one, is silent message loss -- only the
+    # CREATION of a new file is a legitimate Edit/Write there (sends). Moves
+    # inbox->read happen via shell scripts, not these tools.
+    if ($normalized -match '(^|/)messages/') {
+        $overwrites = ($toolName -eq 'Edit') -or ($toolName -eq 'NotebookEdit') -or
+            (($toolName -eq 'Write') -and (Test-Path -LiteralPath $filePath))
+        if ($overwrites) {
+            @{
+                hookSpecificOutput = @{
+                    hookEventName            = 'PreToolUse'
+                    permissionDecision       = 'deny'
+                    permissionDecisionReason = "guard-scope: '$filePath' is an existing file under a messages/ tree -- never edit or overwrite messages (2026-07-17 data-loss class). Use scripts/send-message.ps1 to send; new files only."
+                }
+            } | ConvertTo-Json -Depth 5
+            exit 0
+        }
+    }
+
     if ($env:EXPLORER_RUN_DIR) {
         # Explorer mode (task 102): the run dir is the ENTIRE write surface --
         # no task file, no report, no messages/, no other run's scratch.
@@ -96,11 +133,14 @@ try {
         $taskFilePattern = "^" + [regex]::Escape("$repoRoot/work/tasks/$agentTask-") + "[^/]*\.md$"
         $reportFilePattern = "^" + [regex]::Escape("$repoRoot/work/reports/$agentTask-") + "[^/]*\.md$"
 
+        # messages/scratch allowances are ANCHORED to this repo's work/ tree
+        # (bootstrap review): the old any-path '(^|/)messages/' substring also
+        # matched other repos' message stores (e.g. the live conductor's).
         $inLane = (Test-PathUnder -Path $normalized -Root $worktreeRoot) `
             -or ($normalized -match $taskFilePattern) `
             -or ($normalized -match $reportFilePattern) `
-            -or ($normalized -match '(^|/)messages/') `
-            -or ($normalized -match '(^|/)scratch/')
+            -or (Test-PathUnder -Path $normalized -Root "$repoRoot/work/messages") `
+            -or (Test-PathUnder -Path $normalized -Root "$repoRoot/work/scratch")
 
         if ($inLane) { exit 0 }
 
@@ -108,7 +148,7 @@ try {
             hookSpecificOutput = @{
                 hookEventName            = 'PreToolUse'
                 permissionDecision       = 'deny'
-                permissionDecisionReason = "guard-scope: task $agentTask may only write under its worktree ($worktreeRoot/), its task file (tasks/$agentTask-*.md), its report (reports/$agentTask-*.md), messages/, or scratch/. '$filePath' is none of those."
+                permissionDecisionReason = "guard-scope: task $agentTask may only write under its worktree ($worktreeRoot/), its task file (tasks/$agentTask-*.md), its report (reports/$agentTask-*.md), $repoRoot/work/messages/, or $repoRoot/work/scratch/. '$filePath' is none of those."
             }
         } | ConvertTo-Json -Depth 5
         exit 0

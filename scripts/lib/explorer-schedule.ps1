@@ -5,7 +5,7 @@
 # live glue stays in scripts/register-nightly-explorer.ps1,
 # scripts/unregister-nightly-explorer.ps1 and scripts/run-explorer-nightly.ps1
 # (same pure/live split scripts/lib/explorer-args.ps1 documents for the
-# harness itself, and scripts/lib/watchdog-arming.ps1 documents for task 100).
+# harness itself -- pure logic in lib/, live glue in the calling script).
 
 function Get-ExplorerScheduleCommandLine {
     # The single command-line string schtasks /TR takes. Built here instead

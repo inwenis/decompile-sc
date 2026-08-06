@@ -73,19 +73,20 @@ function Test-NeedsSetup {
     # without a real checkout. Caller (spawn-agent.ps1) does the actual
     # Test-Path calls and passes the results in.
     #
-    # A worktree missing node_modules needs setup.ps1 run before claude starts
-    # (ground rule 6: a worktree is one command from working, not zero-minus-one).
+    # A worktree missing the setup sentinel (this repo: the .venv python that
+    # setup.ps1 creates) needs setup.ps1 run before claude starts (ground
+    # rule 6: a worktree is one command from working, not zero-minus-one).
     # The main conductor checkout is excluded: it is set up once by a human,
     # never auto-setup'd on every spawn.
     param(
         [Parameter(Mandatory)][string]$WorkDir,
         [Parameter(Mandatory)][string]$ConductorRepo,
-        [Parameter(Mandatory)][bool]$NodeModulesExists
+        [Parameter(Mandatory)][bool]$SetupSentinelExists
     )
     $workDirNorm = ($WorkDir -replace '\\', '/').TrimEnd('/')
     $repoNorm = ($ConductorRepo -replace '\\', '/').TrimEnd('/')
     if ($workDirNorm -eq $repoNorm) { return $false }
-    return -not $NodeModulesExists
+    return -not $SetupSentinelExists
 }
 
 function ConvertTo-PSArrayLiteral {

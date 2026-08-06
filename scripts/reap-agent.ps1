@@ -64,8 +64,14 @@ $sentinelPath = Get-AgentCloseSentinelPath -Root $dataRoot -Task $taskId
 $pwshPid = $entry.pwshPid
 $closedGracefully = $false
 
+# Identity check before any kill path (bootstrap review): a stale registry
+# pid may have been reused by an UNRELATED process after a crash/reboot.
 if (-not $pwshPid -or -not (Test-ProcessAlive -ProcessId ([int]$pwshPid))) {
     Write-Host "pwsh PID $pwshPid already gone (or unrecorded) -- nothing to reap."
+    $closedGracefully = $true
+}
+elseif (-not (Test-ProcessMatchesRegistryEntry -ProcessId ([int]$pwshPid) -Entry $entry)) {
+    Write-Host "pwsh PID $pwshPid exists but does NOT match the registry entry (pid reuse after crash/reboot?) -- refusing to touch it; marking entry stopped."
     $closedGracefully = $true
 }
 else {

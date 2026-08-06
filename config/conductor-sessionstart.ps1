@@ -96,13 +96,12 @@ if ($c.Count -ge 2 -and ($c[0] -ne '0' -or $c[1] -ne '0')) {
 } else { $lines += 'main: in sync with origin' }
 $lines += "worktrees: $((@(git -C $repo worktree list) | Measure-Object).Count - 1) registered"
 
-# Duplicate-conductor watchdog: arm it (or confirm it's already armed) every
-# session so it survives a restart without the conductor remembering (task
-# 100). Never let a watchdog-arming failure block the rest of the board.
-try {
-    $watchdogLines = & (Join-Path (Split-Path $PSScriptRoot -Parent) 'scripts/arm-watchdog.ps1') -Repo $repo
-    $lines += $watchdogLines
-} catch { $lines += "watchdog: arm FAILED: $_" }
+# Duplicate-conductor watchdog: NOT ported (bootstrap review). Upstream's
+# arm-watchdog.ps1/watchdog-daemon.ps1 were a temporary experiment whose
+# hardcoded retirement date (2026-08-03) has passed; the whole watchdog family
+# (check-conductors.ps1, lib/conductor-watchdog.ps1, lib/watchdog-arming.ps1,
+# lib/conductor-live-report.ps1, lib/process-cwd.ps1) was dropped with it so
+# the board never prints a permanent, non-actionable FAILED line.
 
-$lines += 'RE-ARM NOW: conductor inbox Monitor (AGENTS.md § Messaging). Deps: npm install if lockfile moved.'
+$lines += 'RE-ARM NOW: conductor inbox Monitor (AGENTS.md § Messaging).'
 $lines -join "`n"

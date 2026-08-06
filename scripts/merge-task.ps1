@@ -74,7 +74,12 @@ if ($refusal) { throw "Refusing to merge task ${taskId}: $refusal" }
 
 # The PR's own state + its position against the base branch. ConvertFrom-Json is
 # safe here: all three fields are plain strings/bools, no dates to mangle.
-$viewRaw = gh pr view $prNumber --json state,mergeStateStatus 2>&1
+# --repo pin (bootstrap review): gh resolves the target repo from the cwd's
+# git remote. Without the pin, running this from any other checkout (e.g. the
+# LIVE conductor repo) would evaluate -- and MERGE -- that repo's same-numbered
+# PR. Every gh pr call in this script and close-task.ps1 carries the pin.
+$ghRepo = 'inwenis/decompile-sc'
+$viewRaw = gh pr view $prNumber --repo $ghRepo --json state,mergeStateStatus 2>&1
 if ($LASTEXITCODE -ne 0) { throw "gh pr view $prNumber failed: $viewRaw" }
 $view = ("$viewRaw" | Out-String) | ConvertFrom-Json
 
@@ -82,7 +87,7 @@ $view = ("$viewRaw" | Out-String) | ConvertFrom-Json
 # exit code is not an error here -- the verdict comes from the payload. The
 # `workflow` field is what separates our CI from third-party app checks
 # (GitGuardian runs on every PR); see Get-ChecksVerdict.
-$checksRaw = gh pr checks $prNumber --json bucket,workflow,name 2>&1 | Out-String
+$checksRaw = gh pr checks $prNumber --repo $ghRepo --json bucket,workflow,name 2>&1 | Out-String
 $verdict = Get-ChecksVerdict -Json $checksRaw
 
 # Full gate now that every fact is in hand. -RequireHumanOk is left off: the
@@ -94,7 +99,7 @@ $refusal = Get-MergeRefusalReason -TaskId $taskId -AgentTask $env:AGENT_TASK `
 if ($refusal) { throw "Refusing to merge task ${taskId}: $refusal" }
 
 Write-Host "task ${taskId}: PR #$prNumber OPEN, $($view.mergeStateStatus), checks $verdict -- merging (squash)"
-gh pr merge $prNumber --squash | Out-Host
+gh pr merge $prNumber --repo $ghRepo --squash | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "gh pr merge $prNumber --squash failed -- nothing was closed." }
 
 # Hand off: close-task.ps1 owns pulling main, stamping merged:, and committing.

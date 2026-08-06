@@ -71,7 +71,10 @@ $prNumber = Get-TaskPrNumber -Content $content
 $prState = $null
 $mergedAt = $null
 if ($prNumber) {
-    $raw = gh pr view $prNumber --json state,mergedAt --jq '.state + "|" + (.mergedAt // "")' 2>&1
+    # --repo pin (bootstrap review): without it gh resolves the repo from the
+    # cwd's git remote -- run from the wrong checkout it would read another
+    # repo's same-numbered PR and stamp merged: off the wrong state.
+    $raw = gh pr view $prNumber --repo inwenis/decompile-sc --json state,mergedAt --jq '.state + "|" + (.mergedAt // "")' 2>&1
     if ($LASTEXITCODE -ne 0) { throw "gh pr view $prNumber failed: $raw" }
     $parts = ("$raw").Trim() -split '\|', 2
     $prState = $parts[0]

@@ -20,6 +20,13 @@ and TOOLING, not redistributed game content.
    Offline and single-player only.
 4. Every claimed address/offset/struct must carry evidence: how it was found
    and how it was verified. No guessed offsets in `research/`.
+5. `C:/git/conductor` and `C:/git/conductor-task*` are ANOTHER LIVE SYSTEM
+   (a separate orchestrator with ~25 in-flight agents and real user
+   messages). NEVER read, modify, `cd` into, or run git/gh against them from
+   this repo — touching them is a data-loss incident. Everything this repo
+   needs from there is already ported into `scripts/`/`config/`; if
+   something seems missing, ask the user. (Sole exception: `./run.ps1`,
+   which the USER launches to serve the Agent Console UI.)
 
 ## Layout
 

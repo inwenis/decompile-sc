@@ -1,7 +1,7 @@
 # Pure(ish) logic for read-message.ps1 (task 130): the atomic move-then-print
 # core, collision-safe filing, and unread-message discovery. Split out of the
 # CLI wrapper so the race/collision branches are unit-testable without real
-# concurrency -- same split as scripts/lib/watchdog-arming.ps1 (pure logic in
+# concurrency -- same split the rest of scripts/lib/ uses (pure logic in
 # lib/ + tests, live process/CLI glue stays in the untested wrapper script).
 
 function Move-MessageToRead {

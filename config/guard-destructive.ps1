@@ -33,6 +33,41 @@ if ($cmd -match $denyDeletePattern -and $cmd -match '(?i)messages[/\\]') {
     exit 0
 }
 
+# HARD DENY, overwrite half of the same incident class (bootstrap review):
+# Set-Content/Out-File/Add-Content/tee and `>`/`>>` redirection targeting a
+# messages/ path silently clobber (or corrupt) real user messages -- the
+# Edit/Write tools are covered by guard-scope.ps1, this covers the shell.
+$overwriteVerbPattern = '(^|[\s;|&(])(Set-Content\s|Out-File\s|Add-Content\s|Tee-Object\s|tee(\.exe)?\s)'
+$redirectToMessages = $cmd -match '>{1,2}\s*["'']?\S*messages[/\\]'
+if ($redirectToMessages -or ($cmd -match $overwriteVerbPattern -and $cmd -match '(?i)messages[/\\]')) {
+    @{
+        hookSpecificOutput = @{
+            hookEventName            = 'PreToolUse'
+            permissionDecision       = 'deny'
+            permissionDecisionReason = 'writing over files under messages/ is banned (2026-07-17 data-loss incident class) — use scripts/send-message.ps1 to create NEW message files; never redirect or Set-Content into a messages/ tree'
+        }
+    } | ConvertTo-Json -Depth 5
+    exit 0
+}
+
+# HARD DENY, every mode (bootstrap review): C:/git/conductor and its
+# C:/git/conductor-task* worktrees are ANOTHER LIVE SYSTEM (~25 in-flight
+# agents, real user messages). No shell command from this repo may reference
+# them at all -- reads included: there is nothing in that repo a decompile-sc
+# agent needs that is not already ported here, and every accident class
+# (git -C, Remove-Item, cd + operate, redirects) starts with the path
+# appearing in a command. Matches /, \ and mixed spellings.
+if ($cmd -match '(?i)[/\\]git[/\\]+conductor') {
+    @{
+        hookSpecificOutput = @{
+            hookEventName            = 'PreToolUse'
+            permissionDecision       = 'deny'
+            permissionDecisionReason = 'C:/git/conductor (and conductor-task* worktrees) is the LIVE conductor system — decompile-sc agents never touch it (data-loss incident class). Everything needed from it is already ported into this repo; ask the user if something seems missing. (Exception: the user launches ./run.ps1 themselves.)'
+        }
+    } | ConvertTo-Json -Depth 5
+    exit 0
+}
+
 # WORKER MODE (2026-07-17): an "ask" decision OVERRIDES bypass permissions and
 # throws a terminal prompt — it froze workers for hours on ROUTINE self-scoped
 # ops (killing their own dev server, rm-ing their own fixtures; 048 lost 3h).
