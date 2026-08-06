@@ -57,3 +57,8 @@ assets/
 ghidra_projects/
 *.gpr
 *.rep/
+
+# Ghidra headless install (task 001) -- large (~1.2 GB), pinned version + hash in
+# tools/ghidra/README.md, reinstalled on demand, never committed
+tools/ghidra/ghidra_*/
+tools/ghidra/*.zip
