@@ -1,5 +1,8 @@
 {
   "state": "processing",
-  "subject": "cutting task 001",
-  "updatedAt": "2026-08-06T22:20:43Z"
+  "subject": "cutting task 002",
+  "updatedAt": "2026-08-06T22:42:39Z",
+  "contextPct": 18,
+  "effort": "xhigh",
+  "model": "Opus 5 (1M context)"
 }
