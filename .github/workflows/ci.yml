@@ -128,13 +128,21 @@ jobs:
       - name: Lint (ruff, only if pulled in via requirements.txt)
         shell: pwsh
         run: |
+          # `pip show` exits 1 when ruff isn't installed -- that's the expected
+          # skip signal, not a failure, so reset $LASTEXITCODE right after
+          # reading it. Otherwise the stale 1 survives past the Write-Host
+          # skip message and GitHub's pwsh wrapper fails the step on exit
+          # using whatever $LASTEXITCODE last held.
           $ruffInstalled = $false
           try {
               pip show ruff *> $null
               if ($LASTEXITCODE -eq 0) { $ruffInstalled = $true }
+              $LASTEXITCODE = 0
           } catch {}
           if ($ruffInstalled -and (Test-Path 'tools')) {
               ruff check tools
+              exit $LASTEXITCODE
           } else {
               Write-Host 'ruff not installed (or tools/ absent) -- skipping lint'
+              exit 0
           }
