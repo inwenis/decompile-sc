@@ -144,6 +144,128 @@ map that the eventual implementation task follows.
 6. A concrete "open questions for binary analysis" section usable as the next task's contract.
 7. No binaries touched, nothing game-derived committed. PR opened, link in Status.pr.
 
+## ROUND 2 — review findings to fix (added by conductor 2026-08-07)
+
+An adversarial citation verifier cloned all five repos at your pinned commits and checked
+every claim line by line. Result: **zero fabricated citations.** All 41 distinct addresses
+trace to a named public source at the exact `file:line` you cite, all 5 commit hashes are
+real and are the actual repo HEADs, and both community quotes are verbatim. Your evidence
+discipline is genuinely good. Verdict was **yes-with-fixes**.
+
+You were spawned fresh into your existing worktree `C:/git/decompile-sc-task003`, branch
+`task003-selection-cap-recon`. Your PR #2 already exists — do NOT start over, do NOT open a
+second PR. Fix the items below on that branch and push.
+
+**HIGH 1 — direct self-contradiction on replay playback.** §6.2 says "our replays will not
+play back in a vanilla client **regardless**". §7 #1's verification step says "Save a replay,
+confirm it plays back in the vanilla client (it should — every emitted command is
+vanilla-shaped)." Both cannot be true. #1 is the correct one for the fan-out design; §6.2's
+"regardless" is really scoped to the cap-raise designs but reads as universal. Fix: scope
+§6.2 explicitly to candidates #2/#3 and state that #1 stays replay-compatible.
+
+**MEDIUM 2 — "four arrays" vs five, repeated.** §1.1, §2.3 and §3 row 1 all say **four**
+fixed-size global arrays. §2.2, §7 #2 and §8 q1 all enumerate **five** 12-slot arrays
+(`0x00597208`, `0x0059724C`, `0x006284B8`, `0x006284E8`, `0x0057FE60`). §2.3's adjacency
+bullets silently drop `client_selection_group2` (`0x0059724C`). The relocation-effort estimate
+that ranks candidate #2 rests on this count. Fix: say five everywhere, and add a `0x0059724C`
+adjacency bullet.
+
+**MEDIUM 3 — `clientSelectionGroupEnd` is misread, making part of your adjacency argument
+circular.** This is the most important fix. §2.2 presents `0x00597238` as a global holding an
+"end pointer". GPTP's macro is `#define SCBW_DATA(type,name,offset) type const name =
+(type)offset;` — so `clientSelectionGroupEnd` is a **compile-time constant sentinel** that
+GPTP produced by adding 12×4 to `0x00597208`. It is not a datum living at that address. So
+when §2.3 and §7 candidate 5 argue "`0x00597208 + 0x30` is exactly `clientSelectionGroupEnd`,
+therefore the neighbour is packed", that is circular — you are citing your own arithmetic back
+as independent evidence.
+
+Your conclusion still stands, but the load-bearing evidence is `0x0059723C`
+(`client_selection_changed`, teippi `offsets.h:323`), which leaves exactly **4 bytes — one
+extra slot — of unidentified slack**. Fix: drop `clientSelectionGroupEnd` from the adjacency
+argument, rest it on `0x0059723C`, and state plainly that the 4-byte gap is unidentified.
+Your own §8 q3 already asks the right question about this. Note the
+`0x006284B8 + 0x30 = 0x006284E8` bullet IS genuine two-source adjacency — keep that one.
+
+**MEDIUM 4 — §5.5 breaks the repo's own evidence rule.** "Remastered / 1.18+ did not change
+it. Blizzard's stated remaster goal was gameplay preservation" carries no citation and no
+`[unverified]` tag, in a section otherwise scrupulous about both. Fix: cite a patch note or
+Blizzard statement, or tag it `[unverified]`.
+
+**MEDIUM 5 — wrong internal cross-reference.** §7 #2 says "Depends on #4 (binary analysis)
+landing first." Your #4 is "Prototype in OpenBW first"; binary analysis is §8 / task 001. Fix
+the reference.
+
+**MEDIUM 6 — the headline negative is absence-of-evidence stated as a finding.** §5 opens
+"Finding: no public project has raised the selection cap on 1.16.1." flat, with no account of
+what was searched. The verifier ran its own independent search and also found no
+counterexample, so it is probably true — but it is unfalsified, not verified. Your own
+`prior-art.md` handles this correctly with "[searched multiple phrasings; absence not
+proven]". Adopt that house phrasing and list the searches you ran. §1.2's hedged "Nobody
+*appears* to have done it" is fine as-is.
+
+**MEDIUM 7 — candidate #1 is never costed against the buffer limits you yourself establish.**
+This matters because #1 is the first milestone we intend to build. You note fan-out costs
+"N/12 commands" but never cross that with §6.2's single-byte (255) per-frame command block or
+§4.3's 512-byte `TurnBuffer`. A 100-unit intent is ~9 Select+order pairs in one frame, roughly
+250+ bytes from one player — right at the replay block ceiling. Also: each `Select`
+**replaces** `playersSelections[player]`, so restoring the visible selection costs an extra
+command, making it N/12 **+1**. Fix: add a sizing paragraph to #1 and a "chunk across frames
+if needed" note.
+
+**LOW 8 — `0x006284B8` has no entry in §2.2's Roles list**, despite being the source of the
+HUD copy (§4.5) and the array the order iterator walks (§4.4). This weakens candidate #3,
+which claims blast radius "input + HUD only. Sim untouched" — but the HUD's source array sits
+at `0x006284B8`, adjacent to `playersSelections`, on the sim side, and would be overwritten
+every frame by the 12-iteration copy at `updateSelectedUnitData.cpp:24-25`. Fix: add the role,
+and correct #3's blast-radius claim.
+
+**LOW 9 — "deliberately" overstates neivv.** The verified quote says only that it "hasn't been
+an issue for the stuff I've been doing" — he did not need it, rather than chose against it.
+Change "deliberately left this one alone" to "did not attempt it, by his own statement".
+§1.2's "explicitly leaves selection at 12" is accurate; keep that.
+
+**LOW 10 — wrong count in §8 q10.** "save.cpp has 19 selection hits" — actual is 16 matching
+lines / 22 occurrences. Your conclusion (selection is serialised into saves) is right and
+better supported by citing `save.cpp:1046-1057` (writes `Limits::Selection *
+Limits::ActivePlayers` pointers) and `:1916-1919` (reads them back). Cite those instead of a
+grep count.
+
+**LOW 11 — unrecorded source disagreement on `0x0059723D`.** You give shape `u8` citing BWAPI,
+GPTP and teippi, but teippi types it `offset<uint32_t>` (`offsets.h:322`). Same class of
+disagreement as your §8 q5, which you correctly record. Note it or drop the teippi citation
+from that row.
+
+**LOW 12 — §0 says "Four public code bases were cloned" above a five-row table** (screp).
+
+**LOW 13 — §2.2 role 1 cites a read as a write.** `CMDRECV_Selection.cpp:484` is a read in the
+dedup loop; the third write is `:238`. Use `:238, :312, :393`.
+
+**LOW 14 — §4.3 over-reaches on `SelectRemove` (0x0B).** BWAPI defines `Select` (0x09) and
+`SelectAdd` (0x0A) only — there is no `SelectRemove`/`ShiftDeselect` class in that repo. The
+0x0B row rests on screp alone (which does confirm the shape). Attribute it to screp explicitly
+rather than to "BWAPI constructs these packets itself, so this is authoritative".
+
+**LOW 15 — §2.4 calls GPTP's `SC_memcpy_0` a "memmove".** Overlapping-copy semantics matter
+here; use the source's own name.
+
+**LOW 16 — same command, two sizes, unexplained.** §4.3 says a 24-unit select is 50 bytes;
+§6.2 says 51 (adding the replay playerID byte). Both are right; say why they differ.
+
+**LOW 17 — §6.1's "the game's sync check kills it" carries no citation.** The receiver-drop
+half is well-evidenced (GPTP `:451`); the sync-kill mechanism is asserted. teippi
+`commands.cpp:307` (`commands::Sync`) is available as at least partial evidence — cite it or
+tag the mechanism `[unverified]`.
+
+**VERY LOW 18 — §9 index lists files never cited in the body**: BWAPI `GameInternals.cpp`,
+teippi `constants/image.h`, OpenBW `game_types.h`.
+
+Note on merging: the repo now has `.github/workflows/ci.yml` on main, but GitHub Actions is
+blocked at the ACCOUNT level (zero runs repo-wide, likely unverified email or a $0 spending
+limit) and is escalated to the user. So your PR cannot go green yet — that is not your
+problem and not a reason to delay. Push your fixes and report.
+
+Do NOT merge your own PR. Message the conductor when pushed.
+
 ## Reporting
 
 Status is DERIVED, never reported. The console works out what this task is
