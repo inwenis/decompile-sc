@@ -7,9 +7,15 @@ test-results/
 
 # Python venv created by setup.ps1
 .venv/
+__pycache__/
 
 # StarCraft binaries/assets — NEVER commit game files (hard project rule)
 game/
+
+# working copies live outside the repo already; belt-and-braces in case a
+# future worker symlinks/copies one in
+C:/sc-work/
+/sc-work/
 *.exe
 *.dll
 *.mpq
