@@ -1,0 +1,25 @@
+# conductor data: scratch is throwaway; tasks/, reports/, messages/ stay tracked
+work/scratch/
+
+node_modules/
+dist/
+test-results/
+
+# StarCraft binaries/assets — NEVER commit game files (hard project rule)
+game/
+*.exe
+*.dll
+*.mpq
+*.MPQ
+*.snp
+*.pdb
+*.gdb
+*.rep
+*.chk
+*.grp
+*.dat.bin
+
+# Ghidra
+ghidra_projects/
+*.gpr
+*.rep/
