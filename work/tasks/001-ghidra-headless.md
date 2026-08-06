@@ -114,6 +114,87 @@ test binary are NOT committed — only the wrapper, the headless script, and doc
 4. Nothing binary committed: no Ghidra install, no test PE, no `.gpr`/project dir. The
    install path is gitignored. PR opened, link in Status.pr.
 
+## ROUND 2 — review findings to fix (added by conductor 2026-08-07)
+
+Your PR #1 is open and the pipeline was independently re-verified: install, hash (three
+ways), both selector paths, paths-with-spaces, and the analyzeHeadless-exits-0-on-postscript
+-error behaviour your guard defends against all reproduced. The core deliverable is sound.
+
+You were spawned fresh into the same worktree (`C:/git/decompile-sc-task004`'s sibling
+`C:/git/decompile-sc-task001`, branch `task001-ghidra-headless`) because the previous session
+went idle. Your branch and PR already exist — do NOT start over, do NOT open a second PR.
+Fix the items below on that branch and push. A detailed copy of this list is also in your
+inbox at `C:/git/decompile-sc/work/messages/001/inbox/`.
+
+**HIGH 1 — stale output causes a silent FALSE SUCCESS.** `analyze.ps1:136,140`:
+`$decompPathGlob = "$base.*.c"` matches ANY `.c` left in `OutDir` by a previous run, for ANY
+function. Reproduced with the DEFAULT OutDir: run 1 `-FunctionName DllCanUnloadNow` wrote its
+`.c`; run 2 `-FunctionName TotallyBogusFn_E` made Ghidra log `REPORT SCRIPT ERROR: Function
+not found`, yet `analyze.ps1` printed `done.` and exited 0 because run 1's file still matched.
+This defeats the exact guard your comment at `:132-133` claims to provide, and the intended
+StarCraft workflow is many `-FunctionAddress` runs into one OutDir — so you WILL read a
+previous function's decompilation believing it is the current one.
+Fix: snapshot the pre-run set (or run start time) and require a new/newer file; better, have
+the Java script emit a manifest naming the resolved function + entry point and assert on it.
+
+**HIGH 2 — `-ImageBase` is a documented NO-OP on PE files.** `analyze.ps1:126` passes
+`-loader-imagebase`; `README.md:119` documents it as the way to force the base. Ghidra's own
+`analyzeHeadlessREADME.html` lists that option under **ElfLoader** only; the PeLoader option
+list does not include it. Reproduced: `-ImageBase 0x400000` on a PE logged
+`WARN Skipping unsupported -loader-imagebase argument` and the listing still began at the
+original base — while the wrapper reported success. Image-base handling is one of the three
+things this deliverable must get right for 1.16.1, and cross-referencing against a wrong base
+would poison our address work.
+Fix: drop `-ImageBase`, or implement it properly (`currentProgram.setImageBase(addr, true)`,
+or `-loader BinaryLoader -loader-baseAddr`). At minimum hard-fail on that warning. Correct
+README §3 to state plainly that a PE image base cannot be forced via a loader option.
+
+**MEDIUM 3 — decompile failure still writes a `.c`, so the wrapper reports success.**
+`ExportListingAndDecompile.java:104-110` writes `// decompile failed for ...` and returns
+normally; the file exists, so `analyze.ps1:140` is satisfied. Realistic on a 1.2 MB
+StarCraft.exe with the hardcoded 60s timeout. Fix: throw instead, or reject a `.c` whose first
+line starts with `// decompile failed`. Expose the timeout as a parameter.
+
+**MEDIUM 4 — fixed project dir/name breaks concurrent runs and wedges after an interrupt.**
+`analyze.ps1:107,115` use a fixed dir + project name `analyze`, and `:108` unconditionally
+`Remove-Item -Recurse -Force` on it. Two concurrent runs: the second died with
+`LockException: Unable to lock project`. A killed run leaves an orphaned JVM holding the lock,
+and the NEXT run then dies on `analyze.lock~ ... being used by another process`. Multiple
+agents work concurrently here, so this will happen. Fix: per-run unique project dir/name
+(PID or GUID), removed in a `finally`; catch the Remove-Item failure and rethrow with
+actionable text.
+
+**LOW 5 — address selector silently falls back to the enclosing function.**
+`ExportListingAndDecompile.java:69-72`: `getFunctionAt`, else `getFunctionContaining`. An
+address slightly off, or pointing mid-function, silently yields a DIFFERENT function. We will
+feed addresses from third-party hook lists that may not be exact entry points. Fix: always
+print the resolved function name AND entry point, and warn explicitly when the fallback was
+used.
+
+**LOW 6 — Ghidra's `launch.bat:250-252` runs `pause` on failure**, so a human running your
+documented command in a normal terminal hangs on any Ghidra error. Fix: redirect stdin
+(`$null | & $analyzeHeadless @headlessArgs`).
+
+**LOW 7 — name lookup takes the first match silently** (`ExportListingAndDecompile.java:76-83`).
+Duplicates (thunks, `__imp_` variants) resolve arbitrarily. Prefer `getGlobalFunctions(name)`
+and error on ambiguity.
+
+**LOW 8 — no `-cspec` passthrough.** Add a `-CompilerSpec` parameter mapped to `-cspec`.
+
+**LOW 9 — README leaves 546 MB of dead weight**: the install steps never say to delete
+`ghidra_12.1.2_PUBLIC_20260605.zip` after extracting. Add that. Also consider a `-SkipListing`
+flag — you regenerate the full listing every run (724 KB for a 60 KB DLL; roughly 30 MB
+rewritten per single-function query on StarCraft.exe).
+
+**CONDUCTOR'S OWN ERROR — please correct a wrong number you inherited.** I wrote "~2.7 MB"
+for StarCraft.exe into your original contract and it reached your README. Verified real
+figures: `StarCraft.exe` **1,220,608 bytes (1.16 MB)**, `storm.dll` 409,600, `battle.snp`
+557,310 — total code surface ~2.2 MB. Fix the README. This repo's premise is evidence-cited
+claims, so a wrong number in a doc matters more than its severity suggests.
+
+**Do NOT** weaken `scripts/merge-task.ps1`. **Do NOT** merge your own PR. Message the
+conductor when pushed.
+
 ## Reporting
 
 Status is DERIVED, never reported. The console works out what this task is
