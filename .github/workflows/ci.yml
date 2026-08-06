@@ -1,0 +1,148 @@
+name: CI
+
+# name MUST stay exactly "CI" -- scripts/lib/merge-task.ps1's Get-ChecksVerdict
+# defaults to -Workflow 'CI' and matches on this name to gate merges.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Parse, lint and import checks
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse-check all .ps1 files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = Get-ChildItem -Path . -Filter *.ps1 -Recurse -File |
+              Where-Object { $_.FullName -notmatch '\\\.git\\' }
+          $failed = $false
+          foreach ($f in $files) {
+              $parseErrors = $null
+              [System.Management.Automation.Language.Parser]::ParseFile(
+                  $f.FullName, [ref]$null, [ref]$parseErrors) | Out-Null
+              if ($parseErrors.Count -gt 0) {
+                  $failed = $true
+                  Write-Host "::error file=$($f.FullName)::Parse errors in $($f.FullName)"
+                  foreach ($e in $parseErrors) {
+                      Write-Host "  line $($e.Extent.StartLineNumber): $($e.Message)"
+                  }
+              }
+          }
+          if ($failed) { throw 'One or more PowerShell files failed to parse' }
+          Write-Host "Parsed $($files.Count) .ps1 files OK"
+
+      - name: Validate JSON under config/ and .claude/
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $jsonFiles = @()
+          foreach ($dir in @('config', '.claude')) {
+              if (Test-Path $dir) {
+                  $jsonFiles += Get-ChildItem -Path $dir -Filter *.json -Recurse -File
+              }
+          }
+          if ($jsonFiles.Count -eq 0) {
+              Write-Host 'No JSON files found under config/ or .claude/ -- skipping'
+          } else {
+              $failed = $false
+              foreach ($f in $jsonFiles) {
+                  try {
+                      Get-Content -Raw -LiteralPath $f.FullName | ConvertFrom-Json | Out-Null
+                  } catch {
+                      $failed = $true
+                      Write-Host "::error file=$($f.FullName)::Invalid JSON: $($_.Exception.Message)"
+                  }
+              }
+              if ($failed) { throw 'One or more JSON files failed to validate' }
+              Write-Host "Validated $($jsonFiles.Count) JSON files OK"
+          }
+
+      - name: Run Pester tests (if tests/ exists)
+        shell: pwsh
+        run: |
+          if (Test-Path 'tests') {
+              Install-Module -Name Pester -MinimumVersion 5.0.0 -Force -SkipPublisherCheck -Scope CurrentUser
+              Import-Module Pester -MinimumVersion 5.0.0
+              Invoke-Pester -Path tests -CI
+          } else {
+              Write-Host 'No tests/ directory -- skipping Pester'
+          }
+
+      - name: Guard against tracked game-content files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Project hard rule 1: never commit game binaries/archives. Extension
+          # list matches the game-content set called out in the task; a size
+          # cap catches large binary blobs of other extensions too.
+          $bannedExt = @('.exe', '.dll', '.mpq', '.snp', '.grp', '.chk', '.rep', '.idb', '.i64', '.gpr')
+          $maxBytes = 5MB
+          $tracked = git ls-files
+          $badExt = $tracked | Where-Object {
+              $bannedExt -contains ([System.IO.Path]::GetExtension($_).ToLowerInvariant())
+          }
+          $badSize = @()
+          foreach ($f in $tracked) {
+              if ((Test-Path -LiteralPath $f -PathType Leaf) -and ((Get-Item -LiteralPath $f).Length -gt $maxBytes)) {
+                  $badSize += $f
+              }
+          }
+          $bad = @($badExt) + @($badSize) | Select-Object -Unique
+          if ($bad.Count -gt 0) {
+              foreach ($f in $bad) { Write-Host "::error file=$f::tracked game-content or oversized binary file" }
+              throw "Tracked game-content/binary files found: $($bad -join ', ')"
+          }
+          Write-Host 'No tracked game-content files found'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: |
+          if (Test-Path 'requirements.txt') {
+              pip install -r requirements.txt
+          } else {
+              Write-Host 'No requirements.txt -- skipping pip install'
+          }
+
+      - name: Byte-compile tools/*.py
+        shell: pwsh
+        run: |
+          if (Test-Path 'tools') {
+              python -m compileall -q tools
+          } else {
+              Write-Host 'No tools/ directory -- skipping'
+          }
+
+      - name: Lint (ruff, only if pulled in via requirements.txt)
+        shell: pwsh
+        run: |
+          # `pip show` exits 1 when ruff isn't installed -- that's the expected
+          # skip signal, not a failure, so reset $LASTEXITCODE right after
+          # reading it. Otherwise the stale 1 survives past the Write-Host
+          # skip message and GitHub's pwsh wrapper fails the step on exit
+          # using whatever $LASTEXITCODE last held.
+          $ruffInstalled = $false
+          try {
+              pip show ruff *> $null
+              if ($LASTEXITCODE -eq 0) { $ruffInstalled = $true }
+              $LASTEXITCODE = 0
+          } catch {}
+          if ($ruffInstalled -and (Test-Path 'tools')) {
+              ruff check tools
+              exit $LASTEXITCODE
+          } else {
+              Write-Host 'ruff not installed (or tools/ absent) -- skipping lint'
+              exit 0
+          }
