@@ -1,0 +1,8 @@
+{
+  "state": "processing",
+  "subject": "spawning task 004",
+  "updatedAt": "2026-08-06T23:14:16Z",
+  "contextPct": 28,
+  "effort": "xhigh",
+  "model": "Opus 5 (1M context)"
+}
