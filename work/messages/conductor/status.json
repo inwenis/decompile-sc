@@ -1,8 +1,8 @@
 {
   "state": "processing",
-  "subject": "cutting task 006",
-  "updatedAt": "2026-08-06T23:36:47Z",
-  "contextPct": 35,
+  "subject": "merging task 006",
+  "updatedAt": "2026-08-06T23:50:06Z",
+  "contextPct": 37,
   "effort": "xhigh",
   "model": "Opus 5 (1M context)"
 }
