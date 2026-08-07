@@ -71,6 +71,14 @@ Three hooks, one funnel. Full derivation in
 A fourth hook on `SortAllUnits` (`0x0046F0F0`) only logs how many units the box actually
 contained; it changes nothing.
 
+A drag box reaches all three, and so does a shift-add — the chain is traced end to end in
+[`research/command-path.md`](../../research/command-path.md) §3.3:
+
+```
+drag box -> 0x0046FA40 -> SortAllUnits -> sortOverflowHandler (per unit past the cap)
+                       -> selectMultipleUnitsFromUnitList -> CMDACT_Select -> queueCommand
+```
+
 **The visible chunk is emitted last.** `research/selection-cap.md` §7 costs fan-out as
 `ceil(N/12)` pairs *plus one* `Select` to put back the selection the player can see, because each
 `Select` replaces `playersSelections[player]` wholesale. Ordering the overflow chunks first and

@@ -207,6 +207,37 @@ eviction is preceded by a snapshot that still contains the victim.
 
 ---
 
+### 3.3 The whole chain, drag box to wire
+
+The three hook points above are only useful if a human drag-box actually goes through all of them.
+It does. `FUN_0046FA40` — the only caller of `SortAllUnits` that passes `clicked = 0`, and whose
+candidate list comes from `FUN_004308A0(param_1)` — is the drag-box handler:
+
+```
+drag box
+  -> 0x0046FA40                      builds the candidate list, zeroes a 12-slot output
+     -> 0x0046F0F0  SortAllUnits(candidates, out12, clicked = 0)
+        -> 0x0046F040  sortOverflowHandler(unit)      once per unit past the cap
+     -> 0x0049AEF0  selectMultipleUnitsFromUnitList(count, out12, 1, 1)
+        -> 0x004C0860  CMDACT_Select(count, units)    the commit
+           -> 0x00485BD0  queueCommand(bytes, len)    the wire
+```
+
+The shift-add branch of the same function takes a detour and rejoins:
+
+```
+  shift held and a selection exists
+     -> 0x0046F290  combineSelectionsLists(newList, count, 0)
+        -> 0x0046F040  sortOverflowHandler(unit)      the SAME handler, second caller
+     -> 0x0046FA00  applyNewSelect  ->  0x0049AEF0  ->  0x004C0860  ->  0x00485BD0
+```
+
+So both routes pass through the overflow handler, `CMDACT_Select` and `queueCommand`, which is why
+hooking those three is sufficient and hooking `SortAllUnits` itself is optional (task 011 hooks it
+anyway, purely to log how many units the box contained).
+
+---
+
 ## 4. The unit tag — settled
 
 Three independent instruction sequences compute it identically. The Right Click builder's copy,
@@ -361,6 +392,7 @@ hook placed on one *builder* would miss half the traffic — another reason to h
 ### Derived here, from this binary
 
 - The convention, body and globals of `queueCommand` (§1) and the flush (§1.1).
+- The drag-box call chain end to end, and that the shift-add branch rejoins it (§3.3).
 - The conventions and prologue bytes of `CMDACT_Select`, `SortAllUnits` and
   `sortOverflowHandler`, plus the eviction behaviour of the last (§2, §3).
 - The unit-tag encoding, from three independent sites (§4).
