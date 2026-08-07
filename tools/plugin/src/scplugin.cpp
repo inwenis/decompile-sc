@@ -1,0 +1,373 @@
+// scplugin.cpp -- read-only observer DLL for StarCraft 1.16.1 (task 008, rung 1).
+//
+// WHAT THIS DOES
+//   Loaded into a running StarCraft.exe by scinject.exe. On attach it records the
+//   process id, the module base StarCraft.exe actually loaded at, and the relocation
+//   delta against the PE's preferred base. It then polls the selection globals
+//   mapped statically in research/binary-selection-map.md and appends a line to a
+//   log file whenever the observed state changes.
+//
+// WHAT THIS DOES NOT DO -- and must not, per task 008 hard rule 3
+//   No writes to game memory. No code patching. No page-protection changes. No
+//   input hooks. No behaviour change of any kind. Every game-memory access in this
+//   file goes through SafeRead(), which only ever memcpy's *out* of the game.
+//
+// Log destination: %SCPLUGIN_LOG% if set, else C:\sc-work\logs\sc-plugin.log.
+// Both are outside the repo; C:/sc-work/ is gitignored (task 008 hard rule 4 --
+// no captured game data is ever committed).
+
+#include <windows.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "sc_addresses.h"
+
+// ---------------------------------------------------------------------------
+// Logging
+// ---------------------------------------------------------------------------
+
+static HANDLE g_log = INVALID_HANDLE_VALUE;
+static CRITICAL_SECTION g_logLock;
+static volatile LONG g_stop = 0;
+
+static void EnsureDirectoryTree(const char* filePath) {
+    char dir[MAX_PATH];
+    lstrcpynA(dir, filePath, MAX_PATH);
+    char* slash = strrchr(dir, '\\');
+    if (!slash) return;
+    *slash = '\0';
+    // Create each component in turn; CreateDirectoryA on an existing dir is a
+    // harmless ERROR_ALREADY_EXISTS.
+    for (char* p = dir; *p; ++p) {
+        if (*p == '\\' && p != dir && *(p - 1) != ':') {
+            *p = '\0';
+            CreateDirectoryA(dir, NULL);
+            *p = '\\';
+        }
+    }
+    CreateDirectoryA(dir, NULL);
+}
+
+static void ResolveLogPath(char* out, size_t outLen) {
+    DWORD n = GetEnvironmentVariableA("SCPLUGIN_LOG", out, (DWORD)outLen);
+    if (n == 0 || n >= outLen) {
+        lstrcpynA(out, "C:\\sc-work\\logs\\sc-plugin.log", (int)outLen);
+    }
+}
+
+static void LogOpen(void) {
+    char path[MAX_PATH];
+    ResolveLogPath(path, sizeof(path));
+    EnsureDirectoryTree(path);
+    g_log = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+}
+
+static void LogLine(const char* fmt, ...) {
+    if (g_log == INVALID_HANDLE_VALUE) return;
+
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+
+    char body[2048];
+    va_list ap;
+    va_start(ap, fmt);
+    _vsnprintf(body, sizeof(body) - 1, fmt, ap);
+    va_end(ap);
+    body[sizeof(body) - 1] = '\0';
+
+    char line[2200];
+    int len = _snprintf(line, sizeof(line) - 1,
+                        "[%04u-%02u-%02u %02u:%02u:%02u.%03u] %s\r\n",
+                        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute,
+                        st.wSecond, st.wMilliseconds, body);
+    if (len < 0) return;
+    line[sizeof(line) - 1] = '\0';
+
+    EnterCriticalSection(&g_logLock);
+    DWORD written = 0;
+    WriteFile(g_log, line, (DWORD)len, &written, NULL);
+    FlushFileBuffers(g_log);  // so the log is readable live while the game runs
+    LeaveCriticalSection(&g_logLock);
+}
+
+// ---------------------------------------------------------------------------
+// Read-only memory access
+// ---------------------------------------------------------------------------
+
+// Copies n bytes out of the target address if, and only if, the whole range sits
+// inside one committed, readable region. Never writes to the game. Returns false
+// instead of faulting on a bad address, so a wrong static offset produces a log
+// line saying "unreadable" rather than a crashed game.
+static bool SafeRead(const void* addr, void* out, size_t n) {
+    MEMORY_BASIC_INFORMATION mbi;
+    if (VirtualQuery(addr, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
+    if (mbi.State != MEM_COMMIT) return false;
+    if (mbi.Protect & PAGE_GUARD) return false;
+
+    const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
+                           PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+                           PAGE_EXECUTE_WRITECOPY;
+    if ((mbi.Protect & readable) == 0) return false;
+
+    const BYTE* start  = (const BYTE*)addr;
+    const BYTE* regEnd = (const BYTE*)mbi.BaseAddress + mbi.RegionSize;
+    if (start < (const BYTE*)mbi.BaseAddress) return false;
+    if (start + n > regEnd) return false;
+
+    memcpy(out, addr, n);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Selection snapshot
+// ---------------------------------------------------------------------------
+
+struct Snapshot {
+    BYTE  count;                              // clientSelectionCount (u8)
+    BYTE  iterator;                           // selectionIterator (u8)
+    DWORD playerId;                           // 0x0051267C
+    DWORD playerId688;                        // 0x00512688
+    DWORD playerId678;                        // 0x00512678
+    DWORD group[SC_SELECTION_SLOTS];          // clientSelectionGroup
+    DWORD group2[SC_SELECTION_SLOTS];         // clientSelectionGroup2
+    DWORD active[SC_SELECTION_SLOTS];         // activePlayerSelection
+    DWORD playerRow[SC_SELECTION_SLOTS];      // playersSelections[playerId]
+    BYTE  ok;                                 // bitmask of which reads succeeded
+};
+
+enum {
+    OK_COUNT = 1 << 0, OK_GROUP = 1 << 1, OK_GROUP2 = 1 << 2,
+    OK_ACTIVE = 1 << 3, OK_ROW = 1 << 4, OK_IDS = 1 << 5
+};
+
+static BYTE* g_base = NULL;   // actual load address of StarCraft.exe
+
+static void* Rt(DWORD staticVa) {
+    return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE));
+}
+
+static int NonNull(const DWORD* arr) {
+    int n = 0;
+    for (int i = 0; i < SC_SELECTION_SLOTS; ++i) if (arr[i]) ++n;
+    return n;
+}
+
+static void FormatSlots(const DWORD* arr, char* out, size_t outLen) {
+    size_t used = 0;
+    out[0] = '\0';
+    for (int i = 0; i < SC_SELECTION_SLOTS; ++i) {
+        if (!arr[i]) continue;
+        char one[32];
+        int k = _snprintf(one, sizeof(one) - 1, "%s[%d]=0x%08lX",
+                          used ? " " : "", i, (unsigned long)arr[i]);
+        if (k < 0) break;
+        one[sizeof(one) - 1] = '\0';
+        if (used + (size_t)k + 1 >= outLen) break;
+        memcpy(out + used, one, (size_t)k + 1);
+        used += (size_t)k;
+    }
+    if (used == 0) lstrcpynA(out, "(none)", (int)outLen);
+}
+
+static void TakeSnapshot(Snapshot* s) {
+    memset(s, 0, sizeof(*s));
+
+    if (SafeRead(Rt(SC_VA_CLIENT_SELECTION_COUNT), &s->count, 1)) s->ok |= OK_COUNT;
+    SafeRead(Rt(SC_VA_SELECTION_ITERATOR), &s->iterator, 1);
+
+    if (SafeRead(Rt(SC_VA_ACTIVE_PLAYER_ID), &s->playerId, 4) &&
+        SafeRead(Rt(SC_VA_PLAYER_ID_512688), &s->playerId688, 4) &&
+        SafeRead(Rt(SC_VA_PLAYER_ID_512678), &s->playerId678, 4)) {
+        s->ok |= OK_IDS;
+    }
+
+    if (SafeRead(Rt(SC_VA_CLIENT_SELECTION_GROUP), s->group, sizeof(s->group)))
+        s->ok |= OK_GROUP;
+    if (SafeRead(Rt(SC_VA_CLIENT_SELECTION_GROUP2), s->group2, sizeof(s->group2)))
+        s->ok |= OK_GROUP2;
+    if (SafeRead(Rt(SC_VA_ACTIVE_PLAYER_SELECTION), s->active, sizeof(s->active)))
+        s->ok |= OK_ACTIVE;
+
+    // playersSelections[player] -- clamp the index, the id global is exactly the
+    // kind of thing this task exists to check rather than trust.
+    DWORD p = (s->ok & OK_IDS) ? (s->playerId & 0xFF) : 0;
+    if (p < SC_MAX_PLAYERS) {
+        DWORD rowVa = SC_VA_PLAYERS_SELECTIONS + p * SC_SELECTION_SLOTS * 4;
+        if (SafeRead(Rt(rowVa), s->playerRow, sizeof(s->playerRow))) s->ok |= OK_ROW;
+    }
+}
+
+static void LogSnapshot(const Snapshot* s) {
+    char gbuf[512], abuf[512], rbuf[512], g2buf[512];
+    FormatSlots(s->group,     gbuf,  sizeof(gbuf));
+    FormatSlots(s->active,    abuf,  sizeof(abuf));
+    FormatSlots(s->playerRow, rbuf,  sizeof(rbuf));
+    FormatSlots(s->group2,    g2buf, sizeof(g2buf));
+
+    LogLine("SEL count=%u nonNullGroup=%d iter=%u player=%u/%u/%u ok=0x%02X",
+            (unsigned)s->count, NonNull(s->group), (unsigned)s->iterator,
+            (unsigned)s->playerId, (unsigned)s->playerId688,
+            (unsigned)s->playerId678, (unsigned)s->ok);
+    LogLine("    clientSelectionGroup   %s", gbuf);
+    LogLine("    activePlayerSelection  %s", abuf);
+    LogLine("    playersSelections[%u]   %s", (unsigned)(s->playerId & 0xFF), rbuf);
+    LogLine("    clientSelectionGroup2  %s", g2buf);
+}
+
+// ---------------------------------------------------------------------------
+// Marker channel
+//
+// Correlating "what I did on screen" with "what the log says" after the fact is
+// the whole point of the exercise, and timestamps alone are ambiguous once the
+// game is running at 250ms poll granularity. The driver writes a one-line label
+// into a marker file before each test case; the observer notices the change and
+// stamps it into the log, in-band, between the snapshots it separates.
+//
+// This is a read of a file the observer owns -- it is not a write to, or a hook
+// into, the game.
+// ---------------------------------------------------------------------------
+
+static char g_markerPath[MAX_PATH];
+static char g_lastMarker[256];
+
+static void ResolveMarkerPath(void) {
+    DWORD n = GetEnvironmentVariableA("SCPLUGIN_MARKER", g_markerPath, MAX_PATH);
+    if (n != 0 && n < MAX_PATH) return;
+
+    char logPath[MAX_PATH];
+    ResolveLogPath(logPath, sizeof(logPath));
+    char* slash = strrchr(logPath, '\\');
+    if (slash) {
+        *(slash + 1) = '\0';
+        _snprintf(g_markerPath, MAX_PATH - 1, "%smarker.txt", logPath);
+    } else {
+        lstrcpynA(g_markerPath, "marker.txt", MAX_PATH);
+    }
+    g_markerPath[MAX_PATH - 1] = '\0';
+}
+
+static void PollMarker(void) {
+    HANDLE h = CreateFileA(g_markerPath, GENERIC_READ,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+
+    char buf[256] = {0};
+    DWORD got = 0;
+    ReadFile(h, buf, sizeof(buf) - 1, &got, NULL);
+    CloseHandle(h);
+    buf[got < sizeof(buf) ? got : sizeof(buf) - 1] = '\0';
+
+    for (char* p = buf; *p; ++p) if (*p == '\r' || *p == '\n') { *p = '\0'; break; }
+    if (buf[0] == '\0') return;
+    if (strcmp(buf, g_lastMarker) == 0) return;
+
+    lstrcpynA(g_lastMarker, buf, sizeof(g_lastMarker));
+    LogLine("---- MARK: %s ----", g_lastMarker);
+}
+
+// ---------------------------------------------------------------------------
+// Observer thread
+// ---------------------------------------------------------------------------
+
+static DWORD GetPollMs(void) {
+    char buf[32];
+    DWORD n = GetEnvironmentVariableA("SCPLUGIN_POLL_MS", buf, sizeof(buf));
+    if (n == 0 || n >= sizeof(buf)) return 250;
+    int v = atoi(buf);
+    if (v < 20) v = 20;
+    if (v > 5000) v = 5000;
+    return (DWORD)v;
+}
+
+static DWORD WINAPI ObserverThread(LPVOID) {
+    const DWORD pollMs = GetPollMs();
+    ResolveMarkerPath();
+    LogLine("OBSERVER start pollMs=%u (read-only; no writes to game memory)", pollMs);
+    LogLine("OBSERVER marker file: %s", g_markerPath);
+
+    Snapshot prev;
+    memset(&prev, 0xFF, sizeof(prev));  // force a first log line
+    unsigned ticks = 0;
+
+    while (!InterlockedCompareExchange(&g_stop, 0, 0)) {
+        PollMarker();
+        Snapshot cur;
+        TakeSnapshot(&cur);
+        if (memcmp(&cur, &prev, sizeof(cur)) != 0) {
+            LogSnapshot(&cur);
+            prev = cur;
+        }
+        // Liveness heartbeat: proves the thread is still polling during long
+        // stretches with no selection change (menus, loading screens).
+        if (++ticks % (60000 / pollMs ? 60000 / pollMs : 1) == 0) {
+            LogLine("HEARTBEAT ticks=%u", ticks);
+        }
+        Sleep(pollMs);
+    }
+
+    LogLine("OBSERVER stop ticks=%u", ticks);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Attach
+// ---------------------------------------------------------------------------
+
+static void LogAttachBanner(void) {
+    HMODULE exeMod = GetModuleHandleA(NULL);
+    g_base = (BYTE*)exeMod;
+
+    char exePath[MAX_PATH] = {0};
+    GetModuleFileNameA(exeMod, exePath, MAX_PATH);
+
+    char dllPath[MAX_PATH] = {0};
+    HMODULE self = NULL;
+    GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCSTR)&LogAttachBanner, &self);
+    if (self) GetModuleFileNameA(self, dllPath, MAX_PATH);
+
+    LONG delta = (LONG)((DWORD_PTR)g_base - SC_PREFERRED_IMAGE_BASE);
+
+    LogLine("========================================================");
+    LogLine("ATTACH pid=%u tid=%u", GetCurrentProcessId(), GetCurrentThreadId());
+    LogLine("  host exe      : %s", exePath);
+    LogLine("  plugin dll    : %s", dllPath);
+    LogLine("  module base   : 0x%08X", (unsigned)(DWORD_PTR)g_base);
+    LogLine("  preferred base: 0x%08X", (unsigned)SC_PREFERRED_IMAGE_BASE);
+    LogLine("  reloc delta   : %s0x%08X  => static addresses are %s",
+            delta < 0 ? "-" : "+", (unsigned)(delta < 0 ? -delta : delta),
+            delta == 0 ? "USABLE VERBATIM" : "SHIFTED (rebased by the plugin)");
+
+    // Read a couple of bytes at the image base as a sanity check that we are
+    // reading the mapped image at all ('MZ' == 0x5A4D).
+    WORD mz = 0;
+    if (SafeRead(g_base, &mz, 2)) {
+        LogLine("  image[0..1]   : 0x%04X %s", mz,
+                mz == 0x5A4D ? "('MZ' - mapped image confirmed)" : "(UNEXPECTED)");
+    } else {
+        LogLine("  image[0..1]   : UNREADABLE");
+    }
+}
+
+BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID) {
+    if (reason == DLL_PROCESS_ATTACH) {
+        DisableThreadLibraryCalls(hinst);
+        InitializeCriticalSection(&g_logLock);
+        LogOpen();
+        LogAttachBanner();
+        // The observer runs on its own thread; DllMain itself does nothing but
+        // start it, so we never hold the loader lock while polling.
+        HANDLE h = CreateThread(NULL, 0, ObserverThread, NULL, 0, NULL);
+        if (h) CloseHandle(h);
+        else LogLine("ERROR CreateThread failed gle=%u", GetLastError());
+    } else if (reason == DLL_PROCESS_DETACH) {
+        InterlockedExchange(&g_stop, 1);
+        LogLine("DETACH pid=%u", GetCurrentProcessId());
+        if (g_log != INVALID_HANDLE_VALUE) CloseHandle(g_log);
+        g_log = INVALID_HANDLE_VALUE;
+    }
+    return TRUE;
+}
