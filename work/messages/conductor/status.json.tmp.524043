@@ -1,0 +1,8 @@
+{
+  "state": "processing",
+  "subject": "merging task 010",
+  "updatedAt": "2026-08-07T08:19:07Z",
+  "contextPct": 60,
+  "effort": "xhigh",
+  "model": "Opus 5 (1M context)"
+}
