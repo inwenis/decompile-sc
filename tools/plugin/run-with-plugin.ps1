@@ -43,7 +43,21 @@ param(
     [switch]$WaitForExit,
     # A/B control: launch through exactly this path with our observer NOT injected.
     # Used to prove a symptom is (or is not) ours, and to demonstrate the uninstalled game.
-    [switch]$NoPlugin
+    [switch]$NoPlugin,
+    # What the plugin is allowed to do (task 011). 'observe' is the DEFAULT and the
+    # off switch: read-only, no hooks, nothing written to game memory -- exactly the
+    # task-008 observer. See tools/plugin/README.md "Modes".
+    [ValidateSet('observe', 'hooktest', 'shadow', 'fanout')]
+    [string]$Mode = 'observe',
+    # Log every outgoing command id (default on; noisy but it is what makes a single
+    # hand-driven test run diagnosable without a second run).
+    [ValidateSet('0', '1')][string]$LogCommands = '1',
+    # Per-turn byte budget for fan-out. The replay format length-prefixes each
+    # frame's command block with ONE byte, so 255 is the hard ceiling for everything
+    # every player does in a frame; 200 leaves room. selection-cap.md 6.2.
+    [int]$FanoutBudget = 200,
+    # Override the set of command ids that get fanned out (hex, space separated).
+    [string]$FanoutCmds
 )
 
 $ErrorActionPreference = 'Stop'
@@ -195,7 +209,20 @@ New-Item -ItemType Directory -Path (Split-Path $LogPath -Parent) -Force | Out-Nu
 $env:SCPLUGIN_LOG     = $LogPath
 $env:SCPLUGIN_POLL_MS = "$PollMs"
 
-Write-Host "run-with-plugin: log -> $LogPath (poll ${PollMs}ms)"
+# The plugin defaults to 'observe' when this is unset, so setting it explicitly on
+# every launch keeps "which mode was that run?" answerable from the command alone.
+$env:SCPLUGIN_MODE           = $Mode
+$env:SCPLUGIN_LOG_COMMANDS   = $LogCommands
+$env:SCPLUGIN_FANOUT_BUDGET  = "$FanoutBudget"
+if ($FanoutCmds) { $env:SCPLUGIN_FANOUT_CMDS = $FanoutCmds }
+else { $env:SCPLUGIN_FANOUT_CMDS = '' }
+
+Write-Host "run-with-plugin: log -> $LogPath (poll ${PollMs}ms, mode=$Mode)"
+if ($Mode -eq 'observe') {
+    Write-Host 'run-with-plugin: mode=observe — read-only, the plugin writes NOTHING to game memory'
+} else {
+    Write-Host "run-with-plugin: mode=$Mode — the plugin will patch game memory IN THIS PROCESS ONLY (never on disk)"
+}
 
 $injArgs = @($exe, $dll, '--wait-ms', "$SettleMs")
 

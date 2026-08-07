@@ -1,113 +1,54 @@
-// scplugin.cpp -- read-only observer DLL for StarCraft 1.16.1 (task 008, rung 1).
+// scplugin.cpp -- StarCraft 1.16.1 plugin DLL.
 //
 // WHAT THIS DOES
 //   Loaded into a running StarCraft.exe by scinject.exe. On attach it records the
 //   process id, the module base StarCraft.exe actually loaded at, and the relocation
 //   delta against the PE's preferred base. It then polls the selection globals
 //   mapped statically in research/binary-selection-map.md and appends a line to a
-//   log file whenever the observed state changes.
+//   log file whenever the observed state changes (task 008, rung 1).
 //
-// WHAT THIS DOES NOT DO -- and must not, per task 008 hard rule 3
-//   No writes to game memory. No code patching. No page-protection changes. No
-//   input hooks. No behaviour change of any kind. Every game-memory access in this
-//   file goes through SafeRead(), which only ever memcpy's *out* of the game.
+//   Depending on %SCPLUGIN_MODE% it additionally installs the fan-out hooks
+//   (task 011, sc_fanout.cpp), which is the only part of this plugin that writes to
+//   game memory:
+//
+//     observe   (DEFAULT)  read-only. No hooks, no writes, byte-for-byte the
+//                          task-008 observer. THIS IS THE OFF SWITCH.
+//     hooktest             one hook (queueCommand), logging only, no behaviour change
+//     shadow               + capture the pre-cap selection and log it, still no
+//                          behaviour change
+//     fanout               + fan orders out over the whole captured selection
+//
+//   Unset, misspelled, or unrecognised -> observe. The plugin is passive unless
+//   something explicitly asks for more.
+//
+// WHAT THIS NEVER DOES
+//   It never patches StarCraft.exe on disk. Every modification is in this process's
+//   memory, is reversible, and is undone on unload. The game directory is not
+//   written to at all.
 //
 // Log destination: %SCPLUGIN_LOG% if set, else C:\sc-work\logs\sc-plugin.log.
-// Both are outside the repo; C:/sc-work/ is gitignored (task 008 hard rule 4 --
-// no captured game data is ever committed).
+// Both are outside the repo; C:/sc-work/ is gitignored -- no captured game data is
+// ever committed (AGENTS.md hard rule 1).
 
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "sc_addresses.h"
+#include "sc_fanout.h"
+#include "sc_hook.h"
+#include "sc_log.h"
 
-// ---------------------------------------------------------------------------
-// Logging
-// ---------------------------------------------------------------------------
-
-static HANDLE g_log = INVALID_HANDLE_VALUE;
-static CRITICAL_SECTION g_logLock;
 static volatile LONG g_stop = 0;
-// Set only on the process-termination detach path, where every other thread has
-// already been killed by the OS -- possibly inside the critical section. Blocking
-// on a lock whose owner no longer exists would hang the game on exit, so the last
-// log line is written with a try-lock and dropped rather than waited for.
-static volatile LONG g_logTryLock = 0;
-
-static void EnsureDirectoryTree(const char* filePath) {
-    char dir[MAX_PATH];
-    lstrcpynA(dir, filePath, MAX_PATH);
-    char* slash = strrchr(dir, '\\');
-    if (!slash) return;
-    *slash = '\0';
-    // Create each component in turn; CreateDirectoryA on an existing dir is a
-    // harmless ERROR_ALREADY_EXISTS.
-    for (char* p = dir; *p; ++p) {
-        if (*p == '\\' && p != dir && *(p - 1) != ':') {
-            *p = '\0';
-            CreateDirectoryA(dir, NULL);
-            *p = '\\';
-        }
-    }
-    CreateDirectoryA(dir, NULL);
-}
-
-static void ResolveLogPath(char* out, size_t outLen) {
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_LOG", out, (DWORD)outLen);
-    if (n == 0 || n >= outLen) {
-        lstrcpynA(out, "C:\\sc-work\\logs\\sc-plugin.log", (int)outLen);
-    }
-}
-
-static void LogOpen(void) {
-    char path[MAX_PATH];
-    ResolveLogPath(path, sizeof(path));
-    EnsureDirectoryTree(path);
-    g_log = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                        NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-}
-
-static void LogLine(const char* fmt, ...) {
-    if (g_log == INVALID_HANDLE_VALUE) return;
-
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-
-    char body[2048];
-    va_list ap;
-    va_start(ap, fmt);
-    _vsnprintf(body, sizeof(body) - 1, fmt, ap);
-    va_end(ap);
-    body[sizeof(body) - 1] = '\0';
-
-    char line[2200];
-    int len = _snprintf(line, sizeof(line) - 1,
-                        "[%04u-%02u-%02u %02u:%02u:%02u.%03u] %s\r\n",
-                        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute,
-                        st.wSecond, st.wMilliseconds, body);
-    if (len < 0) return;
-    line[sizeof(line) - 1] = '\0';
-
-    if (InterlockedCompareExchange(&g_logTryLock, 0, 0)) {
-        if (!TryEnterCriticalSection(&g_logLock)) return;
-    } else {
-        EnterCriticalSection(&g_logLock);
-    }
-    DWORD written = 0;
-    WriteFile(g_log, line, (DWORD)len, &written, NULL);
-    FlushFileBuffers(g_log);  // so the log is readable live while the game runs
-    LeaveCriticalSection(&g_logLock);
-}
 
 // ---------------------------------------------------------------------------
 // Read-only memory access
 // ---------------------------------------------------------------------------
 
 // Copies n bytes out of the target address if, and only if, the whole range sits
-// inside one committed, readable region. Never writes to the game. Returns false
-// instead of faulting on a bad address, so a wrong static offset produces a log
-// line saying "unreadable" rather than a crashed game.
+// inside one committed, readable region. Returns false instead of faulting on a bad
+// address, so a wrong static offset produces a log line saying "unreadable" rather
+// than a crashed game.
 static bool SafeRead(const void* addr, void* out, size_t n) {
     MEMORY_BASIC_INFORMATION mbi;
     if (VirtualQuery(addr, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
@@ -214,14 +155,14 @@ static void LogSnapshot(const Snapshot* s) {
     FormatSlots(s->playerRow, rbuf,  sizeof(rbuf));
     FormatSlots(s->group2,    g2buf, sizeof(g2buf));
 
-    LogLine("SEL count=%u nonNullGroup=%d iter=%u player=%u/%u/%u ok=0x%02X",
-            (unsigned)s->count, NonNull(s->group), (unsigned)s->iterator,
-            (unsigned)s->playerId, (unsigned)s->playerId688,
-            (unsigned)s->playerId678, (unsigned)s->ok);
-    LogLine("    clientSelectionGroup   %s", gbuf);
-    LogLine("    activePlayerSelection  %s", abuf);
-    LogLine("    playersSelections[%u]   %s", (unsigned)(s->playerId & 0xFF), rbuf);
-    LogLine("    clientSelectionGroup2  %s", g2buf);
+    ScLog("SEL count=%u nonNullGroup=%d iter=%u player=%u/%u/%u ok=0x%02X",
+          (unsigned)s->count, NonNull(s->group), (unsigned)s->iterator,
+          (unsigned)s->playerId, (unsigned)s->playerId688,
+          (unsigned)s->playerId678, (unsigned)s->ok);
+    ScLog("    clientSelectionGroup   %s", gbuf);
+    ScLog("    activePlayerSelection  %s", abuf);
+    ScLog("    playersSelections[%u]   %s", (unsigned)(s->playerId & 0xFF), rbuf);
+    ScLog("    clientSelectionGroup2  %s", g2buf);
 }
 
 // ---------------------------------------------------------------------------
@@ -245,7 +186,7 @@ static void ResolveMarkerPath(void) {
     if (n != 0 && n < MAX_PATH) return;
 
     char logPath[MAX_PATH];
-    ResolveLogPath(logPath, sizeof(logPath));
+    ScLogResolvePath(logPath, sizeof(logPath));
     char* slash = strrchr(logPath, '\\');
     if (slash) {
         *(slash + 1) = '\0';
@@ -273,7 +214,7 @@ static void PollMarker(void) {
     if (strcmp(buf, g_lastMarker) == 0) return;
 
     lstrcpynA(g_lastMarker, buf, sizeof(g_lastMarker));
-    LogLine("---- MARK: %s ----", g_lastMarker);
+    ScLog("---- MARK: %s ----", g_lastMarker);
 }
 
 // ---------------------------------------------------------------------------
@@ -290,11 +231,14 @@ static DWORD GetPollMs(void) {
     return (DWORD)v;
 }
 
+static ScMode g_mode = SC_MODE_OBSERVE;
+
 static DWORD WINAPI ObserverThread(LPVOID) {
     const DWORD pollMs = GetPollMs();
     ResolveMarkerPath();
-    LogLine("OBSERVER start pollMs=%u (read-only; no writes to game memory)", pollMs);
-    LogLine("OBSERVER marker file: %s", g_markerPath);
+    ScLog("OBSERVER start pollMs=%u mode=%s%s", (unsigned)pollMs, ScModeName(g_mode),
+          g_mode == SC_MODE_OBSERVE ? " (read-only; no writes to game memory)" : "");
+    ScLog("OBSERVER marker file: %s", g_markerPath);
 
     Snapshot prev;
     memset(&prev, 0xFF, sizeof(prev));  // force a first log line
@@ -315,12 +259,13 @@ static DWORD WINAPI ObserverThread(LPVOID) {
         // Liveness heartbeat: proves the thread is still polling during long
         // stretches with no selection change (menus, loading screens).
         if (++ticks % (60000 / pollMs ? 60000 / pollMs : 1) == 0) {
-            LogLine("HEARTBEAT ticks=%u", ticks);
+            ScLog("HEARTBEAT ticks=%u", ticks);
+            ScFanoutLogState();
         }
         Sleep(pollMs);
     }
 
-    LogLine("OBSERVER stop ticks=%u", ticks);
+    ScLog("OBSERVER stop ticks=%u", ticks);
     return 0;
 }
 
@@ -344,25 +289,28 @@ static void LogAttachBanner(void) {
 
     LONG delta = (LONG)((DWORD_PTR)g_base - SC_PREFERRED_IMAGE_BASE);
 
-    LogLine("========================================================");
-    LogLine("ATTACH pid=%u tid=%u", GetCurrentProcessId(), GetCurrentThreadId());
-    LogLine("  host exe      : %s", exePath);
-    LogLine("  plugin dll    : %s", dllPath);
-    LogLine("  module base   : 0x%08X", (unsigned)(DWORD_PTR)g_base);
-    LogLine("  preferred base: 0x%08X", (unsigned)SC_PREFERRED_IMAGE_BASE);
-    LogLine("  reloc delta   : %s0x%08X  => static addresses are %s",
-            delta < 0 ? "-" : "+", (unsigned)(delta < 0 ? -delta : delta),
-            delta == 0 ? "USABLE VERBATIM" : "SHIFTED (rebased by the plugin)");
+    ScLog("========================================================");
+    ScLog("ATTACH pid=%u tid=%u", (unsigned)GetCurrentProcessId(),
+          (unsigned)GetCurrentThreadId());
+    ScLog("  host exe      : %s", exePath);
+    ScLog("  plugin dll    : %s", dllPath);
+    ScLog("  module base   : 0x%08X", (unsigned)(DWORD_PTR)g_base);
+    ScLog("  preferred base: 0x%08X", (unsigned)SC_PREFERRED_IMAGE_BASE);
+    ScLog("  reloc delta   : %s0x%08X  => static addresses are %s",
+          delta < 0 ? "-" : "+", (unsigned)(delta < 0 ? -delta : delta),
+          delta == 0 ? "USABLE VERBATIM" : "SHIFTED (rebased by the plugin)");
 
     // Read a couple of bytes at the image base as a sanity check that we are
     // reading the mapped image at all ('MZ' == 0x5A4D).
     WORD mz = 0;
     if (SafeRead(g_base, &mz, 2)) {
-        LogLine("  image[0..1]   : 0x%04X %s", mz,
-                mz == 0x5A4D ? "('MZ' - mapped image confirmed)" : "(UNEXPECTED)");
+        ScLog("  image[0..1]   : 0x%04X %s", mz,
+              mz == 0x5A4D ? "('MZ' - mapped image confirmed)" : "(UNEXPECTED)");
     } else {
-        LogLine("  image[0..1]   : UNREADABLE");
+        ScLog("  image[0..1]   : UNREADABLE");
     }
+    ScLog("  mode          : %s (%%SCPLUGIN_MODE%%; unset => observe, which writes "
+          "nothing to game memory)", ScModeName(g_mode));
 }
 
 static HANDLE g_observer = NULL;
@@ -370,13 +318,15 @@ static HANDLE g_observer = NULL;
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hinst);
-        InitializeCriticalSection(&g_logLock);
-        LogOpen();
+        ScLogOpen();
+        g_mode = ScFanoutResolveMode();
         LogAttachBanner();
+        ScFanoutInstall(g_base, g_mode);
         // The observer runs on its own thread; DllMain itself does nothing but
         // start it, so we never hold the loader lock while polling.
         g_observer = CreateThread(NULL, 0, ObserverThread, NULL, 0, NULL);
-        if (!g_observer) LogLine("ERROR CreateThread failed gle=%u", GetLastError());
+        if (!g_observer) ScLog("ERROR CreateThread failed gle=%u",
+                               (unsigned)GetLastError());
     } else if (reason == DLL_PROCESS_DETACH) {
         InterlockedExchange(&g_stop, 1);
 
@@ -391,19 +341,22 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         // terminated every other thread, so there is nothing to join, and the
         // log lock may be permanently owned by a thread that no longer exists.
         bool joined = true;
+        if (lpReserved != NULL) ScLogSetTryLock();
+        ScFanoutLogStats();   // the run's counters, on both detach paths
         if (lpReserved == NULL) {
             if (g_observer) joined = (WaitForSingleObject(g_observer, 5000) == WAIT_OBJECT_0);
-        } else {
-            InterlockedExchange(&g_logTryLock, 1);
+            // Un-splice only on the FreeLibrary path. On process exit the address
+            // space is being torn down anyway, and walking the thread list from
+            // DllMain under the loader lock is exactly the kind of call that is
+            // documented as unsafe there.
+            ScFanoutRemove();
         }
 
-        LogLine("DETACH pid=%u", GetCurrentProcessId());
+        ScLog("DETACH pid=%u", (unsigned)GetCurrentProcessId());
 
         if (joined) {
             if (g_observer) { CloseHandle(g_observer); g_observer = NULL; }
-            if (g_log != INVALID_HANDLE_VALUE) CloseHandle(g_log);
-            g_log = INVALID_HANDLE_VALUE;
-            if (lpReserved == NULL) DeleteCriticalSection(&g_logLock);
+            ScLogClose();
         }
         // If the join timed out, the handles and the critical section are leaked
         // on purpose: a thread that may still be logging must not find them
