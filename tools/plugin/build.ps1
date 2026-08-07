@@ -28,7 +28,13 @@ would only show up as a mystifying "the DLL will not load" much later.
 param(
     [string]$ToolchainBin,
     [string]$OutDir,
-    [switch]$DebugBuild
+    [switch]$DebugBuild,
+    # Build AND RUN hooktest.exe, the offline unit test for the inline-detour
+    # engine (src/hooktest.cpp). No StarCraft file is involved. A non-zero exit
+    # from it fails this build -- the detour engine is the one piece that writes
+    # executable memory inside the game, so it is proved here before it is used
+    # there.
+    [switch]$Test
 )
 
 $ErrorActionPreference = 'Stop'
@@ -75,16 +81,30 @@ $common = @(
 )
 if ($DebugBuild) { $common += @('-O0', '-g') } else { $common += @('-O2', '-s') }
 
-$dllOut = Join-Path $OutDir 'scplugin.dll'
-$exeOut = Join-Path $OutDir 'scinject.exe'
+$dllOut  = Join-Path $OutDir 'scplugin.dll'
+$exeOut  = Join-Path $OutDir 'scinject.exe'
+$testOut = Join-Path $OutDir 'hooktest.exe'
+
+# The plugin is several translation units since task 011: the observer, the log,
+# the detour engine and the fan-out hooks.
+$pluginSrc = @('scplugin.cpp', 'sc_log.cpp', 'sc_hook.cpp', 'sc_fanout.cpp') |
+             ForEach-Object { Join-Path $srcDir $_ }
+$testSrc   = @('hooktest.cpp', 'sc_log.cpp', 'sc_hook.cpp') |
+             ForEach-Object { Join-Path $srcDir $_ }
 
 Write-Host 'build: compiling scplugin.dll ...'
-& $gpp @common -shared (Join-Path $srcDir 'scplugin.cpp') -o $dllOut -I $srcDir
+& $gpp @common -shared @pluginSrc -o $dllOut -I $srcDir
 if ($LASTEXITCODE -ne 0) { throw "build: g++ failed for scplugin.dll (exit $LASTEXITCODE)" }
 
 Write-Host 'build: compiling scinject.exe ...'
 & $gpp @common (Join-Path $srcDir 'scinject.cpp') -o $exeOut
 if ($LASTEXITCODE -ne 0) { throw "build: g++ failed for scinject.exe (exit $LASTEXITCODE)" }
+
+if ($Test) {
+    Write-Host 'build: compiling hooktest.exe ...'
+    & $gpp @common @testSrc -o $testOut -I $srcDir
+    if ($LASTEXITCODE -ne 0) { throw "build: g++ failed for hooktest.exe (exit $LASTEXITCODE)" }
+}
 
 function Assert-Pe32 {
     param([string]$Path)
@@ -109,6 +129,7 @@ function Assert-Pe32 {
 
 Assert-Pe32 $dllOut
 Assert-Pe32 $exeOut
+if ($Test) { Assert-Pe32 $testOut }
 
 if (Test-Path -LiteralPath $objdump) {
     Write-Host 'verify: objdump cross-check'
@@ -117,7 +138,16 @@ if (Test-Path -LiteralPath $objdump) {
     & $objdump -p $dllOut | Select-String 'DLL Name:' | ForEach-Object { "  $_" }
 }
 
+if ($Test) {
+    Write-Host ''
+    Write-Host 'build: running hooktest.exe (detour engine, no game involved) ...'
+    & $testOut
+    if ($LASTEXITCODE -ne 0) { throw "build: hooktest.exe FAILED (exit $LASTEXITCODE)" }
+    Write-Host 'build: hooktest OK'
+}
+
 Write-Host ''
 Write-Host "build: OK"
 Write-Host "  $dllOut"
 Write-Host "  $exeOut"
+if ($Test) { Write-Host "  $testOut" }
