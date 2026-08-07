@@ -84,11 +84,12 @@ and `--no-validate` to skip the post-generation check).
 
 Generated maps go into `C:\sc-work\1161-base\Maps\` (the disposable working
 copy), never `C:\sc-install\Starcraft` (hard rule: never touch the pristine
-install). **`tools/make-working-copy.ps1 -Force` purges anything extra under
-the working copy**, so a generated map does not survive a working-copy
-reset -- regenerate it with `./tools/make-test-map.ps1` rather than expecting
-it to persist. Generated `.scx` files are gitignored; only the generator is
-committed.
+install). `tools/make-working-copy.ps1 -Force` preserves anything under
+`Maps\` that isn't part of the pristine install (task 010), so a generated
+map survives a default reset. Pass `-PurgeExtras` for a true byte-for-byte
+mirror that wipes it (along with replays and player profiles) -- if you need
+that, regenerate the map afterwards with `./tools/make-test-map.ps1`.
+Generated `.scx` files are gitignored; only the generator is committed.
 
 ## Validation
 
