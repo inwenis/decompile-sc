@@ -126,7 +126,7 @@ re-running with `-Mode observe`, is a stock 1.16.1 client.
 
 So the run is spent on the one thing only a human can show.
 
-- **51 offline checks pass** (`./tools/plugin/build.ps1 -Test`, no game involved):
+- **50 offline checks pass, 0 failures** (`./tools/plugin/build.ps1 -Test`, no game involved):
   - the detour engine, against three functions whose prologues match the real StarCraft ones byte
     for byte — including that a mismatched prologue is refused rather than patched;
   - the **whole fan-out core**, driven against a fake module image: 36 units and one right-click
