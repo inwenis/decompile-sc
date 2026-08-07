@@ -26,6 +26,27 @@ Nothing else matters. The test never asks how many units there are — the plugi
 | `<MAP>` | the map to pick in the Play Custom dialog |
 | `<HOWTO>` | anything unusual about reaching it (folder, expansion vs original, race choice) |
 
+### Known-good fixture
+
+`<MAP>` = **`(1)Enslavers02b`**, `<HOWTO>` = *Single Player → Expansion (Brood War) → Play Custom →
+browse into `Maps\campaign\`*. Stock Blizzard map, so it is guaranteed loadable. The human is
+**Player 2** (0-based slot 1, which matches the active-player id of 1 observed at runtime in
+`research/runtime-selection-observations.md` §3.8) and starts with **22 mobile selectable units** —
+12 Zealots, 4 Dragoons, 3 Scouts, 2 Observers, 1 Archon — packed into about 11×9 tiles, so one drag
+box catches them all. Nearest hostile army is 44 tiles away.
+
+At 22 units the fan-out is **2 pairs, ~68 bytes**: one `Select` of the 10 units past the cap plus
+the order, then one `Select` of the visible 12 plus the order. Nowhere near any budget.
+
+Two things to expect and not misread: it is a scripted campaign mission, so an intro cutscene or a
+forced camera pan before control is handed over is normal; and a drag box takes every mobile unit
+regardless of type, because the engine only applies a same-type filter to ctrl+click, not to a box.
+
+Worth recording, from task 013's search: **no standard melee or ladder map gives any player more
+than 12 real mobile units** — melee starts are 4–12 workers by design. Only two scripted campaign
+missions in the whole 210-map stock set clear the bar. A future fixture is therefore a campaign map
+or a generated one, not a ladder map.
+
 ---
 
 ## Run A — control: the plugin is passive
