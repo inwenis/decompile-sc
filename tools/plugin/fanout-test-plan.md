@@ -47,6 +47,16 @@ than 12 real mobile units** — melee starts are 4–12 workers by design. Only 
 missions in the whole 210-map stock set clear the bar. A future fixture is therefore a campaign map
 or a generated one, not a ladder map.
 
+### Result of the run (2026-08-07)
+
+Run on this fixture, by the user: **run A moved 12, run B moved all of them.** Full success by the
+table below.
+
+One correction to the paragraph above, from the live run: the drag box captured **24** units, not
+the 22 the static map read predicted — so the static count is a lower bound on what a box actually
+takes, and the plan's rule of never asking the tester to count is the right one. 24 units is 2
+pairs and 72–74 bytes.
+
 ---
 
 ## Run A — control: the plugin is passive
