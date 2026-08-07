@@ -101,16 +101,31 @@ ones.
 ### 1.3 The residual gap, stated plainly
 
 Both passes find a reference only when the array's address is **materialized as a constant** —
-either as an instruction operand or as an encoded absolute address. Code that receives the array
-base as a function parameter, or reads it from another global, is invisible to both. Nothing in
-what was read suggests that pattern is used here (every access seen so far is absolute or
-`base+index*4` off an absolute), but it cannot be excluded by these methods, and no claim below
-depends on excluding it. Where a count is quoted it is a count of *statically resolvable*
-references, and that is the number the relocation work is bounded by from below.
+either as an instruction operand or as an encoded absolute address. Three classes of relocation
+site are therefore invisible to them, and only the first two are genuinely out of reach:
+
+1. **Base in a register.** Code that receives the array base as a function parameter. Nothing read
+   here suggests that pattern is used for these arrays (every access seen is absolute or
+   `base + index*4` off an absolute), but it cannot be excluded by these methods.
+2. **Base in another global.** A pointer to the array stored somewhere and dereferenced. Same
+   status: not seen, not excludable.
+3. **Strides encoded in addressing arithmetic.** This one is *not* out of reach, and round 1 of
+   this document wrongly implied it was covered. `LEA EDX,[EDI + EDI*0x2]` followed by
+   `LEA EAX,[EBX + EDX*0x4]` computes `slot + player*12` — the row stride of `playersSelections` —
+   while naming no address and containing no constant. It is invisible to the cross-reference
+   sweep (§2) *and* to the immediate sweep (§4), yet every such site must change to widen the
+   array. These are found instead by a scale-factor chain sweep and are tabulated in §2.2. A
+   review of round 1 caught this omission; it was a real hole in the relocation work list, not a
+   caveat.
+
+Where a count is quoted it is a count of *statically resolvable* references, and that is the
+number the relocation work is bounded by from below.
 
 ---
 
 ## 2. §8 Q1 — cross-reference sweep
+
+### 2.1 Instructions that name a selection address
 
 Committed table: [`data/selection-xrefs.tsv`](data/selection-xrefs.tsv) — one row per
 (global, instruction), with the instruction address, the containing function's entry point, the
@@ -128,15 +143,94 @@ and which pass found it.
 | `clientSelectionCount` `0x0059723D` | `u8` | **23** | 21 | 0 |
 
 **342 distinct instructions across 140 distinct functions.** That is the floor on the relocation
-work for candidate #2 in [`selection-cap.md`](selection-cap.md) §7.
+work for candidate #2 in [`selection-cap.md`](selection-cap.md) §7. The arithmetic, since the
+numbers do not add up at a glance: the column above sums to **343**, the file holds **345** rows,
+and the headline is **342**. 343 + the 2 non-instruction rows of gap 2 below = 345 rows; 343 − 1
+double-count = 342 distinct instructions, because the `REP MOVSD` at `0x004C38C2` copies
+`activePlayerSelection` into `clientSelectionGroup` and so appears under both globals.
 
-Reading the "element offsets" column: an array whose every element appears (`clientSelectionGroup`,
-`clientSelectionGroup2`) is addressed *slot by slot* with absolute addresses — 12 separate patch
-sites per array. An array showing only offsets 0 and 4 (`activePlayerSelection`) is walked by
-computed index or `REP STOSD` from its base — one patch site, many bound constants. The two need
-different relocation strategies and the table is what tells them apart.
+**How to read the "element offsets" column — with the caveat that matters.** The offsets in that
+column are *where the instruction lands*, which is not the same as *what is literally encoded in
+the instruction*. Only **63 of the 119** `clientSelectionGroup` rows carry an in-range absolute
+address at all; the rest reach the array through a register base that Ghidra resolved by constant
+propagation. Counting encoded dwords directly (pass 2, which knows nothing about disassembly):
 
-### Gaps, stated explicitly
+| Global | Distinct element addresses literally encoded | Which |
+|---|---|---|
+| `clientSelectionGroup` | **7** | `+0, 4, 8, 12, 16, 20, 44` |
+| `clientSelectionGroup2` | **6** | `+0, 4, 8, 12, 16, 20` |
+| `selectionHotkeys` | 10 | base and mid-array walk bases |
+| `playersSelections` | 2 | base and `+4` |
+| `activePlayerSelection` | 1 | base only |
+
+So the correct statement is **"≥7 literally-encoded slot addresses, plus register-base accesses
+resolved by propagation"**, not "12 separate patch sites per array". Offsets 24–40 of
+`clientSelectionGroup` have **zero** encoded dwords anywhere in the binary; their attribution to
+slots 6–11 comes from a single 6-way-unrolled loop where the analyzer propagated a register base.
+That propagation is sound as an account of what the code touches — but it is the same class of
+inference §3.5 warns about, and a relocation strategy costed as "patch 12 absolute slot addresses
+per array" would be costing something the binary does not contain. Round 1 of this document made
+that over-read; the per-row data was always honest, the summary sentence was not.
+
+The distinction the column still supports is real and still matters: an array with several encoded
+slot addresses (`clientSelectionGroup`, `clientSelectionGroup2`) is partly addressed slot by slot,
+while an array showing only its base (`activePlayerSelection`) is walked by computed index or
+`REP STOSD` — one encoded patch site, many bound constants and strides. The two need different
+relocation strategies.
+
+### 2.2 Encoded row strides — the relocation sites no address sweep can find
+
+Committed table: [`data/selection-strides.tsv`](data/selection-strides.tsv).
+
+`playersSelections` is `[8][12]`, so stepping one player row means multiplying by 12. The compiler
+does not emit a 12 for that. It emits a scale-factor chain:
+
+```
+0049AFB5   LEA EDX,[EDI + EDI*0x2]              ; player * 3
+0049AFB8   LEA EAX,[EBX + EDX*0x4]              ; slot + player * 12
+0049AFBB   MOV dword ptr [EAX*0x4 + 0x6284e8],ESI
+```
+
+or, in the byte-offset variant, an early `SHL` and a plain add:
+
+```
+0049A752   LEA EDI,[ESI + ESI*0x2]              ; player * 3
+0049A755   SHL EDI,0x4                          ; * 16  -> player * 48 bytes
+0049A758   ADD EDI,0x6284e8                     ; &playersSelections[player][0]
+```
+
+The first two instructions of each chain name no address and contain no watched constant. **They
+are invisible to §2.1 and to §4 — and every one of them must change to widen the array.**
+
+`tools/ghidra/scripts/StrideSweep.java` finds them mechanically rather than by hand: it seeds on
+`LEA rD,[rA + rA*0x2]` (the only way to get an odd multiplier out of x86 scaled-index addressing),
+follows `rD` forward through the function multiplying in every scale factor applied to it, and
+stops at the instruction that dereferences the result. A chain that reaches **48 bytes = 12 dwords
+= one selection row** is a row-stride site.
+
+Program-wide it found **322** `×3` chains. 296 are in functions with no connection to any selection
+global — `×3` is the compiler's idiom for every 3-, 6-, 12- and 24-byte structure in the binary, so
+those are noise by construction and are counted, not committed. The remaining **26** are in the
+selection functions, and **20 of them are row strides**:
+
+| Array | Row-stride chains | Sites |
+|---|---|---|
+| `playersSelections` (12-slot player row) | **14** | `0x004966CC`, `0x00496A83`, `0x0049A185`, `0x0049A21D`, `0x0049A23B`, `0x0049A752`, `0x0049A768`, `0x0049A869`, `0x0049AFB5`, `0x004C257B`, `0x004C2655`, `0x004C26B0`, `0x004C27D3`, `0x004EEDCB` |
+| `selectionHotkeys` (12-slot group row) | **6** | `0x004965F6`, `0x00496698`, `0x0049675C`, `0x004967FE`, `0x00496958`, `0x00496B56` |
+
+Addresses are the seed `LEA`; the table carries the rest of each chain and the consuming
+instruction. Every one of the 20 resolves to a named target array — 14 end at an access based on
+`0x006284E8`, 6 at one based on `0x0057FE60` — so none is an unattributed guess.
+
+The other 6 selection-relevant chains are committed too, with their multipliers (`×3` and `×12`
+bytes), precisely because "this selection function contains an `×12` chain that is **not** a row
+step" is the kind of near-miss a reader should be able to check rather than take on trust.
+
+**This raises the floor on candidate #2's work list by 20 sites that round 1 did not report.** It
+also changes its shape: 6 of the 20 belong to `selectionHotkeys`, so widening a control group and
+widening a selection are separate stride edits.
+
+### 2.3 Gaps, stated explicitly
 
 1. **One instruction is pass-2 only** — `0x004C26B6`, above. It is in the table.
 2. **Two rows are not instructions.** `0x00500A9E` and `0x00500AC2` in `.rdata` are defined pointer
@@ -151,7 +245,18 @@ different relocation strategies and the table is what tells them apart.
    Relocation must catch mid-array constants like this one, not just base addresses.
 5. **The end-pointer constant is not in this table** and must not be forgotten — see §3.1. Adding it
    raises the true `clientSelectionGroup` site count from 119 to **163**.
-6. Residual method gap: §1.3.
+6. **Three `playersSelections` rows are semantically `activePlayerSelection` end-pointer
+   comparisons.** `CMP EDX,0x6284e8` at `0x0049A303`, `CMP ESI,0x6284e8` at `0x0049AE75` and
+   `CMP ECX,0x6284e8` at `0x004C3B62` each terminate an ascending walk (`ADD reg,4`) over
+   `activePlayerSelection`, whose one-past-the-end address *is* `0x006284E8` — see §3.3, where the
+   two arrays are shown to abut exactly. The sweep files them under `playersSelections` because
+   that is the address they encode, which is the right call for a relocation list (moving
+   `playersSelections` breaks them). It is the wrong call for reading the code, so it is stated
+   here. This is a labelling nuance, not an error: the same address genuinely serves both roles.
+   The table's notes carry the same caveat.
+7. **Encoded strides are not in this table at all** — by construction; see §2.2 for the 20 sites
+   and §1.3 for why neither sweep can see them.
+8. Residual method gap: §1.3.
 
 ---
 
@@ -173,12 +278,17 @@ and asking whether it is free. It is not, in **two** independent ways.
    the literal `0x597238`:
 
    ```
-   004C38FA   CMP EBX,0x597238        ; inside updateSelectedUnitData, walking clientSelectionGroup
+   004C38F2   81 FB 38 72 59 00    CMP EBX,0x597238   ; in updateSelectedUnitData, walking clientSelectionGroup
    ```
 
    These are the loop bounds of the walks over `clientSelectionGroup`. GPTP's constant is not an
    artefact of GPTP; the compiler baked the same one-past-the-end address into 44 sites. Every one
    of them is a relocation site.
+
+   The 44/2 split was re-derived from raw bytes without Ghidra, by scanning `.text` for the
+   little-endian dword `38 72 59 00` and decoding the opcode in front of each hit: **46 occurrences
+   — 37 `81 /7` (`CMP r32,imm32`), 7 `3D` (`CMP EAX,imm32`), 1 `A1` (`MOV EAX,[abs]`) and 1 `A3`
+   (`MOV [abs],EAX`)**. 44 comparisons, 2 data accesses, no third category.
 
 2. **It is also a real 4-byte global, read and written as data.** Two more instructions treat it
    as storage, not as a bound: `MOV EAX,[0x00597238]` at `0x004C3880` and `MOV [0x00597238],EAX`
@@ -325,32 +435,139 @@ each case. That is now demonstrated rather than inferred.
 
 ## 4. §8 Q2 — immediate-constant inventory
 
-Committed table: [`data/selection-immediates.tsv`](data/selection-immediates.tsv) — 111 occurrences,
-each with instruction address, value, and role. 35 functions were swept; 28 of them contain at
-least one watched value.
+Committed table: [`data/selection-immediates.tsv`](data/selection-immediates.tsv) — **139
+occurrences**, each with instruction address, value, operand kind, and role. 45 functions were
+swept; 37 of them contain at least one watched value.
 
-Function list = `selection-cap.md` §4.1–§4.5, **plus** eleven functions that touch the selection
-globals and are named in no public source; they were found by the Q1 sweep and are labelled from
-what their code does. Watched values: `0x0C`, `0x0B`, `0x30`, `0x2C`, `0x12`, `0x1B00` (6912),
-`0x6C0` (1728), `0x360` (864), `0x60` (96).
+Function list = the 24 functions of `selection-cap.md` §4.1–§4.5, **plus** 21 that touch the
+selection globals and are named in no public source; they were found by the Q1 sweep and are
+labelled from what their code does. Watched values: `0x0C`, `0x0B`, `0x30`, `0x2C`, `0x12`,
+`0x180` (384), `0x1B00` (6912), `0x6C0` (1728), `0x360` (864), `0x60` (96).
+
+### The classification rule, and the bug that was in it
+
+An x86 instruction can carry a memory displacement and an immediate at the same time, and for this
+analysis they mean opposite things:
+
+```
+004C275A   80 7E 01 0C    CMP byte ptr [ESI + 0x1],0xc
+```
+
+`0x0C` is the selection cap the received packet count is checked against; `0x1` is merely where
+that count byte sits in the packet. Round 1 classified rows from instruction *text*, matched the
+`[reg + 0x..]` displacement form first, and filed this row as `struct-or-stack-offset`,
+`capRelevant=False` — while §5.4 of this same document used it as the evidence that the wire count
+is unsigned. Anyone filtering the file on `capRelevant=True`, which is its obvious programmatic
+use, would have missed the `CMDRECV_Select` packet-count cap entirely.
+
+`ImmediateSweep.java` now records **`opKind`** — whether the scalar it matched was the immediate or
+part of a memory operand — at the point of match, from Ghidra's operand type, and the classifier
+keys off that. Re-running over the identical 35-function set produced exactly **two** role changes
+in 111 rows, both of them this bug:
+
+| Instruction | was | now |
+|---|---|---|
+| `0x004C275A  CMP byte ptr [ESI + 0x1],0xc` | `struct-or-stack-offset`, not cap-relevant | **`comparison`, cap-relevant** |
+| `0x004C0A9B  MOV byte ptr [EBP + -0x40],0xb` | `struct-or-stack-offset` | **`command-id`** (see below) |
+
+No other row in the file had the same shape. On the unchanged function set the headline becomes
+**44 of 111 cap-relevant**, not 43.
 
 ### Roles
 
+Over the full 45-function sweep:
+
 | Role | Count | Meaning |
 |---|---|---|
-| `struct-or-stack-offset` | 47 | the value is a memory displacement (`[ECX + 0xc]`, `[EBP + 0xc]`) — **not** a cap |
-| `comparison` | 22 | right-hand side of a `CMP` — a check |
-| `loop-bound` | 14 | loaded into a register that then drives a counted loop |
-| `abi-stack-cleanup` | 10 | `RET 0xc` / `ADD ESP,0xc` — calling convention, **not** a cap |
-| `unit-tag-shift` | 10 | `SAR/SHL reg,0xb` — **not** a cap, see below |
-| `array-size` | 5 | `REP STOS` element count — a real buffer length |
-| `index-scale` | 2 | multiplies or steps an index |
+| `struct-or-stack-offset` | 53 | the matched scalar is a memory displacement (`[ECX + 0xc]`, `[EBP + 0xc]`) — **not** a cap |
+| `comparison` | 31 | right-hand side of a `CMP` — a check |
+| `loop-bound` | 15 | loaded into a register that then drives a counted loop |
+| `abi-stack-cleanup` | 12 | `RET 0xc` / `ADD ESP,0xc` / `SUB ESP,0xc` — calling convention and frame arithmetic, **not** a cap |
+| `unit-tag-shift` | 12 | `SAR/SHL reg,0xb` — **not** a cap, see below |
+| `array-size` | 10 | a real buffer extent: a `REP STOS` element count, or a byte length passed to a call |
+| `index-scale` | 4 | multiplies or steps an index (`IMUL`, or `ADD/SUB reg,0x30` walking one row) |
+| `command-id` | 1 | a wire opcode that happens to equal a watched value |
 | `unrelated-constant` | 1 | a unit-id comparison that happens to equal a watched value |
-| `command-id` | 1 | see below |
 
-**43 of the 111 occurrences are cap-relevant.** The other 68 are the reason this had to be a table
+Nine roles, **139 rows, summing exactly**, and no row left `unclassified-review`. (Round 1's table
+listed nine roles summing to 112 against a 111-row file, because `command-id` was in the prose but
+unreachable in the classifier — the displacement rule caught `0x004C0A9B` first.)
+
+**60 of the 139 occurrences are cap-relevant.** The other 79 are the reason this had to be a table
 and not a byte search: the value 12 appears far more often as `CUnit + 0x0C` (the sprite pointer)
 and as a 3-argument stack cleanup than it does as the selection limit.
+
+### Values that do not occur — an absence is a finding
+
+Two of the ten watched values produce **zero** rows across all 45 functions, and both absences are
+load-bearing:
+
+- **`0x2C` (44)** — the last-element offset of a 12-pointer array. It appears as an immediate
+  nowhere. The last element is reached by pointer walking, not by a `+44` displacement.
+- **`0x1B00` (6912)** — the byte size of `selection_hotkeys`. Nowhere either: the array's extent is
+  expressed as the `REP STOSD` **element** count `0x6C0` (1728 dwords) at `0x004965A3` and
+  `0x004EEC73`, never as a byte total. A patcher searching for the byte size would find nothing and
+  might conclude the array size is not hardcoded. It is; it is just counted in dwords.
+
+`build-immediate-table.ps1` reports the zero-occurrence values on every run, so this cannot silently
+stop being true.
+
+### `0x180` — the array's byte size, and ten functions the round-1 spec missed
+
+`0x180` = 384 = `sizeof(playersSelections)` was not among round 1's watched values, although `0x30`
+(48, a 12-pointer row) and `0x6C0` (1728 dwords) already were — the same class of value. It occurs
+three times, in a form that also matters:
+
+```
+004C2D1D   PUSH 0x180                 ; length
+004C2D22   MOV EAX,0x6284e8           ; buffer
+004C2D27   CALL 0x004c3450
+```
+
+and at `0x004D0139` (`PUSH 0x180` / `PUSH 0x6284e8` / `CALL 0x004C3280`) and `0x004D0688`. All three
+are `array-size`, cap-relevant, and all three are **relocation sites that also change the on-disk
+format**.
+
+**What they are, checked rather than assumed.** `0x004C3450` and `0x004C3280` are a compressed-block
+write/read pair — `_fwrite`/`_fread` in 0x2000-byte chunks, both carrying the debug string
+`Starcraft\SWAR\lang\compress.cpp`. Their three callers all carry
+`Starcraft\SWAR\lang\saveload.cpp` strings, and `0x004CFEF0` is unambiguously the load path (it
+`_fread`s the block at `saveload.cpp:0x78d`–`0x7a9` alongside the unit and sprite blocks). So **all
+three `0x180` sites are the save/load path** — which confirms, from this binary, `selection-cap.md`
+§8 q10's claim that the savegame format embeds `playersSelections` at its 12-wide size, previously
+carried by teippi's source alone. (`0x004C2910` and `0x004D02D0` quote the *same* `saveload.cpp`
+line numbers, `0x677` and `0x67e`, i.e. one source routine emitted twice.)
+
+These functions were in the Q1 cross-reference table from the start — they materialise `0x6284E8` —
+but were absent from the immediate sweep's **function list**, so their constants never reached the
+inventory. Chasing `0x180` exposed the gap; closing it properly meant adding every remaining
+`playersSelections` owner, ten functions in all:
+
+| Function | Why it belongs |
+|---|---|
+| `0x0049A170` `removeUnitFromPlayerSelection` | the shift-click removal compaction — see §6.5. Carries three cap constants (`MOV EBX,0xc`, `CMP EAX,0xc`, `CMP EBX,0xc`) that were missing from the inventory entirely |
+| `0x004C2910` `saveGameWriteBlocks` | writes the 384-byte block |
+| `0x004D02D0` `saveGameWriteBlocks2` | writes the 384-byte block (second emission of the same source routine) |
+| `0x004CFEF0` `loadGameReadBlocks` | reads it back |
+| `0x004CEE00` `saveLoadSelectionPtrToTag` | walks all `0x60` dwords converting `CUnit*` → `(uniqueness << 11) \| index` before the write |
+| `0x004CEDA0` `saveLoadSelectionTagToPtr` | walks them back after the read, rejecting entries whose `CUnit + 0xA5` no longer matches |
+| `0x0049A2C0`, `0x004C3B40` | walk `activePlayerSelection` to its end sentinel |
+| `0x00499A60`, `0x0049B870` | index `activePlayerSelection` and read `playersSelections` |
+
+The converter pair is a second confirmation of §6.1's entry encoding, and it is teippi's
+`ConvertUnitPtr<true>`/`<false>` over `bw::selection_groups` — cited in `selection-cap.md` §8 q10
+from teippi's source, now seen in this binary. Each carries a hardcoded `0x60` element count, so
+each is also a cap site.
+
+**The lesson is about the method, not the constant.** The immediate sweep is only as complete as its
+function list, and that list was hand-assembled from prior art plus a first look at the Q1 output.
+Any function in `selection-xrefs.tsv` that is not in `specs/selection-functions.spec` is an
+inventory blind spot by construction. **Coverage is now complete for `playersSelections` — all 20
+functions that touch it are swept — and deliberately incomplete elsewhere**: of the 140 functions
+that touch any selection global, 45 are swept. The largest remaining gap is `clientSelectionGroup`
+(52 touching functions, 3 swept), most of which are HUD/status-screen readers of a single slot. That
+gap is stated rather than closed, because it is a scope decision: the cap constants live in the
+storage-owning code, and the inventory's purpose is to find them, not to enumerate every reader.
 
 ### The two constants most likely to be misread
 
@@ -379,9 +596,10 @@ and as a 3-argument stack cleanup than it does as the selection limit.
 | `0x00496D61` | `selectSingleUnitFromID` | 48 | index-scale | hotkey per-group stride |
 | `0x004965A3`, `0x004EEC73` | hotkey clears | 1728 | array-size | 6912-byte `REP STOSD` |
 | `0x0049A32F`, `0x004EED1F`, `0x004EEDE5` | selection clears | 96 | array-size | 384-byte `REP STOSD` |
-
-`0x2C` (44) does not occur as an immediate in any function swept. The last-element offset is reached
-by pointer walking, not by a `+44` displacement.
+| `0x0049A1EF`, `0x0049A213` | `removeUnitFromPlayerSelection` | 12 | comparison | bounds of the shift-click compaction scan — see §6.5 |
+| `0x0049A18C` | `removeUnitFromPlayerSelection` | 12 | loop-bound | "not found" sentinel for that scan |
+| `0x004C2D1D`, `0x004D0139`, `0x004D0688` | save/load block I/O | 384 | array-size | `sizeof(playersSelections)` written to and read from disk |
+| `0x004CEE08`, `0x004CEDA7` | save/load pointer↔tag converters | 96 | array-size | 96-dword walks over the same array |
 
 ---
 
@@ -546,8 +764,9 @@ checks out, including the single-unit special case.
 Additional fixed-size block operations found, all `REP STOSD` clears rather than copies: 1728 dwords
 over `selection_hotkeys` (`0x004965A3`, `0x004EEC73`), 96 dwords over `playersSelections`
 (`0x0049A32F`, `0x004EED1F`, `0x004EEDE5`), 12 dwords over `activePlayerSelection` and over each of
-`clientSelectionGroup` / `clientSelectionGroup2`. The `SC_memcpy_0`-based shift-click compaction
-that `selection-cap.md` §2.4 flags was **not** traced in this task — still open.
+`clientSelectionGroup` / `clientSelectionGroup2`. The shift-click compaction that
+`selection-cap.md` §2.4 flags is traced in **§6.5** — it turns out to be an inline `REP MOVSD`, not
+a call to `SC_memcpy_0`.
 
 ### 6.3 The wire format, confirmed from the send side
 
@@ -585,11 +804,48 @@ practice is **not established here**. Flagged because a cap change that rewrites
 know the vanilla bound is off by one, and because it is a candidate explanation for otherwise
 unexplained control-group corruption.
 
+### 6.5 q4, second half — the shift-click compaction, found and read
+
+`selection-cap.md` §2.4 and §8 q4 ask about the shift-click compaction that "uses
+`SC_memcpy_0`", and round 1 of this document listed it as **not traced**. Following the stride
+sweep into `0x0049A170` found it. The function takes a `CUnit*` in `EAX` and a player index, and:
+
+1. scans `playersSelections[player]` **6-way unrolled**, bounded by 12, recording both the index of
+   the unit (`iVar4`) and the index of the first NULL (`iVar2` — the live count);
+2. if the unit was found and is not the last live slot, shifts the tail down one:
+
+   ```
+   0049A21D   LEA ECX,[EDI + EDI*0x2]      ; player * 3
+   0049A220   LEA ECX,[EBX + ECX*0x4]      ; found + player * 12
+   0049A223   SHL ECX,0x2                  ; -> byte offset
+   0049A226   LEA EDI,[ECX + 0x6284e8]     ; dst = &slot[found]
+   0049A22C   LEA ESI,[ECX + 0x6284ec]     ; src = &slot[found + 1]
+   0049A236   MOVSD.REP ES:EDI,ESI
+   ```
+
+3. NULLs the vacated last slot (`0x0049A241`).
+
+Two things follow. **It is not a call to `SC_memcpy_0`** — it is an inline `REP MOVSD`, so hooking a
+memcpy would not intercept it. And the overlap question q4 raises is settled for this site: `dst`
+is `src − 4` and the copy runs **ascending**, which is exactly the direction that makes a
+downward shift correct; there is no `memmove` semantics to preserve because the copy never needs
+them. A widened array does not change that, but the `0xC` bounds at `0x0049A18C`, `0x0049A1EF` and
+`0x0049A213`, the unrolled scan's step, and the two stride sites above all change.
+
+The first fixed-size copy of q4 (`updateSelectedUnitData`) was already confirmed in §6.2. **q4 is
+answered for both copies it names**; what remains open is whether any *other* `REP MOVSD` in the
+binary is selection-length-derived, which the stride sweep does not answer because a copy length is
+not an addressing scale.
+
 ---
 
 ## 7. Corrections to `selection-cap.md`
 
 Called out separately because these are inherited claims that the binary does not support.
+
+**All of these have been applied to [`selection-cap.md`](selection-cap.md) itself** (its §10
+revision log records them), so that document no longer states the corrected claims. They are kept
+here because this is where the evidence lives.
 
 1. **§4.4 "the loop is bound-agnostic — it terminates on NULL, not on a count" is wrong.**
    `getActivePlayerNextSelection` (`0x0049A850`) is 33 instructions and opens with:
@@ -605,8 +861,23 @@ Called out separately because these are inherited claims that the binary does no
    The iterator is bounded by a hardcoded 12. NULL entries are *skipped* further down, but
    termination is the count. §4.4 calls this "the single most encouraging finding in this
    document" on the basis that the order-dispatch path would need no change; that conclusion does
-   not hold — this function must be changed too. It is called from **71 sites**, which is the good
-   news: one function to fix, not 71.
+   not hold — this function must be changed too. It is reached from **73 sites**, which is the good
+   news: one function to fix, not 73.
+
+   The gate itself was re-decoded by hand from the file bytes, without Ghidra:
+   `0x0049A857` holds `80 FB 0C` (`CMP BL,0x0C`) followed by `72 04` (`JB +4`). The 73 is sourced
+   two independent ways and they agree:
+
+   | Source | Result |
+   |---|---|
+   | `FuncProbe.java` over the entry point (committed: [`data/selection-function-probe.tsv`](data/selection-function-probe.tsv)) | `refsTotal` **73** |
+   | Raw `rel32` scan of `.text` in the file image, no Ghidra involved | **72** `E8` (`CALL`) **+ 1** `E9` (`JMP`) = **73** |
+
+   The one `JMP` is a tail call at `0x0049A8B7` — inside a block that auto-analysis had left as
+   undefined bytes and that §1.2's code recovery brought back (seed `0x0049A8B0`). Ghidra files it
+   as a call-type reference, which is why `callRefs` reads 73 rather than 72; the raw scan is what
+   separates the two forms. Round 1 of this document said "71 sites" and cited nothing — it was the
+   only unsourced number in it.
 
 2. **§2.2 records an unresolved disagreement on `clientSelectionCount` (`0x0059723D`)** — BWAPI and
    GPTP say `u8`, teippi types it `offset<uint32_t>`. **Resolved: it is a `u8`.** All 23 accesses in
@@ -636,21 +907,35 @@ as a finding, the absence of mismatches is itself the finding: the public prior 
 are trustworthy on this binary. It is the *types* and one *control-flow claim* that needed
 correcting.
 
+The evidence is committed as [`data/selection-function-probe.tsv`](data/selection-function-probe.tsv)
+— all 45 swept functions, with the verdict (`ENTRY-POINT` for 45 of 45), body extent, instruction
+count and reference breakdown for each. The 23 inherited addresses are the rows whose labels come
+from public sources; the rest are this task's own, so they are entry points by construction and
+prove nothing on their own.
+
 ---
 
 ## 8. Confidence and method
 
 ### Verified directly against the binary in this task
 
-- The working copy's SHA-256, twice (host tool and Ghidra).
+- The working copy's SHA-256, twice (host tool and Ghidra), on every run including round 2's.
 - Language, image base, entry point, section layout, and the BSS boundary (§0).
-- 342 referencing instructions across 140 functions for the seven globals (§2).
-- 111 constant occurrences with roles (§4).
+- 342 referencing instructions across 140 functions for the seven globals (§2.1).
+- 20 encoded row strides in the selection functions, out of 322 `×3` chains program-wide (§2.2).
+- 139 constant occurrences with roles, across 45 functions (§4).
 - The neighbour identity behind every one of the five arrays (§3).
 - Array shapes: `[8][12]` for `playersSelections`, `[8][18][12]` for `selection_hotkeys`, 12 for the
   three client/active arrays — each from at least two independent instruction sites.
 - Signedness of both receive-side count checks (§5.4), the entry encoding of `selection_hotkeys`
   (§6.1), the width of `clientSelectionCount` (§7.2), and the three send-side command ids (§6.3).
+- Four headline claims were additionally **re-decoded by hand from the file's own bytes with no
+  tooling in the loop**, because they are the ones the rest of the document leans on:
+  `0x0049A857 = 80 FB 0C` (`CMP BL,0xC`, the §7.1 gate); `0x004C275A = 80 7E 01 0C` +
+  `0F 87` (`CMP byte ptr [ESI+1],0xC` / `JA`, the §5.4 unsignedness); `0x004C38F2 =
+  81 FB 38 72 59 00` (`CMP EBX,0x597238`, the §3.1 sentinel) against `0x004C38FA =
+  80 3D 3D 72 59 00 01` (`CMP byte ptr [0x59723D],1`); and the 46 encoded `0x00597238` dwords
+  splitting 44 `CMP` / 2 `MOV`. All four agree with the pipeline's output.
 
 ### Inherited and used as-is
 
@@ -663,17 +948,21 @@ correcting.
 
 ### Open
 
-- **The `SC_memcpy_0` shift-click compaction** (`selection-cap.md` §2.4, §8 q4) — not traced.
-  Whether it has `memcpy` or `memmove` overlap semantics remains unresolved, and it matters for a
-  widened array.
 - **Whether the ~1 KB behind `selection_hotkeys` is genuinely free** (§3.5) — unreferenced is not
   free, and computed-base globals are invisible to this method.
 - **Whether hotkey slot 18 is reachable** and what it corrupts (§6.4).
 - **Why three routines reset only three slots of `clientSelectionGroup2`** (§3.2).
+- **Whether any `REP MOVSD` outside the two now identified has a selection-derived length** (§6.5).
+  A copy length is not an addressing scale, so the stride sweep does not answer it.
+- **The constant inventory is deliberately partial outside `playersSelections`** (§4): 45 of the 140
+  functions that touch a selection global are swept. Coverage is complete for `playersSelections`
+  and thin for `clientSelectionGroup` (3 of 52).
 - **§8 q6 (`CMDACT_Select` queueing vs the 512-byte TurnBuffer), q7 (status-screen dialog
-  resource), q9 (`unit_IsStandardAndMovable` predicate and callers), q10 (other readers:
-  triggers, AI, save/load)** — not attempted in this task.
-- The residual method gap of §1.3, which applies to every count in §2.
+  resource), q9 (`unit_IsStandardAndMovable` predicate and callers)** — not attempted in this task.
+  q10 (other readers) is now **partly answered**: save/load is confirmed in this binary (§4, §6.5),
+  triggers and AI are not examined.
+- The residual method gap of §1.3 — base-in-register and base-in-global — which applies to every
+  count in §2. The third class it used to hide, encoded strides, is now covered by §2.2.
 
 ### Reproducing this
 
@@ -683,17 +972,79 @@ Tooling is committed under `tools/ghidra/`:
 |---|---|
 | `sweep.ps1` | persistent-project driver: `-Mode Prepare` imports and analyzes once, `-Mode Run` executes a query script against the analyzed program with `-noanalysis` (seconds, not minutes) |
 | `scripts/XrefSweep.java` | the two-pass range sweep (§1.1) |
-| `scripts/ImmediateSweep.java` | constant sweep + per-function instruction dump |
+| `scripts/ImmediateSweep.java` | constant sweep + per-function instruction dump; records `opKind` per match (§4) |
+| `scripts/StrideSweep.java` | scale-factor chain sweep for encoded row strides (§2.2) |
 | `scripts/RegionProbe.java` | byte-level occupancy probe (§3) |
-| `scripts/FuncProbe.java` | validates inherited function addresses (§7) |
+| `scripts/FuncProbe.java` | validates inherited function addresses, with a call/jump/total reference breakdown (§7) |
 | `scripts/RawHitDecode.java` | decodes pass-2 hits Ghidra never referenced (§1.1) |
 | `scripts/DisassembleAt.java` | recovers code auto-analysis missed (§1.2) |
 | `scripts/DecompileMany.java` | batch decompile for calibration (§5) |
 | `specs/*.spec` | the swept address ranges and function lists, with the reasoning inline |
-| `build-xref-table.ps1`, `build-immediate-table.ps1` | produce the committed tables in `research/data/` |
+| `specs/selection-code-recovery.spec` | the 24 disassembly seeds §1.2's code recovery is driven from, so the documented command order actually replays |
+| `build-xref-table.ps1`, `build-immediate-table.ps1`, `build-stride-table.ps1` | produce the committed tables in `research/data/` |
+
+Committed data, all of it findings rather than derived game content:
+[`selection-xrefs.tsv`](data/selection-xrefs.tsv) (§2.1),
+[`selection-strides.tsv`](data/selection-strides.tsv) (§2.2),
+[`selection-neighbours.tsv`](data/selection-neighbours.tsv) (§3),
+[`selection-immediates.tsv`](data/selection-immediates.tsv) (§4),
+[`selection-function-probe.tsv`](data/selection-function-probe.tsv) (§7).
 
 The Ghidra install lives at `C:\re-tools\ghidra_12.1.2_PUBLIC` (outside every worktree, so that
 pruning a merged worktree cannot delete it) and is found via `$env:GHIDRA_INSTALL_DIR`. The Ghidra
 project, full listings, decompiled C and per-function instruction dumps are **derived game content**
 and stay under `work/scratch/` (gitignored); only the finding tables in `research/data/` are
 committed.
+
+---
+
+## 9. Revision log
+
+**2026-08-07 — round 2, after adversarial verification.** A reviewer re-derived the headline claims
+from raw bytes without this document's tooling, and separately re-ran the pipeline: the sweep chain
+reproduced `selection-xrefs.tsv` byte-identically (5008 → 5082 functions), 17 randomly sampled rows
+across the three tables each decoded to the claimed instruction, and all inherited addresses
+resolved to entry points. What the review found wrong, and what changed:
+
+1. **The constant classifier used instruction text and could not tell a displacement from an
+   immediate** (§4). `CMP byte ptr [ESI + 0x1],0xc` at `0x004C275A` — the `CMDRECV_Select` packet
+   count cap, the site §5.4 rests on — was filed `struct-or-stack-offset`, `capRelevant=False`.
+   `ImmediateSweep.java` now records the operand kind from Ghidra's operand type. Exactly two rows
+   in 111 changed; on the unchanged function set the headline is **44 of 111**, not 43.
+2. **The `×12` row stride appeared in neither table** (§2.2, §1.3). It is encoded in scale factors,
+   so it is invisible to an address sweep and to a constant sweep alike — yet every site must change
+   to widen the array. New `StrideSweep.java`; **20 row-stride sites** now committed, 14 for
+   `playersSelections` and 6 for `selectionHotkeys`. §1.3 previously described the residual gap as
+   base-in-register / base-in-global only, which implied this class was covered. It was not.
+3. **`0x180` (384 = `sizeof(playersSelections)`) was not watched** (§4). Added; it occurs three
+   times, all in save/load. Chasing it exposed that the immediate sweep's function list was missing
+   ten functions that the cross-reference table already showed touching `playersSelections` — those
+   are now swept, and coverage for that array is complete. The table grew 111 → 139 rows.
+4. **§3.1 quoted `0x004C38FA` for `CMP EBX,0x597238`.** The instruction is at `0x004C38F2`;
+   `0x004C38FA` is `CMP byte ptr [0x0059723D],0x1`. Prose error only — the committed table was
+   always right. Both re-decoded by hand.
+5. **"called from 71 sites" (§7.1) was wrong and unsourced.** It is **73**, confirmed by
+   `FuncProbe` (`refsTotal 73`, now committed) and by an independent raw `rel32` scan (72 `CALL` +
+   1 tail `JMP` at `0x0049A8B7`).
+6. **§4's role table did not match the file it summarised** — nine roles summing to 112 against a
+   111-row file, with a `command-id` role that the classifier could never assign. Fixed at the
+   source: the role is now reachable, and the table sums exactly.
+7. **§2 over-read the element-offset column.** "12 separate patch sites per array" is not what the
+   binary shows: only **7** `clientSelectionGroup` slot addresses are literally encoded anywhere,
+   and only 63 of its 119 rows carry a literal address at all. Restated, with the propagation
+   caveat §3.5 already gave for `selectionHotkeys`.
+8. **The code-recovery seed list was not committed**, so §1.2's documented command order did not
+   replay. Now `specs/selection-code-recovery.spec`, with its derivation written out.
+9. **A watched value with zero occurrences was reported for `0x2C` but not for `0x1B00`.** Both are
+   now reported, and `build-immediate-table.ps1` prints the zero-occurrence list on every run.
+10. **Three `playersSelections` rows are `activePlayerSelection` end-pointer comparisons.** The
+    filing is right for a relocation list and misleading for reading the code; both the table (new
+    `note` column) and §2.3 now say so.
+
+One review claim did **not** hold up, and is recorded here rather than quietly dropped: it stated
+that `0x004C2D1D` is not save/load. It is. That function carries
+`Starcraft\SWAR\lang\saveload.cpp` debug strings and reaches `playersSelections` through the same
+compressed-block writer (`0x004C3450`, `compress.cpp`) whose read counterpart the load path
+`0x004CFEF0` uses on the identical block list. The instruction to watch `0x180` was right; the
+reason given for it was not. (Also minor: the review's third `PUSH 0x180` site is at `0x004D0688`,
+not `0x004D0685`.)

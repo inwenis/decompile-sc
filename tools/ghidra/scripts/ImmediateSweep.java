@@ -10,16 +10,26 @@
 // It exists to be read during analysis and must stay under a gitignored scratch path -- see
 // AGENTS.md hard rule 1. Only the distilled constant table belongs in research/.
 //
+// Each row carries `opKind`, which is what makes the role assignment downstream possible at
+// all. An x86 instruction can carry a memory displacement AND an immediate at once, and the two
+// mean opposite things for this analysis: in `CMP byte ptr [ESI + 0x1],0xc` the 0xc is the
+// SELECTION CAP being checked against a packet field, while the 0x1 is a structure offset. A
+// classifier that only sees the instruction text cannot tell which scalar it matched -- round 1
+// of task 005 classified that very instruction as a struct offset and dropped the single most
+// load-bearing cap site out of its cap-relevant set. So the operand kind is taken from Ghidra's
+// operand type here, at the point where the match is made, and carried through.
+//
 // Script args:
 //   1: output TSV path. Companion dump goes to <path>.body.txt. <path>.manifest is the run's
 //      success signal.
 //   2: spec file -- one function per line: label,functionAddrHex
-//   3: optional -- comma-separated hex watch values. Default: c,b,30,2c,12,1b00
+//   3: optional -- '+'-separated hex watch values. Default: c,b,30,2c,12,180,1b00
 //
 //@category Headless
 
 import ghidra.app.script.GhidraScript;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.lang.OperandType;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.InstructionIterator;
@@ -36,7 +46,10 @@ import java.util.Set;
 
 public class ImmediateSweep extends GhidraScript {
 
-    private static final String DEFAULT_WATCH = "c,b,30,2c,12,1b00";
+    // 180 = 384 = sizeof(playersSelections). Added in round 2: it is pushed as a byte length
+    // beside a materialisation of 0x6284E8, which is the same class of value as the 0x30 and
+    // 0x6C0 already watched, and it is a relocation site.
+    private static final String DEFAULT_WATCH = "c,b,30,2c,12,180,1b00";
 
     @Override
     public void run() throws Exception {
@@ -79,7 +92,7 @@ public class ImmediateSweep extends GhidraScript {
              PrintWriter body = new PrintWriter(Files.newBufferedWriter(Paths.get(outPath + ".body.txt")))) {
 
             w.println(String.join("\t", "label", "specAddr", "resolvedVia", "funcEntry", "funcName",
-                "insAddr", "opIndex", "valueHex", "valueDec", "mnemonic", "instruction"));
+                "insAddr", "opIndex", "opKind", "valueHex", "valueDec", "mnemonic", "instruction"));
 
             for (SweepUtil.Spec s : specs) {
                 Address want = addr(s.hex(0));
@@ -111,6 +124,7 @@ public class ImmediateSweep extends GhidraScript {
                     Instruction ins = it.next();
                     body.println("  " + ins.getAddress() + "  " + ins);
                     for (int op = 0; op < ins.getNumOperands(); op++) {
+                        String opKind = operandKind(ins.getOperandType(op));
                         for (Object o : ins.getOpObjects(op)) {
                             if (!(o instanceof Scalar)) {
                                 continue;
@@ -127,6 +141,7 @@ public class ImmediateSweep extends GhidraScript {
                                 f.getName(),
                                 SweepUtil.hex(ins.getAddress().getOffset()),
                                 Integer.toString(op),
+                                opKind,
                                 "0x" + Long.toHexString(v).toUpperCase(),
                                 Long.toString(v),
                                 ins.getMnemonicString(),
@@ -143,6 +158,24 @@ public class ImmediateSweep extends GhidraScript {
         SweepUtil.writeManifest(outPath, rows, List.of(
             "bodyDump=" + (outPath + ".body.txt").replace("\\", "/"),
             "unresolved=" + String.join(";", unresolved)));
+    }
+
+    /**
+     * What the matched scalar IS within its operand.
+     *
+     *   immediate    a literal operand in its own right -- CMP DL,0xc / PUSH 0x180 / RET 0xc.
+     *   mem-operand  part of a memory reference -- the displacement in [ECX + 0xc], or a scale
+     *                factor. Never a cap for any value watched here (scales are only 1/2/4/8).
+     *   other        neither; emitted rather than guessed at.
+     */
+    private static String operandKind(int type) {
+        if (OperandType.isDynamic(type) || OperandType.isAddress(type)) {
+            return "mem-operand";
+        }
+        if (OperandType.isScalar(type)) {
+            return "immediate";
+        }
+        return "other";
     }
 
     private Address addr(long offset) {

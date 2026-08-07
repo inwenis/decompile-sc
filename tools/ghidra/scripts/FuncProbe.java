@@ -7,7 +7,15 @@
 // wrong or it is expressed against a different base.
 //
 // Per spec address this emits: whether it is an exact entry point, the enclosing function if
-// not, the function's extent, instruction count, caller count and first instruction.
+// not, the function's extent, instruction count, first instruction, and a BREAKDOWN of the
+// references that reach its entry point.
+//
+// The breakdown is three columns, not one, because "how many places call this?" has two
+// different right answers on this binary. getActivePlayerNextSelection (0x0049A850) is reached
+// by 72 CALL instructions and by one tail JMP; a review of task 005 round 1 found the document
+// quoting 71, sourced to nothing. `callRefs` counts CALL-type references, `jumpRefs` counts
+// JUMP-type ones (a tail call is a jump), `refsTotal` counts every reference of any type. Quote
+// the column that matches the claim being made, and say which.
 //
 // Script args:
 //   1: output TSV path (<path>.manifest is the run's success signal)
@@ -49,8 +57,8 @@ public class FuncProbe extends GhidraScript {
         long rows = 0;
         try (PrintWriter w = new PrintWriter(Files.newBufferedWriter(out))) {
             w.println(String.join("\t", "label", "specAddr", "block", "verdict", "funcName",
-                "funcEntry", "bodyMin", "bodyMax", "bodyBytes", "instructions", "callers",
-                "callingConvention", "firstInstruction"));
+                "funcEntry", "bodyMin", "bodyMax", "bodyBytes", "instructions", "callRefs",
+                "jumpRefs", "refsTotal", "callingConvention", "firstInstruction"));
 
             for (SweepUtil.Spec s : specs) {
                 Address a = addr(s.hex(0));
@@ -87,14 +95,20 @@ public class FuncProbe extends GhidraScript {
                     }
                 }
 
-                int callers = 0;
+                int callRefs = 0;
+                int jumpRefs = 0;
+                int refsTotal = 0;
                 if (containing != null) {
                     ReferenceIterator rit = currentProgram.getReferenceManager()
                         .getReferencesTo(containing.getEntryPoint());
                     while (rit.hasNext()) {
                         Reference r = rit.next();
+                        refsTotal++;
                         if (r.getReferenceType().isCall()) {
-                            callers++;
+                            callRefs++;
+                        }
+                        else if (r.getReferenceType().isJump()) {
+                            jumpRefs++;
                         }
                     }
                 }
@@ -110,7 +124,9 @@ public class FuncProbe extends GhidraScript {
                     containing == null ? "" : SweepUtil.hex(containing.getBody().getMaxAddress().getOffset()),
                     containing == null ? "" : Long.toString(containing.getBody().getNumAddresses()),
                     Long.toString(insCount),
-                    Integer.toString(callers),
+                    Integer.toString(callRefs),
+                    Integer.toString(jumpRefs),
+                    Integer.toString(refsTotal),
                     containing == null ? "" : containing.getCallingConventionName(),
                     first));
                 rows++;

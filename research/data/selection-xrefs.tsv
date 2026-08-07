@@ -1,346 +1,346 @@
-global	insAddr	funcEntry	refType	elemIndices	elemCount	firstTarget	instruction	discovery
-activePlayerSelection	0x0045D04D	0x0045D040	DATA	0	1	0x006284B8	MOV ESI,0x6284b8	ghidra-ref
-activePlayerSelection	0x0045D055	0x0045D040	READ	0,1	2	0x006284B8	MOVSD.REP ES:EDI,ESI	ghidra-ref
-activePlayerSelection	0x0046FA97	0x0046FA40	READ	0	1	0x006284B8	MOV EAX,[0x006284b8]	ghidra-ref
-activePlayerSelection	0x0046FAA7	0x0046FA40	DATA	0	1	0x006284B8	MOV ESI,0x6284b8	ghidra-ref
-activePlayerSelection	0x0046FAB3	0x0046FA40	READ	0,1	2	0x006284B8	MOVSD.REP ES:EDI,ESI	ghidra-ref
-activePlayerSelection	0x0046FBAA	0x0046FB40	READ	0	1	0x006284B8	MOV EAX,[0x006284b8]	ghidra-ref
-activePlayerSelection	0x0046FC95	0x0046FB40	DATA	0	1	0x006284B8	MOV ESI,0x6284b8	ghidra-ref
-activePlayerSelection	0x0046FCA0	0x0046FB40	READ	0,1	2	0x006284B8	MOVSD.REP ES:EDI,ESI	ghidra-ref
-activePlayerSelection	0x0046FCF6	0x0046FB40	DATA	0	1	0x006284B8	MOV ECX,0x6284b8	ghidra-ref
-activePlayerSelection	0x0046FCFD	0x0046FB40	DATA	0	1	0x006284B8	LEA ECX,[ECX]	ghidra-ref
-activePlayerSelection	0x0046FD00	0x0046FB40	READ	0,1	2	0x006284B8	MOV EAX,dword ptr [ECX]	ghidra-ref
-activePlayerSelection	0x00499A70	0x00499A60	READ	0,1	2	0x006284B8	MOV ESI,dword ptr [EBX*0x4 + 0x6284b8]	ghidra-ref
-activePlayerSelection	0x00499A98	0x00499A60	WRITE	0	1	0x006284B8	MOV dword ptr [ECX*0x4 + 0x6284b8],EDX	ghidra-ref
-activePlayerSelection	0x0049A2C6	0x0049A2C0	DATA	0	1	0x006284B8	MOV EDX,0x6284b8	ghidra-ref
-activePlayerSelection	0x0049A2D0	0x0049A2C0	READ	0,1	2	0x006284B8	MOV ECX,dword ptr [EDX]	ghidra-ref
-activePlayerSelection	0x0049A328	0x0049A320	DATA	0	1	0x006284B8	MOV EDI,0x6284b8	ghidra-ref
-activePlayerSelection	0x0049A32D	0x0049A320	WRITE	0,1	2	0x006284B8	STOSD.REP ES:EDI	ghidra-ref
-activePlayerSelection	0x0049AE48	0x0049AE40	DATA	0	1	0x006284B8	MOV ESI,0x6284b8	ghidra-ref
-activePlayerSelection	0x0049AE50	0x0049AE40	READ	0,1	2	0x006284B8	MOV EAX,dword ptr [ESI]	ghidra-ref
-activePlayerSelection	0x0049AE56	0x0049AE40	WRITE	0,1	2	0x006284B8	MOV dword ptr [ESI],0x0	ghidra-ref
-activePlayerSelection	0x0049AE92	0x0049AE40	WRITE	0,1	2	0x006284B8	MOV dword ptr [EBX*0x4 + 0x6284b8],ESI	ghidra-ref
-activePlayerSelection	0x0049AEB6	0x0049AE40	WRITE	0	1	0x006284B8	MOV dword ptr [EAX*0x4 + 0x6284b8],ECX	ghidra-ref
-activePlayerSelection	0x0049AEC6	0x0049AE40	READ	0,1	2	0x006284B8	MOV EDX,dword ptr [EBX*0x4 + 0x6284b8]	ghidra-ref
-activePlayerSelection	0x0049B6A0	0x0049B870	READ	0,1	2	0x006284B8	MOV ESI,dword ptr [EBX*0x4 + 0x6284b8]	ghidra-ref
-activePlayerSelection	0x0049B6F7	0x0049B870	WRITE	0	1	0x006284B8	MOV dword ptr [EAX*0x4 + 0x6284b8],ECX	ghidra-ref
-activePlayerSelection	0x0049F7C0	0x0049F7A0	READ	0,1	2	0x006284B8	MOV ECX,dword ptr [EBX*0x4 + 0x6284b8]	ghidra-ref
-activePlayerSelection	0x0049F7D3	0x0049F7A0	DATA	0	1	0x006284B8	MOV ESI,0x6284b8	ghidra-ref
-activePlayerSelection	0x0049F7DB	0x0049F7A0	READ	0,1	2	0x006284B8	MOVSD.REP ES:EDI,ESI	ghidra-ref
-activePlayerSelection	0x004C38B8	0x004C38B0	DATA	0	1	0x006284B8	MOV ESI,0x6284b8	ghidra-ref
-activePlayerSelection	0x004C38C2	0x004C38B0	READ	0,1	2	0x006284B8	MOVSD.REP ES:EDI,ESI	ghidra-ref
-activePlayerSelection	0x004C3B49	0x004C3B40	DATA	0	1	0x006284B8	MOV ECX,0x6284b8	ghidra-ref
-activePlayerSelection	0x004C3B50	0x004C3B40	READ	0,1	2	0x006284B8	MOV EAX,dword ptr [ECX]	ghidra-ref
-activePlayerSelection	0x004D603C	0x004D6010	DATA	0	1	0x006284B8	MOV EDI,dword ptr [ECX*0x4 + 0x6284b8]	ghidra-ref
-activePlayerSelection	0x004E627D	0x004E6260	DATA	0	1	0x006284B8	MOV dword ptr [ECX*0x4 + 0x6284b8],EDX	ghidra-ref
-activePlayerSelection	0x004EED18	0x004EED10	DATA	0	1	0x006284B8	MOV EDI,0x6284b8	ghidra-ref
-activePlayerSelection	0x004EED1D	0x004EED10	WRITE	0,1	2	0x006284B8	STOSD.REP ES:EDI	ghidra-ref
-clientSelectionCount	0x004283F3	0x004283F0	READ	0	1	0x0059723D	MOV CL,byte ptr [0x0059723d]	ghidra-ref
-clientSelectionCount	0x00428965	0x00428960	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref
-clientSelectionCount	0x00428993	0x00428990	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref
-clientSelectionCount	0x00428A13	0x00428A10	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref
-clientSelectionCount	0x00428AD3	0x00428AD0	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref
-clientSelectionCount	0x00428B83	0x00428B80	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref
-clientSelectionCount	0x00428C33	0x00428C30	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref
-clientSelectionCount	0x00428CB3	0x00428CB0	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref
-clientSelectionCount	0x00428E65	0x00428E60	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref
-clientSelectionCount	0x0042965E	0x00429640	READ	0	1	0x0059723D	MOV CL,byte ptr [0x0059723d]	ghidra-ref
-clientSelectionCount	0x004296CE	0x004296B0	READ	0	1	0x0059723D	MOV CL,byte ptr [0x0059723d]	ghidra-ref
-clientSelectionCount	0x0045658C	0x004564E0	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref
-clientSelectionCount	0x0045816A	0x00458120	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref
-clientSelectionCount	0x00458CA9	0x00458BC0	READ	0	1	0x0059723D	MOV AL,[0x0059723d]	ghidra-ref
-clientSelectionCount	0x00458DE7	0x00458DE0	READ	0	1	0x0059723D	MOV CL,byte ptr [0x0059723d]	ghidra-ref
-clientSelectionCount	0x00464638	0x00464360	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref
-clientSelectionCount	0x00492D5E	0x00492CC0	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref
-clientSelectionCount	0x0049FF96	0x0049FED0	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],BL	ghidra-ref
-clientSelectionCount	0x004C38C6	0x004C38B0	WRITE	0	1	0x0059723D	MOV byte ptr [0x0059723d],0x0	ghidra-ref
-clientSelectionCount	0x004C38E9	0x004C38B0	READ_WRITE	0	1	0x0059723D	INC byte ptr [0x0059723d]	ghidra-ref
-clientSelectionCount	0x004C38FA	0x004C38B0	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref
-clientSelectionCount	0x004C3C49	0x004C3BB0	WRITE	0	1	0x0059723D	MOV byte ptr [0x0059723d],BL	ghidra-ref
-clientSelectionCount	0x004E567B	0x004E5640	READ	0	1	0x0059723D	MOV AL,[0x0059723d]	ghidra-ref
-clientSelectionGroup	0x004234D4	0x004234D0	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref
-clientSelectionGroup	0x004234E0	0x004234D0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref
-clientSelectionGroup	0x00423555	0x00423540	DATA	0	1	0x00597208	MOV EDX,0x597208	ghidra-ref
-clientSelectionGroup	0x00423560	0x00423540	READ	0,1	2	0x00597208	MOV ECX,dword ptr [EDX]	ghidra-ref
-clientSelectionGroup	0x00423682	0x00423660	DATA	0	1	0x00597208	MOV EAX,0x597208	ghidra-ref
-clientSelectionGroup	0x00423687	0x00423660	READ	0,1	2	0x00597208	MOV ECX,dword ptr [EAX]	ghidra-ref
-clientSelectionGroup	0x00424384	0x00424380	DATA	0	1	0x00597208	MOV EDX,0x597208	ghidra-ref
-clientSelectionGroup	0x00424390	0x00424380	READ	0,1	2	0x00597208	MOV EAX,dword ptr [EDX]	ghidra-ref
-clientSelectionGroup	0x00424550	0x00424540	READ	0,6	2	0x00597208	MOV ECX,dword ptr [EAX + 0x597208]	ghidra-ref
-clientSelectionGroup	0x0042457A	0x00424540	READ	1,7	2	0x0059720C	MOV ECX,dword ptr [EAX + 0x59720c]	ghidra-ref
-clientSelectionGroup	0x004245A3	0x00424540	READ	2,8	2	0x00597210	MOV ECX,dword ptr [EAX + 0x597210]	ghidra-ref
-clientSelectionGroup	0x004245CD	0x00424540	READ	3,9	2	0x00597214	MOV ECX,dword ptr [EAX + 0x597214]	ghidra-ref
-clientSelectionGroup	0x004245F7	0x00424540	READ	4,10	2	0x00597218	MOV ECX,dword ptr [EAX + 0x597218]	ghidra-ref
-clientSelectionGroup	0x00424621	0x00424540	READ	5,11	2	0x0059721C	MOV ECX,dword ptr [EAX + 0x59721c]	ghidra-ref
-clientSelectionGroup	0x0042466C	0x00424660	DATA	0	1	0x00597208	MOV EAX,0x597208	ghidra-ref
-clientSelectionGroup	0x00424671	0x00424660	READ	0,1	2	0x00597208	MOV ECX,dword ptr [EAX]	ghidra-ref
-clientSelectionGroup	0x004259C2	0x00425960	DATA	0	1	0x00597208	MOV EDI,0x597208	ghidra-ref
-clientSelectionGroup	0x004259CF	0x00425960	READ	0,1	2	0x00597208	MOV EAX,dword ptr [EDI]	ghidra-ref
-clientSelectionGroup	0x004282E0	0x004282E0	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref
-clientSelectionGroup	0x004282E7	0x004282E0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref
-clientSelectionGroup	0x00428310	0x00428310	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref
-clientSelectionGroup	0x00428317	0x00428310	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref
-clientSelectionGroup	0x00428372	0x00428360	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref
-clientSelectionGroup	0x00428380	0x00428360	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref
-clientSelectionGroup	0x004283C0	0x004283C0	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref
-clientSelectionGroup	0x004283C7	0x004283C0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref
-clientSelectionGroup	0x00428480	0x00428480	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref
-clientSelectionGroup	0x00428485	0x00428480	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref
-clientSelectionGroup	0x004284B0	0x004284B0	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref
-clientSelectionGroup	0x004284B5	0x004284B0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref
-clientSelectionGroup	0x00428570	0x00428560	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref
-clientSelectionGroup	0x00428577	0x00428560	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref
-clientSelectionGroup	0x004285B0	0x004285A0	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref
-clientSelectionGroup	0x004285B7	0x004285A0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref
-clientSelectionGroup	0x004285E0	0x004285E0	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref
-clientSelectionGroup	0x004285E7	0x004285E0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref
-clientSelectionGroup	0x00428610	0x00428610	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref
-clientSelectionGroup	0x00428617	0x00428610	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref
-clientSelectionGroup	0x00428640	0x00428640	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref
-clientSelectionGroup	0x00428647	0x00428640	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref
-clientSelectionGroup	0x00428670	0x00428670	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref
-clientSelectionGroup	0x00428677	0x00428670	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref
-clientSelectionGroup	0x004286A0	0x004286A0	DATA	0	1	0x00597208	MOV EDX,0x597208	ghidra-ref
-clientSelectionGroup	0x004286A5	0x004286A0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [EDX]	ghidra-ref
-clientSelectionGroup	0x004286E0	0x004286E0	DATA	0	1	0x00597208	MOV EDX,0x597208	ghidra-ref
-clientSelectionGroup	0x004286E5	0x004286E0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [EDX]	ghidra-ref
-clientSelectionGroup	0x00428733	0x00428730	DATA	0	1	0x00597208	MOV EAX,0x597208	ghidra-ref
-clientSelectionGroup	0x00428740	0x00428730	READ	0,1	2	0x00597208	MOV ESI,dword ptr [EAX]	ghidra-ref
-clientSelectionGroup	0x00428783	0x00428780	DATA	0	1	0x00597208	MOV EAX,0x597208	ghidra-ref
-clientSelectionGroup	0x00428790	0x00428780	READ	0,1	2	0x00597208	MOV ESI,dword ptr [EAX]	ghidra-ref
-clientSelectionGroup	0x00428860	0x00428860	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref
-clientSelectionGroup	0x00428865	0x00428860	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref
-clientSelectionGroup	0x004289A0	0x00428990	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref
-clientSelectionGroup	0x004289A7	0x00428990	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref
-clientSelectionGroup	0x00428A20	0x00428A10	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref
-clientSelectionGroup	0x00428A27	0x00428A10	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref
-clientSelectionGroup	0x00428D40	0x00428D40	DATA	0	1	0x00597208	MOV EDX,0x597208	ghidra-ref
-clientSelectionGroup	0x00428D45	0x00428D40	READ	0	1	0x00597208	MOV EAX,dword ptr [EDX]	ghidra-ref
-clientSelectionGroup	0x00428DA0	0x00428DA0	DATA	0	1	0x00597208	MOV EDX,0x597208	ghidra-ref
-clientSelectionGroup	0x00428DA5	0x00428DA0	READ	0	1	0x00597208	MOV EAX,dword ptr [EDX]	ghidra-ref
-clientSelectionGroup	0x00428E20	0x00428E00	READ	0,1	2	0x00597208	MOV ESI,dword ptr [EDI + 0x597208]	ghidra-ref
-clientSelectionGroup	0x00428EA1	0x00428EA0	DATA	0	1	0x00597208	MOV ESI,0x597208	ghidra-ref
-clientSelectionGroup	0x00428EA6	0x00428EA0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ESI]	ghidra-ref
-clientSelectionGroup	0x00428ED1	0x00428ED0	DATA	0	1	0x00597208	MOV ESI,0x597208	ghidra-ref
-clientSelectionGroup	0x00428ED6	0x00428ED0	READ	0,1	2	0x00597208	MOV ECX,dword ptr [ESI]	ghidra-ref
-clientSelectionGroup	0x00428F31	0x00428F30	DATA	0	1	0x00597208	MOV ESI,0x597208	ghidra-ref
-clientSelectionGroup	0x00428F36	0x00428F30	READ	0,1	2	0x00597208	MOV ECX,dword ptr [ESI]	ghidra-ref
-clientSelectionGroup	0x00428FA3	0x00428FA0	DATA	0	1	0x00597208	MOV EAX,0x597208	ghidra-ref
-clientSelectionGroup	0x00428FB0	0x00428FA0	READ	0,1	2	0x00597208	MOV ESI,dword ptr [EAX]	ghidra-ref
-clientSelectionGroup	0x00428FF2	0x00428FF0	DATA	0	1	0x00597208	MOV EDI,0x597208	ghidra-ref
-clientSelectionGroup	0x00428FF7	0x00428FF0	READ	0,1	2	0x00597208	MOV ESI,dword ptr [EDI]	ghidra-ref
-clientSelectionGroup	0x0042907C	0x00429070	DATA	0	1	0x00597208	MOV ESI,0x597208	ghidra-ref
-clientSelectionGroup	0x00429081	0x00429070	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ESI]	ghidra-ref
-clientSelectionGroup	0x004290FF	0x004290F0	DATA	0	1	0x00597208	MOV EBX,0x597208	ghidra-ref
-clientSelectionGroup	0x00429104	0x004290F0	READ	0,1	2	0x00597208	MOV ESI,dword ptr [EBX]	ghidra-ref
-clientSelectionGroup	0x00429187	0x00429170	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref
-clientSelectionGroup	0x00429190	0x00429170	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref
-clientSelectionGroup	0x004291D7	0x004291C0	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref
-clientSelectionGroup	0x004291E0	0x004291C0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref
-clientSelectionGroup	0x0042921C	0x00429210	DATA	0	1	0x00597208	MOV EBX,0x597208	ghidra-ref
-clientSelectionGroup	0x00429221	0x00429210	READ	0,1	2	0x00597208	MOV ESI,dword ptr [EBX]	ghidra-ref
-clientSelectionGroup	0x004292CC	0x004292C0	DATA	0	1	0x00597208	MOV EBX,0x597208	ghidra-ref
-clientSelectionGroup	0x004292D1	0x004292C0	READ	0,1	2	0x00597208	MOV ESI,dword ptr [EBX]	ghidra-ref
-clientSelectionGroup	0x0042937F	0x00429370	DATA	0	1	0x00597208	MOV EBX,0x597208	ghidra-ref
-clientSelectionGroup	0x00429384	0x00429370	READ	0,1	2	0x00597208	MOV ESI,dword ptr [EBX]	ghidra-ref
-clientSelectionGroup	0x004293EF	0x004293E0	DATA	0	1	0x00597208	MOV EBX,0x597208	ghidra-ref
-clientSelectionGroup	0x004293F4	0x004293E0	READ	0,1	2	0x00597208	MOV ESI,dword ptr [EBX]	ghidra-ref
-clientSelectionGroup	0x00429485	0x00429470	DATA	0	1	0x00597208	MOV ESI,0x597208	ghidra-ref
-clientSelectionGroup	0x00429490	0x00429470	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ESI]	ghidra-ref
-clientSelectionGroup	0x00455A06	0x00455A00	DATA	11	1	0x00597234	MOV EAX,0x597234	ghidra-ref
-clientSelectionGroup	0x00455A12	0x00455A00	DATA	11	1	0x00597234	MOV dword ptr [EBP + -0x4],EAX	ghidra-ref
-clientSelectionGroup	0x00455A15	0x00455A00	READ	10,11	2	0x00597230	MOV EDI,dword ptr [EAX]	ghidra-ref
-clientSelectionGroup	0x00455BB9	0x00455A00	DATA	0	1	0x00597208	CMP EAX,0x597208	ghidra-ref
-clientSelectionGroup	0x00455BBE	0x00455A00	DATA	9,10	2	0x0059722C	MOV dword ptr [EBP + -0x4],EAX	ghidra-ref
-clientSelectionGroup	0x004563D0	0x004563A0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ESI*0x4 + 0x597208]	ghidra-ref
-clientSelectionGroup	0x00456400	0x004563A0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ESI*0x4 + 0x597208]	ghidra-ref
-clientSelectionGroup	0x00456540	0x004564E0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ESI*0x4 + 0x597208]	ghidra-ref
-clientSelectionGroup	0x004565C0	0x004564E0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [EBX*0x4 + 0x597208]	ghidra-ref
-clientSelectionGroup	0x00458BD6	0x00458BC0	DATA	0	1	0x00597208	MOV EAX,0x597208	ghidra-ref
-clientSelectionGroup	0x00458BE7	0x00458BC0	DATA	0	1	0x00597208	MOV dword ptr [EBP + -0x8],EAX	ghidra-ref
-clientSelectionGroup	0x00458BF0	0x00458BC0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [EAX]	ghidra-ref
-clientSelectionGroup	0x00458C8B	0x00458BC0	DATA	2	1	0x00597210	ADD EAX,0x4	ghidra-ref
-clientSelectionGroup	0x00458C93	0x00458BC0	DATA	1,2	2	0x0059720C	MOV dword ptr [EBP + -0x8],EAX	ghidra-ref
-clientSelectionGroup	0x0046F656	0x0046F5B0	DATA	0	1	0x00597208	MOV EAX,0x597208	ghidra-ref
-clientSelectionGroup	0x0046F65C	0x0046F5B0	DATA	0	1	0x00597208	MOV dword ptr [EBP + -0x18],EAX	ghidra-ref
-clientSelectionGroup	0x0046F664	0x0046F5B0	READ	0,1	2	0x00597208	MOV EBX,dword ptr [EAX]	ghidra-ref
-clientSelectionGroup	0x0046F7EC	0x0046F5B0	DATA	1,2	2	0x0059720C	MOV dword ptr [EBP + -0x18],EAX	ghidra-ref
-clientSelectionGroup	0x004C389D	0x004C3780	DATA	0	1	0x00597208	MOV EDI,0x597208	ghidra-ref
-clientSelectionGroup	0x004C38A2	0x004C3780	WRITE	0,1	2	0x00597208	STOSD.REP ES:EDI	ghidra-ref
-clientSelectionGroup	0x004C38BD	0x004C38B0	DATA	0	1	0x00597208	MOV EDI,0x597208	ghidra-ref
-clientSelectionGroup	0x004C38C2	0x004C38B0	WRITE	0,1	2	0x00597208	MOVSD.REP ES:EDI,ESI	ghidra-ref
-clientSelectionGroup	0x004C38D3	0x004C38B0	DATA	0	1	0x00597208	MOV EBX,0x597208	ghidra-ref
-clientSelectionGroup	0x004C38D8	0x004C38B0	READ	0,1	2	0x00597208	MOV EDI,dword ptr [EBX]	ghidra-ref
-clientSelectionGroup	0x004C3910	0x004C38B0	DATA	1	1	0x0059720C	MOV EDI,0x59720c	ghidra-ref
-clientSelectionGroup	0x004C3915	0x004C38B0	WRITE	0	1	0x00597208	MOV dword ptr [0x00597208],ESI	ghidra-ref
-clientSelectionGroup	0x004C391B	0x004C38B0	WRITE	1,2	2	0x0059720C	STOSD.REP ES:EDI	ghidra-ref
-clientSelectionGroup	0x004C3C3C	0x004C3BB0	DATA	0	1	0x00597208	MOV EDI,0x597208	ghidra-ref
-clientSelectionGroup	0x004C3C41	0x004C3BB0	WRITE	0,1	2	0x00597208	STOSD.REP ES:EDI	ghidra-ref
-clientSelectionGroup	0x004E5691	0x004E5640	READ	0	1	0x00597208	MOV EAX,[0x00597208]	ghidra-ref
-clientSelectionGroup2	0x004564FC	0x004564E0	READ	0	1	0x0059724C	MOV EAX,[0x0059724c]	ghidra-ref
-clientSelectionGroup2	0x0049A33B	0x0049A320	WRITE	0	1	0x0059724C	MOV [0x0059724c],EAX	ghidra-ref
-clientSelectionGroup2	0x0049A340	0x0049A320	WRITE	1	1	0x00597250	MOV [0x00597250],EAX	ghidra-ref
-clientSelectionGroup2	0x0049A345	0x0049A320	WRITE	2	1	0x00597254	MOV [0x00597254],EAX	ghidra-ref
-clientSelectionGroup2	0x004BF8A2	0x004BF8A0	WRITE	0	1	0x0059724C	MOV [0x0059724c],EAX	ghidra-ref
-clientSelectionGroup2	0x004BF8A7	0x004BF8A0	WRITE	1	1	0x00597250	MOV [0x00597250],EAX	ghidra-ref
-clientSelectionGroup2	0x004BF8AC	0x004BF8A0	WRITE	2	1	0x00597254	MOV [0x00597254],EAX	ghidra-ref
-clientSelectionGroup2	0x004BF8C2	0x004BF8C0	READ	0,6	2	0x0059724C	MOV ECX,dword ptr [EAX*0x4 + 0x59724c]	ghidra-ref
-clientSelectionGroup2	0x004BF8CD	0x004BF8C0	READ	1,7	2	0x00597250	MOV ECX,dword ptr [EAX*0x4 + 0x597250]	ghidra-ref
-clientSelectionGroup2	0x004BF8D8	0x004BF8C0	READ	2,8	2	0x00597254	MOV ECX,dword ptr [EAX*0x4 + 0x597254]	ghidra-ref
-clientSelectionGroup2	0x004BF8E3	0x004BF8C0	READ	3,9	2	0x00597258	MOV ECX,dword ptr [EAX*0x4 + 0x597258]	ghidra-ref
-clientSelectionGroup2	0x004BF8EE	0x004BF8C0	READ	4,10	2	0x0059725C	MOV ECX,dword ptr [EAX*0x4 + 0x59725c]	ghidra-ref
-clientSelectionGroup2	0x004BF8F9	0x004BF8C0	READ	5,11	2	0x00597260	MOV ECX,dword ptr [EAX*0x4 + 0x597260]	ghidra-ref
-clientSelectionGroup2	0x004BF930	0x004BF8C0	READ	0,1	2	0x0059724C	CMP dword ptr [ECX*0x4 + 0x59724c],EDX	ghidra-ref
-clientSelectionGroup2	0x004BF93F	0x004BF8C0	READ	9	1	0x00597270	MOV EDX,dword ptr [EAX*0x4 + 0x597248]	ghidra-ref
-clientSelectionGroup2	0x004BF947	0x004BF8C0	WRITE	1	1	0x00597250	MOV dword ptr [ECX*0x4 + 0x59724c],EDX	ghidra-ref
-clientSelectionGroup2	0x004BF94E	0x004BF8C0	WRITE	9	1	0x00597270	MOV dword ptr [EAX*0x4 + 0x59724c],0x0	ghidra-ref
-clientSelectionGroup2	0x004BFA40	0x004BFA40	READ	0	1	0x0059724C	MOV EAX,[0x0059724c]	ghidra-ref
-clientSelectionGroup2	0x004C07E0	0x004C07B0	DATA	0	1	0x0059724C	MOV EDI,0x59724c	ghidra-ref
-clientSelectionGroup2	0x004C07E5	0x004C07B0	WRITE	0,1	2	0x0059724C	STOSD.REP ES:EDI	ghidra-ref
-clientSelectionGroup2	0x004C07F3	0x004C07B0	DATA	0	1	0x0059724C	MOV EDI,0x59724c	ghidra-ref
-clientSelectionGroup2	0x004C07F8	0x004C07B0	WRITE	0,1	2	0x0059724C	MOVSD.REP ES:EDI,ESI	ghidra-ref
-clientSelectionGroup2	0x004C07FF	0x004C07B0	WRITE	1	1	0x00597250	MOVSB.REP ES:EDI,ESI	ghidra-ref
-clientSelectionGroup2	0x004C08E0	0x004C0860	READ	0,1	2	0x0059724C	MOV ECX,dword ptr [EAX*0x4 + 0x59724c]	ghidra-ref
-clientSelectionGroup2	0x004C08F7	0x004C0860	DATA	1	1	0x00597250	LEA EAX,[EAX*0x4 + 0x59724c]	ghidra-ref
-clientSelectionGroup2	0x004C096E	0x004C0860	DATA	0	1	0x0059724C	MOV EDI,0x59724c	ghidra-ref
-clientSelectionGroup2	0x004C0980	0x004C0860	READ	0,1	2	0x0059724C	MOV ESI,dword ptr [EDI]	ghidra-ref
-clientSelectionGroup2	0x004C0A02	0x004C0860	DATA	0	1	0x0059724C	MOV EDI,0x59724c	ghidra-ref
-clientSelectionGroup2	0x004C0A07	0x004C0860	WRITE	0,1	2	0x0059724C	STOSD.REP ES:EDI	ghidra-ref
-clientSelectionGroup2	0x004C0A10	0x004C0860	DATA	0	1	0x0059724C	MOV EDI,0x59724c	ghidra-ref
-clientSelectionGroup2	0x004C0A15	0x004C0860	WRITE	0,1	2	0x0059724C	MOVSD.REP ES:EDI,ESI	ghidra-ref
-clientSelectionGroup2	0x004EED2B	0x004EED10	WRITE	0	1	0x0059724C	MOV [0x0059724c],EAX	ghidra-ref
-clientSelectionGroup2	0x004EED30	0x004EED10	WRITE	1	1	0x00597250	MOV [0x00597250],EAX	ghidra-ref
-clientSelectionGroup2	0x004EED35	0x004EED10	WRITE	2	1	0x00597254	MOV [0x00597254],EAX	ghidra-ref
-playersSelections	0x004966D2	0x004965D0	DATA	0	1	0x006284E8	ADD EBX,0x6284e8	ghidra-ref
-playersSelections	0x00496A89	0x00496940	DATA	0	1	0x006284E8	MOV dword ptr [EAX*0x4 + 0x6284e8],ECX	ghidra-ref
-playersSelections	0x00499B0F	0x00499A60	DATA	72,84	2	0x00628608	MOV dword ptr [EBP + -0xc],EDI	ghidra-ref
-playersSelections	0x00499B23	0x00499A60	READ	72,84,85	3	0x00628608	MOV EAX,dword ptr [EDI]	ghidra-ref
-playersSelections	0x0049A191	0x0049A170	DATA	1	1	0x006284EC	ADD ECX,0x6284ec	ghidra-ref
-playersSelections	0x0049A197	0x0049A170	DATA	0,6	2	0x006284E8	MOV EDX,dword ptr [ECX + -0x4]	ghidra-ref
-playersSelections	0x0049A1A4	0x0049A170	DATA	1,7	2	0x006284EC	MOV EDX,dword ptr [ECX]	ghidra-ref
-playersSelections	0x0049A1B1	0x0049A170	DATA	2,8	2	0x006284F0	MOV EDX,dword ptr [ECX + 0x4]	ghidra-ref
-playersSelections	0x0049A1BF	0x0049A170	DATA	3,9	2	0x006284F4	MOV EDX,dword ptr [ECX + 0x8]	ghidra-ref
-playersSelections	0x0049A1CD	0x0049A170	DATA	4	1	0x006284F8	MOV EDX,dword ptr [ECX + 0xc]	ghidra-ref
-playersSelections	0x0049A1DB	0x0049A170	DATA	5	1	0x006284FC	MOV EDX,dword ptr [ECX + 0x10]	ghidra-ref
-playersSelections	0x0049A226	0x0049A170	DATA	0	1	0x006284E8	LEA EDI,[ECX + 0x6284e8]	ghidra-ref
-playersSelections	0x0049A22C	0x0049A170	DATA	1	1	0x006284EC	LEA ESI,[ECX + 0x6284ec]	ghidra-ref
-playersSelections	0x0049A236	0x0049A170	DATA	0,1	2	0x006284E8	MOVSD.REP ES:EDI,ESI	ghidra-ref
-playersSelections	0x0049A241	0x0049A170	DATA	0	1	0x006284E8	MOV dword ptr [ECX*0x4 + 0x6284e8],0x0	ghidra-ref
-playersSelections	0x0049A303	0x0049A2C0	DATA	0	1	0x006284E8	CMP EDX,0x6284e8	ghidra-ref
-playersSelections	0x0049A334	0x0049A320	DATA	0	1	0x006284E8	MOV EDI,0x6284e8	ghidra-ref
-playersSelections	0x0049A339	0x0049A320	WRITE	0,1	2	0x006284E8	STOSD.REP ES:EDI	ghidra-ref
-playersSelections	0x0049A758	0x0049A740	DATA	0	1	0x006284E8	ADD EDI,0x6284e8	ghidra-ref
-playersSelections	0x0049A763	0x0049A740	DATA	0,1	2	0x006284E8	STOSD.REP ES:EDI	ghidra-ref
-playersSelections	0x0049A770	0x0049A740	DATA	0	1	0x006284E8	ADD ESI,0x6284e8	ghidra-ref
-playersSelections	0x0049A776	0x0049A740	DATA	0,1	2	0x006284E8	MOV EAX,dword ptr [ESI]	ghidra-ref
-playersSelections	0x0049A7A3	0x0049A740	DATA	0,1	2	0x006284E8	MOV dword ptr [ESI],0x0	ghidra-ref
-playersSelections	0x0049A870	0x0049A850	DATA	0	1	0x006284E8	MOV EAX,dword ptr [ESI*0x4 + 0x6284e8]	ghidra-ref
-playersSelections	0x0049AE75	0x0049AE40	DATA	0	1	0x006284E8	CMP ESI,0x6284e8	ghidra-ref
-playersSelections	0x0049AFBB	0x0049AF80	DATA	0	1	0x006284E8	MOV dword ptr [EAX*0x4 + 0x6284e8],ESI	ghidra-ref
-playersSelections	0x0049B728	0x0049B870	DATA	0	1	0x006284E8	MOV EDI,0x6284e8	ghidra-ref
-playersSelections	0x0049B736	0x0049B870	DATA	0	1	0x006284E8	MOV dword ptr [EBP + -0x10],EDI	ghidra-ref
-playersSelections	0x0049B770	0x0049B870	READ	0,1	2	0x006284E8	MOV EBX,dword ptr [EDI]	ghidra-ref
-playersSelections	0x0049B85E	0x0049B870	DATA	12,24	2	0x00628518	MOV dword ptr [EBP + -0x10],EDI	ghidra-ref
-playersSelections	0x004C2583	0x004C2560	DATA	1	1	0x006284EC	ADD EAX,0x6284ec	ghidra-ref
-playersSelections	0x004C265B	0x004C2560	DATA	0	1	0x006284E8	ADD EAX,0x6284e8	ghidra-ref
-playersSelections	0x004C26B6	0x004C2560	UNCLASSIFIED	0	1	0x006284E8	MOV dword ptr [EDX*0x4 + 0x6284e8],ESI	raw-dword-only
-playersSelections	0x004C27D9	0x004C2750	DATA	0	1	0x006284E8	ADD EAX,0x6284e8	ghidra-ref
-playersSelections	0x004C2D22	0x004C2910	DATA	0	1	0x006284E8	MOV EAX,0x6284e8	ghidra-ref
-playersSelections	0x004C3B62	0x004C3B40	DATA	0	1	0x006284E8	CMP ECX,0x6284e8	ghidra-ref
-playersSelections	0x004CEDA2	0x004CEDA0	DATA	0	1	0x006284E8	MOV EDX,0x6284e8	ghidra-ref
-playersSelections	0x004CEDB0	0x004CEDA0	READ	0,1	2	0x006284E8	MOV ECX,dword ptr [EDX]	ghidra-ref
-playersSelections	0x004CEDEF	0x004CEDA0	WRITE	0,1	2	0x006284E8	MOV dword ptr [EDX],EAX	ghidra-ref
-playersSelections	0x004CEE03	0x004CEE00	DATA	0	1	0x006284E8	MOV EDI,0x6284e8	ghidra-ref
-playersSelections	0x004CEE10	0x004CEE00	READ	0,1	2	0x006284E8	MOV ESI,dword ptr [EDI]	ghidra-ref
-playersSelections	0x004CEE4B	0x004CEE00	WRITE	0,1	2	0x006284E8	MOV dword ptr [EDI],EAX	ghidra-ref
-playersSelections	0x004D013E	0x004CFEF0	DATA	0	1	0x006284E8	PUSH 0x6284e8	ghidra-ref
-playersSelections	0x004D068D	0x004D02D0	DATA	0	1	0x006284E8	MOV EAX,0x6284e8	ghidra-ref
-playersSelections	0x004EED24	0x004EED10	DATA	0	1	0x006284E8	MOV EDI,0x6284e8	ghidra-ref
-playersSelections	0x004EED29	0x004EED10	WRITE	0,1	2	0x006284E8	STOSD.REP ES:EDI	ghidra-ref
-playersSelections	0x004EEDD1	0x004EED10	DATA	0	1	0x006284E8	ADD ESI,0x6284e8	ghidra-ref
-playersSelections	0x004EEDEA	0x004EED10	DATA	0	1	0x006284E8	MOV EDI,0x6284e8	ghidra-ref
-playersSelections	0x004EEDEF	0x004EED10	WRITE	0,1	2	0x006284E8	STOSD.REP ES:EDI	ghidra-ref
-selectionHotkeys	0x004965A8	0x004965A0	DATA	0	1	0x0057FE60	MOV EDI,0x57fe60	ghidra-ref
-selectionHotkeys	0x004965AD	0x004965A0	WRITE	0,1	2	0x0057FE60	STOSD.REP ES:EDI	ghidra-ref
-selectionHotkeys	0x004965FC	0x004965D0	DATA	0	1	0x0057FE60	LEA EAX,[ESI + 0x57fe60]	ghidra-ref
-selectionHotkeys	0x00496605	0x004965D0	DATA	0	1	0x0057FE60	MOV EAX,dword ptr [EAX]	ghidra-ref
-selectionHotkeys	0x00496653	0x004965D0	DATA	1	1	0x0057FE64	LEA EAX,[ESI + 0x57fe64]	ghidra-ref
-selectionHotkeys	0x00496660	0x004965D0	DATA	0,6	2	0x0057FE60	MOV ECX,dword ptr [EAX + -0x4]	ghidra-ref
-selectionHotkeys	0x00496667	0x004965D0	DATA	1,7	2	0x0057FE64	CMP dword ptr [EAX],0x0	ghidra-ref
-selectionHotkeys	0x0049666C	0x004965D0	DATA	2,8	2	0x0057FE68	MOV ECX,dword ptr [EAX + 0x4]	ghidra-ref
-selectionHotkeys	0x00496673	0x004965D0	DATA	3,9	2	0x0057FE6C	MOV ECX,dword ptr [EAX + 0x8]	ghidra-ref
-selectionHotkeys	0x0049667A	0x004965D0	DATA	4,10	2	0x0057FE70	MOV ECX,dword ptr [EAX + 0xc]	ghidra-ref
-selectionHotkeys	0x00496681	0x004965D0	DATA	5,11	2	0x0057FE74	MOV ECX,dword ptr [EAX + 0x10]	ghidra-ref
-selectionHotkeys	0x0049669E	0x004965D0	DATA	0	1	0x0057FE60	LEA EDI,[EDI + 0x57fe60]	ghidra-ref
-selectionHotkeys	0x004966B1	0x004965D0	DATA	0,1	2	0x0057FE60	STOSD.REP ES:EDI	ghidra-ref
-selectionHotkeys	0x00496740	0x004965D0	DATA	0,1	2	0x0057FE60	CMP dword ptr [EDX],EBX	ghidra-ref
-selectionHotkeys	0x00496766	0x004965D0	DATA	0	1	0x0057FE60	MOV dword ptr [EDX*0x4 + 0x57fe60],EBX	ghidra-ref
-selectionHotkeys	0x0049680C	0x004967E0	DATA	1	1	0x0057FE64	LEA EAX,[ECX + 0x57fe64]	ghidra-ref
-selectionHotkeys	0x00496813	0x004967E0	DATA	0,6	2	0x0057FE60	CMP dword ptr [EAX + -0x4],EDI	ghidra-ref
-selectionHotkeys	0x00496818	0x004967E0	DATA	1,7	2	0x0057FE64	CMP dword ptr [EAX],EDI	ghidra-ref
-selectionHotkeys	0x0049681C	0x004967E0	DATA	2,8	2	0x0057FE68	CMP dword ptr [EAX + 0x4],EDI	ghidra-ref
-selectionHotkeys	0x00496821	0x004967E0	DATA	3,9	2	0x0057FE6C	CMP dword ptr [EAX + 0x8],EDI	ghidra-ref
-selectionHotkeys	0x00496826	0x004967E0	DATA	4,10	2	0x0057FE70	CMP dword ptr [EAX + 0xc],EDI	ghidra-ref
-selectionHotkeys	0x0049682B	0x004967E0	DATA	5,11	2	0x0057FE74	CMP dword ptr [EAX + 0x10],EDI	ghidra-ref
-selectionHotkeys	0x00496852	0x004967E0	DATA	0	1	0x0057FE60	LEA ECX,[ECX + 0x57fe60]	ghidra-ref
-selectionHotkeys	0x00496870	0x004967E0	DATA	0,1	2	0x0057FE60	MOV EAX,dword ptr [ECX]	ghidra-ref
-selectionHotkeys	0x00496967	0x00496940	DATA	1	1	0x0057FE64	ADD EAX,0x57fe64	ghidra-ref
-selectionHotkeys	0x00496970	0x00496940	DATA	0,6	2	0x0057FE60	MOV ECX,dword ptr [EAX + -0x4]	ghidra-ref
-selectionHotkeys	0x00496977	0x00496940	DATA	1,7	2	0x0057FE64	CMP dword ptr [EAX],0x0	ghidra-ref
-selectionHotkeys	0x0049697C	0x00496940	DATA	2,8	2	0x0057FE68	MOV ECX,dword ptr [EAX + 0x4]	ghidra-ref
-selectionHotkeys	0x00496983	0x00496940	DATA	3,9	2	0x0057FE6C	MOV ECX,dword ptr [EAX + 0x8]	ghidra-ref
-selectionHotkeys	0x0049698A	0x00496940	DATA	4,10	2	0x0057FE70	MOV ECX,dword ptr [EAX + 0xc]	ghidra-ref
-selectionHotkeys	0x00496991	0x00496940	DATA	5,11	2	0x0057FE74	MOV ECX,dword ptr [EAX + 0x10]	ghidra-ref
-selectionHotkeys	0x004969EF	0x00496940	DATA	0	1	0x0057FE60	MOV EAX,dword ptr [EBX*0x4 + 0x57fe60]	ghidra-ref
-selectionHotkeys	0x00496AC4	0x00496940	DATA	0	1	0x0057FE60	MOV ECX,dword ptr [EAX*0x4 + 0x57fe60]	ghidra-ref
-selectionHotkeys	0x00496ACB	0x00496940	DATA	0	1	0x0057FE60	MOV dword ptr [EBX*0x4 + 0x57fe60],ECX	ghidra-ref
-selectionHotkeys	0x00496AD2	0x00496940	DATA	0	1	0x0057FE60	MOV dword ptr [EAX*0x4 + 0x57fe60],0x0	ghidra-ref
-selectionHotkeys	0x00496B5E	0x00496B40	DATA	0	1	0x0057FE60	LEA EDX,[EDX + 0x57fe60]	ghidra-ref
-selectionHotkeys	0x00496B67	0x00496B40	DATA	0,1	2	0x0057FE60	CMP dword ptr [EAX],0x0	ghidra-ref
-selectionHotkeys	0x00496B96	0x00496B40	DATA	0,1	2	0x0057FE60	MOV EAX,dword ptr [EBX]	ghidra-ref
-selectionHotkeys	0x00496D4F	0x00496D30	DATA	217	1	0x005801C4	ADD EDI,0x5801c4	ghidra-ref
-selectionHotkeys	0x004EEC78	0x004EEC30	DATA	0	1	0x0057FE60	MOV EDI,0x57fe60	ghidra-ref
-selectionHotkeys	0x004EEC7D	0x004EEC30	WRITE	0,1	2	0x0057FE60	STOSD.REP ES:EDI	ghidra-ref
-selectionHotkeys	0x00500A9E		DATA	104	1	0x00580002	addr 00580002	data-pointer-not-instruction
-selectionHotkeys	0x00500AC2		DATA	104	1	0x00580002	addr 00580002	data-pointer-not-instruction
-selectionIterator	0x00456160	0x004560D0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x0048DCD0	0x0048DCD0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x0048E017	0x0048E010	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x0048E0AB	0x0048E0A0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],BL	ghidra-ref
-selectionIterator	0x0049A851	0x0049A850	READ	0	1	0x006284B6	MOV BL,byte ptr [0x006284b6]	ghidra-ref
-selectionIterator	0x0049A89C	0x0049A850	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],BL	ghidra-ref
-selectionIterator	0x0049A8B0	0x0049A8B0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x0049A8F8	0x0049A8C0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],BL	ghidra-ref
-selectionIterator	0x0049A9F1	0x0049A8C0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x0049AB47	0x0049AB00	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004BFCD3	0x004BFCD0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],BL	ghidra-ref
-selectionIterator	0x004BFF31	0x004BFF30	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004BFFC1	0x004BFFC0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C0071	0x004C0070	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C0104	0x004C0100	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C0661	0x004C0660	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C0721	0x004C0720	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C0CD7	0x004C0CD0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C0E97	0x004C0E90	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C105A	0x004C1050	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],BL	ghidra-ref
-selectionIterator	0x004C124A	0x004C1240	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],BL	ghidra-ref
-selectionIterator	0x004C143A	0x004C1430	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],BL	ghidra-ref
-selectionIterator	0x004C1624	0x004C1620	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C1804	0x004C1800	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],BL	ghidra-ref
-selectionIterator	0x004C1914	0x004C1910	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C1997	0x004C1990	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C1AC1	0x004C1AC0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C1B24	0x004C1B20	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C1BA4	0x004C1BA0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C1C24	0x004C1C20	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C1CC1	0x004C1CC0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C1E84	0x004C1E80	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C1F14	0x004C1F10	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C1FA4	0x004C1FA0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C2041	0x004C2040	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C20C5	0x004C20C0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C2191	0x004C2190	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C23C1	0x004C23C0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C2EC0	0x004C2EC0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C2EF1	0x004C2EF0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
-selectionIterator	0x004C2F31	0x004C2F30	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref
+global	insAddr	funcEntry	refType	elemIndices	elemCount	firstTarget	instruction	discovery	note
+activePlayerSelection	0x0045D04D	0x0045D040	DATA	0	1	0x006284B8	MOV ESI,0x6284b8	ghidra-ref	
+activePlayerSelection	0x0045D055	0x0045D040	READ	0,1	2	0x006284B8	MOVSD.REP ES:EDI,ESI	ghidra-ref	
+activePlayerSelection	0x0046FA97	0x0046FA40	READ	0	1	0x006284B8	MOV EAX,[0x006284b8]	ghidra-ref	
+activePlayerSelection	0x0046FAA7	0x0046FA40	DATA	0	1	0x006284B8	MOV ESI,0x6284b8	ghidra-ref	
+activePlayerSelection	0x0046FAB3	0x0046FA40	READ	0,1	2	0x006284B8	MOVSD.REP ES:EDI,ESI	ghidra-ref	
+activePlayerSelection	0x0046FBAA	0x0046FB40	READ	0	1	0x006284B8	MOV EAX,[0x006284b8]	ghidra-ref	
+activePlayerSelection	0x0046FC95	0x0046FB40	DATA	0	1	0x006284B8	MOV ESI,0x6284b8	ghidra-ref	
+activePlayerSelection	0x0046FCA0	0x0046FB40	READ	0,1	2	0x006284B8	MOVSD.REP ES:EDI,ESI	ghidra-ref	
+activePlayerSelection	0x0046FCF6	0x0046FB40	DATA	0	1	0x006284B8	MOV ECX,0x6284b8	ghidra-ref	
+activePlayerSelection	0x0046FCFD	0x0046FB40	DATA	0	1	0x006284B8	LEA ECX,[ECX]	ghidra-ref	
+activePlayerSelection	0x0046FD00	0x0046FB40	READ	0,1	2	0x006284B8	MOV EAX,dword ptr [ECX]	ghidra-ref	
+activePlayerSelection	0x00499A70	0x00499A60	READ	0,1	2	0x006284B8	MOV ESI,dword ptr [EBX*0x4 + 0x6284b8]	ghidra-ref	
+activePlayerSelection	0x00499A98	0x00499A60	WRITE	0	1	0x006284B8	MOV dword ptr [ECX*0x4 + 0x6284b8],EDX	ghidra-ref	
+activePlayerSelection	0x0049A2C6	0x0049A2C0	DATA	0	1	0x006284B8	MOV EDX,0x6284b8	ghidra-ref	
+activePlayerSelection	0x0049A2D0	0x0049A2C0	READ	0,1	2	0x006284B8	MOV ECX,dword ptr [EDX]	ghidra-ref	
+activePlayerSelection	0x0049A328	0x0049A320	DATA	0	1	0x006284B8	MOV EDI,0x6284b8	ghidra-ref	
+activePlayerSelection	0x0049A32D	0x0049A320	WRITE	0,1	2	0x006284B8	STOSD.REP ES:EDI	ghidra-ref	
+activePlayerSelection	0x0049AE48	0x0049AE40	DATA	0	1	0x006284B8	MOV ESI,0x6284b8	ghidra-ref	
+activePlayerSelection	0x0049AE50	0x0049AE40	READ	0,1	2	0x006284B8	MOV EAX,dword ptr [ESI]	ghidra-ref	
+activePlayerSelection	0x0049AE56	0x0049AE40	WRITE	0,1	2	0x006284B8	MOV dword ptr [ESI],0x0	ghidra-ref	
+activePlayerSelection	0x0049AE92	0x0049AE40	WRITE	0,1	2	0x006284B8	MOV dword ptr [EBX*0x4 + 0x6284b8],ESI	ghidra-ref	
+activePlayerSelection	0x0049AEB6	0x0049AE40	WRITE	0	1	0x006284B8	MOV dword ptr [EAX*0x4 + 0x6284b8],ECX	ghidra-ref	
+activePlayerSelection	0x0049AEC6	0x0049AE40	READ	0,1	2	0x006284B8	MOV EDX,dword ptr [EBX*0x4 + 0x6284b8]	ghidra-ref	
+activePlayerSelection	0x0049B6A0	0x0049B870	READ	0,1	2	0x006284B8	MOV ESI,dword ptr [EBX*0x4 + 0x6284b8]	ghidra-ref	
+activePlayerSelection	0x0049B6F7	0x0049B870	WRITE	0	1	0x006284B8	MOV dword ptr [EAX*0x4 + 0x6284b8],ECX	ghidra-ref	
+activePlayerSelection	0x0049F7C0	0x0049F7A0	READ	0,1	2	0x006284B8	MOV ECX,dword ptr [EBX*0x4 + 0x6284b8]	ghidra-ref	
+activePlayerSelection	0x0049F7D3	0x0049F7A0	DATA	0	1	0x006284B8	MOV ESI,0x6284b8	ghidra-ref	
+activePlayerSelection	0x0049F7DB	0x0049F7A0	READ	0,1	2	0x006284B8	MOVSD.REP ES:EDI,ESI	ghidra-ref	
+activePlayerSelection	0x004C38B8	0x004C38B0	DATA	0	1	0x006284B8	MOV ESI,0x6284b8	ghidra-ref	
+activePlayerSelection	0x004C38C2	0x004C38B0	READ	0,1	2	0x006284B8	MOVSD.REP ES:EDI,ESI	ghidra-ref	
+activePlayerSelection	0x004C3B49	0x004C3B40	DATA	0	1	0x006284B8	MOV ECX,0x6284b8	ghidra-ref	
+activePlayerSelection	0x004C3B50	0x004C3B40	READ	0,1	2	0x006284B8	MOV EAX,dword ptr [ECX]	ghidra-ref	
+activePlayerSelection	0x004D603C	0x004D6010	DATA	0	1	0x006284B8	MOV EDI,dword ptr [ECX*0x4 + 0x6284b8]	ghidra-ref	
+activePlayerSelection	0x004E627D	0x004E6260	DATA	0	1	0x006284B8	MOV dword ptr [ECX*0x4 + 0x6284b8],EDX	ghidra-ref	
+activePlayerSelection	0x004EED18	0x004EED10	DATA	0	1	0x006284B8	MOV EDI,0x6284b8	ghidra-ref	
+activePlayerSelection	0x004EED1D	0x004EED10	WRITE	0,1	2	0x006284B8	STOSD.REP ES:EDI	ghidra-ref	
+clientSelectionCount	0x004283F3	0x004283F0	READ	0	1	0x0059723D	MOV CL,byte ptr [0x0059723d]	ghidra-ref	
+clientSelectionCount	0x00428965	0x00428960	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref	
+clientSelectionCount	0x00428993	0x00428990	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref	
+clientSelectionCount	0x00428A13	0x00428A10	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref	
+clientSelectionCount	0x00428AD3	0x00428AD0	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref	
+clientSelectionCount	0x00428B83	0x00428B80	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref	
+clientSelectionCount	0x00428C33	0x00428C30	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref	
+clientSelectionCount	0x00428CB3	0x00428CB0	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref	
+clientSelectionCount	0x00428E65	0x00428E60	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref	
+clientSelectionCount	0x0042965E	0x00429640	READ	0	1	0x0059723D	MOV CL,byte ptr [0x0059723d]	ghidra-ref	
+clientSelectionCount	0x004296CE	0x004296B0	READ	0	1	0x0059723D	MOV CL,byte ptr [0x0059723d]	ghidra-ref	
+clientSelectionCount	0x0045658C	0x004564E0	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref	
+clientSelectionCount	0x0045816A	0x00458120	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref	
+clientSelectionCount	0x00458CA9	0x00458BC0	READ	0	1	0x0059723D	MOV AL,[0x0059723d]	ghidra-ref	
+clientSelectionCount	0x00458DE7	0x00458DE0	READ	0	1	0x0059723D	MOV CL,byte ptr [0x0059723d]	ghidra-ref	
+clientSelectionCount	0x00464638	0x00464360	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref	
+clientSelectionCount	0x00492D5E	0x00492CC0	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref	
+clientSelectionCount	0x0049FF96	0x0049FED0	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],BL	ghidra-ref	
+clientSelectionCount	0x004C38C6	0x004C38B0	WRITE	0	1	0x0059723D	MOV byte ptr [0x0059723d],0x0	ghidra-ref	
+clientSelectionCount	0x004C38E9	0x004C38B0	READ_WRITE	0	1	0x0059723D	INC byte ptr [0x0059723d]	ghidra-ref	
+clientSelectionCount	0x004C38FA	0x004C38B0	READ	0	1	0x0059723D	CMP byte ptr [0x0059723d],0x1	ghidra-ref	
+clientSelectionCount	0x004C3C49	0x004C3BB0	WRITE	0	1	0x0059723D	MOV byte ptr [0x0059723d],BL	ghidra-ref	
+clientSelectionCount	0x004E567B	0x004E5640	READ	0	1	0x0059723D	MOV AL,[0x0059723d]	ghidra-ref	
+clientSelectionGroup	0x004234D4	0x004234D0	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref	
+clientSelectionGroup	0x004234E0	0x004234D0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref	
+clientSelectionGroup	0x00423555	0x00423540	DATA	0	1	0x00597208	MOV EDX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00423560	0x00423540	READ	0,1	2	0x00597208	MOV ECX,dword ptr [EDX]	ghidra-ref	
+clientSelectionGroup	0x00423682	0x00423660	DATA	0	1	0x00597208	MOV EAX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00423687	0x00423660	READ	0,1	2	0x00597208	MOV ECX,dword ptr [EAX]	ghidra-ref	
+clientSelectionGroup	0x00424384	0x00424380	DATA	0	1	0x00597208	MOV EDX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00424390	0x00424380	READ	0,1	2	0x00597208	MOV EAX,dword ptr [EDX]	ghidra-ref	
+clientSelectionGroup	0x00424550	0x00424540	READ	0,6	2	0x00597208	MOV ECX,dword ptr [EAX + 0x597208]	ghidra-ref	
+clientSelectionGroup	0x0042457A	0x00424540	READ	1,7	2	0x0059720C	MOV ECX,dword ptr [EAX + 0x59720c]	ghidra-ref	
+clientSelectionGroup	0x004245A3	0x00424540	READ	2,8	2	0x00597210	MOV ECX,dword ptr [EAX + 0x597210]	ghidra-ref	
+clientSelectionGroup	0x004245CD	0x00424540	READ	3,9	2	0x00597214	MOV ECX,dword ptr [EAX + 0x597214]	ghidra-ref	
+clientSelectionGroup	0x004245F7	0x00424540	READ	4,10	2	0x00597218	MOV ECX,dword ptr [EAX + 0x597218]	ghidra-ref	
+clientSelectionGroup	0x00424621	0x00424540	READ	5,11	2	0x0059721C	MOV ECX,dword ptr [EAX + 0x59721c]	ghidra-ref	
+clientSelectionGroup	0x0042466C	0x00424660	DATA	0	1	0x00597208	MOV EAX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00424671	0x00424660	READ	0,1	2	0x00597208	MOV ECX,dword ptr [EAX]	ghidra-ref	
+clientSelectionGroup	0x004259C2	0x00425960	DATA	0	1	0x00597208	MOV EDI,0x597208	ghidra-ref	
+clientSelectionGroup	0x004259CF	0x00425960	READ	0,1	2	0x00597208	MOV EAX,dword ptr [EDI]	ghidra-ref	
+clientSelectionGroup	0x004282E0	0x004282E0	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref	
+clientSelectionGroup	0x004282E7	0x004282E0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref	
+clientSelectionGroup	0x00428310	0x00428310	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00428317	0x00428310	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref	
+clientSelectionGroup	0x00428372	0x00428360	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00428380	0x00428360	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref	
+clientSelectionGroup	0x004283C0	0x004283C0	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref	
+clientSelectionGroup	0x004283C7	0x004283C0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref	
+clientSelectionGroup	0x00428480	0x00428480	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00428485	0x00428480	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref	
+clientSelectionGroup	0x004284B0	0x004284B0	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref	
+clientSelectionGroup	0x004284B5	0x004284B0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref	
+clientSelectionGroup	0x00428570	0x00428560	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00428577	0x00428560	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref	
+clientSelectionGroup	0x004285B0	0x004285A0	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref	
+clientSelectionGroup	0x004285B7	0x004285A0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref	
+clientSelectionGroup	0x004285E0	0x004285E0	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref	
+clientSelectionGroup	0x004285E7	0x004285E0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref	
+clientSelectionGroup	0x00428610	0x00428610	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00428617	0x00428610	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref	
+clientSelectionGroup	0x00428640	0x00428640	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00428647	0x00428640	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref	
+clientSelectionGroup	0x00428670	0x00428670	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00428677	0x00428670	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref	
+clientSelectionGroup	0x004286A0	0x004286A0	DATA	0	1	0x00597208	MOV EDX,0x597208	ghidra-ref	
+clientSelectionGroup	0x004286A5	0x004286A0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [EDX]	ghidra-ref	
+clientSelectionGroup	0x004286E0	0x004286E0	DATA	0	1	0x00597208	MOV EDX,0x597208	ghidra-ref	
+clientSelectionGroup	0x004286E5	0x004286E0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [EDX]	ghidra-ref	
+clientSelectionGroup	0x00428733	0x00428730	DATA	0	1	0x00597208	MOV EAX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00428740	0x00428730	READ	0,1	2	0x00597208	MOV ESI,dword ptr [EAX]	ghidra-ref	
+clientSelectionGroup	0x00428783	0x00428780	DATA	0	1	0x00597208	MOV EAX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00428790	0x00428780	READ	0,1	2	0x00597208	MOV ESI,dword ptr [EAX]	ghidra-ref	
+clientSelectionGroup	0x00428860	0x00428860	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00428865	0x00428860	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref	
+clientSelectionGroup	0x004289A0	0x00428990	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref	
+clientSelectionGroup	0x004289A7	0x00428990	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref	
+clientSelectionGroup	0x00428A20	0x00428A10	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00428A27	0x00428A10	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref	
+clientSelectionGroup	0x00428D40	0x00428D40	DATA	0	1	0x00597208	MOV EDX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00428D45	0x00428D40	READ	0	1	0x00597208	MOV EAX,dword ptr [EDX]	ghidra-ref	
+clientSelectionGroup	0x00428DA0	0x00428DA0	DATA	0	1	0x00597208	MOV EDX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00428DA5	0x00428DA0	READ	0	1	0x00597208	MOV EAX,dword ptr [EDX]	ghidra-ref	
+clientSelectionGroup	0x00428E20	0x00428E00	READ	0,1	2	0x00597208	MOV ESI,dword ptr [EDI + 0x597208]	ghidra-ref	
+clientSelectionGroup	0x00428EA1	0x00428EA0	DATA	0	1	0x00597208	MOV ESI,0x597208	ghidra-ref	
+clientSelectionGroup	0x00428EA6	0x00428EA0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ESI]	ghidra-ref	
+clientSelectionGroup	0x00428ED1	0x00428ED0	DATA	0	1	0x00597208	MOV ESI,0x597208	ghidra-ref	
+clientSelectionGroup	0x00428ED6	0x00428ED0	READ	0,1	2	0x00597208	MOV ECX,dword ptr [ESI]	ghidra-ref	
+clientSelectionGroup	0x00428F31	0x00428F30	DATA	0	1	0x00597208	MOV ESI,0x597208	ghidra-ref	
+clientSelectionGroup	0x00428F36	0x00428F30	READ	0,1	2	0x00597208	MOV ECX,dword ptr [ESI]	ghidra-ref	
+clientSelectionGroup	0x00428FA3	0x00428FA0	DATA	0	1	0x00597208	MOV EAX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00428FB0	0x00428FA0	READ	0,1	2	0x00597208	MOV ESI,dword ptr [EAX]	ghidra-ref	
+clientSelectionGroup	0x00428FF2	0x00428FF0	DATA	0	1	0x00597208	MOV EDI,0x597208	ghidra-ref	
+clientSelectionGroup	0x00428FF7	0x00428FF0	READ	0,1	2	0x00597208	MOV ESI,dword ptr [EDI]	ghidra-ref	
+clientSelectionGroup	0x0042907C	0x00429070	DATA	0	1	0x00597208	MOV ESI,0x597208	ghidra-ref	
+clientSelectionGroup	0x00429081	0x00429070	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ESI]	ghidra-ref	
+clientSelectionGroup	0x004290FF	0x004290F0	DATA	0	1	0x00597208	MOV EBX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00429104	0x004290F0	READ	0,1	2	0x00597208	MOV ESI,dword ptr [EBX]	ghidra-ref	
+clientSelectionGroup	0x00429187	0x00429170	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00429190	0x00429170	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref	
+clientSelectionGroup	0x004291D7	0x004291C0	DATA	0	1	0x00597208	MOV ECX,0x597208	ghidra-ref	
+clientSelectionGroup	0x004291E0	0x004291C0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ECX]	ghidra-ref	
+clientSelectionGroup	0x0042921C	0x00429210	DATA	0	1	0x00597208	MOV EBX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00429221	0x00429210	READ	0,1	2	0x00597208	MOV ESI,dword ptr [EBX]	ghidra-ref	
+clientSelectionGroup	0x004292CC	0x004292C0	DATA	0	1	0x00597208	MOV EBX,0x597208	ghidra-ref	
+clientSelectionGroup	0x004292D1	0x004292C0	READ	0,1	2	0x00597208	MOV ESI,dword ptr [EBX]	ghidra-ref	
+clientSelectionGroup	0x0042937F	0x00429370	DATA	0	1	0x00597208	MOV EBX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00429384	0x00429370	READ	0,1	2	0x00597208	MOV ESI,dword ptr [EBX]	ghidra-ref	
+clientSelectionGroup	0x004293EF	0x004293E0	DATA	0	1	0x00597208	MOV EBX,0x597208	ghidra-ref	
+clientSelectionGroup	0x004293F4	0x004293E0	READ	0,1	2	0x00597208	MOV ESI,dword ptr [EBX]	ghidra-ref	
+clientSelectionGroup	0x00429485	0x00429470	DATA	0	1	0x00597208	MOV ESI,0x597208	ghidra-ref	
+clientSelectionGroup	0x00429490	0x00429470	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ESI]	ghidra-ref	
+clientSelectionGroup	0x00455A06	0x00455A00	DATA	11	1	0x00597234	MOV EAX,0x597234	ghidra-ref	
+clientSelectionGroup	0x00455A12	0x00455A00	DATA	11	1	0x00597234	MOV dword ptr [EBP + -0x4],EAX	ghidra-ref	
+clientSelectionGroup	0x00455A15	0x00455A00	READ	10,11	2	0x00597230	MOV EDI,dword ptr [EAX]	ghidra-ref	
+clientSelectionGroup	0x00455BB9	0x00455A00	DATA	0	1	0x00597208	CMP EAX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00455BBE	0x00455A00	DATA	9,10	2	0x0059722C	MOV dword ptr [EBP + -0x4],EAX	ghidra-ref	
+clientSelectionGroup	0x004563D0	0x004563A0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ESI*0x4 + 0x597208]	ghidra-ref	
+clientSelectionGroup	0x00456400	0x004563A0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ESI*0x4 + 0x597208]	ghidra-ref	
+clientSelectionGroup	0x00456540	0x004564E0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [ESI*0x4 + 0x597208]	ghidra-ref	
+clientSelectionGroup	0x004565C0	0x004564E0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [EBX*0x4 + 0x597208]	ghidra-ref	
+clientSelectionGroup	0x00458BD6	0x00458BC0	DATA	0	1	0x00597208	MOV EAX,0x597208	ghidra-ref	
+clientSelectionGroup	0x00458BE7	0x00458BC0	DATA	0	1	0x00597208	MOV dword ptr [EBP + -0x8],EAX	ghidra-ref	
+clientSelectionGroup	0x00458BF0	0x00458BC0	READ	0,1	2	0x00597208	MOV EAX,dword ptr [EAX]	ghidra-ref	
+clientSelectionGroup	0x00458C8B	0x00458BC0	DATA	2	1	0x00597210	ADD EAX,0x4	ghidra-ref	
+clientSelectionGroup	0x00458C93	0x00458BC0	DATA	1,2	2	0x0059720C	MOV dword ptr [EBP + -0x8],EAX	ghidra-ref	
+clientSelectionGroup	0x0046F656	0x0046F5B0	DATA	0	1	0x00597208	MOV EAX,0x597208	ghidra-ref	
+clientSelectionGroup	0x0046F65C	0x0046F5B0	DATA	0	1	0x00597208	MOV dword ptr [EBP + -0x18],EAX	ghidra-ref	
+clientSelectionGroup	0x0046F664	0x0046F5B0	READ	0,1	2	0x00597208	MOV EBX,dword ptr [EAX]	ghidra-ref	
+clientSelectionGroup	0x0046F7EC	0x0046F5B0	DATA	1,2	2	0x0059720C	MOV dword ptr [EBP + -0x18],EAX	ghidra-ref	
+clientSelectionGroup	0x004C389D	0x004C3780	DATA	0	1	0x00597208	MOV EDI,0x597208	ghidra-ref	
+clientSelectionGroup	0x004C38A2	0x004C3780	WRITE	0,1	2	0x00597208	STOSD.REP ES:EDI	ghidra-ref	
+clientSelectionGroup	0x004C38BD	0x004C38B0	DATA	0	1	0x00597208	MOV EDI,0x597208	ghidra-ref	
+clientSelectionGroup	0x004C38C2	0x004C38B0	WRITE	0,1	2	0x00597208	MOVSD.REP ES:EDI,ESI	ghidra-ref	
+clientSelectionGroup	0x004C38D3	0x004C38B0	DATA	0	1	0x00597208	MOV EBX,0x597208	ghidra-ref	
+clientSelectionGroup	0x004C38D8	0x004C38B0	READ	0,1	2	0x00597208	MOV EDI,dword ptr [EBX]	ghidra-ref	
+clientSelectionGroup	0x004C3910	0x004C38B0	DATA	1	1	0x0059720C	MOV EDI,0x59720c	ghidra-ref	
+clientSelectionGroup	0x004C3915	0x004C38B0	WRITE	0	1	0x00597208	MOV dword ptr [0x00597208],ESI	ghidra-ref	
+clientSelectionGroup	0x004C391B	0x004C38B0	WRITE	1,2	2	0x0059720C	STOSD.REP ES:EDI	ghidra-ref	
+clientSelectionGroup	0x004C3C3C	0x004C3BB0	DATA	0	1	0x00597208	MOV EDI,0x597208	ghidra-ref	
+clientSelectionGroup	0x004C3C41	0x004C3BB0	WRITE	0,1	2	0x00597208	STOSD.REP ES:EDI	ghidra-ref	
+clientSelectionGroup	0x004E5691	0x004E5640	READ	0	1	0x00597208	MOV EAX,[0x00597208]	ghidra-ref	
+clientSelectionGroup2	0x004564FC	0x004564E0	READ	0	1	0x0059724C	MOV EAX,[0x0059724c]	ghidra-ref	
+clientSelectionGroup2	0x0049A33B	0x0049A320	WRITE	0	1	0x0059724C	MOV [0x0059724c],EAX	ghidra-ref	
+clientSelectionGroup2	0x0049A340	0x0049A320	WRITE	1	1	0x00597250	MOV [0x00597250],EAX	ghidra-ref	
+clientSelectionGroup2	0x0049A345	0x0049A320	WRITE	2	1	0x00597254	MOV [0x00597254],EAX	ghidra-ref	
+clientSelectionGroup2	0x004BF8A2	0x004BF8A0	WRITE	0	1	0x0059724C	MOV [0x0059724c],EAX	ghidra-ref	
+clientSelectionGroup2	0x004BF8A7	0x004BF8A0	WRITE	1	1	0x00597250	MOV [0x00597250],EAX	ghidra-ref	
+clientSelectionGroup2	0x004BF8AC	0x004BF8A0	WRITE	2	1	0x00597254	MOV [0x00597254],EAX	ghidra-ref	
+clientSelectionGroup2	0x004BF8C2	0x004BF8C0	READ	0,6	2	0x0059724C	MOV ECX,dword ptr [EAX*0x4 + 0x59724c]	ghidra-ref	
+clientSelectionGroup2	0x004BF8CD	0x004BF8C0	READ	1,7	2	0x00597250	MOV ECX,dword ptr [EAX*0x4 + 0x597250]	ghidra-ref	
+clientSelectionGroup2	0x004BF8D8	0x004BF8C0	READ	2,8	2	0x00597254	MOV ECX,dword ptr [EAX*0x4 + 0x597254]	ghidra-ref	
+clientSelectionGroup2	0x004BF8E3	0x004BF8C0	READ	3,9	2	0x00597258	MOV ECX,dword ptr [EAX*0x4 + 0x597258]	ghidra-ref	
+clientSelectionGroup2	0x004BF8EE	0x004BF8C0	READ	4,10	2	0x0059725C	MOV ECX,dword ptr [EAX*0x4 + 0x59725c]	ghidra-ref	
+clientSelectionGroup2	0x004BF8F9	0x004BF8C0	READ	5,11	2	0x00597260	MOV ECX,dword ptr [EAX*0x4 + 0x597260]	ghidra-ref	
+clientSelectionGroup2	0x004BF930	0x004BF8C0	READ	0,1	2	0x0059724C	CMP dword ptr [ECX*0x4 + 0x59724c],EDX	ghidra-ref	
+clientSelectionGroup2	0x004BF93F	0x004BF8C0	READ	9	1	0x00597270	MOV EDX,dword ptr [EAX*0x4 + 0x597248]	ghidra-ref	
+clientSelectionGroup2	0x004BF947	0x004BF8C0	WRITE	1	1	0x00597250	MOV dword ptr [ECX*0x4 + 0x59724c],EDX	ghidra-ref	
+clientSelectionGroup2	0x004BF94E	0x004BF8C0	WRITE	9	1	0x00597270	MOV dword ptr [EAX*0x4 + 0x59724c],0x0	ghidra-ref	
+clientSelectionGroup2	0x004BFA40	0x004BFA40	READ	0	1	0x0059724C	MOV EAX,[0x0059724c]	ghidra-ref	
+clientSelectionGroup2	0x004C07E0	0x004C07B0	DATA	0	1	0x0059724C	MOV EDI,0x59724c	ghidra-ref	
+clientSelectionGroup2	0x004C07E5	0x004C07B0	WRITE	0,1	2	0x0059724C	STOSD.REP ES:EDI	ghidra-ref	
+clientSelectionGroup2	0x004C07F3	0x004C07B0	DATA	0	1	0x0059724C	MOV EDI,0x59724c	ghidra-ref	
+clientSelectionGroup2	0x004C07F8	0x004C07B0	WRITE	0,1	2	0x0059724C	MOVSD.REP ES:EDI,ESI	ghidra-ref	
+clientSelectionGroup2	0x004C07FF	0x004C07B0	WRITE	1	1	0x00597250	MOVSB.REP ES:EDI,ESI	ghidra-ref	
+clientSelectionGroup2	0x004C08E0	0x004C0860	READ	0,1	2	0x0059724C	MOV ECX,dword ptr [EAX*0x4 + 0x59724c]	ghidra-ref	
+clientSelectionGroup2	0x004C08F7	0x004C0860	DATA	1	1	0x00597250	LEA EAX,[EAX*0x4 + 0x59724c]	ghidra-ref	
+clientSelectionGroup2	0x004C096E	0x004C0860	DATA	0	1	0x0059724C	MOV EDI,0x59724c	ghidra-ref	
+clientSelectionGroup2	0x004C0980	0x004C0860	READ	0,1	2	0x0059724C	MOV ESI,dword ptr [EDI]	ghidra-ref	
+clientSelectionGroup2	0x004C0A02	0x004C0860	DATA	0	1	0x0059724C	MOV EDI,0x59724c	ghidra-ref	
+clientSelectionGroup2	0x004C0A07	0x004C0860	WRITE	0,1	2	0x0059724C	STOSD.REP ES:EDI	ghidra-ref	
+clientSelectionGroup2	0x004C0A10	0x004C0860	DATA	0	1	0x0059724C	MOV EDI,0x59724c	ghidra-ref	
+clientSelectionGroup2	0x004C0A15	0x004C0860	WRITE	0,1	2	0x0059724C	MOVSD.REP ES:EDI,ESI	ghidra-ref	
+clientSelectionGroup2	0x004EED2B	0x004EED10	WRITE	0	1	0x0059724C	MOV [0x0059724c],EAX	ghidra-ref	
+clientSelectionGroup2	0x004EED30	0x004EED10	WRITE	1	1	0x00597250	MOV [0x00597250],EAX	ghidra-ref	
+clientSelectionGroup2	0x004EED35	0x004EED10	WRITE	2	1	0x00597254	MOV [0x00597254],EAX	ghidra-ref	
+playersSelections	0x004966D2	0x004965D0	DATA	0	1	0x006284E8	ADD EBX,0x6284e8	ghidra-ref	
+playersSelections	0x00496A89	0x00496940	DATA	0	1	0x006284E8	MOV dword ptr [EAX*0x4 + 0x6284e8],ECX	ghidra-ref	
+playersSelections	0x00499B0F	0x00499A60	DATA	72,84	2	0x00628608	MOV dword ptr [EBP + -0xc],EDI	ghidra-ref	
+playersSelections	0x00499B23	0x00499A60	READ	72,84,85	3	0x00628608	MOV EAX,dword ptr [EDI]	ghidra-ref	
+playersSelections	0x0049A191	0x0049A170	DATA	1	1	0x006284EC	ADD ECX,0x6284ec	ghidra-ref	
+playersSelections	0x0049A197	0x0049A170	DATA	0,6	2	0x006284E8	MOV EDX,dword ptr [ECX + -0x4]	ghidra-ref	
+playersSelections	0x0049A1A4	0x0049A170	DATA	1,7	2	0x006284EC	MOV EDX,dword ptr [ECX]	ghidra-ref	
+playersSelections	0x0049A1B1	0x0049A170	DATA	2,8	2	0x006284F0	MOV EDX,dword ptr [ECX + 0x4]	ghidra-ref	
+playersSelections	0x0049A1BF	0x0049A170	DATA	3,9	2	0x006284F4	MOV EDX,dword ptr [ECX + 0x8]	ghidra-ref	
+playersSelections	0x0049A1CD	0x0049A170	DATA	4	1	0x006284F8	MOV EDX,dword ptr [ECX + 0xc]	ghidra-ref	
+playersSelections	0x0049A1DB	0x0049A170	DATA	5	1	0x006284FC	MOV EDX,dword ptr [ECX + 0x10]	ghidra-ref	
+playersSelections	0x0049A226	0x0049A170	DATA	0	1	0x006284E8	LEA EDI,[ECX + 0x6284e8]	ghidra-ref	
+playersSelections	0x0049A22C	0x0049A170	DATA	1	1	0x006284EC	LEA ESI,[ECX + 0x6284ec]	ghidra-ref	
+playersSelections	0x0049A236	0x0049A170	DATA	0,1	2	0x006284E8	MOVSD.REP ES:EDI,ESI	ghidra-ref	
+playersSelections	0x0049A241	0x0049A170	DATA	0	1	0x006284E8	MOV dword ptr [ECX*0x4 + 0x6284e8],0x0	ghidra-ref	
+playersSelections	0x0049A303	0x0049A2C0	DATA	0	1	0x006284E8	CMP EDX,0x6284e8	ghidra-ref	Reads as activePlayerSelection, not playersSelections: an ADD reg,4 walk over activePlayerSelection ends here, and 0x006284E8 is that array's one-past-the-end address as well as playersSelections' base (the two abut exactly -- see binary-selection-map.md section 3.3). Filed under playersSelections because that is the address encoded.
+playersSelections	0x0049A334	0x0049A320	DATA	0	1	0x006284E8	MOV EDI,0x6284e8	ghidra-ref	
+playersSelections	0x0049A339	0x0049A320	WRITE	0,1	2	0x006284E8	STOSD.REP ES:EDI	ghidra-ref	
+playersSelections	0x0049A758	0x0049A740	DATA	0	1	0x006284E8	ADD EDI,0x6284e8	ghidra-ref	
+playersSelections	0x0049A763	0x0049A740	DATA	0,1	2	0x006284E8	STOSD.REP ES:EDI	ghidra-ref	
+playersSelections	0x0049A770	0x0049A740	DATA	0	1	0x006284E8	ADD ESI,0x6284e8	ghidra-ref	
+playersSelections	0x0049A776	0x0049A740	DATA	0,1	2	0x006284E8	MOV EAX,dword ptr [ESI]	ghidra-ref	
+playersSelections	0x0049A7A3	0x0049A740	DATA	0,1	2	0x006284E8	MOV dword ptr [ESI],0x0	ghidra-ref	
+playersSelections	0x0049A870	0x0049A850	DATA	0	1	0x006284E8	MOV EAX,dword ptr [ESI*0x4 + 0x6284e8]	ghidra-ref	
+playersSelections	0x0049AE75	0x0049AE40	DATA	0	1	0x006284E8	CMP ESI,0x6284e8	ghidra-ref	Same as 0x0049A303: activePlayerSelection end-pointer comparison encoding playersSelections' base address.
+playersSelections	0x0049AFBB	0x0049AF80	DATA	0	1	0x006284E8	MOV dword ptr [EAX*0x4 + 0x6284e8],ESI	ghidra-ref	
+playersSelections	0x0049B728	0x0049B870	DATA	0	1	0x006284E8	MOV EDI,0x6284e8	ghidra-ref	
+playersSelections	0x0049B736	0x0049B870	DATA	0	1	0x006284E8	MOV dword ptr [EBP + -0x10],EDI	ghidra-ref	
+playersSelections	0x0049B770	0x0049B870	READ	0,1	2	0x006284E8	MOV EBX,dword ptr [EDI]	ghidra-ref	
+playersSelections	0x0049B85E	0x0049B870	DATA	12,24	2	0x00628518	MOV dword ptr [EBP + -0x10],EDI	ghidra-ref	
+playersSelections	0x004C2583	0x004C2560	DATA	1	1	0x006284EC	ADD EAX,0x6284ec	ghidra-ref	
+playersSelections	0x004C265B	0x004C2560	DATA	0	1	0x006284E8	ADD EAX,0x6284e8	ghidra-ref	
+playersSelections	0x004C26B6	0x004C2560	UNCLASSIFIED	0	1	0x006284E8	MOV dword ptr [EDX*0x4 + 0x6284e8],ESI	raw-dword-only	Found by pass 2 only. Ghidra recorded no reference for this scaled-index absolute write; a table built from its reference database alone would omit it.
+playersSelections	0x004C27D9	0x004C2750	DATA	0	1	0x006284E8	ADD EAX,0x6284e8	ghidra-ref	
+playersSelections	0x004C2D22	0x004C2910	DATA	0	1	0x006284E8	MOV EAX,0x6284e8	ghidra-ref	
+playersSelections	0x004C3B62	0x004C3B40	DATA	0	1	0x006284E8	CMP ECX,0x6284e8	ghidra-ref	Same as 0x0049A303: activePlayerSelection end-pointer comparison encoding playersSelections' base address.
+playersSelections	0x004CEDA2	0x004CEDA0	DATA	0	1	0x006284E8	MOV EDX,0x6284e8	ghidra-ref	
+playersSelections	0x004CEDB0	0x004CEDA0	READ	0,1	2	0x006284E8	MOV ECX,dword ptr [EDX]	ghidra-ref	
+playersSelections	0x004CEDEF	0x004CEDA0	WRITE	0,1	2	0x006284E8	MOV dword ptr [EDX],EAX	ghidra-ref	
+playersSelections	0x004CEE03	0x004CEE00	DATA	0	1	0x006284E8	MOV EDI,0x6284e8	ghidra-ref	
+playersSelections	0x004CEE10	0x004CEE00	READ	0,1	2	0x006284E8	MOV ESI,dword ptr [EDI]	ghidra-ref	
+playersSelections	0x004CEE4B	0x004CEE00	WRITE	0,1	2	0x006284E8	MOV dword ptr [EDI],EAX	ghidra-ref	
+playersSelections	0x004D013E	0x004CFEF0	DATA	0	1	0x006284E8	PUSH 0x6284e8	ghidra-ref	
+playersSelections	0x004D068D	0x004D02D0	DATA	0	1	0x006284E8	MOV EAX,0x6284e8	ghidra-ref	
+playersSelections	0x004EED24	0x004EED10	DATA	0	1	0x006284E8	MOV EDI,0x6284e8	ghidra-ref	
+playersSelections	0x004EED29	0x004EED10	WRITE	0,1	2	0x006284E8	STOSD.REP ES:EDI	ghidra-ref	
+playersSelections	0x004EEDD1	0x004EED10	DATA	0	1	0x006284E8	ADD ESI,0x6284e8	ghidra-ref	
+playersSelections	0x004EEDEA	0x004EED10	DATA	0	1	0x006284E8	MOV EDI,0x6284e8	ghidra-ref	
+playersSelections	0x004EEDEF	0x004EED10	WRITE	0,1	2	0x006284E8	STOSD.REP ES:EDI	ghidra-ref	
+selectionHotkeys	0x004965A8	0x004965A0	DATA	0	1	0x0057FE60	MOV EDI,0x57fe60	ghidra-ref	
+selectionHotkeys	0x004965AD	0x004965A0	WRITE	0,1	2	0x0057FE60	STOSD.REP ES:EDI	ghidra-ref	
+selectionHotkeys	0x004965FC	0x004965D0	DATA	0	1	0x0057FE60	LEA EAX,[ESI + 0x57fe60]	ghidra-ref	
+selectionHotkeys	0x00496605	0x004965D0	DATA	0	1	0x0057FE60	MOV EAX,dword ptr [EAX]	ghidra-ref	
+selectionHotkeys	0x00496653	0x004965D0	DATA	1	1	0x0057FE64	LEA EAX,[ESI + 0x57fe64]	ghidra-ref	
+selectionHotkeys	0x00496660	0x004965D0	DATA	0,6	2	0x0057FE60	MOV ECX,dword ptr [EAX + -0x4]	ghidra-ref	
+selectionHotkeys	0x00496667	0x004965D0	DATA	1,7	2	0x0057FE64	CMP dword ptr [EAX],0x0	ghidra-ref	
+selectionHotkeys	0x0049666C	0x004965D0	DATA	2,8	2	0x0057FE68	MOV ECX,dword ptr [EAX + 0x4]	ghidra-ref	
+selectionHotkeys	0x00496673	0x004965D0	DATA	3,9	2	0x0057FE6C	MOV ECX,dword ptr [EAX + 0x8]	ghidra-ref	
+selectionHotkeys	0x0049667A	0x004965D0	DATA	4,10	2	0x0057FE70	MOV ECX,dword ptr [EAX + 0xc]	ghidra-ref	
+selectionHotkeys	0x00496681	0x004965D0	DATA	5,11	2	0x0057FE74	MOV ECX,dword ptr [EAX + 0x10]	ghidra-ref	
+selectionHotkeys	0x0049669E	0x004965D0	DATA	0	1	0x0057FE60	LEA EDI,[EDI + 0x57fe60]	ghidra-ref	
+selectionHotkeys	0x004966B1	0x004965D0	DATA	0,1	2	0x0057FE60	STOSD.REP ES:EDI	ghidra-ref	
+selectionHotkeys	0x00496740	0x004965D0	DATA	0,1	2	0x0057FE60	CMP dword ptr [EDX],EBX	ghidra-ref	
+selectionHotkeys	0x00496766	0x004965D0	DATA	0	1	0x0057FE60	MOV dword ptr [EDX*0x4 + 0x57fe60],EBX	ghidra-ref	
+selectionHotkeys	0x0049680C	0x004967E0	DATA	1	1	0x0057FE64	LEA EAX,[ECX + 0x57fe64]	ghidra-ref	
+selectionHotkeys	0x00496813	0x004967E0	DATA	0,6	2	0x0057FE60	CMP dword ptr [EAX + -0x4],EDI	ghidra-ref	
+selectionHotkeys	0x00496818	0x004967E0	DATA	1,7	2	0x0057FE64	CMP dword ptr [EAX],EDI	ghidra-ref	
+selectionHotkeys	0x0049681C	0x004967E0	DATA	2,8	2	0x0057FE68	CMP dword ptr [EAX + 0x4],EDI	ghidra-ref	
+selectionHotkeys	0x00496821	0x004967E0	DATA	3,9	2	0x0057FE6C	CMP dword ptr [EAX + 0x8],EDI	ghidra-ref	
+selectionHotkeys	0x00496826	0x004967E0	DATA	4,10	2	0x0057FE70	CMP dword ptr [EAX + 0xc],EDI	ghidra-ref	
+selectionHotkeys	0x0049682B	0x004967E0	DATA	5,11	2	0x0057FE74	CMP dword ptr [EAX + 0x10],EDI	ghidra-ref	
+selectionHotkeys	0x00496852	0x004967E0	DATA	0	1	0x0057FE60	LEA ECX,[ECX + 0x57fe60]	ghidra-ref	
+selectionHotkeys	0x00496870	0x004967E0	DATA	0,1	2	0x0057FE60	MOV EAX,dword ptr [ECX]	ghidra-ref	
+selectionHotkeys	0x00496967	0x00496940	DATA	1	1	0x0057FE64	ADD EAX,0x57fe64	ghidra-ref	
+selectionHotkeys	0x00496970	0x00496940	DATA	0,6	2	0x0057FE60	MOV ECX,dword ptr [EAX + -0x4]	ghidra-ref	
+selectionHotkeys	0x00496977	0x00496940	DATA	1,7	2	0x0057FE64	CMP dword ptr [EAX],0x0	ghidra-ref	
+selectionHotkeys	0x0049697C	0x00496940	DATA	2,8	2	0x0057FE68	MOV ECX,dword ptr [EAX + 0x4]	ghidra-ref	
+selectionHotkeys	0x00496983	0x00496940	DATA	3,9	2	0x0057FE6C	MOV ECX,dword ptr [EAX + 0x8]	ghidra-ref	
+selectionHotkeys	0x0049698A	0x00496940	DATA	4,10	2	0x0057FE70	MOV ECX,dword ptr [EAX + 0xc]	ghidra-ref	
+selectionHotkeys	0x00496991	0x00496940	DATA	5,11	2	0x0057FE74	MOV ECX,dword ptr [EAX + 0x10]	ghidra-ref	
+selectionHotkeys	0x004969EF	0x00496940	DATA	0	1	0x0057FE60	MOV EAX,dword ptr [EBX*0x4 + 0x57fe60]	ghidra-ref	
+selectionHotkeys	0x00496AC4	0x00496940	DATA	0	1	0x0057FE60	MOV ECX,dword ptr [EAX*0x4 + 0x57fe60]	ghidra-ref	
+selectionHotkeys	0x00496ACB	0x00496940	DATA	0	1	0x0057FE60	MOV dword ptr [EBX*0x4 + 0x57fe60],ECX	ghidra-ref	
+selectionHotkeys	0x00496AD2	0x00496940	DATA	0	1	0x0057FE60	MOV dword ptr [EAX*0x4 + 0x57fe60],0x0	ghidra-ref	
+selectionHotkeys	0x00496B5E	0x00496B40	DATA	0	1	0x0057FE60	LEA EDX,[EDX + 0x57fe60]	ghidra-ref	
+selectionHotkeys	0x00496B67	0x00496B40	DATA	0,1	2	0x0057FE60	CMP dword ptr [EAX],0x0	ghidra-ref	
+selectionHotkeys	0x00496B96	0x00496B40	DATA	0,1	2	0x0057FE60	MOV EAX,dword ptr [EBX]	ghidra-ref	
+selectionHotkeys	0x00496D4F	0x00496D30	DATA	217	1	0x005801C4	ADD EDI,0x5801c4	ghidra-ref	
+selectionHotkeys	0x004EEC78	0x004EEC30	DATA	0	1	0x0057FE60	MOV EDI,0x57fe60	ghidra-ref	
+selectionHotkeys	0x004EEC7D	0x004EEC30	WRITE	0,1	2	0x0057FE60	STOSD.REP ES:EDI	ghidra-ref	
+selectionHotkeys	0x00500A9E		DATA	104	1	0x00580002	addr 00580002	data-pointer-not-instruction	
+selectionHotkeys	0x00500AC2		DATA	104	1	0x00580002	addr 00580002	data-pointer-not-instruction	
+selectionIterator	0x00456160	0x004560D0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x0048DCD0	0x0048DCD0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x0048E017	0x0048E010	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x0048E0AB	0x0048E0A0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],BL	ghidra-ref	
+selectionIterator	0x0049A851	0x0049A850	READ	0	1	0x006284B6	MOV BL,byte ptr [0x006284b6]	ghidra-ref	
+selectionIterator	0x0049A89C	0x0049A850	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],BL	ghidra-ref	
+selectionIterator	0x0049A8B0	0x0049A8B0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x0049A8F8	0x0049A8C0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],BL	ghidra-ref	
+selectionIterator	0x0049A9F1	0x0049A8C0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x0049AB47	0x0049AB00	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004BFCD3	0x004BFCD0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],BL	ghidra-ref	
+selectionIterator	0x004BFF31	0x004BFF30	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004BFFC1	0x004BFFC0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C0071	0x004C0070	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C0104	0x004C0100	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C0661	0x004C0660	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C0721	0x004C0720	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C0CD7	0x004C0CD0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C0E97	0x004C0E90	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C105A	0x004C1050	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],BL	ghidra-ref	
+selectionIterator	0x004C124A	0x004C1240	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],BL	ghidra-ref	
+selectionIterator	0x004C143A	0x004C1430	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],BL	ghidra-ref	
+selectionIterator	0x004C1624	0x004C1620	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C1804	0x004C1800	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],BL	ghidra-ref	
+selectionIterator	0x004C1914	0x004C1910	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C1997	0x004C1990	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C1AC1	0x004C1AC0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C1B24	0x004C1B20	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C1BA4	0x004C1BA0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C1C24	0x004C1C20	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C1CC1	0x004C1CC0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C1E84	0x004C1E80	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C1F14	0x004C1F10	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C1FA4	0x004C1FA0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C2041	0x004C2040	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C20C5	0x004C20C0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C2191	0x004C2190	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C23C1	0x004C23C0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C2EC0	0x004C2EC0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C2EF1	0x004C2EF0	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	
+selectionIterator	0x004C2F31	0x004C2F30	WRITE	0	1	0x006284B6	MOV byte ptr [0x006284b6],0x0	ghidra-ref	

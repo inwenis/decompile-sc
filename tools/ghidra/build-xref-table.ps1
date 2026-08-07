@@ -60,6 +60,18 @@ $refRows = Import-Csv -LiteralPath $Pass1 -Delimiter "`t"
 $raw = Import-Csv -LiteralPath $rawPath -Delimiter "`t"
 if ($refRows.Count -lt 1) { throw "pass-1 file parsed to $($refRows.Count) rows: $Pass1" }
 
+# Per-instruction notes for rows whose FILING is right but whose reading is not obvious. The
+# sweep files a row under the global whose address the instruction encodes, which is the correct
+# rule for a relocation list -- move that array and this instruction breaks. It is not always the
+# correct rule for reading the code, and where the two diverge the row says so rather than
+# leaving a reader to notice.
+$notes = @{
+    '0x0049A303' = 'Reads as activePlayerSelection, not playersSelections: an ADD reg,4 walk over activePlayerSelection ends here, and 0x006284E8 is that array''s one-past-the-end address as well as playersSelections'' base (the two abut exactly -- see binary-selection-map.md section 3.3). Filed under playersSelections because that is the address encoded.'
+    '0x0049AE75' = 'Same as 0x0049A303: activePlayerSelection end-pointer comparison encoding playersSelections'' base address.'
+    '0x004C3B62' = 'Same as 0x0049A303: activePlayerSelection end-pointer comparison encoding playersSelections'' base address.'
+    '0x004C26B6' = 'Found by pass 2 only. Ghidra recorded no reference for this scaled-index absolute write; a table built from its reference database alone would omit it.'
+}
+
 $rows = [System.Collections.Generic.List[object]]::new()
 
 # Pass 1: collapse the per-target-byte rows into one row per (global, instruction).
@@ -84,6 +96,7 @@ foreach ($g in $pass1Groups) {
             firstTarget = ($g.Group | Sort-Object { [int]$_.byteOffset } | Select-Object -First 1).targetAddr
             instruction = $first.instruction
             discovery   = if ($isDataPointer) { 'data-pointer-not-instruction' } else { 'ghidra-ref' }
+            note        = $notes[$first.fromAddr]
         })
 }
 
@@ -102,6 +115,7 @@ foreach ($h in $uncovered | Where-Object { $_.block -eq '.text' }) {
             firstTarget = $h.encodedValue
             instruction = $h.codeUnit
             discovery   = 'raw-dword-only'
+            note        = $notes[$(if ($h.codeUnitAddr) { $h.codeUnitAddr } else { $h.atAddr })]
         })
 }
 
