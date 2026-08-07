@@ -45,6 +45,12 @@ explicitly asks for more.
 2. Do not inject: `run-with-plugin.ps1 -NoPlugin`, or launch
    `C:\sc-work\1161-base\StarCraft.exe` directly. The game directory contains nothing of ours.
 3. Unload the DLL — `DLL_PROCESS_DETACH` un-splices every hook and restores the original bytes.
+   **Unloading mid-game is unsupported, and it leaves task 014's circles on screen.** Everything in
+   `sc_circles.cpp` is game-thread-only; taking the circles off from the unloader's thread would
+   mutate the sprite overlay list and the image free list while the game thread renders from them.
+   The leftovers are self-healing, not permanent — the engine's own unit-removal path frees the
+   circle on death, and `0x00497620` frees it the next time that unit is selected and deselected.
+   Off switch 1 or 2 is what you want; this one is for a process that is going away anyway.
 
 There is nothing to uninstall in any case: `StarCraft.exe` on disk is never modified, so its
 SHA-256 is unchanged before and after every run.
@@ -535,8 +541,23 @@ window must not be minimised. The oracle is the plugin's own log, because it is 
 the process. Frames are captured at every step into `-ShotDir` (default `C:\sc-work\logs\014-frames`,
 outside the repo) as a **diagnostic only** — they reproduce game artwork and must never be committed.
 
+It also asserts hard rule 3 rather than attesting to it: `StarCraft.exe` is SHA-256'd before launch
+and after close and compared against the pristine 1.16.1 constant from `tools/make-working-copy.ps1`
+both times.
+
 The one thing it cannot assert is whether the circles are actually *drawn*: `CIRCLES show: N/N` only
 proves the engine accepted the attach. Look at the `shadow-selection` frame for that.
+
+**Aiming a click at one of the plugin's own circles** is possible because the plugin logs their
+screen positions:
+
+```
+CIRCLES pos: 12 on screen of 12: 147,196 178,196 209,196 ...
+```
+
+client pixels, computed as the sprite's map position minus the viewport origin the game's own click
+handler uses. Without it the >12 shift-click test cannot tell "clicked one of ours" from "clicked
+one of the engine's" and has to accept either outcome.
 
 ### How memory is written safely
 

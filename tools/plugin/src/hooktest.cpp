@@ -528,14 +528,16 @@ static void CircleTests(void) {
         *(BYTE*)(FakeSprite(41) + SC_CSPRITE_OFF_FLAGS) = 0;
     }
 
-    printf("\n    a unit that dies between attach and detach is left alone\n");
+    printf("\n    a unit whose slot has been RECYCLED is left alone\n");
     ResetCircleCounters();
     {
         ScCircleUnit set[2] = { CircleFor(50), CircleFor(51) };
         ScCirclesShow(set, 2);
-        // Kill unit 50 the way the engine marks a recycled slot, and give the sprite
-        // to somebody else -- which is what makes blind removal dangerous: the flag
-        // bit is still set, but it is not our circle any more.
+        // Bump the uniqueness byte the way 0x004A03FD does. That instruction is the
+        // ONLY write to CUnit+0xA5 in the whole binary and it lives in unit CREATION
+        // (0x004A0320), so this models SLOT REUSE, not death -- see
+        // research/selection-circles.md 4.5. Reuse is what makes blind removal
+        // dangerous: the flag bit may be set again, but by somebody else's circle.
         *(BYTE*)(FakeUnit(50) + SC_CUNIT_OFF_UNIQUENESS) += 1;
         ResetCircleCounters();
         ScCirclesHide();
@@ -543,6 +545,23 @@ static void CircleTests(void) {
         Check("  it was unit 51's sprite", (long long)g_removedSprites[0], FakeSprite(51));
         *(BYTE*)(FakeUnit(50) + SC_CUNIT_OFF_UNIQUENESS) -= 1;
         *(BYTE*)(FakeSprite(50) + SC_CSPRITE_OFF_FLAGS) = 0;
+    }
+
+    printf("\n    a unit that DIED -- the engine already took our circle off\n");
+    ResetCircleCounters();
+    {
+        // What death actually does: 0x004A0740 (the unit-removal path) calls
+        // 0x004975D0 on the way out, which frees the 0x231..0x23A image and clears
+        // flag 0x01 -- regardless of flag 0x08, so it takes OUR circle too. Death does
+        // NOT bump CUnit+0xA5. So the record that protects us here is the flag check,
+        // not the uniqueness check, and a second remove must not be attempted.
+        ScCircleUnit set[2] = { CircleFor(58), CircleFor(59) };
+        ScCirclesShow(set, 2);
+        *(BYTE*)(FakeSprite(58) + SC_CSPRITE_OFF_FLAGS) &= (BYTE)~SC_SPRITE_FLAG_SEL_CIRCLE;
+        ResetCircleCounters();
+        ScCirclesHide();
+        Check("the dead unit's circle is not removed twice", (long long)g_removeCalls, 1);
+        Check("  the survivor is the one removed", (long long)g_removedSprites[0], FakeSprite(59));
     }
 
     printf("\n    a unit whose sprite was swapped underneath us is left alone\n");

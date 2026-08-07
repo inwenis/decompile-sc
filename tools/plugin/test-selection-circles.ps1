@@ -68,27 +68,55 @@ function Step {
     & $Body
 }
 
+# --- on-disk binary, BEFORE anything runs ------------------------------------
+# Project hard rule 3: "Patch memory in-process only -- StarCraft.exe on disk must stay
+# byte-identical to pristine. Hash it and show the result." An attestation in a PR body
+# is not that; this is.
+$exePath = Join-Path $GameDir 'StarCraft.exe'
+if (-not (Test-Path -LiteralPath $exePath)) { throw "test: $exePath not found." }
+$hashBefore = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
+Write-Host "[0] StarCraft.exe SHA-256 before: $hashBefore"
+
+# The pristine 1.16.1 hash, from tools/make-working-copy.ps1 -- the same constant that
+# script verifies the working copy against after it mirrors the install.
+$PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C6A46'
+Assert-That 'the working copy starts out byte-identical to pristine 1.16.1' `
+    ($hashBefore -eq $PRISTINE_SHA256) "(got $hashBefore)"
+
 # --- launch ------------------------------------------------------------------
 if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPath -Force }
 New-Item -ItemType Directory -Path $ShotDir -Force | Out-Null
 
-$circles = if ($NoCircles) { '0' } else { '1' }
-$launch = & (Join-Path $scriptDir 'run-with-plugin.ps1') `
-    -Mode fanout -Circles $circles -InjectWindowedHelper WMode `
-    -GameDir $GameDir -LogPath $LogPath 6>&1 | ForEach-Object { Write-Host $_; "$_" }
-
 $gamePid = 0
-foreach ($l in $launch) { if ($l -match 'scinject:\s*PID=(\d+)') { $gamePid = [int]$Matches[1] } }
-if (-not $gamePid) { throw 'test: could not parse the game pid from scinject output.' }
-
-$hwnd = Get-ScGameWindow -ProcessId $gamePid
+$hwnd = [IntPtr]::Zero
 $shotN = 0
 function Shot([string]$tag) {
+    if ($script:hwnd -eq [IntPtr]::Zero) { return }
     $script:shotN++
-    Save-ScWindowImage -Hwnd $hwnd -Path (Join-Path $ShotDir ("{0:d2}-{1}.png" -f $script:shotN, $tag)) -FullWindow | Out-Null
+    Save-ScWindowImage -Hwnd $script:hwnd -Path (Join-Path $ShotDir ("{0:d2}-{1}.png" -f $script:shotN, $tag)) -FullWindow | Out-Null
 }
 
+# The launch itself is INSIDE the try. run-with-plugin.ps1 throws on an error dialog
+# after the process is already alive, and Get-ScGameWindow throws on a 30 s timeout --
+# either would strand a StarCraft process if they ran ahead of the finally that closes
+# it, which is the one thing hard rule "never leave a game process running" forbids.
 try {
+    $circles = if ($NoCircles) { '0' } else { '1' }
+    # The pid is parsed AS THE LINE STREAMS BY, not from a collected result. If the
+    # launcher throws after the process is alive -- which is exactly what its
+    # error-dialog check does -- a collected variable would never be assigned and the
+    # finally below would have no pid to close.
+    & (Join-Path $scriptDir 'run-with-plugin.ps1') `
+        -Mode fanout -Circles $circles -InjectWindowedHelper WMode `
+        -GameDir $GameDir -LogPath $LogPath 6>&1 | ForEach-Object {
+            Write-Host $_
+            if ("$_" -match 'scinject:\s*PID=(\d+)') { $script:gamePid = [int]$Matches[1] }
+        }
+
+    if (-not $gamePid) { throw 'test: could not parse the game pid from scinject output.' }
+
+    $hwnd = Get-ScGameWindow -ProcessId $gamePid
+
     # --- menus ---------------------------------------------------------------
     # Client coordinates, read off captured frames once and stable for stock 1.16.1.
     Step 'menu: Single Player -> Expansion' {
@@ -188,34 +216,83 @@ try {
                 }
             }
         }
+        # Where the circled units are on screen, so the next step can aim at a KNOWN
+        # shadow unit instead of clicking hopefully. The plugin logs this because
+        # nothing outside the process can work it out.
+        $pos = @($lines | Select-String -Pattern 'CIRCLES pos: \d+ on screen of \d+: (.+)$')
+        if (-not $NoCircles) {
+            Assert-That 'the plugin reported where its circles are on screen' ($pos.Count -gt 0)
+            if ($pos.Count -gt 0) {
+                $script:shadowXY = @([regex]::Match($pos[-1].Line, 'on screen of \d+: (.+)$').Groups[1].Value.Trim() -split '\s+' |
+                    ForEach-Object { $p = $_ -split ','; [pscustomobject]@{ X = [int]$p[0]; Y = [int]$p[1] } })
+                Write-Host "       ($($script:shadowXY.Count) shadow circles on screen, first at $($script:shadowXY[0].X),$($script:shadowXY[0].Y))"
+            }
+        }
         Shot 'shadow-selection'   # <-- LOOK AT THIS ONE: circles on >12 units
     }
 
-    Step 'a shift-click inside a >12 selection cannot corrupt it' {
+    Step 'a shift-click on a KNOWN shadow-circled unit changes nothing' {
         # THIS is the configuration research/selection-circles.md §4 says a naive
-        # implementation smashes a 48-byte stack array in: 12 engine-selected units,
-        # 12 more carrying our circles, and a shift-click landing on one of them.
+        # implementation smashes a 48-byte stack array in: 12 engine-selected units, 12
+        # more carrying our circles, and a shift-click landing on one of ours.
         #
-        # Whichever set the clicked unit is in, exactly one outcome is legal:
-        #   - engine-selected  -> the engine removes it, SEL count 12 -> 11;
-        #   - shadow-circled   -> flag 0x08 is clear, so the branch that reads
-        #                         selectionIndex is unreachable and nothing changes.
-        # The click cannot be aimed at one set or the other from outside the process,
-        # so both are accepted -- and anything else is a failure.
+        # Because the plugin logs its circles' screen positions, the click can be AIMED
+        # at one of them, and the assertion is the exact predicted behaviour rather than
+        # "either branch is fine": our sprites never carry flag 0x08, so the engine
+        # takes its add-to-selection branch, finds the selection already holds 12, and
+        # returns -- no selection change, and no selection command on the wire.
+        if ($NoCircles -or -not $script:shadowXY -or $script:shadowXY.Count -eq 0) {
+            Write-Host '       (skipped: no shadow circle positions available)'
+            return
+        }
+        # Pick one clear of the HUD, which starts around y=350 at 640x480.
+        $target = $script:shadowXY | Where-Object { $_.Y -lt 340 -and $_.Y -gt 10 } | Select-Object -First 1
+        if (-not $target) { $target = $script:shadowXY[0] }
+
+        $mark = Get-ScLogLineCount -LogPath $LogPath
+        $selBefore = @(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'SEL count=(\d+)')
+        $n0 = if ($selBefore.Count) { [int]([regex]::Match($selBefore[-1].Line, 'SEL count=(\d+)').Groups[1].Value) } else { 12 }
+
+        Write-Host "       (aiming at the shadow circle at $($target.X),$($target.Y))"
+        Send-ScClick -Hwnd $hwnd -X $target.X -Y $target.Y -Shift
+        Start-Sleep -Seconds 2
+        $after = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
+
+        Assert-That 'the game survived the shift-click' `
+            ($null -ne (Get-Process -Id $gamePid -ErrorAction SilentlyContinue))
+
+        $sel = @($after | Select-String -Pattern 'SEL count=(\d+)')
+        $n1 = if ($sel.Count) { [int]([regex]::Match($sel[-1].Line, 'SEL count=(\d+)').Groups[1].Value) } else { $n0 }
+        Assert-That "the engine's selection is unchanged ($n0 -> $n1)" ($n1 -eq $n0)
+
+        # No Select / SelectAdd / SelectRemove was emitted: the engine did not treat our
+        # unit as something it could add to or remove from the selection.
+        $cmds = @($after | Select-String -Pattern 'CMD id=0x0(9|A|B) ')
+        Assert-That 'no selection command was emitted' ($cmds.Count -eq 0) `
+            ($cmds.Count -gt 0 ? "($($cmds[0].Line.Trim()))" : '')
+        Shot 'after-shadow-shift-click'
+    }
+
+    Step 'an un-aimed shift-click inside the >12 selection is still legal' {
+        # The complement of the step above: a click that may land on one of the ENGINE's
+        # 12. Those sprites are ones this plugin never touches, so the expected result is
+        # stock behaviour -- but the position of an engine-selected unit is not something
+        # the plugin can report (it only knows its own), so this one cannot be aimed and
+        # both outcomes are accepted. It is here for the crash/corruption check, not as a
+        # behavioural assertion; see research/selection-circles.md §7.
+        $selBefore = @(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'SEL count=(\d+)')
+        $n0 = if ($selBefore.Count) { [int]([regex]::Match($selBefore[-1].Line, 'SEL count=(\d+)').Groups[1].Value) } else { 12 }
         $mark = Get-ScLogLineCount -LogPath $LogPath
         Send-ScClick -Hwnd $hwnd -X 235 -Y 48 -Shift
         Start-Sleep -Seconds 2
         $sel = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark |
                  Select-String -Pattern 'SEL count=(\d+)')
-        $alive = $null -ne (Get-Process -Id $gamePid -ErrorAction SilentlyContinue)
-        Assert-That 'the game survived the shift-click' $alive
-        $n = 12
-        if ($sel.Count -gt 0) {
-            $n = [int]([regex]::Match($sel[-1].Line, 'SEL count=(\d+)').Groups[1].Value)
-        }
-        Write-Host "       (the clicked unit was $(if ($n -eq 11) { 'engine-selected -> removed' } else { 'shadow-circled -> ignored' }))"
-        Assert-That "the selection is 11 or 12, never anything else (SEL count=$n)" ($n -eq 11 -or $n -eq 12)
-        Shot 'after-shadow-shift-click'
+        $n1 = if ($sel.Count) { [int]([regex]::Match($sel[-1].Line, 'SEL count=(\d+)').Groups[1].Value) } else { $n0 }
+        Assert-That 'the game survived it' `
+            ($null -ne (Get-Process -Id $gamePid -ErrorAction SilentlyContinue))
+        Write-Host "       (landed on $(if ($n1 -eq $n0 - 1) { 'an engine-selected unit -> removed' } else { 'nothing selectable, or one of ours -> ignored' }))"
+        Assert-That "the selection changed by at most one unit ($n0 -> $n1)" `
+            ($n1 -eq $n0 -or $n1 -eq $n0 - 1)
     }
 
     Step 'one order still reaches every unit (fan-out is not broken)' {
@@ -240,9 +317,17 @@ try {
     }
 }
 finally {
-    if (-not $KeepOpen) {
-        & (Join-Path $scriptDir 'close-game.ps1') | Write-Host
+    # -ProcessId, always. close-game.ps1 resolving the game by NAME throws whenever any
+    # other StarCraft is running -- including the user's own playable install -- and a
+    # throw in a finally block replaces whatever real failure sent us here. It also
+    # closes the wrong game.
+    if (-not $KeepOpen -and $gamePid -gt 0) {
+        try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | Write-Host }
+        catch { Write-Host "  WARN close-game failed: $($_.Exception.Message)" }
         Start-Sleep -Seconds 2
+    }
+    elseif (-not $KeepOpen) {
+        Write-Host '  WARN no pid was ever parsed -- nothing to close'
     }
 }
 
@@ -287,8 +372,20 @@ else {
         ($partial.Count -gt 0 ? "($($partial[0].Line.Trim()))" : '')
 }
 
-$left = Get-Process -Name StarCraft -ErrorAction SilentlyContinue
-Assert-That 'no game process is left running' ($KeepOpen -or $null -eq $left)
+# Check OUR pid, not the name: an unrelated StarCraft (the user's own install) is a
+# scenario this repo's tooling explicitly expects, and failing on it would be a false
+# alarm about the one rule that must never produce noise.
+$left = if ($gamePid -gt 0) { Get-Process -Id $gamePid -ErrorAction SilentlyContinue } else { $null }
+Assert-That 'the game process this test started is gone' ($KeepOpen -or $null -eq $left)
+
+# --- on-disk binary, AFTER the run -------------------------------------------
+# The other half of hard rule 3. If any code path had written to StarCraft.exe -- a
+# stray patch, a botched working-copy refresh -- this is where it shows up, and it is
+# an assertion rather than a claim in a report.
+$hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
+Write-Host "  StarCraft.exe SHA-256 after:  $hashAfter"
+Assert-That 'StarCraft.exe on disk is byte-identical to before the run' ($hashAfter -eq $hashBefore)
+Assert-That 'and still byte-identical to pristine 1.16.1' ($hashAfter -eq $PRISTINE_SHA256)
 
 Write-Host ''
 Write-Host "test-selection-circles: $failures failure(s)"

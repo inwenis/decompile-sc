@@ -195,9 +195,29 @@ asked what a safe value would be for a unit that is fan-out-selected but not eng
 
 Found with `tools/ghidra/scripts/FieldSweep.java` (new in this task), which enumerates every
 instruction whose operand is `[reg + 0x0B]` — a struct field has no address, so `XrefSweep` cannot
-see it. That returns 94 candidate operands (`work/scratch/selgfx3/disp0b.tsv`). Most are stack
-locals or `CImage::direction` (`CImage` also has a byte at `0x0B`). Every candidate that could not
-be dismissed by its module was decompiled and read; the survivors are:
+see it. That returns **94 candidate operands** (`work/scratch/selgfx6/disp0b.tsv`; 50 reads, 39
+writes, the rest address-only `LEA`). They break down as:
+
+| Bucket | Count | How it was dismissed |
+|---|---|---|
+| `[EBP + 0xB]` | 38 | a frame-pointer-relative byte is a stack local, not a struct field |
+| the image module, `0x004D5xxx`–`0x004D7xxx` | 24 | `CImage` also has a byte at `0x0B` (`direction`); these are all image-list code |
+| named CRT functions | 5 | `___sbh_alloc_block`, `__ismbcspace`, … |
+| `word ptr [reg + 0xB]` | 6 | 16-bit, so not this byte field at all |
+| `LEA` | 5 | computes an address, does not access the field |
+| **everything else** | **24** | **decompiled and read, one function at a time** |
+
+All 24 of the last row are accounted for. Nine of them were missed by the first draft of this
+document and are the subject of round 6
+(`tools/ghidra/specs/selection-graphics-6.spec`, `work/scratch/selgfx6/`): `FUN_00403DB0` and
+`FUN_00403E50` initialise and reset an object free-list pool; `FUN_0042E600` is string/parse code;
+`FUN_00433DD0` builds an event record; `FUN_00435210` decrements a countdown in the sub-struct at
+`CUnit+0x134`; `FUN_00435900` is AI/pathing state; `FUN_00472570` walks a `char*`; `FUN_00472300`
+formats a game-creation struct; `FUN_00418510` is text/keyboard handling. **None of them is a
+`CSprite`.** `FUN_00458B30` and `FUN_00472500` (round 5) are likewise unrelated, and `FUN_004E6140`
+and `FUN_00499210` read `CImage::direction` off an image, not a sprite.
+
+That leaves, as the only instructions in the binary that touch `CSprite::selectionIndex`:
 
 | Address | Function | What it does with the value | Guard |
 |---|---|---|---|
@@ -206,16 +226,23 @@ be dismissed by its module was decompiled and read; the survivors are:
 | `0x0049F00B` | `0x0049EFA0` — change a unit's owner | saves it, calls `0x004E6290`, re-attaches with `0x004E6180(saved)` | `if (unit->sprite->flags & 8)` |
 | `0x0049F8B6` | `0x0049F860` — rebuild a unit's sprite | saves it, tears the sprite down, re-attaches with `0x004E6180(saved)` | `if (unit->sprite->flags & 8)` |
 
-Writes are equally few: `0x004E61D6` and `0x004E61FD` (both inside `0x004E6180`), plus `0x004997AE`
-in `0x004997A0`, a byte-identical copy of `0x004E6180`'s inner block with **zero references** — a
-leftover the compiler did not fold away.
+Of the 39 writes at this displacement, exactly **three** are to a `CSprite`: `0x004E61D6` and
+`0x004E61FD` (both inside `0x004E6180`), plus `0x004997AE` in `0x004997A0`, a byte-identical copy of
+`0x004E6180`'s inner block with **zero references** — a leftover the compiler did not fold away. The
+other 36 fall into the buckets in the table above.
 
 **Method limit, stated plainly.** A displacement sweep is a candidate list, not a proof of absence:
 an instruction that computed the field address arithmetically (`LEA` then a later dereference, or a
 base already advanced by 11) would not appear. Two independent things make that unlikely to matter
-here — the writes are as few as the reads and sit in one function, and the four readers found are
-exactly the four operations that can move a unit out of a selection — but the negative is
+here — the sprite writes are as few as the reads and sit in one function, and the four readers found
+are exactly the four operations that can move a unit out of a selection — but the negative is
 **unfalsified, not proven**.
+
+> **The read/write classifier was wrong in the first draft** and is worth knowing about if you reuse
+> the tool. It keyed off operand *position* ("operand 0 is the destination"), which silently dropped
+> `TEST byte ptr [EDI+0xb],0x1` and `CMP byte ptr [ESI+0xb],0x7` — reads written in destination
+> position, i.e. exactly the shape this sweep exists to find. `FieldSweep.java` now classifies from
+> Ghidra's own operand reference type and emits an `access` column (`r`, `w`, `rw`).
 
 ### 4.2 There is no safe value
 
@@ -284,6 +311,49 @@ The `!wasSelected && hadCircle` branch exists in the shipped binary. A sprite th
 selection circle without being selected is a state the engine writes code to preserve — so the
 plugin is not inventing a configuration the data model does not support.
 
+### 4.5 What actually happens when a circled unit dies
+
+The plugin's stale-record guards (§5) were written against a *model*: "the engine bumps
+`CUnit+0xA5` when a unit goes away, so a mismatch means the record is stale". That model was never
+checked, and it turns out to be wrong in a way that does not matter — but only because something
+else covers it.
+
+**`CUnit+0xA5` is written by exactly one instruction in the entire binary**: `0x004A03FD`,
+
+```c
+unit->uniqueness = (unit->uniqueness + 1) & 0x1F;
+```
+
+and it lives inside `0x004A0320`, which is unit **creation** — the function that clears the whole
+`CUnit`, links it into `playerUnitList[player]` (`0x006283F8`) and gives it a sprite. (FieldSweep at
+displacement `0xA5`, write mode: one row, `work/scratch/selgfx6/dispA5.tsv`. The 5-bit mask is also
+why the wire tag packs as `(uniqueness << 11) | index` — 5 + 11 = 16.)
+
+**So death does not bump it. Slot REUSE does.** A unit that has died but whose slot has not been
+recycled still carries its old uniqueness byte, and the uniqueness guard would not fire.
+
+What closes the window instead is the engine itself. `0x004A0740`, the unit-removal path, ends with:
+
+```c
+FUN_0049A7F0();     // drop the unit from every player's selection
+FUN_0049F7A0();     // drop it from the CLIENT selection   (guarded by sprite flag 0x08)
+FUN_004975D0();     // <<-- REMOVE THE SELECTION CIRCLE     (guarded by sprite flag 0x01 only)
+```
+
+`0x004975D0` is the same primitive the plugin uses, and it does **not** consult flag `0x08` — so the
+engine takes *our* circle off too, frees the image, and clears flag `0x01`. A later `ScCirclesHide`
+then sees flag `0x01` clear, skips the unit, and counts it in `lost`. No double free, no orphaned
+circle, and the counter is the observable.
+
+The guards therefore do close the window, but the load-bearing one is the **flag `0x01` check**, not
+the uniqueness check. Uniqueness earns its place for the *other* case: a recycled slot, where
+`0x004A0320` bumps the byte and hands the unit a fresh sprite, so both that guard and the
+`unit->sprite == recorded sprite` guard fire.
+
+`hooktest.exe` part [8] now models both cases separately — one test bumps the uniqueness byte (slot
+reuse), the other clears flag `0x01` behind the module's back (death) — and asserts the survivor is
+the only unit touched in each.
+
 ---
 
 ## 5. The implementation
@@ -327,7 +397,26 @@ Guards, each ruling out a distinct way a record goes bad between attach and deta
 the mode; circles are only ever active in `fanout` mode, because `shadow` mode's contract is
 "capture and log, change nothing".
 
-### 5.1 What was deliberately left out
+### 5.1 Threading, and why unloading mid-game is unsupported
+
+Everything in `sc_circles.cpp` runs on the **game's own thread** — the `0x0049AE40` detour and
+sc_fanout's `CMDACT_Select` detour are both called by the game. Nothing takes a lock, and nothing
+may be reached from the observer thread or from `DllMain`.
+
+That rules out one thing the first draft did: taking the circles off from `ScFanoutRemove`, which
+runs on the **unloader's** thread during `DLL_PROCESS_DETACH`. The engine is alive there — but
+liveness is not the question. `0x004975D0` unlinks an image from the sprite's overlay list and
+pushes it onto the image free list, and the game thread may be walking exactly those lists to render
+the frame; worse, the `0x0049AE40` hook is still installed at that point, so the game thread can be
+inside `ScCirclesHide()` at the same time.
+
+So the detach path does **not** hide, and **unloading the plugin mid-game is unsupported**. The
+circles left behind are self-healing rather than permanent: the engine's own unit-removal path calls
+`0x004975D0` on death (§4.5), and `0x00497620` takes the circle off the next time that unit is
+selected and deselected. (Process exit is unaffected — `scplugin.cpp` already skips `ScFanoutRemove`
+entirely on that path.)
+
+### 5.2 What was deliberately left out
 
 **The health bar.** It is `0x004D6420`, the other half of `0x004E6180` — but `0x00497620` will only
 take it off again when flag `0x08` is set, so attaching one would mean either setting `0x08` (§4.2)
@@ -355,23 +444,28 @@ from inside the process.
 
 | # | Step | Result |
 |---|---|---|
+| 0 | `StarCraft.exe` SHA-256 before launch | `AD6B58B2…C6A46`, asserted equal to the pristine 1.16.1 constant in `tools/make-working-copy.ps1` |
 | 4 | shift-click removes exactly the clicked unit, small selection | 3 → 2 units |
-| 5 | a 24-unit drag box | `SORT candidates=24 -> selected=12`, `SHADOW captured: 24 (12 visible + 12 beyond)`, `CIRCLES show: 12/12` |
-| 6 | shift-click inside the 12-engine + 12-shadow selection | game alive; `SEL count` 12 → 11 with a 4-byte `0x0B` SelectRemove carrying exactly one unit |
-| 7 | one right-click | `FANOUT start: units=24 -> 2 Select+order pairs`, `FANOUT done` |
+| 5 | a 24-unit drag box | `SORT candidates=24 -> selected=12`, `SHADOW captured: 24 (12 visible + 12 beyond)`, `CIRCLES show: 12/12`, and `CIRCLES pos:` reporting all 12 on screen |
+| 6 | shift-click **aimed at a known shadow-circled unit** (first reported position, `147,196`) | `SEL count` 12 → 12 **and no `0x09`/`0x0A`/`0x0B` command emitted** — the predicted "add-to-selection branch, selection already full, return" |
+| 7 | an un-aimed shift-click in the same selection | landed on an engine-selected unit: `SEL count` 12 → 11. Not a behavioural assertion — see §7 |
+| 8 | one right-click | `FANOUT start: units=24 -> 2 Select+order pairs`, `FANOUT done` |
 | — | shutdown | `CIRCLES stats: shown=24 hidden=12 held=12 skipped=0 noImage=0 lost=0` — accounting balances; `held` is the live selection at process exit, where the plugin deliberately does not un-splice |
 | — | every selection change | no `CIRCLES hide: a/b` line with `a != b` — no change ever left a circle behind |
+| — | `StarCraft.exe` SHA-256 after close | unchanged, and still equal to the pristine constant |
+
+Step 6 is aimed rather than hopeful because the plugin logs where its circles are on screen
+(`CIRCLES pos:`, client pixels, computed as sprite position minus the viewport origin the click
+handler itself uses). Without that a test cannot distinguish "clicked one of ours" from "clicked one
+of the engine's", and the assertion collapses to "either branch is acceptable".
 
 Run by hand in the same session, in addition:
 
-- shift-clicking a **shadow-circled** unit (circle, no health bar) in a 24-unit selection: no
-  command emitted, `SEL count` stayed 12, process responding — the predicted "add-to-selection
-  branch, selection already full, return".
+- shift-clicking an engine-selected unit inside the 12+12 selection: `SEL count` 12 → 11 with a
+  4-byte `0x0B` SelectRemove carrying exactly one unit.
 - `-Circles 0`: `FANOUT config: ... circles=0` and **4** hooks instead of 5 — the
   `CreateNewUnitSelectionsFromList` hook is not installed at all.
 - `-Mode observe`: no `HOOK` line of any kind, no `CIRCLES` line. Passive is stock.
-- `StarCraft.exe` SHA-256 before and after every run: `AD6B58B2…C6A46`, and identical to the
-  pristine install's copy.
 
 Offline, with no game in the process at all: `build.ps1 -Test` part [8] drives the module against
 fake sprites and fake engine primitives — attach, re-state, hide, idempotent hide, "the engine owns
@@ -386,17 +480,32 @@ pixels, which is why the test says so and prints where they are.
 
 ## 7. Open questions
 
-1. **Sprites the plugin never sees.** A unit whose sprite is destroyed and rebuilt while
-   shadow-circled is handled by the engine (§4.4) — but a unit that is *hidden* (loaded into a
-   transport, warped out) has not been tested with a circle attached.
-2. **The `lost` counter has never fired.** Every guard in §5 is exercised offline against fakes;
+1. **Which end of the overlay list draws first is not established.** `0x004D6420` links the health
+   bar at `CSprite+0x1C` and `0x004D7070` links the circle at `CSprite+0x20`, and on screen the
+   circle plainly renders *under* the unit while the bar renders over it — but this task never
+   decompiled the renderer's walk, so the mapping from list end to draw order is inferred from
+   pixels, not read. A health-bar task must settle it before relying on either end.
+   (`sc_addresses.h` carries the same warning beside the constant.)
+2. **Sprites the plugin never sees.** A unit whose sprite is destroyed and rebuilt while
+   shadow-circled is handled by the engine (§4.4), and one that dies is handled by `0x004975D0` in
+   the removal path (§4.5) — but a unit that is *hidden* (loaded into a transport, warped out) has
+   not been tested with a circle attached.
+3. **The `lost` counter has never fired.** Every guard in §5 is exercised offline against fakes;
    none has been observed firing in a real game, so the in-game behaviour of the stale-record paths
-   is unverified. The counter exists precisely so that "never happens" stays a measurement.
-3. **The image budget.** The engine's image pool is 5000 (teippi, `selection-cap.md` §5). A
+   is unverified. The counter exists precisely so that "never happens" stays a measurement. §4.5
+   predicts it *will* fire, once per circled unit that dies.
+4. **A shift-click aimed at a specific ENGINE-selected unit is not automated.** The plugin can
+   report where its own circles are, so step 6 is deterministic; it has no way to report the
+   engine's 12, so step 7 clicks a fixed coordinate and accepts either branch. The engine's sprites
+   are ones this plugin never writes, so the behaviour there is stock by construction — but that is
+   an argument, not a test.
+5. **The image budget.** The engine's image pool is 5000 (teippi, `selection-cap.md` §5). A
    selection of ~250 units would add ~250 images. `noImage` has always been 0; the ceiling is
    untested.
-4. **`0x004997A0` has zero references.** It is byte-for-byte the inner block of `0x004E6180`. Almost
+6. **`0x004997A0` has zero references.** It is byte-for-byte the inner block of `0x004E6180`. Almost
    certainly a compiler artefact, but "unreferenced in the static call graph" is not "never reached"
    if anything dispatches indirectly.
-5. **The displacement sweep's blind spot**, §4.1: a `selectionIndex` access computed arithmetically
+7. **The displacement sweep's blind spot**, §4.1: a `selectionIndex` access computed arithmetically
    would not appear in it.
+8. **Unloading the plugin mid-game leaves its circles on screen.** Documented as unsupported rather
+   than fixed — see §5.2.

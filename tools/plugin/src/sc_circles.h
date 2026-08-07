@@ -13,14 +13,23 @@
 // reimplement anything: it calls the engine's own attach (0x004D7070) and remove
 // (0x004975D0) primitives on the units the cap threw away.
 //
+// THREADING. Every entry point below is GAME-THREAD ONLY: they are reached from the
+// 0x0049AE40 detour and from sc_fanout's CMDACT_Select detour, both of which the game
+// calls on its own thread. Nothing here takes a lock, and nothing may be called from
+// the observer thread or from DllMain -- 0x004975D0 mutates the sprite overlay list
+// and the image free list, which the game thread walks to render every frame.
+//
 // WHAT THIS MODULE DELIBERATELY DOES NOT DO -- and why it is the whole point:
 //
 //   It never sets sprite flag 0x08 ("selected") and never writes
 //   CSprite::selectionIndex (sprite+0x0B).
 //
-// Exactly one instruction in the entire binary reads selectionIndex -- 0x0046FD77, in
-// the click handler -- and it is reached only when the clicked unit's sprite has flag
-// 0x08 set. It uses the value as a memmove offset into a 12-entry stack array:
+// FOUR instructions in the binary read selectionIndex -- 0x0046FD77 (click handler),
+// 0x0049F7B3 (remove one unit from the client selection), 0x0049F00B (change a unit's
+// owner) and 0x0049F8B6 (rebuild a unit's sprite); the full table is in
+// research/selection-circles.md 4.1. Every one of them is reached only when the unit's
+// sprite has flag 0x08 set, and every one uses the value as a memmove offset into a
+// 12-entry stack array:
 //
 //     n = <units in activePlayerSelection, at most 12>
 //     if (clicked->sprite->flags & 8) {
@@ -32,8 +41,8 @@
 // engine-selected. A value of 12 or more makes `(n-1-i)` negative and smashes a
 // 48-byte stack array; a value of 0..11 is in bounds but silently deletes a DIFFERENT,
 // genuinely selected unit from the player's selection. Leaving flag 0x08 clear is what
-// makes the whole question moot: our units never enter that branch, so the field is
-// never read for them and never has to hold anything.
+// makes the whole question moot: our units never enter any of those four branches, so
+// the field is never read for them and never has to hold anything.
 //
 // The cost is that a shadow-selected unit gets a circle but no health bar (the bar is
 // the other half of 0x004E6180, and 0x00497620 will only take it off again when 0x08

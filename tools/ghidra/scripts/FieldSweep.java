@@ -9,14 +9,25 @@
 // shadow-selected unit without knowing every instruction in this binary that reads it.
 //
 // Matching is deliberately coarse: any operand of the form [reg + disp] or [reg + reg*s + disp]
-// with the requested displacement, on an instruction whose operand size matches -Size (0 = any).
-// A displacement is not proof the base register holds the struct we care about, so the output is
-// a CANDIDATE list to be read, not an answer. It is small enough to read.
+// with the requested displacement, at any width. A displacement is not proof the base register
+// holds the struct we care about, so the output is a CANDIDATE list to be read, not an answer.
+// It is small enough to read.
+//
+// It is also not a proof of ABSENCE: an access that computed the field address arithmetically
+// (LEA into a register, or a base already advanced past the struct start) carries no displacement
+// and cannot appear here. Say so wherever a result of this sweep is quoted.
+//
+// The access filter classifies by Ghidra's own operand REFERENCE TYPE, not by operand position.
+// An earlier version used "operand 0 == write", which is wrong for exactly the instructions this
+// sweep exists to find: `TEST byte ptr [EDI+0xb],0x1` and `CMP byte ptr [ESI+0xb],0x7` are READS
+// of a field written in operand position 0, and a position-based filter silently dropped them --
+// under-reporting readers in a sweep whose whole purpose is to enumerate them.
 //
 // Script args:
 //   1: output TSV path (its .manifest is the run's success signal)
 //   2: displacement, hex (e.g. 0xB)
-//   3: optional access filter -- "read", "write" or "any" (default any)
+//   3: optional access filter -- "read", "write" or "any" (default any). An instruction that both
+//      reads and writes the field (e.g. `OR byte ptr [ESI+0xe],BL`) matches BOTH filters.
 //
 //@category Headless
 
@@ -27,6 +38,7 @@ import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.InstructionIterator;
 import ghidra.program.model.scalar.Scalar;
+import ghidra.program.model.symbol.RefType;
 
 import java.io.PrintWriter;
 import java.nio.file.Files;
@@ -55,7 +67,7 @@ public class FieldSweep extends GhidraScript {
         long rows = 0;
         try (PrintWriter w = new PrintWriter(Files.newBufferedWriter(out))) {
             w.println(String.join("\t", "addr", "function", "funcEntry", "mnemonic",
-                "opIndex", "baseReg", "text"));
+                "opIndex", "baseReg", "access", "text"));
 
             InstructionIterator it = currentProgram.getListing().getInstructions(true);
             while (it.hasNext()) {
@@ -89,14 +101,26 @@ public class FieldSweep extends GhidraScript {
                     if (insn.getDefaultOperandRepresentation(op).indexOf('[') < 0) {
                         continue;
                     }
-                    if (!"any".equals(mode)) {
-                        boolean isDest = (op == 0);
-                        if ("write".equals(mode) && !isDest) {
-                            continue;
-                        }
-                        if ("read".equals(mode) && isDest) {
-                            continue;
-                        }
+                    // Ghidra's own read/write classification for this operand. Position tells
+                    // you nothing here: TEST and CMP read their operand-0 memory, and OR/AND
+                    // both read AND write it.
+                    RefType rt = insn.getOperandRefType(op);
+                    boolean reads = rt != null && rt.isRead();
+                    boolean writes = rt != null && rt.isWrite();
+                    if (rt == null) {
+                        // No reference type recorded -- fall back to "it is a memory operand, so
+                        // it is at least read" rather than dropping the row silently.
+                        reads = true;
+                    }
+                    String access = (reads ? "r" : "") + (writes ? "w" : "");
+                    if (access.isEmpty()) {
+                        access = "?";
+                    }
+                    if ("write".equals(mode) && !writes) {
+                        continue;
+                    }
+                    if ("read".equals(mode) && !reads) {
+                        continue;
                     }
 
                     Address a = insn.getAddress();
@@ -108,6 +132,7 @@ public class FieldSweep extends GhidraScript {
                         insn.getMnemonicString(),
                         Integer.toString(op),
                         baseReg,
+                        access,
                         SweepUtil.cell(insn.toString())));
                     rows++;
                 }

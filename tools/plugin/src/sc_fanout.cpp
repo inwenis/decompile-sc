@@ -753,11 +753,24 @@ void ScFanoutTestBegin(BYTE* fakeModuleBase, ScQueueFn emit, int budget) {
 void ScFanoutRemove(void) {
     if (g_mode == SC_MODE_OBSERVE && !g_hkQueue.installed) return;
 
-    // Take our circles off BEFORE the threads are suspended and before the hooks come
-    // out. This runs only on the FreeLibrary path (scplugin.cpp deliberately skips it
-    // on process exit), so the engine is alive and calling into it is safe -- and a
-    // game left running after an unload must be a stock game, circles included.
-    ScCirclesHide();
+    // NOTE: our circles are deliberately NOT taken off here.
+    //
+    // This runs on the FreeLibrary path, on the UNLOADER's thread. The engine is alive
+    // -- which is why an earlier draft called ScCirclesHide() here -- but "alive" is a
+    // liveness answer to a concurrency question. 0x004975D0 unlinks an image from the
+    // sprite's overlay list and pushes it onto the image free list, and the game's own
+    // thread may be walking exactly those lists to render the frame. Worse, the
+    // 0x0049AE40 hook is still installed at this point, so the game thread can be
+    // inside ScCirclesHide() concurrently with this one.
+    //
+    // Everything in sc_circles.cpp is therefore GAME-THREAD-ONLY, and unloading the
+    // plugin mid-game is documented as unsupported (tools/plugin/README.md, off switch
+    // 3). The circles that stay behind are self-healing rather than permanent: the
+    // engine's own unit-removal path calls 0x004975D0 on death
+    // (research/selection-circles.md 4.5), and 0x00497620 takes the circle off the next
+    // time that unit is selected and deselected.
+    ScLog("CIRCLES: %d circle(s) left attached -- unloading mid-game does not remove "
+          "them (see tools/plugin/README.md, off switch 3)", ScCirclesCount());
 
     ScHookSuspendThreads();
     ScCirclesRemoveHook();

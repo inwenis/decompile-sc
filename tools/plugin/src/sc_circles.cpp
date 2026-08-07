@@ -19,6 +19,7 @@
 // moment we take one the engine has already finished.
 
 #include <windows.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "sc_addresses.h"
@@ -27,6 +28,8 @@
 #include "sc_log.h"
 
 #define SC_CIRCLES_MAX 256
+
+static void LogCirclePositions(void);
 
 static BYTE* g_base    = NULL;
 static bool  g_enabled = false;
@@ -181,7 +184,7 @@ void ScCirclesHide(void) {
         if ((flags & SC_SPRITE_FLAG_SEL_CIRCLE) == 0) { ++g_statLost; continue; }
         if ((flags & SC_SPRITE_FLAG_SELECTED) != 0) {
             ScLog("CIRCLES: unit 0x%08X became engine-selected while we held its "
-                  "circle -- leaving it alone", c->unit);
+                  "circle -- leaving it alone", (unsigned)c->unit);
             ++g_statLost;
             continue;
         }
@@ -240,6 +243,45 @@ void ScCirclesShow(const ScCircleUnit* units, int n) {
 
     ScLog("CIRCLES show: %d/%d units circled (noImage=%u skipped=%u)",
           shown, n, g_statNoImage, g_statSkipped);
+    LogCirclePositions();
+}
+
+// Where the circled units are ON SCREEN, in client pixels.
+//
+// This exists for one reason: an automated test cannot aim a click at "one of the units
+// the plugin circled" unless something tells it where they are. Without it the only
+// >12 shift-click a test can perform lands on whichever unit happens to be there, and
+// has to accept either outcome -- which is a much weaker assertion than the one this
+// design deserves (tools/plugin/test-selection-circles.ps1, step 7).
+//
+// client = mapPixel - viewportOrigin, with the origin read exactly where the click
+// handler at 0x0046FB40 reads it. Purely diagnostic: nothing in the feature depends on
+// these two globals, and a wrong value here can only mis-aim a test, never mis-draw a
+// circle.
+static void LogCirclePositions(void) {
+    if (g_circledCount <= 0) return;
+
+    const int left = (int)*(WORD*)Rt(SC_VA_SCREEN_LEFT);
+    const int top  = (int)*(WORD*)Rt(SC_VA_SCREEN_TOP);
+
+    char buf[1024];
+    int used = 0;
+    int listed = 0;
+    for (int i = 0; i < g_circledCount; ++i) {
+        const DWORD s = g_circled[i].sprite;
+        if (!Readable(s, SC_CSPRITE_SIZE)) continue;
+        const int x = (int)*(WORD*)(s + SC_CSPRITE_OFF_POS_X) - left;
+        const int y = (int)*(WORD*)(s + SC_CSPRITE_OFF_POS_Y) - top;
+        // Off-screen units are useless to a test and would only be noise.
+        if (x < 0 || y < 0 || x > 640 || y > 480) continue;
+        const int room = (int)sizeof(buf) - used;
+        if (room < 24) { break; }
+        used += _snprintf(buf + used, (size_t)room, "%s%d,%d", listed ? " " : "", x, y);
+        ++listed;
+    }
+    if (listed == 0) return;
+    buf[sizeof(buf) - 1] = '\0';
+    ScLog("CIRCLES pos: %d on screen of %d: %s", listed, g_circledCount, buf);
 }
 
 int ScCirclesCount(void) { return g_circledCount; }
