@@ -35,4 +35,35 @@ void ScFanoutLogState(void);
 // counters are still the thing a reader needs.
 void ScFanoutLogStats(void);
 
+// ---------------------------------------------------------------------------
+// The fan-out core, hook-free.
+//
+// The four detours below do nothing but marshal arguments into these three
+// functions. Splitting them out means the interesting half -- chunking, tag
+// encoding, emission order, staleness, the byte budget -- can be driven and
+// asserted byte-for-byte from a test process with no StarCraft and no hooks
+// (src/hooktest.cpp part [7]). What is left untestable offline is only whether the
+// ENGINE obeys the commands, which is what the human test is for.
+// ---------------------------------------------------------------------------
+
+// Where emitted commands go. In the game this is the queueCommand trampoline; in a
+// test it is a capture buffer.
+typedef void (__attribute__((fastcall)) *ScQueueFn)(const void*, unsigned);
+
+// One unit the 12-cap is discarding, plus the 12-slot array as it stands BEFORE the
+// engine's handler runs (that handler can evict an entry, and the evicted unit would
+// otherwise be lost from both the output and our record).
+void ScFanoutOnOverflow(unsigned count, unsigned long* outList, unsigned long unit);
+
+// The engine's final, truncated selection, at the moment it is committed.
+void ScFanoutOnSelect(unsigned count, unsigned long* units);
+
+// One outgoing command. Returns true if it was FANNED OUT and the caller must
+// therefore suppress the engine's own copy.
+bool ScFanoutOnCommand(const unsigned char* buf, unsigned len);
+
+// Point the core at a fake module image and a capture function. Test-only; passing
+// a NULL emit restores normal operation.
+void ScFanoutTestBegin(unsigned char* fakeModuleBase, ScQueueFn emit, int budget);
+
 #endif // SC_FANOUT_H

@@ -89,7 +89,7 @@ $testOut = Join-Path $OutDir 'hooktest.exe'
 # the detour engine and the fan-out hooks.
 $pluginSrc = @('scplugin.cpp', 'sc_log.cpp', 'sc_hook.cpp', 'sc_fanout.cpp') |
              ForEach-Object { Join-Path $srcDir $_ }
-$testSrc   = @('hooktest.cpp', 'sc_log.cpp', 'sc_hook.cpp') |
+$testSrc   = @('hooktest.cpp', 'sc_log.cpp', 'sc_hook.cpp', 'sc_fanout.cpp') |
              ForEach-Object { Join-Path $srcDir $_ }
 
 Write-Host 'build: compiling scplugin.dll ...'

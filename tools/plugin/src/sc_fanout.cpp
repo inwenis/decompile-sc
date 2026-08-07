@@ -190,11 +190,12 @@ static ScHook g_hkSelect;
 static ScHook g_hkSort;
 static ScHook g_hkOverflow;
 
-typedef void     (__attribute__((fastcall)) *QueueCommandFn)(const void*, unsigned);
 typedef void     (__attribute__((stdcall)) *CmdactSelectFn)(unsigned, DWORD*);
 typedef unsigned (__attribute__((stdcall)) *SortAllUnitsFn)(DWORD*, DWORD*, DWORD);
 
-static QueueCommandFn OrigQueueCommand(void) { return (QueueCommandFn)g_hkQueue.trampoline; }
+// Where emitted commands go: the queueCommand trampoline in the game, a capture
+// buffer under test. Never the hooked entry point -- that would re-enter our detour.
+static ScQueueFn g_emit = NULL;
 
 // Verified prologues -- ScHookInstall refuses to patch if memory disagrees.
 // Bytes taken from work/scratch/hookprobe/*.asm (Ghidra, this binary); the
@@ -273,17 +274,18 @@ static int EmitSelect(const ShadowUnit* units, int n) {
     buf[0] = SC_CMD_SELECT;
     buf[1] = (BYTE)live;
     const int len = 2 + live * 2;
-    OrigQueueCommand()(buf, (unsigned)len);
+    if (g_emit) g_emit(buf, (unsigned)len);
     return len;
 }
 
 static void EmitRaw(const BYTE* buf, int len) {
-    OrigQueueCommand()(buf, (unsigned)len);
+    if (g_emit) g_emit(buf, (unsigned)len);
 }
 
 // Emits as many of the plan's remaining chunks as the budget allows.
-static void DrainPlan(void) {
-    if (!g_plan.active) return;
+// Returns how many Select+order pairs actually went out.
+static int DrainPlan(void) {
+    if (!g_plan.active) return 0;
 
     // How much room is left in the engine's own turn buffer this turn? queueCommand
     // silently DROPS a command on two of its overflow paths, so never push past it.
@@ -293,6 +295,7 @@ static void DrainPlan(void) {
     int   budget = g_budget < room ? g_budget : room;
 
     int spent = 0;
+    int pairs = 0;
     while (g_plan.nextChunk < g_plan.chunkCount) {
         int start = 0, len = 0;
         if (!ChunkBounds(&g_plan, g_plan.nextChunk, &start, &len)) break;
@@ -306,6 +309,7 @@ static void DrainPlan(void) {
             EmitRaw(g_plan.order, g_plan.orderLen);
             spent += wrote + g_plan.orderLen;
             ++g_statPairs;
+            ++pairs;
         }
         ++g_plan.nextChunk;
     }
@@ -320,9 +324,15 @@ static void DrainPlan(void) {
               "go out with the next command", g_plan.nextChunk, g_plan.chunkCount,
               spent, budget);
     }
+    return pairs;
 }
 
-static void StartFanout(const BYTE* order, int orderLen) {
+// Returns false if NOT ONE pair went out -- the caller must then let the engine's
+// own command through instead of suppressing it. Without this, a turn buffer that
+// is already nearly full (negative budget) or a selection whose units all died
+// would turn a suppressed order into an order that reaches nobody: the player's
+// click would do nothing at all, which is worse than fanning out badly.
+static bool StartFanout(const BYTE* order, int orderLen) {
     if (g_plan.active) {
         ScLog("FANOUT: a previous plan was still pending (%d/%d chunks) -- dropping it",
               g_plan.nextChunk, g_plan.chunkCount);
@@ -344,7 +354,13 @@ static void StartFanout(const BYTE* order, int orderLen) {
           "-> %d Select+order pairs",
           order[0], orderLen, g_plan.count, g_plan.visibleCount, overflow,
           g_plan.chunkCount);
-    DrainPlan();
+
+    if (DrainPlan() > 0) return true;
+
+    ScLog("FANOUT abandoned: no pair could be emitted (turn buffer full, or every "
+          "captured unit is stale) -- letting the engine's own command through");
+    g_plan.active = false;
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -361,17 +377,11 @@ static volatile LONG g_inFanout = 0;
 // makes each of these functions realign ESP itself.
 #define SC_GAME_ENTRY __attribute__((force_align_arg_pointer))
 
-static void __attribute__((fastcall)) SC_GAME_ENTRY
-HkQueueCommand(const void* buf, unsigned len) {
-    // Re-entrancy: everything we emit goes through the TRAMPOLINE, not through the
-    // target, so this guard only ever matters if the engine itself re-enters.
-    if (InterlockedCompareExchange(&g_inFanout, 0, 0)) {
-        OrigQueueCommand()(buf, len);
-        return;
-    }
-    if (!buf || len == 0) { OrigQueueCommand()(buf, len); return; }
+// The decision half, callable without any hook installed.
+bool ScFanoutOnCommand(const BYTE* buf, unsigned len) {
+    if (!buf || len == 0) return false;
 
-    const BYTE id = ((const BYTE*)buf)[0];
+    const BYTE id = buf[0];
     ++g_statCommands;
     if (g_verboseCmds) ScLog("CMD id=0x%02X len=%u", id, len);
 
@@ -395,22 +405,36 @@ HkQueueCommand(const void* buf, unsigned len) {
         g_shadowCount > SC_SELECTION_SLOTS &&
         g_visibleCount > 0 &&
         len <= SC_MAX_ORDER_BYTES) {
-        StartFanout((const BYTE*)buf, (int)len);
-        suppress = true;   // chunk 0 already carried this exact order
+        // Suppress only if at least one Select+order pair really went out; the
+        // first pair already carried this exact order.
+        suppress = StartFanout(buf, (int)len);
     }
 
     LeaveCriticalSection(&g_lock);
     InterlockedExchange(&g_inFanout, 0);
+    return suppress;
+}
 
-    if (!suppress) OrigQueueCommand()(buf, len);
+static void __attribute__((fastcall)) SC_GAME_ENTRY
+HkQueueCommand(const void* buf, unsigned len) {
+    // Re-entrancy: everything we emit goes through the TRAMPOLINE, not through the
+    // hooked entry point, so this guard only matters when the engine itself
+    // re-enters -- which it does, via the turn flush emitting a sync command from
+    // inside our own emission.
+    if (InterlockedCompareExchange(&g_inFanout, 0, 0)) {
+        ((ScQueueFn)g_hkQueue.trampoline)(buf, len);
+        return;
+    }
+    if (!ScFanoutOnCommand((const BYTE*)buf, len)) {
+        ((ScQueueFn)g_hkQueue.trampoline)(buf, len);
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Hook: CMDACT_Select -- __stdcall(count, CUnit** units); the commit point
 // ---------------------------------------------------------------------------
 
-static void __attribute__((stdcall)) SC_GAME_ENTRY
-HkCmdactSelect(unsigned count, DWORD* units) {
+void ScFanoutOnSelect(unsigned count, DWORD* units) {
     EnterCriticalSection(&g_lock);
     ++g_statSelects;
 
@@ -463,7 +487,13 @@ HkCmdactSelect(unsigned count, DWORD* units) {
     }
 
     LeaveCriticalSection(&g_lock);
+}
 
+static void __attribute__((stdcall)) SC_GAME_ENTRY
+HkCmdactSelect(unsigned count, DWORD* units) {
+    ScFanoutOnSelect(count, units);
+    // Deliberately outside the lock: the original queues its Select through the
+    // hooked queueCommand, which takes the same lock.
     ((CmdactSelectFn)g_hkSelect.trampoline)(count, units);
 }
 
@@ -501,7 +531,11 @@ void* g_overflowTrampoline = NULL;
 
 extern "C" void SC_GAME_ENTRY
 ScOverflowObserve(unsigned count, DWORD* outList, DWORD unit, DWORD clicked) {
-    (void)clicked;
+    (void)clicked;   // the clicked unit is already in outList when it matters
+    ScFanoutOnOverflow(count, outList, unit);
+}
+
+void ScFanoutOnOverflow(unsigned count, DWORD* outList, DWORD unit) {
     EnterCriticalSection(&g_lock);
     ++g_statOverflow;
 
@@ -642,8 +676,29 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
         return 0;
     }
 
+    // Emissions go through the trampoline, never the hooked entry point.
+    g_emit = (ScQueueFn)g_hkQueue.trampoline;
+
     ScLog("HOOK: %d/%d installed, mode=%s", installed, expected, ScModeName(mode));
     return installed;
+}
+
+// Test-only: point the core at a fake module image and a capture function, with no
+// hooks anywhere. src/hooktest.cpp part [7] uses this to drive a whole 36-unit
+// fan-out and assert the emitted bytes.
+void ScFanoutTestBegin(BYTE* fakeModuleBase, ScQueueFn emit, int budget) {
+    if (!g_lockInit) { InitializeCriticalSection(&g_lock); g_lockInit = true; }
+    g_base   = fakeModuleBase;
+    g_emit   = emit;
+    g_mode   = emit ? SC_MODE_FANOUT : SC_MODE_OBSERVE;
+    g_budget = budget;
+    g_maxUnits = SC_SHADOW_MAX - 1;
+    g_verboseCmds = false;
+    SetDefaultFanoutCmds();
+    g_shadowCount = 0;
+    g_visibleCount = 0;
+    g_accumCount = 0;
+    memset(&g_plan, 0, sizeof(g_plan));
 }
 
 void ScFanoutRemove(void) {
