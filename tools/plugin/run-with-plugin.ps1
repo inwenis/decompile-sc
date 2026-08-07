@@ -57,7 +57,11 @@ param(
     # every player does in a frame; 200 leaves room. selection-cap.md 6.2.
     [int]$FanoutBudget = 200,
     # Override the set of command ids that get fanned out (hex, space separated).
-    [string]$FanoutCmds
+    [string]$FanoutCmds,
+    # Task 014: draw a selection circle under the units the 12-cap threw away.
+    # Only meaningful in -Mode fanout; '0' is the feature's own off switch, which is
+    # how a run with and without the visuals can be compared without rebuilding.
+    [ValidateSet('0', '1')][string]$Circles = '1'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -214,6 +218,7 @@ $env:SCPLUGIN_POLL_MS = "$PollMs"
 $env:SCPLUGIN_MODE           = $Mode
 $env:SCPLUGIN_LOG_COMMANDS   = $LogCommands
 $env:SCPLUGIN_FANOUT_BUDGET  = "$FanoutBudget"
+$env:SCPLUGIN_CIRCLES        = $Circles
 if ($FanoutCmds) { $env:SCPLUGIN_FANOUT_CMDS = $FanoutCmds }
 else { $env:SCPLUGIN_FANOUT_CMDS = '' }
 

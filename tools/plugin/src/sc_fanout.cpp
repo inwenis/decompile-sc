@@ -31,6 +31,7 @@
 #include <stdlib.h>
 
 #include "sc_addresses.h"
+#include "sc_circles.h"
 #include "sc_fanout.h"
 #include "sc_hook.h"
 #include "sc_log.h"
@@ -477,6 +478,36 @@ void ScFanoutOnSelect(unsigned count, DWORD* units) {
 
     g_accumCount = 0;
 
+    // Task 014: put a selection circle under the units the cap threw away.
+    //
+    // Here and not earlier, for two reasons. First, this is the moment the shadow
+    // list exists -- the overflow accumulator and the engine's final list have just
+    // been unioned. Second, the engine has ALREADY finished attaching its own
+    // graphics for this selection: CreateNewUnitSelectionsFromList (0x0049AE40) runs
+    // before CMDACT_Select on every path into here (0x0049AEF0 calls them in that
+    // order; so does the click handler 0x0046FB40). Attaching now therefore cannot
+    // collide with the engine's own attach pass, and our matching detach already ran
+    // from the 0x0049AE40 pre-hook a moment ago.
+    //
+    // The overflow units are the FRONT of g_shadow -- visible units are stored last
+    // so the final Select+order pair of a fan-out leaves the simulation holding what
+    // the player can see.
+    {
+        const int overflow = g_shadowCount - g_visibleCount;
+        if (ScCirclesEnabled() && overflow > 0) {
+            ScCircleUnit circ[SC_SHADOW_MAX];
+            int n = 0;
+            for (int i = 0; i < overflow && n < SC_SHADOW_MAX; ++i) {
+                circ[n].unit       = g_shadow[i].ptr;
+                circ[n].sprite     = 0;      // filled in by ScCirclesShow
+                circ[n].uniqueness = g_shadow[i].uniqueness;
+                circ[n].player     = g_shadow[i].player;
+                ++n;
+            }
+            ScCirclesShow(circ, n);
+        }
+    }
+
     // A new selection invalidates a pending fan-out: those pairs would command units
     // the player has moved on from. The engine's own Select is about to be queued
     // right behind us, so the simulation selection ends up correct either way.
@@ -625,6 +656,13 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     g_verboseCmds = EnvInt("SCPLUGIN_LOG_COMMANDS", 1, 0, 1) != 0;
     LoadFanoutCmds();
 
+    // Task 014's selection circles. Only in fanout mode -- `shadow` mode's contract is
+    // "capture and log, change nothing", and drawing a circle is a change. %SCPLUGIN_CIRCLES%
+    // is its own off switch on top of the mode, so a fan-out run can be compared with and
+    // without the visuals without rebuilding anything.
+    const bool circles = (mode == SC_MODE_FANOUT) && EnvInt("SCPLUGIN_CIRCLES", 1, 0, 1) != 0;
+    ScCirclesInit(moduleBase, circles);
+
     char cmds[192];
     int used = 0;
     cmds[0] = '\0';
@@ -632,8 +670,9 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
         used += _snprintf(cmds + used, sizeof(cmds) - used, "%s0x%02X",
                           i ? " " : "", g_fanoutCmds[i]);
     }
-    ScLog("FANOUT config: mode=%s budget=%dB maxUnits=%d logCommands=%d cmds=[%s]",
-          ScModeName(mode), g_budget, g_maxUnits, g_verboseCmds ? 1 : 0, cmds);
+    ScLog("FANOUT config: mode=%s budget=%dB maxUnits=%d logCommands=%d circles=%d cmds=[%s]",
+          ScModeName(mode), g_budget, g_maxUnits, g_verboseCmds ? 1 : 0,
+          circles ? 1 : 0, cmds);
 
     // One suspension for all hooks: the game is quiescent for microseconds instead
     // of once per hook, and a partially installed set is never observable.
@@ -663,11 +702,17 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
                           kPrologueSort, (int)sizeof(kPrologueSort))) ++installed;
     }
 
+    // Task 014's one extra hook. It goes in under the same suspension as the rest so
+    // a half-installed set is never observable.
+    if (circles && ScCirclesInstallHook()) ++installed;
+
     ScHookResumeThreads();
 
     // A partial install is not a working plugin: the queueCommand hook without the
     // selection hooks would fan out a shadow list nothing ever fills. Roll back.
-    const int expected = (mode >= SC_MODE_SHADOW) ? 4 : 1;
+    // The circle hook counts too -- without it our circles would never come off, and
+    // stale circles under units the player has deselected is worse than none.
+    const int expected = ((mode >= SC_MODE_SHADOW) ? 4 : 1) + (circles ? 1 : 0);
     if (installed != expected) {
         ScLog("HOOK: only %d of %d hooks installed -- ROLLING BACK, the plugin is "
               "passive for this run", installed, expected);
@@ -694,6 +739,10 @@ void ScFanoutTestBegin(BYTE* fakeModuleBase, ScQueueFn emit, int budget) {
     g_budget = budget;
     g_maxUnits = SC_SHADOW_MAX - 1;
     g_verboseCmds = false;
+    // Circles OFF for the fan-out tests: ScFanoutOnSelect would otherwise call the
+    // engine's sprite primitives, and in a test process those addresses are a fake
+    // module image. sc_circles has its own tests, with its own fake primitives.
+    ScCirclesInit(fakeModuleBase, false);
     SetDefaultFanoutCmds();
     g_shadowCount = 0;
     g_visibleCount = 0;
@@ -703,7 +752,15 @@ void ScFanoutTestBegin(BYTE* fakeModuleBase, ScQueueFn emit, int budget) {
 
 void ScFanoutRemove(void) {
     if (g_mode == SC_MODE_OBSERVE && !g_hkQueue.installed) return;
+
+    // Take our circles off BEFORE the threads are suspended and before the hooks come
+    // out. This runs only on the FreeLibrary path (scplugin.cpp deliberately skips it
+    // on process exit), so the engine is alive and calling into it is safe -- and a
+    // game left running after an unload must be a stock game, circles included.
+    ScCirclesHide();
+
     ScHookSuspendThreads();
+    ScCirclesRemoveHook();
     ScHookRemove(&g_hkSort);
     ScHookRemove(&g_hkOverflow);
     ScHookRemove(&g_hkSelect);
@@ -717,6 +774,7 @@ void ScFanoutLogStats(void) {
           "deferred=%u staleSkipped=%u",
           ScModeName(g_mode), g_statCommands, g_statSelects, g_statOverflow,
           g_statFanouts, g_statPairs, g_statDeferred, g_statStale);
+    ScCirclesLogStats();
 }
 
 void ScFanoutLogState(void) {
