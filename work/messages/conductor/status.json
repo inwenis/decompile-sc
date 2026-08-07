@@ -1,8 +1,8 @@
 {
   "state": "processing",
-  "subject": "cutting task 008",
-  "updatedAt": "2026-08-07T07:01:22Z",
-  "contextPct": 48,
+  "subject": "rung 1 of fan-out: toolchain + injection + runtime read",
+  "updatedAt": "2026-08-07T07:24:21Z",
+  "contextPct": 50,
   "effort": "xhigh",
   "model": "Opus 5 (1M context)"
 }

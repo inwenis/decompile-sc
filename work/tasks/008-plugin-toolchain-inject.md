@@ -147,6 +147,36 @@ costs a corrupted game state and a confusing debugging session.
 7. Document the whole thing in `tools/plugin/README.md`: toolchain, build command, install and
    uninstall steps, and the injection design decision with its rationale.
 
+## ADDED 2026-08-07 — windowed mode is now a prerequisite, by user decision
+
+The user was offered "one short fullscreen session now" vs "fix windowed mode first" and chose
+**fix windowed first**. So getting a windowed game is now part of this task, before step 5.
+
+Your diagnosis stands: `storm.dll` does `LoadLibraryA("ddraw.dll")` then resolves functions by
+name, and `WMode.dll` has no export table, so `GetProcAddress` fails and DirectDraw never
+initialises. Dropping it into the `ddraw.dll` slot cannot work.
+
+**Hypothesis worth trying first, because it is nearly free for you:** a DLL with no exports and
+a `FindWindowA` import is not shaped like a DirectDraw proxy — it is shaped like something
+meant to be **injected** into a running process and to locate the game window itself.
+`research/launch-baseline.md` noticed that about `WMode_Fix.dll` and did not follow it up. You
+already have a working injector. So: try injecting `WMode.dll` (and/or `WMode_Fix.dll`) with
+`scinject.exe` instead of proxying it, rather than assuming the ddraw-swap recipe was merely
+mis-executed. If that is what those DLLs are for, this costs one run.
+
+If that fails, the fallback is a real chain-loading `ddraw.dll` proxy of your own: export the
+entry points `storm.dll` actually resolves, forward each to the genuine 32-bit system
+`ddraw.dll` under `SysWOW64`, and hook only what windowed mode requires. Find the required
+exports empirically — log what is requested — rather than guessing at the full DirectDraw API.
+
+**Timebox this and report rather than grinding.** If windowed is not converging after a
+reasonable effort, say so and we will reconsider; a fullscreen session remains available as a
+fallback if the user agrees. Do not let this swallow the runtime verification, which is the
+actual deliverable.
+
+Whatever you learn, record it in your research doc — including a plain statement of whether the
+merged `launch-baseline.md` recipe is wrong, right-but-misapplied, or unresolved.
+
 ## Acceptance criteria
 
 1. A pinned, documented 32-bit C++ toolchain; the build is reproducible from the committed
