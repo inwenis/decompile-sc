@@ -1,8 +1,8 @@
 {
-  "state": "processing",
-  "subject": "merging task 005",
-  "updatedAt": "2026-08-07T01:35:18Z",
-  "contextPct": 46,
+  "state": "idle",
+  "subject": "night complete; awaiting your call on fan-out vs wide selection",
+  "updatedAt": "2026-08-07T01:36:35Z",
+  "contextPct": 47,
   "effort": "xhigh",
   "model": "Opus 5 (1M context)"
 }
