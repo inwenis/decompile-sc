@@ -90,8 +90,10 @@ Result with `WMode.dll` as `ddraw.dll`:
 3. If the window is minimized on first appearance, restore it (click the taskbar icon, or
    `ShowWindow(hwnd, SW_RESTORE)` if automating).
 4. To go back to a clean, pristine-mirroring working copy: delete `ddraw.dll`, or just
-   re-run `tools/make-working-copy.ps1 -Force` (the `robocopy /MIR` purges anything not in
-   the pristine source, including a leftover `ddraw.dll`).
+   re-run `tools/make-working-copy.ps1 -Force` (a root-level extra like a leftover
+   `ddraw.dll` is still purged by default; task 010 changed the default to preserve only
+   `characters\`/`Maps\` extras -- player profiles, replays, generated test maps. Pass
+   `-PurgeExtras` for the old true-mirror-everything behaviour).
 
 All test launches were killed within the bounded wait (well under 30s) and confirmed gone
 via a follow-up `Get-Process` check. The working copy itself was left in its clean,
