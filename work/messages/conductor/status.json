@@ -1,8 +1,8 @@
 {
-  "state": "idle",
-  "subject": "night complete; awaiting your call on fan-out vs wide selection",
-  "updatedAt": "2026-08-07T01:36:35Z",
-  "contextPct": 47,
+  "state": "processing",
+  "subject": "cutting task 008",
+  "updatedAt": "2026-08-07T07:01:22Z",
+  "contextPct": 48,
   "effort": "xhigh",
   "model": "Opus 5 (1M context)"
 }
