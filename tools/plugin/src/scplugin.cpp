@@ -29,6 +29,11 @@
 static HANDLE g_log = INVALID_HANDLE_VALUE;
 static CRITICAL_SECTION g_logLock;
 static volatile LONG g_stop = 0;
+// Set only on the process-termination detach path, where every other thread has
+// already been killed by the OS -- possibly inside the critical section. Blocking
+// on a lock whose owner no longer exists would hang the game on exit, so the last
+// log line is written with a try-lock and dropped rather than waited for.
+static volatile LONG g_logTryLock = 0;
 
 static void EnsureDirectoryTree(const char* filePath) {
     char dir[MAX_PATH];
@@ -84,7 +89,11 @@ static void LogLine(const char* fmt, ...) {
     if (len < 0) return;
     line[sizeof(line) - 1] = '\0';
 
-    EnterCriticalSection(&g_logLock);
+    if (InterlockedCompareExchange(&g_logTryLock, 0, 0)) {
+        if (!TryEnterCriticalSection(&g_logLock)) return;
+    } else {
+        EnterCriticalSection(&g_logLock);
+    }
     DWORD written = 0;
     WriteFile(g_log, line, (DWORD)len, &written, NULL);
     FlushFileBuffers(g_log);  // so the log is readable live while the game runs
@@ -295,9 +304,13 @@ static DWORD WINAPI ObserverThread(LPVOID) {
         PollMarker();
         Snapshot cur;
         TakeSnapshot(&cur);
+        // memcmp compares the padding bytes too, so `prev` must be refreshed with
+        // a byte copy. Struct assignment is not required to carry padding across;
+        // a compiler that dropped it would leave `prev`'s 0xFF seed in the gaps
+        // forever and every tick would look like a change.
         if (memcmp(&cur, &prev, sizeof(cur)) != 0) {
             LogSnapshot(&cur);
-            prev = cur;
+            memcpy(&prev, &cur, sizeof(prev));
         }
         // Liveness heartbeat: proves the thread is still polling during long
         // stretches with no selection change (menus, loading screens).
@@ -352,7 +365,9 @@ static void LogAttachBanner(void) {
     }
 }
 
-BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID) {
+static HANDLE g_observer = NULL;
+
+BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hinst);
         InitializeCriticalSection(&g_logLock);
@@ -360,14 +375,40 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID) {
         LogAttachBanner();
         // The observer runs on its own thread; DllMain itself does nothing but
         // start it, so we never hold the loader lock while polling.
-        HANDLE h = CreateThread(NULL, 0, ObserverThread, NULL, 0, NULL);
-        if (h) CloseHandle(h);
-        else LogLine("ERROR CreateThread failed gle=%u", GetLastError());
+        g_observer = CreateThread(NULL, 0, ObserverThread, NULL, 0, NULL);
+        if (!g_observer) LogLine("ERROR CreateThread failed gle=%u", GetLastError());
     } else if (reason == DLL_PROCESS_DETACH) {
         InterlockedExchange(&g_stop, 1);
+
+        // lpReserved == NULL means FreeLibrary: the observer thread is still
+        // running and this DLL's code is about to be unmapped underneath it, so
+        // it has to be joined before the log handle and the lock are destroyed.
+        // The thread only calls file, memory and Sleep APIs -- never LoadLibrary
+        // or FreeLibrary -- so it cannot be waiting on the loader lock DllMain
+        // holds, and this bounded wait cannot deadlock against it.
+        //
+        // lpReserved != NULL means the process is exiting: Windows has already
+        // terminated every other thread, so there is nothing to join, and the
+        // log lock may be permanently owned by a thread that no longer exists.
+        bool joined = true;
+        if (lpReserved == NULL) {
+            if (g_observer) joined = (WaitForSingleObject(g_observer, 5000) == WAIT_OBJECT_0);
+        } else {
+            InterlockedExchange(&g_logTryLock, 1);
+        }
+
         LogLine("DETACH pid=%u", GetCurrentProcessId());
-        if (g_log != INVALID_HANDLE_VALUE) CloseHandle(g_log);
-        g_log = INVALID_HANDLE_VALUE;
+
+        if (joined) {
+            if (g_observer) { CloseHandle(g_observer); g_observer = NULL; }
+            if (g_log != INVALID_HANDLE_VALUE) CloseHandle(g_log);
+            g_log = INVALID_HANDLE_VALUE;
+            if (lpReserved == NULL) DeleteCriticalSection(&g_logLock);
+        }
+        // If the join timed out, the handles and the critical section are leaked
+        // on purpose: a thread that may still be logging must not find them
+        // closed. A leak at unload is strictly better than a use-after-free
+        // inside the game.
     }
     return TRUE;
 }

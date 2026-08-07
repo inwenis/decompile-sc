@@ -77,10 +77,19 @@ namespace SCWin {
 }
 
 if ($ProcessId -eq 0) {
+    # Fallback only. run-with-plugin.ps1 passes the pid scinject printed, because
+    # resolving by name throws whenever another StarCraft happens to be running --
+    # after a launch that in fact succeeded.
     $procs = @(Get-Process StarCraft -ErrorAction SilentlyContinue)
     if ($procs.Count -eq 0) { Write-Host 'check-game-windows: no StarCraft process running'; exit 3 }
     if ($procs.Count -gt 1) { throw "check-game-windows: $($procs.Count) StarCraft processes running; pass -ProcessId." }
     $ProcessId = $procs[0].Id
+}
+elseif (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
+    # The game died between launch and check -- report it rather than enumerating
+    # zero windows for a dead pid and calling that healthy.
+    Write-Host "check-game-windows: pid $ProcessId is not running"
+    exit 3
 }
 
 $wins = [SCWin.Enum]::ForPid([uint32]$ProcessId)

@@ -8,10 +8,14 @@
 //
 // so a relocated/ASLR'd load is handled rather than assumed away.
 //
-// Provenance for each address: research/binary-selection-map.md and its committed
-// evidence table research/data/selection-xrefs.tsv. Types come from the same
-// document (clientSelectionCount resolved to u8 there -- all 23 accesses in the
-// binary are byte-width, no dword access exists).
+// Provenance for every address is research/binary-selection-map.md; the exact
+// section is quoted in the comment above each constant. The selection arrays and
+// counters additionally have per-instruction rows in the committed evidence table
+// research/data/selection-xrefs.tsv. The three player-id VAs below do NOT -- they
+// have no rows in that TSV and come from the map's section 7 prose alone, which is
+// also why the plugin logs all three rather than picking one. Types come from the
+// same document (clientSelectionCount resolved to u8 there -- all 23 accesses in
+// the binary are byte-width, no dword access exists).
 
 #ifndef SC_ADDRESSES_H
 #define SC_ADDRESSES_H

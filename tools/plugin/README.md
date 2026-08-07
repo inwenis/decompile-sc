@@ -12,7 +12,7 @@ Findings from actually running it: [`research/runtime-selection-observations.md`
 |---|---|
 | Plugin | `scplugin.dll` — 32-bit, injected into StarCraft.exe |
 | Injector | `scinject.exe` — 32-bit launcher; starts the game and injects |
-| Files added to the game directory | **none** |
+| Files added to the game directory | **none** by the injection path — the deprecated [`-Windowed`](#windowed-mode-injected-not-proxied) switch is the one exception, and it writes `ddraw.dll` |
 | Writes to game memory | **none** |
 
 ---
@@ -126,6 +126,25 @@ verify: scinject.exe   Machine=0x014C  OptMagic=0x010B  EXE
 5. Read the remote thread's exit code — that is the `HMODULE`, and a `0` there is
    a hard failure rather than a silent no-op.
 
+**Failure policy: never leave a game process behind.** Every exit path after
+`CreateProcess` goes through one `Bail()` helper that terminates the game if it
+is still alive and closes both handles. `ResumeThread`'s return value is checked,
+because an unchecked failure there leaves `StarCraft.exe` *suspended forever*,
+holding the working copy, while the injector exits 0. A failed late injection
+also terminates rather than leaving the game running unobserved — the caller is
+going to report a failed run either way, and a half-launched game the caller has
+no handle on is worse than none.
+
+| `scinject.exe` exit | meaning |
+|---|---|
+| `0` | launched and injected |
+| `1` | bad arguments, missing file, or a path under `C:\sc-install` |
+| `2` | a Win32 call failed before the process existed |
+| `3` | the game exited on its own before injection |
+| `4` | late injection failed — game terminated |
+| `5` | `--early-dll` injection failed — game terminated |
+| `6` | `ResumeThread` failed — game terminated rather than left suspended |
+
 Injecting *after* init rather than into a never-run process is deliberate. A
 passive observer gains nothing from being present before the entry point, and
 `CreateRemoteThread` into a process whose loader has not initialised is the
@@ -150,7 +169,10 @@ still the wrong choice here:
    in the process.
 
 The launcher vector has none of those properties: the `ddraw.dll` slot stays
-completely free, and the game directory is never modified.
+completely free, and the game directory is not modified by anything on this path.
+(The deprecated `-Windowed` switch still performs the rejected `ddraw.dll` swap —
+it is kept only so the failure stays reproducible, and it is the sole thing in
+this tool that writes into the game directory.)
 
 ### Windowed mode: injected, not proxied
 
@@ -199,14 +221,26 @@ file in the game folder.
 | `-Windowed` / `-RemoveWindowed` | the **old** `ddraw.dll`-swap recipe and its undo. Kept only so the failure is reproducible; it does not work — use `-InjectWindowedHelper` |
 | `-WaitForExit` | block until the game exits instead of returning |
 
-Defaults: game `C:\sc-work\1161-base` (the disposable working copy — the script
-**refuses** a path under `C:\sc-install`), log `C:\sc-work\logs\sc-plugin.log`,
-poll 250 ms.
+Defaults: game `C:\sc-work\1161-base` (the disposable working copy), log
+`C:\sc-work\logs\sc-plugin.log`, poll 250 ms.
 
-After injecting, the script runs `check-game-windows.ps1`, which enumerates the
-game's top-level windows from outside the process and fails the run if a modal
-dialog (window class `#32770`) is open. A StarCraft launch can fail with the
-process still alive and an error box on screen; exit codes alone cannot see that.
+**The pristine install is guarded on the canonical path, not on how it was
+spelled.** `-GameDir` is first canonicalised — `/` → `\`, `\\?\` and `\\.\`
+device prefixes stripped, `.`/`..` resolved, 8.3 short names expanded, symlinks
+and junctions followed — and the run is refused if the result is at or under
+`C:\sc-install`. Everything afterwards uses that canonical path, so the guard
+cannot test one spelling while `Copy-Item`/`Remove-Item` act on another. All of
+`C:\sc-install\Starcraft`, `C:/sc-install/Starcraft`, `\\?\C:\sc-install\x` and
+`C:\sc-work\..\sc-install` are rejected. `scinject.exe` carries the same check
+independently, so calling the injector by hand does not get past it.
+
+After injecting, the script runs `check-game-windows.ps1` **against the pid
+`scinject.exe` printed** (`scinject: PID=<n>`), which enumerates that process's
+top-level windows from outside and fails the run if a modal dialog (window class
+`#32770`) is open. A StarCraft launch can fail with the process still alive and
+an error box on screen; exit codes alone cannot see that. The pid is passed
+explicitly because resolving by process name would throw whenever any other
+StarCraft happens to be running — after a launch that in fact succeeded.
 
 ```powershell
 ./tools/plugin/check-game-windows.ps1        # standalone; exit 1 == dialog open
@@ -258,8 +292,10 @@ bugs.
 **Nothing to uninstall.** The plugin is never copied into the game directory; it is
 loaded from wherever it was built. Launch `C:\sc-work\1161-base\StarCraft.exe`
 directly and the game is a stock, unmodified 1.16.1 client. Verified: after all
-testing, the working copy differed from the pristine install by zero files
-(see `research/runtime-selection-observations.md` §6).
+testing, the working copy differed from the pristine install by exactly one file —
+`Maps\test-many-units.scx`, which belongs to task 009, not to this task (242
+pristine files vs 243 in the working copy; see
+`research/runtime-selection-observations.md` §6). Nothing this task added remained.
 
 The one exception is the deprecated `-Windowed` switch, which *does* write
 `ddraw.dll` into the game directory. Remove it with `-RemoveWindowed`, or reset:
