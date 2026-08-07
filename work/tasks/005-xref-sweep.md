@@ -4,7 +4,7 @@
 
 agent: 005
 model: opus
-pr: -
+pr: https://github.com/inwenis/decompile-sc/pull/6
 
 ## Workspace
 
@@ -163,6 +163,101 @@ same addresses. Deliverable is documentation and tables — never game code.
 7. PR opened, link in Status.pr. Note that CI cannot currently run (GitHub Actions is blocked
    at the account level, escalated to the user) — that is expected and is not your problem;
    do not wait on it.
+
+## ROUND 2 — review findings to fix (added by conductor 2026-08-07)
+
+An adversarial verifier re-derived your headline claims **from raw bytes, hand-decoding
+without using any of your tooling**, then separately re-ran your pipeline. Result: the
+analysis held. Your `sweep.ps1` chain regenerated `selection-xrefs.tsv` **byte-identically**
+(5008 → 5082 functions exactly as documented), 17 randomly sampled TSV rows across all three
+files every one decoded to the exact claimed instruction, and all 35 inherited addresses
+resolved to entry points. §3's occupancy numbers reproduced exactly. This is strong work.
+
+**Your §7.1 claim is upheld: `selection-cap.md` §4.4 is wrong and must be corrected.** The
+`CMP BL,0xc` gate at `0x0049A857` was confirmed by independent hand-decode. Fix that in the
+merged doc too — see item 11 below.
+
+Fix the following on your branch and push. Your PR stays open; do not open a second one.
+
+**HIGH 1 — classifier bug puts the WRONG value on your most load-bearing site.**
+`selection-immediates.tsv` row `0x004C275A` says `role=struct-or-stack-offset`,
+`capRelevant=False`. Your own §4 table says `comparison`, cap-relevant. That is a direct
+doc↔data contradiction. Cause: when an instruction has both a memory displacement and an
+immediate, the classifier prefers the displacement — `CMP byte ptr [ESI + 0x1],0xc` picked the
+`0x1` and lost the `0xc`. Impact: anyone filtering `capRelevant=True`, which is the obvious
+programmatic use of the file, **misses the CMDRECV_Select packet-count cap** — the exact site
+your §5.4 uses to answer §8 q8. Fix: classify by the immediate when the watched value IS the
+immediate operand. Headline becomes **44 of 111**, not 43. Re-check the whole file for other
+instances of the same pattern.
+
+**HIGH 2 — the `playersSelections` row stride (×12) appears in NEITHER table.** It is encoded
+as `LEA r,[r+r*2]` (×3) combined with a `*4` scale or `SHL r,4`, at **at least 12 sites**:
+`0x004966D1, 0x00496A89, 0x0049A225, 0x0049A241, 0x0049A757, 0x0049A76F, 0x0049A869,
+0x0049AFBB, 0x004C2659, 0x004C26B0, 0x004C27D7, 0x004EEDD0`. These are invisible to the xref
+sweep (they reference no address) and to the immediate sweep (they contain no immediate) — yet
+**every one of them must change to widen the array**. This is a genuine completeness gap in
+the deliverable's core purpose: the relocation work list.
+
+Your §1.3 states the residual gap as base-in-register / base-in-global. It does **not** cover
+encoded strides. Fix: widen §1.3 to name this class explicitly, and add a stride-site table.
+The `8D` LEA forms paired with `0x6284E8` materialisation are mechanically findable, so this
+should be a sweep, not a manual list.
+
+**MEDIUM 3 — `0x180` (384 = `sizeof(playersSelections)`) is missing from the watched values.**
+Confirmed as `PUSH 0x180` immediately before `0x6284E8` is materialised, at `0x004C2D1D`,
+`0x004D0139`, `0x004D0685`. You already watch `0x30` (48 = a 12-pointer array), so byte sizes
+were in scope — this is the same class of value. Note `0x004C2D1D` is not save/load, so your
+§8 q10 deferral does not cover it. Add `0x180` and re-run `ImmediateSweep`.
+
+**MEDIUM 4 — §3.1 prose cites the wrong address.** You write `004C38FA CMP EBX,0x597238`. At
+`0x004C38FA` the binary actually has `CMP byte ptr [0x0059723d],0x1`; the real
+`CMP EBX,0x597238` is at **`0x004C38F2`**, 8 bytes earlier. Your committed TSV has it right —
+this is a prose transcription error only. Fix the prose.
+
+**MEDIUM 5 — "called from 71 sites" is wrong and is your only unsourced number.** True value
+is **73** (72 `CALL` + 1 tail `JMP`), confirmed two independent ways: a raw rel32 scan and your
+own `RegionProbe`'s `refCount 73`. Your conclusion is unaffected — still one function to fix,
+not 73 — but this is the one count in a document that claims full sourcing with no traceable
+source. Fix the number and cite `FuncProbe`'s callers column, or commit that output.
+
+**MEDIUM 6 — §4's role table does not match the file it summarises.** The table lists 9 roles
+summing to **112**; the file has **111** rows across **8** roles. The 9th role, `command-id`
+(count 1), does not exist in the TSV — row `0x004C0A9B` is classified `struct-or-stack-offset`
+there, which is also wrong for the same reason as finding 1 (`0xb` is the immediate, not the
+displacement). Either add a real `command-id` role or correct the table.
+
+**MEDIUM 7 — §2 over-reads the element-offset column.** "12 separate patch sites per array" is
+not what the binary shows: only **7** distinct `clientSelectionGroup` element addresses are
+literally encoded anywhere (`+0,4,8,12,16,20,44`); offsets 24–40 have zero encoded dwords.
+Their attribution to slots 6–11 comes from one 6-way-unrolled loop where Ghidra resolved a
+propagated register base. Only 63 of 119 rows carry a literal address at all. Your per-row data
+is honest — the summary sentence is the problem, and it is being used to justify a relocation
+strategy. Fix: say "≥7 literally-encoded slot addresses plus resolved register-base accesses",
+and mirror the propagation caveat you already give in §3.5.
+
+**LOW 8 — the §1.2 code-recovery seed list is not committed**, so the documented commands do
+not reproduce your result in order. The verifier re-derived it in one line (the `UNCOVERED` +
+`.text` rows from pass 2, 31 seeds) and got a byte-identical table, so this is mechanical.
+Commit `specs/selection-code-recovery.spec`, or have `build-xref-table.ps1` emit it.
+
+**LOW 9 — watched value `0x1B00` produced zero rows and the absence is not reported.** You
+report `0x2C`'s absence explicitly; do the same here. Only 7 of 9 watched values occur.
+
+**LOW 10 — 3 of the 49 `playersSelections` rows are semantically `activePlayerSelection`
+end-pointer comparisons** (`ADD reg,4` + `CMP reg,0x6284E8` at `0x0049A303`, `0x0049AE75`,
+`0x004C3B62`). §3.3 explains the shared boundary so this is a labelling nuance, not an error —
+but say so in the table's notes.
+
+**11 — CORRECT THE MERGED RESEARCH.** `research/selection-cap.md` is now on main and your
+branch has main merged in, so fix it on your branch — the correction belongs with the evidence
+that produced it. Its §4.4 claims `getActivePlayerNextSelection` is "bound-agnostic — it
+terminates on NULL, not on a count" and calls that "the single most encouraging finding in this
+document". That is false on this binary. Rewrite it to reflect the `CMP BL,0xc` gate, state
+that it is one function to fix rather than 73 call sites, and cross-link
+`binary-selection-map.md` as the source. While there, correct anything else your binary work
+overturned — including §8 q5 and q8, which you resolved. Add a line to that doc's revision log.
+
+Do NOT merge your own PR. Message the conductor when pushed.
 
 ## Reporting
 

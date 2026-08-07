@@ -1,8 +1,8 @@
 {
   "state": "processing",
-  "subject": "merging task 001",
-  "updatedAt": "2026-08-06T23:54:50Z",
-  "contextPct": 38,
+  "subject": "all merged; 005 running Ghidra xref sweep",
+  "updatedAt": "2026-08-07T00:50:12Z",
+  "contextPct": 42,
   "effort": "xhigh",
   "model": "Opus 5 (1M context)"
 }
