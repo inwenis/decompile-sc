@@ -1,0 +1,140 @@
+function	funcEntry	insAddr	valueHex	valueDec	mnemonic	opKind	role	capRelevant	instruction	note
+SortAllUnits	0x0046F0F0	0x0046F109	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EAX,dword ptr [EBP + 0xc]	
+SortAllUnits	0x0046F0F0	0x0046F14B	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV ECX,dword ptr [EBP + 0xc]	
+SortAllUnits	0x0046F0F0	0x0046F161	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EDX,dword ptr [ESI + 0xc]	
+SortAllUnits	0x0046F0F0	0x0046F169	0xC	12	TEST	mem-operand	struct-or-stack-offset	False	TEST byte ptr [EDX + 0xc],AL	
+SortAllUnits	0x0046F0F0	0x0046F206	0xC	12	CMP	immediate	comparison	True	CMP EAX,0xc	SortAllUnits list-full check; JL (SIGNED) at 0x0046F209 -> overflow handler 0x0046F040. GPTP annotates this site as 0x0046F208, which is the address of the 0x0C IMMEDIATE BYTE inside this 3-byte instruction, not of the instruction.
+SortAllUnits	0x0046F0F0	0x0046F20C	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV ECX,dword ptr [EBP + 0xc]	
+SortAllUnits	0x0046F0F0	0x0046F217	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV ECX,dword ptr [EBP + 0xc]	
+SortAllUnits	0x0046F0F0	0x0046F252	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EDX,dword ptr [EBP + 0xc]	
+SortAllUnits	0x0046F0F0	0x0046F261	0xC	12	RET	immediate	abi-stack-cleanup	False	RET 0xc	
+SortAllUnits	0x0046F0F0	0x0046F268	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EDX,dword ptr [EBP + 0xc]	
+SortAllUnits	0x0046F0F0	0x0046F277	0xC	12	RET	immediate	abi-stack-cleanup	False	RET 0xc	
+SortAllUnits	0x0046F0F0	0x0046F27C	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EDX,dword ptr [EBP + 0xc]	
+SortAllUnits	0x0046F0F0	0x0046F289	0xC	12	RET	immediate	abi-stack-cleanup	False	RET 0xc	
+selectionOverflowHandler	0x0046F040	0x0046F04D	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV ECX,dword ptr [EAX + 0xc]	
+selectionOverflowHandler	0x0046F040	0x0046F084	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV ECX,dword ptr [EBP + 0xc]	
+selectionOverflowHandler	0x0046F040	0x0046F08C	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV ECX,dword ptr [EAX + 0xc]	
+selectionOverflowHandler	0x0046F040	0x0046F0C2	0xC	12	CMP	mem-operand	struct-or-stack-offset	False	CMP EDX,dword ptr [EBP + 0xc]	
+combineSelectionsLists	0x0046F290	0x0046F2AD	0xC	12	CMP	immediate	comparison	True	CMP ESI,0xc	
+combineSelectionsLists	0x0046F290	0x0046F2B3	0xC	12	MOV	immediate	loop-bound	True	MOV EAX,0xc	
+combineSelectionsLists	0x0046F290	0x0046F2BC	0xC	12	RET	immediate	abi-stack-cleanup	False	RET 0xc	
+combineSelectionsLists	0x0046F290	0x0046F304	0xC	12	RET	immediate	abi-stack-cleanup	False	RET 0xc	
+combineSelectionsLists	0x0046F290	0x0046F307	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EAX,dword ptr [EBP + 0xc]	
+combineSelectionsLists	0x0046F290	0x0046F313	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV dword ptr [EBP + 0xc],0x0	
+combineSelectionsLists	0x0046F290	0x0046F33A	0xC	12	CMP	immediate	comparison	True	CMP EDX,0xc	
+combineSelectionsLists	0x0046F290	0x0046F345	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EAX,dword ptr [EBP + 0xc]	
+combineSelectionsLists	0x0046F290	0x0046F35B	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EAX,dword ptr [EBP + 0xc]	
+combineSelectionsLists	0x0046F290	0x0046F363	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV dword ptr [EBP + 0xc],EAX	
+combineSelectionsLists	0x0046F290	0x0046F37C	0xC	12	RET	immediate	abi-stack-cleanup	False	RET 0xc	
+resolveClickedUnit	0x0046F3A0	0x0046F3AC	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EAX,dword ptr [EBP + 0xc]	
+resolveClickedUnit	0x0046F3A0	0x0046F3E8	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EDI,dword ptr [ESI + 0xc]	
+resolveClickedUnit	0x0046F3A0	0x0046F3EB	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV CL,byte ptr [EDI + 0xc]	
+resolveClickedUnit	0x0046F3A0	0x0046F479	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EAX,dword ptr [EBX + 0xc]	
+resolveClickedUnit	0x0046F3A0	0x0046F4D1	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EBX,dword ptr [EBP + 0xc]	
+resolveClickedUnit	0x0046F3A0	0x0046F58F	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV ESI,dword ptr [ESI + 0xc]	
+resolveClickedUnit	0x0046F3A0	0x0046F596	0x12	18	MOVZX	mem-operand	struct-or-stack-offset	False	MOVZX ECX,byte ptr [ESI + 0x12]	Not a selection constant: a struct field read at +0x12.
+applyNewSelect	0x0046FA00	0x0046FA24	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EAX,dword ptr [EBP + 0xc]	
+unit_IsStandardAndMovable	0x0047B770	0x0047B7E7	0x60	96	CMP	immediate	unrelated-constant	False	CMP AX,0x60	Not a selection constant: a unit-id comparison inside unit_IsStandardAndMovable.
+selectSingleUnitFromID	0x00496D30	0x00496D41	0x360	864	IMUL	immediate	index-scale	True	IMUL EDI,EDI,0x360	selectSingleUnitFromID: per-player stride of selection_hotkeys. 864 = 18 groups x 12 slots x 4 bytes -- binary confirmation of the [8][18][12] shape.
+selectSingleUnitFromID	0x00496D30	0x00496D61	0x30	48	SUB	immediate	index-scale	True	SUB EDI,0x30	selectSingleUnitFromID: per-group stride, 48 = 12 slots x 4 bytes.
+selectSingleUnitFromID	0x00496D30	0x00496E07	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV ESI,dword ptr [EDI + 0xc]	
+selectMultipleUnitsFromUnitList	0x0049AEF0	0x0049AEF4	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EBX,dword ptr [EBP + 0xc]	
+selectMultipleUnitsFromUnitList	0x0049AEF0	0x0049AF30	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EBX,dword ptr [EBP + 0xc]	
+CMDACT_Select	0x004C0860	0x004C08AA	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EDI,dword ptr [EBP + 0xc]	
+CMDACT_Select	0x004C0860	0x004C08F0	0xC	12	CMP	immediate	comparison	True	CMP EAX,0xc	
+CMDACT_Select	0x004C0860	0x004C0915	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV ECX,dword ptr [ESI + 0xc]	
+CMDACT_Select	0x004C0860	0x004C0918	0xC	12	TEST	mem-operand	struct-or-stack-offset	False	TEST byte ptr [ECX + 0xc],AL	
+CMDACT_Select	0x004C0860	0x004C0951	0xB	11	SHL	immediate	unit-tag-shift	False	SHL EAX,0xb	
+CMDACT_Select	0x004C0860	0x004C0976	0xC	12	MOV	immediate	loop-bound	True	MOV EBX,0xc	
+CMDACT_Select	0x004C0860	0x004C0990	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV ECX,dword ptr [EBP + 0xc]	
+CMDACT_Select	0x004C0860	0x004C09A8	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV ECX,dword ptr [EBP + 0xc]	
+CMDACT_Select	0x004C0860	0x004C09DE	0xB	11	SHL	immediate	unit-tag-shift	False	SHL EAX,0xb	
+CMDACT_Select	0x004C0860	0x004C09F8	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EBX,dword ptr [EBP + 0xc]	
+CMDACT_Select	0x004C0860	0x004C09FD	0xC	12	MOV	immediate	loop-bound	True	MOV ECX,0xc	
+CMDACT_Select	0x004C0860	0x004C0A5D	0xB	11	SHL	immediate	unit-tag-shift	False	SHL EAX,0xb	
+CMDACT_Select	0x004C0860	0x004C0A9B	0xB	11	MOV	immediate	command-id	False	MOV byte ptr [EBP + -0x40],0xb	Not a selection bound: this is the wire command id 0x0B (SelectRemove/ShiftDeselect) being written into the outgoing command buffer. selection-cap.md §4.3 notes 0x0B rested on screp alone; the binary confirms it.
+CMDACT_HotkeyUnit	0x004C07B0	0x004C07D5	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV ESI,dword ptr [EBP + 0xc]	
+CMDACT_HotkeyUnit	0x004C07B0	0x004C07DB	0xC	12	MOV	immediate	loop-bound	True	MOV ECX,0xc	
+CMDACT_HotkeyUnit	0x004C07B0	0x004C0834	0xC	12	RET	immediate	abi-stack-cleanup	False	RET 0xc	
+CMDACT_HotkeyUnit	0x004C07B0	0x004C0847	0xC	12	RET	immediate	abi-stack-cleanup	False	RET 0xc	
+CMDACT_HotkeyUnit	0x004C07B0	0x004C0854	0xC	12	RET	immediate	abi-stack-cleanup	False	RET 0xc	
+hotkeySaveOrAdd	0x004965D0	0x0049663D	0xB	11	SAR	immediate	unit-tag-shift	False	SAR EAX,0xb	
+hotkeySaveOrAdd	0x004965D0	0x0049667A	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV ECX,dword ptr [EAX + 0xc]	
+hotkeySaveOrAdd	0x004965D0	0x0049668E	0xC	12	CMP	immediate	comparison	True	CMP EDI,0xc	
+hotkeySaveOrAdd	0x004965D0	0x004966AC	0xC	12	MOV	immediate	loop-bound	True	MOV ECX,0xc	
+hotkeySaveOrAdd	0x004965D0	0x00496724	0xB	11	SHL	immediate	unit-tag-shift	False	SHL EBX,0xb	
+hotkeySaveOrAdd	0x004965D0	0x00496763	0xC	12	CMP	immediate	comparison	True	CMP EDI,0xc	
+hotkeySaveOrAdd	0x004965D0	0x00496779	0xC	12	CMP	immediate	comparison	True	CMP EAX,0xc	
+hotkeyRecall	0x00496940	0x0049698A	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV ECX,dword ptr [EAX + 0xc]	
+hotkeyRecall	0x00496940	0x0049699E	0xC	12	CMP	immediate	comparison	True	CMP EDI,0xc	
+hotkeyRecall	0x00496940	0x00496A3B	0xB	11	SAR	immediate	unit-tag-shift	False	SAR EAX,0xb	
+hotkeyRecall	0x00496940	0x00496A71	0xC	12	CMP	immediate	comparison	True	CMP EDI,0xc	
+CMDRECV_Select	0x004C2750	0x004C275A	0xC	12	CMP	immediate	comparison	True	CMP byte ptr [ESI + 0x1],0xc	CMDRECV_Select packet count check, read straight from the packet byte at +1; JA (UNSIGNED) -> the wire count is unsigned, so the protocol ceiling is 255, not 127.
+CMDRECV_Select	0x004C2750	0x004C27CC	0xB	11	SAR	immediate	unit-tag-shift	False	SAR EAX,0xb	
+CMDRECV_Select	0x004C2750	0x004C27EC	0xC	12	CMP	immediate	comparison	True	CMP ECX,0xc	
+CMDRECV_ShiftSelect	0x004C2560	0x004C256D	0xC	12	CMP	immediate	comparison	True	CMP DL,0xc	CMDRECV_ShiftSelect packet count check; JA (UNSIGNED) -> counts 13..255 all rejected. GPTP types this parameter s8.
+CMDRECV_ShiftSelect	0x004C2560	0x004C25AA	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EDI,dword ptr [EAX + 0xc]	
+CMDRECV_ShiftSelect	0x004C2560	0x004C25BE	0xC	12	CMP	immediate	comparison	True	CMP ECX,0xc	
+CMDRECV_ShiftSelect	0x004C2560	0x004C25E0	0xC	12	CMP	immediate	comparison	True	CMP EDX,0xc	CMDRECV_ShiftSelect index+count check; JG (SIGNED), matches GPTP index + bCount <= SELECTION_ARRAY_LENGTH.
+CMDRECV_ShiftSelect	0x004C2560	0x004C2649	0xB	11	SAR	immediate	unit-tag-shift	False	SAR EAX,0xb	
+CMDRECV_ShiftSelect	0x004C2560	0x004C266E	0xC	12	CMP	immediate	comparison	True	CMP ECX,0xc	
+CMDRECV_ShiftSelect	0x004C2560	0x004C2685	0xC	12	CMP	immediate	comparison	True	CMP EDI,0xc	
+CMDRECV_Hotkey	0x004C2870	0x004C2873	0x12	18	CMP	immediate	comparison	True	CMP AL,0x12	CMDRECV_Hotkey group-slot check; JA (UNSIGNED) so slots 0..18 pass, but the per-player stride is 864 = 18 groups (0..17). Slot 18 passes this guard and is outside the array.
+addUnitToSelectionSlot	0x0049AF80	0x0049AF89	0xC	12	CMP	immediate	comparison	True	CMP EBX,0xc	addUnitToSelectionSlot slot bound; matches GPTP selection_slot < SELECTION_ARRAY_LENGTH.
+addUnitToSelectionSlot	0x0049AF80	0x0049AF8E	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EAX,dword ptr [ESI + 0xc]	
+clearPlayerSelection	0x0049A740	0x0049A75E	0xC	12	MOV	immediate	loop-bound	True	MOV ECX,0xc	
+clearPlayerSelection	0x0049A740	0x0049A77C	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EAX,dword ptr [EAX + 0xc]	
+clearPlayerSelection	0x0049A740	0x0049A7AD	0xC	12	CMP	immediate	comparison	True	CMP EDI,0xc	
+getActivePlayerNextSelection	0x0049A850	0x0049A857	0xC	12	CMP	immediate	comparison	True	CMP BL,0xc	getActivePlayerNextSelection iterator bound; JC (UNSIGNED) -> returns NULL once selection_iterator reaches 12. selection-cap.md §4.4 calls this loop bound-agnostic; it is not.
+getActivePlayerNextSelection	0x0049A850	0x0049A87B	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV ECX,dword ptr [EAX + 0xc]	
+updateSelectedUnitData	0x004C38B0	0x004C38B3	0xC	12	MOV	immediate	loop-bound	True	MOV ECX,0xc	updateSelectedUnitData: element count of the 12-dword copy activePlayerSelection -> clientSelectionGroup. This is selection-cap.md §8 q4 fixed-size copy #1.
+updateSelectedUnitData	0x004C38B0	0x004C3909	0xB	11	MOV	immediate	loop-bound	True	MOV ECX,0xb	updateSelectedUnitData single-unit special case: after putting the one unit in slot 0, clear the remaining 11. SELECTION_ARRAY_LENGTH-1.
+clearSelectionHotkeys	0x004965A0	0x004965A3	0x6C0	1728	MOV	immediate	array-size	True	MOV ECX,0x6c0	REP STOSD element count clearing selection_hotkeys: 1728 dwords = 6912 bytes = 8x18x12x4. Second independent binary confirmation of the array size.
+hotkeyGroupCompact	0x004967E0	0x00496826	0xC	12	CMP	mem-operand	struct-or-stack-offset	False	CMP dword ptr [EAX + 0xc],EDI	
+hotkeyGroupCompact	0x004967E0	0x00496836	0xC	12	CMP	immediate	comparison	True	CMP EDX,0xc	
+hotkeyGroupCompact	0x004967E0	0x004968AC	0xB	11	SAR	immediate	unit-tag-shift	False	SAR EAX,0xb	
+hotkeyGroupCompact	0x004967E0	0x004968D2	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV ECX,dword ptr [ECX + 0xc]	
+hotkeyGroupCompact	0x004967E0	0x004968F8	0xC	12	CMP	immediate	comparison	True	CMP EAX,0xc	
+hotkeyGroupHelper	0x00496B40	0x00496B70	0xC	12	CMP	immediate	comparison	True	CMP ESI,0xc	
+hotkeyGroupHelper	0x00496B40	0x00496B79	0xC	12	MOV	immediate	loop-bound	True	MOV ECX,0xc	
+hotkeyGroupHelper	0x00496B40	0x00496BB0	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EDX,dword ptr [ECX + 0xc]	
+hotkeyGroupHelper	0x00496B40	0x00496BCA	0xB	11	SAR	immediate	unit-tag-shift	False	SAR EAX,0xb	
+clearAllPlayerSelections	0x0049A320	0x0049A323	0xC	12	MOV	immediate	loop-bound	True	MOV ECX,0xc	
+clearAllPlayerSelections	0x0049A320	0x0049A32F	0x60	96	MOV	immediate	array-size	True	MOV ECX,0x60	REP STOSD element count clearing playersSelections: 96 dwords = 384 bytes = 8x12x4.
+hudTeardownClearsClientSelection	0x004C3780	0x004C3896	0xC	12	MOV	immediate	loop-bound	True	MOV ECX,0xc	
+hudConsoleInitOwns0x00597238	0x004C3950	0x004C3993	0xC	12	ADD	immediate	abi-stack-cleanup	False	ADD ESP,0xc	
+clientSelectionCountWriter	0x004C3BB0	0x004C3C37	0xC	12	MOV	immediate	loop-bound	True	MOV ECX,0xc	
+hotkeyStorageUser004EEC30	0x004EEC30	0x004EEC73	0x6C0	1728	MOV	immediate	array-size	True	MOV ECX,0x6c0	REP STOSD element count clearing selection_hotkeys: 1728 dwords = 6912 bytes.
+selectionResetOnGameStart	0x004EED10	0x004EED13	0xC	12	MOV	immediate	loop-bound	True	MOV ECX,0xc	
+selectionResetOnGameStart	0x004EED10	0x004EED1F	0x60	96	MOV	immediate	array-size	True	MOV ECX,0x60	REP STOSD element count clearing playersSelections: 96 dwords = 384 bytes.
+selectionResetOnGameStart	0x004EED10	0x004EEDD7	0xC	12	MOV	immediate	loop-bound	True	MOV ECX,0xc	
+selectionResetOnGameStart	0x004EED10	0x004EEDE5	0x60	96	MOV	immediate	array-size	True	MOV ECX,0x60	REP STOSD element count clearing playersSelections: 96 dwords = 384 bytes.
+removeUnitFromPlayerSelection	0x0049A170	0x0049A18C	0xC	12	MOV	immediate	loop-bound	True	MOV EBX,0xc	
+removeUnitFromPlayerSelection	0x0049A170	0x0049A1CD	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EDX,dword ptr [ECX + 0xc]	
+removeUnitFromPlayerSelection	0x0049A170	0x0049A1EF	0xC	12	CMP	immediate	comparison	True	CMP EAX,0xc	
+removeUnitFromPlayerSelection	0x0049A170	0x0049A213	0xC	12	CMP	immediate	comparison	True	CMP EBX,0xc	
+saveGameWriteBlocks	0x004C2910	0x004C2D1D	0x180	384	PUSH	immediate	array-size	True	PUSH 0x180	
+saveGameWriteBlocks	0x004C2910	0x004C2D56	0x12	18	MOVSX	mem-operand	struct-or-stack-offset	False	MOVSX EDX,word ptr [EAX + 0x12]	
+loadGameReadBlocks	0x004CFEF0	0x004CFEF3	0xC	12	SUB	immediate	abi-stack-cleanup	False	SUB ESP,0xc	
+loadGameReadBlocks	0x004CFEF0	0x004D0139	0x180	384	PUSH	immediate	array-size	True	PUSH 0x180	
+saveGameWriteBlocks2	0x004D02D0	0x004D02DA	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EBX,dword ptr [EBP + 0xc]	
+saveGameWriteBlocks2	0x004D02D0	0x004D0688	0x180	384	PUSH	immediate	array-size	True	PUSH 0x180	
+saveGameWriteBlocks2	0x004D02D0	0x004D06C1	0x12	18	MOVSX	mem-operand	struct-or-stack-offset	False	MOVSX EDX,word ptr [EAX + 0x12]	
+saveGameWriteBlocks2	0x004D02D0	0x004D0785	0xC	12	CMP	mem-operand	struct-or-stack-offset	False	CMP dword ptr [EBP + 0xc],EDI	
+saveLoadSelectionPtrToTag	0x004CEE00	0x004CEE08	0x60	96	MOV	immediate	array-size	True	MOV EBX,0x60	
+saveLoadSelectionPtrToTag	0x004CEE00	0x004CEE46	0xB	11	SHL	immediate	unit-tag-shift	False	SHL EAX,0xb	
+saveLoadSelectionTagToPtr	0x004CEDA0	0x004CEDA7	0x60	96	MOV	immediate	array-size	True	MOV ESI,0x60	
+saveLoadSelectionTagToPtr	0x004CEDA0	0x004CEDE6	0xB	11	SAR	immediate	unit-tag-shift	False	SAR ECX,0xb	
+activePlayerSelectionWalk004C3B40	0x004C3B40	0x004C3B43	0x30	48	SUB	immediate	abi-stack-cleanup	False	SUB ESP,0x30	
+activePlayerSelectionUser00499A60	0x00499A60	0x00499AA9	0xC	12	CMP	immediate	comparison	True	CMP EBX,0xc	
+activePlayerSelectionUser00499A60	0x00499A60	0x00499B04	0x30	48	SUB	immediate	index-scale	True	SUB EDI,0x30	
+activePlayerSelectionUser00499A60	0x00499A60	0x00499B33	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV ESI,dword ptr [EAX + 0xc]	
+activePlayerSelectionUser00499A60	0x00499A60	0x00499B86	0xC	12	CMP	immediate	comparison	True	CMP EAX,0xc	
+activePlayerSelectionUser0049B870	0x0049B870	0x0049B708	0xC	12	CMP	immediate	comparison	True	CMP EBX,0xc	
+activePlayerSelectionUser0049B870	0x0049B870	0x0049B793	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV EDX,dword ptr [EBX + 0xc]	
+activePlayerSelectionUser0049B870	0x0049B870	0x0049B7E7	0xC	12	MOV	mem-operand	struct-or-stack-offset	False	MOV ESI,dword ptr [EBX + 0xc]	
+activePlayerSelectionUser0049B870	0x0049B870	0x0049B83A	0xC	12	CMP	immediate	comparison	True	CMP EAX,0xc	
+activePlayerSelectionUser0049B870	0x0049B870	0x0049B852	0x30	48	ADD	immediate	index-scale	True	ADD EDI,0x30	
+activePlayerSelectionUser0049B870	0x0049B870	0x0049B894	0xB	11	CMP	immediate	comparison	True	CMP EAX,0xb	
+activePlayerSelectionUser0049B870	0x0049B870	0x0049B8BD	0xC	12	CMP	immediate	comparison	True	CMP EAX,0xc	

@@ -71,15 +71,15 @@ one of them expresses it as an *array length*, not as a policy check.
 | Address | Name (source) | Shape | Cited at |
 |---|---|---|---|
 | `0x00597208` | `ClientSelectionGroup` / `clientSelectionGroup` / `client_selection_group` | `CUnit*[12]` | BWAPI `BW/Offsets.h:145`; GPTP `SCBW/scbwdata.h:74`; teippi `src/offsets.h:319` |
-| `0x00597238` | `clientSelectionGroupEnd` | **not a datum** — a compile-time constant sentinel. GPTP's macro is `#define SCBW_DATA(type,name,offset) type const name = (type)offset;` (`scbwdata.h:11`), so this is the literal `(CUnit**)0x00597238`, i.e. `0x00597208 + 12×4` written out. Nothing is known to live at this address | GPTP `SCBW/scbwdata.h:11, 75` |
+| `0x00597238` | `clientSelectionGroupEnd` | GPTP's symbol is a compile-time constant, not an observed datum (`#define SCBW_DATA(type,name,offset) type const name = (type)offset;`, `scbwdata.h:11`) — but **the binary settles what is there, and it is occupied twice over**: 44 instructions compare a register against the literal `0x597238` as a loop end-sentinel, and two more read and write it as a HUD/console global (`MOV EAX,[0x00597238]` at `0x004C3880`, `MOV [0x00597238],EAX` at `0x004C3A09`). Not a spare slot | GPTP `SCBW/scbwdata.h:11, 75`; [`binary-selection-map.md`](binary-selection-map.md) §3.1 |
 | `0x0059723C` | `client_selection_changed` (a.k.a. `bCanUpdateSelectedUnitData`) | `u8` | teippi `src/offsets.h:323`; GPTP `hooks/interface/selection.cpp:446` |
-| `0x0059723D` | `ClientSelectionCount` | `u8` per BWAPI + GPTP; teippi types the same address `offset<uint32_t>` (`offsets.h:322`) — **an unresolved source disagreement**, same class as §8 q5 | BWAPI `BW/Offsets.h:146`; GPTP `scbwdata.h:76`; teippi `offsets.h:322` |
+| `0x0059723D` | `ClientSelectionCount` | `u8`. BWAPI and GPTP say `u8`, teippi types it `offset<uint32_t>` (`offsets.h:322`); **resolved from the binary in favour of `u8`** — all 23 accesses are byte-width, not one dword access exists | BWAPI `BW/Offsets.h:146`; GPTP `scbwdata.h:76`; teippi `offsets.h:322`; [`binary-selection-map.md`](binary-selection-map.md) §7.2 |
 | `0x00597248` | `primary_selected` / `activePortraitUnit` | `Unit*` | teippi `src/offsets.h:328`; GPTP `scbwdata.h:425` |
 | `0x0059724C` | `client_selection_group2` | `Unit*[12]` | teippi `src/offsets.h:320` |
 | `0x006284B6` | `selection_iterator` / `selectionIndexStart` | `u8` | teippi `offsets.h:325`; GPTP `scbwdata.h:346` |
 | `0x006284B8` | `activePlayerSelection` / `client_selection_group3` | `CUnit*[12]` | GPTP `scbwdata.h:347`; teippi `offsets.h:321` |
 | `0x006284E8` | `playersSelections` / `selection_groups` | `CUnit*[8][12]` | GPTP `scbwdata.h:352-353`; teippi `offsets.h:324` |
-| `0x0057FE60` | `selection_hotkeys` | `[8][18][12]`, 4 bytes/entry | teippi `offsets.h:326`; GPTP `CMDRECV_Selection.cpp:28` + index math at `:38` |
+| `0x0057FE60` | `selection_hotkeys` | `[8][18][12]`, 4 bytes/entry. Shape **confirmed from the binary** (864-byte per-player stride, 48-byte per-group stride, 1728-dword clear); entries are `StoredUnit` u32s `(uniqueness << 11) \| index`, **not** `Unit*` — see §8 q5 | teippi `offsets.h:326`; GPTP `CMDRECV_Selection.cpp:28` + index math at `:38`; [`binary-selection-map.md`](binary-selection-map.md) §3.5, §6.1 |
 | `0x0063FE40` | `recent_selection_times` | `u16[8][8]` | teippi `offsets.h:327` |
 | `0x0051267C` | `select_command_user` / `ACTIVE_PLAYER_ID` | `u8`/`s32` | teippi `offsets.h:343`; GPTP `scbwdata.h:118` |
 
@@ -115,6 +115,14 @@ one of them expresses it as an *array length*, not as a policy check.
    which matters for candidate #3 (§7).
 
 ### 2.3 Memory adjacency — why the arrays cannot simply grow **[inference]**
+
+> **Superseded 2026-08-07 by direct evidence.** This section reasons from arithmetic on cited
+> addresses and flags its own weak points. [`binary-selection-map.md`](binary-selection-map.md) §3
+> answers the same question from the binary, per array, and identifies the actual neighbour behind
+> each one. Headline: **four of the five arrays have zero slack** and the fifth
+> (`selection_hotkeys`) has ~1 KB behind it — not enough to widen it. The 4-byte gap this section
+> could not resolve is occupied twice over. Read that section for the answer; this one is kept for
+> the reasoning and the sourcing.
 
 Arithmetic on the cited addresses only:
 
@@ -180,7 +188,7 @@ but it is touched by the same code paths (teippi `selection.cpp:195-205`).
 | 3 | **Control groups + recent selections** (§4.2) | `[8][18][12]` array, save/recall/alt-click paths | Medium — 5 functions |
 | 4 | **Command send path** (§4.3) | `Select`/`SelectAdd`/`SelectRemove` packets carry `u8 count` + `u16 tag[]`; sender caps at 12 | Medium — format is count-driven, so it *stretches*; the cap is in code |
 | 5 | **Command receive path** (§4.3) | `CMDRECV_Select`/`ShiftSelect` reject or truncate above 12 before touching `playersSelections` | Medium |
-| 6 | **Order/action dispatch** (§4.4) | Every order handler iterates the receiving player's 12-slot array via a global iterator | Low if storage is fixed — the loop is bound-agnostic |
+| 6 | **Order/action dispatch** (§4.4) | Every order handler iterates the receiving player's 12-slot array via a global iterator | Low — but **not zero**: the iterator has a hardcoded `CMP BL,0xc` (`0x0049A857`). One function to fix, reached from 73 sites |
 | 7 | **HUD / status screen** (§4.5) | 12 wireframe buttons in the dialog; `clientSelectionGroup[12]` copied per frame; screen real estate | **Hard** (art/layout), easy (code) |
 | 8 | **Selection circles / sprite overlays** (§2.4) | Per-sprite, count-independent | Low |
 | 9 | **Sound** | One "selected" sound per selection change, gated by `selection_sound_cooldown` (`0x0064087C`, teippi `offsets.h:583`); rank comparison over the selection picks the speaker (`compareUnitRank` `0x0049A350`, GPTP `selection.cpp:1239`) | Low |
@@ -242,8 +250,15 @@ does confirm the id and the same count-then-tags shape.
 ```
 Select      (0x09) : [u8 cmdId][u8 count][u16 unitTag] × count   (BWAPI + screp)
 SelectAdd   (0x0A) : same                                        (BWAPI + screp)
-SelectRemove(0x0B) : same                                        (screp only)
+SelectRemove(0x0B) : same                                        (screp only -> confirmed 2026-08-07)
 ```
+
+**`0x0B` no longer rests on screp alone.** `CMDACT_Select` (`0x004C0860`) builds three command
+buffers and writes the id byte into each: `0x09` at `0x004C0A78`, `0x0A` at `0x004C0AB2`, and
+**`0x0B` at `0x004C0A9B`** (`MOV byte ptr [EBP + -0x40],0xb`). The length is computed as
+`LEA EDX,[EDX + EDX*0x1 + 0x2]` = `2 + count*2`, matching BWAPI's size function exactly. The binary
+emits the command screp alone documented.
+([`binary-selection-map.md`](binary-selection-map.md) §6.3.)
 
 - Command IDs: BWAPI `BW/OrderTypes.h:68` (`BWCommand<0x0A>`), `:81` (`BWCommand<0x09>`); screp
   `rep/repcmd/types.go:13-15` (`TypeIDSelect 0x09`, `TypeIDSelectAdd 0x0a`,
@@ -298,7 +313,7 @@ function `count * 4 + 6` at `selection.cpp:497-500` and dispatch at `commands.cp
 (`if (buf[1] != 0) Warning("Bad select: %d")`, `selection.cpp:175, 216, 266`). So: a 1.16.1 plugin
 redefining the selection command exists in the wild, and it is incompatible with vanilla by design.
 
-### 4.4 Order dispatch — the good news
+### 4.4 Order dispatch — one function to fix
 
 Every received order applies itself to the receiving player's selection through one iterator:
 
@@ -309,9 +324,31 @@ while (CUnit* u = getActivePlayerNextSelection())  // 0x0049A850
 ```
 
 GPTP `hooks/recv_commands/train_cmd_receive.cpp:18-19, 62, 77-80`; also
-`unhooked/unit_morph_inject.cpp:35-37`. The loop is **bound-agnostic** — it terminates on NULL, not on
-a count. If the storage is relocated and `getActivePlayerNextSelection` is re-pointed, most of the order
-path needs no change at all. This is the single most encouraging finding in this document.
+`unhooked/unit_morph_inject.cpp:35-37`.
+
+**Corrected 2026-08-07 from the binary.** This section previously read that the loop is
+"bound-agnostic — it terminates on NULL, not on a count", and called that "the single most
+encouraging finding in this document". **That is false on this binary.**
+`getActivePlayerNextSelection` is 33 instructions and opens with a hardcoded 12:
+
+```
+0049A851   MOV BL,byte ptr [0x006284b6]     ; selection_iterator
+0049A857   CMP BL,0xc                       ; 80 FB 0C
+0049A85A   JC  0x0049A860                   ; iterator < 12 -> continue
+0049A85C   XOR EAX,EAX ; POP EBX ; RET      ; else return NULL
+```
+
+NULL entries *are* skipped further down, but **termination is the count**. The gate was decoded
+both by our Ghidra pipeline and, independently, by hand from the file's bytes.
+
+The finding is still good news, just a smaller kind: the bound lives in **one function**, and that
+function is reached from **73 sites** (72 `CALL` + one tail `JMP` at `0x0049A8B7`, confirmed two
+independent ways). So the order-dispatch path costs one function to fix, not 73 — but it is not
+free, and any plan that assumed it needed no change is wrong.
+
+Source: [`binary-selection-map.md`](binary-selection-map.md) §7.1, with the site listed in
+`research/data/selection-immediates.tsv` (`0x0049A857`, role `comparison`, cap-relevant) and the
+reference counts in `research/data/selection-function-probe.tsv`.
 
 ### 4.5 HUD / status screen
 
@@ -615,8 +652,18 @@ hooking 1.16.1, offline only ([`prior-art.md` §5](prior-art.md) for the injecti
   storage writes selection pointers over adjacent engine state.
 - **Listed because** it is the answer the task warns about, and because *proving* it wrong with an
   address map is more useful than asserting it.
-- **Confidence**: **high** that it corrupts memory. The one place a small in-place edit might be safe
-  is a pure *policy* check with no array write behind it — none has been identified.
+- **Confidence**: ~~**high** that it corrupts memory~~ — **demonstrated 2026-08-07, not inferred.**
+  Four of the five arrays have a live neighbour identified by name immediately behind them:
+  `clientSelectionGroup` → a loop end-sentinel used by 44 instructions *and* a HUD/console global;
+  `clientSelectionGroup2` → the hotkey double-tap timestamp; `activePlayerSelection` →
+  `playersSelections` itself; `playersSelections` → a 3072-byte game-result string buffer. Only
+  `selection_hotkeys` has room behind it, ~1 KB, which is 21 hotkey groups — nowhere near the 6912
+  bytes doubling it would need. ([`binary-selection-map.md`](binary-selection-map.md) §3.)
+- **And the constant list in this candidate is incomplete anyway**: the `×12` row stride of
+  `playersSelections` is not written as an immediate at all, it is encoded in `LEA` scale factors at
+  20 further sites, so a byte-patch of the visible immediates would miss them silently
+  ([`binary-selection-map.md`](binary-selection-map.md) §2.2). The one place a small in-place edit
+  might be safe is a pure *policy* check with no array write behind it — none has been identified.
 
 ---
 
@@ -625,42 +672,67 @@ hooking 1.16.1, offline only ([`prior-art.md` §5](prior-art.md) for the injecti
 Everything below is a question our own analysis must answer; none can be settled from public sources.
 They are ordered so that answering 1–4 unblocks candidate #2.
 
-1. **Cross-reference sweep.** For each of `0x00597208`, `0x0059724C`, `0x006284B8`, `0x006284E8`,
-   `0x0057FE60`, `0x006284B6`, `0x0059723D`: list *every* instruction in `StarCraft.exe` that
-   references it. The relocation work is exactly the size of this list. Deliver it as a committed
-   symbol/xref table.
-2. **Immediate-constant sweep.** In the functions named in §4.1–§4.5, list every immediate `0x0C`,
-   `0x0B`, `0x30` (12×4), `0x2C`, `0x12` (18) and `0x1B00` (hotkey array size) with its instruction
-   address and role (loop bound / index scale / array size / comparison).
-3. **Adjacency confirmation — the 4-byte gap first.** No public source names anything at
+**Status as of 2026-08-07:** task 005 answered **q1, q2, q3, q4, q5 and q8** against
+`StarCraft.exe` 1.16.1 and part of q10. The answers, the evidence and the committed tables are in
+[`binary-selection-map.md`](binary-selection-map.md); the per-question notes below say where.
+**q6, q7 and q9 are still open**, and so is the rest of q10 (triggers, AI, sync/checksum).
+
+1. ~~**Cross-reference sweep.**~~ **ANSWERED** — 342 instructions across 140 functions touch the
+   seven globals (`research/data/selection-xrefs.tsv`), plus **20 encoded row strides** that name no
+   address at all and are therefore invisible to any cross-reference sweep
+   (`research/data/selection-strides.tsv`). The relocation work list is the union of the two.
+   ([`binary-selection-map.md`](binary-selection-map.md) §2.)
+2. ~~**Immediate-constant sweep.**~~ **ANSWERED** — 139 occurrences across 45 functions, each with
+   a role; 60 are cap-relevant (`research/data/selection-immediates.tsv`). Two watched values occur
+   nowhere as immediates: `0x2C` (44) and `0x1B00` (6912) — the hotkey array's size is expressed as
+   the dword count `0x6C0`, never as a byte total.
+   ([`binary-selection-map.md`](binary-selection-map.md) §4.)
+3. ~~**Adjacency confirmation — the 4-byte gap first.**~~ **ANSWERED, per array, and the answer
+   differs per array** — see [`binary-selection-map.md`](binary-selection-map.md) §3 and the
+   supersession note at §2.3 above. The 4-byte gap at `0x00597238` is occupied twice over.
+   Original question follows. No public source names anything at
    `0x00597238`–`0x0059723B`, the four bytes between the end of `client_selection_group` and
    `client_selection_changed` (`0x0059723C`). (Do not be misled by GPTP's `clientSelectionGroupEnd`:
    per §2.2 that symbol is a compile-time constant equal to that address, not evidence about what
    lives there.) Is that gap padding, or an unnamed datum? Same question for `0x0059727C`+ (behind
    `client_selection_group2`), `0x00628668`+ (behind `playersSelections`) and `0x00581960`+ (behind
    `selection_hotkeys`). This decides relocate-vs-extend for each array independently.
-4. **Fixed-size copies.** Find every `memcpy`/`rep movsd` whose length is derived from the selection
-   size — starting with the one behind GPTP's `updateSelectedUnitData` (the 12-iteration copy at
-   `hooks/interface/updateSelectedUnitData.cpp:24-25`) and the shift-click compaction that uses
-   `sprite->selectionIndex` (`hooks/interface/selection.cpp:627-635`).
-5. **Resolve a source disagreement.** teippi types `selection_hotkeys` (`0x0057FE60`) as
-   `Unit*[8][18][12]` (`src/offsets.h:326`); GPTP types the same address as a `u32` array of
-   `StoredUnit` values (index + uniqueness) and reads it with `(u16)` casts
-   (`CMDRECV_Selection.cpp:28, 215`). Both agree on 4 bytes per entry. Which is it? This changes how
-   the relocated array must be written and whether stale entries are detectable.
+4. ~~**Fixed-size copies.**~~ **ANSWERED for both copies this question names.** The
+   `updateSelectedUnitData` copy is at `0x004C38B0` (`REP MOVSD`, 12 dwords, `0x004C38C2`). The
+   shift-click compaction is `0x0049A170`: a 6-way-unrolled scan bounded by 12, then an **inline
+   `REP MOVSD`** — *not* a call to `SC_memcpy_0`, so hooking a memcpy would not intercept it. Its
+   overlap question is settled: `dst = src − 4`, ascending, which is exactly the direction that
+   makes a downward shift correct. Still open: whether any *other* `REP MOVSD` in the binary has a
+   selection-derived length. ([`binary-selection-map.md`](binary-selection-map.md) §6.2, §6.5.)
+5. ~~**Resolve a source disagreement.**~~ **ANSWERED 2026-08-07 — GPTP is right.** teippi typed
+   `selection_hotkeys` (`0x0057FE60`) as `Unit*[8][18][12]` (`src/offsets.h:326`); GPTP typed the
+   same address as a `u32` array of `StoredUnit` values. The binary stores
+   `(uniqueness << 11) | unitIndex`, not pointers: `hotkeySaveOrAdd` (`0x004965D0`) masks
+   `AND ECX,0x7ff` for the index, `IMUL ECX,ECX,0x150` into the unit table at `0x0059CB58`, and
+   compares `CUnit + 0xA5` against `entry >> 11` to detect a stale entry. **Stale entries are
+   explicitly detectable and the engine detects them** — so a relocated, widened array must
+   preserve the tag encoding and that check, and cannot simply store pointers.
+   ([`binary-selection-map.md`](binary-selection-map.md) §6.1.)
 6. **`CMDACT_Select` (`0x004C0860`).** Exactly how does it build the packet, what caps the count on the
    send side, and what is the maximum command size the queueing routine accepts before it interacts
    with the 512-byte `TurnBuffer` (`0x00654880`) / `sgdwBytesInCmdQueue` (`0x00654AA0`)?
 7. **Status-screen dialog.** How are the 12 small unit buttons created — hardcoded in code, or as
    controls in a dialog `.bin` resource? Get the control IDs and the layout source. This decides
    whether a wider HUD row is a code change, a resource change, or both.
-8. **`s8` vs `u8` count, and the width of `ClientSelectionCount`.** Two related questions.
-   (a) Is the received count sign-extended (GPTP types the parameter `s8`,
-   `CMDRECV_Selection.cpp:327, 444`)? Determines the true protocol ceiling: 127 or 255.
-   (b) A second unrecorded source disagreement, same class as q5: BWAPI (`BW/Offsets.h:146`) and
-   GPTP (`scbwdata.h:76`) both type `0x0059723D` as `u8`, while teippi types it
-   `offset<uint32_t>` (`offsets.h:322`). If it is really 32-bit it overlaps `0x0059723E`–`0x00597240`,
-   which nothing else names. Settle the width from the actual instructions that read it.
+8. ~~**`s8` vs `u8` count, and the width of `ClientSelectionCount`.**~~ **BOTH ANSWERED
+   2026-08-07.**
+   (a) The received count is **unsigned**; GPTP's `s8` typing (`CMDRECV_Selection.cpp:327, 444`) is
+   wrong, and the difference is behavioural. `CMDRECV_Select` reads the count straight off the
+   packet and gates it with `CMP byte ptr [ESI + 0x1],0xc` / **`JA`** at `0x004C275A` — unsigned
+   above, not `JG`. Same in `CMDRECV_ShiftSelect` (`0x004C256D`). Counts 13–255 are all rejected
+   outright. Under GPTP's `s8`, a count of 200 would sign-extend to −56, pass `bCount <= 12` and
+   fall into the `bCount > 0` else-path, clearing the player's selection instead of rejecting the
+   command; the real binary clears nothing. **The protocol ceiling is 255, not 127.**
+   (b) `0x0059723D` is a **`u8`** — BWAPI and GPTP are right, teippi's `offset<uint32_t>` is wrong.
+   All 23 accesses in the binary are byte-width (`MOV CL,byte ptr [0x0059723d]`,
+   `CMP byte ptr [0x0059723d],0x1`, `INC byte ptr [0x0059723d]`, `MOV byte ptr [0x0059723d],BL`);
+   not one dword access exists, so nothing overlaps `0x0059723E`–`0x00597240`.
+   ([`binary-selection-map.md`](binary-selection-map.md) §5.4 and §7.2.)
 9. **`unit_IsStandardAndMovable` (`0x0047B770`)** — its exact predicate, and every caller. It is the
    multi-select gate and it appears in *both* the input path and the receive path; a cap change that
    misses one caller produces "some units silently refuse to join the selection" bugs.
@@ -673,6 +745,16 @@ They are ordered so that answering 1–4 unblocks candidate #2.
     `bw::selection_hotkeys`. So the savegame format embeds both the selection and the control groups
     at their 12-wide sizes: **a widened array changes the save format**, and saves written by the mod
     will not load in vanilla (and vice versa).
+
+    **Save/load confirmed in the binary 2026-08-07** — the teippi-sourced half of this question is
+    now first-hand. `playersSelections` is written and read as a 384-byte block (`PUSH 0x180` at
+    `0x004C2D1D`, `0x004D0139`, `0x004D0688`) through compressed-block helpers `0x004C3450`
+    (`_fwrite`) and `0x004C3280` (`_fread`), inside routines carrying
+    `Starcraft\SWAR\lang\saveload.cpp` debug strings. `ConvertUnitPtr` is real too: `0x004CEE00`
+    walks all 96 dwords turning `CUnit*` into `(uniqueness << 11) | index` before the write, and
+    `0x004CEDA0` walks them back afterwards, rejecting entries whose `CUnit + 0xA5` no longer
+    matches. **Triggers, AI and the sync/checksum path remain unexamined.**
+    ([`binary-selection-map.md`](binary-selection-map.md) §4.)
 
 Suggested first Ghidra target order: `0x004C2750` (`CMDRECV_Select`) → `0x004C2560`
 (`CMDRECV_ShiftSelect`) → `0x0049AF80` → `0x0046F0F0` (`SortAllUnits`) → `0x004C0860`
@@ -719,6 +801,30 @@ Repository cross-links: [`research/prior-art.md`](prior-art.md) §1 (OpenBW), §
 ---
 
 ## 10. Revision log
+
+**2026-08-07 — first corrections from the binary itself (task 005).** Everything in this document
+was read out of public projects; task 005 checked it against `StarCraft.exe` 1.16.1 and produced
+[`binary-selection-map.md`](binary-selection-map.md). What that overturned or settled here:
+
+1. **§4.4 was wrong, and it was this document's headline optimism.** "The loop is bound-agnostic —
+   it terminates on NULL, not on a count", called "the single most encouraging finding in this
+   document", is false on this binary. `getActivePlayerNextSelection` (`0x0049A850`) opens with
+   `CMP BL,0xc` at `0x0049A857` and returns NULL once the iterator reaches 12. Rewritten: it is one
+   function to fix, reached from **73 sites** (72 `CALL` + one tail `JMP`), not a path that needs no
+   change. §3's risk table row 6 corrected to match.
+2. **§8 q5 answered** — hotkey entries are `StoredUnit` u32s `(uniqueness << 11) | index`, as GPTP
+   says, not teippi's `Unit*`. Stale entries are detectable and the engine detects them.
+3. **§8 q8 answered, both halves** — the received count is **unsigned** (`JA`, not `JG`), so GPTP's
+   `s8` typing is wrong and the protocol ceiling is 255, not 127; and `0x0059723D` is a **`u8`**, so
+   teippi's `offset<uint32_t>` is wrong. §2.2 updated for the second.
+4. **§8 q1, q2, q3 and q4 answered**, and q10's save/load half is now first-hand rather than
+   teippi-sourced. Per-question notes added in §8; §2.3 marked superseded by the per-array adjacency
+   answer, which found the 4-byte gap at `0x00597238` occupied twice over.
+5. **§4.3's `0x0B` command id no longer rests on screp alone** — the binary emits it at
+   `0x004C0A9B` inside `CMDACT_Select`.
+6. **§7 candidate #5 upgraded from "expected to fail" to demonstrated**, by naming the neighbour
+   that each in-place widening would overwrite; and its constant list noted as incomplete, since the
+   `×12` row stride is encoded in addressing arithmetic rather than written as an immediate.
 
 **2026-08-07 — round 2, after adversarial citation review.** The review re-cloned all five repos at
 the pinned commits and re-checked every address, commit hash and quote line by line; none were

@@ -1,0 +1,27 @@
+array	isRowStride	strideBytes	strideElements	funcEntry	funcName	seedAddr	seedIns	chainAddrs	chainIns	consumerAddr	consumerIns	chainEnd	context
+playersSelections	True	48	12	0x004965D0	FUN_004965d0	0x004966CC	LEA EBX,[EBX + EBX*0x2]	0x004966CF	SHL EBX,0x4	0x004966D2	ADD EBX,0x6284e8	consumed-base-add	in-spec
+playersSelections	True	48	12	0x00496940	FUN_00496940	0x00496A83	LEA EDX,[ESI + ESI*0x2]	0x00496A86;0x00496A89	LEA EAX,[EDI + EDX*0x4] ; MOV dword ptr [EAX*0x4 + 0x6284e8],ECX	0x00496A89	MOV dword ptr [EAX*0x4 + 0x6284e8],ECX	consumed	in-spec
+playersSelections	True	48	12	0x0049A170	FUN_0049a170	0x0049A185	LEA ECX,[EDI + EDI*0x2]	0x0049A188	SHL ECX,0x4	0x0049A191	ADD ECX,0x6284ec	consumed-base-add	in-spec
+playersSelections	True	48	12	0x0049A170	FUN_0049a170	0x0049A21D	LEA ECX,[EDI + EDI*0x2]	0x0049A220;0x0049A223	LEA ECX,[EBX + ECX*0x4] ; SHL ECX,0x2	0x0049A226	LEA EDI,[ECX + 0x6284e8]	consumed-base-add	in-spec
+playersSelections	True	48	12	0x0049A170	FUN_0049a170	0x0049A23B	LEA EDX,[EDI + EDI*0x2]	0x0049A23E;0x0049A241	LEA ECX,[EAX + EDX*0x4] ; MOV dword ptr [ECX*0x4 + 0x6284e8],0x0	0x0049A241	MOV dword ptr [ECX*0x4 + 0x6284e8],0x0	consumed	in-spec
+playersSelections	True	48	12	0x0049A740	FUN_0049a740	0x0049A752	LEA EDI,[ESI + ESI*0x2]	0x0049A755	SHL EDI,0x4	0x0049A758	ADD EDI,0x6284e8	consumed-base-add	in-spec
+playersSelections	True	48	12	0x0049A740	FUN_0049a740	0x0049A768	LEA ESI,[ESI + ESI*0x2]	0x0049A76B	SHL ESI,0x4	0x0049A770	ADD ESI,0x6284e8	consumed-base-add	in-spec
+playersSelections	True	48	12	0x0049A850	FUN_0049a850	0x0049A869	LEA EAX,[EAX + EAX*0x2]	0x0049A86D;0x0049A870	LEA ESI,[ECX + EAX*0x4] ; MOV EAX,dword ptr [ESI*0x4 + 0x6284e8]	0x0049A870	MOV EAX,dword ptr [ESI*0x4 + 0x6284e8]	consumed	in-spec
+playersSelections	True	48	12	0x0049AF80	FUN_0049af80	0x0049AFB5	LEA EDX,[EDI + EDI*0x2]	0x0049AFB8;0x0049AFBB	LEA EAX,[EBX + EDX*0x4] ; MOV dword ptr [EAX*0x4 + 0x6284e8],ESI	0x0049AFBB	MOV dword ptr [EAX*0x4 + 0x6284e8],ESI	consumed	in-spec
+playersSelections	True	48	12	0x004C2560	FUN_004c2560	0x004C257B	LEA EAX,[EAX + EAX*0x2]	0x004C257E	SHL EAX,0x4	0x004C2583	ADD EAX,0x6284ec	consumed-base-add	in-spec
+playersSelections	True	48	12	0x004C2560	FUN_004c2560	0x004C2655	LEA EAX,[EAX + EAX*0x2]	0x004C2658	SHL EAX,0x4	0x004C265B	ADD EAX,0x6284e8	consumed-base-add	in-spec
+playersSelections	True	48	12	0x004C2560	FUN_004c2560	0x004C26B0	LEA ECX,[EAX + EAX*0x2]	0x004C26B3;0x004C26B6	LEA EDX,[EDI + ECX*0x4] ; MOV dword ptr [EDX*0x4 + 0x6284e8],ESI	0x004C26B6	MOV dword ptr [EDX*0x4 + 0x6284e8],ESI	consumed	in-spec
+playersSelections	True	48	12	0x004C2750	FUN_004c2750	0x004C27D3	LEA EAX,[EDI + EDI*0x2]	0x004C27D6	SHL EAX,0x4	0x004C27D9	ADD EAX,0x6284e8	consumed-base-add	in-spec
+playersSelections	True	48	12	0x004EED10	FUN_004eed10	0x004EEDCB	LEA ESI,[EAX + EAX*0x2]	0x004EEDCE	SHL ESI,0x4	0x004EEDD1	ADD ESI,0x6284e8	consumed-base-add	in-spec
+selectionHotkeys	True	48	12	0x004965D0	FUN_004965d0	0x004965F6	LEA ESI,[ESI + ESI*0x2]	0x004965F9	SHL ESI,0x4	0x004965FC	LEA EAX,[ESI + 0x57fe60]	consumed-base-add	in-spec
+selectionHotkeys	True	48	12	0x004965D0	FUN_004965d0	0x00496698	LEA EDI,[EAX + EAX*0x2]	0x0049669B	SHL EDI,0x4	0x0049669E	LEA EDI,[EDI + 0x57fe60]	consumed-base-add	in-spec
+selectionHotkeys	True	48	12	0x004965D0	FUN_004965d0	0x0049675C	LEA ECX,[EAX + EAX*0x2]	0x0049675F;0x00496766	LEA EDX,[EDI + ECX*0x4] ; MOV dword ptr [EDX*0x4 + 0x57fe60],EBX	0x00496766	MOV dword ptr [EDX*0x4 + 0x57fe60],EBX	consumed	in-spec
+selectionHotkeys	True	48	12	0x004967E0	FUN_004967e0	0x004967FE	LEA ECX,[EAX + EAX*0x2]	0x00496805	SHL ECX,0x4	0x0049680C	LEA EAX,[ECX + 0x57fe64]	consumed-base-add	in-spec
+selectionHotkeys	True	48	12	0x00496940	FUN_00496940	0x00496958	LEA EAX,[EAX + EAX*0x2]	0x0049695E	SHL EAX,0x4	0x00496967	ADD EAX,0x57fe64	consumed-base-add	in-spec
+selectionHotkeys	True	48	12	0x00496B40	FUN_00496b40	0x00496B56	LEA EDX,[EAX + EAX*0x2]	0x00496B5B	SHL EDX,0x4	0x00496B5E	LEA EDX,[EDX + 0x57fe60]	consumed-base-add	in-spec
+unresolved	False	3		0x00458120	FUN_00458120	0x0045817F	LEA EAX,[EAX + EAX*0x2]					call-clobber	refs-selection-global
+unresolved	False	3		0x00458120	FUN_00458120	0x0045819C	LEA EDX,[EAX + EAX*0x2]					call-clobber	refs-selection-global
+unresolved	False	12	3	0x00458BC0	FUN_00458bc0	0x00458C48	LEA EAX,[EAX + EAX*0x2]	0x00458C4E	SHL EAX,0x2			overwritten	refs-selection-global
+unresolved	False	12	3	0x00458BC0	FUN_00458bc0	0x00458C4B	LEA ECX,[ECX + ECX*0x2]	0x00458C57	SHL ECX,0x2			window-exhausted	refs-selection-global
+unresolved	False	12	3	0x00496940	FUN_00496940	0x004969E6	LEA EDI,[EAX + EAX*0x2]	0x004969E9	SHL EDI,0x2			window-exhausted	in-spec
+unresolved	False	12	3	0x0049B870	FUN_0049b870	0x0049B878	LEA ECX,[ESI + ESI*0x2]	0x0049B884	LEA ECX,[ECX*0x4 + 0x58d634]			overwritten	in-spec
