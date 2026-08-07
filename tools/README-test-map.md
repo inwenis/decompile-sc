@@ -47,8 +47,9 @@ Steps, in order:
    coordinates.
 4. Overwrite the OWNR section: chosen player -> `HUMAN_OCCUPIED`, everyone
    else -> `INACTIVE`.
-5. Save back into a copy of the template MPQ via richchk (StormLib under the
-   hood).
+5. Save back into a copy of the template MPQ (StormLib under the hood, via
+   richchk's DLL binding but NOT richchk's own `save_chk_to_mpq` -- see
+   "Why the game rejected the old output" below).
 6. Read the result back and assert unit count/type/owner, start location,
    no active computer players, and terrain dimensions -- see "Validation"
    below.
@@ -108,10 +109,61 @@ OK: C:\sc-work\1161-base\Maps\test-many-units.scx
   terrain 128x96 tiles
 ```
 
-**This is structural validation only -- the map has not been loaded in-game
-by this task.** In-game loading is delegated to task 008, which will load it
-during its windowed-mode session so the user's screen is interrupted once
-instead of twice.
+**This is structural validation only, and it is not proof the game accepts
+the file** -- see the next section. It parses the output back with the same
+library that wrote it, which only shows the library agrees with itself.
+In-game loading needs a human (task 013 `research/`, and
+`research/runtime-selection-observations.md` §5: synthetic clicks cannot
+reliably drive this game's menus).
+
+## Why the game rejected the old output (task 013)
+
+Task 009's original map (36 Marines, otherwise identical to today's default)
+passed the structural validation above and was still rejected by the game as
+corrupt. The cause: richchk 0.3.0's `StarCraftMpqIo.save_chk_to_mpq()` writes
+`staredit\scenario.chk` back into the archive via a hardcoded call in
+`StormLibWrapper.add_file()` (`mpq/stormlib/stormlib_wrapper.py`) --
+`MPQ_FILE_COMPRESS` only (never `MPQ_FILE_ENCRYPTED`) and
+`MPQ_COMPRESSION_ZLIB`, with no parameter to change either.
+
+Checked independently -- an MPQ reader written from scratch against the
+public MoPaQ format spec (not richchk, not StormLib, not anything that wrote
+the file under test) -- every stock map inspected
+(`C:\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx`, the
+template this generator uses, and a scenario map,
+`Maps\campaign\(1)Enslavers02b.scm`) stores `staredit\scenario.chk`
+**encrypted** and **PKWARE-compressed** (sector data starts with byte
+`0x08`). richchk's output was **unencrypted** and **zlib-compressed** (byte
+`0x02`) -- the only structural difference this diff found between our output
+and two independently-sourced Blizzard maps. Classic 1.16.1 predates zlib
+support in `Storm.dll`; PKWARE ("implode") is the original method every
+build understands. That mismatch is the most likely reason the file loads
+into richchk fine (round-trips through zlib+its own decoder) but the real
+game's older decompressor rejects it.
+
+**Fix**: `make_test_map.py` now calls `save_chk_to_mpq_matching_blizzard()`
+instead of richchk's `save_chk_to_mpq()`. It reuses richchk's own CHK
+encoder and StormLib DLL binding for everything else, but calls
+`SFileAddFileEx` directly with `MPQ_FILE_COMPRESS | MPQ_FILE_ENCRYPTED` and
+`MPQ_COMPRESSION_PKWARE` -- the flags the independent reader found on every
+stock map checked. Verified (again with the same from-scratch reader, not
+richchk) that regenerated output now reports `flags=0x80010200`
+(COMPRESS+ENCRYPTED+EXISTS) and leading sector byte `0x08` (PKWARE),
+matching stock exactly. See `work/scratch/raw_mpq_inspect.py` (not
+committed -- throwaway diagnostic script) for the reader used.
+
+**Not yet closed**: this is still round-tripping-adjacent proof -- an
+independent *parser* agrees the container now looks like a real one, but
+per this task's own rule, only an actual game load proves the game accepts
+it. That confirmation was not spent on this fix; task 013's one human
+verification attempt went to unblocking task 011 with a stock map instead
+(see task 013's PR/report). Re-running `./tools/make-test-map.ps1` and
+getting one human load is the remaining step to fully close this out.
+
+Also fixed in passing: `-UnitType zealot` mapped to unit id `64`, which is
+Protoss Probe, not Zealot (id `65`) -- confirmed against richchk's own
+`unis/unit_id.py` enum. Unrelated to the corruption bug; would have placed
+the wrong unit, not broken the file.
 
 ## Known limitations
 

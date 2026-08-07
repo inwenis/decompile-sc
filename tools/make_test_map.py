@@ -16,21 +16,32 @@ Usage:
 
 import argparse
 import collections
+import ctypes
 import math
+import shutil
 import struct
 import sys
 from pathlib import Path
 
 from richchk.editor.richchk.rich_chk_editor import RichChkEditor
 from richchk.editor.richchk.rich_ownr_editor import RichOwnrEditor
+from richchk.io.chk.chk_io import ChkIo
+from richchk.io.mpq.starcraft_audio_files_metadata_io import StarCraftAudioFilesMetadataIo
 from richchk.io.mpq.starcraft_mpq_io_helper import StarCraftMpqIoHelper
 from richchk.io.richchk.query.chk_query_util import ChkQueryUtil
+from richchk.io.richchk.richchk_io import RichChkIo
 from richchk.model.chk.unknown.decoded_unknown_section import DecodedUnknownSection
+from richchk.model.mpq.stormlib.stormlib_archive_mode import StormLibArchiveMode
+from richchk.model.mpq.stormlib.stormlib_flag import StormLibFlag
+from richchk.model.mpq.stormlib.stormlib_operation import StormLibOperation
 from richchk.model.richchk.dim.rich_dim_section import RichDimSection
 from richchk.model.richchk.ownr.player_type import PlayerType
 from richchk.model.richchk.ownr.rich_ownr_section import RichOwnrSection
 from richchk.model.richchk.rich_chk import RichChk
 from richchk.model.richchk.trig.player_id import PlayerId
+from richchk.model.richchk.wav.rich_wav_metadata_lookup import RichWavMetadataLookup
+from richchk.mpq.stormlib.stormlib_helper import StormLibHelper
+from richchk.util.fileutils import CrossPlatformSafeTemporaryNamedFile
 
 # CHK "UNIT" section: one 36-byte record per placed unit (incl. resources and
 # start-location markers). richchk does not model this section (no UNIT
@@ -60,7 +71,7 @@ _VALID_OWNER_HP_SHIELD_ENERGY = 0x01 | 0x02 | 0x04 | 0x08
 UNIT_TYPE_IDS = {
     "marine": 0,
     "zergling": 37,
-    "zealot": 64,
+    "zealot": 65,
 }
 
 DEFAULT_TEMPLATE = r"C:\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx"
@@ -141,6 +152,85 @@ def build_new_unit_records(
     return records
 
 
+_CHK_MPQ_PATH = "staredit\\scenario.chk"
+
+
+def _add_scenario_chk_like_blizzard(
+    stormlib_wrapper, open_result, infile: str, path_in_archive: str
+) -> None:
+    """Write staredit\\scenario.chk into the archive with the flags/compression a
+    real 1.16.1 client actually wrote, instead of richchk 0.3.0's hardcoded
+    values.
+
+    richchk's StormLibWrapper.add_file() (mpq/stormlib/stormlib_wrapper.py)
+    hardcodes MPQ_FILE_COMPRESS + MPQ_COMPRESSION_ZLIB and never sets
+    MPQ_FILE_ENCRYPTED, with no parameter to override either. Verified
+    independently (an MPQ reader written from scratch against the public
+    MoPaQ format spec, not richchk/StormLib -- see
+    work/scratch/raw_mpq_inspect.py) that every stock map checked stores this
+    file ENCRYPTED and PKWARE-compressed (leading sector byte 0x08), while
+    richchk's output is unencrypted and ZLIB-compressed (leading byte 0x02).
+    Classic 1.16.1 predates zlib support in Storm.dll; PKWARE ("implode") is
+    the original, universally-supported method. This calls the same
+    SFileAddFileEx export richchk uses, just with the flags that match every
+    Blizzard-built map on disk.
+    """
+    flags = (
+        StormLibFlag.MPQ_FILE_COMPRESS.value
+        | StormLibFlag.MPQ_FILE_ENCRYPTED.value
+        | StormLibFlag.MPQ_FILE_REPLACEEXISTING.value
+    )
+    compression = StormLibFlag.MPQ_COMPRESSION_PKWARE.value
+    func = getattr(
+        stormlib_wrapper.stormlib.stormlib_dll, StormLibOperation.S_FILE_ADD_FILE_EX.value
+    )
+    result = func(
+        open_result.handle,
+        infile,
+        path_in_archive.encode("ascii"),
+        flags,
+        compression,
+        compression,
+    )
+    if result == 0:
+        get_last_error = getattr(stormlib_wrapper.stormlib.stormlib_dll, "GetLastError")
+        get_last_error.restype = ctypes.c_uint
+        raise ValueError(f"SFileAddFileEx failed, GetLastError={get_last_error()}")
+
+
+def save_chk_to_mpq_matching_blizzard(chk: RichChk, template: Path, output: Path) -> None:
+    """Same job as richchk's StarCraftMpqIo.save_chk_to_mpq(), but writes
+    staredit\\scenario.chk with Blizzard-matching flags/compression (see
+    _add_scenario_chk_like_blizzard). Everything else -- CHK encoding, MPQ
+    copy, compaction -- is richchk's own code, unchanged."""
+    stormlib_wrapper = StormLibHelper.load_stormlib(None)
+    wav_metadata = StarCraftAudioFilesMetadataIo(
+        stormlib_wrapper=stormlib_wrapper
+    ).extract_all_audio_files_metadata(str(template))
+    wav_lookup = RichWavMetadataLookup(
+        _metadata_by_wav_path={x.path_to_wav_in_mpq: x for x in wav_metadata}
+    )
+
+    with (
+        CrossPlatformSafeTemporaryNamedFile() as temp_chk_file,
+        CrossPlatformSafeTemporaryNamedFile() as temp_mpq_file,
+    ):
+        ChkIo().encode_chk_to_file(
+            RichChkIo().encode_chk(rich_chk=chk, wav_metadata_lookup=wav_lookup),
+            temp_chk_file,
+            force_create=True,
+        )
+        shutil.copyfile(str(template), temp_mpq_file)
+        open_result = stormlib_wrapper.open_archive(
+            temp_mpq_file, StormLibArchiveMode.STORMLIB_WRITE_ONLY
+        )
+        _add_scenario_chk_like_blizzard(
+            stormlib_wrapper, open_result, temp_chk_file, _CHK_MPQ_PATH
+        )
+        stormlib_wrapper.close_archive(stormlib_wrapper.compact_archive(open_result))
+        shutil.copyfile(temp_mpq_file, str(output))
+
+
 def generate_map(
     template: Path, output: Path, unit_count: int, unit_type: str, player: int
 ) -> None:
@@ -195,7 +285,7 @@ def generate_map(
     chk = RichChkEditor().replace_chk_section(new_ownr, chk)
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    mpqio.save_chk_to_mpq(chk, str(template), str(output), overwrite_existing=True)
+    save_chk_to_mpq_matching_blizzard(chk, template, output)
 
 
 def validate_map(path: Path, unit_count: int, unit_type: str, player: int) -> None:
