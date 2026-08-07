@@ -1,8 +1,8 @@
 {
   "state": "processing",
-  "subject": "cutting task 014",
-  "updatedAt": "2026-08-07T21:50:27Z",
+  "subject": "spawning task 014",
+  "updatedAt": "2026-08-07T21:53:58Z",
   "contextPct": 74,
   "effort": "xhigh",
-  "model": "Opus 5 (1M context)"
+  "model": "Fable 5"
 }
