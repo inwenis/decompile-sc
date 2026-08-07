@@ -4,7 +4,8 @@
 
 agent: 007
 model: sonnet
-pr: -
+pr: https://github.com/inwenis/decompile-sc/pull/7
+merged: 2026-08-07
 
 ## Workspace
 
