@@ -4,7 +4,7 @@
 
 agent: 008
 model: opus
-pr: -
+pr: https://github.com/inwenis/decompile-sc/pull/9
 
 ## Workspace
 
@@ -176,6 +176,86 @@ actual deliverable.
 
 Whatever you learn, record it in your research doc — including a plain statement of whether the
 merged `launch-baseline.md` recipe is wrong, right-but-misapplied, or unresolved.
+
+## ROUND 2 — review findings (added by conductor 2026-08-07)
+
+An adversarial verifier audited this PR. **Your read-only claim is CONFIRMED** — proven three
+independent ways: a source audit of every write expression in `scplugin.cpp` (all target
+plugin-owned locals/statics; the only game-memory touch is `SafeRead`'s `memcpy` where the game
+address is the *source* and is `const`-qualified), an object-level `nm -u` dump showing
+`VirtualProtect` / `WriteProcessMemory` / `VirtualAllocEx` / `CreateRemoteThread` are **not
+referenced** by the plugin translation unit, and by chasing the one red flag — the linked DLL
+*does* import `VirtualProtect`, which traces to MinGW's `__pei386_runtime_relocator` operating
+on the plugin's own image at load, unreachable from your code. Also confirmed: build reproduces,
+artifacts genuinely 32-bit by independent PE parse, the `Assert-Pe32` check actually FIRES on a
+real x64 binary, all nine addresses match the verified map including widths and the 48-byte row
+stride, and every document quote matches the raw log verbatim. Your §5 scope disclaimers were
+checked by grepping the whole PR for cap-related overreach — there is none.
+
+Fix the following, then push. Item 1 is **required before merge**.
+
+**HIGH 1 — the pristine-install guard is bypassable, and `-Windowed` writes THROUGH it.**
+`run-with-plugin.ps1:52` tests `$GameDir -match '^\s*C:\\sc-install'`. Verified by direct test:
+
+    C:\sc-install\Starcraft   -> blocked
+    C:/sc-install/Starcraft   -> NOT blocked
+    \\?\C:\sc-install\x       -> NOT blocked
+
+Both bypasses are valid Windows paths that `Test-Path`, `Join-Path` and `CreateProcess` all
+accept. The consequence is not merely launching the wrong install: `-Windowed` does
+`Copy-Item ... -Destination $GameDir\ddraw.dll -Force` (line 81) — **writing into the user's
+pristine install** — and `-RemoveWindowed` does `Remove-Item $GameDir\ddraw.dll -Force`
+(line 63) — **deleting from it**. `README.md:203` claims the script "refuses" such a path; that
+is true for exactly one spelling.
+
+This is the only thing in the PR that can touch the pristine install, and hard rule 1 is
+absolute. Fix: normalise before testing — `[IO.Path]::GetFullPath($GameDir.Replace('/','\'))`
+then re-test, or compare resolved roots rather than matching a literal prefix. Consider the same
+guard in `scinject.cpp`, which has none at all (defence in depth, not required).
+
+**MEDIUM 2 — suspended orphan.** `scinject.cpp:165` ignores `ResumeThread`'s return, and
+`run-with-plugin.ps1:119` passes `--no-wait-exit`, so a failed resume leaves `StarCraft.exe`
+permanently suspended holding the working copy, with nothing reporting it. Check the return and
+terminate on failure.
+
+**MEDIUM 3 — inconsistent failure cleanup.** Early-injection failure terminates the process
+(`:150`, `:159`); late-injection failure (`:186-188`) returns 4 and leaves the game running
+unobserved while the caller throws. Paths at `:174-177` and `:184-188` also return without
+`CloseHandle`. Pick one policy; close handles on every exit path.
+
+**MEDIUM 4 — health check can hit the wrong process.** `check-game-windows.ps1:80-82` resolves
+by process name and throws if more than one exists; `run-with-plugin.ps1:130` never passes the
+pid your injector already printed. Another StarCraft on the machine makes the post-launch check
+throw *after* a successful launch. Emit the pid parseably, capture it, pass `-ProcessId`.
+
+**LOW 5 — the README rounds a number in the wrong direction.** `README.md:261` says the working
+copy differed from pristine by "zero files"; `runtime-selection-observations.md:441-446` says
+242 vs 243 — exactly one file, task 009's test map. Your research doc is correct and forthright;
+the README restated it wrongly. This is the only place the verifier found evidence rounded
+*toward* a better story, so fix it precisely.
+
+**LOW 6 — unqualified game-directory claims.** `README.md:15` ("Files added: none") and `:153`
+("never modified") are contradicted by the deprecated `-Windowed` switch. The exception IS
+disclosed elsewhere, so this is summary-table wording only — qualify it.
+
+**LOW 7-9 —** stale comment at `scinject.cpp:135-138` contradicting the file's own header;
+`--no-plugin` implemented but absent from usage text (`:87-89`); remote allocation leaked if
+`GetProcAddress` fails (`:60-61`).
+
+**LOW 10 — provenance preamble overclaims.** `sc_addresses.h:11-12` says each address's
+provenance includes the committed TSV. The three player-id VAs have **zero rows** in
+`selection-xrefs.tsv` — they exist only in the map's §7 prose. Your per-address comments cite
+correctly; only the blanket preamble is wrong.
+
+**LOW 11 — latent change-detection fragility.** `scplugin.cpp:298` compares snapshots with
+`memcmp`, and `Snapshot` has 2 bytes of padding; `prev` is seeded `0xFF` then updated by struct
+assignment. The pinned GCC copies padding so this is latent, not live — but a compiler that
+skipped it would log-flood forever. Use `memcpy(&prev, &cur, sizeof(prev))`.
+
+**LOW 12 —** `DETACH` closes the log handle without joining the observer thread
+(`scplugin.cpp:366-370`).
+
+Do not merge your own PR. Message the conductor when pushed.
 
 ## Acceptance criteria
 
