@@ -150,27 +150,54 @@ still the wrong choice here:
    in the process.
 
 The launcher vector has none of those properties: the `ddraw.dll` slot stays
-completely free for whatever windowed-mode solution ends up working, and the game
-directory is never modified.
+completely free, and the game directory is never modified.
 
-> Windowed mode itself is currently broken on this machine *independently of this
-> plugin* — see [`research/runtime-selection-observations.md`](../../research/runtime-selection-observations.md) §
-> "Windowed mode". That is a correction to `research/launch-baseline.md`, not a
-> regression introduced here.
+### Windowed mode: injected, not proxied
+
+`research/launch-baseline.md`'s recipe — copy `WMode.dll` in as `ddraw.dll` —
+**does not work**, on this or any machine: `storm.dll` resolves entry points from
+`ddraw.dll` by name, and `WMode.dll` has no export table, so `GetProcAddress`
+fails and DirectDraw never initialises. Full evidence, including a run with our
+plugin absent that reproduces the same failure, is in
+[`research/runtime-selection-observations.md`](../../research/runtime-selection-observations.md) §4.
+
+What does work is injecting it, which is what a DLL with no exports and a
+`FindWindowA` import is shaped for:
+
+```powershell
+./tools/plugin/run-with-plugin.ps1 -InjectWindowedHelper WMode
+```
+
+That passes `--early-dll <gamedir>\WMode.dll` to the injector, which loads it into
+the **still-suspended** process before `ResumeThread` — so its `DllMain` hooks
+before DirectDraw initialises. Result: a real 640×480-client window, the desktop
+resolution untouched, no error dialog, and **still nothing written into the game
+directory**.
+
+This is why the launcher vector was worth having beyond our own plugin: the same
+mechanism that gets our observer in also fixes windowed mode, and neither costs a
+file in the game folder.
 
 ---
 
 ## Run
 
 ```powershell
-# build + launch the working copy with the observer injected
-./tools/plugin/run-with-plugin.ps1 -Build
+# build + launch the working copy, windowed, with the observer injected
+./tools/plugin/run-with-plugin.ps1 -Build -InjectWindowedHelper WMode
 
 # options
 ./tools/plugin/run-with-plugin.ps1 -PollMs 100 -LogPath C:\sc-work\logs\run.log
-./tools/plugin/run-with-plugin.ps1 -Windowed        # installs WMode.dll as ddraw.dll
-./tools/plugin/run-with-plugin.ps1 -RemoveWindowed -NoLaunch   # undo that
+./tools/plugin/run-with-plugin.ps1 -NoPlugin -InjectWindowedHelper WMode   # A/B control
 ```
+
+| flag | what |
+|---|---|
+| `-InjectWindowedHelper WMode\|WMode_Fix\|both` | early-inject the windowed-mode helper (see above) |
+| `-NoPlugin` | launch through this exact path with our observer **not** injected — the control that tells you whether a symptom is ours, and the demonstration of the uninstalled game |
+| `-PollMs`, `-LogPath` | observer poll interval and log destination |
+| `-Windowed` / `-RemoveWindowed` | the **old** `ddraw.dll`-swap recipe and its undo. Kept only so the failure is reproducible; it does not work — use `-InjectWindowedHelper` |
+| `-WaitForExit` | block until the game exits instead of returning |
 
 Defaults: game `C:\sc-work\1161-base` (the disposable working copy — the script
 **refuses** a path under `C:\sc-install`), log `C:\sc-work\logs\sc-plugin.log`,
@@ -190,6 +217,16 @@ process still alive and an error box on screen; exit codes alone cannot see that
 `%SCPLUGIN_LOG%`, default `C:\sc-work\logs\sc-plugin.log`. Outside the repo, and
 `C:/sc-work/` is gitignored — captured game state is never committed (project hard
 rule 1). `%SCPLUGIN_POLL_MS%` sets the poll interval (default 250, clamped 20–5000).
+
+`%SCPLUGIN_MARKER%` (default `marker.txt` beside the log) is a correlation channel:
+write a one-line label into that file and the observer stamps
+`---- MARK: <label> ----` into the log between snapshots. Timestamps alone are
+ambiguous at 250 ms granularity when you are trying to line "what I did on screen"
+up with "what the log says". It is a read of a file the observer owns — not a hook
+into, or a write to, the game.
+
+The log is written **only when the observed state changes**, so quiet stretches are
+normal. The 60-second `HEARTBEAT` line is the liveness signal.
 
 Attach banner, then one block per observed change:
 
@@ -220,15 +257,20 @@ bugs.
 
 **Nothing to uninstall.** The plugin is never copied into the game directory; it is
 loaded from wherever it was built. Launch `C:\sc-work\1161-base\StarCraft.exe`
-directly and the game is a stock, unmodified 1.16.1 client.
+directly and the game is a stock, unmodified 1.16.1 client. Verified: after all
+testing, the working copy differed from the pristine install by zero files
+(see `research/runtime-selection-observations.md` §6).
 
-If `-Windowed` was used, that *did* write `ddraw.dll` into the game directory (it is
-the pre-existing `launch-baseline.md` recipe, not part of the plugin). Remove it
-with `-RemoveWindowed`, or reset everything:
+The one exception is the deprecated `-Windowed` switch, which *does* write
+`ddraw.dll` into the game directory. Remove it with `-RemoveWindowed`, or reset:
 
 ```powershell
 ./tools/make-working-copy.ps1 -Force     # ~3s, robocopy /MIR + hash verify
 ```
+
+> **`-Force` is a `/MIR`, so it purges everything not in the pristine install** —
+> including player profiles, replays, and any test map another task generated. It
+> is not a free operation on a shared working copy.
 
 ---
 

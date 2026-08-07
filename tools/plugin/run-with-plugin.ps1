@@ -38,7 +38,10 @@ param(
     [string]$InjectWindowedHelper = 'none',
     [switch]$RemoveWindowed,
     [switch]$NoLaunch,
-    [switch]$WaitForExit
+    [switch]$WaitForExit,
+    # A/B control: launch through exactly this path with our observer NOT injected.
+    # Used to prove a symptom is (or is not) ours, and to demonstrate the uninstalled game.
+    [switch]$NoPlugin
 )
 
 $ErrorActionPreference = 'Stop'
@@ -109,6 +112,10 @@ if ($InjectWindowedHelper -ne 'none') {
     }
 }
 
+if ($NoPlugin) {
+    $injArgs += '--no-plugin'
+    Write-Host 'run-with-plugin: -NoPlugin — control run, our observer will NOT be injected'
+}
 if (-not $WaitForExit) { $injArgs += '--no-wait-exit' }
 
 & $inj @injArgs

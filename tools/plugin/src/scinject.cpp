@@ -97,6 +97,7 @@ int main(int argc, char** argv) {
     DWORD settleMs = 4000;
     bool waitExit = true;
     bool pluginEarly = false;
+    bool noPlugin = false;   // A/B control: launch through the same path, our code absent
     char early[MAX_EARLY][MAX_PATH];
     int  earlyCount = 0;
 
@@ -104,6 +105,7 @@ int main(int argc, char** argv) {
         if (strcmp(argv[i], "--wait-ms") == 0 && i + 1 < argc) settleMs = (DWORD)atoi(argv[++i]);
         else if (strcmp(argv[i], "--no-wait-exit") == 0) waitExit = false;
         else if (strcmp(argv[i], "--early") == 0) pluginEarly = true;
+        else if (strcmp(argv[i], "--no-plugin") == 0) noPlugin = true;
         else if (strcmp(argv[i], "--early-dll") == 0 && i + 1 < argc) {
             if (earlyCount >= MAX_EARLY) { fprintf(stderr, "scinject: too many --early-dll\n"); return 1; }
             if (!GetFullPathNameA(argv[++i], MAX_PATH, early[earlyCount], NULL))
@@ -150,7 +152,7 @@ int main(int argc, char** argv) {
         }
         printf("scinject: early-injected %s -> HMODULE 0x%08lX\n", early[i], m);
     }
-    if (pluginEarly) {
+    if (pluginEarly && !noPlugin) {
         DWORD m = InjectDll(pi.hProcess, dllPath);
         if (m == 0) {
             fprintf(stderr, "scinject: EARLY injection FAILED for %s\n", dllPath);
@@ -175,7 +177,10 @@ int main(int argc, char** argv) {
         return 3;
     }
 
-    if (!pluginEarly) {
+    if (noPlugin) {
+        printf("scinject: --no-plugin, our observer was NOT injected (control run)\n");
+    }
+    else if (!pluginEarly) {
         DWORD remoteModule = InjectDll(pi.hProcess, dllPath);
         if (remoteModule == 0) {
             fprintf(stderr, "scinject: LoadLibraryA returned NULL in target -- DLL not loaded\n");
