@@ -13,26 +13,47 @@ StarCraft 1.16.1 work in `research/`.
 | Download URL | https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.2_build/ghidra_12.1.2_PUBLIC_20260605.zip |
 | SHA-256 | `b62e81a0390618466c019c60d8c2f796ced2509c4c1aea4a37644a77272cf99d` |
 | Size | ~546 MB zip, ~1.2 GB extracted |
-| Install path (gitignored) | `tools/ghidra/ghidra_12.1.2_PUBLIC/` |
+| Install path | `C:\re-tools\ghidra_12.1.2_PUBLIC\` -- OUTSIDE every worktree and repo, see below |
 
 Hash confirmed two ways: matches the `digest` field on the GitHub release asset, and matches
 the SHA-256 published in the release notes body.
 
+## Install location: outside every worktree and repo
+
+The install must live **outside every worktree and repo**, at the shared path
+`C:\re-tools\ghidra_12.1.2_PUBLIC\`, with `GHIDRA_INSTALL_DIR` pointed at it (user scope, so
+every new shell/agent picks it up without re-setting it). `analyze.ps1` already resolves the
+install dir in this order: `-GhidraInstallDir` param, then `$env:GHIDRA_INSTALL_DIR`, then a
+single auto-discovered `ghidra_*/` directory next to the script -- setting the env var once is
+enough, no code change or per-invocation flag needed.
+
+Why this matters: the install is gitignored, so it is invisible to git. If it lives inside a
+worktree (e.g. the old `tools/ghidra/ghidra_12.1.2_PUBLIC/` path this doc used to document),
+merging and pruning that worktree silently deletes the install along with it -- git never sees
+it, so nothing warns you. This already happened: task 005 lost its toolchain mid-run when the
+conductor pruned task 001's worktree, which held the only Ghidra install on the machine. Installing
+to a shared path outside every worktree means no worker's worktree prune can ever take it out.
+
 ## Install (fresh machine)
 
 ```powershell
-cd tools/ghidra
+New-Item -ItemType Directory -Path C:\re-tools -Force | Out-Null
+cd C:\re-tools
 Invoke-WebRequest -Uri 'https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.2_build/ghidra_12.1.2_PUBLIC_20260605.zip' -OutFile ghidra_12.1.2_PUBLIC_20260605.zip
 $hash = (Get-FileHash ghidra_12.1.2_PUBLIC_20260605.zip -Algorithm SHA256).Hash
 if ($hash -ne 'B62E81A0390618466C019C60D8C2F796CED2509C4C1AEA4A37644A77272CF99D') { throw "hash mismatch: $hash" }
 Expand-Archive ghidra_12.1.2_PUBLIC_20260605.zip -DestinationPath .
+[Environment]::SetEnvironmentVariable('GHIDRA_INSTALL_DIR', 'C:\re-tools\ghidra_12.1.2_PUBLIC', 'User')
 ```
 
-Extracts to `tools/ghidra/ghidra_12.1.2_PUBLIC/` (note: the top-level folder inside the zip is
+Extracts to `C:\re-tools\ghidra_12.1.2_PUBLIC\` (note: the top-level folder inside the zip is
 named after the version, not the dated asset filename). Delete the zip once extraction is
 verified -- `Remove-Item ghidra_12.1.2_PUBLIC_20260605.zip` -- there's no reason to keep an
-extra 546 MB around. Both the zip and any `ghidra_*/` install directory under `tools/ghidra/`
-are gitignored -- never commit either.
+extra 546 MB around. The `[Environment]::SetEnvironmentVariable(..., 'User')` call sets it for
+future shells; the shell you ran it in needs `$env:GHIDRA_INSTALL_DIR = 'C:\re-tools\ghidra_12.1.2_PUBLIC'`
+(or a restart) to pick it up immediately. Neither the zip nor the extracted install should ever
+end up under a repo or worktree path -- they'd be gitignored there too, which is exactly the
+silent-prune trap above.
 
 ### JDK requirement
 
