@@ -44,6 +44,28 @@ $ExpectedSnpSize = 557310
 $ExpectedFileCountApprox = 242
 $ExpectedTotalBytesApprox = 1068MB
 
+# robocopy /MIR deletes anything in -Destination not present in -Source. A
+# mistyped -Destination combined with -Force would silently wipe whatever
+# lives there. Only allow /MIR against a destination that is empty, already
+# looks like a StarCraft install, or sits under a known scratch root.
+$KnownScratchRoots = @('C:\sc-work')
+
+function Test-SafeMirrorDestination {
+    param([string]$Path)
+    $full = [System.IO.Path]::GetFullPath($Path).TrimEnd('\') + '\'
+    foreach ($root in $KnownScratchRoots) {
+        $rootFull = [System.IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
+        if ($full.StartsWith($rootFull, [StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+    if (Test-Path (Join-Path $Path 'StarCraft.exe')) {
+        return $true
+    }
+    $existingItems = Get-ChildItem -Path $Path -Force -ErrorAction SilentlyContinue
+    return (-not $existingItems)
+}
+
 function Get-Sha256 {
     param([string]$Path)
     (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToUpperInvariant()
@@ -55,14 +77,14 @@ function Test-KeyBinaries {
     foreach ($name in $ExpectedHashes.Keys) {
         $path = Join-Path $Root $name
         if (-not (Test-Path $path)) {
-            Write-Error "[$Label] missing: $path"
+            Write-Warning "[$Label] missing: $path"
             $ok = $false
             continue
         }
         $actual = Get-Sha256 -Path $path
         $expected = $ExpectedHashes[$name]
         if ($actual -ne $expected) {
-            Write-Error "[$Label] $name sha256 MISMATCH`n  expected: $expected`n  actual:   $actual"
+            Write-Warning "[$Label] $name sha256 MISMATCH`n  expected: $expected`n  actual:   $actual"
             $ok = $false
         } else {
             Write-Host "[$Label] $name sha256 OK ($actual)"
@@ -70,12 +92,12 @@ function Test-KeyBinaries {
     }
     $snpPath = Join-Path $Root 'battle.snp'
     if (-not (Test-Path $snpPath)) {
-        Write-Error "[$Label] missing: $snpPath"
+        Write-Warning "[$Label] missing: $snpPath"
         $ok = $false
     } else {
         $snpSize = (Get-Item $snpPath).Length
         if ($snpSize -ne $ExpectedSnpSize) {
-            Write-Error "[$Label] battle.snp size MISMATCH expected=$ExpectedSnpSize actual=$snpSize"
+            Write-Warning "[$Label] battle.snp size MISMATCH expected=$ExpectedSnpSize actual=$snpSize"
             $ok = $false
         } else {
             Write-Host "[$Label] battle.snp size OK ($snpSize bytes)"
@@ -106,6 +128,9 @@ if (-not $sourceOk) {
 if (Test-Path $Destination) {
     if (-not $Force) {
         throw "Destination already exists: $Destination`nPass -Force to re-sync it (robocopy /MIR), or choose a different -Destination."
+    }
+    if (-not (Test-SafeMirrorDestination -Path $Destination)) {
+        throw "Refusing to robocopy /MIR into $Destination -- it is not empty, does not look like a StarCraft install (no StarCraft.exe found), and is not under a known scratch root ($($KnownScratchRoots -join ', ')). /MIR deletes anything in the destination not present in the source; this guards against wiping a mistyped -Destination. Pass a different -Destination, or empty this one first if you're sure."
     }
     Write-Host "Destination exists, -Force passed: re-syncing via robocopy /MIR."
 } else {
@@ -138,7 +163,7 @@ Write-Host ("destination: {0} files, {1:N1} MB" -f $dstStats.Count, ($dstStats.B
 
 $statsOk = $true
 if ($srcStats.Count -ne $dstStats.Count -or $srcStats.Bytes -ne $dstStats.Bytes) {
-    Write-Error "File count/size MISMATCH between source and destination."
+    Write-Warning "File count/size MISMATCH between source and destination."
     $statsOk = $false
 }
 if ([Math]::Abs($srcStats.Count - $ExpectedFileCountApprox) -gt 5) {
