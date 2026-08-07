@@ -4,7 +4,7 @@
 
 agent: 011
 model: opus
-pr: -
+pr: https://github.com/inwenis/decompile-sc/pull/11
 
 ## Workspace
 
@@ -159,6 +159,52 @@ ONE attempt per round trip, so instrument thoroughly and log enough to diagnose 
 
 The map is `C:\sc-work\1161-base\Maps\test-many-units.scx` — 36 Marines, single player, no
 hostiles. Regenerate with `tools/make-test-map.ps1` if it is missing.
+
+## STAGE D PASSED — finalise the PR (added by conductor 2026-08-07)
+
+**The user ran the test and it worked.** Their report, verbatim, sent 2026-08-07T21:21:40Z:
+
+    run a - 12 moved
+    run b - all moved
+
+Map used was `(1)Enslavers02b` (24 units captured), **not** the 36-Marine map — that one was
+rejected by the game as corrupt and has since been root-caused and fixed by task 013.
+
+I cross-checked this against your own run-B log before accepting it, and they agree:
+
+    SHADOW captured: 24 units (12 visible + 12 beyond the cap)
+    FANOUT start: units=24 (visible 12 + overflow 12) -> 2 Select+order pairs
+    FANOUT done: 2/2 chunks emitted, 72 bytes this turn
+    STATS mode=fanout fanouts=4 pairs=8 deferred=0 staleSkipped=0
+
+Four orders produced eight pairs, nothing deferred, nothing skipped as stale, 72-74 bytes per
+turn against a 200-byte budget. The observe-mode control run on the same map moved 12, so the
+result is attributable to the plugin rather than to the map.
+
+**Your only remaining job is to finalise the PR:**
+
+1. Quote the user's result verbatim in the PR body — acceptance criterion 4 requires their own
+   account, not your logs.
+2. Record that the map was `(1)Enslavers02b` with 24 units, not the original 36-Marine fixture.
+3. State the limits plainly so a passing test does not imply more coverage than it has: one map,
+   one order-type pair (0x14/0x15), 24 units, single-player, one human run. Orders whose
+   semantics depend on the whole selection remain untested.
+4. Do not add features. Finalise and report.
+
+**Hard rule 5 is now WRONG and is replaced.** Task 012 proved a script CAN drive this game — not
+via `SendInput`, but by posting `WM_LBUTTONDOWN`/`WM_MOUSEMOVE` to the game's own HWND with
+client coordinates in `lParam`. Demonstrated live twice, focus not required, and no screen
+coordinates are involved anywhere, so the coordinate-failure class is designed out rather than
+patched. Replace rule 5 with:
+
+    Do not use SendInput/SendKeys (banned by config/guard-destructive.ps1).
+    Posting window messages to the game's own HWND is permitted and works
+    -- see research/automated-testing-options.md 4.1.
+
+You do not need to build a driver here. Just stop treating one-attempt-per-round-trip as a
+constraint in anything you write.
+
+Do not merge your own PR.
 
 ## Acceptance criteria
 
