@@ -1,0 +1,2 @@
+label	targetAddr	byteOffset	elemIndex	fromAddr	refType	opIndex	isPrimary	funcEntry	funcName	instruction
+handlerBinderFn	0x004584C0	0	0	0x0045852D	UNCONDITIONAL_CALL	0	true		(none)	CALL 0x004584c0

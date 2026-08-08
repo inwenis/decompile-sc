@@ -1,0 +1,36 @@
+label	targetAddr	byteOffset	elemIndex	fromAddr	refType	opIndex	isPrimary	funcEntry	funcName	instruction
+wireframeInteractFn	0x004583E0	0	0	0x00504B70	DATA	0	true		(none)	addr 004583e0
+wireframeInteractFn	0x004583E0	0	0	0x00504B74	DATA	0	true		(none)	addr 004583e0
+wireframeInteractFn	0x004583E0	0	0	0x00504B78	DATA	0	true		(none)	addr 004583e0
+wireframeInteractFn	0x004583E0	0	0	0x00504B7C	DATA	0	true		(none)	addr 004583e0
+wireframeInteractFn	0x004583E0	0	0	0x00504B80	DATA	0	true		(none)	addr 004583e0
+wireframeInteractFn	0x004583E0	0	0	0x00504B84	DATA	0	true		(none)	addr 004583e0
+wireframeInteractFn	0x004583E0	0	0	0x00504B88	DATA	0	true		(none)	addr 004583e0
+wireframeInteractFn	0x004583E0	0	0	0x00504B8C	DATA	0	true		(none)	addr 004583e0
+wireframeInteractFn	0x004583E0	0	0	0x00504B90	DATA	0	true		(none)	addr 004583e0
+wireframeInteractFn	0x004583E0	0	0	0x00504B94	DATA	0	true		(none)	addr 004583e0
+wireframeInteractFn	0x004583E0	0	0	0x00504B98	DATA	0	true		(none)	addr 004583e0
+wireframeInteractFn	0x004583E0	0	0	0x00504B9C	DATA	0	true		(none)	addr 004583e0
+mouseOverHelperFn	0x00457DE0	0	0	0x00457EFC	UNCONDITIONAL_CALL	0	true		(none)	CALL 0x00457de0
+mouseOverHelperFn	0x00457DE0	0	0	0x00457FAA	UNCONDITIONAL_CALL	0	true		(none)	CALL 0x00457de0
+mouseOverHelperFn	0x00457DE0	0	0	0x00458485	UNCONDITIONAL_CALL	0	true		(none)	CALL 0x00457de0
+defaultInteractTable	0x005014AC	0	0	0x00419571	DATA	1	true	0x004194E0	FUN_004194e0	MOV EDX,dword ptr [EAX + 0x5014ac]
+defaultInteractTable	0x005014AC	0	0	0x004A5686	DATA	0	true	0x004A5650	FUN_004a5650	JMP dword ptr [EAX*0x4 + 0x5014ac]
+defaultInteractTable	0x005014AC	0	0	0x00414CD4	DATA	1	true	0x00414C90	FUN_00414c90	MOV ECX,dword ptr [EAX + 0x5014ac]
+defaultInteractTable	0x005014AC	0	0	0x0045EEF4	DATA	0	true		(none)	JMP dword ptr [EAX*0x4 + 0x5014ac]
+defaultInteractTable	0x005014AC	0	0	0x00456A60	DATA	0	true		(none)	JMP dword ptr [EAX*0x4 + 0x5014ac]
+defaultInteractTable	0x005014AC	0	0	0x00457F0B	DATA	0	true		(none)	JMP dword ptr [EAX*0x4 + 0x5014ac]
+defaultInteractTable	0x005014AC	0	0	0x00457FB9	DATA	0	true		(none)	JMP dword ptr [EAX*0x4 + 0x5014ac]
+defaultInteractTable	0x005014AC	0	0	0x004598BF	DATA	0	true		(none)	JMP dword ptr [EAX*0x4 + 0x5014ac]
+defaultInteractTable	0x005014AC	0	0	0x00459938	DATA	0	true		(none)	JMP dword ptr [EAX*0x4 + 0x5014ac]
+defaultInteractTable	0x005014AC	0	0	0x00456ED7	DATA	1	true		(none)	MOV EAX,dword ptr [EAX*0x4 + 0x5014ac]
+defaultInteractTable	0x005014AC	0	0	0x00456EE5	DATA	0	true		(none)	JMP dword ptr [EAX*0x4 + 0x5014ac]
+defaultInteractTable	0x005014AC	0	0	0x0045820F	DATA	0	true		(none)	JMP dword ptr [EAX*0x4 + 0x5014ac]
+defaultInteractTable	0x005014AC	0	0	0x00458494	DATA	0	true		(none)	JMP dword ptr [EAX*0x4 + 0x5014ac]
+defaultInteractTable	0x005014AC	0	0	0x0045995A	DATA	0	true		(none)	CALL dword ptr [EAX*0x4 + 0x5014ac]
+defaultInteractTable	0x005014AC	0	0	0x004B895F	DATA	0	true		(none)	JMP dword ptr [EAX*0x4 + 0x5014ac]
+defaultInteractTable	0x005014AC	0	0	0x0044F017	DATA	0	true		(none)	JMP dword ptr [EAX*0x4 + 0x5014ac]
+hudFrameDriverFn	0x004D93F0	0	0	0x004D9538	UNCONDITIONAL_CALL	0	true	0x004D9530	FUN_004d9530	CALL 0x004d93f0
+hudFrameDriverFn	0x004D93F0	0	0	0x004D9542	UNCONDITIONAL_CALL	0	true	0x004D9530	FUN_004d9530	CALL 0x004d93f0
+hudFrameDriverFn	0x004D93F0	0	0	0x004D990F	UNCONDITIONAL_CALL	0	true	0x004D9840	FUN_004d9840	CALL 0x004d93f0
+consoleInitFn	0x004C3BB0	0	0	0x004EEDAE	UNCONDITIONAL_CALL	0	true	0x004EED10	FUN_004eed10	CALL 0x004c3bb0
