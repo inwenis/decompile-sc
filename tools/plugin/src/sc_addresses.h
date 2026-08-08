@@ -349,9 +349,28 @@
 #define SC_EVT_OFF_TYPE 0x0Cu
 #define SC_EVT_RBUTTONDOWN 7
 #define SC_EVT_TYPE_USER   14
+// dwUser sub-code of a completed click, where 0x004583E0 turns the button's
+// statUser unit into a Select. Read out of this binary: 0x004583E0's dwUser switch
+// (jump table at 0x0045849C, work/scratch/hud/binder-listing.tsv) sends case 2 to
+// 0x0045844E -> CALL 0x00458220 (StatusScreenButton, the select). BWAPI
+// BW/Dialog.h names it BW_USER_ACTIVATE = 2.
+#define SC_USER_ACTIVATE 2
 
-// CUnit fields the row reads (both used by the engine's own row code:
-// hp at +0x08 by the cond/cache pair, id at +0x64 everywhere):
+// CUnit fields the row reads. hitpoints at +0x08 is read for the DEATH signal;
+// it is the field the engine's DAMAGE primitive 0x004797B0 zeroes on a kill
+// (research/command-opcodes.md 6), so a damage-death reads 0 here. id at +0x64.
 #define SC_CUNIT_OFF_HITPOINTS 0x08u
+
+// The player unit list -- CUnit*[8] of per-player list heads, and the CUnit
+// prev/next links the engine threads them on. Derived by task 017 from the unit
+// (re)init 0x004A0320 (decompiled): it sets [unit+0x68]=0, [unit+0x6C]=head,
+// [head+0x68]=unit, head=unit -- a head-insert doubly linked list. The removal
+// path 0x004A0740 unlinks a removed unit, so a unit reachable from
+// playerUnitList[player] via +0x6C is IN PLAY; a freed/removed/transported/
+// mind-controlled unit is not. This is the click gate's in-play check.
+#define SC_VA_PLAYER_UNIT_LIST 0x006283F8u
+#define SC_CUNIT_OFF_LIST_PREV 0x68u
+#define SC_CUNIT_OFF_LIST_NEXT 0x6Cu
+#define SC_MAX_UNITS_WALK      2000   // loop bound: never trust a game list to terminate
 
 #endif // SC_ADDRESSES_H

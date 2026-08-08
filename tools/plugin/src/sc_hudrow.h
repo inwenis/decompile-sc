@@ -98,5 +98,7 @@ int  ScHudRowOnButtonEvent(DWORD control, DWORD evt);
 
 int  ScHudRowCurrentPage(void);   // 0-based
 int  ScHudRowPageCount(void);
+int  ScHudRowGatedCount(void);    // clicks the gate has swallowed
+bool ScHudRowIsDiverged(void);    // latched off-to-stock on engine divergence
 
 #endif // SC_HUDROW_H

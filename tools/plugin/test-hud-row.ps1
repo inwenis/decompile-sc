@@ -401,7 +401,11 @@ try {
         Assert-That 'the row left page 2 (stock hand-back logged)' `
             (@($lines | Select-String -Pattern 'HUDROW stock restored').Count -gt 0)
         $sc = Get-ScState 'shift-removed'
-        Assert-That "the selection dropped below 13 (n=$($sc.N))" ($sc.N -ge 1 -and $sc.N -le 12)
+        # PIN the payload: a real shift-remove of 1-of-12 shown leaves 11; a SILENT
+        # shift failure (drive-game.ps1 documents that risk) degenerates to a plain
+        # click which leaves exactly 1. Require >= 2 so the degenerate case fails.
+        Assert-That "the shift-remove left more than one unit (n=$($sc.N)) — not a degenerate plain click" `
+            ($sc.N -ge 2 -and $sc.N -le 12)
     }
 
     Step 'AMENDMENT 2: a <=12 selection produces NO row activity at all' {
@@ -428,7 +432,10 @@ try {
             Assert-That "  all 12 buttons own the engine interact ($($vm.Groups[1].Value)/$($vm.Groups[2].Value))" `
                 ($vm.Groups[1].Value -eq '12' -and $vm.Groups[2].Value -eq '12')
             Assert-That '  the indicator is unlinked from the child chain' ($vm.Groups[3].Value -eq '0')
-            Assert-That "  the child chain is intact ($($vm.Groups[4].Value) controls)" ([int]$vm.Groups[4].Value -ge 13)
+            # PIN the chain length for this fixture/build (statdata.bin ships 57
+            # controls in the status dialog; the indicator is unspliced at this point).
+            Assert-That "  the child chain is intact and complete ($($vm.Groups[4].Value) controls, expect 57)" `
+                ([int]$vm.Groups[4].Value -eq 57)
         }
         $mark2 = Get-ScLogLineCount -LogPath $LogPath
         Start-Sleep -Seconds 3
@@ -438,14 +445,17 @@ try {
         Shot 'stock-small-selection' | Out-Null
     }
 
-    # NOTE on the death leg (conductor review item 4): in-game unit death is not
-    # exercised here because this fixture has NO combat -- one unit-less computer slot,
-    # no enemy, no triggers (that is exactly what keeps the map from ending itself,
-    # see test-burrow-fanout.ps1). Killing a Lurker unattended would need an attacker
-    # and a reliable wait for the kill, which the fixture deliberately excludes. Death
-    # is instead modelled correctly OFFLINE in hooktest part [10] ("a unit DYING --
-    # HP->0, uniqueness UNCHANGED"), which is the case the 0xA5 bug hid; the separate
-    # slot-reuse and engine-side-mutation snaps are covered there too.
+    # NOTE on the death / removal legs: in-game unit death and removal (transport
+    # load, mind control, archon merge) are not exercised here because this fixture
+    # has NO combat and no transports -- one unit-less computer slot, no enemy, no
+    # triggers (exactly what keeps the map from ending itself; see
+    # test-burrow-fanout.ps1). Producing any of them unattended would need an
+    # attacker/transport and a reliable wait, which the fixture deliberately excludes.
+    # These are instead modelled correctly OFFLINE in hooktest part [10]: real damage
+    # death (HP->0, uniqueness UNCHANGED -- the case the 0xA5 bug hid), slot reuse,
+    # PERSISTENT engine-side divergence (hand back to stock, no churn, heal on the
+    # next commit), and the CLICK GATE swallowing a click on a removed-not-killed
+    # overflow unit before it can reach the engine's Select.
 }
 catch {
     Write-Host "  FAIL a test step threw: $($_.Exception.Message)"

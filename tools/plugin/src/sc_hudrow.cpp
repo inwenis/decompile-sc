@@ -56,6 +56,15 @@ static int   g_page      = 0;
 static int   g_pageCount = 1;
 static bool  g_flipPending = false;
 
+// Latched when our shadow list diverges from the engine's own selection with NO
+// new commit behind it -- an engine-side removal (transport load, mind control,
+// archon merge, trigger RemoveUnit) that sc_fanout's version counter never saw, or
+// a click the gate rejected. While latched the row HANDS BACK TO STOCK and does not
+// page, so the engine shows its own truth (removed units gone by construction) and
+// there is no per-frame churn. Cleared only by the next real selection commit (a
+// version bump), which rebuilds a consistent shadow.
+static bool  g_diverged = false;
+
 // What the 12 buttons currently show, for the cond drift check.
 struct HudSlotCache { DWORD unit; BYTE uniq; DWORD hp; WORD id; };
 static HudSlotCache g_cache[SC_HUD_BUTTON_COUNT];
@@ -78,6 +87,8 @@ static unsigned g_statFlips   = 0;
 static unsigned g_statStale   = 0;   // dead units dropped from the display list
 static unsigned g_statWraps   = 0;
 static unsigned g_statSplices = 0;
+static unsigned g_statDiverged = 0;  // times the row handed back on engine divergence
+static unsigned g_statGated    = 0;  // clicks the gate swallowed (stale unit)
 
 static void* Rt(DWORD staticVa) {
     return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE));
@@ -157,15 +168,17 @@ static bool Readable(DWORD addr, DWORD len) {
 // (re)init) and NOT by death -- death runs 0x004A0740 without touching it. So:
 //
 //   * uniqueness mismatch  -> the slot was recycled into a different unit;
-//   * hitpoints == 0        -> the unit died (its slot may not be reused yet, so
-//                              0xA5 still matches -- this is the case 0xA5 misses).
+//   * hitpoints == 0        -> a DAMAGE death (its slot may not be reused yet, so
+//                              0xA5 still matches -- the case 0xA5 misses).
 //
-// hitpoints is CUnit+0x08, the exact field the engine's own refresh-condition
-// 0x00424660 compares against its HP cache (hud-selection-row.md 4.2), so a dead
-// unit reads 0 there one frame before its slot is recycled. Requiring BOTH means a
-// corpse is dropped from the display list on the very next dispatch -- it is never
-// shown, and therefore never clickable, for more than that one frame (the same
-// self-heal window vanilla has).
+// hitpoints is CUnit+0x08, which the engine's DAMAGE primitive 0x004797B0 drives to
+// 0 on a kill (research/command-opcodes.md 6), so a damage-killed unit reads 0 here
+// one frame before its slot recycles. This term covers damage deaths only; the
+// OTHER removal paths (transport load, mind control, archon merge, trigger
+// RemoveUnit) leave HP and 0xA5 untouched and are handled structurally, not here --
+// the divergence latch hands the row to stock when the engine's visible selection
+// diverges (ScHudRowOnDispatch), and the click gate (ClickUnitValid) refuses any
+// clicked unit that is no longer in its player's unit list.
 static bool UnitAlive(const ScShadowInfo* u) {
     if (!u->unit) return false;
     if (*(BYTE*)(u->unit + SC_CUNIT_OFF_UNIQUENESS) != u->uniqueness) return false;
@@ -181,6 +194,42 @@ static WORD UnitTag(DWORD unit) {
     DWORD index = off / SC_CUNIT_SIZE + 1;
     if (index > SC_MAX_UNIT_INDEX) return 0;
     return (WORD)(((WORD)*(BYTE*)(unit + SC_CUNIT_OFF_UNIQUENESS) << 11) | (WORD)index);
+}
+
+// Is `unit` reachable from its own player's unit list? A unit in play is linked
+// into playerUnitList[player] (0x006283F8) via +0x6C; the removal path unlinks a
+// freed/removed/transported/mind-controlled unit (sc_addresses.h). So this is the
+// structural "still in play" test the click gate needs -- it does not depend on any
+// per-removal-path signal. Bounded so a corrupt list cannot hang the game thread.
+static bool InPlayerUnitList(DWORD unit) {
+    if (!unit) return false;
+    BYTE player = *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER);
+    if (player >= SC_MAX_PLAYERS) return false;
+    DWORD u = ((DWORD*)Rt(SC_VA_PLAYER_UNIT_LIST))[player];
+    for (int guard = 0; u && guard < SC_MAX_UNITS_WALK; ++guard) {
+        if (u == unit) return true;
+        u = *(DWORD*)(u + SC_CUNIT_OFF_LIST_NEXT);
+    }
+    return false;
+}
+
+// Is a clicked wireframe unit safe to hand to the engine's Select? It must be a
+// unit we are currently displaying (so we hold its captured uniqueness), NOT
+// recycled (uniqueness match), NOT dead (HP>0), and STILL IN PLAY (in its player's
+// unit list). This closes the dangerous exposure CLASS structurally: a freed /
+// removed / transported unit fails the list check no matter which removal path
+// dropped it, and a recycled slot fails the uniqueness check -- so a stale CUnit*
+// can never reach CMDACT_Select where its tag would pass the receive-side check.
+static bool ClickUnitValid(DWORD unit) {
+    if (!unit) return false;
+    BYTE captured = 0; bool known = false;
+    for (int i = 0; i < g_cacheN; ++i) {
+        if (g_cache[i].unit == unit) { captured = g_cache[i].uniq; known = true; break; }
+    }
+    if (!known) return false;                                        // not a shown unit
+    if (*(BYTE*)(unit + SC_CUNIT_OFF_UNIQUENESS) != captured) return false;  // recycled
+    if (*(DWORD*)(unit + SC_CUNIT_OFF_HITPOINTS) == 0) return false;         // dead
+    return InPlayerUnitList(unit);                                           // in play
 }
 
 static DWORD ChildOf(DWORD dlg)  { return *(DWORD*)(dlg + SC_BINDLG_OFF_FIRST_CHILD); }
@@ -259,11 +308,16 @@ static bool RefreshShadow(bool* selChanged, bool* death) {
     g_ver = ver;
     g_verValid = true;
 
-    // Engine-side selection mutation that bypassed CMDACT_Select (the version
-    // counter did not move) is a selection change too. hooktest [10] keeps the fake
-    // clientSelectionGroup in sync with the visible tail so this path runs there.
-    if (!changed && n > 0 && !EngineSelectionMatchesVisible()) {
-        changed = true;
+    // A real new commit (version bump) heals any divergence -- the shadow is fresh.
+    // Otherwise, if the engine's own visible selection no longer matches our visible
+    // tail, an engine-side removal happened that CMDACT_Select never reported: LATCH
+    // diverged so the dispatcher hands the row back to stock. Not treated as a
+    // "changed" (which would keep paging with page 1) -- divergence means stop
+    // paging entirely until the next commit.
+    if (changed) {
+        g_diverged = false;
+    } else if (n > 0 && !EngineSelectionMatchesVisible()) {
+        g_diverged = true;
     }
 
     if (changed || died) {
@@ -301,15 +355,40 @@ int ScHudRowOnButtonEvent(DWORD ctrl, DWORD evt) {
     // control+0x2A (hud-selection-row.md 5.1). So a right-click arrives here as
     // event->type == 7, and the stock button interact ignores it, which is what
     // makes the gesture free to claim.
-    if (g_enabled && evt && g_pageCount > 1) {
+    if (g_enabled && evt) {
         WORD type = *(WORD*)(evt + SC_EVT_OFF_TYPE);
-        if (type == SC_EVT_RBUTTONDOWN) {
+
+        // Right-click flips the page.
+        if (type == SC_EVT_RBUTTONDOWN && g_pageCount > 1) {
             g_page = (g_page + 1) % g_pageCount;
             g_flipPending = true;
             *(BYTE*)Rt(SC_VA_STAT_DIRTY) = 1;
             ++g_statFlips;
             ScLog("HUDROW flip -> page %d/%d", g_page + 1, g_pageCount);
             return 1;
+        }
+
+        // THE CLICK GATE. An ACTIVATE (a completed click) is where the stock handler
+        // 0x00458220 would put the button's statUser CUnit* into a Select command.
+        // While we are paging (buttons wrapped), a displayed unit can have been
+        // removed by a path our divergence check cannot see (an OVERFLOW unit loaded
+        // into a transport, say). Validate it FIRST: if it is not a live, in-play,
+        // non-recycled unit, SWALLOW the click (the engine never sees the stale
+        // pointer) and latch diverged so the row hands back to stock. This bounds the
+        // dangerous exposure to zero regardless of removal path; the corpse-display
+        // window becomes cosmetic-only.
+        if (type == SC_EVT_TYPE_USER && g_wrapCount > 0 &&
+            *(DWORD*)(evt + SC_EVT_OFF_USER) == SC_USER_ACTIVATE) {
+            DWORD su = *(DWORD*)(ctrl + SC_BINDLG_OFF_USER);
+            DWORD unit = su ? *(DWORD*)(su + SC_STATUSER_OFF_UNIT) : 0;
+            if (!ClickUnitValid(unit)) {
+                ScLog("HUDROW click gate: unit 0x%08X is not live/in-play -- click "
+                      "swallowed, handing back to stock", (unsigned)unit);
+                g_diverged = true;
+                *(BYTE*)Rt(SC_VA_STAT_DIRTY) = 1;
+                ++g_statGated;
+                return 1;                         // swallow: engine never sees it
+            }
         }
     }
     return CallEngineInteract(ctrl, evt);
@@ -339,17 +418,19 @@ static void EnsureWrapped(DWORD firstBtn) {
     }
 }
 
-// Restore the wrapped interact pointers. `safe` = the cached button pointers are
-// known to still belong to a live dialog. When they are NOT (the dialog pointer
-// went away, so those pointers are into freed heap by construction), pass
-// safe=false: the bookkeeping is dropped WITHOUT dereferencing, and the next paged
-// frame re-wraps fresh from the new dialog's own buttons.
-static void Unwrap(bool safe) {
-    if (safe) {
+// Restore the wrapped interact pointers by walking the CURRENT dialog's own button
+// chain -- never g_wrapBtn, whose cached addresses can be into freed heap after a
+// same-address dialog realloc (root == g_dialog, so the new-dialog reset never
+// fired). Walking the live chain validates membership by construction: only a
+// button actually linked into `root` right now is touched. `root == 0` means the
+// dialog is gone: just drop the bookkeeping.
+static void Unwrap(DWORD root) {
+    if (root) {
         const DWORD engineFn = (DWORD)Rt(SC_VA_WIREFRAME_BTN_INTERACT);
         const DWORD shim     = (DWORD)&HudBtnInteractShim;
-        for (int i = 0; i < g_wrapCount; ++i) {
-            DWORD* interact = (DWORD*)(g_wrapBtn[i] + SC_BINDLG_OFF_INTERACT);
+        DWORD c = FindChildById(root, SC_HUD_FIRST_SMALL_BUTTON);
+        for (int i = 0; i < SC_HUD_BUTTON_COUNT && c; ++i, c = NextOf(c)) {
+            DWORD* interact = (DWORD*)(c + SC_BINDLG_OFF_INTERACT);
             if (*interact == shim) *interact = engineFn;
         }
     }
@@ -543,7 +624,7 @@ static void LogVerifyStock(DWORD root) {
         if (*(DWORD*)(c + SC_BINDLG_OFF_INTERACT) == engineFn) ++engineOwned;
     }
     int chainLen = 0;
-    for (DWORD w = ChildOf(root); w && chainLen < 64; w = NextOf(w)) ++chainLen;
+    for (DWORD w = ChildOf(root); w && chainLen < 128; w = NextOf(w)) ++chainLen;
     ScLog("HUDROW verify stock: engineInteract=%d/%d indicatorLinked=%d chainLen=%d",
           engineOwned, walked, IndicatorInChain(root) ? 1 : 0, chainLen);
 }
@@ -555,7 +636,7 @@ static void LogVerifyStock(DWORD root) {
 // away and the cached button pointers are into freed heap: drop the bookkeeping
 // without dereferencing (the next paged frame re-wraps fresh).
 static void RestoreStock(DWORD root) {
-    Unwrap(root != 0);
+    Unwrap(root);
     if (root) UnspliceIndicator(root); else g_indSpliced = false;
     g_cacheValid = false;
     if (root) {
@@ -604,8 +685,13 @@ void ScHudRowOnDispatch(void) {
     DWORD firstBtn = root ? FindChildById(root, SC_HUD_FIRST_SMALL_BUTTON) : 0;
 
     // Page only when there is real overflow AND a dialog with a row AND a portrait
-    // unit (the engine's own precondition for showing the status area at all).
-    if (!overflow || !root || !firstBtn || !PortraitUnit()) {
+    // unit (the engine's own precondition), AND we have not DIVERGED from the
+    // engine's own selection. On divergence (an engine-side removal our version
+    // counter never saw, or a click the gate rejected) we HAND BACK TO STOCK and
+    // stay stock until the next commit rebuilds a consistent shadow -- the engine
+    // then shows its own truth, with no per-frame churn and no stale tail.
+    if (g_diverged && (g_wrapCount > 0 || g_indSpliced)) ++g_statDiverged;
+    if (!overflow || g_diverged || !root || !firstBtn || !PortraitUnit()) {
         if (g_wrapCount > 0 || g_indSpliced) RestoreStock(root);   // hands back inside
         else CallOrigDispatch();
         ++g_statStock;
@@ -667,6 +753,7 @@ void ScHudRowInit(BYTE* moduleBase, bool enabled) {
     g_indSpliced = false;
     g_indText[0] = '\0';
     g_rectsLogged = false;
+    g_diverged = false;
 }
 
 bool ScHudRowEnabled(void) { return g_enabled; }
@@ -715,8 +802,10 @@ void ScHudRowRemoveHooks(void) {
 
 void ScHudRowLogStats(void) {
     if (!g_enabled) return;
-    ScLog("HUDROW stats: acts=%u stock=%u flips=%u staleDropped=%u wraps=%u splices=%u",
-          g_statActs, g_statStock, g_statFlips, g_statStale, g_statWraps, g_statSplices);
+    ScLog("HUDROW stats: acts=%u stock=%u flips=%u staleDropped=%u wraps=%u splices=%u "
+          "diverged=%u gated=%u",
+          g_statActs, g_statStock, g_statFlips, g_statStale, g_statWraps, g_statSplices,
+          g_statDiverged, g_statGated);
 }
 
 // ---------------------------------------------------------------------------
@@ -735,7 +824,10 @@ void ScHudRowTestBegin(BYTE* fakeModuleBase,
     g_testOrigDispatch = origDispatch;
     g_statActs = g_statStock = g_statFlips = 0;
     g_statStale = g_statWraps = g_statSplices = 0;
+    g_statDiverged = g_statGated = 0;
 }
 
-int ScHudRowCurrentPage(void) { return g_page; }
-int ScHudRowPageCount(void)   { return g_pageCount; }
+int ScHudRowCurrentPage(void)  { return g_page; }
+int ScHudRowPageCount(void)    { return g_pageCount; }
+int ScHudRowGatedCount(void)   { return (int)g_statGated; }
+bool ScHudRowIsDiverged(void)  { return g_diverged; }

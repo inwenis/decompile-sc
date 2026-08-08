@@ -920,6 +920,49 @@ static void SetEngineSelectionFirst(int n) {   // FakeUnit(0..n-1)
 static void Drive36Sync(void)   { DriveSelection(36); SetEngineSelectionFirst(12); }
 static void SmallSync(int n)    { SmallSelection(n);  SetEngineSelectionFirst(n); }
 
+// Link FakeUnit(0..n-1) into the fake playerUnitList[player] via +0x68/+0x6C, so
+// the click gate's InPlayerUnitList walk runs for real. Head-insert.
+static void BuildFakePlayerList(int n, BYTE player) {
+    DWORD* heads = (DWORD*)FakeRt(SC_VA_PLAYER_UNIT_LIST);
+    heads[player] = 0;
+    for (int i = 0; i < n; ++i) {
+        DWORD u = FakeUnit(i);
+        *(DWORD*)(u + SC_CUNIT_OFF_LIST_PREV) = 0;
+        *(DWORD*)(u + SC_CUNIT_OFF_LIST_NEXT) = heads[player];
+        if (heads[player]) *(DWORD*)(heads[player] + SC_CUNIT_OFF_LIST_PREV) = u;
+        heads[player] = u;
+    }
+}
+static void UnlinkFakeUnit(int i, BYTE player) {   // models removal from play
+    DWORD* heads = (DWORD*)FakeRt(SC_VA_PLAYER_UNIT_LIST);
+    DWORD u = FakeUnit(i);
+    DWORD prev = *(DWORD*)(u + SC_CUNIT_OFF_LIST_PREV);
+    DWORD next = *(DWORD*)(u + SC_CUNIT_OFF_LIST_NEXT);
+    if (prev) *(DWORD*)(prev + SC_CUNIT_OFF_LIST_NEXT) = next; else heads[player] = next;
+    if (next) *(DWORD*)(next + SC_CUNIT_OFF_LIST_PREV) = prev;
+    *(DWORD*)(u + SC_CUNIT_OFF_LIST_NEXT) = 0;
+    *(DWORD*)(u + SC_CUNIT_OFF_LIST_PREV) = 0;
+}
+static void RelinkFakeUnit(int i, BYTE player) {   // put it back, for cleanup
+    DWORD* heads = (DWORD*)FakeRt(SC_VA_PLAYER_UNIT_LIST);
+    DWORD u = FakeUnit(i);
+    *(DWORD*)(u + SC_CUNIT_OFF_LIST_PREV) = 0;
+    *(DWORD*)(u + SC_CUNIT_OFF_LIST_NEXT) = heads[player];
+    if (heads[player]) *(DWORD*)(heads[player] + SC_CUNIT_OFF_LIST_PREV) = u;
+    heads[player] = u;
+}
+
+// A dialog USER/ACTIVATE event (the select notification) built into `buf` (>= 0x14).
+static void MakeActivateEvt(BYTE* buf) {
+    memset(buf, 0, 0x14);
+    *(DWORD*)(buf + SC_EVT_OFF_USER) = SC_USER_ACTIVATE;   // dwUser = 2
+    *(WORD*) (buf + SC_EVT_OFF_TYPE) = SC_EVT_TYPE_USER;   // type  = 14
+}
+static void MakeRButtonEvt(BYTE* buf) {
+    memset(buf, 0, 0x14);
+    *(WORD*)(buf + SC_EVT_OFF_TYPE) = SC_EVT_RBUTTONDOWN;  // type = 7
+}
+
 static void ResetHudCounters(void) {
     g_ctlShows = g_ctlHides = g_ctlUpdates = 0;
     g_engInteractCalls = g_origDispatchCalls = 0;
@@ -938,6 +981,7 @@ static void HudRowTests(void) {
         *(WORD*) (FakeUnit(i) + SC_CUNIT_OFF_UNIT_ID)   = (WORD)(100 + i);
         *(DWORD*)(FakeUnit(i) + SC_CUNIT_OFF_HITPOINTS) = 40 * 256;
     }
+    BuildFakePlayerList(64, 1);               // all in play (player 1), for the click gate
 
     ScFanoutTestBegin(g_fake, NULL, 200);     // shadow-list source; no emission
     BuildFakeDialog();
@@ -1094,23 +1138,81 @@ static void HudRowTests(void) {
         *(BYTE*)(FakeUnit(16) + SC_CUNIT_OFF_UNIQUENESS) -= 1;
     }
 
-    printf("\n    an ENGINE-side selection change (clientSelectionGroup) snaps back too\n");
-    // The engine drops a unit from clientSelectionGroup without CMDACT_Select (the
-    // fan-out version counter does not move); the visible-tail-vs-engine comparison
-    // catches it.
+    printf("\n    PERSISTENT engine divergence hands back to stock and stays there\n");
+    // An engine-side removal that bypassed CMDACT_Select (transport, mind control,
+    // trigger RemoveUnit): the visible unit is gone from clientSelectionGroup but the
+    // version counter never moved. The row must hand back to stock and STAY stock
+    // (no per-frame churn, flip structurally dead) until the next real commit.
     {
-        BYTE evt[0x14];
-        memset(evt, 0, sizeof(evt));
-        *(WORD*)(evt + SC_EVT_OFF_TYPE) = SC_EVT_RBUTTONDOWN;
-        ScHudRowOnButtonEvent(FakeCtl(3), (DWORD)&evt[0]);
-        ScHudRowOnDispatch();
-        Check("on page 2 once more", ScHudRowCurrentPage() + 1, 2);
+        Drive36Sync();
+        ScHudRowOnDispatch();                                   // paged, page 1
+        Check("paged before divergence", ScHudRowPageCount(), 3);
         DWORD* g = (DWORD*)FakeRt(SC_VA_CLIENT_SELECTION_GROUP);
-        DWORD saved = g[11]; g[11] = 0;                         // engine dropped one
+        DWORD saved = g[5]; g[5] = 0;                           // engine dropped a visible unit
+        ResetHudCounters();
         ScHudRowOnDispatch();
-        Check("engine selection mismatch snapped back to page 1",
-              ScHudRowCurrentPage() + 1, 1);
-        g[11] = saved;                                          // restore for later
+        Check("divergence handed back to stock (engine dispatcher ran)",
+              (long long)g_origDispatchCalls, 1);
+        Check("  latched diverged", ScHudRowIsDiverged() ? 1 : 0, 1);
+        {
+            bool restored = true;
+            for (int i = 0; i < 12; ++i)
+                if (*(DWORD*)(FakeCtl(1+i) + SC_BINDLG_OFF_INTERACT) != engineFn) restored = false;
+            Check("  all 12 buttons restored to engine interact (flip now dead)",
+                  restored ? 1 : 0, 1);
+        }
+        Check("  the indicator is unspliced", CountChildren(), 13);
+        ResetHudCounters();
+        for (int k = 0; k < 4; ++k) ScHudRowOnDispatch();
+        Check("  stays stock over 4 frames: no re-show churn", (long long)g_ctlShows, 0);
+        Check("  engine dispatcher ran each of the 4 frames", (long long)g_origDispatchCalls, 4);
+        // Heal: restore the engine selection AND a new commit (version bump).
+        g[5] = saved;
+        Drive36Sync();
+        ResetHudCounters();
+        ScHudRowOnDispatch();
+        Check("a new commit heals divergence and resumes paging", g_ctlShows > 0 ? 1 : 0, 1);
+        Check("  no longer diverged", ScHudRowIsDiverged() ? 1 : 0, 0);
+    }
+
+    printf("\n    the CLICK GATE swallows a click on a removed-not-killed OVERFLOW unit\n");
+    // The exposure (b) closes: an overflow unit loaded into a transport is unlinked
+    // from its player unit list but keeps HP and uniqueness, and is NOT in
+    // clientSelectionGroup (so the divergence check cannot see it). A click on its
+    // portrait must be swallowed before the engine's Select ever sees the stale ptr.
+    {
+        BYTE rbtn[0x14], act[0x14];
+        MakeRButtonEvt(rbtn);
+        MakeActivateEvt(act);
+        Drive36Sync();
+        ScHudRowOnDispatch();                                   // page 1
+        ScHudRowOnButtonEvent(FakeCtl(3), (DWORD)&rbtn[0]);     // -> page 2
+        ScHudRowOnDispatch();
+        Check("on page 2 (units 13-24)", ScHudRowCurrentPage() + 1, 2);
+        // Unit 15 is shown on page-2 button 4 (disp[15] = FakeUnit(15)). Remove it
+        // from play: HP and uniqueness UNCHANGED, gone from the player unit list.
+        Check("  button 4 shows unit 15", ShownStatUserUnit(3) == FakeUnit(15) ? 1 : 0, 1);
+        UnlinkFakeUnit(15, 1);
+        ResetHudCounters();
+        int r = ScHudRowOnButtonEvent(FakeCtl(4), (DWORD)&act[0]);
+        Check("the click on the removed unit is SWALLOWED", (long long)r, 1);
+        Check("  the engine interact was NOT called", (long long)g_engInteractCalls, 0);
+        Check("  the gate counted it", ScHudRowGatedCount(), 1);
+        Check("  latched diverged -> next frame hands to stock", ScHudRowIsDiverged() ? 1 : 0, 1);
+        ScHudRowOnDispatch();
+        Check("  handed back to stock", (long long)g_origDispatchCalls, 1);
+
+        // Contrast: a VALID unit's click passes through to the engine.
+        RelinkFakeUnit(15, 1);
+        Drive36Sync();
+        ScHudRowOnDispatch();                                   // page 1, fresh
+        ScHudRowOnButtonEvent(FakeCtl(3), (DWORD)&rbtn[0]);     // -> page 2
+        ScHudRowOnDispatch();
+        ResetHudCounters();
+        int r2 = ScHudRowOnButtonEvent(FakeCtl(4), (DWORD)&act[0]);
+        Check("a valid unit's ACTIVATE is NOT swallowed", (long long)r2, 0);
+        Check("  it reaches the engine interact", (long long)g_engInteractCalls, 1);
+        Check("  the gate count did not rise", ScHudRowGatedCount(), 1);
     }
 
     printf("\n    a selection change to ONE unit restores the row to stock\n");
@@ -1156,8 +1258,16 @@ static void HudRowTests(void) {
     ScHudRowOnDispatch();
     Check("disabled: the engine's dispatcher ran", (long long)g_origDispatchCalls, 1);
     Check("disabled: no control was shown", (long long)g_ctlShows, 0);
-    Check("disabled: a right-click is NOT intercepted", (long long)ScHudRowOnButtonEvent(FakeCtl(3), 0), 0);
-    Check("disabled: it reached the engine interact instead", (long long)g_engInteractCalls, 1);
+    {
+        // A REAL right-click event, so only g_enabled separates this from the enabled
+        // flip case -- not a degenerate evt==0.
+        BYTE rbtn[0x14];
+        MakeRButtonEvt(rbtn);
+        Check("disabled: a real right-click is NOT intercepted",
+              (long long)ScHudRowOnButtonEvent(FakeCtl(3), (DWORD)&rbtn[0]), 0);
+        Check("disabled: it reached the engine interact instead",
+              (long long)g_engInteractCalls, 1);
+    }
 
     ScHudRowTestBegin(NULL, NULL, NULL, NULL, NULL, NULL);   // leave it inert
     ScFanoutTestBegin(NULL, NULL, 200);

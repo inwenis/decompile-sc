@@ -295,9 +295,40 @@ records go stale between refreshes (a displayed unit can die). Vanilla has this 
 too — `0x0049F7A0` clears the unit out of `clientSelectionGroup` on death, but statUser
 keeps the old pointer until the next act run. It is memory-safe in vanilla because CUnit
 slots are static array entries (`0x0059CCA8` + n×0x150), recycled, never freed — reads give
-wrong-but-harmless pixels for a frame. A shadow list page inherits exactly that class of
-exposure, plus the same staleness guards the circles module already uses
-(bounds/stride check + `CUnit+0xA5` uniqueness) at page-fill time.
+wrong-but-harmless pixels for a frame.
+
+### 6.1 The stale-pointer exposure CLASS, closed structurally (stage B)
+
+A shadow page can display an overflow unit the engine has since **removed** — killed,
+loaded into a transport, mind-controlled, archon-merged, trigger-removed. The danger is not
+the wrong pixels; it is a click on that stale slot handing the engine a `CUnit*` whose tag
+still passes the receive-side uniqueness check, so a removed unit enters engine selection —
+where vanilla self-heals in one frame. sc_hudrow closes the whole class with two structural
+measures rather than one detector per removal path:
+
+1. **Detection ≠ removal-path.** Death is one signal (`hitPoints == 0`, `CUnit+0x08`, the
+   field the damage primitive `0x004797B0` zeroes — [`command-opcodes.md`](command-opcodes.md)
+   §6); slot reuse is another (`CUnit+0xA5` bumped by `0x004A0320`). The **rest** are caught
+   without a per-path signal: each dispatch compares the engine's own visible selection
+   (`clientSelectionGroup`, `0x00597208`) against the shadow's visible tail, and on a
+   divergence with no new commit behind it the row **hands back to stock** and stays there
+   until the next `CMDACT_Select` commit. The engine then shows its own truth — removed units
+   gone by construction — with no per-frame churn.
+
+2. **The click gate.** Before the engine's click handler receives a button's statUser
+   `CUnit*` (on the `BW_USER_ACTIVATE` = 2 sub-event that `0x004583E0` routes to `0x00458220`
+   — jump table at `0x0045849C`), sc_hudrow validates it: displayed, uniqueness unchanged,
+   `hitPoints > 0`, **and present in its player's unit list**. The unit list is
+   `playerUnitList` at `0x006283F8` (a `CUnit*[8]` of per-player heads), threaded through
+   `CUnit+0x68`/`+0x6C` — decompiled from the unit (re)init `0x004A0320`, which head-inserts a
+   unit into `playerUnitList[player]`; the removal path `0x004A0740` unlinks it. So a
+   freed/removed/transported/transferred unit is *not reachable* from its player's list head,
+   no matter which path dropped it. An invalid click is **swallowed** (the engine never sees
+   the stale pointer) and the row latches to stock. The dangerous exposure is bounded to zero;
+   the corpse-display window becomes cosmetic-only.
+
+These, plus the same bounds/stride and `CUnit+0xA5` guards the circles module uses, are what
+make the shadow page safe.
 
 ## 7. Candidate designs, costed
 
