@@ -26,8 +26,19 @@ param(
     [int]$UnitCount = 36,
     [string]$UnitType = 'marine',
     [int]$Player = 0,
+    # Pixels between placed units (32 = one tile). Units bigger than a tile need more:
+    # the game silently drops the ones it cannot place, and a map that was asked for 36
+    # units comes up with a handful.
+    [int]$GridSpacing = 32,
     [string]$TemplatePath = 'C:\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx',
-    [string]$OutputPath = 'C:\sc-work\1161-base\Maps\test-many-units.scx'
+    [string]$OutputPath = 'C:\sc-work\1161-base\Maps\test-many-units.scx',
+    # Leave the template's player slots alone. For a template that is already a playable
+    # single-player scenario (a stock campaign mission), rewriting them deletes the
+    # mission's own actors.
+    [switch]$KeepOwnr,
+    # Drop the target player's existing units first, so the placed group is all one type.
+    # A mixed selection is offered only the basic command card in game -- no ability buttons.
+    [switch]$ClearPlayerUnits
 )
 
 $ErrorActionPreference = 'Stop'
@@ -45,10 +56,17 @@ else {
     throw "No .venv found at $venvPython and no 'python' on PATH. Run ./setup.ps1 first."
 }
 
-& $python (Join-Path $PSScriptRoot 'make_test_map.py') `
-    --unit-count $UnitCount `
-    --unit-type $UnitType `
-    --player $Player `
-    --template $TemplatePath `
-    --output $OutputPath
+$pyArgs = @(
+    (Join-Path $PSScriptRoot 'make_test_map.py')
+    '--unit-count', $UnitCount
+    '--unit-type', $UnitType
+    '--player', $Player
+    '--grid-spacing', $GridSpacing
+    '--template', $TemplatePath
+    '--output', $OutputPath
+)
+if ($KeepOwnr) { $pyArgs += '--keep-ownr' }
+if ($ClearPlayerUnits) { $pyArgs += '--clear-player-units' }
+
+& $python @pyArgs
 exit $LASTEXITCODE

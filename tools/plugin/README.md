@@ -106,15 +106,36 @@ own remaining turn-buffer room, and finishes the rest on the next command. A 36-
 
 ### Which commands get fanned out
 
-**By default only two: `0x14` Right Click and `0x15` Targeted Order** — the only two ids whose
-payload layout this project has read out of the binary. Between them they carry move, attack,
-attack-move, patrol, gather, repair and every right-click.
+**19 of the 58 opcodes the engine accepts**, chosen by one rule that is a fact about the engine
+rather than a preference (task 015, full derivation in
+[`research/command-opcodes.md`](../../research/command-opcodes.md), per-opcode table in
+[`research/data/command-opcodes.tsv`](../../research/data/command-opcodes.tsv)):
 
-`research/command-path.md` §6 tabulates all 51 ids the binary emits with their lengths, but does
-**not** name 45 of them, and fanning out a command whose meaning is guessed is how a plugin ends
-up quietly duplicating a build order. Extend the set with
-`-FanoutCmds '14 15 1A'` once an id has been identified — the plugin logs `CMD id=0xNN len=N` for
-every command, so identifying one costs a single keypress in game.
+> fan out a command **⟺** the engine's own handler applies it to **every** unit in the receiving
+> player's selection, **and** the handler does not move the player's resources.
+
+The first half is why fan-out preserves semantics: for such a command the engine already does the
+thing to all twelve units it holds, so replaying it against the units the cap hid is the same
+operation over more units. The second half is the safety margin — minerals and gas are
+player-global, and a command that spends them is one the player issued once.
+
+| | ids |
+|---|---|
+| fan out | `0x14` Right Click, `0x15` Targeted Order (Attack / Patrol / Move), `0x1A` **Stop**, `0x2B` **Hold Position**, `0x1B` `0x1C` `0x1D` `0x1E` `0x21` `0x22` `0x25` `0x26` `0x28` `0x2A` `0x2C` `0x2D` `0x2E` `0x36` `0x5A` |
+| passthrough | everything else — 25 selection-independent ids, 11 that do nothing unless *exactly one* unit is selected (Train, Build, Research …), 3 that loop but move resources, and `0x54`, which the dispatcher does not accept at all |
+
+The single-unit-gated ones are the trap worth knowing about: they are inert at twelve units, which
+makes them look harmless to replay — but a fan-out chunk can be **one** unit long, so replaying
+one would make it fire where the player's own selection never could.
+
+Every command is also length-checked against the length the engine's dispatcher consumes for that
+id (from the command-length table at `0x005005F8`); one that disagrees is passed through untouched
+rather than replayed, because handing the receive loop an unexpected byte count would
+desynchronise everything behind it in the same turn buffer.
+
+`%SCPLUGIN_FANOUT_CMDS%` / `-FanoutCmds '14 15 1A'` replaces the set; the length check still
+applies to whatever it names. The plugin logs `CMD id=0xNN len=N bytes=[…]` for every command, so
+identifying an id still costs a single keypress in game.
 
 ---
 
@@ -160,8 +181,9 @@ circle *with* a bar is one of the engine's 12, circle *without* is one of ours.
 
 | | |
 |---|---|
-| Orders other than `0x14`/`0x15` | not fanned out by default; the selection still works, the order just reaches the visible ≤12 as in stock |
-| Whole-selection orders (archon merge, unload-all, building morph) | **not handled, and not attempted.** Their semantics depend on the entire selection at once, so splitting into 12-unit chunks would change what they mean — an archon merge chunked into threes merges the wrong pairs. They are not in the default id set, so they behave exactly as stock |
+| Passthrough orders | reach the visible ≤12 as in stock. That is the policy, not a gap — see "Which commands get fanned out" |
+| Merge-shaped commands (`0x2A`, `0x5A`) | **are** fanned out, and the effect scales: they pair units of one type inside each chunk, so 24 units of the right type merge into 12 rather than 6. Same semantics per chunk, twice the effect overall |
+| Per-unit costs scale with the unit count | a fanned-out command that costs the acting unit energy (`0x21`) or HP (`0x36`) spends it for every unit reached, which is what "the order applies to all of them" means. Nothing player-global is ever spent twice |
 | Shift-add past 12 | the shift path goes through `combineSelectionsLists`, which the overflow hook does cover, but a shift-add re-commits through `CMDACT_Select`; whatever the engine ends up holding is what gets captured. Not tested |
 | Control-group recall (`0x13`) | rebuilds the selection outside `CMDACT_Select`, so the captured list is **dropped** on seeing that command rather than fanned out stale |
 | The HUD | still shows 12 wireframes. Not a bug: the engine's cap is never raised. **The on-screen circles no longer stay at 12** (task 014) — but the wireframe row is a fixed 12-slot dialog and is a separate job |
@@ -523,6 +545,7 @@ The one exception is the deprecated `-Windowed` switch, which *does* write
 | `run-with-plugin.ps1` | launch wrapper (+ windowed shim helper, + dialog check, + `-Mode`) |
 | `drive-game.ps1` | posted-window-message driver: find the HWND, click, drag, type, capture a frame. No synthetic OS input, no screen coordinates |
 | `test-selection-circles.ps1` | **unattended** end-to-end test: launches, walks the menus, loads a stock map, drives a drag box and an order, asserts on the plugin log |
+| `test-fanout-orders.ps1` | **unattended** end-to-end test of the per-opcode policy: Stop and Hold Position reach all 24 units of a >12 selection, asserted from every unit's own order byte, not from the picture |
 | `check-game-windows.ps1` | out-of-process launch health check |
 | `close-game.ps1` | WM_CLOSE the game and verify it exited (hard rule: never leave one running) |
 
@@ -531,7 +554,16 @@ The one exception is the deprecated `-Windowed` switch, which *does* write
 ```powershell
 ./tools/plugin/test-selection-circles.ps1            # circles on
 ./tools/plugin/test-selection-circles.ps1 -NoCircles # the off-switch run
+./tools/plugin/test-fanout-orders.ps1                # Stop / Hold / Attack / Patrol at >12
 ```
+
+`test-fanout-orders.ps1` adds a second oracle on top of the log: the plugin's `UNITSTATE` line,
+which walks the **shadow list** — all 24 units, not the 12 the engine holds — and reports a
+histogram of their current order ids read from `CUnit+0x4D`. The driver asks for one by writing a
+label into the marker file and waiting for the line carrying that label back, so "every unit
+obeyed" is a synchronous read of all 24 units' own state. The assertion that matters is the
+negative one: after one Stop keypress, **not one** of the 24 is still on the order they were all
+moving with. A command that only reached the engine's twelve would leave twelve still walking.
 
 It drives the game with `PostMessage` and **client** coordinates in `lParam` — the technique task
 012 demonstrated live

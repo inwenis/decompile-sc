@@ -215,6 +215,13 @@ static void PollMarker(void) {
 
     lstrcpynA(g_lastMarker, buf, sizeof(g_lastMarker));
     ScLog("---- MARK: %s ----", g_lastMarker);
+
+    // Task 015: a marker is the driver saying "look now", so it is also the trigger for
+    // the per-unit state dump. Driving it off the marker rather than off a timer is what
+    // makes an unattended assertion possible at all -- the test writes a marker, waits for
+    // the UNITSTATE line carrying that exact tag, and asserts on it. No polling race, and
+    // no extra IPC beyond the file channel that already exists.
+    ScFanoutLogUnitStates(g_lastMarker);
 }
 
 // ---------------------------------------------------------------------------

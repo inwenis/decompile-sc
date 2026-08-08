@@ -73,13 +73,21 @@ With parameters:
 | `-UnitCount`   | `36`                                                        | units to place (must be comfortably > 12) |
 | `-UnitType`    | `marine`                                                    | name (`marine`, `zergling`, `zealot`) or a raw units.dat integer id |
 | `-Player`      | `0`                                                         | 0-based slot, 0-7 (0 = Player 1)      |
+| `-GridSpacing` | `32`                                                        | pixels between units (32 = one tile). Units bigger than a tile need more, or the game silently drops the ones it cannot place |
+| `-KeepOwnr`    | off                                                         | leave the template's player slots alone — for a template that is already a playable single-player scenario |
+| `-ClearPlayerUnits` | off                                                    | drop the target player's existing units first, so the placed group is all one type |
 | `-TemplatePath`| `C:\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx` | source map for terrain/start location |
 | `-OutputPath`  | `C:\sc-work\1161-base\Maps\test-many-units.scx`            | where the generated map is written    |
 
 The `.ps1` is a thin wrapper; the actual logic is `tools/make_test_map.py`
-(same params as `--unit-count`/`--unit-type`/`--player`/`--template`/
-`--output`, plus `--validate-only PATH` to just re-validate an existing map
-and `--no-validate` to skip the post-generation check).
+(same params as `--unit-count`/`--unit-type`/`--player`/`--grid-spacing`/
+`--keep-ownr`/`--clear-player-units`/`--template`/`--output`, plus
+`--validate-only PATH` to just re-validate an existing map and `--no-validate`
+to skip the post-generation check).
+
+The unit block is **centred on the start location**. The camera opens centred there and shows
+about 20x12 tiles, so a block that grew right-and-down from that point (as it did before task 015)
+put its far half off screen and behind the HUD, where no drag box can reach it.
 
 ## Output location
 
@@ -182,3 +190,30 @@ the wrong unit, not broken the file.
   them) -- so mineral/gas patches from the template map are still present.
   This is intentional (keeps the map internally consistent) but means map
   size/complexity scales with whatever template is chosen.
+
+### THE BIG ONE: a map from a MELEE template plays as a melee game (task 015, unresolved)
+
+Load a map generated from the default `(2)Fading Realm.scx` ladder template, with Game Type set
+to **Use Map Settings**, and the player gets a **standard starting base** — the placed units are
+never created. Proved from inside the process, not from the screen: with a generated 36-unit map
+loaded, the plugin reports `types=[0x29:4 0x23:3 0x2A:1]` (four Drones, three Larva, one Overlord)
+for the boxed selection and `types=[0x83:1]` (a Hatchery) for a ctrl+click, while the map file
+demonstrably holds 36 units of the requested type and none of those.
+
+Generating from a stock **campaign** template instead (`--keep-ownr`) produces a map that loads,
+shows the mission briefing and enters the game — and then ends within about seven seconds. Two
+different campaign templates behave the same way, which points at the CHK round-trip disturbing
+trigger data rather than at any one mission.
+
+**So the generator produces structurally valid maps that do not yet play the way they are meant
+to.** Everything upstream of that is now verified in game: the map appears in Play Custom, the
+lobby offers a human slot, the units are in the file, the block is on screen. Two bugs found on
+the way there were fixed in task 015 and are worth not re-introducing:
+
+1. `OWNR` must be `0x06` (`PlayerType.HUMAN`, "Human (Open Slot)"), **not** `0x02`
+   (`HUMAN_OCCUPIED`). `0x02` is what the game writes at runtime for a slot a human has already
+   taken; with it, Play Custom refuses the map — *"This map does not have a slot for a human
+   participant."*, Human Slots: 0.
+2. Single-player Play Custom also refuses a map with no computer slot at all — *"You must have at
+   least one computer opponent."* — so exactly one slot is set to `COMPUTER` and given no units
+   anywhere on the map. The validator asserts both halves.
