@@ -68,6 +68,71 @@ if ($cmd -match '(?i)[/\\]git[/\\]+conductor') {
     exit 0
 }
 
+# HARD DENY (2026-08-08 registry-wipe incident, task018): a worker's sound-mute code
+# wrote to the user's real HKCU StarCraft key to mute it for test launches. One line —
+# `New-Item -Path <existing key> -Force` — deleted and recreated the key, wiping every
+# value under it (Gamma, scroll speed, Recent Maps, ...), not just the two it meant to
+# touch. AGENTS.md now carries a hard rule: never write live user state outside the
+# repo/working copy; prove registry-touching code against a throwaway path first, and
+# prefer a process-scoped mechanism (e.g. a Windows Core Audio session mute) over
+# mutating the registry at all. Read-only queries (Get-ItemProperty, Get-Item, reg
+# query) stay allowed — this only blocks writes/deletes.
+#
+# RESIDUAL LIMITS, stated plainly so this is never mistaken for a hard boundary:
+#   - This inspects the command STRING only. It would NOT have caught the original
+#     incident if that line had lived inside a .ps1 file instead of a direct shell
+#     command — a worker running `./some-script.ps1` that internally does the exact same
+#     `New-Item -Force` sails through unseen. Script-file review is what actually catches
+#     that case; this hook is a shell-command tripwire, not a static analyser.
+#   - It matches on the Blizzard key APPEARING in the command text at all, including
+#     inside quotes, comments, or prose — e.g. a message quoting this very incident as an
+#     example can trip it (happened once already, drafting the round-4 review of this
+#     task). That is a false-positive cost worth paying for the coverage; know it going
+#     in rather than being surprised by it.
+#   - Covers the literal Blizzard vendor key (parent, not just \Starcraft — deleting the
+#     parent wipes the child with it), the write verbs below (New-Item, Remove-Item,
+#     Remove-ItemProperty, Set-ItemProperty, New-ItemProperty, Set-Item), EVERY one of
+#     their built-in PowerShell alias spellings (ni, ri/rm/del/rd/erase, rp, sp, si —
+#     `rm`/`del`/`rd`/`erase` were missing from an earlier pass; a verifier's 23-case
+#     matrix caught it, `rm` being the most natural spelling an agent reaches for and the
+#     exact verb of the original incident), the raw .NET registry API, and `regedit /s`.
+#     It does not attempt to enumerate every possible way to reach the Win32 registry API
+#     (COM, P/Invoke under a different type name, a compiled helper exe, etc.) — those are
+#     unusual enough for a worker's routine task that requiring a human ask (message the
+#     conductor) for anything this pattern list does not recognise is the intended
+#     fallback, not a gap to keep chasing indefinitely.
+$blizzardKey        = '(?i)Blizzard\s+Entertainment'
+$registryWriteVerbs =
+    '(^|[\s;|&(])(New-Item|ni|Remove-Item|ri|rm|del|rd|erase|Remove-ItemProperty|rp|Set-ItemProperty|sp|New-ItemProperty|Set-Item|si)\b' +
+    '|reg(\.exe)?\s+(add|delete)\b' +
+    '|regedit(\.exe)?\s[^\r\n]*\/s\b' +
+    '|Microsoft\.Win32\.Registry|RegistryKey\]|\[Registry\]'
+if ($cmd -match $blizzardKey -and $cmd -match $registryWriteVerbs) {
+    @{
+        hookSpecificOutput = @{
+            hookEventName            = 'PreToolUse'
+            permissionDecision       = 'deny'
+            permissionDecisionReason = "writing to the StarCraft registry key (or its Blizzard Entertainment parent) is banned (2026-08-08 registry-wipe incident) — it is live user state, never a worker's to mutate. Use a process-scoped mechanism instead (e.g. a Windows Core Audio session mute), or a throwaway test key to prove code first. Read-only queries stay allowed. If this fired on quoted/illustrative text rather than a real command, that is a known false-positive class (see the comment above this block in config/guard-destructive.ps1) — rephrase to avoid the literal key name, or ask the conductor."
+        }
+    } | ConvertTo-Json -Depth 5
+    exit 0
+}
+# Same incident, general case: `New-Item -Force` against ANY registry path is the same
+# footgun regardless of which key -- -Force on an EXISTING key deletes and recreates it
+# (unlike file New-Item -Force, which just overwrites content). Message the conductor
+# if a real need for it comes up; this is rare enough to warrant a human in the loop.
+if ($cmd -match '(^|[\s;|&(])(New-Item|ni)\b' -and $cmd -match '-Force\b' -and
+    $cmd -match '[\s"'']HK(CU|LM|CR|U|CC):?[\\/]') {
+    @{
+        hookSpecificOutput = @{
+            hookEventName            = 'PreToolUse'
+            permissionDecision       = 'deny'
+            permissionDecisionReason = "'New-Item -Force' against a registry path is banned (2026-08-08 registry-wipe incident) — -Force on an EXISTING key deletes and recreates it, wiping every value under it. Test-Path first and only New-Item when the key is confirmed missing; message the conductor if -Force against a possibly-existing key is genuinely needed."
+        }
+    } | ConvertTo-Json -Depth 5
+    exit 0
+}
+
 # WORKER MODE (2026-07-17): an "ask" decision OVERRIDES bypass permissions and
 # throws a terminal prompt — it froze workers for hours on ROUTINE self-scoped
 # ops (killing their own dev server, rm-ing their own fixtures; 048 lost 3h).
