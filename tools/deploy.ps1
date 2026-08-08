@@ -311,16 +311,23 @@ $robocopyArgs = @(
     '/COPY:DAT', '/R:2', '/W:2', '/NFL', '/NDL', '/NP'
 )
 
-# --- preserved-data tripwire (task018, round 4): snapshot before, assert after ---------
+# --- preserved-data tripwire (task018, round 4/5): snapshot before, assert after -------
 # Three review rounds have now found a class of bug in this exact mirror step (a
 # preserved directory silently purged). A verifier catching it by hand every time does
 # not scale -- this makes a future regression a loud thrown error instead of something
 # that has to be noticed. Hashes, not just presence: a byte-for-byte survival claim
 # deserves a byte-for-byte check, and these directories are small (profiles/saves/
 # replays), so hashing everything in them costs nothing meaningful.
-$preservedDirs = @('characters', 'save', 'Maps\Replays')
+#
+# Covers all FIVE preserved classes, not just three -- round 4 shipped with the tripwire
+# watching characters\/save\/Maps\Replays\ only while the doc and the robocopy exclusion
+# list both already claimed all five; a verifier caught the mismatch. SCScrnShot_*.pcx is
+# a root-level FILE pattern, not a directory, so it is snapshotted separately
+# (-RootFilePatterns) rather than forced into the directory-shaped $RelativeDirs list.
+$preservedDirs = @('characters', 'save', 'Maps\Replays', 'maps\download')
+$preservedRootFilePatterns = @('SCScrnShot_*.pcx')
 function Get-ScPreservedSnapshot {
-    param([string]$Root, [string[]]$RelativeDirs)
+    param([string]$Root, [string[]]$RelativeDirs, [string[]]$RootFilePatterns = @())
     $snap = @{}
     foreach ($rel in $RelativeDirs) {
         $full = Join-Path $Root $rel
@@ -333,18 +340,28 @@ function Get-ScPreservedSnapshot {
             }
         } else { @() }
     }
+    if ($RootFilePatterns.Count -gt 0 -and (Test-Path -LiteralPath $Root)) {
+        $snap['<root patterns>'] = Get-ChildItem -LiteralPath $Root -File -Force -ErrorAction SilentlyContinue |
+            Where-Object { $name = $_.Name; @($RootFilePatterns | Where-Object { $name -like $_ }).Count -gt 0 } |
+            ForEach-Object {
+                [pscustomobject]@{
+                    Rel  = $_.Name
+                    Hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+                }
+            }
+    }
     return $snap
 }
-$preSnapshot = Get-ScPreservedSnapshot -Root $gameDeployDir -RelativeDirs $preservedDirs
+$preSnapshot = Get-ScPreservedSnapshot -Root $gameDeployDir -RelativeDirs $preservedDirs -RootFilePatterns $preservedRootFilePatterns
 
 & robocopy @robocopyArgs | Out-Host
 if ($LASTEXITCODE -ge 8) { throw "deploy: robocopy failed with exit code $LASTEXITCODE" }
 Write-Host "robocopy exit code $LASTEXITCODE (success)"
 Write-Host 'robocopy: characters\, save\, Maps\Replays\, maps\download\ and SCScrnShot_*.pcx excluded -- player data in the deploy dir is never touched'
 
-$postSnapshot = Get-ScPreservedSnapshot -Root $gameDeployDir -RelativeDirs $preservedDirs
+$postSnapshot = Get-ScPreservedSnapshot -Root $gameDeployDir -RelativeDirs $preservedDirs -RootFilePatterns $preservedRootFilePatterns
 $lost = @()
-foreach ($rel in $preservedDirs) {
+foreach ($rel in $preSnapshot.Keys) {
     $before = @{}; foreach ($f in $preSnapshot[$rel]) { $before[$f.Rel] = $f.Hash }
     $after  = @{};  foreach ($f in $postSnapshot[$rel]) { $after[$f.Rel] = $f.Hash }
     foreach ($path in $before.Keys) {
@@ -355,7 +372,7 @@ foreach ($rel in $preservedDirs) {
 if ($lost.Count -gt 0) {
     throw "deploy: preserved-data tripwire FAILED -- the mirror step above touched files it must not have:`n$($lost -join "`n")"
 }
-Write-Host "verify: preserved-data tripwire OK ($(($preSnapshot.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum) file(s) checked across characters\/save\/Maps\Replays\)"
+Write-Host "verify: preserved-data tripwire OK ($(($preSnapshot.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum) file(s) checked across all five preserved classes)"
 
 # --- 3. copy the plugin runtime (self-contained, see .DESCRIPTION) -----------
 Write-Host ''

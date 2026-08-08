@@ -90,16 +90,20 @@ if ($cmd -match '(?i)[/\\]git[/\\]+conductor') {
 #     task). That is a false-positive cost worth paying for the coverage; know it going
 #     in rather than being surprised by it.
 #   - Covers the literal Blizzard vendor key (parent, not just \Starcraft — deleting the
-#     parent wipes the child with it) and the write verbs below, their common PowerShell
-#     aliases, the raw .NET registry API, and `regedit /s`. It does not attempt to
-#     enumerate every possible way to reach the Win32 registry API (COM, P/Invoke under a
-#     different type name, a compiled helper exe, etc.) — those are unusual enough for a
-#     worker's routine task that requiring a human ask (message the conductor) for
-#     anything this pattern list does not recognise is the intended fallback, not a gap
-#     to keep chasing indefinitely.
+#     parent wipes the child with it), the write verbs below (New-Item, Remove-Item,
+#     Remove-ItemProperty, Set-ItemProperty, New-ItemProperty, Set-Item), EVERY one of
+#     their built-in PowerShell alias spellings (ni, ri/rm/del/rd/erase, rp, sp, si —
+#     `rm`/`del`/`rd`/`erase` were missing from an earlier pass; a verifier's 23-case
+#     matrix caught it, `rm` being the most natural spelling an agent reaches for and the
+#     exact verb of the original incident), the raw .NET registry API, and `regedit /s`.
+#     It does not attempt to enumerate every possible way to reach the Win32 registry API
+#     (COM, P/Invoke under a different type name, a compiled helper exe, etc.) — those are
+#     unusual enough for a worker's routine task that requiring a human ask (message the
+#     conductor) for anything this pattern list does not recognise is the intended
+#     fallback, not a gap to keep chasing indefinitely.
 $blizzardKey        = '(?i)Blizzard\s+Entertainment'
 $registryWriteVerbs =
-    '(^|[\s;|&(])(New-Item|ni|Remove-Item|ri|Remove-ItemProperty|rp|Set-ItemProperty|sp|New-ItemProperty)\b' +
+    '(^|[\s;|&(])(New-Item|ni|Remove-Item|ri|rm|del|rd|erase|Remove-ItemProperty|rp|Set-ItemProperty|sp|New-ItemProperty|Set-Item|si)\b' +
     '|reg(\.exe)?\s+(add|delete)\b' +
     '|regedit(\.exe)?\s[^\r\n]*\/s\b' +
     '|Microsoft\.Win32\.Registry|RegistryKey\]|\[Registry\]'

@@ -56,21 +56,31 @@ namespace ScAudio {
   internal enum EDataFlow { eRender = 0 }
   internal enum ERole { eConsole = 0 }
 
+  // [PreserveSig] on every method in every interface below, without exception. Without
+  // it the CLR treats the int return as an HRESULT and THROWS on any failure code
+  // instead of returning it -- silently turning every `if (... != 0) return false` /
+  // `continue` guard in TryMuteProcess into dead code. A verifier proved this live:
+  // IMMDeviceCollection.Item(9999) (an out-of-range index) threw ArgumentException
+  // instead of returning a failure HRESULT, because Item lacked [PreserveSig]. The
+  // failure mode that matters here: an endpoint invalidated mid-enumeration (a USB
+  // headset unplugged, an HDMI monitor sleeping -- both device classes are real
+  // possibilities, not theoretical) would throw an uncaught exception out of a launch
+  // script well after the game is already up and running.
   [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
   internal interface IMMDeviceEnumerator {
-    int EnumAudioEndpoints(EDataFlow dataFlow, int stateMask, out IMMDeviceCollection ppDevices);
-    int GetDefaultAudioEndpoint(EDataFlow dataFlow, ERole role, out IMMDevice ppDevice);
+    [PreserveSig] int EnumAudioEndpoints(EDataFlow dataFlow, int stateMask, out IMMDeviceCollection ppDevices);
+    [PreserveSig] int GetDefaultAudioEndpoint(EDataFlow dataFlow, ERole role, out IMMDevice ppDevice);
   }
 
   [ComImport, Guid("0BD7A1BE-7A1A-44DB-8397-CC5392387B5E"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
   internal interface IMMDeviceCollection {
-    int GetCount(out uint count);
-    int Item(uint index, out IMMDevice device);
+    [PreserveSig] int GetCount(out uint count);
+    [PreserveSig] int Item(uint index, out IMMDevice device);
   }
 
   [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
   internal interface IMMDevice {
-    int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams,
+    [PreserveSig] int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams,
                  [MarshalAs(UnmanagedType.IUnknown)] out object ppInterface);
   }
 
@@ -78,15 +88,15 @@ namespace ScAudio {
   // (never called) purely to keep GetSessionEnumerator at its real vtable slot.
   [ComImport, Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
   internal interface IAudioSessionManager2 {
-    int GetAudioSessionControl(IntPtr sessionGuid, int streamFlags, out IntPtr control);
-    int GetSimpleAudioVolume(IntPtr sessionGuid, int streamFlags, out IntPtr volume);
-    int GetSessionEnumerator(out IAudioSessionEnumerator sessionEnum);
+    [PreserveSig] int GetAudioSessionControl(IntPtr sessionGuid, int streamFlags, out IntPtr control);
+    [PreserveSig] int GetSimpleAudioVolume(IntPtr sessionGuid, int streamFlags, out IntPtr volume);
+    [PreserveSig] int GetSessionEnumerator(out IAudioSessionEnumerator sessionEnum);
   }
 
   [ComImport, Guid("E2F5BB11-0570-40CA-ACDD-3AA01277DEE8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
   internal interface IAudioSessionEnumerator {
-    int GetCount(out int count);
-    int GetSession(int index, out IAudioSessionControl session);
+    [PreserveSig] int GetCount(out int count);
+    [PreserveSig] int GetSession(int index, out IAudioSessionControl session);
   }
 
   // A COM handle only -- every real call goes through .NET's automatic QueryInterface
@@ -99,17 +109,17 @@ namespace ScAudio {
   // GetProcessId lands at its real vtable slot (the 3rd of this interface's own 5).
   [ComImport, Guid("BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
   internal interface IAudioSessionControl2 {
-    int GetState(out int state);
-    int GetDisplayName(out IntPtr name);
-    int SetDisplayName(IntPtr name, ref Guid ctx);
-    int GetIconPath(out IntPtr path);
-    int SetIconPath(IntPtr path, ref Guid ctx);
-    int GetGroupingParam(out Guid group);
-    int SetGroupingParam(ref Guid group, ref Guid ctx);
-    int RegisterAudioSessionNotification(IntPtr client);
-    int UnregisterAudioSessionNotification(IntPtr client);
-    int GetSessionIdentifier(out IntPtr id);
-    int GetSessionInstanceIdentifier(out IntPtr id);
+    [PreserveSig] int GetState(out int state);
+    [PreserveSig] int GetDisplayName(out IntPtr name);
+    [PreserveSig] int SetDisplayName(IntPtr name, ref Guid ctx);
+    [PreserveSig] int GetIconPath(out IntPtr path);
+    [PreserveSig] int SetIconPath(IntPtr path, ref Guid ctx);
+    [PreserveSig] int GetGroupingParam(out Guid group);
+    [PreserveSig] int SetGroupingParam(ref Guid group, ref Guid ctx);
+    [PreserveSig] int RegisterAudioSessionNotification(IntPtr client);
+    [PreserveSig] int UnregisterAudioSessionNotification(IntPtr client);
+    [PreserveSig] int GetSessionIdentifier(out IntPtr id);
+    [PreserveSig] int GetSessionInstanceIdentifier(out IntPtr id);
     [PreserveSig] int GetProcessId(out uint pid);
   }
 

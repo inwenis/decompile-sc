@@ -324,16 +324,28 @@ try {
     # rather than merely skipping it (cheap insurance -- see "Sound" for what that
     # guards against). Process-scoped, every active render endpoint checked -- see
     # tools/plugin/sc-audio-mute.ps1.
+    # Wrapped: audio bookkeeping must never fail a launch that has already succeeded.
+    # -Sound runs on EVERY USER launch (the deployed shortcut always passes it), unguarded
+    # against $ErrorActionPreference='Stop' -- a verifier flagged that a COM hiccup here
+    # would otherwise report "failed to launch" to a user over a game that is running
+    # fine. The -Sound branch also calls the interop directly rather than through
+    # Set-ScProcessMuted's poll loop -- this is pure insurance (see "Sound" .DESCRIPTION),
+    # not something worth costing the user up to 5s of polling on every launch for.
     if ($gamePid -gt 0) {
-        if ($Sound) {
-            Set-ScProcessMuted -ProcessId $gamePid -Mute $false -TimeoutSec 5 | Out-Null
-            Write-Host 'run-with-plugin: -Sound — ensured the game''s audio session is not muted'
+        try {
+            if ($Sound) {
+                [ScAudio.Interop]::TryMuteProcess([uint32]$gamePid, $false) | Out-Null
+                Write-Host 'run-with-plugin: -Sound — ensured the game''s audio session is not muted'
+            }
+            elseif (Set-ScProcessMuted -ProcessId $gamePid -Mute $true) {
+                Write-Host 'run-with-plugin: sound muted for this launch (process-scoped WASAPI session mute, every active render endpoint) -- pass -Sound to keep audio on'
+            }
+            else {
+                Write-Warning 'run-with-plugin: could not find an audio session to mute within the timeout -- launch continues audible. Pass -Sound to silence this warning if that is expected.'
+            }
         }
-        elseif (Set-ScProcessMuted -ProcessId $gamePid -Mute $true) {
-            Write-Host 'run-with-plugin: sound muted for this launch (process-scoped WASAPI session mute, every active render endpoint) -- pass -Sound to keep audio on'
-        }
-        else {
-            Write-Warning 'run-with-plugin: could not find an audio session to mute within the timeout -- launch continues audible. Pass -Sound to silence this warning if that is expected.'
+        catch {
+            Write-Warning "run-with-plugin: sound mute/unmute failed unexpectedly ($($_.Exception.Message)) -- the launch itself is unaffected."
         }
     }
 
@@ -348,8 +360,17 @@ try {
         Write-Warning 'run-with-plugin: could not parse the pid from scinject output; falling back to resolving the game by process name.'
         & (Join-Path $scriptDir 'check-game-windows.ps1')
     }
-    if ($LASTEXITCODE -eq 1) {
-        throw 'run-with-plugin: the game has an error dialog open — the launch is NOT healthy.'
+    # Any non-zero is unhealthy, not just exit 1 (error dialog). check-game-windows.ps1
+    # exits 3 when the pid is not running at all -- reachable here because scinject
+    # returns as soon as injection succeeds, and the game then has the ~2s settle sleep
+    # above to die on its own (partially-mirrored deploy tree, a locked MPQ, a
+    # second-instance self-exit). A verifier found this falls through silently on the
+    # deployed launcher's play path: exit 3 was not 1, so nothing threw, the hidden pwsh
+    # exited 0, and the user got no window and no error -- the exact symptom the
+    # -NoLaunchLock fix above exists to prevent, from a different cause. Throwing on any
+    # non-zero closes that regardless of which check-game-windows.ps1 exit code it is.
+    if ($LASTEXITCODE -ne 0) {
+        throw "run-with-plugin: the game is NOT healthy after launch (check-game-windows.ps1 exit=$LASTEXITCODE -- 1=error dialog open, 3=process not running/died immediately)."
     }
 }
 finally {
