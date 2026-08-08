@@ -42,7 +42,12 @@ param(
     # Keep the template's TRIG/MBRF sections. NOT for a test fixture: every stock map
     # ships triggers that end the game, and they fire within seconds of loading a
     # generated map (tools/README-test-map.md, "why generated maps used not to play").
-    [switch]$KeepTriggers
+    [switch]$KeepTriggers,
+    # Race written into SIDE for the human and computer slots. Defaults to the race the
+    # placed unit type belongs to. It must not be left as a ladder template's "User
+    # Selectable" -- that slot gets MELEE starting units even under Use Map Settings.
+    [ValidateSet('zerg', 'terran', 'protoss')]
+    [string]$Race
 )
 
 $ErrorActionPreference = 'Stop'
@@ -72,6 +77,7 @@ $pyArgs = @(
 if ($KeepOwnr) { $pyArgs += '--keep-ownr' }
 if ($ClearPlayerUnits) { $pyArgs += '--clear-player-units' }
 if ($KeepTriggers) { $pyArgs += '--keep-triggers' }
+if ($Race) { $pyArgs += @('--race', $Race) }
 
 & $python @pyArgs
 exit $LASTEXITCODE

@@ -538,26 +538,36 @@ Task 016 root-caused both. Neither was the CHK round-trip that was suspected at 
    StarCraft gives such a slot the standard **melee starting units** even under Use Map Settings,
    and never creates that player's placed units. Ruled out first, by measurement, not by
    argument: the Game Type combo was opened and *Use Map Settings* picked explicitly from its
-   list, and the histogram above did not change; and with task 016's raw-CHK generator the file
-   differs from the stock ladder map in `OWNR`, `SIDE`, `UNIT` and `TRIG` **and nothing else**,
-   so no other section can be responsible. Writing an explicit race into `SIDE` — one byte per
-   slot — turns `types=[0x2A:1 0x23:3 0x29:4]` into `types=[0x67:36]`.
+   list (SC's dropdowns select on button-*up*, so a plain click chooses nothing and the box's
+   label is not evidence — `Send-ScDropdownPick`), and the histogram above did not change. And
+   the map that produced that histogram came from task 016's raw-CHK generator at a point where
+   it did not touch `SIDE`: it differed from the stock ladder map in `OWNR`, `UNIT` and `TRIG`
+   **and nothing else**, with `SIDE` still holding the template's own `0x05` — so no section
+   outside those three could be responsible, and `SIDE` was the untouched one left. Writing an
+   explicit race into it — one byte per slot — turns `types=[0x2A:1 0x23:3 0x29:4]` into
+   `types=[0x67:36]`.
 2. **The campaign map is ended by its own mission triggers.** `TRIG` came across the old richchk
-   round-trip byte-identical (measured, 50400 bytes on `(1)Enslavers01.scm`), and a raw-CHK map
-   generated from `(1)Enslavers02b.scm` differs from the stock file in `UNIT` alone and still
-   ends. That map ships 30 triggers, six of which end the game on conditions about *which units
-   exist* — which is exactly what a generator changes. Predicted from the trigger dump and then
-   confirmed in game: with triggers kept, *"Congratulations! You are victorious!"* about nine
-   seconds in; with them stripped, the map runs indefinitely. Full write-up in
-   `tools/README-test-map.md`.
+   round-trip byte-identical (measured, 50400 bytes on `(1)Enslavers01.scm`), so the round-trip
+   never touched a trigger byte; and the ending is not something any edit provokes — a raw-CHK
+   map from `(1)Enslavers02b.scm` differing from the stock file in `UNIT` alone played on past
+   60 s and had to be shut down by hand. That map ships 30 triggers, six of which end the game on
+   conditions about *which units exist*, which is exactly what a generator changes. Predicted
+   from the trigger dump before the run, then watched happen: with triggers kept and `OWNR`
+   rewritten, *"Congratulations! You are victorious!"* about nine seconds in; with them stripped,
+   the map runs indefinitely. That end was seen on a **captured frame**, not in the log — the
+   observer reports selection and unit state, and an empty selection in a menu is
+   indistinguishable from one in game. The log-backed form of the same property is §8.2's idle
+   step. Full write-up in `tools/README-test-map.md`.
 
 A third one, invisible until the finished test was run repeatedly: **`FORC` bit `0x01`,
-"randomize start location"**, which `(2)Fading Realm.scx` sets on the force every slot belongs
-to. The engine implements it by permuting the participants among the start-location *owners* —
-by changing which player id you play as, not where the camera looks. On a two-slot generated map
-that is a coin flip, and losing it puts the human on player 1 while every placed unit belongs to
-player 0: `player=1/1/1`, `UNITSTATE n=0`, a black screen. Clearing the bit makes it
-deterministic (`player=0/0/0` on both runs since).
+"randomize start location"** (staredit.net CHK spec), which `(2)Fading Realm.scx` sets on the
+force every slot belongs to. Of three in-game loads of an otherwise-finished fixture — same file,
+same menu path, same lobby — one came up as `player=1/1/1`, `UNITSTATE n=0`, a black screen,
+while the other two came up as player 0 with the expected 36 units. So with the bit set the
+human's own player id is not fixed, and on any slot but 0 they own none of the placed units. The
+mechanism (presumably a permutation of participants across start-location owners) is an inference
+from that, not a claim proved here. Three runs since clearing it, all `player=0/0/0` — a small
+sample, and not the argument: a fixture must not leave the choice to the engine at all.
 
 All three fixes live in `tools/make_test_map.py` and are asserted by its validator. The
 read-only tool the evidence came out of is `tools/inspect_map.py`
@@ -569,15 +579,19 @@ read-only tool the evidence came out of is `tools/inspect_map.py`
 generates a 36-Lurker Use-Map-Settings map at run time, loads it through Play Custom, and deletes
 it afterwards. Burrow is innate to Lurkers, so the map needs no tech state at all.
 
+Verbatim from `C:\sc-work\logs\016-burrow-fanout.log`, one run, nothing elided:
+
 ```
-UNITSTATE [boxed]    n=36 live=36 visible=12 overflow=24 orders=[0x03:36] types=[0x67:36] burrowed=0/36
-UNITSTATE [idle]     n=36 live=36 visible=12 overflow=24 orders=[0x03:36] types=[0x67:36] burrowed=0/36
-  -- 120 s later: still 36 units, still nobody burrowed. Nothing in this map moves on its own.
-CMD id=0x2C len=2 bytes=[2C 00]
-FANOUT start: cmd=0x2C len=2 units=36 (visible 12 + overflow 24) -> 3 Select+order pairs
-FANOUT done: 3/3 chunks emitted, 84 bytes this turn
-UNITSTATE [burrowed] n=36 live=36 visible=12 overflow=24 orders=[0x03:36] orders2=[0x6D:36] types=[0x67:36] burrowed=36/36
+[2026-08-08 05:32:07.201] UNITSTATE [boxed-1] n=36 live=36 visible=12 overflow=24 orders=[0x03:36] orders2=[0x17:36] types=[0x67:36] burrowed=0/36
+[2026-08-08 05:34:11.036] UNITSTATE [idle-2] n=36 live=36 visible=12 overflow=24 orders=[0x03:36] orders2=[0x17:36] types=[0x67:36] burrowed=0/36
+[2026-08-08 05:34:11.430] CMD id=0x2C len=2 bytes=[2C 00]
+[2026-08-08 05:34:11.432] FANOUT start: cmd=0x2C len=2 units=36 (visible 12 + overflow 24) -> 3 Select+order pairs
+[2026-08-08 05:34:11.432] FANOUT done: 3/3 chunks emitted, 84 bytes this turn
+[2026-08-08 05:34:15.873] UNITSTATE [burrowed-3] n=36 live=36 visible=12 overflow=24 orders=[0x03:36] orders2=[0x6D:36] types=[0x67:36] burrowed=36/36
 ```
+
+The two minutes between `boxed-1` and `idle-2` are the idle step: same 36 units, same single
+order bucket, still `burrowed=0/36`. Nothing in this map moves on its own.
 
 `0x2C` is the Burrow command id (`research/data/command-opcodes.tsv`: dispatcher length 2,
 handler `0x004C1FA0`, LOOP selection shape, policy fanout — and §7.1's derivation of

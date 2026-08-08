@@ -103,11 +103,47 @@ def chk_name(name: str) -> str:
     return name.ljust(4)
 
 
+# Chunks the engine ADDS UP rather than overwrites when a name appears more than
+# once (staredit.net CHK spec): a second UNIT chunk places more units, a second
+# TRIG chunk runs more triggers. For those, "edit the last one" is wrong -- blanking
+# the last TRIG of a stacked pair would leave the first pair's victory triggers
+# running while this tool's own validator reported success. This generator refuses
+# such a template outright (see require_single_chunk) rather than editing it wrongly.
+ADDITIVE_SECTIONS = ("UNIT", "TRIG", "MBRF", "THG2")
+
+
+def count_sections(sections: list[ChkSection], name: str) -> int:
+    padded = chk_name(name)
+    return sum(1 for s in sections if s.name == padded)
+
+
+def require_single_chunk(sections: list[ChkSection], template: Path) -> None:
+    """Refuse a template that duplicates any chunk this tool edits or empties.
+
+    Same reasoning as the negative-size refusal in parse_chk_sections: a file this
+    tool cannot represent faithfully should fail loudly, not be quietly changed
+    into something else.
+    """
+    for name in ADDITIVE_SECTIONS:
+        n = count_sections(sections, name)
+        if n > 1:
+            raise ValueError(
+                f"Template {template} has {n} {name} chunks. The engine ADDS UP repeated "
+                f"{name} chunks rather than letting the last one win, so editing one of "
+                f"them would leave the others in force; refusing rather than producing a "
+                f"map whose contents do not match what this tool reports."
+            )
+
+
 def find_section(sections: list[ChkSection], name: str) -> int:
     """Index of the LAST chunk with this name, or -1.
 
-    Last, not first: the engine applies chunks in file order, so where a name
-    appears more than once the final one is the one that wins.
+    Last, not first, because the engine applies chunks in file order and for an
+    OVERWRITING section (OWNR, SIDE, FORC, DIM ...) the final one is the one that
+    wins. That premise does NOT hold for the additive sections listed in
+    ADDITIVE_SECTIONS -- templates that duplicate those are refused up front by
+    require_single_chunk, which is what keeps this function's answer correct for
+    every file this tool will actually edit.
     """
     padded = chk_name(name)
     for i in range(len(sections) - 1, -1, -1):
@@ -413,6 +449,7 @@ def generate_map(
             f"Template {template}: this tool's CHK parser does not round-trip it "
             "byte-for-byte; refusing to edit a file it does not fully understand."
         )
+    require_single_chunk(sections, template)
 
     unit_idx = require_section(sections, "UNIT", template)
     existing_records = parse_unit_records(sections[unit_idx].payload)
@@ -495,19 +532,22 @@ def generate_map(
         sides[pick_opponent_slot(player)] = race
         sections = replace_section(sections, "SIDE", bytes(sides), template)
 
-        # AND THE PLAYERS MUST NOT BE SHUFFLED BETWEEN SLOTS (task 016).
+        # AND THE HUMAN MUST LAND ON THE SLOT THAT OWNS THE UNITS (task 016).
         #
-        # FORC's last four bytes are per-force property flags, and bit 0x01 is "randomize
-        # start location". A Blizzard ladder map sets it -- (2)Fading Realm.scx carries
-        # 0x01 on Force 1, which every slot belongs to. StarCraft implements that by
-        # permuting the participants among the start-location OWNERS, i.e. by changing
-        # which player id you play as; it is not a camera decision. On a two-slot generated
-        # map that is a coin flip, and losing it means the human is player 1 while all the
-        # placed units belong to player 0: you spawn in the dark owning nothing.
-        # Observed exactly that on 2026-08-08 -- the plugin logged `player=1/1/1` and
-        # `UNITSTATE n=0` on a run whose map, menus and lobby were identical to a passing
-        # one. Clearing the bit makes the assignment deterministic. The other three bits
-        # (allied, allied victory, shared vision) are left alone.
+        # FORC's last four bytes are per-force property flags; bit 0x01 is "randomize
+        # start location" (staredit.net CHK spec). A Blizzard ladder map sets it --
+        # (2)Fading Realm.scx carries 0x01 on Force 1, which every slot belongs to.
+        #
+        # What was OBSERVED, not what the engine is assumed to do internally: across
+        # three in-game loads of an otherwise-finished fixture, one came up with the
+        # plugin logging `player=1/1/1` and `UNITSTATE n=0` on a black screen, while the
+        # other two logged player 0 and the expected 36 units -- same map file, same menu
+        # path, same lobby. So with this bit set the human's own player id is not fixed,
+        # and when it is not slot 0 they own none of the placed units. Three runs since
+        # clearing it, all `player=0/0/0`; that is a small sample, and the reason to
+        # clear the bit is that a fixture must not depend on which slot the engine picks
+        # at all. The other three bits (allied, allied victory, shared vision) are left
+        # alone.
         forc_idx = require_section(sections, "FORC", template)
         forc = bytearray(sections[forc_idx].payload)
         if len(forc) != 20:
@@ -576,6 +616,9 @@ def validate_map(
 ) -> None:
     unit_id = resolve_unit_id(unit_type)
     sections = parse_chk_sections(read_chk_bytes(path))
+    # Duplicated additive chunks would make every count below a half-truth: the
+    # numbers would describe one chunk while the game reads them all.
+    require_single_chunk(sections, path)
 
     unit_idx = find_section(sections, "UNIT")
     if unit_idx < 0:
@@ -680,16 +723,23 @@ def validate_map(
         ]
         if random_start:
             raise AssertionError(
-                f"{path}: force(s) {[i + 1 for i in random_start]} still randomise start "
-                f"locations (FORC flag 0x01); the human would be reassigned to another "
-                f"player slot at random, owning none of the placed units"
+                f"{path}: force(s) {[i + 1 for i in random_start]} still carry the FORC "
+                f"'randomize start location' bit (0x01); with it set the human's player "
+                f"id is not fixed, and on a slot other than {player} they own none of the "
+                f"placed units"
             )
 
     changed = None
     if template is not None and template.exists():
         changed = diff_against_template(path, template)
-        expected = {"UNIT", "TRIG", "MBRF"} | (
-            set() if keep_ownr else {"OWNR", "SIDE", "FORC"})
+        # Only the sections this run actually edited may differ. With --keep-triggers
+        # the tool does not touch TRIG/MBRF at all, so whitelisting them there would
+        # let a real difference in them pass unnoticed -- same reasoning as keep_ownr.
+        expected = {"UNIT"}
+        if not keep_ownr:
+            expected |= {"OWNR", "SIDE", "FORC"}
+        if not keep_triggers:
+            expected |= {"TRIG", "MBRF"}
         unexpected = [c for c in changed if c not in expected]
         if unexpected:
             raise AssertionError(
@@ -716,8 +766,9 @@ def validate_map(
     if forc_idx >= 0:
         flags = list(sections[forc_idx].payload[16:20])
         print("  FORC force flags " + " ".join(f"0x{f:02X}" for f in flags)
-              + (" -- no force randomises start locations, so the human is always "
-                 f"player {player}" if not any(f & FORC_RANDOM_START for f in flags) else ""))
+              + (" -- no force randomises start locations, so the human's player id is "
+                 f"not left to the engine to pick"
+                 if not any(f & FORC_RANDOM_START for f in flags) else ""))
     print(f"  TRIG holds {trig_len} byte(s)"
           + ("" if keep_triggers else " -- nothing can end the game on its own"))
     print(f"  terrain {width}x{height} tiles")

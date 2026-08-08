@@ -313,15 +313,18 @@ function Send-ScDropdownPick {
     .SYNOPSIS
     Pick the Nth entry of one of the game's menu dropdowns (Game Type, race, ...).
     .DESCRIPTION
-    These are press-and-hold controls, not click-to-open ones: the list exists only
-    between button-down and button-up, and the entry under the cursor at button-up is
-    the one selected. A normal Send-ScClick therefore opens and closes the list without
-    choosing anything -- which looks exactly like "the dropdown already said what I
-    wanted", because the box goes on showing its old label.
+    These are press-and-hold controls, not click-to-open ones: the entry under the
+    cursor at button-UP is the one selected, and the list is on screen only while the
+    button is held.
 
-    -Index 0 is the first entry BELOW the closed box. Entry pitch was measured on the
-    1.16.1 Create Game screen at 640x480 (task 016): first entry 16px below the box's
-    own centre line, 15px apart after that.
+    How that was established (task 016, Game Type combo on the Create Game screen):
+    a plain Send-ScClick on the box left the frame captured a second later showing the
+    box closed with its label unchanged, and the game behaved the same as with no click
+    at all -- so a click is not a way to choose, and the label alone says nothing about
+    what is set. Posting WM_LBUTTONDOWN *without* the matching UP and capturing the frame
+    then shows the list open; the offsets below were read off that frame, at a 640x480
+    client: first entry 16px below the closed box's own centre line, 15px apart after
+    that. -Index 0 is that first entry.
     #>
     [CmdletBinding()]
     param(

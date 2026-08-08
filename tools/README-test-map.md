@@ -26,8 +26,11 @@ big group and issue one order in a couple of seconds.
 `tools/make_test_map.py` patches the template's CHK **in place, as raw
 bytes**. A CHK file is a flat sequence of `<4-byte name><i32 size><size
 bytes>` chunks; the generator reads them into a list, replaces the payload of
-the three or four chunks it must change, and re-serialises. Every other chunk
-comes across unmodified, in its original order, duplicates included.
+the handful of chunks it must change, and re-serialises. Every other chunk
+comes across unmodified, in its original order, duplicates included. A template
+that duplicates a chunk the engine *adds up* rather than overwrites (`UNIT`,
+`TRIG`, `MBRF`, `THG2`) is refused outright, since editing one of a stacked
+pair would leave the other in force.
 
 It does **not** decode and re-encode the CHK through
 [richchk](https://github.com/sethmachine/richchk) any more, which is what
@@ -45,8 +48,9 @@ None of that turned out to be the reason generated maps did not play (see
 below), but a generator whose output differs from its template in ways nobody
 chose is a generator whose failures cannot be reasoned about. The raw-byte
 path removes the question: the validator now asserts the output differs from
-its template **only** in `OWNR`, `SIDE`, `FORC`, `UNIT` and `TRIG`, and refuses
-otherwise.
+its template **only in the sections this run actually edited** — `UNIT` always,
+`OWNR`/`SIDE`/`FORC` when the player slots were rewritten, `TRIG`/`MBRF` when
+the triggers were stripped — and refuses otherwise.
 
 richchk is still a dependency, and still does the half it is good at: reading
 `staredit\scenario.chk` out of the MPQ and writing it back, through its
@@ -247,8 +251,9 @@ the wrong unit, not broken the file.
 
 ## Why generated maps used not to play (task 015 found it, task 016 root-caused it)
 
-Two separate failures kept every generated map from being usable, and **neither was the CHK
-round-trip everyone suspected.** Both are now fixed, and both are asserted by the validator.
+Three separate failures kept every generated map from being usable, and **none of them was the
+CHK round-trip everyone suspected.** All three are now fixed, and all three are asserted by the
+validator.
 
 ### 1. A melee-template map played as a MELEE game — `SIDE` said "User Selectable"
 
@@ -260,13 +265,16 @@ never created. Read from inside the process rather than off the screen: with a g
 containing none of the 36 units the file holds.
 
 It was not the lobby. Re-run on 2026-08-08 with the Game Type combo opened and *"Use Map
-Settings"* picked explicitly from its list (SC's dropdowns are press-and-hold; a plain click
-opens and closes them without selecting, which is how the box goes on showing a label that is not
-what is set), the result was byte-for-byte the same histogram.
+Settings"* picked explicitly from its list (SC's dropdowns are press-and-hold: the entry under
+the cursor at button-*up* is what gets chosen, so a plain click cannot select anything and the
+box's label is not evidence of what is set — `Send-ScDropdownPick` in `drive-game.ps1`), the
+result was byte-for-byte the same histogram.
 
-It was not the round-trip either. With the raw-CHK patcher above, the generated file differed
-from the stock ladder map in `OWNR`, `SIDE`, `UNIT` and `TRIG` **and nothing else**, and it still
-played as melee.
+It was not the round-trip either. The map that produced that histogram came from the raw-CHK
+patcher above, at a point where the tool did not touch `SIDE` yet: it differed from the stock
+ladder map in `OWNR`, `UNIT` and `TRIG` **and nothing else**, with `SIDE` still carrying the
+template's own `0x05` for every slot — and it still played as melee. So no section outside those
+three could be responsible, and `SIDE` was the untouched one left holding the bag.
 
 The cause is the `SIDE` section — one byte per player, that slot's race. A Blizzard **ladder**
 map carries `0x05` "**User Selectable**" for its human slots, because a ladder player picks a
@@ -295,12 +303,16 @@ mission and then ended within about seven seconds. The suspicion was that the CH
 disturbed trigger data. It had not:
 
 - Diffed field by field across the old richchk round-trip, `TRIG` came back **byte-identical**
-  (50400 bytes for `(1)Enslavers01.scm`), and so did `MBRF`, `STR` and `UPRP`.
-- With the raw-CHK patcher, a map generated from `(1)Enslavers02b.scm` differs from the stock
-  file in the `UNIT` section **alone** — and still ends.
+  (50400 bytes for `(1)Enslavers01.scm`), and so did `MBRF`, `STR` and `UPRP`. Whatever the
+  round-trip did to that file, it did not touch a single trigger byte.
+- And the ending is not something *any* edit provokes: with the raw-CHK patcher, a map from
+  `(1)Enslavers02b.scm` differing from the stock file in the `UNIT` section **alone**
+  (`-KeepOwnr -KeepTriggers -ClearPlayerUnits -Player 1`) played on past 60 s with its 36 Lurkers
+  alive and had to be shut down by hand.
 
-A campaign map is a *mission*, and it ships the triggers that end it. `(1)Enslavers02b.scm` has
-30 triggers, six of which end the game, all executed by Force 1 (the human's force):
+A campaign map is a *mission*, and it ships the triggers that end it. Which one fires depends on
+exactly which units the generator added or removed. `(1)Enslavers02b.scm` has 30 triggers, six of
+which end the game, all executed by Force 1 (the human's force):
 
 | trigger | condition | action |
 | ------- | ---------------------------------------------- | ------------------------------- |
@@ -315,10 +327,18 @@ fire; let it rewrite `OWNR` and every other player's units are never created, so
 unit-168s belong to player 6. The leading `Wait` + `Pause Game` in those action chains is why it
 takes seconds rather than being instant.
 
-Predicted from the trigger dump and then confirmed in game on 2026-08-08: a map generated from
-`(1)Enslavers02b.scm` with `-KeepTriggers` put *"Congratulations! You are victorious!"* on screen
-about nine seconds after the mission started. The same map with the triggers stripped — the
-default — runs indefinitely.
+Predicted from the trigger dump before the run, then watched happen on 2026-08-08: the same
+template with `-KeepTriggers` but `OWNR` rewritten (so players 3-6 are inactive and their
+unit-168s never exist) put *"Congratulations! You are victorious!"* on screen about nine seconds
+after the mission started. The same template with the triggers stripped — the default — runs
+indefinitely.
+
+That one is a **screen** observation, from a captured frame, and it is the only claim in this
+document that is: the plugin log has no line that says "the mission ended", because the observer
+reports selection and unit state, and an empty selection in a menu looks the same as an empty
+selection in game. The log-backed version of the same property is in
+`tools/plugin/test-burrow-fanout.ps1`, which after 120 s re-boxes and asserts
+`live=36` — a claim you cannot make from a menu.
 
 So: **a test fixture must carry no triggers at all.** A ladder template is no safer than a
 campaign one; decoded out of `(2)Fading Realm.scx`, a Blizzard melee map ships the three standard
@@ -328,22 +348,26 @@ only other participant is the unit-less computer opponent. (That one is read fro
 watched in game: the fix landed before it was ever loaded with its triggers intact. The campaign
 case above is the one confirmed on screen.)
 
-### 3. Half the runs spawned the player in the dark, owning nothing — `FORC` randomised slots
+### 3. The human did not always land on the slot that owns the units — `FORC` randomised it
 
-Found while running the finished test repeatedly, which is the only way this one shows up: with
-the map, the menus and the lobby byte-for-byte identical to a passing run, the game came up on a
-black screen with an empty minimap and the plugin reported `player=1/1/1`, `UNITSTATE n=0`.
+Found while running the finished test repeatedly, which is the only way this one shows up. Of
+three in-game loads of an otherwise-finished fixture — same map file, same menu path, same lobby
+— **one** came up on a black screen with an empty minimap, the plugin reporting `player=1/1/1`
+and `UNITSTATE n=0`; the other two reported player 0 and the expected 36 Lurkers.
 
 `FORC`'s last four bytes are per-force property flags, and bit `0x01` is *randomize start
-location*. `(2)Fading Realm.scx` sets it on Force 1, which every slot belongs to. StarCraft
-implements that by permuting the participants among the **start-location owners** — that is, by
-changing which player id you play as. It is not a camera decision. On a two-slot generated map
-that is a coin flip, and losing it makes the human player 1 while all 36 placed units belong to
-player 0.
+location* (staredit.net CHK spec). `(2)Fading Realm.scx` sets it on Force 1, which every slot
+belongs to.
 
-The generator now clears that bit on every force (leaving allied / allied-victory / shared-vision
-alone), and the validator refuses a map that still has it. Two consecutive full test runs after
-the fix both logged `player=0/0/0`.
+What that run shows is the **observable**: with the bit set, the human's own player id is not
+fixed, and when it comes out as slot 1 they own none of the units, which are all on slot 0. The
+mechanism inside the engine — presumably a permutation of participants across the
+start-location owners — is an inference from that and is not claimed here as proved.
+
+The generator now clears the bit on every force (leaving allied / allied-victory / shared-vision
+alone) and the validator refuses a map that still carries it. Three full test runs since, all
+`player=0/0/0` — a small sample, and deliberately not the argument: the point is that a fixture
+must not depend on which slot the engine picks at all.
 
 ### Still true, from task 015 — do not re-introduce
 

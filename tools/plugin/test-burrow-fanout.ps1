@@ -162,10 +162,11 @@ try {
             (@($gen | Select-String -Pattern 'TRIG holds 0 byte').Count -gt 0)
         Assert-That 'the map differs from its template only where this tool meant it to' `
             (@($gen | Select-String -Pattern 'differs from the template ONLY in: OWNR SIDE UNIT TRIG FORC').Count -gt 0)
-        # If a force could still randomise start locations, the human would be reassigned
-        # to another player slot about half the time and would own none of the placed
-        # units -- a coin-flip failure, which is worse than a reliable one.
-        Assert-That 'the human is always the player who owns the units' `
+        # With the FORC "randomize start location" bit set, the human's player id is not
+        # fixed: one of three otherwise-identical in-game loads came up as player 1,
+        # owning none of the placed units. An intermittent failure is worse than a
+        # reliable one, so the fixture must not leave the choice open.
+        Assert-That "the human's player id is not left to the engine to pick" `
             (@($gen | Select-String -Pattern 'no force randomises start locations').Count -gt 0)
     }
 
