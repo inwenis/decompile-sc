@@ -902,6 +902,24 @@ static void SetHudGlobals(DWORD dialog, DWORD portrait) {
     *(BYTE*) FakeRt(SC_VA_STAT_DIRTY)           = 0;
 }
 
+// Keep the fake clientSelectionGroup (0x00597208) in sync with the engine's
+// visible <=12, so RefreshShadow's engine-selection comparison runs for real in
+// the test instead of firing spuriously on a zero page. `n` units, zero-padded.
+static void SetEngineSelection(const DWORD* units, int n) {
+    DWORD* g = (DWORD*)FakeRt(SC_VA_CLIENT_SELECTION_GROUP);
+    for (int i = 0; i < 12; ++i) g[i] = (i < n) ? units[i] : 0;
+}
+static void SetEngineSelectionFirst(int n) {   // FakeUnit(0..n-1)
+    DWORD u[12];
+    for (int i = 0; i < n && i < 12; ++i) u[i] = FakeUnit(i);
+    SetEngineSelection(u, n < 12 ? n : 12);
+}
+
+// A >12 or <=12 selection PLUS the matching engine visible selection, so
+// RefreshShadow's engine-mismatch snap does not fire spuriously.
+static void Drive36Sync(void)   { DriveSelection(36); SetEngineSelectionFirst(12); }
+static void SmallSync(int n)    { SmallSelection(n);  SetEngineSelectionFirst(n); }
+
 static void ResetHudCounters(void) {
     g_ctlShows = g_ctlHides = g_ctlUpdates = 0;
     g_engInteractCalls = g_origDispatchCalls = 0;
@@ -932,7 +950,7 @@ static void HudRowTests(void) {
 
     printf("\n    a <=12 selection stays stock: the engine's dispatcher runs, nothing touched\n");
     ResetHudCounters();
-    SmallSelection(10);
+    SmallSync(10);
     ScHudRowOnDispatch();
     Check("the original dispatcher ran", (long long)g_origDispatchCalls, 1);
     Check("button 1 interact still the engine's",
@@ -943,7 +961,7 @@ static void HudRowTests(void) {
 
     printf("\n    36 units: page 1 is the ENGINE'S OWN 12\n");
     ResetHudCounters();
-    DriveSelection(36);
+    Drive36Sync();
     ScHudRowOnDispatch();
     Check("the engine's dispatcher was NOT called (we stood in for it)",
           (long long)g_origDispatchCalls, 0);
@@ -1029,7 +1047,11 @@ static void HudRowTests(void) {
     ScHudRowOnDispatch();
     Check("a displayed unit losing HP forces a re-fill", g_ctlShows > 0 ? 1 : 0, 1);
 
-    printf("\n    a unit DYING snaps back to page 1 (the conductor's rule)\n");
+    printf("\n    a unit DYING (HP->0, uniqueness UNCHANGED) snaps back to page 1\n");
+    // The blocker fix: death is detected by HP==0, NOT by the uniqueness byte --
+    // research/selection-circles.md 4.5 proves death does not bump 0xA5. Unit 15 is
+    // an OVERFLOW unit (page 2), so this isolates HP-death from the engine-selection
+    // path (clientSelectionGroup, the visible 12, is untouched).
     {
         BYTE evt[0x14];
         memset(evt, 0, sizeof(evt));
@@ -1037,16 +1059,58 @@ static void HudRowTests(void) {
         ScHudRowOnButtonEvent(FakeCtl(3), (DWORD)&evt[0]);
         ScHudRowOnDispatch();
         Check("on page 2", ScHudRowCurrentPage() + 1, 2);
-        *(BYTE*)(FakeUnit(15) + SC_CUNIT_OFF_UNIQUENESS) += 1;   // slot recycled
+        BYTE uniqBefore = *(BYTE*)(FakeUnit(15) + SC_CUNIT_OFF_UNIQUENESS);
+        *(DWORD*)(FakeUnit(15) + SC_CUNIT_OFF_HITPOINTS) = 0;    // real death
+        Check("  uniqueness is UNCHANGED by death (0xA5 does not move)",
+              (long long)*(BYTE*)(FakeUnit(15) + SC_CUNIT_OFF_UNIQUENESS), (long long)uniqBefore);
         ScHudRowOnDispatch();
-        Check("death snapped back to page 1", ScHudRowCurrentPage() + 1, 1);
+        Check("HP==0 death snapped back to page 1", ScHudRowCurrentPage() + 1, 1);
         Check("  35 live units, still 3 pages", ScHudRowPageCount(), 3);
         {
             DWORD ind = *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD);
             const char* text = (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
             Check("  indicator says 35 units", (text && strstr(text, "35 units")) ? 1 : 0, 1);
         }
-        *(BYTE*)(FakeUnit(15) + SC_CUNIT_OFF_UNIQUENESS) -= 1;
+        *(DWORD*)(FakeUnit(15) + SC_CUNIT_OFF_HITPOINTS) = 40 * 256;   // revive for later cases
+    }
+
+    printf("\n    a RECYCLED slot (uniqueness bumped) is dropped too -- the other case\n");
+    {
+        BYTE evt[0x14];
+        memset(evt, 0, sizeof(evt));
+        *(WORD*)(evt + SC_EVT_OFF_TYPE) = SC_EVT_RBUTTONDOWN;
+        ScHudRowOnButtonEvent(FakeCtl(3), (DWORD)&evt[0]);
+        ScHudRowOnDispatch();
+        Check("on page 2 again", ScHudRowCurrentPage() + 1, 2);
+        *(BYTE*)(FakeUnit(16) + SC_CUNIT_OFF_UNIQUENESS) += 1;   // slot reused (0x004A0320)
+        ScHudRowOnDispatch();
+        Check("reuse snapped back to page 1", ScHudRowCurrentPage() + 1, 1);
+        {
+            DWORD ind = *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD);
+            const char* text = (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
+            Check("  indicator says 35 units (only unit 16 dropped)",
+                  (text && strstr(text, "35 units")) ? 1 : 0, 1);
+        }
+        *(BYTE*)(FakeUnit(16) + SC_CUNIT_OFF_UNIQUENESS) -= 1;
+    }
+
+    printf("\n    an ENGINE-side selection change (clientSelectionGroup) snaps back too\n");
+    // The engine drops a unit from clientSelectionGroup without CMDACT_Select (the
+    // fan-out version counter does not move); the visible-tail-vs-engine comparison
+    // catches it.
+    {
+        BYTE evt[0x14];
+        memset(evt, 0, sizeof(evt));
+        *(WORD*)(evt + SC_EVT_OFF_TYPE) = SC_EVT_RBUTTONDOWN;
+        ScHudRowOnButtonEvent(FakeCtl(3), (DWORD)&evt[0]);
+        ScHudRowOnDispatch();
+        Check("on page 2 once more", ScHudRowCurrentPage() + 1, 2);
+        DWORD* g = (DWORD*)FakeRt(SC_VA_CLIENT_SELECTION_GROUP);
+        DWORD saved = g[11]; g[11] = 0;                         // engine dropped one
+        ScHudRowOnDispatch();
+        Check("engine selection mismatch snapped back to page 1",
+              ScHudRowCurrentPage() + 1, 1);
+        g[11] = saved;                                          // restore for later
     }
 
     printf("\n    a selection change to ONE unit restores the row to stock\n");
@@ -1054,7 +1118,7 @@ static void HudRowTests(void) {
     // single branch never calls the multi act, so the hand-back must come from the
     // dispatcher detour itself.
     ResetHudCounters();
-    SmallSelection(1);
+    SmallSync(1);
     ScHudRowOnDispatch();
     Check("the engine's dispatcher ran the hand-back", (long long)g_origDispatchCalls, 1);
     {
@@ -1073,7 +1137,7 @@ static void HudRowTests(void) {
           (long long)g_origDispatchCalls, 1);
 
     printf("\n    re-entering overflow re-wraps and re-splices exactly once\n");
-    DriveSelection(36);
+    Drive36Sync();
     ScHudRowOnDispatch();
     ScHudRowOnDispatch();                     // idempotence: a second frame changes nothing
     Check("still 14 children after two frames", CountChildren(), 14);
@@ -1081,6 +1145,19 @@ static void HudRowTests(void) {
     printf("\n    THE INVARIANT: this module never touches a sprite\n");
     Check("flag 0x08 was never set on any sprite", NoSpriteWasMarkedSelected(64) ? 1 : 0, 1);
     Check("selectionIndex was never written", NoSelectionIndexWasWritten(64) ? 1 : 0, 1);
+
+    printf("\n    the DISABLED module is a pure passthrough (g_enabled == false)\n");
+    // NULL base -> ScHudRowTestBegin leaves the module disabled but keeps the seam,
+    // so the "!g_enabled -> CallOrigDispatch" path is observable.
+    ScHudRowTestBegin(NULL, &FakeShowCtl, &FakeHideCtl, &FakeUpdateCtl,
+                      &FakeEngineInteract, &FakeOrigDispatch);
+    ResetHudCounters();
+    Drive36Sync();                            // even a >12 selection...
+    ScHudRowOnDispatch();
+    Check("disabled: the engine's dispatcher ran", (long long)g_origDispatchCalls, 1);
+    Check("disabled: no control was shown", (long long)g_ctlShows, 0);
+    Check("disabled: a right-click is NOT intercepted", (long long)ScHudRowOnButtonEvent(FakeCtl(3), 0), 0);
+    Check("disabled: it reached the engine interact instead", (long long)g_engInteractCalls, 1);
 
     ScHudRowTestBegin(NULL, NULL, NULL, NULL, NULL, NULL);   // leave it inert
     ScFanoutTestBegin(NULL, NULL, 200);

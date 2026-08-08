@@ -4,8 +4,10 @@
 // visible-last. The DISPLAY list reorders it live-visible-first, then live
 // overflow -- so page 1 is always the engine's own <=12 units (the conductor's
 // rule: the engine's truth is one flip away, and a selection change snaps back to
-// it). Dead units are dropped at refresh, so a page never shows a corpse for more
-// than one cond tick.
+// it). Liveness is HP>0 plus a uniqueness match (UnitAlive) -- NOT uniqueness
+// alone, which death does not change (selection-circles.md 4.5) -- so a dead unit
+// is dropped from the display list on the next dispatch and never shown, or
+// clickable, for more than that one frame.
 //
 // WHAT THE ENGINE SEES. While a page is displayed, the only game state this module
 // has written is: the 12 buttons' statUser records (the exact bytes the engine's
@@ -147,11 +149,27 @@ static bool Readable(DWORD addr, DWORD len) {
     return addr + len <= regionEnd;
 }
 
-// The unit array is a fixed global; a captured pointer was bounds/stride-checked
-// by sc_fanout, so reading its uniqueness byte is safe (same as StillAlive there).
+// Is this still the same, LIVING unit it was at capture?
+//
+// Two independent things can invalidate a captured unit, and CUnit+0xA5 alone
+// catches only ONE of them. research/selection-circles.md 4.5 (task 014,
+// byte-level verified) proves 0xA5 is bumped by slot REUSE (0x004A0320, unit
+// (re)init) and NOT by death -- death runs 0x004A0740 without touching it. So:
+//
+//   * uniqueness mismatch  -> the slot was recycled into a different unit;
+//   * hitpoints == 0        -> the unit died (its slot may not be reused yet, so
+//                              0xA5 still matches -- this is the case 0xA5 misses).
+//
+// hitpoints is CUnit+0x08, the exact field the engine's own refresh-condition
+// 0x00424660 compares against its HP cache (hud-selection-row.md 4.2), so a dead
+// unit reads 0 there one frame before its slot is recycled. Requiring BOTH means a
+// corpse is dropped from the display list on the very next dispatch -- it is never
+// shown, and therefore never clickable, for more than that one frame (the same
+// self-heal window vanilla has).
 static bool UnitAlive(const ScShadowInfo* u) {
     if (!u->unit) return false;
-    return *(BYTE*)(u->unit + SC_CUNIT_OFF_UNIQUENESS) == u->uniqueness;
+    if (*(BYTE*)(u->unit + SC_CUNIT_OFF_UNIQUENESS) != u->uniqueness) return false;
+    return *(DWORD*)(u->unit + SC_CUNIT_OFF_HITPOINTS) != 0;
 }
 
 static WORD UnitTag(DWORD unit) {
@@ -189,9 +207,37 @@ static DWORD FindChildById(DWORD root, short id) {
 // Shadow refresh + display list
 // ---------------------------------------------------------------------------
 
+// Does the engine's own client selection (clientSelectionGroup, 0x00597208,
+// walked to the sentinel 0x597238) still match the visible tail of our shadow
+// list, as a SET? The engine mutates clientSelectionGroup on death and on some
+// selection edits WITHOUT going through CMDACT_Select (so sc_fanout's version
+// counter would not move); comparing here catches those and snaps us to page 1.
+static bool EngineSelectionMatchesVisible(void) {
+    DWORD eng[SC_HUD_BUTTON_COUNT];
+    int engN = 0;
+    DWORD* slot = (DWORD*)Rt(SC_VA_CLIENT_SELECTION_GROUP);
+    for (int i = 0; i < SC_HUD_BUTTON_COUNT; ++i) {
+        if (slot[i] && engN < SC_HUD_BUTTON_COUNT) eng[engN++] = slot[i];
+    }
+    const int overflowN = g_n - g_vis;
+    int visN = 0;
+    for (int i = overflowN; i < g_n; ++i) if (g_alive[i]) ++visN;
+    if (visN != engN) return false;
+    // Every engine slot must appear in our (live) visible tail.
+    for (int e = 0; e < engN; ++e) {
+        bool found = false;
+        for (int i = overflowN; i < g_n && !found; ++i) {
+            if (g_alive[i] && g_list[i].unit == eng[e]) found = true;
+        }
+        if (!found) return false;
+    }
+    return true;
+}
+
 // Returns true when the display list holds more than 12 live units. Sets
-// *selChanged when the shadow version moved, *death when a unit displayed under
-// the SAME version died since the last refresh -- both snap back to page 1.
+// *selChanged when the shadow version moved OR the engine's own selection diverged
+// from our visible tail, *death when a listed unit died since the last refresh --
+// all three snap back to page 1.
 static bool RefreshShadow(bool* selChanged, bool* death) {
     unsigned ver = 0;
     int vis = 0;
@@ -212,6 +258,13 @@ static bool RefreshShadow(bool* selChanged, bool* death) {
     g_vis = vis <= n ? vis : n;
     g_ver = ver;
     g_verValid = true;
+
+    // Engine-side selection mutation that bypassed CMDACT_Select (the version
+    // counter did not move) is a selection change too. hooktest [10] keeps the fake
+    // clientSelectionGroup in sync with the visible tail so this path runs there.
+    if (!changed && n > 0 && !EngineSelectionMatchesVisible()) {
+        changed = true;
+    }
 
     if (changed || died) {
         g_page = 0;
@@ -286,12 +339,19 @@ static void EnsureWrapped(DWORD firstBtn) {
     }
 }
 
-static void Unwrap(void) {
-    const DWORD engineFn = (DWORD)Rt(SC_VA_WIREFRAME_BTN_INTERACT);
-    const DWORD shim     = (DWORD)&HudBtnInteractShim;
-    for (int i = 0; i < g_wrapCount; ++i) {
-        DWORD* interact = (DWORD*)(g_wrapBtn[i] + SC_BINDLG_OFF_INTERACT);
-        if (*interact == shim) *interact = engineFn;
+// Restore the wrapped interact pointers. `safe` = the cached button pointers are
+// known to still belong to a live dialog. When they are NOT (the dialog pointer
+// went away, so those pointers are into freed heap by construction), pass
+// safe=false: the bookkeeping is dropped WITHOUT dereferencing, and the next paged
+// frame re-wraps fresh from the new dialog's own buttons.
+static void Unwrap(bool safe) {
+    if (safe) {
+        const DWORD engineFn = (DWORD)Rt(SC_VA_WIREFRAME_BTN_INTERACT);
+        const DWORD shim     = (DWORD)&HudBtnInteractShim;
+        for (int i = 0; i < g_wrapCount; ++i) {
+            DWORD* interact = (DWORD*)(g_wrapBtn[i] + SC_BINDLG_OFF_INTERACT);
+            if (*interact == shim) *interact = engineFn;
+        }
     }
     g_wrapCount = 0;
 }
@@ -299,6 +359,16 @@ static void Unwrap(void) {
 // ---------------------------------------------------------------------------
 // The indicator control
 // ---------------------------------------------------------------------------
+
+// Is the indicator actually linked into this root's child chain? g_indSpliced can
+// be stale if the engine freed the dialog and allocated a NEW one at the SAME
+// address (our root==g_dialog check cannot see that). Walking the chain settles it
+// from the live data instead of trusting the flag.
+static bool IndicatorInChain(DWORD root) {
+    DWORD ind = (DWORD)&g_indCtrl[0];
+    for (DWORD c = ChildOf(root); c; c = NextOf(c)) if (c == ind) return true;
+    return false;
+}
 
 // Spliced at the HEAD of the child list: the CREATE-time handler binder skips it
 // (index <= 0), the hide-all sweeps hide it like any child, and drawing last in
@@ -308,7 +378,26 @@ static void Unwrap(void) {
 // dialog surface.
 static void EnsureIndicator(DWORD root, DWORD firstBtn) {
     DWORD ind = (DWORD)&g_indCtrl[0];
+    // Re-splice if we think we are spliced but are not actually in the chain
+    // (same-address dialog realloc).
+    if (g_indSpliced && !IndicatorInChain(root)) g_indSpliced = false;
+
     if (!g_indSpliced) {
+        // Runtime evidence guard for the type: the engine must have a real
+        // interact AND update handler for SC_CTRL_TYPE_LSTATIC in the default
+        // tables. If either is null this build does not dispatch that type the way
+        // BWAPI's enum says, so refuse to splice rather than hand the dialog a
+        // control it cannot draw. The row still pages; it just shows no indicator.
+        DWORD tInteract = *(DWORD*)((DWORD)Rt(SC_VA_DEFAULT_INTERACT_TABLE) +
+                                    SC_CTRL_TYPE_LSTATIC * 4);
+        DWORD tUpdate   = *(DWORD*)((DWORD)Rt(SC_VA_DEFAULT_UPDATE_TABLE) +
+                                    SC_CTRL_TYPE_LSTATIC * 4);
+        if (!tInteract || !tUpdate) {
+            ScLog("HUDROW: no engine handler for control type %d (interact=0x%08X "
+                  "update=0x%08X) -- indicator suppressed", SC_CTRL_TYPE_LSTATIC,
+                  (unsigned)tInteract, (unsigned)tUpdate);
+            return;
+        }
         memset(g_indCtrl, 0, sizeof(g_indCtrl));
         short* b   = (short*)(firstBtn + SC_BINDLG_OFF_BOUNDS);
         short* ib  = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
@@ -316,15 +405,13 @@ static void EnsureIndicator(DWORD root, DWORD firstBtn) {
         ib[1] = (short)(b[1] + 1);        // top
         ib[2] = (short)(b[0] + 150);      // right
         ib[3] = (short)(b[1] + 10);       // bottom
-        *(DWORD*)(ind + SC_BINDLG_OFF_FLAGS)    = SC_CTRL_FLAG_VISIBLE | 0x400; // smallest font
+        *(DWORD*)(ind + SC_BINDLG_OFF_FLAGS)    = SC_CTRL_FLAG_VISIBLE | SC_CTRL_FONT_SMALLEST;
         *(short*)(ind + SC_BINDLG_OFF_INDEX)    = (short)0xFFE0;   // negative: binder-proof
-        *(WORD*) (ind + SC_BINDLG_OFF_TYPE)     = 9;               // LSTATIC
+        *(WORD*) (ind + SC_BINDLG_OFF_TYPE)     = (WORD)SC_CTRL_TYPE_LSTATIC;
         *(DWORD*)(ind + SC_BINDLG_OFF_TEXT)     = (DWORD)g_indText;
         *(DWORD*)(ind + SC_BINDLG_OFF_PARENT)   = root;
-        *(DWORD*)(ind + SC_BINDLG_OFF_INTERACT) =
-            *(DWORD*)((DWORD)Rt(SC_VA_DEFAULT_INTERACT_TABLE) + 9 * 4);
-        *(DWORD*)(ind + SC_BINDLG_OFF_UPDATE)   =
-            *(DWORD*)((DWORD)Rt(SC_VA_DEFAULT_UPDATE_TABLE) + 9 * 4);
+        *(DWORD*)(ind + SC_BINDLG_OFF_INTERACT) = tInteract;
+        *(DWORD*)(ind + SC_BINDLG_OFF_UPDATE)   = tUpdate;
         *(DWORD*)(ind + SC_BINDLG_OFF_NEXT)     = ChildOf(root);
         *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD) = ind;
         g_indSpliced = true;
@@ -441,17 +528,42 @@ static void FillPage(DWORD root, DWORD firstBtn) {
     LogReadback(firstBtn);
 }
 
+// A positive read-back that the dialog is genuinely back to stock: all 12 wireframe
+// buttons point at the engine's own interact, the indicator is not linked into the
+// child chain, and the chain itself is intact (the head is reachable and the button
+// run is contiguous). Logged so an in-game test can ASSERT the hand-back rather than
+// infer it from the absence of paging.
+static void LogVerifyStock(DWORD root) {
+    if (!root) { ScLog("HUDROW verify stock: no dialog"); return; }
+    const DWORD engineFn = (DWORD)Rt(SC_VA_WIREFRAME_BTN_INTERACT);
+    int engineOwned = 0, walked = 0;
+    DWORD c = FindChildById(root, SC_HUD_FIRST_SMALL_BUTTON);
+    for (int i = 0; i < SC_HUD_BUTTON_COUNT && c; ++i, c = NextOf(c)) {
+        ++walked;
+        if (*(DWORD*)(c + SC_BINDLG_OFF_INTERACT) == engineFn) ++engineOwned;
+    }
+    int chainLen = 0;
+    for (DWORD w = ChildOf(root); w && chainLen < 64; w = NextOf(w)) ++chainLen;
+    ScLog("HUDROW verify stock: engineInteract=%d/%d indicatorLinked=%d chainLen=%d",
+          engineOwned, walked, IndicatorInChain(root) ? 1 : 0, chainLen);
+}
+
 // Leave paged mode: restore the stock pointers, remove the indicator, force-repaint
 // the buttons so any pixels our indicator left on the dialog surface are painted
 // over, then hand the frame to the engine's own dispatcher (which lays out the
-// single-portrait or <=12 multi view normally).
+// single-portrait or <=12 multi view normally). `root == 0` means the dialog went
+// away and the cached button pointers are into freed heap: drop the bookkeeping
+// without dereferencing (the next paged frame re-wraps fresh).
 static void RestoreStock(DWORD root) {
-    Unwrap();
-    if (root) UnspliceIndicator(root);
+    Unwrap(root != 0);
+    if (root) UnspliceIndicator(root); else g_indSpliced = false;
     g_cacheValid = false;
-    DWORD c = root ? FindChildById(root, SC_HUD_FIRST_SMALL_BUTTON) : 0;
-    for (int i = 0; i < SC_HUD_BUTTON_COUNT && c; ++i, c = NextOf(c)) {
-        if (*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) CallUpdate(c);
+    if (root) {
+        DWORD c = FindChildById(root, SC_HUD_FIRST_SMALL_BUTTON);
+        for (int i = 0; i < SC_HUD_BUTTON_COUNT && c; ++i, c = NextOf(c)) {
+            if (*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) CallUpdate(c);
+        }
+        LogVerifyStock(root);
     }
     ScLog("HUDROW stock restored (n=%d)", g_dispN);
     CallOrigDispatch();

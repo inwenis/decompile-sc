@@ -300,24 +300,40 @@
 #define SC_VA_DEFAULT_INTERACT_TABLE 0x005014ACu
 #define SC_VA_DEFAULT_UPDATE_TABLE   0x00501504u
 
-// BinDlg field offsets, each confirmed by an instruction cited in
-// hud-selection-row.md 2:
-#define SC_BINDLG_OFF_NEXT        0x00u
-#define SC_BINDLG_OFF_BOUNDS      0x04u   // s16 left, top, right, bottom
-#define SC_BINDLG_OFF_TEXT        0x14u
-#define SC_BINDLG_OFF_FLAGS       0x18u   // u32
-#define SC_BINDLG_OFF_INDEX       0x20u   // s16 control id
-#define SC_BINDLG_OFF_TYPE        0x22u   // u16; 0 = the dialog itself
-#define SC_BINDLG_OFF_GRAPHIC     0x24u
-#define SC_BINDLG_OFF_USER        0x26u   // the button's 8-byte statUser record
-#define SC_BINDLG_OFF_INTERACT    0x2Au
-#define SC_BINDLG_OFF_UPDATE      0x2Eu
-#define SC_BINDLG_OFF_PARENT      0x32u
-#define SC_BINDLG_OFF_FIRST_CHILD 0x42u
-#define SC_BINDLG_SIZE            0x56u   // 86 bytes (GPTP structures.h C_ASSERT)
+// BinDlg field offsets. Those marked "hud 2" are proven by an instruction cited
+// in hud-selection-row.md 2 (read out of THIS binary). Those marked "GPTP" are
+// inherited from GPTP SCBW/structures.h and used as-is -- NOT independently
+// re-derived here; they are not referenced by the sweep, so this block states
+// their true provenance rather than overclaiming.
+#define SC_BINDLG_OFF_NEXT        0x00u   // hud 2 (every child walk)
+#define SC_BINDLG_OFF_BOUNDS      0x04u   // GPTP (rct); s16 left,top,right,bottom.
+                                          //   Used only to POSITION the indicator and
+                                          //   to log button rects -- a wrong offset
+                                          //   mis-aims a diagnostic, never mis-selects.
+#define SC_BINDLG_OFF_TEXT        0x14u   // hud 2 (relocator 0x004194E0 fixes pszText)
+#define SC_BINDLG_OFF_FLAGS       0x18u   // hud 2 (0x0045845D TEST [ctrl+0x18],0x8)
+#define SC_BINDLG_OFF_INDEX       0x20u   // hud 2 (layout walk compares [ctrl+0x20]==0x21)
+#define SC_BINDLG_OFF_TYPE        0x22u   // hud 2 ("is this the root" test); 0 = dialog
+#define SC_BINDLG_OFF_GRAPHIC     0x24u   // hud 2 (wireframe draw writes border id here)
+#define SC_BINDLG_OFF_USER        0x26u   // hud 2 (button CREATE allocs 8B into +0x26)
+#define SC_BINDLG_OFF_INTERACT    0x2Au   // hud 2 (0x00418EB0 calls [ctrl+0x2A])
+#define SC_BINDLG_OFF_UPDATE      0x2Eu   // hud 2 (0x0045841C MOV [ESI+0x2E],0x456F50)
+#define SC_BINDLG_OFF_PARENT      0x32u   // hud 2 (click handler climbs [ctrl+0x32])
+#define SC_BINDLG_OFF_FIRST_CHILD 0x42u   // hud 2 (every child walk starts at [dlg+0x42])
+#define SC_BINDLG_SIZE            0x56u   // GPTP (structures.h C_ASSERT sizeof==86);
+                                          //   only used to zero a plugin-owned scratch
+                                          //   BinDlg -- never to stride a game array.
 
-#define SC_CTRL_FLAG_DRAWN   0x1u   // set once drawn; act sets it before updateControl
-#define SC_CTRL_FLAG_VISIBLE 0x8u   // 0x0045845D tests exactly this bit
+#define SC_CTRL_FLAG_DRAWN   0x1u    // set once drawn; act sets it before updateControl
+#define SC_CTRL_FLAG_VISIBLE 0x8u    // hud 2 (0x0045845D TEST [ctrl+0x18],0x8)
+// CTRL_FONT_SMALLEST -- BWAPI BW/Dialog.h:17. The smallest of the font-size flags,
+// so the indicator text fits the row's top edge.
+#define SC_CTRL_FONT_SMALLEST 0x400u
+// Control type of a left-aligned static text control. BWAPI BW/Dialog.h ctrls
+// enum: cLSTATIC = 9. Verified at runtime before use: sc_hudrow reads the default
+// interact/update table entries for type 9 and refuses to splice the indicator if
+// either is null (i.e. the engine has no handler for that type in this build).
+#define SC_CTRL_TYPE_LSTATIC 9
 
 // The wireframe row's control ids: 12 buttons, packed left to right.
 #define SC_HUD_FIRST_SMALL_BUTTON 0x21

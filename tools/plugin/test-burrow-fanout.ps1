@@ -171,7 +171,7 @@ try {
     }
 
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
-        -Mode fanout -Circles 0 -InjectWindowedHelper WMode `
+        -Mode fanout -Circles 0 -HudRow 0 -InjectWindowedHelper WMode `
         -GameDir $GameDir -LogPath $LogPath 6>&1 | ForEach-Object {
             Write-Host $_
             if ("$_" -match 'scinject:\s*PID=(\d+)') { $script:gamePid = [int]$Matches[1] }

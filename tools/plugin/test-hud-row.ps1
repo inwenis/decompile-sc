@@ -79,15 +79,16 @@ function Get-HudShow {
     $hits = @(Wait-ScLogMatch -LogPath $LogPath -FromLine $FromLine -TimeoutSec $TimeoutSec `
         -Pattern 'HUDROW show n=\d+ page=\d+/\d+ slots=\d+')
     $m = [regex]::Match($hits[-1],
-        'HUDROW show n=(\d+) page=(\d+)/(\d+) slots=(\d+) \[([0-9A-F ]*)\]')
+        'HUDROW show n=(\d+) page=(\d+)/(\d+) slots=(\d+) \[([0-9A-F ]*)\] indicator="([^"]*)"')
     if (-not $m.Success) { throw "test: unparseable HUDROW show line: $($hits[-1])" }
     @{
-        N     = [int]$m.Groups[1].Value
-        Page  = [int]$m.Groups[2].Value
-        Pages = [int]$m.Groups[3].Value
-        Slots = [int]$m.Groups[4].Value
-        Tags  = @($m.Groups[5].Value -split ' ' | Where-Object { $_ })
-        Line  = $hits[-1]
+        N         = [int]$m.Groups[1].Value
+        Page      = [int]$m.Groups[2].Value
+        Pages     = [int]$m.Groups[3].Value
+        Slots     = [int]$m.Groups[4].Value
+        Tags      = @($m.Groups[5].Value -split ' ' | Where-Object { $_ })
+        Indicator = $m.Groups[6].Value
+        Line      = $hits[-1]
     }
 }
 
@@ -268,30 +269,34 @@ try {
         $overlap = @($p2.Tags | Where-Object { $page1.Tags -contains $_ })
         Assert-That 'page 2 shares NO unit with page 1 (12 fresh shadow units)' `
             ($overlap.Count -eq 0) "(overlap: $($overlap -join ' '))"
+        Assert-That 'the indicator text changed across the flip' `
+            ($p2.Indicator -ne $page1.Indicator -and $p2.Indicator -match '13-24' -and $p2.Indicator -match '\(2/3\)') `
+            "(page1='$($page1.Indicator)' page2='$($p2.Indicator)')"
         Write-Host "       $($p2.Line)"
         $script:page2 = $p2
 
         $after = Shot 'page2'
-        # CORROBORATION ONLY (not the oracle -- the readback above is): the row's
-        # pixels changed across the flip. The button rects are client coords and the
-        # frame is the full window, so pad generously and clamp; report, never gate.
+        # GATED rendering evidence: the row's pixels MUST change across the flip.
+        # The indicator text alone guarantees it (a different string is drawn), so
+        # diff -gt 0 is a sound gate, not a heuristic. The button rects are client
+        # coords and the frame is the full window, so pad generously and clamp.
         $rowL = [Math]::Max(0, (($rects.Rects | ForEach-Object { $_[0] } | Measure-Object -Minimum).Minimum) - 8)
         $rowT = [Math]::Max(0, (($rects.Rects | ForEach-Object { $_[1] } | Measure-Object -Minimum).Minimum) - 8)
         $rowR = (($rects.Rects | ForEach-Object { $_[2] } | Measure-Object -Maximum).Maximum) + 40
         $rowB = (($rects.Rects | ForEach-Object { $_[3] } | Measure-Object -Maximum).Maximum) + 40
-        if ($before -and $after) {
-            try {
-                $a = Get-CropBytes $before $rowL $rowT $rowR $rowB
-                $b = Get-CropBytes $after  $rowL $rowT $rowR $rowB
-                $diff = 0
-                for ($i = 0; $i -lt [Math]::Min($a.Count, $b.Count); $i++) {
-                    if ($a[$i] -ne $b[$i]) { $diff++ }
-                }
-                Write-Host "       corroboration: row pixels changed across the flip -- $diff sampled bytes differ (frames in $ShotDir)"
-            } catch {
-                Write-Host "       corroboration skipped (frame crop): $($_.Exception.Message)"
+        $diff = -1
+        try {
+            $a = Get-CropBytes $before $rowL $rowT $rowR $rowB
+            $b = Get-CropBytes $after  $rowL $rowT $rowR $rowB
+            $diff = 0
+            for ($i = 0; $i -lt [Math]::Min($a.Count, $b.Count); $i++) {
+                if ($a[$i] -ne $b[$i]) { $diff++ }
             }
+        } catch {
+            Write-Host "       crop failed: $($_.Exception.Message)"
         }
+        Assert-That "the row's rendered pixels changed across the flip ($diff sampled bytes differ)" `
+            ($diff -gt 0)
     }
 
     Step 'two more right-clicks: page 3, then wrap back to page 1' {
@@ -346,29 +351,65 @@ try {
         Shot 'after-shadow-click' | Out-Null
     }
 
-    Step 'AMENDMENT 1: re-box, flip to page 2, then a selection change snaps to page 1' {
+    Step 'AMENDMENT 1a: on page 2, a MAP selection change snaps back to page 1' {
         $mark = Get-ScLogLineCount -LogPath $LogPath
         Send-ScDrag -Hwnd $hwnd -X1 10 -Y1 10 -X2 630 -Y2 340 -Steps 20
         Start-Sleep -Seconds 2
         $pA = Get-HudShow -FromLine $mark
         Assert-That 're-boxed: page 1 again' ($pA.Page -eq 1)
 
+        # Flip to page 2 and ASSERT it happened -- otherwise the snap-back below can
+        # pass vacuously (if the flip silently failed, the row was already on page 1).
+        $mark = Get-ScLogLineCount -LogPath $LogPath
         $c = Get-BtnCenter $rects 5
         Send-ScClick -Hwnd $hwnd -X $c.X -Y $c.Y -Right
         Start-Sleep -Seconds 1
-        # Now change the selection from the MAP (a fresh small drag over part of the
-        # cluster) and require the next display to be page 1.
+        $onP2 = Get-HudShow -FromLine $mark
+        Assert-That 'PRECONDITION: the flip to page 2 happened' ($onP2.Page -eq 2)
+
+        # Now change the selection from the MAP and require the next display = page 1.
         $mark = Get-ScLogLineCount -LogPath $LogPath
         Send-ScDrag -Hwnd $hwnd -X1 10 -Y1 10 -X2 630 -Y2 340 -Steps 20
         Start-Sleep -Seconds 2
         $pB = Get-HudShow -FromLine $mark
-        Assert-That 'after the selection change the row is back on page 1' ($pB.Page -eq 1)
+        Assert-That 'after the MAP selection change the row is back on page 1' ($pB.Page -eq 1)
+    }
+
+    Step 'AMENDMENT 1b: a SHIFT-CLICK on the row is a selection change through our hook' {
+        # A different selection-change route. On a paged row the shift-click path
+        # (StatusScreenButton, 0x00458220) collects the 12 VISIBLE portraits minus the
+        # clicked one -- <=11 units -- so the selection drops below 13 and the row
+        # leaves paged mode entirely. What we assert is the invariant the amendment is
+        # about: the change routes through our hook and the row does NOT stay on page 2.
+        $mark = Get-ScLogLineCount -LogPath $LogPath
+        # re-box to get back over 12, then flip to page 2 and confirm it.
+        Send-ScDrag -Hwnd $hwnd -X1 10 -Y1 10 -X2 630 -Y2 340 -Steps 20
+        Start-Sleep -Seconds 2
+        $c = Get-BtnCenter $rects 5
+        Send-ScClick -Hwnd $hwnd -X $c.X -Y $c.Y -Right
+        Start-Sleep -Seconds 1
+        $onP2 = Get-HudShow -FromLine $mark
+        Assert-That 'PRECONDITION: on page 2 before the shift-click' ($onP2.Page -eq 2)
+
+        $mark = Get-ScLogLineCount -LogPath $LogPath
+        $b4 = Get-BtnCenter $rects 4
+        Send-ScClick -Hwnd $hwnd -X $b4.X -Y $b4.Y -Shift    # remove that portrait
+        Start-Sleep -Seconds 2
+        $lines = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
+        Assert-That 'the shift-click emitted a selection command through our hook' `
+            (@($lines | Select-String -Pattern 'CMD id=0x0(9|A|B) ').Count -gt 0)
+        Assert-That 'the row left page 2 (stock hand-back logged)' `
+            (@($lines | Select-String -Pattern 'HUDROW stock restored').Count -gt 0)
+        $sc = Get-ScState 'shift-removed'
+        Assert-That "the selection dropped below 13 (n=$($sc.N))" ($sc.N -ge 1 -and $sc.N -le 12)
     }
 
     Step 'AMENDMENT 2: a <=12 selection produces NO row activity at all' {
-        # The row is on page 1 (previous step). A LEFT-click on a page-1 portrait is
-        # the engine's own "select just this unit" -- a deterministic way down to a
-        # 1-unit selection with no map-coordinate guessing.
+        # Re-box >12 to get a paged row, then a LEFT-click on a page-1 portrait is the
+        # engine's own "select just this unit" -- a deterministic way down to a 1-unit
+        # selection with no map-coordinate guessing.
+        Send-ScDrag -Hwnd $hwnd -X1 10 -Y1 10 -X2 630 -Y2 340 -Steps 20
+        Start-Sleep -Seconds 2
         $mark = Get-ScLogLineCount -LogPath $LogPath
         $b1 = Get-BtnCenter $rects 1
         Send-ScClick -Hwnd $hwnd -X $b1.X -Y $b1.Y
@@ -378,6 +419,17 @@ try {
         Assert-That "the selection shrank to one unit (n=$($small.N))" ($small.N -eq 1)
         Assert-That 'the hand-back to stock was logged' `
             (@($lines | Select-String -Pattern 'HUDROW stock restored').Count -gt 0)
+        # POSITIVE stock read-back (not just the absence of paging): all 12 buttons
+        # own the engine interact again, the indicator is unlinked, the chain is intact.
+        $verify = @($lines | Select-String -Pattern 'HUDROW verify stock: engineInteract=(\d+)/(\d+) indicatorLinked=(\d+) chainLen=(\d+)')
+        Assert-That 'a positive stock read-back was logged' ($verify.Count -gt 0)
+        if ($verify.Count -gt 0) {
+            $vm = [regex]::Match($verify[-1].Line, 'engineInteract=(\d+)/(\d+) indicatorLinked=(\d+) chainLen=(\d+)')
+            Assert-That "  all 12 buttons own the engine interact ($($vm.Groups[1].Value)/$($vm.Groups[2].Value))" `
+                ($vm.Groups[1].Value -eq '12' -and $vm.Groups[2].Value -eq '12')
+            Assert-That '  the indicator is unlinked from the child chain' ($vm.Groups[3].Value -eq '0')
+            Assert-That "  the child chain is intact ($($vm.Groups[4].Value) controls)" ([int]$vm.Groups[4].Value -ge 13)
+        }
         $mark2 = Get-ScLogLineCount -LogPath $LogPath
         Start-Sleep -Seconds 3
         $lines2 = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark2)
@@ -385,6 +437,15 @@ try {
             (@($lines2 | Select-String -Pattern 'HUDROW (show|flip)').Count -eq 0)
         Shot 'stock-small-selection' | Out-Null
     }
+
+    # NOTE on the death leg (conductor review item 4): in-game unit death is not
+    # exercised here because this fixture has NO combat -- one unit-less computer slot,
+    # no enemy, no triggers (that is exactly what keeps the map from ending itself,
+    # see test-burrow-fanout.ps1). Killing a Lurker unattended would need an attacker
+    # and a reliable wait for the kill, which the fixture deliberately excludes. Death
+    # is instead modelled correctly OFFLINE in hooktest part [10] ("a unit DYING --
+    # HP->0, uniqueness UNCHANGED"), which is the case the 0xA5 bug hid; the separate
+    # slot-reuse and engine-side-mutation snaps are covered there too.
 }
 catch {
     Write-Host "  FAIL a test step threw: $($_.Exception.Message)"
