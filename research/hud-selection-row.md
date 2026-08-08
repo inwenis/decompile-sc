@@ -242,6 +242,29 @@ Two facts worth stating twice:
    selection changes flow through the shadow-list bookkeeping like any other selection
    change, with no new work.
 
+### 5.1 How a raw mouse event reaches a wireframe button (the page-flip gesture)
+
+The button interact `0x004583E0` branches on `event->type` (`event+0x0C`): type `3`
+(`MOUSEMOVE`) and type `14` (`USER`, whose `dwUser` at `event+0` selects activate/prev/next).
+It does **not** handle the raw button events — those fall through to the default. The routing
+from a raw event to a control is the default dialog interact `0x00418EB0` (decompiled,
+`work/scratch/hud/decomp5/`), whose `switch(event->type)` groups the mouse-button events:
+
+```c
+case 4: case 6: case 7: case 9:              // LBUTTONDOWN, LBUTTONDBLCLK, RBUTTONDOWN, RBUTTONDBLCLK
+    ctrl = hitTestChildUnderCursor();        // 0x00418340
+    if (ctrl) { ...; return (*(int(**)())(ctrl + 0x2A))(); }   // that control's interact, SAME event
+```
+
+So a **right-click over a wireframe button is delivered to that button's interact with
+`event->type == 7`** — and the stock interact ignores type 7 (right-clicking a portrait does
+nothing in vanilla), which is exactly why the gesture is free to claim. The plugin wraps the
+12 buttons' interact pointers (`control+0x2A`, plain dialog-heap data — no code is patched)
+with a shim that returns on type 7 after flipping the page and tail-calls `0x004583E0` for
+every other event, so left/shift/ctrl/alt clicks keep their stock meaning on whatever the row
+currently shows. The call convention is `__fastcall(ECX = control, EDX = event)` — the same as
+the engine's own interact, confirmed by the register setup at the `0x00418EB0` call site.
+
 ## 6. Hazard analysis
 
 The task's inherited, non-negotiable rule: shadow units must never receive
@@ -280,28 +303,41 @@ exposure, plus the same staleness guards the circles module already uses
 
 ### (a) PAGING — row still shows 12; a gesture cycles which 12 of N
 
-**What changes.** One new plugin module (sc_hudrow), two detours, no engine data widened:
+**What changes.** One new plugin module (sc_hudrow), one detour, no engine data widened.
+**Design note, settled during stage B:** the single clean hook is the per-frame **dispatcher
+`0x00458120`** (§4.2), not the act/cond pair `0x00425960`/`0x00424660` this section first
+proposed. Detouring the dispatcher is what lets the module restore stock even when a shadow
+click drops the selection to *one* unit — the engine then takes its single-portrait branch
+and never calls the multi-select act, so a detour on act alone could never hand back.
+`0x00458120` has a 5-byte reloc-safe prologue (`MOV EAX,[0x00597248]`) and one caller. The
+module reproduces the act loop's effect for a page and throttles its own re-fill exactly as
+cond throttles the engine's layout.
 
-1. **Detour `0x00425960` (act).** Shadow count ≤ 12 → run the original (vanilla path,
-   including the vanilla case where fan-out is off). Shadow count > 12 → run our
-   re-implementation of the loop in §4.2 (it is 15 lines against already-mapped primitives
-   `0x004186A0`/`0x00418700`/`0x0041C400`), sourcing units from
-   `shadowList[page*12 .. page*12+11]` instead of `clientSelectionGroup`, with staleness
-   guards per unit.
-2. **Detour `0x00424660` (cond).** Our version: page-flip pending, shadow-list change, or
-   HP/id drift of the *displayed page* (own 12-entry cache, same comparison the engine
-   does) → return 1. Falls back to the original when the shadow path is inactive.
-3. **Page state**: current page, reset to 0 whenever the shadow list is replaced (the
-   existing `CMDACT_Select` / `0x0049AE40` hooks already see every selection change).
+1. **Detour `0x00458120` (dispatcher).** Shadow count ≤ 12 → tail into the original
+   dispatcher (stock single-portrait and stock ≤12 multi both run untouched). Shadow count
+   > 12 → run our re-implementation of the §4.2 loop (≈15 lines against the already-mapped
+   primitives `0x004186A0`/`0x00418700`/`0x0041C400`), sourcing the 12 buttons from
+   `displayList[page*12 .. page*12+11]` with a per-unit staleness guard, and skip the
+   engine's own layout for that frame.
+2. **Throttle the re-fill** the way the engine's cond throttles: re-lay-out only on a
+   page-flip, a shadow-list change, a unit death on the displayed page, or HP/id drift of a
+   displayed unit (own 12-entry cache, the same comparison `0x00424660` makes). On a quiet
+   frame the page persists — nothing else writes the status buttons once the dispatcher is
+   skipped.
+3. **Page state**: current page, reset to 0 whenever the shadow list changes. sc_fanout
+   exposes a version counter bumped on every selection commit (and on hotkey-recall drop),
+   so the module snaps to page 1 on any selection change without diffing lists.
 4. **The gesture**: right-click on any wireframe button. Implemented by wrapping the 12
-   buttons' `fxnInteract` (+0x2A) with a thin shim — `BW_EVN_RBUTTONDOWN` → page++,
-   dirty flag = 1, return 1; anything else → jump to the engine's `0x004583E0`. The wrap is
-   (re)applied idempotently from the act detour, which also survives dialog re-creation
-   (the binder rebinds at every CREATE; our next act run re-wraps). Right-click is free real
-   estate: the engine's own handler routes it to the default dispatch, which ignores it.
-5. Registered conventions: both detoured functions are `EAX = dialog` register-convention,
-   patch windows are ordinary 5-byte prologue splices — same `ScHookInstall` machinery as
-   the four existing hooks.
+   buttons' `fxnInteract` (+0x2A) with a thin shim — event type `7` (RBUTTONDOWN) → page++,
+   dirty flag = 1, return 1; anything else → tail-call the engine's `0x004583E0`. The wrap
+   is (re)applied idempotently from the dispatcher detour, which also survives dialog
+   re-creation (the binder rebinds at every CREATE; our next paged frame re-wraps).
+   Right-click is free real estate, and §5.1 confirms from the binary that a right-click over
+   a wireframe button reaches the button's interact as event type 7 (the stock interact
+   ignores it).
+5. Calling conventions, all verified against this binary: the dispatcher takes no arguments
+   (5-byte prologue splice, same `ScHookInstall` machinery as the existing hooks); the button
+   shim is `__fastcall(ECX = control, EDX = event)` matching the engine's own interact (§5.1).
 
 **selectionIndex / flag-0x08 discipline**: untouched by construction (§6) — the module
 writes statUser records and two module-private globals, nothing else. The hooktest poison

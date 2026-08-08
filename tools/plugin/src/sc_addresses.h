@@ -250,4 +250,92 @@
 #define SC_CMD_RIGHT_CLICK   0x14u
 #define SC_CMD_TARGETED_ORDER 0x15u
 
+// ---------------------------------------------------------------------------
+// HUD SELECTION ROW -- derived by task 017 from StarCraft.exe 1.16.1 itself.
+// Full evidence, with decompiles and the creation chain, in
+// research/hud-selection-row.md; committed instruction tables in
+// research/data/hud-*.tsv. Nothing in this block is inherited without being
+// re-derived against this binary.
+// ---------------------------------------------------------------------------
+
+// No arguments, returns void. THE per-frame status-area dispatcher: the single
+// entry the HUD driver 0x004D93F0 calls each frame, branching portrait-null /
+// single-unit / multi-select (hud-selection-row.md 4.2). sc_hudrow detours THIS
+// (not the multi-select act/cond pair) so it can restore the row to stock even
+// when a shadow click drops the selection to one unit and the engine would take
+// its single branch. Patch window 5 bytes / 1 instruction (MOV EAX,[0x00597248]),
+// reloc-safe; one caller (HookProbe, work/scratch/hud/hookprobe/).
+#define SC_VA_STAT_DATA_UPDATE 0x00458120u
+
+// The multi-select layout ("act") and refresh-condition ("cond") the dispatcher
+// calls; sc_hudrow re-implements their effect for a page rather than detouring
+// them, but keeps the addresses for evidence (hud-selection-row.md 4.2).
+#define SC_VA_UNITSTAT_ACT_SELECTION  0x00425960u
+#define SC_VA_UNITSTAT_COND_SELECTION 0x00424660u
+
+// Unit* -- the active portrait unit; the dispatcher's first test (portrait NULL ->
+// hide the whole status area). sc_hudrow reads it to decide whether to page.
+#define SC_VA_ACTIVE_PORTRAIT_UNIT 0x00597248u
+
+// Generic dialog primitives (GPTP unit_stat_selection.cpp helpers; conventions
+// verified against the decompiled callers in this binary):
+#define SC_VA_SHOW_CONTROL   0x004186A0u  // ESI = BinDlg*
+#define SC_VA_HIDE_CONTROL   0x00418700u  // ESI = BinDlg*
+#define SC_VA_UPDATE_CONTROL 0x0041C400u  // EAX = BinDlg*
+
+// __fastcall(ECX = BinDlg* control, EDX = event) -> int. The wireframe button's
+// interact handler; all 12 buttons point here via the 44-entry table at 0x00504AF0
+// (hud-selection-row.md 3). sc_hudrow WRAPS the per-control pointer (control+0x2A)
+// with a thin shim and tail-calls this address -- the code itself is never patched.
+#define SC_VA_WIREFRAME_BTN_INTERACT 0x004583E0u
+
+// The statdata module's globals (hud-selection-row.md 2):
+#define SC_VA_STATDATA_DIALOG 0x0068C1F0u  // BinDlg* -- the whole status-area dialog
+#define SC_VA_STAT_DIRTY      0x0068C1F8u  // u8 -- redraw-needed flag the dispatcher consumes
+#define SC_VA_STAT_ALL_HIDDEN 0x0068C1E5u  // u8 -- "children currently hidden" state
+
+// Default per-control-type handler tables the .bin relocator (0x004194E0) assigns
+// from; sc_hudrow's indicator control takes its handlers from the same tables, so
+// it is drawn by exactly the code a loaded control would be.
+#define SC_VA_DEFAULT_INTERACT_TABLE 0x005014ACu
+#define SC_VA_DEFAULT_UPDATE_TABLE   0x00501504u
+
+// BinDlg field offsets, each confirmed by an instruction cited in
+// hud-selection-row.md 2:
+#define SC_BINDLG_OFF_NEXT        0x00u
+#define SC_BINDLG_OFF_BOUNDS      0x04u   // s16 left, top, right, bottom
+#define SC_BINDLG_OFF_TEXT        0x14u
+#define SC_BINDLG_OFF_FLAGS       0x18u   // u32
+#define SC_BINDLG_OFF_INDEX       0x20u   // s16 control id
+#define SC_BINDLG_OFF_TYPE        0x22u   // u16; 0 = the dialog itself
+#define SC_BINDLG_OFF_GRAPHIC     0x24u
+#define SC_BINDLG_OFF_USER        0x26u   // the button's 8-byte statUser record
+#define SC_BINDLG_OFF_INTERACT    0x2Au
+#define SC_BINDLG_OFF_UPDATE      0x2Eu
+#define SC_BINDLG_OFF_PARENT      0x32u
+#define SC_BINDLG_OFF_FIRST_CHILD 0x42u
+#define SC_BINDLG_SIZE            0x56u   // 86 bytes (GPTP structures.h C_ASSERT)
+
+#define SC_CTRL_FLAG_DRAWN   0x1u   // set once drawn; act sets it before updateControl
+#define SC_CTRL_FLAG_VISIBLE 0x8u   // 0x0045845D tests exactly this bit
+
+// The wireframe row's control ids: 12 buttons, packed left to right.
+#define SC_HUD_FIRST_SMALL_BUTTON 0x21
+#define SC_HUD_LAST_SMALL_BUTTON  0x2C
+#define SC_HUD_BUTTON_COUNT       12
+
+// A button's statUser record (allocated 8 bytes in its CREATE case at 0x0045842E):
+#define SC_STATUSER_OFF_UNIT 0x0u   // CUnit*
+#define SC_STATUSER_OFF_ID   0x4u   // u16 -- the grpwire.grp frame index
+
+// Dialog event layout (read by 0x004583E0: type at +0xC, dwUser at +0):
+#define SC_EVT_OFF_USER 0x00u
+#define SC_EVT_OFF_TYPE 0x0Cu
+#define SC_EVT_RBUTTONDOWN 7
+#define SC_EVT_TYPE_USER   14
+
+// CUnit fields the row reads (both used by the engine's own row code:
+// hp at +0x08 by the cond/cache pair, id at +0x64 everywhere):
+#define SC_CUNIT_OFF_HITPOINTS 0x08u
+
 #endif // SC_ADDRESSES_H

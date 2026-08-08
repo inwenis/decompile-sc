@@ -23,6 +23,7 @@
 #include "sc_circles.h"
 #include "sc_fanout.h"
 #include "sc_hook.h"
+#include "sc_hudrow.h"
 #include "sc_log.h"
 
 static int g_failures = 0;
@@ -805,6 +806,289 @@ static void CircleTests(void) {
 }
 
 // ---------------------------------------------------------------------------
+// [10] The HUD-row paging (task 017), driven against a fake dialog tree.
+//
+// sc_hudrow reaches the engine through six pointers (show/hide/update control,
+// the button interact, and the two detour originals), so the whole page machine
+// -- refresh, page math, the wrap, the splice, snap-back-to-page-1, and the
+// restore-to-stock transition -- runs here with no StarCraft in the process.
+// The fake sprites from part [8] are kept poisoned throughout: this module never
+// touches a sprite, and the final assertions prove it the same way part [8] does.
+//
+// What is NOT provable offline is whether the engine draws the page and routes
+// real dialog events -- that is what tools/plugin/test-hud-row.ps1 is for.
+// ---------------------------------------------------------------------------
+
+#define FAKE_DLG_VA      0x00690000u
+#define FAKE_STATUSER_VA 0x00691000u
+
+static unsigned g_ctlShows = 0, g_ctlHides = 0, g_ctlUpdates = 0;
+static unsigned g_engInteractCalls = 0;
+static unsigned g_origDispatchCalls = 0;
+
+static void FakeShowCtl(DWORD ctrl)   { ++g_ctlShows;   *(DWORD*)(ctrl + SC_BINDLG_OFF_FLAGS) |= SC_CTRL_FLAG_VISIBLE; }
+static void FakeHideCtl(DWORD ctrl)   { ++g_ctlHides;   *(DWORD*)(ctrl + SC_BINDLG_OFF_FLAGS) &= ~(DWORD)SC_CTRL_FLAG_VISIBLE; }
+static void FakeUpdateCtl(DWORD ctrl) { ++g_ctlUpdates; (void)ctrl; }
+
+static int __attribute__((fastcall)) FakeEngineInteract(DWORD ctrl, DWORD evt) {
+    (void)ctrl; (void)evt;
+    ++g_engInteractCalls;
+    return 0;
+}
+
+static void FakeOrigDispatch(void) { ++g_origDispatchCalls; }
+
+static DWORD FakeCtl(int i)      { return (DWORD)FakeRt(FAKE_DLG_VA) + 0x100u + (DWORD)i * SC_BINDLG_SIZE; }
+static DWORD FakeStatUser(int i) { return (DWORD)FakeRt(FAKE_STATUSER_VA) + (DWORD)i * 8u; }
+static DWORD FakeRoot(void)      { return (DWORD)FakeRt(FAKE_DLG_VA); }
+
+// Root dialog + one non-button control (id 1) + the 12 wireframe buttons
+// (ids 0x21..0x2C), statUser records poisoned so "nobody wrote it" is
+// distinguishable from "somebody wrote 0".
+static void BuildFakeDialog(void) {
+    const DWORD engineFn = (DWORD)FakeRt(SC_VA_WIREFRAME_BTN_INTERACT);
+    DWORD root = FakeRoot();
+    memset((void*)root, 0, SC_BINDLG_SIZE);
+    *(WORD*)(root + SC_BINDLG_OFF_TYPE) = 0;                    // a dialog
+
+    for (int i = 0; i < 13; ++i) {
+        DWORD c = FakeCtl(i);
+        memset((void*)c, 0, SC_BINDLG_SIZE);
+        *(WORD*) (c + SC_BINDLG_OFF_TYPE)   = (i == 0) ? 5 : 2; // image, then buttons
+        *(short*)(c + SC_BINDLG_OFF_INDEX)  = (i == 0) ? 1 : (short)(SC_HUD_FIRST_SMALL_BUTTON + i - 1);
+        *(DWORD*)(c + SC_BINDLG_OFF_PARENT) = root;
+        *(DWORD*)(c + SC_BINDLG_OFF_NEXT)   = (i < 12) ? FakeCtl(i + 1) : 0;
+        short* b = (short*)(c + SC_BINDLG_OFF_BOUNDS);
+        b[0] = (short)(166 + (i % 6) * 36); b[1] = (short)(398 + (i / 6) * 34);
+        b[2] = (short)(b[0] + 34);          b[3] = (short)(b[1] + 32);
+        if (i > 0) {
+            *(DWORD*)(c + SC_BINDLG_OFF_INTERACT) = engineFn;
+            *(DWORD*)(c + SC_BINDLG_OFF_USER)     = FakeStatUser(i - 1);
+            *(DWORD*)(FakeStatUser(i - 1) + SC_STATUSER_OFF_UNIT) = 0xEEEEEEEEu;
+            *(WORD*) (FakeStatUser(i - 1) + SC_STATUSER_OFF_ID)   = 0xEEEE;
+        }
+    }
+    *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD) = FakeCtl(0);
+
+    // The per-type default handler tables the indicator control reads its
+    // draw/interact from (type 9 = LSTATIC).
+    *(DWORD*)((DWORD)FakeRt(SC_VA_DEFAULT_INTERACT_TABLE) + 9 * 4) = 0x11111111u;
+    *(DWORD*)((DWORD)FakeRt(SC_VA_DEFAULT_UPDATE_TABLE)   + 9 * 4) = 0x22222222u;
+    *(BYTE*)FakeRt(SC_VA_STAT_ALL_HIDDEN) = 0;
+    *(BYTE*)FakeRt(SC_VA_STAT_DIRTY)      = 0;
+}
+
+static int CountChildren(void) {
+    int n = 0;
+    for (DWORD c = *(DWORD*)(FakeRoot() + SC_BINDLG_OFF_FIRST_CHILD); c && n < 32;
+         c = *(DWORD*)(c + SC_BINDLG_OFF_NEXT)) ++n;
+    return n;
+}
+
+static DWORD ShownStatUserUnit(int btn) {   // 0-based button index
+    return *(DWORD*)(FakeStatUser(btn) + SC_STATUSER_OFF_UNIT);
+}
+
+static void SmallSelection(int n) {
+    DWORD v[SC_SELECTION_SLOTS];
+    for (int i = 0; i < n; ++i) v[i] = FakeUnit(i);
+    ScFanoutOnSelect((unsigned)n, v);
+}
+
+// Point the dispatcher's two globals at the fake dialog + a live portrait unit.
+static void SetHudGlobals(DWORD dialog, DWORD portrait) {
+    *(DWORD*)FakeRt(SC_VA_STATDATA_DIALOG)      = dialog;
+    *(DWORD*)FakeRt(SC_VA_ACTIVE_PORTRAIT_UNIT) = portrait;
+    *(BYTE*) FakeRt(SC_VA_STAT_DIRTY)           = 0;
+}
+
+static void ResetHudCounters(void) {
+    g_ctlShows = g_ctlHides = g_ctlUpdates = 0;
+    g_engInteractCalls = g_origDispatchCalls = 0;
+}
+
+static void HudRowTests(void) {
+    printf("\n[10] HUD-row paging: fake dialog tree, fake engine primitives\n");
+
+    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
+                                 PAGE_READWRITE);
+    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+
+    MakeUnits(64, 1);
+    MakeSprites(64);                          // poisoned selectionIndex, part [8] style
+    for (int i = 0; i < 64; ++i) {            // give every unit a type id and HP
+        *(WORD*) (FakeUnit(i) + SC_CUNIT_OFF_UNIT_ID)   = (WORD)(100 + i);
+        *(DWORD*)(FakeUnit(i) + SC_CUNIT_OFF_HITPOINTS) = 40 * 256;
+    }
+
+    ScFanoutTestBegin(g_fake, NULL, 200);     // shadow-list source; no emission
+    BuildFakeDialog();
+    ScHudRowTestBegin(g_fake, &FakeShowCtl, &FakeHideCtl, &FakeUpdateCtl,
+                      &FakeEngineInteract, &FakeOrigDispatch);
+
+    const DWORD engineFn = (DWORD)FakeRt(SC_VA_WIREFRAME_BTN_INTERACT);
+    const DWORD root     = FakeRoot();
+    SetHudGlobals(root, FakeUnit(0));         // dialog + a live portrait unit
+
+    printf("\n    a <=12 selection stays stock: the engine's dispatcher runs, nothing touched\n");
+    ResetHudCounters();
+    SmallSelection(10);
+    ScHudRowOnDispatch();
+    Check("the original dispatcher ran", (long long)g_origDispatchCalls, 1);
+    Check("button 1 interact still the engine's",
+          (long long)*(DWORD*)(FakeCtl(1) + SC_BINDLG_OFF_INTERACT), (long long)engineFn);
+    Check("statUser 0 untouched (poison intact)", (long long)ShownStatUserUnit(0),
+          (long long)0xEEEEEEEEu);
+    Check("child count unchanged (no indicator)", CountChildren(), 13);
+
+    printf("\n    36 units: page 1 is the ENGINE'S OWN 12\n");
+    ResetHudCounters();
+    DriveSelection(36);
+    ScHudRowOnDispatch();
+    Check("the engine's dispatcher was NOT called (we stood in for it)",
+          (long long)g_origDispatchCalls, 0);
+    Check("page 1 of 3", ScHudRowCurrentPage() + 1, 1);
+    Check("page count 3", ScHudRowPageCount(), 3);
+    {
+        bool slotsOk = true, wrapOk = true, wrapUniform = true;
+        DWORD wrapVal = *(DWORD*)(FakeCtl(1) + SC_BINDLG_OFF_INTERACT);
+        for (int i = 0; i < 12; ++i) {
+            if (ShownStatUserUnit(i) != FakeUnit(i)) slotsOk = false;
+            if (*(WORD*)(FakeStatUser(i) + SC_STATUSER_OFF_ID) != (WORD)(100 + i)) slotsOk = false;
+            DWORD w = *(DWORD*)(FakeCtl(1 + i) + SC_BINDLG_OFF_INTERACT);
+            if (w == engineFn || w == 0) wrapOk = false;
+            if (w != wrapVal) wrapUniform = false;
+        }
+        Check("the 12 statUser records hold visible units 1-12", slotsOk ? 1 : 0, 1);
+        Check("all 12 buttons wrapped away from the engine fn", wrapOk ? 1 : 0, 1);
+        Check("  with one uniform shim", wrapUniform ? 1 : 0, 1);
+    }
+    Check("the indicator is spliced (14 children)", CountChildren(), 14);
+    {
+        DWORD ind = *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD);
+        Check("  at the head, with a negative id",
+              (long long)*(short*)(ind + SC_BINDLG_OFF_INDEX), (long long)(short)0xFFE0);
+        Check("  interact from the type-9 default table",
+              (long long)*(DWORD*)(ind + SC_BINDLG_OFF_INTERACT), 0x11111111);
+        Check("  update from the type-9 default table",
+              (long long)*(DWORD*)(ind + SC_BINDLG_OFF_UPDATE), 0x22222222);
+        const char* text = (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
+        Check("  text says 36 units, 1-12, page 1/3",
+              (text && strstr(text, "36 units") && strstr(text, "1-12") &&
+               strstr(text, "(1/3)")) ? 1 : 0, 1);
+    }
+    // A quiet frame: dispatcher runs, but nothing changed -> no re-fill and the
+    // engine's dispatcher stays untouched (the page persists on its own).
+    ResetHudCounters();
+    ScHudRowOnDispatch();
+    Check("a settled frame does not re-show the buttons", (long long)g_ctlShows, 0);
+    Check("  and does not call the engine's dispatcher", (long long)g_origDispatchCalls, 0);
+
+    printf("\n    right-click flips pages; every other event passes through\n");
+    {
+        BYTE evt[0x14];
+        memset(evt, 0, sizeof(evt));
+        *(WORD*)(evt + SC_EVT_OFF_TYPE) = SC_EVT_RBUTTONDOWN;
+        Check("right-click handled", ScHudRowOnButtonEvent(FakeCtl(3), (DWORD)&evt[0]), 1);
+        Check("  dirty flag raised", (long long)*(BYTE*)FakeRt(SC_VA_STAT_DIRTY), 1);
+        ScHudRowOnDispatch();
+        Check("  page 2 of 3", ScHudRowCurrentPage() + 1, 2);
+        Check("  dirty flag consumed", (long long)*(BYTE*)FakeRt(SC_VA_STAT_DIRTY), 0);
+        bool slotsOk = true;
+        for (int i = 0; i < 12; ++i) {
+            if (ShownStatUserUnit(i) != FakeUnit(12 + i)) slotsOk = false;
+        }
+        Check("  page 2 shows overflow units 13-24", slotsOk ? 1 : 0, 1);
+        {
+            DWORD ind = *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD);
+            const char* text = (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
+            Check("  indicator says 13-24 (2/3)",
+                  (text && strstr(text, "13-24") && strstr(text, "(2/3)")) ? 1 : 0, 1);
+        }
+        ResetHudCounters();
+        *(WORD*)(evt + SC_EVT_OFF_TYPE) = 4;   // LBUTTONDOWN
+        ScHudRowOnButtonEvent(FakeCtl(3), (DWORD)&evt[0]);
+        Check("  a left-click reaches the engine's handler",
+              (long long)g_engInteractCalls, 1);
+        *(WORD*)(evt + SC_EVT_OFF_TYPE) = SC_EVT_RBUTTONDOWN;
+        ScHudRowOnButtonEvent(FakeCtl(3), (DWORD)&evt[0]);
+        ScHudRowOnDispatch();
+        Check("  next flip reaches page 3 (units 25-36)",
+              ShownStatUserUnit(0) == FakeUnit(24) ? 1 : 0, 1);
+        ScHudRowOnButtonEvent(FakeCtl(3), (DWORD)&evt[0]);
+        ScHudRowOnDispatch();
+        Check("  and wraps back to page 1", ScHudRowCurrentPage() + 1, 1);
+    }
+
+    printf("\n    HP drift on the displayed page is noticed\n");
+    ResetHudCounters();
+    ScHudRowOnDispatch();
+    Check("settled again (no re-show)", (long long)g_ctlShows, 0);
+    *(DWORD*)(FakeUnit(0) + SC_CUNIT_OFF_HITPOINTS) = 10 * 256;   // unit 0 is on page 1
+    ResetHudCounters();
+    ScHudRowOnDispatch();
+    Check("a displayed unit losing HP forces a re-fill", g_ctlShows > 0 ? 1 : 0, 1);
+
+    printf("\n    a unit DYING snaps back to page 1 (the conductor's rule)\n");
+    {
+        BYTE evt[0x14];
+        memset(evt, 0, sizeof(evt));
+        *(WORD*)(evt + SC_EVT_OFF_TYPE) = SC_EVT_RBUTTONDOWN;
+        ScHudRowOnButtonEvent(FakeCtl(3), (DWORD)&evt[0]);
+        ScHudRowOnDispatch();
+        Check("on page 2", ScHudRowCurrentPage() + 1, 2);
+        *(BYTE*)(FakeUnit(15) + SC_CUNIT_OFF_UNIQUENESS) += 1;   // slot recycled
+        ScHudRowOnDispatch();
+        Check("death snapped back to page 1", ScHudRowCurrentPage() + 1, 1);
+        Check("  35 live units, still 3 pages", ScHudRowPageCount(), 3);
+        {
+            DWORD ind = *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD);
+            const char* text = (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
+            Check("  indicator says 35 units", (text && strstr(text, "35 units")) ? 1 : 0, 1);
+        }
+        *(BYTE*)(FakeUnit(15) + SC_CUNIT_OFF_UNIQUENESS) -= 1;
+    }
+
+    printf("\n    a selection change to ONE unit restores the row to stock\n");
+    // The single-unit case the dispatcher detour exists for: the engine's own
+    // single branch never calls the multi act, so the hand-back must come from the
+    // dispatcher detour itself.
+    ResetHudCounters();
+    SmallSelection(1);
+    ScHudRowOnDispatch();
+    Check("the engine's dispatcher ran the hand-back", (long long)g_origDispatchCalls, 1);
+    {
+        bool restored = true;
+        for (int i = 0; i < 12; ++i) {
+            if (*(DWORD*)(FakeCtl(1 + i) + SC_BINDLG_OFF_INTERACT) != engineFn) restored = false;
+        }
+        Check("all 12 interact pointers restored to the engine fn", restored ? 1 : 0, 1);
+    }
+    Check("the indicator is unspliced (13 children)", CountChildren(), 13);
+    Check("buttons force-repainted over the indicator's pixels",
+          g_ctlUpdates > 0 ? 1 : 0, 1);
+    ResetHudCounters();
+    ScHudRowOnDispatch();
+    Check("and it stays stock (engine dispatcher keeps running)",
+          (long long)g_origDispatchCalls, 1);
+
+    printf("\n    re-entering overflow re-wraps and re-splices exactly once\n");
+    DriveSelection(36);
+    ScHudRowOnDispatch();
+    ScHudRowOnDispatch();                     // idempotence: a second frame changes nothing
+    Check("still 14 children after two frames", CountChildren(), 14);
+
+    printf("\n    THE INVARIANT: this module never touches a sprite\n");
+    Check("flag 0x08 was never set on any sprite", NoSpriteWasMarkedSelected(64) ? 1 : 0, 1);
+    Check("selectionIndex was never written", NoSelectionIndexWasWritten(64) ? 1 : 0, 1);
+
+    ScHudRowTestBegin(NULL, NULL, NULL, NULL, NULL, NULL);   // leave it inert
+    ScFanoutTestBegin(NULL, NULL, 200);
+    VirtualFree(g_fake, 0, MEM_RELEASE);
+    g_fake = NULL;
+}
+
+// ---------------------------------------------------------------------------
 
 int main(void) {
     char tmp[MAX_PATH];
@@ -891,6 +1175,7 @@ int main(void) {
     FanoutCoreTests();
     OpcodePolicyTests();
     CircleTests();
+    HudRowTests();
 
     printf("\nhooktest: %d failure(s)\n", g_failures);
     ScLogClose();

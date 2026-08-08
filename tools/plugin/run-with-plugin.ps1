@@ -61,7 +61,11 @@ param(
     # Task 014: draw a selection circle under the units the 12-cap threw away.
     # Only meaningful in -Mode fanout; '0' is the feature's own off switch, which is
     # how a run with and without the visuals can be compared without rebuilding.
-    [ValidateSet('0', '1')][string]$Circles = '1'
+    [ValidateSet('0', '1')][string]$Circles = '1',
+    # Task 017: page the bottom-HUD wireframe row through the whole shadow
+    # selection (right-click on the row flips pages). Only meaningful in
+    # -Mode fanout; '0' is its own off switch, same pattern as -Circles.
+    [ValidateSet('0', '1')][string]$HudRow = '1'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -219,6 +223,7 @@ $env:SCPLUGIN_MODE           = $Mode
 $env:SCPLUGIN_LOG_COMMANDS   = $LogCommands
 $env:SCPLUGIN_FANOUT_BUDGET  = "$FanoutBudget"
 $env:SCPLUGIN_CIRCLES        = $Circles
+$env:SCPLUGIN_HUDROW         = $HudRow
 if ($FanoutCmds) { $env:SCPLUGIN_FANOUT_CMDS = $FanoutCmds }
 else { $env:SCPLUGIN_FANOUT_CMDS = '' }
 
