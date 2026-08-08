@@ -161,7 +161,12 @@ try {
         Assert-That 'nothing can end the game on its own (TRIG is empty)' `
             (@($gen | Select-String -Pattern 'TRIG holds 0 byte').Count -gt 0)
         Assert-That 'the map differs from its template only where this tool meant it to' `
-            (@($gen | Select-String -Pattern 'differs from the template ONLY in: OWNR SIDE UNIT TRIG').Count -gt 0)
+            (@($gen | Select-String -Pattern 'differs from the template ONLY in: OWNR SIDE UNIT TRIG FORC').Count -gt 0)
+        # If a force could still randomise start locations, the human would be reassigned
+        # to another player slot about half the time and would own none of the placed
+        # units -- a coin-flip failure, which is worse than a reliable one.
+        Assert-That 'the human is always the player who owns the units' `
+            (@($gen | Select-String -Pattern 'no force randomises start locations').Count -gt 0)
     }
 
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `

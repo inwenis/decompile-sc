@@ -12,9 +12,11 @@ big group and issue one order in a couple of seconds.
 - Single player only: the chosen player's OWNR slot becomes `HUMAN` (open
   slot), exactly one other slot becomes a unit-less `COMPUTER`, every other
   slot is forced to `INACTIVE`. Nothing hostile is on the map.
-- The chosen player's race (`SIDE`) is written explicitly, and the map's
-  triggers (`TRIG`/`MBRF`) are removed. Those two are what make the result
-  actually *play* -- see "Why generated maps used not to play" below.
+- The chosen player's race (`SIDE`) is written explicitly, the "randomize start
+  location" bit is cleared from every force (`FORC`), and the map's triggers
+  (`TRIG`/`MBRF`) are removed. Those three are what make the result actually
+  *play*, and play the same way every time -- see "Why generated maps used not
+  to play" below.
 - Everything else (terrain, start locations, forces, unit/upgrade/tech
   settings, strings, briefing art) comes **byte for byte** unchanged from a
   real Blizzard map used as a template.
@@ -43,7 +45,7 @@ None of that turned out to be the reason generated maps did not play (see
 below), but a generator whose output differs from its template in ways nobody
 chose is a generator whose failures cannot be reasoned about. The raw-byte
 path removes the question: the validator now asserts the output differs from
-its template **only** in `OWNR`, `SIDE`, `UNIT` and `TRIG`, and refuses
+its template **only** in `OWNR`, `SIDE`, `FORC`, `UNIT` and `TRIG`, and refuses
 otherwise.
 
 richchk is still a dependency, and still does the half it is good at: reading
@@ -69,11 +71,12 @@ Steps, in order:
 4. Rewrite `OWNR`: chosen player -> `HUMAN` (0x06), one other slot ->
    `COMPUTER` (0x05), everyone else -> `INACTIVE`.
 5. Rewrite `SIDE` for those two slots to an explicit race.
-6. Empty `TRIG` and `MBRF`.
-7. Save into a copy of the template MPQ (StormLib under the hood, via
+6. Clear the "randomize start location" bit from every force in `FORC`.
+7. Empty `TRIG` and `MBRF`.
+8. Save into a copy of the template MPQ (StormLib under the hood, via
    richchk's DLL binding but NOT richchk's own `save_chk_to_mpq` -- see
    "Why the game rejected the old output" below).
-8. Read the result back and assert placed unit count/type/owner, start
+9. Read the result back and assert placed unit count/type/owner, start
    location, player slots, race, empty triggers, terrain dimensions, and the
    section-level diff against the template -- see "Validation" below.
 
@@ -159,9 +162,10 @@ OK: C:\sc-work\1161-base\Maps\BroodWar\00-testmap\lurkers.scx
   start location for player 0 at (864, 624)
   OWNR[0] = HUMAN(open slot); one unit-less computer slot at 1
   SIDE[0] = Zerg -- not 'User Selectable', so the engine adds no melee starting units
+  FORC force flags 0x00 0x00 0x00 0x00 -- no force randomises start locations, so the human is always player 0
   TRIG holds 0 byte(s) -- nothing can end the game on its own
   terrain 128x96 tiles
-  differs from the template ONLY in: OWNR SIDE UNIT TRIG
+  differs from the template ONLY in: OWNR SIDE UNIT TRIG FORC
 ```
 
 Every one of those assertions except the last is still only *structural*, and
@@ -323,6 +327,23 @@ melee triggers, and the third of them — *"all players: non-allied victory play
 only other participant is the unit-less computer opponent. (That one is read from the file, not
 watched in game: the fix landed before it was ever loaded with its triggers intact. The campaign
 case above is the one confirmed on screen.)
+
+### 3. Half the runs spawned the player in the dark, owning nothing — `FORC` randomised slots
+
+Found while running the finished test repeatedly, which is the only way this one shows up: with
+the map, the menus and the lobby byte-for-byte identical to a passing run, the game came up on a
+black screen with an empty minimap and the plugin reported `player=1/1/1`, `UNITSTATE n=0`.
+
+`FORC`'s last four bytes are per-force property flags, and bit `0x01` is *randomize start
+location*. `(2)Fading Realm.scx` sets it on Force 1, which every slot belongs to. StarCraft
+implements that by permuting the participants among the **start-location owners** — that is, by
+changing which player id you play as. It is not a camera decision. On a two-slot generated map
+that is a coin flip, and losing it makes the human player 1 while all 36 placed units belong to
+player 0.
+
+The generator now clears that bit on every force (leaving allied / allied-victory / shared-vision
+alone), and the validator refuses a map that still has it. Two consecutive full test runs after
+the fix both logged `player=0/0/0`.
 
 ### Still true, from task 015 — do not re-introduce
 

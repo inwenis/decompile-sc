@@ -185,6 +185,12 @@ SIDE_NAMES = {
 }
 RACE_IDS = {"zerg": SIDE_ZERG, "terran": SIDE_TERRAN, "protoss": SIDE_PROTOSS}
 
+# FORC per-force property flags (the section's last four bytes, one per force).
+FORC_RANDOM_START = 0x01
+FORC_ALLIED = 0x02
+FORC_ALLIED_VICTORY = 0x04
+FORC_SHARED_VISION = 0x08
+
 # A handful of common unit type names (units.dat ids). Marine is the
 # documented default: small, cheap, unambiguous to count on screen. Anything
 # else can be passed as a raw units.dat integer id.
@@ -489,6 +495,27 @@ def generate_map(
         sides[pick_opponent_slot(player)] = race
         sections = replace_section(sections, "SIDE", bytes(sides), template)
 
+        # AND THE PLAYERS MUST NOT BE SHUFFLED BETWEEN SLOTS (task 016).
+        #
+        # FORC's last four bytes are per-force property flags, and bit 0x01 is "randomize
+        # start location". A Blizzard ladder map sets it -- (2)Fading Realm.scx carries
+        # 0x01 on Force 1, which every slot belongs to. StarCraft implements that by
+        # permuting the participants among the start-location OWNERS, i.e. by changing
+        # which player id you play as; it is not a camera decision. On a two-slot generated
+        # map that is a coin flip, and losing it means the human is player 1 while all the
+        # placed units belong to player 0: you spawn in the dark owning nothing.
+        # Observed exactly that on 2026-08-08 -- the plugin logged `player=1/1/1` and
+        # `UNITSTATE n=0` on a run whose map, menus and lobby were identical to a passing
+        # one. Clearing the bit makes the assignment deterministic. The other three bits
+        # (allied, allied victory, shared vision) are left alone.
+        forc_idx = require_section(sections, "FORC", template)
+        forc = bytearray(sections[forc_idx].payload)
+        if len(forc) != 20:
+            raise ValueError(f"Template {template}: FORC is {len(forc)} bytes, expected 20")
+        for i in range(16, 20):
+            forc[i] &= ~FORC_RANDOM_START & 0xFF
+        sections = replace_section(sections, "FORC", bytes(forc), template)
+
     # THE MISSION MUST NOT BE ABLE TO END ITSELF (task 016).
     #
     # Under Use Map Settings the engine runs no melee win/lose logic of its own: a game
@@ -641,11 +668,28 @@ def validate_map(
                     f"such a slot the standard MELEE starting units even under Use Map "
                     f"Settings, and the map's own placed units are never created"
                 )
+        # No force may randomise start locations: that shuffles which player id the human
+        # actually plays as, and half the time they are not the one owning the units. See
+        # the FORC note in generate_map().
+        forc_idx = find_section(sections, "FORC")
+        if forc_idx < 0:
+            raise AssertionError(f"{path}: no FORC section found")
+        random_start = [
+            i for i, f in enumerate(sections[forc_idx].payload[16:20])
+            if f & FORC_RANDOM_START
+        ]
+        if random_start:
+            raise AssertionError(
+                f"{path}: force(s) {[i + 1 for i in random_start]} still randomise start "
+                f"locations (FORC flag 0x01); the human would be reassigned to another "
+                f"player slot at random, owning none of the placed units"
+            )
 
     changed = None
     if template is not None and template.exists():
         changed = diff_against_template(path, template)
-        expected = {"UNIT", "TRIG", "MBRF"} | (set() if keep_ownr else {"OWNR", "SIDE"})
+        expected = {"UNIT", "TRIG", "MBRF"} | (
+            set() if keep_ownr else {"OWNR", "SIDE", "FORC"})
         unexpected = [c for c in changed if c not in expected]
         if unexpected:
             raise AssertionError(
@@ -668,6 +712,12 @@ def validate_map(
     print(f"  SIDE[{player}] = {SIDE_NAMES.get(side, side)}"
           + ("" if side == SIDE_USER_SELECTABLE else " -- not 'User Selectable', so the "
              "engine adds no melee starting units"))
+    forc_idx = find_section(sections, "FORC")
+    if forc_idx >= 0:
+        flags = list(sections[forc_idx].payload[16:20])
+        print("  FORC force flags " + " ".join(f"0x{f:02X}" for f in flags)
+              + (" -- no force randomises start locations, so the human is always "
+                 f"player {player}" if not any(f & FORC_RANDOM_START for f in flags) else ""))
     print(f"  TRIG holds {trig_len} byte(s)"
           + ("" if keep_triggers else " -- nothing can end the game on its own"))
     print(f"  terrain {width}x{height} tiles")

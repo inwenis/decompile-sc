@@ -551,7 +551,17 @@ Task 016 root-caused both. Neither was the CHK round-trip that was suspected at 
    seconds in; with them stripped, the map runs indefinitely. Full write-up in
    `tools/README-test-map.md`.
 
-Both fixes live in `tools/make_test_map.py` and are asserted by its validator.
+A third one, invisible until the finished test was run repeatedly: **`FORC` bit `0x01`,
+"randomize start location"**, which `(2)Fading Realm.scx` sets on the force every slot belongs
+to. The engine implements it by permuting the participants among the start-location *owners* —
+by changing which player id you play as, not where the camera looks. On a two-slot generated map
+that is a coin flip, and losing it puts the human on player 1 while every placed unit belongs to
+player 0: `player=1/1/1`, `UNITSTATE n=0`, a black screen. Clearing the bit makes it
+deterministic (`player=0/0/0` on both runs since).
+
+All three fixes live in `tools/make_test_map.py` and are asserted by its validator. The
+read-only tool the evidence came out of is `tools/inspect_map.py`
+(`sections` / `diff` / `players` / `triggers --ending-only`).
 
 ### 8.2 The in-game ability run, delivered
 
