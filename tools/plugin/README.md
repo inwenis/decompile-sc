@@ -1,4 +1,4 @@
-# StarCraft 1.16.1 plugin — observer (task 008) and command fan-out (task 011)
+# StarCraft 1.16.1 plugin — observer (008), command fan-out (011), selection circles (014)
 
 Our own code, running inside StarCraft 1.16.1.
 
@@ -10,6 +10,10 @@ verified *statically* — also hold in a live process. Findings:
 **Task 011** added the part that writes: hooks that capture the player's selection *before* the
 engine truncates it to 12, and fan a single order out into several `Select(≤12)`+order pairs so
 every unit obeys. Design evidence: [`research/command-path.md`](../../research/command-path.md).
+
+**Task 014** made those extra units *look* selected: it attaches the engine's own selection-circle
+image to every unit the cap threw away, so 24 box-selected units show 24 circles instead of 12.
+Design evidence: [`research/selection-circles.md`](../../research/selection-circles.md).
 
 | | |
 |---|---|
@@ -33,7 +37,7 @@ explicitly asks for more.
 | `observe` **(default)** | none | none — no byte of game memory is written | the task-008 observer, and the **off switch** |
 | `hooktest` | 1 (`queueCommand`) | none; logs `CMD id=0xNN len=N` for every outgoing command | proves a hook fires, and names command ids |
 | `shadow` | 4 | none; logs the pre-cap selection | proves the >12 capture without touching gameplay |
-| `fanout` | 4 | orders reach every captured unit | the feature |
+| `fanout` | 5 (4 with `-Circles 0`) | orders reach every captured unit, **and every captured unit gets a selection circle** | the feature |
 
 **Three independent off switches**, in increasing order of bluntness:
 
@@ -41,6 +45,12 @@ explicitly asks for more.
 2. Do not inject: `run-with-plugin.ps1 -NoPlugin`, or launch
    `C:\sc-work\1161-base\StarCraft.exe` directly. The game directory contains nothing of ours.
 3. Unload the DLL — `DLL_PROCESS_DETACH` un-splices every hook and restores the original bytes.
+   **Unloading mid-game is unsupported, and it leaves task 014's circles on screen.** Everything in
+   `sc_circles.cpp` is game-thread-only; taking the circles off from the unloader's thread would
+   mutate the sprite overlay list and the image free list while the game thread renders from them.
+   The leftovers are self-healing, not permanent — the engine's own unit-removal path frees the
+   circle on death, and `0x00497620` frees it the next time that unit is selected and deselected.
+   Off switch 1 or 2 is what you want; this one is for a process that is going away anyway.
 
 There is nothing to uninstall in any case: `StarCraft.exe` on disk is never modified, so its
 SHA-256 is unchanged before and after every run.
@@ -106,6 +116,46 @@ up quietly duplicating a build order. Extend the set with
 `-FanoutCmds '14 15 1A'` once an id has been identified — the plugin logs `CMD id=0xNN len=N` for
 every command, so identifying one costs a single keypress in game.
 
+---
+
+## Selection circles: how they work
+
+Full derivation in [`research/selection-circles.md`](../../research/selection-circles.md).
+
+A selection circle in this engine is **not a flag the renderer consults** — it is a `CImage` with
+draw function `0x0D` and an id in `0x231..0x23A` (ten sizes), linked into the sprite's overlay list.
+Sprite flag `0x01` (at `CSprite+0x0E`, *not* `+0x06` as BWAPI's header says) is just the bookkeeping
+bit that records one is attached.
+
+So the plugin does not reimplement anything. It calls the engine's own primitives:
+
+| | |
+|---|---|
+| attach | `0x004D7070(colourTable[player], 0x231)` with `EAX = CSprite*`, then `flags \|= 0x01` |
+| detach | `0x004975D0` with `ECX = CSprite*` — the engine's own remove-just-the-circle |
+
+**One extra hook, `CreateNewUnitSelectionsFromList` (`0x0049AE40`)**, the client's
+"replace the whole selection" funnel (10 callers: the drag box, every click path, control-group
+recall). Our circles come off at its **entry**, before the engine attaches its own — which is what
+keeps the two sets disjoint at every instant.
+
+### Why it never sets the "selected" flag
+
+`CSprite::selectionIndex` (`+0x0B`) is read by four instructions in the binary, every one of them
+using it as a `memmove` offset into a **12-entry stack array**:
+
+- a value ≥ 12 makes the length negative and smashes a 48-byte stack buffer;
+- a value ≤ 11 is in bounds but deletes a *different, genuinely selected* unit from the selection.
+
+There is no safe value for a unit that is fan-out-selected but not engine-selected. All four readers
+are gated on sprite flag `0x08` ("selected"), so the plugin **sets only flag `0x01`, never `0x08`,
+and never writes `selectionIndex` at all** — the field is then never read for our units.
+`hooktest.exe` part [8] asserts both invariants against fake sprites.
+
+The visible cost: a shadow-selected unit gets a circle and **no health bar** (the bar is the other
+half of the engine's attach, and its removal is gated on `0x08`). That is also a useful tell —
+circle *with* a bar is one of the engine's 12, circle *without* is one of ours.
+
 ### Known limitations
 
 | | |
@@ -114,7 +164,8 @@ every command, so identifying one costs a single keypress in game.
 | Whole-selection orders (archon merge, unload-all, building morph) | **not handled, and not attempted.** Their semantics depend on the entire selection at once, so splitting into 12-unit chunks would change what they mean — an archon merge chunked into threes merges the wrong pairs. They are not in the default id set, so they behave exactly as stock |
 | Shift-add past 12 | the shift path goes through `combineSelectionsLists`, which the overflow hook does cover, but a shift-add re-commits through `CMDACT_Select`; whatever the engine ends up holding is what gets captured. Not tested |
 | Control-group recall (`0x13`) | rebuilds the selection outside `CMDACT_Select`, so the captured list is **dropped** on seeing that command rather than fanned out stale |
-| The HUD | still shows 12 wireframes. Not a bug: the engine's cap is never raised, and the on-screen selection circles stay at 12 |
+| The HUD | still shows 12 wireframes. Not a bug: the engine's cap is never raised. **The on-screen circles no longer stay at 12** (task 014) — but the wireframe row is a fixed 12-slot dialog and is a separate job |
+| Health bars | shadow-selected units get a circle and no health bar, deliberately — see "Selection circles" above |
 | Sound | each emitted `Select` can trigger the selection sound |
 | Recent-selection ring | each emitted `Select` pushes an entry into the engine's alt-click recent-selection groups |
 | Replays | every emitted command is vanilla-shaped, so a replay still parses; but one human intent appears as several `Select`+order pairs, and a very large selection can still exceed the 255-byte frame block if the budget is raised |
@@ -363,6 +414,7 @@ file in the game folder.
 | `-LogCommands 0\|1` | log every outgoing command id (default 1) |
 | `-FanoutBudget <bytes>` | per-turn byte budget for emitted pairs (default 200; the replay frame block is 255) |
 | `-FanoutCmds '14 15 1A'` | replace the set of command ids that get fanned out |
+| `-Circles 0\|1` | task 014's selection circles under the over-cap units (default 1; only meaningful in `-Mode fanout`). `0` is the feature's own off switch and drops the hook count from 5 to 4 |
 | `-Windowed` / `-RemoveWindowed` | the **old** `ddraw.dll`-swap recipe and its undo. Kept only so the failure is reproducible; it does not work — use `-InjectWindowedHelper` |
 | `-WaitForExit` | block until the game exits instead of returning |
 
@@ -463,13 +515,49 @@ The one exception is the deprecated `-Windowed` switch, which *does* write
 | `src/scplugin.cpp` | `DllMain`, the read-only observer — `SafeRead`, snapshot, log |
 | `src/sc_log.h/.cpp` | the shared log file and its lock |
 | `src/sc_hook.h/.cpp` | the inline-detour engine — prologue check, trampoline, thread suspension |
-| `src/sc_fanout.h/.cpp` | the shadow selection and the fan-out; the only code that writes to game memory |
-| `src/hooktest.cpp` | offline unit test for the detour engine (`build.ps1 -Test`) |
+| `src/sc_fanout.h/.cpp` | the shadow selection and the fan-out |
+| `src/sc_circles.h/.cpp` | task 014's selection circles: one hook, two engine calls, and the reasoning for never touching `selectionIndex` |
+| `src/hooktest.cpp` | offline unit tests for the detour engine, the fan-out core and the circles (`build.ps1 -Test`) |
 | `src/scinject.cpp` | the 32-bit launcher/injector |
 | `build.ps1` | build + PE machine-type gate (+ `-Test`) |
 | `run-with-plugin.ps1` | launch wrapper (+ windowed shim helper, + dialog check, + `-Mode`) |
+| `drive-game.ps1` | posted-window-message driver: find the HWND, click, drag, type, capture a frame. No synthetic OS input, no screen coordinates |
+| `test-selection-circles.ps1` | **unattended** end-to-end test: launches, walks the menus, loads a stock map, drives a drag box and an order, asserts on the plugin log |
 | `check-game-windows.ps1` | out-of-process launch health check |
 | `close-game.ps1` | WM_CLOSE the game and verify it exited (hard rule: never leave one running) |
+
+### Testing it without a human
+
+```powershell
+./tools/plugin/test-selection-circles.ps1            # circles on
+./tools/plugin/test-selection-circles.ps1 -NoCircles # the off-switch run
+```
+
+It drives the game with `PostMessage` and **client** coordinates in `lParam` — the technique task
+012 demonstrated live
+([`research/automated-testing-options.md`](../../research/automated-testing-options.md) §4.1).
+Focus is not required; the
+window must not be minimised. The oracle is the plugin's own log, because it is written from inside
+the process. Frames are captured at every step into `-ShotDir` (default `C:\sc-work\logs\014-frames`,
+outside the repo) as a **diagnostic only** — they reproduce game artwork and must never be committed.
+
+It also asserts hard rule 3 rather than attesting to it: `StarCraft.exe` is SHA-256'd before launch
+and after close and compared against the pristine 1.16.1 constant from `tools/make-working-copy.ps1`
+both times.
+
+The one thing it cannot assert is whether the circles are actually *drawn*: `CIRCLES show: N/N` only
+proves the engine accepted the attach. Look at the `shadow-selection` frame for that.
+
+**Aiming a click at one of the plugin's own circles** is possible because the plugin logs their
+screen positions:
+
+```
+CIRCLES pos: 12 on screen of 12: 147,196 178,196 209,196 ...
+```
+
+client pixels, computed as the sprite's map position minus the viewport origin the game's own click
+handler uses. Without it the >12 shift-click test cannot tell "clicked one of ours" from "clicked
+one of the engine's" and has to accept either outcome.
 
 ### How memory is written safely
 

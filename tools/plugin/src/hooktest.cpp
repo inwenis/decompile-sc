@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "sc_addresses.h"
+#include "sc_circles.h"
 #include "sc_fanout.h"
 #include "sc_hook.h"
 #include "sc_log.h"
@@ -374,6 +375,239 @@ static void FanoutCoreTests(void) {
 }
 
 // ---------------------------------------------------------------------------
+// [8] The selection circles, driven with fake sprites and fake engine primitives.
+//
+// sc_circles reaches the engine through two function pointers precisely so this can
+// run: the attach/detach state machine, the staleness rules and -- the point of the
+// whole design -- the promise that neither sprite flag 0x08 nor CSprite::selectionIndex
+// is ever written, are all asserted here with no StarCraft in the process.
+//
+// What is NOT provable offline is whether the engine DRAWS the image it was asked to
+// attach. That is the one thing the in-game run exists to answer.
+// ---------------------------------------------------------------------------
+
+#define FAKE_SPRITE_VA 0x00680000u          // inside the fake image, clear of everything else
+
+static DWORD g_addCalls = 0, g_removeCalls = 0;
+static DWORD g_lastAddSprite = 0, g_lastAddColour = 0, g_lastAddImageId = 0;
+static DWORD g_removedSprites[64];
+static int   g_removedCount = 0;
+static bool  g_addFails = false;            // simulate an exhausted image free list
+
+static DWORD FakeSprite(int i) { return (DWORD)FakeRt(FAKE_SPRITE_VA) + (DWORD)i * 0x24u; }
+
+static DWORD FakeAddCircle(DWORD sprite, DWORD colour, DWORD baseImageId) {
+    ++g_addCalls;
+    g_lastAddSprite = sprite; g_lastAddColour = colour; g_lastAddImageId = baseImageId;
+    if (g_addFails) return 0;
+    return 0xC0FFEE00u;   // a non-NULL "CImage*"; the module only tests it for zero
+}
+
+// Emulates 0x004975D0 faithfully enough to catch a double-free: it clears flag 0x01,
+// and it does nothing at all when that flag is already clear.
+static BYTE FakeRemoveCircle(DWORD sprite) {
+    ++g_removeCalls;
+    if (g_removedCount < (int)(sizeof(g_removedSprites) / sizeof(g_removedSprites[0]))) {
+        g_removedSprites[g_removedCount++] = sprite;
+    }
+    BYTE* flags = (BYTE*)(sprite + SC_CSPRITE_OFF_FLAGS);
+    if ((*flags & SC_SPRITE_FLAG_SEL_CIRCLE) == 0) return 0;
+    *flags = (BYTE)(*flags & ~SC_SPRITE_FLAG_SEL_CIRCLE);
+    return 1;
+}
+
+// Unit i gets sprite i, with the sprite zeroed and selectionIndex poisoned to 0xEE so
+// that "nobody wrote it" is distinguishable from "somebody wrote 0".
+static void MakeSprites(int n) {
+    for (int i = 0; i < n; ++i) {
+        DWORD s = FakeSprite(i);
+        memset((void*)s, 0, 0x24);
+        *(BYTE*)(s + SC_CSPRITE_OFF_SELECTION_INDEX) = 0xEE;
+        *(DWORD*)(FakeUnit(i) + SC_CUNIT_OFF_SPRITE) = s;
+    }
+}
+
+static ScCircleUnit CircleFor(int i) {
+    ScCircleUnit c;
+    c.unit       = FakeUnit(i);
+    c.sprite     = 0;
+    c.uniqueness = *(BYTE*)(FakeUnit(i) + SC_CUNIT_OFF_UNIQUENESS);
+    c.player     = *(BYTE*)(FakeUnit(i) + SC_CUNIT_OFF_PLAYER);
+    return c;
+}
+
+static void ResetCircleCounters(void) {
+    g_addCalls = g_removeCalls = 0;
+    g_removedCount = 0;
+    g_addFails = false;
+}
+
+static bool NoSpriteWasMarkedSelected(int n) {
+    for (int i = 0; i < n; ++i) {
+        if (*(BYTE*)(FakeSprite(i) + SC_CSPRITE_OFF_FLAGS) & SC_SPRITE_FLAG_SELECTED) return false;
+    }
+    return true;
+}
+
+static bool NoSelectionIndexWasWritten(int n) {
+    for (int i = 0; i < n; ++i) {
+        if (*(BYTE*)(FakeSprite(i) + SC_CSPRITE_OFF_SELECTION_INDEX) != 0xEE) return false;
+    }
+    return true;
+}
+
+static void CircleTests(void) {
+    printf("\n[8] selection circles: fake sprites, fake engine primitives\n");
+
+    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
+                                 PAGE_READWRITE);
+    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+
+    MakeUnits(64, 1);
+    MakeSprites(64);
+    // The colour table the module reads, BYTE[0x00581D6A + player]; player 1 -> 0x5A.
+    *(BYTE*)((DWORD)FakeRt(SC_VA_SELECTION_COLOR_TABLE) + 1) = 0x5A;
+
+    ScCirclesTestBegin(g_fake, &FakeAddCircle, &FakeRemoveCircle);
+    ResetCircleCounters();
+
+    printf("\n    attaching to three units\n");
+    {
+        ScCircleUnit set[3] = { CircleFor(20), CircleFor(21), CircleFor(22) };
+        ScCirclesShow(set, 3);
+        Check("three attach calls", (long long)g_addCalls, 3);
+        Check("module holds three", ScCirclesCount(), 3);
+        Check("flag 0x01 set on unit 20's sprite",
+              *(BYTE*)(FakeSprite(20) + SC_CSPRITE_OFF_FLAGS) & SC_SPRITE_FLAG_SEL_CIRCLE, 1);
+        Check("the colour byte came from the player table", (long long)g_lastAddColour, 0x5A);
+        Check("the base image id is 0x231", (long long)g_lastAddImageId,
+              SC_SELECTION_CIRCLE_IMAGE_BASE);
+    }
+
+    printf("\n    THE INVARIANT: flag 0x08 and selectionIndex are never written\n");
+    Check("no sprite was marked selected", NoSpriteWasMarkedSelected(64) ? 1 : 0, 1);
+    Check("no selectionIndex was written", NoSelectionIndexWasWritten(64) ? 1 : 0, 1);
+
+    printf("\n    re-stating the set detaches the old one first\n");
+    ResetCircleCounters();
+    {
+        ScCircleUnit set[2] = { CircleFor(30), CircleFor(31) };
+        ScCirclesShow(set, 2);
+        Check("three detach calls", (long long)g_removeCalls, 3);
+        Check("two attach calls", (long long)g_addCalls, 2);
+        Check("module holds two", ScCirclesCount(), 2);
+        Check("unit 20's sprite is clean again",
+              *(BYTE*)(FakeSprite(20) + SC_CSPRITE_OFF_FLAGS), 0);
+    }
+
+    printf("\n    hide takes everything off and is idempotent\n");
+    ResetCircleCounters();
+    ScCirclesHide();
+    Check("two detach calls", (long long)g_removeCalls, 2);
+    Check("module holds none", ScCirclesCount(), 0);
+    ScCirclesHide();
+    Check("a second hide calls nothing", (long long)g_removeCalls, 2);
+
+    printf("\n    a sprite the ENGINE owns is never touched\n");
+    ResetCircleCounters();
+    {
+        // flag 0x08: the engine has this unit in its 12. flag 0x01 alone: something
+        // else already put a circle on it. Adopting either would mean freeing an
+        // image we did not allocate.
+        *(BYTE*)(FakeSprite(40) + SC_CSPRITE_OFF_FLAGS) = SC_SPRITE_FLAG_SELECTED;
+        *(BYTE*)(FakeSprite(41) + SC_CSPRITE_OFF_FLAGS) = SC_SPRITE_FLAG_SEL_CIRCLE;
+        ScCircleUnit set[3] = { CircleFor(40), CircleFor(41), CircleFor(42) };
+        ScCirclesShow(set, 3);
+        Check("only the free unit was attached", (long long)g_addCalls, 1);
+        Check("module holds one", ScCirclesCount(), 1);
+        ResetCircleCounters();
+        ScCirclesHide();
+        Check("and only that one is detached", (long long)g_removeCalls, 1);
+        Check("  it was unit 42's sprite", (long long)g_removedSprites[0], FakeSprite(42));
+        *(BYTE*)(FakeSprite(40) + SC_CSPRITE_OFF_FLAGS) = 0;
+        *(BYTE*)(FakeSprite(41) + SC_CSPRITE_OFF_FLAGS) = 0;
+    }
+
+    printf("\n    a unit whose slot has been RECYCLED is left alone\n");
+    ResetCircleCounters();
+    {
+        ScCircleUnit set[2] = { CircleFor(50), CircleFor(51) };
+        ScCirclesShow(set, 2);
+        // Bump the uniqueness byte the way 0x004A03FD does. That instruction is the
+        // ONLY write to CUnit+0xA5 in the whole binary and it lives in unit CREATION
+        // (0x004A0320), so this models SLOT REUSE, not death -- see
+        // research/selection-circles.md 4.5. Reuse is what makes blind removal
+        // dangerous: the flag bit may be set again, but by somebody else's circle.
+        *(BYTE*)(FakeUnit(50) + SC_CUNIT_OFF_UNIQUENESS) += 1;
+        ResetCircleCounters();
+        ScCirclesHide();
+        Check("only the survivor is detached", (long long)g_removeCalls, 1);
+        Check("  it was unit 51's sprite", (long long)g_removedSprites[0], FakeSprite(51));
+        *(BYTE*)(FakeUnit(50) + SC_CUNIT_OFF_UNIQUENESS) -= 1;
+        *(BYTE*)(FakeSprite(50) + SC_CSPRITE_OFF_FLAGS) = 0;
+    }
+
+    printf("\n    a unit that DIED -- the engine already took our circle off\n");
+    ResetCircleCounters();
+    {
+        // What death actually does: 0x004A0740 (the unit-removal path) calls
+        // 0x004975D0 on the way out, which frees the 0x231..0x23A image and clears
+        // flag 0x01 -- regardless of flag 0x08, so it takes OUR circle too. Death does
+        // NOT bump CUnit+0xA5. So the record that protects us here is the flag check,
+        // not the uniqueness check, and a second remove must not be attempted.
+        ScCircleUnit set[2] = { CircleFor(58), CircleFor(59) };
+        ScCirclesShow(set, 2);
+        *(BYTE*)(FakeSprite(58) + SC_CSPRITE_OFF_FLAGS) &= (BYTE)~SC_SPRITE_FLAG_SEL_CIRCLE;
+        ResetCircleCounters();
+        ScCirclesHide();
+        Check("the dead unit's circle is not removed twice", (long long)g_removeCalls, 1);
+        Check("  the survivor is the one removed", (long long)g_removedSprites[0], FakeSprite(59));
+    }
+
+    printf("\n    a unit whose sprite was swapped underneath us is left alone\n");
+    ResetCircleCounters();
+    {
+        ScCircleUnit set[1] = { CircleFor(52) };
+        ScCirclesShow(set, 1);
+        *(DWORD*)(FakeUnit(52) + SC_CUNIT_OFF_SPRITE) = FakeSprite(53);
+        ScCirclesHide();
+        Check("nothing detached", (long long)g_removeCalls, 0);
+        *(DWORD*)(FakeUnit(52) + SC_CUNIT_OFF_SPRITE) = FakeSprite(52);
+        *(BYTE*)(FakeSprite(52) + SC_CSPRITE_OFF_FLAGS) = 0;
+    }
+
+    printf("\n    an exhausted image free list is survived, not recorded\n");
+    ResetCircleCounters();
+    {
+        g_addFails = true;
+        ScCircleUnit set[2] = { CircleFor(54), CircleFor(55) };
+        ScCirclesShow(set, 2);
+        Check("both attaches were attempted", (long long)g_addCalls, 2);
+        Check("neither was recorded", ScCirclesCount(), 0);
+        Check("no flag was set on a sprite with no image",
+              *(BYTE*)(FakeSprite(54) + SC_CSPRITE_OFF_FLAGS), 0);
+        g_addFails = false;
+    }
+
+    printf("\n    a unit with no sprite at all is skipped, not dereferenced\n");
+    ResetCircleCounters();
+    {
+        *(DWORD*)(FakeUnit(56) + SC_CUNIT_OFF_SPRITE) = 0;
+        ScCircleUnit set[2] = { CircleFor(56), CircleFor(57) };
+        ScCirclesShow(set, 2);
+        Check("only the unit with a sprite was attached", (long long)g_addCalls, 1);
+        ScCirclesHide();
+    }
+
+    Check("FINAL: flag 0x08 was never set on any sprite", NoSpriteWasMarkedSelected(64) ? 1 : 0, 1);
+    Check("FINAL: selectionIndex was never written",       NoSelectionIndexWasWritten(64) ? 1 : 0, 1);
+
+    ScCirclesInit(NULL, false);   // leave the module inert
+    VirtualFree(g_fake, 0, MEM_RELEASE);
+    g_fake = NULL;
+}
+
+// ---------------------------------------------------------------------------
 
 int main(void) {
     char tmp[MAX_PATH];
@@ -458,6 +692,7 @@ int main(void) {
     Check("no detour ran after removal (mixed)", g_mixedCalls - mixedBefore, 0);
 
     FanoutCoreTests();
+    CircleTests();
 
     printf("\nhooktest: %d failure(s)\n", g_failures);
     ScLogClose();

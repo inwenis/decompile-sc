@@ -73,9 +73,97 @@
 
 #define SC_CUNIT_SIZE            0x150u  // 336; measured live in
                                          // research/runtime-selection-observations.md 3.5
+#define SC_CUNIT_OFF_SPRITE      0x0Cu   // CSprite*; read as [unit+0x0C] by every function
+                                         // in research/selection-circles.md 2
 #define SC_CUNIT_OFF_PLAYER      0x4Cu   // u8 owning player
 #define SC_CUNIT_OFF_UNIT_ID     0x64u   // u16 unit type id
 #define SC_CUNIT_OFF_UNIQUENESS  0xA5u   // u8, the tag's staleness check
+
+// ---------------------------------------------------------------------------
+// SELECTION CIRCLES -- derived by task 014 from StarCraft.exe 1.16.1 itself.
+// Full evidence, with disassembly, in research/selection-circles.md.
+//
+// NOTE the offsets below are NOT the ones BWAPI's CSprite.h publishes. BWAPI puts
+// selectionIndex at 0x03 and flags at 0x06; this binary uses 0x0B and 0x0E, because
+// its CSprite begins with the two linked-list pointers. research/selection-cap.md
+// 2.4 already quoted 0x0B for selectionIndex from prior art; 0x0E for flags is new
+// here, and both are now read off instructions in this binary rather than inherited.
+// ---------------------------------------------------------------------------
+
+#define SC_CSPRITE_OFF_SELECTION_INDEX 0x0Bu  // u8; written at 0x004E61D6 / 0x004E61FD
+#define SC_CSPRITE_OFF_FLAGS           0x0Eu  // u8; tested at 0x004E61A3, 0x004975D3, ...
+// u16 map-pixel position. 0x0049F860 passes the pair as (x, y) to 0x00469F60
+// (`FUN_00469f60(*(u16*)(sprite+0x14), *(u16*)(sprite+0x16))`), and 0x0046F3A0 uses
+// [sprite+0x16] alone as the y in its draw-order comparison.
+#define SC_CSPRITE_OFF_POS_X           0x14u
+#define SC_CSPRITE_OFF_POS_Y           0x16u
+#define SC_CSPRITE_OFF_MAIN_IMAGE      0x18u
+#define SC_CSPRITE_OFF_FIRST_OVERLAY   0x1Cu
+#define SC_CSPRITE_OFF_LAST_OVERLAY    0x20u
+
+// The viewport's top-left corner in MAP pixels, so client = map - these. Both are read
+// by the click handler at 0x0046FB40, which builds the on-screen rectangle it searches
+// as `{ left, top, left + 0x280, top + 400 }` -- i.e. 640 wide, and these two are its
+// origin. Used only to log where a circled unit is on screen, so an automated test can
+// aim a click at one; nothing in the feature itself depends on them.
+#define SC_VA_SCREEN_LEFT 0x0062848Cu  // u16 (the binary reads the low half)
+#define SC_VA_SCREEN_TOP  0x006284A8u  // u16
+
+// Sprite flag bits, confirmed against this binary (selection-circles.md 3):
+//   0x01 -- a selection-circle image (id 0x231..0x23A) is attached to this sprite.
+//           0x004975D0 clears exactly this bit and frees exactly that image.
+//   0x08 -- "selected". 0x004E6180 sets it together with selectionIndex; 0x00497620
+//           clears it. IT IS THE GATE ON ALL FOUR selectionIndex READS IN THE BINARY:
+//           0x0046FD77 and 0x0049F7B3 use the value as a memmove offset into a 12-entry
+//           STACK array (no value is safe there for a unit outside the engine's 12),
+//           while 0x0049F00B and 0x0049F8B6 save it and re-attach with
+//           0x004E6180(saved). Leaving this bit clear is what puts our units out of
+//           reach of all four. Table and reasoning: research/selection-circles.md 4.
+#define SC_SPRITE_FLAG_SEL_CIRCLE 0x01u
+#define SC_SPRITE_FLAG_SELECTED   0x08u
+
+// u8[8], indexed by CUnit+0x4C. 0x004E61A6 reads `MOV DL,byte ptr [ECX + 0x581d6a]`
+// with ECX = the owning player, and passes the byte straight to the overlay builder,
+// which stores it at image+0x30 (the colour-remap selector, 0x004D6810).
+#define SC_VA_SELECTION_COLOR_TABLE 0x00581D6Au
+
+// Base image id for the selection circle. 0x004D6810 computes the real id as
+// `0x231 + spritesDatCircleIndex[sprite->sprite_id]`, and the remover accepts
+// 0x231..0x23A -- ten consecutive ids, the ten circle sizes.
+#define SC_SELECTION_CIRCLE_IMAGE_BASE 0x231u
+
+// EAX = CSprite*, __stdcall(u32 colourByte, u32 baseImageId), RET 8. Allocates an
+// image from the free list, links it at the sprite's LAST-overlay end (CSprite+0x20)
+// and initialises it through 0x004D6810. Returns the new CImage* or NULL when the
+// image free list is empty. Call site: 0x004E61B4-0x004E61BC.
+//
+// WHICH END OF THE LIST DRAWS FIRST IS NOT ESTABLISHED. An earlier version of this
+// comment asserted "so it draws over the unit's own images", which is unevidenced and
+// probably backwards -- the selection circle plainly renders UNDER the unit on screen,
+// and the health bar (linked at the FIRST-overlay end by 0x004D6420) renders over it.
+// Nothing in this task decompiled the renderer's walk, so the ordering is left as an
+// open question rather than guessed at (research/selection-circles.md 7). A future
+// health-bar task must settle it before relying on either end.
+#define SC_VA_SPRITE_ADD_SEL_CIRCLE 0x004D7070u
+
+// ECX = CSprite*, no stack arguments, RET. If flag 0x01 is set, clears it, finds the
+// image whose id is in 0x231..0x23A and frees it. This is the engine's own
+// remove-just-the-circle primitive (it is the whole of the invincible-unit deselect
+// path), which is exactly what a plugin that never sets flag 0x08 needs.
+#define SC_VA_SPRITE_REMOVE_SEL_CIRCLE 0x004975D0u
+
+// EAX = CUnit**, __stdcall(u32 count), RET 4. The client-side "replace the whole
+// selection" funnel: it detaches the selection graphics of every unit currently in
+// activePlayerSelection, then attaches them to the new list. 10 callers, covering the
+// drag box, every click path, and control-group recall -- which makes its ENTRY the
+// one place a plugin can drop its own extra circles before the engine re-attaches.
+#define SC_VA_CREATE_NEW_UNIT_SELECTIONS 0x0049AE40u
+
+// The engine's own per-unit primitives. NOT called or hooked by this plugin -- listed
+// because research/selection-circles.md 2 quotes them and because a future task that
+// wants the HP bar as well will need them.
+#define SC_VA_UNIT_SELECT_GRAPHICS   0x004E6180u  // EAX = CUnit*, __stdcall(u8 slot)
+#define SC_VA_UNIT_DESELECT_GRAPHICS 0x004E6290u  // EAX = CUnit*
 
 // ---------------------------------------------------------------------------
 // COMMAND PATH -- derived by task 011 from StarCraft.exe 1.16.1 itself.

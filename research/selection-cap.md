@@ -170,6 +170,17 @@ selection. The source's own name is used here deliberately — whether that rout
 `memcpy` or `memmove` overlap semantics is unresolved from public sources and matters for a
 widened array **[unverified]**. Any relocation must also keep `selectionIndex` in sync.
 
+> **Answered 2026-08-08 from the binary by task 014 — read
+> [`selection-circles.md`](selection-circles.md) instead of this paragraph.** Both flag meanings
+> below are confirmed, and `selectionIndex` really is at `0x0B`. But **the flags byte is at `0x0E`
+> in this binary, not at `0x06`** — its `CSprite` starts with the two list pointers, which shifts
+> everything after `spriteID` by 8 relative to the published headers. And the hazard is worse than
+> "keep `selectionIndex` in sync": FOUR instructions read it, all as a `memmove` offset into a
+> 12-entry stack array, so **no value is safe for a unit outside the engine's 12** — a value ≥ 12
+> smashes the stack, a value ≤ 11 deletes a different, genuinely selected unit. All four are gated
+> on flag `0x08`, which is why task 014's plugin sets only flag `0x01` and never writes the index.
+> ([`selection-circles.md` §2, §4](selection-circles.md).)
+
 Also on the sprite: `flags & 0x08 = Selected`, `flags & 0x01 = draw selection circle`
 (BWAPI `CSprite.h:20-29`; GPTP `structures/CSprite.h:14-22`), plus a
 **`DashedSelectionMask = 0x6`** two-bit counter for allied ("dashed") selection circles, which teippi
