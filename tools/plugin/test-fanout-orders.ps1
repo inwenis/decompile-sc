@@ -13,18 +13,25 @@ input, focus not required, window must not be minimised.
 
 THE ORACLE IS THE PLUGIN'S `UNITSTATE` LINE. The plugin walks its shadow list -- the whole
 pre-cap selection, all 24 units, not the 12 the engine holds -- reads each unit's current
-order id out of CUnit+0xA6 and reports a histogram. So "every unit obeyed" is a claim about
-all 24 units' own state, made from inside the process.
+MAIN order id out of CUnit+0x4D and reports a histogram. So "every unit obeyed" is a claim
+about all 24 units' own state, made from inside the process.
 
-The shape of the proof for each order:
+The shape of the proof for each command:
 
-  1. drive the units into motion, and record which order they are all on;
+  1. assert the precondition as ONE order shared by EVERY live unit, and that it is the
+     order this test put them on -- not merely "the most common order in the histogram",
+     which would pass with the other twelve on something else entirely;
   2. press the key once;
-  3. assert the plugin fanned the command out to more than twelve units, AND that
-     afterwards NOT ONE unit is still on the moving order.
+  3. assert the plugin fanned the command out to more than twelve units;
+  4. assert the result is again ONE order shared by EVERY live unit, and DIFFERENT from
+     the one they were all on. Both halves matter: "nobody is still doing the old thing"
+     alone is satisfied by units that merely finished it.
 
-Step 3's second half is the part that cannot be faked by a command that only reached the
-visible twelve: the other twelve would still be walking.
+THE ORDER OF THE CASES IS THE POINT. Hold Position runs FIRST, from a moving group: units
+that simply arrived at their destination go idle, and idle is not the hold order, so
+arrival cannot fake it. Stop then runs from the HOLDING group -- stationary units holding
+position have nothing to arrive at, so there is no window in which anything but Stop can
+take them off the hold order. Neither case has a "maybe they just got there" reading.
 
 Frames are captured as a DIAGNOSTIC only and land outside the repo -- they reproduce game
 artwork (AGENTS.md hard rule 1) and must never be committed.
@@ -49,6 +56,19 @@ $scriptDir = $PSScriptRoot
 
 $failures = 0
 $step = 0
+
+# The two order ids this test pins, both observed on this fixture and explained in
+# research/command-opcodes.md §4.1 / §7.1. They are asserted, not merely reported, so a
+# change in what the engine does to these units fails the run instead of sliding through
+# as "well, they are all on SOME one order".
+#
+#   $HOLD_ORDER  what every unit is on after Hold Position. 0x2B's handler picks the order
+#                per unit TYPE (0x39/0x3E/0x6C/0x88/0x6B), and all five Protoss types in
+#                this box map to 0x6B -- a mix here would fail the single-order assertion
+#                first, which is the honest failure.
+#   $IDLE_ORDER  what every unit is on after Stop, and before anything has been ordered.
+$HOLD_ORDER = '0x6B'
+$IDLE_ORDER = '0x03'
 
 function Assert-That {
     param([string]$What, [bool]$Ok, [string]$Detail = '')
@@ -103,26 +123,28 @@ function Get-ScUnitState {
     throw "test: no UNITSTATE line for marker '$label' within ${TimeoutSec}s."
 }
 
-function Get-ScDominantOrder {
-    param($State)
-    ($State.Orders.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 1).Key
+# "Every live unit is on exactly one order, and it is this one." The single-bucket half is
+# what stops a vacuous pass: a histogram whose largest bucket is 13 of 24 says nothing at
+# all about the other eleven.
+function Assert-ScAllOnOneOrder {
+    param([string]$What, $State, [string]$ExpectedOrder = '')
+    $only = @($State.Orders.Keys)
+    $ok = ($State.Live -gt 12) -and ($only.Count -eq 1) -and
+          ($State.Orders[$only[0]] -eq $State.Live)
+    if ($ok -and $ExpectedOrder) { $ok = ($only[0] -eq $ExpectedOrder) }
+    $want = $ExpectedOrder ? " (must be $ExpectedOrder)" : ''
+    $detail = ($State.Orders.GetEnumerator() | ForEach-Object { "$($_.Key):$($_.Value)" }) -join ' '
+    Assert-That "$What`: all $($State.Live) units share ONE order$want" $ok "(got $detail)"
+    return ($only.Count -eq 1) ? $only[0] : ''
 }
 
-# Asserts one untargeted command: it fans out past the cap, and afterwards not one unit is
-# still doing what they were all doing before.
-function Assert-ScOrderReachedEveryone {
+# One untargeted command, against a group ALREADY in a known uniform state: it fans out past
+# the cap, and afterwards every live unit is on one NEW shared order.
+function Assert-ScCommandReachedEveryone {
     param(
         [string]$What, [IntPtr]$Hwnd, [int]$VirtualKey, [string]$ExpectedCmdId,
-        [string]$Tag
+        [string]$Tag, [string]$FromOrder, $Before, [string]$ExpectedAfter = ''
     )
-    # Put them all in motion first, so "still moving" is a detectable failure.
-    Send-ScClick -Hwnd $Hwnd -X 90 -Y 300 -Right
-    Start-Sleep -Seconds 2
-    $before = Get-ScUnitState "$Tag-moving"
-    $moving = Get-ScDominantOrder $before
-    Assert-That "$What`: the group is moving first (order $moving on $($before.Orders[$moving]) of $($before.Live) units)" `
-        ($before.Live -gt 12 -and $before.Orders[$moving] -gt 12)
-
     $mark = Get-ScLogLineCount -LogPath $LogPath
     Send-ScKey -Hwnd $Hwnd -VirtualKey $VirtualKey
     Start-Sleep -Seconds 3
@@ -140,15 +162,17 @@ function Assert-ScOrderReachedEveryone {
     Assert-That "$What`: every chunk went out" (@($lines | Select-String -Pattern 'FANOUT done').Count -gt 0)
 
     $after = Get-ScUnitState "$Tag-after"
-    Assert-That "$What`: nobody died on the way ($($before.Live) -> $($after.Live))" `
-        ($after.Live -eq $before.Live)
-    # THE assertion. If the command had only reached the engine's twelve, the other twelve
-    # would still be on the moving order.
-    $stillMoving = $after.Orders[$moving]
-    if ($null -eq $stillMoving) { $stillMoving = 0 }
-    Assert-That "$What`: NOT ONE of the $($after.Live) units is still on order $moving (was $($before.Orders[$moving]))" `
-        ($stillMoving -eq 0) "(still $stillMoving)"
+    Assert-That "$What`: nobody died on the way ($($Before.Live) -> $($after.Live))" `
+        ($after.Live -eq $Before.Live)
+    # The positive: every one of them is now on one shared order -- a command that reached
+    # only the engine's twelve would leave the other twelve on $FromOrder, which breaks the
+    # single-bucket assertion...
+    $now = Assert-ScAllOnOneOrder "$What`: after" $after $ExpectedAfter
+    # ...and that shared order is not the one they came from.
+    Assert-That "$What`: and it is a NEW order ($FromOrder -> $now)" `
+        ($now -ne '' -and $now -ne $FromOrder)
     Write-Host "       $($after.Line)"
+    return $after
 }
 
 # --- on-disk binary, BEFORE anything runs --------------------------------------
@@ -228,16 +252,43 @@ try {
         Shot 'boxed'
     }
 
-    Step 'Stop (0x1A) reaches every unit, not just the twelve' {
-        Assert-ScOrderReachedEveryone -What 'Stop' -Hwnd $hwnd -VirtualKey 0x53 `
-            -ExpectedCmdId '0x1A' -Tag 'stop'
-        Shot 'after-stop'
+    Step 'Hold Position (0x2B) reaches every unit, not just the twelve' {
+        # Put them in motion with the Move button (key M) and a target near the middle of
+        # the view, so the group stays inside the drag box for the later steps.
+        Send-ScKey -Hwnd $hwnd -VirtualKey 0x4D
+        Start-Sleep -Milliseconds 400
+        Send-ScClick -Hwnd $hwnd -X 250 -Y 100
+        Start-Sleep -Seconds 3
+        $moving = Get-ScUnitState 'moving'
+        Write-Host "       $($moving.Line)"
+        # The precondition that matters is NOT "they are all on the move order" -- one unit
+        # of the twenty-four is an Observer that need not accept a ground move, and a
+        # precondition that flaky would be tuned away rather than trusted. It is the exact
+        # property that makes the after-state mean something: NOT ONE of them is already
+        # holding position. If any were, the after-assertion could be satisfied by units the
+        # command never reached.
+        $preHold = $moving.Orders[$HOLD_ORDER]
+        if ($null -eq $preHold) { $preHold = 0 }
+        Assert-That "not one of the $($moving.Live) units is already holding ($HOLD_ORDER)" `
+            ($moving.Live -gt 12 -and $preHold -eq 0) "(already holding: $preHold)"
+
+        # Hold FIRST, from a moving group: a unit that merely arrived at its destination
+        # goes idle, and idle is not the hold order, so arrival cannot fake this result.
+        $script:held = Assert-ScCommandReachedEveryone -What 'Hold Position' -Hwnd $hwnd `
+            -VirtualKey 0x48 -ExpectedCmdId '0x2B' -Tag 'hold' `
+            -FromOrder '(not holding)' -Before $moving -ExpectedAfter $HOLD_ORDER
+        Shot 'after-hold'
     }
 
-    Step 'Hold Position (0x2B) reaches every unit, not just the twelve' {
-        Assert-ScOrderReachedEveryone -What 'Hold Position' -Hwnd $hwnd -VirtualKey 0x48 `
-            -ExpectedCmdId '0x2B' -Tag 'hold'
-        Shot 'after-hold'
+    Step 'Stop (0x1A) reaches every unit, not just the twelve' {
+        # From the HOLDING group, which the step above just asserted is all 24 units on one
+        # order. Stationary units holding position have nothing to arrive at, so nothing but
+        # Stop can take them off it -- this assertion has no second reading at all.
+        $null = Assert-ScAllOnOneOrder 'the group is holding' $script:held $HOLD_ORDER
+        $null = Assert-ScCommandReachedEveryone -What 'Stop' -Hwnd $hwnd `
+            -VirtualKey 0x53 -ExpectedCmdId '0x1A' -Tag 'stop' `
+            -FromOrder $HOLD_ORDER -Before $script:held -ExpectedAfter $IDLE_ORDER
+        Shot 'after-stop'
     }
 
     Step 'Attack and Patrol are Targeted Order (0x15), and it fans out' {
@@ -248,8 +299,14 @@ try {
         foreach ($case in @(
             @{ Name = 'Attack'; Key = 0x41 },
             @{ Name = 'Patrol'; Key = 0x50 })) {
-            Send-ScDrag -Hwnd $hwnd -X1 115 -Y1 25 -X2 515 -Y2 355 -Steps 20
+            # The whole viewport, not the original box: the group has been ordered around
+            # since, and a box that no longer contains all of them would fail the fan-out
+            # assertion for a reason that has nothing to do with the fan-out.
+            Send-ScDrag -Hwnd $hwnd -X1 5 -Y1 5 -X2 630 -Y2 345 -Steps 20
             Start-Sleep -Seconds 2
+            $reboxed = Get-ScUnitState "rebox-$($case.Name)"
+            Assert-That "$($case.Name): the re-box still captures more than twelve ($($reboxed.N))" `
+                ($reboxed.N -gt 12)
             $mark = Get-ScLogLineCount -LogPath $LogPath
             Send-ScKey -Hwnd $hwnd -VirtualKey $case.Key
             Start-Sleep -Milliseconds 500

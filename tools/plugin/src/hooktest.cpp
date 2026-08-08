@@ -535,16 +535,22 @@ static void OpcodePolicyTests(void) {
         }
         Check("all 19 fan out at their own length", fannedOut, 19);
 
-        // And nothing else does. Every other id the dispatcher accepts must pass through.
+        // And nothing else does. ALL 39 other ids the dispatcher accepts must pass through
+        // -- including the five whose length the dispatcher computes rather than reads from
+        // an immediate (0x06, 0x07, 0x09, 0x0A, 0x0B). Those five carry `len = -1` in the
+        // opcode table, so the length guard refuses them at any length; the arbitrary
+        // lengths below are exactly the point.
         static const BYTE kOther[] = {
-            0x05, 0x08, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x18, 0x19,
-            0x1F, 0x20, 0x23, 0x27, 0x29, 0x2F, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35,
-            0x37, 0x38, 0x39, 0x3A, 0x3B, 0x55, 0x56, 0x57, 0x58, 0x5C,
+            0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+            0x11, 0x12, 0x13, 0x18, 0x19, 0x1F, 0x20, 0x23, 0x27, 0x29, 0x2F, 0x30,
+            0x31, 0x32, 0x33, 0x34, 0x35, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x55, 0x56,
+            0x57, 0x58, 0x5C,
         };
         static const BYTE kOtherLen[] = {
-            1, 1, 8, 3, 5, 2, 1, 1, 5, 3, 1, 1,
-            3, 3, 3, 1, 3, 5, 2, 1, 2, 1, 1, 3,
-            7, 1, 1, 2, 2, 2, 10, 2, 5, 82,
+            1, 8, 8, 1, 4, 4, 4, 8, 3, 5, 2, 1,
+            1, 5, 3, 1, 1, 3, 3, 3, 1, 3, 5, 2,
+            1, 2, 1, 1, 3, 7, 1, 1, 2, 2, 2, 10,
+            2, 5, 82,
         };
         int passed = 0;
         for (unsigned i = 0; i < sizeof(kOther); ++i) {
@@ -556,7 +562,7 @@ static void OpcodePolicyTests(void) {
             else printf("       0x%02X was NOT passed through (suppressed=%d commands=%d)\n",
                         kOther[i], o.suppressed ? 1 : 0, o.commands);
         }
-        Check("all 34 other accepted opcodes pass through untouched",
+        Check("all 39 other accepted opcodes pass through untouched",
               passed, (int)sizeof(kOther));
     }
 

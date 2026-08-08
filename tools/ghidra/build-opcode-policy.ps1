@@ -33,9 +33,20 @@ Four inputs, all derived here from the binary:
       NONE    the handler never touches the selection iterator.
       LOOP*   the handler forwards to an applier that loops (0x14 and 0x15 only).
 
- 4. Whether the handler reaches a function that MOVES THE PLAYER'S RESOURCES. 0x00467250
-    subtracts from the two per-player resource arrays 0x0057F0F0 and 0x0057F120; 0x00468280
-    is the cancel/refund path. Either one makes the command resource-costed.
+ 4. Whether the handler CALLS DIRECTLY, AT ONE LEVEL, a function that moves the player's
+    resources. 0x00467250 subtracts from the two per-player resource arrays 0x0057F0F0 and
+    0x0057F120; 0x00468280 is the cancel/refund path. Either one makes the command
+    resource-costed.
+
+    THE SCAN IS DEPTH 1 -- a text match over the handler's own decompiled body, not a
+    transitive closure over its call graph. Two indirect chains are known and are NOT found
+    by it: the 0x20 handler reaches 0x00468280 through 0x00466A70, and the 0x34 handler
+    reaches it through a tail jump in 0x004E66E0. Neither changes any policy in the current
+    table, because both opcodes are SINGLE-gated and therefore passthrough on the shape rule
+    alone -- but a FUTURE opcode that loops the selection and spends indirectly would be
+    mis-cleared by this scan. Anything added to the fan-out set on the strength of an empty
+    `resourceFns` column must have its call graph checked by hand until this is a real
+    closure.
 
 The policy falls out of 3 and 4 and nothing else:
 
@@ -73,6 +84,7 @@ $ITER         = 'FUN_0049a850'    # getActivePlayerNextSelection
 # Functions that move the player's minerals/gas. Both were read in this binary:
 #   0x00467250  `(&DAT_0057f0f0)[player] -= ...; (&DAT_0057f120)[player] -= ...`
 #   0x00468280  the cancel path, which refunds through 0x0042CEC0 / 0x0042CE70
+# Matched at ONE LEVEL only -- see the .DESCRIPTION note on the two known indirect chains.
 $RESOURCE_FNS = @('FUN_00467250', 'FUN_00468280')
 
 # 0x14 and 0x15 do not touch the selection iterator themselves -- they forward to an

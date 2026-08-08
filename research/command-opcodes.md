@@ -155,23 +155,32 @@ is never used and may disagree.
 
 ## 3. The one property that decides the policy
 
-Every handler was decompiled (`DecompileMany.java`, 55 functions) and classified by **how it
-uses the receiving player's selection**. The iterator is
+The 58 accepted opcodes reach **53 distinct handler functions** (some ids share one), and those
+53 plus the two appliers of §3 below — 55 functions — were all decompiled
+(`DecompileMany.java`) and classified by **how each uses the receiving player's selection**.
+The iterator is
 `getActivePlayerNextSelection` (`0x0049A850`), which walks `playersSelections[activePlayer]`
 (`0x006284E8 + player*12`) from `selectionIterator` (`0x006284B6`) and returns 0 past slot 11 —
 i.e. it walks the engine's own ≤12 selection and nothing else.
 
-Three shapes, and only three:
+Five shapes appear in the `selectionShape` column of
+[`data/command-opcodes.tsv`](data/command-opcodes.tsv). Counts are **per opcode**, over the 58
+the dispatcher accepts (the TSV's 59th row is `0x54`, which it does not — §1.3):
 
-| shape | code | meaning | count |
+| shape | code | meaning | opcodes |
 |---|---|---|---|
 | **LOOP** | `selectionIterator = 0; u = next(); while (u) { …per unit…; u = next(); }` | the engine applies this command to **every** unit it holds | 20 |
+| **LOOP\*** | the handler unpacks the payload and forwards to an applier that loops | same, one call deeper | 2 |
 | **SINGLE** | `u = next(); if (u) { v = next(); if (v == 0) { …} }` | the command does something **only when exactly one unit is selected** | 11 |
-| **NONE** | never touches the iterator | selection-independent (chat, the select commands themselves, control groups, sync, alliance, …) | 27 |
+| **NONE** | never touches the iterator | selection-independent (chat, the select commands themselves, control groups, sync, alliance, …) | 21 |
+| **INLINE** | the dispatcher case has no handler function at all — it is a few statements in the switch | `0x05`, `0x0F`, `0x3A`, `0x3B` | 4 |
 
-`0x14` and `0x15` are shape **LOOP\***: the handler itself only unpacks the payload and forwards
-to an applier — `0x004560D0` for Right Click, `0x0049AB00` for Targeted Order — and *that*
-function runs the loop. Recorded explicitly in the table so it cannot be mistaken for NONE.
+20 + 2 + 11 + 21 + 4 = 58.
+
+`0x14` and `0x15` are the two **LOOP\*** rows: the handler itself only unpacks the payload and
+forwards to an applier — `0x004560D0` for Right Click, `0x0049AB00` for Targeted Order — and
+*that* function runs the loop. They carry their own shape in the table rather than being folded
+into NONE, which is what their handler alone would look like.
 
 ### 3.1 Why LOOP is the safe half of the rule
 
@@ -196,11 +205,38 @@ player's own 13-unit selection never could. Every SINGLE opcode is passthrough.
 ```
 
 `0x00468280` is the cancel/refund path (through `0x0042CEC0` / `0x0042CE70`). A handler that
-reaches either moves a **player-global** quantity, and a player-global effect is one the player
-issued once, whatever the selection size. Four opcodes are LOOP-shaped *and* resource-moving —
-`0x19`, `0x23`, `0x27` and (SINGLE anyway) `0x1F`, `0x35` — and are passthrough on that ground
-alone. They are the most interesting rows in the table, because the shape rule alone would have
-let two of them through.
+calls either moves a **player-global** quantity, and a player-global effect is one the player
+issued once, whatever the selection size.
+
+Six opcodes call one of the two:
+
+| id | shape | via | would the shape rule alone have allowed it? |
+|---|---|---|---|
+| `0x19` | LOOP | `0x00468280` | **yes** |
+| `0x23` | LOOP | `0x00467250` | **yes** |
+| `0x27` | LOOP | `0x00467250` | **yes** |
+| `0x18` | SINGLE | `0x00468280` | no |
+| `0x1F` | SINGLE | `0x00467250` | no |
+| `0x35` | SINGLE | `0x00467250` | no |
+
+So the resource half of the rule is what keeps **three** opcodes out of the fan-out set that the
+shape half would have let through. The other three are passthrough twice over.
+
+### 3.4 The resource scan is depth 1, and that is a known limit
+
+`tools/ghidra/build-opcode-policy.ps1` matches the two function names **in the handler's own
+decompiled body** — one level, not a transitive closure over its call graph. Two indirect chains
+are known and are *not* found by it:
+
+- the `0x20` handler (`0x004C0100`) reaches `0x00468280` through `0x00466A70`;
+- the `0x34` handler (`0x004BFF30`) reaches it through a tail jump in `0x004E66E0`.
+
+Neither changes a policy in the current table: both opcodes are SINGLE-gated and therefore
+passthrough on the shape rule alone. But a **future** opcode that loops the selection and spends
+indirectly would be mis-cleared, so anything added to the fan-out set on the strength of an empty
+`resourceFns` column has to have its call graph checked by hand until this scan is a real
+closure. Both the script's docstring and this section say "calls directly, one level" for that
+reason.
 
 ---
 
@@ -262,7 +298,7 @@ it from the other end: after Hold Position all 24 units of five different types 
 | `0x2C` | 2 | `0x004C1FA0` | | issues order `0x74` |
 | `0x2D` | 2 | `0x004C1AC0` | | |
 | `0x2E` | 1 | `0x004BFCD0` | | |
-| `0x36` | 1 | `0x004C2F30` | | costs the unit HP, not resources (`0x004797B0`) |
+| `0x36` | 1 | `0x004C2F30` | | costs the acting unit HP, not resources — §6 |
 | `0x5A` | 1 | `0x004C0CD0` | | a second merge, same shape as `0x2A` |
 
 ### 5.1 The passthrough set, by reason
@@ -343,8 +379,26 @@ Two further consequences of the same rule, flagged for the same reason:
   merge that consumes the units. Fanning it out merges within each chunk, so 24 units of the
   right type become 12 merged ones instead of 6. Semantically identical per chunk; twice the
   effect overall.
-- **`0x36`** costs the acting unit HP (`0x004797B0`), not resources. Same story: more units, more
-  HP spent, no player-global quantity touched.
+- **`0x36`** costs the acting unit **HP**, not resources. Its handler gates on
+  `0xa00 < *(int*)(unit + 8)` and then calls `0x004797B0`, which was decompiled for this claim
+  rather than assumed:
+
+  ```c
+  if (in_EAX < *(int *)(in_ECX + 8)) {          /* amount < the field at +8 */
+      *(int *)(in_ECX + 8) = *(int *)(in_ECX + 8) - in_EAX;   /* subtract it */
+      ...
+  } else {                                       /* amount >= it: the unit dies */
+      *(undefined4 *)(in_ECX + 8) = 0;
+      FUN_00475710(); FUN_00488af0();            /* death + kill-credit path */
+  }
+  ```
+
+  A field at `CUnit+0x8` that is decremented by an amount and, on reaching zero, runs a death
+  path **is** hit points; `0x004797B0` is the engine's damage primitive. The handler's own gate
+  (`> 0xa00`, i.e. 10 HP at the engine's 1/256 fixed point) is the "enough health to pay" check.
+  Neither the handler nor `0x004797B0` calls `0x00467250` or `0x00468280` at any depth reachable
+  from its own body, so nothing player-global moves. Same story as the others: more units
+  reached, more units' own HP spent.
 
 ---
 
@@ -359,19 +413,34 @@ file. Run of 2026-08-08:
 
 ```
 UNITSTATE [boxed]      n=24 live=24 visible=12 overflow=12 orders=[0x03:24] types=[0x41:12 0x54:2 0x16:1 0x42:4 0x46:3 0x15:1 0x44:1]
-  Stop: the group is moving first (order 0x06 on 23 of 24 units)
-  Stop: it was fanned out; 24 units were commanded; every chunk went out
-UNITSTATE [stop-after] n=24 live=24 visible=12 overflow=12 orders=[0x03:24]
-  -> NOT ONE of the 24 units is still on order 0x06
 
-  Hold Position: the group is moving first (order 0x31 on 23 of 24 units)
+UNITSTATE [moving]     n=24 live=24 visible=12 overflow=12 orders=[0x03:14 0x06:9 0x02:1]
+  -> not one of the 24 units is already holding (0x6B)
   Hold Position: it was fanned out; 24 units were commanded; every chunk went out
 UNITSTATE [hold-after] n=24 live=24 visible=12 overflow=12 orders=[0x6B:24]
-  -> NOT ONE of the 24 units is still on order 0x31
+  -> all 24 units share ONE order, and it is 0x6B
+
+  the group is holding: all 24 units share ONE order, 0x6B
+  Stop: it was fanned out; 24 units were commanded; every chunk went out
+UNITSTATE [stop-after] n=24 live=24 visible=12 overflow=12 orders=[0x03:24]
+  -> all 24 units share ONE order, 0x03, and it is not 0x6B
 ```
 
-The second half of each pair is the assertion that cannot be satisfied by a command that only
-reached the engine's twelve: the other twelve would still be walking. `0 failure(s)`.
+`0 failure(s)`. Three properties of that shape are deliberate, because each closes a way the
+assertion could pass without meaning anything:
+
+1. **The after-state is a single bucket covering every live unit, pinned to a known order id.**
+   "The largest bucket is over twelve" would say nothing about the rest — the `[moving]` line
+   above is exactly that trap, with no order reaching thirteen of the twenty-four.
+2. **Hold Position runs first, from a moving group.** A unit that merely arrived at its
+   destination goes idle, and idle is not the hold order, so arrival cannot fake the result.
+3. **Stop then runs from the holding group.** Stationary units holding position have nothing to
+   arrive at, so nothing but Stop can take all twenty-four off `0x6B`.
+
+The precondition for step 2 is not "they are all moving" — one of the twenty-four is an Observer
+that need not accept a ground move, and a precondition that flaky would end up tuned away rather
+than trusted. It is the property that actually makes the after-state mean something: **not one of
+them is already holding**.
 
 Attack and Patrol are confirmed in the same run to be `0x15` with distinct order bytes, and to
 fan out — **already working via `0x15` since task 011**, no new code, checked here as a
@@ -399,12 +468,22 @@ to `0x6E`; `0x00491B30` sets it to `0x6D` after deducting energy) and is logged 
   *nothing emitted*.
 - The length guard: `0x1A` arriving at 3 bytes, `0x14` at 4 bytes, and an id the dispatcher does
   not accept are all refused rather than replayed.
-- The whole set, both ways: all 19 fan-out ids fan out at their own dispatcher length, and all
-  34 other accepted opcodes pass through untouched.
+- The whole set, both ways, with **complete coverage of the 58 accepted opcodes**: all 19
+  fan-out ids fan out at their own dispatcher length, and all 39 non-fan-out ids pass through
+  untouched. That includes the five whose length the dispatcher computes rather than reads
+  (`0x06`, `0x07`, `0x09`, `0x0A`, `0x0B`) — they carry `len = -1` in the plugin's opcode table,
+  so the length guard refuses them at any length, and the test feeds them arbitrary lengths for
+  exactly that reason.
 
 ---
 
 ## 8. The fixture wall: no stock map can host a >12 untargeted-ability test
+
+> **Status: the in-game half of acceptance criterion 3 was formally waived for task 015 by the
+> conductor on 2026-08-08**, on the strength of the disclosure below, and moved to a follow-up
+> task (the map-generator CHK/trigger round-trip, plus the burrow assertion the
+> `burrowed=N/M` plumbing in this task's `UNITSTATE` line already supports). Task 015 closes on
+> the offline byte-exact proof of the whole set plus Stop and Hold Position live at 24 units.
 
 Acceptance criterion 3 asked for an untargeted **ability** fanning out in game. It needs three
 things at once, and the stock map set cannot supply them together.
