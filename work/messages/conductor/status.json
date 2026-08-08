@@ -1,8 +1,8 @@
 {
-  "model": "Fable 5",
+  "subject": "milestone complete: 12-unit-cap mod delivered (PRs 11-17 merged); awaiting user pick on Remastered vs polish vs pause",
   "state": "processing",
-  "contextPct": 33,
-  "subject": "merging task 017",
+  "contextPct": 34,
   "effort": "xhigh",
-  "updatedAt": "2026-08-08T08:25:33Z"
+  "model": "Fable 5",
+  "updatedAt": "2026-08-08T08:26:54Z"
 }
