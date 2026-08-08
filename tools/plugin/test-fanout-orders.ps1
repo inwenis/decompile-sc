@@ -89,38 +89,12 @@ function Step {
 # UNITSTATE line for it. Waiting for the line carrying OUR label is what makes this a
 # synchronous read of unit state rather than a race against the 250 ms poll.
 $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
-$markerSeq = 0
 
-function Get-ScUnitState {
+# The reader itself lives in drive-game.ps1 (Get-ScUnitState) so this test and
+# test-burrow-fanout.ps1 parse the plugin's line in exactly one place.
+function Get-ScState {
     param([string]$Tag, [int]$TimeoutSec = 10)
-    $script:markerSeq++
-    $label = "$Tag-$script:markerSeq"
-    Set-Content -LiteralPath $markerPath -Value $label -NoNewline
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    while ((Get-Date) -lt $deadline) {
-        $line = Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
-                Select-String -Pattern ([regex]::Escape("UNITSTATE [$label]")) |
-                Select-Object -Last 1
-        if ($line) {
-            $m = [regex]::Match($line.Line,
-                'UNITSTATE \[[^\]]*\] n=(\d+) live=(\d+) visible=(\d+) overflow=(\d+) orders=\[([^\]]*)\] orders2=\[[^\]]*\] types=\[([^\]]*)\] burrowed=(\d+)/(\d+)')
-            if (-not $m.Success) { break }
-            $orders = @{}
-            foreach ($pair in ($m.Groups[5].Value -split '\s+' | Where-Object { $_ -match ':' })) {
-                $kv = $pair -split ':'
-                $orders[$kv[0]] = [int]$kv[1]
-            }
-            return [pscustomobject]@{
-                N = [int]$m.Groups[1].Value; Live = [int]$m.Groups[2].Value
-                Visible = [int]$m.Groups[3].Value; Overflow = [int]$m.Groups[4].Value
-                Orders = $orders; Types = $m.Groups[6].Value
-                Burrowed = [int]$m.Groups[7].Value
-                Line = $line.Line.Trim()
-            }
-        }
-        Start-Sleep -Milliseconds 250
-    }
-    throw "test: no UNITSTATE line for marker '$label' within ${TimeoutSec}s."
+    Get-ScUnitState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -TimeoutSec $TimeoutSec
 }
 
 # "Every live unit is on exactly one order, and it is this one." The single-bucket half is
@@ -161,7 +135,7 @@ function Assert-ScCommandReachedEveryone {
     }
     Assert-That "$What`: every chunk went out" (@($lines | Select-String -Pattern 'FANOUT done').Count -gt 0)
 
-    $after = Get-ScUnitState "$Tag-after"
+    $after = Get-ScState "$Tag-after"
     Assert-That "$What`: nobody died on the way ($($Before.Live) -> $($after.Live))" `
         ($after.Live -eq $Before.Live)
     # The positive: every one of them is now on one shared order -- a command that reached
@@ -244,7 +218,7 @@ try {
         $shadow = @($lines | Select-String -Pattern 'SHADOW captured: (\d+) units \((\d+) visible \+ (\d+) beyond')
         Assert-That 'the shadow list holds the whole box' ($shadow.Count -gt 0)
 
-        $state = Get-ScUnitState 'boxed'
+        $state = Get-ScState 'boxed'
         Assert-That "more than twelve units are under command ($($state.N))" ($state.N -gt 12)
         Assert-That "the engine itself still holds only twelve ($($state.Visible))" ($state.Visible -eq 12)
         Assert-That "the rest are beyond the cap ($($state.Overflow))" ($state.Overflow -gt 0)
@@ -259,7 +233,7 @@ try {
         Start-Sleep -Milliseconds 400
         Send-ScClick -Hwnd $hwnd -X 250 -Y 100
         Start-Sleep -Seconds 3
-        $moving = Get-ScUnitState 'moving'
+        $moving = Get-ScState 'moving'
         Write-Host "       $($moving.Line)"
         # The precondition that matters is NOT "they are all on the move order" -- one unit
         # of the twenty-four is an Observer that need not accept a ground move, and a
@@ -304,7 +278,7 @@ try {
             # assertion for a reason that has nothing to do with the fan-out.
             Send-ScDrag -Hwnd $hwnd -X1 5 -Y1 5 -X2 630 -Y2 345 -Steps 20
             Start-Sleep -Seconds 2
-            $reboxed = Get-ScUnitState "rebox-$($case.Name)"
+            $reboxed = Get-ScState "rebox-$($case.Name)"
             Assert-That "$($case.Name): the re-box still captures more than twelve ($($reboxed.N))" `
                 ($reboxed.N -gt 12)
             $mark = Get-ScLogLineCount -LogPath $LogPath

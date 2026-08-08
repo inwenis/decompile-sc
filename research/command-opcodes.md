@@ -479,11 +479,12 @@ to `0x6E`; `0x00491B30` sets it to `0x6D` after deducting energy) and is logged 
 
 ## 8. The fixture wall: no stock map can host a >12 untargeted-ability test
 
-> **Status: the in-game half of acceptance criterion 3 was formally waived for task 015 by the
-> conductor on 2026-08-08**, on the strength of the disclosure below, and moved to a follow-up
-> task (the map-generator CHK/trigger round-trip, plus the burrow assertion the
-> `burrowed=N/M` plumbing in this task's `UNITSTATE` line already supports). Task 015 closes on
-> the offline byte-exact proof of the whole set plus Stop and Hold Position live at 24 units.
+> **Status: CLOSED by task 016 on 2026-08-08.** The in-game half of task 015's acceptance
+> criterion 3 was formally waived by the conductor on the strength of the disclosure below, and
+> moved to a follow-up task. That task built the fixture, and the untargeted ability is now
+> proved in the live engine — §8.2. The waiver is spent; nothing in this section is outstanding.
+> Task 015 itself closed on the offline byte-exact proof of the whole set plus Stop and Hold
+> Position live at 24 units.
 
 Acceptance criterion 3 asked for an untargeted **ability** fanning out in game. It needs three
 things at once, and the stock map set cannot supply them together.
@@ -519,23 +520,72 @@ ever been caught because nothing had loaded its output in game:
    The camera opens centred on the start location and shows about 20×12 tiles, so the far half of
    the block sat off screen and behind the HUD where no drag box can reach it.
 
-A third obstacle was found but **not** solved, and the ability test is not delivered in game
-because of it: a map generated from a **melee ladder template** plays as a melee game even with
-Game Type set to *Use Map Settings* — the player gets a standard starting base and the placed
-units are never created. Proved from inside the process rather than from the screen: with the
-generated 36-unit map loaded, the plugin's `UNITSTATE` reports
+A third obstacle was found but not solved by task 015, and the ability test was not delivered in
+game because of it: a map generated from a **melee ladder template** plays as a melee game even
+with Game Type set to *Use Map Settings* — the player gets a standard starting base and the
+placed units are never created. Proved from inside the process rather than from the screen: with
+the generated 36-unit map loaded, the plugin's `UNITSTATE` reports
 `types=[0x29:4 0x23:3 0x2A:1]` (four Drones, three Larva, one Overlord) and a ctrl+click reports
 `types=[0x83:1]` (a Hatchery) — a Zerg melee start, containing none of the 36 units the map file
 demonstrably holds. Generating from a stock **campaign** template instead produces a map that
-loads and enters the mission (`player=1/1/1` in the log) but ends within about seven seconds,
-consistent with a trigger misfiring after the CHK round-trip; two different campaign templates
-behave the same way.
+loads and enters the mission (`player=1/1/1` in the log) but ends within about seven seconds; two
+different campaign templates behave the same way.
 
-So the untargeted-ability fan-out is proved **offline and byte-exact** (§7.2, `0x2A` and the
-whole 19-id set), and the untargeted **command** path is proved in the live game by Stop and Hold
-Position (§7.1). Those two are the same code path as any other id in the set — the opcode is a
-row in a table, not a branch — but the in-game ability run itself is not delivered. It is the one
-gap in this task, and it is a fixture gap, not a feature gap.
+Task 016 root-caused both. Neither was the CHK round-trip that was suspected at the time.
+
+1. **The melee start is the `SIDE` section.** A Blizzard ladder map carries `0x05` "User
+   Selectable" as the race of its human slots, because a ladder player picks a race in the lobby.
+   StarCraft gives such a slot the standard **melee starting units** even under Use Map Settings,
+   and never creates that player's placed units. Ruled out first, by measurement, not by
+   argument: the Game Type combo was opened and *Use Map Settings* picked explicitly from its
+   list, and the histogram above did not change; and with task 016's raw-CHK generator the file
+   differs from the stock ladder map in `OWNR`, `SIDE`, `UNIT` and `TRIG` **and nothing else**,
+   so no other section can be responsible. Writing an explicit race into `SIDE` — one byte per
+   slot — turns `types=[0x2A:1 0x23:3 0x29:4]` into `types=[0x67:36]`.
+2. **The campaign map is ended by its own mission triggers.** `TRIG` came across the old richchk
+   round-trip byte-identical (measured, 50400 bytes on `(1)Enslavers01.scm`), and a raw-CHK map
+   generated from `(1)Enslavers02b.scm` differs from the stock file in `UNIT` alone and still
+   ends. That map ships 30 triggers, six of which end the game on conditions about *which units
+   exist* — which is exactly what a generator changes. Predicted from the trigger dump and then
+   confirmed in game: with triggers kept, *"Congratulations! You are victorious!"* about nine
+   seconds in; with them stripped, the map runs indefinitely. Full write-up in
+   `tools/README-test-map.md`.
+
+Both fixes live in `tools/make_test_map.py` and are asserted by its validator.
+
+### 8.2 The in-game ability run, delivered
+
+`tools/plugin/test-burrow-fanout.ps1`, unattended, `0 failure(s)`, run of 2026-08-08. It
+generates a 36-Lurker Use-Map-Settings map at run time, loads it through Play Custom, and deletes
+it afterwards. Burrow is innate to Lurkers, so the map needs no tech state at all.
+
+```
+UNITSTATE [boxed]    n=36 live=36 visible=12 overflow=24 orders=[0x03:36] types=[0x67:36] burrowed=0/36
+UNITSTATE [idle]     n=36 live=36 visible=12 overflow=24 orders=[0x03:36] types=[0x67:36] burrowed=0/36
+  -- 120 s later: still 36 units, still nobody burrowed. Nothing in this map moves on its own.
+CMD id=0x2C len=2 bytes=[2C 00]
+FANOUT start: cmd=0x2C len=2 units=36 (visible 12 + overflow 24) -> 3 Select+order pairs
+FANOUT done: 3/3 chunks emitted, 84 bytes this turn
+UNITSTATE [burrowed] n=36 live=36 visible=12 overflow=24 orders=[0x03:36] orders2=[0x6D:36] types=[0x67:36] burrowed=36/36
+```
+
+`0x2C` is the Burrow command id (`research/data/command-opcodes.tsv`: dispatcher length 2,
+handler `0x004C1FA0`, LOOP selection shape, policy fanout — and §7.1's derivation of
+`CUnit+0x4D` rests partly on that handler issuing order `0x74` and skipping a unit already on
+it). Four properties make the `36/36` mean something:
+
+1. `burrowed` is counted over the **shadow list** — all 36 units — from each unit's own
+   `CUnit+0xDC` bit `0x10`, not from the picture and not from the largest bucket.
+2. The engine holds twelve (`visible=12`, `overflow=24`, both asserted). Twenty-four of the
+   thirty-six are past the cap, so a count above twelve is unreachable without the fan-out.
+3. The map has no triggers, no enemy units and one unit-less computer slot, so nothing in the
+   game can burrow a Lurker except the command. The 120 s idle step demonstrates that rather
+   than assuming it: the count is still `0/36` when it ends.
+4. The before-state is asserted, not assumed — `0/36`, with every unit on one shared order.
+
+So the untargeted-ability fan-out is now proved three ways: **offline and byte-exact** (§7.2,
+`0x2A` and the whole 19-id set), **in the live game as a command** (§7.1, Stop and Hold Position
+at 24 units), and **in the live game as an ability** (here, Burrow at 36 units).
 
 ---
 
@@ -555,15 +605,15 @@ gap in this task, and it is a fixture gap, not a feature gap.
 - `0x1A` = Stop, `0x2B` = Hold Position, and the order bytes for Attack / Patrol / Move (§4).
 - That a mixed selection is offered no ability buttons (§8).
 - That Stop and Hold Position reach all 24 units of a >12 selection (§7.1).
+- That `0x2C` = Burrow, and that it reaches all 36 units of a >12 selection (§8.2).
+- That a CHK slot whose `SIDE` race is `0x05` "User Selectable" is given melee starting units
+  even under Use Map Settings, and its placed units are never created (§8.1).
 
 ### Open
 
 - **The names of 43 opcodes.** Reduced from 45 by this task; the method is cheap and the tooling
   is committed (`work/scratch/015/name-opcodes.ps1` is a scratch driver, but it is 60 lines over
   `drive-game.ps1`).
-- **Why a map generated from a melee template plays melee under Use Map Settings** (§8.1).
-- **Why a map generated from a campaign template ends its mission within seconds** (§8.1) — the
-  suspicion is a richchk CHK round-trip disturbing `STR`-indexed trigger data, unverified.
 - **What `0x54` is**, given the client emits it and the dispatcher does not accept it (§1.3).
 - The `0x004BF9A9` raw reference to the length table, inside code Ghidra never disassembled.
 
@@ -575,5 +625,6 @@ $env:GHIDRA_INSTALL_DIR = 'C:\re-tools\ghidra_12.1.2_PUBLIC'
     -ProjectDir work/scratch/ghidra-sweep -LogFile work/scratch/ghidra-sweep/import.log
 ./tools/ghidra/build-opcode-policy.ps1          # -> research/data/command-opcodes.tsv
 ./tools/plugin/build.ps1 -Test                  # the offline proofs, no game
-./tools/plugin/test-fanout-orders.ps1           # the live-game proof, unattended
+./tools/plugin/test-fanout-orders.ps1           # the live-game command proof, unattended
+./tools/plugin/test-burrow-fanout.ps1           # the live-game ability proof, unattended (§8.2)
 ```

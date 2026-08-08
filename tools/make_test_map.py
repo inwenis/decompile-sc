@@ -2,15 +2,17 @@
 """Generate a single-player StarCraft 1.16.1 test map with many units pre-placed.
 
 Purpose: a fast fixture for testing "select more than 12 units at once" (the
-project's north star mod). Loading the map should drop the player next to a
-cluster of units big enough that one drag-box grabs more than the classic
-12-unit selection cap.
+project's north star mod) and for testing what one order does to all of them.
+Loading the map should drop the player next to a cluster of units big enough
+that one drag-box grabs more than the classic 12-unit selection cap, on a map
+that then sits there and does nothing until the test is over.
 
-See tools/README-test-map.md for the approach and known limitations.
+See tools/README-test-map.md for the approach, the two failures task 016
+root-caused, and known limitations.
 
 Usage:
     python tools/make_test_map.py
-    python tools/make_test_map.py --unit-count 50 --unit-type marine --player 0
+    python tools/make_test_map.py --unit-count 36 --unit-type lurker --player 0
     python tools/make_test_map.py --validate-only C:\\sc-work\\1161-base\\Maps\\test-many-units.scx --unit-count 36 --unit-type marine --player 0
 """
 
@@ -23,33 +25,120 @@ import struct
 import sys
 from pathlib import Path
 
-from richchk.editor.richchk.rich_chk_editor import RichChkEditor
-from richchk.editor.richchk.rich_ownr_editor import RichOwnrEditor
-from richchk.io.chk.chk_io import ChkIo
-from richchk.io.mpq.starcraft_audio_files_metadata_io import StarCraftAudioFilesMetadataIo
 from richchk.io.mpq.starcraft_mpq_io_helper import StarCraftMpqIoHelper
-from richchk.io.richchk.query.chk_query_util import ChkQueryUtil
-from richchk.io.richchk.richchk_io import RichChkIo
-from richchk.model.chk.unknown.decoded_unknown_section import DecodedUnknownSection
 from richchk.model.mpq.stormlib.stormlib_archive_mode import StormLibArchiveMode
 from richchk.model.mpq.stormlib.stormlib_flag import StormLibFlag
 from richchk.model.mpq.stormlib.stormlib_operation import StormLibOperation
-from richchk.model.richchk.dim.rich_dim_section import RichDimSection
-from richchk.model.richchk.ownr.player_type import PlayerType
-from richchk.model.richchk.ownr.rich_ownr_section import RichOwnrSection
-from richchk.model.richchk.rich_chk import RichChk
-from richchk.model.richchk.trig.player_id import PlayerId
-from richchk.model.richchk.wav.rich_wav_metadata_lookup import RichWavMetadataLookup
 from richchk.mpq.stormlib.stormlib_helper import StormLibHelper
 from richchk.util.fileutils import CrossPlatformSafeTemporaryNamedFile
 
-# CHK "UNIT" section: one 36-byte record per placed unit (incl. resources and
-# start-location markers). richchk does not model this section (no UNIT
-# transcoder as of 0.3.0 -- see requirements.txt), so it is read/written as
-# raw bytes here. Layout verified two ways: (1) staredit.net's published CHK
+# ---------------------------------------------------------------------------
+# CHK sections, as raw bytes
+# ---------------------------------------------------------------------------
+# A CHK file is a flat sequence of `<4-byte name><i32 size><size bytes>` chunks.
+# This generator reads the template's chunks, replaces the payload of the two or
+# three it must change, and writes the rest back BYTE FOR BYTE.
+#
+# It deliberately does NOT decode-and-re-encode the CHK through richchk, which
+# is what task 009-015's generator did. Task 016 diffed both sides of that
+# round-trip section by section and found richchk 0.3.0 rewrites sections it was
+# never asked to touch:
+#   * UNIS/UNIx (unit settings): 4-18 bytes differ inside the base-weapon-damage
+#     array, on every map tried;
+#   * MRGN (locations): a 64-location vanilla-StarCraft section is re-emitted
+#     padded to the 255-location Brood War size (1280 -> 5100 bytes);
+#   * SWNM (switch names): a 1024-byte section is ADDED to maps that had none.
+# None of those is asked for by this tool, and a generator whose output differs
+# from its template in ways nobody chose is a generator whose failures cannot be
+# reasoned about. Reading the CHK out of the MPQ, and writing it back in, still
+# goes through richchk's StormLib binding -- that half was never the problem.
+_CHK_MPQ_PATH = "staredit\\scenario.chk"
+
+ChkSection = collections.namedtuple("ChkSection", "name payload")
+
+
+def parse_chk_sections(data: bytes) -> list[ChkSection]:
+    """Every chunk in file order, duplicates included.
+
+    Refuses maps that use the negative-size chunk trick (a map-protection
+    technique that makes the cursor rewind): this tool cannot re-serialise one
+    faithfully, and silently flattening it would change what the game reads.
+    """
+    sections: list[ChkSection] = []
+    i = 0
+    while i + 8 <= len(data):
+        name = data[i:i + 4].decode("latin-1")
+        (size,) = struct.unpack_from("<i", data, i + 4)
+        if size < 0:
+            raise ValueError(
+                f"CHK section {name!r} at offset {i} has a negative size ({size}); "
+                "this map uses the rewinding-chunk protection trick and cannot be "
+                "used as a template."
+            )
+        start = i + 8
+        if start + size > len(data):
+            raise ValueError(
+                f"CHK section {name!r} at offset {i} claims {size} bytes but only "
+                f"{len(data) - start} remain; the file is truncated."
+            )
+        sections.append(ChkSection(name, data[start:start + size]))
+        i = start + size
+    if i != len(data):
+        raise ValueError(f"{len(data) - i} trailing byte(s) after the last CHK section")
+    return sections
+
+
+def serialize_chk_sections(sections: list[ChkSection]) -> bytes:
+    return b"".join(
+        s.name.encode("latin-1") + struct.pack("<I", len(s.payload)) + s.payload
+        for s in sections
+    )
+
+
+def chk_name(name: str) -> str:
+    """CHK section names are exactly four bytes, space-padded: 'DIM ', 'VER ',
+    'STR ', 'WAV '. Callers spell them without the padding."""
+    if len(name) > 4:
+        raise ValueError(f"CHK section name {name!r} is longer than four bytes")
+    return name.ljust(4)
+
+
+def find_section(sections: list[ChkSection], name: str) -> int:
+    """Index of the LAST chunk with this name, or -1.
+
+    Last, not first: the engine applies chunks in file order, so where a name
+    appears more than once the final one is the one that wins.
+    """
+    padded = chk_name(name)
+    for i in range(len(sections) - 1, -1, -1):
+        if sections[i].name == padded:
+            return i
+    return -1
+
+
+def require_section(sections: list[ChkSection], name: str, template: Path) -> int:
+    idx = find_section(sections, name)
+    if idx < 0:
+        raise ValueError(f"Template {template} has no {name} section; not a valid map")
+    return idx
+
+
+def replace_section(sections: list[ChkSection], name: str, payload: bytes,
+                    template: Path) -> list[ChkSection]:
+    idx = require_section(sections, name, template)
+    out = list(sections)
+    out[idx] = ChkSection(chk_name(name), payload)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# UNIT section: one 36-byte record per placed unit
+# ---------------------------------------------------------------------------
+# richchk does not model this section (no UNIT transcoder as of 0.3.0), so it is
+# parsed by hand here. Layout verified two ways: (1) staredit.net's published CHK
 # spec, (2) parsing a real Blizzard ladder map's UNIT bytes with this exact
-# struct and confirming known-good records (start locations, mineral/gas
-# patches) decode sensibly -- see tools/README-test-map.md.
+# struct and confirming known-good records (start locations, mineral/gas patches)
+# decode sensibly -- see tools/README-test-map.md.
 _UNIT_RECORD_SIZE = 36
 _UNIT_RECORD_FMT = "<IHHHHHHBBBBIHHII"
 _UNIT_FIELDS = (
@@ -65,6 +154,37 @@ START_LOCATION_UNIT_ID = 214
 # bit0 owner, bit1 hp, bit2 shield, bit3 energy, bit4 resource, bit5 hangar.
 _VALID_OWNER_HP_SHIELD_ENERGY = 0x01 | 0x02 | 0x04 | 0x08
 
+# OWNR / IOWN slot values, as the CHK spec defines them and as every stock map on
+# disk carries them (checked directly: (2)Fading Realm.scx is [6,6,0,...],
+# campaign\(1)Enslavers01.scm is [5,0,0,5,5,0,6,0,...]).
+OWNR_INACTIVE = 0x00
+OWNR_COMPUTER_GAME = 0x01
+OWNR_HUMAN_OCCUPIED = 0x02
+OWNR_RESCUE_PASSIVE = 0x03
+OWNR_COMPUTER = 0x05
+OWNR_HUMAN = 0x06
+OWNR_NEUTRAL = 0x07
+OWNR_NAMES = {
+    OWNR_INACTIVE: "INACTIVE", OWNR_COMPUTER_GAME: "COMPUTER_GAME",
+    OWNR_HUMAN_OCCUPIED: "HUMAN_OCCUPIED", OWNR_RESCUE_PASSIVE: "RESCUE_PASSIVE",
+    0x04: "UNUSED", OWNR_COMPUTER: "COMPUTER", OWNR_HUMAN: "HUMAN(open slot)",
+    OWNR_NEUTRAL: "NEUTRAL", 0x08: "CLOSED",
+}
+
+# SIDE section: one byte per player, the race the map assigns that slot.
+SIDE_ZERG = 0x00
+SIDE_TERRAN = 0x01
+SIDE_PROTOSS = 0x02
+SIDE_INDEPENDENT = 0x03
+SIDE_NEUTRAL = 0x04
+SIDE_USER_SELECTABLE = 0x05
+SIDE_NAMES = {
+    SIDE_ZERG: "Zerg", SIDE_TERRAN: "Terran", SIDE_PROTOSS: "Protoss",
+    SIDE_INDEPENDENT: "Independent", SIDE_NEUTRAL: "Neutral",
+    SIDE_USER_SELECTABLE: "User Selectable", 0x06: "Random", 0x07: "Inactive",
+}
+RACE_IDS = {"zerg": SIDE_ZERG, "terran": SIDE_TERRAN, "protoss": SIDE_PROTOSS}
+
 # A handful of common unit type names (units.dat ids). Marine is the
 # documented default: small, cheap, unambiguous to count on screen. Anything
 # else can be passed as a raw units.dat integer id.
@@ -72,10 +192,20 @@ UNIT_TYPE_IDS = {
     "marine": 0,
     "zergling": 37,
     "zealot": 65,
-    # Lurker is the fan-out fixture for untargeted ABILITIES (task 015): Burrow is innate
-    # for lurkers -- no research, so it works on a map with no tech set at all -- it takes
-    # no target, and it leaves a per-unit state a plugin can read back and assert on.
+    # Lurker is the fan-out fixture for untargeted ABILITIES (task 015/016): Burrow is
+    # innate for lurkers -- no research, so it works on a map with no tech set at all --
+    # it takes no target, and it leaves a per-unit state a plugin can read back and
+    # assert on (CUnit+0xDC bit 0x10, SC_UNIT_FLAG_BURROWED).
     "lurker": 103,
+}
+
+# Which race each named unit type belongs to. Only used to pick a sensible default
+# for the placed units' owner; a Terran player can own Lurkers perfectly well under
+# Use Map Settings. Anything passed as a raw id defaults to Terran and can be
+# overridden with --race.
+UNIT_TYPE_RACES = {
+    "marine": SIDE_TERRAN, "zergling": SIDE_ZERG, "zealot": SIDE_PROTOSS,
+    "lurker": SIDE_ZERG,
 }
 
 DEFAULT_TEMPLATE = r"C:\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx"
@@ -87,6 +217,15 @@ DEFAULT_UNIT_COUNT = 36
 # HUD, where no drag box can reach it. Bigger units need more room than one tile or the
 # game drops the ones that cannot be placed -- pass --grid-spacing for those.
 GRID_SPACING_PX = 32
+
+
+def resolve_race(race: str | None, unit_type: str) -> int:
+    if race:
+        key = race.strip().lower()
+        if key not in RACE_IDS:
+            raise ValueError(f"Unknown race {race!r}; use one of {sorted(RACE_IDS)}.")
+        return RACE_IDS[key]
+    return UNIT_TYPE_RACES.get(unit_type.strip().lower(), SIDE_TERRAN)
 
 
 def resolve_unit_id(unit_type: str) -> int:
@@ -101,19 +240,6 @@ def resolve_unit_id(unit_type: str) -> int:
             f"{sorted(UNIT_TYPE_IDS)} or a raw units.dat integer id."
         )
     return UNIT_TYPE_IDS[key]
-
-
-def player_id_for_index(index: int) -> PlayerId:
-    if not 0 <= index <= 11:
-        raise ValueError(f"player index must be 0-11, got {index}")
-    return PlayerId[f"PLAYER_{index + 1}"]
-
-
-def find_unknown_section(chk: RichChk, name: str):
-    for i, section in enumerate(chk.chk_sections):
-        if isinstance(section, DecodedUnknownSection) and section.actual_section_name == name:
-            return i, section
-    return None, None
 
 
 def parse_unit_records(data: bytes) -> list[UnitRecord]:
@@ -166,7 +292,15 @@ def build_new_unit_records(
     return records
 
 
-_CHK_MPQ_PATH = "staredit\\scenario.chk"
+# ---------------------------------------------------------------------------
+# MPQ IO
+# ---------------------------------------------------------------------------
+def read_chk_bytes(map_path: Path) -> bytes:
+    """The raw staredit\\scenario.chk out of a map, via richchk's StormLib binding."""
+    mpqio = StarCraftMpqIoHelper.create_mpq_io(None)
+    with CrossPlatformSafeTemporaryNamedFile() as temp_chk_file:
+        mpqio.extract_chk_from_mpq(str(map_path), temp_chk_file, overwrite_existing=True)
+        return Path(temp_chk_file).read_bytes()
 
 
 def _add_scenario_chk_like_blizzard(
@@ -179,14 +313,13 @@ def _add_scenario_chk_like_blizzard(
     richchk's StormLibWrapper.add_file() (mpq/stormlib/stormlib_wrapper.py)
     hardcodes MPQ_FILE_COMPRESS + MPQ_COMPRESSION_ZLIB and never sets
     MPQ_FILE_ENCRYPTED, with no parameter to override either. Verified
-    independently (an MPQ reader written from scratch against the public
-    MoPaQ format spec, not richchk/StormLib -- see
-    work/scratch/raw_mpq_inspect.py) that every stock map checked stores this
-    file ENCRYPTED and PKWARE-compressed (leading sector byte 0x08), while
-    richchk's output is unencrypted and ZLIB-compressed (leading byte 0x02).
-    Classic 1.16.1 predates zlib support in Storm.dll; PKWARE ("implode") is
-    the original, universally-supported method. This calls the same
-    SFileAddFileEx export richchk uses, just with the flags that match every
+    independently (task 013: an MPQ reader written from scratch against the
+    public MoPaQ format spec, not richchk/StormLib) that every stock map checked
+    stores this file ENCRYPTED and PKWARE-compressed (leading sector byte 0x08),
+    while richchk's output is unencrypted and ZLIB-compressed (leading byte
+    0x02). Classic 1.16.1 predates zlib support in Storm.dll; PKWARE
+    ("implode") is the original, universally-supported method. This calls the
+    same SFileAddFileEx export richchk uses, just with the flags that match every
     Blizzard-built map on disk.
     """
     flags = (
@@ -212,28 +345,16 @@ def _add_scenario_chk_like_blizzard(
         raise ValueError(f"SFileAddFileEx failed, GetLastError={get_last_error()}")
 
 
-def save_chk_to_mpq_matching_blizzard(chk: RichChk, template: Path, output: Path) -> None:
-    """Same job as richchk's StarCraftMpqIo.save_chk_to_mpq(), but writes
-    staredit\\scenario.chk with Blizzard-matching flags/compression (see
-    _add_scenario_chk_like_blizzard). Everything else -- CHK encoding, MPQ
-    copy, compaction -- is richchk's own code, unchanged."""
+def save_chk_bytes_to_mpq(chk_bytes: bytes, template: Path, output: Path) -> None:
+    """Copy the template archive and drop the given scenario.chk into the copy,
+    with Blizzard-matching flags/compression (see _add_scenario_chk_like_blizzard).
+    Every other file in the archive is carried over untouched."""
     stormlib_wrapper = StormLibHelper.load_stormlib(None)
-    wav_metadata = StarCraftAudioFilesMetadataIo(
-        stormlib_wrapper=stormlib_wrapper
-    ).extract_all_audio_files_metadata(str(template))
-    wav_lookup = RichWavMetadataLookup(
-        _metadata_by_wav_path={x.path_to_wav_in_mpq: x for x in wav_metadata}
-    )
-
     with (
         CrossPlatformSafeTemporaryNamedFile() as temp_chk_file,
         CrossPlatformSafeTemporaryNamedFile() as temp_mpq_file,
     ):
-        ChkIo().encode_chk_to_file(
-            RichChkIo().encode_chk(rich_chk=chk, wav_metadata_lookup=wav_lookup),
-            temp_chk_file,
-            force_create=True,
-        )
+        Path(temp_chk_file).write_bytes(chk_bytes)
         shutil.copyfile(str(template), temp_mpq_file)
         open_result = stormlib_wrapper.open_archive(
             temp_mpq_file, StormLibArchiveMode.STORMLIB_WRITE_ONLY
@@ -248,11 +369,13 @@ def save_chk_to_mpq_matching_blizzard(chk: RichChk, template: Path, output: Path
 def pick_opponent_slot(player: int) -> int:
     """The slot that becomes the (unit-less) computer opponent.
 
-    Single-player Play Custom refuses to start a map with no computer slot at all --
-    "You must have at least one computer opponent." -- so a map with exactly one human
-    and eleven inactive slots cannot be launched, whatever else is right about it. One
-    COMPUTER slot satisfies that check; it is given no units anywhere on the map, so
-    there is still nothing hostile in the game.
+    Single-player Play Custom refuses to start a MELEE game with no computer slot at
+    all -- "You must have at least one computer opponent." -- so a map with exactly one
+    human and eleven inactive slots cannot be launched that way, whatever else is right
+    about it. One COMPUTER slot satisfies that check; it is given no units anywhere on
+    the map, so there is still nothing hostile in the game. Under Use Map Settings the
+    check does not apply, but the slot is harmless there and keeps one map usable under
+    both game types.
     """
     return 1 if player != 1 else 0
 
@@ -260,7 +383,8 @@ def pick_opponent_slot(player: int) -> int:
 def generate_map(
     template: Path, output: Path, unit_count: int, unit_type: str, player: int,
     spacing: int = GRID_SPACING_PX, keep_ownr: bool = False,
-    clear_player_units: bool = False,
+    clear_player_units: bool = False, keep_triggers: bool = False,
+    race: int = SIDE_TERRAN,
 ) -> None:
     unit_id = resolve_unit_id(unit_type)
     if not 0 <= player <= 7:
@@ -273,13 +397,19 @@ def generate_map(
             "Run tools/make-working-copy.ps1 first to populate the working copy."
         )
 
-    mpqio = StarCraftMpqIoHelper.create_mpq_io(None)
-    chk = mpqio.read_chk_from_mpq(str(template))
+    template_chk = read_chk_bytes(template)
+    sections = parse_chk_sections(template_chk)
+    # The parser is only trustworthy if it can put the file back together
+    # unchanged. Assert that before editing anything, so a template this tool
+    # cannot represent fails loudly here instead of producing a subtly wrong map.
+    if serialize_chk_sections(sections) != template_chk:
+        raise ValueError(
+            f"Template {template}: this tool's CHK parser does not round-trip it "
+            "byte-for-byte; refusing to edit a file it does not fully understand."
+        )
 
-    unit_idx, unit_section = find_unknown_section(chk, "UNIT")
-    if unit_section is None:
-        raise ValueError(f"Template {template} has no UNIT section; not a valid map")
-    existing_records = parse_unit_records(unit_section.chk_binary_data)
+    unit_idx = require_section(sections, "UNIT", template)
+    existing_records = parse_unit_records(sections[unit_idx].payload)
 
     start = next(
         (r for r in existing_records if r.unit_id == START_LOCATION_UNIT_ID and r.player == player),
@@ -306,51 +436,124 @@ def generate_map(
     new_records = build_new_unit_records(
         unit_count, unit_id, player, start.x, start.y, next_instance, spacing
     )
-    new_unit_bytes = b"".join(pack_unit_record(r) for r in kept_records) + b"".join(
-        pack_unit_record(r) for r in new_records
+    sections = replace_section(
+        sections, "UNIT",
+        b"".join(pack_unit_record(r) for r in kept_records + new_records),
+        template,
     )
 
-    new_sections = list(chk.chk_sections)
-    new_sections[unit_idx] = DecodedUnknownSection("UNIT", new_unit_bytes)
-    chk = RichChk(_chk_sections=new_sections)
-
     # Single player, no hostile pressure: the chosen slot becomes a human slot, every
-    # other slot goes inactive (no computer players).
+    # other slot goes inactive (no computer players) bar one unit-less computer.
     #
-    # PlayerType.HUMAN (OWNR 0x06, "Human (Open Slot)"), NOT HUMAN_OCCUPIED (0x02).
-    # An earlier version wrote 0x02 and the Play Custom dialog refused every map this
-    # generator produced with "This map does not have a slot for a human participant"
-    # (Human Slots: 0). 0x02 is what the game writes at RUNTIME for a slot a human has
-    # already taken; what makes a slot available in the lobby is 0x06, which is what
-    # every stock playable map carries for its human slots.
+    # OWNR 0x06 ("Human (Open Slot)"), NOT 0x02 (HUMAN_OCCUPIED). An earlier version
+    # wrote 0x02 and the Play Custom dialog refused every map this generator produced
+    # with "This map does not have a slot for a human participant" (Human Slots: 0).
+    # 0x02 is what the game writes at RUNTIME for a slot a human has already taken;
+    # what makes a slot available in the lobby is 0x06, which is what every stock
+    # playable map carries for its human slots.
     # keep_ownr is for a template that is ALREADY a playable single-player scenario -- a
     # stock campaign mission, say. Rewriting its slots would delete the mission's own
     # actors and leave a map whose triggers reference players that no longer exist.
     if not keep_ownr:
-        ownr = ChkQueryUtil.find_only_rich_section_in_chk(RichOwnrSection, chk)
-        new_types = {
-            player_id_for_index(i): PlayerType.INACTIVE for i in range(12) if i != player
-        }
-        new_types[player_id_for_index(player)] = PlayerType.HUMAN
-        new_types[player_id_for_index(pick_opponent_slot(player))] = PlayerType.COMPUTER
-        new_ownr = RichOwnrEditor().set_player_types(new_types, ownr)
-        chk = RichChkEditor().replace_chk_section(new_ownr, chk)
+        ownr_idx = require_section(sections, "OWNR", template)
+        old = sections[ownr_idx].payload
+        if len(old) != 12:
+            raise ValueError(f"Template {template}: OWNR is {len(old)} bytes, expected 12")
+        slots = [OWNR_INACTIVE] * 12
+        slots[player] = OWNR_HUMAN
+        slots[pick_opponent_slot(player)] = OWNR_COMPUTER
+        sections = replace_section(sections, "OWNR", bytes(slots), template)
 
+        # THE SLOT'S RACE MUST BE AN EXPLICIT ONE, NOT "User Selectable" (task 016).
+        #
+        # This is what made every melee-template map play as a melee game no matter what
+        # the lobby's Game Type said. A Blizzard LADDER map carries SIDE = 0x05 "User
+        # Selectable" for its human slots, because a ladder player picks a race in the
+        # lobby. Load such a map under Use Map Settings and StarCraft still hands that
+        # slot the standard melee starting units for whichever race got picked -- proved
+        # in-process on 2026-08-08: the plugin's UNITSTATE reported
+        # types=[0x29:4 0x23:3 0x2A:1] (four Drones, three Larva, one Overlord) on a
+        # 36-Lurker map, with the Game Type combo explicitly set to Use Map Settings from
+        # its list. A stock campaign map, which plays correctly under exactly the same
+        # menu path, carries a FIXED race for its human slot (Enslavers02b: 0x02 Protoss).
+        # Writing a fixed race here is the difference.
+        side_idx = require_section(sections, "SIDE", template)
+        old_side = sections[side_idx].payload
+        if len(old_side) != 12:
+            raise ValueError(f"Template {template}: SIDE is {len(old_side)} bytes, expected 12")
+        sides = list(old_side)
+        sides[player] = race
+        # The computer slot gets a fixed race too, for the same reason: a slot left on
+        # "User Selectable" is a slot the engine may hand a melee base to, and a computer
+        # with a base is hostile pressure this fixture must not have.
+        sides[pick_opponent_slot(player)] = race
+        sections = replace_section(sections, "SIDE", bytes(sides), template)
+
+    # THE MISSION MUST NOT BE ABLE TO END ITSELF (task 016).
+    #
+    # Under Use Map Settings the engine runs no melee win/lose logic of its own: a game
+    # ends when a trigger says Victory, Defeat or End Scenario, and otherwise never. Stock
+    # maps all ship triggers that do exactly that. Decoded straight out of the files:
+    #   (2)Fading Realm.scx (LADDER) carries the three standard melee triggers, the third
+    #   being "All players: non-allied-victory-players command at most 0 [231] -> Victory",
+    #   which reads as TRUE for the human on the first frame of a generated map, since the
+    #   only other participant is the unit-less computer opponent;
+    #   (1)Enslavers02b.scm (CAMPAIGN) carries 30 triggers, six of which end the game --
+    #   "Force 1: current player commands at most 0 [Men] -> Defeat" and five more on
+    #   specific unit ids the mission requires.
+    # The campaign case was also confirmed in game (task 016, 2026-08-08): with triggers
+    # kept, "Congratulations! You are victorious!" about nine seconds in. None of it has
+    # anything to do with the CHK round-trip that was previously suspected -- task 016
+    # diffed a campaign template's TRIG across that round-trip and it is byte-identical.
+    #
+    # An empty TRIG section is a legal, common thing for a CHK to hold -- (2)Fading
+    # Realm.scx ships a zero-length MBRF -- and it is what makes a generated map sit
+    # there indefinitely, which is the whole point of a test fixture.
+    if not keep_triggers:
+        for name in ("TRIG", "MBRF"):
+            if find_section(sections, name) >= 0:
+                sections = replace_section(sections, name, b"", template)
+
+    new_chk = serialize_chk_sections(sections)
     output.parent.mkdir(parents=True, exist_ok=True)
-    save_chk_to_mpq_matching_blizzard(chk, template, output)
+    save_chk_bytes_to_mpq(new_chk, template, output)
+
+
+def diff_against_template(output: Path, template: Path) -> list[str]:
+    """Names of the CHK sections whose bytes differ between template and output.
+
+    The generator changes UNIT, OWNR and TRIG/MBRF and nothing else; anything
+    else in this list is a bug, and the validator fails on it. This is the
+    assertion that the old richchk round-trip could not have passed.
+    """
+    a = parse_chk_sections(read_chk_bytes(template))
+    b = parse_chk_sections(read_chk_bytes(output))
+    changed = []
+    for i in range(max(len(a), len(b))):
+        sa = a[i] if i < len(a) else None
+        sb = b[i] if i < len(b) else None
+        if sa is None:
+            changed.append(f"+{sb.name}")
+        elif sb is None:
+            changed.append(f"-{sa.name}")
+        elif sa.name != sb.name:
+            changed.append(f"{sa.name}->{sb.name}")
+        elif sa.payload != sb.payload:
+            changed.append(sa.name)
+    return changed
 
 
 def validate_map(
-    path: Path, unit_count: int, unit_type: str, player: int, keep_ownr: bool = False
+    path: Path, unit_count: int, unit_type: str, player: int, keep_ownr: bool = False,
+    keep_triggers: bool = False, template: Path | None = None,
 ) -> None:
     unit_id = resolve_unit_id(unit_type)
-    mpqio = StarCraftMpqIoHelper.create_mpq_io(None)
-    chk = mpqio.read_chk_from_mpq(str(path))
+    sections = parse_chk_sections(read_chk_bytes(path))
 
-    _idx, unit_section = find_unknown_section(chk, "UNIT")
-    if unit_section is None:
+    unit_idx = find_section(sections, "UNIT")
+    if unit_idx < 0:
         raise AssertionError(f"{path}: no UNIT section found")
-    records = parse_unit_records(unit_section.chk_binary_data)
+    records = parse_unit_records(sections[unit_idx].payload)
 
     matching = [r for r in records if r.unit_id == unit_id and r.player == player]
     if len(matching) != unit_count:
@@ -366,58 +569,110 @@ def validate_map(
     if start is None:
         raise AssertionError(f"{path}: no start location found for player {player}")
 
-    ownr = ChkQueryUtil.find_only_rich_section_in_chk(RichOwnrSection, chk)
-    actual_type = ownr.player_types[player]
-    if keep_ownr:
-        if actual_type not in (PlayerType.HUMAN, PlayerType.HUMAN_OCCUPIED):
-            raise AssertionError(
-                f"{path}: --keep-ownr was used but player {player}'s slot is "
-                f"{actual_type}, which no human can occupy"
-            )
-        dim = ChkQueryUtil.find_only_rich_section_in_chk(RichDimSection, chk)
-        print(f"OK: {path}")
-        print(f"  {len(matching)} unit(s) of type {unit_id} owned by player {player}")
-        print(f"  start location for player {player} at ({start.x}, {start.y})")
-        print(f"  OWNR left as the template had it; player {player} = {actual_type}")
-        print(f"  terrain {dim.width}x{dim.height} tiles")
-        return
-    if actual_type != PlayerType.HUMAN:
+    ownr_idx = find_section(sections, "OWNR")
+    if ownr_idx < 0:
+        raise AssertionError(f"{path}: no OWNR section found")
+    slots = list(sections[ownr_idx].payload)
+    actual = slots[player]
+
+    dim_idx = find_section(sections, "DIM")
+    if dim_idx < 0 or len(sections[dim_idx].payload) < 4:
+        raise AssertionError(f"{path}: no usable DIM section")
+    width, height = struct.unpack_from("<HH", sections[dim_idx].payload, 0)
+    if width <= 0 or height <= 0:
+        raise AssertionError(f"{path}: invalid terrain dimensions {width}x{height}")
+
+    # Nothing may be able to end the game on its own -- the property that makes this a
+    # fixture rather than a mission. See the TRIG note in generate_map().
+    trig_idx = find_section(sections, "TRIG")
+    trig_len = len(sections[trig_idx].payload) if trig_idx >= 0 else 0
+    if not keep_triggers and trig_len != 0:
         raise AssertionError(
-            f"{path}: player {player} OWNR slot is {actual_type}, expected HUMAN "
-            f"(0x06 'Human (Open Slot)' -- 0x02 HUMAN_OCCUPIED makes the Play Custom "
-            f"dialog report 'no slot for a human participant')"
-        )
-    # Exactly one computer slot, and it must own nothing: that is what keeps "at least
-    # one computer opponent" satisfied for the launcher while leaving nothing hostile in
-    # the game. More than one, or one with units, is a generator bug.
-    opponent = pick_opponent_slot(player)
-    computers = [
-        i for i, t in enumerate(ownr.player_types)
-        if i != player and t in (PlayerType.COMPUTER, PlayerType.COMPUTER_GAME)
-    ]
-    if computers != [opponent]:
-        raise AssertionError(
-            f"{path}: computer slots are {computers}, expected exactly [{opponent}]"
-        )
-    opponent_units = [
-        r for r in records
-        if r.player == opponent and r.unit_id != START_LOCATION_UNIT_ID
-    ]
-    if opponent_units:
-        raise AssertionError(
-            f"{path}: the computer opponent owns {len(opponent_units)} unit(s); it must "
-            f"own none, or the map is not hostility-free"
+            f"{path}: TRIG holds {trig_len} bytes ({trig_len // 2400} trigger(s)); a "
+            "generated fixture must carry none, or the map's own victory/defeat "
+            "triggers end the game within seconds of loading"
         )
 
-    dim = ChkQueryUtil.find_only_rich_section_in_chk(RichDimSection, chk)
-    if dim.width <= 0 or dim.height <= 0:
-        raise AssertionError(f"{path}: invalid terrain dimensions {dim.width}x{dim.height}")
+    if keep_ownr:
+        if actual not in (OWNR_HUMAN, OWNR_HUMAN_OCCUPIED):
+            raise AssertionError(
+                f"{path}: --keep-ownr was used but player {player}'s slot is "
+                f"{OWNR_NAMES.get(actual, actual)}, which no human can occupy"
+            )
+    else:
+        if actual != OWNR_HUMAN:
+            raise AssertionError(
+                f"{path}: player {player} OWNR slot is {OWNR_NAMES.get(actual, actual)}, "
+                f"expected HUMAN (0x06 'Human (Open Slot)' -- 0x02 HUMAN_OCCUPIED makes "
+                f"the Play Custom dialog report 'no slot for a human participant')"
+            )
+        # Exactly one computer slot, and it must own nothing: that is what keeps "at
+        # least one computer opponent" satisfied for a melee-type launch while leaving
+        # nothing hostile in the game. More than one, or one with units, is a bug.
+        opponent = pick_opponent_slot(player)
+        computers = [
+            i for i, t in enumerate(slots)
+            if i != player and t in (OWNR_COMPUTER, OWNR_COMPUTER_GAME)
+        ]
+        if computers != [opponent]:
+            raise AssertionError(
+                f"{path}: computer slots are {computers}, expected exactly [{opponent}]"
+            )
+        opponent_units = [
+            r for r in records
+            if r.player == opponent and r.unit_id != START_LOCATION_UNIT_ID
+        ]
+        if opponent_units:
+            raise AssertionError(
+                f"{path}: the computer opponent owns {len(opponent_units)} unit(s); it "
+                f"must own none, or the map is not hostility-free"
+            )
+        # No active slot may be left on "User Selectable" -- that is what makes the
+        # engine hand out melee starting units under Use Map Settings. See the SIDE
+        # note in generate_map().
+        side_idx = find_section(sections, "SIDE")
+        if side_idx < 0:
+            raise AssertionError(f"{path}: no SIDE section found")
+        sides = list(sections[side_idx].payload)
+        for slot in (player, opponent):
+            if sides[slot] == SIDE_USER_SELECTABLE:
+                raise AssertionError(
+                    f"{path}: SIDE[{slot}] is 0x05 'User Selectable'; the engine gives "
+                    f"such a slot the standard MELEE starting units even under Use Map "
+                    f"Settings, and the map's own placed units are never created"
+                )
+
+    changed = None
+    if template is not None and template.exists():
+        changed = diff_against_template(path, template)
+        expected = {"UNIT", "TRIG", "MBRF"} | (set() if keep_ownr else {"OWNR", "SIDE"})
+        unexpected = [c for c in changed if c not in expected]
+        if unexpected:
+            raise AssertionError(
+                f"{path}: the output differs from its template in section(s) "
+                f"{unexpected}, which this tool never asked to change. Every other "
+                f"section must come across byte-for-byte."
+            )
 
     print(f"OK: {path}")
     print(f"  {len(matching)} unit(s) of type {unit_id} owned by player {player}")
     print(f"  start location for player {player} at ({start.x}, {start.y})")
-    print(f"  OWNR[{player}] = {actual_type}; one unit-less computer slot at {opponent}")
-    print(f"  terrain {dim.width}x{dim.height} tiles")
+    side_idx = find_section(sections, "SIDE")
+    side = list(sections[side_idx].payload)[player] if side_idx >= 0 else None
+    if keep_ownr:
+        print(f"  OWNR left as the template had it; player {player} = "
+              f"{OWNR_NAMES.get(actual, actual)}")
+    else:
+        print(f"  OWNR[{player}] = {OWNR_NAMES.get(actual, actual)}; one unit-less "
+              f"computer slot at {pick_opponent_slot(player)}")
+    print(f"  SIDE[{player}] = {SIDE_NAMES.get(side, side)}"
+          + ("" if side == SIDE_USER_SELECTABLE else " -- not 'User Selectable', so the "
+             "engine adds no melee starting units"))
+    print(f"  TRIG holds {trig_len} byte(s)"
+          + ("" if keep_triggers else " -- nothing can end the game on its own"))
+    print(f"  terrain {width}x{height} tiles")
+    if changed is not None:
+        print(f"  differs from the template ONLY in: {' '.join(changed) or '(nothing)'}")
 
 
 def main() -> int:
@@ -432,6 +687,12 @@ def main() -> int:
         help="pixels between placed units (32 = one tile). Units bigger than a tile "
              "need more, or the game drops the ones it cannot place.",
     )
+    parser.add_argument(
+        "--race", type=str, default=None, choices=sorted(RACE_IDS),
+        help="Race written into SIDE for the human and computer slots. Defaults to the "
+             "race the placed unit type belongs to. It must not be left as the "
+             "template's 'User Selectable' -- see the SIDE note in generate_map.",
+    )
     parser.add_argument("--template", type=Path, default=Path(DEFAULT_TEMPLATE))
     parser.add_argument("--output", type=Path, default=Path(DEFAULT_OUTPUT))
     parser.add_argument(
@@ -445,6 +706,13 @@ def main() -> int:
         action="store_true",
         help="Remove the target player's existing units first, so the placed group is "
              "all one type (a mixed selection gets no ability buttons in game).",
+    )
+    parser.add_argument(
+        "--keep-triggers",
+        action="store_true",
+        help="Keep the template's TRIG/MBRF sections. NOT for a test fixture: every "
+             "stock map ships triggers that end the game, and they fire within seconds "
+             "of loading a generated map (see the TRIG note in generate_map).",
     )
     parser.add_argument(
         "--validate-only",
@@ -463,18 +731,20 @@ def main() -> int:
         if args.validate_only is not None:
             validate_map(
                 args.validate_only, args.unit_count, args.unit_type, args.player,
-                args.keep_ownr,
+                args.keep_ownr, args.keep_triggers,
             )
             return 0
 
         generate_map(
             args.template, args.output, args.unit_count, args.unit_type, args.player,
-            args.grid_spacing, args.keep_ownr, args.clear_player_units,
+            args.grid_spacing, args.keep_ownr, args.clear_player_units, args.keep_triggers,
+            resolve_race(args.race, args.unit_type),
         )
         print(f"wrote {args.output}")
         if not args.no_validate:
             validate_map(
-                args.output, args.unit_count, args.unit_type, args.player, args.keep_ownr
+                args.output, args.unit_count, args.unit_type, args.player, args.keep_ownr,
+                args.keep_triggers, args.template,
             )
         return 0
     except (ValueError, FileNotFoundError, AssertionError) as exc:

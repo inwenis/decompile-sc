@@ -7,52 +7,75 @@ big group and issue one order in a couple of seconds.
 
 ## What it makes
 
-- Default: 36 Terran Marines, owned by Player 1, clustered in a grid next to
-  Player 1's start location.
-- Single player only: the chosen player's OWNR slot is forced to
-  `HUMAN_OCCUPIED`, every other slot is forced to `INACTIVE`. No computer
-  players, no hostile pressure.
-- Everything else (terrain, start locations, forces, races) comes unchanged
-  from a real Blizzard ladder map used as a template, so the result is a
-  normal, structurally valid, loadable `.scx`.
+- Default: 36 Terran Marines, owned by Player 1, clustered in a grid centred
+  on Player 1's start location.
+- Single player only: the chosen player's OWNR slot becomes `HUMAN` (open
+  slot), exactly one other slot becomes a unit-less `COMPUTER`, every other
+  slot is forced to `INACTIVE`. Nothing hostile is on the map.
+- The chosen player's race (`SIDE`) is written explicitly, and the map's
+  triggers (`TRIG`/`MBRF`) are removed. Those two are what make the result
+  actually *play* -- see "Why generated maps used not to play" below.
+- Everything else (terrain, start locations, forces, unit/upgrade/tech
+  settings, strings, briefing art) comes **byte for byte** unchanged from a
+  real Blizzard map used as a template.
 
 ## How it works
 
-`tools/make_test_map.py` uses [richchk](https://github.com/sethmachine/richchk)
-0.3.0 (pinned in `requirements.txt`) to read and write the map's CHK data
-inside its MPQ container. richchk was chosen over the alternatives surveyed
-in `research/prior-art.md` because it's the only maintained library found
-that round-trips a full playable `.scm`/`.scx` (CHK sections *and* the MPQ
-container, via its bundled StormLib) rather than just CHK bytes.
+`tools/make_test_map.py` patches the template's CHK **in place, as raw
+bytes**. A CHK file is a flat sequence of `<4-byte name><i32 size><size
+bytes>` chunks; the generator reads them into a list, replaces the payload of
+the three or four chunks it must change, and re-serialises. Every other chunk
+comes across unmodified, in its original order, duplicates included.
 
-One gap: richchk does not model the CHK `UNIT` section (the placed-unit
-list) -- it has no `UNIT` transcoder, so it decodes/encodes it as an opaque
-`DecodedUnknownSection` (raw bytes, passed through unchanged on a normal
-read/write). Nothing else maintained does this for Python either (see
-prior-art's CHK row). This generator fills that one gap by hand: it parses
-and appends 36-byte `UNIT` records directly, using the documented format
-(staredit.net's CHK spec) cross-checked against real bytes read out of a
-Blizzard ladder map with this repo's own template-map inspection (start
-location and mineral-patch records decode exactly as documented). Everything
-else -- MPQ IO, CHK chunking, OWNR editing -- goes through richchk unchanged.
+It does **not** decode and re-encode the CHK through
+[richchk](https://github.com/sethmachine/richchk) any more, which is what
+tasks 009-015 did. Task 016 diffed both sides of that round-trip section by
+section and found richchk 0.3.0 silently rewriting sections nobody asked it
+to touch:
+
+| section | what the round-trip did |
+| ---------- | ------------------------------------------------------------- |
+| `UNIS`/`UNIx` | 4-18 bytes changed inside the base-weapon-damage array, on every map tried |
+| `MRGN`     | a 64-location vanilla-StarCraft section re-emitted padded to the 255-location Brood War size (1280 -> 5100 bytes) |
+| `SWNM`     | a 1024-byte switch-names section **added** to maps that had none |
+
+None of that turned out to be the reason generated maps did not play (see
+below), but a generator whose output differs from its template in ways nobody
+chose is a generator whose failures cannot be reasoned about. The raw-byte
+path removes the question: the validator now asserts the output differs from
+its template **only** in `OWNR`, `SIDE`, `UNIT` and `TRIG`, and refuses
+otherwise.
+
+richchk is still a dependency, and still does the half it is good at: reading
+`staredit\scenario.chk` out of the MPQ and writing it back, through its
+bundled StormLib binding.
+
+The `UNIT` section (the placed-unit list) is parsed by hand either way --
+richchk has no `UNIT` transcoder as of 0.3.0, and nothing else maintained
+does this for Python (see `research/prior-art.md`'s CHK row). The 36-byte
+record layout comes from staredit.net's CHK spec, cross-checked against real
+bytes out of a Blizzard ladder map (start-location and mineral-patch records
+decode exactly as documented).
 
 Steps, in order:
 
-1. Read `staredit\scenario.chk` out of a template `.scx` (an existing 2-player
-   ladder map from the working copy) via richchk.
+1. Extract `staredit\scenario.chk` from a template `.scm`/`.scx` and split it
+   into raw chunks. Assert the split round-trips to the identical bytes before
+   editing anything, so a template this tool cannot represent fails loudly.
 2. Find that player's `UNIT`-section start-location record (unit id 214) to
    get spawn coordinates.
 3. Append N new 36-byte `UNIT` records (chosen unit type, full HP/shield/
-   energy, owned by the chosen player) in a grid starting at those
-   coordinates.
-4. Overwrite the OWNR section: chosen player -> `HUMAN_OCCUPIED`, everyone
-   else -> `INACTIVE`.
-5. Save back into a copy of the template MPQ (StormLib under the hood, via
+   energy, owned by the chosen player) in a grid centred on those coordinates.
+4. Rewrite `OWNR`: chosen player -> `HUMAN` (0x06), one other slot ->
+   `COMPUTER` (0x05), everyone else -> `INACTIVE`.
+5. Rewrite `SIDE` for those two slots to an explicit race.
+6. Empty `TRIG` and `MBRF`.
+7. Save into a copy of the template MPQ (StormLib under the hood, via
    richchk's DLL binding but NOT richchk's own `save_chk_to_mpq` -- see
    "Why the game rejected the old output" below).
-6. Read the result back and assert unit count/type/owner, start location,
-   no active computer players, and terrain dimensions -- see "Validation"
-   below.
+8. Read the result back and assert placed unit count/type/owner, start
+   location, player slots, race, empty triggers, terrain dimensions, and the
+   section-level diff against the template -- see "Validation" below.
 
 ## How to run
 
@@ -71,23 +94,42 @@ With parameters:
 | Param          | Default                                                   | Meaning                              |
 | -------------- | ---------------------------------------------------------- | ------------------------------------- |
 | `-UnitCount`   | `36`                                                        | units to place (must be comfortably > 12) |
-| `-UnitType`    | `marine`                                                    | name (`marine`, `zergling`, `zealot`) or a raw units.dat integer id |
+| `-UnitType`    | `marine`                                                    | name (`marine`, `zergling`, `zealot`, `lurker`) or a raw units.dat integer id |
 | `-Player`      | `0`                                                         | 0-based slot, 0-7 (0 = Player 1)      |
 | `-GridSpacing` | `32`                                                        | pixels between units (32 = one tile). Units bigger than a tile need more, or the game silently drops the ones it cannot place |
-| `-KeepOwnr`    | off                                                         | leave the template's player slots alone — for a template that is already a playable single-player scenario |
+| `-KeepOwnr`    | off                                                         | leave the template's player slots and races alone — for a template that is already a playable single-player scenario |
 | `-ClearPlayerUnits` | off                                                    | drop the target player's existing units first, so the placed group is all one type |
+| `-KeepTriggers` | off                                                        | keep the template's `TRIG`/`MBRF`. **Never for a fixture** — a stock map's own triggers end the game within seconds of loading |
+| `-Race`        | the placed unit type's race                                 | `zerg`/`terran`/`protoss`, written into `SIDE` for the human and computer slots |
 | `-TemplatePath`| `C:\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx` | source map for terrain/start location |
 | `-OutputPath`  | `C:\sc-work\1161-base\Maps\test-many-units.scx`            | where the generated map is written    |
 
 The `.ps1` is a thin wrapper; the actual logic is `tools/make_test_map.py`
 (same params as `--unit-count`/`--unit-type`/`--player`/`--grid-spacing`/
-`--keep-ownr`/`--clear-player-units`/`--template`/`--output`, plus
-`--validate-only PATH` to just re-validate an existing map and `--no-validate`
-to skip the post-generation check).
+`--keep-ownr`/`--clear-player-units`/`--keep-triggers`/`--race`/`--template`/
+`--output`, plus `--validate-only PATH` to just re-validate an existing map and
+`--no-validate` to skip the post-generation check).
 
 The unit block is **centred on the start location**. The camera opens centred there and shows
 about 20x12 tiles, so a block that grew right-and-down from that point (as it did before task 015)
 put its far half off screen and behind the HUD, where no drag box can reach it.
+
+## Looking at a map
+
+`tools/inspect_map.py` is the read-only companion, and the tool that produced the
+root-cause evidence below. It decodes nothing through richchk's CHK layer, so what
+it prints is what the engine reads:
+
+```powershell
+.venv/Scripts/python tools/inspect_map.py sections MAP          # every chunk, in file order
+.venv/Scripts/python tools/inspect_map.py diff MAP_A MAP_B      # section-by-section, byte for byte
+.venv/Scripts/python tools/inspect_map.py players MAP           # per-slot OWNR / SIDE / force / units
+.venv/Scripts/python tools/inspect_map.py triggers MAP --ending-only
+```
+
+`players` on the default ladder template shows the melee-start bug in one line
+(`SIDE` = "User Selectable"); `triggers --ending-only` shows why no stock map can
+be used as a fixture with its triggers left in.
 
 ## Output location
 
@@ -103,26 +145,31 @@ Generated `.scx` files are gitignored; only the generator is committed.
 ## Validation
 
 The generator runs a structural validation pass on its own output (unless
-`--no-validate` is passed): parses the produced file back and asserts the
-placed-unit count/type/owner, presence of a start location for that player,
-no other active computer player slots, and non-zero terrain dimensions.
-Example output:
+`--no-validate` is passed): it re-reads the produced file and asserts the
+placed-unit count/type/owner, a start location for that player, the player
+slots (one human, exactly one unit-less computer), that neither active slot is
+left on the race value "User Selectable", that `TRIG` is empty, non-zero
+terrain dimensions, and that the output differs from its template in no
+section other than the ones it meant to change. Example output:
 
 ```
-wrote C:\sc-work\1161-base\Maps\test-many-units.scx
-OK: C:\sc-work\1161-base\Maps\test-many-units.scx
-  36 unit(s) of type 0 owned by player 0
+wrote C:\sc-work\1161-base\Maps\BroodWar\00-testmap\lurkers.scx
+OK: C:\sc-work\1161-base\Maps\BroodWar\00-testmap\lurkers.scx
+  36 unit(s) of type 103 owned by player 0
   start location for player 0 at (864, 624)
-  OWNR[0] = PlayerType.HUMAN_OCCUPIED, no other active computer players
+  OWNR[0] = HUMAN(open slot); one unit-less computer slot at 1
+  SIDE[0] = Zerg -- not 'User Selectable', so the engine adds no melee starting units
+  TRIG holds 0 byte(s) -- nothing can end the game on its own
   terrain 128x96 tiles
+  differs from the template ONLY in: OWNR SIDE UNIT TRIG
 ```
 
-**This is structural validation only, and it is not proof the game accepts
-the file** -- see the next section. It parses the output back with the same
-library that wrote it, which only shows the library agrees with itself.
-In-game loading needs a human (task 013 `research/`, and
-`research/runtime-selection-observations.md` §5: synthetic clicks cannot
-reliably drive this game's menus).
+Every one of those assertions except the last is still only *structural*, and
+structure was never the thing that was wrong (task 016). The proof that the
+game accepts and plays the file is `tools/plugin/test-burrow-fanout.ps1`: it
+generates a map with this tool, loads it unattended, and reads back from inside
+the process that the 36 placed units are the units that exist, that the mission
+is still running two minutes later, and that one keypress burrows all 36.
 
 ## Why the game rejected the old output (task 013)
 
@@ -149,9 +196,9 @@ build understands. That mismatch is the most likely reason the file loads
 into richchk fine (round-trips through zlib+its own decoder) but the real
 game's older decompressor rejects it.
 
-**Fix**: `make_test_map.py` now calls `save_chk_to_mpq_matching_blizzard()`
-instead of richchk's `save_chk_to_mpq()`. It reuses richchk's own CHK
-encoder and StormLib DLL binding for everything else, but calls
+**Fix**: `make_test_map.py` now calls its own `save_chk_bytes_to_mpq()`
+instead of richchk's `save_chk_to_mpq()`. It reuses richchk's StormLib DLL
+binding, but calls
 `SFileAddFileEx` directly with `MPQ_FILE_COMPRESS | MPQ_FILE_ENCRYPTED` and
 `MPQ_COMPRESSION_PKWARE` -- the flags the independent reader found on every
 stock map checked. Verified (again with the same from-scratch reader, not
@@ -175,13 +222,16 @@ the wrong unit, not broken the file.
 
 ## Known limitations
 
-- Unit placement is a simple grid starting at the start location's pixel
+- Unit placement is a simple grid centred on the start location's pixel
   coordinates; it does not check for terrain passability/collisions with
   existing doodads. On the default template this lands in open ground, but a
   different `-TemplatePath` map could place units somewhere awkward (e.g.
   overlapping a cliff edge) -- worth an eyeball check if you swap templates.
-- `-UnitType` only has three built-in names (Marine, Zergling, Zealot); any
-  other unit needs its units.dat integer id passed directly.
+- `-UnitType` only has four built-in names (Marine, Zergling, Zealot, Lurker);
+  any other unit needs its units.dat integer id passed directly.
+- A template that uses the negative-size CHK chunk trick (map protection) is
+  refused outright: this tool cannot re-serialise one faithfully, and would
+  rather fail than quietly change what the game reads.
 - `-Player` is limited to 0-7 (the 8 real player slots); indices 8-11 are
   observer/unused slots in the CHK format and are not meaningful targets
   here.
@@ -191,29 +241,96 @@ the wrong unit, not broken the file.
   This is intentional (keeps the map internally consistent) but means map
   size/complexity scales with whatever template is chosen.
 
-### THE BIG ONE: a map from a MELEE template plays as a melee game (task 015, unresolved)
+## Why generated maps used not to play (task 015 found it, task 016 root-caused it)
+
+Two separate failures kept every generated map from being usable, and **neither was the CHK
+round-trip everyone suspected.** Both are now fixed, and both are asserted by the validator.
+
+### 1. A melee-template map played as a MELEE game — `SIDE` said "User Selectable"
 
 Load a map generated from the default `(2)Fading Realm.scx` ladder template, with Game Type set
-to **Use Map Settings**, and the player gets a **standard starting base** — the placed units are
-never created. Proved from inside the process, not from the screen: with a generated 36-unit map
-loaded, the plugin reports `types=[0x29:4 0x23:3 0x2A:1]` (four Drones, three Larva, one Overlord)
-for the boxed selection and `types=[0x83:1]` (a Hatchery) for a ctrl+click, while the map file
-demonstrably holds 36 units of the requested type and none of those.
+to **Use Map Settings**, and the player got a **standard starting base**; the placed units were
+never created. Read from inside the process rather than off the screen: with a generated
+36-Lurker map loaded, the plugin's `UNITSTATE` reported
+`types=[0x29:4 0x23:3 0x2A:1]` — four Drones, three Larva, one Overlord — a Zerg melee start
+containing none of the 36 units the file holds.
 
-Generating from a stock **campaign** template instead (`--keep-ownr`) produces a map that loads,
-shows the mission briefing and enters the game — and then ends within about seven seconds. Two
-different campaign templates behave the same way, which points at the CHK round-trip disturbing
-trigger data rather than at any one mission.
+It was not the lobby. Re-run on 2026-08-08 with the Game Type combo opened and *"Use Map
+Settings"* picked explicitly from its list (SC's dropdowns are press-and-hold; a plain click
+opens and closes them without selecting, which is how the box goes on showing a label that is not
+what is set), the result was byte-for-byte the same histogram.
 
-**So the generator produces structurally valid maps that do not yet play the way they are meant
-to.** Everything upstream of that is now verified in game: the map appears in Play Custom, the
-lobby offers a human slot, the units are in the file, the block is on screen. Two bugs found on
-the way there were fixed in task 015 and are worth not re-introducing:
+It was not the round-trip either. With the raw-CHK patcher above, the generated file differed
+from the stock ladder map in `OWNR`, `SIDE`, `UNIT` and `TRIG` **and nothing else**, and it still
+played as melee.
 
-1. `OWNR` must be `0x06` (`PlayerType.HUMAN`, "Human (Open Slot)"), **not** `0x02`
-   (`HUMAN_OCCUPIED`). `0x02` is what the game writes at runtime for a slot a human has already
-   taken; with it, Play Custom refuses the map — *"This map does not have a slot for a human
-   participant."*, Human Slots: 0.
-2. Single-player Play Custom also refuses a map with no computer slot at all — *"You must have at
-   least one computer opponent."* — so exactly one slot is set to `COMPUTER` and given no units
-   anywhere on the map. The validator asserts both halves.
+The cause is the `SIDE` section — one byte per player, that slot's race. A Blizzard **ladder**
+map carries `0x05` "**User Selectable**" for its human slots, because a ladder player picks a
+race in the lobby. StarCraft hands a User-Selectable slot the standard **melee starting units**
+for whichever race is picked, *even under Use Map Settings*, and the map's own placed units for
+that player never appear. A stock **campaign** map, which plays correctly through exactly the
+same menu path, carries a fixed race instead — `(1)Enslavers02b.scm` has `0x02` (Protoss) for its
+human slot.
+
+Writing an explicit race into `SIDE` is the whole fix. Same map, same menus, one byte per slot
+changed:
+
+```
+before   UNITSTATE ... n=8  live=8  visible=8  overflow=0  types=[0x2A:1 0x23:3 0x29:4]
+after    UNITSTATE ... n=36 live=36 visible=12 overflow=24 types=[0x67:36]      (0x67 = Lurker)
+```
+
+A visible tell in the lobby, for anyone debugging this again: a User-Selectable slot shows a
+**race dropdown** ("Random") next to the player name on the Create Game screen. A fixed-race map
+shows none.
+
+### 2. A campaign-template map ended within seconds — the mission's own triggers
+
+Generating from a stock **campaign** template produced a map that loaded, briefed, entered the
+mission and then ended within about seven seconds. The suspicion was that the CHK round-trip had
+disturbed trigger data. It had not:
+
+- Diffed field by field across the old richchk round-trip, `TRIG` came back **byte-identical**
+  (50400 bytes for `(1)Enslavers01.scm`), and so did `MBRF`, `STR` and `UPRP`.
+- With the raw-CHK patcher, a map generated from `(1)Enslavers02b.scm` differs from the stock
+  file in the `UNIT` section **alone** — and still ends.
+
+A campaign map is a *mission*, and it ships the triggers that end it. `(1)Enslavers02b.scm` has
+30 triggers, six of which end the game, all executed by Force 1 (the human's force):
+
+| trigger | condition | action |
+| ------- | ---------------------------------------------- | ------------------------------- |
+| 0       | current player commands at most 0 [Men]         | Defeat |
+| 10      | **all players** command at most 0 of unit 168   | Wait, Pause Game, Wait, Set Next Scenario, **Victory** |
+| 15-19   | current player commands at most 0 of unit 21 / 22 / 80 / 81 / 86 (the mission's protected units) | Wait, Pause Game, Play WAV, Display Text, Wait, **Defeat** |
+
+Every one of those conditions is about *which units exist*, and changing which units exist is the
+generator's entire job. Point it at the human slot with `-ClearPlayerUnits` and triggers 0/15/16
+fire; let it rewrite `OWNR` and every other player's units are never created, so trigger 10's
+"all players command at most 0 of unit 168" is true on the first frame — the map's only three
+unit-168s belong to player 6. The leading `Wait` + `Pause Game` in those action chains is why it
+takes seconds rather than being instant.
+
+Predicted from the trigger dump and then confirmed in game on 2026-08-08: a map generated from
+`(1)Enslavers02b.scm` with `-KeepTriggers` put *"Congratulations! You are victorious!"* on screen
+about nine seconds after the mission started. The same map with the triggers stripped — the
+default — runs indefinitely.
+
+So: **a test fixture must carry no triggers at all.** A ladder template is no safer than a
+campaign one; decoded out of `(2)Fading Realm.scx`, a Blizzard melee map ships the three standard
+melee triggers, and the third of them — *"all players: non-allied victory players command at most
+0 [unit class 231] → Victory"* — reads as true on the first frame of a generated map, because the
+only other participant is the unit-less computer opponent. (That one is read from the file, not
+watched in game: the fix landed before it was ever loaded with its triggers intact. The campaign
+case above is the one confirmed on screen.)
+
+### Still true, from task 015 — do not re-introduce
+
+1. `OWNR` must be `0x06` ("Human (Open Slot)"), **not** `0x02` (`HUMAN_OCCUPIED`). `0x02` is what
+   the game writes at runtime for a slot a human has already taken; with it, Play Custom refuses
+   the map — *"This map does not have a slot for a human participant."*, Human Slots: 0.
+2. Single-player Play Custom refuses a **melee-type** launch with no computer slot at all — *"You
+   must have at least one computer opponent."* — so exactly one slot is set to `COMPUTER` and
+   given no units anywhere on the map. The validator asserts both halves.
+3. The unit block is centred on the start location, or its far half sits off screen where no drag
+   box can reach it.

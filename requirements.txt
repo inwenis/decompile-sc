@@ -1,7 +1,10 @@
 pefile>=2024.8.26
 
 # task009: CHK/MPQ read+write for generating test maps. Pinned exact — chosen
-# because it round-trips a full playable .scm/.scx (CHK sections + MPQ
-# container via bundled StormLib), not just CHK bytes; see
-# research/prior-art.md CHK row for alternatives considered.
+# because it reaches inside a full .scm/.scx (MPQ container via bundled
+# StormLib), not just CHK bytes; see research/prior-art.md CHK row for
+# alternatives considered.
+# task016: only the MPQ half is used now. Its CHK decode/encode round-trip
+# rewrites UNIS/UNIx, MRGN and SWNM unasked, so make_test_map.py patches the
+# CHK as raw bytes instead — see tools/README-test-map.md "How it works".
 richchk==0.3.0
