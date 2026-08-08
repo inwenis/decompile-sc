@@ -120,6 +120,33 @@ Run `deploy.ps1` from the persistent checkout (`C:\git\decompile-sc`), not from 
 task worktree, so the git SHA in the receipt reflects `main` after the merge it's meant to
 capture.
 
+## Sound
+
+Unattended launches through `run-with-plugin.ps1` (every test suite, and anything a
+worker runs by hand without passing `-Sound`) are **silent by default** -- a `-Sound`
+switch is the escape hatch for a normal, audible launch, e.g. when debugging something
+audio-adjacent. **The deployed shortcut always passes `-Sound`**: the launcher
+`deploy.ps1` generates bakes it in (see `Launch-StarCraft-Modded.ps1`'s own
+`-InjectWindowedHelper WMode -Sound -Circles 1 ...` call), so the user's own play is never
+muted by this.
+
+Mechanism: `tools/plugin/sc-audio-mute.ps1` mutes the game's own Windows Core Audio
+(WASAPI) session directly -- the same per-application volume the Windows Volume Mixer
+controls -- once the game's process id is known, and keeps re-affirming it in the
+background for as long as the process lives (the session is created lazily, not at
+launch -- see `run-with-plugin.ps1`'s own "Sound" section for what was and was not
+directly verified). Nothing is written to the registry or disk; the mute is a property of
+the process's own audio session and ends when the process does -- no restore step, no
+state that can be left corrupted by a crash or an overlapping run.
+
+This replaced an earlier registry-based approach (`HKCU:\SOFTWARE\Blizzard
+Entertainment\Starcraft` `music`/`sfx`, save-before/restore-after) that wiped a real
+user's entire StarCraft settings key on its first live run via an unguarded `New-Item
+-Force` against an already-existing key -- see `run-with-plugin.ps1`'s "Sound" section for
+the full incident writeup. `config/guard-destructive.ps1` now hard-denies writes to that
+registry key from any worker, and AGENTS.md carries a standing rule against writing live
+user state outside the repo/working copy as a direct result.
+
 ## Re-deploy
 
 ```powershell

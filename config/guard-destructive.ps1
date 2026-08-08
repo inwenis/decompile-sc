@@ -68,6 +68,43 @@ if ($cmd -match '(?i)[/\\]git[/\\]+conductor') {
     exit 0
 }
 
+# HARD DENY (2026-08-08 registry-wipe incident, task018): a worker's sound-mute code
+# wrote to the user's real HKCU StarCraft key to mute it for test launches. One line —
+# `New-Item -Path <existing key> -Force` — deleted and recreated the key, wiping every
+# value under it (Gamma, scroll speed, Recent Maps, ...), not just the two it meant to
+# touch. AGENTS.md now carries a hard rule: never write live user state outside the
+# repo/working copy; prove registry-touching code against a throwaway path first, and
+# prefer a process-scoped mechanism (e.g. a Windows Core Audio session mute) over
+# mutating the registry at all. Read-only queries (Get-ItemProperty, Get-Item, reg
+# query) stay allowed — this only blocks writes/deletes.
+$blizzardStarcraftKey  = '(?i)Blizzard\s+Entertainment[\\/]+Starcraft'
+$registryWriteVerbs    = '(^|[\s;|&(])(New-Item|Remove-Item|Remove-ItemProperty|Set-ItemProperty|New-ItemProperty)\b|reg(\.exe)?\s+(add|delete)\b'
+if ($cmd -match $blizzardStarcraftKey -and $cmd -match $registryWriteVerbs) {
+    @{
+        hookSpecificOutput = @{
+            hookEventName            = 'PreToolUse'
+            permissionDecision       = 'deny'
+            permissionDecisionReason = "writing to the StarCraft registry key is banned (2026-08-08 registry-wipe incident) — it is live user state, never a worker's to mutate. Use a process-scoped mechanism instead (e.g. a Windows Core Audio session mute), or a throwaway test key to prove code first. Read-only queries stay allowed."
+        }
+    } | ConvertTo-Json -Depth 5
+    exit 0
+}
+# Same incident, general case: `New-Item -Force` against ANY registry path is the same
+# footgun regardless of which key -- -Force on an EXISTING key deletes and recreates it
+# (unlike file New-Item -Force, which just overwrites content). Message the conductor
+# if a real need for it comes up; this is rare enough to warrant a human in the loop.
+if ($cmd -match '(^|[\s;|&(])New-Item\b' -and $cmd -match '-Force\b' -and
+    $cmd -match '[\s"'']HK(CU|LM|CR|U|CC):?[\\/]') {
+    @{
+        hookSpecificOutput = @{
+            hookEventName            = 'PreToolUse'
+            permissionDecision       = 'deny'
+            permissionDecisionReason = "'New-Item -Force' against a registry path is banned (2026-08-08 registry-wipe incident) — -Force on an EXISTING key deletes and recreates it, wiping every value under it. Test-Path first and only New-Item when the key is confirmed missing; message the conductor if -Force against a possibly-existing key is genuinely needed."
+        }
+    } | ConvertTo-Json -Depth 5
+    exit 0
+}
+
 # WORKER MODE (2026-07-17): an "ask" decision OVERRIDES bypass permissions and
 # throws a terminal prompt — it froze workers for hours on ROUTINE self-scoped
 # ops (killing their own dev server, rm-ing their own fixtures; 048 lost 3h).
