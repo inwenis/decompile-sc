@@ -2,8 +2,9 @@
 <#
 .SYNOPSIS
 End-to-end, UNATTENDED proof that a generated map can kill the player's units on
-demand, and that when one of a >12 selection DIES the task-017 HUD row drops it --
-the first IN-GAME exercise of that path (task 019).
+demand, that when one of a >12 selection DIES the task-017 HUD row drops it (task
+019), and that the fan-out's COMMAND path drops it too rather than replaying its tag
+into a Select the engine will follow a freed sprite pointer through (task 020).
 
 .DESCRIPTION
 Every fixture up to task 018 was combat-less by design, so every died-while-displayed
@@ -12,18 +13,26 @@ click gate) was proved OFFLINE only, in hooktest. This test closes that gap with
 combat variant of the map generator: a second, COMPUTER-owned block of Hydralisks
 14 tiles east of the player's Lurkers, no triggers, no AI script.
 
-THE ORACLE IS THE GAP BETWEEN TWO IN-PROCESS NUMBERS.
+THE ORACLE IS THE GAP BETWEEN TWO IN-PROCESS NUMBERS, read from one line.
 
-  UNITSTATE n=36 live=36     the shadow list still holds all 36 captured units, and
-                             every one still passes sc_fanout's liveness test, which
-                             is a UNIQUENESS (CUnit+0xA5) comparison ONLY
-  HUDROW    show n=35        the row's display list holds 35, because sc_hudrow's
-                             UnitAlive ALSO requires hitpoints (CUnit+0x08) != 0
+  UNITSTATE n=36 live=35 ... uniqOnly=36 hp0=1
+                             the shadow list still holds all 36 captured units;
+                             CUnit+0xA5 alone (`uniqOnly`) still accepts every one of
+                             them, and the task-020 gate (`live`) does not, because
+                             one of them reads hitpoints == 0
+  HUDROW    show n=35        the row's display list agrees, on its own HP term
 
 A damage death does not recycle the slot, so uniqueness still matches -- that is
 exactly the case the 0xA5-only test misses (research/selection-circles.md 4.5, and
-the task-017 review that put the HP term in). Those two lines are a unit that died and
-a row that noticed.
+the task-017 review that put the HP term in). Those lines are a unit that died, a row
+that noticed, and -- since task 020 -- a command path that noticed too.
+
+WHAT TASK 020 ADDED. One more step, on the keypress the fixture already used to break
+off the engagement: the first fanned order after a death is read back off the plugin's
+own emit path (`FANOUT select:` carries every tag written, `FANOUT stale drop:` every
+unit refused and why), and the dead unit's tag must be in none of them. -Liveness 0
+runs that same step against the pre-task-020 gate, where it fails -- which is how the
+assertion was shown to be capable of failing (research/fanout-liveness.md).
 
 They are NOT one atomic read. The HUDROW line is found by a log poll (500 ms) and the
 UNITSTATE line is then requested with a fresh marker, so the second is written between
@@ -89,6 +98,31 @@ param(
     # first pair of boxes was taken. Some runs the enemy pursues rather than holding
     # its post, and then it takes a few.
     [int]$MaxRounds = 5,
+    # Task 020's emit-side liveness gate. '1' is the shipped behaviour and what this
+    # test asserts. '0' deliberately restores the pre-020 gate (uniqueness alone) --
+    # the assertions are NOT inverted for it, so the run FAILS, which is the point:
+    # it is how "this assertion can fail" was demonstrated, and it is the A/B arm that
+    # showed what the engine does when it is handed a dead unit's tag
+    # (research/fanout-liveness.md 4). Never a green-run configuration.
+    [ValidateSet('0', '1')][string]$Liveness = '1',
+    # Seconds to wait after the death before issuing the fanned order under test.
+    #
+    # A dead unit passes through TWO states, and they are not the same experiment.
+    # For a second or two it is dead-but-still-there: hitpoints 0, still linked, still
+    # holding a sprite, still in the engine's own selection while its death animation
+    # plays. Then the removal path 0x004A0740 runs and it becomes dead-and-gone:
+    # unlinked, and CUnit+0x0C reads 0. Both are inside the window where CUnit+0xA5
+    # still matches, so the pre-020 gate would replay it in either -- but only the
+    # second one has the receive path dereferencing a null sprite pointer.
+    #
+    # 0 (the default) fires as soon as the death is seen, which is the state a player
+    # actually hits -- and which of the two states that lands in is NOT under this
+    # script's control, since it depends on how long the row's poll took to notice.
+    # Both recorded -Liveness 0 runs used delay 0; one landed in each state, by luck.
+    # A value around 8-10 should put the order in the second state on this fixture
+    # deliberately, but that has not been run -- it exists so the "sprite reads 0"
+    # landing can be aimed at rather than waited for (research/fanout-liveness.md 4.2).
+    [int]$OrderDelaySec = 0,
     [switch]$KeepOpen
 )
 
@@ -201,6 +235,19 @@ function Shot([string]$tag) {
 # pids scinject handed IT, and only ever closes those.
 $script:launchedPids = @()
 
+# CROSS-WORKER LAUNCH SERIALISATION IS NOT THIS FILE'S JOB. run-with-plugin.ps1 takes
+# an exclusive OS handle on C:\sc-work\logs\sc-launch.lock for the launch sequence
+# whenever $env:AGENT_TASK is set (task 018, tools/plugin/sc-launch-lock.ps1), which
+# covers every launch this test makes.
+#
+# An earlier version of this file carried its own content-based claim on that same
+# path, written before task 018 merged. It does not survive alongside the handle
+# version and was removed rather than adapted: while another worker holds the handle
+# with FileShare.None, `Get-Content` on the file THROWS, which the claim code read as
+# "nobody holds it", and the `Set-Content` that followed threw for the same reason and
+# killed the run. Two mechanisms on one path is the bug; the OS handle is the one that
+# has no check-then-write window, so it is the one that stays.
+
 # $true when the launch produced a live, injected game. run-with-plugin.ps1 throws on
 # a failed injection, and the pid it printed before failing belongs to a process that
 # is already gone, so neither the exception nor the pid alone is the answer -- both
@@ -214,6 +261,7 @@ function Invoke-Launch {
     try {
         & (Join-Path $scriptDir 'run-with-plugin.ps1') `
             -Mode fanout -InjectWindowedHelper WMode -LogCommands 0 `
+            -Liveness $Liveness `
             -GameDir $GameDir -LogPath $LogPath 6>&1 | ForEach-Object {
                 Write-Host "       $_"
                 if ("$_" -match 'scinject:\s*PID=(\d+)') {
@@ -323,7 +371,8 @@ function Close-LaunchedGame {
 
 function Stop-Mission {
     $target = $script:gamePid
-    if (-not (Close-LaunchedGame)) {
+    $gone = Close-LaunchedGame
+    if (-not $gone) {
         Write-Host "  FAIL pid $target is still running after close-game"
         $script:failures++
     }
@@ -635,17 +684,28 @@ try {
         if ($null -eq $drop) { return }
         Write-Host "       DEATH: $($drop.Line)"
 
-        # THE ORACLE. The row lost a unit; the shadow list did not, and every unit in
-        # it still passes sc_fanout's liveness test, which compares CUnit+0xA5 and
-        # nothing else. The only term that can separate the two numbers is the one
-        # sc_hudrow adds: hitpoints != 0. This is that term firing in a real game.
+        # THE ORACLE. The row lost a unit; the shadow list did not. Both liveness
+        # numbers come off the SAME read of that list: `uniqOnly` is CUnit+0xA5 alone
+        # -- the engine's own stale-tag test, and the whole of what the fan-out
+        # checked before task 020 -- and it still accepts every one of them. `live`
+        # is the task-020 gate, and it does not. Their difference is a unit that is
+        # dead and whose slot has not been recycled: the case CUnit+0xA5 cannot see,
+        # the case that used to be replayed into a Select.
         $now = Get-ScState 'at-the-death'
         Assert-That "a unit of the boxed selection DIED in combat -- the row's display list is down to $($drop.N) of $baseline" `
             ($drop.N -lt $baseline)
         Assert-That "the shadow list still holds all $baseline captured units (n=$($now.N))" `
             ($now.N -eq $baseline)
-        Assert-That "and every one of them still passes the UNIQUENESS test (live=$($now.Live)) -- so what the row dropped, it dropped on HITPOINTS, the case CUnit+0xA5 alone misses" `
-            ($now.Live -eq $baseline)
+        Assert-That "and every one of them still passes the UNIQUENESS test (uniqOnly=$($now.UniqOnly)) -- CUnit+0xA5 does not move on death" `
+            ($now.UniqOnly -eq $baseline)
+        Assert-That "but the task-020 gate does not (live=$($now.Live), hp0=$($now.Hp0)) -- it dropped on HITPOINTS, exactly what the row did" `
+            ($now.Live -lt $baseline -and $now.Hp0 -ge 1)
+        # `-le`, not `-eq`, for the same reason the header gives for the two reads not
+        # being atomic: this one is taken AFTER the row's line, and the population can
+        # only fall. A gate that counted MORE survivors than the row did a moment
+        # earlier would be the real failure, and that is what this rules out.
+        Assert-That "the gate counts no more survivors than the row did (row $($drop.N), gate $($now.Live))" `
+            ($now.Live -le $drop.N)
         Write-Host "       $($now.Line)"
         Shot 'at-the-death' | Out-Null
 
@@ -674,35 +734,169 @@ try {
         }
     }
 
+    Step 'PHASE B: THE 020 FIX -- the first fanned order after a death does NOT replay the dead unit' {
+        <#
+        THE ASSERTION THIS TASK EXISTS FOR.
+
+        Right now the shadow list holds a unit that is dead and whose slot has not
+        been recycled, so its CUnit+0xA5 still matches what we captured. Before task
+        020 the emit gate compared nothing else, so that unit's tag went into the
+        replayed Select, the engine's receive path accepted it (CMDRECV_Select
+        0x004C2750 validates count/decode/uniqueness/dedup/id!=14 and nothing more)
+        and addUnitToSelectionSlot 0x0049AF80 dereferenced its sprite pointer.
+
+        One keypress is all it takes -- and it is the same keypress the fixture
+        already needed to break off the engagement, so this costs the run nothing.
+        BURROW, not retreat: walking away does not work (the Hydralisks pursue, the
+        Lurkers keep dying all the way home, and a page walk over a population that is
+        still moving compares two different lists). Burrowing ends the fight where it
+        stands -- a Hydralisk is not a detector and cannot target a burrowed unit --
+        and it moves nobody, so the survivors stay in one boxable clump. It is the
+        same untargeted-ability fan-out test-burrow-fanout.ps1 proves reaches all 36
+        units from one keypress.
+
+        THE ORACLE IS THE WIRE, read back from the plugin's own emit path: every tag
+        that goes into a Select is logged by `FANOUT select:` as it is written, and
+        every unit refused a place is logged by `FANOUT stale drop:` with the reason
+        and the fields the receive path would have used. The claim is a set
+        difference over those two lines, corroborated against the row's own
+        independently-read tag set from before the fight.
+
+        It CAN fail, and that has been shown both ways: offline, hooktest part [7]
+        runs the identical case with the gate at its pre-020 shape and asserts the
+        dead tag DOES reach the wire; in game, -Liveness 0 runs this very step
+        against the pre-020 gate, where it fails (research/fanout-liveness.md 4).
+        #>
+        if ($OrderDelaySec -gt 0) {
+            Write-Host "       waiting ${OrderDelaySec}s first, so the dead unit is past REMOVAL (0x004A0740) and not merely dead"
+            Start-Sleep -Seconds $OrderDelaySec
+        }
+        $mark = Get-ScLogLineCount -LogPath $LogPath
+        Write-Host "       breaking off the fight by BURROWING -- and this is the fanned order under test (liveness=$Liveness, delay=${OrderDelaySec}s)"
+        Send-ScKey -Hwnd $hwnd -VirtualKey $BURROW_KEY
+        Start-Sleep -Seconds 5
+
+        $since = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
+        $fan = @($since | Select-String -Pattern 'FANOUT start: cmd=0x([0-9A-F]{2}) .* units=(\d+)')
+        Assert-That 'the keypress fanned out through our hook' ($fan.Count -gt 0) `
+            '(no FANOUT start line after the order)'
+
+        # Every tag the emit path actually wrote, and every unit it refused.
+        $emitted = @()
+        foreach ($l in ($since | Select-String -Pattern 'FANOUT select: in=\d+ out=\d+ dropped=\d+ tags=\[([0-9A-F ]*)\]')) {
+            $m = [regex]::Match($l.Line, 'tags=\[([0-9A-F ]*)\]')
+            $emitted += @($m.Groups[1].Value -split ' ' | Where-Object { $_ })
+        }
+        # THE VERDICT LINES, BOTH KINDS. sc_fanout writes one forensics line per unit
+        # its liveness test rejects, and it writes it WHETHER OR NOT the gate then
+        # refuses the unit: `FANOUT stale drop` when the gate is on and the tag is
+        # withheld, `FANOUT REPLAYING A STALE UNIT (gate off)` when the pre-020 gate
+        # lets it through anyway. Same fields, same `why=`.
+        #
+        # Scraping BOTH is what makes the assertion below mean anything. An earlier
+        # version of this step read only `stale drop` lines -- which sc_fanout writes
+        # exclusively on the branch that ALSO skips writing the tag -- so the set of
+        # "dead tags" was by construction a set of tags that had not been emitted, and
+        # "none of them reached the wire" was a tautology. Worse, under -Liveness 0 no
+        # `stale drop` line exists at all, the set came out empty, and the assertion
+        # PASSED while the dead unit's tag was demonstrably on the wire. The union is
+        # the same set of units in both arms; only the outcome differs, which is
+        # exactly what a regression assertion needs.
+        $verdicts = @()
+        foreach ($l in ($since | Select-String -Pattern 'FANOUT (?:stale drop|REPLAYING A STALE UNIT \(gate off\)): unit=0x[0-9A-F]{8}')) {
+            $m = [regex]::Match($l.Line,
+                'FANOUT (stale drop|REPLAYING A STALE UNIT \(gate off\)): unit=0x([0-9A-F]{8}) tag=([0-9A-F]{4}) why=(\w+) hp=(\d+) .*sprite=0x([0-9A-F]{8}) spriteFlags=(-?\d+)')
+            if (-not $m.Success) { continue }
+            $verdicts += [pscustomobject]@{
+                Withheld = ($m.Groups[1].Value -eq 'stale drop')
+                Unit = $m.Groups[2].Value; Tag = $m.Groups[3].Value; Why = $m.Groups[4].Value
+                Hp = [int]$m.Groups[5].Value
+                Sprite = $m.Groups[6].Value; SpriteFlags = [int]$m.Groups[7].Value
+                Line = $l.Line.Trim()
+            }
+        }
+        foreach ($d in $verdicts) { Write-Host "       VERDICT: $($d.Line)" }
+        Write-Host "       emitted $($emitted.Count) tags across $(($since | Select-String 'FANOUT select:').Count) Select(s)"
+
+        Assert-That 'the emit path wrote at least one Select we can read back' `
+            ($emitted.Count -gt 0)
+        # (1) something was judged not-live, and (2) it was judged so for BEING DEAD --
+        # not for a recycled slot, which is the case the pre-020 gate already caught.
+        #
+        # Every list below is projected with ForEach-Object rather than read as
+        # `$collection.Property`. Member enumeration over a collection that may be
+        # empty is exactly the kind of thing that turns a PASSING assertion into a
+        # thrown step, and the passing case is the common one here.
+        $deadVerdicts = @($verdicts | Where-Object { $_.Why -eq 'hp0' })
+        $reasons = @($verdicts | ForEach-Object { $_.Why } | Sort-Object -Unique)
+        $deadTags = @($deadVerdicts | ForEach-Object { $_.Tag } | Sort-Object -Unique)
+        Assert-That "the gate judged at least one unit not-live, on HITPOINTS ($($deadVerdicts.Count) of $($verdicts.Count) verdicts were hp0)" `
+            ($deadVerdicts.Count -ge 1) "(reasons seen: $($reasons -join ','))"
+        Assert-That 'every hp0 verdict really did read zero hit points' `
+            (@($deadVerdicts | Where-Object { $_.Hp -ne 0 }).Count -eq 0)
+        # THE REGRESSION ASSERTION, and the one this whole task turns on: not one of
+        # those tags is in any emitted Select. It FAILS under -Liveness 0, where the
+        # very same units are judged the very same way and their tags go out anyway.
+        $replayedTags = @($deadTags | Where-Object { $emitted -contains $_ })
+        Assert-That "no dead unit's tag reached the wire (dead tags: $($deadTags -join ' '))" `
+            ($replayedTags.Count -eq 0) "(replayed anyway: $($replayedTags -join ' '))"
+        # ...and the gate did the withholding, rather than the tag being absent for some
+        # other reason. Separates "the gate worked" from "the chunk happened to omit it".
+        $notWithheld = @($deadVerdicts | Where-Object { -not $_.Withheld } | ForEach-Object { $_.Tag })
+        Assert-That "and the gate is what withheld them ($($deadVerdicts.Count) of $($deadVerdicts.Count) withheld)" `
+            ($notWithheld.Count -eq 0) "(let through: $($notWithheld -join ' '))"
+        # INDEPENDENT CORROBORATION. Every tag the fan-out calls dead must be one the
+        # HUD ROW listed before the fight -- read out of the live dialog controls by a
+        # different module, on a different path, before any of this happened. All of
+        # them, not just one: a tag the row never showed would mean the fan-out is
+        # talking about a unit that was never in this selection.
+        $unknownBefore = @($deadTags | Where-Object { $script:beforeRow.Tags -notcontains $_ })
+        Assert-That "every unit the gate called dead is one the row itself listed before the fight ($($deadTags.Count) of $($deadTags.Count))" `
+            ($unknownBefore.Count -eq 0) "(not in the row's pre-fight tag set: $($unknownBefore -join ' '))"
+
+        # The same claim from the counter side, in-process and marker-synchronised:
+        # staleSkipped moved, and the two liveness numbers have separated.
+        $st = Get-ScState 'after-the-fanned-order'
+        Write-Host "       $($st.Line)"
+        Assert-That "staleSkipped is above zero ($($st.StaleSkipped))" ($st.StaleSkipped -gt 0)
+        Assert-That "the shadow list still holds every captured unit (n=$($st.N))" `
+            ($st.N -eq $UnitCount)
+        Assert-That "uniqueness alone still accepts them all (uniqOnly=$($st.UniqOnly)) -- so this is the case CUnit+0xA5 cannot see" `
+            ($st.UniqOnly -eq $UnitCount)
+        Assert-That "and the gate does not (live=$($st.Live), hp0=$($st.Hp0), removed=$($st.Removed))" `
+            ($st.Live -lt $st.UniqOnly -and ($st.Hp0 + $st.Removed) -ge 1)
+        Assert-That "the run is using the liveness gate (liveness=$($st.Liveness))" `
+            ($st.Liveness -eq [int]$Liveness)
+        Shot 'after-fanned-order' | Out-Null
+
+        # The engine is still standing after being handed that Select, and the
+        # survivors obeyed the order. What the DEFECT does to the engine instead is
+        # the -Liveness 0 run, written up in research/fanout-liveness.md 4.
+        $p = Get-Process -Id $script:gamePid -ErrorAction SilentlyContinue
+        Assert-That 'the game survived the replayed order' `
+            ($null -ne $p -and -not $p.HasExited)
+
+        $dug = Get-ScState 'burrowed-out-of-the-fight'
+        # More than a full page of them, so the row still has something to page over.
+        # Since task 020 `live` is the FULL liveness count, so the dead are already
+        # out of it and every unit it counts should have burrowed -- the gap that
+        # used to sit between Burrowed and BurrowedOf has moved to n vs live.
+        Assert-That "the survivors burrowed and are out of the fight ($($dug.Burrowed) of the $($dug.BurrowedOf) still live)" `
+            ($dug.Burrowed -gt $HUD_SLOTS -and $dug.Burrowed -eq $dug.BurrowedOf)
+        Assert-That "and the shadow list is still bigger than the live count, because it still holds the dead (n=$($dug.N) live=$($dug.Live))" `
+            ($dug.N -gt $dug.Live)
+    }
+
     $script:afterRow = $null
 
     Step 'PHASE B: THE 017 CONSEQUENCE -- the dead units are gone from the row, and the row is otherwise coherent' {
-        # Break off the engagement and let the fight actually end before comparing tag
-        # sets: a page walk over a selection that is still losing units compares two
-        # different lists. Then take a fresh box -- required, not cosmetic, because a
-        # death among the engine's visible twelve latches the row to stock and only a
-        # new commit (a version bump, sc_hudrow RefreshShadow) clears that latch; a
-        # fan-out of a move order does not rebuild the shadow list and so does not.
-        # BURROW, not retreat. Walking away does not work: the Hydralisks pursue, the
-        # Lurkers keep dying all the way home, and a page walk over a population that
-        # is still moving compares two different lists (five disengage attempts in a
-        # row failed that way). Burrowing ends the fight where it stands, because a
-        # Hydralisk is not a detector and cannot target a burrowed unit at all -- and
-        # it moves nobody, so the survivors stay in one boxable clump.
-        #
-        # It is the same untargeted-ability fan-out test-burrow-fanout.ps1 proves
-        # reaches all 36 units from one keypress.
-        Write-Host '       breaking off the fight by BURROWING (a Hydralisk is no detector: burrowed units cannot be targeted)'
-        Send-ScKey -Hwnd $hwnd -VirtualKey $BURROW_KEY
-        Start-Sleep -Seconds 4
-        $dug = Get-ScState 'burrowed-out-of-the-fight'
-        # More than a full page of them, so the row still has something to page over.
-        # Not all of the shadow list: that count is over units passing the UNIQUENESS
-        # test, which the ones already killed still do, and a dead Lurker does not
-        # burrow. The gap between the two numbers is the deaths, which is the whole
-        # point of this test.
-        Assert-That "the survivors burrowed and are out of the fight ($($dug.Burrowed) of the $($dug.BurrowedOf) the shadow list still holds)" `
-            ($dug.Burrowed -gt $HUD_SLOTS -and $dug.Burrowed -lt $dug.BurrowedOf)
+        # Let the fight actually end before comparing tag sets: a page walk over a
+        # selection that is still losing units compares two different lists. The
+        # engagement was already broken off by the burrow in the previous step. Then
+        # take a fresh box -- required, not cosmetic, because a death among the
+        # engine's visible twelve latches the row to stock and only a new commit (a
+        # version bump, sc_hudrow RefreshShadow) clears that latch; a fan-out of a
+        # move order does not rebuild the shadow list and so does not.
         Wait-RowSettled -QuietSec 6 -TimeoutSec 90 | Out-Null
 
         for ($attempt = 1; $attempt -le $MaxRounds; $attempt++) {
@@ -851,6 +1045,10 @@ try {
 }
 catch {
     Write-Host "  FAIL a test step threw: $($_.Exception.Message)"
+    # The offending SOURCE LINE, not just its number: a step that throws is a bug in
+    # the test and the number alone sends the reader to the wrong statement when a
+    # backtick-continued call spans two lines.
+    Write-Host "       $($_.InvocationInfo.PositionMessage)"
     Write-Host "       $($_.ScriptStackTrace)"
     $failures++
 }
@@ -866,10 +1064,27 @@ Write-Host '[final] the run must balance'
 # Pid-scoped, both halves: every pid scinject handed THIS test, and nothing else.
 # Another worker's game running right now is not this test's business and must not
 # make it fail.
-$stillUp = @($script:launchedPids | Where-Object {
-    $p = Get-Process -Id $_ -ErrorAction SilentlyContinue
-    $null -ne $p -and -not $p.HasExited
-})
+#
+# POLLED, and NAME-CHECKED. A pid that WM_CLOSE has already retired can still
+# enumerate for a moment (close-game reported "exited cleanly" and this check saw it
+# a second later), and a pid the OS has recycled belongs to somebody else entirely.
+# One sample of `Get-Process -Id` cannot tell either of those from a stranded game --
+# so wait for it to go, and only believe a survivor that is still a StarCraft.
+$stillUp = @()
+foreach ($id in $script:launchedPids) {
+    $alive = $null
+    for ($i = 0; $i -lt 20; $i++) {
+        $p = Get-Process -Id $id -ErrorAction SilentlyContinue
+        if ($null -eq $p -or $p.HasExited) { $alive = $null; break }
+        if ($p.ProcessName -notlike 'StarCraft*') {
+            Write-Host "       (pid $id is now '$($p.ProcessName)' -- the OS recycled it; not ours)"
+            $alive = $null; break
+        }
+        $alive = $p
+        Start-Sleep -Milliseconds 500
+    }
+    if ($null -ne $alive) { $stillUp += $id }
+}
 Assert-That 'no game process this test started is left running' `
     ($KeepOpen -or $stillUp.Count -eq 0) `
     "(launched $($script:launchedPids -join ' '); still up: $($stillUp -join ' '))"

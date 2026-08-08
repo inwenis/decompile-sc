@@ -42,6 +42,11 @@ live process. `C:\sc-install\Starcraft` was never opened.
    ([`binary-selection-map.md`](binary-selection-map.md) §7: 23 of 23 inherited addresses resolve
    exactly). What is new here is their **calling conventions, their prologue bytes, and their
    behaviour**.
+6. **A sender that holds a unit list across time owes the receive side a liveness check** — and
+   this document's tag encoding (§4) is not one. `CUnit+0xA5` moves on slot reuse, not on death,
+   so a captured tag stays "valid" long after its unit has gone. Task 020 traced what the receive
+   path does with such a tag and what it costs, and put the missing check on the emit side:
+   [`fanout-liveness.md`](fanout-liveness.md).
 
 ---
 

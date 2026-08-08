@@ -94,9 +94,30 @@ drag box -> 0x0046FA40 -> SortAllUnits -> sortOverflowHandler (per unit past the
 `Select` replaces `playersSelections[player]` wholesale. Ordering the overflow chunks first and
 the visible one last folds that restore into the final pair.
 
-**Staleness.** Captured units are stored as (pointer, `CUnit+0xA5` uniqueness). At emit time the
-uniqueness byte is re-checked and a unit that no longer matches is dropped — the engine's own
-staleness test for stored unit tags.
+**Liveness (task 020).** Captured units are stored as (pointer, `CUnit+0xA5` uniqueness,
+`CUnit+0x4C` owner). At emit time each one is re-checked before its tag is written into a
+`Select`, and the check is **not** the uniqueness byte alone. It cannot be: `CUnit+0xA5` is
+written by one instruction in the whole binary, inside the unit (re)init `0x004A0320`, so it moves
+on slot **reuse** and *not* on **death** ([`research/selection-circles.md`](../../research/selection-circles.md)
+§4.5). A unit killed a moment ago still carries the uniqueness we captured, so its tag passes the
+receive side's check (`CMDRECV_Select` `0x004C2750` validates count / decode / uniqueness / dedup /
+`id != 14` and nothing else) and `addUnitToSelectionSlot` `0x0049AF80` then dereferences its
+sprite pointer, unguarded. The five terms, and why each one is there, are derived in
+[`research/fanout-liveness.md`](../../research/fanout-liveness.md):
+
+| term | catches | cost |
+|---|---|---|
+| `CUnit+0xA5` unchanged | the slot was recycled into a different unit | one byte compare |
+| `CUnit+0x08` (hitpoints) `!= 0` | a **damage death** — the case `0xA5` cannot see | one dword compare |
+| `CUnit+0x4C` (owner) unchanged | the unit changed hands (mind control) | one byte compare |
+| `CUnit+0x0C` (sprite) `!= NULL` | the exact pointer the receive path dereferences | one compare |
+| reachable in `playerUnitList[owner]` | **removal from play by any path** — trigger `RemoveUnit`, archon-consumed, the tail of a death | one bounded list walk **per fanned order**, not per frame |
+
+Every tag that goes out is logged by `FANOUT select:`, and every unit refused a place by
+`FANOUT stale drop:` with the reason and the fields the engine would have used — so an unattended
+run can assert on the wire rather than on a counter. `%SCPLUGIN_FANOUT_LIVENESS%`
+(`run-with-plugin.ps1 -Liveness 0`) restores the pre-task-020 gate; it is a **known-bad**
+configuration that exists only to reproduce the defect on demand.
 
 **Byte budget.** The replay format length-prefixes each frame's command block with a *single*
 byte, so everything every player does in one frame must fit in 255 bytes. The plugin emits up to
@@ -437,6 +458,7 @@ file in the game folder.
 | `-FanoutBudget <bytes>` | per-turn byte budget for emitted pairs (default 200; the replay frame block is 255) |
 | `-FanoutCmds '14 15 1A'` | replace the set of command ids that get fanned out |
 | `-Circles 0\|1` | task 014's selection circles under the over-cap units (default 1; only meaningful in `-Mode fanout`). `0` is the feature's own off switch and drops the hook count from 5 to 4 |
+| `-Liveness 0\|1` | task 020's emit-side liveness gate (default **1**). `0` restores the pre-020 uniqueness-only test and will replay a dead unit's tag into a `Select` — a **defect-reproduction** switch, not an off switch; the launcher prints a warning when it is used |
 | `-Windowed` / `-RemoveWindowed` | the **old** `ddraw.dll`-swap recipe and its undo. Kept only so the failure is reproducible; it does not work — use `-InjectWindowedHelper` |
 | `-WaitForExit` | block until the game exits instead of returning |
 

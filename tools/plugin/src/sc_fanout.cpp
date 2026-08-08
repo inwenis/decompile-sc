@@ -24,6 +24,14 @@
 //      The visible chunk is emitted LAST, so the sim-side selection is left exactly
 //      as the player sees it -- the separate "restore Select" that
 //      research/selection-cap.md 7 costs is folded into the final pair.
+//
+//      ONE EXCEPTION, since task 020 put a liveness gate on the emit path: if EVERY
+//      unit of the visible chunk fails that gate, no Select is written for it and the
+//      simulation is left holding the last OVERFLOW chunk instead. It needs all twelve
+//      visible units to be inside the death/removal window at once, it self-heals on
+//      the next order or selection commit, and the pre-020 behaviour was not better --
+//      it emitted twelve tags the receive path then had to throw away. Stated here
+//      because the invariant above is load-bearing everywhere else in this file.
 
 #include <windows.h>
 #include <string.h>
@@ -208,18 +216,23 @@ static bool ShadowContains(const ShadowUnit* arr, int n, DWORD ptr) {
     return false;
 }
 
-// Reads a unit's identity fields. The unit array is a fixed 1700-entry global, so
-// an in-range pointer is always readable -- but the pointer itself is validated
-// against the array's bounds and stride first, because a bad one would otherwise
-// be dereferenced.
-static bool ReadUnit(DWORD ptr, ShadowUnit* out) {
+// Is this a pointer to a real slot of the unit array? The array is a fixed
+// 1700-entry global, so an in-range pointer is always readable -- but the pointer
+// itself has to be validated against the array's bounds and stride first, because a
+// bad one would otherwise be dereferenced. Every deref in this file goes through
+// here, including each link of the player-unit-list walk below.
+static bool UnitPtrValid(DWORD ptr) {
     if (!ptr) return false;
     DWORD arrayBase = (DWORD)Rt(SC_VA_UNIT_ARRAY_BASE);
     if (ptr < arrayBase) return false;
     DWORD off = ptr - arrayBase;
     if (off % SC_CUNIT_SIZE != 0) return false;
-    DWORD index = off / SC_CUNIT_SIZE + 1;     // the wire index is 1-based
-    if (index > SC_MAX_UNIT_INDEX) return false;
+    return (off / SC_CUNIT_SIZE + 1) <= SC_MAX_UNIT_INDEX;   // the wire index is 1-based
+}
+
+// Reads a unit's identity fields.
+static bool ReadUnit(DWORD ptr, ShadowUnit* out) {
+    if (!UnitPtrValid(ptr)) return false;
     out->ptr        = ptr;
     out->uniqueness = *(BYTE*)(ptr + SC_CUNIT_OFF_UNIQUENESS);
     out->player     = *(BYTE*)(ptr + SC_CUNIT_OFF_PLAYER);
@@ -230,22 +243,251 @@ static bool ReadUnit(DWORD ptr, ShadowUnit* out) {
 // the Targeted Order builder all do it. Returns 0 for anything out of range,
 // which is what the engine encodes too.
 static WORD UnitTag(DWORD ptr) {
-    if (!ptr) return 0;
-    DWORD arrayBase = (DWORD)Rt(SC_VA_UNIT_ARRAY_BASE);
-    if (ptr < arrayBase) return 0;
-    DWORD off = ptr - arrayBase;
-    if (off % SC_CUNIT_SIZE != 0) return 0;
-    DWORD index = off / SC_CUNIT_SIZE + 1;
-    if (index > SC_MAX_UNIT_INDEX) return 0;
+    if (!UnitPtrValid(ptr)) return 0;
+    DWORD index = (ptr - (DWORD)Rt(SC_VA_UNIT_ARRAY_BASE)) / SC_CUNIT_SIZE + 1;
     BYTE uniq = *(BYTE*)(ptr + SC_CUNIT_OFF_UNIQUENESS);
     return (WORD)(((WORD)uniq << 11) | (WORD)index);
 }
 
-// Still the same unit it was when we recorded it? Same test the engine applies to
-// its own stored tags.
-static bool StillAlive(const ShadowUnit* u) {
+// ---------------------------------------------------------------------------
+// LIVENESS -- why one uniqueness comparison is not enough on THIS path
+//
+// The shadow list is captured at selection time and replayed, as unit TAGS, into a
+// Select the engine's own receive path consumes. That receive path
+// (CMDRECV_Select 0x004C2750 -> addUnitToSelectionSlot 0x0049AF80,
+// binary-selection-map.md 5.1/5.2) validates a received entry with exactly:
+// count <= 12, index/uniqueness decode, CUnit+0xA5 == the tag's uniqueness, a
+// 12-bounded dedup, and `unit->id != 14`. Then it does this, unguarded:
+//
+//     if (*(byte*)(*(int*)(unit + 0x0C) + 0x0E) & 0x20) return 0;   // sprite->flags
+//
+// -- it DEREFERENCES CUnit+0x0C, the sprite pointer. There is no null check and no
+// liveness check anywhere on that path: the engine trusts the sender, and on this
+// path WE are the sender.
+//
+// CUnit+0xA5 does not cover that trust. It is written by ONE instruction in the whole
+// binary, 0x004A03FD inside the unit (re)init 0x004A0320 -- so it moves on slot REUSE
+// and NOT on death (selection-circles.md 4.5, byte-level verified by task 014). A unit
+// that died a moment ago still carries the uniqueness we captured, so the tag we would
+// replay still passes the engine's check, and the engine then follows a sprite pointer
+// belonging to a unit that has been removed from play.
+//
+// So the emit-side gate supplies exactly what the receive side does not check:
+//
+//   engine checks (receive side)      |  this gate adds (send side)
+//   ---------------------------------|-------------------------------------------
+//   uniqueness  -> recycled slot      |  hitpoints != 0   -> DAMAGE DEATH
+//   id != 14, dedup, count <= 12      |  in player list   -> REMOVED FROM PLAY
+//                                     |  player unchanged -> OWNERSHIP CHANGE
+//                                     |  sprite != NULL   -> the pointer it derefs
+//
+// Term by term, with what each one is for and what it costs:
+//
+//   1. uniqueness (CUnit+0xA5) -- the engine's own test, kept. Catches a RECYCLED
+//      slot, and only that. One byte compare.
+//   2. hitpoints (CUnit+0x08) != 0 -- catches a DAMAGE DEATH, the case (1) misses.
+//      It is the field the engine's damage primitive 0x004797B0 drives to 0 on a
+//      kill (command-opcodes.md 6), and nothing resets it until the slot is
+//      re-inited, so it reads 0 for the whole dead-but-not-recycled window. This is
+//      the same term task 017 put in sc_hudrow's UnitAlive. One dword compare.
+//   3. player (CUnit+0x4C) unchanged -- the record says whose unit this was; a
+//      mind-controlled unit relinks under a new owner and is no longer part of the
+//      player's selection. (The engine would refuse it anyway -- 0x0049AF80 tests
+//      `unit->playerId == ACTIVE_NATION_ID` for slot > 0 -- so this term is about
+//      not emitting a tag we know is wrong, not about safety.) One byte compare.
+//   4. sprite (CUnit+0x0C) != NULL -- the exact pointer 0x0049AF80 dereferences
+//      without checking. Refusing a unit that has none costs one compare and cannot
+//      cost a live unit: the unit (re)init 0x004A0320 gives every unit in play a
+//      sprite.
+//   5. reachable in playerUnitList[player] -- catches REMOVAL FROM PLAY by ANY path,
+//      with no per-path detector: trigger RemoveUnit, archon-consumed, and the tail
+//      of a death once 0x004A0740 has actually unlinked the unit. Terms 2 and 5
+//      cover the two halves of a death between them -- HP goes to 0 first, while the
+//      unit is still linked and playing its death animation; the unlink follows.
+//
+// WHY THE LIST WALK IS HERE AND NOT ONLY IN sc_hudrow.
+//
+// task 017 deliberately kept the walk OUT of its per-frame UnitAlive and used it only
+// in the click gate (hud-selection-row.md 6.1), because the row had two structural
+// backstops for every other removal path: a divergence latch that hands the row back
+// to stock when the engine's own visible selection stops matching, and the click gate
+// itself -- and it re-runs the check every frame, where a list walk per displayed unit
+// per frame is a real cost.
+//
+// THE COMMAND PATH HAS NEITHER BACKSTOP. There is no per-frame comparison against the
+// engine's selection, and there is no gate between the shadow list and the wire: what
+// EmitSelect writes goes to the receive path. An archon merge or a trigger RemoveUnit
+// leaves hitpoints and CUnit+0xA5 both untouched, so terms 1-4 would all pass and the
+// tag would go out. The walk is what makes the gate complete rather than
+// death-shaped, and the cost argument runs the other way too: this runs ONCE PER
+// FANNED ORDER over at most ~250 units, not once per frame -- roughly the work of one
+// frame's worth of the row's own per-unit reads, on a path the player triggers by
+// hand. It is bounded by SC_MAX_UNITS_WALK and validates every link before following
+// it, so a corrupt list fails closed instead of hanging or faulting.
+//
+// %SCPLUGIN_FANOUT_LIVENESS%=0 restores the pre-task-020 behaviour (term 1 alone).
+// It exists so the same build can reproduce the defect on demand -- which is how the
+// in-game regression assertion is shown to be capable of failing, and how the
+// pre-fix receive-side behaviour was observed at all (research/fanout-liveness.md 4).
+// ---------------------------------------------------------------------------
+
+enum ScDropWhy {
+    SC_LIVE_OK = 0,
+    SC_DROP_RECYCLED,     // CUnit+0xA5 moved: the slot is a different unit now
+    SC_DROP_DEAD,         // hitpoints == 0
+    SC_DROP_FOREIGN,      // CUnit+0x4C changed: no longer this player's unit
+    SC_DROP_NOSPRITE,     // CUnit+0x0C == 0: nothing for the receive path to deref
+    SC_DROP_REMOVED,      // not reachable from playerUnitList[player]
+    SC_DROP_NOTAG         // the pointer does not encode to a wire tag
+};
+
+// The header publishes the same set for hooktest to assert on; the two must agree
+// numerically, and a mismatch would silently turn a "dropped for the right reason"
+// assertion into a coincidence.
+static_assert((int)SC_DROP_RECYCLED == (int)SC_FANOUT_RECYCLED, "drop reason drift");
+static_assert((int)SC_DROP_DEAD     == (int)SC_FANOUT_DEAD,     "drop reason drift");
+static_assert((int)SC_DROP_FOREIGN  == (int)SC_FANOUT_FOREIGN,  "drop reason drift");
+static_assert((int)SC_DROP_NOSPRITE == (int)SC_FANOUT_NOSPRITE, "drop reason drift");
+static_assert((int)SC_DROP_REMOVED  == (int)SC_FANOUT_REMOVED,  "drop reason drift");
+static_assert((int)SC_DROP_NOTAG    == (int)SC_FANOUT_NOTAG,    "drop reason drift");
+
+static const char* DropWhyName(int why) {
+    switch (why) {
+        case SC_LIVE_OK:        return "live";
+        case SC_DROP_RECYCLED:  return "recycled";
+        case SC_DROP_DEAD:      return "hp0";
+        case SC_DROP_FOREIGN:   return "foreign";
+        case SC_DROP_NOSPRITE:  return "nosprite";
+        case SC_DROP_REMOVED:   return "removed";
+        case SC_DROP_NOTAG:     return "notag";
+    }
+    return "?";
+}
+
+// Term 1 alone: the engine's own stale-tag test, and the whole of what this module
+// checked before task 020. Kept as its own function because it is still reported --
+// `uniqOnly=` in the UNITSTATE line is what a test compares against `live=` to show
+// the added terms firing.
+static bool SameUnit(const ShadowUnit* u) {
     if (!u->ptr) return false;
     return *(BYTE*)(u->ptr + SC_CUNIT_OFF_UNIQUENESS) == u->uniqueness;
+}
+
+// Is `unit` reachable from its owning player's unit list? A unit in play is
+// head-inserted into playerUnitList[player] (0x006283F8) by the unit (re)init
+// 0x004A0320 and threaded through CUnit+0x6C; the removal path 0x004A0740 UNLINKS a
+// unit removed from play (sc_addresses.h, hud-selection-row.md 6.1). Every link is
+// bounds/stride-validated before it is followed, and the walk is bounded, so a torn
+// or corrupt list fails closed rather than faulting or hanging.
+static bool InPlayerUnitList(DWORD unit) {
+    if (!unit) return false;
+    BYTE player = *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER);
+    if (player >= SC_MAX_PLAYERS) return false;
+    DWORD u = ((DWORD*)Rt(SC_VA_PLAYER_UNIT_LIST))[player];
+    for (int guard = 0; u && guard < SC_MAX_UNITS_WALK; ++guard) {
+        if (!UnitPtrValid(u)) return false;
+        if (u == unit) return true;
+        u = *(DWORD*)(u + SC_CUNIT_OFF_LIST_NEXT);
+    }
+    return false;
+}
+
+static bool g_liveness = true;    // %SCPLUGIN_FANOUT_LIVENESS%
+
+// The full test. `why` (optional) gets the first term that failed, so a log line can
+// say WHICH removal this was rather than just "stale". This function does NOT consult
+// the %SCPLUGIN_FANOUT_LIVENESS% switch: the verdict is always computed, so a run with
+// the gate turned off still REPORTS what it is about to do (see PassesGate).
+static bool UnitLive(const ShadowUnit* u, int* why) {
+    int w = SC_LIVE_OK;
+    if (!u->ptr) w = SC_DROP_NOTAG;
+    else if (*(BYTE*)(u->ptr + SC_CUNIT_OFF_UNIQUENESS) != u->uniqueness) w = SC_DROP_RECYCLED;
+    else if (*(DWORD*)(u->ptr + SC_CUNIT_OFF_HITPOINTS) == 0) w = SC_DROP_DEAD;
+    else if (*(BYTE*)(u->ptr + SC_CUNIT_OFF_PLAYER) != u->player) w = SC_DROP_FOREIGN;
+    else if (*(DWORD*)(u->ptr + SC_CUNIT_OFF_SPRITE) == 0) w = SC_DROP_NOSPRITE;
+    else if (!InPlayerUnitList(u->ptr)) w = SC_DROP_REMOVED;
+    if (why) *why = w;
+    return w == SC_LIVE_OK;
+}
+
+// What actually DECIDES. Normally the full test; with the gate switched off, the
+// pre-task-020 test (uniqueness alone). Split from UnitLive on purpose: the defect
+// arm of an A/B run must still be able to say "the unit I am about to replay is dead
+// and here is its sprite pointer", which is the whole of the measurement in
+// research/fanout-liveness.md 4.
+// `why` always carries the TRUE verdict, even when the pre-020 gate is about to let
+// the unit through anyway -- that is the whole point of the split, and clobbering it
+// with SC_LIVE_OK on the allowed path is what an earlier version of this function did,
+// which silently cost the defect arm its measurement.
+static bool PassesGate(const ShadowUnit* u, int* why) {
+    const bool live = UnitLive(u, why);
+    if (g_liveness) return live;
+    if (SameUnit(u)) return true;
+    if (why) *why = SC_DROP_RECYCLED;
+    return false;
+}
+
+// ONE forensics line per unit per selection, not per unit per ORDER.
+//
+// The shadow list deliberately keeps corpses until the next selection commit, so the
+// same dead unit is re-judged by every fanned order until the player re-selects. Left
+// unguarded, each of those re-judgements wrote a line -- and ScLog flushes the file
+// handle synchronously, on the game thread, under our lock. After a real battle that
+// is a growing pile of identical lines on every right-click, in the SHIPPED default.
+//
+// Keyed on the shadow VERSION, which sc_fanout already bumps on every commit (and on
+// the hotkey-recall drop), so a genuinely new selection reports afresh. The list is
+// small and linear-scanned: it only ever holds units that failed the gate, and a
+// selection with hundreds of those has bigger problems than a log line.
+//
+// CONSEQUENCE FOR THE COUNTERS, stated because it is easy to misread: g_statStale and
+// g_statDrop still count drop EVENTS (every order, every unit), not distinct units.
+// They are throughput counters, not a population. `staleSkipped` is therefore also
+// sticky for the session -- once anything has been dropped it never returns to 0.
+static DWORD    g_loggedPtr[64];
+static int      g_loggedCount = 0;
+static unsigned g_loggedVersion = 0;
+static bool     g_loggedValid = false;
+
+static bool ShouldLogForensics(DWORD unit) {
+    if (!g_loggedValid || g_loggedVersion != g_shadowVersion) {
+        g_loggedVersion = g_shadowVersion;
+        g_loggedCount = 0;
+        g_loggedValid = true;
+    }
+    for (int i = 0; i < g_loggedCount; ++i) if (g_loggedPtr[i] == unit) return false;
+    // Full table: report it. Repeating beats silently dropping evidence, and the only
+    // way to get here is a selection with 64+ distinct failing units.
+    if (g_loggedCount < (int)(sizeof(g_loggedPtr) / sizeof(g_loggedPtr[0]))) {
+        g_loggedPtr[g_loggedCount++] = unit;
+    }
+    return true;
+}
+
+// The fields the engine's receive path would use for this unit, logged as one line.
+// The sprite pointer and its flag byte are what addUnitToSelectionSlot 0x0049AF80
+// dereferences; the flags are read only after VirtualQuery says the page is committed
+// and readable, so reporting on a freed sprite cannot itself fault. `-1` for the flags
+// means "the pointer is not readable memory" -- which is itself the answer.
+static void LogUnitForensics(const char* what, const ShadowUnit* u, int why) {
+    if (!ShouldLogForensics(u->ptr)) return;
+    DWORD sprite = u->ptr ? *(DWORD*)(u->ptr + SC_CUNIT_OFF_SPRITE) : 0;
+    int   sflags = -1;
+    if (sprite) {
+        MEMORY_BASIC_INFORMATION mbi;
+        if (VirtualQuery((LPCVOID)(sprite + SC_CSPRITE_OFF_FLAGS), &mbi, sizeof(mbi))
+                == sizeof(mbi) && mbi.State == MEM_COMMIT &&
+            !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
+            sflags = *(BYTE*)(sprite + SC_CSPRITE_OFF_FLAGS);
+        }
+    }
+    ScLog("%s: unit=0x%08X tag=%04X why=%s hp=%u uniq=%u/%u player=%u/%u "
+          "sprite=0x%08X spriteFlags=%d inList=%d",
+          what, (unsigned)u->ptr, UnitTag(u->ptr), DropWhyName(why),
+          u->ptr ? *(unsigned*)(u->ptr + SC_CUNIT_OFF_HITPOINTS) : 0,
+          u->ptr ? *(BYTE*)(u->ptr + SC_CUNIT_OFF_UNIQUENESS) : 0, u->uniqueness,
+          u->ptr ? *(BYTE*)(u->ptr + SC_CUNIT_OFF_PLAYER) : 0, u->player,
+          (unsigned)sprite, sflags, (u->ptr && InPlayerUnitList(u->ptr)) ? 1 : 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -282,7 +524,11 @@ static unsigned g_statOverflow   = 0;
 static unsigned g_statFanouts    = 0;
 static unsigned g_statPairs      = 0;
 static unsigned g_statDeferred   = 0;
-static unsigned g_statStale      = 0;
+static unsigned g_statStale      = 0;   // units DROPPED from an emitted Select, all reasons
+// The same total, split by which term rejected the unit. `hp0` is the task-020
+// case -- a unit killed by damage whose slot has not been recycled, which term 1
+// alone (uniqueness) cannot see.
+static unsigned g_statDrop[SC_DROP_NOTAG + 1] = { 0 };
 
 // ---------------------------------------------------------------------------
 // The deferred plan
@@ -325,18 +571,50 @@ static int ChunkBounds(const Plan* p, int chunk, int* start, int* len) {
 }
 
 // Queues one vanilla Select (0x09) for the given units. Returns bytes queued, or 0
-// if nothing survived the staleness check.
+// if nothing survived the liveness gate.
+//
+// THIS IS THE GATE. Every tag this module ever puts on the wire is written here, so
+// a unit that fails UnitLive is a unit the engine's receive path never sees -- which
+// is the whole of the task-020 fix. The dropped ones are logged individually, with
+// the fields the receive path would have used, because "which unit, and why" is the
+// evidence an in-game run needs and a counter alone cannot give.
 static int EmitSelect(const ShadowUnit* units, int n) {
     BYTE buf[2 + SC_SELECTION_SLOTS * 2];
-    int  live = 0;
+    char tagText[SC_SELECTION_SLOTS * 5 + 4];
+    int  live = 0, dropped = 0, used = 0;
+    tagText[0] = '\0';
     for (int i = 0; i < n && live < SC_SELECTION_SLOTS; ++i) {
-        if (!StillAlive(&units[i])) { ++g_statStale; continue; }
-        WORD tag = UnitTag(units[i].ptr);
-        if (!tag) { ++g_statStale; continue; }
+        int why = SC_LIVE_OK;
+        WORD tag = 0;
+        bool allow = PassesGate(&units[i], &why);
+        if (allow) {
+            tag = UnitTag(units[i].ptr);
+            if (!tag) { allow = false; why = SC_DROP_NOTAG; }
+        }
+        if (!allow) {
+            ++g_statStale;
+            ++g_statDrop[why];
+            ++dropped;
+            LogUnitForensics("FANOUT stale drop", &units[i], why);
+            continue;
+        }
+        if (why != SC_LIVE_OK) {
+            // Only reachable with %SCPLUGIN_FANOUT_LIVENESS%=0: the pre-task-020 gate
+            // is about to put a unit the full test rejects on the wire. Logged as
+            // loudly as it deserves, with the pointer the receive path is about to
+            // follow -- this line IS the defect-arm measurement.
+            LogUnitForensics("FANOUT REPLAYING A STALE UNIT (gate off)", &units[i], why);
+        }
         buf[2 + live * 2]     = (BYTE)(tag & 0xFF);
         buf[2 + live * 2 + 1] = (BYTE)(tag >> 8);
+        used += _snprintf(tagText + used, sizeof(tagText) - used, "%s%04X",
+                          live ? " " : "", tag);
         ++live;
     }
+    // Logged even when nothing was dropped: this line is the wire-level read-back an
+    // in-game test asserts on ("the dead unit's tag is in no emitted Select"), and a
+    // line that only appeared on the interesting runs could not carry that claim.
+    ScLog("FANOUT select: in=%d out=%d dropped=%d tags=[%s]", n, live, dropped, tagText);
     if (live == 0) return 0;
     buf[0] = SC_CMD_SELECT;
     buf[1] = (BYTE)live;
@@ -548,14 +826,18 @@ void ScFanoutOnSelect(unsigned count, DWORD* units) {
         for (int i = 0; i < g_accumCount && g_shadowCount < g_maxUnits; ++i) {
             if (ShadowContains(visible, visibleCount, g_accum[i].ptr)) continue;
             if (ShadowContains(g_shadow, g_shadowCount, g_accum[i].ptr)) continue;
-            if (!StillAlive(&g_accum[i])) continue;
+            // Same gate as the emit path: a unit that is already dead when the
+            // selection commits has no business entering the shadow list at all.
+            if (!PassesGate(&g_accum[i], NULL)) continue;
             if (visibleCount > 0 && g_accum[i].player != visible[0].player) continue;
             g_shadow[g_shadowCount++] = g_accum[i];
             ++added;
         }
     }
     // Visible units go LAST, so the final Select+order pair of a fan-out leaves the
-    // simulation holding exactly what the player can see.
+    // simulation holding exactly what the player can see -- unless the liveness gate
+    // refuses all twelve of them, in which case that pair is not written at all (see
+    // the exception in this file's header comment).
     for (int i = 0; i < visibleCount && g_shadowCount < SC_SHADOW_MAX; ++i) {
         g_shadow[g_shadowCount++] = visible[i];
     }
@@ -584,7 +866,7 @@ void ScFanoutOnSelect(unsigned count, DWORD* units) {
     //
     // The overflow units are the FRONT of g_shadow -- visible units are stored last
     // so the final Select+order pair of a fan-out leaves the simulation holding what
-    // the player can see.
+    // the player can see (with the all-twelve-dead exception in the file header).
     {
         const int overflow = g_shadowCount - g_visibleCount;
         if (ScCirclesEnabled() && overflow > 0) {
@@ -747,6 +1029,11 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     g_budget      = EnvInt("SCPLUGIN_FANOUT_BUDGET", SC_DEFAULT_BUDGET, 40, 480);
     g_maxUnits    = EnvInt("SCPLUGIN_MAX_UNITS", SC_SHADOW_MAX - 1, 12, SC_SHADOW_MAX - 1);
     g_verboseCmds = EnvInt("SCPLUGIN_LOG_COMMANDS", 1, 0, 1) != 0;
+    // Task 020's liveness gate, ON by default. Setting it to 0 restores the
+    // uniqueness-only test the fan-out shipped with, which is a KNOWN-BAD
+    // configuration -- it exists so an A/B run can show the defect and so the
+    // in-game regression assertion can be shown to be capable of failing.
+    g_liveness    = EnvInt("SCPLUGIN_FANOUT_LIVENESS", 1, 0, 1) != 0;
     LoadFanoutCmds();
 
     // Task 014's selection circles. Only in fanout mode -- `shadow` mode's contract is
@@ -771,9 +1058,15 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
                           i ? " " : "", g_fanoutCmds[i]);
     }
     ScLog("FANOUT config: mode=%s budget=%dB maxUnits=%d logCommands=%d circles=%d "
-          "hudrow=%d cmds=[%s]",
+          "hudrow=%d liveness=%d cmds=[%s]",
           ScModeName(mode), g_budget, g_maxUnits, g_verboseCmds ? 1 : 0,
-          circles ? 1 : 0, hudrow ? 1 : 0, cmds);
+          circles ? 1 : 0, hudrow ? 1 : 0, g_liveness ? 1 : 0, cmds);
+    if (!g_liveness) {
+        ScLog("FANOUT WARNING: %%SCPLUGIN_FANOUT_LIVENESS%%=0 -- the emit gate is the "
+              "pre-task-020 uniqueness test ALONE. A unit killed by damage will be "
+              "replayed into a Select and the engine will follow its sprite pointer. "
+              "This configuration exists only to reproduce that defect on demand.");
+    }
 
     // One suspension for all hooks: the game is quiescent for microseconds instead
     // of once per hook, and a partially installed set is never observable.
@@ -857,7 +1150,23 @@ void ScFanoutTestBegin(BYTE* fakeModuleBase, ScQueueFn emit, int budget) {
     g_visibleCount = 0;
     g_accumCount = 0;
     g_shadowVersion = 0;
+    g_liveness = true;              // the shipped default; [7] flips it explicitly
+    g_statStale = 0;
+    memset(g_statDrop, 0, sizeof(g_statDrop));
     memset(&g_plan, 0, sizeof(g_plan));
+}
+
+// Test-only: drive the %SCPLUGIN_FANOUT_LIVENESS% switch without an environment.
+// hooktest part [7] uses it to prove that the pre-task-020 gate really does replay a
+// damage-killed unit -- an assertion that cannot fail is not evidence that the fixed
+// one works.
+void ScFanoutTestSetLiveness(bool on) { g_liveness = on; }
+
+// Test-only: how many units the emit gate has dropped, and how many for `why`.
+int ScFanoutStaleSkipped(void) { return (int)g_statStale; }
+int ScFanoutDroppedFor(int why) {
+    if (why < 0 || why > SC_DROP_NOTAG) return 0;
+    return (int)g_statDrop[why];
 }
 
 // Task 017: snapshot for the HUD row. Same order as storage -- overflow first,
@@ -913,9 +1222,13 @@ void ScFanoutRemove(void) {
 void ScFanoutLogStats(void) {
     if (g_mode == SC_MODE_OBSERVE) return;
     ScLog("STATS mode=%s commands=%u selects=%u overflowCalls=%u fanouts=%u pairs=%u "
-          "deferred=%u staleSkipped=%u",
+          "deferred=%u staleSkipped=%u (recycled=%u hp0=%u foreign=%u nosprite=%u "
+          "removed=%u notag=%u) liveness=%d",
           ScModeName(g_mode), g_statCommands, g_statSelects, g_statOverflow,
-          g_statFanouts, g_statPairs, g_statDeferred, g_statStale);
+          g_statFanouts, g_statPairs, g_statDeferred, g_statStale,
+          g_statDrop[SC_DROP_RECYCLED], g_statDrop[SC_DROP_DEAD],
+          g_statDrop[SC_DROP_FOREIGN], g_statDrop[SC_DROP_NOSPRITE],
+          g_statDrop[SC_DROP_REMOVED], g_statDrop[SC_DROP_NOTAG], g_liveness ? 1 : 0);
     ScCirclesLogStats();
     ScHudRowLogStats();
 }
@@ -937,8 +1250,10 @@ void ScFanoutLogUnitStates(const char* tag) {
     WORD     orderKey[32], order2Key[32], typeKey[32];
     unsigned orderCnt[32], order2Cnt[32], typeCnt[32];
     int      orderN = 0, order2N = 0, typeN = 0;
-    int      live = 0, burrowed = 0;
+    int      live = 0, burrowed = 0, uniqOnly = 0;
     int      orderOverflow = 0, order2Overflow = 0, typeOverflow = 0;
+    int      why[SC_DROP_NOTAG + 1];
+    for (int i = 0; i <= SC_DROP_NOTAG; ++i) why[i] = 0;
 
     // One accumulator, used twice: histogram `key` into (keys, counts, n).
     struct Hist {
@@ -961,7 +1276,19 @@ void ScFanoutLogUnitStates(const char* tag) {
     };
 
     for (int i = 0; i < g_shadowCount; ++i) {
-        if (!StillAlive(&g_shadow[i])) continue;
+        // BOTH numbers, from the same read of the same list: `uniqOnly` is what the
+        // pre-task-020 test (CUnit+0xA5 alone) would have said, `live` is what the
+        // gate says now. A damage death separates them, and that gap is the oracle
+        // the in-game fixture asserts on.
+        //
+        // The per-reason counters below are FIRST-FAILING-TERM, not independent: a
+        // unit that is both dead and already unlinked is charged to `hp0`, because
+        // hitpoints is tested first. So `removed=0` next to `hp0=1` does NOT mean the
+        // unit is still in its player's list -- read the per-unit `FANOUT stale drop`
+        // line for that (it reports every field).
+        if (SameUnit(&g_shadow[i])) ++uniqOnly;
+        int w = SC_LIVE_OK;
+        if (!UnitLive(&g_shadow[i], &w)) { ++why[w]; continue; }
         ++live;
         DWORD flags = *(DWORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_FLAGS);
         if (flags & SC_UNIT_FLAG_BURROWED) ++burrowed;
@@ -981,10 +1308,16 @@ void ScFanoutLogUnitStates(const char* tag) {
     used = Hist::Format(types, (int)sizeof(types), typeKey, typeCnt, typeN);
     if (typeOverflow) _snprintf(types + used, sizeof(types) - used, " +%d-more", typeOverflow);
 
+    // The trailing fields are appended, never inserted: drive-game.ps1's parser
+    // matches the leading run of fields and is not anchored at the end, so a reader
+    // written against the task-015 line still works.
     ScLog("UNITSTATE [%s] n=%d live=%d visible=%d overflow=%d orders=[%s] orders2=[%s] "
-          "types=[%s] burrowed=%d/%d",
+          "types=[%s] burrowed=%d/%d uniqOnly=%d recycled=%d hp0=%d foreign=%d "
+          "nosprite=%d removed=%d staleSkipped=%u liveness=%d",
           tag ? tag : "-", g_shadowCount, live, g_visibleCount,
-          g_shadowCount - g_visibleCount, orders, orders2, types, burrowed, live);
+          g_shadowCount - g_visibleCount, orders, orders2, types, burrowed, live,
+          uniqOnly, why[SC_DROP_RECYCLED], why[SC_DROP_DEAD], why[SC_DROP_FOREIGN],
+          why[SC_DROP_NOSPRITE], why[SC_DROP_REMOVED], g_statStale, g_liveness ? 1 : 0);
 
     LeaveCriticalSection(&g_lock);
 }
