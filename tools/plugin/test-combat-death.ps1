@@ -232,65 +232,18 @@ function Shot([string]$tag) {
 # pids scinject handed IT, and only ever closes those.
 $script:launchedPids = @()
 
-# --- the cross-worker launch slot ----------------------------------------------
+# CROSS-WORKER LAUNCH SERIALISATION IS NOT THIS FILE'S JOB. run-with-plugin.ps1 takes
+# an exclusive OS handle on C:\sc-work\logs\sc-launch.lock for the launch sequence
+# whenever $env:AGENT_TASK is set (task 018, tools/plugin/sc-launch-lock.ps1), which
+# covers every launch this test makes.
 #
-# StarCraft enforces a single instance per machine, and this repo runs its in-game
-# suites in parallel tabs, so two workers launching at once means one of them fails
-# and retries for no reason. C:\sc-work\logs\sc-launch.lock is the machine-wide claim
-# ("task 018 is building this into run-with-plugin.ps1"; as of this task it is not
-# there yet, so the co-operation is implemented HERE rather than assumed).
-#
-# The protocol is deliberately timid: WAIT while a LIVE process holds it, take over
-# only a claim whose holder is gone or whose age is absurd, and release only a claim
-# that still names us. Nothing here ever kills or closes another worker's process --
-# a lock file is a request, not a right.
-$script:launchLock = Join-Path (Split-Path $LogPath -Parent) 'sc-launch.lock'
-$script:holdsLock = $false
-
-function Read-LaunchSlot {
-    if (-not (Test-Path -LiteralPath $script:launchLock)) { return $null }
-    try { Get-Content -LiteralPath $script:launchLock -Raw | ConvertFrom-Json } catch { $null }
-}
-
-function Wait-LaunchSlot {
-    param([int]$TimeoutSec = 900)
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    while ($true) {
-        $held = Read-LaunchSlot
-        $free = $true
-        if ($null -ne $held -and $held.pid) {
-            $p = Get-Process -Id ([int]$held.pid) -ErrorAction SilentlyContinue
-            if ($null -ne $p -and -not $p.HasExited -and [int]$held.pid -ne $PID) {
-                $ageMin = 999
-                try { $ageMin = [int]((Get-Date).ToUniversalTime() - [datetime]$held.startedUtc).TotalMinutes } catch { }
-                if ($ageMin -lt 60) { $free = $false }
-                else { Write-Host "       (the launch slot has been held by pid $($held.pid) for ${ageMin}m -- treating it as abandoned)" }
-            }
-        }
-        if ($free) {
-            $claim = @{ task = '020'; pid = $PID; startedUtc = (Get-Date).ToUniversalTime().ToString('o') }
-            Set-Content -LiteralPath $script:launchLock -Value ($claim | ConvertTo-Json) -NoNewline
-            $script:holdsLock = $true
-            return $true
-        }
-        if ((Get-Date) -ge $deadline) {
-            Write-Host '       (gave up waiting for the launch slot -- launching anyway; the retry loop below handles a collision)'
-            return $false
-        }
-        Write-Host "       waiting for the machine's launch slot, held by pid $($held.pid) (task $($held.task))"
-        Start-Sleep -Seconds 20
-    }
-}
-
-function Clear-LaunchSlot {
-    if (-not $script:holdsLock) { return }
-    $held = Read-LaunchSlot
-    # Only ever remove a claim that is still OURS.
-    if ($null -ne $held -and [int]$held.pid -eq $PID) {
-        Remove-Item -LiteralPath $script:launchLock -Force -ErrorAction SilentlyContinue
-    }
-    $script:holdsLock = $false
-}
+# An earlier version of this file carried its own content-based claim on that same
+# path, written before task 018 merged. It does not survive alongside the handle
+# version and was removed rather than adapted: while another worker holds the handle
+# with FileShare.None, `Get-Content` on the file THROWS, which the claim code read as
+# "nobody holds it", and the `Set-Content` that followed threw for the same reason and
+# killed the run. Two mechanisms on one path is the bug; the OS handle is the one that
+# has no check-then-write window, so it is the one that stays.
 
 # $true when the launch produced a live, injected game. run-with-plugin.ps1 throws on
 # a failed injection, and the pid it printed before failing belongs to a process that
@@ -352,8 +305,6 @@ function Start-Mission {
     #>
     if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPath -Force }
     if (Test-Path -LiteralPath $markerPath) { Remove-Item -LiteralPath $markerPath -Force }
-
-    Wait-LaunchSlot | Out-Null
 
     for ($attempt = 1; $attempt -le 4; $attempt++) {
         if (Invoke-Launch) { break }
@@ -418,9 +369,6 @@ function Close-LaunchedGame {
 function Stop-Mission {
     $target = $script:gamePid
     $gone = Close-LaunchedGame
-    # Released only once OUR game is actually gone -- handing the slot on while a
-    # StarCraft is still up is worse than not taking it in the first place.
-    if ($gone) { Clear-LaunchSlot }
     if (-not $gone) {
         Write-Host "  FAIL pid $target is still running after close-game"
         $script:failures++
@@ -1073,7 +1021,7 @@ catch {
     $failures++
 }
 finally {
-    if (-not $KeepOpen) { Stop-Mission; Clear-LaunchSlot }
+    if (-not $KeepOpen) { Stop-Mission }
     if (-not $KeepOpen -and (Test-Path -LiteralPath $mapDir)) {
         Remove-Item -LiteralPath $mapDir -Recurse -Force -ErrorAction SilentlyContinue
     }
