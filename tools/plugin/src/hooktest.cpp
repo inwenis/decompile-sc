@@ -233,12 +233,28 @@ static WORD  ExpectTag(int i) {
     return (WORD)(((WORD)uniq << 11) | (WORD)(i + 1));
 }
 
+// Defined with parts [8] and [10], used here: a unit is only "live" to sc_fanout's
+// task-020 gate if it has a sprite and is linked into its player's unit list, so
+// every part that drives the fan-out core needs both.
+static void MakeSprites(int n);
+static void BuildFakePlayerList(int n, BYTE player);
+static void UnlinkFakeUnit(int i, BYTE player);
+static void RelinkFakeUnit(int i, BYTE player);
+
+// A block of units in the state the engine leaves a unit that is IN PLAY: a
+// uniqueness byte, an owner, hit points, a sprite, and a place in
+// playerUnitList[owner]. Every one of those is a term of the emit-side liveness gate
+// (sc_fanout.cpp, "LIVENESS"), so a test that wants a unit to be emitted has to set
+// all of them -- and a test that wants one DROPPED breaks exactly one and says which.
 static void MakeUnits(int n, BYTE player) {
     for (int i = 0; i < n; ++i) {
         BYTE* u = (BYTE*)FakeUnit(i);
         u[SC_CUNIT_OFF_UNIQUENESS] = (BYTE)(1 + (i % 7));   // varied, so a wrong
         u[SC_CUNIT_OFF_PLAYER]     = player;                // index shows up as a
-    }                                                       // wrong tag
+        *(DWORD*)(u + SC_CUNIT_OFF_HITPOINTS) = 40 * 256;   // wrong tag
+    }
+    MakeSprites(n);
+    BuildFakePlayerList(n, player);
 }
 
 static void ResetQueueCounters(void) {
@@ -271,6 +287,35 @@ static int ExpectSelectAt(const char* what, int off, const int* idx, int n) {
     }
     Check(what, ok ? 1 : 0, 1);
     return off + 2 + n * 2;
+}
+
+// Walks the capture as the wire stream it is -- Select(0x09) then a fixed-length
+// order, repeating -- and answers whether `tag` is in ANY emitted Select. That is the
+// question task 020's gate is about: not "how many units went out" but "did THIS
+// unit's tag reach the receive path".
+static bool CaptureHasTag(WORD tag, int orderLen) {
+    int off = 0;
+    while (off + 2 <= g_captureLen) {
+        if (g_capture[off] != SC_CMD_SELECT) { off += orderLen; continue; }
+        const int n = g_capture[off + 1];
+        for (int i = 0; i < n && off + 4 + i * 2 <= g_captureLen; ++i) {
+            WORD t = (WORD)(g_capture[off + 2 + i * 2] | (g_capture[off + 3 + i * 2] << 8));
+            if (t == tag) return true;
+        }
+        off += 2 + n * 2;
+    }
+    return false;
+}
+
+// How many unit tags all the emitted Selects carry between them.
+static int CaptureTagCount(int orderLen) {
+    int off = 0, n = 0;
+    while (off + 2 <= g_captureLen) {
+        if (g_capture[off] != SC_CMD_SELECT) { off += orderLen; continue; }
+        n += g_capture[off + 1];
+        off += 2 + g_capture[off + 1] * 2;
+    }
+    return n;
 }
 
 static int ExpectOrderAt(const char* what, int off) {
@@ -335,19 +380,156 @@ static void FanoutCoreTests(void) {
         Check("nothing emitted", g_captureCount, 0);
     }
 
-    printf("\n    units that died between capture and order are dropped\n");
+    printf("\n    SLOT REUSE: a recycled slot (uniqueness bumped) is dropped\n");
     ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
     ResetQueueCounters();
     DriveSelection(36);
-    // "Kill" three of the overflow units by bumping their uniqueness byte, exactly
-    // the way the engine's own stale-tag test detects a recycled slot.
+    // The slot was re-initialised into a different unit: 0x004A0320 bumps CUnit+0xA5
+    // (selection-circles.md 4.5), which is the one case the engine's own stale-tag
+    // test detects -- and the only one the pre-task-020 gate detected.
     for (int i = 12; i < 15; ++i) *(BYTE*)(FakeUnit(i) + SC_CUNIT_OFF_UNIQUENESS) += 1;
     g_captureLen = 0; g_captureCount = 0;
     ScFanoutOnCommand(kRightClick, sizeof(kRightClick));
     Check("still 3 pairs", g_captureCount, 6);
     Check("first Select carries 9 units, not 12", g_capture[1], 9);
     Check("bytes queued drops by 3 tags (6B)", g_captureLen, 102);
+    Check("all three were charged to `recycled`, not to another reason",
+          ScFanoutDroppedFor(SC_FANOUT_RECYCLED), 3);
+    Check("and nothing else was dropped", ScFanoutStaleSkipped(), 3);
     for (int i = 12; i < 15; ++i) *(BYTE*)(FakeUnit(i) + SC_CUNIT_OFF_UNIQUENESS) -= 1;
+
+    // ---------------------------------------------------------------------
+    // TASK 020. The case the uniqueness test cannot see: a unit killed by DAMAGE.
+    //
+    // CUnit+0xA5 is written by one instruction in the binary, inside the unit
+    // (re)init 0x004A0320 -- so it moves on slot REUSE and NOT on death
+    // (selection-circles.md 4.5). A damage-killed unit whose slot has not been
+    // recycled therefore still carries the uniqueness we captured, its tag still
+    // passes the receive side's check (CMDRECV_Select 0x004C2750), and
+    // addUnitToSelectionSlot 0x0049AF80 then dereferences its sprite pointer.
+    //
+    // The two halves are asserted SEPARATELY -- uniqueness UNCHANGED is what makes
+    // this test about the new term rather than the old one.
+    // ---------------------------------------------------------------------
+    printf("\n    DAMAGE DEATH: hitpoints 0 with uniqueness UNCHANGED -- the 0xA5 case\n");
+    {
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        DriveSelection(36);
+        const int dead = 13;                       // one of the overflow units
+        const BYTE uniqBefore = *(BYTE*)(FakeUnit(dead) + SC_CUNIT_OFF_UNIQUENESS);
+        const WORD deadTag = ExpectTag(dead);
+        *(DWORD*)(FakeUnit(dead) + SC_CUNIT_OFF_HITPOINTS) = 0;    // 0x004797B0 does this
+
+        g_captureLen = 0; g_captureCount = 0;
+        ScFanoutOnCommand(kRightClick, sizeof(kRightClick));
+
+        Check("the unit's uniqueness byte did NOT move, so the engine's own test "
+              "would still accept its tag",
+              *(BYTE*)(FakeUnit(dead) + SC_CUNIT_OFF_UNIQUENESS), uniqBefore);
+        Check("the dead unit's tag is in NO emitted Select",
+              CaptureHasTag(deadTag, (int)sizeof(kRightClick)) ? 1 : 0, 0);
+        Check("35 of the 36 went out", CaptureTagCount((int)sizeof(kRightClick)), 35);
+        Check("it was dropped as a DEATH, not as a recycled slot",
+              ScFanoutDroppedFor(SC_FANOUT_DEAD), 1);
+        Check("staleSkipped counted exactly it", ScFanoutStaleSkipped(), 1);
+        Check("the order still fanned out over the survivors", g_captureCount, 6);
+
+        // THE POINT, stated as a test: with the gate back at its pre-task-020 shape
+        // the very same unit IS replayed. An assertion that cannot fail proves
+        // nothing, so the failing configuration is exercised here too.
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ScFanoutTestSetLiveness(false);
+        ResetQueueCounters();
+        DriveSelection(36);
+        g_captureLen = 0; g_captureCount = 0;
+        ScFanoutOnCommand(kRightClick, sizeof(kRightClick));
+        Check("PRE-FIX (liveness off): the dead unit's tag DOES reach the wire",
+              CaptureHasTag(deadTag, (int)sizeof(kRightClick)) ? 1 : 0, 1);
+        Check("PRE-FIX: all 36 went out, dead one included",
+              CaptureTagCount((int)sizeof(kRightClick)), 36);
+        Check("PRE-FIX: nothing was skipped", ScFanoutStaleSkipped(), 0);
+
+        *(DWORD*)(FakeUnit(dead) + SC_CUNIT_OFF_HITPOINTS) = 40 * 256;
+    }
+
+    // ---------------------------------------------------------------------
+    // The other removal paths. None of them touches hitpoints OR uniqueness, which
+    // is why the gate needs a term that is not death-shaped: the unit-list walk.
+    // ---------------------------------------------------------------------
+    printf("\n    REMOVED FROM PLAY: unlinked from playerUnitList, HP and 0xA5 intact\n");
+    {
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        DriveSelection(36);
+        const int gone = 20;
+        const WORD goneTag = ExpectTag(gone);
+        UnlinkFakeUnit(gone, 1);        // what 0x004A0740 does to a unit removed from play
+
+        g_captureLen = 0; g_captureCount = 0;
+        ScFanoutOnCommand(kRightClick, sizeof(kRightClick));
+        Check("its hitpoints are untouched -- the death term cannot see this one",
+              (long long)*(DWORD*)(FakeUnit(gone) + SC_CUNIT_OFF_HITPOINTS), 40 * 256);
+        Check("its uniqueness is untouched too",
+              *(BYTE*)(FakeUnit(gone) + SC_CUNIT_OFF_UNIQUENESS),
+              (long long)(1 + (gone % 7)));
+        Check("the removed unit's tag is in NO emitted Select",
+              CaptureHasTag(goneTag, (int)sizeof(kRightClick)) ? 1 : 0, 0);
+        Check("it was dropped as REMOVED FROM PLAY",
+              ScFanoutDroppedFor(SC_FANOUT_REMOVED), 1);
+        Check("35 of the 36 went out", CaptureTagCount((int)sizeof(kRightClick)), 35);
+        RelinkFakeUnit(gone, 1);
+    }
+
+    printf("\n    OWNERSHIP CHANGE: the slot now belongs to another player\n");
+    {
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        DriveSelection(36);
+        const int taken = 25;
+        const WORD takenTag = ExpectTag(taken);
+        *(BYTE*)(FakeUnit(taken) + SC_CUNIT_OFF_PLAYER) = 2;   // mind control relinks it
+        g_captureLen = 0; g_captureCount = 0;
+        ScFanoutOnCommand(kRightClick, sizeof(kRightClick));
+        Check("the tag of a unit that changed hands is in NO emitted Select",
+              CaptureHasTag(takenTag, (int)sizeof(kRightClick)) ? 1 : 0, 0);
+        Check("dropped as FOREIGN", ScFanoutDroppedFor(SC_FANOUT_FOREIGN), 1);
+        *(BYTE*)(FakeUnit(taken) + SC_CUNIT_OFF_PLAYER) = 1;
+    }
+
+    printf("\n    NO SPRITE: the exact pointer 0x0049AF80 dereferences is NULL\n");
+    {
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        DriveSelection(36);
+        const int bald = 30;
+        const WORD baldTag = ExpectTag(bald);
+        const DWORD sprite = *(DWORD*)(FakeUnit(bald) + SC_CUNIT_OFF_SPRITE);
+        *(DWORD*)(FakeUnit(bald) + SC_CUNIT_OFF_SPRITE) = 0;
+        g_captureLen = 0; g_captureCount = 0;
+        ScFanoutOnCommand(kRightClick, sizeof(kRightClick));
+        Check("a unit with no sprite is in NO emitted Select",
+              CaptureHasTag(baldTag, (int)sizeof(kRightClick)) ? 1 : 0, 0);
+        Check("dropped as NOSPRITE", ScFanoutDroppedFor(SC_FANOUT_NOSPRITE), 1);
+        *(DWORD*)(FakeUnit(bald) + SC_CUNIT_OFF_SPRITE) = sprite;
+    }
+
+    printf("\n    a whole selection that died leaves the ENGINE's own order alone\n");
+    {
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        DriveSelection(36);
+        for (int i = 0; i < 36; ++i) *(DWORD*)(FakeUnit(i) + SC_CUNIT_OFF_HITPOINTS) = 0;
+        g_captureLen = 0; g_captureCount = 0;
+        // Not suppressed: with no live unit to select, suppressing the player's own
+        // order would turn one click into nothing at all. StartFanout already had
+        // this rule for an exhausted turn buffer; the gate must not break it.
+        Check("not suppressed, so the engine's own order still goes out",
+              ScFanoutOnCommand(kRightClick, sizeof(kRightClick)) ? 1 : 0, 0);
+        Check("and no Select was emitted for a corpse",
+              CaptureTagCount((int)sizeof(kRightClick)), 0);
+        for (int i = 0; i < 36; ++i) *(DWORD*)(FakeUnit(i) + SC_CUNIT_OFF_HITPOINTS) = 40 * 256;
+    }
 
     printf("\n    a budget too small to hold every pair spills to the next command\n");
     ScFanoutTestBegin(g_fake, &CaptureEmit, 40);   // one pair (36B) fits, two do not

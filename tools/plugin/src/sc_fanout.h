@@ -70,8 +70,31 @@ void ScFanoutOnSelect(unsigned count, unsigned long* units);
 bool ScFanoutOnCommand(const unsigned char* buf, unsigned len);
 
 // Point the core at a fake module image and a capture function. Test-only; passing
-// a NULL emit restores normal operation.
+// a NULL emit restores normal operation. Resets the liveness switch to its shipped
+// default (ON) and zeroes the drop counters.
 void ScFanoutTestBegin(unsigned char* fakeModuleBase, ScQueueFn emit, int budget);
+
+// Why a unit was refused a place in an emitted Select. Mirrors ScDropWhy in
+// sc_fanout.cpp; hooktest asserts on the individual reasons so "it was dropped"
+// and "it was dropped for the right reason" are different failures.
+enum ScFanoutDrop {
+    SC_FANOUT_LIVE     = 0,
+    SC_FANOUT_RECYCLED = 1,   // CUnit+0xA5 moved -- the slot holds a different unit
+    SC_FANOUT_DEAD     = 2,   // hitpoints == 0 -- a damage death, slot not recycled
+    SC_FANOUT_FOREIGN  = 3,   // CUnit+0x4C changed -- no longer this player's unit
+    SC_FANOUT_NOSPRITE = 4,   // CUnit+0x0C == 0 -- nothing for the receive path to deref
+    SC_FANOUT_REMOVED  = 5,   // not reachable from playerUnitList[player]
+    SC_FANOUT_NOTAG    = 6    // the pointer does not encode to a wire tag
+};
+
+// Test-only: drive %SCPLUGIN_FANOUT_LIVENESS% directly. `false` is the pre-task-020
+// gate (uniqueness alone) and is a known-bad configuration -- it exists so the
+// defect can be reproduced deliberately.
+void ScFanoutTestSetLiveness(bool on);
+
+// Test-only counters: units dropped from emitted Selects, in total and by reason.
+int ScFanoutStaleSkipped(void);
+int ScFanoutDroppedFor(int why);
 
 // ---------------------------------------------------------------------------
 // Shadow-list snapshot (task 017: the HUD row pages through this list)

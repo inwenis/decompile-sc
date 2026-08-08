@@ -429,6 +429,11 @@ function Get-ScUnitState {
             $m = [regex]::Match($line.Line,
                 'UNITSTATE \[[^\]]*\] n=(\d+) live=(\d+) visible=(\d+) overflow=(\d+) orders=\[([^\]]*)\] orders2=\[([^\]]*)\] types=\[([^\]]*)\] burrowed=(\d+)/(\d+)')
             if (-not $m.Success) { break }
+            # Task 020 appended the liveness breakdown to the same line. Parsed
+            # separately and optionally, so this reader still works against a log
+            # written by an older plugin build (the fields are absent, not wrong).
+            $lv = [regex]::Match($line.Line,
+                'uniqOnly=(\d+) recycled=(\d+) hp0=(\d+) foreign=(\d+) nosprite=(\d+) removed=(\d+) staleSkipped=(\d+) liveness=(\d+)')
             $toMap = {
                 param([string]$s)
                 $h = @{}
@@ -447,6 +452,15 @@ function Get-ScUnitState {
                 TypesText = $m.Groups[7].Value
                 Burrowed = [int]$m.Groups[8].Value
                 BurrowedOf = [int]$m.Groups[9].Value
+                # -1 means "this build did not report it", never "it was zero".
+                UniqOnly = $(if ($lv.Success) { [int]$lv.Groups[1].Value } else { -1 })
+                Recycled = $(if ($lv.Success) { [int]$lv.Groups[2].Value } else { -1 })
+                Hp0 = $(if ($lv.Success) { [int]$lv.Groups[3].Value } else { -1 })
+                Foreign = $(if ($lv.Success) { [int]$lv.Groups[4].Value } else { -1 })
+                NoSprite = $(if ($lv.Success) { [int]$lv.Groups[5].Value } else { -1 })
+                Removed = $(if ($lv.Success) { [int]$lv.Groups[6].Value } else { -1 })
+                StaleSkipped = $(if ($lv.Success) { [int]$lv.Groups[7].Value } else { -1 })
+                Liveness = $(if ($lv.Success) { [int]$lv.Groups[8].Value } else { -1 })
                 Line = $line.Line.Trim()
             }
         }

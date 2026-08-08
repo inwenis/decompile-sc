@@ -164,7 +164,15 @@ param(
     # deploy.ps1 generates bakes this in even though the env-var check alone would
     # already cover it, specifically so a held/wedged lock can never turn into the user
     # double-clicking their game and silently getting nothing.
-    [switch]$NoLaunchLock
+    [switch]$NoLaunchLock,
+    # Task 020: the emit-side liveness gate. '1' (the default, and the shipped
+    # behaviour) refuses to put a dead / removed-from-play unit's tag into a
+    # replayed Select. '0' is a KNOWN-BAD configuration that restores the
+    # uniqueness-only test the fan-out shipped with, so the defect can be
+    # reproduced on demand -- it is how the in-game regression assertion was shown
+    # to be capable of failing (research/fanout-liveness.md). Never use it for a
+    # real run.
+    [ValidateSet('0', '1')][string]$Liveness = '1'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -267,6 +275,10 @@ try {
     $env:SCPLUGIN_FANOUT_BUDGET  = "$FanoutBudget"
     $env:SCPLUGIN_CIRCLES        = $Circles
     $env:SCPLUGIN_HUDROW         = $HudRow
+    $env:SCPLUGIN_FANOUT_LIVENESS = $Liveness
+    if ($Liveness -eq '0') {
+        Write-Warning 'run-with-plugin: -Liveness 0 — the fan-out emit gate is back to the pre-task-020 uniqueness test ALONE. A unit killed by damage will be replayed into a Select. This is a deliberate defect-reproduction run.'
+    }
     if ($FanoutCmds) { $env:SCPLUGIN_FANOUT_CMDS = $FanoutCmds }
     else { $env:SCPLUGIN_FANOUT_CMDS = '' }
 
