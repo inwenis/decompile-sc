@@ -24,6 +24,14 @@
 //      The visible chunk is emitted LAST, so the sim-side selection is left exactly
 //      as the player sees it -- the separate "restore Select" that
 //      research/selection-cap.md 7 costs is folded into the final pair.
+//
+//      ONE EXCEPTION, since task 020 put a liveness gate on the emit path: if EVERY
+//      unit of the visible chunk fails that gate, no Select is written for it and the
+//      simulation is left holding the last OVERFLOW chunk instead. It needs all twelve
+//      visible units to be inside the death/removal window at once, it self-heals on
+//      the next order or selection commit, and the pre-020 behaviour was not better --
+//      it emitted twelve tags the receive path then had to throw away. Stated here
+//      because the invariant above is load-bearing everywhere else in this file.
 
 #include <windows.h>
 #include <string.h>
@@ -419,12 +427,50 @@ static bool PassesGate(const ShadowUnit* u, int* why) {
     return false;
 }
 
+// ONE forensics line per unit per selection, not per unit per ORDER.
+//
+// The shadow list deliberately keeps corpses until the next selection commit, so the
+// same dead unit is re-judged by every fanned order until the player re-selects. Left
+// unguarded, each of those re-judgements wrote a line -- and ScLog flushes the file
+// handle synchronously, on the game thread, under our lock. After a real battle that
+// is a growing pile of identical lines on every right-click, in the SHIPPED default.
+//
+// Keyed on the shadow VERSION, which sc_fanout already bumps on every commit (and on
+// the hotkey-recall drop), so a genuinely new selection reports afresh. The list is
+// small and linear-scanned: it only ever holds units that failed the gate, and a
+// selection with hundreds of those has bigger problems than a log line.
+//
+// CONSEQUENCE FOR THE COUNTERS, stated because it is easy to misread: g_statStale and
+// g_statDrop still count drop EVENTS (every order, every unit), not distinct units.
+// They are throughput counters, not a population. `staleSkipped` is therefore also
+// sticky for the session -- once anything has been dropped it never returns to 0.
+static DWORD    g_loggedPtr[64];
+static int      g_loggedCount = 0;
+static unsigned g_loggedVersion = 0;
+static bool     g_loggedValid = false;
+
+static bool ShouldLogForensics(DWORD unit) {
+    if (!g_loggedValid || g_loggedVersion != g_shadowVersion) {
+        g_loggedVersion = g_shadowVersion;
+        g_loggedCount = 0;
+        g_loggedValid = true;
+    }
+    for (int i = 0; i < g_loggedCount; ++i) if (g_loggedPtr[i] == unit) return false;
+    // Full table: report it. Repeating beats silently dropping evidence, and the only
+    // way to get here is a selection with 64+ distinct failing units.
+    if (g_loggedCount < (int)(sizeof(g_loggedPtr) / sizeof(g_loggedPtr[0]))) {
+        g_loggedPtr[g_loggedCount++] = unit;
+    }
+    return true;
+}
+
 // The fields the engine's receive path would use for this unit, logged as one line.
 // The sprite pointer and its flag byte are what addUnitToSelectionSlot 0x0049AF80
 // dereferences; the flags are read only after VirtualQuery says the page is committed
 // and readable, so reporting on a freed sprite cannot itself fault. `-1` for the flags
 // means "the pointer is not readable memory" -- which is itself the answer.
 static void LogUnitForensics(const char* what, const ShadowUnit* u, int why) {
+    if (!ShouldLogForensics(u->ptr)) return;
     DWORD sprite = u->ptr ? *(DWORD*)(u->ptr + SC_CUNIT_OFF_SPRITE) : 0;
     int   sflags = -1;
     if (sprite) {
@@ -789,7 +835,9 @@ void ScFanoutOnSelect(unsigned count, DWORD* units) {
         }
     }
     // Visible units go LAST, so the final Select+order pair of a fan-out leaves the
-    // simulation holding exactly what the player can see.
+    // simulation holding exactly what the player can see -- unless the liveness gate
+    // refuses all twelve of them, in which case that pair is not written at all (see
+    // the exception in this file's header comment).
     for (int i = 0; i < visibleCount && g_shadowCount < SC_SHADOW_MAX; ++i) {
         g_shadow[g_shadowCount++] = visible[i];
     }
@@ -818,7 +866,7 @@ void ScFanoutOnSelect(unsigned count, DWORD* units) {
     //
     // The overflow units are the FRONT of g_shadow -- visible units are stored last
     // so the final Select+order pair of a fan-out leaves the simulation holding what
-    // the player can see.
+    // the player can see (with the all-twelve-dead exception in the file header).
     {
         const int overflow = g_shadowCount - g_visibleCount;
         if (ScCirclesEnabled() && overflow > 0) {

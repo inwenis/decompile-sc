@@ -23,11 +23,14 @@ in-process observation on the task-019 combat fixture, and from the offline core
 3. **Observed, not assumed: the pre-fix path is TOLERATED, not a fault** — §4. Measured in-process
    on the combat fixture with the gate deliberately switched off, on the worst form of the input: a
    dead unit whose `CUnit+0x0C` reads **`0x00000000`** at the moment its tag is written. The game
-   does not crash, and the corpse does **not** enter `playersSelections` — the receive path
-   rejects exactly the stale entries of the replayed `Select` and keeps the other ten. So this is a
-   **correctness defect with an unproven safety margin**, not a crash. What is *not* settled is
-   *which* receive-side check does the rejecting: our reading of `0x0049AF80` puts an unguarded
-   null dereference in front of every predicate that could (§4.3).
+   does not crash, and no corpse is left in `playersSelections` — the ten non-stale tags of a
+   twelve-tag chunk are there afterwards and the two stale ones are not. So this is a **correctness
+   defect with an unproven safety margin**, not a crash.
+   Two honest limits on that, both §4: the `sprite == 0` landing was hit **once, by luck** and is
+   not yet reproducible on demand (§4.2), and the snapshot cannot tell receive-side *rejection*
+   from *accept-then-evict* (§4.1). What is not settled either way is which check saves it — our
+   reading of `0x0049AF80` puts an unguarded null dereference in front of every predicate that
+   could (§4.3).
 4. **The fix is a five-term gate on the emit side**, supplying exactly what the receive side does
    not check: hitpoints, owner, sprite non-null, and reachability in `playerUnitList[owner]` — on
    top of the uniqueness test that was already there (§3).
@@ -164,6 +167,21 @@ once per order the player types by hand, is not in the same class as the same wa
 frame. Every link is bounds/stride-validated before it is followed, so a torn or corrupt list
 returns `false` (fail-closed) instead of faulting or spinning.
 
+### 3.1.1 One thread caveat, recorded rather than fixed
+
+The gate runs on the **game thread** wherever it decides anything — `EmitSelect` and the
+capture-time filter are both called by the engine. `ScFanoutLogUnitStates` is the exception: it
+runs on the **observer thread** (a marker read), and since task 020 it calls the same `UnitLive`,
+so its list walk can race the game thread linking/unlinking units.
+
+It cannot fault — every link goes through `UnitPtrValid` before it is followed and the walk is
+bounded — but a concurrent unlink can make the reported `live=` and `removed=` *undercount* by one
+for that line. Every assertion that reads those fields tolerates an undercount (they are `<`, `≥`
+or `≤` comparisons, never equality against a live population), so this is latent rather than live.
+It is also a departure from `sc_hudrow`, whose walk is game-thread-only by construction. If a
+future assertion ever needs an exact `live=`, move the call to the game thread rather than tighten
+the assertion.
+
 ### 3.2 What the gate deliberately lets through
 
 A **transport-loaded** unit stays linked in its player's list (the engine walks that list for
@@ -237,11 +255,25 @@ with the ten pointers the engine ended up holding:
 | **0E53** | 1619 | `0x00621848` — the unit the forensics line names | **no** |
 | **0E4D** | 1613 | `0x00621068` — alive at emit, dead by execution | **no** |
 
-The ten survivors of our chunk are *exactly* the ten non-stale tags, in the engine's own order. So
-the replayed `Select` really was executed (it is also what made 33 units burrow), and the receive
-path **rejected precisely the two stale entries and nothing else**. The process ran on through the
-rest of the test — a 45 s soak, another fanned order, a clean `WM_CLOSE` exit with
+The ten the engine ends up holding are *exactly* the ten non-stale tags, in its own order. The
+replayed `Select` really was executed (it is also what made 33 units burrow). The process ran on
+through the rest of the test — a 45 s soak, another fanned order, a clean `WM_CLOSE` exit with
 `DLL_PROCESS_DETACH` — and `StarCraft.exe` on disk was byte-identical before and after.
+
+**What that snapshot does and does not prove.** It is ONE sample, taken 870 ms after the emit, and
+it is the *first* one after it: the observer logs only on change, and this log has no line at all
+between `19:19:55.056` and `19:19:55.926`. Two histories end in that identical state, and this data
+does not separate them:
+
+1. the receive path **rejected** the two stale entries and never stored them; or
+2. it **accepted** them and the engine **evicted** them a moment later, on the removal path that
+   drops a unit from every selection array (`0x0049A7F0`, `0x0049F7A0`).
+
+For `0E4D` especially — which §4.4 shows was still alive when its tag was written and died
+afterwards — eviction-on-death is at least as likely as receive-side rejection. So the claim here
+is the one the heading makes and no more: **no fault, and no corpse left in `playersSelections`.**
+*By what mechanism* it is not there is §4.3's question, which therefore has three candidate
+answers, not two.
 
 ### 4.2 The window has two halves, and both were hit
 
@@ -257,28 +289,41 @@ rest of the test — a 45 s soak, another fanned order, a clean `WM_CLOSE` exit 
                             faults -- and it does not
 ```
 
-Which half a run lands in is not under the fixture's control — it depends on how long the row's
-poll took to notice the death. An earlier defect-arm run landed in the **left** half (the dead
-unit's pointer was still in `clientSelectionGroup` when the order went out): benign, as expected.
-The run quoted in §4.1 landed in the **right** half — `sprite=0x00000000`, `inList=0` — which is
-the case the static model says is a null dereference. It is not one. `-OrderDelaySec` on the test
-script exists so a future run can be aimed at the right half on purpose rather than by luck.
+Which half a run lands in is **not under the fixture's control**, and this matters for how much
+weight §4's determination can carry. It depends on how long the HUD row's poll took to notice the
+death, which varies run to run. Both recorded defect-arm runs used the default `-OrderDelaySec 0`:
+one landed in the **left** half (the dead unit's pointer was still in `clientSelectionGroup` when
+the order went out) — benign, as expected — and the one quoted in §4.1 landed in the **right** half,
+`sprite=0x00000000`, `inList=0`, which is the case the static model calls a null dereference. It is
+not one.
+
+**The worst-case landing is reached by luck, not on demand.** It has now been observed in two
+separate runs (§4.1 and §5.2.1), and the second replayed one corpse from EACH half in the same
+order — so it is not a one-off. But no run has yet used `-OrderDelaySec` to *aim* at it: that knob
+exists to wait out the removal and then issue the order, which would make the case reproducible
+instead of incidental. Until then, "tolerated" rests on two incidental observations of the
+`sprite == 0` case, which is part of why §4.3 stays an open question rather than a conclusion
+about the engine.
 
 ### 4.3 What this does NOT settle
 
 Our reading of `0x0049AF80` ([`binary-selection-map.md`](binary-selection-map.md) §5.1) puts
 `!(unit->sprite->flags & 0x20)` — i.e. `*(byte*)(*(int*)(unit+0x0C)+0x0E)` — *before* every
 predicate that could plausibly reject a corpse. With `CUnit+0x0C` measured at 0, that read is
-`[0x0000000E]` and should fault. It did not. So one of two things is true, and this task did not
+`[0x0000000E]` and should fault. It did not. So one of three things is true, and this task did not
 distinguish them:
 
 1. the runtime instruction order differs from the decompiled/GPTP source order, and something
    that *does* reject a removed unit (`unit_IsStandardAndMovable` `0x0047B770`, or a null-sprite
    test the condensed decompile does not show) runs first; or
-2. the entry is rejected earlier still, inside `CMDRECV_Select`, by a check we have not read.
+2. the entry is rejected earlier still, inside `CMDRECV_Select`, by a check we have not read; or
+3. **nothing rejects it at all** — the entry is stored, and the engine's own removal path evicts it
+   before our next observer sample (§4.1). In that case the sprite read either did not happen or
+   did not fault, and we have not seen which.
 
-The experiment that would settle it is a detour on `0x0049AF80` itself, logging its argument and
-return per call. That is a new hook in game memory and was out of scope here.
+The experiment that would settle all three is a detour on `0x0049AF80` itself, logging its
+argument and return per call, sampled tightly enough to catch a store-then-evict. That is a new
+hook in game memory and was out of scope here.
 
 **The fix does not depend on which it is.** A sender that hands the engine entries it has to throw
 away is wrong whatever the engine does with them, and the only reading we have of that path
@@ -358,12 +403,60 @@ test-combat-death: 0 failure(s) in 04:06
 
 `uniqOnly=36` against `live=27` in one line, from one read of one list, is the defect and the fix
 in the same sentence: the test the fan-out used to apply accepts all 36 of them; the one it applies
-now does not; and the 29 tags that went out contain none of the nine.
+now does not.
 
-It is capable of failing, and was shown to fail: the same script with `-Liveness 0` fails exactly
-the three assertions that carry the claim (`the gate refused at least one unit`, `the dead unit is
-one the row itself listed`, `staleSkipped is above zero`) while every other assertion in the file
-still passes — `test-combat-death: 3 failure(s)`. That run is §4's arm B.
+**Mind the two numbers, they are taken at different times.** The gate refused **seven** units at
+emit; the 29 tags that went out contain none of *those seven*. The `hp0=9` in the later `UNITSTATE`
+line is from a marker read several seconds afterwards, by which time two more units had died — and
+those two ARE among the 29, because they were alive when their tags were written. That is not a
+leak, it is §4.4: no emit-time check can cover the frames between `queueCommand` and execution, and
+the engine handles that last stretch itself.
+
+**On "capable of failing".** The first version of this claim was wrong and the review caught it.
+The in-game assertion was scraped only from `FANOUT stale drop:` lines, which sc_fanout writes
+exclusively on the branch that also *withholds* the tag — so "none of the dead tags reached the
+wire" was true by construction, and under `-Liveness 0` (where the plugin logs `FANOUT REPLAYING A
+STALE UNIT` instead) the set came out empty and the assertion **passed while the dead tag was on
+the wire**. The three failures that run did produce were its neighbours, not the load-bearing
+assertion.
+
+Fixed by scraping BOTH verdict lines — the same units, judged the same way, in both arms; only the
+outcome differs. `-Liveness 0` now fails the assertion itself, for the reason it names. §5.4 has
+the current both-arms result.
+
+### 5.2.1 Both arms, as they actually run
+
+`-Liveness 0`, same script, same fixture. The gate judges the same units the same way; only the
+outcome differs — which is what makes the assertion a test rather than a description:
+
+```
+VERDICT: FANOUT REPLAYING A STALE UNIT (gate off): unit=0x00622FE8 tag=0E65 why=hp0 hp=0
+                                        uniq=1/1 player=0/0 sprite=0x0063F0C8 spriteFlags=0 inList=0
+VERDICT: FANOUT REPLAYING A STALE UNIT (gate off): unit=0x00622808 tag=0E5F why=hp0 hp=0
+                                        uniq=1/1 player=0/0 sprite=0x00000000 spriteFlags=-1 inList=0
+FAIL no dead unit's tag reached the wire (dead tags: 0E5F 0E65) (replayed anyway: 0E5F 0E65)
+FAIL and the gate is what withheld them (2 of 2 withheld) (let through: 0E65 0E5F)
+ok   every unit the gate called dead is one the row itself listed before the fight (2 of 2)
+FAIL staleSkipped is above zero (0)
+test-combat-death: 3 failure(s) in 04:21
+```
+
+The first failure is the regression assertion itself, naming the two tags it found on the wire.
+The independent corroboration still passes in this arm, as it must: both units really were in the
+selection, the row listed both before the fight, and it is only their *treatment* that changed.
+
+**Two things this run settles that the earlier ones could not.**
+
+1. **Both halves of the window in ONE order.** `0E65` still had a sprite (`0x0063F0C8`) and `0E5F`
+   did not (`0x00000000`) — the same emit replayed a corpse from each half of §4.2's timeline. So
+   the `sprite == 0` landing is no longer a single lucky observation; it has now happened in two
+   separate runs, both at `-OrderDelaySec 0`.
+2. **`spriteFlags=0` on the sprite-alive corpse — the Hidden bit is CLEAR.** That is the bit
+   `0x0049AF80` tests (`& 0x20`). So for `0E65` the engine's own Hidden check would have *passed*
+   it, not rejected it — which is a point in favour of the accept-then-evict reading in §4.1 for
+   that unit, and against "some receive-side check rejects corpses". It does not settle §4.3 (it
+   says nothing about the `sprite == 0` unit, where the read itself is the question), but it is
+   the first direct evidence bearing on it.
 
 ### 5.3 The gate does not break the feature
 

@@ -514,6 +514,47 @@ static void FanoutCoreTests(void) {
         *(DWORD*)(FakeUnit(bald) + SC_CUNIT_OFF_SPRITE) = sprite;
     }
 
+    // ---------------------------------------------------------------------
+    // The one place the gate WEAKENS an invariant, pinned so it cannot drift
+    // further without a test noticing.
+    //
+    // "The visible chunk is emitted LAST, so the simulation ends up holding exactly
+    // what the player sees" holds only while at least one visible unit is live. Kill
+    // all twelve and that chunk emits nothing, so the simulation is left holding the
+    // last OVERFLOW chunk. Narrow (all twelve inside the death window at once) and
+    // self-healing on the next order, but it is real and the file's header comment now
+    // says so -- this asserts the behaviour that comment describes.
+    // ---------------------------------------------------------------------
+    printf("\n    ALL 12 VISIBLE dead, overflow alive: the order still reaches the living\n");
+    {
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        DriveSelection(36);
+        for (int i = 0; i < 12; ++i) *(DWORD*)(FakeUnit(i) + SC_CUNIT_OFF_HITPOINTS) = 0;
+
+        g_captureLen = 0; g_captureCount = 0;
+        Check("suppressed: pairs did go out for the overflow",
+              ScFanoutOnCommand(kRightClick, sizeof(kRightClick)) ? 1 : 0, 1);
+        Check("the two overflow chunks are emitted, the visible one is not",
+              g_captureCount, 4);
+        Check("24 tags went out, none of them a visible unit",
+              CaptureTagCount((int)sizeof(kRightClick)), 24);
+        for (int i = 0; i < 12; ++i) {
+            if (CaptureHasTag(ExpectTag(i), (int)sizeof(kRightClick))) {
+                Check("a dead VISIBLE unit's tag reached the wire", 1, 0);
+                break;
+            }
+        }
+        Check("all 12 were charged to hp0", ScFanoutDroppedFor(SC_FANOUT_DEAD), 12);
+        // THE WEAKENED INVARIANT, stated as the test sees it: the LAST Select of the
+        // run is an overflow chunk, not the visible one, so the simulation is left
+        // holding units the player cannot see. Asserted rather than hidden.
+        Check("the last Select carries the SECOND overflow chunk (units 25-36), which "
+              "is the invariant this case weakens",
+              CaptureHasTag(ExpectTag(35), (int)sizeof(kRightClick)) ? 1 : 0, 1);
+        for (int i = 0; i < 12; ++i) *(DWORD*)(FakeUnit(i) + SC_CUNIT_OFF_HITPOINTS) = 40 * 256;
+    }
+
     printf("\n    a whole selection that died leaves the ENGINE's own order alone\n");
     {
         ScFanoutTestBegin(g_fake, &CaptureEmit, 200);

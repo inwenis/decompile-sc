@@ -116,9 +116,12 @@ param(
     # second one has the receive path dereferencing a null sprite pointer.
     #
     # 0 (the default) fires as soon as the death is seen, which is the state a player
-    # actually hits. A value around 8-10 puts the order in the second state on this
-    # fixture; that is how the -Liveness 0 arm was aimed at it
-    # (research/fanout-liveness.md 4).
+    # actually hits -- and which of the two states that lands in is NOT under this
+    # script's control, since it depends on how long the row's poll took to notice.
+    # Both recorded -Liveness 0 runs used delay 0; one landed in each state, by luck.
+    # A value around 8-10 should put the order in the second state on this fixture
+    # deliberately, but that has not been run -- it exists so the "sprite reads 0"
+    # landing can be aimed at rather than waited for (research/fanout-liveness.md 4.2).
     [int]$OrderDelaySec = 0,
     [switch]$KeepOpen
 )
@@ -784,43 +787,72 @@ try {
             $m = [regex]::Match($l.Line, 'tags=\[([0-9A-F ]*)\]')
             $emitted += @($m.Groups[1].Value -split ' ' | Where-Object { $_ })
         }
-        $drops = @()
-        foreach ($l in ($since | Select-String -Pattern 'FANOUT stale drop: unit=0x[0-9A-F]{8} tag=([0-9A-F]{4}) why=(\w+) hp=(\d+)')) {
-            $m = [regex]::Match($l.Line, 'tag=([0-9A-F]{4}) why=(\w+) hp=(\d+) .*sprite=0x([0-9A-F]{8}) spriteFlags=(-?\d+)')
-            $drops += [pscustomobject]@{
-                Tag = $m.Groups[1].Value; Why = $m.Groups[2].Value; Hp = [int]$m.Groups[3].Value
-                Sprite = $m.Groups[4].Value; SpriteFlags = [int]$m.Groups[5].Value
+        # THE VERDICT LINES, BOTH KINDS. sc_fanout writes one forensics line per unit
+        # its liveness test rejects, and it writes it WHETHER OR NOT the gate then
+        # refuses the unit: `FANOUT stale drop` when the gate is on and the tag is
+        # withheld, `FANOUT REPLAYING A STALE UNIT (gate off)` when the pre-020 gate
+        # lets it through anyway. Same fields, same `why=`.
+        #
+        # Scraping BOTH is what makes the assertion below mean anything. An earlier
+        # version of this step read only `stale drop` lines -- which sc_fanout writes
+        # exclusively on the branch that ALSO skips writing the tag -- so the set of
+        # "dead tags" was by construction a set of tags that had not been emitted, and
+        # "none of them reached the wire" was a tautology. Worse, under -Liveness 0 no
+        # `stale drop` line exists at all, the set came out empty, and the assertion
+        # PASSED while the dead unit's tag was demonstrably on the wire. The union is
+        # the same set of units in both arms; only the outcome differs, which is
+        # exactly what a regression assertion needs.
+        $verdicts = @()
+        foreach ($l in ($since | Select-String -Pattern 'FANOUT (?:stale drop|REPLAYING A STALE UNIT \(gate off\)): unit=0x[0-9A-F]{8}')) {
+            $m = [regex]::Match($l.Line,
+                'FANOUT (stale drop|REPLAYING A STALE UNIT \(gate off\)): unit=0x([0-9A-F]{8}) tag=([0-9A-F]{4}) why=(\w+) hp=(\d+) .*sprite=0x([0-9A-F]{8}) spriteFlags=(-?\d+)')
+            if (-not $m.Success) { continue }
+            $verdicts += [pscustomobject]@{
+                Withheld = ($m.Groups[1].Value -eq 'stale drop')
+                Unit = $m.Groups[2].Value; Tag = $m.Groups[3].Value; Why = $m.Groups[4].Value
+                Hp = [int]$m.Groups[5].Value
+                Sprite = $m.Groups[6].Value; SpriteFlags = [int]$m.Groups[7].Value
                 Line = $l.Line.Trim()
             }
         }
-        foreach ($d in $drops) { Write-Host "       DROPPED: $($d.Line)" }
+        foreach ($d in $verdicts) { Write-Host "       VERDICT: $($d.Line)" }
         Write-Host "       emitted $($emitted.Count) tags across $(($since | Select-String 'FANOUT select:').Count) Select(s)"
 
         Assert-That 'the emit path wrote at least one Select we can read back' `
             ($emitted.Count -gt 0)
-        # (1) something was refused, and (2) it was refused for BEING DEAD -- not for
-        # a recycled slot, which is the case the pre-020 gate already caught.
+        # (1) something was judged not-live, and (2) it was judged so for BEING DEAD --
+        # not for a recycled slot, which is the case the pre-020 gate already caught.
         #
         # Every list below is projected with ForEach-Object rather than read as
         # `$collection.Property`. Member enumeration over a collection that may be
         # empty is exactly the kind of thing that turns a PASSING assertion into a
         # thrown step, and the passing case is the common one here.
-        $deadDrops = @($drops | Where-Object { $_.Why -eq 'hp0' })
-        $reasons = @($drops | ForEach-Object { $_.Why } | Sort-Object -Unique)
-        $deadTags = @($deadDrops | ForEach-Object { $_.Tag } | Sort-Object -Unique)
-        Assert-That "the gate refused at least one unit, and did it on HITPOINTS ($($deadDrops.Count) of $($drops.Count) drops were hp0)" `
-            ($deadDrops.Count -ge 1) "(reasons seen: $($reasons -join ','))"
-        Assert-That 'every hp0 drop really did read zero hit points' `
-            (@($deadDrops | Where-Object { $_.Hp -ne 0 }).Count -eq 0)
-        # THE REGRESSION ASSERTION: not one of those tags is in any emitted Select.
+        $deadVerdicts = @($verdicts | Where-Object { $_.Why -eq 'hp0' })
+        $reasons = @($verdicts | ForEach-Object { $_.Why } | Sort-Object -Unique)
+        $deadTags = @($deadVerdicts | ForEach-Object { $_.Tag } | Sort-Object -Unique)
+        Assert-That "the gate judged at least one unit not-live, on HITPOINTS ($($deadVerdicts.Count) of $($verdicts.Count) verdicts were hp0)" `
+            ($deadVerdicts.Count -ge 1) "(reasons seen: $($reasons -join ','))"
+        Assert-That 'every hp0 verdict really did read zero hit points' `
+            (@($deadVerdicts | Where-Object { $_.Hp -ne 0 }).Count -eq 0)
+        # THE REGRESSION ASSERTION, and the one this whole task turns on: not one of
+        # those tags is in any emitted Select. It FAILS under -Liveness 0, where the
+        # very same units are judged the very same way and their tags go out anyway.
         $replayedTags = @($deadTags | Where-Object { $emitted -contains $_ })
         Assert-That "no dead unit's tag reached the wire (dead tags: $($deadTags -join ' '))" `
             ($replayedTags.Count -eq 0) "(replayed anyway: $($replayedTags -join ' '))"
-        # And the dropped unit is one of OURS -- a tag the row itself showed before
-        # the fight, read out of the live dialog, not a number the fan-out invented.
-        $knownBefore = @($deadTags | Where-Object { $script:beforeRow.Tags -contains $_ })
-        Assert-That "the dead unit is one the row itself listed before the fight ($($knownBefore.Count) of $($deadTags.Count))" `
-            ($knownBefore.Count -ge 1)
+        # ...and the gate did the withholding, rather than the tag being absent for some
+        # other reason. Separates "the gate worked" from "the chunk happened to omit it".
+        $notWithheld = @($deadVerdicts | Where-Object { -not $_.Withheld } | ForEach-Object { $_.Tag })
+        Assert-That "and the gate is what withheld them ($($deadVerdicts.Count) of $($deadVerdicts.Count) withheld)" `
+            ($notWithheld.Count -eq 0) "(let through: $($notWithheld -join ' '))"
+        # INDEPENDENT CORROBORATION. Every tag the fan-out calls dead must be one the
+        # HUD ROW listed before the fight -- read out of the live dialog controls by a
+        # different module, on a different path, before any of this happened. All of
+        # them, not just one: a tag the row never showed would mean the fan-out is
+        # talking about a unit that was never in this selection.
+        $unknownBefore = @($deadTags | Where-Object { $script:beforeRow.Tags -notcontains $_ })
+        Assert-That "every unit the gate called dead is one the row itself listed before the fight ($($deadTags.Count) of $($deadTags.Count))" `
+            ($unknownBefore.Count -eq 0) "(not in the row's pre-fight tag set: $($unknownBefore -join ' '))"
 
         # The same claim from the counter side, in-process and marker-synchronised:
         # staleSkipped moved, and the two liveness numbers have separated.
