@@ -4,7 +4,8 @@
 
 agent: 017
 model: fable
-pr: -
+pr: https://github.com/inwenis/decompile-sc/pull/17
+merged: 2026-08-08
 
 ## Workspace
 
