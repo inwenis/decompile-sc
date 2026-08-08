@@ -375,6 +375,203 @@ static void FanoutCoreTests(void) {
 }
 
 // ---------------------------------------------------------------------------
+// [9] The per-opcode fan-out policy (task 015), driven the same way as [7].
+//
+// [7] proves the chunking machinery with one 10-byte right-click. This part proves the
+// POLICY that decides which commands go through that machinery at all: the untargeted
+// orders a player issues to a group -- Stop, Hold Position, an ability -- reach every
+// unit, and the commands that must never be replayed do not, whatever the selection size.
+//
+// Every id used below is a row in research/data/command-opcodes.tsv, and the two named
+// ones were named by pressing their key in a live game and reading the id the plugin
+// logged (research/command-opcodes.md 4).
+// ---------------------------------------------------------------------------
+
+static int ExpectBytesAt(const char* what, int off, const BYTE* want, int n) {
+    bool ok = (off + n <= g_captureLen) && memcmp(g_capture + off, want, (size_t)n) == 0;
+    Check(what, ok ? 1 : 0, 1);
+    return off + n;
+}
+
+// Runs one command against a 36-unit shadow list and reports what came out.
+struct FanoutOutcome { bool suppressed; int commands; int bytes; };
+
+static FanoutOutcome RunOne(const BYTE* cmd, int len) {
+    ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+    ResetQueueCounters();
+    DriveSelection(36);
+    g_captureLen = 0; g_captureCount = 0;
+    FanoutOutcome o;
+    o.suppressed = ScFanoutOnCommand(cmd, (unsigned)len);
+    o.commands = g_captureCount;
+    o.bytes = g_captureLen;
+    return o;
+}
+
+static void OpcodePolicyTests(void) {
+    printf("\n[9] the per-opcode policy: which commands reach all 36 units\n");
+
+    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
+                                 PAGE_READWRITE);
+    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+    MakeUnits(64, 1);
+
+    // --- Stop: 2 bytes, id + queued. The user's ask, in one line of assertions.
+    printf("\n    Stop (0x1A) reaches all 36: 3 Select+order pairs, exact bytes\n");
+    {
+        const BYTE stop[2] = { 0x1A, 0x00 };
+        FanoutOutcome o = RunOne(stop, sizeof(stop));
+        Check("the engine's own Stop is suppressed", o.suppressed ? 1 : 0, 1);
+        Check("3 pairs x (Select + Stop)", o.commands, 6);
+        // 3 x (2 + 12*2) + 3 x 2 = 78 + 6 = 84
+        Check("bytes queued", o.bytes, 84);
+
+        int a[SC_SELECTION_SLOTS], b[SC_SELECTION_SLOTS], v[SC_SELECTION_SLOTS];
+        for (int i = 0; i < SC_SELECTION_SLOTS; ++i) { a[i] = 12 + i; b[i] = 24 + i; v[i] = i; }
+        int off = 0;
+        off = ExpectSelectAt("pair 1 selects units 13-24", off, a, 12);
+        off = ExpectBytesAt ("pair 1 carries Stop verbatim", off, stop, 2);
+        off = ExpectSelectAt("pair 2 selects units 25-36", off, b, 12);
+        off = ExpectBytesAt ("pair 2 carries Stop verbatim", off, stop, 2);
+        off = ExpectSelectAt("pair 3 selects the VISIBLE 12 (last)", off, v, 12);
+        (void)ExpectBytesAt ("pair 3 carries Stop verbatim", off, stop, 2);
+    }
+
+    // --- Hold Position, and the queued (shift) flag it carries.
+    printf("\n    Hold Position (0x2B) reaches all 36, queued flag preserved per chunk\n");
+    {
+        const BYTE holdQueued[2] = { 0x2B, 0x01 };   // shift held
+        FanoutOutcome o = RunOne(holdQueued, sizeof(holdQueued));
+        Check("suppressed", o.suppressed ? 1 : 0, 1);
+        Check("3 pairs", o.commands, 6);
+        Check("bytes queued", o.bytes, 84);
+        // Each chunk gets the order ONCE, with the player's own queued byte untouched,
+        // so every unit ends up with exactly one queued order -- the same thing the
+        // engine would have done to twelve of them.
+        int off = 2 + 12 * 2;
+        off = ExpectBytesAt("chunk 1 keeps queued=1", off, holdQueued, 2);
+        off += 2 + 12 * 2;
+        off = ExpectBytesAt("chunk 2 keeps queued=1", off, holdQueued, 2);
+        off += 2 + 12 * 2;
+        (void)ExpectBytesAt("chunk 3 keeps queued=1", off, holdQueued, 2);
+    }
+
+    // --- A 1-byte untargeted ability. 0x2A is the shortest command in the fan-out set,
+    // so it is also the check that a length-1 order chunks correctly.
+    printf("\n    a 1-byte untargeted ability (0x2A) reaches all 36\n");
+    {
+        const BYTE ability[1] = { 0x2A };
+        FanoutOutcome o = RunOne(ability, sizeof(ability));
+        Check("suppressed", o.suppressed ? 1 : 0, 1);
+        Check("3 pairs", o.commands, 6);
+        Check("bytes queued", o.bytes, 78 + 3);
+    }
+
+    // --- The passthrough set. These are the commands the task exists to NOT duplicate.
+    printf("\n    production, cancel and research are NOT duplicated, at any selection size\n");
+    {
+        struct { const char* what; BYTE bytes[8]; int len; } kMustPassThrough[] = {
+            { "0x1F (single-gated, spends resources through 0x00467250)", { 0x1F, 0x00, 0x00 }, 3 },
+            { "0x23 (loops, but spends resources through 0x00467250)",    { 0x23, 0x67, 0x00 }, 3 },
+            { "0x27 (loops, but spends resources through 0x00467250)",    { 0x27 }, 1 },
+            { "0x35 (single-gated, spends resources through 0x00467250)", { 0x35, 0x00, 0x00 }, 3 },
+            { "0x18 (single-gated cancel, refunds through 0x00468280)",   { 0x18 }, 1 },
+            { "0x19 (loops, but refunds through 0x00468280)",             { 0x19 }, 1 },
+            { "0x20 (single-gated)",                                      { 0x20, 0xFE, 0xFF }, 3 },
+            { "0x0C (single-gated Build)",                                { 0x0C, 1, 2, 3, 4, 5, 6, 7 }, 8 },
+            { "0x13 (control group, rebuilds the selection elsewhere)",   { 0x13, 0x01, 0x00 }, 3 },
+            { "0x09 (Select itself)",                                     { 0x09, 0x01, 0x11, 0x22 }, 4 },
+        };
+        for (unsigned i = 0; i < sizeof(kMustPassThrough) / sizeof(kMustPassThrough[0]); ++i) {
+            FanoutOutcome o = RunOne(kMustPassThrough[i].bytes, kMustPassThrough[i].len);
+            char msg[160];
+            _snprintf(msg, sizeof(msg), "%s: not suppressed", kMustPassThrough[i].what);
+            Check(msg, o.suppressed ? 1 : 0, 0);
+            _snprintf(msg, sizeof(msg), "%s: nothing emitted", kMustPassThrough[i].what);
+            Check(msg, o.commands, 0);
+        }
+    }
+
+    // --- The length guard. A fan-out id carrying a length the engine's dispatcher does
+    // not consume for it is not that command; replaying it would hand the receive loop a
+    // byte count it did not expect and desynchronise the rest of the turn buffer.
+    printf("\n    a fan-out id with the wrong length is refused, not replayed\n");
+    {
+        const BYTE stopTooLong[3] = { 0x1A, 0x00, 0x00 };
+        FanoutOutcome o = RunOne(stopTooLong, sizeof(stopTooLong));
+        Check("0x1A at len=3 is not suppressed", o.suppressed ? 1 : 0, 0);
+        Check("nothing emitted", o.commands, 0);
+
+        const BYTE rightClickTooShort[4] = { 0x14, 1, 2, 3 };
+        o = RunOne(rightClickTooShort, sizeof(rightClickTooShort));
+        Check("0x14 at len=4 is not suppressed", o.suppressed ? 1 : 0, 0);
+        Check("nothing emitted", o.commands, 0);
+
+        const BYTE unknownId[2] = { 0x77, 0x00 };
+        o = RunOne(unknownId, sizeof(unknownId));
+        Check("an id the dispatcher does not accept is not suppressed", o.suppressed ? 1 : 0, 0);
+        Check("nothing emitted", o.commands, 0);
+    }
+
+    // --- The set itself. Transcribing a policy table into C is exactly the sort of edit
+    // that silently gains or loses an id, so the whole set is asserted, not spot-checked.
+    printf("\n    the default fan-out set is exactly the 19 ids the policy table marks fanout\n");
+    {
+        static const BYTE kExpected[] = {
+            0x14, 0x15, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x21, 0x22, 0x25,
+            0x26, 0x28, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x36, 0x5A,
+        };
+        // Every expected id, at ITS OWN dispatcher length, must fan out.
+        static const BYTE kLen[] = { 10, 11, 2, 1, 1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 1, 1, 1 };
+        int fannedOut = 0;
+        for (unsigned i = 0; i < sizeof(kExpected); ++i) {
+            BYTE cmd[16];
+            memset(cmd, 0, sizeof(cmd));
+            cmd[0] = kExpected[i];
+            FanoutOutcome o = RunOne(cmd, kLen[i]);
+            if (o.suppressed && o.commands == 6) ++fannedOut;
+            else printf("       0x%02X did NOT fan out (suppressed=%d commands=%d)\n",
+                        kExpected[i], o.suppressed ? 1 : 0, o.commands);
+        }
+        Check("all 19 fan out at their own length", fannedOut, 19);
+
+        // And nothing else does. ALL 39 other ids the dispatcher accepts must pass through
+        // -- including the five whose length the dispatcher computes rather than reads from
+        // an immediate (0x06, 0x07, 0x09, 0x0A, 0x0B). Those five carry `len = -1` in the
+        // opcode table, so the length guard refuses them at any length; the arbitrary
+        // lengths below are exactly the point.
+        static const BYTE kOther[] = {
+            0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+            0x11, 0x12, 0x13, 0x18, 0x19, 0x1F, 0x20, 0x23, 0x27, 0x29, 0x2F, 0x30,
+            0x31, 0x32, 0x33, 0x34, 0x35, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x55, 0x56,
+            0x57, 0x58, 0x5C,
+        };
+        static const BYTE kOtherLen[] = {
+            1, 8, 8, 1, 4, 4, 4, 8, 3, 5, 2, 1,
+            1, 5, 3, 1, 1, 3, 3, 3, 1, 3, 5, 2,
+            1, 2, 1, 1, 3, 7, 1, 1, 2, 2, 2, 10,
+            2, 5, 82,
+        };
+        int passed = 0;
+        for (unsigned i = 0; i < sizeof(kOther); ++i) {
+            BYTE cmd[96];
+            memset(cmd, 0, sizeof(cmd));
+            cmd[0] = kOther[i];
+            FanoutOutcome o = RunOne(cmd, kOtherLen[i]);
+            if (!o.suppressed && o.commands == 0) ++passed;
+            else printf("       0x%02X was NOT passed through (suppressed=%d commands=%d)\n",
+                        kOther[i], o.suppressed ? 1 : 0, o.commands);
+        }
+        Check("all 39 other accepted opcodes pass through untouched",
+              passed, (int)sizeof(kOther));
+    }
+
+    ScFanoutTestBegin(NULL, NULL, 200);
+    VirtualFree(g_fake, 0, MEM_RELEASE);
+    g_fake = NULL;
+}
+
+// ---------------------------------------------------------------------------
 // [8] The selection circles, driven with fake sprites and fake engine primitives.
 //
 // sc_circles reaches the engine through two function pointers precisely so this can
@@ -692,6 +889,7 @@ int main(void) {
     Check("no detour ran after removal (mixed)", g_mixedCalls - mixedBefore, 0);
 
     FanoutCoreTests();
+    OpcodePolicyTests();
     CircleTests();
 
     printf("\nhooktest: %d failure(s)\n", g_failures);

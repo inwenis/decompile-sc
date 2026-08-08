@@ -72,12 +72,21 @@ UNIT_TYPE_IDS = {
     "marine": 0,
     "zergling": 37,
     "zealot": 65,
+    # Lurker is the fan-out fixture for untargeted ABILITIES (task 015): Burrow is innate
+    # for lurkers -- no research, so it works on a map with no tech set at all -- it takes
+    # no target, and it leaves a per-unit state a plugin can read back and assert on.
+    "lurker": 103,
 }
 
 DEFAULT_TEMPLATE = r"C:\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx"
 DEFAULT_OUTPUT = r"C:\sc-work\1161-base\Maps\test-many-units.scx"
 DEFAULT_UNIT_COUNT = 36
-GRID_SPACING_PX = 32  # one tile; keeps the cluster inside one drag-box
+# One tile between units, and the block CENTRED on the start location. Both matter:
+# the camera opens centred on the start location and shows about 20x12 tiles, so a block
+# that grows right-and-down from that point puts its far half off screen and behind the
+# HUD, where no drag box can reach it. Bigger units need more room than one tile or the
+# game drops the ones that cannot be placed -- pass --grid-spacing for those.
+GRID_SPACING_PX = 32
 
 
 def resolve_unit_id(unit_type: str) -> int:
@@ -123,17 +132,22 @@ def pack_unit_record(rec: UnitRecord) -> bytes:
 
 
 def build_new_unit_records(
-    count: int, unit_id: int, player: int, center_x: int, center_y: int, next_instance: int
+    count: int, unit_id: int, player: int, center_x: int, center_y: int, next_instance: int,
+    spacing: int = GRID_SPACING_PX,
 ) -> list[UnitRecord]:
     per_row = math.ceil(math.sqrt(count))
+    rows = math.ceil(count / per_row)
+    # Centre the block on (center_x, center_y) -- see GRID_SPACING_PX.
+    origin_x = center_x - (per_row - 1) * spacing // 2
+    origin_y = center_y - (rows - 1) * spacing // 2
     records = []
     for i in range(count):
         row, col = divmod(i, per_row)
         records.append(
             UnitRecord(
                 instance=next_instance + i,
-                x=center_x + col * GRID_SPACING_PX,
-                y=center_y + row * GRID_SPACING_PX,
+                x=origin_x + col * spacing,
+                y=origin_y + row * spacing,
                 unit_id=unit_id,
                 rel_type=0,
                 special_flags=0,
@@ -231,8 +245,22 @@ def save_chk_to_mpq_matching_blizzard(chk: RichChk, template: Path, output: Path
         shutil.copyfile(temp_mpq_file, str(output))
 
 
+def pick_opponent_slot(player: int) -> int:
+    """The slot that becomes the (unit-less) computer opponent.
+
+    Single-player Play Custom refuses to start a map with no computer slot at all --
+    "You must have at least one computer opponent." -- so a map with exactly one human
+    and eleven inactive slots cannot be launched, whatever else is right about it. One
+    COMPUTER slot satisfies that check; it is given no units anywhere on the map, so
+    there is still nothing hostile in the game.
+    """
+    return 1 if player != 1 else 0
+
+
 def generate_map(
-    template: Path, output: Path, unit_count: int, unit_type: str, player: int
+    template: Path, output: Path, unit_count: int, unit_type: str, player: int,
+    spacing: int = GRID_SPACING_PX, keep_ownr: bool = False,
+    clear_player_units: bool = False,
 ) -> None:
     unit_id = resolve_unit_id(unit_type)
     if not 0 <= player <= 7:
@@ -264,9 +292,21 @@ def generate_map(
     if start is None:
         raise ValueError(f"Template {template} has no start location in its UNIT section")
 
+    # Placing on top of the player's own units gives a mixed selection, and in game a
+    # mixed selection is offered only the basic command card -- no unit ability button at
+    # all. Clearing them first is what makes the generated map able to test an ability.
+    kept_records = existing_records
+    if clear_player_units:
+        kept_records = [
+            r for r in existing_records
+            if r.player != player or r.unit_id == START_LOCATION_UNIT_ID
+        ]
+
     next_instance = max((r.instance for r in existing_records), default=0) + 1
-    new_records = build_new_unit_records(unit_count, unit_id, player, start.x, start.y, next_instance)
-    new_unit_bytes = unit_section.chk_binary_data + b"".join(
+    new_records = build_new_unit_records(
+        unit_count, unit_id, player, start.x, start.y, next_instance, spacing
+    )
+    new_unit_bytes = b"".join(pack_unit_record(r) for r in kept_records) + b"".join(
         pack_unit_record(r) for r in new_records
     )
 
@@ -274,21 +314,35 @@ def generate_map(
     new_sections[unit_idx] = DecodedUnknownSection("UNIT", new_unit_bytes)
     chk = RichChk(_chk_sections=new_sections)
 
-    # Single player, no hostile pressure: the chosen slot becomes a fixed
-    # human occupant, every other slot goes inactive (no computer players).
-    ownr = ChkQueryUtil.find_only_rich_section_in_chk(RichOwnrSection, chk)
-    new_types = {
-        player_id_for_index(i): PlayerType.INACTIVE for i in range(12) if i != player
-    }
-    new_types[player_id_for_index(player)] = PlayerType.HUMAN_OCCUPIED
-    new_ownr = RichOwnrEditor().set_player_types(new_types, ownr)
-    chk = RichChkEditor().replace_chk_section(new_ownr, chk)
+    # Single player, no hostile pressure: the chosen slot becomes a human slot, every
+    # other slot goes inactive (no computer players).
+    #
+    # PlayerType.HUMAN (OWNR 0x06, "Human (Open Slot)"), NOT HUMAN_OCCUPIED (0x02).
+    # An earlier version wrote 0x02 and the Play Custom dialog refused every map this
+    # generator produced with "This map does not have a slot for a human participant"
+    # (Human Slots: 0). 0x02 is what the game writes at RUNTIME for a slot a human has
+    # already taken; what makes a slot available in the lobby is 0x06, which is what
+    # every stock playable map carries for its human slots.
+    # keep_ownr is for a template that is ALREADY a playable single-player scenario -- a
+    # stock campaign mission, say. Rewriting its slots would delete the mission's own
+    # actors and leave a map whose triggers reference players that no longer exist.
+    if not keep_ownr:
+        ownr = ChkQueryUtil.find_only_rich_section_in_chk(RichOwnrSection, chk)
+        new_types = {
+            player_id_for_index(i): PlayerType.INACTIVE for i in range(12) if i != player
+        }
+        new_types[player_id_for_index(player)] = PlayerType.HUMAN
+        new_types[player_id_for_index(pick_opponent_slot(player))] = PlayerType.COMPUTER
+        new_ownr = RichOwnrEditor().set_player_types(new_types, ownr)
+        chk = RichChkEditor().replace_chk_section(new_ownr, chk)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     save_chk_to_mpq_matching_blizzard(chk, template, output)
 
 
-def validate_map(path: Path, unit_count: int, unit_type: str, player: int) -> None:
+def validate_map(
+    path: Path, unit_count: int, unit_type: str, player: int, keep_ownr: bool = False
+) -> None:
     unit_id = resolve_unit_id(unit_type)
     mpqio = StarCraftMpqIoHelper.create_mpq_io(None)
     chk = mpqio.read_chk_from_mpq(str(path))
@@ -314,16 +368,46 @@ def validate_map(path: Path, unit_count: int, unit_type: str, player: int) -> No
 
     ownr = ChkQueryUtil.find_only_rich_section_in_chk(RichOwnrSection, chk)
     actual_type = ownr.player_types[player]
-    if actual_type != PlayerType.HUMAN_OCCUPIED:
+    if keep_ownr:
+        if actual_type not in (PlayerType.HUMAN, PlayerType.HUMAN_OCCUPIED):
+            raise AssertionError(
+                f"{path}: --keep-ownr was used but player {player}'s slot is "
+                f"{actual_type}, which no human can occupy"
+            )
+        dim = ChkQueryUtil.find_only_rich_section_in_chk(RichDimSection, chk)
+        print(f"OK: {path}")
+        print(f"  {len(matching)} unit(s) of type {unit_id} owned by player {player}")
+        print(f"  start location for player {player} at ({start.x}, {start.y})")
+        print(f"  OWNR left as the template had it; player {player} = {actual_type}")
+        print(f"  terrain {dim.width}x{dim.height} tiles")
+        return
+    if actual_type != PlayerType.HUMAN:
         raise AssertionError(
-            f"{path}: player {player} OWNR slot is {actual_type}, expected HUMAN_OCCUPIED"
+            f"{path}: player {player} OWNR slot is {actual_type}, expected HUMAN "
+            f"(0x06 'Human (Open Slot)' -- 0x02 HUMAN_OCCUPIED makes the Play Custom "
+            f"dialog report 'no slot for a human participant')"
         )
-    other_hostile = [
+    # Exactly one computer slot, and it must own nothing: that is what keeps "at least
+    # one computer opponent" satisfied for the launcher while leaving nothing hostile in
+    # the game. More than one, or one with units, is a generator bug.
+    opponent = pick_opponent_slot(player)
+    computers = [
         i for i, t in enumerate(ownr.player_types)
         if i != player and t in (PlayerType.COMPUTER, PlayerType.COMPUTER_GAME)
     ]
-    if other_hostile:
-        raise AssertionError(f"{path}: found active computer player slot(s) {other_hostile}")
+    if computers != [opponent]:
+        raise AssertionError(
+            f"{path}: computer slots are {computers}, expected exactly [{opponent}]"
+        )
+    opponent_units = [
+        r for r in records
+        if r.player == opponent and r.unit_id != START_LOCATION_UNIT_ID
+    ]
+    if opponent_units:
+        raise AssertionError(
+            f"{path}: the computer opponent owns {len(opponent_units)} unit(s); it must "
+            f"own none, or the map is not hostility-free"
+        )
 
     dim = ChkQueryUtil.find_only_rich_section_in_chk(RichDimSection, chk)
     if dim.width <= 0 or dim.height <= 0:
@@ -332,7 +416,7 @@ def validate_map(path: Path, unit_count: int, unit_type: str, player: int) -> No
     print(f"OK: {path}")
     print(f"  {len(matching)} unit(s) of type {unit_id} owned by player {player}")
     print(f"  start location for player {player} at ({start.x}, {start.y})")
-    print(f"  OWNR[{player}] = {actual_type}, no other active computer players")
+    print(f"  OWNR[{player}] = {actual_type}; one unit-less computer slot at {opponent}")
     print(f"  terrain {dim.width}x{dim.height} tiles")
 
 
@@ -341,8 +425,27 @@ def main() -> int:
     parser.add_argument("--unit-count", type=int, default=DEFAULT_UNIT_COUNT)
     parser.add_argument("--unit-type", type=str, default="marine")
     parser.add_argument("--player", type=int, default=0, help="0-based player slot (0 = Player 1)")
+    parser.add_argument(
+        "--grid-spacing",
+        type=int,
+        default=GRID_SPACING_PX,
+        help="pixels between placed units (32 = one tile). Units bigger than a tile "
+             "need more, or the game drops the ones it cannot place.",
+    )
     parser.add_argument("--template", type=Path, default=Path(DEFAULT_TEMPLATE))
     parser.add_argument("--output", type=Path, default=Path(DEFAULT_OUTPUT))
+    parser.add_argument(
+        "--keep-ownr",
+        action="store_true",
+        help="Do not rewrite the player slots. Use when the template is already a "
+             "playable single-player scenario (a stock campaign mission).",
+    )
+    parser.add_argument(
+        "--clear-player-units",
+        action="store_true",
+        help="Remove the target player's existing units first, so the placed group is "
+             "all one type (a mixed selection gets no ability buttons in game).",
+    )
     parser.add_argument(
         "--validate-only",
         type=Path,
@@ -358,13 +461,21 @@ def main() -> int:
 
     try:
         if args.validate_only is not None:
-            validate_map(args.validate_only, args.unit_count, args.unit_type, args.player)
+            validate_map(
+                args.validate_only, args.unit_count, args.unit_type, args.player,
+                args.keep_ownr,
+            )
             return 0
 
-        generate_map(args.template, args.output, args.unit_count, args.unit_type, args.player)
+        generate_map(
+            args.template, args.output, args.unit_count, args.unit_type, args.player,
+            args.grid_spacing, args.keep_ownr, args.clear_player_units,
+        )
         print(f"wrote {args.output}")
         if not args.no_validate:
-            validate_map(args.output, args.unit_count, args.unit_type, args.player)
+            validate_map(
+                args.output, args.unit_count, args.unit_type, args.player, args.keep_ownr
+            )
         return 0
     except (ValueError, FileNotFoundError, AssertionError) as exc:
         print(f"error: {exc}", file=sys.stderr)

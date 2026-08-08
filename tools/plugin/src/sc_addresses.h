@@ -79,6 +79,30 @@
 #define SC_CUNIT_OFF_UNIT_ID     0x64u   // u16 unit type id
 #define SC_CUNIT_OFF_UNIQUENESS  0xA5u   // u8, the tag's staleness check
 
+// u8 -- the unit's CURRENT (main) ORDER id, immediately after the owning player at 0x4C.
+// Derived by task 015 from the receive-side handlers in this binary, which read it to
+// avoid re-issuing an order a unit is already on: the 0x25 handler (0x004C1F10) issues
+// order 0x63 and skips a unit whose [+0x4D] is already 0x63; 0x26 (0x004C1E80) does the
+// same with 0x62; 0x2C (0x004C1FA0) with 0x74. The issue-order helper 0x004754F0
+// switches on it with order-shaped cases. THIS is the field that changes when a unit is
+// told to move, stop or hold.
+#define SC_CUNIT_OFF_ORDER_ID    0x4Du
+
+// u8 -- the SECONDARY order id, which runs alongside the main one. The 0x22 handler
+// (0x004C0660) sets it to 0x6E and clears the order-target fields beside it, and
+// 0x00491B30 (from the 0x21 handler) sets it to 0x6D after deducting the unit's energy --
+// a cloak, which is exactly the kind of thing that persists while a unit does something
+// else. Logged next to the main order so a command that changes only one of the two is
+// still visible.
+#define SC_CUNIT_OFF_ORDER2_ID   0xA6u
+
+// u32 -- unit flags. Bit 0x10 is the burrowed/submerged state: the Stop handler
+// (0x004C2190) refuses a unit with it set unless the unit's type is 0x67, the one type
+// that acts while burrowed, and the Right Click applier (0x004560D0) picks a different
+// behaviour table for exactly that combination. READ ONLY, same as the order id.
+#define SC_CUNIT_OFF_FLAGS       0xDCu
+#define SC_UNIT_FLAG_BURROWED    0x10u
+
 // ---------------------------------------------------------------------------
 // SELECTION CIRCLES -- derived by task 014 from StarCraft.exe 1.16.1 itself.
 // Full evidence, with disassembly, in research/selection-circles.md.

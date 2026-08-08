@@ -30,6 +30,13 @@ void ScFanoutRemove(void);
 // One line describing the current shadow list, for the observer's log.
 void ScFanoutLogState(void);
 
+// One line describing what the SHADOW UNITS ARE DOING: a histogram of their current
+// order ids and how many are in the burrowed/submerged state. This is the oracle for
+// "did the order actually reach all 36 of them" -- the log tells the test what every
+// unit's order byte is, so an unattended run can assert on all of them without seeing
+// the screen. `tag` is echoed into the line so a run can be read back case by case.
+void ScFanoutLogUnitStates(const char* tag);
+
 // One STATS line. Written on BOTH detach paths -- including process exit, where the
 // hooks are deliberately left spliced (the address space is going away) but the run's
 // counters are still the thing a reader needs.

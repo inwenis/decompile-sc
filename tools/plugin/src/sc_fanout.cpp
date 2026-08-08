@@ -41,7 +41,13 @@
 // ---------------------------------------------------------------------------
 
 #define SC_SHADOW_MAX       256   // wire ceiling is 255 units (count byte, unsigned)
-#define SC_MAX_ORDER_BYTES   32   // the longest order command in the table is 11B
+
+// The longest command in the fan-out set is 11 bytes (0x15, Targeted Order). That is not
+// a guess any more: research/data/command-opcodes.tsv carries the length the engine's own
+// receive dispatcher (0x004865D0) consumes for every opcode it accepts, cross-checked
+// against the command-length table at 0x005005F8, and the largest among the fan-out ids
+// is 0x0B. 32 leaves room without letting a malformed command through.
+#define SC_MAX_ORDER_BYTES   32
 
 // Default per-turn byte budget. The replay format prefixes each frame's command
 // block with a SINGLE byte (screp repparser.go:464-465), so everything every player
@@ -62,31 +68,86 @@ static void* Rt(DWORD staticVa) {
 // ---------------------------------------------------------------------------
 // Which commands get fanned out
 //
-// The default set is deliberately just TWO ids -- the only two whose payload layout
-// this project has read out of the binary instruction by instruction
-// (research/command-path.md 5). Between them they carry essentially everything a
-// player does to a group: move, attack, attack-move, patrol, gather, repair, and
-// every right-click.
+// ONE RULE, and it is a fact about the engine rather than a preference:
 //
-// research/command-path.md 6 lists all 51 command ids the binary emits, with their
-// lengths and emitter addresses -- but this task did NOT establish which id is
-// "Stop" and which is "Merge Archon", and fanning out a command whose meaning is
-// guessed is exactly how you get a plugin that quietly duplicates a build order.
-// %SCPLUGIN_FANOUT_CMDS% (space/comma separated hex) replaces the set once an id
-// has been identified; the plugin logs every id it sees, so identifying one costs a
-// single keypress in game.
+//     fan out a command  <=>  the engine's own handler for it applies it to EVERY
+//                             unit in the receiving player's selection, AND the
+//                             handler does not move the player's resources.
+//
+// The first half is why fan-out is semantics-preserving: for such a command the engine
+// already does the thing to all twelve units it holds, so replaying it against the units
+// the cap hid is the same operation over more units, not a new one. The second half is
+// the safety margin: minerals and gas are a player-global resource, and a command that
+// spends them is one the player issued once.
+//
+// Both halves are read out of this binary and tabulated per opcode in
+// research/data/command-opcodes.tsv (built by tools/ghidra/build-opcode-policy.ps1) and
+// written up in research/command-opcodes.md. `kOpcodes` below is that table's fan-out and
+// length columns, transcribed; nothing here is a guess about what an id "probably means".
+//
+// The sharp case is the SINGLE-gated commands -- Train, Build, Research and friends do
+// nothing at all unless EXACTLY ONE unit is selected. They look harmless to replay
+// precisely because they are inert at twelve, but a fan-out chunk can be one unit long,
+// so replaying one would make it fire where the player's own selection never could.
+// They are passthrough.
+//
+// %SCPLUGIN_FANOUT_CMDS% (space/comma separated hex) replaces the set; the length check
+// below still applies to whatever it names.
 // ---------------------------------------------------------------------------
+
+struct ScOpcode {
+    BYTE id;
+    signed char len;      // bytes the engine's dispatcher consumes; -1 = computed
+    bool fanout;          // the policy from research/data/command-opcodes.tsv
+};
+
+// Every opcode the receive dispatcher at 0x004865D0 accepts. Ids absent from this table
+// are not commands the engine takes, and an id whose length disagrees with the one here
+// is never fanned out (see ScFanoutOnCommand).
+static const ScOpcode kOpcodes[] = {
+    { 0x05, 1, false }, { 0x06, -1, false }, { 0x07, -1, false }, { 0x08, 1, false },
+    { 0x09, -1, false }, { 0x0A, -1, false }, { 0x0B, -1, false }, { 0x0C, 8, false },
+    { 0x0D, 3, false }, { 0x0E, 5, false }, { 0x0F, 2, false }, { 0x10, 1, false },
+    { 0x11, 1, false }, { 0x12, 5, false }, { 0x13, 3, false },
+    { 0x14, 10, true },   // Right Click        -- applier 0x004560D0 loops the selection
+    { 0x15, 11, true },   // Targeted Order     -- applier 0x0049AB00 loops the selection
+    { 0x18, 1, false },   // SINGLE-gated, and refunds through 0x00468280
+    { 0x19, 1, false },   // loops, but refunds through 0x00468280
+    { 0x1A, 2, true },    // Stop               -- named in game, key S
+    { 0x1B, 1, true }, { 0x1C, 1, true }, { 0x1D, 1, true }, { 0x1E, 2, true },
+    { 0x1F, 3, false },   // SINGLE-gated and spends resources through 0x00467250
+    { 0x20, 3, false },   // SINGLE-gated
+    { 0x21, 2, true }, { 0x22, 2, true },
+    { 0x23, 3, false },   // loops, but spends resources through 0x00467250
+    { 0x25, 2, true }, { 0x26, 2, true },
+    { 0x27, 1, false },   // loops, but spends resources through 0x00467250
+    { 0x28, 2, true }, { 0x29, 3, false }, { 0x2A, 1, true },
+    { 0x2B, 2, true },    // Hold Position      -- named in game, key H
+    { 0x2C, 2, true }, { 0x2D, 2, true }, { 0x2E, 1, true },
+    { 0x2F, 5, false }, { 0x30, 2, false }, { 0x31, 1, false }, { 0x32, 2, false },
+    { 0x33, 1, false }, { 0x34, 1, false },
+    { 0x35, 3, false },   // SINGLE-gated and spends resources through 0x00467250
+    { 0x36, 1, true }, { 0x37, 7, false }, { 0x38, 1, false }, { 0x39, 1, false },
+    { 0x3A, 2, false }, { 0x3B, 2, false }, { 0x55, 2, false }, { 0x56, 10, false },
+    { 0x57, 2, false }, { 0x58, 5, false }, { 0x5A, 1, true }, { 0x5C, 82, false },
+};
 
 static BYTE g_fanoutCmds[64];
 static int  g_fanoutCmdCount = 0;
 
+static const ScOpcode* FindOpcode(BYTE id) {
+    for (unsigned i = 0; i < sizeof(kOpcodes) / sizeof(kOpcodes[0]); ++i) {
+        if (kOpcodes[i].id == id) return &kOpcodes[i];
+    }
+    return NULL;
+}
+
 static void SetDefaultFanoutCmds(void) {
-    static const BYTE kDefault[] = {
-        SC_CMD_RIGHT_CLICK,     // 0x14, 10 bytes: x, y, targetTag, targetType, queued
-        SC_CMD_TARGETED_ORDER,  // 0x15, 11 bytes: the same plus an order id
-    };
-    memcpy(g_fanoutCmds, kDefault, sizeof(kDefault));
-    g_fanoutCmdCount = (int)sizeof(kDefault);
+    g_fanoutCmdCount = 0;
+    for (unsigned i = 0; i < sizeof(kOpcodes) / sizeof(kOpcodes[0]) &&
+                        g_fanoutCmdCount < (int)sizeof(g_fanoutCmds); ++i) {
+        if (kOpcodes[i].fanout) g_fanoutCmds[g_fanoutCmdCount++] = kOpcodes[i].id;
+    }
 }
 
 static void LoadFanoutCmds(void) {
@@ -384,7 +445,21 @@ bool ScFanoutOnCommand(const BYTE* buf, unsigned len) {
 
     const BYTE id = buf[0];
     ++g_statCommands;
-    if (g_verboseCmds) ScLog("CMD id=0x%02X len=%u", id, len);
+    if (g_verboseCmds) {
+        // The payload, not just the id. Two ids carry everything the command card can
+        // send -- 0x15 is Attack, Patrol and Move alike, told apart only by the order
+        // byte at offset 9 -- so an id-only log cannot say which button was pressed.
+        // research/command-opcodes.md 4 names ids from exactly these lines.
+        char hex[3 * 24 + 4];
+        unsigned show = len < 24 ? len : 24;
+        unsigned used = 0;
+        for (unsigned i = 0; i < show; ++i) {
+            used += (unsigned)_snprintf(hex + used, sizeof(hex) - used, "%s%02X",
+                                        i ? " " : "", buf[i]);
+        }
+        if (show < len) _snprintf(hex + used, sizeof(hex) - used, " ...");
+        ScLog("CMD id=0x%02X len=%u bytes=[%s]", id, len, hex);
+    }
 
     InterlockedExchange(&g_inFanout, 1);
     EnterCriticalSection(&g_lock);
@@ -406,9 +481,20 @@ bool ScFanoutOnCommand(const BYTE* buf, unsigned len) {
         g_shadowCount > SC_SELECTION_SLOTS &&
         g_visibleCount > 0 &&
         len <= SC_MAX_ORDER_BYTES) {
-        // Suppress only if at least one Select+order pair really went out; the
-        // first pair already carried this exact order.
-        suppress = StartFanout(buf, (int)len);
+        // The length the ENGINE will consume for this id, from its own dispatcher. A
+        // command whose length disagrees is not the command this id is supposed to be:
+        // replaying it would hand the receive loop a byte count it did not expect and
+        // desynchronise everything behind it in the same turn buffer. Refuse and let the
+        // engine's own command through untouched.
+        const ScOpcode* op = FindOpcode(id);
+        if (!op || op->len < 0 || (unsigned)op->len != len) {
+            ScLog("FANOUT refused: cmd 0x%02X arrived with len=%u, the dispatcher consumes "
+                  "%d -- passing it through untouched", id, len, op ? op->len : -1);
+        } else {
+            // Suppress only if at least one Select+order pair really went out; the
+            // first pair already carried this exact order.
+            suppress = StartFanout(buf, (int)len);
+        }
     }
 
     LeaveCriticalSection(&g_lock);
@@ -788,6 +874,75 @@ void ScFanoutLogStats(void) {
           ScModeName(g_mode), g_statCommands, g_statSelects, g_statOverflow,
           g_statFanouts, g_statPairs, g_statDeferred, g_statStale);
     ScCirclesLogStats();
+}
+
+// The oracle for "did the order reach every unit". Walks the shadow list -- which is the
+// whole pre-cap selection, not the twelve the engine holds -- and reports what each unit
+// is actually doing, as a histogram so one line covers any group size.
+//
+// READS ONLY. It runs on the observer thread, not the game thread, so it must not touch
+// anything the game could be mid-write on: the two fields it reads are single bytes/dwords
+// of unit state, and a torn read would at worst mis-bucket one unit in one line. Nothing
+// here is on the game's own code path.
+void ScFanoutLogUnitStates(const char* tag) {
+    if (g_mode == SC_MODE_OBSERVE) return;
+    if (!g_lockInit) return;
+
+    EnterCriticalSection(&g_lock);
+
+    WORD     orderKey[32], order2Key[32], typeKey[32];
+    unsigned orderCnt[32], order2Cnt[32], typeCnt[32];
+    int      orderN = 0, order2N = 0, typeN = 0;
+    int      live = 0, burrowed = 0;
+    int      orderOverflow = 0, order2Overflow = 0, typeOverflow = 0;
+
+    // One accumulator, used twice: histogram `key` into (keys, counts, n).
+    struct Hist {
+        static void Add(WORD key, WORD* keys, unsigned* counts, int* n, int cap, int* overflow) {
+            for (int j = 0; j < *n; ++j) if (keys[j] == key) { ++counts[j]; return; }
+            if (*n >= cap) { ++*overflow; return; }
+            keys[*n] = key;
+            counts[*n] = 1;
+            ++*n;
+        }
+        static int Format(char* out, int cap, const WORD* keys, const unsigned* counts, int n) {
+            int used = 0;
+            out[0] = '\0';
+            for (int j = 0; j < n && used + 14 < cap; ++j) {
+                used += _snprintf(out + used, (size_t)(cap - used), "%s0x%02X:%u",
+                                  j ? " " : "", keys[j], counts[j]);
+            }
+            return used;
+        }
+    };
+
+    for (int i = 0; i < g_shadowCount; ++i) {
+        if (!StillAlive(&g_shadow[i])) continue;
+        ++live;
+        DWORD flags = *(DWORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_FLAGS);
+        if (flags & SC_UNIT_FLAG_BURROWED) ++burrowed;
+        Hist::Add(*(BYTE*)(g_shadow[i].ptr + SC_CUNIT_OFF_ORDER_ID),
+                  orderKey, orderCnt, &orderN, 32, &orderOverflow);
+        Hist::Add(*(BYTE*)(g_shadow[i].ptr + SC_CUNIT_OFF_ORDER2_ID),
+                  order2Key, order2Cnt, &order2N, 32, &order2Overflow);
+        Hist::Add(*(WORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_UNIT_ID),
+                  typeKey, typeCnt, &typeN, 32, &typeOverflow);
+    }
+
+    char orders[256], orders2[256], types[256];
+    int used = Hist::Format(orders, (int)sizeof(orders), orderKey, orderCnt, orderN);
+    if (orderOverflow) _snprintf(orders + used, sizeof(orders) - used, " +%d-more", orderOverflow);
+    used = Hist::Format(orders2, (int)sizeof(orders2), order2Key, order2Cnt, order2N);
+    if (order2Overflow) _snprintf(orders2 + used, sizeof(orders2) - used, " +%d-more", order2Overflow);
+    used = Hist::Format(types, (int)sizeof(types), typeKey, typeCnt, typeN);
+    if (typeOverflow) _snprintf(types + used, sizeof(types) - used, " +%d-more", typeOverflow);
+
+    ScLog("UNITSTATE [%s] n=%d live=%d visible=%d overflow=%d orders=[%s] orders2=[%s] "
+          "types=[%s] burrowed=%d/%d",
+          tag ? tag : "-", g_shadowCount, live, g_visibleCount,
+          g_shadowCount - g_visibleCount, orders, orders2, types, burrowed, live);
+
+    LeaveCriticalSection(&g_lock);
 }
 
 void ScFanoutLogState(void) {
