@@ -272,8 +272,10 @@ static void LogCirclePositions(void) {
         if (!Readable(s, SC_CSPRITE_SIZE)) continue;
         const int x = (int)*(WORD*)(s + SC_CSPRITE_OFF_POS_X) - left;
         const int y = (int)*(WORD*)(s + SC_CSPRITE_OFF_POS_Y) - top;
-        // Off-screen units are useless to a test and would only be noise.
-        if (x < 0 || y < 0 || x > 640 || y > 480) continue;
+        // Off-screen units are useless to a test and would only be noise. The client is
+        // 640x480, so 640 and 480 are the first coordinates OUTSIDE it -- an inclusive
+        // bound here would hand a test a point one pixel off the window.
+        if (x < 0 || y < 0 || x >= 640 || y >= 480) continue;
         const int room = (int)sizeof(buf) - used;
         if (room < 24) { break; }
         used += _snprintf(buf + used, (size_t)room, "%s%d,%d", listed ? " " : "", x, y);

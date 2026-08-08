@@ -13,23 +13,45 @@
 // reimplement anything: it calls the engine's own attach (0x004D7070) and remove
 // (0x004975D0) primitives on the units the cap threw away.
 //
-// THREADING. Every entry point below is GAME-THREAD ONLY: they are reached from the
-// 0x0049AE40 detour and from sc_fanout's CMDACT_Select detour, both of which the game
-// calls on its own thread. Nothing here takes a lock, and nothing may be called from
-// the observer thread or from DllMain -- 0x004975D0 mutates the sprite overlay list
-// and the image free list, which the game thread walks to render every frame.
+// THREADING, precisely -- the entry points below are NOT all the same:
+//
+//   ScCirclesShow / ScCirclesHide            GAME THREAD ONLY. These are the only two
+//   (and ScCirclesOnSelectionChange, which   that call into the engine (0x004D7070 /
+//    is the hook that calls Hide)            0x004975D0), and those mutate the sprite
+//                                            overlay list and the image free list --
+//                                            the same lists the game thread walks to
+//                                            render every frame. Nothing here takes a
+//                                            lock, so a second caller is a data race.
+//                                            Reached only from the 0x0049AE40 detour
+//                                            and sc_fanout's CMDACT_Select detour.
+//
+//   ScCirclesInit / ScCirclesInstallHook     Plugin globals and ScHookInstall only; no
+//                                            engine call. Run from DLL_PROCESS_ATTACH.
+//
+//   ScCirclesRemoveHook                      Un-splices only. Run from DLL_PROCESS_DETACH
+//                                            under ScHookSuspendThreads.
+//
+//   ScCirclesCount / ScCirclesLogStats       Read plugin globals; no engine call.
+//
+// The rule that matters: never call Show or Hide from anywhere but the game's own
+// thread. That is why ScFanoutRemove does NOT take the circles off on unload, and why
+// unloading mid-game is unsupported (tools/plugin/README.md, off switch 3).
 //
 // WHAT THIS MODULE DELIBERATELY DOES NOT DO -- and why it is the whole point:
 //
 //   It never sets sprite flag 0x08 ("selected") and never writes
 //   CSprite::selectionIndex (sprite+0x0B).
 //
-// FOUR instructions in the binary read selectionIndex -- 0x0046FD77 (click handler),
-// 0x0049F7B3 (remove one unit from the client selection), 0x0049F00B (change a unit's
-// owner) and 0x0049F8B6 (rebuild a unit's sprite); the full table is in
-// research/selection-circles.md 4.1. Every one of them is reached only when the unit's
-// sprite has flag 0x08 set, and every one uses the value as a memmove offset into a
-// 12-entry stack array:
+// FOUR instructions in the binary read selectionIndex, and every one of them is reached
+// only when the unit's sprite has flag 0x08 set (full table:
+// research/selection-circles.md 4.1):
+//
+//   0x0046FD77  click handler                   ) use it as a memmove offset into a
+//   0x0049F7B3  remove one unit from the client )  12-entry STACK array
+//   0x0049F00B  change a unit's owner           ) save it, detach, re-attach with
+//   0x0049F8B6  rebuild a unit's sprite         )  0x004E6180(saved)
+//
+// The first two are the dangerous ones: the memmove is
 //
 //     n = <units in activePlayerSelection, at most 12>
 //     if (clicked->sprite->flags & 8) {

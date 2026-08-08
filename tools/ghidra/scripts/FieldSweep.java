@@ -27,7 +27,8 @@
 //   1: output TSV path (its .manifest is the run's success signal)
 //   2: displacement, hex (e.g. 0xB)
 //   3: optional access filter -- "read", "write" or "any" (default any). An instruction that both
-//      reads and writes the field (e.g. `OR byte ptr [ESI+0xe],BL`) matches BOTH filters.
+//      reads and writes the field (e.g. `OR byte ptr [ESI+0xe],BL`) matches BOTH filters, and one
+//      Ghidra could not classify (access "?") matches EVERY filter rather than being dropped.
 //
 //@category Headless
 
@@ -107,20 +108,20 @@ public class FieldSweep extends GhidraScript {
                     RefType rt = insn.getOperandRefType(op);
                     boolean reads = rt != null && rt.isRead();
                     boolean writes = rt != null && rt.isWrite();
-                    if (rt == null) {
-                        // No reference type recorded -- fall back to "it is a memory operand, so
-                        // it is at least read" rather than dropping the row silently.
-                        reads = true;
-                    }
-                    String access = (reads ? "r" : "") + (writes ? "w" : "");
-                    if (access.isEmpty()) {
-                        access = "?";
-                    }
-                    if ("write".equals(mode) && !writes) {
-                        continue;
-                    }
-                    if ("read".equals(mode) && !reads) {
-                        continue;
+                    // UNKNOWN means Ghidra recorded no usable classification -- either no RefType
+                    // at all, or a non-null one that claims neither (RefType.INVALID does exactly
+                    // that). Such a row must never be filtered out by EITHER mode: dropping rows
+                    // a classifier could not classify is the same silent under-reporting the
+                    // position-based version had, just from a different direction.
+                    final boolean unknown = !reads && !writes;
+                    String access = unknown ? "?" : ((reads ? "r" : "") + (writes ? "w" : ""));
+                    if (!unknown) {
+                        if ("write".equals(mode) && !writes) {
+                            continue;
+                        }
+                        if ("read".equals(mode) && !reads) {
+                            continue;
+                        }
                     }
 
                     Address a = insn.getAddress();

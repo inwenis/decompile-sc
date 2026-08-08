@@ -241,13 +241,24 @@ try {
         # "either branch is fine": our sprites never carry flag 0x08, so the engine
         # takes its add-to-selection branch, finds the selection already holds 12, and
         # returns -- no selection change, and no selection command on the wire.
-        if ($NoCircles -or -not $script:shadowXY -or $script:shadowXY.Count -eq 0) {
-            Write-Host '       (skipped: no shadow circle positions available)'
+        if ($NoCircles) {
+            Write-Host '       (skipped: circles are off in this run)'
             return
         }
-        # Pick one clear of the HUD, which starts around y=350 at 640x480.
+        if (-not $script:shadowXY -or $script:shadowXY.Count -eq 0) {
+            Assert-That 'shadow circle positions were available to aim at' $false
+            return
+        }
+        # Must be clear of the HUD, which starts around y=350 at 640x480. There is no
+        # fallback to "aim at it anyway": a click behind the HUD hits nothing, and
+        # "nothing happened" is exactly what this step asserts -- so the fallback would
+        # be a guaranteed vacuous pass. No usable target is a FAILURE, not a shrug.
         $target = $script:shadowXY | Where-Object { $_.Y -lt 340 -and $_.Y -gt 10 } | Select-Object -First 1
-        if (-not $target) { $target = $script:shadowXY[0] }
+        if (-not $target) {
+            Assert-That 'at least one shadow circle is on the battlefield, not behind the HUD' $false `
+                "(all $($script:shadowXY.Count) reported positions were outside y=10..340)"
+            return
+        }
 
         $mark = Get-ScLogLineCount -LogPath $LogPath
         $selBefore = @(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'SEL count=(\d+)')
@@ -316,18 +327,34 @@ try {
         Shot 'after-order'
     }
 }
+catch {
+    # A step that throws is a failed run, not an aborted one. Recording it here instead
+    # of letting it propagate is what keeps the post-mortem below reachable -- the
+    # after-close hash, the stranded-process check and the circle accounting are the
+    # assertions for hard rule 3 and "never leave a game running", and those matter MOST
+    # on the runs that went wrong.
+    Write-Host "  FAIL a test step threw: $($_.Exception.Message)"
+    Write-Host "       $($_.ScriptStackTrace)"
+    $failures++
+}
 finally {
     # -ProcessId, always. close-game.ps1 resolving the game by NAME throws whenever any
-    # other StarCraft is running -- including the user's own playable install -- and a
-    # throw in a finally block replaces whatever real failure sent us here. It also
-    # closes the wrong game.
+    # other StarCraft is running -- including the user's own playable install -- and it
+    # would close the wrong game.
     if (-not $KeepOpen -and $gamePid -gt 0) {
         try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | Write-Host }
-        catch { Write-Host "  WARN close-game failed: $($_.Exception.Message)" }
+        catch {
+            # close-game escalates to Stop-Process and throws only when the game is
+            # STILL alive afterwards. That is a stranded game process -- the one thing
+            # the hard rule forbids -- so it fails the run rather than warning about it.
+            Write-Host "  FAIL close-game could not shut the game down: $($_.Exception.Message)"
+            $failures++
+        }
         Start-Sleep -Seconds 2
     }
     elseif (-not $KeepOpen) {
-        Write-Host '  WARN no pid was ever parsed -- nothing to close'
+        Write-Host '  FAIL no pid was ever parsed, so nothing could be closed'
+        $failures++
     }
 }
 

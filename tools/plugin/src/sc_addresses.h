@@ -113,11 +113,12 @@
 //   0x01 -- a selection-circle image (id 0x231..0x23A) is attached to this sprite.
 //           0x004975D0 clears exactly this bit and frees exactly that image.
 //   0x08 -- "selected". 0x004E6180 sets it together with selectionIndex; 0x00497620
-//           clears it. IT IS THE GATE ON ALL FOUR selectionIndex READS IN THE BINARY
-//           (0x0046FD77, 0x0049F7B3, 0x0049F00B, 0x0049F8B6), every one of which uses
-//           the value as a memmove offset into a 12-entry stack array -- which is why
-//           this plugin never sets it. Table and reasoning:
-//           research/selection-circles.md 4.
+//           clears it. IT IS THE GATE ON ALL FOUR selectionIndex READS IN THE BINARY:
+//           0x0046FD77 and 0x0049F7B3 use the value as a memmove offset into a 12-entry
+//           STACK array (no value is safe there for a unit outside the engine's 12),
+//           while 0x0049F00B and 0x0049F8B6 save it and re-attach with
+//           0x004E6180(saved). Leaving this bit clear is what puts our units out of
+//           reach of all four. Table and reasoning: research/selection-circles.md 4.
 #define SC_SPRITE_FLAG_SEL_CIRCLE 0x01u
 #define SC_SPRITE_FLAG_SELECTED   0x08u
 

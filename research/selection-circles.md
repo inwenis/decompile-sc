@@ -198,14 +198,22 @@ instruction whose operand is `[reg + 0x0B]` — a struct field has no address, s
 see it. That returns **94 candidate operands** (`work/scratch/selgfx6/disp0b.tsv`; 50 reads, 39
 writes, the rest address-only `LEA`). They break down as:
 
-| Bucket | Count | How it was dismissed |
-|---|---|---|
-| `[EBP + 0xB]` | 38 | a frame-pointer-relative byte is a stack local, not a struct field |
-| the image module, `0x004D5xxx`–`0x004D7xxx` | 24 | `CImage` also has a byte at `0x0B` (`direction`); these are all image-list code |
-| named CRT functions | 5 | `___sbh_alloc_block`, `__ismbcspace`, … |
-| `word ptr [reg + 0xB]` | 6 | 16-bit, so not this byte field at all |
-| `LEA` | 5 | computes an address, does not access the field |
-| **everything else** | **24** | **decompiled and read, one function at a time** |
+They partition — each row takes only what the rows above it did not, so the counts add to 94 exactly:
+
+| # | Bucket | Count | How it was dismissed |
+|---|---|---|---|
+| 1 | `[EBP + 0xB]` | 38 | a frame-pointer-relative byte is a stack local, not a struct field. (This bucket absorbs the 5 named CRT rows — `___sbh_alloc_block`, `__ismbcspace`, … — which are all EBP-relative too) |
+| 2 | the image module, `0x004D5xxx`–`0x004D7xxx` | 24 | `CImage` also has a byte at `0x0B` (`direction`); these are all image-list code |
+| 3 | `word ptr [reg + 0xB]` | 6 | 16-bit, so not this byte field at all |
+| 4 | `LEA` | 2 | computes an address rather than accessing the field — **both read anyway**, see below |
+| 5 | **everything else** | **24** | **decompiled and read, one function at a time** |
+| | | **94** | |
+
+Row 4 is only two rows, and leaving them merely "dismissed" would be having it both ways: this
+document calls address arithmetic the sweep's blind spot, so a visible instance of it has to be
+looked at. `FUN_00490FE0` (`LEA ECX,[EDX+0xb]`) is fog-of-war/vision state around `DAT_0057F0B0`;
+`FUN_004A2D60` (`LEA EDX,[EAX+EDX*1+0xb]`) walks the structure at `DAT_006D5BC4`. Neither has a
+`CSprite` anywhere in it (round 9, `work/scratch/selgfx9/`).
 
 All 24 of the last row are accounted for. Nine of them were missed by the first draft of this
 document and are the subject of round 6
@@ -238,11 +246,15 @@ here — the sprite writes are as few as the reads and sit in one function, and 
 are exactly the four operations that can move a unit out of a selection — but the negative is
 **unfalsified, not proven**.
 
-> **The read/write classifier was wrong in the first draft** and is worth knowing about if you reuse
-> the tool. It keyed off operand *position* ("operand 0 is the destination"), which silently dropped
-> `TEST byte ptr [EDI+0xb],0x1` and `CMP byte ptr [ESI+0xb],0x7` — reads written in destination
-> position, i.e. exactly the shape this sweep exists to find. `FieldSweep.java` now classifies from
-> Ghidra's own operand reference type and emits an `access` column (`r`, `w`, `rw`).
+> **The read/write classifier was wrong twice, and both failures were the same class: silently
+> dropping rows.** It first keyed off operand *position* ("operand 0 is the destination"), which
+> dropped `TEST byte ptr [EDI+0xb],0x1` and `CMP byte ptr [ESI+0xb],0x7` — reads written in
+> destination position, i.e. exactly the shape this sweep exists to find. The fix classified from
+> Ghidra's operand reference type, but then dropped any row whose type claimed *neither* read nor
+> write. On this displacement that is 5 rows, all `LEA`. `FieldSweep.java` now emits an `access`
+> column (`r`, `w`, `rw`, `?`) and a `?` row passes **every** filter rather than none: `-read` on
+> `0xB` returns 55 rows = 50 reads + those 5. A sweep that quietly under-reports is worse than no
+> sweep, because the result still looks like an answer.
 
 ### 4.2 There is no safe value
 
@@ -324,26 +336,59 @@ else covers it.
 unit->uniqueness = (unit->uniqueness + 1) & 0x1F;
 ```
 
-and it lives inside `0x004A0320`, which is unit **creation** — the function that clears the whole
-`CUnit`, links it into `playerUnitList[player]` (`0x006283F8`) and gives it a sprite. (FieldSweep at
-displacement `0xA5`, write mode: one row, `work/scratch/selgfx6/dispA5.tsv`. The 5-bit mask is also
-why the wire tag packs as `(uniqueness << 11) | index` — 5 + 11 = 16.)
+and it lives inside `0x004A0320`, which is unit **initialisation on (re)use** — it resets the
+CUnit's fields one by one, links the unit into `playerUnitList[player]` (`0x006283F8`) and gives it a
+sprite. Note it *does not* zero the struct wholesale: `+0xA5` is read-modify-written by the line
+above, which is the only reason the counter carries information at all. (FieldSweep at displacement
+`0xA5`, write mode: one row, `work/scratch/selgfx6/dispA5.tsv`. The 5-bit mask is also why the wire
+tag packs as `(uniqueness << 11) | index` — 5 + 11 = 16.)
 
 **So death does not bump it. Slot REUSE does.** A unit that has died but whose slot has not been
 recycled still carries its old uniqueness byte, and the uniqueness guard would not fire.
 
-What closes the window instead is the engine itself. `0x004A0740`, the unit-removal path, ends with:
+What closes the window instead is the engine itself. `0x004A0740`, the unit-removal path, ends with
+this — **inside a guard**, which the first draft of this section wrongly quoted as unconditional:
 
 ```c
-FUN_0049A7F0();     // drop the unit from every player's selection
-FUN_0049F7A0();     // drop it from the CLIENT selection   (guarded by sprite flag 0x08)
-FUN_004975D0();     // <<-- REMOVE THE SELECTION CIRCLE     (guarded by sprite flag 0x01 only)
+if (FUN_004A0080() == 0) {                   // <-- the gate; see below
+    ...
+    FUN_0049A7F0();     // drop the unit from all 8 players' selections, and take off the
+                        //   dashed/allied circles (ids 0x23B..0x244)
+    FUN_0049F7A0();     // drop it from the CLIENT selection   (guarded by sprite flag 0x08)
+    FUN_004975D0();     // <<-- REMOVE THE SELECTION CIRCLE     (guarded by sprite flag 0x01 only)
+    ...
+}
 ```
+
+`0x0049A7F0` is a loop `for (player = 0; player < 8; ++player) FUN_0049A170(player)` —
+`removeUnitFromPlayerSelection`, the function §3 already quotes — followed by a walk of the sprite's
+overlay list freeing any image in `0x23B..0x244` and clearing flag bits `0x06`. That both justifies
+the label and independently confirms the dashed-circle image base `0x23B` seen in `0x0049F860`
+(§4.4).
 
 `0x004975D0` is the same primitive the plugin uses, and it does **not** consult flag `0x08` — so the
 engine takes *our* circle off too, frees the image, and clears flag `0x01`. A later `ScCirclesHide`
 then sees flag `0x01` clear, skips the unit, and counts it in `lost`. No double free, no orphaned
 circle, and the counter is the observable.
+
+**The gate, and why it does not break the argument.** `FUN_004A0080` returns non-zero — skipping the
+whole tail — in exactly two cases:
+
+1. the unit's type carries units.dat flag `0x10` (**Subunit**: turrets). It is unlinked from the
+   player's unit list and returns 1.
+2. the unit is *not* hidden (`sprite->flags & 0x20` clear) **and** its type is `0x6E`, `0x95` or
+   `0x9D` — the three gas buildings. They are not removed at all; they are morphed into type `0xBC`
+   and reassigned to player `0x0B`, i.e. a destroyed refinery reverting to a neutral vespene geyser.
+
+Neither can be a shadow-circled unit. Subunits are filtered out of selection candidates
+(`unit_isUnselectable` / `unit_IsStandardAndMovable`, [`selection-cap.md` §4.1](selection-cap.md)),
+and `0x0049AE40` substitutes `unit+0x70` for a `0x10`-flagged entry before the selection is ever
+committed; buildings can only be selected one at a time, so a gas building cannot be in a >12 box
+selection. A hidden unit falls through the gate and the tail runs normally.
+
+So the self-heal holds for every unit that can carry one of our circles — but it holds *because of
+those filters*, not because the tail is unconditional. If a future change ever lets a subunit into
+the shadow list, this is the paragraph that stops being true.
 
 The guards therefore do close the window, but the load-bearing one is the **flag `0x01` check**, not
 the uniqueness check. Uniqueness earns its place for the *other* case: a recycled slot, where
