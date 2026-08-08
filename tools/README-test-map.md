@@ -12,6 +12,10 @@ big group and issue one order in a couple of seconds.
 - Single player only: the chosen player's OWNR slot becomes `HUMAN` (open
   slot), exactly one other slot becomes a unit-less `COMPUTER`, every other
   slot is forced to `INACTIVE`. Nothing hostile is on the map.
+- Unless `-EnemyCount` is passed (task 019), which gives that computer slot a
+  block of units a documented distance away, so a test can walk the player's
+  group into it and prove what the plugin does when a selected unit DIES. See
+  "Combat variant" below. Without the flag the output is unchanged.
 - The chosen player's race (`SIDE`) is written explicitly, the "randomize start
   location" bit is cleared from every force (`FORC`), and the map's triggers
   (`TRIG`/`MBRF`) are removed. Those three are what make the result actually
@@ -108,12 +112,28 @@ With parameters:
 | `-ClearPlayerUnits` | off                                                    | drop the target player's existing units first, so the placed group is all one type |
 | `-KeepTriggers` | off                                                        | keep the template's `TRIG`/`MBRF`. **Never for a fixture** — a stock map's own triggers end the game within seconds of loading |
 | `-Race`        | the placed unit type's race                                 | `zerg`/`terran`/`protoss`, written into `SIDE` for the human and computer slots |
+| `-UnitHp`      | `100`                                                       | hit points for the placed units, as a **percentage** of the type's maximum (1-100). Lower makes the combat variant's victims die in seconds instead of minutes |
 | `-TemplatePath`| `C:\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx` | source map for terrain/start location |
 | `-OutputPath`  | `C:\sc-work\1161-base\Maps\test-many-units.scx`            | where the generated map is written    |
 
+Combat variant (task 019) — off unless `-EnemyCount` is given:
+
+| Param            | Default      | Meaning                                                     |
+| ---------------- | ------------ | ----------------------------------------------------------- |
+| `-EnemyCount`    | `0`          | COMPUTER-owned units to place. `0` keeps the hostility-free map tasks 015-017 use |
+| `-EnemyType`     | `hydralisk`  | same name table as `-UnitType`, or a raw units.dat id       |
+| `-EnemyOffsetX`  | `448`        | map pixels east of the player's start location for the enemy block's centre (14 tiles) |
+| `-EnemyOffsetY`  | `0`          | map pixels south of it                                      |
+| `-EnemySpacing`  | `48`         | pixels between enemy units                                  |
+| `-EnemyRace`     | the enemy type's race | written into `SIDE` for the computer slot           |
+| `-EnemyOwner`    | `computer`   | `player` instead builds the **placement probe**: identical unit types at identical coordinates, owned by the human, so a test can box them and count them in-process |
+| `-MinEnemyGap`   | `256`        | refuse an enemy block closer than this to the player's block |
+
 The `.ps1` is a thin wrapper; the actual logic is `tools/make_test_map.py`
 (same params as `--unit-count`/`--unit-type`/`--player`/`--grid-spacing`/
-`--keep-ownr`/`--clear-player-units`/`--keep-triggers`/`--race`/`--template`/
+`--keep-ownr`/`--clear-player-units`/`--keep-triggers`/`--race`/`--unit-hp`/
+`--enemy-count`/`--enemy-type`/`--enemy-offset-x`/`--enemy-offset-y`/
+`--enemy-spacing`/`--enemy-race`/`--enemy-owner`/`--min-enemy-gap`/`--template`/
 `--output`, plus `--validate-only PATH` to just re-validate an existing map and
 `--no-validate` to skip the post-generation check).
 
@@ -162,14 +182,25 @@ section other than the ones it meant to change. Example output:
 ```
 wrote C:\sc-work\1161-base\Maps\BroodWar\00-testmap\lurkers.scx
 OK: C:\sc-work\1161-base\Maps\BroodWar\00-testmap\lurkers.scx
-  36 unit(s) of type 103 owned by player 0
+  36 unit(s) of type 103 owned by player 0, at 100% hit points
   start location for player 0 at (864, 624)
-  OWNR[0] = HUMAN(open slot); one unit-less computer slot at 1
+  OWNR[0] = HUMAN(open slot); one computer slot at 1 owning 0 unit(s) -- nothing hostile in the game
   SIDE[0] = Zerg -- not 'User Selectable', so the engine adds no melee starting units
   FORC force flags 0x00 0x00 0x00 0x00 -- no force randomises start locations, so the human is always player 0
   TRIG holds 0 byte(s) -- nothing can end the game on its own
   terrain 128x96 tiles
   differs from the template ONLY in: OWNR SIDE UNIT TRIG FORC
+```
+
+With `-EnemyCount` the same pass also reports the enemy block, the player block, and
+the gap between them, and refuses the map if that gap is under `-MinEnemyGap`:
+
+```
+  36 unit(s) of type 103 owned by player 0, at 30% hit points
+  OWNR[0] = HUMAN(open slot); one computer slot at 1 owning 6 unit(s)
+  ENEMY 6 unit(s) of type 38 owned by slot 1 (computer), spanning (1264,600)-(1360,648) px
+        the player's block spans (784,544)-(944,704) px; the two are at least 320px (10.0 tiles) apart
+        offset from the start location: (+448, +0) px
 ```
 
 Every one of those assertions except the last is still only *structural*, and
@@ -178,6 +209,120 @@ game accepts and plays the file is `tools/plugin/test-burrow-fanout.ps1`: it
 generates a map with this tool, loads it unattended, and reads back from inside
 the process that the 36 placed units are the units that exist, that the mission
 is still running two minutes later, and that one keypress burrows all 36.
+
+For the combat variant the same job is done by
+`tools/plugin/test-combat-death.ps1`, which additionally reads back the ENEMY
+block's own spawn in-process (via the placement probe below) and proves the map
+does not end itself when units are lost.
+
+## Combat variant — an enemy force that can kill our units on demand (task 019)
+
+Every fixture up to task 018 was **combat-less by design**, and that was the whole
+problem: the plugin's died-while-displayed paths (the circles module's staleness
+guards, the HUD row's liveness term and click gate) could only ever be exercised
+offline, in `hooktest`. `-EnemyCount` adds a second, COMPUTER-owned block of units so
+a test can walk the player's group into it and get one killed for real.
+
+```powershell
+./tools/make-test-map.ps1 -UnitCount 36 -UnitType lurker -UnitHp 30 `
+    -EnemyCount 6 -EnemyType hydralisk -OutputPath ...\combat.scx
+```
+
+### How the enemy is made to fight: nothing. That is the finding.
+
+The task offered three ways to get a computer force to attack — a melee AI flag, a
+synthesised `TRIG` that orders it, or unit types that attack on sight. It is the
+third, and it needs **no new CHK section at all**: preplaced units on a computer slot
+sit on their default order and shoot whatever walks into range. `TRIG` stays empty,
+which is what keeps task 016's no-auto-end property intact.
+
+That is a behavioural claim, so it is asserted in game, not argued.
+`tools/plugin/test-combat-death.ps1` boxes the 36 Lurkers, right-clicks a move order
+into the Hydralisk block, and reads back from inside the process that the player's
+units start dying — while the same run asserts that **nothing** happens for the
+twenty seconds before that order (the map still idles; see below).
+
+Two CHK-level choices support it, and both are refusals rather than rewrites:
+
+- **The two slots must not be allied.** `FORC`'s first eight bytes assign each slot to
+  a force and bit `0x02` of a force's flag byte is "allied" (staredit.net CHK spec,
+  the same source as the `0x01` random-start bit above). Allied units never shoot each
+  other, so a combat map generated from a template whose two slots share an allied
+  force is **refused**, in the generator and again in the validator. The documented
+  ladder template passes: its Force 1 flag byte is `0x01`, which becomes `0x00` once
+  the random-start bit is cleared.
+- **The computer slot gets the enemy type's race** in `SIDE`, instead of the player's.
+  Nothing observed says a Zerg slot cannot own Terran units under Use Map Settings,
+  but a slot whose race matches what it owns is what every stock map does.
+
+### Where the enemy goes, and why there
+
+The block's centre defaults to **+448 map pixels (14 tiles) due east** of the player's
+start location, and the generator refuses anything that leaves under 256px between the
+two blocks' bounding boxes. Both numbers come from the 640x480 screen, not from taste:
+
+- the camera opens centred on the start location and **never moves on its own**, so a
+  right-click at client x is a move order to `start.x + x - 320` map pixels — a
+  destination past about +310px cannot be clicked at all;
+- so the enemy must be close enough for one right-click near the right-hand edge to
+  put the player's block on top of it, and far enough that nothing is in anyone's
+  acquisition range while the test is still boxing units.
+
+The geometry is only geometry. The property that matters — *nothing engages until the
+test says so* — is asserted in game: 36 units boxed, all alive, twenty seconds later
+still 36 with no row line reporting a loss.
+
+### Proving the enemy block actually spawns: `-EnemyOwner player`
+
+The human slot's units can be counted in-process by boxing them. The computer's
+cannot: a drag box does not pick up hostile units, and the enemy block is off screen
+from the opening camera position. So the same generator builds a **placement probe** —
+`-EnemyOwner player` puts the identical unit type, count and coordinates on the human
+slot instead — and the test centres the view on it with a **minimap click**
+(`Get-ScMinimapPoint` in `tools/plugin/drive-game.ps1`) and boxes it.
+
+Result, read out of the process on 2026-08-08: `UNITSTATE n=6 types=[0x26:6]` — six
+Hydralisks (units.dat 38), and nothing else, at the coordinates the file places them.
+The combat map is then asserted to place the same type, the same count and the same
+pixel rectangle, differing only in which slot owns them.
+
+The minimap mapping itself was calibrated the same way rather than assumed: the
+minimap box is 128x128 client pixels at (7, 348) and a map of W x H tiles is drawn one
+pixel per tile, centred in it. Nine origin candidates were scanned in game; only that
+one selects exactly the six placed units for every x tried, and a click four pixels
+higher puts only three of them on screen.
+
+### `-UnitHp`: why the victims are on 30% health
+
+The `hp` byte at offset 0x19 of a UNIT record is a **percentage** of the unit type's
+maximum (1-100, staredit.net CHK spec), and it applies because bit `0x02` of the
+valid-properties mask at 0x0E is set — which it has been since task 009, with every
+fixture written at 100. A full-health 125-point Lurker absorbs about twenty Hydralisk
+shots, and the first death took roughly two minutes; the whole test took eleven.
+
+At `-UnitHp 30` the first death arrives in about ten seconds and the test runs in
+about four and a half minutes, with nothing else about the fixture changed: same unit
+type, same evidence, same inability to shoot back. The effect is asserted rather than
+assumed — the test fails if the first death takes longer than its deadline, which at
+full health it always would.
+
+### Why the player's units are Lurkers — two reasons, both load-bearing
+
+An **unburrowed Lurker has no weapon at all** (its only attack is a burrowed-only
+weapon), so the enemy force survives the engagement. The deaths therefore arrive as a
+steady trickle instead of being decided by which side wins a fight, and the boxed
+group stays over the 12-unit cap — the only state in which the HUD-row assertion means
+anything. It is also the unit type tasks 015-017 already use, so the fixture is the
+one those suites are written against.
+
+And a **burrowed** Lurker cannot be targeted by a Hydralisk, which is not a detector.
+That is how the test ends the engagement: one keypress, the same untargeted-ability
+fan-out `test-burrow-fanout.ps1` proves reaches all 36 units, and the fight stops
+where it stands without moving anybody. Walking away does **not** work — the enemy
+pursues, the Lurkers keep dying all the way home, and five disengage-by-retreat
+attempts in a row failed to produce a population that held still long enough to
+compare the row with itself. Burrowing produced one on the first attempt, and took the
+whole test from 5:11 to 3:43.
 
 ## Why the game rejected the old output (task 013)
 
