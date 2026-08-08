@@ -34,6 +34,7 @@
 #include "sc_circles.h"
 #include "sc_fanout.h"
 #include "sc_hook.h"
+#include "sc_hudrow.h"
 #include "sc_log.h"
 
 // ---------------------------------------------------------------------------
@@ -194,6 +195,10 @@ static int        g_visibleCount  = 0;
 // Units seen by the overflow hook since the last selection commit.
 static ShadowUnit g_accum[SC_SHADOW_MAX];
 static int        g_accumCount = 0;
+
+// Bumped on every selection commit and on the hotkey-recall shadow drop, so the
+// HUD row (task 017) can detect "the selection changed" without diffing lists.
+static unsigned   g_shadowVersion = 0;
 
 static CRITICAL_SECTION g_lock;
 static bool g_lockInit = false;
@@ -470,6 +475,7 @@ bool ScFanoutOnCommand(const BYTE* buf, unsigned len) {
     if (id == SC_CMD_HOTKEY && g_shadowCount > g_visibleCount) {
         ScLog("SHADOW dropped: hotkey command 0x13 rebuilds the selection elsewhere");
         g_shadowCount = g_visibleCount;
+        ++g_shadowVersion;
     }
 
     // Finish any plan left over from a previous turn before adding to the buffer.
@@ -554,6 +560,7 @@ void ScFanoutOnSelect(unsigned count, DWORD* units) {
         g_shadow[g_shadowCount++] = visible[i];
     }
     g_visibleCount = visibleCount;
+    ++g_shadowVersion;
 
     if (added > 0) {
         ScLog("SHADOW captured: %d units (%d visible + %d beyond the cap) "
@@ -749,6 +756,13 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     const bool circles = (mode == SC_MODE_FANOUT) && EnvInt("SCPLUGIN_CIRCLES", 1, 0, 1) != 0;
     ScCirclesInit(moduleBase, circles);
 
+    // Task 017's HUD-row paging. Same shape as the circles: fanout mode only
+    // (shadow mode's contract is "capture and log, change nothing"), with
+    // %SCPLUGIN_HUDROW% as its own off switch so the row can be compared stock
+    // and paged without rebuilding anything.
+    const bool hudrow = (mode == SC_MODE_FANOUT) && EnvInt("SCPLUGIN_HUDROW", 1, 0, 1) != 0;
+    ScHudRowInit(moduleBase, hudrow);
+
     char cmds[192];
     int used = 0;
     cmds[0] = '\0';
@@ -756,9 +770,10 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
         used += _snprintf(cmds + used, sizeof(cmds) - used, "%s0x%02X",
                           i ? " " : "", g_fanoutCmds[i]);
     }
-    ScLog("FANOUT config: mode=%s budget=%dB maxUnits=%d logCommands=%d circles=%d cmds=[%s]",
+    ScLog("FANOUT config: mode=%s budget=%dB maxUnits=%d logCommands=%d circles=%d "
+          "hudrow=%d cmds=[%s]",
           ScModeName(mode), g_budget, g_maxUnits, g_verboseCmds ? 1 : 0,
-          circles ? 1 : 0, cmds);
+          circles ? 1 : 0, hudrow ? 1 : 0, cmds);
 
     // One suspension for all hooks: the game is quiescent for microseconds instead
     // of once per hook, and a partially installed set is never observable.
@@ -792,13 +807,19 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     // a half-installed set is never observable.
     if (circles && ScCirclesInstallHook()) ++installed;
 
+    // Task 017's one dispatcher detour, same suspension. ScHudRowInstallHooks
+    // returns 0 or 1.
+    if (hudrow) installed += ScHudRowInstallHooks();
+
     ScHookResumeThreads();
 
     // A partial install is not a working plugin: the queueCommand hook without the
     // selection hooks would fan out a shadow list nothing ever fills. Roll back.
     // The circle hook counts too -- without it our circles would never come off, and
-    // stale circles under units the player has deselected is worse than none.
-    const int expected = ((mode >= SC_MODE_SHADOW) ? 4 : 1) + (circles ? 1 : 0);
+    // stale circles under units the player has deselected is worse than none. The
+    // HUD-row dispatcher detour is one hook.
+    const int expected = ((mode >= SC_MODE_SHADOW) ? 4 : 1) + (circles ? 1 : 0)
+                       + (hudrow ? 1 : 0);
     if (installed != expected) {
         ScLog("HOOK: only %d of %d hooks installed -- ROLLING BACK, the plugin is "
               "passive for this run", installed, expected);
@@ -829,11 +850,32 @@ void ScFanoutTestBegin(BYTE* fakeModuleBase, ScQueueFn emit, int budget) {
     // engine's sprite primitives, and in a test process those addresses are a fake
     // module image. sc_circles has its own tests, with its own fake primitives.
     ScCirclesInit(fakeModuleBase, false);
+    // HUD row likewise inert here; hooktest part [10] drives it with its own fakes.
+    ScHudRowInit(fakeModuleBase, false);
     SetDefaultFanoutCmds();
     g_shadowCount = 0;
     g_visibleCount = 0;
     g_accumCount = 0;
+    g_shadowVersion = 0;
     memset(&g_plan, 0, sizeof(g_plan));
+}
+
+// Task 017: snapshot for the HUD row. Same order as storage -- overflow first,
+// visible last. Under the lock so a mid-commit copy can never mix two selections.
+int ScFanoutCopyShadow(ScShadowInfo* out, int maxOut, int* visibleCount,
+                       unsigned* version) {
+    if (!g_lockInit) { InitializeCriticalSection(&g_lock); g_lockInit = true; }
+    EnterCriticalSection(&g_lock);
+    int n = g_shadowCount < maxOut ? g_shadowCount : maxOut;
+    for (int i = 0; i < n; ++i) {
+        out[i].unit       = g_shadow[i].ptr;
+        out[i].uniqueness = g_shadow[i].uniqueness;
+        out[i].player     = g_shadow[i].player;
+    }
+    if (visibleCount) *visibleCount = g_visibleCount;
+    if (version)      *version      = g_shadowVersion;
+    LeaveCriticalSection(&g_lock);
+    return n;
 }
 
 void ScFanoutRemove(void) {
@@ -859,6 +901,7 @@ void ScFanoutRemove(void) {
           "them (see tools/plugin/README.md, off switch 3)", ScCirclesCount());
 
     ScHookSuspendThreads();
+    ScHudRowRemoveHooks();
     ScCirclesRemoveHook();
     ScHookRemove(&g_hkSort);
     ScHookRemove(&g_hkOverflow);
@@ -874,6 +917,7 @@ void ScFanoutLogStats(void) {
           ScModeName(g_mode), g_statCommands, g_statSelects, g_statOverflow,
           g_statFanouts, g_statPairs, g_statDeferred, g_statStale);
     ScCirclesLogStats();
+    ScHudRowLogStats();
 }
 
 // The oracle for "did the order reach every unit". Walks the shadow list -- which is the

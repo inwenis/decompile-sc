@@ -73,4 +73,23 @@ bool ScFanoutOnCommand(const unsigned char* buf, unsigned len);
 // a NULL emit restores normal operation.
 void ScFanoutTestBegin(unsigned char* fakeModuleBase, ScQueueFn emit, int budget);
 
+// ---------------------------------------------------------------------------
+// Shadow-list snapshot (task 017: the HUD row pages through this list)
+// ---------------------------------------------------------------------------
+
+struct ScShadowInfo {
+    unsigned long unit;         // CUnit*, bounds/stride-validated at capture time
+    unsigned char uniqueness;   // CUnit+0xA5 at capture -- the staleness test
+    unsigned char player;       // CUnit+0x4C at capture
+};
+
+// Copies the current shadow list under the fan-out lock: OVERFLOW UNITS FIRST,
+// the engine's visible (<=12) units LAST -- the same order sc_fanout stores it.
+// Returns the number copied; *visibleCount gets how many of the TAIL entries the
+// engine actually holds; *version gets a counter that increments on every
+// selection commit (and on the hotkey-recall shadow drop), so a caller can detect
+// "the selection changed" without diffing lists.
+int ScFanoutCopyShadow(ScShadowInfo* out, int maxOut, int* visibleCount,
+                       unsigned* version);
+
 #endif // SC_FANOUT_H

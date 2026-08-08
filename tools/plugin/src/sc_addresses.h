@@ -250,4 +250,133 @@
 #define SC_CMD_RIGHT_CLICK   0x14u
 #define SC_CMD_TARGETED_ORDER 0x15u
 
+// ---------------------------------------------------------------------------
+// HUD SELECTION ROW -- derived by task 017 from StarCraft.exe 1.16.1 itself.
+// Full evidence, with decompiles and the creation chain, in
+// research/hud-selection-row.md; committed instruction tables in
+// research/data/hud-*.tsv. Nothing in this block is inherited without being
+// re-derived against this binary.
+// ---------------------------------------------------------------------------
+
+// No arguments, returns void. THE per-frame status-area dispatcher: the single
+// entry the HUD driver 0x004D93F0 calls each frame, branching portrait-null /
+// single-unit / multi-select (hud-selection-row.md 4.2). sc_hudrow detours THIS
+// (not the multi-select act/cond pair) so it can restore the row to stock even
+// when a shadow click drops the selection to one unit and the engine would take
+// its single branch. Patch window 5 bytes / 1 instruction (MOV EAX,[0x00597248]),
+// reloc-safe; one caller (HookProbe, work/scratch/hud/hookprobe/).
+#define SC_VA_STAT_DATA_UPDATE 0x00458120u
+
+// The multi-select layout ("act") and refresh-condition ("cond") the dispatcher
+// calls; sc_hudrow re-implements their effect for a page rather than detouring
+// them, but keeps the addresses for evidence (hud-selection-row.md 4.2).
+#define SC_VA_UNITSTAT_ACT_SELECTION  0x00425960u
+#define SC_VA_UNITSTAT_COND_SELECTION 0x00424660u
+
+// Unit* -- the active portrait unit; the dispatcher's first test (portrait NULL ->
+// hide the whole status area). sc_hudrow reads it to decide whether to page.
+#define SC_VA_ACTIVE_PORTRAIT_UNIT 0x00597248u
+
+// Generic dialog primitives (GPTP unit_stat_selection.cpp helpers; conventions
+// verified against the decompiled callers in this binary):
+#define SC_VA_SHOW_CONTROL   0x004186A0u  // ESI = BinDlg*
+#define SC_VA_HIDE_CONTROL   0x00418700u  // ESI = BinDlg*
+#define SC_VA_UPDATE_CONTROL 0x0041C400u  // EAX = BinDlg*
+
+// __fastcall(ECX = BinDlg* control, EDX = event) -> int. The wireframe button's
+// interact handler; all 12 buttons point here via the 44-entry table at 0x00504AF0
+// (hud-selection-row.md 3). sc_hudrow WRAPS the per-control pointer (control+0x2A)
+// with a thin shim and tail-calls this address -- the code itself is never patched.
+#define SC_VA_WIREFRAME_BTN_INTERACT 0x004583E0u
+
+// The statdata module's globals (hud-selection-row.md 2):
+#define SC_VA_STATDATA_DIALOG 0x0068C1F0u  // BinDlg* -- the whole status-area dialog
+#define SC_VA_STAT_DIRTY      0x0068C1F8u  // u8 -- redraw-needed flag the dispatcher consumes
+#define SC_VA_STAT_ALL_HIDDEN 0x0068C1E5u  // u8 -- "children currently hidden" state
+
+// Default per-control-type handler tables the .bin relocator (0x004194E0) assigns
+// from; sc_hudrow's indicator control takes its handlers from the same tables, so
+// it is drawn by exactly the code a loaded control would be.
+#define SC_VA_DEFAULT_INTERACT_TABLE 0x005014ACu
+#define SC_VA_DEFAULT_UPDATE_TABLE   0x00501504u
+
+// BinDlg field offsets. Those marked "hud 2" are proven by an instruction cited
+// in hud-selection-row.md 2 (read out of THIS binary). Those marked "GPTP" are
+// inherited from GPTP SCBW/structures.h and used as-is -- NOT independently
+// re-derived here; they are not referenced by the sweep, so this block states
+// their true provenance rather than overclaiming.
+#define SC_BINDLG_OFF_NEXT        0x00u   // hud 2 (every child walk)
+#define SC_BINDLG_OFF_BOUNDS      0x04u   // GPTP (rct); s16 left,top,right,bottom.
+                                          //   Used only to POSITION the indicator and
+                                          //   to log button rects -- a wrong offset
+                                          //   mis-aims a diagnostic, never mis-selects.
+#define SC_BINDLG_OFF_TEXT        0x14u   // hud 2 (relocator 0x004194E0 fixes pszText)
+#define SC_BINDLG_OFF_FLAGS       0x18u   // hud 2 (0x0045845D TEST [ctrl+0x18],0x8)
+#define SC_BINDLG_OFF_INDEX       0x20u   // hud 2 (layout walk compares [ctrl+0x20]==0x21)
+#define SC_BINDLG_OFF_TYPE        0x22u   // hud 2 ("is this the root" test); 0 = dialog
+#define SC_BINDLG_OFF_GRAPHIC     0x24u   // hud 2 (wireframe draw writes border id here)
+#define SC_BINDLG_OFF_USER        0x26u   // hud 2 (button CREATE allocs 8B into +0x26)
+#define SC_BINDLG_OFF_INTERACT    0x2Au   // hud 2 (0x00418EB0 calls [ctrl+0x2A])
+#define SC_BINDLG_OFF_UPDATE      0x2Eu   // hud 2 (0x0045841C MOV [ESI+0x2E],0x456F50)
+#define SC_BINDLG_OFF_PARENT      0x32u   // hud 2 (click handler climbs [ctrl+0x32])
+#define SC_BINDLG_OFF_FIRST_CHILD 0x42u   // hud 2 (every child walk starts at [dlg+0x42])
+#define SC_BINDLG_SIZE            0x56u   // GPTP (structures.h C_ASSERT sizeof==86);
+                                          //   only used to zero a plugin-owned scratch
+                                          //   BinDlg -- never to stride a game array.
+
+#define SC_CTRL_FLAG_DRAWN   0x1u    // set once drawn; act sets it before updateControl
+#define SC_CTRL_FLAG_VISIBLE 0x8u    // hud 2 (0x0045845D TEST [ctrl+0x18],0x8)
+// CTRL_FONT_SMALLEST -- BWAPI BW/Dialog.h:17. The smallest of the font-size flags,
+// so the indicator text fits the row's top edge.
+#define SC_CTRL_FONT_SMALLEST 0x400u
+// Control type of a left-aligned static text control. BWAPI BW/Dialog.h ctrls
+// enum: cLSTATIC = 9. Verified at runtime before use: sc_hudrow reads the default
+// interact/update table entries for type 9 and refuses to splice the indicator if
+// either is null (i.e. the engine has no handler for that type in this build).
+#define SC_CTRL_TYPE_LSTATIC 9
+
+// The wireframe row's control ids: 12 buttons, packed left to right.
+#define SC_HUD_FIRST_SMALL_BUTTON 0x21
+#define SC_HUD_LAST_SMALL_BUTTON  0x2C
+#define SC_HUD_BUTTON_COUNT       12
+
+// A button's statUser record (allocated 8 bytes in its CREATE case at 0x0045842E):
+#define SC_STATUSER_OFF_UNIT 0x0u   // CUnit*
+#define SC_STATUSER_OFF_ID   0x4u   // u16 -- the grpwire.grp frame index
+
+// Dialog event layout (read by 0x004583E0: type at +0xC, dwUser at +0):
+#define SC_EVT_OFF_USER 0x00u
+#define SC_EVT_OFF_TYPE 0x0Cu
+#define SC_EVT_RBUTTONDOWN 7
+#define SC_EVT_TYPE_USER   14
+// dwUser sub-code of a completed click, where 0x004583E0 turns the button's
+// statUser unit into a Select. Read out of this binary: 0x004583E0's dwUser switch
+// (jump table at 0x0045849C, work/scratch/hud/binder-listing.tsv) sends case 2 to
+// 0x0045844E -> CALL 0x00458220 (StatusScreenButton, the select). BWAPI
+// BW/Dialog.h names it BW_USER_ACTIVATE = 2.
+#define SC_USER_ACTIVATE 2
+
+// CUnit fields the row reads. hitpoints at +0x08 is read for the DEATH signal;
+// it is the field the engine's DAMAGE primitive 0x004797B0 zeroes on a kill
+// (research/command-opcodes.md 6), so a damage-death reads 0 here. id at +0x64.
+#define SC_CUNIT_OFF_HITPOINTS 0x08u
+
+// The player unit list -- per-player list heads at 0x006283F8, and the CUnit
+// prev/next links the engine threads them on. Derived by task 017 from the unit
+// (re)init 0x004A0320 (decompiled): it sets [unit+0x68]=0, [unit+0x6C]=head,
+// [head+0x68]=unit, head=unit -- a head-insert doubly linked list, indexed by the
+// unit's owning player. The removal path 0x004A0740 UNLINKS a unit that is removed
+// from play, so a unit NOT reachable from playerUnitList[player] via +0x6C has been
+// removed (killed-and-not-yet-recycled, trigger RemoveUnit, archon-consumed). Note:
+// a TRANSPORT-loaded unit stays list-linked (the engine walks the list for supply,
+// loaded units included) and a MIND-CONTROLLED unit relinks under its new owner, so
+// both remain reachable -- and both are fine to hand to the engine's Select: they
+// are live, identity-correct CUnit*s that vanilla can select. The array size is not
+// evidenced here (vanilla convention is one entry per player incl. neutral); the
+// gate reads only indices < SC_MAX_PLAYERS (8), which is fail-closed for any size.
+#define SC_VA_PLAYER_UNIT_LIST 0x006283F8u
+#define SC_CUNIT_OFF_LIST_PREV 0x68u
+#define SC_CUNIT_OFF_LIST_NEXT 0x6Cu
+#define SC_MAX_UNITS_WALK      2000   // loop bound: never trust a game list to terminate
+
 #endif // SC_ADDRESSES_H

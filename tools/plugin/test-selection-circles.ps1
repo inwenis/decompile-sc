@@ -107,7 +107,7 @@ try {
     # error-dialog check does -- a collected variable would never be assigned and the
     # finally below would have no pid to close.
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
-        -Mode fanout -Circles $circles -InjectWindowedHelper WMode `
+        -Mode fanout -Circles $circles -HudRow 0 -InjectWindowedHelper WMode `
         -GameDir $GameDir -LogPath $LogPath 6>&1 | ForEach-Object {
             Write-Host $_
             if ("$_" -match 'scinject:\s*PID=(\d+)') { $script:gamePid = [int]$Matches[1] }
