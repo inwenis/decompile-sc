@@ -12,29 +12,57 @@ cleanly (mirrors the game tree, overwrites the plugin binaries and launcher, re-
 shortcut).
 
 What it does, in order:
-  1. Guards -DeployRoot: refuses a target inside this repo, under C:\sc-install (hard
-     rule: never write there), or under -SourceGameDir itself.
-  2. Builds scplugin.dll + scinject.exe from the current checkout (tools/plugin/build.ps1
+  1. Guards -DeployRoot: canonicalises it (device prefix, 8.3 short names, symlinks/
+     junctions -- tools/plugin/sc-canonical-path.ps1, the same routine
+     run-with-plugin.ps1 uses for its pristine-install guard) and refuses a target
+     inside this repo, under C:\git (any repo/worktree), under C:\sc-work (the
+     working-copy scratch root) or -SourceGameDir specifically, or under
+     C:\sc-install (hard rule: never write there).
+  2. Refuses if StarCraft is currently running from inside -DeployRoot (redeploying
+     over a locked scplugin.dll would abort mid-copy, after /MIR had already purged).
+  3. Refuses if <DeployRoot>\game contains a reparse point (symlink/junction): /MIR
+     purging through one deletes files in whatever it points at, and /XJ does not
+     stop that on the robocopy build this was verified against.
+  4. Builds scplugin.dll + scinject.exe from the current checkout (tools/plugin/build.ps1
      -- already asserts both are PE32/x86 and fails the build otherwise).
-  3. Mirrors -SourceGameDir (default the working copy, C:\sc-work\1161-base) into
+  5. Mirrors -SourceGameDir (default the working copy, C:\sc-work\1161-base) into
      <DeployRoot>\game -- the same StarCraft.exe bytes, not a rebuild of anything.
-  4. Copies the freshly built plugin binaries, plus run-with-plugin.ps1 and its
-     check-game-windows.ps1 dependency, into <DeployRoot>\plugin -- so the deployed
-     install does not depend on this repo (or this worktree, which is disposable)
-     still existing on disk later. See "Design: self-contained, not a thin repo
-     pointer" below.
-  5. Writes <DeployRoot>\Launch-StarCraft-Modded.ps1, a launcher with zero parameters
+     characters\ (player profiles) and Maps\Replays\ (replays) are excluded from the
+     mirror in both directions, so anything the deployed game itself writes there
+     survives every future redeploy. See "Player data survives redeploys" below.
+  6. Copies the freshly built plugin binaries, plus run-with-plugin.ps1 and its
+     check-game-windows.ps1/sc-canonical-path.ps1 dependencies, into
+     <DeployRoot>\plugin -- so the deployed install does not depend on this repo (or
+     this worktree, which is disposable) still existing on disk later. See "Design:
+     self-contained, not a thin repo pointer" below.
+  7. Writes <DeployRoot>\Launch-StarCraft-Modded.ps1, a launcher with zero parameters
      that calls the deployed copy of run-with-plugin.ps1 with the feature set baked in:
      -Mode fanout -InjectWindowedHelper WMode -Circles 1 -HudRow 1 (fanout + selection
      circles + HUD row paging, windowed). This is run-with-plugin.ps1's real working
      windowed recipe, not its deprecated/broken -Windowed switch -- see
      tools/plugin/README.md "Windowed mode: injected, not proxied".
-  6. Creates/updates the desktop shortcut "StarCraft Modded.lnk", target
+  8. Creates/updates the desktop shortcut "StarCraft Modded.lnk", target
      "pwsh -WindowStyle Hidden -File <launcher>" so double-clicking shows the game and
      nothing else -- no console window.
-  7. Verifies: deployed StarCraft.exe sha256 == source's, plugin DLL/EXE are newer than
+  9. Verifies: deployed StarCraft.exe sha256 == source's, plugin DLL/EXE are newer than
      this run's start (proof they were actually rebuilt, not stale leftovers), the
      shortcut resolves to an existing target and launcher. Prints a one-line receipt.
+
+Player data survives redeploys.
+Early versions of this script mirrored -SourceGameDir into <DeployRoot>\game with a plain
+/MIR, which is a TRUE mirror: anything the destination has that the source does not gets
+DELETED. That is correct for the shipped game files (an old build should not linger) and
+wrong for player state -- a save under characters\ or a replay under Maps\Replays\ exists
+ONLY in the deploy dir (the working copy is a dev scratch area, not where anyone plays),
+so a plain /MIR silently deleted the user's own saves and replays on every single redeploy
+after the one that created them. Fixed by /XD-ing both directories out of the mirror
+entirely: robocopy neither copies into them nor purges them, in either direction, so they
+are exactly whatever the deployed game itself has written, forever. The tradeoff: a custom
+map dropped directly under <DeployRoot>\game\Maps\ (not \Replays\) is NOT preserved -- it
+lives in the part of the tree that still mirrors the source -- which mirrors the tradeoff
+tools/make-working-copy.ps1 already makes for the working copy itself (its
+-PreservedExtraPrefixes covers characters\ and all of Maps\; this script's is narrower,
+matching exactly what a stock client writes on its own: profiles and replays).
 
 Design: self-contained, not a thin repo pointer.
 tools/plugin/run-with-plugin.ps1 already does everything the launcher needs (pristine-
@@ -52,7 +80,9 @@ binaries themselves already work, so it is not a new kind of staleness.
 
 .PARAMETER DeployRoot
 Where the self-contained install is assembled. Must not be inside this repo, under
-C:\sc-install, or under -SourceGameDir.
+C:\git, under C:\sc-work, under -SourceGameDir, or under C:\sc-install. Checked against
+the canonical (device-prefix/8.3/junction-resolved) form of both the argument and every
+protected root, not the literal spelling.
 
 .PARAMETER SourceGameDir
 The pristine-verified working copy to deploy from. Never C:\sc-install (hard rule 1).
@@ -77,32 +107,32 @@ $scriptDir = $PSScriptRoot
 $repoRoot  = (Resolve-Path (Join-Path $scriptDir '..')).Path
 $pluginDir = Join-Path $scriptDir 'plugin'
 
+# Junction/8.3/device-prefix-proof canonicalisation (Get-CanonicalPath, Test-PathUnder) --
+# shared with run-with-plugin.ps1's pristine-install guard. A plain GetFullPath comparison
+# is spellable around: '-DeployRoot \\?\C:\sc-install\Starcraft' passes a naive prefix
+# check unchanged, and /MIR would then purge inside the pristine install.
+. (Join-Path $pluginDir 'sc-canonical-path.ps1')
+
 # --- guard: refuse a dangerous -DeployRoot ----------------------------------
-# Simple GetFullPath prefix checks are enough here (unlike run-with-plugin.ps1's
-# device-prefix/8.3/junction-proof canonicalisation): DeployRoot is a fresh
-# directory of our own making, not an existing tree we copy into/delete from
-# based on a spoofable spelling. What matters is catching an honest mistake --
-# a typo'd -DeployRoot landing inside the repo or under C:\sc-install.
-function Get-SimpleFullPath {
-    param([string]$Path)
-    [IO.Path]::GetFullPath($Path).TrimEnd('\')
+$deployRootFull = Get-CanonicalPath $DeployRoot
+foreach ($devicePrefix in @('\\?\', '\\.\')) {
+    if ($deployRootFull.StartsWith($devicePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        # Get-CanonicalPath strips exactly one such prefix; a canonical result that still
+        # carries one is a spelling this guard does not understand. Refuse outright rather
+        # than trust it.
+        throw "deploy: refusing -DeployRoot '$DeployRoot' -- canonicalised to '$deployRootFull', which still carries a device prefix."
+    }
 }
-
-function Test-UnderOrEqual {
-    param([string]$Candidate, [string]$Root)
-    $c = Get-SimpleFullPath $Candidate
-    $r = Get-SimpleFullPath $Root
-    return ($c -ieq $r) -or $c.StartsWith("$r\", [StringComparison]::OrdinalIgnoreCase)
-}
-
-$deployRootFull = Get-SimpleFullPath $DeployRoot
 foreach ($protected in @(
     @{ Path = $repoRoot;       Label = 'this repo' }
-    @{ Path = 'C:\sc-install'; Label = 'the pristine install (hard rule 1)' }
+    @{ Path = 'C:\git';        Label = 'every repo/worktree root' }
+    @{ Path = 'C:\sc-work';    Label = 'the working-copy scratch root' }
     @{ Path = $SourceGameDir;  Label = '-SourceGameDir itself' }
+    @{ Path = 'C:\sc-install'; Label = 'the pristine install (hard rule 1)' }
 )) {
-    if (Test-UnderOrEqual -Candidate $deployRootFull -Root $protected.Path) {
-        throw "deploy: refusing -DeployRoot '$deployRootFull' -- it is inside/under $($protected.Label) ('$($protected.Path)')."
+    $protectedFull = Get-CanonicalPath $protected.Path
+    if (Test-PathUnder -Candidate $deployRootFull -Root $protectedFull) {
+        throw "deploy: refusing -DeployRoot '$DeployRoot' (resolves to '$deployRootFull') -- it is inside/under $($protected.Label) ('$protectedFull')."
     }
 }
 
@@ -112,6 +142,39 @@ if (-not (Test-Path -LiteralPath $SourceGameDir)) {
 $sourceExe = Join-Path $SourceGameDir 'StarCraft.exe'
 if (-not (Test-Path -LiteralPath $sourceExe)) {
     throw "deploy: $sourceExe not found -- is -SourceGameDir a real working copy?"
+}
+$gameDeployDir = Join-Path $deployRootFull 'game'
+
+# --- guard: refuse if StarCraft is currently running --------------------------
+# /MIR purges then re-copies. A process holding scplugin.dll open from a previous deploy
+# would abort the copy AFTER the purge already ran, leaving a stale build behind a
+# working-looking shortcut -- reproduced live. The natural check is "running FROM
+# DeployRoot specifically", but that needs the process's image path, and on this machine
+# Get-Process's Path/MainModule, Get-CimInstance's ExecutablePath, and even a raw
+# OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION) on the game's pid all come back empty/
+# access-denied for this specific process (verified live, cause not root-caused -- some
+# session/token boundary between this shell and the desktop the game runs on). A guard
+# that silently no-ops when path access fails is worse than a broader one that always
+# fires, so this checks by name alone, same as tools/plugin/close-game.ps1's own
+# precedent: refuse whenever ANY StarCraft process is running, not just one from inside
+# -DeployRoot. Conservative, but never silently wrong.
+$runningGame = Get-Process StarCraft -ErrorAction SilentlyContinue
+if ($runningGame) {
+    $pidList = ($runningGame | Select-Object -ExpandProperty Id) -join ', '
+    throw "deploy: StarCraft is running (pid $pidList) -- close it first (tools/plugin/close-game.ps1), then redeploy."
+}
+
+# --- guard: refuse to mirror over a reparse point in the deployed game dir ---
+# /XJ (exclude junctions) does NOT stop /MIR purging through a junction's target on the
+# robocopy build this was verified against -- a junction placed under <DeployRoot>\game
+# (e.g. as a workaround to relocate saves) turns the next deploy into a wipe of wherever
+# it points. The only safe fix is to never attempt the mirror if one is present.
+if (Test-Path -LiteralPath $gameDeployDir) {
+    $reparsePoints = @(Get-ChildItem -LiteralPath $gameDeployDir -Recurse -Force -Attributes ReparsePoint -ErrorAction SilentlyContinue)
+    if ($reparsePoints.Count -gt 0) {
+        $list = ($reparsePoints | ForEach-Object { "  $($_.FullName)" }) -join "`n"
+        throw "deploy: refusing to mirror -- $($reparsePoints.Count) reparse point(s) (symlink/junction) found under $gameDeployDir :`n$list`nA /MIR purge follows a junction into its target and deletes files there. Remove it by hand and re-run."
+    }
 }
 
 # --- version receipt ---------------------------------------------------------
@@ -143,19 +206,30 @@ foreach ($f in @($builtDll, $builtExe)) {
 }
 Write-Host 'build: OK, both artifacts newer than this deploy run'
 
-# --- 2. mirror the game tree --------------------------------------------------
+# --- 2. mirror the game tree, preserving player saves/replays ----------------
 Write-Host ''
 Write-Host "== Mirroring $SourceGameDir -> $deployRootFull\game =="
-$gameDeployDir = Join-Path $deployRootFull 'game'
 New-Item -ItemType Directory -Path $deployRootFull -Force | Out-Null
+# characters\ (player profiles) and Maps\Replays\ (replays) are USER DATA the deployed
+# game itself writes, not part of the shipped source -- /XD skips them entirely on both
+# the copy and the purge side of /MIR, so a save/replay written after one deploy survives
+# every deploy after it. See .DESCRIPTION "Player data survives redeploys".
+#
+# /XD 'Maps\Replays' (a multi-segment relative path) does NOT match on this robocopy
+# build -- verified live: it still descended into Maps\replays, overwrote LastReplay.rep
+# from source and purged a destination-only file. A bare directory NAME does work (also
+# verified live) and matches at any depth, which is fine here: 'Replays' occurs exactly
+# once in the whole source tree (under Maps\).
 $robocopyArgs = @(
     $SourceGameDir, $gameDeployDir,
-    '/MIR',         # deploy dir is ours alone; a true mirror is what keeps re-runs idempotent
+    '/MIR',
+    '/XD', 'characters', 'Replays',
     '/COPY:DAT', '/R:2', '/W:2', '/NFL', '/NDL', '/NP'
 )
 & robocopy @robocopyArgs | Out-Host
 if ($LASTEXITCODE -ge 8) { throw "deploy: robocopy failed with exit code $LASTEXITCODE" }
 Write-Host "robocopy exit code $LASTEXITCODE (success)"
+Write-Host 'robocopy: characters\ and Maps\Replays\ excluded -- player saves/replays in the deploy dir are never touched'
 
 # --- 3. copy the plugin runtime (self-contained, see .DESCRIPTION) -----------
 Write-Host ''
@@ -166,7 +240,8 @@ Copy-Item -LiteralPath $builtDll -Destination (Join-Path $pluginDeployDir 'scplu
 Copy-Item -LiteralPath $builtExe -Destination (Join-Path $pluginDeployDir 'scinject.exe') -Force
 Copy-Item -LiteralPath (Join-Path $pluginDir 'run-with-plugin.ps1')     -Destination (Join-Path $pluginDeployDir 'run-with-plugin.ps1')     -Force
 Copy-Item -LiteralPath (Join-Path $pluginDir 'check-game-windows.ps1') -Destination (Join-Path $pluginDeployDir 'check-game-windows.ps1') -Force
-Write-Host 'plugin runtime copied: scplugin.dll, scinject.exe, run-with-plugin.ps1, check-game-windows.ps1'
+Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-canonical-path.ps1')  -Destination (Join-Path $pluginDeployDir 'sc-canonical-path.ps1')  -Force
+Write-Host 'plugin runtime copied: scplugin.dll, scinject.exe, run-with-plugin.ps1, check-game-windows.ps1, sc-canonical-path.ps1'
 
 # --- 4. write the zero-argument launcher --------------------------------------
 $launcherPath = Join-Path $deployRootFull 'Launch-StarCraft-Modded.ps1'
