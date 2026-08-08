@@ -347,6 +347,52 @@ function Send-ScDropdownPick {
     if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
 }
 
+function Get-ScMinimapPoint {
+    <#
+    .SYNOPSIS
+    The client pixel to click on the minimap to centre the view on a map TILE.
+    .DESCRIPTION
+    The view is otherwise unmovable from a script: the camera opens centred on the
+    player's start location and never moves on its own, edge-scrolling needs the
+    pointer parked at the very edge (which posted WM_MOUSEMOVE does not sustain --
+    task 019 tried it, the view did not move and the game exited during the attempt),
+    and the keyboard scroll keys are modifier-adjacent. A LEFT click on the minimap
+    does move the camera, and it is one posted click.
+
+    Geometry, at a 640x480 client: the minimap box is 128x128 client pixels with its
+    top-left at (7, 348) -- the console art's minimap panel, whose right edge is where
+    the 12-button wireframe row's root dialog begins (`HUDROW rects root=[138,...]`,
+    research/hud-selection-row.md). A map of W x H tiles with both <= 128 is drawn at
+    one pixel per tile and CENTRED in that box.
+
+    Calibrated in game (task 019) on the generated 128x96-tile fixture, whose enemy
+    block sits at tile (41,19): this formula gives client (48, 383), and clicking
+    there then drag-boxing the screen selected exactly the six placed Hydralisks and
+    nothing else (`UNITSTATE n=6 types=[0x26:6]`). Clicking four pixels higher put
+    only three of them on screen, so the vertical centring term is real and not a
+    rounding accident. Nine origin candidates were scanned; (7, 348) with the
+    (128-H)/2 offset is the one that reproduces the result for every x tried.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][int]$MapTilesW,
+        [Parameter(Mandatory)][int]$MapTilesH,
+        [Parameter(Mandatory)][int]$TileX,
+        [Parameter(Mandatory)][int]$TileY,
+        [int]$BoxLeft = 7, [int]$BoxTop = 348, [int]$BoxSize = 128
+    )
+    if ($MapTilesW -gt $BoxSize -or $MapTilesH -gt $BoxSize) {
+        throw "drive-game: Get-ScMinimapPoint is calibrated for maps up to ${BoxSize}x${BoxSize} tiles; got ${MapTilesW}x${MapTilesH}. A bigger map is drawn at a smaller scale and this 1px-per-tile mapping does not hold."
+    }
+    if ($TileX -lt 0 -or $TileY -lt 0 -or $TileX -ge $MapTilesW -or $TileY -ge $MapTilesH) {
+        throw "drive-game: tile ($TileX,$TileY) is outside a ${MapTilesW}x${MapTilesH} map."
+    }
+    [pscustomobject]@{
+        X = $BoxLeft + [int](($BoxSize - $MapTilesW) / 2) + $TileX
+        Y = $BoxTop  + [int](($BoxSize - $MapTilesH) / 2) + $TileY
+    }
+}
+
 $script:ScMarkerSeq = 0
 
 function Get-ScUnitState {

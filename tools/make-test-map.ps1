@@ -47,7 +47,29 @@ param(
     # placed unit type belongs to. It must not be left as a ladder template's "User
     # Selectable" -- that slot gets MELEE starting units even under Use Map Settings.
     [ValidateSet('zerg', 'terran', 'protoss')]
-    [string]$Race
+    [string]$Race,
+    # --- the combat variant (task 019) -------------------------------------------
+    # Place this many COMPUTER-owned units near the player's block, so a test can walk
+    # the player's units into them and get one killed. 0 keeps the hostility-free map.
+    [int]$EnemyCount = 0,
+    [string]$EnemyType,
+    # Map pixels east/south of the player's start location for the enemy block's centre.
+    [int]$EnemyOffsetX,
+    [int]$EnemyOffsetY,
+    [int]$EnemySpacing,
+    [ValidateSet('zerg', 'terran', 'protoss')]
+    [string]$EnemyRace,
+    # 'computer' is the combat fixture; 'player' is the placement probe -- same unit
+    # types at the same coordinates but owned by the human, so a test can box them and
+    # count them in-process.
+    [ValidateSet('computer', 'player')]
+    [string]$EnemyOwner,
+    [int]$MinEnemyGap,
+    # Hit points for the placed units, as a PERCENTAGE of the type's maximum (1-100).
+    # Lower is how the combat fixture makes its victims die in seconds rather than
+    # minutes without changing anything else about them.
+    [ValidateRange(1, 100)]
+    [int]$UnitHp
 )
 
 $ErrorActionPreference = 'Stop'
@@ -78,6 +100,17 @@ if ($KeepOwnr) { $pyArgs += '--keep-ownr' }
 if ($ClearPlayerUnits) { $pyArgs += '--clear-player-units' }
 if ($KeepTriggers) { $pyArgs += '--keep-triggers' }
 if ($Race) { $pyArgs += @('--race', $Race) }
+if ($EnemyCount -gt 0) { $pyArgs += @('--enemy-count', $EnemyCount) }
+if ($EnemyType) { $pyArgs += @('--enemy-type', $EnemyType) }
+# 0 is a meaningful offset (due north/east of the start location on that axis), so
+# these test for "the caller passed it", not for "it is non-zero".
+if ($PSBoundParameters.ContainsKey('EnemyOffsetX')) { $pyArgs += @('--enemy-offset-x', $EnemyOffsetX) }
+if ($PSBoundParameters.ContainsKey('EnemyOffsetY')) { $pyArgs += @('--enemy-offset-y', $EnemyOffsetY) }
+if ($PSBoundParameters.ContainsKey('EnemySpacing')) { $pyArgs += @('--enemy-spacing', $EnemySpacing) }
+if ($PSBoundParameters.ContainsKey('MinEnemyGap')) { $pyArgs += @('--min-enemy-gap', $MinEnemyGap) }
+if ($EnemyRace) { $pyArgs += @('--enemy-race', $EnemyRace) }
+if ($EnemyOwner) { $pyArgs += @('--enemy-owner', $EnemyOwner) }
+if ($PSBoundParameters.ContainsKey('UnitHp')) { $pyArgs += @('--unit-hp', $UnitHp) }
 
 & $python @pyArgs
 exit $LASTEXITCODE
