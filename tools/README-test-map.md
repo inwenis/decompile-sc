@@ -105,14 +105,14 @@ With parameters:
 | Param          | Default                                                   | Meaning                              |
 | -------------- | ---------------------------------------------------------- | ------------------------------------- |
 | `-UnitCount`   | `36`                                                        | units to place (must be comfortably > 12) |
-| `-UnitType`    | `marine`                                                    | name (`marine`, `zergling`, `zealot`, `lurker`) or a raw units.dat integer id |
+| `-UnitType`    | `marine`                                                    | a name from the built-in table (`marine`, `goliath`, `siege-tank`, `zergling`, `hydralisk`, `ultralisk`, `zealot`, `dragoon`, `lurker`) or a raw units.dat integer id |
 | `-Player`      | `0`                                                         | 0-based slot, 0-7 (0 = Player 1)      |
 | `-GridSpacing` | `32`                                                        | pixels between units (32 = one tile). Units bigger than a tile need more, or the game silently drops the ones it cannot place |
 | `-KeepOwnr`    | off                                                         | leave the template's player slots and races alone — for a template that is already a playable single-player scenario |
 | `-ClearPlayerUnits` | off                                                    | drop the target player's existing units first, so the placed group is all one type |
 | `-KeepTriggers` | off                                                        | keep the template's `TRIG`/`MBRF`. **Never for a fixture** — a stock map's own triggers end the game within seconds of loading |
 | `-Race`        | the placed unit type's race                                 | `zerg`/`terran`/`protoss`, written into `SIDE` for the human and computer slots |
-| `-UnitHp`      | `100`                                                       | hit points for the placed units, as a **percentage** of the type's maximum (1-100). Lower makes the combat variant's victims die in seconds instead of minutes |
+| `-UnitHp`      | `100`                                                       | hit points as a **percentage** of the type's maximum (1-100), applied to the `-UnitType` block **only**. Lower makes the combat variant's victims die in seconds instead of minutes. The enemy force is deliberately left at 100%: it has to survive the engagement, which is what keeps the deaths a trickle |
 | `-TemplatePath`| `C:\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx` | source map for terrain/start location |
 | `-OutputPath`  | `C:\sc-work\1161-base\Maps\test-many-units.scx`            | where the generated map is written    |
 
@@ -294,11 +294,18 @@ higher puts only three of them on screen.
 
 ### `-UnitHp`: why the victims are on 30% health
 
-The `hp` byte at offset 0x19 of a UNIT record is a **percentage** of the unit type's
-maximum (1-100, staredit.net CHK spec), and it applies because bit `0x02` of the
-valid-properties mask at 0x0E is set — which it has been since task 009, with every
-fixture written at 100. A full-health 125-point Lurker absorbs about twenty Hydralisk
-shots, and the first death took roughly two minutes; the whole test took eleven.
+The `hp` byte at offset **0x11** of a UNIT record (immediately after the owner byte at
+0x10) is a **percentage** of the unit type's maximum (1-100, staredit.net CHK spec),
+and it applies because bit `0x02` of the valid-properties mask at 0x0E is set — which
+it has been since task 009, with every fixture written at 100. A full-health 125-point
+Lurker absorbs about twenty Hydralisk shots, and the first death took roughly two
+minutes; the whole test took eleven.
+
+The offset is checked, not counted by eye: packing a record through
+`_UNIT_RECORD_FMT` with `hp=30` puts `30` at byte 0x11, and 0x19 — which an earlier
+draft of this section named — is the **high byte of the `units in hangar` u16** at
+0x18, which this tool always writes as zero. The generator never addressed the field
+by a literal offset, so no generated map was ever affected.
 
 At `-UnitHp 30` the first death arrives in about ten seconds and the test runs in
 about four and a half minutes, with nothing else about the fixture changed: same unit
@@ -380,8 +387,10 @@ the wrong unit, not broken the file.
   existing doodads. On the default template this lands in open ground, but a
   different `-TemplatePath` map could place units somewhere awkward (e.g.
   overlapping a cliff edge) -- worth an eyeball check if you swap templates.
-- `-UnitType` only has four built-in names (Marine, Zergling, Zealot, Lurker);
-  any other unit needs its units.dat integer id passed directly.
+- `-UnitType` and `-EnemyType` have nine built-in names between them (Marine,
+  Goliath, Siege Tank (Tank Mode), Zergling, Hydralisk, Ultralisk, Zealot,
+  Dragoon, Lurker); any other unit needs its units.dat integer id passed
+  directly.
 - A template that uses the negative-size CHK chunk trick (map protection) is
   refused outright: this tool cannot re-serialise one faithfully, and would
   rather fail than quietly change what the game reads.
@@ -393,6 +402,29 @@ the wrong unit, not broken the file.
   them) -- so mineral/gas patches from the template map are still present.
   This is intentional (keeps the map internally consistent) but means map
   size/complexity scales with whatever template is chosen.
+
+### …and specifically for the combat variant
+
+Worth stating plainly, because the in-game evidence is easy to read as covering
+more than it does:
+
+- **The COMPUTER slot's units are never counted in process.** A drag box does not
+  pick up hostile units and the enemy block is off screen from the opening camera,
+  so `-EnemyOwner player` is a *substitution*: it proves the engine creates exactly
+  that many units of that type at those coordinates **for the human slot**. On the
+  combat map itself, the enemy force's existence is proved only by the deaths it
+  causes. The generator's structural read-back is what pins the count and the owner
+  there.
+- **This closes the damage-death half of the 014/017 gap, and only that half.**
+  Removal *without* death -- trigger `RemoveUnit`, transport load, mind control,
+  archon merge, a recycled slot -- leaves hit points and `+0xA5` untouched, is
+  handled structurally rather than by the liveness term, and is still proved offline
+  in `hooktest` alone. Nothing in this fixture exercises those.
+- **Which unit dies first is not controllable.** Whether the first casualty is one
+  of the engine's own visible twelve (row hands back to stock) or one of the
+  overflow (row keeps paging) depends on what the enemy shoots. Both are asserted
+  when they occur, but the test *selects* neither, and the same-selection page walk
+  is therefore opportunistic -- the run-to-run proof is the re-boxed comparison.
 
 ## Why generated maps used not to play (task 015 found it, task 016 root-caused it)
 

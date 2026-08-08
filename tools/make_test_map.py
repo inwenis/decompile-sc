@@ -195,10 +195,19 @@ START_LOCATION_UNIT_ID = 214
 # bit0 owner, bit1 hp, bit2 shield, bit3 energy, bit4 resource, bit5 hangar.
 _VALID_OWNER_HP_SHIELD_ENERGY = 0x01 | 0x02 | 0x04 | 0x08
 
-# The `hp` byte at offset 0x19 is a PERCENTAGE of the unit type's maximum, 1-100
-# (staredit.net CHK spec, the same source as the rest of this record layout), and it
-# only applies because bit 0x02 of the valid-properties mask above is set -- which it
-# has been since task 009, with every generated fixture written at 100.
+# The `hp` byte is a PERCENTAGE of the unit type's maximum, 1-100 (staredit.net CHK
+# spec, the same source as the rest of this record layout), and it only applies
+# because bit 0x02 of the valid-properties mask above is set -- which it has been
+# since task 009, with every generated fixture written at 100.
+#
+# It sits at offset 0x11 of the 36-byte record, right after the owner byte at 0x10.
+# Checked rather than counted by eye: packing a record through _UNIT_RECORD_FMT with
+# hp=30 puts 30 at byte 0x11, and 0x19 -- which an earlier draft of this comment
+# named -- is the high byte of the `units in hangar` u16 at 0x18, which this tool
+# always writes as zero. Nothing in the generator ever addresses the field by a
+# literal offset (it packs the named struct field), so no map was ever wrong; the
+# offset is documentation, and in this repo documentation of an offset is the
+# deliverable.
 #
 # Task 019 exposed it as --unit-hp because a full-health 125-point Lurker takes
 # roughly twenty Hydralisk shots to kill, and the combat test spent minutes waiting

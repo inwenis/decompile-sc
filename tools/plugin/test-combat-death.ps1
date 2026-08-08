@@ -22,8 +22,16 @@ THE ORACLE IS THE GAP BETWEEN TWO IN-PROCESS NUMBERS.
 
 A damage death does not recycle the slot, so uniqueness still matches -- that is
 exactly the case the 0xA5-only test misses (research/selection-circles.md 4.5, and
-the task-017 review that put the HP term in). Those two lines, logged from inside the
-process at the same moment, are a unit that died and a row that noticed.
+the task-017 review that put the HP term in). Those two lines are a unit that died and
+a row that noticed.
+
+They are NOT one atomic read. The HUDROW line is found by a log poll (500 ms) and the
+UNITSTATE line is then requested with a fresh marker, so the second is written between
+half a second and a couple of seconds after the first. The conclusion survives because
+the gap can only run one way: uniqueness at CUnit+0xA5 changes only when the slot is
+RECYCLED, so a live=n read taken LATE is a stronger claim than one taken at the
+instant of the drop, not a weaker one. Reading it early is what would be unsound, and
+that ordering cannot happen -- the row's drop is what triggers the read.
 
 WHY LURKERS, TWICE OVER. An unburrowed Lurker has no weapon at all, so the enemy
 force survives the engagement and the deaths arrive as a trickle instead of being
@@ -216,7 +224,15 @@ function Invoke-Launch {
     }
     catch {
         Write-Host "       (launch failed: $($_.Exception.Message))"
-        $script:gamePid = 0
+        # run-with-plugin.ps1 throws in two different shapes, and one of them leaves a
+        # LIVE game behind. "injection failed" means the process was already gone --
+        # nothing to close. But its health check throws "the game has an error dialog
+        # open" with the process STILL RUNNING, and by then `scinject: PID=` has
+        # already streamed past, so that pid is ours. Zeroing it here without closing
+        # it would strand a game sitting on a modal dialog, holding the
+        # single-instance claim, on a machine other workers share -- and every retry
+        # below would then fail against our own leftover.
+        Close-LaunchedGame -Reason 'a failed launch' | Out-Null
         return $false
     }
     if ($script:gamePid -le 0) { return $false }
@@ -236,16 +252,18 @@ function Start-Mission {
     0)" / scinject exit 3: the process is gone a moment after being resumed, so there
     is nothing to inject into. On this machine that means another StarCraft already
     holds the game's single-instance claim -- most likely another worker's run, since
-    this repo runs its in-game suites in parallel tabs. Nothing is closed to recover:
-    the other game is not ours to touch. The launch is simply retried after a pause,
-    which is enough when the collision is a run that is about to finish.
+    this repo runs its in-game suites in parallel tabs. THAT game is not ours and is
+    never touched; the launch is simply retried after a pause, which is enough when
+    the collision is a run that is about to finish. What IS cleaned up between
+    attempts is our own half-started game, if the failure left one alive -- see the
+    catch in Invoke-Launch.
     #>
     if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPath -Force }
     if (Test-Path -LiteralPath $markerPath) { Remove-Item -LiteralPath $markerPath -Force }
 
     for ($attempt = 1; $attempt -le 4; $attempt++) {
         if (Invoke-Launch) { break }
-        Write-Host "       (launch attempt $attempt failed -- another StarCraft most likely holds the single-instance claim; waiting, NOT closing anything that is not ours)"
+        Write-Host "       (launch attempt $attempt failed -- another StarCraft most likely holds the single-instance claim; waiting. Anything of OURS left alive was closed above; nothing else is touched)"
         Start-Sleep -Seconds 20
     }
     if (-not $script:gamePid) {
@@ -276,28 +294,39 @@ function Start-Mission {
     Start-Sleep -Seconds 2
 }
 
-function Stop-Mission {
-    if ($script:gamePid -gt 0) {
-        try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $script:gamePid | Write-Host }
-        catch {
-            Write-Host "  FAIL close-game could not shut the game down: $($_.Exception.Message)"
-            $script:failures++
-        }
-        # close-game waits on the process handle, but the pid can still enumerate for
-        # a moment afterwards, so poll rather than take one sample.
-        $gone = $false
-        for ($i = 0; $i -lt 20 -and -not $gone; $i++) {
-            $left = Get-Process -Id $script:gamePid -ErrorAction SilentlyContinue
-            $gone = ($null -eq $left) -or $left.HasExited
-            if (-not $gone) { Start-Sleep -Milliseconds 500 }
-        }
-        if (-not $gone) {
-            Write-Host "  FAIL pid $($script:gamePid) is still running after close-game"
-            $script:failures++
-        }
-    }
+# Shut down the game THIS test launched, if it is still up, and forget it. Returns
+# whether the pid is actually gone. One place does this, so every exit -- a clean
+# phase end, a step that threw, a launch that failed half-way -- leaves the same
+# state behind.
+function Close-LaunchedGame {
+    param([string]$Reason = '')
+    $target = $script:gamePid
     $script:gamePid = 0
     $script:hwnd = [IntPtr]::Zero
+    if ($target -le 0) { return $true }
+
+    $p = Get-Process -Id $target -ErrorAction SilentlyContinue
+    if ($null -eq $p -or $p.HasExited) { return $true }
+    if ($Reason) { Write-Host "       closing the game this test launched (pid $target) -- $Reason" }
+    try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $target | Write-Host }
+    catch { Write-Host "       (close-game threw for pid ${target}: $($_.Exception.Message))" }
+
+    # close-game waits on the process handle, but the pid can still enumerate for a
+    # moment afterwards, so poll rather than take one sample.
+    for ($i = 0; $i -lt 20; $i++) {
+        $left = Get-Process -Id $target -ErrorAction SilentlyContinue
+        if ($null -eq $left -or $left.HasExited) { return $true }
+        Start-Sleep -Milliseconds 500
+    }
+    $false
+}
+
+function Stop-Mission {
+    $target = $script:gamePid
+    if (-not (Close-LaunchedGame)) {
+        Write-Host "  FAIL pid $target is still running after close-game"
+        $script:failures++
+    }
 }
 
 function Invoke-BoxSelect {
@@ -727,10 +756,17 @@ try {
         $extra = @($after.Tags | Where-Object { $before.Tags -notcontains $_ })
         Assert-That "every unit it shows is one it showed before -- nothing appeared from nowhere (extra: $($extra -join ' '))" `
             ($extra.Count -eq 0)
-        Assert-That "the units killed in the fight are gone from the row, by tag: $($missing -join ' ')" `
+        # WHAT THIS DOES AND DOES NOT SAY. `$after` is a fresh drag box, so strictly
+        # these tags are "in the row before the fight, not in it now" -- a survivor
+        # shoved outside the box rectangle would read the same way. Burrowing first
+        # makes that unlikely (nobody is moving, and two boxes five seconds apart
+        # agreed before the walk), and the population drop is corroborated by the
+        # HITPOINTS reading taken at the death itself, which needs no box at all. The
+        # count identity that used to sit here -- missing == before.N - after.N --
+        # was dropped: with `extra` empty and both tag counts equal to their own n, it
+        # follows by set algebra and could not fail while its neighbours passed.
+        Assert-That "units the row showed before the fight are gone from it now, by tag: $($missing -join ' ')" `
             ($missing.Count -ge 1)
-        Assert-That "and they are exactly what the row lost ($($missing.Count) gone, population fell by $($before.N - $after.N))" `
-            ($missing.Count -eq ($before.N - $after.N))
         Assert-That "its pages together still name every unit it counts ($($after.Tags.Count) distinct vs n=$($after.N))" `
             ($after.Tags.Count -eq $after.N)
         Assert-That "the page count matches the population ($($after.Pages) = ceil($($after.N)/$HUD_SLOTS))" `
