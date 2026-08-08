@@ -20,7 +20,18 @@ and TOOLING, not redistributed game content.
    Offline and single-player only.
 4. Every claimed address/offset/struct must carry evidence: how it was found
    and how it was verified. No guessed offsets in `research/`.
-5. `C:/git/conductor` and `C:/git/conductor-task*` are ANOTHER LIVE SYSTEM
+5. NEVER write to live user state outside the repo and the working copy —
+   registry keys, `%APPDATA%`, Documents, the desktop. The user's machine is
+   not a test bench. Specifically: `HKCU:\SOFTWARE\Blizzard Entertainment\*`
+   holds their real game settings (2026-08-08 incident: `New-Item -Force` on
+   an existing key DELETES AND RECREATES it — 22 settings wiped, restored
+   from a lucky pre-existing dump, MRU list partly lost). Prove any
+   state-touching mechanism against a throwaway key/path first, and prefer a
+   process-scoped mechanism over persistent user state whenever both work.
+   Deployment targets the user chose (the deploy dir, a desktop shortcut) are
+   the exception — write those, but never destructively (see `tools/deploy.ps1`
+   player-data rules).
+6. `C:/git/conductor` and `C:/git/conductor-task*` are ANOTHER LIVE SYSTEM
    (a separate orchestrator with ~25 in-flight agents and real user
    messages). NEVER read, modify, `cd` into, or run git/gh against them from
    this repo — touching them is a data-loss incident. Everything this repo
