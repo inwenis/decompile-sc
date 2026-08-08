@@ -196,11 +196,14 @@ static WORD UnitTag(DWORD unit) {
     return (WORD)(((WORD)*(BYTE*)(unit + SC_CUNIT_OFF_UNIQUENESS) << 11) | (WORD)index);
 }
 
-// Is `unit` reachable from its own player's unit list? A unit in play is linked
-// into playerUnitList[player] (0x006283F8) via +0x6C; the removal path unlinks a
-// freed/removed/transported/mind-controlled unit (sc_addresses.h). So this is the
-// structural "still in play" test the click gate needs -- it does not depend on any
-// per-removal-path signal. Bounded so a corrupt list cannot hang the game thread.
+// Is `unit` reachable from its owning player's unit list? A unit in play is linked
+// into playerUnitList[player] (0x006283F8) via +0x6C; the removal path 0x004A0740
+// UNLINKS a unit removed from play (sc_addresses.h). So a unit that is NOT reachable
+// has been removed -- killed-and-not-recycled, trigger RemoveUnit, archon-consumed --
+// regardless of which removal path dropped it. (Transport-loaded and mind-controlled
+// units stay/relink in a player list and remain reachable; that is fine, they are
+// live identity-correct units. See ClickUnitValid.) Bounded so a corrupt list cannot
+// hang the game thread.
 static bool InPlayerUnitList(DWORD unit) {
     if (!unit) return false;
     BYTE player = *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER);
@@ -215,11 +218,14 @@ static bool InPlayerUnitList(DWORD unit) {
 
 // Is a clicked wireframe unit safe to hand to the engine's Select? It must be a
 // unit we are currently displaying (so we hold its captured uniqueness), NOT
-// recycled (uniqueness match), NOT dead (HP>0), and STILL IN PLAY (in its player's
-// unit list). This closes the dangerous exposure CLASS structurally: a freed /
-// removed / transported unit fails the list check no matter which removal path
-// dropped it, and a recycled slot fails the uniqueness check -- so a stale CUnit*
-// can never reach CMDACT_Select where its tag would pass the receive-side check.
+// recycled (uniqueness match), NOT dead (HP>0), and STILL IN PLAY (reachable in its
+// player's unit list). This closes the DANGEROUS exposure -- a stale/freed CUnit*
+// reaching CMDACT_Select where its tag would pass the receive-side uniqueness check:
+// a removed-from-play unit fails the list check and a recycled slot fails the
+// uniqueness check. Units that pass but are no longer in OUR selection (a loaded or
+// mind-controlled unit) are still live, identity-correct CUnit*s and are harmless to
+// select; the divergence latch separately hands the row to stock when the engine's
+// visible selection changes, so the row never keeps offering them.
 static bool ClickUnitValid(DWORD unit) {
     if (!unit) return false;
     BYTE captured = 0; bool known = false;
@@ -370,13 +376,13 @@ int ScHudRowOnButtonEvent(DWORD ctrl, DWORD evt) {
 
         // THE CLICK GATE. An ACTIVATE (a completed click) is where the stock handler
         // 0x00458220 would put the button's statUser CUnit* into a Select command.
-        // While we are paging (buttons wrapped), a displayed unit can have been
-        // removed by a path our divergence check cannot see (an OVERFLOW unit loaded
-        // into a transport, say). Validate it FIRST: if it is not a live, in-play,
-        // non-recycled unit, SWALLOW the click (the engine never sees the stale
-        // pointer) and latch diverged so the row hands back to stock. This bounds the
-        // dangerous exposure to zero regardless of removal path; the corpse-display
-        // window becomes cosmetic-only.
+        // While we are paging (buttons wrapped), a displayed OVERFLOW unit can have
+        // been removed from play by a path our divergence check cannot see (trigger
+        // RemoveUnit, archon-consumed -- neither touches clientSelectionGroup).
+        // Validate it FIRST: if it is not a live, in-play, non-recycled unit, SWALLOW
+        // the click (the engine never sees the stale pointer) and latch diverged so
+        // the row hands back to stock. This bounds the dangerous exposure to zero
+        // regardless of removal path; the corpse-display window becomes cosmetic-only.
         if (type == SC_EVT_TYPE_USER && g_wrapCount > 0 &&
             *(DWORD*)(evt + SC_EVT_OFF_USER) == SC_USER_ACTIVATE) {
             DWORD su = *(DWORD*)(ctrl + SC_BINDLG_OFF_USER);

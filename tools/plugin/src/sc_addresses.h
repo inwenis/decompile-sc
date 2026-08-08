@@ -361,13 +361,19 @@
 // (research/command-opcodes.md 6), so a damage-death reads 0 here. id at +0x64.
 #define SC_CUNIT_OFF_HITPOINTS 0x08u
 
-// The player unit list -- CUnit*[8] of per-player list heads, and the CUnit
+// The player unit list -- per-player list heads at 0x006283F8, and the CUnit
 // prev/next links the engine threads them on. Derived by task 017 from the unit
 // (re)init 0x004A0320 (decompiled): it sets [unit+0x68]=0, [unit+0x6C]=head,
-// [head+0x68]=unit, head=unit -- a head-insert doubly linked list. The removal
-// path 0x004A0740 unlinks a removed unit, so a unit reachable from
-// playerUnitList[player] via +0x6C is IN PLAY; a freed/removed/transported/
-// mind-controlled unit is not. This is the click gate's in-play check.
+// [head+0x68]=unit, head=unit -- a head-insert doubly linked list, indexed by the
+// unit's owning player. The removal path 0x004A0740 UNLINKS a unit that is removed
+// from play, so a unit NOT reachable from playerUnitList[player] via +0x6C has been
+// removed (killed-and-not-yet-recycled, trigger RemoveUnit, archon-consumed). Note:
+// a TRANSPORT-loaded unit stays list-linked (the engine walks the list for supply,
+// loaded units included) and a MIND-CONTROLLED unit relinks under its new owner, so
+// both remain reachable -- and both are fine to hand to the engine's Select: they
+// are live, identity-correct CUnit*s that vanilla can select. The array size is not
+// evidenced here (vanilla convention is one entry per player incl. neutral); the
+// gate reads only indices < SC_MAX_PLAYERS (8), which is fail-closed for any size.
 #define SC_VA_PLAYER_UNIT_LIST 0x006283F8u
 #define SC_CUNIT_OFF_LIST_PREV 0x68u
 #define SC_CUNIT_OFF_LIST_NEXT 0x6Cu

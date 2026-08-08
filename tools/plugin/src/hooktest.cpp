@@ -1176,10 +1176,13 @@ static void HudRowTests(void) {
     }
 
     printf("\n    the CLICK GATE swallows a click on a removed-not-killed OVERFLOW unit\n");
-    // The exposure (b) closes: an overflow unit loaded into a transport is unlinked
-    // from its player unit list but keeps HP and uniqueness, and is NOT in
-    // clientSelectionGroup (so the divergence check cannot see it). A click on its
-    // portrait must be swallowed before the engine's Select ever sees the stale ptr.
+    // The exposure (b) closes: an overflow unit REMOVED FROM PLAY (trigger RemoveUnit
+    // / archon-consumed -- i.e. unlinked from its player unit list) keeps HP and
+    // uniqueness and is NOT in clientSelectionGroup, so the divergence check cannot
+    // see it. UnlinkFakeUnit models exactly that removal. A click on its portrait must
+    // be swallowed before the engine's Select sees the stale pointer. (A transport-
+    // loaded or mind-controlled unit stays list-linked and would correctly PASS -- it
+    // is a live, identity-correct CUnit*.)
     {
         BYTE rbtn[0x14], act[0x14];
         MakeRButtonEvt(rbtn);

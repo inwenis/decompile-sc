@@ -299,12 +299,12 @@ wrong-but-harmless pixels for a frame.
 
 ### 6.1 The stale-pointer exposure CLASS, closed structurally (stage B)
 
-A shadow page can display an overflow unit the engine has since **removed** — killed,
-loaded into a transport, mind-controlled, archon-merged, trigger-removed. The danger is not
-the wrong pixels; it is a click on that stale slot handing the engine a `CUnit*` whose tag
-still passes the receive-side uniqueness check, so a removed unit enters engine selection —
-where vanilla self-heals in one frame. sc_hudrow closes the whole class with two structural
-measures rather than one detector per removal path:
+A shadow page can display an overflow unit whose state changed since it was captured —
+killed, freed by a trigger, archon-consumed, or merely dropped from the visible selection
+(transport-loaded, mind-controlled). The *dangerous* case is narrow: a click that hands the
+engine a **freed** `CUnit*` whose tag still passes the receive-side uniqueness check, so a
+no-longer-real unit enters engine selection — where vanilla self-heals in one frame. sc_hudrow
+closes that class with two structural measures rather than one detector per removal path:
 
 1. **Detection ≠ removal-path.** Death is one signal (`hitPoints == 0`, `CUnit+0x08`, the
    field the damage primitive `0x004797B0` zeroes — [`command-opcodes.md`](command-opcodes.md)
@@ -318,14 +318,25 @@ measures rather than one detector per removal path:
 2. **The click gate.** Before the engine's click handler receives a button's statUser
    `CUnit*` (on the `BW_USER_ACTIVATE` = 2 sub-event that `0x004583E0` routes to `0x00458220`
    — jump table at `0x0045849C`), sc_hudrow validates it: displayed, uniqueness unchanged,
-   `hitPoints > 0`, **and present in its player's unit list**. The unit list is
-   `playerUnitList` at `0x006283F8` (a `CUnit*[8]` of per-player heads), threaded through
-   `CUnit+0x68`/`+0x6C` — decompiled from the unit (re)init `0x004A0320`, which head-inserts a
-   unit into `playerUnitList[player]`; the removal path `0x004A0740` unlinks it. So a
-   freed/removed/transported/transferred unit is *not reachable* from its player's list head,
-   no matter which path dropped it. An invalid click is **swallowed** (the engine never sees
-   the stale pointer) and the row latches to stock. The dangerous exposure is bounded to zero;
-   the corpse-display window becomes cosmetic-only.
+   `hitPoints > 0`, **and reachable in its owning player's unit list**. The unit list is
+   `playerUnitList` at `0x006283F8` (per-player heads, indexed by the unit's owner), threaded
+   through `CUnit+0x68`/`+0x6C` — decompiled from the unit (re)init `0x004A0320`, which
+   head-inserts a unit into `playerUnitList[player]`; the removal path `0x004A0740` **unlinks**
+   a unit removed from play. So a unit **removed from play** (killed-and-not-recycled, trigger
+   RemoveUnit, archon-consumed) is *not reachable* from its player's list head, no matter which
+   path dropped it, and its click is **swallowed** (the engine never sees the stale pointer)
+   with the row latched to stock. The array's element count is not evidenced here; the gate
+   reads only indices `< 8` (`SC_MAX_PLAYERS`), which is fail-closed for any size.
+
+   Two live cases deliberately **pass** the gate, and that is correct: a **transport-loaded**
+   unit stays linked in its player's list (the engine walks the list for supply, loaded units
+   included), and a **mind-controlled** unit relinks under its new owner (the walk reads the
+   current `CUnit+0x4C`). Both are live, identity-correct `CUnit*`s that vanilla can select, so
+   handing one to the engine is harmless. The point of the gate is only the *dangerous* case —
+   a **freed/removed** slot whose tag would still pass the receive-side uniqueness check. When
+   the engine drops a loaded/controlled unit from the *visible* selection, measure (1)'s
+   divergence latch catches it separately and the row hands back to stock, so it is never kept
+   on offer.
 
 These, plus the same bounds/stride and `CUnit+0xA5` guards the circles module uses, are what
 make the shadow page safe.
