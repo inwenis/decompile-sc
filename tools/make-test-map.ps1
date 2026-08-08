@@ -6,11 +6,11 @@
     12-unit selection cap (task009).
 
 .DESCRIPTION
-    Thin wrapper around tools/make_test_map.py (a richchk-based CHK/MPQ
-    editor -- see tools/README-test-map.md). Takes an existing melee map as a
-    terrain/start-location template, appends N placed units near the chosen
-    player's start location, and disables every other player slot so nothing
-    hostile is on the map.
+    Thin wrapper around tools/make_test_map.py (a raw-CHK patcher over richchk's
+    MPQ binding -- see tools/README-test-map.md). Takes an existing melee map as
+    a terrain/start-location template, appends N placed units near the chosen
+    player's start location, disables every other player slot so nothing hostile
+    is on the map, and strips the template's triggers so nothing can end the game.
 
     Runs the generator's own structural validation pass afterward and prints
     its output -- no need for a separate validate step.
@@ -38,7 +38,16 @@ param(
     [switch]$KeepOwnr,
     # Drop the target player's existing units first, so the placed group is all one type.
     # A mixed selection is offered only the basic command card in game -- no ability buttons.
-    [switch]$ClearPlayerUnits
+    [switch]$ClearPlayerUnits,
+    # Keep the template's TRIG/MBRF sections. NOT for a test fixture: every stock map
+    # ships triggers that end the game, and they fire within seconds of loading a
+    # generated map (tools/README-test-map.md, "why generated maps used not to play").
+    [switch]$KeepTriggers,
+    # Race written into SIDE for the human and computer slots. Defaults to the race the
+    # placed unit type belongs to. It must not be left as a ladder template's "User
+    # Selectable" -- that slot gets MELEE starting units even under Use Map Settings.
+    [ValidateSet('zerg', 'terran', 'protoss')]
+    [string]$Race
 )
 
 $ErrorActionPreference = 'Stop'
@@ -67,6 +76,8 @@ $pyArgs = @(
 )
 if ($KeepOwnr) { $pyArgs += '--keep-ownr' }
 if ($ClearPlayerUnits) { $pyArgs += '--clear-player-units' }
+if ($KeepTriggers) { $pyArgs += '--keep-triggers' }
+if ($Race) { $pyArgs += @('--race', $Race) }
 
 & $python @pyArgs
 exit $LASTEXITCODE

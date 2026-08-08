@@ -308,6 +308,107 @@ function Send-ScKey {
     if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
 }
 
+function Send-ScDropdownPick {
+    <#
+    .SYNOPSIS
+    Pick the Nth entry of one of the game's menu dropdowns (Game Type, race, ...).
+    .DESCRIPTION
+    These are press-and-hold controls, not click-to-open ones: the entry under the
+    cursor at button-UP is the one selected, and the list is on screen only while the
+    button is held.
+
+    How that was established (task 016, Game Type combo on the Create Game screen):
+    a plain Send-ScClick on the box left the frame captured a second later showing the
+    box closed with its label unchanged, and the game behaved the same as with no click
+    at all -- so a click is not a way to choose, and the label alone says nothing about
+    what is set. Posting WM_LBUTTONDOWN *without* the matching UP and capturing the frame
+    then shows the list open; the offsets below were read off that frame, at a 640x480
+    client: first entry 16px below the closed box's own centre line, 15px apart after
+    that. -Index 0 is that first entry.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][IntPtr]$Hwnd,
+        [Parameter(Mandatory)][int]$X, [Parameter(Mandatory)][int]$Y,
+        [Parameter(Mandatory)][int]$Index,
+        [int]$FirstOffset = 16, [int]$Pitch = 15, [int]$SettleMs = 400
+    )
+    Assert-ScDrivable -Hwnd $Hwnd
+    $itemY = $Y + $FirstOffset + $Index * $Pitch
+    $atBox  = ConvertTo-ScLParam $X $Y
+    $atItem = ConvertTo-ScLParam $X $itemY
+    [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]0, $atBox)
+    Start-Sleep -Milliseconds 60
+    [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_LBUTTONDOWN, [IntPtr]$script:MK_LBUTTON, $atBox)
+    Start-Sleep -Milliseconds 200
+    [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]$script:MK_LBUTTON, $atItem)
+    Start-Sleep -Milliseconds 200
+    [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_LBUTTONUP, [IntPtr]0, $atItem)
+    if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
+}
+
+$script:ScMarkerSeq = 0
+
+function Get-ScUnitState {
+    <#
+    .SYNOPSIS
+    Ask the plugin for a UNITSTATE line and parse it. THE test oracle.
+    .DESCRIPTION
+    Writes a unique label into the plugin's marker file and waits for the UNITSTATE
+    line carrying that exact label. The plugin dumps the line when it notices the
+    marker change (scplugin.cpp PollMarker), so this is a SYNCHRONOUS read of every
+    unit's own state from inside the process -- not a race against the 250ms poll,
+    and not a claim about the picture.
+
+    The line covers the whole shadow list, i.e. the entire pre-cap selection, not the
+    twelve the engine holds.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$LogPath,
+        [Parameter(Mandatory)][string]$Tag,
+        [string]$MarkerPath,
+        [int]$TimeoutSec = 10
+    )
+    if (-not $MarkerPath) { $MarkerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt' }
+    $script:ScMarkerSeq++
+    $label = "$Tag-$script:ScMarkerSeq"
+    Set-Content -LiteralPath $MarkerPath -Value $label -NoNewline
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        $line = Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
+                Select-String -Pattern ([regex]::Escape("UNITSTATE [$label]")) |
+                Select-Object -Last 1
+        if ($line) {
+            $m = [regex]::Match($line.Line,
+                'UNITSTATE \[[^\]]*\] n=(\d+) live=(\d+) visible=(\d+) overflow=(\d+) orders=\[([^\]]*)\] orders2=\[([^\]]*)\] types=\[([^\]]*)\] burrowed=(\d+)/(\d+)')
+            if (-not $m.Success) { break }
+            $toMap = {
+                param([string]$s)
+                $h = @{}
+                foreach ($pair in ($s -split '\s+' | Where-Object { $_ -match ':' })) {
+                    $kv = $pair -split ':'
+                    $h[$kv[0]] = [int]$kv[1]
+                }
+                $h
+            }
+            return [pscustomobject]@{
+                N = [int]$m.Groups[1].Value; Live = [int]$m.Groups[2].Value
+                Visible = [int]$m.Groups[3].Value; Overflow = [int]$m.Groups[4].Value
+                Orders = (& $toMap $m.Groups[5].Value)
+                Orders2 = (& $toMap $m.Groups[6].Value)
+                Types = (& $toMap $m.Groups[7].Value)
+                TypesText = $m.Groups[7].Value
+                Burrowed = [int]$m.Groups[8].Value
+                BurrowedOf = [int]$m.Groups[9].Value
+                Line = $line.Line.Trim()
+            }
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    throw "drive-game: no UNITSTATE line for marker '$label' within ${TimeoutSec}s (log: $LogPath)."
+}
+
 function Save-ScWindowImage {
     <#
     .SYNOPSIS

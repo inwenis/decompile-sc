@@ -546,6 +546,7 @@ The one exception is the deprecated `-Windowed` switch, which *does* write
 | `drive-game.ps1` | posted-window-message driver: find the HWND, click, drag, type, capture a frame. No synthetic OS input, no screen coordinates |
 | `test-selection-circles.ps1` | **unattended** end-to-end test: launches, walks the menus, loads a stock map, drives a drag box and an order, asserts on the plugin log |
 | `test-fanout-orders.ps1` | **unattended** end-to-end test of the per-opcode policy: Stop and Hold Position reach all 24 units of a >12 selection, asserted from every unit's own order byte, not from the picture |
+| `test-burrow-fanout.ps1` | **unattended** end-to-end test of an untargeted ABILITY: generates a 36-Lurker Use-Map-Settings map, boxes it, presses Burrow once, asserts `burrowed` goes 0/36 → 36/36 from each unit's own flags. Deletes the map afterwards |
 | `check-game-windows.ps1` | out-of-process launch health check |
 | `close-game.ps1` | WM_CLOSE the game and verify it exited (hard rule: never leave one running) |
 
@@ -555,7 +556,18 @@ The one exception is the deprecated `-Windowed` switch, which *does* write
 ./tools/plugin/test-selection-circles.ps1            # circles on
 ./tools/plugin/test-selection-circles.ps1 -NoCircles # the off-switch run
 ./tools/plugin/test-fanout-orders.ps1                # Stop / Hold / Attack / Patrol at >12
+./tools/plugin/test-burrow-fanout.ps1                # Burrow (an untargeted ABILITY) at 36
 ```
+
+`test-burrow-fanout.ps1` is the one that needs no stock map: no `.scm`/`.scx` Blizzard shipped can
+put more than twelve same-type units with an ability button on one screen
+([`research/command-opcodes.md`](../../research/command-opcodes.md) §8), so it **generates** its
+fixture with `tools/make-test-map.ps1`, plays it, and deletes it. Two properties of that generator
+are what make the map playable at all, and both were root-caused by task 016: the human slot's
+race must be explicit rather than the ladder template's "User Selectable" (otherwise the engine
+hands out melee starting units even under Use Map Settings), and the template's triggers must be
+stripped (otherwise they end the game within seconds). See
+[`tools/README-test-map.md`](../README-test-map.md).
 
 `test-fanout-orders.ps1` adds a second oracle on top of the log: the plugin's `UNITSTATE` line,
 which walks the **shadow list** — all 24 units, not the 12 the engine holds — and reports a
