@@ -1,8 +1,8 @@
 {
-  "state": "processing",
-  "subject": "merging task 013",
-  "updatedAt": "2026-08-07T22:15:09Z",
-  "contextPct": 76,
+  "model": "Fable 5",
   "effort": "xhigh",
-  "model": "Fable 5"
+  "contextPct": 15,
+  "subject": "merging task 014",
+  "state": "processing",
+  "updatedAt": "2026-08-08T00:29:17Z"
 }
