@@ -18,40 +18,50 @@ What it does, in order:
      inside this repo, under C:\git (any repo/worktree), under C:\sc-work (the
      working-copy scratch root) or -SourceGameDir specifically, or under
      C:\sc-install (hard rule: never write there).
-  2. Refuses if StarCraft is currently running -- ANY StarCraft process, not only one
+  2. Takes the same cross-worker launch lock run-with-plugin.ps1 does (see its
+     "Launch lock" .DESCRIPTION and tools/plugin/sc-launch-lock.ps1) for the rest of
+     this run -- guard checks through verify -- so a game cannot start in the window
+     between the running-game check below and the mirror actually running.
+  3. Refuses if StarCraft is currently running -- ANY StarCraft process, not only one
      running from -DeployRoot (redeploying over a locked scplugin.dll would abort
      mid-copy, after /MIR had already purged; see "Why the running-game check is
      name-based" below for why it is not scoped tighter).
-  3. Refuses if <DeployRoot>\game contains a reparse point (symlink/junction): /MIR
+  4. Refuses if <DeployRoot>\game contains a reparse point (symlink/junction): /MIR
      purging through one deletes files in whatever it points at, and /XJ does not
      stop that on the robocopy build this was verified against.
-  4. Builds scplugin.dll + scinject.exe from the current checkout (tools/plugin/build.ps1
+  5. Builds scplugin.dll + scinject.exe from the current checkout (tools/plugin/build.ps1
      -- already asserts both are PE32/x86 and fails the build otherwise).
-  5. Mirrors -SourceGameDir (default the working copy, C:\sc-work\1161-base) into
+  6. Mirrors -SourceGameDir (default the working copy, C:\sc-work\1161-base) into
      <DeployRoot>\game -- the same StarCraft.exe bytes, not a rebuild of anything.
-     characters\ (player profiles), save\ (single-player saved games) and Maps\Replays\
-     (replays) are excluded from the mirror in both directions, so anything the deployed
-     game itself writes there survives every future redeploy. See "What survives a
-     redeploy, and what does not" below.
-  6. Copies the freshly built plugin binaries, plus run-with-plugin.ps1 and its
-     check-game-windows.ps1/sc-canonical-path.ps1/sc-audio-mute.ps1 dependencies, into
-     <DeployRoot>\plugin -- so the deployed install does not depend on this repo (or
-     this worktree, which is disposable) still existing on disk later. See "Design:
-     self-contained, not a thin repo pointer" below.
-  7. Writes <DeployRoot>\Launch-StarCraft-Modded.ps1, a launcher with zero parameters
+     characters\, save\, Maps\Replays\, maps\download\ and SCScrnShot_*.pcx are excluded
+     from the mirror in both directions, so anything the deployed game itself writes
+     there survives every future redeploy. A tripwire hashes those directories before
+     and after the mirror and throws if anything preserved actually changed. See "What
+     survives a redeploy, and what does not" below.
+  7. Copies the freshly built plugin binaries, plus run-with-plugin.ps1 and its
+     check-game-windows.ps1/sc-canonical-path.ps1/sc-audio-mute.ps1/sc-launch-lock.ps1
+     dependencies, into <DeployRoot>\plugin -- so the deployed install does not depend
+     on this repo (or this worktree, which is disposable) still existing on disk later.
+     See "Design: self-contained, not a thin repo pointer" below.
+  8. Writes <DeployRoot>\Launch-StarCraft-Modded.ps1, a launcher with zero parameters
      that calls the deployed copy of run-with-plugin.ps1 with the feature set baked in:
-     -Mode fanout -InjectWindowedHelper WMode -Circles 1 -HudRow 1 -Sound (fanout +
-     selection circles + HUD row paging, windowed, audible). This is run-with-plugin.ps1's
-     real working windowed recipe, not its deprecated/broken -Windowed switch -- see
-     tools/plugin/README.md "Windowed mode: injected, not proxied". -Sound matters here
-     specifically: run-with-plugin.ps1 mutes by default (unattended test suites), and
-     this is the one launcher that must stay audible -- the user plays through it.
-  8. Creates/updates the desktop shortcut "StarCraft Modded.lnk", target
+     -Mode fanout -InjectWindowedHelper WMode -Circles 1 -HudRow 1 -Sound -NoLaunchLock
+     (fanout + selection circles + HUD row paging, windowed, audible, and structurally
+     unable to take the worker launch lock). This is run-with-plugin.ps1's real working
+     windowed recipe, not its deprecated/broken -Windowed switch -- see
+     tools/plugin/README.md "Windowed mode: injected, not proxied". -Sound and
+     -NoLaunchLock both matter here specifically because this is the ONE launcher the
+     user's own play goes through -- see run-with-plugin.ps1's "Launch lock" .DESCRIPTION
+     for the regression that shipped once from getting this wrong. The launcher also
+     wraps the call in try/catch: on failure it logs to <DeployRoot>\logs\launch-error.log
+     and shows a message box, because this runs `pwsh -WindowStyle Hidden` with no
+     console -- without that, any failure here is silently invisible to the user.
+  9. Creates/updates the desktop shortcut "StarCraft Modded.lnk", target
      "pwsh -WindowStyle Hidden -File <launcher>" so double-clicking shows the game and
      nothing else -- no console window.
-  9. Verifies: deployed StarCraft.exe sha256 == source's, plugin DLL/EXE are newer than
-     this run's start (proof they were actually rebuilt, not stale leftovers), the
-     shortcut resolves to an existing target and launcher. Prints a one-line receipt.
+  10. Verifies: deployed StarCraft.exe sha256 == source's, plugin DLL/EXE are newer than
+      this run's start (proof they were actually rebuilt, not stale leftovers), the
+      shortcut resolves to an existing target and launcher. Prints a one-line receipt.
 
 What survives a redeploy, and what does not.
 Early versions of this script mirrored -SourceGameDir into <DeployRoot>\game with a plain
@@ -59,21 +69,27 @@ Early versions of this script mirrored -SourceGameDir into <DeployRoot>\game wit
 DELETED. That is correct for the shipped game files (an old build should not linger) and
 wrong for player state, which exists ONLY in the deploy dir (the working copy is a dev
 scratch area, nobody plays from it) -- a plain /MIR silently deleted it on every single
-redeploy after the one that created it. Caught in review before "deployed" meant anything,
-in two passes: the first covered characters\ (profiles) and Maps\Replays\ (replays); it
-missed save\ (single-player saved games, a SIBLING of characters\, not something it
-already covered) until a live save-then-redeploy test caught it.
+redeploy after the one that created it. Caught in review across THREE rounds, each one
+finding another sibling of the same bug class: the first covered characters\ (profiles)
+and Maps\Replays\ (replays); the second missed save\ (single-player saved games, a
+SIBLING of characters\, not something it already covered) until a live save-then-redeploy
+test caught it; the third added maps\download\ and SCScrnShot_*.pcx pre-emptively and a
+post-mirror tripwire (hash every preserved file before and after, throw on any change) so
+a FOURTH instance of this class fails loudly instead of shipping quietly.
 
 PRESERVED (excluded from the mirror entirely, in both directions):
-  - characters\   -- player profiles
-  - save\         -- single-player saved games
-  - Maps\Replays\ -- replays
+  - characters\        -- player profiles
+  - save\               -- single-player saved games
+  - Maps\Replays\       -- replays
+  - maps\download\      -- Battle.net map-download cache (0 occurrences in source, same
+                            shape as save\ -- excluded pre-emptively, not yet caught live)
+  - SCScrnShot_*.pcx    -- in-game screenshots (F12), which land in the game dir ROOT
 
 PURGED (still a true mirror of -SourceGameDir, same as everything else):
   - Maps\ itself, outside \Replays\ -- a custom map dropped straight into
     <DeployRoot>\game\Maps\ does NOT survive a redeploy.
   - Errors\ -- crash logs, same reasoning.
-  - anything else not in the three preserved directories above.
+  - anything else not in the preserved set above.
 
 Custom maps were deliberately left out of the preserved set, not overlooked: the honest
 fix would mean the same diff-based "keep destination-only extras" logic
@@ -146,6 +162,11 @@ $pluginDir = Join-Path $scriptDir 'plugin'
 # is spellable around: '-DeployRoot \\?\C:\sc-install\Starcraft' passes a naive prefix
 # check unchanged, and /MIR would then purge inside the pristine install.
 . (Join-Path $pluginDir 'sc-canonical-path.ps1')
+# Cross-worker/deploy serialisation -- deploy.ps1 takes the same lock run-with-plugin.ps1
+# does, for its whole run (guard check through the mirror), closing a TOCTOU a verifier
+# found: without it, StarCraft could start between the running-game preflight check below
+# and the mirror actually running. See tools/plugin/sc-launch-lock.ps1.
+. (Join-Path $pluginDir 'sc-launch-lock.ps1')
 
 # --- guard: refuse a dangerous -DeployRoot ----------------------------------
 $deployRootFull = Get-CanonicalPath $DeployRoot
@@ -178,6 +199,16 @@ if (-not (Test-Path -LiteralPath $sourceExe)) {
     throw "deploy: $sourceExe not found -- is -SourceGameDir a real working copy?"
 }
 $gameDeployDir = Join-Path $deployRootFull 'game'
+
+# --- launch/deploy lock (task018) --------------------------------------------
+# Taken for the WHOLE rest of this run (guard through verify), not just the mirror --
+# without it, StarCraft could start between the running-game check right below and the
+# mirror actually running, the exact TOCTOU a verifier found. Unlike run-with-plugin.ps1,
+# this is not gated on $env:AGENT_TASK: deploy.ps1 is never in the user's own play path
+# (the deployed launcher calls run-with-plugin.ps1 directly, never this script), so there
+# is no user-facing regression risk in always taking it here.
+$deployLock = Enter-ScLaunchLock -TimeoutMinutes 5
+try {
 
 # --- guard: refuse if StarCraft is currently running --------------------------
 # /MIR purges then re-copies. A process holding scplugin.dll open from a previous deploy
@@ -258,22 +289,73 @@ New-Item -ItemType Directory -Path $deployRootFull -Force | Out-Null
 # checked live), so it is purely a deploy-dir-only, destination-side directory, exactly
 # the shape /MIR purges without an exclusion.
 #
+# maps\download\ (Battle.net map-download cache) is the same shape again -- also 0
+# occurrences in the source tree, also purely destination-side if the deployed game ever
+# creates it. Excluded pre-emptively rather than waiting for a fourth round to find it.
+#
+# SCScrnShot_*.pcx (in-game screenshots, F12) land in the game dir ROOT, not a
+# subdirectory -- /XD cannot express that, so it is a /XF file-pattern exclusion instead,
+# same "excluded from both sides of /MIR" treatment.
+#
 # /XD 'Maps\Replays' (a multi-segment relative path) does NOT match on this robocopy
 # build -- verified live: it still descended into Maps\replays, overwrote LastReplay.rep
 # from source and purged a destination-only file. A bare directory NAME does work (also
-# verified live) and matches at any depth, which is fine for 'Replays' and 'save': each
-# occurs at most once in the whole source tree (once under Maps\, and zero times,
-# respectively).
+# verified live) and matches at any depth, which is fine for 'Replays'/'save'/'download':
+# each occurs at most once in the whole source tree (once under Maps\, and zero times for
+# the other two).
 $robocopyArgs = @(
     $SourceGameDir, $gameDeployDir,
     '/MIR',
-    '/XD', 'characters', 'Replays', 'save',
+    '/XD', 'characters', 'Replays', 'save', 'download',
+    '/XF', 'SCScrnShot_*.pcx',
     '/COPY:DAT', '/R:2', '/W:2', '/NFL', '/NDL', '/NP'
 )
+
+# --- preserved-data tripwire (task018, round 4): snapshot before, assert after ---------
+# Three review rounds have now found a class of bug in this exact mirror step (a
+# preserved directory silently purged). A verifier catching it by hand every time does
+# not scale -- this makes a future regression a loud thrown error instead of something
+# that has to be noticed. Hashes, not just presence: a byte-for-byte survival claim
+# deserves a byte-for-byte check, and these directories are small (profiles/saves/
+# replays), so hashing everything in them costs nothing meaningful.
+$preservedDirs = @('characters', 'save', 'Maps\Replays')
+function Get-ScPreservedSnapshot {
+    param([string]$Root, [string[]]$RelativeDirs)
+    $snap = @{}
+    foreach ($rel in $RelativeDirs) {
+        $full = Join-Path $Root $rel
+        $snap[$rel] = if (Test-Path -LiteralPath $full) {
+            Get-ChildItem -LiteralPath $full -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                [pscustomobject]@{
+                    Rel  = $_.FullName.Substring($full.Length).TrimStart('\')
+                    Hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+                }
+            }
+        } else { @() }
+    }
+    return $snap
+}
+$preSnapshot = Get-ScPreservedSnapshot -Root $gameDeployDir -RelativeDirs $preservedDirs
+
 & robocopy @robocopyArgs | Out-Host
 if ($LASTEXITCODE -ge 8) { throw "deploy: robocopy failed with exit code $LASTEXITCODE" }
 Write-Host "robocopy exit code $LASTEXITCODE (success)"
-Write-Host 'robocopy: characters\, save\ and Maps\Replays\ excluded -- player profiles/saves/replays in the deploy dir are never touched'
+Write-Host 'robocopy: characters\, save\, Maps\Replays\, maps\download\ and SCScrnShot_*.pcx excluded -- player data in the deploy dir is never touched'
+
+$postSnapshot = Get-ScPreservedSnapshot -Root $gameDeployDir -RelativeDirs $preservedDirs
+$lost = @()
+foreach ($rel in $preservedDirs) {
+    $before = @{}; foreach ($f in $preSnapshot[$rel]) { $before[$f.Rel] = $f.Hash }
+    $after  = @{};  foreach ($f in $postSnapshot[$rel]) { $after[$f.Rel] = $f.Hash }
+    foreach ($path in $before.Keys) {
+        if (-not $after.ContainsKey($path)) { $lost += "MISSING  $rel\$path" }
+        elseif ($after[$path] -ne $before[$path]) { $lost += "CHANGED  $rel\$path" }
+    }
+}
+if ($lost.Count -gt 0) {
+    throw "deploy: preserved-data tripwire FAILED -- the mirror step above touched files it must not have:`n$($lost -join "`n")"
+}
+Write-Host "verify: preserved-data tripwire OK ($(($preSnapshot.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum) file(s) checked across characters\/save\/Maps\Replays\)"
 
 # --- 3. copy the plugin runtime (self-contained, see .DESCRIPTION) -----------
 Write-Host ''
@@ -286,7 +368,8 @@ Copy-Item -LiteralPath (Join-Path $pluginDir 'run-with-plugin.ps1')     -Destina
 Copy-Item -LiteralPath (Join-Path $pluginDir 'check-game-windows.ps1') -Destination (Join-Path $pluginDeployDir 'check-game-windows.ps1') -Force
 Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-canonical-path.ps1')  -Destination (Join-Path $pluginDeployDir 'sc-canonical-path.ps1')  -Force
 Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-audio-mute.ps1')      -Destination (Join-Path $pluginDeployDir 'sc-audio-mute.ps1')      -Force
-Write-Host 'plugin runtime copied: scplugin.dll, scinject.exe, run-with-plugin.ps1, check-game-windows.ps1, sc-canonical-path.ps1, sc-audio-mute.ps1'
+Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-launch-lock.ps1')     -Destination (Join-Path $pluginDeployDir 'sc-launch-lock.ps1')     -Force
+Write-Host 'plugin runtime copied: scplugin.dll, scinject.exe, run-with-plugin.ps1, check-game-windows.ps1, sc-canonical-path.ps1, sc-audio-mute.ps1, sc-launch-lock.ps1'
 
 # --- 4. write the zero-argument launcher --------------------------------------
 $launcherPath = Join-Path $deployRootFull 'Launch-StarCraft-Modded.ps1'
@@ -298,18 +381,45 @@ this file rather than editing it by hand. Baked feature set: fan-out + selection
 + HUD row paging, windowed, sound ON (run-with-plugin.ps1 mutes by default for unattended
 test suites -- -Sound here is what keeps the user's own play audible; see
 tools/README-deploy.md "Sound").
+
+-NoLaunchLock is baked in deliberately, on top of run-with-plugin.ps1's own
+$env:AGENT_TASK check (never true here, since nothing sets that variable for the user's
+own desktop shortcut): the worker launch lock must be structurally unreachable from this
+path, not just conditionally skipped, because this launcher runs
+`pwsh -WindowStyle Hidden` with no console -- a held or wedged lock would otherwise mean
+double-clicking the game produces nothing on screen for however long the wait budget is,
+with no error visible anywhere. That regression shipped once during this task's own
+review and was caught before merge; this comment (and the try/catch below) are why it
+should not need catching twice.
+
+The try/catch below exists for the same reason, generalised: ANY failure in a hidden
+process is otherwise invisible. On failure this writes the error to
+<here>\logs\launch-error.log and shows a message box -- something on screen, rather than
+a double-click that silently does nothing.
 #>
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
-& (Join-Path $here 'plugin\run-with-plugin.ps1') `
-    -GameDir  (Join-Path $here 'game') `
-    -BuildDir (Join-Path $here 'plugin') `
-    -LogPath  (Join-Path $here 'logs\sc-plugin.log') `
-    -Mode fanout `
-    -InjectWindowedHelper WMode `
-    -Sound `
-    -Circles 1 `
-    -HudRow 1
+try {
+    & (Join-Path $here 'plugin\run-with-plugin.ps1') `
+        -GameDir  (Join-Path $here 'game') `
+        -BuildDir (Join-Path $here 'plugin') `
+        -LogPath  (Join-Path $here 'logs\sc-plugin.log') `
+        -Mode fanout `
+        -InjectWindowedHelper WMode `
+        -Sound `
+        -NoLaunchLock `
+        -Circles 1 `
+        -HudRow 1
+}
+catch {
+    $errLog = Join-Path $here 'logs\launch-error.log'
+    New-Item -ItemType Directory -Path (Split-Path $errLog -Parent) -Force | Out-Null
+    "$([DateTime]::Now.ToString('o'))`r`n$($_ | Out-String)" | Out-File -LiteralPath $errLog -Append -Encoding utf8
+    Add-Type -AssemblyName System.Windows.Forms
+    [System.Windows.Forms.MessageBox]::Show(
+        "StarCraft Modded failed to launch:`r`n`r`n$($_.Exception.Message)`r`n`r`nDetails logged to:`r`n$errLog",
+        'StarCraft Modded', 'OK', 'Error') | Out-Null
+}
 '@
 Set-Content -LiteralPath $launcherPath -Value $launcherBody -Encoding utf8NoBOM
 Write-Host ''
@@ -357,6 +467,10 @@ if ($resolved.TargetPath -ne $pwshExe) { throw "deploy: shortcut target mismatch
 if ($resolved.Arguments -notmatch [Regex]::Escape($launcherPath)) { throw "deploy: shortcut arguments do not reference the launcher: $($resolved.Arguments)" }
 if (-not (Test-Path -LiteralPath $launcherPath)) { throw "deploy: shortcut points at a launcher that does not exist: $launcherPath" }
 Write-Host "verify: shortcut resolves ($shortcutPath -> $pwshExe $($resolved.Arguments))"
+
+} finally {
+    Exit-ScLaunchLock -Lock $deployLock
+}
 
 Write-Host ''
 Write-Host "deploy: OK  version=$version  date=$dateStamp  -> $deployRootFull"

@@ -77,14 +77,38 @@ if ($cmd -match '(?i)[/\\]git[/\\]+conductor') {
 # prefer a process-scoped mechanism (e.g. a Windows Core Audio session mute) over
 # mutating the registry at all. Read-only queries (Get-ItemProperty, Get-Item, reg
 # query) stay allowed — this only blocks writes/deletes.
-$blizzardStarcraftKey  = '(?i)Blizzard\s+Entertainment[\\/]+Starcraft'
-$registryWriteVerbs    = '(^|[\s;|&(])(New-Item|Remove-Item|Remove-ItemProperty|Set-ItemProperty|New-ItemProperty)\b|reg(\.exe)?\s+(add|delete)\b'
-if ($cmd -match $blizzardStarcraftKey -and $cmd -match $registryWriteVerbs) {
+#
+# RESIDUAL LIMITS, stated plainly so this is never mistaken for a hard boundary:
+#   - This inspects the command STRING only. It would NOT have caught the original
+#     incident if that line had lived inside a .ps1 file instead of a direct shell
+#     command — a worker running `./some-script.ps1` that internally does the exact same
+#     `New-Item -Force` sails through unseen. Script-file review is what actually catches
+#     that case; this hook is a shell-command tripwire, not a static analyser.
+#   - It matches on the Blizzard key APPEARING in the command text at all, including
+#     inside quotes, comments, or prose — e.g. a message quoting this very incident as an
+#     example can trip it (happened once already, drafting the round-4 review of this
+#     task). That is a false-positive cost worth paying for the coverage; know it going
+#     in rather than being surprised by it.
+#   - Covers the literal Blizzard vendor key (parent, not just \Starcraft — deleting the
+#     parent wipes the child with it) and the write verbs below, their common PowerShell
+#     aliases, the raw .NET registry API, and `regedit /s`. It does not attempt to
+#     enumerate every possible way to reach the Win32 registry API (COM, P/Invoke under a
+#     different type name, a compiled helper exe, etc.) — those are unusual enough for a
+#     worker's routine task that requiring a human ask (message the conductor) for
+#     anything this pattern list does not recognise is the intended fallback, not a gap
+#     to keep chasing indefinitely.
+$blizzardKey        = '(?i)Blizzard\s+Entertainment'
+$registryWriteVerbs =
+    '(^|[\s;|&(])(New-Item|ni|Remove-Item|ri|Remove-ItemProperty|rp|Set-ItemProperty|sp|New-ItemProperty)\b' +
+    '|reg(\.exe)?\s+(add|delete)\b' +
+    '|regedit(\.exe)?\s[^\r\n]*\/s\b' +
+    '|Microsoft\.Win32\.Registry|RegistryKey\]|\[Registry\]'
+if ($cmd -match $blizzardKey -and $cmd -match $registryWriteVerbs) {
     @{
         hookSpecificOutput = @{
             hookEventName            = 'PreToolUse'
             permissionDecision       = 'deny'
-            permissionDecisionReason = "writing to the StarCraft registry key is banned (2026-08-08 registry-wipe incident) — it is live user state, never a worker's to mutate. Use a process-scoped mechanism instead (e.g. a Windows Core Audio session mute), or a throwaway test key to prove code first. Read-only queries stay allowed."
+            permissionDecisionReason = "writing to the StarCraft registry key (or its Blizzard Entertainment parent) is banned (2026-08-08 registry-wipe incident) — it is live user state, never a worker's to mutate. Use a process-scoped mechanism instead (e.g. a Windows Core Audio session mute), or a throwaway test key to prove code first. Read-only queries stay allowed. If this fired on quoted/illustrative text rather than a real command, that is a known false-positive class (see the comment above this block in config/guard-destructive.ps1) — rephrase to avoid the literal key name, or ask the conductor."
         }
     } | ConvertTo-Json -Depth 5
     exit 0
@@ -93,7 +117,7 @@ if ($cmd -match $blizzardStarcraftKey -and $cmd -match $registryWriteVerbs) {
 # footgun regardless of which key -- -Force on an EXISTING key deletes and recreates it
 # (unlike file New-Item -Force, which just overwrites content). Message the conductor
 # if a real need for it comes up; this is rare enough to warrant a human in the loop.
-if ($cmd -match '(^|[\s;|&(])New-Item\b' -and $cmd -match '-Force\b' -and
+if ($cmd -match '(^|[\s;|&(])(New-Item|ni)\b' -and $cmd -match '-Force\b' -and
     $cmd -match '[\s"'']HK(CU|LM|CR|U|CC):?[\\/]') {
     @{
         hookSpecificOutput = @{

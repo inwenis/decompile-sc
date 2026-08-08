@@ -1,25 +1,48 @@
 <#
 .SYNOPSIS
 Process-scoped audio mute via Windows Core Audio (WASAPI) session volume -- no registry,
-no file, no state that outlives the target process.
+no file, no state intended to outlive the target process.
 
 .DESCRIPTION
 task018: unattended test launches must be silent by default; the first attempt at this
 used the game's own HKCU registry volume settings (mute before launch, restore after) and
 that went badly -- see tools/plugin/README.md "Sound" and the 2026-08-08 incident it
 references. This is the replacement: mute the game's own per-application audio session
-directly, the same mechanism the Windows Volume Mixer uses per-app. Nothing is written to
-disk or the registry, there is nothing to restore, and the mute dies with the process --
-a crash, a kill, or two overlapping runs cannot leave anything muted or corrupted, because
-there is no persistent state to begin with.
+directly, the same mechanism the Windows Volume Mixer uses per-app.
 
-Session enumeration walks every active session on the DEFAULT RENDER endpoint and matches
-by process id (IAudioSessionControl2::GetProcessId), the same identification approach
-check-game-windows.ps1 and close-game.ps1 already use for windows -- resolving "the game"
-by name would hit whichever StarCraft happens to be running.
+Enumerates EVERY ACTIVE render endpoint (EnumAudioEndpoints, DEVICE_STATE_ACTIVE), not
+just the default one. First version of this checked the default endpoint only and never
+found StarCraft's session across several real attempts; a verifier found Windows' own
+per-app audio policy store showing StarCraft with sessions on THREE distinct render
+endpoints on the machine this was built on (onboard line-out, an HDMI output, a USB
+device) -- the session was very likely live the whole time, on an endpoint this code
+never looked at. Checking every active endpoint is the actual fix; a longer timeout on
+the wrong endpoint would still have found nothing.
 
-The game's audio session does not necessarily exist the instant the process does (its
-sound engine initialises after the window comes up), so Set-ScProcessMuted polls for it.
+Session identification matches by process id (IAudioSessionControl2::GetProcessId), the
+same approach check-game-windows.ps1 and close-game.ps1 use for windows -- resolving "the
+game" by name would hit whichever StarCraft happens to be running.
+
+Scope, stated exactly rather than aspirationally: Set-ScProcessMuted polls for up to
+-TimeoutSec at launch and then STOPS. An earlier version additionally started a
+Register-ObjectEvent background timer meant to keep re-affirming the mute for the whole
+game session; measured live, that timer does not fire while the calling script is inside
+a Start-Sleep call (0 ticks observed across a 3s sleep -- PowerShell does not appear to
+service the event queue during a plain sleep), which is most of what this script and
+every test suite spend their time doing, and the timer dies with the calling pwsh process
+regardless. That mechanism did not do what its own comments claimed and has been removed
+rather than left in place as a false guarantee. If a session does not exist yet within
+-TimeoutSec of launch (all endpoints checked, still nothing), the launch continues
+audible -- there is currently no ongoing re-check after that point.
+
+No registry key or file is written by SetMute as far as this was checked (searched both
+HKCU:\...\MMDevices\Audio\Render\*\Applications\* and the modern per-app policy store at
+HKCU:\Software\Microsoft\Internet Explorer\LowRegistry\Audio\PolicyConfig\PropertyStore
+for anything referencing StarCraft after muting/unmuting a real session -- found nothing
+in either, across 286 policy-store entries). That is not an exhaustive proof, so
+Set-ScProcessMuted is called with -Mute $false explicitly wherever an audible launch is
+requested (see run-with-plugin.ps1's -Sound handling) rather than simply skipped -- cheap
+insurance against a persistence path this search did not find.
 
 Dot-source this file; it defines Set-ScProcessMuted in the caller's scope.
 #>
@@ -35,8 +58,14 @@ namespace ScAudio {
 
   [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
   internal interface IMMDeviceEnumerator {
-    int EnumAudioEndpoints(EDataFlow dataFlow, int stateMask, out IntPtr ppDevices);
+    int EnumAudioEndpoints(EDataFlow dataFlow, int stateMask, out IMMDeviceCollection ppDevices);
     int GetDefaultAudioEndpoint(EDataFlow dataFlow, ERole role, out IMMDevice ppDevice);
+  }
+
+  [ComImport, Guid("0BD7A1BE-7A1A-44DB-8397-CC5392387B5E"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  internal interface IMMDeviceCollection {
+    int GetCount(out uint count);
+    int Item(uint index, out IMMDevice device);
   }
 
   [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -89,45 +118,56 @@ namespace ScAudio {
     int SetMasterVolume(float level, ref Guid ctx);
     int GetMasterVolume(out float level);
     [PreserveSig] int SetMute([MarshalAs(UnmanagedType.Bool)] bool mute, ref Guid ctx);
-    int GetMute(out bool mute);
+    [PreserveSig] int GetMute(out bool mute);
   }
 
   public static class Interop {
     private static readonly Guid CLSID_MMDeviceEnumerator = new Guid("BCDE0395-E52F-467C-8E3D-C4579291692E");
     private static readonly Guid IID_IAudioSessionManager2 = new Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F");
+    private const int DEVICE_STATE_ACTIVE = 0x1;
 
-    // Finds the active session for `pid` on the default render endpoint and sets its
-    // mute state. Returns true iff a matching session was found (mute was actually
-    // applied) -- false means "no session yet", not an error; the caller polls.
+    // Finds every active session for `pid`, across EVERY active render endpoint (not
+    // just the default one -- see .DESCRIPTION for why that distinction is the whole
+    // fix), and sets its mute state. Returns true iff at least one matching session was
+    // found on any endpoint -- false means "no session found on any active endpoint",
+    // not an error; the caller polls.
     public static bool TryMuteProcess(uint pid, bool mute) {
       var enumerator = (IMMDeviceEnumerator)Activator.CreateInstance(Type.GetTypeFromCLSID(CLSID_MMDeviceEnumerator));
-      IMMDevice device;
-      if (enumerator.GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eConsole, out device) != 0 || device == null) return false;
+      IMMDeviceCollection collection;
+      if (enumerator.EnumAudioEndpoints(EDataFlow.eRender, DEVICE_STATE_ACTIVE, out collection) != 0 || collection == null) return false;
 
-      object sessionManagerObj;
-      Guid iid = IID_IAudioSessionManager2;
-      if (device.Activate(ref iid, 1 /* CLSCTX_INPROC_SERVER */, IntPtr.Zero, out sessionManagerObj) != 0) return false;
-      var sessionManager = (IAudioSessionManager2)sessionManagerObj;
+      uint deviceCount;
+      if (collection.GetCount(out deviceCount) != 0) return false;
 
-      IAudioSessionEnumerator sessionEnum;
-      if (sessionManager.GetSessionEnumerator(out sessionEnum) != 0) return false;
-
-      int count;
-      sessionEnum.GetCount(out count);
       bool found = false;
-      for (int i = 0; i < count; i++) {
-        IAudioSessionControl ctrl;
-        if (sessionEnum.GetSession(i, out ctrl) != 0 || ctrl == null) continue;
-        var ctrl2 = ctrl as IAudioSessionControl2;
-        if (ctrl2 == null) continue;
-        uint sessionPid;
-        if (ctrl2.GetProcessId(out sessionPid) != 0) continue;
-        if (sessionPid != pid) continue;
-        var vol = ctrl as ISimpleAudioVolume;
-        if (vol == null) continue;
-        Guid ctx = Guid.Empty;
-        vol.SetMute(mute, ref ctx);
-        found = true;
+      for (uint di = 0; di < deviceCount; di++) {
+        IMMDevice device;
+        if (collection.Item(di, out device) != 0 || device == null) continue;
+
+        object sessionManagerObj;
+        Guid iid = IID_IAudioSessionManager2;
+        if (device.Activate(ref iid, 1 /* CLSCTX_INPROC_SERVER */, IntPtr.Zero, out sessionManagerObj) != 0) continue;
+        var sessionManager = (IAudioSessionManager2)sessionManagerObj;
+
+        IAudioSessionEnumerator sessionEnum;
+        if (sessionManager.GetSessionEnumerator(out sessionEnum) != 0) continue;
+
+        int count;
+        sessionEnum.GetCount(out count);
+        for (int i = 0; i < count; i++) {
+          IAudioSessionControl ctrl;
+          if (sessionEnum.GetSession(i, out ctrl) != 0 || ctrl == null) continue;
+          var ctrl2 = ctrl as IAudioSessionControl2;
+          if (ctrl2 == null) continue;
+          uint sessionPid;
+          if (ctrl2.GetProcessId(out sessionPid) != 0) continue;
+          if (sessionPid != pid) continue;
+          var vol = ctrl as ISimpleAudioVolume;
+          if (vol == null) continue;
+          Guid ctx = Guid.Empty;
+          vol.SetMute(mute, ref ctx);
+          found = true;
+        }
       }
       return found;
     }
@@ -139,69 +179,31 @@ namespace ScAudio {
 function Set-ScProcessMuted {
     <#
     .SYNOPSIS
-    Mute a process's own Windows audio session, and keep it muted for as long as the
-    process and the calling PowerShell session both live.
+    Set (or clear) the mute state of a process's own Windows audio session, across every
+    active render endpoint. Polls for -TimeoutSec because the session does not
+    necessarily exist the instant the process does.
     .DESCRIPTION
-    Two parts, because the game's audio session is created LAZILY -- verified live:
-    StarCraft sitting at its own main menu, visibly running (not stalled), still shows
-    ZERO sessions in the enumerator until something actually plays a sound. The moment
-    that first happens can be well after launch and well into a test run driving menus
-    or gameplay, not just in the first few seconds.
+    Returns $true once a session for -ProcessId was found (on any active endpoint) and
+    set to -Mute, $false if none appeared within -TimeoutSec. A $false is NOT treated as
+    a fatal error by the caller -- some launches may take longer than the default timeout
+    to create a session, or in principle never create one; the launch itself must not
+    fail just because muting could not be confirmed.
 
-    1. An immediate poll (-TimeoutSec/-PollMs) covers the common case -- a session that
-       already exists, or appears within a few seconds -- and gives the caller a
-       same-call true/false signal.
-    2. A background System.Timers.Timer (via Register-ObjectEvent, so its callback runs
-       on THIS runspace's own event queue rather than a foreign thread -- calling into
-       PowerShell/.NET types from a raw thread-pool timer callback is not something this
-       host does safely) re-affirms the mute every 1.5s, so whichever moment the session
-       actually appears, it gets muted within about that long of existing. Self-cleaning:
-       stops and unregisters itself once the process exits or -BackgroundMinutes elapses,
-       whichever first -- nothing is left running past the game's own lifetime, and
-       nothing can spin forever if a handle were somehow never released.
-
-    ISimpleAudioVolume::SetMute is idempotent and process-scoped (see sc-audio-mute.ps1
-    top-of-file .DESCRIPTION): re-affirming it on a timer costs nothing persistent and
-    leaves nothing to clean up on exit, unlike the registry approach this replaced.
-
-    Returns $true iff the immediate poll found and muted a session; $false only means
-    "not found THAT fast" -- the background timer keeps trying regardless, so $false is
-    not a fatal signal to the caller.
+    Does NOT keep checking after -TimeoutSec elapses -- see this file's top-of-file
+    .DESCRIPTION for why an earlier background-re-check design was removed rather than
+    kept as a mechanism that did not actually run.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][int]$ProcessId,
         [bool]$Mute = $true,
-        [int]$TimeoutSec = 8,
-        [int]$PollMs = 300,
-        [int]$BackgroundMinutes = 30
+        [int]$TimeoutSec = 15,
+        [int]$PollMs = 300
     )
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    $foundNow = $false
     while ((Get-Date) -lt $deadline) {
-        if ([ScAudio.Interop]::TryMuteProcess([uint32]$ProcessId, $Mute)) { $foundNow = $true; break }
+        if ([ScAudio.Interop]::TryMuteProcess([uint32]$ProcessId, $Mute)) { return $true }
         Start-Sleep -Milliseconds $PollMs
     }
-
-    if ($Mute) {
-        $timer = New-Object System.Timers.Timer
-        $timer.Interval = 1500
-        $timer.AutoReset = $true
-        $ctx = [pscustomobject]@{ ProcessId = $ProcessId; UntilUtc = [DateTime]::UtcNow.AddMinutes($BackgroundMinutes) }
-        $subscriberName = "ScAudioMute_$ProcessId`_$([Guid]::NewGuid().ToString('N'))"
-        $null = Register-ObjectEvent -InputObject $timer -EventName Elapsed -SourceIdentifier $subscriberName -MessageData $ctx -Action {
-            $c = $Event.MessageData
-            $stillRunning = Get-Process -Id $c.ProcessId -ErrorAction SilentlyContinue
-            if (-not $stillRunning -or [DateTime]::UtcNow -ge $c.UntilUtc) {
-                $Sender.Stop()
-                $Sender.Dispose()
-                Unregister-Event -SourceIdentifier $Event.SourceIdentifier -ErrorAction SilentlyContinue
-                return
-            }
-            [ScAudio.Interop]::TryMuteProcess([uint32]$c.ProcessId, $true) | Out-Null
-        }
-        $timer.Start()
-    }
-
-    return $foundNow
+    return $false
 }

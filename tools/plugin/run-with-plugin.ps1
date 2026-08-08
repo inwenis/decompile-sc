@@ -24,49 +24,73 @@ to a path outside the repo (C:/sc-work/ is gitignored).
 Launch lock (task018). Two workers launching concurrently is not hypothetical -- it
 happened live during task018's own development: a second worker's StarCraft process
 shared this one's plugin/geometry closely enough that its own cleanup logic mistook one
-launch for its leftover and closed it mid-test. Every launch through this script now
-takes a file lock at C:\sc-work\logs\sc-launch.lock (task id + pid + timestamp) before
-CreateProcess and releases it once the post-launch health check completes -- deliberately
-scoped to the LAUNCH SEQUENCE, not the whole play session (this script usually returns
-while the game keeps running, so holding the lock that long would need a background
-watcher tied to the game's lifetime, a bigger mechanism than the launch race actually
-needs). A lock whose recorded pid is no longer running is treated as stale and taken
-immediately. Waits up to 3 minutes for a live holder before failing loudly; never
-silently launches a second game into a live collision. Deliberately NOT under
+launch for its leftover and closed it mid-test. Every WORKER launch through this script
+now takes an exclusive OS file lock at C:\sc-work\logs\sc-launch.lock
+(`[IO.File]::Open(..., FileShare.None)`, held open for the duration -- not a
+check-then-write on file contents, which a verifier showed has a real two-winner race
+window) before anything that touches the shared working copy (the CreateProcess sequence,
+but also -RemoveWindowed's delete and -Windowed's copy of ddraw.dll -- both act on the
+same shared $GameDir, so both race exactly the way launches do) and releases it once the
+post-launch health check completes. Deliberately scoped to the LAUNCH SEQUENCE, not the
+whole play session: -WaitForExit releases the lock BEFORE blocking on the game's exit,
+not after, so a long/foreground play session does not hold the lock for its whole
+duration -- a lock held that long would need a background watcher tied to the game's
+lifetime rather than this script's own, a bigger mechanism than the launch race needs.
+An exclusive OS handle needs no separate staleness logic: if the holder crashes or is
+killed, Windows releases the handle itself the instant the process dies, so a "stale
+lock" cannot exist by construction (the previous check-then-write design tracked pid
+liveness by hand for exactly this reason; the handle design deletes the whole problem
+instead of fixing it). Waits up to 5 minutes for a live holder before failing loudly;
+never silently launches a second game into a live collision. Deliberately NOT under
 work/scratch/ -- that is worktree-local (each worker's own worktree has its own, unshared
 copy), which would not serialise anything between workers at all; C:\sc-work\logs\ is the
 one location every launch already treats as the shared scratch root (see -LogPath).
 
+**This lock is for workers only and must never affect the user's own play.** It is taken
+only when $env:AGENT_TASK is set (true for every worker, never true for a human
+double-clicking the desktop shortcut) -- and -NoLaunchLock skips it unconditionally as a
+second, independent guard. deploy.ps1's generated launcher bakes -NoLaunchLock in
+explicitly, even though the env-var check alone already covers the user's path, because a
+held or wedged lock on the shared dev lock file must never turn into the user
+double-clicking their game and silently getting nothing for however long the wait budget
+is -- that exact regression shipped in an earlier round of this task and was caught before
+merge, not after. deploy.ps1 itself also takes this same lock for its own build+mirror
+window, closing a TOCTOU in its own running-game preflight check.
+
 Sound. Every unattended test suite (test-selection-circles.ps1,
 test-fanout-orders.ps1, test-burrow-fanout.ps1, test-hud-row.ps1) launches
 through this script, so a launch is SILENT by default -- pass -Sound for a
-normal, audible one. Mechanism: tools/plugin/sc-audio-mute.ps1 mutes the game's
-own Windows Core Audio (WASAPI) session directly -- the same per-application
-volume the Windows Volume Mixer controls -- once the process id is known.
-Nothing is written to the registry or disk, so there is nothing to restore and
-nothing that can be left corrupted or stuck-muted by a crash, a kill, or two
-overlapping runs: the mute is a property of the process's own audio session and
-ends when the process does.
+normal, audible one (this also actively clears any mute rather than merely
+skipping muting -- see below). Mechanism: tools/plugin/sc-audio-mute.ps1 mutes
+the game's own Windows Core Audio (WASAPI) session directly -- the same
+per-application volume the Windows Volume Mixer controls -- across EVERY
+ACTIVE RENDER ENDPOINT, once the process id is known.
 
-The game's own audio session is created LAZILY, not at launch -- verified live:
-StarCraft sitting at its own main menu (visibly running, not stalled) shows
-ZERO sessions in the Core Audio session enumerator until something actually
-plays. Set-ScProcessMuted therefore polls briefly at launch AND keeps a
-background timer re-affirming the mute for as long as the game process lives
-(see sc-audio-mute.ps1), so whichever moment a session actually appears it
-gets muted within about 1.5s of existing, not just in the first few seconds.
+Scope, stated exactly: Set-ScProcessMuted polls for up to its -TimeoutSec at
+launch and then stops -- there is no ongoing re-check after that window. An
+earlier version of this claimed a background timer kept re-affirming the mute
+for the whole game session; measured live, that timer did not fire while the
+calling script was inside a Start-Sleep call (0 ticks across a 3s sleep) and
+died with the calling pwsh process regardless, so it did not do what it
+claimed and was removed rather than left in place as a false guarantee -- see
+sc-audio-mute.ps1's own .DESCRIPTION for the full account.
 
-Verification status, stated plainly rather than overclaimed: the mute/unmute
-call itself is proven correct against a REAL session on this machine (a
-different process, `TryMuteProcess` round-tripped mute -> GetMute=true ->
-unmute -> GetMute=false). What was NOT directly observed in this environment,
-despite several attempts (menu clicks, several seconds of waiting) was
-StarCraft's OWN session actually appearing in the enumerator -- it may need
-longer than tested, or this machine may not have a real audio render device
-for DirectSound to attach to at all (both remain open questions, not
-confirmed either way). The mechanism is correct and will mute the session the
-moment one exists; whether StarCraft ever creates one on this specific machine
-is the part left unverified.
+Why StarCraft's session was not found in three earlier attempts, resolved: the
+mute code checked the DEFAULT render endpoint only. Windows' own per-app audio
+policy store on the machine this was tested on shows StarCraft with sessions
+on THREE distinct render endpoints (onboard line-out, an HDMI output, a USB
+device) -- the session was almost certainly live the whole time, on an
+endpoint this code never looked at. sc-audio-mute.ps1 now enumerates every
+active render endpoint, not just the default one.
+
+Persistence, checked rather than assumed: searched both
+HKCU:\...\MMDevices\Audio\Render\*\Applications\* and the modern per-app
+policy store at HKCU:\...\Internet Explorer\LowRegistry\Audio\PolicyConfig\
+PropertyStore for anything referencing StarCraft after muting/unmuting a real
+session -- found nothing in either. Not an exhaustive proof, so -Sound calls
+Set-ScProcessMuted -Mute $false explicitly (see below) rather than just
+skipping the mute call, as cheap insurance against a persistence path this
+search did not find.
 
 A first version of this used the game's registry volume settings instead
 (HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft `music`/`sfx`, captured before
@@ -131,7 +155,16 @@ param(
     # through this script, so muting here is the one place that covers all of
     # them -- see "Sound" below). Pass -Sound for a normal, audible launch; the
     # deployed desktop shortcut always passes it, since that one is for playing.
-    [switch]$Sound
+    [switch]$Sound,
+    # Task018: the launch lock (see "Launch lock" below) is a worker-serialisation
+    # mechanism and must never affect the user's own deployed play -- it is taken only
+    # when $env:AGENT_TASK is set (true for every worker, never true for a human
+    # double-clicking the desktop shortcut) as the primary guard, AND skippable
+    # explicitly with this switch as a second, independent one. The deployed launcher
+    # deploy.ps1 generates bakes this in even though the env-var check alone would
+    # already cover it, specifically so a held/wedged lock can never turn into the user
+    # double-clicking their game and silently getting nothing.
+    [switch]$NoLaunchLock
 )
 
 $ErrorActionPreference = 'Stop'
@@ -158,6 +191,9 @@ $repoRoot  = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 # Process-scoped audio mute for unattended launches -- see "Sound" below and
 # tools/plugin/sc-audio-mute.ps1.
 . (Join-Path $scriptDir 'sc-audio-mute.ps1')
+# Cross-worker launch serialisation -- see "Launch lock" below and
+# tools/plugin/sc-launch-lock.ps1.
+. (Join-Path $scriptDir 'sc-launch-lock.ps1')
 
 $PRISTINE_ROOT = 'C:\sc-install'
 $givenGameDir  = $GameDir
@@ -177,135 +213,97 @@ if (-not (Test-Path -LiteralPath $GameDir)) {
     throw "run-with-plugin: game dir not found: $GameDir (create it with tools/make-working-copy.ps1)"
 }
 
-$ddraw = Join-Path $GameDir 'ddraw.dll'
-
-if ($RemoveWindowed) {
-    if (Test-Path -LiteralPath $ddraw) {
-        Remove-Item -LiteralPath $ddraw -Force
-        Write-Host "run-with-plugin: removed $ddraw (windowed-mode shim)"
-    }
-    else { Write-Host "run-with-plugin: no $ddraw present, nothing to remove" }
-}
-
-if ($Build) { & (Join-Path $scriptDir 'build.ps1') | Write-Host }
-
-if (-not $BuildDir) { $BuildDir = Join-Path $repoRoot 'work/scratch/plugin-build' }
-$dll = Join-Path $BuildDir 'scplugin.dll'
-$inj = Join-Path $BuildDir 'scinject.exe'
-foreach ($f in @($dll, $inj)) {
-    if (-not (Test-Path -LiteralPath $f)) { throw "run-with-plugin: missing $f -- run ./tools/plugin/build.ps1 first (or pass -Build)." }
-}
-
-if ($Windowed) {
-    $wmode = Join-Path $GameDir 'WMode.dll'
-    if (-not (Test-Path -LiteralPath $wmode)) { throw "run-with-plugin: $wmode not found; cannot enable windowed mode." }
-    Copy-Item -LiteralPath $wmode -Destination $ddraw -Force
-    Write-Host "run-with-plugin: windowed shim installed ($ddraw <- WMode.dll)"
-}
-
-if ($NoLaunch) { Write-Host 'run-with-plugin: -NoLaunch given, done.'; return }
-
-$exe = Join-Path $GameDir 'StarCraft.exe'
-if (-not (Test-Path -LiteralPath $exe)) { throw "run-with-plugin: $exe not found" }
-
-New-Item -ItemType Directory -Path (Split-Path $LogPath -Parent) -Force | Out-Null
-$env:SCPLUGIN_LOG     = $LogPath
-$env:SCPLUGIN_POLL_MS = "$PollMs"
-
-# The plugin defaults to 'observe' when this is unset, so setting it explicitly on
-# every launch keeps "which mode was that run?" answerable from the command alone.
-$env:SCPLUGIN_MODE           = $Mode
-$env:SCPLUGIN_LOG_COMMANDS   = $LogCommands
-$env:SCPLUGIN_FANOUT_BUDGET  = "$FanoutBudget"
-$env:SCPLUGIN_CIRCLES        = $Circles
-$env:SCPLUGIN_HUDROW         = $HudRow
-if ($FanoutCmds) { $env:SCPLUGIN_FANOUT_CMDS = $FanoutCmds }
-else { $env:SCPLUGIN_FANOUT_CMDS = '' }
-
-Write-Host "run-with-plugin: log -> $LogPath (poll ${PollMs}ms, mode=$Mode)"
-if ($Mode -eq 'observe') {
-    Write-Host 'run-with-plugin: mode=observe — read-only, the plugin writes NOTHING to game memory'
-} else {
-    Write-Host "run-with-plugin: mode=$Mode — the plugin will patch game memory IN THIS PROCESS ONLY (never on disk)"
-}
-
-$injArgs = @($exe, $dll, '--wait-ms', "$SettleMs")
-
-# The windowed-mode helpers have no export table, so they cannot be a ddraw proxy;
-# they are injectable hook DLLs and must be in place before DirectDraw initialises.
-# Hence --early-dll (injected while the process is still suspended).
-if ($InjectWindowedHelper -ne 'none') {
-    $helpers = switch ($InjectWindowedHelper) {
-        'WMode'     { @('WMode.dll') }
-        'WMode_Fix' { @('WMode_Fix.dll') }
-        'both'      { @('WMode.dll', 'WMode_Fix.dll') }
-    }
-    foreach ($h in $helpers) {
-        $hp = Join-Path $GameDir $h
-        if (-not (Test-Path -LiteralPath $hp)) { throw "run-with-plugin: $hp not found" }
-        $injArgs += @('--early-dll', $hp)
-        Write-Host "run-with-plugin: will early-inject $hp"
-    }
-}
-
-if ($NoPlugin) {
-    $injArgs += '--no-plugin'
-    Write-Host 'run-with-plugin: -NoPlugin — control run, our observer will NOT be injected'
-}
-if (-not $WaitForExit) { $injArgs += '--no-wait-exit' }
-
 # --- launch lock (task018) ----------------------------------------------------
-# Two workers launching concurrently is not hypothetical -- it happened live during
-# task018: a second worker's own StarCraft process shared this one's plugin+geometry
-# closely enough that its cleanup logic mistook one launch for the other's leftover and
-# closed it mid-test. This lock serialises the LAUNCH SEQUENCE specifically (CreateProcess
-# through the post-launch health check below) across every worker on the machine, so two
-# scinject/injection races can never overlap. It deliberately does NOT hold for the
-# game's whole play session afterward -- once a launch is confirmed healthy, this script
-# usually returns while the game keeps running (no -WaitForExit), so a lock held that long
-# would need a background watcher tied to the game's lifetime rather than this script's
-# own, which is a bigger mechanism than the actual race (the launch sequence) needs.
-# Deliberately NOT under work/scratch/: that directory is worktree-local (each worker's
-# worktree has its own, unshared), which would not serialise anything between workers at
-# all. C:\sc-work\logs\ is the one location every worker's launch already treats as the
-# shared scratch root (see -LogPath's own default), so the lock lives there instead.
-$lockPath = 'C:\sc-work\logs\sc-launch.lock'
-$lockTaskId = if ($env:AGENT_TASK) { $env:AGENT_TASK } else { "pid$PID" }
-New-Item -ItemType Directory -Path (Split-Path $lockPath -Parent) -Force | Out-Null
-$lockDeadline = (Get-Date).AddMinutes(3)
-$lockHeld = $false
-while (-not $lockHeld) {
-    $holder = $null
-    if (Test-Path -LiteralPath $lockPath) {
-        try { $holder = Get-Content -LiteralPath $lockPath -Raw -ErrorAction Stop | ConvertFrom-Json } catch { $holder = $null }
-    }
-    $holderAlive = $holder -and (Get-Process -Id $holder.pid -ErrorAction SilentlyContinue)
-    if (-not $holder -or -not $holderAlive) {
-        if ($holder -and -not $holderAlive) {
-            Write-Host "run-with-plugin: launch lock held by dead pid $($holder.pid) (task=$($holder.task)) -- treating as stale, taking it"
-        }
-        # Not a true cross-process mutex (no atomic test-and-set on a plain file write) --
-        # a second worker could in principle write in the same instant. The re-read below
-        # catches that: only the writer whose own pid comes back out actually holds it: a
-        # loser just loops back to the top and waits its turn, rather than proceeding
-        # believing it has the lock when it does not.
-        [pscustomobject]@{ task = $lockTaskId; pid = $PID; startedUtc = [DateTime]::UtcNow.ToString('o') } |
-            ConvertTo-Json | Set-Content -LiteralPath $lockPath -Encoding utf8NoBOM
-        Start-Sleep -Milliseconds 250
-        $reread = Get-Content -LiteralPath $lockPath -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
-        if ($reread -and $reread.pid -eq $PID) { $lockHeld = $true }
-    }
-    if (-not $lockHeld) {
-        if ((Get-Date) -ge $lockDeadline) {
-            $who = if ($holder) { "task=$($holder.task) pid=$($holder.pid)" } else { 'unknown' }
-            throw "run-with-plugin: could not acquire the launch lock ($lockPath) within 3 minutes -- another launch ($who) is still using it."
-        }
-        Start-Sleep -Seconds 2
-    }
-}
-Write-Host "run-with-plugin: launch lock acquired ($lockTaskId, pid $PID)"
+# See .DESCRIPTION "Launch lock" for the full design/incident. Acquired here, BEFORE
+# -RemoveWindowed's delete and -Windowed's copy -- both act on the shared $GameDir's
+# ddraw.dll, so both race exactly the way the launch itself does, not just CreateProcess.
+# Gated on $env:AGENT_TASK (true for every worker, never for the user's desktop shortcut)
+# and -NoLaunchLock, independently -- this lock must never be reachable from the user's
+# own play. See tools/plugin/sc-launch-lock.ps1 for the mechanism itself.
+$takeLock = (-not $NoLaunchLock) -and [bool]$env:AGENT_TASK
+$lock = $null
+if ($takeLock) { $lock = Enter-ScLaunchLock -TimeoutMinutes 5 }
 
 try {
+    $ddraw = Join-Path $GameDir 'ddraw.dll'
+
+    if ($RemoveWindowed) {
+        if (Test-Path -LiteralPath $ddraw) {
+            Remove-Item -LiteralPath $ddraw -Force
+            Write-Host "run-with-plugin: removed $ddraw (windowed-mode shim)"
+        }
+        else { Write-Host "run-with-plugin: no $ddraw present, nothing to remove" }
+    }
+
+    if ($Build) { & (Join-Path $scriptDir 'build.ps1') | Write-Host }
+
+    if (-not $BuildDir) { $BuildDir = Join-Path $repoRoot 'work/scratch/plugin-build' }
+    $dll = Join-Path $BuildDir 'scplugin.dll'
+    $inj = Join-Path $BuildDir 'scinject.exe'
+    foreach ($f in @($dll, $inj)) {
+        if (-not (Test-Path -LiteralPath $f)) { throw "run-with-plugin: missing $f -- run ./tools/plugin/build.ps1 first (or pass -Build)." }
+    }
+
+    if ($Windowed) {
+        $wmode = Join-Path $GameDir 'WMode.dll'
+        if (-not (Test-Path -LiteralPath $wmode)) { throw "run-with-plugin: $wmode not found; cannot enable windowed mode." }
+        Copy-Item -LiteralPath $wmode -Destination $ddraw -Force
+        Write-Host "run-with-plugin: windowed shim installed ($ddraw <- WMode.dll)"
+    }
+
+    if ($NoLaunch) { Write-Host 'run-with-plugin: -NoLaunch given, done.'; return }
+
+    $exe = Join-Path $GameDir 'StarCraft.exe'
+    if (-not (Test-Path -LiteralPath $exe)) { throw "run-with-plugin: $exe not found" }
+
+    New-Item -ItemType Directory -Path (Split-Path $LogPath -Parent) -Force | Out-Null
+    $env:SCPLUGIN_LOG     = $LogPath
+    $env:SCPLUGIN_POLL_MS = "$PollMs"
+
+    # The plugin defaults to 'observe' when this is unset, so setting it explicitly on
+    # every launch keeps "which mode was that run?" answerable from the command alone.
+    $env:SCPLUGIN_MODE           = $Mode
+    $env:SCPLUGIN_LOG_COMMANDS   = $LogCommands
+    $env:SCPLUGIN_FANOUT_BUDGET  = "$FanoutBudget"
+    $env:SCPLUGIN_CIRCLES        = $Circles
+    $env:SCPLUGIN_HUDROW         = $HudRow
+    if ($FanoutCmds) { $env:SCPLUGIN_FANOUT_CMDS = $FanoutCmds }
+    else { $env:SCPLUGIN_FANOUT_CMDS = '' }
+
+    Write-Host "run-with-plugin: log -> $LogPath (poll ${PollMs}ms, mode=$Mode)"
+    if ($Mode -eq 'observe') {
+        Write-Host 'run-with-plugin: mode=observe — read-only, the plugin writes NOTHING to game memory'
+    } else {
+        Write-Host "run-with-plugin: mode=$Mode — the plugin will patch game memory IN THIS PROCESS ONLY (never on disk)"
+    }
+
+    # --no-wait-exit ALWAYS: -WaitForExit's blocking wait happens in THIS script, after
+    # the lock below is released, not inside scinject.exe holding the lock for the
+    # whole play session (see .DESCRIPTION "Launch lock" on -WaitForExit).
+    $injArgs = @($exe, $dll, '--wait-ms', "$SettleMs", '--no-wait-exit')
+
+    # The windowed-mode helpers have no export table, so they cannot be a ddraw proxy;
+    # they are injectable hook DLLs and must be in place before DirectDraw initialises.
+    # Hence --early-dll (injected while the process is still suspended).
+    if ($InjectWindowedHelper -ne 'none') {
+        $helpers = switch ($InjectWindowedHelper) {
+            'WMode'     { @('WMode.dll') }
+            'WMode_Fix' { @('WMode_Fix.dll') }
+            'both'      { @('WMode.dll', 'WMode_Fix.dll') }
+        }
+        foreach ($h in $helpers) {
+            $hp = Join-Path $GameDir $h
+            if (-not (Test-Path -LiteralPath $hp)) { throw "run-with-plugin: $hp not found" }
+            $injArgs += @('--early-dll', $hp)
+            Write-Host "run-with-plugin: will early-inject $hp"
+        }
+    }
+
+    if ($NoPlugin) {
+        $injArgs += '--no-plugin'
+        Write-Host 'run-with-plugin: -NoPlugin — control run, our observer will NOT be injected'
+    }
+
     # Stream scinject's output live AND keep it, so the pid it prints can be handed
     # to the health check below. Resolving the game by process name instead would
     # throw whenever any other StarCraft is running on the machine -- after a launch
@@ -322,49 +320,46 @@ try {
     }
 
     # --- sound (task018) -------------------------------------------------------
-    # Muted by default (see .DESCRIPTION "Sound"); -Sound skips this entirely, which is
-    # what the deployed shortcut passes. Process-scoped (the game's own WASAPI audio
-    # session, ISimpleAudioVolume::SetMute) -- no registry, no file, nothing that outlives
-    # the process, so a crash/kill/overlapping run cannot leave anything muted or corrupted.
-    # A first version of this used the game's registry volume settings instead; that wiped
-    # a real user's HKCU StarCraft key via an unguarded New-Item -Force (2026-08-08
-    # incident) and was replaced rather than merely fixed -- see tools/plugin/README.md
-    # "Sound" and tools/plugin/sc-audio-mute.ps1.
-    if (-not $Sound -and $gamePid -gt 0) {
-        if (Set-ScProcessMuted -ProcessId $gamePid) {
-            Write-Host 'run-with-plugin: sound muted for this launch (process-scoped WASAPI session mute) -- pass -Sound to keep audio on'
+    # Muted by default (see .DESCRIPTION "Sound"); -Sound actively CLEARS the mute
+    # rather than merely skipping it (cheap insurance -- see "Sound" for what that
+    # guards against). Process-scoped, every active render endpoint checked -- see
+    # tools/plugin/sc-audio-mute.ps1.
+    if ($gamePid -gt 0) {
+        if ($Sound) {
+            Set-ScProcessMuted -ProcessId $gamePid -Mute $false -TimeoutSec 5 | Out-Null
+            Write-Host 'run-with-plugin: -Sound — ensured the game''s audio session is not muted'
+        }
+        elseif (Set-ScProcessMuted -ProcessId $gamePid -Mute $true) {
+            Write-Host 'run-with-plugin: sound muted for this launch (process-scoped WASAPI session mute, every active render endpoint) -- pass -Sound to keep audio on'
         }
         else {
             Write-Warning 'run-with-plugin: could not find an audio session to mute within the timeout -- launch continues audible. Pass -Sound to silence this warning if that is expected.'
         }
     }
 
-    if (-not $WaitForExit) {
-        # A launch can fail with the process still alive and a modal DirectDraw error
-        # box on screen -- invisible to exit codes. Check from outside the process.
-        Start-Sleep -Seconds 2
-        if ($gamePid -gt 0) {
-            & (Join-Path $scriptDir 'check-game-windows.ps1') -ProcessId $gamePid
-        }
-        else {
-            Write-Warning 'run-with-plugin: could not parse the pid from scinject output; falling back to resolving the game by process name.'
-            & (Join-Path $scriptDir 'check-game-windows.ps1')
-        }
-        if ($LASTEXITCODE -eq 1) {
-            throw 'run-with-plugin: the game has an error dialog open — the launch is NOT healthy.'
-        }
+    # A launch can fail with the process still alive and a modal DirectDraw error box on
+    # screen -- invisible to exit codes. Check from outside the process. Always run this
+    # (not just when -WaitForExit is absent) since scinject.exe itself no longer waits.
+    Start-Sleep -Seconds 2
+    if ($gamePid -gt 0) {
+        & (Join-Path $scriptDir 'check-game-windows.ps1') -ProcessId $gamePid
+    }
+    else {
+        Write-Warning 'run-with-plugin: could not parse the pid from scinject output; falling back to resolving the game by process name.'
+        & (Join-Path $scriptDir 'check-game-windows.ps1')
+    }
+    if ($LASTEXITCODE -eq 1) {
+        throw 'run-with-plugin: the game has an error dialog open — the launch is NOT healthy.'
     }
 }
 finally {
-    # Release only if this is still our own lock -- defensive against the (already rare,
-    # already narrowed by the re-read-after-write check above) case of somehow not
-    # actually holding it when this runs.
-    if ($lockHeld) {
-        $current = $null
-        try { $current = Get-Content -LiteralPath $lockPath -Raw -ErrorAction Stop | ConvertFrom-Json } catch {}
-        if ($current -and $current.pid -eq $PID) {
-            Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
-            Write-Host "run-with-plugin: launch lock released ($lockTaskId, pid $PID)"
-        }
-    }
+    if ($lock) { Exit-ScLaunchLock -Lock $lock }
+}
+
+if ($WaitForExit -and $gamePid -gt 0) {
+    # Deliberately OUTSIDE the lock (see .DESCRIPTION "Launch lock") -- this can block
+    # for a whole play session, and the lock above only ever covers the launch sequence.
+    Write-Host "run-with-plugin: -WaitForExit — waiting for pid $gamePid to exit (Ctrl-C to stop waiting)"
+    Wait-Process -Id $gamePid -ErrorAction SilentlyContinue
+    Write-Host "run-with-plugin: pid $gamePid exited"
 }
