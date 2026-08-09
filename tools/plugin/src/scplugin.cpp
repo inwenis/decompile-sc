@@ -35,6 +35,7 @@
 #include <string.h>
 
 #include "sc_addresses.h"
+#include "sc_card.h"
 #include "sc_fanout.h"
 #include "sc_hook.h"
 #include "sc_log.h"
@@ -377,6 +378,10 @@ static void PollMarker(void) {
     // comparison.
     ScanWorld(g_lastMarker);
 
+    // Task 026: and so does the command-card read-back. It goes BEFORE the shadow
+    // dump for the same reason the world scan does -- the engine's own view first.
+    ScCardScan(g_lastMarker);
+
     // Task 015: a marker is the driver saying "look now", so it is also the trigger for
     // the per-unit state dump. Driving it off the marker rather than off a timer is what
     // makes an unattended assertion possible at all -- the test writes a marker, waits for
@@ -401,16 +406,22 @@ static DWORD GetPollMs(void) {
 
 static ScMode g_mode = SC_MODE_OBSERVE;
 
-static bool GetWorldScan(void) {
+static bool GetEnvFlag(const char* name) {
     char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_WORLDSCAN", buf, sizeof(buf));
+    DWORD n = GetEnvironmentVariableA(name, buf, sizeof(buf));
     if (n == 0 || n >= sizeof(buf)) return false;
     return buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y';
 }
 
+static bool GetWorldScan(void) { return GetEnvFlag("SCPLUGIN_WORLDSCAN"); }
+
 static DWORD WINAPI ObserverThread(LPVOID) {
     const DWORD pollMs = GetPollMs();
     g_worldScan = GetWorldScan();
+    // Task 026: the read-only command-card scan. Same shape and same off switch as
+    // the world scan, and for the same reason -- it must exist in observe mode too,
+    // because "the card the stock game draws" is half of every comparison.
+    ScCardInit(g_base, GetEnvFlag("SCPLUGIN_CARDSCAN"));
     ResolveMarkerPath();
     ScLog("OBSERVER start pollMs=%u mode=%s%s", (unsigned)pollMs, ScModeName(g_mode),
           g_mode == SC_MODE_OBSERVE ? " (read-only; no writes to game memory)" : "");
@@ -418,6 +429,9 @@ static DWORD WINAPI ObserverThread(LPVOID) {
     ScLog("OBSERVER worldScan=%d (%%SCPLUGIN_WORLDSCAN%%; read-only walk of the engine's "
           "own per-player unit lists, installs no hook and works in observe mode)",
           g_worldScan ? 1 : 0);
+    ScLog("OBSERVER cardScan=%d (%%SCPLUGIN_CARDSCAN%%; read-only walk of the command-card "
+          "dialog 0x0068C148, installs no hook and works in observe mode)",
+          ScCardEnabled() ? 1 : 0);
 
     Snapshot prev;
     memset(&prev, 0xFF, sizeof(prev));  // force a first log line

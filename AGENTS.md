@@ -51,6 +51,27 @@ So: prove the pattern positive against a log where the thing DID happen, then re
 where it should not have. Pair every absence check with a positive one — "the ability fired in
 this arm" alongside "nothing was interrupted" — or a silently broken run reads as a clean result.
 
+## Read a dialog's CONTENT from memory; never hash its pixels (hard rule, 2026-08-09, task 026)
+
+**A frame hash answers "did any pixel change". That is not the question, and it is not stable
+across sessions.** Task 023 gated the whole Ghost-cloak result on two region fingerprints of the
+command card and concluded that researching the tech "DOES draw a different command card". It does
+not: reading the card out of process memory shows both fixtures holding the same nine slots, the
+same buttons, in the same states — and on the next session both fixtures hashed to the *same*
+value, the one 023 had recorded for the control. Two sessions of work were spent on a conclusion a
+pixel hash had invented.
+
+So: when a claim is about what a dialog **holds** — which button, which slot, enabled or greyed —
+walk the dialog and read the fields. The engine's UI is ordinary heap data; `sc_card`/`sc_hudrow`
+show the shape, and a read-back needs no hook and works in `-Mode observe`. Keep frame captures for
+corroboration and for the human, never as the oracle.
+
+The same rule caught a second thing the same evening: a tool that verifies its own write with its
+own indexing verifies nothing. `make_test_map.py` wrote PTEx tech-major and read it back tech-major
+while the engine reads it player-major, so its validator printed
+`PTEx: player 0 has researched 10(...)` for maps on which player 0 had researched nothing. **Check
+a fixture in the engine's memory, not in the generator's read-back.**
+
 ## Never click a map-browser row by number (hard rule, 2026-08-09, task 023)
 
 **`Select-ScBrowserMap` walks the browser. Nothing else does.** It scrolls the list to a

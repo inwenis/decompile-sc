@@ -396,6 +396,12 @@ came back reading **"Select Target"**: that slot is a *targeted* ability, i.e. L
 Naming the Cloak button is one keypress sweep on a working command card and is owned by the
 harness task, with this evidence attached.
 
+> **Amended, task 026** ([`command-card.md`](command-card.md)). It was not a keypress sweep, and
+> no sweep could have found it. The Cloak button is card **slot 7**, it was **greyed**, and both
+> input paths refuse a greyed control on one flag bit — so the key and the click were the same
+> negative twice, not two. The cause was the fixture: its PTEx never granted Personnel Cloaking to
+> player 0. Naming it took a read of the card out of process memory.
+
 ### 7.2 The static half
 
 The handlers cannot do it. `0x004C0720` → `0x00491B30` (the cloak family) writes energy and
@@ -491,6 +497,11 @@ on a still fixture and in a live fight, statically and dynamically.
 It does not answer: why a cloaked Ghost appeared to stop attacking. That remains open, most
 likely vanilla (the plugin has no AI, targeting or acquisition code in it at all), and the
 honest state of it is "not reproduced, and not yet reproducible with this harness".
+
+> **Still open after task 026**, and deliberately so. Task 026 explained why the *test* could not
+> cloak a Ghost ([`command-card.md`](command-card.md) §7) — a greyed button on an unresearched
+> fixture. That is a statement about the harness, not about the user's Ghost. The A/B on a
+> genuinely cloaked Ghost has not been run.
 
 ---
 
@@ -662,9 +673,18 @@ hides them.
   every suite that reaches its map by a hardcoded row is then off by one, with no detection and
   no recovery. This task's own suites compute the row from the filesystem; the five older ones
   do not. Handed to the harness task rather than fixed here.
-- **Why the Ghost's Cloak button could not be driven** (§7.1). Not established.
-- **Which selection the send-side gate consults** — presumably the engine's twelve, but that is
-  an inference from one observation, where all 36 units were identical by the time it fired
-  (§5.2).
+- ~~**Why the Ghost's Cloak button could not be driven** (§7.1).~~ **Closed by task 026**
+  ([`command-card.md`](command-card.md) §0, §5). The button is card slot 7 and it was **greyed**:
+  both of the engine's input paths test `control+0x18 & 0x2` and return, so no key and no click
+  could ever have reached it. It was greyed because the fixture never granted the tech — the PTEx
+  writer's index order disagreed with the engine's, and Stim Packs (tech 0, player 0) is one of the
+  only two cells where the two conventions coincide, which is why every earlier fixture appeared to
+  work. The user spotted it on screen first: "the ghosts didn't have the cloak ability unlocked".
+- ~~**Which selection the send-side gate consults**~~ — **Closed by task 026**
+  ([`command-card.md`](command-card.md) §4.3): it is `clientSelectionGroup`, the engine's own
+  twelve, read out of the binary rather than inferred. Cloak's gate `0x00423540` and Stim's own
+  action `0x004234D0` walk that same array. The consequence §5.2 hypothesised therefore holds: a
+  >12 selection whose visible twelve cannot pay emits nothing even though units past the cap could
+  have paid.
 - The cost table at `0x00656380` is read but not enumerated; only the two cloak entries matter
   here.

@@ -332,15 +332,42 @@ by arithmetic rather than assumed: `44*12 + 44*12 + 44 + 44 + 44*12 == 1672`, wh
 exactly the size of the section in `(2)Fading Realm.scx` on disk. A template without a
 `PTEx` section is refused rather than guessed at.
 
+**The per-player arrays are PLAYER-MAJOR — `player * 44 + tech` (fixed in task 026).** This
+tool had them tech-major, and the section size above could not catch it: the total is right
+either way. `tech * 12 + player` and `player * 44 + tech` agree at exactly two cells, `(0, 0)`
+and `(43, 11)` — and the first is **Stim Packs for the human slot**, the only tech any fixture
+here had ever proved worked. Every other tech was written into some other player's row and the
+engine granted the human nothing. `--tech-researched personnel-cloaking` put its byte at offset
+120, which the engine reads as player 2's tech 32; the Ghost's Cloak button came up greyed, and
+tasks 022 and 023 spent two sessions concluding that the command card's ability row was inert.
+
+Two things made it survive: the generator's own `read_techs_researched` used the same wrong
+index, so its validator confirmed its own write and printed
+`PTEx: player 0 has researched 10(personnel-cloaking)` for a map on which player 0 had nothing;
+and the one fixture anybody had verified in game was the coincident cell. The order is now read
+out of the engine's own PTEx applier (`0x004CB7D0`, disassembled in
+[`research/command-card.md`](../research/command-card.md) §6.3), the write and the read share one
+`ptex_index()`, and `tests/make-test-map.Tests.ps1` pins the literal byte offsets — including
+that `(tech 10, player 0)` is byte 10 and not byte 120.
+
 Tech ids come from richchk's own `TechId` enum — the same source, and the same provenance
 discipline, as the unit ids. Named here: `stim-packs` (0), `siege-mode` (5),
 `cloaking-field` (9), `personnel-cloaking` (10), `burrowing` (11); anything else can be
 passed as a raw `techdata.dat` id.
 
 Proved in game: with `--tech-researched stim-packs`, 36 generated Marines have the Stim
-button and one keypress emits command `0x36`. Without it the command card has no ability
-button on it at all, and the run fails several minutes later on "the key emitted nothing" —
-which is why the test asserts the generator's own `PTEx:` line before it launches anything.
+button and one keypress emits command `0x36`. Without it the run fails several minutes later
+on "the key emitted nothing" — which is why the test asserts the generator's own `PTEx:` line
+before it launches anything.
+
+Two corrections to that paragraph, both from task 026. **The generator's `PTEx:` line is not
+evidence** — it is a read-back of this tool's own write through this tool's own indexing, and it
+reported success for years' worth of maps the engine never received. The evidence is the
+engine's memory: launch with `-CardScan 1` and read the `CARD ... tech p=0 researched=[...]`
+line ([`research/command-card.md`](../research/command-card.md) §9). And **an unresearched tech
+does not remove the button from the card** — availability does that; research decides whether
+the button is *enabled* or *greyed*. An ability whose tech is available but unresearched sits on
+the card, greyed, and is silent to every key and every click.
 
 ### `-DamagedCount N -DamagedHp P` (and `-DamagedEnergy P`): payers and non-payers in ONE selection
 

@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "sc_addresses.h"
+#include "sc_card.h"
 #include "sc_circles.h"
 #include "sc_fanout.h"
 #include "sc_hook.h"
@@ -1977,7 +1978,275 @@ static void ExitLogTests(void) {
 
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// [13] the command-card read-back (task 026), driven against a fake card dialog.
+//
+// WHY IT NEEDS A TEST AT ALL. This module is the ORACLE for the whole task: the
+// answer to "why can nothing drive the Ghost's Cloak" is a single bit it reports,
+// control+0x18 & 0x2. An oracle that reports GREYED unconditionally would produce
+// exactly the finding the task expects and would be worthless -- AGENTS.md's
+// absence-assertions rule in its other direction. So the same walk is driven over
+// the same dialog twice, once with the bit set and once with it clear, and both
+// readings are required. It also has to REFUSE to fault on a bad Button pointer
+// and to terminate on a looped `next`, because it runs on the observer thread
+// against a list the game thread is editing.
+//
+// The module reaches memory through exactly two things -- the module base and the
+// reader -- so replacing both runs the whole walk with no StarCraft in the process.
+// ---------------------------------------------------------------------------
+
+#define FAKE_CARD_DLG_VA 0x006A0000u
+#define FAKE_CARD_BTN_VA 0x006A2000u
+#define FAKE_CARD_BAD_VA 0x00780000u   // outside the fake image: unreadable on purpose
+
+static unsigned g_cardReadFails = 0;
+
+// Reads only inside the fake image; anything else fails the way SafeRead fails on
+// an uncommitted page in the game.
+static bool FakeCardRead(DWORD addr, void* out, size_t n) {
+    DWORD lo = (DWORD)(DWORD_PTR)g_fake;
+    DWORD hi = lo + FAKE_IMAGE_BYTES;
+    if (addr < lo || addr + (DWORD)n > hi) { ++g_cardReadFails; return false; }
+    memcpy(out, (const void*)(DWORD_PTR)addr, n);
+    return true;
+}
+
+static DWORD FakeCardCtl(int i) { return (DWORD)FakeRt(FAKE_CARD_DLG_VA) + 0x100u + (DWORD)i * SC_BINDLG_SIZE; }
+static DWORD FakeCardBtn(int i) { return (DWORD)FakeRt(FAKE_CARD_BTN_VA) + (DWORD)i * SC_BUTTON_SIZE; }
+
+// The Ghost's real buttonset, read out of the binary by
+// work/scratch/card/dump-buttonsets.ps1 (research/command-card.md 3). Slots 1-5
+// are the basic row; slot 7 is Cloak; slot 8 is Lockdown; slot 9 Nuclear Strike.
+struct FakeBtnDef { WORD slot; WORD icon; DWORD cond; DWORD act; WORD cparam; WORD aparam; WORD name; WORD dis; };
+static const FakeBtnDef kGhostCard[9] = {
+    { 1, 0x00E4, 0x004282D0, 0x00424440,  0,  0, 0x0298, 0x0000 },
+    { 2, 0x00E5, 0x004282D0, 0x004233F0,  0,  0, 0x0299, 0x0000 },
+    { 3, 0x00E6, 0x00428F30, 0x00424380,  0,  0, 0x029A, 0x0000 },
+    { 4, 0x00FE, 0x004282D0, 0x00424140,  0,  0, 0x029B, 0x0000 },
+    { 5, 0x00FF, 0x004282D0, 0x00423370,  0,  0, 0x029C, 0x0000 },
+    { 7, 0x00FC, 0x004293E0, 0x00423730, 10, 10, 0x0158, 0x0163 },  // Personnel Cloaking
+    { 7, 0x00FD, 0x00429370, 0x00423270, 10,  0, 0x0159, 0x0000 },  // Decloak (same slot)
+    { 8, 0x00F0, 0x004294E0, 0x00423F70,  1,  1, 0x014F, 0x015B },  // Lockdown
+    { 9, 0x0137, 0x00428810, 0x00423A40,  0,  0, 0x02AD, 0x02F9 },  // Nuclear Strike
+};
+
+// One card control per slot 1..9, laid out the way the engine's own layout
+// function leaves them: the button assigned to the control whose index matches
+// its slot, slot 6 blanked (no button reaches it), slot 8 hidden (Lockdown not
+// researched), slot 9 visible-but-greyed (no silo).
+static void BuildFakeCard(bool cloakDisabled) {
+    DWORD root = (DWORD)FakeRt(FAKE_CARD_DLG_VA);
+    memset((void*)(DWORD_PTR)root, 0, SC_BINDLG_SIZE);
+    *(WORD*)(DWORD_PTR)(root + SC_BINDLG_OFF_TYPE) = 0;             // a dialog, not a control
+    {
+        short* rr = (short*)(DWORD_PTR)(root + SC_BINDLG_OFF_BOUNDS);
+        rr[0] = 500; rr[1] = 358; rr[2] = 639; rr[3] = 479;         // the card's own origin
+    }
+
+    for (int i = 0; i < 9; ++i) {
+        DWORD c = FakeCardCtl(i);
+        int   slot = i + 1;
+        memset((void*)(DWORD_PTR)c, 0, SC_BINDLG_SIZE);
+        *(WORD*) (DWORD_PTR)(c + SC_BINDLG_OFF_TYPE)   = 2;
+        *(short*)(DWORD_PTR)(c + SC_BINDLG_OFF_INDEX)  = (short)slot;
+        *(DWORD*)(DWORD_PTR)(c + SC_BINDLG_OFF_PARENT) = root;
+        *(DWORD*)(DWORD_PTR)(c + SC_BINDLG_OFF_NEXT)   = (i < 8) ? FakeCardCtl(i + 1) : 0;
+        // A 3x3 grid of 33x33 buttons, dialog-relative -- the shape the real card
+        // has, so the "compute a slot centre from the read-back" arithmetic the
+        // probe does is exercised here rather than only in game.
+        short* r = (short*)(DWORD_PTR)(c + SC_BINDLG_OFF_BOUNDS);
+        r[0] = (short)(3 + (i % 3) * 46); r[1] = (short)(6 + (i / 3) * 42);
+        r[2] = (short)(r[0] + 32);        r[3] = (short)(r[1] + 32);
+
+        int b = -1;
+        for (int k = 0; k < 9; ++k) if (kGhostCard[k].slot == slot) { b = k; break; }
+        // slot 6 gets nothing; slot 8's button (Lockdown) is present but hidden.
+        if (b < 0) {
+            *(DWORD*)(DWORD_PTR)(c + SC_BINDLG_OFF_FLAGS)   = 0;              // hidden, blanked
+            *(WORD*) (DWORD_PTR)(c + SC_BINDLG_OFF_GRAPHIC) = 0xFFFF;
+            *(DWORD*)(DWORD_PTR)(c + SC_BINDLG_OFF_USER)    = 0;
+            continue;
+        }
+
+        DWORD bp = FakeCardBtn(b);
+        *(WORD*) (DWORD_PTR)(bp + SC_BUTTON_OFF_SLOT)       = kGhostCard[b].slot;
+        *(WORD*) (DWORD_PTR)(bp + SC_BUTTON_OFF_ICON)       = kGhostCard[b].icon;
+        *(DWORD*)(DWORD_PTR)(bp + SC_BUTTON_OFF_COND)       = kGhostCard[b].cond;
+        *(DWORD*)(DWORD_PTR)(bp + SC_BUTTON_OFF_ACTION)     = kGhostCard[b].act;
+        *(WORD*) (DWORD_PTR)(bp + SC_BUTTON_OFF_COND_PARAM) = kGhostCard[b].cparam;
+        *(WORD*) (DWORD_PTR)(bp + SC_BUTTON_OFF_ACT_PARAM)  = kGhostCard[b].aparam;
+        *(WORD*) (DWORD_PTR)(bp + SC_BUTTON_OFF_NAME_STR)   = kGhostCard[b].name;
+        *(WORD*) (DWORD_PTR)(bp + SC_BUTTON_OFF_DIS_STR)    = kGhostCard[b].dis;
+
+        DWORD flags = SC_CTRL_FLAG_DRAWN;
+        if (slot == 8) {
+            flags = 0;                                   // hidden: tech not researched
+        } else {
+            flags |= SC_CTRL_FLAG_VISIBLE;
+            if (slot == 9) flags |= SC_CTRL_FLAG_DISABLED;                    // no silo
+            if (slot == 7 && cloakDisabled) flags |= SC_CTRL_FLAG_DISABLED;
+        }
+        *(DWORD*)(DWORD_PTR)(c + SC_BINDLG_OFF_FLAGS)   = flags;
+        *(WORD*) (DWORD_PTR)(c + SC_BINDLG_OFF_GRAPHIC) = kGhostCard[b].icon;
+        *(DWORD*)(DWORD_PTR)(c + SC_BINDLG_OFF_USER)    = bp;
+    }
+    *(DWORD*)(DWORD_PTR)(root + SC_BINDLG_OFF_FIRST_CHILD) = FakeCardCtl(0);
+
+    *(DWORD*)FakeRt(SC_VA_CARD_DIALOG)          = root;
+    *(WORD*) FakeRt(SC_VA_CARD_ID)              = 1;                  // the Ghost
+    *(WORD*) FakeRt(SC_VA_CARD_OVERRIDE_SEL)    = SC_CARD_ID_NONE;
+    *(WORD*) FakeRt(SC_VA_CARD_OVERRIDE_SUB)    = SC_CARD_ID_NONE;
+    *(DWORD*)FakeRt(SC_VA_CARD_REFUSE_REASON)   = 8;
+    *(DWORD*)FakeRt(SC_VA_ACTIVE_PORTRAIT_UNIT) = FakeUnit(0);
+    *(WORD*) (DWORD_PTR)(FakeUnit(0) + SC_CUNIT_OFF_UNIT_ID)   = 1;    // Ghost
+    *(WORD*) (DWORD_PTR)(FakeUnit(0) + SC_CUNIT_OFF_BUTTONSET) = 1;
+    *(WORD*) (DWORD_PTR)(FakeUnit(0) + SC_CUNIT_OFF_ENERGY)    = 0xC800;  // 200 energy
+    *(BYTE*) (DWORD_PTR)(FakeUnit(0) + SC_CUNIT_OFF_PLAYER)    = 0;
+    // The buttonset table row the header reports, so "the card id resolves to a
+    // real buttonset" is a read and not an inference.
+    DWORD e = (DWORD)FakeRt(SC_VA_BUTTONSET_TABLE) + 1u * SC_BUTTONSET_STRIDE;
+    *(WORD*) (DWORD_PTR)(e + SC_BUTTONSET_OFF_N)   = 9;
+    *(DWORD*)(DWORD_PTR)(e + SC_BUTTONSET_OFF_PTR) = FakeCardBtn(0);
+}
+
+// A checksum over the whole fake card region -- the dialog, the controls and the
+// Button array. "Read-only" is a claim about behaviour, so it is measured.
+static DWORD FakeCardChecksum(void) {
+    const BYTE* p = (const BYTE*)FakeRt(FAKE_CARD_DLG_VA);
+    DWORD h = 2166136261u;
+    for (unsigned i = 0; i < 0x3000u; ++i) { h ^= p[i]; h *= 16777619u; }
+    return h;
+}
+
+static const ScCardSlot* FindSlot(const ScCardSlot* s, int n, int index) {
+    for (int i = 0; i < n; ++i) if (s[i].index == index) return &s[i];
+    return NULL;
+}
+
+static void CardScanTests(void) {
+    printf("\n[13] the command-card read-back, against a fake card dialog\n");
+
+    // Every part allocates its own fake image and releases it again (the previous
+    // part has already freed g_fake by the time this runs).
+    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
+                                 PAGE_READWRITE);
+    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+    ScCardTestBegin(g_fake, FakeCardRead);
+
+    ScCardHeader hdr;
+    ScCardSlot   slots[SC_CARD_SLOTS];
+
+    // --- (a) the Ghost card with Cloak GREYED -------------------------------
+    BuildFakeCard(true);
+    DWORD before = FakeCardChecksum();
+    int n = ScCardSnapshot(&hdr, slots, SC_CARD_SLOTS);
+    Check("nine card controls found", n, 9);
+    Check("the walk wrote nothing (checksum)", (long long)(FakeCardChecksum() == before), 1);
+    Check("header resolved the card dialog", hdr.ok ? 1 : 0, 1);
+    Check("card id is the portrait unit's buttonset", hdr.cardId, hdr.portraitSet);
+    Check("that buttonset holds nine buttons", hdr.setCount, 9);
+    Check("portrait reads as a Ghost", hdr.portraitType, 1);
+    Check("visible slots", hdr.shown, 7);
+    Check("of which greyed", hdr.greyed, 2);
+
+    const ScCardSlot* s7 = FindSlot(slots, n, 7);
+    Check("slot 7 exists", s7 ? 1 : 0, 1);
+    if (s7) {
+        Check("slot 7 carries a Button record", s7->buttonOk ? 1 : 0, 1);
+        Check("slot 7's button is slotted 7",   s7->bSlot, 7);
+        Check("slot 7's condition is the cloak one", (long long)s7->bCond, 0x004293E0);
+        Check("slot 7's action is the cloak one",    (long long)s7->bAction, 0x00423730);
+        Check("slot 7's conditionParam is Personnel Cloaking",
+              s7->bCondParam, SC_TECH_PERSONNEL_CLOAKING);
+        Check("slot 7 is visible",  s7->visible ? 1 : 0, 1);
+        Check("slot 7 reads GREYED", s7->disabled ? 1 : 0, 1);
+        // The click point the probe computes: dialog origin + control rect centre.
+        Check("slot 7's centre computes to x",
+              hdr.rootRect[0] + (s7->rect[0] + s7->rect[2]) / 2, 500 + (3 + 35) / 2);
+        Check("slot 7's centre computes to y",
+              hdr.rootRect[1] + (s7->rect[1] + s7->rect[3]) / 2, 358 + (90 + 122) / 2);
+    }
+    const ScCardSlot* s8 = FindSlot(slots, n, 8);
+    Check("slot 8 reads hidden", (s8 && !s8->visible) ? 1 : 0, 1);
+    const ScCardSlot* s6 = FindSlot(slots, n, 6);
+    Check("slot 6 has no button record", (s6 && !s6->buttonOk) ? 1 : 0, 1);
+
+    // --- (b) THE SAME WALK, Cloak ENABLED -----------------------------------
+    // Without this the GREYED reading above proves nothing: a stuck oracle would
+    // pass (a) and fail here.
+    BuildFakeCard(false);
+    n = ScCardSnapshot(&hdr, slots, SC_CARD_SLOTS);
+    s7 = FindSlot(slots, n, 7);
+    Check("with the bit cleared, slot 7 reads enabled",
+          (s7 && s7->visible && !s7->disabled) ? 1 : 0, 1);
+    Check("and the greyed count drops to the nuke alone", hdr.greyed, 1);
+
+    // --- (c) an unreadable Button pointer is reported, not followed ----------
+    BuildFakeCard(true);
+    *(DWORD*)(DWORD_PTR)(FakeCardCtl(6) + SC_BINDLG_OFF_USER) = FAKE_CARD_BAD_VA;
+    unsigned failsBefore = g_cardReadFails;
+    n = ScCardSnapshot(&hdr, slots, SC_CARD_SLOTS);
+    s7 = FindSlot(slots, n, 7);
+    Check("a bad Button pointer yields buttonOk=0", (s7 && !s7->buttonOk) ? 1 : 0, 1);
+    Check("  and the reader refused it rather than faulting",
+          (long long)(g_cardReadFails > failsBefore), 1);
+    Check("  the other eight slots still read", n, 9);
+
+    // --- (d) a looped `next` terminates --------------------------------------
+    BuildFakeCard(true);
+    *(DWORD*)(DWORD_PTR)(FakeCardCtl(8) + SC_BINDLG_OFF_NEXT) = FakeCardCtl(0);
+    n = ScCardSnapshot(&hdr, slots, SC_CARD_SLOTS);
+    Check("a cyclic child list still returns (bounded walk)", n, 9);
+
+    // --- (e) no card in this process state -----------------------------------
+    *(DWORD*)FakeRt(SC_VA_CARD_DIALOG) = 0;
+    n = ScCardSnapshot(&hdr, slots, SC_CARD_SLOTS);
+    Check("a null card dialog reports not-ok, no slots", (n == 0 && !hdr.ok) ? 1 : 0, 1);
+
+    // --- (f) the per-player tech state, at the ENGINE's indexing ---------------
+    // The reason this is here and not left to the game: the whole Ghost result turned
+    // on a PTEx writer that used tech-major indexing while the engine uses
+    // player-major, and its own read-back agreed with it. So the reader is pinned
+    // against literal player*stride+tech offsets, and against the specific pair the
+    // bug confused -- player 0 tech 10 versus the byte the old arithmetic would have
+    // reached.
+    BuildFakeCard(true);
+    memset(FakeRt(SC_VA_TECH_AVAILABLE),  0, 12 * SC_TECH_STRIDE_VANILLA);
+    memset(FakeRt(SC_VA_TECH_RESEARCHED), 0, 12 * SC_TECH_STRIDE_VANILLA);
+    memset(FakeRt(SC_VA_TECH_AVAILABLE_BW),  0, 12 * SC_TECH_STRIDE_BW);
+    memset(FakeRt(SC_VA_TECH_RESEARCHED_BW), 0, 12 * SC_TECH_STRIDE_BW);
+    // Player 0: Personnel Cloaking available AND researched. Player 2: tech 32 of the
+    // BW tail researched -- which is precisely where the old tech-major write for
+    // (tech 10, player 0) actually landed, so a reader that still used it would read
+    // player 0 as not researched and player 2 as researched.
+    *(BYTE*)((DWORD_PTR)FakeRt(SC_VA_TECH_AVAILABLE)  + 0 * SC_TECH_STRIDE_VANILLA + 10) = 1;
+    *(BYTE*)((DWORD_PTR)FakeRt(SC_VA_TECH_RESEARCHED) + 0 * SC_TECH_STRIDE_VANILLA + 10) = 1;
+    *(BYTE*)((DWORD_PTR)FakeRt(SC_VA_TECH_RESEARCHED_BW) + 2 * SC_TECH_STRIDE_BW + (32 - 24)) = 1;
+
+    ScCardTechState ts;
+    Check("player 0's tech state reads", ScCardReadTechState(0, &ts) ? 1 : 0, 1);
+    Check("  Personnel Cloaking is researched for player 0", ts.researched[10], 1);
+    Check("  and available", ts.available[10], 1);
+    Check("  Stim Packs is not", ts.researched[0], 0);
+    Check("  and nothing leaked in from the BW tail", ts.researched[32], 0);
+    Check("player 2 has the BW tech, player 0 does not",
+          (ScCardReadTechState(2, &ts) && ts.researched[32] && !ts.researched[10]) ? 1 : 0, 1);
+    Check("an out-of-range player fails closed rather than reading a neighbour",
+          ScCardReadTechState(12, &ts) ? 1 : 0, 0);
+
+    ScCardTestEnd();
+    Check("the module is off again after the test", ScCardEnabled() ? 1 : 0, 0);
+
+    VirtualFree(g_fake, 0, MEM_RELEASE);
+    g_fake = NULL;
+}
+
 int main(void) {
+    // Unbuffered, because this binary's failure mode is a CRASH inside one part and
+    // a fully-buffered stdout (which is what a redirected run gets) throws away the
+    // lines that say which one.
+    setvbuf(stdout, NULL, _IONBF, 0);
+
     char tmp[MAX_PATH];
     GetTempPathA(MAX_PATH, tmp);
     lstrcatA(tmp, "scplugin-hooktest.log");
@@ -2064,6 +2333,7 @@ int main(void) {
     CircleTests();
     HudRowTests();
     ControlGroupTests();
+    CardScanTests();
     ExitLogTests();
 
     printf("\nhooktest: %d failure(s)\n", g_failures);

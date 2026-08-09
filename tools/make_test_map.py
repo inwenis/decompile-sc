@@ -327,14 +327,53 @@ UNIT_TYPE_RACES = {
 # disk: 44*12 + 44*12 + 44 + 44 + 44*12 == 1672, which is exactly the section's size in
 # (2)Fading Realm.scx. A layout that reproduces the real section size to the byte, for a
 # section this tool did not write, is not a guess.
+#
+# THE PER-PLAYER ARRAYS ARE PLAYER-MAJOR: index = player * 44 + tech (task 026).
+#
+# This tool had it TECH-major, and that was wrong in a way nothing here could catch:
+# `tech * 12 + player` and `player * 44 + tech` agree at exactly one point, tech 0 for
+# player 0 -- which is Stim Packs for the human slot, the only tech any fixture had ever
+# proved worked. `--tech-researched personnel-cloaking` (tech 10) wrote byte 120, which
+# the engine reads as player 2's tech 32; player 0's tech 10 stayed 0, the Ghost's Cloak
+# button came up GREYED, and task 022's whole "the ability row is inert" reading was that
+# and nothing else. The user spotted it from the screen before we spotted it from the
+# code: "the ghosts didn't have the cloak ability unlocked".
+#
+# The indexing is now read out of THIS BINARY rather than out of prose. The PTEx applier
+# 0x004CB7D0 (research/command-card.md 6) walks the section like this:
+#
+#     0x004CB870  SUB EBX,0x2c            ; EBX = player * 44  -- the OUTER step
+#     0x004CB873  SUB ESI,0x18            ; ESI = player * 24  -- the destination array
+#     0x004CB879  MOV EAX,0x2c            ; EAX = tech, 43..0  -- the INNER index
+#     0x004CB881  LEA ECX,[EBP + EBX + -0x210]     ; playerUsesDefault + player*44
+#     0x004CB888  CMP byte ptr [ECX + EAX],0x0     ;   ... + tech
+#     0x004CB8CC  LEA ECX,[EBX + EAX]              ; player*44 + tech
+#     0x004CB8CF  MOV DL,byte ptr [EBP + ECX + -0x688]  ; playerAvailability[that]
+#     0x004CB8EE  MOV DL,byte ptr [EBP + EDX + -0x478]  ; playerAlreadyResearched[that]
+#     0x004CB8FB  MOV byte ptr [ESI + ECX + 0x58cf44],DL ; -> techResearched[player][tech]
+#
+# and the five stack bases it uses are 0x688 / 0x478 / 0x268 / 0x23C / 0x210 below EBP,
+# whose successive differences are 0x210, 0x210, 0x2C, 0x2C -- i.e. exactly the five
+# sub-arrays below, in order. PTEC (the 24-tech vanilla section, applier 0x004CB670) has
+# the same shape with 24 in place of 44.
 PTEX_TECHS = 44
 PTEX_PLAYERS = 12
-PTEX_OFF_PLAYER_AVAILABLE = 0                                        # [tech][player]
+PTEX_OFF_PLAYER_AVAILABLE = 0                                        # [player][tech]
 PTEX_OFF_PLAYER_RESEARCHED = PTEX_TECHS * PTEX_PLAYERS               # 528
 PTEX_OFF_DEFAULT_AVAILABLE = PTEX_OFF_PLAYER_RESEARCHED + PTEX_TECHS * PTEX_PLAYERS
 PTEX_OFF_DEFAULT_RESEARCHED = PTEX_OFF_DEFAULT_AVAILABLE + PTEX_TECHS
-PTEX_OFF_USES_DEFAULT = PTEX_OFF_DEFAULT_RESEARCHED + PTEX_TECHS     # [tech][player]
+PTEX_OFF_USES_DEFAULT = PTEX_OFF_DEFAULT_RESEARCHED + PTEX_TECHS     # [player][tech]
 PTEX_SIZE = PTEX_OFF_USES_DEFAULT + PTEX_TECHS * PTEX_PLAYERS        # 1672
+
+
+def ptex_index(tech: int, player: int) -> int:
+    """Offset of (tech, player) inside one PTEx per-player array.
+
+    PLAYER-MAJOR, per the applier disassembly above. One function, so the write and
+    the read-back cannot drift apart -- they did, and a wrong write verified by an
+    equally wrong read reported success for a fixture the engine never received.
+    """
+    return player * PTEX_TECHS + tech
 
 # techdata.dat ids, printed straight out of richchk's own enum
 # (.venv/Lib/site-packages/richchk/model/richchk/techs/tech_id.py, `TechId`) -- the same
@@ -381,7 +420,7 @@ def set_techs_researched(payload: bytes, tech_ids: list[int], player: int) -> by
         raise ValueError(f"player must be 0-{PTEX_PLAYERS - 1}, got {player}")
     buf = bytearray(payload)
     for tech in tech_ids:
-        idx = tech * PTEX_PLAYERS + player
+        idx = ptex_index(tech, player)
         buf[PTEX_OFF_PLAYER_AVAILABLE + idx] = 1
         buf[PTEX_OFF_PLAYER_RESEARCHED + idx] = 1
         buf[PTEX_OFF_USES_DEFAULT + idx] = 0
@@ -394,7 +433,7 @@ def read_techs_researched(payload: bytes, player: int) -> list[int]:
         raise ValueError(f"PTEx is {len(payload)} bytes, expected {PTEX_SIZE}")
     out = []
     for tech in range(PTEX_TECHS):
-        idx = tech * PTEX_PLAYERS + player
+        idx = ptex_index(tech, player)
         if (payload[PTEX_OFF_PLAYER_RESEARCHED + idx]
                 and payload[PTEX_OFF_PLAYER_AVAILABLE + idx]
                 and not payload[PTEX_OFF_USES_DEFAULT + idx]):
