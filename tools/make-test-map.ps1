@@ -85,7 +85,14 @@ param(
     # Techs to mark available AND already-researched for -Player, written into PTEx.
     # Without this nothing on a generated map has an ability that needs research --
     # which is every ability with a per-unit cost (Stim Packs, both cloaks, Siege Mode).
-    [string[]]$TechResearched = @()
+    [string[]]$TechResearched = @(),
+    # --- the production variant (task 025) ---------------------------------------
+    # Starting resources for -Player, written as ONE `Always -> Set Resources` trigger
+    # into the otherwise-emptied TRIG section. A CHK carries no starting-resources field
+    # and Use Map Settings hands out none, so without this a producing building can
+    # afford roughly one unit. Cannot be combined with -KeepTriggers.
+    [int]$StartingMinerals,
+    [int]$StartingGas
 )
 
 $ErrorActionPreference = 'Stop'
@@ -131,6 +138,10 @@ if ($DamagedCount -gt 0) { $pyArgs += @('--damaged-count', $DamagedCount) }
 if ($PSBoundParameters.ContainsKey('DamagedHp')) { $pyArgs += @('--damaged-hp', $DamagedHp) }
 if ($PSBoundParameters.ContainsKey('DamagedEnergy')) { $pyArgs += @('--damaged-energy', $DamagedEnergy) }
 foreach ($t in $TechResearched) { $pyArgs += @('--tech-researched', $t) }
+# 0 is a meaningful amount ("start with nothing"), so these test for "the caller passed
+# it", same as the enemy offsets above.
+if ($PSBoundParameters.ContainsKey('StartingMinerals')) { $pyArgs += @('--starting-minerals', $StartingMinerals) }
+if ($PSBoundParameters.ContainsKey('StartingGas')) { $pyArgs += @('--starting-gas', $StartingGas) }
 
 & $python @pyArgs
 exit $LASTEXITCODE

@@ -86,11 +86,11 @@ $exeOut  = Join-Path $OutDir 'scinject.exe'
 $testOut = Join-Path $OutDir 'hooktest.exe'
 
 # The plugin is several translation units since task 011: the observer, the log,
-# the detour engine, the fan-out hooks, (task 014) the selection circles and
-# (task 017) the HUD selection-row paging.
-$pluginSrc = @('scplugin.cpp', 'sc_log.cpp', 'sc_hook.cpp', 'sc_fanout.cpp', 'sc_circles.cpp', 'sc_hudrow.cpp') |
+# the detour engine, the fan-out hooks, (task 014) the selection circles,
+# (task 017) the HUD selection-row paging and (task 025) the production queue.
+$pluginSrc = @('scplugin.cpp', 'sc_log.cpp', 'sc_hook.cpp', 'sc_fanout.cpp', 'sc_circles.cpp', 'sc_hudrow.cpp', 'sc_prodqueue.cpp') |
              ForEach-Object { Join-Path $srcDir $_ }
-$testSrc   = @('hooktest.cpp', 'sc_log.cpp', 'sc_hook.cpp', 'sc_fanout.cpp', 'sc_circles.cpp', 'sc_hudrow.cpp') |
+$testSrc   = @('hooktest.cpp', 'sc_log.cpp', 'sc_hook.cpp', 'sc_fanout.cpp', 'sc_circles.cpp', 'sc_hudrow.cpp', 'sc_prodqueue.cpp') |
              ForEach-Object { Join-Path $srcDir $_ }
 
 Write-Host 'build: compiling scplugin.dll ...'

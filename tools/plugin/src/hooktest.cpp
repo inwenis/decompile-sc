@@ -25,6 +25,7 @@
 #include "sc_hook.h"
 #include "sc_hudrow.h"
 #include "sc_log.h"
+#include "sc_prodqueue.h"
 
 static int g_failures = 0;
 
@@ -1934,6 +1935,284 @@ static int CountLines(const char* path, const char* needle) {
     return n;
 }
 
+// ---------------------------------------------------------------------------
+// [11] The production-queue core (task 025), driven with no game and no hooks.
+//
+// Everything the feature can do to a player's resources happens in three functions --
+// ScProdQueueOnTrain, ScProdQueueOnTick, ScProdQueueOnCancel -- and all three take a
+// CUnit* and read/write globals that live inside the fake image. So the whole
+// "paid exactly once, refunded exactly once" claim is decidable HERE, arithmetically,
+// against a counter this test owns, instead of only in a game run where a stray
+// mineral is invisible.
+// ---------------------------------------------------------------------------
+
+#define PQ_BUILDING   0        // fake unit index used as the producing building
+#define PQ_TYPE_A     0x00     // Terran Marine's id; any id under 0x6A works here
+#define PQ_TYPE_B     0x07
+#define PQ_TYPE_FREE  0x40     // given the units.dat "moves no resources" bit below
+#define PQ_PLAYER     1
+
+static DWORD PqBuilding(void) { return FakeUnit(PQ_BUILDING); }
+
+static void PqSetCost(unsigned type, WORD minerals, WORD gas, bool movesResources) {
+    *(WORD*)((DWORD)FakeRt(SC_VA_UNIT_MINERAL_COST) + type * 2) = minerals;
+    *(WORD*)((DWORD)FakeRt(SC_VA_UNIT_GAS_COST)     + type * 2) = gas;
+    BYTE* flag = (BYTE*)((DWORD)FakeRt(SC_VA_UNIT_COST_FLAGS) + type * 4);
+    *flag = movesResources ? 0 : SC_UNIT_COST_FLAG_NO_SPEND;
+}
+
+static DWORD* PqMinerals(void) {
+    return (DWORD*)((DWORD)FakeRt(SC_VA_PLAYER_MINERALS) + PQ_PLAYER * 4);
+}
+static DWORD* PqGas(void) {
+    return (DWORD*)((DWORD)FakeRt(SC_VA_PLAYER_GAS) + PQ_PLAYER * 4);
+}
+
+// Fill the engine's five slots with `n` occupied entries, head at slot 0.
+static void PqSetEngineQueue(int n, WORD type) {
+    DWORD u = PqBuilding();
+    *(BYTE*)(u + SC_CUNIT_OFF_BUILD_QUEUE_SLOT) = 0;
+    for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) {
+        *(WORD*)(u + SC_CUNIT_OFF_BUILD_QUEUE + i * 2) =
+            (i < n) ? type : (WORD)SC_BUILD_QUEUE_EMPTY;
+    }
+}
+static WORD PqEngineSlot(int i) {
+    return *(WORD*)(PqBuilding() + SC_CUNIT_OFF_BUILD_QUEUE + i * 2);
+}
+static int PqEngineLen(void) {
+    int n = 0;
+    for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) {
+        if (PqEngineSlot(i) != SC_BUILD_QUEUE_EMPTY) ++n;
+    }
+    return n;
+}
+
+// One "the player clicked train with a full queue" -- what the detour hands the core.
+static void PqTrain(unsigned type) {
+    bool wasFull = PqEngineLen() >= SC_BUILD_QUEUE_SLOTS;
+    ScProdQueueOnTrain(PqBuilding(), type, wasFull);
+}
+
+// Folds the "not tracked" sentinel (-1) to 0, for the places that want a LENGTH.
+static int PqOverflow(void) {
+    int n = ScProdQueueOverflowCount(PqBuilding());
+    return n < 0 ? 0 : n;
+}
+
+static void PqBegin(int maxTotal, DWORD minerals, DWORD gas) {
+    MakeUnits(8, PQ_PLAYER);
+    PqSetCost(PQ_TYPE_A, 50, 0, true);
+    PqSetCost(PQ_TYPE_B, 100, 25, true);
+    PqSetCost(PQ_TYPE_FREE, 999, 999, false);   // cost table filled, flag says ignore it
+    *PqMinerals() = minerals;
+    *PqGas()      = gas;
+    PqSetEngineQueue(SC_BUILD_QUEUE_SLOTS, PQ_TYPE_A);
+    ScProdQueueTestBegin(g_fake, maxTotal);
+}
+
+static void ProdQueueTests(void) {
+    printf("\n[11] the production-queue core: >5 queued, no game, no hooks\n");
+
+    if (!g_fake) {
+        g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
+                                     PAGE_READWRITE);
+        if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+    }
+
+    printf("\n    a FULL queue diverts the item to the plugin, and pays for it once\n");
+    PqBegin(16, 1000, 500);
+    PqTrain(PQ_TYPE_A);
+    Check("overflow holds the item",            ScProdQueueOverflowCount(PqBuilding()), 1);
+    Check("the engine's five are untouched",    PqEngineLen(), SC_BUILD_QUEUE_SLOTS);
+    Check("minerals down by exactly one cost",  (long long)*PqMinerals(), 950);
+    Check("gas untouched (this type costs none)", (long long)*PqGas(), 500);
+    Check("captured counter",                   ScProdQueueStat(SC_PRODQ_STAT_CAPTURED), 1);
+
+    printf("\n    a queue with room is left ENTIRELY to the engine\n");
+    PqBegin(16, 1000, 500);
+    PqSetEngineQueue(3, PQ_TYPE_A);
+    PqTrain(PQ_TYPE_A);
+    Check("nothing captured", ScProdQueueOverflowCount(PqBuilding()), -1);
+    Check("no building tracked", ScProdQueueTrackedBuildings(), 0);
+    Check("the plugin moved no money", (long long)*PqMinerals(), 1000);
+
+    printf("\n    FIFO: a freed slot takes the OLDEST overflow item, and pays nothing\n");
+    PqBegin(16, 1000, 500);
+    PqTrain(PQ_TYPE_A);
+    PqTrain(PQ_TYPE_B);
+    Check("two items held", ScProdQueueOverflowCount(PqBuilding()), 2);
+    Check("head of overflow is the first one queued",
+          ScProdQueueOverflowAt(PqBuilding(), 0), PQ_TYPE_A);
+    {
+        DWORD mineralsAfterCapture = *PqMinerals();
+        // The engine finishes slot 0 and frees it, exactly as productionTick does.
+        *(WORD*)(PqBuilding() + SC_CUNIT_OFF_BUILD_QUEUE) = SC_BUILD_QUEUE_EMPTY;
+        ScProdQueueOnTick(PqBuilding());
+        Check("the freed slot now holds the OLDEST overflow item",
+              PqEngineSlot(0), PQ_TYPE_A);
+        Check("one item left in overflow", ScProdQueueOverflowCount(PqBuilding()), 1);
+        Check("and it is the SECOND one queued",
+              ScProdQueueOverflowAt(PqBuilding(), 0), PQ_TYPE_B);
+        Check("promotion moved NO money", (long long)*PqMinerals(),
+              (long long)mineralsAfterCapture);
+        Check("promoted counter", ScProdQueueStat(SC_PRODQ_STAT_PROMOTED), 1);
+    }
+
+    printf("\n    two freed slots promote two items, in order, in one tick\n");
+    PqBegin(16, 1000, 500);
+    PqTrain(PQ_TYPE_A);
+    PqTrain(PQ_TYPE_B);
+    *(WORD*)(PqBuilding() + SC_CUNIT_OFF_BUILD_QUEUE + 0) = SC_BUILD_QUEUE_EMPTY;
+    *(WORD*)(PqBuilding() + SC_CUNIT_OFF_BUILD_QUEUE + 2) = SC_BUILD_QUEUE_EMPTY;
+    ScProdQueueOnTick(PqBuilding());
+    Check("first free slot took the first item",  PqEngineSlot(0), PQ_TYPE_A);
+    Check("second free slot took the second",     PqEngineSlot(1), PQ_TYPE_B);
+    Check("overflow drained, record dropped",     ScProdQueueTrackedBuildings(), 0);
+
+    printf("\n    the ring WRAPS: head at 3 means the free slot found is 3, not 0\n");
+    PqBegin(16, 1000, 500);
+    PqTrain(PQ_TYPE_B);
+    *(BYTE*)(PqBuilding() + SC_CUNIT_OFF_BUILD_QUEUE_SLOT) = 3;
+    *(WORD*)(PqBuilding() + SC_CUNIT_OFF_BUILD_QUEUE + 3 * 2) = SC_BUILD_QUEUE_EMPTY;
+    *(WORD*)(PqBuilding() + SC_CUNIT_OFF_BUILD_QUEUE + 1 * 2) = SC_BUILD_QUEUE_EMPTY;
+    ScProdQueueOnTick(PqBuilding());
+    Check("slot 3 (the head) took it, not slot 1", PqEngineSlot(3), PQ_TYPE_B);
+    Check("slot 1 is still empty",                 PqEngineSlot(1), SC_BUILD_QUEUE_EMPTY);
+
+    printf("\n    cancel-last (payload 0xFE) is CONSUMED and refunds exactly once\n");
+    PqBegin(16, 1000, 500);
+    PqTrain(PQ_TYPE_A);
+    PqTrain(PQ_TYPE_B);
+    Check("paid for both", (long long)*PqMinerals(), 1000 - 50 - 100);
+    Check("gas paid for the second", (long long)*PqGas(), 500 - 25);
+    Check("the plugin consumes it",
+          ScProdQueueOnCancel(PqBuilding(), SC_CANCEL_TRAIN_LAST) ? 1 : 0, 1);
+    Check("the LAST item came back (type B)", (long long)*PqMinerals(), 1000 - 50);
+    Check("its gas came back too",            (long long)*PqGas(), 500);
+    Check("one item left",                    ScProdQueueOverflowCount(PqBuilding()), 1);
+    Check("cancelling again returns the first",
+          ScProdQueueOnCancel(PqBuilding(), SC_CANCEL_TRAIN_LAST) ? 1 : 0, 1);
+    Check("balance is back where it started", (long long)*PqMinerals(), 1000);
+    Check("record dropped",                   ScProdQueueTrackedBuildings(), 0);
+    Check("a further cancel is the ENGINE's",
+          ScProdQueueOnCancel(PqBuilding(), SC_CANCEL_TRAIN_LAST) ? 1 : 0, 0);
+
+    printf("\n    a cancel that names a SLOT is never ours -- the engine refunds it\n");
+    PqBegin(16, 1000, 500);
+    PqTrain(PQ_TYPE_A);
+    for (unsigned slot = 0; slot < SC_BUILD_QUEUE_SLOTS; ++slot) {
+        Check("slot cancel passes through", ScProdQueueOnCancel(PqBuilding(), slot) ? 1 : 0, 0);
+    }
+    Check("0xFF (the no-op form) passes through",
+          ScProdQueueOnCancel(PqBuilding(), SC_CANCEL_TRAIN_NONE) ? 1 : 0, 0);
+    Check("overflow untouched", ScProdQueueOverflowCount(PqBuilding()), 1);
+    Check("money untouched",    (long long)*PqMinerals(), 950);
+
+    printf("\n    the cap refuses, and a refusal costs the player nothing\n");
+    PqBegin(8, 1000, 500);              // 5 engine + 3 plugin
+    for (int i = 0; i < 5; ++i) PqTrain(PQ_TYPE_A);
+    Check("three accepted",   ScProdQueueOverflowCount(PqBuilding()), 3);
+    Check("two refused",      ScProdQueueStat(SC_PRODQ_STAT_REFUSED_FULL), 2);
+    Check("paid for three only", (long long)*PqMinerals(), 1000 - 150);
+
+    printf("\n    an unaffordable item is refused, not queued into debt\n");
+    PqBegin(16, 120, 0);
+    PqTrain(PQ_TYPE_A);                 // 50 -> 70
+    PqTrain(PQ_TYPE_A);                 // 50 -> 20
+    PqTrain(PQ_TYPE_A);                 // cannot afford
+    Check("two accepted",       ScProdQueueOverflowCount(PqBuilding()), 2);
+    Check("one refused on cost", ScProdQueueStat(SC_PRODQ_STAT_REFUSED_COST), 1);
+    Check("balance never goes negative", (long long)*PqMinerals(), 20);
+
+    printf("\n    a type units.dat says moves no resources moves none, either way\n");
+    PqBegin(16, 1000, 500);
+    PqTrain(PQ_TYPE_FREE);
+    Check("queued", ScProdQueueOverflowCount(PqBuilding()), 1);
+    Check("minerals untouched", (long long)*PqMinerals(), 1000);
+    Check("gas untouched",      (long long)*PqGas(), 500);
+    (void)ScProdQueueOnCancel(PqBuilding(), SC_CANCEL_TRAIN_LAST);
+    Check("and the refund moves none either", (long long)*PqMinerals(), 1000);
+
+    printf("\n    a type the Train handler itself would reject (>= 0x6A) is refused\n");
+    PqBegin(16, 1000, 500);
+    PqTrain(SC_MAX_TRAINABLE_UNIT_ID);
+    Check("not tracked", ScProdQueueTrackedBuildings(), 0);
+    Check("money untouched", (long long)*PqMinerals(), 1000);
+
+    printf("\n    the building dies: every held item is refunded, exactly once\n");
+    PqBegin(16, 1000, 500);
+    PqTrain(PQ_TYPE_A);
+    PqTrain(PQ_TYPE_B);
+    Check("paid", (long long)*PqMinerals(), 850);
+    // A damage death: the slot is not recycled, the hit points are zero. This is the
+    // same signal sc_fanout's task-020 gate uses.
+    *(DWORD*)(PqBuilding() + SC_CUNIT_OFF_HITPOINTS) = 0;
+    ScProdQueueOnTick(FakeUnit(1));     // any other building's tick runs the sweep
+    Check("record dropped",  ScProdQueueTrackedBuildings(), 0);
+    Check("both items refunded", (long long)*PqMinerals(), 1000);
+    Check("gas refunded too",    (long long)*PqGas(), 500);
+    Check("refunded counter",    ScProdQueueStat(SC_PRODQ_STAT_REFUNDED), 2);
+
+    printf("\n    a RECYCLED slot (uniqueness bumped) is a different building\n");
+    PqBegin(16, 1000, 500);
+    PqTrain(PQ_TYPE_A);
+    *(BYTE*)(PqBuilding() + SC_CUNIT_OFF_UNIQUENESS) += 1;
+    ScProdQueueOnTick(FakeUnit(1));
+    Check("record dropped", ScProdQueueTrackedBuildings(), 0);
+    Check("refunded",       (long long)*PqMinerals(), 1000);
+
+    printf("\n    a building UNLINKED from the player list is gone (deep sweep only)\n");
+    PqBegin(16, 1000, 500);
+    PqTrain(PQ_TYPE_A);
+    UnlinkFakeUnit(PQ_BUILDING, PQ_PLAYER);
+    ScProdQueueOnTick(FakeUnit(1));                 // fast sweep: cannot see this
+    Check("the fast sweep leaves it alone", ScProdQueueTrackedBuildings(), 1);
+    ScProdQueueOnTrain(FakeUnit(1), PQ_TYPE_A, false);   // a player action: deep sweep
+    Check("the deep sweep drops it", ScProdQueueTrackedBuildings(), 0);
+    Check("refunded",                (long long)*PqMinerals(), 1000);
+    RelinkFakeUnit(PQ_BUILDING, PQ_PLAYER);
+
+    printf("\n    end to end: 5 engine + 11 plugin, drained one slot at a time\n");
+    PqBegin(16, 2000, 0);
+    {
+        const DWORD start = *PqMinerals();
+        for (int i = 0; i < 11; ++i) PqTrain(PQ_TYPE_A);
+        Check("eleven held",   ScProdQueueOverflowCount(PqBuilding()), 11);
+        Check("logical length is 16", PqEngineLen() + PqOverflow(), 16);
+        Check("a twelfth is refused", (PqTrain(PQ_TYPE_A), ScProdQueueOverflowCount(PqBuilding())), 11);
+        Check("paid for eleven, once each", (long long)(start - *PqMinerals()), 11 * 50);
+
+        // ScProdQueueOverflowCount reports -1 for a building it is not tracking, which
+        // is NOT the same as 0 -- the loop has to fold that to zero or it exits one
+        // item early, with the last one still sitting in the engine's ring.
+        int built = 0;
+        for (int frame = 0; frame < 64 && (PqEngineLen() + PqOverflow()) > 0; ++frame) {
+            // The engine completes the head item and frees its slot.
+            DWORD u = PqBuilding();
+            BYTE head = *(BYTE*)(u + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
+            if (*(WORD*)(u + SC_CUNIT_OFF_BUILD_QUEUE + head * 2) != SC_BUILD_QUEUE_EMPTY) {
+                *(WORD*)(u + SC_CUNIT_OFF_BUILD_QUEUE + head * 2) = SC_BUILD_QUEUE_EMPTY;
+                *(BYTE*)(u + SC_CUNIT_OFF_BUILD_QUEUE_SLOT) = (BYTE)((head + 1) % SC_BUILD_QUEUE_SLOTS);
+                ++built;
+            }
+            ScProdQueueOnTick(u);
+        }
+        Check("all sixteen were built", built, 16);
+        Check("nothing left in the engine's five", PqEngineLen(), 0);
+        Check("nothing left in the plugin",        ScProdQueueTrackedBuildings(), 0);
+        Check("promoted exactly the eleven", ScProdQueueStat(SC_PRODQ_STAT_PROMOTED), 11);
+        Check("no refund happened",  ScProdQueueStat(SC_PRODQ_STAT_REFUNDED), 0);
+        // The eleven overflow items were paid for by the plugin and never again; the
+        // engine's own five were paid for before this test set them up, which is why
+        // the balance is down by eleven costs and not sixteen.
+        Check("total spend is eleven costs, not twelve and not twenty-two",
+              (long long)(start - *PqMinerals()), 11 * 50);
+    }
+
+    ScProdQueueTestBegin(NULL, 0);   // leave the core inert for the parts after this
+}
+
 static void ExitLogTests(void) {
     printf("\n[12] the exit log path writes even when the lock is dead-owned\n");
 
@@ -2064,6 +2343,7 @@ int main(void) {
     CircleTests();
     HudRowTests();
     ControlGroupTests();
+    ProdQueueTests();
     ExitLogTests();
 
     printf("\nhooktest: %d failure(s)\n", g_failures);

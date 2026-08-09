@@ -38,6 +38,7 @@
 #include "sc_fanout.h"
 #include "sc_hook.h"
 #include "sc_log.h"
+#include "sc_prodqueue.h"
 
 static volatile LONG g_stop = 0;
 
@@ -383,6 +384,13 @@ static void PollMarker(void) {
     // the UNITSTATE line carrying that exact tag, and asserts on it. No polling race, and
     // no extra IPC beyond the file channel that already exists.
     ScFanoutLogUnitStates(g_lastMarker);
+
+    // Task 025: the production-queue oracle, on the same trigger and for the same
+    // reason. It prints the ENGINE's own five slots read straight out of CUnit+0x98
+    // beside the plugin's overflow, so an unattended run asserts a queue length from
+    // the building's memory rather than from the screen. Read-only; a no-op when
+    // %SCPLUGIN_PRODQ% never switched the feature on.
+    ScProdQueueLogState(g_lastMarker);
 }
 
 // ---------------------------------------------------------------------------
@@ -501,6 +509,17 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         g_mode = ScFanoutResolveMode();
         LogAttachBanner();
         ScFanoutInstall(g_base, g_mode);
+        // Task 025. Gated on %SCPLUGIN_PRODQ% AND on not being in observe mode:
+        // observe is the whole plugin's off switch and must stay byte-for-byte the
+        // task-008 read-only observer, whatever else is set in the environment.
+        if (g_mode == SC_MODE_OBSERVE) {
+            if (ScProdQueueEnabled()) {
+                ScLog("PRODQ: %%SCPLUGIN_PRODQ%% is set but the mode is observe -- "
+                      "IGNORED. Observe writes nothing to game memory.");
+            }
+        } else {
+            ScProdQueueInstall(g_base);
+        }
         // The observer runs on its own thread; DllMain itself does nothing but
         // start it, so we never hold the loader lock while polling.
         g_observer = CreateThread(NULL, 0, ObserverThread, NULL, 0, NULL);
@@ -522,12 +541,18 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         bool joined = true;
         if (lpReserved != NULL) ScLogSetTryLock();
         ScFanoutLogStats();   // the run's counters, on both detach paths
+        ScProdQueueLogStats();
         if (lpReserved == NULL) {
             if (g_observer) joined = (WaitForSingleObject(g_observer, 5000) == WAIT_OBJECT_0);
             // Un-splice only on the FreeLibrary path. On process exit the address
             // space is being torn down anyway, and walking the thread list from
             // DllMain under the loader lock is exactly the kind of call that is
             // documented as unsafe there.
+            //
+            // ScProdQueueRemove goes FIRST: it refunds every overflow item it is still
+            // holding before it un-splices. The other order would leave paid-for items
+            // with no hook left to promote or refund them.
+            ScProdQueueRemove();
             ScFanoutRemove();
         }
 
