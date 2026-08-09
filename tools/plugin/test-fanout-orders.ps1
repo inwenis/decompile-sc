@@ -1,4 +1,4 @@
-#Requires -Version 7
+﻿#Requires -Version 7
 <#
 .SYNOPSIS
 End-to-end, UNATTENDED test of task 015's per-opcode fan-out: launches the game, loads a
@@ -208,7 +208,9 @@ try {
         Start-Sleep -Seconds 6
         Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
         Start-Sleep -Seconds 8
-        Send-ScClick -Hwnd $hwnd -X 200 -Y 261        # dismiss the "StarCraft Tips" dialog
+        # The tips dialog is found in the engine's own dialog list and dismissed by ITS OWN
+        # OK button, then asserted gone (task 027) -- never a fixed point, never the registry.
+        Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
         Start-Sleep -Seconds 2
         Shot 'in-game'
     }

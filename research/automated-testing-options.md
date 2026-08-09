@@ -410,3 +410,100 @@ Further limits that apply to the whole plan:
 - **No game content committed.** The two window captures live in `work/scratch/` (gitignored) and are deliberately not committed or attached to the PR: they reproduce game artwork. Built binaries are likewise not committed.
 - **Offline, single-player only.** No Battle.net, no multiplayer, no CD key, at any point.
 - **The probe scripts are throwaway.** They live in `work/scratch/012-*.ps1` and are not proposed as tooling; the point of this task is the decision, and productionising the driver belongs to the follow-up task described in §5.2.
+
+---
+
+## 9. The foreground question, settled (task 027, 2026-08-09)
+
+Tasks 022/023 concluded that a posted `WM_MOUSEMOVE` is IGNORED while the game window is
+not the foreground window, and made every move-posting primitive raise the window first.
+That is wrong, and it was costing the user their focus on every unattended run. Task 027
+reversed it on two independent kinds of evidence.
+
+### 9.1 The window procedure does not check activation
+
+`StarCraft.exe` `FUN_004d1d70` is the window procedure (Ghidra headless, this binary; it is
+the function containing the `GetKeyState(VK_MENU)` call at `0x004d218a` and the `case 0x111`
+accelerator hand-off documented in `control-groups.md` §5.2). Its `WM_MOUSEMOVE` case, in
+full:
+
+```c
+case 0x200:                                       /* WM_MOUSEMOVE */
+  DAT_006cddc0._0_1_ = (byte)DAT_006cddc0 | 1;    /* "the mouse moved" bit */
+  if ((ushort)lParam < 0x280) _DAT_006cddc4 = lParam & 0xffff;  else _DAT_006cddc4 = 0x27f;
+  if ((ushort)(lParam >> 0x10) < 0x1e0) { _DAT_006cddc8 = lParam >> 0x10; return 1; }
+  _DAT_006cddc8 = 0x1df;
+  return 1;
+```
+
+Three stores and a return: the tracked cursor at `0x006CDDC4`/`0x006CDDC8` (clamped to
+639/479, i.e. the 640x480 client) and the pending-move bit at `0x006CDDC0`. No foreground
+test, no active test. The pump `0x004D1BF0` then acts on that bit unconditionally
+(`TEST byte ptr [0x006cddc0],0x1` at `0x004d1c90` → `0x004D1AE0`, which builds a type-3 UI
+event from the stored position and clears the bit).
+
+Corroborating: `StarCraft.exe` imports `GetForegroundWindow` and calls it in exactly ONE
+place, `0x004eddf0` — a diagnostic that reads the foreground window's TITLE. Nothing on the
+input path calls it.
+
+### 9.2 What activation actually does — and why the raise was harmful
+
+The window procedure's `WM_ACTIVATEAPP` case (`case 0x1c`) stores `wParam` into
+`DAT_0051bfa8` and calls `0x004d1750` and `0x00421730`:
+
+| address | calls | effect |
+|---|---|---|
+| `0x004d1750` | `LoadCursorA(NULL,0x7f00)`, `SetCursor`, `GetCursorPos`, `SetCursorPos` | re-asserts the OS cursor |
+| `0x00421730` | `ClipCursor` (`[0x004fe37c]`) with `0x006CDDB0` (a RECT) when activating, `NULL` when deactivating | **confines the user's real mouse to the game window** |
+| `0x0041d710` | reads `DAT_0051bfa8`, `IsIconic` | returns 0 — *do not draw* — while the app is inactive or minimised |
+
+So every raise (a) trapped the user's mouse and (b) re-synced the game's cursor to the
+physical mouse, throwing away the position a posted move had just set.
+
+### 9.3 The live measurement
+
+`tools/plugin/probe-quiet-input.ps1`, one launch, main menu only, oracles that are hashes
+of one window region rather than pictures:
+
+| step | button-region fingerprint | reading |
+|---|---|---|
+| cursor parked at (590,450), game foreground | `FF975A03A546737B` | baseline; region is static |
+| posted move onto Single Player, **user's window foreground the whole time** | `271D215ABFB1EF45` | the background move registered **and drew** |
+| game raised, then read again | `FF975A03A546737B` | the raise reset the cursor to the physical mouse |
+
+`GetForegroundWindow()` was sampled around every step and never changed while the move was
+posted. Two further arms: with the window in the background the animated main menu produced
+two different frames 3 s apart (rendering is LIVE in the background under the windowed-mode
+helper), and the same control in the foreground also differed (the animation oracle fires,
+so the background result means what it says).
+
+### 9.4 How 022 saw the opposite
+
+022's oracle was a captured FRAME of the game's drawn cursor, and §9.2 shows drawing is the
+thing activation actually gates (`0x0041d710`). A stock launch — no windowed-mode helper —
+therefore freezes its picture while inactive, and a frame taken then shows the cursor where
+it last drew, whatever the engine's tracked position now is. The raise also bundled a 400 ms
+settle before the first posted move of each activation, on a control task 021 had already
+diagnosed as timing-sensitive and fixed by raising waits. Neither of those is "the move was
+dropped".
+
+What is claimed here is only what was measured: with no raise anywhere in the harness,
+`test-fanout-orders` and `test-selection-circles` — the exact pair 022/023 cited as going
+25→0 — are both 0 failures, the drag box captures all 24 units, and the foreground never
+changes during either run.
+
+### 9.5 The active-dialog list
+
+`0x006D5E34` is the head of the engine's list of active dialogs, threaded on the BinDlg
+`+0x00` "next" link. Evidence: the event dispatcher `0x00419FD0` — the function every input
+event reaches — loads it, then walks `[ECX]` calling each entry's `+0x2A` interact handler
+until the link is null. Read-only, it gives a suite the dialog set by name, with each
+dialog's bounds and its controls' text/bounds (control bounds are LOCAL to the dialog
+origin, the same convention `hud-selection-row.md` uses).
+
+The plugin logs it as one `DIALOGS` line per change (`scplugin.cpp ScanDialogs`). Observed
+names on a normal run: `MainMenu`, `Login`, `RaceSelection`, `Create`, `TerranRR`,
+`Tips_Dlg`, and in-game `Minimap` / `TextBox` / `Stat_F10` / `StatBtn`. That is what
+replaced the hardcoded `(200,261)` tips-dialog click: `Tips_Dlg` sits at `128,32,511,287`
+with its OK button at local `20,216,123,243`, i.e. client `(199,261)` on this build —
+computed now, not assumed.

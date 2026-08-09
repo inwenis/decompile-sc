@@ -1,4 +1,4 @@
-#Requires -Version 7
+﻿#Requires -Version 7
 <#
 .SYNOPSIS
 Prove, in the live game, that the map browser is opened by a row computed from the
@@ -178,7 +178,9 @@ try {
     Start-Sleep -Seconds 6
     Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
     Start-Sleep -Seconds 10
-    Send-ScClick -Hwnd $hwnd -X 200 -Y 261        # dismiss the "StarCraft Tips" dialog
+    # The tips dialog is found in the engine's own dialog list and dismissed by ITS OWN
+    # OK button, then asserted gone (task 027) -- never a fixed point, never the registry.
+    Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $logPath | Out-Null
     Start-Sleep -Seconds 3
     Save-ScWindowImage -Hwnd $hwnd -Path (Join-Path $shotDir '03-in-game.png') -FullWindow | Out-Null
 
