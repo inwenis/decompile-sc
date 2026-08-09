@@ -179,27 +179,45 @@ function Get-ScState {
 
 # --- the fixture ---------------------------------------------------------------
 
+# The two fixtures this suite creates. Task-prefixed so "mine" is decidable in a folder
+# that is shared with every other worker's run.
+$script:myFixtures = @('019-probe.scx', '019-combat.scx')
+
+function Remove-MyFixtures {
+    foreach ($n in $script:myFixtures) {
+        $p = Join-Path $mapDir $n
+        if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Assert-FixtureFolderIsOurs {
+    if (-not (Test-Path -LiteralPath $mapDir)) { return }
+    $foreign = @(Get-ChildItem -LiteralPath $mapDir -Filter *.scx -ErrorAction SilentlyContinue |
+                 Where-Object { $script:myFixtures -notcontains $_.Name })
+    if ($foreign.Count -gt 0) {
+        throw ("test: $mapDir holds a fixture this test did not create " +
+               "($($foreign.Name -join ', ')). The map browser is clicked by ROW, so a " +
+               "foreign map can be the one that loads -- refusing rather than deleting " +
+               "theirs or playing it. Re-run when they are done.")
+    }
+}
+
 # Generate one variant and parse the generator's own validation read-back, so the
 # geometry this script clicks at comes from the file that was written rather than
 # from a constant that could drift away from it.
 function New-Fixture {
     param([string]$Name, [string]$EnemyOwner)
     # INTERIM SHARED-FOLDER GUARD (2026-08-09). This folder is shared between workers and
-    # this line is a recursive delete. Task 022 caught itself one step from deleting task
-    # 021's map out from under a live game, and this suite could do the same to theirs.
-    # Refusing is the whole of the guard on purpose -- the conductor is cutting a task to
-    # fix the shared tooling properly, and a half-redesign here would collide with it.
-    if (Test-Path -LiteralPath $mapDir) {
-        $live = @(Get-Process -Name StarCraft -ErrorAction SilentlyContinue |
-                  Where-Object { $script:launchedPids -notcontains $_.Id })
-        if ($live.Count -gt 0) {
-            throw ("test: refusing to recursive-delete $mapDir while a StarCraft this " +
-                   "test did not launch is alive (pid $($live.Id -join ',')). Another " +
-                   "worker is mid-run and their fixture is in that folder -- re-run when " +
-                   "they are done.")
-        }
-        Remove-Item -LiteralPath $mapDir -Recurse -Force
-    }
+    # this used to be a recursive delete of the whole thing.
+    #
+    # A live-process check alone was NOT enough, and this is what it cost: with no foreign
+    # game running the guard passed, this suite wrote its fixture, task 022 then dropped
+    # `022-ghosts.scx` in beside it -- and because the map browser is clicked by ROW and
+    # `022-ghosts.scx` sorts before `combat.scx`, THIS TEST LOADED THEIR MAP and boxed 36
+    # Ghosts. So the rule is now the stronger one: refuse on any fixture we did not
+    # create, whether or not a game is running, and never delete the folder.
+    Assert-FixtureFolderIsOurs
+    Remove-MyFixtures
     $path = Join-Path $mapDir "$Name.scx"
     $out = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
         -UnitCount $UnitCount -UnitType lurker -Player 0 -UnitHp $UnitHp `
@@ -577,7 +595,7 @@ try {
     # PHASE A -- both slots spawn EXACTLY what the file places
     # =====================================================================
     Step "PHASE A: generate the PLACEMENT PROBE ($UnitCount lurkers + $EnemyCount hydralisks, both the human's)" {
-        $script:probeFx = New-Fixture -Name 'probe' -EnemyOwner 'player'
+        $script:probeFx = New-Fixture -Name '019-probe' -EnemyOwner 'player'
         Assert-That 'the generator succeeded' ($probeFx.Exit -eq 0) "(exit $($probeFx.Exit))"
         Assert-That 'it wrote the map' ([bool]$probeFx.Written)
         Assert-That 'its structural validation passed' ([bool]$probeFx.Ok)
@@ -626,7 +644,7 @@ try {
     # PHASE B -- combat
     # =====================================================================
     Step "PHASE B: generate the COMBAT map (same block, owned by the computer)" {
-        $script:combatFx = New-Fixture -Name 'combat' -EnemyOwner 'computer'
+        $script:combatFx = New-Fixture -Name '019-combat' -EnemyOwner 'computer'
         Assert-That 'the generator succeeded' ($combatFx.Exit -eq 0) "(exit $($combatFx.Exit))"
         Assert-That 'it wrote the map' ([bool]$combatFx.Written)
         Assert-That 'its structural validation passed' ([bool]$combatFx.Ok)
@@ -1232,9 +1250,8 @@ catch {
 }
 finally {
     if (-not $KeepOpen) { Stop-Mission }
-    if (-not $KeepOpen -and (Test-Path -LiteralPath $mapDir)) {
-        Remove-Item -LiteralPath $mapDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    # ONLY our own fixtures, never the folder -- another worker's map may be beside them.
+    if (-not $KeepOpen) { Remove-MyFixtures }
 }
 
 Write-Host ''
@@ -1266,7 +1283,7 @@ foreach ($id in $script:launchedPids) {
 Assert-That 'no game process this test started is left running' `
     ($KeepOpen -or $stillUp.Count -eq 0) `
     "(launched $($script:launchedPids -join ' '); still up: $($stillUp -join ' '))"
-Assert-That 'the generated maps were cleaned up' ($KeepOpen -or -not (Test-Path -LiteralPath $mapDir))
+Assert-That 'the generated maps were cleaned up' ($KeepOpen -or @(Get-ChildItem -LiteralPath $mapDir -Filter *.scx -ErrorAction SilentlyContinue | Where-Object { $script:myFixtures -contains $_.Name }).Count -eq 0)
 
 $hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
 Write-Host "  StarCraft.exe SHA-256 after:  $hashAfter"
