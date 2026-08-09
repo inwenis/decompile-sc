@@ -1598,6 +1598,13 @@ function Get-ScUnitState {
             # "this build did not report it", never as zero.
             $ce = [regex]::Match($line.Line,
                 'stimmed=(\d+)/(\d+) hp=\[([^\]]*)\] stim=\[([^\]]*)\] energy=\[([^\]]*)\]')
+            # Task 024 appended the chunk size and the RALLY-POINT histogram. Same rule
+            # again: optional, so an older log parses with these reported as absent.
+            # Rally keys are the packed (x << 16) | y the plugin logs, so ONE key means
+            # every unit in the selection is rallied to the same map point -- which is
+            # what "the order reached all of them" has to mean for a building.
+            $bg = [regex]::Match($line.Line,
+                'simSlots=(\d+) rally=\[([^\]]*)\] circled=(\d+)/(\d+)')
             $toMap = {
                 param([string]$s)
                 $h = @{}
@@ -1633,6 +1640,13 @@ function Get-ScUnitState {
                 Energy = $(if ($ce.Success) { & $toMap $ce.Groups[5].Value } else { $null })
                 HpText = $(if ($ce.Success) { $ce.Groups[3].Value } else { '' })
                 StimText = $(if ($ce.Success) { $ce.Groups[4].Value } else { '' })
+                SimSlots = $(if ($bg.Success) { [int]$bg.Groups[1].Value } else { -1 })
+                Rally = $(if ($bg.Success) { & $toMap $bg.Groups[2].Value } else { $null })
+                RallyText = $(if ($bg.Success) { $bg.Groups[2].Value } else { '' })
+                # Units carrying a selection circle right now (sprite flag 0x01),
+                # engine-drawn and plugin-drawn alike, out of the live shadow list.
+                Circled = $(if ($bg.Success) { [int]$bg.Groups[3].Value } else { -1 })
+                CircledOf = $(if ($bg.Success) { [int]$bg.Groups[4].Value } else { -1 })
                 Line = $line.Line.Trim()
             }
         }
@@ -1684,6 +1698,10 @@ function Get-ScWorldState {
         if ($done.Count -gt 0) {
             $units = @()
             $counts = @{}
+            # The viewport's top-left in MAP pixels, so a caller can convert any unit's
+            # pos=(x,y) into the CLIENT coordinate a posted click must carry:
+            # client = map - origin. $null when the plugin build predates it.
+            $screen = $null
             foreach ($l in $lines) {
                 $m = [regex]::Match($l.Line,
                     'p=(\d+) i=(\d+) unit=0x([0-9A-Fa-f]+) owner=(\d+) type=0x([0-9A-Fa-f]+) hp=(-?\d+) order=0x([0-9A-Fa-f]+) order2=0x([0-9A-Fa-f]+) stim=(\d+) energy=(\d+) pos=\((\d+),(\d+)\) flags=0x([0-9A-Fa-f]+)')
@@ -1705,6 +1723,13 @@ function Get-ScWorldState {
                     }
                     continue
                 }
+                $o = [regex]::Match($l.Line, 'screen=\((\d+),(\d+)\)')
+                if ($o.Success) {
+                    $screen = [pscustomobject]@{
+                        Left = [int]$o.Groups[1].Value; Top = [int]$o.Groups[2].Value
+                    }
+                    continue
+                }
                 $s = [regex]::Match($l.Line, 'p=(\d+) units=(\d+) recount=(\d+) complete=(\d+)')
                 if ($s.Success) {
                     $counts[[int]$s.Groups[1].Value] = [pscustomobject]@{
@@ -1714,7 +1739,9 @@ function Get-ScWorldState {
                     }
                 }
             }
-            return [pscustomobject]@{ Label = $label; Units = $units; Counts = $counts }
+            return [pscustomobject]@{
+                Label = $label; Units = $units; Counts = $counts; Screen = $screen
+            }
         }
         Start-Sleep -Milliseconds 250
     }
