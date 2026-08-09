@@ -141,7 +141,14 @@ $script:armLock = $null
 #   cloak -- CUnit+0xA6, the SECONDARY order 0x00491B30 sets to 0x6D. That handler also
 #            deducts CUnit+0xA2 (energy) and touches the main order nowhere, which is
 #            exactly why this ability is the sharp test of the interruption hypothesis.
-$ENEMY_TYPE_ID = 109       # units.dat 109, Terran Supply Depot -- no weapon, cannot move
+# Set from -EnemyType / the ability descriptor just below the descriptor table. The
+# allowed values are the weaponless, immobile Terran buildings this suite has verified.
+$ENEMY_TYPE_ID = 109
+# units.dat ids this suite will accept as a target block, with the property that matters:
+# no weapon, and no way for the unit to DECIDE to act (a computer-owned Command Centre
+# with no orders never lifts off). "Cannot attack", not "is not currently attacking" --
+# the distinction a burrowing Lurker taught this file the hard way.
+$ENEMY_TYPES_OK = @{ 109 = 'Terran Supply Depot (500 hp)'; 106 = 'Terran Command Centre (1500 hp)' }
 $IDLE_ORDER = 0x03
 $CLOAK_ORDER2 = 0x6D       # research/ability-semantics.md §3
 # The Ghost Cloak BUTTON's action function -- what NAMES a card slot as Cloak in the
@@ -174,6 +181,9 @@ $ABILITIES = @{
         PaidName = 'hit points'
         NeedCard = $false
         EnemyCount = 12
+        # Supply Depot, 500 hit points. Unchanged: this arm's published numbers were
+        # measured against this block.
+        EnemyType = '109'
         # OFF for stim, deliberately: this arm's published numbers were measured without
         # it and turning it on would change them for no reason. See the cloak entry.
         Settle = $false
@@ -205,6 +215,18 @@ $ABILITIES = @{
         # "the target block outlasted the measurement", and a block that dies mid-run puts
         # the end of the fight inside a control window (§8.4b of ability-semantics.md).
         EnemyCount = 16
+        # A COMMAND CENTRE, NOT A SUPPLY DEPOT, and this is the fixture doing the job an
+        # assertion should not have to. 1500 hit points against the depot's 500, so the
+        # interval between target deaths triples and none can die inside a two-second
+        # window in practice. Measured on the depot block: the plugin arm lost a target
+        # roughly every 13 s (16 -> 13 across one run) and one of those deaths landed
+        # INSIDE the ability window, idling 33 of 36 Ghosts at once -- the exact signature
+        # the hypothesis predicts, manufactured by the fixture. The no-target-died gate
+        # below catches that; this stops it happening. Both are kept: the fixture makes
+        # clean runs the normal case, the gate makes a dirty one impossible to publish.
+        # Still weaponless and immobile -- a computer-owned Command Centre with no orders
+        # cannot lift off, so the "cannot attack, cannot decide to" premise is unchanged.
+        EnemyType = '106'
         # WAIT FOR THE FIGHT TO SETTLE before the first control window. Measured, not
         # guessed: on the first cloak run the leading control saw 6 order changes and the
         # trailing one saw 0 -- a spread of exactly the bound the suite calls too unstable
@@ -223,6 +245,8 @@ $ABILITY_KEY = $ABIL.Key
 # The descriptor supplies the default only when the CALLER did not. -EnemyCount 12 passed
 # explicitly must stay 12 even on the arm whose descriptor says 16.
 if (-not $PSBoundParameters.ContainsKey('EnemyCount')) { $EnemyCount = $ABIL.EnemyCount }
+if (-not $PSBoundParameters.ContainsKey('EnemyType'))  { $EnemyType  = $ABIL.EnemyType }
+$ENEMY_TYPE_ID = [int]$EnemyType
 if (-not $LogDir) { $LogDir = $(if ($Ability -eq 'stim') { 'C:\sc-work\logs\022' } else { 'C:\sc-work\logs\026' }) }
 # The camera opens centred on the start location and never moves on its own, so a click
 # at client x is an order to (start.x + x - 320). Same constants as test-combat-death.ps1.
@@ -641,8 +665,9 @@ try {
             # has no weapon and cannot move, so it cannot DECIDE to start shooting. The
             # previous fixture used Lurkers, which have no weapon unburrowed -- and a
             # computer-owned one burrows on its own and shreds the group with splash.
-            Assert-That "[$mode] the target block is a weaponless, immobile building type ($ENEMY_TYPE_ID)" `
-                ($ENEMY_TYPE_ID -eq 109)
+            Assert-That ("[{0}] the target block is a weaponless, immobile building type ({1} = {2})" -f `
+                         $mode, $ENEMY_TYPE_ID, ($ENEMY_TYPES_OK[$ENEMY_TYPE_ID] ?? 'NOT ON THE VERIFIED LIST')) `
+                ($ENEMY_TYPES_OK.ContainsKey($ENEMY_TYPE_ID))
             Assert-That "[$mode] the fixture spawned $UnitCount $($ABIL.UnitLabel)" ($spawned -eq $UnitCount) `
                 ($melee.Count -gt 0 ? "(got $spawned, and player 0 owns SCV/Drone/Larva/Overlord-shaped units -- THIS IS A MELEE START, the Game Type pick did not take)" : "(got $spawned)")
             Assert-That "[$mode] and $EnemyCount enemy buildings" `
