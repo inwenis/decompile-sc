@@ -1896,6 +1896,86 @@ static void HudRowTests(void) {
 }
 
 // ---------------------------------------------------------------------------
+// [12] the process-exit log path (task 023)
+//
+// THE FAILURE THIS PINS DOWN. One run's detach wrote NOTHING -- no STATS, no
+// GROUPSTATS, no CIRCLES stats, not even DETACH -- and test-selection-circles
+// failed on the missing CIRCLES line while the plugin had done nothing wrong
+// (task 021 found it, task 022 found the mechanism). ScLog's exit mode used a
+// TryEnterCriticalSection and returned on the first failure; on the exit path the
+// lock's owner is a thread the OS has already terminated, so it never comes back
+// and every line of the sequence is dropped.
+//
+// The test holds the log lock from ANOTHER THREAD that never releases it -- which
+// is the dead-owner state, reproduced exactly -- and requires the line to land
+// anyway. It fails against the old code by construction: TryEnterCriticalSection
+// cannot succeed while a different thread owns the section.
+// ---------------------------------------------------------------------------
+
+static HANDLE g_lockHeld = NULL;    // signalled once the holder owns the lock
+static HANDLE g_lockDrop = NULL;    // signalled to make the holder let go
+
+static DWORD WINAPI LockHolderThread(LPVOID) {
+    if (!ScLogTestTryHoldLock()) { SetEvent(g_lockHeld); return 1; }
+    SetEvent(g_lockHeld);
+    WaitForSingleObject(g_lockDrop, 30000);
+    ScLogTestReleaseLock();
+    return 0;
+}
+
+// How many lines of `path` contain `needle`.
+static int CountLines(const char* path, const char* needle) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return -1;
+    char buf[4096];
+    int n = 0;
+    while (fgets(buf, sizeof(buf), f)) { if (strstr(buf, needle)) ++n; }
+    fclose(f);
+    return n;
+}
+
+static void ExitLogTests(void) {
+    printf("\n[12] the exit log path writes even when the lock is dead-owned\n");
+
+    char path[MAX_PATH];
+    ScLogResolvePath(path, sizeof(path));
+
+    g_lockHeld = CreateEventA(NULL, TRUE, FALSE, NULL);
+    g_lockDrop = CreateEventA(NULL, TRUE, FALSE, NULL);
+    if (!g_lockHeld || !g_lockDrop) { printf("  FAIL could not create events\n"); ++g_failures; return; }
+
+    HANDLE t = CreateThread(NULL, 0, LockHolderThread, NULL, 0, NULL);
+    if (!t) { printf("  FAIL could not start the lock holder\n"); ++g_failures; return; }
+    WaitForSingleObject(g_lockHeld, 5000);
+
+    // Exit mode, lock owned by a thread that is not going to give it back.
+    int before = CountLines(path, "EXITLOGTEST");
+    ScLogSetTryLock();
+    DWORD t0 = GetTickCount();
+    ScLog("EXITLOGTEST line written with the lock held elsewhere");
+    DWORD elapsed = GetTickCount() - t0;
+    int after = CountLines(path, "EXITLOGTEST");
+
+    Check("the line reached the log anyway", (long long)(after - before), 1);
+    // Bounded: it must not sit on a lock that is never coming back. The cap is
+    // SC_LOG_EXIT_WAIT_MS (250); allow generous slack for a loaded machine.
+    Check("and it did not block indefinitely (<2s)", (long long)(elapsed < 2000 ? 1 : 0), 1);
+
+    SetEvent(g_lockDrop);
+    WaitForSingleObject(t, 5000);
+    CloseHandle(t);
+    CloseHandle(g_lockHeld);
+    CloseHandle(g_lockDrop);
+
+    // Back to normal mode: the ordinary path still takes the lock and still writes.
+    ScLogTestClearTryLock();
+    before = CountLines(path, "EXITLOGTEST");
+    ScLog("EXITLOGTEST normal-mode line");
+    after = CountLines(path, "EXITLOGTEST");
+    Check("normal mode still writes", (long long)(after - before), 1);
+}
+
+// ---------------------------------------------------------------------------
 
 int main(void) {
     char tmp[MAX_PATH];
@@ -1984,6 +2064,7 @@ int main(void) {
     CircleTests();
     HudRowTests();
     ControlGroupTests();
+    ExitLogTests();
 
     printf("\nhooktest: %d failure(s)\n", g_failures);
     ScLogClose();

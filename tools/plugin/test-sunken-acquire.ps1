@@ -35,6 +35,9 @@ does. That difference is the whole point of running both.
 param(
     [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
     [string]$LogDir = 'C:\sc-work\logs\022',
+    # Which folder under Maps\ the fixture is generated into; see test-burrow-fanout.ps1.
+    # Default is what this suite has always used.
+    [string]$FixtureDir,
     # MORE THAN TWELVE, on purpose. At six units the fan-out never fires, the overflow
     # circles have nothing to draw and the HUD row never pages -- so the "fanout" arm would
     # be stock plus four pass-through hooks, and the comparison would answer "does LOADING
@@ -78,13 +81,17 @@ $WALK_Y = 240
 $ENEMY_OFFSET_X = 448
 
 $PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C6A46'
-# THIS TASK'S OWN FIXTURE FOLDER, not the shared 00-testmap.
-# The map browser picks by ROW, so sharing a folder means two workers pick each other's
-# maps -- which happened twice during task 022, once in each direction, and cost a run
-# each time. A folder of our own removes the interference in both directions rather than
-# racing for it. The name sorts before every other 00-t* folder ('0' < any letter), so the
-# first-row folder click that every suite here uses still lands on it.
-$mapDir = Join-Path $GameDir 'Maps\BroodWar\00-t022'
+# A FIXTURE FOLDER OF ITS OWN, not the shared 00-testmap: sharing one means two workers
+# can pick each other's maps, which happened twice during task 022, once in each
+# direction. No row is assumed from the name -- Select-ScBrowserMap computes every click
+# from the filesystem and verifies what opened.
+# Not a bare default any more: with $env:AGENT_TASK set this resolves to THIS
+# agent's own folder, so two concurrent runs of this same suite cannot land in one
+# folder and overwrite each other's identically-named fixture (task 023 review).
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t022' }
+$mapDir = $FixtureDir
+$mapName = 'sunken-acquire.scx'
+$fixtures = New-ScFixtureRun -Dir $mapDir -Names @($mapName)
 
 function Assert-That {
     param([string]$What, [bool]$Ok, [string]$Detail = '')
@@ -125,12 +132,14 @@ function Invoke-Arm {
     $logPath = Join-Path $LogDir "sunken-$tag.log"
     $shotDir = Join-Path $LogDir "sunken-$tag-frames"
     $markerPath = Join-Path $LogDir 'marker.txt'
-    $mapPath = Join-Path $mapDir "022-sunken.scx"
+    $mapPath = Join-Path $mapDir $mapName
     if (Test-Path -LiteralPath $logPath) { Remove-Item -LiteralPath $logPath -Force }
     if (Test-Path -LiteralPath $markerPath) { Remove-Item -LiteralPath $markerPath -Force }
     New-Item -ItemType Directory -Path $shotDir -Force | Out-Null
 
-    Wait-ScTestMapDirFree -Dir $mapDir -MyMapPath $mapPath
+    # Four arms run in sequence and each regenerates the same declared fixture, so the
+    # wait clears only OUR file and never counts an earlier arm's as foreign.
+    Wait-ScFixtureFolderFree -Run $fixtures
     $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
         -UnitCount $UnitCount -UnitType $UnitType -Player 0 -Race terran `
         -EnemyCount 1 -EnemyType $SUNKEN_TYPE -EnemyRace zerg `
@@ -139,7 +148,7 @@ function Invoke-Arm {
     $gen | Where-Object { "$_" -notmatch 'WARNING:StormLib' } | ForEach-Object { Write-Host "       $_" }
     Assert-That "[$tag] the generator succeeded" ($LASTEXITCODE -eq 0) "(exit $LASTEXITCODE)"
 
-    Assert-ScFixtureStillMine -Dir $mapDir -MapPath $mapPath
+    Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
     Wait-ScNoGameRunning
     $script:armLock = Enter-ScLaunchLock -TaskId "022-sunken-$tag"
     $script:armPid = 0
@@ -169,15 +178,11 @@ function Invoke-Arm {
         Start-Sleep -Seconds 2
         Send-ScClick -Hwnd $hwnd -X 327 -Y 415
         Start-Sleep -Seconds 2
-        # The folder row is POSITIONAL and this task's folder is not necessarily first:
-        # another worker's 00-t021 sorts before 00-t022. Computed from the filesystem.
-        $folderRow = Get-ScMapFolderRow -MapsDir (Split-Path $mapDir -Parent) -FolderName (Split-Path $mapDir -Leaf)
-        Write-Host "       fixture folder is row $($folderRow.Row) (y=$($folderRow.Y)); siblings: $($folderRow.Siblings)"
-        Send-ScClick -Hwnd $hwnd -X 117 -Y $folderRow.Y
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 393
-        Start-Sleep -Milliseconds 800
-        Send-ScClick -Hwnd $hwnd -X 117 -Y 159
-        Start-Sleep -Milliseconds 500
+        # Every row from the filesystem, and the opened folder verified before the map row
+        # is clicked. Task 022 computed the FOLDER row here and left the MAP row hardcoded
+        # at 159; that half was the original incident (a foreign .scx sorting before ours).
+        Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
+        Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
         Set-ScGameType -Hwnd $hwnd -Index 2
         ArmShot 'lobby'
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393
@@ -223,9 +228,7 @@ function Invoke-Arm {
         }
         Exit-ScLaunchLock -Lock $script:armLock
         $script:armLock = $null
-        if (-not $KeepOpen -and (Test-Path -LiteralPath $mapPath)) {
-            Remove-Item -LiteralPath $mapPath -Force -ErrorAction SilentlyContinue
-        }
+        if (-not $KeepOpen) { Remove-ScOwnFixture -Run $fixtures }
         Remove-ScOwnFixtureDir -Dir $mapDir
     }
     return $result

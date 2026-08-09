@@ -51,16 +51,39 @@ So: prove the pattern positive against a log where the thing DID happen, then re
 where it should not have. Pair every absence check with a positive one — "the ability fired in
 this arm" alongside "nothing was interrupted" — or a silently broken run reads as a clean result.
 
-## Test fixtures: one folder per task (hard rule, 2026-08-09)
+## Never click a map-browser row by number (hard rule, 2026-08-09, task 023)
+
+**`Select-ScBrowserMap` walks the browser. Nothing else does.** It scrolls the list to a
+known top, computes every row from the filesystem, and makes the browser prove the row it
+clicked was a map. A hardcoded `-X 117 -Y 140` is the defect that cost six runs in one day,
+and it has three levels — the fixture folder's row, the map's row inside it, and the row of
+`[Up One Level]`, which sorts ALPHABETICALLY AMONG THE FOLDERS and therefore moves when any
+task creates a fixture folder. That third one broke a suite that generates no fixture and
+shares no folder, so "I don't use the shared folder" is not an exemption.
+
+The list also opens ALREADY SCROLLED, which is why a computed row is not enough on its own
+and why the sync comes first. Details and evidence: the block comment above
+`Get-ScBrowserListing` in `tools/plugin/drive-game.ps1`.
+
+## Test fixtures: one folder per task, one NAME per suite (hard rule, 2026-08-09)
 
 **Generate into `Maps\BroodWar\00-t<NNN>\`, your own folder — never the shared
-`00-testmap`.** This removes the contention in both directions instead of racing for it:
-nobody else's row click can land on your map, and yours cannot land on theirs. `0` sorts
-before any letter, so the first-row folder click every suite uses still finds it.
+`00-testmap`.** This removes the contention in both directions instead of racing for it.
+Suites take `-FixtureDir` for exactly this: more than one task runs some of them, so the
+folder is the caller's choice, not the suite's.
+
+**Name the fixture after the SUITE, not the task** (`burrow-fanout.scx`). Two suites
+generating `lurkers.scx` made "delete only your own file" undecidable between them and
+blocked a run outright.
+
+**Declare every fixture a run will create, up front** (`New-ScFixtureRun`). Ownership is
+per-run, not per-file: the old one-filename rule counted a suite's own earlier fixture as
+foreign and made it wait for itself. Declaring is not softening — anything outside the
+declared set is still foreign, and refusing is still the answer.
 
 Remove the folder at the end of the run, and only if it is empty — an empty folder of yours
-left behind becomes the first row for everyone else, which is the same bug with the roles
-swapped.
+still pushes every entry below it down a row for everyone else, and only six rows are
+visible at once.
 
 The rules below still apply INSIDE your own folder (they are what caught the incidents):
 
@@ -73,18 +96,34 @@ changes which map YOUR test loads. On 2026-08-09 task 021's run played task 022'
 
 Rules, all three, no exceptions:
 
-1. **Task-prefix every generated fixture** (`021-lurkers.scx`), so "mine" is decidable.
-2. **Delete only your own named files**, on every path including `finally`. Never
+1. **Name every generated fixture for its suite** (`burrow-fanout.scx`) and declare it to
+   `New-ScFixtureRun`, so "mine" is decidable from the filename alone.
+2. **Delete only your own declared files**, on every path including `finally`. Never
    `Remove-Item -Recurse` that folder.
-3. **Refuse to start if any `.scx` you did not create is present** — whether or not a game
+3. **Refuse to start if any `.scx` you did not declare is present** — whether or not a game
    is running. Process-liveness is NOT a sufficient test: the other worker's run may begin
    seconds after yours generates its fixture.
-4. **Re-check immediately before clicking the browser row**, not only at generate time. The
+4. **Re-check immediately before the browser walk**, not only at generate time. The
    folder can be cleared or added to in between — task 022 lost a run to exactly that. Throw
    with the cause named rather than playing whatever is there.
 
 Rule 3 is what prevents the silent failure — playing someone else's map produces internally
 consistent nonsense, which is worse than a crash.
+
+## Posted mouse MOVES need the window foreground (hard rule, 2026-08-09, tasks 022/023)
+
+The game processes a posted click with its window in the background and DROPS the posted
+`WM_MOUSEMOVE`. Anything that reads the game's own tracked cursor position therefore acts
+on a stale point, silently: the Game Type dropdown committing the previous value, the
+minimap centring click missing, `Send-ScDrag` selecting nothing at all.
+
+Every primitive in `drive-game.ps1` that posts a move goes through `Assert-ScWindowActive`,
+which verifies the result (`SetForegroundWindow` is refused for a background process and
+returns TRUE while doing nothing) and THROWS rather than posting into a no-op. Do not add
+an input primitive that skips it.
+
+Confirmed, not merely attributed: one sweep of `test-fanout-orders` and
+`test-selection-circles` against the fix took both from 25 lost assertions to 0.
 
 ## Screenshots vs hard rule 1 (settled)
 

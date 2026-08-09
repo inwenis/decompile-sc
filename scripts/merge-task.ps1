@@ -51,6 +51,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'lib/merge-task.ps1')
+. (Join-Path $PSScriptRoot 'lib/ci-local.ps1')
 . (Join-Path $PSScriptRoot 'lib/close-task.ps1')
 . (Join-Path $PSScriptRoot 'lib/agent-lifecycle.ps1')
 . (Join-Path $PSScriptRoot 'lib/data-root.ps1')
@@ -106,14 +107,20 @@ if ($verdict -ne 'pass' -and $LocalCiReceipt) {
         throw "local CI receipt not found: $LocalCiReceipt"
     }
     $receipt = Get-Content -Raw -LiteralPath $LocalCiReceipt | ConvertFrom-Json
-    if ($receipt.verdict -ne 'pass') {
-        throw "local CI receipt is '$($receipt.verdict)', not pass: $LocalCiReceipt"
-    }
-    if (-not $headSha.StartsWith($receipt.sha)) {
-        throw "local CI receipt is for sha $($receipt.sha) but PR #$prNumber head is $headSha -- re-run run-ci-local.ps1 on the current head"
-    }
+    # Every reason a receipt may not stand in for CI, in one testable place
+    # (lib/ci-local.ps1) -- including the two task 023 added: a receipt that
+    # skipped a REQUIRED step, and a receipt written before skip tracking,
+    # which cannot tell us whether it skipped anything at all.
+    $receiptRefusal = Get-CiReceiptRefusalReason -Receipt $receipt -HeadSha $headSha
+    if ($receiptRefusal) { throw "local CI receipt cannot substitute for CI: $receiptRefusal ($LocalCiReceipt)" }
+
+    # What the receipt did NOT run is printed next to the pass, every time. A
+    # substitution is only as good as the evidence it names.
+    $skipLine = Format-CiReceiptSkips -Receipt $receipt
     Write-Host "task ${taskId}: cloud CI verdict '$verdict' SUBSTITUTED by local receipt $($receipt.sha) ($($receipt.ranAt)) -- $LocalCiReceipt"
-    $script:localCiNote = "Cloud CI could not run (GitHub Actions billing). Merged on a local reproduction of ci.yml: sha $($receipt.sha), ran $($receipt.ranAt), verdict pass. See scripts/run-ci-local.ps1."
+    if ($skipLine) { Write-Host "task ${taskId}: $skipLine" }
+    $script:localCiNote = "Cloud CI could not run (GitHub Actions billing). Merged on a local reproduction of ci.yml: sha $($receipt.sha), ran $($receipt.ranAt), verdict pass." +
+        $(if ($skipLine) { " $skipLine." } else { '' }) + " See scripts/run-ci-local.ps1."
     $verdict = 'pass'
 }
 

@@ -46,6 +46,9 @@ reliably issue. The report says so in those terms rather than letting the two re
 param(
     [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
     [string]$LogDir = 'C:\sc-work\logs\022',
+    # Which folder under Maps\ the fixture is generated into; see test-burrow-fanout.ps1.
+    # Default is what this suite has always used.
+    [string]$FixtureDir,
     [int]$UnitCount = 36,
     # NO low-energy tail by default. The client's own command card refuses an ability
     # when the units it can see cannot pay for it -- the same send-side gate this task
@@ -115,14 +118,20 @@ $WALK_X = 540
 $WALK_Y = 240
 
 $PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C6A46'
-# THIS TASK'S OWN FIXTURE FOLDER, not the shared 00-testmap.
-# The map browser picks by ROW, so sharing a folder means two workers pick each other's
-# maps -- which happened twice during task 022, once in each direction, and cost a run
-# each time. A folder of our own removes the interference in both directions rather than
-# racing for it. The name sorts before every other 00-t* folder ('0' < any letter), so the
-# first-row folder click that every suite here uses still lands on it.
-$mapDir = Join-Path $GameDir 'Maps\BroodWar\00-t022'
-$mapPath = Join-Path $mapDir '022-combat.scx'
+# A FIXTURE FOLDER OF ITS OWN, not the shared 00-testmap.
+# Sharing a folder means two workers can pick each other's maps -- which happened twice
+# during task 022, once in each direction, and cost a run each time. A folder of our own
+# removes the interference in both directions rather than racing for it. No row is
+# assumed from the name any more: Select-ScBrowserMap computes every click from the
+# filesystem and verifies what opened.
+# Not a bare default any more: with $env:AGENT_TASK set this resolves to THIS
+# agent's own folder, so two concurrent runs of this same suite cannot land in one
+# folder and overwrite each other's identically-named fixture (task 023 review).
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t022' }
+$mapDir = $FixtureDir
+$mapName = 'ability-in-combat.scx'
+$mapPath = Join-Path $mapDir $mapName
+$fixtures = New-ScFixtureRun -Dir $mapDir -Names @($mapName)
 
 function Assert-That {
     param([string]$What, [bool]$Ok, [string]$Detail = '')
@@ -138,9 +147,9 @@ function Step {
 }
 
 function New-Fixture {
-    # Shared folder, several suites, possibly several workers -- see
-    # Wait-ScTestMapDirFree. Never `Remove-Item -Recurse` this directory.
-    Wait-ScTestMapDirFree -Dir $mapDir -MyMapPath $mapPath
+    # Possibly several workers -- see Wait-ScFixtureFolderFree. Never
+    # `Remove-Item -Recurse` this directory.
+    Wait-ScFixtureFolderFree -Run $fixtures
     $genArgs = @{
         UnitCount = $UnitCount; UnitType = 'marine'; Player = 0
         TechResearched = 'stim-packs'
@@ -181,7 +190,7 @@ function Invoke-Arm {
     # that collides is a game that is still ALIVE. So: wait for the machine to be free,
     # then hold the lock for as long as this arm's game exists, and tell run-with-plugin
     # not to take it again underneath us.
-    Assert-ScFixtureStillMine -Dir $mapDir -MapPath $mapPath
+    Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
     Wait-ScNoGameRunning
     $script:armLock = Enter-ScLaunchLock -TaskId '022-ability-in-combat'
     $gamePid = 0
@@ -212,15 +221,11 @@ function Invoke-Arm {
         Start-Sleep -Seconds 2
         Send-ScClick -Hwnd $hwnd -X 327 -Y 415
         Start-Sleep -Seconds 2
-        # The folder row is POSITIONAL and this task's folder is not necessarily first:
-        # another worker's 00-t021 sorts before 00-t022. Computed from the filesystem.
-        $folderRow = Get-ScMapFolderRow -MapsDir (Split-Path $mapDir -Parent) -FolderName (Split-Path $mapDir -Leaf)
-        Write-Host "       fixture folder is row $($folderRow.Row) (y=$($folderRow.Y)); siblings: $($folderRow.Siblings)"
-        Send-ScClick -Hwnd $hwnd -X 117 -Y $folderRow.Y
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 393
-        Start-Sleep -Milliseconds 800
-        Send-ScClick -Hwnd $hwnd -X 117 -Y 159
-        Start-Sleep -Milliseconds 500
+        # Every row from the filesystem, and the opened folder verified before the map row
+        # is clicked. Task 022 computed the FOLDER row here and left the MAP row hardcoded
+        # at 159; that half was the original incident (a foreign .scx sorting before ours).
+        Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
+        Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
         Set-ScGameType -Hwnd $hwnd -Index 2      # Use Map Settings, verified (see Set-ScGameType)
         ArmShot 'lobby'
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393
@@ -622,9 +627,7 @@ catch {
     $failures++
 }
 finally {
-    if (-not $KeepOpen -and (Test-Path -LiteralPath $mapPath)) {
-        Remove-Item -LiteralPath $mapPath -Force -ErrorAction SilentlyContinue
-    }
+    if (-not $KeepOpen) { Remove-ScOwnFixture -Run $fixtures }
     Remove-ScOwnFixtureDir -Dir $mapDir
 }
 

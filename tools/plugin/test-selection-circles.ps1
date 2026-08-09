@@ -138,14 +138,19 @@ try {
     Step 'menu: Play Custom -> Maps\campaign\(1)Enslavers02b.scm' {
         Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom
         Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 135 -Y 178        # [Up One Level]  (out of BroodWar\)
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok
-        Start-Sleep -Milliseconds 800
-        Send-ScClick -Hwnd $hwnd -X 117 -Y 140        # [campaign]
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok
-        Start-Sleep -Milliseconds 800
-        Send-ScClick -Hwnd $hwnd -X 150 -Y 197        # (1)Enslavers02b.scm
-        Start-Sleep -Milliseconds 500
+        # Up out of BroodWar, into campaign, onto the map -- every row computed from the
+        # filesystem and every folder verified on screen before the next click.
+        #
+        # THE RUN THAT MADE THIS NECESSARY WAS THIS SUITE'S. The three fixed-row clicks
+        # that used to be here worked until another task created its own fixture folder
+        # under Maps\BroodWar: `[Up One Level]` sorts alphabetically among the folders, so
+        # it moved off row 3, this walk opened a folder, the map never loaded, and the
+        # suite timed out looking exactly like menu flake (task 022, 2026-08-09). This
+        # suite generates nothing and shares nothing -- and was broken anyway, which is
+        # why every browser click in this repo is computed now, not just the ones next to
+        # a fixture.
+        Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir `
+            -MapPath (Join-Path $GameDir 'Maps\campaign\(1)Enslavers02b.scm') | Out-Null
         Shot 'map-selected'
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok
         Start-Sleep -Seconds 6

@@ -62,6 +62,9 @@ param(
     [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
     [string]$LogPath = 'C:\sc-work\logs\022\stim-fanout.log',
     [string]$ShotDir = 'C:\sc-work\logs\022\stim-frames',
+    # Which folder under Maps\ the fixture is generated into; see test-burrow-fanout.ps1.
+    # Default is what this suite has always used.
+    [string]$FixtureDir,
     # Long enough to show nothing drifts on its own. Shorter than the burrow test's 120s
     # because THAT test had to prove a generated map does not end itself and this one
     # inherits that result from the same template -- what this step has to show is only
@@ -96,14 +99,18 @@ $STIM_TIMER = 0x25
 $MARINE_MAX_HP = 0x2800    # 40 HP in the engine's 1/256 fixed point; asserted below,
                            # not assumed -- the before-state read is what establishes it
 
-# THIS TASK'S OWN FIXTURE FOLDER, not the shared 00-testmap.
-# The map browser picks by ROW, so sharing a folder means two workers pick each other's
-# maps -- which happened twice during task 022, once in each direction, and cost a run
-# each time. A folder of our own removes the interference in both directions rather than
-# racing for it. The name sorts before every other 00-t* folder ('0' < any letter), so the
-# first-row folder click that every suite here uses still lands on it.
-$mapDir = Join-Path $GameDir 'Maps\BroodWar\00-t022'
-$mapPath = Join-Path $mapDir '022-stim.scx'
+# A FIXTURE FOLDER OF ITS OWN, not the shared 00-testmap: sharing one means two workers
+# can pick each other's maps, which happened twice during task 022, once in each
+# direction. No row is assumed from the name -- Select-ScBrowserMap computes every click
+# from the filesystem and verifies what opened.
+# Not a bare default any more: with $env:AGENT_TASK set this resolves to THIS
+# agent's own folder, so two concurrent runs of this same suite cannot land in one
+# folder and overwrite each other's identically-named fixture (task 023 review).
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t022' }
+$mapDir = $FixtureDir
+$mapName = 'stim-fanout.scx'
+$mapPath = Join-Path $mapDir $mapName
+$fixtures = New-ScFixtureRun -Dir $mapDir -Names @($mapName)
 
 function Assert-That {
     param([string]$What, [bool]$Ok, [string]$Detail = '')
@@ -162,10 +169,10 @@ function Shot([string]$tag) {
 
 try {
     Step "generate the fixture: $UnitCount Marines, the last $DamagedCount pre-damaged, Stim researched" {
-        # Shared folder, several suites, possibly several workers: wait rather than
-        # delete, and never take the folder out from under a running game (see
-        # Wait-ScTestMapDirFree -- task 022 hit exactly that collision live).
-        Wait-ScTestMapDirFree -Dir $mapDir -MyMapPath $mapPath
+        # Possibly several workers: wait rather than delete, and never take the folder
+        # out from under a running game (see Wait-ScFixtureFolderFree -- task 022 hit
+        # exactly that collision live).
+        Wait-ScFixtureFolderFree -Run $fixtures
         $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
             -UnitCount $UnitCount -UnitType marine -Player 0 `
             -DamagedCount $DamagedCount -DamagedHp $DamagedHpPercent `
@@ -190,7 +197,7 @@ try {
     # Single-instance game, and the launch lock is normally released as soon as the
     # launch is done -- which does not protect a game that is still alive. Wait for the
     # machine, then hold the lock for this run's whole lifetime.
-    Assert-ScFixtureStillMine -Dir $mapDir -MapPath $mapPath
+    Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
     Wait-ScNoGameRunning
     $launchLock = Enter-ScLaunchLock -TaskId '022-stim-fanout'
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
@@ -202,7 +209,7 @@ try {
     if (-not $gamePid) { throw 'test: could not parse the game pid from scinject output.' }
     $hwnd = Get-ScGameWindow -ProcessId $gamePid
 
-    Step 'menus: Single Player -> Expansion -> Play Custom -> 00-testmap\stim.scx' {
+    Step "menus: Single Player -> Expansion -> Play Custom -> $mapName" {
         Start-Sleep -Seconds 2
         Send-ScClick -Hwnd $hwnd -X 215 -Y 119        # Single Player
         Send-ScClick -Hwnd $hwnd -X 373 -Y 300        # StarCraft: Brood War (Expansion)
@@ -212,15 +219,11 @@ try {
         Start-Sleep -Seconds 2
         Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom -- opens in Maps\BroodWar
         Start-Sleep -Seconds 2
-        # The folder row is POSITIONAL and this task's folder is not necessarily first:
-        # another worker's 00-t021 sorts before 00-t022. Computed from the filesystem.
-        $folderRow = Get-ScMapFolderRow -MapsDir (Split-Path $mapDir -Parent) -FolderName (Split-Path $mapDir -Leaf)
-        Write-Host "       fixture folder is row $($folderRow.Row) (y=$($folderRow.Y)); siblings: $($folderRow.Siblings)"
-        Send-ScClick -Hwnd $hwnd -X 117 -Y $folderRow.Y
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok
-        Start-Sleep -Milliseconds 800
-        Send-ScClick -Hwnd $hwnd -X 117 -Y 159        # stim.scx -- row 2, after [Up One Level]
-        Start-Sleep -Milliseconds 500
+        # Every row from the filesystem, and the opened folder verified before the map row
+        # is clicked. Task 022 computed the FOLDER row here and left the MAP row hardcoded
+        # at 159; that half was the original incident (a foreign .scx sorting before ours).
+        Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
+        Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
         Set-ScGameType -Hwnd $hwnd -Index 2      # Use Map Settings, verified (see Set-ScGameType)
         Shot 'lobby'
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing
@@ -456,11 +459,9 @@ finally {
         Write-Host '  FAIL no pid was ever parsed, so nothing could be closed'
         $failures++
     }
-    if (-not $KeepOpen -and (Test-Path -LiteralPath $mapPath)) {
-        Remove-Item -LiteralPath $mapPath -Force -ErrorAction SilentlyContinue
-    }
-    # An empty folder of ours left behind would become the first row of every other
-    # suite's folder click, so it goes too -- but only if it is empty, and only ours.
+    if (-not $KeepOpen) { Remove-ScOwnFixture -Run $fixtures }
+    # An empty folder of ours left behind still pushes every entry below it down a row,
+    # and only six are visible, so it goes too -- but only if it is empty, and only ours.
     Remove-ScOwnFixtureDir -Dir $mapDir
     if ($launchLock) { Exit-ScLaunchLock -Lock $launchLock; $launchLock = $null }
 }

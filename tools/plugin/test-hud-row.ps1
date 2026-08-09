@@ -35,6 +35,9 @@ param(
     [string]$GameDir = 'C:\sc-work\1161-base',
     [string]$LogPath = 'C:\sc-work\logs\017-hud-row.log',
     [string]$ShotDir = 'C:\sc-work\logs\017-hud-row-frames',
+    # Which folder under Maps\ the fixture is generated into; see test-burrow-fanout.ps1.
+    # Default is what this suite has always used.
+    [string]$FixtureDir,
     [int]$UnitCount = 36,
     [switch]$KeepOpen
 )
@@ -49,8 +52,17 @@ $step = 0
 
 $LURKER_TYPE = '0x67'
 
-$mapDir = Join-Path $GameDir 'Maps\BroodWar\00-testmap'
-$mapPath = Join-Path $mapDir 'lurkers.scx'
+# The fixture name is this SUITE's own: it and test-burrow-fanout.ps1 both generated
+# `lurkers.scx`, which made "delete only your own file" undecidable between them and
+# blocked a run outright (task 022, 2026-08-09).
+# Not a bare default any more: with $env:AGENT_TASK set this resolves to THIS
+# agent's own folder, so two concurrent runs of this same suite cannot land in one
+# folder and overwrite each other's identically-named fixture (task 023 review).
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-testmap' }
+$mapDir = $FixtureDir
+$mapName = 'hud-row.scx'
+$mapPath = Join-Path $mapDir $mapName
+$fixtures = New-ScFixtureRun -Dir $mapDir -Names @($mapName)
 
 function Assert-That {
     param([string]$What, [bool]$Ok, [string]$Detail = '')
@@ -167,12 +179,10 @@ function Get-CropBytes {
 
 try {
     Step "generate the fixture: $UnitCount Lurkers, Use Map Settings, no triggers" {
-        # AGENTS.md rule 4 (task 022): the generated-fixture folder is SHARED between workers and
-        # the map browser picks by ROW, so a foreign .scx silently changes which map loads --
-        # and a recursive delete here takes another worker's fixture out from under its running
-        # game. This suite is not otherwise touched by task 022; this is the compliance change,
-        # nothing else.
-        Wait-ScTestMapDirFree -Dir $mapDir -MyMapPath $mapPath
+        # AGENTS.md rule 4 (task 022): the fixture folder may be shared between workers and
+        # the map browser opens a ROW, so a foreign .scx moves which map loads. Wait for
+        # theirs to go; clear only ours; never the folder.
+        Wait-ScFixtureFolderFree -Run $fixtures
         $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
             -UnitCount $UnitCount -UnitType lurker -Player 0 -OutputPath $mapPath 2>&1
         $gen | ForEach-Object { Write-Host "       $_" }
@@ -201,7 +211,7 @@ try {
             ($m.Groups[1].Value -eq $m.Groups[2].Value -and [int]$m.Groups[1].Value -eq 6)
     }
 
-    Step 'menus: Single Player -> Expansion -> Play Custom -> 00-testmap\lurkers.scx' {
+    Step "menus: Single Player -> Expansion -> Play Custom -> $mapName" {
         Start-Sleep -Seconds 2
         Send-ScClick -Hwnd $hwnd -X 215 -Y 119        # Single Player
         Send-ScClick -Hwnd $hwnd -X 373 -Y 300        # StarCraft: Brood War (Expansion)
@@ -211,11 +221,8 @@ try {
         Start-Sleep -Seconds 2
         Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom -- opens in Maps\BroodWar
         Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 117 -Y 140        # [00-testmap], first row
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok
-        Start-Sleep -Milliseconds 800
-        Send-ScClick -Hwnd $hwnd -X 117 -Y 159        # lurkers.scx -- row 2
-        Start-Sleep -Milliseconds 500
+        Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
+        Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
         Send-ScDropdownPick -Hwnd $hwnd -X 265 -Y 268 -Index 2   # Use Map Settings
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing
         Start-Sleep -Seconds 6
@@ -481,12 +488,10 @@ finally {
         $failures++
     }
     if (-not $KeepOpen -and (Test-Path -LiteralPath $mapDir)) {
-        Remove-Item -LiteralPath $mapPath -Force -ErrorAction SilentlyContinue
-        # And take the FOLDER away too when it is empty. Leaving an empty 00-testmap behind
-        # is not harmless: every suite here reaches its map with positional row clicks, so an
-        # extra directory shifts the rows for suites that navigate somewhere else entirely --
-        # which is exactly how task 022's compliance change broke test-selection-circles'
-        # route to Maps\campaign. Remove-ScOwnFixtureDir refuses if anything is still in it.
+        Remove-ScOwnFixture -Run $fixtures
+        # And take the FOLDER away too when it is empty. An abandoned empty folder still
+        # pushes every entry below it down a row, and only six rows are visible.
+        # Remove-ScOwnFixtureDir refuses if anything at all is still in it.
         Remove-ScOwnFixtureDir -Dir $mapDir
     }
 }

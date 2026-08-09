@@ -272,8 +272,11 @@ The assertions that make those numbers mean something, all of them per unit and 
 
    The last row is the one that closes it. A partition following the visible/overflow line
    would have to take the engine's twelve **whole** or leave them whole; instead the twelve are
-   themselves cut 4/8, along the hit-point line, exactly like everything else. `test-stim-
-   fanout.ps1` now asserts that split directly rather than leaving it as prose.
+   themselves cut 4/8, along the hit-point line, exactly like everything else. These numbers
+   were hand-derived from the published run's log; `test-stim-fanout.ps1` carried an assertion
+   for them from task 022 but could not pass it — the reader it used returned the twelve
+   pointers as one nested array, so the check read zero on both sides (task 023). **As of task
+   023 the split is asserted automatically**, and a second live run reproduces the same 4/8.
 5. **Nothing drifts on its own**: 30 s of no input with the count still `0/36` and every hit
    point unchanged. Terran units do not regenerate, which is why the fixture is Marines and not
    a Zerg unit that would climb back over the gate while the test watched.

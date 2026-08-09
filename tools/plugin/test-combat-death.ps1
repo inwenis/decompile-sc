@@ -74,6 +74,14 @@ param(
     [string]$GameDir = 'C:\sc-work\1161-base',
     [string]$LogPath = 'C:\sc-work\logs\019-combat-death.log',
     [string]$ShotDir = 'C:\sc-work\logs\019-combat-death-frames',
+    # Which folder under Maps\ the two fixtures are generated into.
+    #
+    # MORE THAN ONE TASK RUNS THIS SUITE, so it cannot be nailed to one task's folder the
+    # way a single-owner suite can. A worker points it at its own
+    # (`-FixtureDir <GameDir>\Maps\BroodWar\00-t023`) and no other run's browser click can
+    # land on its map, nor its own on theirs. The default is what this suite has always
+    # used, so running it by hand is unchanged.
+    [string]$FixtureDir,
     [int]$UnitCount = 36,
     [int]$EnemyCount = 6,
     # Hit points for the victims, as a percentage of a Lurker's 125. At 100 the first
@@ -155,7 +163,11 @@ $WALK_Y = 240
 # uses. Burrowing is how this test ends the engagement; see the note there.
 $BURROW_KEY = 0x55
 
-$mapDir = Join-Path $GameDir 'Maps\BroodWar\00-testmap'
+# Not a bare default any more: with $env:AGENT_TASK set this resolves to THIS
+# agent's own folder, so two concurrent runs of this same suite cannot land in one
+# folder and overwrite each other's identically-named fixture (task 023 review).
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-testmap' }
+$mapDir = $FixtureDir
 $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
 
 function Assert-That {
@@ -179,51 +191,44 @@ function Get-ScState {
 
 # --- the fixture ---------------------------------------------------------------
 
-# The two fixtures this suite creates. Task-prefixed so "mine" is decidable in a folder
-# that is shared with every other worker's run.
-$script:myFixtures = @('019-probe.scx', '019-combat.scx')
+# THE TWO FIXTURES THIS SUITE CREATES, declared to drive-game.ps1 UP FRONT.
+#
+# This suite is the reason ownership is a RUN and not a filename. It creates a placement
+# probe, then the combat map; the old "refuse to start if an .scx you did not create is
+# present" rule tested ONE name, so on the second fixture it counted this suite's own
+# phase-A probe as somebody else's and waited for the run to finish itself (task 022,
+# 2026-08-09). A self-deadlock manufactured by the safety rule, not by a collision.
+#
+# Nothing is softened by declaring them: the set is fixed here, and every file outside it
+# is still foreign. The names are the SUITE's rather than a task number, because more than
+# one task runs this file -- which is also why the folder is a parameter now.
+$fixtures = New-ScFixtureRun -Dir $mapDir -Names @('combat-death-probe.scx', 'combat-death.scx')
+$script:myFixtures = $fixtures.Names
 
-function Remove-MyFixtures {
-    foreach ($n in $script:myFixtures) {
-        $p = Join-Path $mapDir $n
-        if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }
-    }
-}
-
-function Assert-FixtureFolderIsOurs {
-    if (-not (Test-Path -LiteralPath $mapDir)) { return }
-    $foreign = @(Get-ChildItem -LiteralPath $mapDir -Filter *.scx -ErrorAction SilentlyContinue |
-                 Where-Object { $script:myFixtures -notcontains $_.Name })
-    if ($foreign.Count -gt 0) {
-        throw ("test: $mapDir holds a fixture this test did not create " +
-               "($($foreign.Name -join ', ')). The map browser is clicked by ROW, so a " +
-               "foreign map can be the one that loads -- refusing rather than deleting " +
-               "theirs or playing it. Re-run when they are done.")
-    }
-}
+function Remove-MyFixtures { Remove-ScOwnFixture -Run $fixtures }
+function Assert-FixtureFolderIsOurs { Assert-ScFixtureFolderMine -Run $fixtures }
 
 # Generate one variant and parse the generator's own validation read-back, so the
 # geometry this script clicks at comes from the file that was written rather than
 # from a constant that could drift away from it.
 function New-Fixture {
     param([string]$Name, [string]$EnemyOwner)
-    # INTERIM SHARED-FOLDER GUARD (2026-08-09). This folder is shared between workers and
-    # this used to be a recursive delete of the whole thing.
+    # SHARED-FOLDER GUARD (2026-08-09). The folder may be shared between workers, and this
+    # used to be a recursive delete of the whole thing.
     #
     # A live-process check alone was NOT enough, and this is what it cost: with no foreign
     # game running the guard passed, this suite wrote its fixture, task 022 then dropped
-    # `022-ghosts.scx` in beside it -- and because the map browser is clicked by ROW and
-    # `022-ghosts.scx` sorts before `combat.scx`, THIS TEST LOADED THEIR MAP and boxed 36
-    # Ghosts. So the rule is now the stronger one: refuse on any fixture we did not
-    # create, whether or not a game is running, and never delete the folder.
+    # `022-ghosts.scx` in beside it -- and because the map browser opens a ROW and
+    # `022-ghosts.scx` sorted before this suite's map, THIS TEST LOADED THEIR MAP and boxed
+    # 36 Ghosts. So the rule is the stronger one: refuse on any fixture we did not create,
+    # whether or not a game is running, and never delete the folder.
+    #
+    # Only THIS fixture is cleared, not both: phase B must not delete phase A's probe out
+    # from under a comparison that is still using it.
+    New-Item -ItemType Directory -Path $mapDir -Force | Out-Null
     Assert-FixtureFolderIsOurs
-    Remove-MyFixtures
-    $path = Join-Path $mapDir "$Name.scx"
-    # NOTE for anyone tempted to add Wait-ScTestMapDirFree here as well: do not. It judges
-    # ownership by ONE filename, so on the second call it would count this suite's own
-    # phase-A fixture as foreign and wait for the run to finish itself -- which is exactly
-    # the self-deadlock the registry above exists to prevent. The registry is the model
-    # this file uses; one ownership rule per file.
+    Remove-ScOwnFixture -Run $fixtures -Names @($Name)
+    $path = Join-Path $mapDir $Name
     $out = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
         -UnitCount $UnitCount -UnitType lurker -Player 0 -UnitHp $UnitHp `
         -EnemyCount $EnemyCount -EnemyType hydralisk -EnemyOwner $EnemyOwner `
@@ -334,10 +339,11 @@ function Invoke-Launch {
 
 function Start-Mission {
     <#
-    Launch, inject, and walk the menus to the ONE .scx in Maps\BroodWar\00-testmap.
-    Exactly one map file is in that folder at a time, so the file row is always the
-    same one (row 2; row 1 is the parent entry) -- the same recipe test-hud-row.ps1
-    and test-burrow-fanout.ps1 use.
+    Launch, inject, and walk the menus to -MapPath. Every browser row is computed from
+    the filesystem and every folder verified on screen (Select-ScBrowserMap) -- so this
+    no longer needs "exactly one map file is in that folder", which is just as well:
+    phase B runs with phase A's probe still beside it, and the old row-2 click would
+    have loaded whichever of the two sorted first.
 
     THE LAUNCH RETRY. A launch can fail with "process exited before injection (code
     0)" / scinject exit 3: the process is gone a moment after being resumed, so there
@@ -349,6 +355,7 @@ function Start-Mission {
     attempts is our own half-started game, if the failure left one alive -- see the
     catch in Invoke-Launch.
     #>
+    param([Parameter(Mandatory)][string]$MapPath)
     if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPath -Force }
     if (Test-Path -LiteralPath $markerPath) { Remove-Item -LiteralPath $markerPath -Force }
 
@@ -371,11 +378,10 @@ function Start-Mission {
     Start-Sleep -Seconds 2
     Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom -- opens in Maps\BroodWar
     Start-Sleep -Seconds 2
-    Send-ScClick -Hwnd $hwnd -X 117 -Y 140        # [00-testmap], first row
-    Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok
-    Start-Sleep -Milliseconds 800
-    Send-ScClick -Hwnd $hwnd -X 117 -Y 159        # the one map file -- row 2
-    Start-Sleep -Milliseconds 500
+    # Last check before the row is clicked, not only at generate time: the folder can be
+    # added to in between, and every row below the addition moves.
+    Assert-ScFixtureStillMine -Run $fixtures -MapPath $MapPath
+    Select-ScBrowserMap -Hwnd $script:hwnd -GameDir $GameDir -MapPath $MapPath | Out-Null
     Send-ScDropdownPick -Hwnd $hwnd -X 265 -Y 268 -Index 2   # Use Map Settings
     Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing
     Start-Sleep -Seconds 6
@@ -600,7 +606,7 @@ try {
     # PHASE A -- both slots spawn EXACTLY what the file places
     # =====================================================================
     Step "PHASE A: generate the PLACEMENT PROBE ($UnitCount lurkers + $EnemyCount hydralisks, both the human's)" {
-        $script:probeFx = New-Fixture -Name '019-probe' -EnemyOwner 'player'
+        $script:probeFx = New-Fixture -Name 'combat-death-probe.scx' -EnemyOwner 'player'
         Assert-That 'the generator succeeded' ($probeFx.Exit -eq 0) "(exit $($probeFx.Exit))"
         Assert-That 'it wrote the map' ([bool]$probeFx.Written)
         Assert-That 'its structural validation passed' ([bool]$probeFx.Ok)
@@ -609,7 +615,7 @@ try {
             ($probeFx.EnemySlot -eq 0 -and $probeFx.EnemyOwner -eq 'player')
     }
 
-    Start-Mission
+    Start-Mission -MapPath $probeFx.Path
 
     Step 'PHASE A: the human slot spawns exactly the placed units -- no melee starting units' {
         Invoke-BoxSelect
@@ -649,7 +655,7 @@ try {
     # PHASE B -- combat
     # =====================================================================
     Step "PHASE B: generate the COMBAT map (same block, owned by the computer)" {
-        $script:combatFx = New-Fixture -Name '019-combat' -EnemyOwner 'computer'
+        $script:combatFx = New-Fixture -Name 'combat-death.scx' -EnemyOwner 'computer'
         Assert-That 'the generator succeeded' ($combatFx.Exit -eq 0) "(exit $($combatFx.Exit))"
         Assert-That 'it wrote the map' ([bool]$combatFx.Written)
         Assert-That 'its structural validation passed' ([bool]$combatFx.Ok)
@@ -666,7 +672,7 @@ try {
             ($combatFx.GapPx -ge 256)
     }
 
-    Start-Mission
+    Start-Mission -MapPath $combatFx.Path
 
     Step 'PHASE B: the hudrow hook is installed (6 hooks in fanout mode)' {
         $cfg = @(Wait-ScLogMatch -LogPath $LogPath -Pattern 'FANOUT config: .*hudrow=1' -TimeoutSec 20)
