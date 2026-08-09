@@ -193,14 +193,17 @@ try {
         Start-Sleep -Seconds 2
         Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom
         Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 135 -Y 178        # [Up One Level]  (out of BroodWar\)
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok
-        Start-Sleep -Milliseconds 800
-        Send-ScClick -Hwnd $hwnd -X 117 -Y 140        # [campaign]
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok
-        Start-Sleep -Milliseconds 800
-        Send-ScClick -Hwnd $hwnd -X 150 -Y 197        # (1)Enslavers02b.scm
-        Start-Sleep -Milliseconds 500
+        # Up out of BroodWar, into campaign, onto the map -- every row computed from the
+        # filesystem and every folder verified on screen before the next click.
+        #
+        # THIS SUITE HAS NO FIXTURE OF ITS OWN AND WAS BROKEN ANYWAY. The three clicks
+        # that used to be here were fixed rows, and `[Up One Level]` sorts alphabetically
+        # AMONG the folders of Maps\BroodWar -- so one `00-*` fixture folder created by
+        # somebody else pushed it off row 3 and this walk opened a folder instead of
+        # leaving BroodWar. That is level 3 of the positional-click bug (drive-game.ps1),
+        # and it is why nothing here is per-fixture-folder.
+        Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir `
+            -MapPath (Join-Path $GameDir 'Maps\campaign\(1)Enslavers02b.scm') | Out-Null
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok
         Start-Sleep -Seconds 6
         Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start

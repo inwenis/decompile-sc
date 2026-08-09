@@ -62,6 +62,9 @@ param(
     [string]$GameDir = 'C:\sc-work\1161-base',
     [string]$LogPath = 'C:\sc-work\logs\021-control-groups.log',
     [string]$ShotDir = 'C:\sc-work\logs\021-control-group-frames',
+    # Which folder under Maps\ the fixture is generated into; see test-burrow-fanout.ps1.
+    # Default is what this suite has always used.
+    [string]$FixtureDir,
     [int]$UnitCount = 36,
     [int]$Group = 1,
     [switch]$KeepOpen
@@ -100,40 +103,24 @@ $UMS_INDEX = 2
 # structural answer was taken: one folder per task, so the interference is removed rather
 # than scheduled around.
 #
-#   * `0` sorts before any letter, so the first-row folder click every suite uses finds it;
-#   * the fixture is still task-named and only that file is ever deleted, on every path;
+#   * the fixture is still named for its suite and only that file is ever deleted, on
+#     every path;
 #   * the run still REFUSES to start on any `.scx` it did not create -- that is what caught
 #     the original collision, and it stays correct inside our own folder;
-#   * the folder is removed at the end ONLY IF EMPTY, because an empty folder of ours left
-#     behind becomes someone else's first row -- the same bug with the roles swapped.
-$mapDir = Join-Path $GameDir 'Maps\BroodWar\00-t021'
-$mapName = '021-lurkers.scx'
+#   * the folder is removed at the end ONLY IF EMPTY: an empty folder of ours pushes every
+#     entry below it down a row for everybody else, and only six rows are visible.
+#
+# No ROW is assumed from any of that any more: Select-ScBrowserMap computes every browser
+# click from the filesystem and verifies what opened (task 023).
+if (-not $FixtureDir) { $FixtureDir = Join-Path $GameDir 'Maps\BroodWar\00-t021' }
+$mapDir = $FixtureDir
+$mapName = 'control-groups.scx'
 $mapPath = Join-Path $mapDir $mapName
+$fixtures = New-ScFixtureRun -Dir $mapDir -Names @($mapName)
 
-function Remove-MyFixtureDirIfEmpty {
-    if (-not (Test-Path -LiteralPath $mapDir)) { return }
-    if (@(Get-ChildItem -LiteralPath $mapDir -Force -ErrorAction SilentlyContinue).Count -eq 0) {
-        Remove-Item -LiteralPath $mapDir -Force -ErrorAction SilentlyContinue
-    }
-}
-
-function Remove-MyFixture {
-    if (Test-Path -LiteralPath $mapPath) {
-        Remove-Item -LiteralPath $mapPath -Force -ErrorAction SilentlyContinue
-    }
-}
-
-function Assert-FixtureFolderIsOurs {
-    if (-not (Test-Path -LiteralPath $mapDir)) { return }
-    $foreign = @(Get-ChildItem -LiteralPath $mapDir -Filter *.scx -ErrorAction SilentlyContinue |
-                 Where-Object { $_.Name -ne $mapName })
-    if ($foreign.Count -gt 0) {
-        throw ("test: $mapDir already holds a fixture this test did not create " +
-               "($($foreign.Name -join ', ')). Another worker is probably mid-run. " +
-               "Refusing to start rather than deleting their map or letting the menu's " +
-               "row-2 click land on it -- re-run when they are done.")
-    }
-}
+function Remove-MyFixtureDirIfEmpty { Remove-ScOwnFixtureDir -Dir $mapDir }
+function Remove-MyFixture { Remove-ScOwnFixture -Run $fixtures }
+function Assert-FixtureFolderIsOurs { Assert-ScFixtureFolderMine -Run $fixtures }
 
 function Assert-That {
     param([string]$What, [bool]$Ok, [string]$Detail = '')
@@ -215,7 +202,7 @@ try {
     if (-not $gamePid) { throw 'test: could not parse the game pid from scinject output.' }
     $hwnd = Get-ScGameWindow -ProcessId $gamePid
 
-    Step "menus: Single Player -> Expansion -> Play Custom -> 00-t021\$mapName" {
+    Step "menus: Single Player -> Expansion -> Play Custom -> $mapName" {
         Start-Sleep -Seconds 2
         Send-ScClick -Hwnd $hwnd -X 215 -Y 119        # Single Player
         Send-ScClick -Hwnd $hwnd -X 373 -Y 300        # StarCraft: Brood War (Expansion)
@@ -225,11 +212,11 @@ try {
         Start-Sleep -Seconds 2
         Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom
         Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 117 -Y 140        # [00-t021], our own folder -- 0 sorts first
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok
-        Start-Sleep -Milliseconds 800
-        Send-ScClick -Hwnd $hwnd -X 117 -Y 159        # our fixture: the only .scx here
-        Start-Sleep -Milliseconds 500
+        # Both rows from the filesystem, and the opened folder verified before the map row
+        # is clicked. `0 sorts first` was true of one fixture folder and false the moment a
+        # second task made its own.
+        Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
+        Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
         # Set the Game Type EXPLICITLY: the combo carries whatever this machine's profile
         # last used, and a stale "Melee" hands the slot melee starting units instead of
         # the map's own 36 (task 015/016).
