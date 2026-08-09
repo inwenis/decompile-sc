@@ -39,6 +39,17 @@ and TOOLING, not redistributed game content.
    something seems missing, ask the user. (Sole exception: `./run.ps1`,
    which the USER launches to serve the Agent Console UI.)
 
+## Read a dialog's content from memory, not from its pixels (2026-08-09, task 026)
+
+A frame-region hash is NOT a reliable oracle for what a dialog shows. Task 023 concluded a
+researched fixture "drew a different command card" from two differing region fingerprints;
+task 026's read of the card's own slot table showed both fixtures identical — the hash was a
+false positive. When a claim is about UI CONTENT (which button, which slot, enabled vs greyed),
+read the structure out of process memory (the control array, the statUser records, the button's
+state bits), not a screenshot of it. Frames are corroboration for "did it visibly render at
+all", never the measurement. Same lesson the folder-row "flake" taught: what looks visual is
+usually a readable structure underneath.
+
 ## Absence assertions must first be proved positive (2026-08-09)
 
 An assertion that something is ABSENT is worth nothing until the same pattern has been shown to
