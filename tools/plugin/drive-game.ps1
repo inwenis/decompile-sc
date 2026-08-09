@@ -1475,11 +1475,27 @@ function Send-ScDropdownPick {
     client: first entry 16px below the closed box's own centre line, 15px apart after
     that. -Index 0 is that first entry.
 
-    IT ALSO NEEDS THE WINDOW TO BE ACTIVE (task 022): the mouse MOVE that walks down the
-    open list is dropped when the window is in the background, so the pick becomes a
-    silent no-op that leaves the previous value in place. Set-ScWindowActive explains the
-    measurement. Activation happens here rather than at every call site, so that every
-    existing caller is fixed by having this function do it; -NoActivate opts out.
+    THIS IS THE ONE INPUT IN THE HARNESS THAT REALLY DOES NEED THE FOREGROUND, and task
+    027 measured it three ways rather than assuming it (probe-quiet-dropdown.ps1, one
+    launch, all three arms on the Create Game screen, using Set-ScGameType's own
+    verified-change oracle):
+
+      A  background, no raise                                  -> pick did NOT take
+      B  background + AttachThreadInput(game) + SetActiveWindow -> pick did NOT take
+      C  foreground                                             -> pick took, attempt 1
+
+    So the cheap "share the input queue without taking the foreground" answer is dead for
+    this control, on measurement and not on theory. The likely mechanism: this is a
+    press-and-hold control and the game calls SetCapture on button-down (0x004d1a76), and
+    Windows only grants the capture to the FOREGROUND window. A world drag-box is also a
+    held-button walk and works fine in the background, so it is this dialog control's
+    handling, not held buttons in general.
+
+    Everything else in this file works with the game in the background (task 027 removed
+    the raise from Assert-ScWindowActive). This function therefore raises for the length
+    of ONE pick and then HANDS THE FOREGROUND BACK to whatever had it, so a suite that
+    picks a game type costs the user about two seconds of their window during the menu
+    walk instead of the entire run. -NoActivate opts out of both.
     #>
     [CmdletBinding()]
     param(
@@ -1507,23 +1523,37 @@ function Send-ScDropdownPick {
         [int]$OpenMs = 700, [int]$HoverMs = 400
     )
     Assert-ScDrivable -Hwnd $Hwnd
+    # Whose window this is about to be taken from, so it can be given back.
+    $prevFg = [IntPtr]::Zero
     if (-not $NoActivate) {
-        # Loud, not silent: a pick made in the background is the failure mode this
-        # whole comment block exists about, and it would otherwise be discovered as
-        # a wrong unit type several minutes later.
-        Assert-ScWindowActive -Hwnd $Hwnd -Because 'a dropdown pick, whose walk down the open list is a mouse MOVE and'
+        $prevFg = [ScDrive.Native]::GetForegroundWindow()
+        # Loud, not silent: a pick made in the background is a measured no-op (see above)
+        # and would otherwise be discovered as a wrong unit type several minutes later.
+        Assert-ScWindowActive -Hwnd $Hwnd -RaiseWindow `
+            -Because 'a dropdown pick, whose walk down the open list needs the capture the game only gets in the foreground, and'
     }
-    $itemY = $Y + $FirstOffset + $Index * $Pitch
-    $atBox  = ConvertTo-ScLParam $X $Y
-    $atItem = ConvertTo-ScLParam $X $itemY
-    [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]0, $atBox)
-    Start-Sleep -Milliseconds 60
-    [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_LBUTTONDOWN, [IntPtr]$script:MK_LBUTTON, $atBox)
-    Start-Sleep -Milliseconds $OpenMs
-    [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]$script:MK_LBUTTON, $atItem)
-    Start-Sleep -Milliseconds $HoverMs
-    [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_LBUTTONUP, [IntPtr]0, $atItem)
-    if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
+    try {
+        $itemY = $Y + $FirstOffset + $Index * $Pitch
+        $atBox  = ConvertTo-ScLParam $X $Y
+        $atItem = ConvertTo-ScLParam $X $itemY
+        [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]0, $atBox)
+        Start-Sleep -Milliseconds 60
+        [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_LBUTTONDOWN, [IntPtr]$script:MK_LBUTTON, $atBox)
+        Start-Sleep -Milliseconds $OpenMs
+        [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]$script:MK_LBUTTON, $atItem)
+        Start-Sleep -Milliseconds $HoverMs
+        [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_LBUTTONUP, [IntPtr]0, $atItem)
+        if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
+    }
+    finally {
+        # Give the user their window back, on every path including a throw. Deactivating
+        # also makes the game call ClipCursor(NULL) (0x00421730), which releases the mouse
+        # confinement its own WM_ACTIVATEAPP handler applied -- so the borrow ends cleanly
+        # rather than leaving the user's cursor trapped in a 640x480 box.
+        if ($prevFg -ne [IntPtr]::Zero -and $prevFg -ne $Hwnd) {
+            [void][ScDrive.Native]::MakeForeground($prevFg)
+        }
+    }
 }
 
 function Get-ScMinimapPoint {

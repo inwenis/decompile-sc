@@ -151,6 +151,17 @@ So:
 - Do not "fix" a flaky input by activating the window. It will not be the cause, and it
   will steal the user's focus and trap their mouse while the run lasts.
 
+**The one exception, measured: `Send-ScDropdownPick`.** A menu dropdown is a press-and-hold
+control and the game calls `SetCapture` on button-down (`0x004d1a76`); Windows grants the
+mouse capture only to the FOREGROUND window. `probe-quiet-dropdown.ps1` ran all three arms
+on the Create Game screen: background = pick did not take, background + `AttachThreadInput`
++ `SetActiveWindow` = pick did not take, foreground = took on the first attempt. So that
+primitive raises for the length of ONE pick and then **hands the foreground back** to
+whatever had it (which also makes the game release its `ClipCursor`). Cost: about two
+seconds during the menu walk of the three suites that call `Set-ScGameType`, instead of the
+whole run. A world drag-box is also a held-button walk and needs none of this — so this is
+the dialog control, not held buttons in general.
+
 Verified after the change: `test-fanout-orders` and `test-selection-circles` (the pair
 022/023 cited) both 0 failures, with `tools/plugin/watch-foreground.ps1` sampling
 `GetForegroundWindow()` every 250 ms across both runs and recording **no change at all** —
