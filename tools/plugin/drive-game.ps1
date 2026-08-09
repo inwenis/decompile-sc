@@ -1079,14 +1079,23 @@ function Get-ScSelectionGroup {
 
     Returns the pointers as upper-case hex strings without the 0x, matching the format
     Get-ScWorldState reports for each unit, so the two can be intersected directly.
+
+    RETURNED UNROLLED, deliberately. This used to end in `,@(...)`, the idiom that stops a
+    one-element result collapsing to a scalar -- but its one caller wraps the call in
+    `@(...)`, and the two together produce an array holding ONE element which is itself the
+    array of twelve. `$engine.Count` then reads 1, `-contains` matches nothing, and
+    test-stim-fanout failed two assertions about the ENGINE'S TWELVE while the log in front
+    of it held all twelve pointers. A harness bug wearing the costume of a finding, which
+    is the class this whole task is about. PowerShell 7 gives scalars a .Count of 1, so the
+    idiom buys nothing here anyway.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$LogPath)
     $line = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
               Select-String -Pattern 'clientSelectionGroup\s+\[0\]=') | Select-Object -Last 1
     if (-not $line) { return @() }
-    ,@([regex]::Matches($line.Line, '=0x([0-9A-Fa-f]+)') |
-       ForEach-Object { $_.Groups[1].Value.ToUpperInvariant() })
+    [regex]::Matches($line.Line, '=0x([0-9A-Fa-f]+)') |
+        ForEach-Object { $_.Groups[1].Value.ToUpperInvariant() }
 }
 
 function Get-ScRegionFingerprint {

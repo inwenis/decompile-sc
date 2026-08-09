@@ -128,6 +128,42 @@ Describe 'map-browser listing model' {
     }
 }
 
+Describe 'log parsing' {
+
+    It 'returns the engine twelve as twelve, not as one array holding twelve' {
+        # The regression: Get-ScSelectionGroup ended in `,@(...)` and its caller wrapped
+        # the call in `@(...)`, so $engine.Count read 1 and `-contains` matched nothing.
+        # test-stim-fanout then failed two assertions about the engine's own selection
+        # while the log in front of it held all twelve pointers -- a harness bug wearing
+        # the costume of a finding.
+        $log = Join-Path ([IO.Path]::GetTempPath()) ("sc-sel-" + [Guid]::NewGuid().ToString('n') + ".log")
+        $ptrs = 0..11 | ForEach-Object { "[$_]=0x0062{0:X4}" -f (0x1000 + $_ * 0x150) }
+        try {
+            Set-Content -LiteralPath $log -Value @(
+                '[2026-08-09 06:00:00.000] observer tick'
+                "[2026-08-09 06:00:01.000]     clientSelectionGroup   $($ptrs -join ' ')"
+                "[2026-08-09 06:00:01.002]     clientSelectionGroup2  $($ptrs -join ' ')"
+            )
+            $engine = @(Get-ScSelectionGroup -LogPath $log)
+            $engine.Count | Should -Be 12
+            $engine[0] | Should -Be '00621000'
+            # The whole point of reading them: intersecting with Get-ScWorldState's units.
+            $engine | Should -Contain '00621150'
+        } finally { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
+    }
+
+    It 'does not mistake clientSelectionGroup2 for clientSelectionGroup' {
+        $log = Join-Path ([IO.Path]::GetTempPath()) ("sc-sel-" + [Guid]::NewGuid().ToString('n') + ".log")
+        try {
+            Set-Content -LiteralPath $log -Value @(
+                '[2026-08-09 06:00:01.000]     clientSelectionGroup   [0]=0x00621000 [1]=0x00621150'
+                '[2026-08-09 06:00:01.002]     clientSelectionGroup2  [0]=0x00AAAAAA [1]=0x00BBBBBB [2]=0x00CCCCCC'
+            )
+            @(Get-ScSelectionGroup -LogPath $log) | Should -Be @('00621000', '00621150')
+        } finally { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 Describe 'fixture ownership registry' {
 
     BeforeEach {
