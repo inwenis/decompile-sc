@@ -12,6 +12,11 @@ node_modules/
 dist/
 test-results/
 
+# Invoke-Pester -CI writes this next to the repo root on every local CI run. It is a
+# run artifact, not a source file -- it was committed by accident once and its only
+# effect was a diff on every run.
+testResults.xml
+
 # Python venv created by setup.ps1
 .venv/
 __pycache__/

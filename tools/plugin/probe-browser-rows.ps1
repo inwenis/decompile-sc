@@ -21,8 +21,9 @@ WHAT IT PROVES, in order, each one loudly:
 
   1. the computed rows differ from the old hardcoded ones (printed side by side, so the
      old click is shown landing on the decoy);
-  2. the folder the browser actually opened has the number of entries the filesystem
-     predicts -- Assert-ScBrowserListing, which throws if it does not;
+  2. the row the walk clicks really is a MAP row and not a folder or empty space, read
+     back off the browser's own map-information panel -- Assert-ScBrowserMapSelected,
+     which throws if it is not;
   3. the map that LOADED is this run's own, read out of the process: the world scan holds
      this fixture's unit type and none of the decoy's.
 

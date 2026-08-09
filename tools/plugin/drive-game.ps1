@@ -513,7 +513,7 @@ function Sort-ScBrowserNames {
     NOT PowerShell's `Sort-Object`, which is culture-aware and weights punctuation
     differently -- and these lists are full of punctuation (`(2)Astral Balance.scm`,
     `00-t021`). Every entry ordering visible in the frames cited above is reproduced by
-    this comparer; Assert-ScBrowserListing re-checks the resulting count live, so a
+    this comparer, and Assert-ScBrowserMapSelected re-checks the row it lands on live, so a
     disagreement surfaces as a failed run rather than a wrong map.
     #>
     param([string[]]$Names)
@@ -556,7 +556,7 @@ function Get-ScBrowserListing {
     # Ordinal-ignore-case, not PowerShell's culture-aware Sort-Object: a culture sort
     # weights punctuation differently, and this list is full of it ((2)Astral Balance.scm,
     # 00-t021). The frames above are consistent with ordinal-ignore-case at every entry
-    # they show, and Assert-ScBrowserListing re-checks the resulting COUNT live.
+    # they show, and Assert-ScBrowserMapSelected re-checks the row this lands on live.
     $dirNames  = @(Sort-ScBrowserNames ([string[]]$dirNames))
     $fileNames = @(Sort-ScBrowserNames ([string[]]$fileNames))
 
@@ -611,8 +611,8 @@ function Get-ScBrowserRowOccupancy {
     rectangle. Six digests, in row order.
 
     They answer exactly one question -- DID THIS ROW CHANGE -- and that is all the callers
-    here ask (Sync-ScBrowserToTop: has the list stopped moving; Test-ScBrowserCanScroll:
-    did it move at all). They do NOT say whether a row has text on it: the list control is
+    here ask (Sync-ScBrowserToTop: has the list stopped moving yet, i.e.
+    is it at the top). They do NOT say whether a row has text on it: the list control is
     transparent, so a blank row shows whatever menu artwork is behind it and two blank rows
     do not match each other.
 
@@ -785,7 +785,7 @@ function Select-ScBrowserMap {
     THE one entry point every suite uses, so there is one model of the browser in this
     repo instead of nine copies of `-X 117 -Y 140`. Every click on the way is computed
     from the filesystem and every directory it opens is verified before the next click
-    (Assert-ScBrowserListing).
+    (Assert-ScBrowserMapSelected).
 
     Selecting only -- the caller still sets the Game Type and presses Ok, because what
     happens between selecting a map and launching it differs per suite.
