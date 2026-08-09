@@ -498,10 +498,54 @@ It does not answer: why a cloaked Ghost appeared to stop attacking. That remains
 likely vanilla (the plugin has no AI, targeting or acquisition code in it at all), and the
 honest state of it is "not reproduced, and not yet reproducible with this harness".
 
-> **Still open after task 026**, and deliberately so. Task 026 explained why the *test* could not
-> cloak a Ghost ([`command-card.md`](command-card.md) §7) — a greyed button on an unresearched
-> fixture. That is a statement about the harness, not about the user's Ghost. The A/B on a
-> genuinely cloaked Ghost has not been run.
+> **Superseded by §7.6 (task 026).** The A/B has now been run on real cloaking Ghosts. Read
+> §7.6 for the answer; this section's Marines-and-Stim measurement stands as the second data
+> point it always was.
+
+### 7.6 The same question, on the user's own unit: 36 Ghosts and real Cloak
+
+`tools/plugin/test-ability-in-combat.ps1 -Ability cloak`. Task 026 made this runnable by fixing
+the fixture generator's PTEx index order ([`command-card.md`](command-card.md) §6.3): before that
+the Cloak button was greyed and no input could reach it. Same measurement as §7.4, same two arms,
+with three things swapped: 36 **Ghosts**, Personnel Cloaking researched *and confirmed in the
+engine's own tech array*, and the ability issued by clicking the Cloak slot located in the live
+command card by its `Button` action `0x00423730` — not by a guessed coordinate.
+
+#### 7.6.1 The confound that had to be removed first, because it points the wrong way
+
+The first two runs of this arm produced a result that looked exactly like the user's report and
+was **not real**, and it is worth recording in full because the shape generalises.
+
+Run 2, plugin arm: **33 of 36 Ghosts went `0x0a` (AttackUnit) → `0x03` across the ability
+window**, against control windows of 1 and 0 changes, and against a stock arm of 0. That reads as
+"our fan-out makes cloaked Ghosts stop attacking" — the user's report, reproduced, and blamed on
+us.
+
+The enemy count in the very same pair of scans went **14 → 13**. A Supply Depot died inside the
+ability window. Every unit that was shooting it drops to idle in that instant, which is
+bit-for-bit the transition the hypothesis under test predicts, so after the fact the two are
+indistinguishable.
+
+**And the confound is correlated with the arm, because the feature works.** In the plugin arm all
+36 units are shooting; in stock only the engine's twelve. The plugin arm therefore kills targets
+about three times faster and is about three times as likely to lose one inside a window — stock's
+block went 16 → 16 in the same run. A confound that fires in the treatment arm and not the
+control arm, in the direction of the hypothesis, is the worst kind available.
+
+Two independent fixes, both kept:
+
+1. **The fixture.** The cloak arm now attacks 16 **Command Centres** (1500 hit points) instead of
+   Supply Depots (500). Three times the hit points is three times the interval between deaths.
+   Still weaponless, still immobile — a computer-owned Command Centre with no orders never lifts
+   off, so the "cannot *decide* to act" premise §8.4b converged on is unchanged.
+2. **The gate.** The three windows are re-taken until the target count is *identical* across all
+   of them, and a run that never gets a clean set **fails** rather than reporting the dirty one.
+   The fixture makes a clean take ordinary; the gate makes a dirty one impossible to publish.
+
+**§7.4's Stim result is not tainted by this**, and the direction is why: a target dying inside a
+window makes that window **noisier**, and §7.4's published finding was that the ability window was
+the **quietest of the three**. The confound runs against that conclusion, so it cannot have
+manufactured it. The gate now applies to that arm too, retroactively.
 
 ---
 
