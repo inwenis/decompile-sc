@@ -617,22 +617,32 @@ try {
         # BOTH PATHS, NAMED. The whole point of the disabled bit is that it gags the mouse
         # and the keyboard together; with the bit clear both must work, and each is asserted
         # separately so "one of them fired" cannot stand in for the pair.
-        $slotHit = @($card | Where-Object { $_.Slot -eq $cloak.Index -and
-                                            (Get-AllIds $_) -match [regex]::Escape($CLOAK_CMD) })
-        Assert-That "the CLICK path issued it -- card slot $($cloak.Index) emitted $CLOAK_CMD" `
-            ($slotHit.Count -eq 1) "(slot rows: $(@($card | ForEach-Object { "$($_.Slot)=$(Get-AllIds $_)" }) -join ' '))"
-        $keyHit = @(@($table) + @($solo) | Where-Object { (Get-AllIds $_) -match [regex]::Escape($CLOAK_CMD) })
-        Assert-That "the KEY path issued it too -- key(s) $(@($keyHit | ForEach-Object { $_.Key }) -join ',') emitted $CLOAK_CMD" `
+        #
+        # EITHER FACE COUNTS, and it has to. Slot 7 is a toggle, so which command a press
+        # emits depends on whether the Ghost happens to be cloaked when this arm reaches it
+        # -- and the earlier arms in this very probe decide that. Measured across two runs:
+        # the same slot click emitted 0x21 in one and 0x22 in the other, purely because
+        # sweep B's `C` had left the unit in a different state. Requiring 0x21 specifically
+        # made the probe fail on the run where it worked, which is the same self-inflicted
+        # false negative the toggle already caused once in the card read (see $CLOAK_PAIR).
+        $TOGGLE_CMDS = '0x21|0x22'
+        $slotRow = @($card | Where-Object { $_.Slot -eq $cloak.Index })
+        $slotIds = @($slotRow | ForEach-Object { Get-AllIds $_ }) -join ' '
+        Assert-That "the CLICK path issued the ability -- card slot $($cloak.Index) emitted $slotIds" `
+            ($slotRow.Count -eq 1 -and $slotIds -match $TOGGLE_CMDS) `
+            "(slot rows: $(@($card | ForEach-Object { "$($_.Slot)=$(Get-AllIds $_)" }) -join ' '))"
+        $keyHit = @(@($table) + @($solo) | Where-Object { (Get-AllIds $_) -match $TOGGLE_CMDS })
+        Assert-That "the KEY path issued it too -- key(s) $(@($keyHit | ForEach-Object { $_.Key }) -join ',') emitted the ability" `
             ($keyHit.Count -ge 1) `
             '(task 022 swept A-Z and got nothing; that sweep ran against a GREYED button, and the hotkey predicate 0x004588C0 refuses one)'
 
-        # THE TOGGLE, round-tripped. 0x22 is the same slot's other face, and seeing both
-        # ids in one run is what proves the read of the pair is a description of one
-        # button rather than of two unrelated ones that happen to share a slot.
-        $decloakHit = @(@($table) + @($solo) + @($card) | Where-Object { (Get-AllIds $_) -match '0x22' })
-        Assert-That 'and the same slot toggled back off (0x22, the Decloak face)' `
-            ($decloakHit.Count -ge 1) `
-            "(from: $(@($decloakHit | ForEach-Object { $_.Key }) -join ', '))"
+        # THE TOGGLE, ROUND-TRIPPED. Seeing BOTH ids somewhere in one run is what proves
+        # the pair really is one button in two states rather than two unrelated buttons
+        # that happen to share a slot -- and it is asserted over the whole run, not over
+        # one arm, precisely because which arm sees which face is not fixed.
+        $allIds = @(@($table) + @($solo) + @($card) | ForEach-Object { Get-AllIds $_ }) -join ' '
+        Assert-That 'and both faces of the toggle reached the wire in this run (0x21 and 0x22)' `
+            (($allIds -match '0x21') -and ($allIds -match '0x22')) "(ids seen: $allIds)"
     }
     else {
         Assert-That 'the Cloak button is on the card at all' ($null -ne $cloak) `
