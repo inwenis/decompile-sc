@@ -39,6 +39,25 @@ and TOOLING, not redistributed game content.
    something seems missing, ask the user. (Sole exception: `./run.ps1`,
    which the USER launches to serve the Agent Console UI.)
 
+## Shared test-fixture folder (hard rule, 2026-08-09 incident)
+
+Every in-game suite generates its map into ONE shared folder in the working copy, and the
+map browser is clicked **by ROW, not by name** — so a file another worker drops in there
+changes which map YOUR test loads. On 2026-08-09 task 021's run played task 022's fixture
+(36 Ghosts where it places Lurkers) and then recursive-deleted the folder.
+
+Rules, all three, no exceptions:
+
+1. **Task-prefix every generated fixture** (`021-lurkers.scx`), so "mine" is decidable.
+2. **Delete only your own named files**, on every path including `finally`. Never
+   `Remove-Item -Recurse` that folder.
+3. **Refuse to start if any `.scx` you did not create is present** — whether or not a game
+   is running. Process-liveness is NOT a sufficient test: the other worker's run may begin
+   seconds after yours generates its fixture.
+
+Rule 3 is what prevents the silent failure — playing someone else's map produces internally
+consistent nonsense, which is worse than a crash.
+
 ## Screenshots vs hard rule 1 (settled)
 
 The global rule "visual change → screenshot → `pr-image`" does NOT apply to game frames.
