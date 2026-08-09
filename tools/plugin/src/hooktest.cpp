@@ -1897,6 +1897,249 @@ static void HudRowTests(void) {
 }
 
 // ---------------------------------------------------------------------------
+// [13] Same-type building groups (task 024), driven the same way as [7].
+//
+// Two halves, both hook-free and both asserted here:
+//
+//   the CLIENT half -- ScFanoutGrowBuildingGroup, which turns SortAllUnits' one-building
+//   fallback into the whole same-type group. Its inputs are exactly the engine's: the
+//   NULL-terminated candidate list, the caller's 12-slot output array, the `clicked`
+//   argument and the count the original returned.
+//
+//   the SIM half -- the chunk size. The simulation gate (addUnitToSelectionSlot
+//   0x0049AF80) refuses a building every slot but the first, so the fan-out has to
+//   deliver a building group ONE unit per Select, and that shows up here as the exact
+//   wire stream: N x (Select(1) + order) instead of one Select(N).
+//
+// The engine's predicate (0x0047B770) is supplied as a stub -- a test process has no
+// engine code, only a fake image -- and the stub answers by unit TYPE, which is what
+// the real one does for a building (units.dat flag 0x01).
+// ---------------------------------------------------------------------------
+
+// Type ids: anything below 106 is an ordinary unit, 106+ a building. 106 is Terran
+// Command Center and 109 Supply Depot in units.dat, which is also what the in-game
+// fixture places -- the numbers are not load-bearing here, the SPLIT is.
+#define FAKE_TYPE_MARINE  0
+#define FAKE_TYPE_DEPOT   109
+#define FAKE_TYPE_BARRACKS 111
+
+static int __attribute__((fastcall)) FakeMovable(unsigned long unit) {
+    return *(WORD*)(unit + SC_CUNIT_OFF_UNIT_ID) < 106 ? 1 : 0;
+}
+
+static void SetFakeType(int i, WORD type) {
+    *(WORD*)(FakeUnit(i) + SC_CUNIT_OFF_UNIT_ID) = type;
+}
+
+// The candidate list SortAllUnits is handed: CUnit pointers, NULL-terminated.
+static void MakeCandidates(DWORD* buf, const int* idx, int n) {
+    for (int i = 0; i < n; ++i) buf[i] = FakeUnit(idx[i]);
+    buf[n] = 0;
+}
+
+static void BuildingGroupTests(void) {
+    printf("\n[13] same-type building groups: one box, N buildings, N rallies\n");
+
+    // Its own fake image, like every other part: each one releases the previous one's.
+    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
+                                 PAGE_READWRITE);
+    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+
+    MakeUnits(64, 1);
+    ResetQueueCounters();
+    ScFanoutTestBegin(g_fake, &CaptureEmit, 400);
+    ScFanoutTestSetMovable(&FakeMovable);
+
+    // 0..3 Supply Depots, 4..6 Barracks, 7..9 Marines. Same owner throughout; the
+    // owner split gets its own case below.
+    for (int i = 0; i < 4; ++i)  SetFakeType(i, FAKE_TYPE_DEPOT);
+    for (int i = 4; i < 7; ++i)  SetFakeType(i, FAKE_TYPE_BARRACKS);
+    for (int i = 7; i < 64; ++i) SetFakeType(i, FAKE_TYPE_MARINE);
+
+    printf("\n    a box of four same-type buildings grows one into four\n");
+    {
+        DWORD cand[8];
+        const int all[4] = { 0, 1, 2, 3 };
+        MakeCandidates(cand, all, 4);
+        DWORD out[SC_SELECTION_SLOTS] = { 0 };
+        out[0] = FakeUnit(3);      // the engine's fallback: the LAST rejected candidate
+        unsigned n = ScFanoutGrowBuildingGroup(cand, out, 0, 1);
+        Check("the group is four", (int)n, 4);
+        Check("the engine's own lead stays in slot 0", out[0] == FakeUnit(3) ? 1 : 0, 1);
+        bool complete = true;
+        for (int i = 0; i < 4; ++i) {
+            bool found = false;
+            for (unsigned j = 0; j < n; ++j) if (out[j] == FakeUnit(i)) found = true;
+            if (!found) complete = false;
+        }
+        Check("all four depots are in the selection", complete ? 1 : 0, 1);
+    }
+
+    printf("\n    ... and a rally reaches every one of them, one Select per building\n");
+    {
+        DWORD sel[4] = { FakeUnit(3), FakeUnit(0), FakeUnit(1), FakeUnit(2) };
+        ScFanoutOnSelect(4, sel);
+        Check("the simulation holds ONE of them at a time", ScFanoutSimSlots(), 1);
+        Check("the shadow list holds all four", ScFanoutShadowCount(), 4);
+
+        g_captureLen = 0; g_captureCount = 0;
+        bool suppressed = ScFanoutOnCommand(kRightClick, sizeof(kRightClick));
+        Check("the engine's own right-click is suppressed", suppressed ? 1 : 0, 1);
+        Check("4 pairs x (Select + order)", g_captureCount, 8);
+        // 4 x (2 + 1*2) + 4 x 10 = 16 + 40 = 56
+        Check("bytes queued", g_captureLen, 56);
+        Check("every Select carries exactly one building", CaptureTagCount(10), 4);
+        for (int i = 0; i < 4; ++i) {
+            Check("  each building's tag reached the receive path",
+                  CaptureHasTag(ExpectTag(i), 10) ? 1 : 0, 1);
+        }
+        // The visible chunk is emitted LAST here as everywhere else, and with slots=1
+        // "the visible chunk" is the lead alone -- so the simulation ends up holding
+        // the building the engine itself selected, which is what the player sees.
+        int lead[1] = { 3 };
+        (void)ExpectSelectAt("the LAST pair selects the engine's own lead",
+                             g_captureLen - (2 + 2) - 10, lead, 1);
+    }
+
+    printf("\n    a MIXED-BUILDING box takes the type of the engine's own lead\n");
+    {
+        // Four depots and three barracks, no units. Vanilla picks one building; we keep
+        // whichever one it picked and add that TYPE's siblings, so the outcome is
+        // vanilla's choice widened, never a second arbitrary rule of ours.
+        DWORD cand[12];
+        const int mixed[7] = { 0, 1, 2, 3, 4, 5, 6 };
+        MakeCandidates(cand, mixed, 7);
+
+        DWORD out[SC_SELECTION_SLOTS] = { 0 };
+        out[0] = FakeUnit(6);                    // the lead is a Barracks
+        unsigned n = ScFanoutGrowBuildingGroup(cand, out, 0, 1);
+        Check("a barracks lead selects the three barracks", (int)n, 3);
+        bool onlyBarracks = true;
+        for (unsigned j = 0; j < n; ++j) {
+            if (*(WORD*)(out[j] + SC_CUNIT_OFF_UNIT_ID) != FAKE_TYPE_BARRACKS) onlyBarracks = false;
+        }
+        Check("  and no depot joined them", onlyBarracks ? 1 : 0, 1);
+
+        DWORD out2[SC_SELECTION_SLOTS] = { 0 };
+        out2[0] = FakeUnit(2);                   // same box, a depot lead
+        unsigned n2 = ScFanoutGrowBuildingGroup(cand, out2, 0, 1);
+        Check("a depot lead from the SAME box selects the four depots", (int)n2, 4);
+    }
+
+    printf("\n    a different owner is a different group\n");
+    {
+        *(BYTE*)(FakeUnit(1) + SC_CUNIT_OFF_PLAYER) = 2;   // one depot changes hands
+        BuildFakePlayerList(64, 1);                        // ... and leaves player 1's list
+        DWORD cand[8];
+        const int all[4] = { 0, 1, 2, 3 };
+        MakeCandidates(cand, all, 4);
+        DWORD out[SC_SELECTION_SLOTS] = { 0 };
+        out[0] = FakeUnit(3);
+        unsigned n = ScFanoutGrowBuildingGroup(cand, out, 0, 1);
+        Check("the other player's depot is not in the group", (int)n, 3);
+        *(BYTE*)(FakeUnit(1) + SC_CUNIT_OFF_PLAYER) = 1;
+        BuildFakePlayerList(64, 1);
+    }
+
+    printf("\n    task 020's liveness gate still decides who may join\n");
+    {
+        const DWORD hpWas = *(DWORD*)(FakeUnit(1) + SC_CUNIT_OFF_HITPOINTS);
+        *(DWORD*)(FakeUnit(1) + SC_CUNIT_OFF_HITPOINTS) = 0;   // a damage death
+        const int before = ScFanoutGroupRefusedFor(SC_FANOUT_DEAD);
+
+        DWORD cand[8];
+        const int all[4] = { 0, 1, 2, 3 };
+        MakeCandidates(cand, all, 4);
+        DWORD out[SC_SELECTION_SLOTS] = { 0 };
+        out[0] = FakeUnit(3);
+        unsigned n = ScFanoutGrowBuildingGroup(cand, out, 0, 1);
+        Check("a destroyed building never enters the selection", (int)n, 3);
+        Check("  and it was refused for being DEAD, not merely absent",
+              ScFanoutGroupRefusedFor(SC_FANOUT_DEAD) - before, 1);
+        bool none = true;
+        for (unsigned j = 0; j < n; ++j) if (out[j] == FakeUnit(1)) none = false;
+        Check("  the dead building's pointer is in no slot", none ? 1 : 0, 1);
+        *(DWORD*)(FakeUnit(1) + SC_CUNIT_OFF_HITPOINTS) = hpWas;
+    }
+
+    printf("\n    more than twelve buildings: twelve visible, the rest past the cap\n");
+    {
+        for (int i = 0; i < 16; ++i) SetFakeType(i, FAKE_TYPE_DEPOT);
+        MakeUnits(64, 1);                        // re-arm hp/sprites/list after the edits
+        for (int i = 0; i < 16; ++i) SetFakeType(i, FAKE_TYPE_DEPOT);
+        for (int i = 16; i < 64; ++i) SetFakeType(i, FAKE_TYPE_MARINE);
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 4000);
+        ScFanoutTestSetMovable(&FakeMovable);
+
+        DWORD cand[20];
+        int idx[16];
+        for (int i = 0; i < 16; ++i) idx[i] = i;
+        MakeCandidates(cand, idx, 16);
+        DWORD out[SC_SELECTION_SLOTS] = { 0 };
+        out[0] = FakeUnit(15);
+        unsigned n = ScFanoutGrowBuildingGroup(cand, out, 0, 1);
+        Check("the caller's twelve slots are filled and no more", (int)n, SC_SELECTION_SLOTS);
+
+        ScFanoutOnSelect(n, out);
+        Check("the shadow list holds all sixteen", ScFanoutShadowCount(), 16);
+        Check("the engine holds twelve of them", ScFanoutVisibleCount(), SC_SELECTION_SLOTS);
+        Check("the sim still holds ONE at a time", ScFanoutSimSlots(), 1);
+
+        g_captureLen = 0; g_captureCount = 0;
+        (void)ScFanoutOnCommand(kRightClick, sizeof(kRightClick));
+        Check("16 pairs x (Select + order)", g_captureCount, 32);
+        Check("every one of the sixteen is rallied", CaptureTagCount(10), 16);
+        bool all16 = true;
+        for (int i = 0; i < 16; ++i) if (!CaptureHasTag(ExpectTag(i), 10)) all16 = false;
+        Check("  and each by its own tag", all16 ? 1 : 0, 1);
+    }
+
+    printf("\n    everything else is stock\n");
+    {
+        DWORD cand[8];
+        const int all[4] = { 0, 1, 2, 3 };
+        MakeCandidates(cand, all, 4);
+        DWORD out[SC_SELECTION_SLOTS] = { 0 };
+        out[0] = FakeUnit(3);
+
+        Check("a CLICK (clicked != 0) is untouched",
+              (int)ScFanoutGrowBuildingGroup(cand, out, FakeUnit(3), 1), 1);
+        Check("a count other than 1 is untouched -- the engine found real units",
+              (int)ScFanoutGrowBuildingGroup(cand, out, 0, 2), 2);
+
+        // A MOVABLE lead is an ordinary unit the engine selected on its own merits, not
+        // the one-building fallback, so the group logic must not fire at all. This is
+        // also the stock arm for the whole feature: with every unit movable, the
+        // function is the identity.
+        DWORD unitCand[8];
+        const int marines[4] = { 20, 21, 22, 23 };
+        MakeCandidates(unitCand, marines, 4);
+        DWORD uout[SC_SELECTION_SLOTS] = { 0 };
+        uout[0] = FakeUnit(20);
+        Check("a movable lead is untouched",
+              (int)ScFanoutGrowBuildingGroup(unitCand, uout, 0, 1), 1);
+
+        // ... and with it, the twelve-unit chunking is exactly what part [7] asserted:
+        // this is the regression guard on `chunk = simSlots`.
+        for (int i = 0; i < 64; ++i) SetFakeType(i, FAKE_TYPE_MARINE);
+        MakeUnits(64, 1);
+        for (int i = 0; i < 64; ++i) SetFakeType(i, FAKE_TYPE_MARINE);
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ScFanoutTestSetMovable(&FakeMovable);
+        DriveSelection(36);
+        Check("36 ordinary units still chunk by twelve", ScFanoutSimSlots(), SC_SELECTION_SLOTS);
+        g_captureLen = 0; g_captureCount = 0;
+        (void)ScFanoutOnCommand(kRightClick, sizeof(kRightClick));
+        Check("  3 pairs, not 36", g_captureCount, 6);
+        Check("  bytes queued unchanged from part [7]", g_captureLen, 108);
+    }
+
+    ScFanoutTestSetMovable(NULL);
+    VirtualFree(g_fake, 0, MEM_RELEASE);
+    g_fake = NULL;
+}
+
+// ---------------------------------------------------------------------------
 // [12] the process-exit log path (task 023)
 //
 // THE FAILURE THIS PINS DOWN. One run's detach wrote NOTHING -- no STATS, no
@@ -1979,7 +2222,9 @@ static void ExitLogTests(void) {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// [13] the command-card read-back (task 026), driven against a fake card dialog.
+// [14] the command-card read-back (task 026), driven against a fake card dialog.
+// Numbered 14, not 13: task 024 took 13 for the building groups on main, and two parts
+// sharing a number makes "which part failed?" unanswerable from a redirected log.
 //
 // WHY IT NEEDS A TEST AT ALL. This module is the ORACLE for the whole task: the
 // answer to "why can nothing drive the Ghost's Cloak" is a single bit it reports,
@@ -2124,7 +2369,7 @@ static const ScCardSlot* FindSlot(const ScCardSlot* s, int n, int index) {
 }
 
 static void CardScanTests(void) {
-    printf("\n[13] the command-card read-back, against a fake card dialog\n");
+    printf("\n[14] the command-card read-back, against a fake card dialog\n");
 
     // Every part allocates its own fake image and releases it again (the previous
     // part has already freed g_fake by the time this runs).
@@ -2242,9 +2487,10 @@ static void CardScanTests(void) {
 }
 
 int main(void) {
-    // Unbuffered, because this binary's failure mode is a CRASH inside one part and
-    // a fully-buffered stdout (which is what a redirected run gets) throws away the
-    // lines that say which one.
+    // Unbuffered: this binary writes executable memory and drives a fake image, so the
+    // interesting failure is a fault, and a faulting run must still say WHICH case it
+    // was in. With the default buffering the last few hundred lines are lost with the
+    // process and the crash looks like it happened at the end of the previous part.
     setvbuf(stdout, NULL, _IONBF, 0);
 
     char tmp[MAX_PATH];
@@ -2333,6 +2579,7 @@ int main(void) {
     CircleTests();
     HudRowTests();
     ControlGroupTests();
+    BuildingGroupTests();
     CardScanTests();
     ExitLogTests();
 

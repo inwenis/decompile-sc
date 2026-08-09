@@ -461,7 +461,7 @@ Ghost**, the slot showed its Decloak face and the probe reported "no Cloak butto
 A false negative manufactured by its own success. The rule that would have caught every one of
 these: **the thing that verifies must not be the thing that acts, and it must be shown to give a
 different answer in the failing direction** — which is why the read-back is now taken *before* any
-input as well as after, and why `hooktest [13]` reads the same card twice, once with the disabled
+input as well as after, and why `hooktest [14]` reads the same card twice, once with the disabled
 bit set and once clear.
 
 ## 7. What this settles, and what it does not
@@ -558,7 +558,7 @@ probe clicks the point the engine hit-tests instead of a coordinate read off a s
 removes the confound that made task 022's reading of "the bottom-left slot" ambiguous in the first
 place, and it closes [`hud-selection-row.md`](hud-selection-row.md) §10 q1 for this dialog.
 
-Offline coverage: `hooktest` part `[13]` drives the whole walk against a fake card dialog — the
+Offline coverage: `hooktest` part `[14]` drives the whole walk against a fake card dialog — the
 Ghost's real button table, a hidden slot, a slot with no button, a bad `Button*`, a cyclic child
 list, and a null dialog. It reads the card **twice with the same code**, once with the disabled bit
 set and once clear, and requires both readings; an oracle that always answered "GREYED" would have
