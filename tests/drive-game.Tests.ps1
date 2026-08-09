@@ -224,3 +224,44 @@ Describe 'fixture ownership registry' {
             Should -Throw -ExpectedMessage '*duplicate fixture name*'
     }
 }
+
+Describe 'fixture folder default' {
+
+    # THE HOLE THE REVIEW FOUND. Ownership keys on the declared NAME set, which separates
+    # this suite from every other suite -- and not at all from ANOTHER RUN OF ITSELF. Two
+    # concurrent runs of one suite with no -FixtureDir declare the same names in the same
+    # folder, so neither sees the other as foreign and one overwrites the other's fixture.
+
+    It 'keeps the suite historical folder when no agent is running (the by-hand case)' {
+        Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-testmap' -AgentTask '' |
+            Should -Be 'C:\g\Maps\BroodWar\00-testmap'
+        Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-testmap' -AgentTask $null |
+            Should -Be 'C:\g\Maps\BroodWar\00-testmap'
+    }
+
+    It 'gives a worker its OWN folder, so two runs of one suite cannot collide' {
+        $a = Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-testmap' -AgentTask '023'
+        $b = Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-testmap' -AgentTask '024'
+        $a | Should -Be 'C:\g\Maps\BroodWar\00-t023'
+        $a | Should -Not -Be $b
+    }
+
+    It 'takes the task id from a suffixed AGENT_TASK (Enter-ScLaunchLock names them that way)' {
+        Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-testmap' -AgentTask '023-ghost-cloak' |
+            Should -Be 'C:\g\Maps\BroodWar\00-t023'
+    }
+
+    It 'never leaves a worker in ANOTHER task finished folder' {
+        # test-control-groups defaulted to 00-t021 and three suites to 00-t022 -- the
+        # folders of the tasks that wrote them, not of the task running them.
+        foreach ($stale in @('00-t021', '00-t022')) {
+            Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback $stale -AgentTask '023' |
+                Should -Be 'C:\g\Maps\BroodWar\00-t023'
+        }
+    }
+
+    It 'falls back to a sanitised leaf for a non-numeric agent id' {
+        Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-testmap' -AgentTask 'probe/../x' |
+            Should -Be 'C:\g\Maps\BroodWar\00-tprobex'
+    }
+}

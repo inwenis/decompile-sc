@@ -163,7 +163,10 @@ $WALK_Y = 240
 # uses. Burrowing is how this test ends the engagement; see the note there.
 $BURROW_KEY = 0x55
 
-if (-not $FixtureDir) { $FixtureDir = Join-Path $GameDir 'Maps\BroodWar\00-testmap' }
+# Not a bare default any more: with $env:AGENT_TASK set this resolves to THIS
+# agent's own folder, so two concurrent runs of this same suite cannot land in one
+# folder and overwrite each other's identically-named fixture (task 023 review).
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-testmap' }
 $mapDir = $FixtureDir
 $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
 

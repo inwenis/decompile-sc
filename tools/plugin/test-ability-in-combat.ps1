@@ -124,7 +124,10 @@ $PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C
 # removes the interference in both directions rather than racing for it. No row is
 # assumed from the name any more: Select-ScBrowserMap computes every click from the
 # filesystem and verifies what opened.
-if (-not $FixtureDir) { $FixtureDir = Join-Path $GameDir 'Maps\BroodWar\00-t022' }
+# Not a bare default any more: with $env:AGENT_TASK set this resolves to THIS
+# agent's own folder, so two concurrent runs of this same suite cannot land in one
+# folder and overwrite each other's identically-named fixture (task 023 review).
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t022' }
 $mapDir = $FixtureDir
 $mapName = 'ability-in-combat.scx'
 $mapPath = Join-Path $mapDir $mapName

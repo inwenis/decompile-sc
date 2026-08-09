@@ -103,7 +103,10 @@ $MARINE_MAX_HP = 0x2800    # 40 HP in the engine's 1/256 fixed point; asserted b
 # can pick each other's maps, which happened twice during task 022, once in each
 # direction. No row is assumed from the name -- Select-ScBrowserMap computes every click
 # from the filesystem and verifies what opened.
-if (-not $FixtureDir) { $FixtureDir = Join-Path $GameDir 'Maps\BroodWar\00-t022' }
+# Not a bare default any more: with $env:AGENT_TASK set this resolves to THIS
+# agent's own folder, so two concurrent runs of this same suite cannot land in one
+# folder and overwrite each other's identically-named fixture (task 023 review).
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t022' }
 $mapDir = $FixtureDir
 $mapName = 'stim-fanout.scx'
 $mapPath = Join-Path $mapDir $mapName

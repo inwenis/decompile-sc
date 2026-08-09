@@ -112,7 +112,10 @@ $UMS_INDEX = 2
 #
 # No ROW is assumed from any of that any more: Select-ScBrowserMap computes every browser
 # click from the filesystem and verifies what opened (task 023).
-if (-not $FixtureDir) { $FixtureDir = Join-Path $GameDir 'Maps\BroodWar\00-t021' }
+# Not a bare default any more: with $env:AGENT_TASK set this resolves to THIS
+# agent's own folder, so two concurrent runs of this same suite cannot land in one
+# folder and overwrite each other's identically-named fixture (task 023 review).
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t021' }
 $mapDir = $FixtureDir
 $mapName = 'control-groups.scx'
 $mapPath = Join-Path $mapDir $mapName

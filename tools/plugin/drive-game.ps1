@@ -877,6 +877,51 @@ function Select-ScBrowserMap {
 # act as promising to delete it.
 # =============================================================================
 
+function Resolve-ScFixtureDir {
+    <#
+    .SYNOPSIS
+    Where this run's fixtures go: the caller's `-FixtureDir` if given, otherwise this
+    AGENT'S OWN folder, otherwise the suite's historical by-hand default.
+
+    .DESCRIPTION
+    THE HOLE THIS CLOSES (task 023 review, 2026-08-09). Ownership is keyed on the declared
+    NAME set, which decides "mine" against ANOTHER suite perfectly -- and not at all
+    against ANOTHER RUN OF THE SAME SUITE. Two concurrent runs of `test-combat-death` with
+    no `-FixtureDir` land in the same folder and declare the same names, so each one's file
+    is "mine" to the other, the foreign check never fires, and one deletes-then-rewrites the
+    other's fixture underneath it. Bounded (it needs two same-suite runs both omitting the
+    parameter) and forbidden by AGENTS.md already -- but this task's whole point was moving
+    contention guards out of documentation and into code, and a neutral default that allows
+    self-collision is the one place that was left to the convention.
+
+    Four suites had the mirror-image bug: their defaults were nailed to `00-t021`/`00-t022`,
+    the folders of the tasks that WROTE them, so any later worker running them by default
+    wrote into a finished task's folder.
+
+    A worker always has `$env:AGENT_TASK`, so the fix needs no new discipline: with it set,
+    the default is that agent's own folder and two agents can never collide. Without it --
+    a human at a prompt, one run at a time -- the suite's historical default is preserved
+    exactly, which is what `-FixtureDir` defaulting "to current behaviour" promised.
+
+    The task id is taken as leading digits, so `023` and `023-ghost-cloak` both give
+    `00-t023` (Enter-ScLaunchLock's -TaskId convention appends a suffix to the same id).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$GameDir,
+        # What this suite used before agents existed. Kept for by-hand runs.
+        [Parameter(Mandatory)][string]$Fallback,
+        # Injectable so Pester can exercise every branch without touching the environment.
+        [AllowNull()][AllowEmptyString()][string]$AgentTask = $env:AGENT_TASK
+    )
+    $leaf = $Fallback
+    if (-not [string]::IsNullOrWhiteSpace($AgentTask)) {
+        $leaf = if ($AgentTask -match '^\s*(\d{1,4})') { "00-t$($Matches[1])" }
+                else { '00-t' + ($AgentTask -replace '[^A-Za-z0-9]', '') }
+    }
+    Join-Path $GameDir (Join-Path 'Maps\BroodWar' $leaf)
+}
+
 function New-ScFixtureRun {
     <#
     .SYNOPSIS
