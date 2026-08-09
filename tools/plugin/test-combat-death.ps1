@@ -1075,6 +1075,12 @@ finally {
         if ($script:lastFixturePath -and (Test-Path -LiteralPath $script:lastFixturePath)) {
             Remove-Item -LiteralPath $script:lastFixturePath -Force -ErrorAction SilentlyContinue
         }
+        # And take the FOLDER away too when it is empty. Leaving an empty 00-testmap behind
+        # is not harmless: every suite here reaches its map with positional row clicks, so an
+        # extra directory shifts the rows for suites that navigate somewhere else entirely --
+        # which is exactly how task 022's compliance change broke test-selection-circles'
+        # route to Maps\campaign. Remove-ScOwnFixtureDir refuses if anything is still in it.
+        Remove-ScOwnFixtureDir -Dir $mapDir
     }
 }
 
