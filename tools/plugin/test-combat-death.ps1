@@ -182,6 +182,15 @@ $script:lastFixturePath = $null
 function New-Fixture {
     param([string]$Name, [string]$EnemyOwner)
     $path = Join-Path $mapDir "$Name.scx"
+    # THIS SUITE MAKES TWO FIXTURES IN SEQUENCE (the placement probe, then the combat map).
+    # The second call must not treat the first as somebody else's work: it is this run's own
+    # file and this run is finished with it. Removing it here is what stops the shared-folder
+    # rule ("refuse to start if an .scx you did not create is present") from deadlocking the
+    # suite against itself -- which it did, for several minutes, before this line existed.
+    if ($script:lastFixturePath -and $script:lastFixturePath -ne $path -and
+        (Test-Path -LiteralPath $script:lastFixturePath)) {
+        Remove-Item -LiteralPath $script:lastFixturePath -Force -ErrorAction SilentlyContinue
+    }
     # AGENTS.md rule 4 (task 022): the generated-fixture folder is SHARED between workers and
         # the map browser picks by ROW, so a foreign .scx silently changes which map loads --
         # and a recursive delete here takes another worker's fixture out from under its running
