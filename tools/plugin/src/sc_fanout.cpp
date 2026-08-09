@@ -216,6 +216,26 @@ static bool ShadowContains(const ShadowUnit* arr, int n, DWORD ptr) {
     return false;
 }
 
+// IDENTITY, not address. A CUnit* is a slot in a fixed 1700-entry global that the engine
+// reuses game after game, so a pointer alone does not name a unit -- it names a seat. The
+// module's own notion of identity everywhere else (UnitLive, PassesGate) is the PAIR
+// (pointer, CUnit+0xA5), and anything that decides "is this the same unit" has to use the
+// pair or it is really asking "is this the same seat".
+//
+// This exists because the control-group code originally used ShadowContains for its
+// containment check, and review pointed out the consequence: a record left over from a
+// previous game whose slot is now occupied by a DIFFERENT live unit would compare equal,
+// so the check that is supposed to detect a cross-session stale group would pass on
+// exactly the input it exists to catch. The offline case that certified it happened to
+// use disjoint slots (40..51 against a group of 0..35), which is the one shape where the
+// two functions agree.
+static bool ShadowContainsUnit(const ShadowUnit* arr, int n, const ShadowUnit* u) {
+    for (int i = 0; i < n; ++i) {
+        if (arr[i].ptr == u->ptr && arr[i].uniqueness == u->uniqueness) return true;
+    }
+    return false;
+}
+
 // Is this a pointer to a real slot of the unit array? The array is a fixed
 // 1700-entry global, so an in-range pointer is always readable -- but the pointer
 // itself has to be validated against the array's bounds and stride first, because a
@@ -709,6 +729,384 @@ static bool StartFanout(const BYTE* order, int orderLen) {
 }
 
 // ---------------------------------------------------------------------------
+// SHADOW CONTROL GROUPS (task 021)
+//
+// THE PROBLEM. Ctrl+1 on a 24-unit selection stored 12, and 1 brought 12 back --
+// and the pre-021 plugin made that worse rather than better: seeing command 0x13 it
+// DROPPED the shadow list outright (the `SHADOW dropped: hotkey command 0x13` line
+// this block replaces), because a recall rebuilds the selection without ever calling
+// CMDACT_Select, so the list would otherwise have gone stale. Correct, and it left
+// the player with 12.
+//
+// WHAT THE ENGINE ACTUALLY DOES, read out of this binary by task 021 and written up
+// with the disassembly in research/control-groups.md:
+//
+//   storage   selectionHotkeys 0x0057FE60, [8][18][12] u32 StoredUnit tags
+//             ((uniqueness << 11) | unitIndex). Groups 0..9 are Ctrl+N; 10..17 are
+//             the engine's own alt-click recent-selection ring. Exactly SEVEN
+//             functions touch it and NONE of them is on the save/load path, so
+//             vanilla control groups are memory-only too.
+//   command   0x13 is 3 bytes, built at 0x004C07BF:
+//                 [0] = 0x13   [1] = action   [2] = group
+//             action 0 = ASSIGN (clear the group, then fill), 1 = RECALL,
+//             2 = ADD (append at the first free slot). The key dispatcher
+//             0x004846E0 carries three families of ten sites, one family per action.
+//   capacity  12, twice over: the store loop at 0x004965D0 returns once it has
+//             written 12 tags, and its source playersSelections[player] is 12 slots.
+//
+// THE SEAM. Both halves land in the queueCommand hook we already have, because the
+// client does its own work BEFORE it queues the command:
+//
+//   store   (13 00 g / 13 02 g)  the key dispatcher queues these inline and changes
+//           no selection state, so the shadow list is still the player's current
+//           selection at that instant. Snapshot (assign) or union (add) it.
+//   recall  (13 01 g)            the client handler 0x00496B40 calls
+//           CreateNewUnitSelectionsFromList (0x0049AE40) FIRST -- that is what fills
+//           activePlayerSelection (0x006284B8) with the engine's new <=12 -- and only
+//           then calls CMDACT_HotkeyUnit, whose first act is queueCommand. So by the
+//           time we see the command, the engine's post-recall visible list is sitting
+//           in activePlayerSelection, and we rebuild the shadow list around it.
+//
+// So this feature adds NO hook and patches NO new byte of the game.
+//
+// WHERE UNITS 13..N LIVE: here, in plugin memory, as the same
+// (CUnit*, CUnit+0xA5, CUnit+0x4C) triple the shadow list already uses. They are
+// never written into selectionHotkeys, playersSelections or activePlayerSelection.
+// That is what keeps this clear of the selectionIndex hazard: all four readers of
+// CSprite+0x0B are gated on sprite flag 0x08, the engine sets 0x08 itself inside
+// 0x004E6180 for exactly the units it puts in activePlayerSelection, and units
+// 13..N are never in that array (research/selection-circles.md 4).
+//
+// STALENESS, and why it is safe rather than merely unlikely. These groups are
+// memory-only, so a save/load can leave them describing a previous game. Two
+// independent gates, neither of them a probability argument:
+//
+//   1. every entry is re-run through task 020's five-term liveness gate at recall
+//      (PassesGate) -- reused, not reinvented, so a dead or removed unit is dropped;
+//   2. CONTAINMENT: the engine's own post-recall list must be a subset of the plugin
+//      group. Store and add maintain that by construction (we store a superset of
+//      what the engine stores, and the engine's recall can only ever drop entries),
+//      so a violation MEANS the group is stale or foreign -- we discard it and fall
+//      back to pre-021 behaviour (shadow = the engine's 12) rather than guessing.
+//      After a load the engine's own group is either empty -- in which case
+//      0x00496B40 returns before queueing anything and this path never runs at all --
+//      or holds units of the loaded game, which cannot be contained in a group
+//      recorded in a different session.
+// ---------------------------------------------------------------------------
+
+#define SC_HOTKEY_GROUPS 10   // the Ctrl+N groups. 10..17 are the engine's own
+                              // recent-selection ring and are not ours to mirror.
+
+// SC_HOTKEY_ASSIGN / _RECALL / _ADD are in sc_addresses.h with the disassembly of the
+// dispatch they come from -- they are facts about the binary, not choices made here.
+
+struct ShadowGroup {
+    ShadowUnit units[SC_SHADOW_MAX];
+    int        count;
+    bool       stored;   // false = we have never recorded this group in this session
+};
+
+static ShadowGroup g_group[SC_HOTKEY_GROUPS];
+
+static unsigned g_statGroupAssign  = 0;
+static unsigned g_statGroupAdd     = 0;
+static unsigned g_statGroupRecall  = 0;
+static unsigned g_statGroupWide    = 0;   // recalls that put MORE than 12 back
+static unsigned g_statGroupDiscard = 0;   // recalls that failed the containment check
+static unsigned g_statGroupReset   = 0;   // groups dropped because the engine restarted
+
+// Is the engine's OWN row for this group holding anything? A direct read of
+// selectionHotkeys[activePlayerId][group], 12 dwords.
+//
+// The player index is the one the STORE uses -- hotkeySaveOrAdd computes its row as
+// `group + DAT_0051267C * 0x12` (0x004965DF..0x004965E9), i.e. SC_VA_ACTIVE_PLAYER_ID.
+// binary-selection-map.md 7 note 7 warns that THREE player-id globals are in play in
+// this subsystem and conflating them produces bugs, so this reads the one that indexes
+// the array being read, and DisagreeingPlayerIds() below reports it if the three ever
+// diverge rather than letting a wrong row pass silently.
+static bool EngineGroupNonEmpty(int group) {
+    const BYTE player = *(BYTE*)Rt(SC_VA_ACTIVE_PLAYER_ID);
+    if (player >= SC_MAX_PLAYERS) return false;   // fail-closed, as everywhere here
+    const DWORD* row = (const DWORD*)Rt(SC_VA_SELECTION_HOTKEYS)
+                     + (size_t)(player * SC_HOTKEY_GROUPS_PER_PLAYER + group)
+                       * SC_HOTKEY_SLOTS_PER_GROUP;
+    for (int i = 0; i < SC_HOTKEY_SLOTS_PER_GROUP; ++i) if (row[i]) return true;
+    return false;
+}
+
+static bool DisagreeingPlayerIds(void) {
+    const BYTE a = *(BYTE*)Rt(SC_VA_ACTIVE_PLAYER_ID);
+    const BYTE b = *(BYTE*)Rt(SC_VA_PLAYER_ID_512688);
+    const BYTE c = *(BYTE*)Rt(SC_VA_PLAYER_ID_512678);
+    return !(a == b && b == c);
+}
+
+// AN ADD INTO AN EMPTY ENGINE ROW IS AN ASSIGN. That one rule is the whole of the
+// stale-group defence for the ADD path, and it is a MIRROR of the engine rather than a
+// guess about the player.
+//
+// What it is for. 0x004EEC30 (and 0x004965A0) zero the WHOLE hotkey array at game start,
+// so after starting a second mission in the same process our groups describe units that
+// no longer exist while the engine's own are empty. RECALL is already safe -- an empty
+// engine group makes the client handler 0x00496B40 return before it queues anything, so
+// our recall path never runs at all, and a non-empty one is covered by the containment
+// check. ADD is the exposed one: `13 02 g` into a group the player never re-assigned in
+// the new game would union fresh units into the previous game's records, and every later
+// containment check would then be maintained against a poisoned baseline.
+//
+// Why mirroring the engine is the right rule rather than a heuristic: hotkeySaveOrAdd's
+// ADD branch (0x004965D0 with param 0) scans for the first FREE slot, so on an empty row
+// it starts writing at index 0 -- an add into an empty group IS an assign, in the engine.
+// Doing the same thing is therefore not a policy this plugin invented; it is the engine's
+// own behaviour, applied to a bigger list.
+//
+// AN EARLIER VERSION OF THIS GOT IT WRONG and the review caught it, so the trap is
+// written down here. It tried to be cleverer -- "the row is empty now AND I have
+// previously observed it non-empty" -- to avoid resetting on the legitimate sequence
+// `Ctrl+N` then shift-add before the assign has executed (the assign is queued, not
+// applied, so the row is still legitimately zero). But the store is receive-side, so on a
+// FIRST Ctrl+N the row is always still empty at that instant and the observation was
+// never recorded: a group used exactly once was permanently immune to the reset, which is
+// ordinary play, not a corner. The rule below has no memory to get wrong.
+//
+// WHAT IT COSTS, stated because it is a real behaviour difference and not nothing: if the
+// player queues `Ctrl+N` and shift-add in the SAME turn AND changes the selection between
+// them, the engine ends up with sel1 + sel2 while this plugin keeps only sel2. Nothing is
+// corrupted -- the next recall's containment check sees the engine hand back units the
+// group does not hold, discards the group and falls back to the engine's own twelve. It
+// is a lost >12 group in a case that needs two hotkey commands inside one turn, not a
+// wrong one.
+static bool ResetGroupIfEngineRowEmpty(int group) {
+    if (EngineGroupNonEmpty(group)) return false;
+    if (!g_group[group].stored) return false;
+    ScLog("GROUP reset: shift-add into group %d while the engine's own row for it is "
+          "EMPTY -- either a new game cleared it under us (0x004EEC30) or it was never "
+          "assigned. hotkeySaveOrAdd starts an add at slot 0 on an empty row, so this "
+          "add becomes an assign here too, dropping the %d unit(s) held from before.",
+          group, g_group[group].count);
+    g_group[group].count  = 0;
+    g_group[group].stored = false;
+    ++g_statGroupReset;
+    return true;
+}
+
+// The engine's own visible selection, as the recall left it. activePlayerSelection is
+// written by CreateNewUnitSelectionsFromList (0x0049AE40), which fills it densely from
+// slot 0 and whose own clear loop terminates on the first NULL -- so stopping at a NULL
+// is the engine's own termination rule, not an assumption about the array.
+static int ReadEngineVisible(ShadowUnit* out, int maxOut) {
+    DWORD* arr = (DWORD*)Rt(SC_VA_ACTIVE_PLAYER_SELECTION);
+    int n = 0;
+    for (int i = 0; i < SC_SELECTION_SLOTS && n < maxOut; ++i) {
+        if (!arr[i]) break;
+        ShadowUnit u;
+        if (!ReadUnit(arr[i], &u)) break;   // bounds/stride-validated, like every deref here
+        out[n++] = u;
+    }
+    return n;
+}
+
+// Task 014's circles over the current overflow. Factored out of ScFanoutOnSelect
+// because a recall has to do exactly the same thing at exactly the same point in the
+// sequence: after the engine has finished attaching its own graphics for the new
+// selection (0x0049AE40 has already run on both paths), and after our matching detach
+// fired from that same function's pre-hook.
+static void ShowOverflowCircles(void) {
+    const int overflow = g_shadowCount - g_visibleCount;
+    if (!ScCirclesEnabled() || overflow <= 0) return;
+    ScCircleUnit circ[SC_SHADOW_MAX];
+    int n = 0;
+    for (int i = 0; i < overflow && n < SC_SHADOW_MAX; ++i) {
+        circ[n].unit       = g_shadow[i].ptr;
+        circ[n].sprite     = 0;      // filled in by ScCirclesShow
+        circ[n].uniqueness = g_shadow[i].uniqueness;
+        circ[n].player     = g_shadow[i].player;
+        ++n;
+    }
+    ScCirclesShow(circ, n);
+}
+
+// Ctrl+N / shift-add. `add` false = the engine's ASSIGN (replace), true = its ADD.
+//
+// Units are gated on the way IN as well as on the way out. The shadow list
+// deliberately keeps corpses until the next selection commit (see ShouldLogForensics),
+// and a group is a longer-lived thing than a selection -- there is no reason to record
+// a unit we already know is dead.
+static void GroupStore(int group, bool add) {
+    if (group < 0 || group >= SC_HOTKEY_GROUPS) return;
+    ShadowGroup* g = &g_group[group];
+
+    // An ADD into an engine row that is empty is an ASSIGN -- the engine's own rule; see
+    // ResetGroupIfEngineRowEmpty. Checked before `before` is read so the log line reports
+    // what this command actually started from.
+    if (add) ResetGroupIfEngineRowEmpty(group);
+
+    if (!add || !g->stored) { g->count = 0; }
+    const int before = g->count;
+
+    int skipped = 0;
+    for (int i = 0; i < g_shadowCount && g->count < g_maxUnits; ++i) {
+        if (!PassesGate(&g_shadow[i], NULL)) { ++skipped; continue; }
+        if (ShadowContainsUnit(g->units, g->count, &g_shadow[i])) continue;
+        g->units[g->count++] = g_shadow[i];
+    }
+    g->stored = true;
+    if (add) ++g_statGroupAdd; else ++g_statGroupAssign;
+
+    ScLog("GROUP %s: group=%d now holds %d unit(s) (was %d, shadow had %d, %d skipped "
+          "as not live) -- the engine stores at most %d of them",
+          add ? "add" : "assign", group, g->count, before, g_shadowCount, skipped,
+          SC_SELECTION_SLOTS);
+}
+
+// Press N. Called with the engine's client-side recall already done, so
+// activePlayerSelection holds what the player is about to see.
+static void GroupRecall(int group) {
+    ++g_statGroupRecall;
+
+    ShadowUnit visible[SC_SELECTION_SLOTS];
+    const int visibleCount = ReadEngineVisible(visible, SC_SELECTION_SLOTS);
+
+    // THE ORDERING CLAIM, LOGGED AS A RAW OBSERVATION -- the conductor's second
+    // addition to the design, and the one thing here that is a claim about RUNTIME
+    // rather than about code. The whole design rests on 0x00496B40 having already
+    // called CreateNewUnitSelectionsFromList (0x0049AE40) by the time it queues
+    // `13 01 g`, i.e. on activePlayerSelection ALREADY holding the post-recall units at
+    // this instant. This line is what an unattended run reads back to check that: the
+    // tags below must be the group's units, not the selection the player had a moment
+    // ago. It is written unconditionally, including on the empty case, so a line that
+    // says `visible=0` is evidence rather than an absence of evidence.
+    {
+        char tags[SC_SELECTION_SLOTS * 5 + 4];
+        int used = 0;
+        tags[0] = '\0';
+        for (int i = 0; i < visibleCount; ++i) {
+            used += _snprintf(tags + used, sizeof(tags) - used, "%s%04X",
+                              i ? " " : "", UnitTag(visible[i].ptr));
+        }
+        ScLog("GROUP recall enter: group=%d activePlayerSelection holds visible=%d [%s] "
+              "(read at queueCommand time, BEFORE anything of ours runs)",
+              group, visibleCount, tags);
+    }
+
+    ShadowGroup* g = (group >= 0 && group < SC_HOTKEY_GROUPS) ? &g_group[group] : NULL;
+
+    // CONTAINMENT (see this section's header): every unit the engine recalled must be
+    // one this group recorded. Anything else means the group does not describe this
+    // selection -- a different session after a load, or a group the engine holds and we
+    // never saw stored -- and the only safe reading of it is none.
+    bool contained = (g != NULL) && g->stored;
+    int  foreign = 0;
+    if (contained) {
+        for (int i = 0; i < visibleCount; ++i) {
+            // The PAIR, not the pointer: a record from a previous game whose slot now
+            // holds a different live unit must read as foreign, which is the whole point
+            // of this check (see ShadowContainsUnit).
+            if (!ShadowContainsUnit(g->units, g->count, &visible[i])) { ++foreign; }
+        }
+        contained = (foreign == 0);
+    }
+
+    if (g && g->stored && !contained) {
+        ++g_statGroupDiscard;
+        ScLog("GROUP discard: group=%d held %d unit(s) but %d of the %d the engine just "
+              "recalled are not among them -- the group does not describe this selection "
+              "(stale after a load, or stored before we were watching). Falling back to "
+              "the engine's own %d.", group, g->count, foreign, visibleCount, visibleCount);
+        g->count  = 0;
+        g->stored = false;
+    }
+
+    // Rebuild: overflow FIRST, the engine's visible units LAST -- the invariant the
+    // whole module rests on (the final Select+order pair of a fan-out must leave the
+    // simulation holding exactly what the player can see).
+    g_shadowCount = 0;
+    int restored = 0, dropped = 0;
+    if (contained) {
+        for (int i = 0; i < g->count && g_shadowCount < g_maxUnits; ++i) {
+            if (ShadowContainsUnit(visible, visibleCount, &g->units[i])) continue;
+            int why = SC_LIVE_OK;
+            if (!PassesGate(&g->units[i], &why)) {
+                ++dropped;
+                LogUnitForensics("GROUP recall drop", &g->units[i], why);
+                continue;
+            }
+            g_shadow[g_shadowCount++] = g->units[i];
+            ++restored;
+        }
+    }
+    for (int i = 0; i < visibleCount && g_shadowCount < SC_SHADOW_MAX; ++i) {
+        g_shadow[g_shadowCount++] = visible[i];
+    }
+    g_visibleCount = visibleCount;
+    ++g_shadowVersion;
+    if (g_shadowCount > SC_SELECTION_SLOTS) ++g_statGroupWide;
+
+    // Compact the group to what actually came back, so a unit that died between two
+    // recalls is not re-judged (and re-logged) on every later one.
+    if (contained) {
+        int keep = 0;
+        for (int i = 0; i < g_shadowCount; ++i) g->units[keep++] = g_shadow[i];
+        g->count = keep;
+    }
+
+    ScLog("GROUP recall: group=%d -> %d unit(s) (%d visible from the engine + %d restored "
+          "past the cap, %d dropped as not live)",
+          group, g_shadowCount, visibleCount, restored, dropped);
+
+    ShowOverflowCircles();
+
+    // A recall is a new selection: a pending fan-out would command units the player has
+    // moved on from. Same reasoning as ScFanoutOnSelect.
+    if (g_plan.active) {
+        ScLog("FANOUT: control group recalled with %d/%d chunks pending -- plan dropped",
+              g_plan.nextChunk, g_plan.chunkCount);
+        g_plan.active = false;
+    }
+}
+
+// The whole 0x13 decision, split out so hooktest can drive it and so the command hook
+// stays readable. Returns true if the command was one we understood.
+static bool OnHotkeyCommand(const BYTE* buf, unsigned len) {
+    // The engine's dispatcher consumes exactly 3 bytes for 0x13 and its group guard is
+    // `CMP AL,0x12 / JA` (0x004C2873) -- unsigned, so it passes 0..18. We only mirror
+    // the ten Ctrl+N groups; 10..17 are the engine's own recent-selection ring, and 18
+    // is the vanilla off-by-one binary-selection-map.md 6.4 flags. Anything outside
+    // 0..9 is left entirely to the engine.
+    if (len != 3) {
+        ScLog("GROUP: hotkey command arrived with len=%u, the dispatcher consumes 3 -- "
+              "ignored", len);
+        return false;
+    }
+    const BYTE action = buf[1];
+    const int  group  = (int)buf[2];
+
+    if (group < 0 || group >= SC_HOTKEY_GROUPS) {
+        ScLog("GROUP: hotkey action=%u group=%d is not one of the ten Ctrl+N groups -- "
+              "left to the engine", action, group);
+        return false;
+    }
+
+    if (DisagreeingPlayerIds()) {
+        // Never seen; logged rather than assumed away, because every row index in this
+        // block comes from one of the three (binary-selection-map.md 7 note 7).
+        ScLog("GROUP WARNING: the three player-id globals disagree (%u/%u/%u) -- the "
+              "engine row this block reads may not be the one the store writes",
+              *(BYTE*)Rt(SC_VA_ACTIVE_PLAYER_ID), *(BYTE*)Rt(SC_VA_PLAYER_ID_512688),
+              *(BYTE*)Rt(SC_VA_PLAYER_ID_512678));
+    }
+    switch (action) {
+        case SC_HOTKEY_ASSIGN: GroupStore(group, false); return true;
+        case SC_HOTKEY_ADD:    GroupStore(group, true);  return true;
+        case SC_HOTKEY_RECALL: GroupRecall(group);       return true;
+        default:
+            ScLog("GROUP: hotkey action=%u is not one CMDRECV_Hotkey dispatches "
+                  "(0/1/2) -- ignored", action);
+            return false;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Hook: queueCommand -- __fastcall(ECX = bytes, EDX = len)
 // ---------------------------------------------------------------------------
 
@@ -747,13 +1145,21 @@ bool ScFanoutOnCommand(const BYTE* buf, unsigned len) {
     InterlockedExchange(&g_inFanout, 1);
     EnterCriticalSection(&g_lock);
 
-    // A control-group recall rebuilds the selection on the receiving side without
-    // going through CMDACT_Select, so our shadow list would silently go stale.
-    // Drop it rather than fan out something the player is no longer holding.
-    if (id == SC_CMD_HOTKEY && g_shadowCount > g_visibleCount) {
-        ScLog("SHADOW dropped: hotkey command 0x13 rebuilds the selection elsewhere");
-        g_shadowCount = g_visibleCount;
-        ++g_shadowVersion;
+    // Control groups (task 021). A recall rebuilds the selection without ever going
+    // through CMDACT_Select, so before this task the shadow list was DROPPED here --
+    // correct at the time, and the reason Ctrl+1 on 24 units gave you 12 back. The
+    // shadow-group block above now stores and restores the whole selection instead.
+    //
+    // A command we do NOT understand (wrong length, a group outside 0..9, an action
+    // CMDRECV_Hotkey does not dispatch) falls back to exactly the old behaviour: drop
+    // the over-cap part rather than fan out a list the player is no longer holding.
+    if (id == SC_CMD_HOTKEY) {
+        if (!OnHotkeyCommand(buf, len) && g_shadowCount > g_visibleCount) {
+            ScLog("SHADOW dropped: hotkey command 0x13 we did not understand rebuilds "
+                  "the selection elsewhere");
+            g_shadowCount = g_visibleCount;
+            ++g_shadowVersion;
+        }
     }
 
     // Finish any plan left over from a previous turn before adding to the buffer.
@@ -867,21 +1273,12 @@ void ScFanoutOnSelect(unsigned count, DWORD* units) {
     // The overflow units are the FRONT of g_shadow -- visible units are stored last
     // so the final Select+order pair of a fan-out leaves the simulation holding what
     // the player can see (with the all-twelve-dead exception in the file header).
-    {
-        const int overflow = g_shadowCount - g_visibleCount;
-        if (ScCirclesEnabled() && overflow > 0) {
-            ScCircleUnit circ[SC_SHADOW_MAX];
-            int n = 0;
-            for (int i = 0; i < overflow && n < SC_SHADOW_MAX; ++i) {
-                circ[n].unit       = g_shadow[i].ptr;
-                circ[n].sprite     = 0;      // filled in by ScCirclesShow
-                circ[n].uniqueness = g_shadow[i].uniqueness;
-                circ[n].player     = g_shadow[i].player;
-                ++n;
-            }
-            ScCirclesShow(circ, n);
-        }
-    }
+    //
+    // Task 021 moved the body of this into ShowOverflowCircles() because a control-group
+    // recall reaches the same point by a different route and has to do the identical
+    // thing; the timing argument above holds for both, since 0x0049AE40 has already run
+    // on each path.
+    ShowOverflowCircles();
 
     // A new selection invalidates a pending fan-out: those pairs would command units
     // the player has moved on from. The engine's own Select is about to be queued
@@ -1154,7 +1551,37 @@ void ScFanoutTestBegin(BYTE* fakeModuleBase, ScQueueFn emit, int budget) {
     g_statStale = 0;
     memset(g_statDrop, 0, sizeof(g_statDrop));
     memset(&g_plan, 0, sizeof(g_plan));
+    // Task 021: the shadow control groups are session state, so a test that begins a
+    // fresh scenario must not inherit the previous one's groups.
+    memset(g_group, 0, sizeof(g_group));
+    g_statGroupAssign = g_statGroupAdd = g_statGroupRecall = 0;
+    g_statGroupWide = g_statGroupDiscard = g_statGroupReset = 0;
 }
+
+// Test-only: how many units the plugin holds for a control group, and the module's
+// group counters. hooktest part [11] asserts on these so "the group holds 36" and
+// "the recall put 36 back" are separate claims.
+int ScFanoutGroupCount(int group) {
+    if (group < 0 || group >= SC_HOTKEY_GROUPS) return -1;
+    return g_group[group].stored ? g_group[group].count : -1;
+}
+
+int ScFanoutGroupStat(int which) {
+    switch (which) {
+        case SC_GROUPSTAT_ASSIGN:  return (int)g_statGroupAssign;
+        case SC_GROUPSTAT_ADD:     return (int)g_statGroupAdd;
+        case SC_GROUPSTAT_RECALL:  return (int)g_statGroupRecall;
+        case SC_GROUPSTAT_WIDE:    return (int)g_statGroupWide;
+        case SC_GROUPSTAT_DISCARD: return (int)g_statGroupDiscard;
+        case SC_GROUPSTAT_RESET:   return (int)g_statGroupReset;
+    }
+    return -1;
+}
+
+// Test-only: the shadow list's shape, so a test can assert "the recall put N back and
+// the engine still holds only 12" without going through the log.
+int ScFanoutShadowCount(void)  { return g_shadowCount; }
+int ScFanoutVisibleCount(void) { return g_visibleCount; }
 
 // Test-only: drive the %SCPLUGIN_FANOUT_LIVENESS% switch without an environment.
 // hooktest part [7] uses it to prove that the pre-task-020 gate really does replay a
@@ -1229,6 +1656,21 @@ void ScFanoutLogStats(void) {
           g_statDrop[SC_DROP_RECYCLED], g_statDrop[SC_DROP_DEAD],
           g_statDrop[SC_DROP_FOREIGN], g_statDrop[SC_DROP_NOSPRITE],
           g_statDrop[SC_DROP_REMOVED], g_statDrop[SC_DROP_NOTAG], g_liveness ? 1 : 0);
+    // Task 021's control groups, on their own line so the STATS line above keeps the
+    // shape every existing reader was written against.
+    {
+        char held[SC_HOTKEY_GROUPS * 8 + 4];
+        int used = 0;
+        held[0] = '\0';
+        for (int i = 0; i < SC_HOTKEY_GROUPS; ++i) {
+            used += _snprintf(held + used, sizeof(held) - used, "%s%d:%d",
+                              i ? " " : "", i, g_group[i].stored ? g_group[i].count : -1);
+        }
+        ScLog("GROUPSTATS assign=%u add=%u recall=%u wide=%u discarded=%u reset=%u "
+              "held=[%s]  (held -1 = never stored this session)",
+              g_statGroupAssign, g_statGroupAdd, g_statGroupRecall, g_statGroupWide,
+              g_statGroupDiscard, g_statGroupReset, held);
+    }
     ScCirclesLogStats();
     ScHudRowLogStats();
 }

@@ -22,6 +22,23 @@ Why posted messages and not synthetic input:
 - Focus is NOT required (task 012 probe 3). The window must not be MINIMISED (probe 2) --
   `Assert-ScDrivable` refuses in that state rather than posting into a black hole.
 
+KNOWN LIMIT -- POSITIONAL SELECTION IS A CORRECTNESS HAZARD, not a convenience. Every
+menu step in this repo clicks a ROW, not a name: "the map file is row 2, because there is
+exactly one .scx in the folder". That assumption is not checkable from a click, and when
+it breaks the run does not fail -- it succeeds against the wrong thing and reports
+confident nonsense.
+
+It has happened. On 2026-08-09 another worker's `022-ghosts.scx` appeared in the shared
+fixture folder beside `combat.scx`; it sorts first, so a suite's row-2 click loaded THEIR
+map and the test went on to box 36 units of type `0x01` (Ghost) where its own fixture
+places Lurkers (`0x67`). The map was deleted afterwards too, but that was the lesser harm:
+a deleted file is noticed, a silently substituted one is not.
+
+So a test that selects by position must make the assumption behind the position TRUE
+before it clicks -- refuse to start if anything it did not create is in that folder -- and
+must assert what it actually got afterwards (unit types and counts), never just that a
+click landed. AGENTS.md § "Shared test-fixture folder" carries the fixture-naming rules.
+
 KNOWN LIMIT -- modifier keys. `GetKeyState` is in the import table, and Windows does not
 update a thread's key-state table for POSTED keyboard messages. So a game that reads shift
 via `GetKeyState` cannot be shift-clicked this way. `Send-ScClick -Shift` therefore does
@@ -124,6 +141,9 @@ $script:WM_RBUTTONUP   = 0x0205
 $script:WM_KEYDOWN     = 0x0100
 $script:WM_KEYUP       = 0x0101
 $script:WM_CHAR        = 0x0102
+# WM_COMMAND -- what an accelerator match SENDS. The window proc's case 0x111 hands its
+# low word straight to the game's own key dispatcher; see Send-ScCommand.
+$script:WM_COMMAND     = 0x0111
 
 $script:MK_LBUTTON = 0x0001
 $script:MK_RBUTTON = 0x0002
@@ -296,16 +316,96 @@ function Send-ScKey {
         [Parameter(Mandatory)][IntPtr]$Hwnd,
         [Parameter(Mandatory)][int]$VirtualKey,
         [char]$Char = [char]0,
+        [switch]$Ctrl, [switch]$Shift,
         [int]$HoldMs = 50, [int]$SettleMs = 200
     )
     Assert-ScDrivable -Hwnd $Hwnd
+    # -Ctrl / -Shift bracket the key with posted modifier KEYDOWN/KEYUP, exactly as
+    # Send-ScClick does. Whether that is ENOUGH is a property of this binary, not of
+    # this function: Windows does not update the thread key-state table for posted
+    # keyboard messages, so a game that resolves its modifiers through `GetKeyState`
+    # will not see them (the KNOWN LIMIT at the top of this file). Task 021 answered it
+    # for the control-group keys in the live game and recorded the result in
+    # research/control-groups.md -- read that before assuming either way, and treat a
+    # failure as "drive it another way", never as "the modifier is broken".
+    if ($Shift) { [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_KEYDOWN, [IntPtr]0x10, [IntPtr]0x002A0001) }
+    if ($Ctrl)  { [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_KEYDOWN, [IntPtr]0x11, [IntPtr]0x001D0001) }
     [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_KEYDOWN, [IntPtr]$VirtualKey, [IntPtr]1)
     if ($Char -ne [char]0) {
         [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_CHAR, [IntPtr][int]$Char, [IntPtr]1)
     }
     Start-Sleep -Milliseconds $HoldMs
     [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_KEYUP, [IntPtr]$VirtualKey, [IntPtr]0xC0000001)
+    if ($Ctrl)  { [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_KEYUP, [IntPtr]0x11, [IntPtr]0xC01D0001) }
+    if ($Shift) { [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_KEYUP, [IntPtr]0x10, [IntPtr]0xC02A0001) }
     if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
+}
+
+function Send-ScCommand {
+    <#
+    .SYNOPSIS
+    Fire one of the game's own ACCELERATOR commands by posting WM_COMMAND -- the only way
+    to drive a MODIFIED key (Ctrl+1, Shift+1) from a script.
+    .DESCRIPTION
+    Task 021, evidence in research/control-groups.md. StarCraft does not read Ctrl or
+    Shift in its window procedure. Its message pump (0x004D1BF0) calls
+    `TranslateAcceleratorA` FIRST and only dispatches the message normally when that
+    returns 0, and the merged accelerator table comes from the binaries' own resources
+    (`Local.dll` id 0x65 holds Ctrl+0..9 and Alt+0..9; `StarCraft.exe` id 0x71 holds
+    Shift+0..9). `TranslateAcceleratorA` resolves FCONTROL/FSHIFT against the calling
+    THREAD's key-state table, which Windows never updates for POSTED messages -- so a
+    posted Ctrl+1 cannot match, and one was measured producing no command at all.
+
+    What the accelerator does on a match is send `WM_COMMAND` carrying its command id,
+    and the window proc's `case 0x111` puts that id straight into the game's own key
+    dispatcher (`0x004846E0` via `[0x005968E0]`), which reads NOTHING from the event but
+    that id. So posting the WM_COMMAND is not a simulation of the keypress: it is the
+    same call, with only `TranslateAcceleratorA`'s modifier check skipped. The engine
+    posts exactly such a message to itself at 0x004D1BA0, which is the precedent.
+
+    PLAIN digits are NOT accelerators -- they reach the dispatcher through the window
+    proc -- so a plain control-group RECALL is driven with `Send-ScKey` as normal, and
+    only the assign/add halves need this.
+
+    Ids come from `python tools/parse_accelerators.py <working-copy PE>`; the ones this
+    repo uses are in research/data/accelerators.tsv.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][IntPtr]$Hwnd,
+        [Parameter(Mandatory)][int]$CommandId,   # e.g. 0x9BDD = Ctrl+1
+        [int]$SettleMs = 250
+    )
+    Assert-ScDrivable -Hwnd $Hwnd
+    [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_COMMAND, [IntPtr]($CommandId -band 0xFFFF), [IntPtr]0)
+    if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
+}
+
+# The control-group accelerator command ids, from research/data/accelerators.tsv.
+# Group 0 is the "0" key, so index 0 of each array is group 0 and index N is group N.
+$script:ScCtrlGroupAssign = @(0x9BE6, 0x9BDD, 0x9BDE, 0x9BDF, 0x9BE0, 0x9BE1, 0x9BE2, 0x9BE3, 0x9BE4, 0x9BE5)
+$script:ScCtrlGroupAdd    = @(0x9BDC, 0x9BD3, 0x9BD4, 0x9BD5, 0x9BD6, 0x9BD7, 0x9BD8, 0x9BD9, 0x9BDA, 0x9BDB)
+
+function Send-ScControlGroupAssign {
+    <# .SYNOPSIS Ctrl+<group> -- store the current selection into control group 0..9. #>
+    param([Parameter(Mandatory)][IntPtr]$Hwnd, [Parameter(Mandatory)][int]$Group, [int]$SettleMs = 400)
+    if ($Group -lt 0 -or $Group -gt 9) { throw "drive-game: control group must be 0..9, got $Group" }
+    Send-ScCommand -Hwnd $Hwnd -CommandId $script:ScCtrlGroupAssign[$Group] -SettleMs $SettleMs
+}
+
+function Send-ScControlGroupAdd {
+    <# .SYNOPSIS Shift+<group> -- add the current selection to control group 0..9. #>
+    param([Parameter(Mandatory)][IntPtr]$Hwnd, [Parameter(Mandatory)][int]$Group, [int]$SettleMs = 400)
+    if ($Group -lt 0 -or $Group -gt 9) { throw "drive-game: control group must be 0..9, got $Group" }
+    Send-ScCommand -Hwnd $Hwnd -CommandId $script:ScCtrlGroupAdd[$Group] -SettleMs $SettleMs
+}
+
+function Send-ScControlGroupRecall {
+    <# .SYNOPSIS Press <group> -- recall control group 0..9. A PLAIN key: no accelerator
+       is involved, so this is an ordinary posted keystroke. #>
+    param([Parameter(Mandatory)][IntPtr]$Hwnd, [Parameter(Mandatory)][int]$Group, [int]$SettleMs = 400)
+    if ($Group -lt 0 -or $Group -gt 9) { throw "drive-game: control group must be 0..9, got $Group" }
+    Send-ScKey -Hwnd $Hwnd -VirtualKey (0x30 + $Group) -SettleMs $SettleMs
 }
 
 function Send-ScDropdownPick {
@@ -331,7 +431,24 @@ function Send-ScDropdownPick {
         [Parameter(Mandatory)][IntPtr]$Hwnd,
         [Parameter(Mandatory)][int]$X, [Parameter(Mandatory)][int]$Y,
         [Parameter(Mandatory)][int]$Index,
-        [int]$FirstOffset = 16, [int]$Pitch = 15, [int]$SettleMs = 400
+        [int]$FirstOffset = 16, [int]$Pitch = 15, [int]$SettleMs = 400,
+        # How long to wait for the list to APPEAR after the button goes down, and how long
+        # to sit on the chosen entry before releasing.
+        #
+        # These were hardcoded at 200ms each, and 200 is not enough. Task 021 had a Game
+        # Type pick silently do nothing: the lobby stayed on Melee and the map played as a
+        # melee game -- 4 Drones instead of the fixture's 36 Lurkers, and eight downstream
+        # assertions failing about something else entirely. Holding the combo open and
+        # photographing it (work/scratch/probe-gametype.ps1) ruled out the two obvious
+        # suspects: on that fixture the list is exactly three entries, the entry centres
+        # land on the 16px/15px offsets below, and index 2 really is "Use Map Settings".
+        # What was left was the timing, and raising these made it reproducible-green.
+        #
+        # THIS FAILURE IS SILENT AND STICKY, which is why the defaults moved rather than
+        # one caller: the combo remembers the last choice in the machine's profile, so a
+        # pick that does nothing leaves the WRONG game type set for every later run too.
+        # Every suite that picks a game type was exposed to it, not just this task's.
+        [int]$OpenMs = 700, [int]$HoverMs = 400
     )
     Assert-ScDrivable -Hwnd $Hwnd
     $itemY = $Y + $FirstOffset + $Index * $Pitch
@@ -340,9 +457,9 @@ function Send-ScDropdownPick {
     [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]0, $atBox)
     Start-Sleep -Milliseconds 60
     [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_LBUTTONDOWN, [IntPtr]$script:MK_LBUTTON, $atBox)
-    Start-Sleep -Milliseconds 200
+    Start-Sleep -Milliseconds $OpenMs
     [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]$script:MK_LBUTTON, $atItem)
-    Start-Sleep -Milliseconds 200
+    Start-Sleep -Milliseconds $HoverMs
     [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_LBUTTONUP, [IntPtr]0, $atItem)
     if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
 }
@@ -477,6 +594,19 @@ function Save-ScWindowImage {
     A DIAGNOSTIC, never an oracle (research/automated-testing-options.md O4). The output
     reproduces game artwork, so it must stay on a gitignored path and must never be
     committed (AGENTS.md hard rule 1) -- this function refuses to write inside the repo.
+
+    READ THIS BEFORE MEASURING A COORDINATE OFF ONE OF THESE FRAMES.
+
+    With -FullWindow the capture is the WINDOW, including the border and title bar, while
+    every function in this file clicks in CLIENT coordinates. At this game's window size
+    the two differ by roughly (+5, +32): a control drawn at y=300 in the image is at
+    y~268 in the coordinates you must post.
+
+    That is not a footnote. Task 021 measured the lobby's Game Type combo off exactly such
+    a frame, concluded every suite had been clicking 32 px too high for months, and
+    "fixed" a coordinate that was already correct -- which made the failure worse, not
+    better. The real cause was timing (see Send-ScDropdownPick). Subtract the offset, or
+    capture without -FullWindow, before concluding a coordinate is wrong.
     #>
     [CmdletBinding()]
     param(

@@ -98,6 +98,11 @@ param(
     # first pair of boxes was taken. Some runs the enemy pursues rather than holding
     # its post, and then it takes a few.
     [int]$MaxRounds = 5,
+    # Task 021's PHASE C: which control group the >12 selection is stored into before
+    # the fight and recalled from after it. Any of the ten Ctrl+N groups behaves the
+    # same; 1 is the one the user's own report used.
+    [ValidateRange(0, 9)]
+    [int]$ControlGroup = 1,
     # Task 020's emit-side liveness gate. '1' is the shipped behaviour and what this
     # test asserts. '0' deliberately restores the pre-020 gate (uniqueness alone) --
     # the assertions are NOT inverted for it, so the run FAILS, which is the point:
@@ -174,12 +179,45 @@ function Get-ScState {
 
 # --- the fixture ---------------------------------------------------------------
 
+# The two fixtures this suite creates. Task-prefixed so "mine" is decidable in a folder
+# that is shared with every other worker's run.
+$script:myFixtures = @('019-probe.scx', '019-combat.scx')
+
+function Remove-MyFixtures {
+    foreach ($n in $script:myFixtures) {
+        $p = Join-Path $mapDir $n
+        if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Assert-FixtureFolderIsOurs {
+    if (-not (Test-Path -LiteralPath $mapDir)) { return }
+    $foreign = @(Get-ChildItem -LiteralPath $mapDir -Filter *.scx -ErrorAction SilentlyContinue |
+                 Where-Object { $script:myFixtures -notcontains $_.Name })
+    if ($foreign.Count -gt 0) {
+        throw ("test: $mapDir holds a fixture this test did not create " +
+               "($($foreign.Name -join ', ')). The map browser is clicked by ROW, so a " +
+               "foreign map can be the one that loads -- refusing rather than deleting " +
+               "theirs or playing it. Re-run when they are done.")
+    }
+}
+
 # Generate one variant and parse the generator's own validation read-back, so the
 # geometry this script clicks at comes from the file that was written rather than
 # from a constant that could drift away from it.
 function New-Fixture {
     param([string]$Name, [string]$EnemyOwner)
-    if (Test-Path -LiteralPath $mapDir) { Remove-Item -LiteralPath $mapDir -Recurse -Force }
+    # INTERIM SHARED-FOLDER GUARD (2026-08-09). This folder is shared between workers and
+    # this used to be a recursive delete of the whole thing.
+    #
+    # A live-process check alone was NOT enough, and this is what it cost: with no foreign
+    # game running the guard passed, this suite wrote its fixture, task 022 then dropped
+    # `022-ghosts.scx` in beside it -- and because the map browser is clicked by ROW and
+    # `022-ghosts.scx` sorts before `combat.scx`, THIS TEST LOADED THEIR MAP and boxed 36
+    # Ghosts. So the rule is now the stronger one: refuse on any fixture we did not
+    # create, whether or not a game is running, and never delete the folder.
+    Assert-FixtureFolderIsOurs
+    Remove-MyFixtures
     $path = Join-Path $mapDir "$Name.scx"
     $out = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
         -UnitCount $UnitCount -UnitType lurker -Player 0 -UnitHp $UnitHp `
@@ -557,7 +595,7 @@ try {
     # PHASE A -- both slots spawn EXACTLY what the file places
     # =====================================================================
     Step "PHASE A: generate the PLACEMENT PROBE ($UnitCount lurkers + $EnemyCount hydralisks, both the human's)" {
-        $script:probeFx = New-Fixture -Name 'probe' -EnemyOwner 'player'
+        $script:probeFx = New-Fixture -Name '019-probe' -EnemyOwner 'player'
         Assert-That 'the generator succeeded' ($probeFx.Exit -eq 0) "(exit $($probeFx.Exit))"
         Assert-That 'it wrote the map' ([bool]$probeFx.Written)
         Assert-That 'its structural validation passed' ([bool]$probeFx.Ok)
@@ -606,7 +644,7 @@ try {
     # PHASE B -- combat
     # =====================================================================
     Step "PHASE B: generate the COMBAT map (same block, owned by the computer)" {
-        $script:combatFx = New-Fixture -Name 'combat' -EnemyOwner 'computer'
+        $script:combatFx = New-Fixture -Name '019-combat' -EnemyOwner 'computer'
         Assert-That 'the generator succeeded' ($combatFx.Exit -eq 0) "(exit $($combatFx.Exit))"
         Assert-That 'it wrote the map' ([bool]$combatFx.Written)
         Assert-That 'its structural validation passed' ([bool]$combatFx.Ok)
@@ -666,6 +704,45 @@ try {
     }
 
     $script:samePassProof = $null
+
+    Step "PHASE C (task 021): Ctrl+$ControlGroup stores all $UnitCount into a control group, BEFORE anyone dies" {
+        # Task 021's death interaction needs a >12 control group that predates the
+        # fight, so the recall in PHASE C below is asked to return a group whose
+        # membership the combat has since invalidated.
+        #
+        # Ctrl+N is posted as a WM_COMMAND carrying the accelerator's own command id:
+        # StarCraft resolves Ctrl through TranslateAcceleratorA, which reads the thread
+        # key-state table that POSTED keyboard messages never update
+        # (research/control-groups.md 5). This costs the fixture nothing -- the command
+        # changes no selection state, it only queues three bytes.
+        $mark = Get-ScLogLineCount -LogPath $LogPath
+        Send-ScControlGroupAssign -Hwnd $hwnd -Group $ControlGroup
+        Start-Sleep -Seconds 2
+        $since = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
+        # No `CMD id=0x13` assertion here: this suite launches with -LogCommands 0 (the
+        # game emits a sync command every frame and the noise swamps the log). It is not
+        # a gap -- sc_fanout writes `GROUP assign:` only from its 0x13 handler, so the
+        # line existing at all IS the command having arrived and been decoded as an
+        # assign for this group. test-control-groups.ps1 asserts the raw bytes.
+        $g = @($since | Select-String -Pattern 'GROUP assign: group=\d+ now holds (\d+)')
+        Assert-That 'the plugin stored a group' ($g.Count -gt 0)
+        if ($g.Count -gt 0) {
+            Write-Host "       $($g[-1].Line.Trim())"
+            $script:groupStored = [int][regex]::Match($g[-1].Line, 'now holds (\d+)').Groups[1].Value
+            Assert-That "it stored all $UnitCount, not the engine's twelve ($script:groupStored)" `
+                ($script:groupStored -eq $UnitCount)
+            # Everything in the group is alive at this instant, which is what makes the
+            # drop count in PHASE C attributable to the combat and to nothing else.
+            #
+            # The NUMBER is captured, not substring-matched: `'0 skipped as not live'` as
+            # a bare substring also matches "10 skipped as not live" -- it would pass on
+            # exactly the input it exists to rule out.
+            $skipM = [regex]::Match($g[-1].Line, '(\d+) skipped as not live')
+            Assert-That 'nothing was skipped as not-live at store time' `
+                ($skipM.Success -and [int]$skipM.Groups[1].Value -eq 0) `
+                ($skipM.Success ? "(skipped $($skipM.Groups[1].Value))" : '(no count in the line)')
+        }
+    }
 
     Step "PHASE B: walk the block into the enemy until one of the boxed units DIES" {
         $baseline = $UnitCount
@@ -987,6 +1064,125 @@ try {
         }
     }
 
+    Step "PHASE C (task 021): recalling group $ControlGroup returns the SURVIVORS and never a corpse" {
+        <#
+        ACCEPTANCE CRITERION 4. The group stored in PHASE C above held all $UnitCount
+        while every one of them was alive. Some are dead now. This presses the group key
+        and asserts that what comes back is the survivors -- and that the dead members'
+        tags reach no emitted Select.
+
+        The gate doing the work is task 020's, unchanged and reused rather than
+        reinvented (research/fanout-liveness.md 3): sc_fanout runs PassesGate over every
+        stored member at recall, logs one `GROUP recall drop` forensics line per refusal
+        with the fields the receive path would have used, and never puts a refused unit
+        into the rebuilt shadow list.
+
+        RECALL NEEDS NO ACCELERATOR. Plain digits are not accelerators (they reach the
+        key dispatcher through the window procedure), so this half is an ordinary posted
+        keystroke -- the real key, on the real path.
+
+        `$script:afterRow` from the previous step is the row's own independently-read
+        survivor set, so the recalled population can be cross-checked against a number
+        this module did not produce.
+        #>
+        $survivors = if ($null -ne $script:afterRow) { $script:afterRow.N } else { 0 }
+        $mark = Get-ScLogLineCount -LogPath $LogPath
+        Send-ScControlGroupRecall -Hwnd $hwnd -Group $ControlGroup
+        Start-Sleep -Seconds 3
+        $since = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
+
+        # As in PHASE C's store step: -LogCommands 0 means there are no `CMD id=` lines
+        # to read, and `GROUP recall:` existing at all is the recall command having
+        # arrived and been decoded. The raw bytes are asserted in test-control-groups.ps1.
+
+        # Every unit the recall refused, with the reason the gate gave.
+        $drops = @()
+        foreach ($l in ($since | Select-String -Pattern 'GROUP recall drop: unit=0x[0-9A-F]{8}')) {
+            $m = [regex]::Match($l.Line,
+                'GROUP recall drop: unit=0x([0-9A-F]{8}) tag=([0-9A-F]{4}) why=(\w+) hp=(\d+)')
+            if ($m.Success) {
+                $drops += [pscustomobject]@{
+                    Unit = $m.Groups[1].Value; Tag = $m.Groups[2].Value
+                    Why = $m.Groups[3].Value; Hp = [int]$m.Groups[4].Value; Line = $l.Line.Trim()
+                }
+            }
+        }
+        foreach ($d in $drops) { Write-Host "       DROPPED: $($d.Line)" }
+
+        $r = @($since | Select-String -Pattern 'GROUP recall: group=\d+ -> (\d+) unit\(s\) \((\d+) visible from the engine \+ (\d+) restored past the cap, (\d+) dropped')
+        Assert-That 'the plugin rebuilt the selection from its group' ($r.Count -gt 0)
+        if ($r.Count -eq 0) { return }
+        Write-Host "       $($r[-1].Line.Trim())"
+        $m = [regex]::Match($r[-1].Line, '-> (\d+) unit\(s\) \((\d+) visible from the engine \+ (\d+) restored past the cap, (\d+) dropped')
+        $total = [int]$m.Groups[1].Value
+        $dropped = [int]$m.Groups[4].Value
+
+        # (1) The recall really did have to refuse someone, and (2) it refused them for
+        # BEING DEAD or REMOVED -- not for a recycled slot, the only case the pre-020
+        # test could already see.
+        Assert-That "the recall dropped at least one stored member ($dropped)" ($dropped -ge 1)
+        $reasons = @($drops | ForEach-Object { $_.Why } | Sort-Object -Unique)
+        Assert-That "and it dropped them for being dead or removed (reasons: $($reasons -join ','))" `
+            (@($drops | Where-Object { $_.Why -in @('hp0', 'removed') }).Count -ge 1)
+        Assert-That 'every hp0 drop really did read zero hit points' `
+            (@($drops | Where-Object { $_.Why -eq 'hp0' -and $_.Hp -ne 0 }).Count -eq 0)
+
+        # THE ASSERTION THIS PHASE EXISTS FOR: fewer came back than were stored, and the
+        # shortfall is exactly the units the gate refused.
+        Assert-That "FEWER came back than were stored ($total < $($script:groupStored))" `
+            ($total -lt $script:groupStored)
+        Assert-That "  and the shortfall is exactly what the gate refused ($($script:groupStored) - $dropped = $total)" `
+            ($script:groupStored - $dropped -eq $total)
+        # Corroborated against a number this module did not produce: the HUD row's own
+        # survivor count from the previous step, read out of the live dialog.
+        #
+        # `-ge`, not `-eq`, and the asymmetry is real rather than slack. The row's number
+        # comes from a fresh DRAG BOX, so it counts survivors inside a rectangle -- the
+        # previous step says as much ("a survivor shoved outside the box rectangle would
+        # read the same way"). A control-group recall is not box-limited: it returns every
+        # stored member that is still alive, wherever it wandered to. So the recall may
+        # legitimately find MORE than the re-box did, and one green run had exactly that
+        # (recall 33, row 32). What would be a real failure is the recall finding FEWER
+        # than a box could see, and that is what this rules out.
+        if ($survivors -gt 0) {
+            Assert-That "  and it finds at least as many as the row's independently-read box (recall $total, row $survivors)" `
+                ($total -ge $survivors) "(a recall finding fewer than a box can see would be the failure)"
+        }
+
+        $st = Get-ScState 'after-group-recall'
+        Write-Host "       $($st.Line)"
+        Assert-That "the shadow list holds exactly the recalled survivors (n=$($st.N))" ($st.N -eq $total)
+        Assert-That "  every one of them is live (live=$($st.Live))" ($st.Live -eq $st.N)
+        Assert-That "  and the corpses are NOT in it (n=$($st.N) live=$($st.Live), hp0=$($st.Hp0) removed=$($st.Removed))" `
+            ($st.Hp0 -eq 0 -and $st.Removed -eq 0)
+        # Still a >12 recall, and the plugin really did restore units past whatever the
+        # engine kept. `visible` is NOT asserted to be 12: the engine's own stored twelve
+        # lose members to the fight too, and its recall compacts them out (0x00496940
+        # step 3), so it can legitimately hand back fewer than twelve. What matters is
+        # that the group came back bigger than the cap and bigger than the engine's share.
+        Assert-That "  it is still over the cap, so this is a >12 group recall (n=$($st.N))" `
+            ($st.N -gt $HUD_SLOTS)
+        Assert-That "  and the plugin restored units past what the engine kept (n=$($st.N) > visible=$($st.Visible))" `
+            ($st.N -gt $st.Visible -and $st.Visible -le $HUD_SLOTS)
+
+        # THE CORPSE IS NOT IN THE SELECTION AT ALL, which is a stronger statement than
+        # "its tag was withheld from a Select": the assertions above show the rebuilt
+        # shadow list contains zero units with hp0 or removed, so there is nothing for a
+        # later order to replay. That is the whole of criterion 4 for this fixture.
+        #
+        # THIS STEP DELIBERATELY ISSUES NO ORDER. Burrow is a TOGGLE and the survivors are
+        # dug in at this point; pressing it here would surface them and leave the next
+        # step -- which presses it to unburrow and then asserts they are above ground --
+        # re-burrowing them instead. That is not a hypothetical, it is what the first run
+        # of this phase did. The wire-level form of the claim ("no dead unit's tag reached
+        # the wire") is already asserted twice over, on the fanned order in PHASE B above
+        # and byte-exactly offline in hooktest part [11], so nothing is lost by not
+        # disturbing this fixture's unit state a second time.
+        $deadTags = @($drops | ForEach-Object { $_.Tag } | Sort-Object -Unique)
+        Write-Host "       corpses refused by the recall, none of them in the list above: $($deadTags -join ' ')"
+        Shot 'after-group-recall' | Out-Null
+    }
+
     Step 'PHASE B: losing units does NOT end the mission' {
         # Under Use Map Settings with an empty TRIG nothing can call Victory or Defeat,
         # so the game must still be running a minute after the losses -- and must still
@@ -1054,9 +1250,8 @@ catch {
 }
 finally {
     if (-not $KeepOpen) { Stop-Mission }
-    if (-not $KeepOpen -and (Test-Path -LiteralPath $mapDir)) {
-        Remove-Item -LiteralPath $mapDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    # ONLY our own fixtures, never the folder -- another worker's map may be beside them.
+    if (-not $KeepOpen) { Remove-MyFixtures }
 }
 
 Write-Host ''
@@ -1088,7 +1283,7 @@ foreach ($id in $script:launchedPids) {
 Assert-That 'no game process this test started is left running' `
     ($KeepOpen -or $stillUp.Count -eq 0) `
     "(launched $($script:launchedPids -join ' '); still up: $($stillUp -join ' '))"
-Assert-That 'the generated maps were cleaned up' ($KeepOpen -or -not (Test-Path -LiteralPath $mapDir))
+Assert-That 'the generated maps were cleaned up' ($KeepOpen -or @(Get-ChildItem -LiteralPath $mapDir -Filter *.scx -ErrorAction SilentlyContinue | Where-Object { $script:myFixtures -contains $_.Name }).Count -eq 0)
 
 $hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
 Write-Host "  StarCraft.exe SHA-256 after:  $hashAfter"
