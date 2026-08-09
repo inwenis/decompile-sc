@@ -577,6 +577,19 @@ function Save-ScWindowImage {
     A DIAGNOSTIC, never an oracle (research/automated-testing-options.md O4). The output
     reproduces game artwork, so it must stay on a gitignored path and must never be
     committed (AGENTS.md hard rule 1) -- this function refuses to write inside the repo.
+
+    READ THIS BEFORE MEASURING A COORDINATE OFF ONE OF THESE FRAMES.
+
+    With -FullWindow the capture is the WINDOW, including the border and title bar, while
+    every function in this file clicks in CLIENT coordinates. At this game's window size
+    the two differ by roughly (+5, +32): a control drawn at y=300 in the image is at
+    y~268 in the coordinates you must post.
+
+    That is not a footnote. Task 021 measured the lobby's Game Type combo off exactly such
+    a frame, concluded every suite had been clicking 32 px too high for months, and
+    "fixed" a coordinate that was already correct -- which made the failure worse, not
+    better. The real cause was timing (see Send-ScDropdownPick). Subtract the offset, or
+    capture without -FullWindow, before concluding a coordinate is wrong.
     #>
     [CmdletBinding()]
     param(
