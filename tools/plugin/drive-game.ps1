@@ -306,7 +306,15 @@ function Send-ScDrag {
     # suites to exactly that, in a sweep where three other suites boxed fine -- which is the
     # intermittency this explains. Activation is part of dragging, not an extra;
     # -NoActivate is for a caller that has already done it.
-    if (-not $NoActivate) { [void](Set-ScWindowActive -Hwnd $Hwnd) }
+    if (-not $NoActivate) {
+        # LOUD, like Send-ScDropdownPick. A drag that runs without foreground selects
+        # nothing and reports nothing -- which is the failure this activation exists to
+        # prevent, and the one that cost another task 25 assertions. Five suites outside
+        # task 022 depend on this primitive, so silence here is the worst place for it.
+        if (-not (Set-ScWindowActive -Hwnd $Hwnd)) {
+            throw 'drive-game: could not bring the game window to the foreground, and a drag made while it is in the background selects NOTHING silently (see Set-ScWindowActive). Refusing to drag.'
+        }
+    }
     if ($Steps -lt 2) { $Steps = 2 }
 
     [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]0, (ConvertTo-ScLParam $X1 $Y1))
@@ -372,16 +380,46 @@ function Get-ScMapFolderRow {
     param(
         [Parameter(Mandatory)][string]$MapsDir,
         [Parameter(Mandatory)][string]$FolderName,
-        [int]$FirstRowY = 140, [int]$Pitch = 19
+        [int]$FirstRowY = 140, [int]$Pitch = 19,
+        [switch]$HasUpOneLevel
     )
     $dirs = @(Get-ChildItem -LiteralPath $MapsDir -Directory -ErrorAction SilentlyContinue |
               ForEach-Object { $_.Name } | Sort-Object)
     $idx = [array]::IndexOf($dirs, $FolderName)
     if ($idx -lt 0) { throw "drive-game: $FolderName is not a directory under $MapsDir." }
+    # `[Up One Level]` occupies row 1 wherever the browser has a parent to go back to --
+    # every suite here relies on that when it clicks the map on the row BELOW it. Whether
+    # this particular list has one depends on where the browser opens, so the caller says
+    # so rather than this guessing; the default is the Maps\BroodWar root, which does not.
+    $offset = if ($HasUpOneLevel) { 1 } else { 0 }
     [pscustomobject]@{
-        Row = $idx + 1
-        Y   = $FirstRowY + $idx * $Pitch
+        Row = $idx + 1 + $offset
+        Y   = $FirstRowY + ($idx + $offset) * $Pitch
         Siblings = ($dirs -join ', ')
+        HasUpOneLevel = [bool]$HasUpOneLevel
+    }
+}
+
+function Assert-ScFixtureStillMine {
+    <#
+    .SYNOPSIS
+    Re-check, as late as possible, that the fixture about to be loaded is this run's own.
+    .DESCRIPTION
+    Wait-ScTestMapDirFree checks once, BEFORE generating. The folder can change between
+    that and the browser click -- another worker's cleanup can take the file, or drop one
+    in -- and the browser picks by ROW, so a foreign file silently changes which map
+    loads. Task 022 lost a run to exactly that gap. Called immediately before the launch.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Dir, [Parameter(Mandatory)][string]$MapPath)
+    $mine = Split-Path $MapPath -Leaf
+    if (-not (Test-Path -LiteralPath $MapPath)) {
+        throw "drive-game: $mine is gone from $Dir between generation and launch -- another worker's cleanup took it. Regenerate; do not interpret this run."
+    }
+    $foreign = @(Get-ChildItem -LiteralPath $Dir -File -ErrorAction SilentlyContinue |
+                 Where-Object { $_.Name -ne $mine })
+    if ($foreign.Count -gt 0) {
+        throw ("drive-game: {0} also holds {1}, which this test did not create. The map browser picks by ROW, so the wrong map would load. Refusing to start." -f $Dir, (($foreign | ForEach-Object { $_.Name }) -join ', '))
     }
 }
 
@@ -463,6 +501,29 @@ function Wait-ScTestMapDirFree {
             Start-Sleep -Seconds 15
         }
     }
+}
+
+function Get-ScSelectionGroup {
+    <#
+    .SYNOPSIS
+    The CUnit pointers the ENGINE is holding -- its capped twelve -- from the observer's
+    own snapshot line.
+    .DESCRIPTION
+    Needed to say anything about "the engine's selection" as a SET rather than as a count.
+    Task 022 used it to settle which units the twelve actually contained, after a claim in
+    that task's own writeup about where a pre-damaged block landed turned out to be false
+    when the pointers were cross-referenced.
+
+    Returns the pointers as upper-case hex strings without the 0x, matching the format
+    Get-ScWorldState reports for each unit, so the two can be intersected directly.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$LogPath)
+    $line = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
+              Select-String -Pattern 'clientSelectionGroup\s+\[0\]=') | Select-Object -Last 1
+    if (-not $line) { return @() }
+    ,@([regex]::Matches($line.Line, '=0x([0-9A-Fa-f]+)') |
+       ForEach-Object { $_.Groups[1].Value.ToUpperInvariant() })
 }
 
 function Get-ScRegionFingerprint {

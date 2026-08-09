@@ -57,6 +57,9 @@ param(
     [int]$EnemyCount = 16,
     [ValidateSet('fanout', 'observe')][string[]]$Modes = @('fanout', 'observe'),
     [int]$EngageTimeoutSec = 60,
+    # How far the two control windows may disagree before the fight is declared too
+    # unstable to measure. Strictly less than this; see the assertion.
+    [int]$ControlSpreadLimit = 6,
     [switch]$KeepOpen
 )
 
@@ -140,24 +143,6 @@ function New-Fixture {
 # One arm: launch in $Mode, walk into the enemy, press Cloak, and take the three scans
 # the comparison needs. Returns the metrics; assertions that only make sense for one arm
 # are made by the caller.
-# The shared-folder race has TWO halves and the wait before generation only covers one:
-# another worker can clear the folder, or drop a file into it, between the moment this
-# fixture is written and the moment the map browser is clicked -- and the browser picks by
-# ROW, so a foreign file silently changes which map loads. Re-checked here, as late as
-# possible, and named as the cause if it fails.
-function Assert-ScFixtureStillMine {
-    param([Parameter(Mandatory)][string]$Dir, [Parameter(Mandatory)][string]$MapPath)
-    $mine = Split-Path $MapPath -Leaf
-    if (-not (Test-Path -LiteralPath $MapPath)) {
-        throw "test: $mine is gone from $Dir between generation and launch -- another worker's cleanup took it. Regenerate; do not interpret this run."
-    }
-    $foreign = @(Get-ChildItem -LiteralPath $Dir -File -ErrorAction SilentlyContinue |
-                 Where-Object { $_.Name -ne $mine })
-    if ($foreign.Count -gt 0) {
-        throw ("test: {0} also holds {1}, which this test did not create. The map browser picks by ROW, so the wrong map would load. Refusing to start." -f $Dir, (($foreign | ForEach-Object { $_.Name }) -join ', '))
-    }
-}
-
 function Invoke-Arm {
     param([Parameter(Mandatory)][string]$Mode)
 
@@ -371,10 +356,35 @@ try {
                 ($melee.Count -gt 0 ? "(got $spawned, and player 0 owns SCV/Drone/Larva/Overlord-shaped units -- THIS IS A MELEE START, the Game Type pick did not take)" : "(got $spawned)")
             Assert-That "[$mode] and $EnemyCount Hydralisks" `
                 (@($arm.Boxed.Units | Where-Object { $_.Type -eq $HYDRALISK_TYPE }).Count -eq $EnemyCount)
-            Assert-That "[$mode] the world scan was not taken mid-edit" `
-                ($arm.Boxed.Counts[0].Units -eq $arm.Boxed.Counts[0].Recount -and $arm.Boxed.Counts[0].Complete -eq 1)
+            # EVERY scan the measurement uses, not just the first one. A torn scan drops a
+            # unit, and a dropped unit cannot be seen to change its order -- so the bias is
+            # DOWNWARD, i.e. towards the conclusion this test reaches. Validating only the
+            # scan the numbers are not computed from would have been the wrong one to check.
+            foreach ($sc in @(
+                @{ N = 'boxed'; S = $arm.Boxed }, @{ N = 'engaged'; S = $arm.Engaged },
+                @{ N = 'baseline'; S = $arm.Baseline }, @{ N = 'after'; S = $arm.After },
+                @{ N = 'control-after'; S = $arm.ControlAfter })) {
+                $c = $sc.S.Counts[0]
+                Assert-That "[$mode] the '$($sc.N)' scan was not taken mid-edit" `
+                    ($c.Units -eq $c.Recount -and $c.Complete -eq 1) `
+                    "(units=$($c.Units) recount=$($c.Recount) complete=$($c.Complete) -- a torn scan biases the result toward 'no disturbance')"
+            }
             Assert-That "[$mode] the two sides engaged within ${EngageTimeoutSec}s" ($null -ne $arm.Engaged)
             if (-not $arm.Engaged) { return }
+
+            # THE ABILITY MUST BE SHOWN TO HAVE FIRED IN *THIS* ARM, and in the stock arm
+            # there is no CMD/FANOUT line to look at -- the command hook is not installed.
+            # Without a substitute, a swallowed keypress produces 0/0/0 and every
+            # assertion below passes while measuring nothing at all. The effect itself is
+            # visible to the world scan in both arms, so that is the signal: units that
+            # were not stimmed before the keypress and are stimmed after it.
+            $stimBefore = @((Get-Mine $arm.Baseline) | Where-Object { $_.Stim -gt 0 }).Count
+            $stimAfter  = @((Get-Mine $arm.After)    | Where-Object { $_.Stim -gt 0 }).Count
+            $arm.StimBefore = $stimBefore
+            $arm.StimAfter = $stimAfter
+            Assert-That "[$mode] the ability actually fired -- units carrying the stim effect went $stimBefore -> $stimAfter" `
+                ($stimAfter -gt $stimBefore) `
+                '(no unit gained the effect, so this arm measured a keypress that did nothing and its numbers mean nothing)'
 
             # Diagnostics first: a metric computed over the wrong scan is the failure mode
             # this whole task keeps meeting, so the raw sizes are printed before anything is
@@ -387,12 +397,18 @@ try {
             $ctrlBefore = Get-Transitions $arm.Engaged $arm.Baseline
             $t = Get-Transitions $arm.Baseline $arm.After
             $ctrlAfter = Get-Transitions $arm.After $arm.ControlAfter
-            # The yardstick is the WORSE of the two controls: taking the larger is the
-            # conservative choice for an assertion that is trying to detect an excess.
-            $ctrl = $(if ($ctrlAfter.Changed -gt $ctrlBefore.Changed) { $ctrlAfter } else { $ctrlBefore })
-            $arm.Control = $ctrl
+            # NO AGGREGATOR. Picking one of the two controls decides the answer: on the
+            # first published run, max() gave threshold 13 against an observed 8 (pass by
+            # five) and min() gave 7 against 8 (fail by one) -- the sign of the headline
+            # excess flips with the choice. Taking the LARGER is not "conservative", it is
+            # lenient: a bigger control raises the bar an excess has to clear. So both are
+            # asserted, both are reported, and the strict one is the one that decides.
             $arm.ControlBefore = $ctrlBefore
             $arm.ControlAfterT = $ctrlAfter
+            $arm.ControlStrict = $(if ($ctrlAfter.Changed -lt $ctrlBefore.Changed) { $ctrlAfter } else { $ctrlBefore })
+            $arm.ControlLenient = $(if ($ctrlAfter.Changed -gt $ctrlBefore.Changed) { $ctrlAfter } else { $ctrlBefore })
+            $ctrl = $arm.ControlStrict
+            $arm.Control = $ctrl
             $arm.Transitions = $t
             $arm.EnemyHpEngaged = Get-EnemyHp $arm.Engaged
             $arm.EnemyHpAfter = Get-EnemyHp $arm.After
@@ -404,10 +420,14 @@ try {
             Write-Host ("       [{0}] CONTROL after : {1} of {2} alive, {3} changed order, {4} stopped attacking" -f `
                 $mode, $ctrlAfter.StillAlive, $ctrlAfter.Before, $ctrlAfter.Changed, $ctrlAfter.WentIdle)
             # An unstable fight is a reason to distrust the measurement, not to average it.
-            Assert-That ("[{0}] the two control windows agree well enough to be a yardstick ({1} vs {2} changed)" -f `
-                         $mode, $ctrlBefore.Changed, $ctrlAfter.Changed) `
-                ([math]::Abs($ctrlBefore.Changed - $ctrlAfter.Changed) -le 6) `
-                '(the fight is decaying too fast for a two-second window to mean anything)'
+            # STRICTLY less than the bound: the first run of this shape sat exactly ON it
+            # (|10-4| = 6), i.e. precisely at the point the script itself calls too
+            # unstable to mean anything, and passed. A boundary is not a margin.
+            $spread = [math]::Abs($ctrlBefore.Changed - $ctrlAfter.Changed)
+            Assert-That ("[{0}] the two control windows agree well enough to be a yardstick (spread {1}, must be < {2})" -f `
+                         $mode, $spread, $ControlSpreadLimit) `
+                ($spread -lt $ControlSpreadLimit) `
+                '(the fight is decaying too fast for a two-second window to mean anything -- re-run on a steadier fixture rather than believing this)'
             Write-Host ("       [{0}] ABILITY window          : {1} of {2} alive, {3} changed order, {4} stopped attacking {5}" -f `
                 $mode, $t.StillAlive, $t.Before, $t.Changed, $t.WentIdle, $t.Detail)
             Write-Host ("       [{0}] enemy hit points: {1} at engage -> {2} after -> {3} twelve seconds later" -f `
@@ -420,12 +440,18 @@ try {
             # yardstick, and the allowance is deliberately generous -- the prediction under
             # test is dozens of units at once, not one or two more than usual.
             $allowance = 3
-            Assert-That ("[{0}] using the ability disturbs no more orders than not using it ({1} vs {2} in the control)" -f `
-                         $mode, $t.Changed, $ctrl.Changed) `
-                ($t.Changed -le $ctrl.Changed + $allowance) $t.Detail
-            Assert-That ("[{0}] and it does not stop units attacking ({1} vs {2} in the control)" -f `
-                         $mode, $t.WentIdle, $ctrl.WentIdle) `
-                ($t.WentIdle -le $ctrl.WentIdle + $allowance)
+            # Against BOTH controls, not against a chosen one. The strict comparison is the
+            # one that can fail; the lenient one is reported so the reader can see the
+            # spread rather than take the author's aggregator on trust.
+            Assert-That ("[{0}] using the ability disturbs no more orders than not using it -- STRICT control ({1} vs {2}+{3})" -f `
+                         $mode, $t.Changed, $arm.ControlStrict.Changed, $allowance) `
+                ($t.Changed -le $arm.ControlStrict.Changed + $allowance) $t.Detail
+            Assert-That ("[{0}] ... and against the lenient control too ({1} vs {2}+{3})" -f `
+                         $mode, $t.Changed, $arm.ControlLenient.Changed, $allowance) `
+                ($t.Changed -le $arm.ControlLenient.Changed + $allowance) $t.Detail
+            Assert-That ("[{0}] and it does not stop units attacking ({1} vs {2} strict / {3} lenient)" -f `
+                         $mode, $t.WentIdle, $arm.ControlStrict.WentIdle, $arm.ControlLenient.WentIdle) `
+                ($t.WentIdle -le $arm.ControlStrict.WentIdle + $allowance)
             # ... and the group is still fighting afterwards, which is the user's actual
             # complaint. Orders alone could look right while nothing happens.
             Assert-That "[$mode] the group kept doing damage after the ability (enemy $($arm.EnemyHpAfter) -> $($arm.EnemyHpLater))" `
@@ -482,18 +508,43 @@ try {
             #
             # What IS comparable is each arm's own EXCESS over its own control window:
             # how much more disturbance the ability caused than not using it did.
-            $fDelta = $f.Transitions.Changed - $f.Control.Changed
-            $oDelta = $o.Transitions.Changed - $o.Control.Changed
-            Write-Host ("       excess disturbance caused by the ability: fanout {0}, stock {1}" -f $fDelta, $oDelta)
+            # Reported against BOTH controls, because the sign of this number depends on
+            # which one is used and hiding that behind an aggregator is how a reader gets
+            # a headline they cannot check.
+            $fStrict = $f.Transitions.Changed - $f.ControlStrict.Changed
+            $fLenient = $f.Transitions.Changed - $f.ControlLenient.Changed
+            $oStrict = $o.Transitions.Changed - $o.ControlStrict.Changed
+            $oLenient = $o.Transitions.Changed - $o.ControlLenient.Changed
+            Write-Host ("       excess disturbance caused by the ability -- fanout: {0} (strict) / {1} (lenient); stock: {2} / {3}" -f `
+                $fStrict, $fLenient, $oStrict, $oLenient)
+            $fDelta = $fStrict
+            $oDelta = $oStrict
             Assert-That 'the ability disturbs no more orders under the plugin than under stock, once each arm is compared with its own control' `
                 ($fDelta -le $oDelta + 5) "(fanout $fDelta vs observe $oDelta)"
             Assert-That 'both arms were still fighting after the ability' `
                 (($f.EnemyHpLater -lt $f.EnemyHpAfter) -and ($o.EnemyHpLater -lt $o.EnemyHpAfter))
-            # The stock arm must really be stock: no hook of ours in it at all.
+            # The stock arm must really be stock -- and AN ABSENCE ASSERTION IS WORTH
+            # NOTHING UNLESS THE SAME PATTERN IS SHOWN TO MATCH SOMETHING. The first
+            # version looked for 'HOOK install', a string the plugin never writes (the
+            # real ones are `HOOK %s: installed at %p` and `HOOK: %d/%d installed`), so it
+            # passed on any log at all, including a fanout one. Each pattern is now proved
+            # POSITIVE against the plugin arm before being required absent from stock.
             $obsLog = Get-Content -LiteralPath $o.LogPath
-            Assert-That 'the stock arm installed no hooks and intercepted no command' `
-                ((@($obsLog | Select-String -Pattern 'FANOUT start|HOOK install').Count -eq 0)) `
-                '(a hook line in the observe log would invalidate the control)'
+            $fanLog = Get-Content -LiteralPath $f.LogPath
+            foreach ($probe in @(
+                @{ What = 'a hook installation line'; Pattern = 'HOOK .*installed' },
+                @{ What = 'an intercepted command';   Pattern = 'CMD id=' },
+                @{ What = 'a fan-out';                Pattern = 'FANOUT start' }
+            )) {
+                $inFanout = @($fanLog | Select-String -Pattern $probe.Pattern).Count
+                $inObserve = @($obsLog | Select-String -Pattern $probe.Pattern).Count
+                Assert-That "the plugin arm DOES show $($probe.What) -- so its absence below means something" `
+                    ($inFanout -gt 0) "(pattern '$($probe.Pattern)' matched nothing in the fanout log either)"
+                Assert-That "the stock arm shows no $($probe.What)" ($inObserve -eq 0) `
+                    "(found $inObserve line(s) matching '$($probe.Pattern)')"
+            }
+            Assert-That 'the stock arm ran in observe mode' `
+                (@($obsLog | Select-String -Pattern 'mode=observe').Count -gt 0)
             Assert-That 'and it still produced the same oracle (WORLD lines)' `
                 (@($obsLog | Select-String -Pattern 'WORLD \[').Count -gt 0)
         }

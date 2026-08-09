@@ -137,24 +137,6 @@ function Assert-Every {
     Assert-That "$What (all $($Items.Count))" ($Items.Count -gt 0 -and $bad.Count -eq 0) $detail
 }
 
-# The shared-folder race has TWO halves and the wait before generation only covers one:
-# another worker can clear the folder, or drop a file into it, between the moment this
-# fixture is written and the moment the map browser is clicked -- and the browser picks by
-# ROW, so a foreign file silently changes which map loads. Re-checked here, as late as
-# possible, and named as the cause if it fails.
-function Assert-ScFixtureStillMine {
-    param([Parameter(Mandatory)][string]$Dir, [Parameter(Mandatory)][string]$MapPath)
-    $mine = Split-Path $MapPath -Leaf
-    if (-not (Test-Path -LiteralPath $MapPath)) {
-        throw "test: $mine is gone from $Dir between generation and launch -- another worker's cleanup took it. Regenerate; do not interpret this run."
-    }
-    $foreign = @(Get-ChildItem -LiteralPath $Dir -File -ErrorAction SilentlyContinue |
-                 Where-Object { $_.Name -ne $mine })
-    if ($foreign.Count -gt 0) {
-        throw ("test: {0} also holds {1}, which this test did not create. The map browser picks by ROW, so the wrong map would load. Refusing to start." -f $Dir, (($foreign | ForEach-Object { $_.Name }) -join ', '))
-    }
-}
-
 # --- on-disk binary, BEFORE anything runs --------------------------------------
 $exePath = Join-Path $GameDir 'StarCraft.exe'
 if (-not (Test-Path -LiteralPath $exePath)) { throw "test: $exePath not found." }
@@ -371,6 +353,38 @@ try {
             ($only.Count -eq 1 -and $only[0] -eq $IDLE_ORDER -and $boxed.Orders[$only[0]] -eq $boxed.Live) `
             "(got $($boxed.Line))"
         Invoke-Stim -Tag 'stim-1' -PayerHpAfter ($MARINE_MAX_HP - $STIM_COST)
+
+        # THE REASON THE SPLIT IS THE ENGINE'S, measured rather than asserted by layout.
+        #
+        # An earlier version of this test claimed the pre-damaged tail landed outside the
+        # engine's twelve, so that a fan-out-side decision would have produced a different
+        # count. Cross-referencing the pointers showed that was simply untrue of the run:
+        # the engine held 8 damaged units and 4 healthy ones. The real evidence is better,
+        # and it is a set comparison rather than a story about layout:
+        #
+        #   * the set that gained the effect is EXACTLY the set that could afford it;
+        #   * that set is NOT the set beyond the cap -- they differ;
+        #   * and the engine's own twelve is itself split by the hit-point line, carrying
+        #     both units that stimmed and units that did not.
+        #
+        # No partition along the visible/overflow line can do that: it would have to take
+        # all twelve of the engine's units or none of them.
+        $engine = @(Get-ScSelectionGroup -LogPath $LogPath)
+        Assert-That "the engine's own selection was readable ($($engine.Count) slots)" ($engine.Count -eq 12)
+        $w = Get-World 'split'
+        $marines = @(Get-Marines $w)
+        $stimmed = @($marines | Where-Object { $_.Stim -gt 0 })
+        $notStimmed = @($marines | Where-Object { $_.Stim -eq 0 })
+        $visibleStimmed = @($stimmed | Where-Object { $engine -contains $_.Unit })
+        $visibleNot = @($notStimmed | Where-Object { $engine -contains $_.Unit })
+        Write-Host ("       of the engine's twelve: {0} stimmed, {1} not; of the {2} beyond the cap: {3} stimmed" -f `
+            $visibleStimmed.Count, $visibleNot.Count, ($marines.Count - $engine.Count),
+            ($stimmed.Count - $visibleStimmed.Count))
+        Assert-That 'the engine own twelve is SPLIT by the hit-point line, not taken whole' `
+            ($visibleStimmed.Count -gt 0 -and $visibleNot.Count -gt 0) `
+            "(stimmed $($visibleStimmed.Count), not $($visibleNot.Count) -- if either were 0 the split could also be read as following the cap)"
+        Assert-That 'and units beyond the cap gained the effect too' `
+            (($stimmed.Count - $visibleStimmed.Count) -gt 0)
     }
 
     Step 'Stim again: the cost is paid AGAIN, per unit, and the effect does not stack' {

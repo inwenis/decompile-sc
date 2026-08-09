@@ -35,7 +35,13 @@ does. That difference is the whole point of running both.
 param(
     [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
     [string]$LogDir = 'C:\sc-work\logs\022',
-    [int]$UnitCount = 6,
+    # MORE THAN TWELVE, on purpose. At six units the fan-out never fires, the overflow
+    # circles have nothing to draw and the HUD row never pages -- so the "fanout" arm would
+    # be stock plus four pass-through hooks, and the comparison would answer "does LOADING
+    # the plugin change acquisition" rather than "does our FAN-OUT change it". The user's
+    # report came from a session with more than twelve units selected, so the fixture has
+    # to be in that regime too. Asserted in game below, not just intended here.
+    [int]$UnitCount = 18,
     [ValidateSet('medic', 'marine')][string[]]$UnitTypes = @('medic', 'marine'),
     [ValidateSet('fanout', 'observe')][string[]]$Modes = @('fanout', 'observe'),
     # How long to stand next to the Sunken before deciding it is not going to attack.
@@ -109,24 +115,6 @@ function Get-MinDistance {
         if ($d -lt $best) { $best = $d }
     } }
     $best
-}
-
-# The shared-folder race has TWO halves and the wait before generation only covers one:
-# another worker can clear the folder, or drop a file into it, between the moment this
-# fixture is written and the moment the map browser is clicked -- and the browser picks by
-# ROW, so a foreign file silently changes which map loads. Re-checked here, as late as
-# possible, and named as the cause if it fails.
-function Assert-ScFixtureStillMine {
-    param([Parameter(Mandatory)][string]$Dir, [Parameter(Mandatory)][string]$MapPath)
-    $mine = Split-Path $MapPath -Leaf
-    if (-not (Test-Path -LiteralPath $MapPath)) {
-        throw "test: $mine is gone from $Dir between generation and launch -- another worker's cleanup took it. Regenerate; do not interpret this run."
-    }
-    $foreign = @(Get-ChildItem -LiteralPath $Dir -File -ErrorAction SilentlyContinue |
-                 Where-Object { $_.Name -ne $mine })
-    if ($foreign.Count -gt 0) {
-        throw ("test: {0} also holds {1}, which this test did not create. The map browser picks by ROW, so the wrong map would load. Refusing to start." -f $Dir, (($foreign | ForEach-Object { $_.Name }) -join ', '))
-    }
 }
 
 # One arm: one unit type, one plugin mode.
@@ -308,6 +296,19 @@ try {
                     (($arm.DistWatched -ge 0 -and $arm.DistWatched -le $SUNKEN_RANGE_PX) -or
                      ($arm.DistArrived -ge 0 -and $arm.DistArrived -le $SUNKEN_RANGE_PX) -or
                      $arm.Survivors -lt $UnitCount)
+                # The plugin arm must actually be exercising the feature, or it is not a
+                # test of the feature. Only meaningful in the fanout arm; the stock arm is
+                # supposed to hold twelve and cap.
+                if ($arm.Mode -eq 'fanout') {
+                    $fan = @(Get-Content -LiteralPath $arm.LogPath |
+                             Select-String -Pattern 'FANOUT start: cmd=0x14 .* units=(\d+)')
+                    $fanUnits = if ($fan.Count -gt 0) {
+                        [int]([regex]::Match($fan[-1].Line, 'units=(\d+)').Groups[1].Value)
+                    } else { 0 }
+                    Assert-That "[$($arm.Tag)] the move order was FANNED OUT past the cap ($fanUnits units)" `
+                        ($fanUnits -gt 12) `
+                        '(at or below twelve the plugin arm is stock plus pass-through hooks, and the comparison says nothing about the fan-out)'
+                }
                 Assert-That "[$($arm.Tag)] the world scan was not taken mid-edit" `
                     ($arm.Watched.Counts[0].Units -eq $arm.Watched.Counts[0].Recount -and $arm.Watched.Counts[0].Complete -eq 1)
                 # The fixture must START quiet, or "it attacked" says nothing about the walk.
@@ -344,9 +345,31 @@ try {
     if ($arms.ContainsKey('medic-observe')) {
         Step 'the stock arm must really be stock' {
             $o = $arms['medic-observe']
+            $f = $arms['medic-fanout']
             $obsLog = Get-Content -LiteralPath $o.LogPath
-            Assert-That 'no hook was installed and no command was intercepted in the observe arm' `
-                (@($obsLog | Select-String -Pattern 'FANOUT start|HOOK install').Count -eq 0)
+            $fanLog = Get-Content -LiteralPath $f.LogPath
+
+            # AN ABSENCE ASSERTION IS WORTH NOTHING UNLESS THE SAME PATTERN IS SHOWN TO
+            # MATCH SOMETHING. The first version of this looked for 'HOOK install', a
+            # string the plugin never writes (the real ones are `HOOK %s: installed at %p`
+            # and `HOOK: %d/%d installed`), so it passed on any log at all -- including a
+            # fanout one. Each pattern below is therefore checked POSITIVE against the
+            # plugin arm's log first, and only then required absent from the stock arm's.
+            foreach ($probe in @(
+                @{ What = 'a hook installation line'; Pattern = 'HOOK .*installed' },
+                @{ What = 'an intercepted command';   Pattern = 'CMD id=' },
+                @{ What = 'a fan-out';                Pattern = 'FANOUT start' }
+            )) {
+                $inFanout = @($fanLog | Select-String -Pattern $probe.Pattern).Count
+                $inObserve = @($obsLog | Select-String -Pattern $probe.Pattern).Count
+                Assert-That "the plugin arm DOES show $($probe.What) -- so its absence below means something" `
+                    ($inFanout -gt 0) "(pattern '$($probe.Pattern)' matched nothing in the fanout log either)"
+                Assert-That "the stock arm shows no $($probe.What)" ($inObserve -eq 0) `
+                    "(found $inObserve line(s) matching '$($probe.Pattern)')"
+            }
+            # And a POSITIVE statement about what the stock arm is, not just what it is not.
+            Assert-That 'the stock arm ran in observe mode' `
+                (@($obsLog | Select-String -Pattern 'mode=observe').Count -gt 0)
             Assert-That 'and it still produced the same oracle (WORLD lines)' `
                 (@($obsLog | Select-String -Pattern 'WORLD \[').Count -gt 0)
         }

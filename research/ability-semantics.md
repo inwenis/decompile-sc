@@ -217,11 +217,12 @@ Two additions to `tools/make_test_map.py` fix that, both asserted by its validat
 by arithmetic rather than assumed: `44*12 + 44*12 + 44 + 44 + 44*12 == 1672`, which is exactly
 the section's size in the template on disk. The generator refuses a template without it.
 
-The pre-damaged tail is the **tail** on purpose. The fan-out emits the engine's visible twelve
-LAST and the overflow chunks first, and the generator builds the block row-major from the
-top-left, so the damaged units land in the part of the box the engine does **not** hold. If a
-split ever came out along the visible/overflow line instead of along the hit-point line, that
-would be ours — the layout is what makes the two hypotheses produce different numbers.
+The tail is placed where the generator puts it and **nothing is claimed about where it lands
+in the engine's selection**. An earlier draft of this document asserted that the damaged units
+fell outside the engine's twelve, so that a cap-based split would have produced a different
+count. That was checked against the run's own pointers during review and it is false: the
+engine held **8 damaged units and 4 healthy ones**. The conclusion survives, but not for that
+reason — see §5, which settles it by comparing sets instead of by arguing about layout.
 
 ---
 
@@ -257,9 +258,22 @@ The assertions that make those numbers mean something, all of them per unit and 
    is satisfied by one unit paying everything.
 3. **Every unit that could not pay gained nothing and paid nothing**, and stayed at exactly the
    gate value.
-4. **The split is along hit points, not along the cap.** 24 payers and 12 skipped, while the
-   engine's own selection is 12 and the overflow is 24 — the two partitions are different, and
-   the one the engine's gate predicts is the one that happened.
+4. **The split is along hit points, not along the cap** — and this is a comparison of SETS,
+   made per unit by pointer, not an argument from how the fixture was laid out. Cross-
+   referencing `clientSelectionGroup` against the 36 per-unit lines of the published run:
+
+   | | |
+   |---|---|
+   | the set that gained the effect | **exactly** the set that could afford it (24 units) |
+   | the set that paid | **exactly** the same 24 |
+   | is that the set beyond the cap? | **no** — they differ |
+   | of the engine's own twelve | **4 stimmed, 8 did not** |
+   | of the 24 beyond the cap | 20 stimmed |
+
+   The last row is the one that closes it. A partition following the visible/overflow line
+   would have to take the engine's twelve **whole** or leave them whole; instead the twelve are
+   themselves cut 4/8, along the hit-point line, exactly like everything else. `test-stim-
+   fanout.ps1` now asserts that split directly rather than leaving it as prose.
 5. **Nothing drifts on its own**: 30 s of no input with the count still `0/36` and every hit
    point unchanged. Terran units do not regenerate, which is why the fixture is Marines and not
    a Zerg unit that would climb back over the gate while the test watched.
@@ -280,21 +294,22 @@ keypress produced only the periodic `0x37`.
 
 So there are two gates, not one: the receive-side per-unit gate in `0x004C2F30`, and a
 send-side one in the client's own command card that suppresses the ability when the selection
-cannot pay for it. This project had only known about the first. It matters for the fan-out
-because **the send side sees the engine's twelve, not the shadow list**: a >12 selection whose
-visible twelve are all too poor to pay will not emit the command at all, even though units past
-the cap could have paid. That is a real, if narrow, difference between what the player sees and
-what they get — recorded here rather than smoothed over, and not fixed, because it is the
-engine's own behaviour and this task audits rather than changes it.
+cannot pay for it. This project had only known about the first. What the send side
+consults is an **inference, not a measurement**: presumably the engine's own twelve rather than
+the shadow list, which would mean a >12 selection whose visible twelve are all too poor to pay
+emits nothing even though units past the cap could have paid. The one observation available
+cannot separate the two, because by the fourth press all 36 units were identical. Recorded here
+as the open question it is — §9 lists it as such — and not fixed either way, because the gate
+itself is the engine's own behaviour and this task audits rather than changes it.
 
 ### 5.3 The energy half, in game
 
 Not delivered as an in-game measurement. The static answer (§3) is complete — per-unit gate,
 per-unit deduction, skip on failure — and the fixture that would prove it live now exists
 (`--tech-researched personnel-cloaking` plus `--damaged-energy`), but the run needs the Ghost's
-cloak keypress to actually emit `0x21`, and it did not in the attempts made here (§7). What is
-missing is one line of knowledge — the key or the `WM_COMMAND` id that the Cloak button carries
-— not a fixture and not a mechanism. A follow-up task can pick it up cheaply.
+Cloak button to actually emit `0x21`, and no attempt here managed that (§7.1, where the reason
+is recorded as unknown). What is missing is one piece of knowledge about the command card — not
+a fixture and not a mechanism.
 
 ---
 
@@ -340,9 +355,11 @@ Four things make the table mean something:
 Three vanilla facts, all visible in this run's per-unit data, which together make a Sunken look
 idle when it is not:
 
-- **It shoots one target at a time.** In the Medic arms exactly one Medic was taking damage at
-  any moment (`hp=12168` on one unit, `hp=15360` on the other five); the rest stood in range
-  untouched.
+- **It appears to shoot one target at a time.** In the Medic arms exactly one Medic was taking
+  damage at any moment (`hp=12168` on one unit, `hp=15360` on the other five). The fixture
+  measures only the CLOSEST unit's distance, so "the other five were in range and ignored" is
+  NOT established — "only one of them was in range" is an alternative this run cannot exclude.
+  What is established is that five of six Medics were undamaged while one was being shot.
 - **Medics heal each other**, and the healer is visible doing it in the same scan — one Medic
   on order `0xB0` with its energy down at 8412 while the others sit at 51200. The damage is
   repaired between shots, so the health bar being watched may never look low.
