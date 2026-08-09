@@ -489,7 +489,9 @@ Write-Host ''
 Write-Host '[final] the run must balance'
 $left = if ($gamePid -gt 0) { Get-Process -Id $gamePid -ErrorAction SilentlyContinue } else { $null }
 Assert-That 'the game process this test started is gone' ($KeepOpen -or $null -eq $left)
-Assert-That 'the generated map was cleaned up' ($KeepOpen -or -not (Test-Path -LiteralPath $mapDir))
+# This test's own fixture, not the folder: the folder is shared with other workers and
+# this suite no longer removes it (AGENTS.md rule 4 -- see the note at the generation step).
+Assert-That 'the generated map was cleaned up' ($KeepOpen -or -not (Test-Path -LiteralPath $mapPath))
 
 $hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
 Write-Host "  StarCraft.exe SHA-256 after:  $hashAfter"

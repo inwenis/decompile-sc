@@ -447,8 +447,22 @@ function Wait-ScTestMapDirFree {
             $Dir, (($foreign | ForEach-Object { $_.Name }) -join ', '))
         Start-Sleep -Seconds 20
     }
-    # Only ever this test's own file.
-    if (Test-Path -LiteralPath $MyMapPath) { Remove-Item -LiteralPath $MyMapPath -Force }
+    # Only ever this test's own file -- and it can be LOCKED, because two suites in this
+    # directory generate a fixture with the same name and another worker's game may have it
+    # open. Waiting for the handle to go is right; throwing on the first attempt turns a
+    # transient into a failed run, and forcing it is not an option against a file a running
+    # game is reading.
+    $deleteDeadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    while (Test-Path -LiteralPath $MyMapPath) {
+        try { Remove-Item -LiteralPath $MyMapPath -Force -ErrorAction Stop; break }
+        catch {
+            if ((Get-Date) -ge $deleteDeadline) {
+                throw "drive-game: $mine in $Dir is locked by another process and could not be replaced within $TimeoutMinutes minute(s) -- a game is still reading it. Not forcing."
+            }
+            Write-Host "       waiting for $mine to be released (another process has it open)"
+            Start-Sleep -Seconds 15
+        }
+    }
 }
 
 function Get-ScRegionFingerprint {
