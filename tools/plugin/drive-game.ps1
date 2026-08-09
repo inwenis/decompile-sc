@@ -266,7 +266,8 @@ function Assert-ScDrivable {
 function Send-ScMouseMove {
     <#
     .SYNOPSIS
-    One posted WM_MOUSEMOVE. Needs the window FOREGROUND -- see Assert-ScWindowActive.
+    One posted WM_MOUSEMOVE. Does NOT need the window foreground (task 027) -- it must
+    only be a live, non-minimised window. See Assert-ScWindowActive.
     #>
     [CmdletBinding()]
     param(
@@ -290,15 +291,14 @@ function Send-ScClick {
     own and draws it; moving first means the down/up pair land where the game already
     believes the pointer is, which is how a real mouse behaves.
 
-    WHICH IS WHY THIS ACTIVATES THE WINDOW (task 023, consolidating task 022's finding).
-    The down/up pair carry their own lParam and land whatever the foreground window is --
-    but the MOVE ahead of them is dropped while the window is in the background, so the
-    game's own tracked cursor stays where the last processed message left it. Any handler
-    that reads that tracked position rather than the message's own lParam then acts on the
-    WRONG POINT, silently. The minimap centring click is the one that was caught doing it
-    (task 022 listed it as one of three symptoms of the same root); rather than guess which
-    other handlers do, every primitive that posts a move now goes through
-    Assert-ScWindowActive. -NoActivate is for a caller that has already done it.
+    The game's window procedure stores that move's x/y unconditionally, foreground or not
+    (task 027 -- see Set-ScWindowActive for the decompiled case and the live measurement),
+    so this works with the game sitting behind whatever the user is doing. Tasks 022/023
+    raised the window here; task 027 removed that, because the raise stole the user's
+    foreground window and confined their mouse without buying the input.
+
+    Assert-ScWindowActive is still called: a minimised or dead window DOES swallow posted
+    mouse messages. -NoActivate is for a caller that has already checked.
     #>
     [CmdletBinding()]
     param(
@@ -356,19 +356,12 @@ function Send-ScDrag {
         [switch]$NoActivate
     )
     Assert-ScDrivable -Hwnd $Hwnd
-    # A DRAG IS MADE OF MOUSE MOVES, AND THE GAME DROPS POSTED MOVES WHILE ITS WINDOW IS
-    # NOT FOREGROUND (task 022 -- see Set-ScWindowActive). The down and the up still land,
-    # so the box opens and closes at the same point and the drag selects NOTHING, silently:
-    # no error, no warning, just an empty selection. Task 021 lost 25 assertions across two
-    # suites to exactly that, in a sweep where three other suites boxed fine -- which is the
-    # intermittency this explains. Activation is part of dragging, not an extra;
-    # -NoActivate is for a caller that has already done it.
+    # A DRAG IS MADE OF MOUSE MOVES, and the posted moves reach the engine whether or not
+    # the window is foreground (task 027 measured it; tasks 022/023 believed otherwise and
+    # raised the window here, which is what stole the user's focus on every run). What
+    # still swallows them is a MINIMISED or dead window, which is what this gate catches.
+    # -NoActivate is for a caller that has already checked.
     if (-not $NoActivate) {
-        # LOUD, like every other move-dependent primitive. A drag that runs without
-        # foreground selects nothing and reports nothing -- which is the failure this
-        # activation exists to prevent, and the one that cost another task 25 assertions.
-        # Five suites outside task 022 depend on this primitive, so silence here is the
-        # worst place for it.
         Assert-ScWindowActive -Hwnd $Hwnd -Because 'a drag, which is made of mouse MOVES and'
     }
     if ($Steps -lt 2) { $Steps = 2 }
@@ -1201,9 +1194,11 @@ function Set-ScGameType {
     The Game Type combo is the single most consequential control in this whole harness --
     get it wrong and the fixture loads as a melee game, the map's placed units are never
     created, and the failure surfaces minutes later as "the wrong units are on the map".
-    It is also the least reliable one: it remembers what this machine last used (so a
-    no-op pick can look like a success for months), and the pick needs the window
-    foreground (Set-ScWindowActive), which another process can take away mid-drag.
+    It is also the least reliable one: it remembers what this machine last used, so a
+    no-op pick can look like a success for months. (Task 022 attributed that no-op to the
+    window not being foreground; task 027 measured otherwise and removed the raise -- see
+    Set-ScWindowActive. The verified-change check below is what actually makes the pick
+    trustworthy, and it is unchanged.)
 
     So this does not pick and hope. It picks a KNOWN OTHER entry first, fingerprints the
     map-information panel, then picks the wanted entry and requires the panel to have
@@ -1282,41 +1277,54 @@ function Wait-ScNoGameRunning {
 function Set-ScWindowActive {
     <#
     .SYNOPSIS
-    Make the game window the foreground window. Needed by EVERY primitive that posts a
-    mouse move -- click, drag, dropdown pick.
+    Make the game window the foreground window. NOT needed to drive it -- see
+    Assert-ScWindowActive, which no longer calls this. Kept as an explicit, opt-in tool.
     .DESCRIPTION
-    THE GAME IGNORES A POSTED WM_MOUSEMOVE WHEN ITS WINDOW IS NOT ACTIVE. Posted clicks
-    are processed either way, which is why every other function in this file works with
-    the window in the background and why this was invisible until task 022 went looking
-    for it.
+    THE HARNESS DOES NOT RAISE THE GAME ANY MORE (task 027). Every unattended run used to
+    call this from every click, drag and dropdown pick, which yanked the user's active
+    window away while they worked -- the symptom that opened task 027.
 
-    Measured, on the Create Game screen (work/scratch/022/probe-gametype*.ps1, frames
-    under C:\sc-work\logs\022-probe*-frames):
+    Tasks 022/023 believed the raise was load-bearing ("the game ignores a posted
+    WM_MOUSEMOVE while its window is not foreground"). Task 027 measured it two ways and
+    that is not what the game does:
 
-      * posting WM_MOUSEMOVE to (500,200) with the window inactive leaves the game's own
-        drawn cursor exactly where the last posted CLICK left it -- the motion is not
-        merely unhighlighted, it is not processed at all;
-      * so a dropdown opened by a posted button-down highlights whatever row the cursor
-        was on when it opened, never moves, and the button-up commits the value that was
-        already selected. The pick silently does nothing;
-      * the same posted sequence, with the window made foreground first, sets the value.
+      * STATIC (Ghidra, StarCraft.exe FUN_004d1d70, the window procedure). Its
+        WM_MOUSEMOVE case is three unconditional stores and a return -- no foreground
+        check, no active check:
+            case 0x200: DAT_006cddc0 |= 1;                  /* "the mouse moved" bit */
+                        _DAT_006cddc4 = lParam & 0xffff;    /* x, clamped to 0x27f  */
+                        _DAT_006cddc8 = lParam >> 16;       /* y, clamped to 0x1df  */
+                        return 1;
+        The binary's only GetForegroundWindow call site (0x004eddf0) is a diagnostic and
+        is nowhere near the input path.
+      * LIVE (tools/plugin/probe-quiet-input.ps1, main menu, one launch). With the USER'S
+        window holding the foreground the whole time, a posted move onto the Single Player
+        button changed that button's region (FF975A03A546737B -> 271D215ABFB1EF45), and
+        GetForegroundWindow never changed. So the move registered AND was drawn while the
+        game was in the background.
 
-    That silent no-op is the dangerous part: the Game Type combo remembers the last value
-    this machine used, so a suite whose pick did nothing still passed for as long as that
-    remembered value happened to be the one it wanted. Task 022 found it the other way
-    round -- the remembered value was "Free For All", every generated fixture loaded as a
-    melee game, and the placed units were never created.
+    What activation actually does is WORSE than useless here. The window procedure's
+    WM_ACTIVATEAPP case (case 0x1c) runs 0x004d1750 and 0x00421730, which between them
+    call SetCursor/GetCursorPos/SetCursorPos and ClipCursor(window rect) -- so every raise
+    re-syncs the game's cursor to the PHYSICAL mouse and confines the user's mouse to the
+    game window. The probe caught the re-sync directly: after the raise the button region
+    went straight back to its parked value (271D... -> FF975A03A546737B), i.e. the raise
+    threw away the position the posted move had just set.
+
+    The other thing 022 read as an input failure was a drawing one: the game gates
+    DRAWING on activation (0x0041d710 returns 0 while DAT_0051bfa8, written by that same
+    WM_ACTIVATEAPP case, is 0), so a frame taken while the window is inactive can be stale
+    on a stock launch. Under the windowed-mode helper every suite injects it is not: the
+    probe fingerprinted the animated main menu 3 s apart with the window in the background
+    and got two different frames, so the pixel oracles (Get-ScRegionFingerprint, the
+    browser-row reads, Set-ScGameType) work in the background too.
+
+    So this function stays -- for a human who wants to watch a run, and as the thing
+    -RaiseWindow reaches for -- but nothing in the harness calls it by default.
 
     SetForegroundWindow alone is refused for a background process (it returns TRUE and
     flashes the taskbar instead), so this goes through the documented AttachThreadInput
     dance and then VERIFIES the result rather than trusting the return value.
-
-    This is the one place in this file that reaches outside the target window's message
-    queue. It steals focus, which is visible to anyone at the machine. Task 023 widened
-    the callers from "the dropdowns" to "everything that posts a move", which is every
-    click -- so the ALREADY-FOREGROUND case is now the common one and must be free: it
-    returns without the settle, because nothing changed and there is nothing to settle.
-    Paying 400ms on every click of a menu walk would add minutes to every suite.
     #>
     [CmdletBinding()]
     param(
@@ -1341,32 +1349,45 @@ function Set-ScWindowActive {
 function Assert-ScWindowActive {
     <#
     .SYNOPSIS
-    Set-ScWindowActive, but it THROWS instead of returning false.
+    The gate every move-dependent primitive goes through. It NO LONGER RAISES THE WINDOW
+    (task 027) -- it only refuses to post into a window that cannot receive the message.
     .DESCRIPTION
-    THE one gate every move-dependent primitive goes through, so that "the window was not
-    foreground" can never be a silent no-op anywhere in this harness.
+    Tasks 022/023 made this raise the game window before every posted move, because a
+    dropped move is a silent no-op and that was believed to be the cause. Task 027 measured
+    the mechanism instead of the symptom -- see Set-ScWindowActive for the decompiled
+    WM_MOUSEMOVE case and the live probe -- and the finding is that posted moves register
+    while the window is in the background. The raise was not buying the input; it was
+    stealing the user's foreground window on every click of every unattended run, and
+    (through the game's own WM_ACTIVATEAPP handler, which calls ClipCursor) CONFINING THE
+    USER'S MOUSE to the game window while it ran.
 
-    Task 022 measured the mechanism (Set-ScWindowActive) and fixed the two primitives that
-    were bleeding at the time. Task 023 consolidated it, because the three symptoms it was
-    attributed to -- the Game Type pick committing the wrong value, the minimap centring
-    click missing, and Send-ScDrag selecting nothing -- share one property: each is a
-    handler that reads the game's OWN tracked cursor position, which a dropped move leaves
-    stale. Any primitive posting a move can hit it, so none of them opts out by default.
+    So the gate stays, and what it gates changed: a MINIMISED or dead window really does
+    swallow posted mouse messages (task 012 probe 2), and that is what Assert-ScDrivable
+    catches. Nothing here touches the foreground.
+
+    -RaiseWindow is the opt-in escape hatch for a human who wants to watch a run. It is
+    never set by the suites; if you find yourself reaching for it to make a test pass,
+    the test is telling you something else is wrong.
 
     -Because is glued into the message so the failure names the operation that refused,
-    not just the fact that a window is not in front.
+    not just the fact that a window cannot take input.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][IntPtr]$Hwnd,
         [string]$Because = 'this input',
-        [int]$Tries = 3
+        [int]$Tries = 3,
+        # Opt-in only. $env:SCDRIVE_RAISE=1 turns it on for a whole run without editing
+        # a suite -- for watching a run by hand, not for unattended ones.
+        [switch]$RaiseWindow
     )
+    Assert-ScDrivable -Hwnd $Hwnd
+    if (-not ($RaiseWindow -or $env:SCDRIVE_RAISE -eq '1')) { return }
     if (Set-ScWindowActive -Hwnd $Hwnd -Tries $Tries) { return }
-    throw ("drive-game: could not bring the game window to the foreground, and $Because " +
-           'is IGNORED while the window is in the background (see Set-ScWindowActive) -- ' +
-           'it would do nothing and report nothing. Refusing to post it. Close whatever ' +
-           'is holding the foreground (a modal dialog, an installer, a lock screen) and re-run.')
+    throw ("drive-game: -RaiseWindow was asked for and the game window could not be " +
+           "brought to the foreground before $Because. Close whatever is holding the " +
+           'foreground (a modal dialog, an installer, a lock screen) and re-run, or drop ' +
+           '-RaiseWindow -- the harness does not need it.')
 }
 
 function Send-ScCommand {
@@ -1454,11 +1475,27 @@ function Send-ScDropdownPick {
     client: first entry 16px below the closed box's own centre line, 15px apart after
     that. -Index 0 is that first entry.
 
-    IT ALSO NEEDS THE WINDOW TO BE ACTIVE (task 022): the mouse MOVE that walks down the
-    open list is dropped when the window is in the background, so the pick becomes a
-    silent no-op that leaves the previous value in place. Set-ScWindowActive explains the
-    measurement. Activation happens here rather than at every call site, so that every
-    existing caller is fixed by having this function do it; -NoActivate opts out.
+    THIS IS THE ONE INPUT IN THE HARNESS THAT REALLY DOES NEED THE FOREGROUND, and task
+    027 measured it three ways rather than assuming it (probe-quiet-dropdown.ps1, one
+    launch, all three arms on the Create Game screen, using Set-ScGameType's own
+    verified-change oracle):
+
+      A  background, no raise                                  -> pick did NOT take
+      B  background + AttachThreadInput(game) + SetActiveWindow -> pick did NOT take
+      C  foreground                                             -> pick took, attempt 1
+
+    So the cheap "share the input queue without taking the foreground" answer is dead for
+    this control, on measurement and not on theory. The likely mechanism: this is a
+    press-and-hold control and the game calls SetCapture on button-down (0x004d1a76), and
+    Windows only grants the capture to the FOREGROUND window. A world drag-box is also a
+    held-button walk and works fine in the background, so it is this dialog control's
+    handling, not held buttons in general.
+
+    Everything else in this file works with the game in the background (task 027 removed
+    the raise from Assert-ScWindowActive). This function therefore raises for the length
+    of ONE pick and then HANDS THE FOREGROUND BACK to whatever had it, so a suite that
+    picks a game type costs the user about two seconds of their window during the menu
+    walk instead of the entire run. -NoActivate opts out of both.
     #>
     [CmdletBinding()]
     param(
@@ -1486,23 +1523,50 @@ function Send-ScDropdownPick {
         [int]$OpenMs = 700, [int]$HoverMs = 400
     )
     Assert-ScDrivable -Hwnd $Hwnd
+    # Whose window this is about to be taken from, so it can be given back.
+    $prevFg = [IntPtr]::Zero
     if (-not $NoActivate) {
-        # Loud, not silent: a pick made in the background is the failure mode this
-        # whole comment block exists about, and it would otherwise be discovered as
-        # a wrong unit type several minutes later.
-        Assert-ScWindowActive -Hwnd $Hwnd -Because 'a dropdown pick, whose walk down the open list is a mouse MOVE and'
+        $prevFg = [ScDrive.Native]::GetForegroundWindow()
+        # Loud, not silent: a pick made in the background is a measured no-op (see above)
+        # and would otherwise be discovered as a wrong unit type several minutes later.
+        Assert-ScWindowActive -Hwnd $Hwnd -RaiseWindow `
+            -Because 'a dropdown pick, whose walk down the open list needs the capture the game only gets in the foreground, and'
     }
-    $itemY = $Y + $FirstOffset + $Index * $Pitch
-    $atBox  = ConvertTo-ScLParam $X $Y
-    $atItem = ConvertTo-ScLParam $X $itemY
-    [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]0, $atBox)
-    Start-Sleep -Milliseconds 60
-    [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_LBUTTONDOWN, [IntPtr]$script:MK_LBUTTON, $atBox)
-    Start-Sleep -Milliseconds $OpenMs
-    [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]$script:MK_LBUTTON, $atItem)
-    Start-Sleep -Milliseconds $HoverMs
-    [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_LBUTTONUP, [IntPtr]0, $atItem)
-    if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
+    try {
+        $itemY = $Y + $FirstOffset + $Index * $Pitch
+        $atBox  = ConvertTo-ScLParam $X $Y
+        $atItem = ConvertTo-ScLParam $X $itemY
+        [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]0, $atBox)
+        Start-Sleep -Milliseconds 60
+        [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_LBUTTONDOWN, [IntPtr]$script:MK_LBUTTON, $atBox)
+        Start-Sleep -Milliseconds $OpenMs
+        [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]$script:MK_LBUTTON, $atItem)
+        Start-Sleep -Milliseconds $HoverMs
+        [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_LBUTTONUP, [IntPtr]0, $atItem)
+        if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
+    }
+    finally {
+        # Give the user their window back, on every path including a throw. Deactivating
+        # also makes the game call ClipCursor(NULL) (0x00421730), which releases the mouse
+        # confinement its own WM_ACTIVATEAPP handler applied -- so the borrow ends cleanly
+        # rather than leaving the user's cursor trapped in a 640x480 box.
+        #
+        # NEVER FATAL. By the time this runs the pick has already happened; if the window
+        # that had the foreground has closed, or something else refuses to give it up, that
+        # is a cosmetic loss and must not fail an otherwise good suite.
+        if ($prevFg -ne [IntPtr]::Zero -and $prevFg -ne $Hwnd) {
+            try {
+                if ([ScDrive.Native]::IsWindow($prevFg)) {
+                    if (-not [ScDrive.Native]::MakeForeground($prevFg)) {
+                        Write-Warning 'drive-game: could not hand the foreground back after the dropdown pick; the game may be left in front. The pick itself succeeded.'
+                    }
+                }
+            }
+            catch {
+                Write-Warning "drive-game: handing the foreground back after the dropdown pick failed ($($_.Exception.Message)). The pick itself succeeded."
+            }
+        }
+    }
 }
 
 function Get-ScMinimapPoint {
@@ -1820,4 +1884,142 @@ function Get-ScLogLineCount {
     param([Parameter(Mandatory)][string]$LogPath)
     if (-not (Test-Path -LiteralPath $LogPath)) { return 0 }
     @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue).Count
+}
+
+# --- the game's own dialogs (task 027) ---------------------------------------
+#
+# The plugin walks the engine's active-dialog list every tick and logs one line per
+# CHANGE of the set (scplugin.cpp ScanDialogs, list head SC_VA_DIALOG_LIST). That line
+# is what makes "is the tips dialog up, and where is its OK button" answerable without
+# a hardcoded point -- the same reason every map-browser row is computed.
+#
+# Line shape (one dialog per ' | ' chunk, controls inline):
+#   DIALOGS n=13  dlg='Tips_Dlg' rect=128,32,511,287 ctrl='o.O.K' rect=20,216,123,243 type=1 flags=0x...
+#
+# Control bounds are LOCAL to their dialog's origin -- the same convention the HUD row
+# uses -- so a client pixel is dialog.left + ctrl.left.
+
+function Get-ScDialogs {
+    <#
+    .SYNOPSIS
+    The game's currently active dialogs, as objects, from the newest DIALOGS log line.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$LogPath)
+
+    if (-not (Test-Path -LiteralPath $LogPath)) { return @() }
+    $line = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
+              Select-String -Pattern 'DIALOGS n=' | Select-Object -Last 1)
+    if ($line.Count -eq 0) { return @() }
+    $text = $line[0].Line
+
+    $out = @()
+    foreach ($chunk in ($text -split ' \| ')) {
+        $m = [regex]::Match($chunk, "dlg='([^']*)' rect=(-?\d+),(-?\d+),(-?\d+),(-?\d+)")
+        if (-not $m.Success) { continue }
+        $ctrls = @()
+        foreach ($c in [regex]::Matches($chunk, "ctrl='([^']*)' rect=(-?\d+),(-?\d+),(-?\d+),(-?\d+) type=(\d+) flags=0x([0-9A-Fa-f]+)")) {
+            $ctrls += [pscustomobject]@{
+                Text  = $c.Groups[1].Value
+                Left  = [int]$c.Groups[2].Value; Top    = [int]$c.Groups[3].Value
+                Right = [int]$c.Groups[4].Value; Bottom = [int]$c.Groups[5].Value
+                Type  = [int]$c.Groups[6].Value
+                Flags = [Convert]::ToUInt32($c.Groups[7].Value, 16)
+            }
+        }
+        $out += [pscustomobject]@{
+            Name  = $m.Groups[1].Value
+            Left  = [int]$m.Groups[2].Value; Top    = [int]$m.Groups[3].Value
+            Right = [int]$m.Groups[4].Value; Bottom = [int]$m.Groups[5].Value
+            Controls = $ctrls
+        }
+    }
+    # Streamed, not returned as one array object: `,$out` would hand the whole array to
+    # a downstream Where-Object AS A SINGLE ITEM, and `$_.Name -match ...` on an array is
+    # truthy whenever any element matches -- so every filter would "match" and return the
+    # entire list. Cost one live run to find.
+    $out
+}
+
+function Wait-ScDialog {
+    <#
+    .SYNOPSIS
+    Wait for a dialog whose name matches -Name to be active (or, with -Gone, to not be).
+    Returns the dialog object (or $null with -Gone). Returns $null on timeout rather
+    than throwing -- the caller decides whether an absent dialog is a failure.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$LogPath,
+        [Parameter(Mandatory)][string]$Name,
+        [int]$TimeoutSec = 15,
+        [switch]$Gone
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ($true) {
+        $hit = @(Get-ScDialogs -LogPath $LogPath | Where-Object { $_.Name -match $Name })
+        if ($Gone) { if ($hit.Count -eq 0) { return $null } }
+        elseif ($hit.Count -gt 0) { return $hit[0] }
+        if ((Get-Date) -ge $deadline) { return $(if ($Gone) { $hit[0] } else { $null }) }
+        Start-Sleep -Milliseconds 300
+    }
+}
+
+function Dismiss-ScTipsDialog {
+    <#
+    .SYNOPSIS
+    Close the in-game "StarCraft Tips" dialog by clicking ITS OWN OK button, and prove
+    it is gone.
+    .DESCRIPTION
+    Every in-game suite used to do this with one unconditional `Send-ScClick -X 200
+    -Y 261` and no check at either end: nothing said a dialog was there, and nothing
+    said it went away. That is the map-browser row-by-number defect in a different
+    costume -- a fixed point that is right until the day it is not, failing silently
+    into the game world underneath.
+
+    So this reads the engine's own dialog list (the plugin's DIALOGS line) and:
+      1. waits for `Tips_Dlg` to be up -- if it never appears, there is nothing to
+         dismiss and that is a normal, reported outcome, not a failure;
+      2. computes the OK button's centre from the button's OWN bounds, which are local
+         to the dialog's origin (client = dialog.left + ctrl.left), and clicks that;
+      3. waits for the dialog to leave the list, and THROWS if it is still there --
+         a tip dialog left up eats every later click in the run.
+
+    NOT the registry. The dialog has a "Show Tips at Startup" checkbox wired to
+    HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft, which is live user state and
+    AGENTS.md hard rule 5 territory (a worker wiped that key once already). This
+    dismisses the dialog for THIS run and leaves the user's setting exactly as it was.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][IntPtr]$Hwnd,
+        [Parameter(Mandatory)][string]$LogPath,
+        [int]$TimeoutSec = 20
+    )
+    $dlg = Wait-ScDialog -LogPath $LogPath -Name 'Tips_Dlg' -TimeoutSec $TimeoutSec
+    if (-not $dlg) {
+        Write-Host '       tips dialog: never appeared (nothing to dismiss)'
+        return $false
+    }
+
+    # 'o.O.K' -- the plugin replaces the hotkey markers the engine stores in the
+    # string with '.', so the match is on the letters that survive that.
+    $ok = @($dlg.Controls | Where-Object { ($_.Text -replace '[^A-Za-z]', '') -cmatch 'OK' })
+    if ($ok.Count -eq 0) {
+        throw ("drive-game: the tips dialog is up but has no OK control in the engine's own " +
+               "control list (controls: $(($dlg.Controls | ForEach-Object { $_.Text }) -join ', ')). " +
+               'Refusing to click a guessed point.')
+    }
+    $x = $dlg.Left + [int](($ok[0].Left + $ok[0].Right) / 2)
+    $y = $dlg.Top  + [int](($ok[0].Top + $ok[0].Bottom) / 2)
+    Write-Host ("       tips dialog: up at {0},{1}; clicking its OK at {2},{3}" -f $dlg.Left, $dlg.Top, $x, $y)
+    Send-ScClick -Hwnd $Hwnd -X $x -Y $y
+
+    $still = Wait-ScDialog -LogPath $LogPath -Name 'Tips_Dlg' -TimeoutSec 10 -Gone
+    if ($still) {
+        throw ('drive-game: the tips dialog is STILL up after clicking its OK button. ' +
+               'Every later click in this run would land on it instead of the game.')
+    }
+    Write-Host '       tips dialog: dismissed and gone'
+    return $true
 }
