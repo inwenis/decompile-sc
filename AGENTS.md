@@ -54,6 +54,9 @@ Rules, all three, no exceptions:
 3. **Refuse to start if any `.scx` you did not create is present** — whether or not a game
    is running. Process-liveness is NOT a sufficient test: the other worker's run may begin
    seconds after yours generates its fixture.
+4. **Re-check immediately before clicking the browser row**, not only at generate time. The
+   folder can be cleared or added to in between — task 022 lost a run to exactly that. Throw
+   with the cause named rather than playing whatever is there.
 
 Rule 3 is what prevents the silent failure — playing someone else's map produces internally
 consistent nonsense, which is worse than a crash.
