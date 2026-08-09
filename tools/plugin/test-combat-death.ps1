@@ -1107,7 +1107,12 @@ foreach ($id in $script:launchedPids) {
 Assert-That 'no game process this test started is left running' `
     ($KeepOpen -or $stillUp.Count -eq 0) `
     "(launched $($script:launchedPids -join ' '); still up: $($stillUp -join ' '))"
-Assert-That 'the generated maps were cleaned up' ($KeepOpen -or -not (Test-Path -LiteralPath $mapDir))
+# This test's own fixtures, not the folder: the folder is shared with other workers and this
+# suite no longer removes it (AGENTS.md rule 4 -- see the note at the generation step).
+$leftOver = @('probe', 'combat') | ForEach-Object { Join-Path $mapDir "$_.scx" } |
+            Where-Object { Test-Path -LiteralPath $_ }
+Assert-That 'the generated maps were cleaned up' ($KeepOpen -or $leftOver.Count -eq 0) `
+    "(left behind: $($leftOver -join ', '))"
 
 $hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
 Write-Host "  StarCraft.exe SHA-256 after:  $hashAfter"
