@@ -66,6 +66,70 @@
 #define SC_MAX_PLAYERS     8
 
 // ---------------------------------------------------------------------------
+// CONTROL GROUPS -- derived by task 021 from StarCraft.exe 1.16.1 itself.
+// Full evidence, with decompiles, in research/control-groups.md; the committed
+// instruction table is research/data/hotkey-xrefs.tsv.
+// ---------------------------------------------------------------------------
+
+// u32[8][18][12] -- the control-group store, holding StoredUnit TAGS
+// ((uniqueness << 11) | unitIndex), not CUnit*. Shape confirmed twice over in
+// binary-selection-map.md 3.5 (a 1728-dword REP STOSD, and the 864/48 strides) and
+// again here by hotkeySaveOrAdd's own row arithmetic, `(group + activePlayerId*0x12)
+// * 0xc` dwords off this base (0x004965E9..0x004965F5).
+//
+// Groups 0..9 are the Ctrl+N groups; 10..17 are the engine's OWN alt-click
+// recent-selection ring (binary-selection-map.md 5.2: CMDRECV_Select picks an LRU
+// slot and `ADD AL,0xa` before saving). The plugin mirrors 0..9 and never touches
+// 10..17.
+//
+// This plugin only ever READS this array (the new-game detection in sc_fanout's
+// shadow-group block). Nothing here writes it.
+#define SC_VA_SELECTION_HOTKEYS 0x0057FE60u
+#define SC_HOTKEY_GROUPS_PER_PLAYER 18
+#define SC_HOTKEY_SLOTS_PER_GROUP   12
+
+// u16[8][8] -- when each recent-selection slot was last used, the LRU key
+// 0x00496560 scans backwards over. Cleared beside the hotkey array by both
+// resets. Listed for completeness; the plugin does not read it.
+#define SC_VA_RECENT_SELECTION_TIMES 0x0063FE40u
+
+// The two globals implementing 500 ms double-tap-to-centre, immediately behind
+// clientSelectionGroup2 (binary-selection-map.md 3.2). Every 0x13-emitting site in
+// the key dispatcher writes 0xFF to the group id; listed so a reader of that
+// dispatcher can recognise them. Not read or written here.
+#define SC_VA_LAST_HOTKEY_TAP_TIME 0x0059727Cu
+#define SC_VA_LAST_HOTKEY_GROUP_ID 0x00597280u
+
+// Wire command 0x13 is three bytes: id, action, group -- built at 0x004C07BF
+// (`MOV byte ptr [EBP-4],0x13` / `[EBP-3],AL` / `[EBP-2],BL`). The action values are
+// the cases CMDRECV_Hotkey (0x004C2870) dispatches on.
+#define SC_HOTKEY_CMD_BYTES 3
+
+// The action values, from CMDRECV_Hotkey's own dispatch (0x004C2870):
+//   [+1]==0 -> 0x004965D0(1)  clear the group's 12 slots, then fill  = ASSIGN (Ctrl+N)
+//   [+1]==1 -> 0x00496940(g)                                          = RECALL (N)
+//   [+1]==2 -> 0x004965D0(0)  append at the first free slot, dedup    = ADD
+// The key dispatcher 0x004846E0 carries three families of ten sites, one per action:
+// ten `13 00 g` (via the shared tail at 0x004849EB, BL = 0), ten inline `13 02 g`
+// (0x004848A2 and its nine siblings), and ten recall sites that call 0x004967E0 then
+// 0x00496B40(g).
+#define SC_HOTKEY_ASSIGN 0
+#define SC_HOTKEY_RECALL 1
+#define SC_HOTKEY_ADD    2
+
+// The engine's own functions on this path. NOT hooked or called by this plugin --
+// the shadow-group feature adds no hook at all -- but every claim the code makes
+// about ordering names one of them, so they are recorded here with the rest.
+#define SC_VA_HOTKEY_CLEAR            0x004965A0u  // REP STOSD over both arrays
+#define SC_VA_HOTKEY_SAVE_OR_ADD      0x004965D0u  // the store; arg 0 = add, 1 = assign
+#define SC_VA_HOTKEY_DOUBLE_TAP       0x004967E0u  // centre the view on a re-tap
+#define SC_VA_HOTKEY_RECALL_RECV      0x00496940u  // receive side: writes playersSelections
+#define SC_VA_HOTKEY_KEY_HANDLER      0x00496B40u  // client side: 0x0049AE40 then CMDACT_HotkeyUnit
+#define SC_VA_CMDACT_HOTKEY_UNIT      0x004C07B0u  // builds and queues the 3-byte 0x13
+#define SC_VA_CMDRECV_HOTKEY          0x004C2870u  // action dispatch, group guard `CMP AL,0x12`
+#define SC_VA_GAME_START_HOTKEY_CLEAR 0x004EEC30u  // the game-start reset
+
+// ---------------------------------------------------------------------------
 // CUnit layout (offsets inherited from GPTP; each one is USED by an instruction
 // this task decompiled, which is corroboration rather than independent derivation
 // -- binary-selection-map.md 8 "Inherited and used as-is" makes the same caveat).

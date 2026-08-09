@@ -1191,6 +1191,400 @@ static void ResetHudCounters(void) {
     g_engInteractCalls = g_origDispatchCalls = 0;
 }
 
+// ---------------------------------------------------------------------------
+// [11] Shadow control groups (task 021), driven the same way as [7].
+//
+// The feature has no hook and no engine call: it is entirely a reaction to wire
+// command 0x13 arriving at ScFanoutOnCommand, plus TWO READS of engine memory --
+// activePlayerSelection (0x006284B8), which the engine's client-side recall has
+// already filled by then, and selectionHotkeys (0x0057FE60), which it reads only to
+// notice that the engine has restarted a game underneath it. Both live inside the fake
+// 3 MB image, so the whole state machine drives offline with no StarCraft in the
+// process and every emitted byte still asserted on the wire.
+//
+// What stays untestable here is the ONE runtime claim the design rests on -- that the
+// engine really has filled activePlayerSelection by the time it queues `13 01 g`. That
+// is what test-control-groups.ps1 checks in the live game, off the plugin's own
+// `GROUP recall enter:` read-back.
+// ---------------------------------------------------------------------------
+
+// The engine's own control-group row, as CMDRECV_Hotkey's store would have left it:
+// StoredUnit tags, not pointers.
+static void FakeEngineHotkeyRow(int group, const int* idx, int n) {
+    const BYTE player = *(BYTE*)FakeRt(SC_VA_ACTIVE_PLAYER_ID);
+    DWORD* row = (DWORD*)FakeRt(SC_VA_SELECTION_HOTKEYS)
+               + (size_t)(player * SC_HOTKEY_GROUPS_PER_PLAYER + group)
+                 * SC_HOTKEY_SLOTS_PER_GROUP;
+    for (int i = 0; i < SC_HOTKEY_SLOTS_PER_GROUP; ++i) row[i] = 0;
+    for (int i = 0; i < n && i < SC_HOTKEY_SLOTS_PER_GROUP; ++i) row[i] = ExpectTag(idx[i]);
+}
+
+static void ZeroEngineHotkeys(void) {
+    memset(FakeRt(SC_VA_SELECTION_HOTKEYS), 0,
+           (size_t)SC_MAX_PLAYERS * SC_HOTKEY_GROUPS_PER_PLAYER
+           * SC_HOTKEY_SLOTS_PER_GROUP * 4);
+}
+
+// activePlayerSelection as CreateNewUnitSelectionsFromList (0x0049AE40) leaves it:
+// CUnit pointers, dense from slot 0, NULL-terminated.
+static void FakeEngineVisible(const int* idx, int n) {
+    DWORD* arr = (DWORD*)FakeRt(SC_VA_ACTIVE_PLAYER_SELECTION);
+    for (int i = 0; i < SC_SELECTION_SLOTS; ++i) arr[i] = 0;
+    for (int i = 0; i < n && i < SC_SELECTION_SLOTS; ++i) arr[i] = FakeUnit(idx[i]);
+}
+
+// The three-byte 0x13 the engine builds at 0x004C07BF.
+static bool Hotkey(BYTE action, BYTE group) {
+    const BYTE cmd[SC_HOTKEY_CMD_BYTES] = { SC_CMD_HOTKEY, action, group };
+    return ScFanoutOnCommand(cmd, sizeof(cmd));
+}
+
+// units 0..11 are the engine's twelve in every case below.
+static const int kFirstTwelve[12] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
+
+static void ControlGroupTests(void) {
+    printf("\n[11] shadow control groups: Ctrl+N over 12, and N brings them back\n");
+
+    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
+                                 PAGE_READWRITE);
+    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+
+    MakeUnits(64, 1);
+    // All three player-id globals set to the units' owner, so the row this code indexes
+    // is the row the engine's own store would write and DisagreeingPlayerIds is quiet.
+    *(BYTE*)FakeRt(SC_VA_ACTIVE_PLAYER_ID) = 1;
+    *(BYTE*)FakeRt(SC_VA_PLAYER_ID_512688) = 1;
+    *(BYTE*)FakeRt(SC_VA_PLAYER_ID_512678) = 1;
+
+    printf("\n    Ctrl+1 on 36 units stores 36, and 1 brings all 36 back\n");
+    {
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        ZeroEngineHotkeys();
+        DriveSelection(36);
+        Check("the shadow list holds the whole box", ScFanoutShadowCount(), 36);
+        Check("  the engine holds only twelve of them", ScFanoutVisibleCount(), 12);
+
+        g_captureLen = 0; g_captureCount = 0;
+        Check("Ctrl+1 is NOT suppressed -- the engine's own 0x13 still goes out",
+              Hotkey(SC_HOTKEY_ASSIGN, 1) ? 1 : 0, 0);
+        Check("  and we emitted nothing of our own for it", g_captureCount, 0);
+        Check("plugin group 1 holds all 36", ScFanoutGroupCount(1), 36);
+        Check("  one assign counted", ScFanoutGroupStat(SC_GROUPSTAT_ASSIGN), 1);
+
+        // The engine now executes that store: its own group holds its twelve.
+        FakeEngineHotkeyRow(1, kFirstTwelve, 12);
+
+        // The player selects something else entirely -- one unit, the way a click does.
+        {
+            DWORD one[1] = { FakeUnit(40) };
+            ScFanoutOnSelect(1, one);
+        }
+        Check("after clicking away the shadow list is just that one unit",
+              ScFanoutShadowCount(), 1);
+
+        // Press 1. The engine's client handler has already run 0x0049AE40, so
+        // activePlayerSelection holds its twelve before our hook sees the command.
+        FakeEngineVisible(kFirstTwelve, 12);
+        g_captureLen = 0; g_captureCount = 0;
+        Check("the recall is NOT suppressed either", Hotkey(SC_HOTKEY_RECALL, 1) ? 1 : 0, 0);
+        // Conductor's point (3a): a recall must not itself be a burst of replayed
+        // Selects. It emits NOTHING -- the replay only ever happens when the player next
+        // issues a fanned order, exactly as before this task.
+        Check("  a recall emits no Select of its own", g_captureCount, 0);
+
+        Check("ALL 36 ARE BACK", ScFanoutShadowCount(), 36);
+        Check("  the engine still holds only twelve", ScFanoutVisibleCount(), 12);
+        Check("  counted as a >12 recall", ScFanoutGroupStat(SC_GROUPSTAT_WIDE), 1);
+        Check("  nothing was discarded", ScFanoutGroupStat(SC_GROUPSTAT_DISCARD), 0);
+
+        // ... and the order that follows reaches every one of them, on the wire.
+        g_captureLen = 0; g_captureCount = 0;
+        Check("the next order is fanned out",
+              ScFanoutOnCommand(kRightClick, sizeof(kRightClick)) ? 1 : 0, 1);
+        Check("  3 Select+order pairs", g_captureCount, 6);
+        Check("  36 tags on the wire", CaptureTagCount((int)sizeof(kRightClick)), 36);
+        int missing = 0;
+        for (int i = 0; i < 36; ++i) {
+            if (!CaptureHasTag(ExpectTag(i), (int)sizeof(kRightClick))) ++missing;
+        }
+        Check("  and every one of the 36 units is among them", missing, 0);
+        // The exact wire stream, chunk by chunk. The group was stored in shadow order
+        // (overflow 12..35, then visible 0..11), so a recall reproduces the same chunking
+        // part [7] asserts for a fresh drag box -- and crucially the VISIBLE chunk is
+        // still LAST, which is the invariant that leaves the simulation holding what the
+        // player can see. A recall must not quietly break it.
+        {
+            int a[SC_SELECTION_SLOTS], b[SC_SELECTION_SLOTS], v[SC_SELECTION_SLOTS];
+            for (int i = 0; i < SC_SELECTION_SLOTS; ++i) {
+                a[i] = 12 + i; b[i] = 24 + i; v[i] = i;
+            }
+            int off = 0;
+            off = ExpectSelectAt("  pair 1 selects the restored units 13-24", off, a, 12);
+            off = ExpectOrderAt ("  pair 1 carries the order verbatim", off);
+            off = ExpectSelectAt("  pair 2 selects the restored units 25-36", off, b, 12);
+            off = ExpectOrderAt ("  pair 2 carries the order verbatim", off);
+            off = ExpectSelectAt("  pair 3 selects the VISIBLE 12 (last)", off, v, 12);
+            (void)ExpectOrderAt ("  pair 3 carries the order verbatim", off);
+        }
+    }
+
+    printf("\n    a unit in a >12 group DIES: recall returns the survivors, never the corpse\n");
+    {
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        ZeroEngineHotkeys();
+        DriveSelection(36);
+        Hotkey(SC_HOTKEY_ASSIGN, 2);
+        Check("group 2 holds 36", ScFanoutGroupCount(2), 36);
+        FakeEngineHotkeyRow(2, kFirstTwelve, 12);
+
+        // Kill one unit that is PAST the cap -- the engine's own group never knew about
+        // it, so only our group can resurrect it. Damage death: hitpoints 0, uniqueness
+        // deliberately untouched, which is precisely what CUnit+0xA5 cannot see.
+        const int corpse = 20;
+        const BYTE uniqBefore = *(BYTE*)(FakeUnit(corpse) + SC_CUNIT_OFF_UNIQUENESS);
+        *(DWORD*)(FakeUnit(corpse) + SC_CUNIT_OFF_HITPOINTS) = 0;
+        Check("the corpse's uniqueness byte is UNCHANGED (the case 0xA5 cannot see)",
+              *(BYTE*)(FakeUnit(corpse) + SC_CUNIT_OFF_UNIQUENESS), uniqBefore);
+
+        { DWORD one[1] = { FakeUnit(40) }; ScFanoutOnSelect(1, one); }
+        FakeEngineVisible(kFirstTwelve, 12);
+        Hotkey(SC_HOTKEY_RECALL, 2);
+
+        Check("35 come back, not 36", ScFanoutShadowCount(), 35);
+        Check("  and the group itself is compacted to 35", ScFanoutGroupCount(2), 35);
+
+        g_captureLen = 0; g_captureCount = 0;
+        ScFanoutOnCommand(kRightClick, sizeof(kRightClick));
+        Check("the dead unit's tag is in NO emitted Select",
+              CaptureHasTag(ExpectTag(corpse), (int)sizeof(kRightClick)) ? 1 : 0, 0);
+        Check("  35 tags went out", CaptureTagCount((int)sizeof(kRightClick)), 35);
+        *(DWORD*)(FakeUnit(corpse) + SC_CUNIT_OFF_HITPOINTS) = 40 * 256;
+    }
+
+    printf("\n    a REMOVED unit (trigger RemoveUnit / archon) is not resurrected either\n");
+    {
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        ZeroEngineHotkeys();
+        DriveSelection(36);
+        Hotkey(SC_HOTKEY_ASSIGN, 3);
+        FakeEngineHotkeyRow(3, kFirstTwelve, 12);
+
+        const int gone = 25;
+        const BYTE uniqBefore = *(BYTE*)(FakeUnit(gone) + SC_CUNIT_OFF_UNIQUENESS);
+        const DWORD hpBefore  = *(DWORD*)(FakeUnit(gone) + SC_CUNIT_OFF_HITPOINTS);
+        UnlinkFakeUnit(gone, 1);
+        Check("hit points untouched by the removal",
+              (int)*(DWORD*)(FakeUnit(gone) + SC_CUNIT_OFF_HITPOINTS), (int)hpBefore);
+        Check("uniqueness untouched by the removal",
+              *(BYTE*)(FakeUnit(gone) + SC_CUNIT_OFF_UNIQUENESS), uniqBefore);
+
+        { DWORD one[1] = { FakeUnit(40) }; ScFanoutOnSelect(1, one); }
+        FakeEngineVisible(kFirstTwelve, 12);
+        Hotkey(SC_HOTKEY_RECALL, 3);
+        Check("35 come back", ScFanoutShadowCount(), 35);
+        RelinkFakeUnit(gone, 1);
+    }
+
+    printf("\n    CONTAINMENT: a group that does not describe this selection is discarded\n");
+    {
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        ZeroEngineHotkeys();
+        DriveSelection(36);
+        Hotkey(SC_HOTKEY_ASSIGN, 4);
+        Check("group 4 holds 36", ScFanoutGroupCount(4), 36);
+        FakeEngineHotkeyRow(4, kFirstTwelve, 12);
+
+        // The engine recalls TWELVE UNITS WE NEVER STORED -- the shape a group left over
+        // from a previous game has. Falling back to the engine's own twelve is the only
+        // safe reading; silently unioning would put a previous game's units on the wire.
+        const int others[12] = { 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51 };
+        { DWORD one[1] = { FakeUnit(40) }; ScFanoutOnSelect(1, one); }
+        FakeEngineVisible(others, 12);
+        Hotkey(SC_HOTKEY_RECALL, 4);
+
+        Check("the shadow list is the engine's twelve and nothing more",
+              ScFanoutShadowCount(), 12);
+        Check("  one discard counted", ScFanoutGroupStat(SC_GROUPSTAT_DISCARD), 1);
+        Check("  and the poisoned group is forgotten", ScFanoutGroupCount(4), -1);
+    }
+
+    printf("\n    NEW GAME: the engine's groups are cleared under us, so ours go too\n");
+    {
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        ZeroEngineHotkeys();
+        DriveSelection(36);
+        Hotkey(SC_HOTKEY_ASSIGN, 5);
+        Check("group 5 holds 36", ScFanoutGroupCount(5), 36);
+
+        // The engine executes the store, so its row is filled. A shift-add now must
+        // KEEP the group -- this is the case the reset must not fire on.
+        FakeEngineHotkeyRow(5, kFirstTwelve, 12);
+        Hotkey(SC_HOTKEY_ADD, 5);
+        Check("a shift-add with the row filled keeps the group", ScFanoutGroupCount(5), 36);
+        Check("  no reset counted", ScFanoutGroupStat(SC_GROUPSTAT_RESET), 0);
+
+        // Now a new game: 0x004EEC30 zeroes the whole array.
+        ZeroEngineHotkeys();
+        { DWORD fresh[1] = { FakeUnit(50) }; ScFanoutOnSelect(1, fresh); }
+        Hotkey(SC_HOTKEY_ADD, 5);
+        Check("the stale group was dropped, so the add behaves as an assign",
+              ScFanoutGroupCount(5), 1);
+        Check("  a reset was counted", ScFanoutGroupStat(SC_GROUPSTAT_RESET) > 0 ? 1 : 0, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // THE CASE THAT USED TO SHIP BROKEN, AND THE ONE THE OLD TEST COULD NOT SEE.
+    //
+    // Review found that the first version of the reset kept a per-group "I have
+    // observed the engine's row filled" flag and only reset when that flag was set. The
+    // store is RECEIVE-SIDE, so on a FIRST Ctrl+N the row is still empty at that
+    // instant and the flag was never recorded -- which made a group used exactly once
+    // permanently immune to the reset. That is ordinary play, not a corner: assign a
+    // group, never touch it again, start a new mission, shift-add into it.
+    //
+    // The block above could not catch it, because it issues an extra shift-add WITH the
+    // row filled before the new game, which is what set the flag. This block is the
+    // sequence with no such command in it, and it is why the mechanism is now the
+    // engine-mirroring rule (an add into an empty row is an assign) with no memory at
+    // all. Deleting that rule fails HERE.
+    // -----------------------------------------------------------------------
+    printf("\n    NEW GAME after a group used exactly ONCE (the shipped-broken case)\n");
+    {
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        ZeroEngineHotkeys();
+        DriveSelection(36);
+        Hotkey(SC_HOTKEY_ASSIGN, 8);              // the ONLY 0x13 of "game A"
+        Check("group 8 holds 36", ScFanoutGroupCount(8), 36);
+        // The engine executes that store some frames later...
+        FakeEngineHotkeyRow(8, kFirstTwelve, 12);
+        // ...and the player never touches group 8 again. New game: the array is zeroed.
+        ZeroEngineHotkeys();
+        {
+            DWORD fresh[5];
+            for (int i = 0; i < 5; ++i) fresh[i] = FakeUnit(40 + i);
+            ScFanoutOnSelect(5, fresh);
+        }
+        Hotkey(SC_HOTKEY_ADD, 8);
+        // Was 25 (36 of game A's records unioned with the new 5) before the fix.
+        Check("the previous game's 36 are gone; the add holds only the new 5",
+              ScFanoutGroupCount(8), 5);
+        Check("  and a reset was counted", ScFanoutGroupStat(SC_GROUPSTAT_RESET) > 0 ? 1 : 0, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // IDENTITY IS THE (POINTER, UNIQUENESS) PAIR, NOT THE POINTER.
+    //
+    // Also from review. A CUnit* is a slot in a fixed global that the engine reuses
+    // game after game, so a stale record whose slot now holds a DIFFERENT live unit
+    // must not read as "contained". The containment gate is the cross-session staleness
+    // detector, and comparing bare pointers would make it pass on exactly the input it
+    // exists to catch. The NEW-GAME containment case earlier in this part uses disjoint
+    // slots (40..51 against a group of 0..35), which is the one shape where comparing
+    // pointers and comparing pairs agree -- so it could not see this either.
+    // -----------------------------------------------------------------------
+    printf("\n    CONTAINMENT compares (pointer, uniqueness), not the pointer alone\n");
+    {
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        ZeroEngineHotkeys();
+        DriveSelection(36);
+        Hotkey(SC_HOTKEY_ASSIGN, 9);
+        Check("group 9 holds 36", ScFanoutGroupCount(9), 36);
+        FakeEngineHotkeyRow(9, kFirstTwelve, 12);
+
+        // Every slot the engine is about to recall is RECYCLED into a different unit --
+        // the same addresses, new uniqueness bytes, exactly what a second game does to
+        // the same 1700-entry array. Bare-pointer containment would call this contained
+        // and hand the player a group built from the previous game's records.
+        for (int i = 0; i < SC_SELECTION_SLOTS; ++i) {
+            BYTE* u = (BYTE*)FakeUnit(i);
+            u[SC_CUNIT_OFF_UNIQUENESS] = (BYTE)(u[SC_CUNIT_OFF_UNIQUENESS] + 1);
+        }
+        { DWORD one[1] = { FakeUnit(40) }; ScFanoutOnSelect(1, one); }
+        FakeEngineVisible(kFirstTwelve, 12);
+        Hotkey(SC_HOTKEY_RECALL, 9);
+
+        Check("the recycled slots are NOT contained, so the group is discarded",
+              ScFanoutGroupStat(SC_GROUPSTAT_DISCARD), 1);
+        Check("  and the shadow list is the engine's twelve alone",
+              ScFanoutShadowCount(), 12);
+        Check("  the poisoned group is forgotten", ScFanoutGroupCount(9), -1);
+        for (int i = 0; i < SC_SELECTION_SLOTS; ++i) {   // put the fixture back
+            BYTE* u = (BYTE*)FakeUnit(i);
+            u[SC_CUNIT_OFF_UNIQUENESS] = (BYTE)(u[SC_CUNIT_OFF_UNIQUENESS] - 1);
+        }
+    }
+
+    printf("\n    shift-add UNIONS a second selection into the group\n");
+    {
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        ZeroEngineHotkeys();
+        DriveSelection(20);                       // units 0..19
+        Hotkey(SC_HOTKEY_ASSIGN, 6);
+        Check("group 6 holds the first 20", ScFanoutGroupCount(6), 20);
+        FakeEngineHotkeyRow(6, kFirstTwelve, 12);
+
+        // A second, overlapping selection: units 12..31.
+        {
+            DWORD visible[SC_SELECTION_SLOTS];
+            for (int i = 0; i < SC_SELECTION_SLOTS; ++i) visible[i] = FakeUnit(12 + i);
+            for (int i = SC_SELECTION_SLOTS; i < 20; ++i) {
+                ScFanoutOnOverflow(SC_SELECTION_SLOTS, visible, FakeUnit(12 + i));
+            }
+            ScFanoutOnSelect(SC_SELECTION_SLOTS, visible);
+        }
+        Hotkey(SC_HOTKEY_ADD, 6);
+        // 0..19 plus 12..31 = 0..31, deduplicated.
+        Check("the union is 32 units, not 40", ScFanoutGroupCount(6), 32);
+        Check("  one add counted", ScFanoutGroupStat(SC_GROUPSTAT_ADD), 1);
+    }
+
+    printf("\n    a 0x13 we do not understand falls back to the pre-021 behaviour\n");
+    {
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        ZeroEngineHotkeys();
+        DriveSelection(36);
+        // Group 12 is one of the engine's OWN recent-selection groups (10..17), which we
+        // deliberately do not mirror. The over-cap part of the list is dropped rather
+        // than fanned out against a selection the engine rebuilt elsewhere.
+        Hotkey(SC_HOTKEY_RECALL, 12);
+        Check("the over-cap units are dropped, as before task 021",
+              ScFanoutShadowCount(), 12);
+        Check("  and no group was touched", ScFanoutGroupStat(SC_GROUPSTAT_RECALL), 0);
+
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        DriveSelection(36);
+        const BYTE truncated[2] = { SC_CMD_HOTKEY, SC_HOTKEY_RECALL };
+        ScFanoutOnCommand(truncated, sizeof(truncated));
+        Check("a wrong-length 0x13 does the same", ScFanoutShadowCount(), 12);
+    }
+
+    printf("\n    a unit that is already dead never ENTERS a group\n");
+    {
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        ZeroEngineHotkeys();
+        DriveSelection(36);
+        *(DWORD*)(FakeUnit(30) + SC_CUNIT_OFF_HITPOINTS) = 0;
+        Hotkey(SC_HOTKEY_ASSIGN, 7);
+        Check("the group holds 35, not 36", ScFanoutGroupCount(7), 35);
+        *(DWORD*)(FakeUnit(30) + SC_CUNIT_OFF_HITPOINTS) = 40 * 256;
+    }
+
+    ScFanoutTestBegin(NULL, NULL, 200);   // leave the core inert
+    VirtualFree(g_fake, 0, MEM_RELEASE);
+    g_fake = NULL;
+}
+
 static void HudRowTests(void) {
     printf("\n[10] HUD-row paging: fake dialog tree, fake engine primitives\n");
 
@@ -1589,6 +1983,7 @@ int main(void) {
     OpcodePolicyTests();
     CircleTests();
     HudRowTests();
+    ControlGroupTests();
 
     printf("\nhooktest: %d failure(s)\n", g_failures);
     ScLogClose();

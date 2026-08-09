@@ -97,6 +97,37 @@ int ScFanoutStaleSkipped(void);
 int ScFanoutDroppedFor(int why);
 
 // ---------------------------------------------------------------------------
+// Shadow control groups (task 021: Ctrl+N stores more than 12, N brings them back)
+//
+// There is no install/enable entry point here on purpose: the feature lives entirely
+// inside ScFanoutOnCommand's handling of wire command 0x13, so it adds no hook, patches
+// no game code, and writes no byte of the engine's own control-group storage. It only
+// READS selectionHotkeys (0x0057FE60), to notice that the engine has restarted a game
+// underneath it. The mechanism, and the evidence for every address, is in
+// research/control-groups.md.
+// ---------------------------------------------------------------------------
+
+// Which group counter ScFanoutGroupStat returns.
+enum ScGroupStat {
+    SC_GROUPSTAT_ASSIGN  = 0,   // Ctrl+N stores
+    SC_GROUPSTAT_ADD     = 1,   // shift-adds into a group
+    SC_GROUPSTAT_RECALL  = 2,   // N recalls
+    SC_GROUPSTAT_WIDE    = 3,   // recalls that put back MORE than the engine's 12
+    SC_GROUPSTAT_DISCARD = 4,   // recalls whose group failed the containment check
+    SC_GROUPSTAT_RESET   = 5    // groups dropped because the engine restarted a game
+};
+
+// Test-only: units the plugin holds for control group `group` (0..9), or -1 if that
+// group has never been stored in this session (which is NOT the same as holding 0).
+int ScFanoutGroupCount(int group);
+int ScFanoutGroupStat(int which);
+
+// Test-only: the shadow list's shape right now -- total, and how many of the TAIL
+// entries the engine itself holds.
+int ScFanoutShadowCount(void);
+int ScFanoutVisibleCount(void);
+
+// ---------------------------------------------------------------------------
 // Shadow-list snapshot (task 017: the HUD row pages through this list)
 // ---------------------------------------------------------------------------
 
