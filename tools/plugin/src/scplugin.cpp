@@ -249,11 +249,14 @@ static int CountPlayerUnits(int p, bool* ok) {
 static void ScanWorld(const char* tag) {
     if (!g_worldScan) return;
 
-    // THE VIEWPORT ORIGIN, so a test can turn the `pos=(x,y)` map pixels below into a
-    // point it can click WITHOUT measuring anything off a screenshot (AGENTS.md: read a
-    // thing's position from memory, not from its pixels). client = map - this pair, read
-    // exactly where the engine's own click handler at 0x0046FB40 reads it when it builds
-    // the rectangle it hit-tests. Diagnostic only: nothing in any feature depends on it.
+    // THE VIEWPORT, first, so a reader can turn every pos=(x,y) below into a CLIENT
+    // coordinate: client = map - origin. Without it a script driving the mouse has to
+    // guess where the camera is, and a drag box aimed by guesswork picks up whatever
+    // else happens to be on screen -- which is how task 024's first in-game run boxed
+    // two blocks at once and got the other one's building. The two globals are the ones
+    // the engine's own click handler 0x0046FB40 builds its search rectangle from
+    // (sc_addresses.h); read-only, and read here rather than hooked. Task 025 needed the
+    // same pair for the same reason and arrived at the same two globals independently.
     {
         unsigned left = 0xFFFF, top = 0xFFFF;
         ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_SCREEN_LEFT), &left);

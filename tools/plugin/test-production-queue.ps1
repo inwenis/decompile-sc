@@ -358,9 +358,9 @@ try {
         Assert-That 'the scan reports the viewport origin' ($null -ne $w.Screen)
         Assert-That 'and the Command Center has a sprite position' `
             ($null -ne $cc -and $cc.X -gt 0 -and $cc.Y -gt 0)
-        $cx = $cc.X - $w.Screen.X
-        $cy = $cc.Y - $w.Screen.Y
-        Write-Host "       CC at map ($($cc.X),$($cc.Y)), viewport ($($w.Screen.X),$($w.Screen.Y)) -> client ($cx,$cy)"
+        $cx = $cc.X - $w.Screen.Left
+        $cy = $cc.Y - $w.Screen.Top
+        Write-Host "       CC at map ($($cc.X),$($cc.Y)), viewport ($($w.Screen.Left),$($w.Screen.Top)) -> client ($cx,$cy)"
         # 340 is the world-area bound every suite in this repo drags inside; below it is
         # the console, which would eat the click.
         Assert-That "the building is on screen, inside the play area ($cx,$cy)" `
