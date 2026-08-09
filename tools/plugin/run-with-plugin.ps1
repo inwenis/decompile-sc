@@ -181,6 +181,14 @@ param(
     # be the SAME oracle. Off by default because the existing suites parse this log
     # and a 36-unit fixture would add 36 lines per marker to every one of their runs.
     [ValidateSet('0', '1')][string]$WorldScan = '0',
+    # Task 025: let a production building hold more than the engine's five queued items.
+    # Off by default -- it installs three detours of its own and it is the only feature
+    # here that MOVES A PLAYER'S RESOURCES, so it is opt-in per run. It is also ignored
+    # outright in -Mode observe, which stays read-only whatever this says.
+    [ValidateSet('0', '1')][string]$ProdQueue = '0',
+    # Total logical queue length per building, the engine's five included. Clamped by
+    # the plugin to [5, 24].
+    [int]$ProdQueueMax = 16,
     # Task 024: same-type building groups. '1' (the default) lets a drag box over N
     # buildings of one type select all N, by relaxing the client half of the
     # unit_IsStandardAndMovable gate for exactly that case. '0' is the feature's own off
@@ -292,6 +300,8 @@ try {
     $env:SCPLUGIN_HUDROW         = $HudRow
     $env:SCPLUGIN_FANOUT_LIVENESS = $Liveness
     $env:SCPLUGIN_WORLDSCAN      = $WorldScan
+    $env:SCPLUGIN_PRODQ          = $ProdQueue
+    $env:SCPLUGIN_PRODQ_MAX      = "$ProdQueueMax"
     $env:SCPLUGIN_BUILDING_GROUPS = $BuildingGroups
     if ($Liveness -eq '0') {
         Write-Warning 'run-with-plugin: -Liveness 0 — the fan-out emit gate is back to the pre-task-020 uniqueness test ALONE. A unit killed by damage will be replayed into a Select. This is a deliberate defect-reproduction run.'

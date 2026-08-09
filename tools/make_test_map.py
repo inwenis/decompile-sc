@@ -300,6 +300,12 @@ UNIT_TYPE_IDS = {
     # side wins a fight. Confirmed in game rather than assumed -- see
     # tools/README-test-map.md "Combat variant".
     "lurker": 103,
+    # Task 025's production fixture. A Command Center is the cheapest way to get a
+    # building that TRAINS -- it produces SCVs (50 minerals, 1 supply) and it supplies
+    # 10 of its own, so a fixture needs it plus a couple of depots and nothing else.
+    "command-center": 106,
+    "supply-depot": 109,
+    "barracks": 111,
 }
 
 # Which race each named unit type belongs to. Only used to pick a sensible default
@@ -312,7 +318,146 @@ UNIT_TYPE_RACES = {
     "zergling": SIDE_ZERG, "hydralisk": SIDE_ZERG, "ultralisk": SIDE_ZERG,
     "zealot": SIDE_PROTOSS, "dragoon": SIDE_PROTOSS,
     "lurker": SIDE_ZERG,
+    "command-center": SIDE_TERRAN, "supply-depot": SIDE_TERRAN, "barracks": SIDE_TERRAN,
 }
+
+# ---------------------------------------------------------------------------
+# STARTING RESOURCES (task 025)
+# ---------------------------------------------------------------------------
+# A CHK has no "starting minerals" field. Under every game type but Use Map Settings the
+# engine hands out its own melee default (50 ore, no gas); under Use Map Settings -- the
+# type every suite in this repo plays its fixtures under -- a map gets whatever its own
+# TRIGGERS give it. So a fixture that has to afford more than one unit needs exactly one
+# trigger: "Always -> Set Resources".
+#
+# That is the ONLY trigger this tool will write, and it carries no Victory, Defeat or End
+# Scenario action, so the property the TRIG note in generate_map() protects -- the mission
+# must not be able to end itself -- still holds. validate_map re-derives that from the
+# bytes rather than trusting this comment.
+#
+# Layout, from the same source as the rest of this file: richchk's own decoded models
+# (.venv/Lib/site-packages/richchk/model/chk/trig/decoded_trigger{,_action,_condition}.py
+# and .../richchk/transcoder/richchk/transcoders/trig/actions/set_resources_action_transcoder.py),
+# which name every field of the 20-byte condition and 32-byte action and say exactly which
+# of them Set Resources fills. CONFIRMED BY ARITHMETIC against the size the rest of this
+# file already assumes for a trigger: 16*20 + 64*32 + 4 + 27 + 1 == 2400, which is the
+# divisor validate_map has used since task 016.
+TRIG_CONDITIONS = 16
+TRIG_CONDITION_BYTES = 20
+TRIG_ACTIONS = 64
+TRIG_ACTION_BYTES = 32
+TRIG_PLAYER_FLAGS = 27
+TRIG_BYTES = (TRIG_CONDITIONS * TRIG_CONDITION_BYTES
+              + TRIG_ACTIONS * TRIG_ACTION_BYTES
+              + 4 + TRIG_PLAYER_FLAGS + 1)          # == 2400
+
+TRIG_CONDITION_ALWAYS = 22       # richchk TriggerConditionId.ALWAYS
+TRIG_ACTION_SET_RESOURCES = 26   # richchk TriggerActionId.SET_RESOURCES
+TRIG_AMOUNT_SET_TO = 7           # richchk AmountModifier.SET_TO
+TRIG_RESOURCE_ORE = 0            # richchk ResourceType.ORE
+TRIG_RESOURCE_GAS = 1            # richchk ResourceType.GAS
+
+
+def _trigger_condition_always() -> bytes:
+    """The 20-byte `Always` condition: every field zero but the condition byte at +15."""
+    cond = bytearray(TRIG_CONDITION_BYTES)
+    cond[15] = TRIG_CONDITION_ALWAYS
+    return bytes(cond)
+
+
+def _trigger_action_set_resources(player: int, amount: int, resource: int) -> bytes:
+    """The 32-byte `Set Resources` action.
+
+    Fields, and nothing else, per the richchk transcoder cited above:
+      +16 u32 first group  = the player
+      +20 u32 second group = the amount
+      +24 u16 argument     = the resource type
+      +26 u8  action byte  = 26
+      +27 u8  modifier     = 7 (Set To)
+    """
+    act = bytearray(TRIG_ACTION_BYTES)
+    struct.pack_into("<II", act, 16, player, amount)
+    struct.pack_into("<H", act, 24, resource)
+    act[26] = TRIG_ACTION_SET_RESOURCES
+    act[27] = TRIG_AMOUNT_SET_TO
+    return bytes(act)
+
+
+def build_starting_resources_trig(player: int, minerals: int, gas: int) -> bytes:
+    """One trigger: `Always -> Set Resources`, executed for `player` only.
+
+    No Preserve Trigger action, so StarCraft disables it once its actions have run --
+    it fires on the first trigger loop of the game and never again.
+    """
+    if not 0 <= player < TRIG_PLAYER_FLAGS:
+        raise ValueError(f"player {player} is outside the trigger's 0..{TRIG_PLAYER_FLAGS - 1} range")
+    for name, value in (("minerals", minerals), ("gas", gas)):
+        if value is not None and not 0 <= value <= 0xFFFFFFFF:
+            raise ValueError(f"--starting-{name} must be a non-negative 32-bit value, got {value}")
+
+    actions = []
+    if minerals is not None:
+        actions.append(_trigger_action_set_resources(player, minerals, TRIG_RESOURCE_ORE))
+    if gas is not None:
+        actions.append(_trigger_action_set_resources(player, gas, TRIG_RESOURCE_GAS))
+    if not actions:
+        raise ValueError("build_starting_resources_trig called with nothing to set")
+    if len(actions) > TRIG_ACTIONS:
+        raise ValueError("too many actions for one trigger")
+
+    out = bytearray()
+    out += _trigger_condition_always()
+    out += bytes(TRIG_CONDITION_BYTES) * (TRIG_CONDITIONS - 1)
+    for act in actions:
+        out += act
+    out += bytes(TRIG_ACTION_BYTES) * (TRIG_ACTIONS - len(actions))
+    out += struct.pack("<I", 0)                       # execution flags: no preserve
+    flags = bytearray(TRIG_PLAYER_FLAGS)
+    flags[player] = 1                                 # executed for this player only
+    out += bytes(flags)
+    out += bytes(1)                                   # current action index
+    assert len(out) == TRIG_BYTES, f"trigger is {len(out)} bytes, expected {TRIG_BYTES}"
+    return bytes(out)
+
+
+def read_starting_resources(trig_payload: bytes) -> list[tuple[int, int, int]]:
+    """Every (player, resource, amount) a TRIG payload's Set Resources actions grant.
+
+    Used by validate_map to check the trigger it wrote from the BYTES, and to prove the
+    same payload carries no game-ending action.
+    """
+    out: list[tuple[int, int, int]] = []
+    for base in range(0, len(trig_payload) - TRIG_BYTES + 1, TRIG_BYTES):
+        acts = base + TRIG_CONDITIONS * TRIG_CONDITION_BYTES
+        flags_at = acts + TRIG_ACTIONS * TRIG_ACTION_BYTES + 4
+        players = [p for p in range(TRIG_PLAYER_FLAGS)
+                   if trig_payload[flags_at + p] == 1]
+        for i in range(TRIG_ACTIONS):
+            off = acts + i * TRIG_ACTION_BYTES
+            action_id = trig_payload[off + 26]
+            if action_id == 0:
+                break
+            if action_id != TRIG_ACTION_SET_RESOURCES:
+                continue
+            amount = struct.unpack_from("<I", trig_payload, off + 20)[0]
+            resource = struct.unpack_from("<H", trig_payload, off + 24)[0]
+            for p in players:
+                out.append((p, resource, amount))
+    return out
+
+
+def trigger_action_ids(trig_payload: bytes) -> set[int]:
+    """Every non-zero action byte in a TRIG payload."""
+    ids: set[int] = set()
+    for base in range(0, len(trig_payload) - TRIG_BYTES + 1, TRIG_BYTES):
+        acts = base + TRIG_CONDITIONS * TRIG_CONDITION_BYTES
+        for i in range(TRIG_ACTIONS):
+            action_id = trig_payload[acts + i * TRIG_ACTION_BYTES + 26]
+            if action_id == 0:
+                break
+            ids.add(action_id)
+    return ids
+
 
 # ---------------------------------------------------------------------------
 # TECH STATE (task 022)
@@ -691,6 +836,8 @@ def generate_map(
     damaged_count: int = 0, damaged_hp_percent: int = 0,
     tech_researched: list[int] | None = None,
     damaged_energy_percent: int | None = None,
+    starting_minerals: int | None = None,
+    starting_gas: int | None = None,
 ) -> None:
     unit_id = resolve_unit_id(unit_type)
     if not 0 <= player <= 7:
@@ -944,6 +1091,24 @@ def generate_map(
             if find_section(sections, name) >= 0:
                 sections = replace_section(sections, name, b"", template)
 
+        # STARTING RESOURCES (task 025). The template's own triggers have just been
+        # dropped, so the ONE trigger written back here is the only trigger the fixture
+        # carries -- see the STARTING RESOURCES block at the top of this file for why a
+        # UMS fixture needs it at all and why it cannot end the game.
+        if starting_minerals is not None or starting_gas is not None:
+            sections = replace_section(
+                sections, "TRIG",
+                build_starting_resources_trig(player, starting_minerals, starting_gas),
+                template,
+            )
+    elif starting_minerals is not None or starting_gas is not None:
+        raise ValueError(
+            "--starting-minerals/--starting-gas cannot be combined with --keep-triggers: "
+            "the resource trigger is written into a TRIG section this tool has just "
+            "emptied, and appending it to a stock map's triggers would keep that map's "
+            "victory/defeat triggers as well."
+        )
+
     # TECH STATE (task 022). Without it a fixture cannot test any ability with a
     # per-unit COST -- see the PTEx block at the top of this file.
     if tech_researched:
@@ -997,6 +1162,8 @@ def validate_map(
     damaged_count: int = 0, damaged_hp_percent: int = 0,
     tech_researched: list[int] | None = None,
     damaged_energy_percent: int | None = None,
+    starting_minerals: int | None = None,
+    starting_gas: int | None = None,
 ) -> None:
     unit_id = resolve_unit_id(unit_type)
     enemy_id = resolve_unit_id(enemy_type) if enemy_count else 0
@@ -1074,13 +1241,37 @@ def validate_map(
     # Nothing may be able to end the game on its own -- the property that makes this a
     # fixture rather than a mission. See the TRIG note in generate_map().
     trig_idx = find_section(sections, "TRIG")
-    trig_len = len(sections[trig_idx].payload) if trig_idx >= 0 else 0
-    if not keep_triggers and trig_len != 0:
+    trig_payload = sections[trig_idx].payload if trig_idx >= 0 else b""
+    trig_len = len(trig_payload)
+    wants_resources = starting_minerals is not None or starting_gas is not None
+    allowed_trig = TRIG_BYTES if wants_resources else 0
+    if not keep_triggers and trig_len != allowed_trig:
         raise AssertionError(
-            f"{path}: TRIG holds {trig_len} bytes ({trig_len // 2400} trigger(s)); a "
-            "generated fixture must carry none, or the map's own victory/defeat "
-            "triggers end the game within seconds of loading"
+            f"{path}: TRIG holds {trig_len} bytes ({trig_len // TRIG_BYTES} trigger(s)), "
+            f"expected {allowed_trig}; a generated fixture must carry none, or the "
+            "map's own victory/defeat triggers end the game within seconds of loading"
         )
+    if not keep_triggers and wants_resources:
+        # The single trigger is checked from its BYTES, both ways round: it grants what
+        # was asked for, AND its only action is Set Resources -- so it cannot end the
+        # game. Reading back only the grants would leave the second half unproved.
+        ids = trigger_action_ids(trig_payload)
+        if ids != {TRIG_ACTION_SET_RESOURCES}:
+            raise AssertionError(
+                f"{path}: the resource trigger carries action id(s) {sorted(ids)}; only "
+                f"{TRIG_ACTION_SET_RESOURCES} (Set Resources) is allowed in a fixture"
+            )
+        granted = read_starting_resources(trig_payload)
+        want = []
+        if starting_minerals is not None:
+            want.append((player, TRIG_RESOURCE_ORE, starting_minerals))
+        if starting_gas is not None:
+            want.append((player, TRIG_RESOURCE_GAS, starting_gas))
+        if sorted(granted) != sorted(want):
+            raise AssertionError(
+                f"{path}: the resource trigger grants {sorted(granted)}, expected "
+                f"{sorted(want)}"
+            )
 
     if keep_ownr:
         if actual not in (OWNR_HUMAN, OWNR_HUMAN_OCCUPIED):
@@ -1411,6 +1602,18 @@ def main() -> int:
              "that needs research -- which is every ability with a per-unit cost.",
     )
     parser.add_argument(
+        "--starting-minerals", type=int, default=None,
+        help="Give --player this many minerals at game start, by writing ONE "
+             "`Always -> Set Resources` trigger into the (otherwise emptied) TRIG "
+             "section. A CHK has no starting-resources field and Use Map Settings hands "
+             "out none, so without this a fixture starts on the melee default and can "
+             "afford almost nothing. Incompatible with --keep-triggers.",
+    )
+    parser.add_argument(
+        "--starting-gas", type=int, default=None,
+        help="The vespene counterpart of --starting-minerals; same single trigger.",
+    )
+    parser.add_argument(
         "--validate-only",
         type=Path,
         default=None,
@@ -1431,7 +1634,7 @@ def main() -> int:
                 args.keep_ownr, args.keep_triggers, None,
                 args.enemy_count, args.enemy_type, args.enemy_owner, args.min_enemy_gap,
                 args.unit_hp, args.damaged_count, args.damaged_hp, techs,
-                args.damaged_energy,
+                args.damaged_energy, args.starting_minerals, args.starting_gas,
             )
             return 0
 
@@ -1444,6 +1647,7 @@ def main() -> int:
             resolve_race(args.enemy_race, args.enemy_type) if args.enemy_count else None,
             args.enemy_owner, args.min_enemy_gap, args.unit_hp,
             args.damaged_count, args.damaged_hp, techs, args.damaged_energy,
+            args.starting_minerals, args.starting_gas,
         )
         print(f"wrote {args.output}")
         if not args.no_validate:
@@ -1452,7 +1656,7 @@ def main() -> int:
                 args.keep_triggers, args.template,
                 args.enemy_count, args.enemy_type, args.enemy_owner, args.min_enemy_gap,
                 args.unit_hp, args.damaged_count, args.damaged_hp, techs,
-                args.damaged_energy,
+                args.damaged_energy, args.starting_minerals, args.starting_gas,
             )
         return 0
     except (ValueError, FileNotFoundError, AssertionError) as exc:

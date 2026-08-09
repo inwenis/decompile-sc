@@ -436,6 +436,52 @@ Protoss Probe, not Zealot (id `65`) -- confirmed against richchk's own
 `unis/unit_id.py` enum. Unrelated to the corruption bug; would have placed
 the wrong unit, not broken the file.
 
+## Starting resources — `-StartingMinerals` / `-StartingGas` (task 025)
+
+A CHK carries **no starting-resources field**. Under Melee/FFA the engine hands out its own
+default; under **Use Map Settings** — the game type every suite in this repo plays its fixtures
+under — a map gets whatever its own *triggers* give it, and this generator strips the template's
+triggers on purpose (see "Why generated maps used not to play"). So until task 025 every fixture
+started on effectively nothing, and a producing building could afford about one unit.
+
+`-StartingMinerals N` (and `-StartingGas N`) writes **one** trigger back into the
+otherwise-emptied `TRIG` section:
+
+```
+condition[0]  Always                          (condition byte 22)
+action[0]     Set Resources  player, N, Ore   (action byte 26, modifier 7 = Set To)
+action[1]     Set Resources  player, N, Gas   (only if -StartingGas was passed)
+executed for  the -Player slot only
+preserve      NO  -- StarCraft disables the trigger once its actions have run
+```
+
+The 2400-byte layout (16 x 20-byte conditions, 64 x 32-byte actions, 4 + 27 + 1 bytes of player
+execution) and the field positions of Set Resources come from richchk's own decoded models and
+its `set_resources_action_transcoder`, cited in the source. It is confirmed by arithmetic against
+the divisor this tool already used: `16*20 + 64*32 + 4 + 27 + 1 == 2400`.
+
+**It still cannot end the game**, and that is checked rather than asserted. `validate_map` reads
+the trigger back out of the generated file and requires two things of the BYTES: that the grants
+are exactly what was asked for, and that the only action byte present anywhere in the payload is
+26 (Set Resources) — so no Victory, Defeat or End Scenario action can have slipped in. The
+"TRIG holds 0 bytes" check becomes "TRIG holds exactly one trigger" only when resources were
+requested; without the flags it is unchanged.
+
+Incompatible with `-KeepTriggers`, which is refused with a message rather than silently appending
+to a stock map's victory triggers.
+
+```powershell
+# task 025's production fixture: one Command Center, 3000 minerals, 1000 gas
+./tools/make-test-map.ps1 -UnitCount 1 -UnitType command-center -Player 0 `
+    -ClearPlayerUnits -GridSpacing 160 -StartingMinerals 3000 -StartingGas 1000 `
+    -OutputPath 'C:\sc-workN1-base\Maps\BroodWar -t025\production-queue.scx'
+```
+
+Three building names were added to the unit table for that fixture: `command-center` (106),
+`supply-depot` (109) and `barracks` (111). A Command Center is the cheapest producing building
+to test with — it trains SCVs at 50 minerals and 1 supply each **and** provides 10 supply of its
+own, so a queue of nine needs no Supply Depot to have landed on buildable ground.
+
 ## Known limitations
 
 - Unit placement is a simple grid centred on the start location's pixel
@@ -443,16 +489,21 @@ the wrong unit, not broken the file.
   existing doodads. On the default template this lands in open ground, but a
   different `-TemplatePath` map could place units somewhere awkward (e.g.
   overlapping a cliff edge) -- worth an eyeball check if you swap templates.
-- `-UnitType` and `-EnemyType` have nine built-in names between them (Marine,
-  Goliath, Siege Tank (Tank Mode), Zergling, Hydralisk, Ultralisk, Zealot,
-  Dragoon, Lurker); any other unit needs its units.dat integer id passed
-  directly.
+- `-UnitType` and `-EnemyType` have a handful of built-in names between them
+  (Marine, Ghost, Medic, Goliath, Siege Tank (Tank Mode), Zergling, Hydralisk,
+  Ultralisk, Zealot, Dragoon, Lurker, and the three task-025 buildings
+  Command Center, Supply Depot and Barracks); any other unit needs its
+  units.dat integer id passed directly.
 - A template that uses the negative-size CHK chunk trick (map protection) is
   refused outright: this tool cannot re-serialise one faithfully, and would
   rather fail than quietly change what the game reads.
 - `-Player` is limited to 0-7 (the 8 real player slots); indices 8-11 are
   observer/unused slots in the CHK format and are not meaningful targets
   here.
+- `-StartingMinerals`/`-StartingGas` set a player's balance ONCE, on the first
+  trigger loop. There is no way here to grant resources over time, and no other
+  trigger of any kind can be written -- deliberately, since the whole point of
+  an emptied `TRIG` is that a fixture cannot end itself.
 - The generated `UNIT` records reuse the template's existing resource/
   start-location entries unchanged (appended after them, not replacing
   them) -- so mineral/gas patches from the template map are still present.

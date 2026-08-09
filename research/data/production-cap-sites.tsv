@@ -1,0 +1,101 @@
+label	specAddr	resolvedVia	funcEntry	funcName	insAddr	opIndex	opKind	valueHex	valueDec	mnemonic	instruction
+addToBuildQueue	0x00467250	exact-entry	0x00467250	FUN_00467250	0x0046725B	1	immediate	0x5	5	CMP	CMP EAX,0x5
+addToBuildQueue	0x00467250	exact-entry	0x00467250	FUN_00467250	0x0046728F	0	immediate	0x4	4	RET	RET 0x4
+addToBuildQueue	0x00467250	exact-entry	0x00467250	FUN_00467250	0x0046729B	0	mem-operand	0x2	2	MOV	MOV word ptr [EDI + ECX*0x2 + 0x98],AX
+addToBuildQueue	0x00467250	exact-entry	0x00467250	FUN_00467250	0x004672A3	0	mem-operand	0x4	4	TEST	TEST byte ptr [EDX*0x4 + 0x664080],0x1
+addToBuildQueue	0x00467250	exact-entry	0x00467250	FUN_00467250	0x004672B1	1	immediate	0x2	2	SHL	SHL EAX,0x2
+addToBuildQueue	0x00467250	exact-entry	0x00467250	FUN_00467250	0x004672E4	0	immediate	0x4	4	RET	RET 0x4
+findFreeBuildQueueSlot	0x004669B0	exact-entry	0x004669B0	FUN_004669b0	0x004669B7	1	immediate	0x5	5	MOV	MOV ECX,0x5
+findFreeBuildQueueSlot	0x004669B0	exact-entry	0x004669B0	FUN_004669b0	0x004669C1	1	immediate	0x5	5	CMP	CMP EAX,0x5
+findFreeBuildQueueSlot	0x004669B0	exact-entry	0x004669B0	FUN_004669b0	0x004669C8	0	mem-operand	0x2	2	CMP	CMP word ptr [EDX + EAX*0x2 + 0x98],0xe4
+findFreeBuildQueueSlot	0x004669B0	exact-entry	0x004669B0	FUN_004669b0	0x004669C8	1	immediate	0xE4	228	CMP	CMP word ptr [EDX + EAX*0x2 + 0x98],0xe4
+findFreeBuildQueueSlot	0x004669B0	exact-entry	0x004669B0	FUN_004669b0	0x004669D9	1	immediate	0x5	5	MOV	MOV EAX,0x5
+cancelBuildQueueSlot	0x00466A70	exact-entry	0x00466A70	FUN_00466a70	0x00466A73	1	immediate	0x5	5	CMP	CMP EBX,0x5
+cancelBuildQueueSlot	0x00466A70	exact-entry	0x00466A70	FUN_00466a70	0x00466A8E	1	immediate	0x5	5	MOV	MOV ECX,0x5
+cancelBuildQueueSlot	0x00466A70	exact-entry	0x00466A70	FUN_00466a70	0x00466A98	1	mem-operand	0x2	2	MOV	MOV AX,word ptr [EDI + ESI*0x2 + 0x98]
+cancelBuildQueueSlot	0x00466A70	exact-entry	0x00466A70	FUN_00466a70	0x00466AA0	1	immediate	0xE4	228	CMP	CMP AX,0xe4
+cancelBuildQueueSlot	0x00466A70	exact-entry	0x00466A70	FUN_00466a70	0x00466AC2	0	mem-operand	0x4	4	TEST	TEST byte ptr [EDX*0x4 + 0x664080],0x1
+cancelBuildQueueSlot	0x00466A70	exact-entry	0x00466A70	FUN_00466a70	0x00466AD6	1	immediate	0x4	4	MOV	MOV ECX,0x4
+cancelBuildQueueSlot	0x00466A70	exact-entry	0x00466A70	FUN_00466a70	0x00466AE1	0	mem-operand	0x2	2	CMP	CMP word ptr [EDI + ESI*0x2 + 0x98],0xe4
+cancelBuildQueueSlot	0x00466A70	exact-entry	0x00466A70	FUN_00466a70	0x00466AE1	1	immediate	0xE4	228	CMP	CMP word ptr [EDI + ESI*0x2 + 0x98],0xe4
+cancelBuildQueueSlot	0x00466A70	exact-entry	0x00466A70	FUN_00466a70	0x00466AF1	1	immediate	0x5	5	MOV	MOV EBX,0x5
+cancelBuildQueueSlot	0x00466A70	exact-entry	0x00466A70	FUN_00466a70	0x00466AF8	1	mem-operand	0x2	2	MOV	MOV AX,word ptr [EDI + EDX*0x2 + 0x98]
+cancelBuildQueueSlot	0x00466A70	exact-entry	0x00466A70	FUN_00466a70	0x00466B00	0	mem-operand	0x2	2	MOV	MOV word ptr [EDI + ESI*0x2 + 0x98],AX
+cancelBuildQueueSlot	0x00466A70	exact-entry	0x00466A70	FUN_00466a70	0x00466B20	1	mem-operand	0x4	4	MOV	MOV EBX,dword ptr [EAX + EDX*0x4 + 0x18]
+cancelBuildQueueSlot	0x00466A70	exact-entry	0x00466A70	FUN_00466a70	0x00466B24	0	mem-operand	0x4	4	MOV	MOV dword ptr [EAX + ESI*0x4 + 0x18],EBX
+cancelBuildQueueSlot	0x00466A70	exact-entry	0x00466A70	FUN_00466a70	0x00466B2E	0	mem-operand	0x2	2	MOV	MOV word ptr [EDI + ESI*0x2 + 0x98],0xe4
+cancelBuildQueueSlot	0x00466A70	exact-entry	0x00466A70	FUN_00466a70	0x00466B2E	1	immediate	0xE4	228	MOV	MOV word ptr [EDI + ESI*0x2 + 0x98],0xe4
+cancelLastQueued	0x00466E40	exact-entry	0x00466E40	FUN_00466e40	0x00466E4C	1	immediate	0x4	4	MOV	MOV ESI,0x4
+cancelLastQueued	0x00466E40	exact-entry	0x00466E40	FUN_00466e40	0x00466E56	1	immediate	0x5	5	MOV	MOV EBX,0x5
+cancelLastQueued	0x00466E40	exact-entry	0x00466E40	FUN_00466e40	0x00466E5D	0	mem-operand	0x2	2	CMP	CMP word ptr [EDI + EDX*0x2 + 0x98],0xe4
+cancelLastQueued	0x00466E40	exact-entry	0x00466E40	FUN_00466e40	0x00466E5D	1	immediate	0xE4	228	CMP	CMP word ptr [EDI + EDX*0x2 + 0x98],0xe4
+clearBuildQueue	0x00466E80	exact-entry	0x00466E80	FUN_00466e80	0x00466E84	1	immediate	0x4	4	MOV	MOV ESI,0x4
+clearBuildQueue	0x00466E80	exact-entry	0x00466E80	FUN_00466e80	0x00466E9A	1	immediate	0x5	5	MOV	MOV ECX,0x5
+clearBuildQueue	0x00466E80	exact-entry	0x00466E80	FUN_00466e80	0x00466EA1	0	mem-operand	0x2	2	CMP	CMP word ptr [EDI + EDX*0x2 + 0x98],0xe4
+clearBuildQueue	0x00466E80	exact-entry	0x00466E80	FUN_00466e80	0x00466EA1	1	immediate	0xE4	228	CMP	CMP word ptr [EDI + EDX*0x2 + 0x98],0xe4
+countTypeInQueue	0x00466B70	exact-entry	0x00466B70	FUN_00466b70	0x00466B7C	0	mem-operand	0x4	4	TEST	TEST byte ptr [EDX*0x4 + 0x664080],0x8
+countTypeInQueue	0x00466B70	exact-entry	0x00466B70	FUN_00466b70	0x00466BDB	1	immediate	0x5	5	MOV	MOV EBX,0x5
+countTypeInQueue	0x00466B70	exact-entry	0x00466B70	FUN_00466b70	0x00466BE2	1	mem-operand	0x2	2	MOVZX	MOVZX EAX,word ptr [ECX + EDX*0x2 + 0x98]
+countTypeInQueue	0x00466B70	exact-entry	0x00466B70	FUN_00466b70	0x00466C55	1	immediate	0x5	5	MOV	MOV EBX,0x5
+countTypeInQueue	0x00466B70	exact-entry	0x00466B70	FUN_00466b70	0x00466C63	1	mem-operand	0x2	2	MOVZX	MOVZX EDX,word ptr [ECX + EDX*0x2 + 0x98]
+countTypeInQueue	0x00466B70	exact-entry	0x00466B70	FUN_00466b70	0x00466C7A	1	immediate	0x5	5	MOV	MOV EBX,0x5
+countTypeInQueue	0x00466B70	exact-entry	0x00466B70	FUN_00466b70	0x00466C81	1	mem-operand	0x2	2	MOVZX	MOVZX EAX,word ptr [ECX + EDX*0x2 + 0x98]
+countTypeInQueue	0x00466B70	exact-entry	0x00466B70	FUN_00466b70	0x00466C90	1	mem-operand	0x2	2	LEA	LEA EAX,[ESI + 0x2]
+countTypeInQueue	0x00466B70	exact-entry	0x00466B70	FUN_00466b70	0x00466C94	1	immediate	0x5	5	MOV	MOV EBX,0x5
+countTypeInQueue	0x00466B70	exact-entry	0x00466B70	FUN_00466b70	0x00466C9B	1	mem-operand	0x2	2	MOVZX	MOVZX EDX,word ptr [ECX + EDX*0x2 + 0x98]
+countTypeInQueue	0x00466B70	exact-entry	0x00466B70	FUN_00466b70	0x00466CAE	1	immediate	0x5	5	MOV	MOV EBX,0x5
+countTypeInQueue	0x00466B70	exact-entry	0x00466B70	FUN_00466b70	0x00466CB8	1	mem-operand	0x2	2	MOVZX	MOVZX EAX,word ptr [ECX + EDX*0x2 + 0x98]
+countTypeInQueue	0x00466B70	exact-entry	0x00466B70	FUN_00466b70	0x00466CC5	1	mem-operand	0x4	4	LEA	LEA EAX,[ESI + 0x4]
+countTypeInQueue	0x00466B70	exact-entry	0x00466B70	FUN_00466b70	0x00466CC9	1	immediate	0x5	5	MOV	MOV ESI,0x5
+countTypeInQueue	0x00466B70	exact-entry	0x00466B70	FUN_00466b70	0x00466CD0	1	mem-operand	0x2	2	MOVZX	MOVZX ECX,word ptr [ECX + EDX*0x2 + 0x98]
+countTypeInQueue	0x00466B70	exact-entry	0x00466B70	FUN_00466b70	0x00466CEC	1	mem-operand	0x2	2	MOVZX	MOVZX EAX,word ptr [ECX + EDX*0x2 + 0x98]
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x00468429	1	immediate	0x4	4	TEST	TEST AH,0x4
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x0046848C	1	immediate	0x2	2	CMP	CMP AL,0x2
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x00468501	0	mem-operand	0x2	2	MOV	MOV word ptr [ESI + EDX*0x2 + 0x98],0xe4
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x00468501	1	immediate	0xE4	228	MOV	MOV word ptr [ESI + EDX*0x2 + 0x98],0xe4
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x00468517	1	immediate	0x5	5	MOV	MOV ECX,0x5
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x00468531	1	immediate	0x5	5	MOV	MOV ECX,0x5
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x0046853A	1	mem-operand	0x2	2	MOV	MOV AX,word ptr [ESI + EDI*0x2 + 0x98]
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x00468542	1	immediate	0xE4	228	CMP	CMP AX,0xe4
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x00468560	0	mem-operand	0x4	4	TEST	TEST byte ptr [EDX*0x4 + 0x664080],BL
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x00468573	1	immediate	0x4	4	MOV	MOV ECX,0x4
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x00468581	0	mem-operand	0x2	2	CMP	CMP word ptr [ESI + EDI*0x2 + 0x98],0xe4
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x00468581	1	immediate	0xE4	228	CMP	CMP word ptr [ESI + EDI*0x2 + 0x98],0xe4
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x00468591	1	immediate	0x5	5	MOV	MOV EBX,0x5
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x00468598	1	mem-operand	0x2	2	MOV	MOV AX,word ptr [ESI + EDX*0x2 + 0x98]
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x004685A0	0	mem-operand	0x2	2	MOV	MOV word ptr [ESI + EDI*0x2 + 0x98],AX
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x004685C0	1	mem-operand	0x4	4	MOV	MOV EBX,dword ptr [EAX + EDX*0x4 + 0x18]
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x004685C4	0	mem-operand	0x4	4	MOV	MOV dword ptr [EAX + EDI*0x4 + 0x18],EBX
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x004685CE	0	mem-operand	0x2	2	MOV	MOV word ptr [ESI + EDI*0x2 + 0x98],0xe4
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x004685CE	1	immediate	0xE4	228	MOV	MOV word ptr [ESI + EDI*0x2 + 0x98],0xe4
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x004685F9	1	mem-operand	0x2	2	MOV	MOV DI,word ptr [ESI + ECX*0x2 + 0x98]
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x00468601	1	immediate	0xE4	228	CMP	CMP DI,0xe4
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x00468644	1	immediate	0x2	2	MOV	MOV byte ptr [ESI + 0xe2],0x2
+productionTick	0x00468420	exact-entry	0x00468420	FUN_00468420	0x0046865B	1	mem-operand	0x4	4	MOV	MOV ESI,dword ptr [ESI + 0x4]
+interceptorTick	0x00466790	exact-entry	0x00466790	FUN_00466790	0x004667BF	0	mem-operand	0x4	4	JMP	JMP dword ptr [EDX*0x4 + 0x4668f8]
+interceptorTick	0x00466790	exact-entry	0x00466790	FUN_00466790	0x004667CD	1	mem-operand	0x2	2	MOV	MOV DI,word ptr [EBX + EAX*0x2 + 0x98]
+interceptorTick	0x00466790	exact-entry	0x00466790	FUN_00466790	0x004667D5	1	immediate	0xE4	228	CMP	CMP DI,0xe4
+interceptorTick	0x00466790	exact-entry	0x00466790	FUN_00466790	0x0046681D	1	immediate	0x2	2	MOV	MOV byte ptr [EBX + 0xe2],0x2
+interceptorTick	0x00466790	exact-entry	0x00466790	FUN_00466790	0x00466860	0	mem-operand	0x2	2	MOV	MOV word ptr [EBX + EAX*0x2 + 0x98],0xe4
+interceptorTick	0x00466790	exact-entry	0x00466790	FUN_00466790	0x00466860	1	immediate	0xE4	228	MOV	MOV word ptr [EBX + EAX*0x2 + 0x98],0xe4
+interceptorTick	0x00466790	exact-entry	0x00466790	FUN_00466790	0x00466874	1	immediate	0x5	5	CMP	CMP AL,0x5
+interceptorTick	0x00466790	exact-entry	0x00466790	FUN_00466790	0x004668AD	1	immediate	0x4	4	MOV	MOV byte ptr [EBX + 0xe2],0x4
+cancelCurrent	0x00468280	exact-entry	0x00468280	FUN_00468280	0x004682F9	1	immediate	0x2	2	TEST	TEST AL,0x2
+cancelCurrent	0x00468280	exact-entry	0x00468280	FUN_00468280	0x0046833A	1	immediate	0x5	5	MOV	MOV ECX,0x5
+cancelCurrent	0x00468280	exact-entry	0x00468280	FUN_00468280	0x00468341	1	mem-operand	0x2	2	MOV	MOV CX,word ptr [ESI + EDX*0x2 + 0x98]
+cancelCurrent	0x00468280	exact-entry	0x00468280	FUN_00468280	0x004683B5	0	mem-operand	0x2	2	MOV	MOV word ptr [ESI + EAX*0x2 + 0x98],0xe4
+cancelCurrent	0x00468280	exact-entry	0x00468280	FUN_00468280	0x004683B5	1	immediate	0xE4	228	MOV	MOV word ptr [ESI + EAX*0x2 + 0x98],0xe4
+cancelCurrent	0x00468280	exact-entry	0x00468280	FUN_00468280	0x004683CD	1	mem-operand	0x2	2	MOVZX	MOVZX EAX,word ptr [EDX*0x2 + 0x6ca318]
+cancelCurrent	0x00468280	exact-entry	0x00468280	FUN_00468280	0x004683D5	1	mem-operand	0x2	2	MOVZX	MOVZX ECX,word ptr [EAX*0x2 + 0x666160]
+cancelCurrent	0x00468280	exact-entry	0x00468280	FUN_00468280	0x00468409	1	mem-operand	0x4	4	MOV	MOV EDI,dword ptr [EDI + 0x4]
+setPendingCost	0x0042D140	exact-entry	0x0042D140	FUN_0042d140	0x0042D15A	1	immediate	0x2	2	SHL	SHL ECX,0x2
+setPendingCost	0x0042D140	exact-entry	0x0042D140	FUN_0042d140	0x0042D17E	0	immediate	0x4	4	RET	RET 0x4
+setPendingCost	0x0042D140	exact-entry	0x0042D140	FUN_0042d140	0x0042D18B	0	immediate	0x4	4	RET	RET 0x4
+refundByType	0x0042CEC0	exact-entry	0x0042CEC0	FUN_0042cec0	0x0042CED6	1	immediate	0x2	2	SHL	SHL EAX,0x2
+cmdrecvCancelTrain	0x004C0100	exact-entry	0x004C0100	FUN_004c0100	0x004C0182	0	immediate	0x4	4	RET	RET 0x4
+cmdrecvCancelTrain	0x004C0100	exact-entry	0x004C0100	FUN_004c0100	0x004C0193	0	immediate	0x4	4	RET	RET 0x4
+btnCancelTrainCondition	0x00428530	exact-entry	0x00428530	FUN_00428530	0x0042853F	1	immediate	0x5	5	MOV	MOV ESI,0x5
+btnCancelTrainCondition	0x00428530	exact-entry	0x00428530	FUN_00428530	0x0042854D	1	mem-operand	0x2	2	CMP	CMP AX,word ptr [ECX + EDX*0x2 + 0x98]
+btnCancelTrainCondition	0x00428530	exact-entry	0x00428530	FUN_00428530	0x00428559	0	immediate	0x4	4	RET	RET 0x4
+queueSlotHelper	0x004669E0	exact-entry	0x004669E0	FUN_004669e0	0x00466A08	1	mem-operand	0x2	2	MOV	MOV DX,word ptr [ESI + EAX*0x2 + 0x98]
+queueSlotHelper	0x004669E0	exact-entry	0x004669E0	FUN_004669e0	0x00466A13	1	mem-operand	0x2	2	MOVZX	MOVZX ECX,word ptr [ECX*0x2 + 0x660428]
