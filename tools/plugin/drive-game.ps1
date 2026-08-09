@@ -414,7 +414,24 @@ function Send-ScDropdownPick {
         [Parameter(Mandatory)][IntPtr]$Hwnd,
         [Parameter(Mandatory)][int]$X, [Parameter(Mandatory)][int]$Y,
         [Parameter(Mandatory)][int]$Index,
-        [int]$FirstOffset = 16, [int]$Pitch = 15, [int]$SettleMs = 400
+        [int]$FirstOffset = 16, [int]$Pitch = 15, [int]$SettleMs = 400,
+        # How long to wait for the list to APPEAR after the button goes down, and how long
+        # to sit on the chosen entry before releasing.
+        #
+        # These were hardcoded at 200ms each, and 200 is not enough. Task 021 had a Game
+        # Type pick silently do nothing: the lobby stayed on Melee and the map played as a
+        # melee game -- 4 Drones instead of the fixture's 36 Lurkers, and eight downstream
+        # assertions failing about something else entirely. Holding the combo open and
+        # photographing it (work/scratch/probe-gametype.ps1) ruled out the two obvious
+        # suspects: on that fixture the list is exactly three entries, the entry centres
+        # land on the 16px/15px offsets below, and index 2 really is "Use Map Settings".
+        # What was left was the timing, and raising these made it reproducible-green.
+        #
+        # THIS FAILURE IS SILENT AND STICKY, which is why the defaults moved rather than
+        # one caller: the combo remembers the last choice in the machine's profile, so a
+        # pick that does nothing leaves the WRONG game type set for every later run too.
+        # Every suite that picks a game type was exposed to it, not just this task's.
+        [int]$OpenMs = 700, [int]$HoverMs = 400
     )
     Assert-ScDrivable -Hwnd $Hwnd
     $itemY = $Y + $FirstOffset + $Index * $Pitch
@@ -423,9 +440,9 @@ function Send-ScDropdownPick {
     [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]0, $atBox)
     Start-Sleep -Milliseconds 60
     [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_LBUTTONDOWN, [IntPtr]$script:MK_LBUTTON, $atBox)
-    Start-Sleep -Milliseconds 200
+    Start-Sleep -Milliseconds $OpenMs
     [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]$script:MK_LBUTTON, $atItem)
-    Start-Sleep -Milliseconds 200
+    Start-Sleep -Milliseconds $HoverMs
     [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_LBUTTONUP, [IntPtr]0, $atItem)
     if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
 }

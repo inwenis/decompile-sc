@@ -80,6 +80,16 @@ $BURROW_CMD = '0x2C'
 $BURROW_KEY = 0x55
 $IDLE_ORDER = '0x03'
 
+# Which entry of the lobby's Game Type combo is "Use Map Settings" -- MEASURED, by holding
+# the combo open and photographing it (work/scratch/probe-gametype.ps1, a throwaway that
+# posts WM_LBUTTONDOWN without the matching UP). On this 2-player fixture the list is
+# exactly three entries -- Melee, Free For All, Use Map Settings -- and the entry centres
+# land on Send-ScDropdownPick's default 16px/15px offsets, so index 2 is right and the
+# geometry is right. That measurement is what rules the pick's coordinates and index OUT
+# as the cause of a melee start, and leaves the open/hover timing, which is why this call
+# passes -OpenMs/-HoverMs well above their defaults.
+$UMS_INDEX = 2
+
 $mapDir = Join-Path $GameDir 'Maps\BroodWar\00-testmap'
 $mapPath = Join-Path $mapDir 'lurkers.scx'
 
@@ -179,9 +189,20 @@ try {
         Start-Sleep -Milliseconds 500
         # Set the Game Type EXPLICITLY: the combo carries whatever this machine's profile
         # last used, and a stale "Melee" hands the slot melee starting units instead of
-        # the map's own 36 (task 015/016). Picking wrong fails the unit-count assertion
-        # below rather than passing quietly.
-        Send-ScDropdownPick -Hwnd $hwnd -X 265 -Y 268 -Index 2
+        # the map's own 36 (task 015/016).
+        #
+        # A run of this test came up Melee -- 4 Drones (`types=[0x40:4]`) instead of 36
+        # Lurkers -- so this step is driven off a MEASURED list rather than a remembered
+        # index. The combo was held open and photographed
+        # (work/scratch/probe-gametype.ps1); $UMS_INDEX below is that measurement, and
+        # the box step names a melee start explicitly if it ever slips again.
+        #
+        # Picked twice because these are press-and-hold controls driven by posted
+        # messages, and choosing an entry that is already selected is a no-op -- so a
+        # second attempt costs a second and removes a whole failure mode.
+        Send-ScDropdownPick -Hwnd $hwnd -X 265 -Y 268 -Index $UMS_INDEX
+        Start-Sleep -Milliseconds 400
+        Send-ScDropdownPick -Hwnd $hwnd -X 265 -Y 268 -Index $UMS_INDEX
         Shot 'lobby'
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing
         Start-Sleep -Seconds 6
@@ -196,6 +217,17 @@ try {
         Send-ScDrag -Hwnd $hwnd -X1 10 -Y1 10 -X2 630 -Y2 340 -Steps 20
         Start-Sleep -Seconds 2
         $script:boxed = Get-ScState 'boxed'
+        # DIAGNOSE THE ONE FIXTURE FAILURE THAT LOOKS LIKE TEN FEATURE FAILURES FIRST.
+        # If the Game Type combo did not take, the game played as Melee and the slot got
+        # standard Zerg starting units -- Drones (type 0x40), not the map's Lurkers. Left
+        # undiagnosed that shows up as "stored 4, not 36" and eight more downstream
+        # failures that say nothing about control groups. Throwing here stops the run at
+        # its actual cause.
+        if ($boxed.Types.ContainsKey('0x40') -or $boxed.N -lt 12) {
+            throw ("test: this is a MELEE start, not the fixture -- the Game Type combo " +
+                   "did not take (types=[$($boxed.TypesText)], n=$($boxed.N)). Re-run; " +
+                   "nothing about control groups was exercised.")
+        }
         Assert-That "the box holds all $UnitCount placed units ($($boxed.N))" ($boxed.N -eq $UnitCount)
         Assert-ScAllOneType 'the spawned units' $boxed $LURKER_TYPE
         Assert-That "the engine itself holds only twelve ($($boxed.Visible))" ($boxed.Visible -eq 12)
