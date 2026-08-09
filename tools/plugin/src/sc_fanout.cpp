@@ -1694,10 +1694,49 @@ void ScFanoutLogUnitStates(const char* tag) {
     int      orderN = 0, order2N = 0, typeN = 0;
     int      live = 0, burrowed = 0, uniqOnly = 0;
     int      orderOverflow = 0, order2Overflow = 0, typeOverflow = 0;
+    // Task 022. A cost-bearing ability is a two-sided claim -- every unit gains the
+    // effect AND every unit pays -- so the oracle has to carry both halves per unit,
+    // over the same shadow walk. Histograms, not sums: "the group lost 240 HP" is
+    // satisfied by one unit losing 240, and that is exactly the confusion this line
+    // exists to rule out.
+    //   hp     CUnit+0x08, the field the damage primitive 0x004797B0 subtracts from
+    //          (sc_addresses.h). 32-bit: a 2500-HP building overflows a WORD key.
+    //   stim   CUnit+0x115, set to 0x25 by the 0x36 handler 0x004C2F30 (task 022,
+    //          research/ability-semantics.md 2).
+    //   energy CUnit+0xA2, the field 0x00491B30 deducts from for the 0x21 family.
+    DWORD    hpKey[32];
+    unsigned hpCnt[32];
+    int      hpN = 0, hpOverflow = 0;
+    WORD     stimKey[32], energyKey[32];
+    unsigned stimCnt[32], energyCnt[32];
+    int      stimN = 0, energyN = 0, stimOverflow = 0, energyOverflow = 0;
+    int      stimmed = 0;
     int      why[SC_DROP_NOTAG + 1];
     for (int i = 0; i <= SC_DROP_NOTAG; ++i) why[i] = 0;
 
-    // One accumulator, used twice: histogram `key` into (keys, counts, n).
+    // Two accumulators, same shape: histogram `key` into (keys, counts, n). The 32-bit
+    // one exists only because hit points do not fit a WORD key -- a 2500-hit-point
+    // building reads 0xA0000 -- and silently truncating them would merge units that are
+    // not in the same state.
+    struct Hist32 {
+        static void Add(DWORD key, DWORD* keys, unsigned* counts, int* n, int cap, int* overflow) {
+            for (int j = 0; j < *n; ++j) if (keys[j] == key) { ++counts[j]; return; }
+            if (*n >= cap) { ++*overflow; return; }
+            keys[*n] = key;
+            counts[*n] = 1;
+            ++*n;
+        }
+        static int Format(char* out, int cap, const DWORD* keys, const unsigned* counts, int n) {
+            int used = 0;
+            out[0] = '\0';
+            for (int j = 0; j < n && used + 20 < cap; ++j) {
+                used += _snprintf(out + used, (size_t)(cap - used), "%s0x%X:%u",
+                                  j ? " " : "", (unsigned)keys[j], counts[j]);
+            }
+            return used;
+        }
+    };
+
     struct Hist {
         static void Add(WORD key, WORD* keys, unsigned* counts, int* n, int cap, int* overflow) {
             for (int j = 0; j < *n; ++j) if (keys[j] == key) { ++counts[j]; return; }
@@ -1734,6 +1773,13 @@ void ScFanoutLogUnitStates(const char* tag) {
         ++live;
         DWORD flags = *(DWORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_FLAGS);
         if (flags & SC_UNIT_FLAG_BURROWED) ++burrowed;
+        BYTE stim = *(BYTE*)(g_shadow[i].ptr + SC_CUNIT_OFF_STIM_TIMER);
+        if (stim) ++stimmed;
+        Hist32::Add(*(DWORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_HITPOINTS),
+                    hpKey, hpCnt, &hpN, 32, &hpOverflow);
+        Hist::Add(stim, stimKey, stimCnt, &stimN, 32, &stimOverflow);
+        Hist::Add(*(WORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_ENERGY),
+                  energyKey, energyCnt, &energyN, 32, &energyOverflow);
         Hist::Add(*(BYTE*)(g_shadow[i].ptr + SC_CUNIT_OFF_ORDER_ID),
                   orderKey, orderCnt, &orderN, 32, &orderOverflow);
         Hist::Add(*(BYTE*)(g_shadow[i].ptr + SC_CUNIT_OFF_ORDER2_ID),
@@ -1750,16 +1796,26 @@ void ScFanoutLogUnitStates(const char* tag) {
     used = Hist::Format(types, (int)sizeof(types), typeKey, typeCnt, typeN);
     if (typeOverflow) _snprintf(types + used, sizeof(types) - used, " +%d-more", typeOverflow);
 
+    char hp[320], stims[256], energies[256];
+    used = Hist32::Format(hp, (int)sizeof(hp), hpKey, hpCnt, hpN);
+    if (hpOverflow) _snprintf(hp + used, sizeof(hp) - used, " +%d-more", hpOverflow);
+    used = Hist::Format(stims, (int)sizeof(stims), stimKey, stimCnt, stimN);
+    if (stimOverflow) _snprintf(stims + used, sizeof(stims) - used, " +%d-more", stimOverflow);
+    used = Hist::Format(energies, (int)sizeof(energies), energyKey, energyCnt, energyN);
+    if (energyOverflow) _snprintf(energies + used, sizeof(energies) - used, " +%d-more", energyOverflow);
+
     // The trailing fields are appended, never inserted: drive-game.ps1's parser
     // matches the leading run of fields and is not anchored at the end, so a reader
     // written against the task-015 line still works.
     ScLog("UNITSTATE [%s] n=%d live=%d visible=%d overflow=%d orders=[%s] orders2=[%s] "
           "types=[%s] burrowed=%d/%d uniqOnly=%d recycled=%d hp0=%d foreign=%d "
-          "nosprite=%d removed=%d staleSkipped=%u liveness=%d",
+          "nosprite=%d removed=%d staleSkipped=%u liveness=%d stimmed=%d/%d "
+          "hp=[%s] stim=[%s] energy=[%s]",
           tag ? tag : "-", g_shadowCount, live, g_visibleCount,
           g_shadowCount - g_visibleCount, orders, orders2, types, burrowed, live,
           uniqOnly, why[SC_DROP_RECYCLED], why[SC_DROP_DEAD], why[SC_DROP_FOREIGN],
-          why[SC_DROP_NOSPRITE], why[SC_DROP_REMOVED], g_statStale, g_liveness ? 1 : 0);
+          why[SC_DROP_NOSPRITE], why[SC_DROP_REMOVED], g_statStale, g_liveness ? 1 : 0,
+          stimmed, live, hp, stims, energies);
 
     LeaveCriticalSection(&g_lock);
 }

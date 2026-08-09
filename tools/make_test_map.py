@@ -269,6 +269,13 @@ FORC_SHARED_VISION = 0x08
 #    65 Protoss Zealot      66 Protoss Dragoon   103 Zerg Lurker
 UNIT_TYPE_IDS = {
     "marine": 0,
+    # Ghost (task 022): the only vanilla unit with an UNTARGETED, ENERGY-costed ability
+    # (Personnel Cloaking, command 0x21) that a generated map can switch on -- which is
+    # what makes the energy half of "does every unit pay its own cost" testable in game
+    # at all. It is also the unit in the user's own report ("a cloaked ghost did not
+    # attack enemies at some point").
+    "ghost": 1,
+    "medic": 34,
     "goliath": 3,
     "siege-tank": 5,
     "zergling": 37,
@@ -300,11 +307,100 @@ UNIT_TYPE_IDS = {
 # Use Map Settings. Anything passed as a raw id defaults to Terran and can be
 # overridden with --race.
 UNIT_TYPE_RACES = {
-    "marine": SIDE_TERRAN, "goliath": SIDE_TERRAN, "siege-tank": SIDE_TERRAN,
+    "marine": SIDE_TERRAN, "ghost": SIDE_TERRAN, "medic": SIDE_TERRAN,
+    "goliath": SIDE_TERRAN, "siege-tank": SIDE_TERRAN,
     "zergling": SIDE_ZERG, "hydralisk": SIDE_ZERG, "ultralisk": SIDE_ZERG,
     "zealot": SIDE_PROTOSS, "dragoon": SIDE_PROTOSS,
     "lurker": SIDE_ZERG,
 }
+
+# ---------------------------------------------------------------------------
+# TECH STATE (task 022)
+# ---------------------------------------------------------------------------
+# Every untargeted ability in vanilla that COSTS the acting unit something needs
+# research: Stim Packs (HP), Cloaking Field / Personnel Cloaking (energy). Burrow is
+# the one exception, and only for Lurkers -- which is why task 016's fixture used
+# Lurkers and why no fixture before this one could test a per-unit COST at all.
+#
+# A Use Map Settings map carries the tech state in PTEx (Brood War, 44 techs). Layout,
+# from the staredit.net CHK spec, and CONFIRMED BY ARITHMETIC against the template on
+# disk: 44*12 + 44*12 + 44 + 44 + 44*12 == 1672, which is exactly the section's size in
+# (2)Fading Realm.scx. A layout that reproduces the real section size to the byte, for a
+# section this tool did not write, is not a guess.
+PTEX_TECHS = 44
+PTEX_PLAYERS = 12
+PTEX_OFF_PLAYER_AVAILABLE = 0                                        # [tech][player]
+PTEX_OFF_PLAYER_RESEARCHED = PTEX_TECHS * PTEX_PLAYERS               # 528
+PTEX_OFF_DEFAULT_AVAILABLE = PTEX_OFF_PLAYER_RESEARCHED + PTEX_TECHS * PTEX_PLAYERS
+PTEX_OFF_DEFAULT_RESEARCHED = PTEX_OFF_DEFAULT_AVAILABLE + PTEX_TECHS
+PTEX_OFF_USES_DEFAULT = PTEX_OFF_DEFAULT_RESEARCHED + PTEX_TECHS     # [tech][player]
+PTEX_SIZE = PTEX_OFF_USES_DEFAULT + PTEX_TECHS * PTEX_PLAYERS        # 1672
+
+# techdata.dat ids, printed straight out of richchk's own enum
+# (.venv/Lib/site-packages/richchk/model/richchk/techs/tech_id.py, `TechId`) -- the same
+# source, and the same provenance discipline, as UNIT_TYPE_IDS above. Only the ones a
+# fixture in this repo has needed are named; anything else can be passed as a raw id.
+TECH_IDS = {
+    "stim-packs": 0,
+    "siege-mode": 5,
+    "cloaking-field": 9,       # Wraith; an UNTARGETED ability that costs ENERGY
+    "personnel-cloaking": 10,  # Ghost; likewise
+    "burrowing": 11,
+}
+
+
+def resolve_tech_id(tech: str) -> int:
+    try:
+        value = int(tech)
+    except ValueError:
+        key = tech.strip().lower()
+        if key not in TECH_IDS:
+            raise ValueError(
+                f"Unknown tech {tech!r}. Use one of {sorted(TECH_IDS)} or a raw "
+                f"techdata.dat integer id."
+            ) from None
+        value = TECH_IDS[key]
+    if not 0 <= value < PTEX_TECHS:
+        raise ValueError(f"tech id must be 0-{PTEX_TECHS - 1}, got {value}")
+    return value
+
+
+def set_techs_researched(payload: bytes, tech_ids: list[int], player: int) -> bytes:
+    """PTEx with `tech_ids` marked available AND already-researched for `player`.
+
+    Three bytes per (tech, player), and all three are needed: the per-player entries say
+    what this player has, and `playerUsesDefault` has to be CLEARED or the engine reads
+    the map-wide default instead and the per-player bytes are dead.
+    """
+    if len(payload) != PTEX_SIZE:
+        raise ValueError(
+            f"PTEx is {len(payload)} bytes, expected {PTEX_SIZE}; this tool only "
+            f"understands the Brood War {PTEX_TECHS}-tech layout."
+        )
+    if not 0 <= player < PTEX_PLAYERS:
+        raise ValueError(f"player must be 0-{PTEX_PLAYERS - 1}, got {player}")
+    buf = bytearray(payload)
+    for tech in tech_ids:
+        idx = tech * PTEX_PLAYERS + player
+        buf[PTEX_OFF_PLAYER_AVAILABLE + idx] = 1
+        buf[PTEX_OFF_PLAYER_RESEARCHED + idx] = 1
+        buf[PTEX_OFF_USES_DEFAULT + idx] = 0
+    return bytes(buf)
+
+
+def read_techs_researched(payload: bytes, player: int) -> list[int]:
+    """Which techs PTEx says `player` has already researched, per-player bytes only."""
+    if len(payload) != PTEX_SIZE:
+        raise ValueError(f"PTEx is {len(payload)} bytes, expected {PTEX_SIZE}")
+    out = []
+    for tech in range(PTEX_TECHS):
+        idx = tech * PTEX_PLAYERS + player
+        if (payload[PTEX_OFF_PLAYER_RESEARCHED + idx]
+                and payload[PTEX_OFF_PLAYER_AVAILABLE + idx]
+                and not payload[PTEX_OFF_USES_DEFAULT + idx]):
+            out.append(tech)
+    return out
+
 
 DEFAULT_TEMPLATE = r"C:\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx"
 DEFAULT_OUTPUT = r"C:\sc-work\1161-base\Maps\test-many-units.scx"
@@ -415,7 +511,49 @@ def pack_unit_record(rec: UnitRecord) -> bytes:
 def build_new_unit_records(
     count: int, unit_id: int, player: int, center_x: int, center_y: int, next_instance: int,
     spacing: int = GRID_SPACING_PX, hp_percent: int = 100,
+    damaged_count: int = 0, damaged_hp_percent: int = 0,
+    energy_percent: int = 100, damaged_energy_percent: int | None = None,
 ) -> list[UnitRecord]:
+    """The block, optionally with a PRE-DAMAGED TAIL.
+
+    Task 022 added `damaged_count`: the LAST that-many units of the block are written
+    at `damaged_hp_percent` instead of `hp_percent`, same type, same grid, same owner.
+
+    Why the same block rather than a second one: an ability with a per-unit cost has a
+    per-unit AFFORDABILITY GATE (Stim's is `CMP dword [unit+8],0xa00 / JLE skip`,
+    research/ability-semantics.md 2), and the only way to see whether the ENGINE or the
+    fan-out decides who is skipped is to have payers and non-payers in ONE selection,
+    reached by ONE keypress. Two separate runs cannot distinguish "the engine skipped
+    the poor ones" from "the plugin sent a different set that time".
+
+    The tail is the LAST units on purpose: the fan-out emits the engine's visible twelve
+    LAST and the overflow chunks first (tools/plugin/README.md), and build order here is
+    row-major from the top-left, so a tail-damaged block puts the damaged units in the
+    part of the box the engine does NOT hold. If the split ever came out along the
+    visible/overflow line instead of along the HP line, that would be ours, and this
+    layout is what makes the two hypotheses produce different numbers.
+    """
+    if damaged_count < 0 or damaged_count > count:
+        raise ValueError(
+            f"damaged-count must be 0..{count} (the block size), got {damaged_count}"
+        )
+    if damaged_count and not MIN_HP_PERCENT <= damaged_hp_percent <= MAX_HP_PERCENT:
+        raise ValueError(
+            f"damaged-hp must be {MIN_HP_PERCENT}-{MAX_HP_PERCENT}, got "
+            f"{damaged_hp_percent}"
+        )
+    # The energy half of the same idea: an ability that costs ENERGY has a per-unit
+    # affordability gate too (0x00491B30 compares `cost*0x100 <= CUnit+0xA2` before it
+    # deducts -- research/ability-semantics.md 3), so the same tail makes it testable.
+    if damaged_energy_percent is None:
+        damaged_energy_percent = energy_percent
+    for name, value in (("energy", energy_percent),
+                        ("damaged-energy", damaged_energy_percent)):
+        if not MIN_HP_PERCENT <= value <= MAX_HP_PERCENT:
+            raise ValueError(
+                f"{name} must be {MIN_HP_PERCENT}-{MAX_HP_PERCENT} (a PERCENTAGE of the "
+                f"unit type's maximum), got {value}"
+            )
     per_row = math.ceil(math.sqrt(count))
     rows = math.ceil(count / per_row)
     # Centre the block on (center_x, center_y) -- see GRID_SPACING_PX.
@@ -434,9 +572,10 @@ def build_new_unit_records(
                 special_flags=0,
                 valid_flags=_VALID_OWNER_HP_SHIELD_ENERGY,
                 player=player,
-                hp=hp_percent,
+                hp=damaged_hp_percent if i >= count - damaged_count else hp_percent,
                 shield=100,
-                energy=100,
+                energy=(damaged_energy_percent if i >= count - damaged_count
+                        else energy_percent),
                 resource=0,
                 hangar=0,
                 state_flags=0,
@@ -549,6 +688,9 @@ def generate_map(
     enemy_spacing: int = ENEMY_SPACING_PX, enemy_race: int | None = None,
     enemy_owner: str = ENEMY_OWNER_COMPUTER, min_enemy_gap: int = MIN_ENEMY_GAP_PX,
     unit_hp_percent: int = MAX_HP_PERCENT,
+    damaged_count: int = 0, damaged_hp_percent: int = 0,
+    tech_researched: list[int] | None = None,
+    damaged_energy_percent: int | None = None,
 ) -> None:
     unit_id = resolve_unit_id(unit_type)
     if not 0 <= player <= 7:
@@ -629,7 +771,8 @@ def generate_map(
     next_instance = max((r.instance for r in existing_records), default=0) + 1
     new_records = build_new_unit_records(
         unit_count, unit_id, player, start.x, start.y, next_instance, spacing,
-        unit_hp_percent,
+        unit_hp_percent, damaged_count, damaged_hp_percent,
+        damaged_energy_percent=damaged_energy_percent,
     )
 
     # THE ENEMY FORCE (task 019). Placed relative to the SAME start location the
@@ -801,6 +944,21 @@ def generate_map(
             if find_section(sections, name) >= 0:
                 sections = replace_section(sections, name, b"", template)
 
+    # TECH STATE (task 022). Without it a fixture cannot test any ability with a
+    # per-unit COST -- see the PTEx block at the top of this file.
+    if tech_researched:
+        ptex_idx = find_section(sections, "PTEx")
+        if ptex_idx < 0:
+            raise ValueError(
+                f"Template {template} has no PTEx section, so this tool cannot give a "
+                f"player a researched tech. Use a Brood War template."
+            )
+        sections = replace_section(
+            sections, "PTEx",
+            set_techs_researched(sections[ptex_idx].payload, tech_researched, player),
+            template,
+        )
+
     new_chk = serialize_chk_sections(sections)
     output.parent.mkdir(parents=True, exist_ok=True)
     save_chk_bytes_to_mpq(new_chk, template, output)
@@ -836,6 +994,9 @@ def validate_map(
     enemy_count: int = 0, enemy_type: str = ENEMY_TYPE,
     enemy_owner: str = ENEMY_OWNER_COMPUTER, min_enemy_gap: int = MIN_ENEMY_GAP_PX,
     unit_hp_percent: int = MAX_HP_PERCENT,
+    damaged_count: int = 0, damaged_hp_percent: int = 0,
+    tech_researched: list[int] | None = None,
+    damaged_energy_percent: int | None = None,
 ) -> None:
     unit_id = resolve_unit_id(unit_type)
     enemy_id = resolve_unit_id(enemy_type) if enemy_count else 0
@@ -859,12 +1020,36 @@ def validate_map(
     # The hit-point percentage is what makes the combat fixture's victims die in
     # seconds rather than minutes, so a run that silently kept the default would look
     # like a slow map rather than a broken flag.
-    wrong_hp = sorted({r.hp for r in matching if r.hp != unit_hp_percent})
-    if wrong_hp:
+    #
+    # With a pre-damaged tail (task 022) the check is on the COUNT AT EACH VALUE, not
+    # on the set of values: the whole point of that fixture is that some units can
+    # afford an ability's cost and some cannot, and "10 healthy + 26 damaged" would
+    # satisfy a set-based check while testing something entirely different from
+    # "24 healthy + 12 damaged".
+    healthy_wanted = unit_count - damaged_count
+    got = collections.Counter(r.hp for r in matching)
+    want = collections.Counter()
+    if healthy_wanted:
+        want[unit_hp_percent] += healthy_wanted
+    if damaged_count:
+        want[damaged_hp_percent] += damaged_count
+    if got != want:
         raise AssertionError(
-            f"{path}: placed units carry hit-point percentage(s) {wrong_hp}, expected "
-            f"{unit_hp_percent}"
+            f"{path}: placed units carry hit-point percentages "
+            f"{dict(sorted(got.items()))}, expected {dict(sorted(want.items()))}"
         )
+
+    if damaged_energy_percent is not None and damaged_count:
+        got_e = collections.Counter(r.energy for r in matching)
+        want_e = collections.Counter()
+        if healthy_wanted:
+            want_e[MAX_HP_PERCENT] += healthy_wanted
+        want_e[damaged_energy_percent] += damaged_count
+        if got_e != want_e:
+            raise AssertionError(
+                f"{path}: placed units carry energy percentages "
+                f"{dict(sorted(got_e.items()))}, expected {dict(sorted(want_e.items()))}"
+            )
 
     start = next(
         (r for r in records if r.unit_id == START_LOCATION_UNIT_ID and r.player == player),
@@ -1012,6 +1197,23 @@ def validate_map(
                     f"(0x02). Allied units do not fight."
                 )
 
+    # THE TECH STATE IS THE FIXTURE, NOT A DETAIL (task 022). Every ability with a
+    # per-unit cost needs research, so a map that quietly lost this byte produces a
+    # command card with no ability button on it -- a run that fails on "the key emitted
+    # nothing", minutes later and several steps away from the cause.
+    if tech_researched:
+        ptex_idx = find_section(sections, "PTEx")
+        if ptex_idx < 0:
+            raise AssertionError(f"{path}: no PTEx section, so no tech state to check")
+        have = read_techs_researched(sections[ptex_idx].payload, player)
+        missing = sorted(set(tech_researched) - set(have))
+        if missing:
+            raise AssertionError(
+                f"{path}: PTEx does not mark tech id(s) {missing} as available AND "
+                f"already-researched (with playerUsesDefault cleared) for player "
+                f"{player}; it lists {have}"
+            )
+
     changed = None
     if template is not None and template.exists():
         changed = diff_against_template(path, template)
@@ -1023,6 +1225,8 @@ def validate_map(
             expected |= {"OWNR", "SIDE", "FORC"}
         if not keep_triggers:
             expected |= {"TRIG", "MBRF"}
+        if tech_researched:
+            expected |= {"PTEx"}
         unexpected = [c for c in changed if c not in expected]
         if unexpected:
             raise AssertionError(
@@ -1034,6 +1238,18 @@ def validate_map(
     print(f"OK: {path}")
     print(f"  {len(matching)} unit(s) of type {unit_id} owned by player {player}, "
           f"at {unit_hp_percent}% hit points")
+    if damaged_count:
+        print(f"  of those, the LAST {damaged_count} are pre-damaged to "
+              f"{damaged_hp_percent}% -- so one selection holds units that can afford a "
+              f"per-unit ability cost and units that cannot")
+        if damaged_energy_percent is not None:
+            print(f"  and that same tail starts at {damaged_energy_percent}% energy, "
+                  f"for the energy-costed half of the same question")
+    if tech_researched:
+        names = {v: k for k, v in TECH_IDS.items()}
+        print("  PTEx: player {} has researched {}".format(
+            player,
+            " ".join(f"{t}({names.get(t, '?')})" for t in sorted(tech_researched))))
     print(f"  start location for player {player} at ({start.x}, {start.y})")
     side_idx = find_section(sections, "SIDE")
     side = list(sections[side_idx].payload)[player] if side_idx >= 0 else None
@@ -1165,6 +1381,36 @@ def main() -> int:
              f"than minutes without changing anything else about them.",
     )
     parser.add_argument(
+        "--damaged-count", type=int, default=0,
+        help="Pre-damage the LAST this-many units of the player's block (same type, "
+             "same grid, same owner) to --damaged-hp instead of --unit-hp. This is the "
+             "fixture for an ability with a PER-UNIT COST: one selection then holds "
+             "units that can afford it and units that cannot, so one keypress shows "
+             "who the ENGINE skips.",
+    )
+    parser.add_argument(
+        "--damaged-hp", type=int, default=0,
+        help=f"Hit points for the --damaged-count tail, as a PERCENTAGE of the unit "
+             f"type's maximum ({MIN_HP_PERCENT}-{MAX_HP_PERCENT}). Required whenever "
+             f"--damaged-count is non-zero.",
+    )
+    parser.add_argument(
+        "--damaged-energy", type=int, default=None,
+        help=f"Energy for the --damaged-count tail, as a PERCENTAGE of the unit type's "
+             f"maximum ({MIN_HP_PERCENT}-{MAX_HP_PERCENT}). The energy counterpart of "
+             f"--damaged-hp: an ability that costs energy has a per-unit affordability "
+             f"gate too, and this is what puts units on both sides of it in ONE "
+             f"selection. Omitted means the tail keeps full energy.",
+    )
+    parser.add_argument(
+        "--tech-researched", type=str, action="append", default=None,
+        metavar="TECH",
+        help="Mark a tech as available AND already-researched for --player, by writing "
+             "PTEx. Repeatable. Names: " + ", ".join(sorted(TECH_IDS)) + "; or a raw "
+             "techdata.dat id. Without this, no unit on a generated map has any ability "
+             "that needs research -- which is every ability with a per-unit cost.",
+    )
+    parser.add_argument(
         "--validate-only",
         type=Path,
         default=None,
@@ -1178,12 +1424,14 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        techs = [resolve_tech_id(t) for t in (args.tech_researched or [])]
         if args.validate_only is not None:
             validate_map(
                 args.validate_only, args.unit_count, args.unit_type, args.player,
                 args.keep_ownr, args.keep_triggers, None,
                 args.enemy_count, args.enemy_type, args.enemy_owner, args.min_enemy_gap,
-                args.unit_hp,
+                args.unit_hp, args.damaged_count, args.damaged_hp, techs,
+                args.damaged_energy,
             )
             return 0
 
@@ -1195,6 +1443,7 @@ def main() -> int:
             (args.enemy_offset_x, args.enemy_offset_y), args.enemy_spacing,
             resolve_race(args.enemy_race, args.enemy_type) if args.enemy_count else None,
             args.enemy_owner, args.min_enemy_gap, args.unit_hp,
+            args.damaged_count, args.damaged_hp, techs, args.damaged_energy,
         )
         print(f"wrote {args.output}")
         if not args.no_validate:
@@ -1202,7 +1451,8 @@ def main() -> int:
                 args.output, args.unit_count, args.unit_type, args.player, args.keep_ownr,
                 args.keep_triggers, args.template,
                 args.enemy_count, args.enemy_type, args.enemy_owner, args.min_enemy_gap,
-                args.unit_hp,
+                args.unit_hp, args.damaged_count, args.damaged_hp, techs,
+                args.damaged_energy,
             )
         return 0
     except (ValueError, FileNotFoundError, AssertionError) as exc:

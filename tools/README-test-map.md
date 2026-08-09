@@ -313,6 +313,62 @@ type, same evidence, same inability to shoot back. The effect is asserted rather
 assumed — the test fails if the first death takes longer than its deadline, which at
 full health it always would.
 
+## The per-unit-COST variant (task 022)
+
+Every ability in vanilla StarCraft that costs the acting unit something needs research:
+Stim Packs, both cloaks, Siege Mode. Burrow is the one exception, and only for Lurkers —
+which is why the fixture above uses Lurkers, and why nothing this generator produced could
+test a per-unit **cost** until task 022 added two flags.
+
+### `-TechResearched <tech>`: the ability button has to exist at all
+
+Writes `PTEx`, the Brood War player-tech section, marking a tech **available** and
+**already-researched** for the chosen player, with `playerUsesDefault` cleared for that
+(tech, player) pair — all three bytes, because the per-player entries are dead while the
+"use default" byte is set.
+
+The layout is the 44-tech Brood War one from the staredit.net CHK spec, and it is confirmed
+by arithmetic rather than assumed: `44*12 + 44*12 + 44 + 44 + 44*12 == 1672`, which is
+exactly the size of the section in `(2)Fading Realm.scx` on disk. A template without a
+`PTEx` section is refused rather than guessed at.
+
+Tech ids come from richchk's own `TechId` enum — the same source, and the same provenance
+discipline, as the unit ids. Named here: `stim-packs` (0), `siege-mode` (5),
+`cloaking-field` (9), `personnel-cloaking` (10), `burrowing` (11); anything else can be
+passed as a raw `techdata.dat` id.
+
+Proved in game: with `--tech-researched stim-packs`, 36 generated Marines have the Stim
+button and one keypress emits command `0x36`. Without it the command card has no ability
+button on it at all, and the run fails several minutes later on "the key emitted nothing" —
+which is why the test asserts the generator's own `PTEx:` line before it launches anything.
+
+### `-DamagedCount N -DamagedHp P` (and `-DamagedEnergy P`): payers and non-payers in ONE selection
+
+The **last N units of the same block** are placed at P% instead of the block's normal value.
+Same type, same grid, same owner — the only difference is what they can afford.
+
+That "same selection" part is the whole point. An ability with a per-unit cost has a
+per-unit affordability gate (Stim's is `CMP dword [unit+8],0xa00 / JLE skip` —
+`research/ability-semantics.md` §2), and the only way to see whether the ENGINE or the
+fan-out decides who gets skipped is to have both kinds of unit in one selection, reached by
+one keypress. Two separate runs cannot tell "the engine skipped the poor ones" apart from
+"the plugin sent a different set that time".
+
+The tail is the **tail** deliberately: the fan-out emits the engine's visible twelve last and
+the overflow chunks first, and this generator builds the block row-major from the top-left,
+so a damaged tail lands in the part of the box the engine does **not** hold. A split along
+the visible/overflow line instead of along the hit-point line would then be ours, and the
+layout is what makes the two hypotheses produce different numbers.
+
+`-DamagedEnergy` is the same idea in the other currency, for the `0x21` family whose cost is
+energy (`0x00491B30` compares `cost*0x100 <= CUnit+0xA2` before deducting it).
+
+> **Watch out for the SEND-side gate.** Task 022 found that the client's own command card
+> refuses to emit an ability when the units it can see cannot pay for it. The client sees
+> the engine's twelve, not the shadow list — so a low-affordability tail can disable the
+> button outright and leave a run measuring nothing. Use the tail to test the gate, not as
+> background scenery in a test about something else.
+
 ### Why the player's units are Lurkers — two reasons, both load-bearing
 
 An **unburrowed Lurker has no weapon at all** (its only attack is a burrowed-only

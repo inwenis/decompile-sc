@@ -219,6 +219,11 @@ function New-Fixture {
     Assert-FixtureFolderIsOurs
     Remove-MyFixtures
     $path = Join-Path $mapDir "$Name.scx"
+    # NOTE for anyone tempted to add Wait-ScTestMapDirFree here as well: do not. It judges
+    # ownership by ONE filename, so on the second call it would count this suite's own
+    # phase-A fixture as foreign and wait for the run to finish itself -- which is exactly
+    # the self-deadlock the registry above exists to prevent. The registry is the model
+    # this file uses; one ownership rule per file.
     $out = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
         -UnitCount $UnitCount -UnitType lurker -Player 0 -UnitHp $UnitHp `
         -EnemyCount $EnemyCount -EnemyType hydralisk -EnemyOwner $EnemyOwner `
@@ -1250,8 +1255,15 @@ catch {
 }
 finally {
     if (-not $KeepOpen) { Stop-Mission }
-    # ONLY our own fixtures, never the folder -- another worker's map may be beside them.
+    # ONLY our own fixtures, never another worker's -- their map may be beside them.
     if (-not $KeepOpen) { Remove-MyFixtures }
+    # And the FOLDER itself, only when it is provably empty. AGENTS.md "one folder per
+    # task": an empty folder left behind becomes the first row for everyone else's
+    # positional click, which is the same bug with the roles swapped -- it broke
+    # test-selection-circles' route to Maps\campaign twice, deterministically.
+    # Remove-ScOwnFixtureDir refuses if anything at all is still in it, so it can never
+    # become the recursive delete this whole rule exists to prevent.
+    if (-not $KeepOpen) { Remove-ScOwnFixtureDir -Dir $mapDir }
 }
 
 Write-Host ''

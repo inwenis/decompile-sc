@@ -92,6 +92,40 @@ namespace ScDrive {
     [DllImport("user32.dll")]
     public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdc, uint flags);
 
+    // --- activation (task 022) ---------------------------------------------
+    // Needed by exactly one thing: the menu dropdowns. See Set-ScWindowActive.
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr h);
+    [DllImport("user32.dll")] private static extern IntPtr SetActiveWindow(IntPtr h);
+    [DllImport("user32.dll")] private static extern IntPtr SetFocus(IntPtr h);
+    [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint a, uint b, bool attach);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr h, IntPtr pid);
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+
+    // Windows refuses SetForegroundWindow from a process that does not already own the
+    // foreground, and returns TRUE while doing nothing (it only flashes the taskbar).
+    // Attaching this thread's input queue to the current foreground thread first is the
+    // documented way to be allowed to do it; the attachment is undone immediately.
+    // Returns whether the window really ended up foreground -- callers assert on that
+    // rather than on the API's return value.
+    public static bool MakeForeground(IntPtr h) {
+      IntPtr fg = GetForegroundWindow();
+      if (fg == h) return true;
+      uint tFg = GetWindowThreadProcessId(fg, IntPtr.Zero);
+      uint tMe = GetCurrentThreadId();
+      bool attached = (tFg != 0 && tFg != tMe) ? AttachThreadInput(tMe, tFg, true) : false;
+      try {
+        BringWindowToTop(h);
+        SetForegroundWindow(h);
+        SetActiveWindow(h);
+        SetFocus(h);
+      } finally {
+        if (attached) AttachThreadInput(tMe, tFg, false);
+      }
+      return GetForegroundWindow() == h;
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT { public int Left, Top, Right, Bottom; }
 
@@ -281,9 +315,26 @@ function Send-ScDrag {
         [Parameter(Mandatory)][IntPtr]$Hwnd,
         [Parameter(Mandatory)][int]$X1, [Parameter(Mandatory)][int]$Y1,
         [Parameter(Mandatory)][int]$X2, [Parameter(Mandatory)][int]$Y2,
-        [int]$Steps = 12, [int]$StepMs = 40, [int]$SettleMs = 400
+        [int]$Steps = 12, [int]$StepMs = 40, [int]$SettleMs = 400,
+        [switch]$NoActivate
     )
     Assert-ScDrivable -Hwnd $Hwnd
+    # A DRAG IS MADE OF MOUSE MOVES, AND THE GAME DROPS POSTED MOVES WHILE ITS WINDOW IS
+    # NOT FOREGROUND (task 022 -- see Set-ScWindowActive). The down and the up still land,
+    # so the box opens and closes at the same point and the drag selects NOTHING, silently:
+    # no error, no warning, just an empty selection. Task 021 lost 25 assertions across two
+    # suites to exactly that, in a sweep where three other suites boxed fine -- which is the
+    # intermittency this explains. Activation is part of dragging, not an extra;
+    # -NoActivate is for a caller that has already done it.
+    if (-not $NoActivate) {
+        # LOUD, like Send-ScDropdownPick. A drag that runs without foreground selects
+        # nothing and reports nothing -- which is the failure this activation exists to
+        # prevent, and the one that cost another task 25 assertions. Five suites outside
+        # task 022 depend on this primitive, so silence here is the worst place for it.
+        if (-not (Set-ScWindowActive -Hwnd $Hwnd)) {
+            throw 'drive-game: could not bring the game window to the foreground, and a drag made while it is in the background selects NOTHING silently (see Set-ScWindowActive). Refusing to drag.'
+        }
+    }
     if ($Steps -lt 2) { $Steps = 2 }
 
     [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]0, (ConvertTo-ScLParam $X1 $Y1))
@@ -339,6 +390,363 @@ function Send-ScKey {
     if ($Ctrl)  { [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_KEYUP, [IntPtr]0x11, [IntPtr]0xC01D0001) }
     if ($Shift) { [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_KEYUP, [IntPtr]0x10, [IntPtr]0xC02A0001) }
     if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
+}
+
+function Get-ScMapFolderRow {
+    <#
+    .SYNOPSIS
+    Which ROW of the map browser a fixture folder will be on.
+    .DESCRIPTION
+    The browser is clicked positionally, and per-task fixture folders inherit that bug one
+    level up: with `00-t021` and `00-t022` both present, row 1 is 021's and row 2 is 022's,
+    so a hardcoded row-1 click opens somebody else's folder and plays their map.
+
+    Computed from the filesystem rather than assumed: the browser lists directories in name
+    order, so the row is the number of sibling directories sorting before this one. The
+    caller still has to verify what it opened -- this removes the guess, not the need for
+    the check.
+
+    Returns the client Y for that row, using the geometry read off a captured frame (first
+    row at y=140, 19px apart at a 640x480 client).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$MapsDir,
+        [Parameter(Mandatory)][string]$FolderName,
+        [int]$FirstRowY = 140, [int]$Pitch = 19,
+        [switch]$HasUpOneLevel
+    )
+    $dirs = @(Get-ChildItem -LiteralPath $MapsDir -Directory -ErrorAction SilentlyContinue |
+              ForEach-Object { $_.Name } | Sort-Object)
+    $idx = [array]::IndexOf($dirs, $FolderName)
+    if ($idx -lt 0) { throw "drive-game: $FolderName is not a directory under $MapsDir." }
+    # `[Up One Level]` occupies row 1 wherever the browser has a parent to go back to --
+    # every suite here relies on that when it clicks the map on the row BELOW it. Whether
+    # this particular list has one depends on where the browser opens, so the caller says
+    # so rather than this guessing; the default is the Maps\BroodWar root, which does not.
+    $offset = if ($HasUpOneLevel) { 1 } else { 0 }
+    [pscustomobject]@{
+        Row = $idx + 1 + $offset
+        Y   = $FirstRowY + ($idx + $offset) * $Pitch
+        Siblings = ($dirs -join ', ')
+        HasUpOneLevel = [bool]$HasUpOneLevel
+    }
+}
+
+function Assert-ScFixtureStillMine {
+    <#
+    .SYNOPSIS
+    Re-check, as late as possible, that the fixture about to be loaded is this run's own.
+    .DESCRIPTION
+    Wait-ScTestMapDirFree checks once, BEFORE generating. The folder can change between
+    that and the browser click -- another worker's cleanup can take the file, or drop one
+    in -- and the browser picks by ROW, so a foreign file silently changes which map
+    loads. Task 022 lost a run to exactly that gap. Called immediately before the launch.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Dir, [Parameter(Mandatory)][string]$MapPath)
+    $mine = Split-Path $MapPath -Leaf
+    if (-not (Test-Path -LiteralPath $MapPath)) {
+        throw "drive-game: $mine is gone from $Dir between generation and launch -- another worker's cleanup took it. Regenerate; do not interpret this run."
+    }
+    $foreign = @(Get-ChildItem -LiteralPath $Dir -File -ErrorAction SilentlyContinue |
+                 Where-Object { $_.Name -ne $mine })
+    if ($foreign.Count -gt 0) {
+        throw ("drive-game: {0} also holds {1}, which this test did not create. The map browser picks by ROW, so the wrong map would load. Refusing to start." -f $Dir, (($foreign | ForEach-Object { $_.Name }) -join ', '))
+    }
+}
+
+function Remove-ScOwnFixtureDir {
+    <#
+    .SYNOPSIS
+    Delete a fixture folder this run created, but only if it is EMPTY.
+    .DESCRIPTION
+    A suite with its own fixture folder must take it away again: every suite in this
+    directory reaches its map with a first-row folder click, so an empty folder left
+    behind changes which folder that click lands on for everyone else. Refusing to delete
+    a non-empty one is the same rule as everywhere else here -- never remove a file this
+    run did not create.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Dir)
+    if (-not (Test-Path -LiteralPath $Dir)) { return }
+    $left = @(Get-ChildItem -LiteralPath $Dir -Force -ErrorAction SilentlyContinue)
+    if ($left.Count -eq 0) { Remove-Item -LiteralPath $Dir -Force -ErrorAction SilentlyContinue }
+    else { Write-Host "       leaving $Dir in place: it still holds $($left.Count) file(s) this run did not create" }
+}
+
+function Wait-ScTestMapDirFree {
+    <#
+    .SYNOPSIS
+    Wait until the shared generated-fixture folder holds nothing but this test's own map,
+    then make sure only this test's own map is in it.
+    .DESCRIPTION
+    Every unattended suite in this directory generates its fixture into the SAME folder
+    (Maps\BroodWar\00-testmap, whose name is what makes the two menu clicks that reach it
+    deterministic) and finds it by clicking the row after [Up One Level]. That is fine for
+    one worker and wrong for two: task 022 hit a live collision -- another worker's
+    combat.scx was sitting in that folder, still open by its running game, while this
+    suite was about to `Remove-Item -Recurse` the folder out from under it.
+
+    So: never delete the folder, only this test's own file, and refuse to start while
+    somebody else's fixture is in there rather than racing them for the second row of the
+    map list. The wait is the polite half; the assertion is the half that stops a
+    mis-clicked row from being diagnosed later as a mysterious wrong-unit-type failure.
+
+    Returns nothing; throws if the folder is still shared when the timeout runs out.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Dir,
+        [Parameter(Mandatory)][string]$MyMapPath,
+        [int]$TimeoutMinutes = 20
+    )
+    $mine = Split-Path $MyMapPath -Leaf
+    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    while ($true) {
+        New-Item -ItemType Directory -Path $Dir -Force | Out-Null
+        $foreign = @(Get-ChildItem -LiteralPath $Dir -File -ErrorAction SilentlyContinue |
+                     Where-Object { $_.Name -ne $mine })
+        if ($foreign.Count -eq 0) { break }
+        if ((Get-Date) -ge $deadline) {
+            throw ("drive-game: $Dir still holds another worker's fixture ({0}) after $TimeoutMinutes minute(s). " +
+                   'Two suites cannot share that folder: the map is chosen by clicking a row, so a second file ' +
+                   'silently changes which map loads. Not deleting it -- it may belong to a running game.') -f `
+                   (($foreign | ForEach-Object { $_.Name }) -join ', ')
+        }
+        Write-Host ("       waiting for {0} to be free (another worker's fixture is in it: {1})" -f `
+            $Dir, (($foreign | ForEach-Object { $_.Name }) -join ', '))
+        Start-Sleep -Seconds 20
+    }
+    # Only ever this test's own file -- and it can be LOCKED, because two suites in this
+    # directory generate a fixture with the same name and another worker's game may have it
+    # open. Waiting for the handle to go is right; throwing on the first attempt turns a
+    # transient into a failed run, and forcing it is not an option against a file a running
+    # game is reading.
+    $deleteDeadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    while (Test-Path -LiteralPath $MyMapPath) {
+        try { Remove-Item -LiteralPath $MyMapPath -Force -ErrorAction Stop; break }
+        catch {
+            if ((Get-Date) -ge $deleteDeadline) {
+                throw "drive-game: $mine in $Dir is locked by another process and could not be replaced within $TimeoutMinutes minute(s) -- a game is still reading it. Not forcing."
+            }
+            Write-Host "       waiting for $mine to be released (another process has it open)"
+            Start-Sleep -Seconds 15
+        }
+    }
+}
+
+function Get-ScSelectionGroup {
+    <#
+    .SYNOPSIS
+    The CUnit pointers the ENGINE is holding -- its capped twelve -- from the observer's
+    own snapshot line.
+    .DESCRIPTION
+    Needed to say anything about "the engine's selection" as a SET rather than as a count.
+    Task 022 used it to settle which units the twelve actually contained, after a claim in
+    that task's own writeup about where a pre-damaged block landed turned out to be false
+    when the pointers were cross-referenced.
+
+    Returns the pointers as upper-case hex strings without the 0x, matching the format
+    Get-ScWorldState reports for each unit, so the two can be intersected directly.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$LogPath)
+    $line = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
+              Select-String -Pattern 'clientSelectionGroup\s+\[0\]=') | Select-Object -Last 1
+    if (-not $line) { return @() }
+    ,@([regex]::Matches($line.Line, '=0x([0-9A-Fa-f]+)') |
+       ForEach-Object { $_.Groups[1].Value.ToUpperInvariant() })
+}
+
+function Get-ScRegionFingerprint {
+    <#
+    .SYNOPSIS
+    A hash of one rectangle of the game window. Not a picture, a comparison key.
+    .DESCRIPTION
+    Frames are a diagnostic in this repo, never an oracle -- reading text off one is not
+    something a script can do reliably. But comparing the SAME rectangle before and after
+    an action is different: it answers "did this region change at all", which is a real
+    yes/no. Set-ScGameType uses it, and nothing about it reproduces game artwork: the
+    return value is a hex digest.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][IntPtr]$Hwnd,
+        [Parameter(Mandatory)][int]$X, [Parameter(Mandatory)][int]$Y,
+        [Parameter(Mandatory)][int]$Width, [Parameter(Mandatory)][int]$Height
+    )
+    Assert-ScDrivable -Hwnd $Hwnd
+    $sz = Get-ScWindowSize -Hwnd $Hwnd
+    $bmp = New-Object System.Drawing.Bitmap($sz.Width, $sz.Height,
+                     [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    try {
+        $g = [System.Drawing.Graphics]::FromImage($bmp)
+        try {
+            $hdc = $g.GetHdc()
+            try { $ok = [ScDrive.Native]::PrintWindow($Hwnd, $hdc, 0) }
+            finally { $g.ReleaseHdc($hdc) }
+        } finally { $g.Dispose() }
+        if (-not $ok) { throw "drive-game: PrintWindow failed for hwnd 0x$('{0:X}' -f [int64]$Hwnd)." }
+        # The frames this repo captures are FULL-WINDOW, because the windowed-mode helper
+        # leaves its caption inside the reported client rectangle -- so the caller's
+        # coordinates are client ones and the offset is added here, once.
+        $cs = Get-ScClientSize -Hwnd $Hwnd
+        $dx = [int](($sz.Width - $cs.Width) / 2)
+        $dy = $sz.Height - $cs.Height - $dx
+        $rect = New-Object System.Drawing.Rectangle(($X + $dx), ($Y + $dy), $Width, $Height)
+        $crop = $bmp.Clone($rect, $bmp.PixelFormat)
+        try {
+            $ms = New-Object System.IO.MemoryStream
+            try {
+                $crop.Save($ms, [System.Drawing.Imaging.ImageFormat]::Bmp)
+                $sha = [System.Security.Cryptography.SHA256]::Create()
+                try { return [BitConverter]::ToString($sha.ComputeHash($ms.ToArray())).Replace('-', '').Substring(0, 16) }
+                finally { $sha.Dispose() }
+            } finally { $ms.Dispose() }
+        } finally { $crop.Dispose() }
+    } finally { $bmp.Dispose() }
+}
+
+function Set-ScGameType {
+    <#
+    .SYNOPSIS
+    Set the Create Game screen's Game Type, and PROVE it changed.
+    .DESCRIPTION
+    The Game Type combo is the single most consequential control in this whole harness --
+    get it wrong and the fixture loads as a melee game, the map's placed units are never
+    created, and the failure surfaces minutes later as "the wrong units are on the map".
+    It is also the least reliable one: it remembers what this machine last used (so a
+    no-op pick can look like a success for months), and the pick needs the window
+    foreground (Set-ScWindowActive), which another process can take away mid-drag.
+
+    So this does not pick and hope. It picks a KNOWN OTHER entry first, fingerprints the
+    map-information panel, then picks the wanted entry and requires the panel to have
+    CHANGED. That panel reads "Number of Players: N" for the melee-style types and
+    "Human Slots / Computer Slots" under Use Map Settings, so a real change of type is a
+    real change of pixels -- and a pick that silently did nothing leaves the two
+    fingerprints identical, which is a failure here instead of a mystery later.
+
+    The list's contents and order were read off a held-open frame (task 016, re-checked
+    by task 022): for the two-player maps this harness generates it is exactly
+    {Melee, Free For All, Use Map Settings}, drawn below the box at +16, +31, +46 client
+    pixels whatever the current value is.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][IntPtr]$Hwnd,
+        [int]$Index = 2,          # Use Map Settings
+        [int]$OtherIndex = 0,     # Melee -- any entry that is not $Index
+        [int]$X = 265, [int]$Y = 268,
+        [int]$Tries = 3
+    )
+    # The map-information panel, client coordinates at 640x480. Wide enough to cover both
+    # the "Number of Players" line and the two-line Human/Computer Slots that replaces it.
+    $panel = @{ X = 400; Y = 270; Width = 210; Height = 40 }
+    for ($try = 1; $try -le $Tries; $try++) {
+        Send-ScDropdownPick -Hwnd $Hwnd -X $X -Y $Y -Index $OtherIndex
+        $before = Get-ScRegionFingerprint -Hwnd $Hwnd @panel
+        Send-ScDropdownPick -Hwnd $Hwnd -X $X -Y $Y -Index $Index
+        $after = Get-ScRegionFingerprint -Hwnd $Hwnd @panel
+        if ($before -ne $after) {
+            Write-Host "       game type set (panel $before -> $after, attempt $try)"
+            return
+        }
+        Write-Host "       game type pick did not take (panel unchanged: $before), retrying"
+        Start-Sleep -Milliseconds 600
+    }
+    throw "drive-game: could not set the Game Type after $Tries attempt(s) -- the map-information panel never changed, so the pick is not taking. A fixture loaded under the wrong game type produces the wrong units, so this refuses to continue."
+}
+
+function Wait-ScNoGameRunning {
+    <#
+    .SYNOPSIS
+    Wait until no StarCraft process is running on this machine.
+    .DESCRIPTION
+    THE GAME IS SINGLE-INSTANCE, MACHINE-WIDE. Launching a second one -- even from a
+    different working copy, with a different injector -- gets an immediate exit, which
+    `scinject.exe` reports as exit 3 ("the game exited on its own before injection") and
+    `run-with-plugin.ps1` turns into a thrown launch failure. Task 022 hit this repeatedly
+    while another worker's suite was mid-run, and copying the install to a private
+    directory did NOT help, which is what established that the constraint is per machine
+    and not per directory.
+
+    The launch lock (sc-launch-lock.ps1) does not cover this on its own: it is held
+    around the LAUNCH, not for as long as the game is alive, so a worker can be holding a
+    running game with the lock free. So a caller that wants a game waits for the machine
+    to be free FIRST and then takes the lock for as long as its own game lives.
+
+    Waiting, never killing: another worker's game is another worker's run, and ending it
+    is the 2026-07 incident class in a different costume.
+    #>
+    [CmdletBinding()]
+    param([int]$TimeoutMinutes = 30, [int]$PollSeconds = 15)
+    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    while ($true) {
+        $running = @(Get-Process -Name 'StarCraft' -ErrorAction SilentlyContinue)
+        if ($running.Count -eq 0) { return }
+        if ((Get-Date) -ge $deadline) {
+            throw ("drive-game: StarCraft has been running (pid {0}) for $TimeoutMinutes minute(s) and this machine allows only one instance. " +
+                   'Not touching it -- it belongs to another worker.') -f (($running | ForEach-Object { $_.Id }) -join ',')
+        }
+        Write-Host ("       waiting for another worker's StarCraft to exit (pid {0})" -f (($running | ForEach-Object { $_.Id }) -join ','))
+        Start-Sleep -Seconds $PollSeconds
+    }
+}
+
+function Set-ScWindowActive {
+    <#
+    .SYNOPSIS
+    Make the game window the foreground window. Needed by the menu dropdowns and by
+    nothing else.
+    .DESCRIPTION
+    THE GAME IGNORES A POSTED WM_MOUSEMOVE WHEN ITS WINDOW IS NOT ACTIVE. Posted clicks
+    are processed either way, which is why every other function in this file works with
+    the window in the background and why this was invisible until task 022 went looking
+    for it.
+
+    Measured, on the Create Game screen (work/scratch/022/probe-gametype*.ps1, frames
+    under C:\sc-work\logs\022-probe*-frames):
+
+      * posting WM_MOUSEMOVE to (500,200) with the window inactive leaves the game's own
+        drawn cursor exactly where the last posted CLICK left it -- the motion is not
+        merely unhighlighted, it is not processed at all;
+      * so a dropdown opened by a posted button-down highlights whatever row the cursor
+        was on when it opened, never moves, and the button-up commits the value that was
+        already selected. The pick silently does nothing;
+      * the same posted sequence, with the window made foreground first, sets the value.
+
+    That silent no-op is the dangerous part: the Game Type combo remembers the last value
+    this machine used, so a suite whose pick did nothing still passed for as long as that
+    remembered value happened to be the one it wanted. Task 022 found it the other way
+    round -- the remembered value was "Free For All", every generated fixture loaded as a
+    melee game, and the placed units were never created.
+
+    SetForegroundWindow alone is refused for a background process (it returns TRUE and
+    flashes the taskbar instead), so this goes through the documented AttachThreadInput
+    dance and then VERIFIES the result rather than trusting the return value.
+
+    This is the one place in this file that reaches outside the target window's message
+    queue. It steals focus, which is visible to anyone at the machine -- so it is called
+    only where it is needed, not on every action.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][IntPtr]$Hwnd,
+        [int]$SettleMs = 400,
+        # Attempts. Foreground changes can lose a race with whatever is currently
+        # foreground (an installer, a notification toast); one retry is cheap.
+        [int]$Tries = 3
+    )
+    Assert-ScDrivable -Hwnd $Hwnd
+    for ($i = 0; $i -lt $Tries; $i++) {
+        if ([ScDrive.Native]::MakeForeground($Hwnd)) {
+            if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
+            return $true
+        }
+        Start-Sleep -Milliseconds 300
+    }
+    return $false
 }
 
 function Send-ScCommand {
@@ -425,6 +833,12 @@ function Send-ScDropdownPick {
     then shows the list open; the offsets below were read off that frame, at a 640x480
     client: first entry 16px below the closed box's own centre line, 15px apart after
     that. -Index 0 is that first entry.
+
+    IT ALSO NEEDS THE WINDOW TO BE ACTIVE (task 022): the mouse MOVE that walks down the
+    open list is dropped when the window is in the background, so the pick becomes a
+    silent no-op that leaves the previous value in place. Set-ScWindowActive explains the
+    measurement. Activation happens here rather than at every call site, so that every
+    existing caller is fixed by having this function do it; -NoActivate opts out.
     #>
     [CmdletBinding()]
     param(
@@ -432,6 +846,7 @@ function Send-ScDropdownPick {
         [Parameter(Mandatory)][int]$X, [Parameter(Mandatory)][int]$Y,
         [Parameter(Mandatory)][int]$Index,
         [int]$FirstOffset = 16, [int]$Pitch = 15, [int]$SettleMs = 400,
+        [switch]$NoActivate,
         # How long to wait for the list to APPEAR after the button goes down, and how long
         # to sit on the chosen entry before releasing.
         #
@@ -451,6 +866,14 @@ function Send-ScDropdownPick {
         [int]$OpenMs = 700, [int]$HoverMs = 400
     )
     Assert-ScDrivable -Hwnd $Hwnd
+    if (-not $NoActivate) {
+        if (-not (Set-ScWindowActive -Hwnd $Hwnd)) {
+            # Loud, not silent: a pick made in the background is the failure mode this
+            # whole comment block exists about, and it would otherwise be discovered as
+            # a wrong unit type several minutes later.
+            throw "drive-game: could not bring the game window to the foreground, and a dropdown pick made while it is in the background does nothing (see Set-ScWindowActive). Refusing to pick."
+        }
+    }
     $itemY = $Y + $FirstOffset + $Index * $Pitch
     $atBox  = ConvertTo-ScLParam $X $Y
     $atItem = ConvertTo-ScLParam $X $itemY
@@ -551,6 +974,12 @@ function Get-ScUnitState {
             # written by an older plugin build (the fields are absent, not wrong).
             $lv = [regex]::Match($line.Line,
                 'uniqOnly=(\d+) recycled=(\d+) hp0=(\d+) foreign=(\d+) nosprite=(\d+) removed=(\d+) staleSkipped=(\d+) liveness=(\d+)')
+            # Task 022 appended the per-unit COST/EFFECT histograms. Same rule as the
+            # task-020 block above: parsed separately and optionally, so a reader written
+            # against an older plugin build still works and a missing field reads as
+            # "this build did not report it", never as zero.
+            $ce = [regex]::Match($line.Line,
+                'stimmed=(\d+)/(\d+) hp=\[([^\]]*)\] stim=\[([^\]]*)\] energy=\[([^\]]*)\]')
             $toMap = {
                 param([string]$s)
                 $h = @{}
@@ -578,12 +1007,100 @@ function Get-ScUnitState {
                 Removed = $(if ($lv.Success) { [int]$lv.Groups[6].Value } else { -1 })
                 StaleSkipped = $(if ($lv.Success) { [int]$lv.Groups[7].Value } else { -1 })
                 Liveness = $(if ($lv.Success) { [int]$lv.Groups[8].Value } else { -1 })
+                Stimmed = $(if ($ce.Success) { [int]$ce.Groups[1].Value } else { -1 })
+                StimmedOf = $(if ($ce.Success) { [int]$ce.Groups[2].Value } else { -1 })
+                # Keys are hex strings exactly as logged ('0x2800'), values are unit counts.
+                Hp = $(if ($ce.Success) { & $toMap $ce.Groups[3].Value } else { $null })
+                Stim = $(if ($ce.Success) { & $toMap $ce.Groups[4].Value } else { $null })
+                Energy = $(if ($ce.Success) { & $toMap $ce.Groups[5].Value } else { $null })
+                HpText = $(if ($ce.Success) { $ce.Groups[3].Value } else { '' })
+                StimText = $(if ($ce.Success) { $ce.Groups[4].Value } else { '' })
                 Line = $line.Line.Trim()
             }
         }
         Start-Sleep -Milliseconds 250
     }
     throw "drive-game: no UNITSTATE line for marker '$label' within ${TimeoutSec}s (log: $LogPath)."
+}
+
+function Get-ScWorldState {
+    <#
+    .SYNOPSIS
+    Ask the plugin for a WORLD scan and parse it. THE oracle that also exists in
+    -Mode observe.
+    .DESCRIPTION
+    Same marker handshake as Get-ScUnitState, but the plugin answers by walking the
+    ENGINE's own per-player unit lists rather than the fan-out's shadow list -- so this
+    works in `-Mode observe`, where no hook is installed and there is no shadow list at
+    all. That is what makes a plugin-vs-stock comparison possible with the SAME oracle
+    on both sides.
+
+    Needs the plugin launched with -WorldScan 1; without it the plugin logs no WORLD
+    lines and this throws on the timeout.
+
+    Returns one object with .Units (one entry per unit, with Player/Type/Hp/Order/
+    Order2/Stim/Energy/X/Y/Flags) and .Counts (per player: Units, Recount, Complete).
+    A Recount that disagrees with Units means the sample was taken while the game
+    thread was editing the list -- the caller should discard it, not believe it.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$LogPath,
+        [Parameter(Mandatory)][string]$Tag,
+        [string]$MarkerPath,
+        [int]$TimeoutSec = 15
+    )
+    if (-not $MarkerPath) { $MarkerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt' }
+    $script:ScMarkerSeq++
+    $label = "$Tag-$script:ScMarkerSeq"
+    Set-Content -LiteralPath $MarkerPath -Value $label -NoNewline
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $esc = [regex]::Escape($label)
+    while ((Get-Date) -lt $deadline) {
+        $lines = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
+                   Select-String -Pattern "WORLD \[$esc\]")
+        # The per-player summary line is written LAST for each player, so seeing one for
+        # player 7 means the whole scan for this label has landed. Waiting for that
+        # instead of for "some line" is what stops a half-written scan being parsed.
+        $done = @($lines | Select-String -Pattern 'p=7 units=')
+        if ($done.Count -gt 0) {
+            $units = @()
+            $counts = @{}
+            foreach ($l in $lines) {
+                $m = [regex]::Match($l.Line,
+                    'p=(\d+) i=(\d+) unit=0x([0-9A-Fa-f]+) owner=(\d+) type=0x([0-9A-Fa-f]+) hp=(-?\d+) order=0x([0-9A-Fa-f]+) order2=0x([0-9A-Fa-f]+) stim=(\d+) energy=(\d+) pos=\((\d+),(\d+)\) flags=0x([0-9A-Fa-f]+)')
+                if ($m.Success) {
+                    $units += [pscustomobject]@{
+                        Player = [int]$m.Groups[1].Value
+                        Index  = [int]$m.Groups[2].Value
+                        Unit   = $m.Groups[3].Value
+                        Owner  = [int]$m.Groups[4].Value
+                        Type   = [Convert]::ToInt32($m.Groups[5].Value, 16)
+                        Hp     = [int]$m.Groups[6].Value
+                        Order  = [Convert]::ToInt32($m.Groups[7].Value, 16)
+                        Order2 = [Convert]::ToInt32($m.Groups[8].Value, 16)
+                        Stim   = [int]$m.Groups[9].Value
+                        Energy = [int]$m.Groups[10].Value
+                        X      = [int]$m.Groups[11].Value
+                        Y      = [int]$m.Groups[12].Value
+                        Flags  = [Convert]::ToUInt32($m.Groups[13].Value, 16)
+                    }
+                    continue
+                }
+                $s = [regex]::Match($l.Line, 'p=(\d+) units=(\d+) recount=(\d+) complete=(\d+)')
+                if ($s.Success) {
+                    $counts[[int]$s.Groups[1].Value] = [pscustomobject]@{
+                        Units    = [int]$s.Groups[2].Value
+                        Recount  = [int]$s.Groups[3].Value
+                        Complete = [int]$s.Groups[4].Value
+                    }
+                }
+            }
+            return [pscustomobject]@{ Label = $label; Units = $units; Counts = $counts }
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    throw "drive-game: no complete WORLD scan for marker '$label' within ${TimeoutSec}s (log: $LogPath). Was the game launched with -WorldScan 1?"
 }
 
 function Save-ScWindowImage {

@@ -167,7 +167,12 @@ function Get-CropBytes {
 
 try {
     Step "generate the fixture: $UnitCount Lurkers, Use Map Settings, no triggers" {
-        if (Test-Path -LiteralPath $mapDir) { Remove-Item -LiteralPath $mapDir -Recurse -Force }
+        # AGENTS.md rule 4 (task 022): the generated-fixture folder is SHARED between workers and
+        # the map browser picks by ROW, so a foreign .scx silently changes which map loads --
+        # and a recursive delete here takes another worker's fixture out from under its running
+        # game. This suite is not otherwise touched by task 022; this is the compliance change,
+        # nothing else.
+        Wait-ScTestMapDirFree -Dir $mapDir -MyMapPath $mapPath
         $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
             -UnitCount $UnitCount -UnitType lurker -Player 0 -OutputPath $mapPath 2>&1
         $gen | ForEach-Object { Write-Host "       $_" }
@@ -476,7 +481,13 @@ finally {
         $failures++
     }
     if (-not $KeepOpen -and (Test-Path -LiteralPath $mapDir)) {
-        Remove-Item -LiteralPath $mapDir -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $mapPath -Force -ErrorAction SilentlyContinue
+        # And take the FOLDER away too when it is empty. Leaving an empty 00-testmap behind
+        # is not harmless: every suite here reaches its map with positional row clicks, so an
+        # extra directory shifts the rows for suites that navigate somewhere else entirely --
+        # which is exactly how task 022's compliance change broke test-selection-circles'
+        # route to Maps\campaign. Remove-ScOwnFixtureDir refuses if anything is still in it.
+        Remove-ScOwnFixtureDir -Dir $mapDir
     }
 }
 
@@ -484,7 +495,9 @@ Write-Host ''
 Write-Host '[final] the run must balance'
 $left = if ($gamePid -gt 0) { Get-Process -Id $gamePid -ErrorAction SilentlyContinue } else { $null }
 Assert-That 'the game process this test started is gone' ($KeepOpen -or $null -eq $left)
-Assert-That 'the generated map was cleaned up' ($KeepOpen -or -not (Test-Path -LiteralPath $mapDir))
+# This test's own fixture, not the folder: the folder is shared with other workers and
+# this suite no longer removes it (AGENTS.md rule 4 -- see the note at the generation step).
+Assert-That 'the generated map was cleaned up' ($KeepOpen -or -not (Test-Path -LiteralPath $mapPath))
 
 $hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
 Write-Host "  StarCraft.exe SHA-256 after:  $hashAfter"

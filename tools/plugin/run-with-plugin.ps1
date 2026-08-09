@@ -172,7 +172,15 @@ param(
     # reproduced on demand -- it is how the in-game regression assertion was shown
     # to be capable of failing (research/fanout-liveness.md). Never use it for a
     # real run.
-    [ValidateSet('0', '1')][string]$Liveness = '1'
+    [ValidateSet('0', '1')][string]$Liveness = '1',
+    # Task 022: the read-only WORLD scan. On each marker the observer walks the
+    # engine's own per-player unit lists and logs one line per unit (type, hp, order,
+    # position). It installs NO hook and writes nothing, so unlike the fan-out's
+    # UNITSTATE line it also exists in -Mode observe -- which is the whole point:
+    # the stock arm of a plugin-vs-stock comparison needs an oracle too, and it must
+    # be the SAME oracle. Off by default because the existing suites parse this log
+    # and a 36-unit fixture would add 36 lines per marker to every one of their runs.
+    [ValidateSet('0', '1')][string]$WorldScan = '0'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -276,6 +284,7 @@ try {
     $env:SCPLUGIN_CIRCLES        = $Circles
     $env:SCPLUGIN_HUDROW         = $HudRow
     $env:SCPLUGIN_FANOUT_LIVENESS = $Liveness
+    $env:SCPLUGIN_WORLDSCAN      = $WorldScan
     if ($Liveness -eq '0') {
         Write-Warning 'run-with-plugin: -Liveness 0 — the fan-out emit gate is back to the pre-task-020 uniqueness test ALONE. A unit killed by damage will be replayed into a Select. This is a deliberate defect-reproduction run.'
     }

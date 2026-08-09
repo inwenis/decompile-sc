@@ -167,6 +167,30 @@
 #define SC_CUNIT_OFF_FLAGS       0xDCu
 #define SC_UNIT_FLAG_BURROWED    0x10u
 
+// u16 -- the unit's ENERGY, in the engine's 1/256 fixed point (a 200-energy caster
+// reads 0xC800). Named by task 015 from 0x00491B30, the deduct the 0x21 handler calls;
+// task 022 read that function's own instructions rather than inheriting the claim:
+// it compares `(u16)(cost * 0x100) <= *(u16*)(unit + 0xA2)` and then does
+// `*(short*)(unit + 0xA2) += cost * -0x100`. A field compared against a cost and then
+// reduced by exactly that cost is the resource the ability spends.
+// research/ability-semantics.md 3.
+#define SC_CUNIT_OFF_ENERGY      0xA2u
+
+// u8 -- the STIM TIMER, in game frames. Derived by task 022 from the 0x36 handler
+// 0x004C2F30 in THIS binary (research/ability-semantics.md 2), disassembly quoted
+// there:
+//     0x004C2FE0  MOV CL,byte ptr [ESI + 0x115]
+//     0x004C2FE6  MOV AL,0x25
+//     0x004C2FEA  JNC skip                      ; already >= 0x25, leave it alone
+//     0x004C2FEC  MOV byte ptr [ESI + 0x115],AL ; else set it to 0x25
+// A field the ability sets to a fixed duration, refreshed rather than stacked, written
+// immediately after the unit pays the ability's HP cost. 16 instructions in the whole
+// binary touch this displacement (work/scratch/022/field-115.tsv, FieldSweep) and the
+// corroborating pair is 0x00492F70, which reads it, decrements and writes it back --
+// i.e. it ticks down. READ ONLY here, same as the order id.
+#define SC_CUNIT_OFF_STIM_TIMER  0x115u
+#define SC_STIM_TIMER_FRAMES     0x25u   // what 0x004C2F30 writes
+
 // ---------------------------------------------------------------------------
 // SELECTION CIRCLES -- derived by task 014 from StarCraft.exe 1.16.1 itself.
 // Full evidence, with disassembly, in research/selection-circles.md.
