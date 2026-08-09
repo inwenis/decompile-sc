@@ -110,11 +110,19 @@ Rules, all three, no exceptions:
 Rule 3 is what prevents the silent failure — playing someone else's map produces internally
 consistent nonsense, which is worse than a crash.
 
-## NEVER raise the game window (hard rule, 2026-08-09, task 027 — reverses 022/023)
+## Foreground: only ONE primitive may raise (hard rule, 2026-08-09, task 027 — reverses 022/023)
 
-**Posted mouse moves do NOT need the foreground, and taking it hurts the user.** This
-section used to say the opposite. It was wrong, and the wrong version cost the user their
-focus on every unattended run — the complaint that opened task 027.
+**The rule has two halves and you need both. Reading one half alone re-opens a real bug.**
+
+1. **Posted mouse MOVES, clicks and world DRAG-boxes do NOT need the foreground.** Nothing
+   in the harness may raise the window for them. This is the half that reverses 022/023.
+2. **A DROPDOWN pick DOES** — `Send-ScDropdownPick` is the one and only place in this repo
+   allowed to raise, it does so for the length of one pick, and it hands the foreground
+   back afterwards. Delete that and the Game Type pick silently stops taking. Details at
+   the end of this section.
+
+Half 1 used to be stated the other way round. It was wrong, and the wrong version cost the
+user their focus on every unattended run — the complaint that opened task 027.
 
 Two kinds of evidence:
 
@@ -151,7 +159,9 @@ So:
 - Do not "fix" a flaky input by activating the window. It will not be the cause, and it
   will steal the user's focus and trap their mouse while the run lasts.
 
-**The one exception, measured: `Send-ScDropdownPick`.** A menu dropdown is a press-and-hold
+### Half 2: the dropdown, the one place a raise is allowed
+
+**Measured, not assumed: `Send-ScDropdownPick`.** A menu dropdown is a press-and-hold
 control and the game calls `SetCapture` on button-down (`0x004d1a76`); Windows grants the
 mouse capture only to the FOREGROUND window. `probe-quiet-dropdown.ps1` ran all three arms
 on the Create Game screen: background = pick did not take, background + `AttachThreadInput`
@@ -162,10 +172,17 @@ seconds during the menu walk of the three suites that call `Set-ScGameType`, ins
 whole run. A world drag-box is also a held-button walk and needs none of this — so this is
 the dialog control, not held buttons in general.
 
-Verified after the change: `test-fanout-orders` and `test-selection-circles` (the pair
-022/023 cited) both 0 failures, with `tools/plugin/watch-foreground.ps1` sampling
-`GetForegroundWindow()` every 250 ms across both runs and recording **no change at all** —
-the user's window kept the foreground for the entire sweep.
+### How to check a run did not steal focus
+
+`tools/plugin/watch-foreground.ps1` samples `GetForegroundWindow()` every 250 ms and prints
+one line per CHANGE, exiting non-zero if any StarCraft window was ever foreground. Run it
+alongside a suite; do not claim "it did not steal focus" without it.
+
+What a correct run looks like: for the six suites that never pick a game type, **zero**
+changes — `test-fanout-orders` and `test-selection-circles` (the pair 022/023 cited) both
+went 0 failures with the user's window keeping the foreground for the entire run. For the
+three that do pick one, exactly one borrow-and-return pair around the pick (measured:
+foreground at 22:03:39, back to the user's window at 22:03:43). Anything else is a bug.
 
 ## The in-game tips dialog is dismissed by ITS OWN button, never by a fixed point (task 027)
 

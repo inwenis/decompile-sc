@@ -1550,8 +1550,21 @@ function Send-ScDropdownPick {
         # also makes the game call ClipCursor(NULL) (0x00421730), which releases the mouse
         # confinement its own WM_ACTIVATEAPP handler applied -- so the borrow ends cleanly
         # rather than leaving the user's cursor trapped in a 640x480 box.
+        #
+        # NEVER FATAL. By the time this runs the pick has already happened; if the window
+        # that had the foreground has closed, or something else refuses to give it up, that
+        # is a cosmetic loss and must not fail an otherwise good suite.
         if ($prevFg -ne [IntPtr]::Zero -and $prevFg -ne $Hwnd) {
-            [void][ScDrive.Native]::MakeForeground($prevFg)
+            try {
+                if ([ScDrive.Native]::IsWindow($prevFg)) {
+                    if (-not [ScDrive.Native]::MakeForeground($prevFg)) {
+                        Write-Warning 'drive-game: could not hand the foreground back after the dropdown pick; the game may be left in front. The pick itself succeeded.'
+                    }
+                }
+            }
+            catch {
+                Write-Warning "drive-game: handing the foreground back after the dropdown pick failed ($($_.Exception.Message)). The pick itself succeeded."
+            }
         }
     }
 }
