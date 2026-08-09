@@ -268,6 +268,32 @@ Flow: cut → spawn → monitor (derived status + conductor inbox) → review
 (MANDATORY GATE: no unreviewed change merges; check acceptance criteria
 yourself, do not trust the worker's word) → merge → close.
 
+### Never stop an agent without checking for an in-flight game (2026-08-09 incident)
+
+`stop-agent.ps1` kills the agent's process tree. It does NOT kill a
+StarCraft the agent launched — the game outlives its driver, keeps the
+launch lock, and blocks EVERY other worker until someone notices.
+
+This happened: task 024 messaged "ready for merge", started one last
+regression run six seconds later, and the conductor stopped it mid-run.
+The orphaned game held the machine for ~18 minutes while two workers
+queued behind it, one of them prepared to wait 90.
+
+Before `stop-agent.ps1`, ALWAYS:
+
+1. `Get-Process StarCraft` — if one is running, do not stop the agent yet.
+2. "Ready for merge" does NOT mean "idle". A worker may start verification
+   runs after reporting. Ask it to confirm it is idle, or merge first and
+   stop it when it acknowledges.
+3. After stopping, re-check for a surviving game and for a
+   `C:\sc-work\logs\sc-launch.lock` naming a dead pid.
+
+Killing an orphan is allowed ONLY with positive proof it is orphaned — a
+dead parent, a test output file that has stopped growing, and a lock file
+naming a dead pid. Otherwise the standing rule holds: another worker's
+game is another worker's run, and workers must never kill one themselves
+(ask the conductor).
+
 ## Spawning workers
 
 All commands run from `C:/git/decompile-sc` via the PowerShell tool (see
