@@ -28,6 +28,12 @@ exactly one .scx in the folder". That assumption is not checkable from a click, 
 it breaks the run does not fail -- it succeeds against the wrong thing and reports
 confident nonsense.
 
+For the MAP BROWSER that is now handled rather than merely warned about: `Select-ScBrowserMap`
+computes every row from the filesystem and verifies each directory it opens against the
+live window before the next click (see the block comment above Get-ScBrowserListing). The
+warning still stands for every other screen here -- the main menu, the lobby, the in-game
+command card -- whose coordinates are fixed points read off a frame.
+
 It has happened. On 2026-08-09 another worker's `022-ghosts.scx` appeared in the shared
 fixture folder beside `combat.scx`; it sorts first, so a suite's row-2 click loaded THEIR
 map and the test went on to box 36 units of type `0x01` (Ghost) where its own fixture
@@ -61,7 +67,20 @@ Set-StrictMode -Version Latest
 # live in a private assembly that Add-Type's reference list cannot name, so the bitmap
 # half is done in PowerShell (Save-ScWindowImage) after a normal Add-Type -AssemblyName.
 # The C# here is pure Win32 P/Invoke, which needs no extra references at all.
-Add-Type -AssemblyName System.Drawing | Out-Null
+# Tolerated rather than required, so this file can be dot-sourced somewhere with no GDI+
+# at all -- a CI runner running the Pester tests for the browser model and the fixture
+# registry, neither of which touches a bitmap. The two functions that DO need it
+# (Save-ScWindowImage, Get-ScRegionFingerprint) say so themselves if it is missing,
+# instead of the whole harness failing to load with an unrelated message.
+$script:ScHaveDrawing = $true
+try { Add-Type -AssemblyName System.Drawing -ErrorAction Stop | Out-Null }
+catch { $script:ScHaveDrawing = $false }
+
+function Assert-ScDrawing {
+    if (-not $script:ScHaveDrawing) {
+        throw 'drive-game: System.Drawing is not available in this PowerShell, so no frame can be captured. Frame capture needs a Windows host with GDI+.'
+    }
+}
 
 if (-not ('ScDrive.Native' -as [type])) {
     Add-Type @"
@@ -245,13 +264,19 @@ function Assert-ScDrivable {
 }
 
 function Send-ScMouseMove {
+    <#
+    .SYNOPSIS
+    One posted WM_MOUSEMOVE. Needs the window FOREGROUND -- see Assert-ScWindowActive.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][IntPtr]$Hwnd,
         [Parameter(Mandatory)][int]$X, [Parameter(Mandatory)][int]$Y,
-        [int]$Buttons = 0, [int]$DelayMs = 30
+        [int]$Buttons = 0, [int]$DelayMs = 30,
+        [switch]$NoActivate
     )
     Assert-ScDrivable -Hwnd $Hwnd
+    if (-not $NoActivate) { Assert-ScWindowActive -Hwnd $Hwnd -Because 'a posted mouse MOVE' }
     [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]$Buttons, (ConvertTo-ScLParam $X $Y))
     if ($DelayMs -gt 0) { Start-Sleep -Milliseconds $DelayMs }
 }
@@ -264,15 +289,27 @@ function Send-ScClick {
     The leading WM_MOUSEMOVE is not decoration. The game tracks a cursor position of its
     own and draws it; moving first means the down/up pair land where the game already
     believes the pointer is, which is how a real mouse behaves.
+
+    WHICH IS WHY THIS ACTIVATES THE WINDOW (task 023, consolidating task 022's finding).
+    The down/up pair carry their own lParam and land whatever the foreground window is --
+    but the MOVE ahead of them is dropped while the window is in the background, so the
+    game's own tracked cursor stays where the last processed message left it. Any handler
+    that reads that tracked position rather than the message's own lParam then acts on the
+    WRONG POINT, silently. The minimap centring click is the one that was caught doing it
+    (task 022 listed it as one of three symptoms of the same root); rather than guess which
+    other handlers do, every primitive that posts a move now goes through
+    Assert-ScWindowActive. -NoActivate is for a caller that has already done it.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][IntPtr]$Hwnd,
         [Parameter(Mandatory)][int]$X, [Parameter(Mandatory)][int]$Y,
         [switch]$Right, [switch]$Shift, [switch]$Ctrl,
-        [int]$HoldMs = 60, [int]$SettleMs = 250
+        [int]$HoldMs = 60, [int]$SettleMs = 250,
+        [switch]$NoActivate
     )
     Assert-ScDrivable -Hwnd $Hwnd
+    if (-not $NoActivate) { Assert-ScWindowActive -Hwnd $Hwnd -Because 'a click, whose leading mouse MOVE' }
 
     $mods = 0
     if ($Shift) { $mods = $mods -bor $script:MK_SHIFT }
@@ -327,13 +364,12 @@ function Send-ScDrag {
     # intermittency this explains. Activation is part of dragging, not an extra;
     # -NoActivate is for a caller that has already done it.
     if (-not $NoActivate) {
-        # LOUD, like Send-ScDropdownPick. A drag that runs without foreground selects
-        # nothing and reports nothing -- which is the failure this activation exists to
-        # prevent, and the one that cost another task 25 assertions. Five suites outside
-        # task 022 depend on this primitive, so silence here is the worst place for it.
-        if (-not (Set-ScWindowActive -Hwnd $Hwnd)) {
-            throw 'drive-game: could not bring the game window to the foreground, and a drag made while it is in the background selects NOTHING silently (see Set-ScWindowActive). Refusing to drag.'
-        }
+        # LOUD, like every other move-dependent primitive. A drag that runs without
+        # foreground selects nothing and reports nothing -- which is the failure this
+        # activation exists to prevent, and the one that cost another task 25 assertions.
+        # Five suites outside task 022 depend on this primitive, so silence here is the
+        # worst place for it.
+        Assert-ScWindowActive -Hwnd $Hwnd -Because 'a drag, which is made of mouse MOVES and'
     }
     if ($Steps -lt 2) { $Steps = 2 }
 
@@ -392,67 +428,486 @@ function Send-ScKey {
     if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
 }
 
-function Get-ScMapFolderRow {
+# =============================================================================
+# THE MAP BROWSER, MODELLED FROM THE FILESYSTEM (task 023)
+# =============================================================================
+#
+# THE BUG THIS REPLACES, in three levels -- all three observed, none hypothetical:
+#
+#   1. `Send-ScClick -X 117 -Y 140` opens "row 1", which was the fixture folder while
+#      exactly one `00-*` folder existed. Per-task folders (`00-t021`, `00-t022`) made
+#      row 1 whoever sorts first, and everyone else opened somebody else's work.
+#   2. The same defect one level down: `022-ghosts.scx` sorts before `combat.scx`, so a
+#      hardcoded row-2 map click loaded another worker's map. That run then boxed 36
+#      Ghosts where its own fixture places Lurkers and reported internally consistent
+#      nonsense (AGENTS.md § "Shared test-fixture folder").
+#   3. MERELY CREATING A DIRECTORY shifts rows for a suite that does not use the shared
+#      folder at all. `test-selection-circles` reaches `Maps\campaign` by clicking
+#      `[Up One Level]` in `Maps\BroodWar` -- an entry that sorts among the folders, so
+#      one extra `00-*` directory pushes it down a row. The click then opened a folder,
+#      the map never loaded, and the suite timed out looking exactly like menu flake
+#      (task 022, 2026-08-09).
+#
+# Level 3 is why nothing here is per-fixture-folder: EVERY row this harness clicks is
+# computed from the filesystem, and what actually opened is verified before proceeding.
+#
+# THE LISTING MODEL, read off captured frames rather than assumed. Two frames from two
+# different tasks (C:\sc-work\logs\016-frames\05-browse.png, header "BroodWar", and
+# ...\06-maps.png, header "maps"; the same listing appears again in
+# 015-probe-scroll\01-maps-root.png) show:
+#
+#   * `[Up One Level]` is NOT pinned to the top -- it is sorted among the directories by
+#     its own displayed name. 05-browse.png reads, in order:
+#         [Allied]  [Ladder]  [Up One Level]  [WebMaps]  (2)Astral Balance.scm  ...
+#     which is exactly alphabetical over {Allied, Ladder, Up One Level, WebMaps}. That
+#     single fact IS level 3.
+#   * Directories (including that entry) come first, then map files, each group sorted.
+#   * `Maps\` is the browser's ROOT: 06-maps.png has no `[Up One Level]` row.
+#   * `BroodWar` is NOT LISTED under `Maps\` (06-maps.png starts at `[campaign]`, and the
+#     scrollbar thumb is at the top -- 015-probe-scroll\02-campaign-listing.png shows what
+#     a scrolled-down thumb looks like, so this is not a scrolled view). The mechanism is
+#     not established; the exclusion is recorded as an observation and
+#     Assert-ScBrowserListing re-checks it live on every run, so if it is wrong the run
+#     fails loudly instead of clicking a row off by one.
+#   * Six rows are visible at a 640x480 client; a longer listing scrolls, and this
+#     harness has no scroll primitive -- so a target below row 6 THROWS rather than
+#     clicking whatever is on row 6.
+#
+# Geometry: the frames above are FULL-WINDOW captures, offset ~(+5,+32) from the client
+# coordinates every click uses (Save-ScWindowImage). Row 1's text sits at image y~172,
+# i.e. client y=140, and the rows are 19px apart. Those are the numbers below; the +32
+# is the trap that made task 021 "fix" a correct coordinate.
+# =============================================================================
+
+$script:ScBrowserFirstRowY   = 140
+$script:ScBrowserRowPitch    = 19
+$script:ScBrowserVisibleRows = 6
+$script:ScBrowserRowX        = 117
+$script:ScBrowserOkX         = 516
+$script:ScBrowserOkY         = 393
+$script:ScBrowserUpEntry     = 'Up One Level'
+$script:ScBrowserMapExt      = @('.scm', '.scx')
+# Directories the browser does not show in its root listing. Observed, not derived --
+# see the block comment above.
+$script:ScBrowserHiddenInRoot = @('BroodWar')
+
+function Get-ScBrowserRowY {
+    param([Parameter(Mandatory)][int]$Row)
+    $script:ScBrowserFirstRowY + ($Row - 1) * $script:ScBrowserRowPitch
+}
+
+function Sort-ScBrowserNames {
     <#
     .SYNOPSIS
-    Which ROW of the map browser a fixture folder will be on.
+    Sort names the way the browser's list appears to: ordinal, case-insensitive.
     .DESCRIPTION
-    The browser is clicked positionally, and per-task fixture folders inherit that bug one
-    level up: with `00-t021` and `00-t022` both present, row 1 is 021's and row 2 is 022's,
-    so a hardcoded row-1 click opens somebody else's folder and plays their map.
+    NOT PowerShell's `Sort-Object`, which is culture-aware and weights punctuation
+    differently -- and these lists are full of punctuation (`(2)Astral Balance.scm`,
+    `00-t021`). Every entry ordering visible in the frames cited above is reproduced by
+    this comparer; Assert-ScBrowserListing re-checks the resulting count live, so a
+    disagreement surfaces as a failed run rather than a wrong map.
+    #>
+    param([string[]]$Names)
+    if (-not $Names -or $Names.Count -eq 0) { return @() }
+    $c = [string[]]$Names
+    [array]::Sort($c, [System.StringComparer]::OrdinalIgnoreCase)
+    $c
+}
 
-    Computed from the filesystem rather than assumed: the browser lists directories in name
-    order, so the row is the number of sibling directories sorting before this one. The
-    caller still has to verify what it opened -- this removes the guess, not the need for
-    the check.
+function Get-ScBrowserListing {
+    <#
+    .SYNOPSIS
+    What the map browser will show for a directory, in row order, computed from disk.
+    .DESCRIPTION
+    -MapsRoot is the directory the browser treats as its root (`<GameDir>\Maps`): the one
+    listing with no `[Up One Level]` entry, and the one where the exclusion above applies.
 
-    Returns the client Y for that row, using the geometry read off a captured frame (first
-    row at y=140, 19px apart at a 640x480 client).
+    Returns an object with .Entries (Name / Kind / Row / Y, in the browser's own order),
+    .Count, .Dir and .IsRoot. Kind is 'up', 'dir' or 'file'.
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$MapsDir,
-        [Parameter(Mandatory)][string]$FolderName,
-        [int]$FirstRowY = 140, [int]$Pitch = 19,
-        [switch]$HasUpOneLevel
+        [Parameter(Mandatory)][string]$Dir,
+        [Parameter(Mandatory)][string]$MapsRoot
     )
-    $dirs = @(Get-ChildItem -LiteralPath $MapsDir -Directory -ErrorAction SilentlyContinue |
-              ForEach-Object { $_.Name } | Sort-Object)
-    $idx = [array]::IndexOf($dirs, $FolderName)
-    if ($idx -lt 0) { throw "drive-game: $FolderName is not a directory under $MapsDir." }
-    # `[Up One Level]` occupies row 1 wherever the browser has a parent to go back to --
-    # every suite here relies on that when it clicks the map on the row BELOW it. Whether
-    # this particular list has one depends on where the browser opens, so the caller says
-    # so rather than this guessing; the default is the Maps\BroodWar root, which does not.
-    $offset = if ($HasUpOneLevel) { 1 } else { 0 }
+    $full = [IO.Path]::GetFullPath($Dir).TrimEnd('\')
+    $rootFull = [IO.Path]::GetFullPath($MapsRoot).TrimEnd('\')
+    if (-not (Test-Path -LiteralPath $full -PathType Container)) {
+        throw "drive-game: the map browser cannot be modelled for '$full' -- no such directory."
+    }
+    $isRoot = $full -ieq $rootFull
+
+    $dirNames = @(Get-ChildItem -LiteralPath $full -Directory -ErrorAction Stop |
+                  ForEach-Object { $_.Name })
+    if ($isRoot) {
+        $dirNames = @($dirNames | Where-Object { $script:ScBrowserHiddenInRoot -notcontains $_ })
+    } else {
+        $dirNames += $script:ScBrowserUpEntry
+    }
+    $fileNames = @(Get-ChildItem -LiteralPath $full -File -ErrorAction Stop |
+                   Where-Object { $script:ScBrowserMapExt -contains $_.Extension.ToLowerInvariant() } |
+                   ForEach-Object { $_.Name })
+
+    # Ordinal-ignore-case, not PowerShell's culture-aware Sort-Object: a culture sort
+    # weights punctuation differently, and this list is full of it ((2)Astral Balance.scm,
+    # 00-t021). The frames above are consistent with ordinal-ignore-case at every entry
+    # they show, and Assert-ScBrowserListing re-checks the resulting COUNT live.
+    $dirNames  = @(Sort-ScBrowserNames ([string[]]$dirNames))
+    $fileNames = @(Sort-ScBrowserNames ([string[]]$fileNames))
+
+    $entries = @()
+    $row = 0
+    foreach ($n in $dirNames) {
+        $row++
+        $kind = if ($n -eq $script:ScBrowserUpEntry) { 'up' } else { 'dir' }
+        $entries += [pscustomobject]@{ Name = $n; Kind = $kind; Row = $row; Y = (Get-ScBrowserRowY -Row $row) }
+    }
+    foreach ($n in $fileNames) {
+        $row++
+        $entries += [pscustomobject]@{ Name = $n; Kind = 'file'; Row = $row; Y = (Get-ScBrowserRowY -Row $row) }
+    }
     [pscustomobject]@{
-        Row = $idx + 1 + $offset
-        Y   = $FirstRowY + ($idx + $offset) * $Pitch
-        Siblings = ($dirs -join ', ')
-        HasUpOneLevel = [bool]$HasUpOneLevel
+        Dir = $full; IsRoot = $isRoot; Entries = $entries; Count = $entries.Count
+        Text = (($entries | ForEach-Object { "$($_.Row):$($_.Name)" }) -join ' | ')
+    }
+}
+
+function Get-ScBrowserEntry {
+    <#
+    .SYNOPSIS
+    The row a named entry will be on, or a throw naming what is there instead.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][psobject]$Listing,
+        [Parameter(Mandatory)][string]$Name
+    )
+    $hit = @($Listing.Entries | Where-Object { $_.Name -ieq $Name })
+    if ($hit.Count -ne 1) {
+        throw ("drive-game: '$Name' is not in the map browser's listing of $($Listing.Dir). " +
+               "The browser shows: $($Listing.Text)")
+    }
+    $e = $hit[0]
+    if ($e.Row -gt $script:ScBrowserVisibleRows) {
+        throw ("drive-game: '$Name' is row $($e.Row) of $($Listing.Dir), and only " +
+               "$($script:ScBrowserVisibleRows) rows are visible without scrolling -- this harness " +
+               'has no scroll primitive, so clicking it is not possible. Clear the stale ' +
+               "fixture folders ahead of it. The browser shows: $($Listing.Text)")
+    }
+    $e
+}
+
+function Get-ScBrowserRowOccupancy {
+    <#
+    .SYNOPSIS
+    Which of the six visible rows currently have TEXT on them, read off the live window.
+    .DESCRIPTION
+    Not OCR and not a picture: Get-ScRegionFingerprint returns a hex digest of one
+    rectangle, and an EMPTY row of the list is flat background, so every empty row
+    fingerprints the same and an occupied one does not. That turns "how many entries is
+    the browser actually showing" into something a script can answer -- which is what
+    makes the filesystem model above CHECKABLE rather than merely plausible.
+
+    Returns the six fingerprints in row order. The caller decides what empty means; see
+    Assert-ScBrowserListing, which uses the last visible row as its reference.
+
+    The strip is 18px tall (one row pitch less a pixel, so neighbouring rows cannot bleed
+    into each other) and stops short of the scrollbar at client x~336.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][IntPtr]$Hwnd)
+    1..$script:ScBrowserVisibleRows | ForEach-Object {
+        Get-ScRegionFingerprint -Hwnd $Hwnd -X 62 -Y ((Get-ScBrowserRowY -Row $_) - 9) -Width 250 -Height 18
+    }
+}
+
+function Assert-ScBrowserListing {
+    <#
+    .SYNOPSIS
+    Prove the browser is showing the directory this run thinks it opened.
+    .DESCRIPTION
+    The computed row is only as good as the listing model behind it, so the model is
+    checked against the live window rather than trusted: the number of OCCUPIED rows must
+    equal the number of entries the filesystem predicts for the directory just opened.
+
+    That is what catches all three levels of the positional-click bug at the moment they
+    happen instead of minutes later:
+      * opened a stock folder by mistake -- `Allied` holds dozens of maps, the count is
+        nothing like 2;
+      * opened nothing at all (the click landed on a file row) -- the listing did not
+        change and the count is the parent's;
+      * the model itself is wrong (a sort order or the `Maps\` exclusion) -- the count
+        disagrees on the very first run rather than silently on somebody else's.
+
+    LIMIT, stated rather than hidden: with six entries or more the visible window is full,
+    there is no empty row to use as a reference, and this can only report that. The
+    fixture folders this harness opens hold one map file plus `[Up One Level]`, so the
+    check is live exactly where it matters. It is also NOT an identity check -- two
+    different folders holding one map each look the same. The identity claim is the
+    suite's own in-process unit assertion after the map loads; this is the early, loud
+    half.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][IntPtr]$Hwnd,
+        [Parameter(Mandatory)][psobject]$Listing
+    )
+    $visible = $script:ScBrowserVisibleRows
+    if ($Listing.Count -ge $visible) {
+        Write-Host ("       browser: $($Listing.Dir) has $($Listing.Count) entries, filling all " +
+                    "$visible visible rows -- occupancy not checkable (no empty row to compare against)")
+        return
+    }
+    $fp = @(Get-ScBrowserRowOccupancy -Hwnd $Hwnd)
+    $empty = $fp[$visible - 1]
+    $occupied = 0
+    for ($r = 1; $r -le $visible; $r++) { if ($fp[$r - 1] -ne $empty) { $occupied++ } }
+
+    $bad = @()
+    for ($r = 1; $r -le $Listing.Count; $r++) {
+        if ($fp[$r - 1] -eq $empty) { $bad += "row $r is blank but should read '$($Listing.Entries[$r-1].Name)'" }
+    }
+    for ($r = $Listing.Count + 1; $r -le $visible; $r++) {
+        if ($fp[$r - 1] -ne $empty) { $bad += "row $r has text on it but the directory has only $($Listing.Count) entries" }
+    }
+    if ($bad.Count -gt 0) {
+        throw ("drive-game: the map browser is NOT showing $($Listing.Dir). Expected " +
+               "$($Listing.Count) entries ($($Listing.Text)); the window shows $occupied occupied " +
+               "row(s) -- $($bad -join '; '). Refusing to go on: a browser showing a different " +
+               'folder is how a run plays somebody else''s map and reports confident nonsense.')
+    }
+    Write-Host "       browser: $($Listing.Dir) -- $($Listing.Count) entries, verified on screen"
+}
+
+function Enter-ScBrowserEntry {
+    <#
+    .SYNOPSIS
+    Open one directory entry (or `Up One Level`) of the map browser, and verify what opened.
+    .DESCRIPTION
+    Re-lists the CURRENT directory immediately before clicking, not once at the start:
+    another worker creating a folder in between moves every row below it, and that gap is
+    exactly how task 022 lost a run. A listing that changed between the two reads is a
+    throw, not a retry -- the harness has no way to know which of the two the game is
+    showing.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][IntPtr]$Hwnd,
+        [Parameter(Mandatory)][string]$Dir,
+        [Parameter(Mandatory)][string]$MapsRoot,
+        [Parameter(Mandatory)][string]$Name,
+        [int]$SettleMs = 900
+    )
+    $before = Get-ScBrowserListing -Dir $Dir -MapsRoot $MapsRoot
+    $entry = Get-ScBrowserEntry -Listing $before -Name $Name
+    $again = Get-ScBrowserListing -Dir $Dir -MapsRoot $MapsRoot
+    if ($again.Text -ne $before.Text) {
+        throw ("drive-game: $Dir changed while the row for '$Name' was being computed " +
+               "(was: $($before.Text); now: $($again.Text)). Every row below the change has moved, " +
+               'so the click would open the wrong thing. Re-run.')
+    }
+    $target = if ($entry.Kind -eq 'up') { Split-Path $before.Dir -Parent } else { Join-Path $before.Dir $entry.Name }
+
+    Write-Host "       browser: $Dir -> [$Name] (row $($entry.Row), y=$($entry.Y))"
+    Send-ScClick -Hwnd $Hwnd -X $script:ScBrowserRowX -Y $entry.Y
+    Send-ScClick -Hwnd $Hwnd -X $script:ScBrowserOkX -Y $script:ScBrowserOkY
+    if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
+
+    $opened = Get-ScBrowserListing -Dir $target -MapsRoot $MapsRoot
+    Assert-ScBrowserListing -Hwnd $Hwnd -Listing $opened
+    $opened
+}
+
+function Select-ScBrowserMap {
+    <#
+    .SYNOPSIS
+    Walk the map browser from wherever it opened to one named map file, and SELECT it.
+    .DESCRIPTION
+    THE one entry point every suite uses, so there is one model of the browser in this
+    repo instead of nine copies of `-X 117 -Y 140`. Every click on the way is computed
+    from the filesystem and every directory it opens is verified before the next click
+    (Assert-ScBrowserListing).
+
+    Selecting only -- the caller still sets the Game Type and presses Ok, because what
+    happens between selecting a map and launching it differs per suite.
+
+    -OpenDir is where the browser opens, which for Single Player -> Expansion -> Play
+    Custom is `<GameDir>\Maps\BroodWar`. The route out of it is up to the common ancestor
+    and back down; `Maps\` is the root, and the ascent stops there.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][IntPtr]$Hwnd,
+        [Parameter(Mandatory)][string]$GameDir,
+        [Parameter(Mandatory)][string]$MapPath,
+        [string]$OpenDir
+    )
+    $mapsRoot = [IO.Path]::GetFullPath((Join-Path $GameDir 'Maps'))
+    if (-not $OpenDir) { $OpenDir = Join-Path $mapsRoot 'BroodWar' }
+    $cur = [IO.Path]::GetFullPath($OpenDir).TrimEnd('\')
+    $mapFull = [IO.Path]::GetFullPath($MapPath)
+    if (-not (Test-Path -LiteralPath $mapFull -PathType Leaf)) {
+        throw "drive-game: $mapFull does not exist, so the browser cannot be walked to it."
+    }
+    $targetDir = [IO.Path]::GetFullPath((Split-Path $mapFull -Parent)).TrimEnd('\')
+
+    $listing = Get-ScBrowserListing -Dir $cur -MapsRoot $mapsRoot
+    # Up to the common ancestor. `$targetDir + '\'` guards the prefix test against
+    # `...\Maps\BroodWar2` looking like a child of `...\Maps\BroodWar`.
+    $guard = 0
+    while (-not (($targetDir + '\') -ilike (($cur + '\') + '*'))) {
+        if ($cur -ieq $mapsRoot) { throw "drive-game: $targetDir is not under the browser's root $mapsRoot." }
+        if (++$guard -gt 8) { throw "drive-game: the browser route from $OpenDir to $targetDir did not converge." }
+        $listing = Enter-ScBrowserEntry -Hwnd $Hwnd -Dir $cur -MapsRoot $mapsRoot -Name $script:ScBrowserUpEntry
+        $cur = $listing.Dir
+    }
+    # ...and back down, one named component at a time.
+    if ($cur -ine $targetDir) {
+        $rel = $targetDir.Substring($cur.Length).Trim('\')
+        foreach ($component in ($rel -split '\\')) {
+            $listing = Enter-ScBrowserEntry -Hwnd $Hwnd -Dir $cur -MapsRoot $mapsRoot -Name $component
+            $cur = $listing.Dir
+        }
+    }
+
+    $leaf = Split-Path $mapFull -Leaf
+    $entry = Get-ScBrowserEntry -Listing $listing -Name $leaf
+    if ($entry.Kind -ne 'file') { throw "drive-game: '$leaf' is not a map file row in $cur." }
+    Write-Host "       browser: selecting $leaf (row $($entry.Row), y=$($entry.Y))"
+    Send-ScClick -Hwnd $Hwnd -X $script:ScBrowserRowX -Y $entry.Y
+    Start-Sleep -Milliseconds 500
+    $entry
+}
+
+# =============================================================================
+# FIXTURE OWNERSHIP: PER-SUITE-RUN, DECLARED UP FRONT (task 023)
+# =============================================================================
+#
+# The rule stays what AGENTS.md § "Shared test-fixture folder" says -- refuse to start on
+# any fixture this run did not create, delete only your own, never the folder. What
+# changes is WHAT "mine" MEANS.
+#
+# It used to mean one filename, tested at startup. `test-combat-death.ps1` creates two
+# fixtures in sequence (a placement probe, then the combat map), so on the second the rule
+# counted the suite's OWN phase-A probe as foreign and the suite waited for itself. A
+# self-deadlock manufactured by the safety rule, not by a collision (task 022,
+# 2026-08-09).
+#
+# So ownership is now a RUN, not a file: a suite declares every fixture name it will ever
+# create before it creates any of them, and the checks below test against that whole set.
+# That fixes the deadlock without softening anything -- the set is fixed at declaration
+# time and every file outside it is still foreign, so this is not "ignore anything that
+# looks a bit like mine". A name has to have been declared, and declaring it is the same
+# act as promising to delete it.
+# =============================================================================
+
+function New-ScFixtureRun {
+    <#
+    .SYNOPSIS
+    Declare the fixture folder and EVERY fixture name this run will create.
+    .DESCRIPTION
+    -Names must be complete. A suite that creates a name it did not declare will be
+    refused by its own next check, which is the intended pressure: the declaration is the
+    list this run cleans up, so an undeclared file is a file nobody will delete.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Dir,
+        [Parameter(Mandatory)][string[]]$Names
+    )
+    if ($Names.Count -eq 0) { throw 'drive-game: a fixture run must declare at least one fixture name.' }
+    $dupes = @($Names | Group-Object | Where-Object { $_.Count -gt 1 })
+    if ($dupes.Count -gt 0) { throw "drive-game: duplicate fixture name(s) declared: $(($dupes.Name) -join ', ')" }
+    [pscustomobject]@{
+        Dir   = $Dir
+        Names = [string[]]$Names
+        Paths = [string[]]@($Names | ForEach-Object { Join-Path $Dir $_ })
+    }
+}
+
+function Get-ScForeignFixture {
+    <#
+    .SYNOPSIS
+    The map files in this run's fixture folder that this run did not declare.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][psobject]$Run)
+    if (-not (Test-Path -LiteralPath $Run.Dir)) { return @() }
+    @(Get-ChildItem -LiteralPath $Run.Dir -File -ErrorAction SilentlyContinue |
+      Where-Object { $script:ScBrowserMapExt -contains $_.Extension.ToLowerInvariant() } |
+      Where-Object { $Run.Names -notcontains $_.Name } |
+      ForEach-Object { $_.Name })
+}
+
+function Assert-ScFixtureFolderMine {
+    <#
+    .SYNOPSIS
+    Refuse to go on while a fixture this run did not declare is in its folder.
+    .DESCRIPTION
+    Called at generate time AND again immediately before the browser walk. Once is not
+    enough: the folder can be added to in between, and the browser row would move under
+    the click. Task 022 lost a run to exactly that gap.
+
+    Never deletes the other file -- it may belong to a game that is running right now.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][psobject]$Run)
+    $foreign = @(Get-ScForeignFixture -Run $Run)
+    if ($foreign.Count -gt 0) {
+        throw ("drive-game: $($Run.Dir) holds $($foreign -join ', '), which this run did not " +
+               "create (it declared: $($Run.Names -join ', ')). The map browser opens a ROW, so a " +
+               'foreign file moves which map loads -- and playing somebody else''s map produces ' +
+               'internally consistent nonsense. Refusing to start, and not deleting theirs: a ' +
+               'running game may have it open.')
     }
 }
 
 function Assert-ScFixtureStillMine {
     <#
     .SYNOPSIS
-    Re-check, as late as possible, that the fixture about to be loaded is this run's own.
+    The late check: this run's own fixture is still there, and nobody else's is.
     .DESCRIPTION
-    Wait-ScTestMapDirFree checks once, BEFORE generating. The folder can change between
-    that and the browser click -- another worker's cleanup can take the file, or drop one
-    in -- and the browser picks by ROW, so a foreign file silently changes which map
-    loads. Task 022 lost a run to exactly that gap. Called immediately before the launch.
+    Run immediately before the browser walk. Two different failures, named separately,
+    because they need different reactions: a MISSING own fixture means another worker's
+    cleanup took it (regenerate, do not interpret the run), a foreign one means a
+    collision (wait for them).
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$Dir, [Parameter(Mandatory)][string]$MapPath)
+    param(
+        [Parameter(Mandatory)][psobject]$Run,
+        [Parameter(Mandatory)][string]$MapPath
+    )
     $mine = Split-Path $MapPath -Leaf
-    if (-not (Test-Path -LiteralPath $MapPath)) {
-        throw "drive-game: $mine is gone from $Dir between generation and launch -- another worker's cleanup took it. Regenerate; do not interpret this run."
+    if ($Run.Names -notcontains $mine) {
+        throw "drive-game: '$mine' was never declared by this fixture run ($($Run.Names -join ', ')) -- declare it in New-ScFixtureRun so it is also cleaned up."
     }
-    $foreign = @(Get-ChildItem -LiteralPath $Dir -File -ErrorAction SilentlyContinue |
-                 Where-Object { $_.Name -ne $mine })
-    if ($foreign.Count -gt 0) {
-        throw ("drive-game: {0} also holds {1}, which this test did not create. The map browser picks by ROW, so the wrong map would load. Refusing to start." -f $Dir, (($foreign | ForEach-Object { $_.Name }) -join ', '))
+    if (-not (Test-Path -LiteralPath $MapPath)) {
+        throw "drive-game: $mine is gone from $($Run.Dir) between generation and launch -- another worker's cleanup took it. Regenerate; do not interpret this run."
+    }
+    Assert-ScFixtureFolderMine -Run $Run
+}
+
+function Remove-ScOwnFixture {
+    <#
+    .SYNOPSIS
+    Delete this run's own declared fixtures, and nothing else. Safe on every path.
+    .DESCRIPTION
+    -Names narrows it to some of the declared set (the phase that is finishing); omitted,
+    it takes all of them. A file that will not delete is left alone and reported -- a
+    running game may be reading it, and forcing is not an option against that.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][psobject]$Run,
+        [string[]]$Names
+    )
+    $want = if ($Names) { $Names } else { $Run.Names }
+    foreach ($n in $want) {
+        if ($Run.Names -notcontains $n) { throw "drive-game: '$n' is not one of this run's declared fixtures." }
+        $p = Join-Path $Run.Dir $n
+        if (-not (Test-Path -LiteralPath $p)) { continue }
+        try { Remove-Item -LiteralPath $p -Force -ErrorAction Stop }
+        catch { Write-Host "       could not delete $p yet ($($_.Exception.Message))" }
     }
 }
 
@@ -475,63 +930,62 @@ function Remove-ScOwnFixtureDir {
     else { Write-Host "       leaving $Dir in place: it still holds $($left.Count) file(s) this run did not create" }
 }
 
-function Wait-ScTestMapDirFree {
+function Wait-ScFixtureFolderFree {
     <#
     .SYNOPSIS
-    Wait until the shared generated-fixture folder holds nothing but this test's own map,
-    then make sure only this test's own map is in it.
+    Wait until this run's fixture folder holds nothing it did not declare, then clear out
+    its own leftovers so the generator can write into a clean folder.
     .DESCRIPTION
-    Every unattended suite in this directory generates its fixture into the SAME folder
-    (Maps\BroodWar\00-testmap, whose name is what makes the two menu clicks that reach it
-    deterministic) and finds it by clicking the row after [Up One Level]. That is fine for
-    one worker and wrong for two: task 022 hit a live collision -- another worker's
-    combat.scx was sitting in that folder, still open by its running game, while this
-    suite was about to `Remove-Item -Recurse` the folder out from under it.
+    Replaces Wait-ScTestMapDirFree, whose ownership test was ONE filename -- which made a
+    multi-fixture suite wait for itself (see the block comment above New-ScFixtureRun).
 
-    So: never delete the folder, only this test's own file, and refuse to start while
-    somebody else's fixture is in there rather than racing them for the second row of the
-    map list. The wait is the polite half; the assertion is the half that stops a
-    mis-clicked row from being diagnosed later as a mysterious wrong-unit-type failure.
+    Two waits, for two different reasons:
+      * for somebody ELSE's fixture to go: never deleted, because a running game may have
+        it open, and killing another worker's run is the 2026-07 incident class in a
+        different costume;
+      * for OUR OWN previous file to become deletable: a stale one can still be held open
+        by a game that is shutting down.
 
-    Returns nothing; throws if the folder is still shared when the timeout runs out.
+    -Names narrows the deletion to the fixtures the caller is about to (re)write, so an
+    earlier phase's file survives into a later phase. Omitted, it clears all of them.
+
+    Throws, with the cause named, if either wait runs out.
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$Dir,
-        [Parameter(Mandatory)][string]$MyMapPath,
+        [Parameter(Mandatory)][psobject]$Run,
+        [string[]]$Names,
         [int]$TimeoutMinutes = 20
     )
-    $mine = Split-Path $MyMapPath -Leaf
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
     while ($true) {
-        New-Item -ItemType Directory -Path $Dir -Force | Out-Null
-        $foreign = @(Get-ChildItem -LiteralPath $Dir -File -ErrorAction SilentlyContinue |
-                     Where-Object { $_.Name -ne $mine })
+        New-Item -ItemType Directory -Path $Run.Dir -Force | Out-Null
+        $foreign = @(Get-ScForeignFixture -Run $Run)
         if ($foreign.Count -eq 0) { break }
         if ((Get-Date) -ge $deadline) {
-            throw ("drive-game: $Dir still holds another worker's fixture ({0}) after $TimeoutMinutes minute(s). " +
-                   'Two suites cannot share that folder: the map is chosen by clicking a row, so a second file ' +
-                   'silently changes which map loads. Not deleting it -- it may belong to a running game.') -f `
-                   (($foreign | ForEach-Object { $_.Name }) -join ', ')
+            throw ("drive-game: $($Run.Dir) still holds another worker's fixture ($($foreign -join ', ')) " +
+                   "after $TimeoutMinutes minute(s). Two runs cannot share that folder: the map is chosen " +
+                   'by clicking a row, so a second file silently changes which map loads. Not deleting ' +
+                   'it -- it may belong to a running game.')
         }
-        Write-Host ("       waiting for {0} to be free (another worker's fixture is in it: {1})" -f `
-            $Dir, (($foreign | ForEach-Object { $_.Name }) -join ', '))
+        Write-Host "       waiting for $($Run.Dir) to be free (another run's fixture is in it: $($foreign -join ', '))"
         Start-Sleep -Seconds 20
     }
-    # Only ever this test's own file -- and it can be LOCKED, because two suites in this
-    # directory generate a fixture with the same name and another worker's game may have it
-    # open. Waiting for the handle to go is right; throwing on the first attempt turns a
-    # transient into a failed run, and forcing it is not an option against a file a running
-    # game is reading.
-    $deleteDeadline = (Get-Date).AddMinutes($TimeoutMinutes)
-    while (Test-Path -LiteralPath $MyMapPath) {
-        try { Remove-Item -LiteralPath $MyMapPath -Force -ErrorAction Stop; break }
-        catch {
-            if ((Get-Date) -ge $deleteDeadline) {
-                throw "drive-game: $mine in $Dir is locked by another process and could not be replaced within $TimeoutMinutes minute(s) -- a game is still reading it. Not forcing."
+
+    $want = if ($Names) { $Names } else { $Run.Names }
+    foreach ($n in $want) {
+        if ($Run.Names -notcontains $n) { throw "drive-game: '$n' is not one of this run's declared fixtures." }
+        $p = Join-Path $Run.Dir $n
+        $deleteDeadline = (Get-Date).AddMinutes($TimeoutMinutes)
+        while (Test-Path -LiteralPath $p) {
+            try { Remove-Item -LiteralPath $p -Force -ErrorAction Stop; break }
+            catch {
+                if ((Get-Date) -ge $deleteDeadline) {
+                    throw "drive-game: $n in $($Run.Dir) is locked by another process and could not be replaced within $TimeoutMinutes minute(s) -- a game is still reading it. Not forcing."
+                }
+                Write-Host "       waiting for $n to be released (another process has it open)"
+                Start-Sleep -Seconds 15
             }
-            Write-Host "       waiting for $mine to be released (another process has it open)"
-            Start-Sleep -Seconds 15
         }
     }
 }
@@ -577,6 +1031,7 @@ function Get-ScRegionFingerprint {
         [Parameter(Mandatory)][int]$Width, [Parameter(Mandatory)][int]$Height
     )
     Assert-ScDrivable -Hwnd $Hwnd
+    Assert-ScDrawing
     $sz = Get-ScWindowSize -Hwnd $Hwnd
     $bmp = New-Object System.Drawing.Bitmap($sz.Width, $sz.Height,
                      [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
@@ -697,8 +1152,8 @@ function Wait-ScNoGameRunning {
 function Set-ScWindowActive {
     <#
     .SYNOPSIS
-    Make the game window the foreground window. Needed by the menu dropdowns and by
-    nothing else.
+    Make the game window the foreground window. Needed by EVERY primitive that posts a
+    mouse move -- click, drag, dropdown pick.
     .DESCRIPTION
     THE GAME IGNORES A POSTED WM_MOUSEMOVE WHEN ITS WINDOW IS NOT ACTIVE. Posted clicks
     are processed either way, which is why every other function in this file works with
@@ -727,8 +1182,11 @@ function Set-ScWindowActive {
     dance and then VERIFIES the result rather than trusting the return value.
 
     This is the one place in this file that reaches outside the target window's message
-    queue. It steals focus, which is visible to anyone at the machine -- so it is called
-    only where it is needed, not on every action.
+    queue. It steals focus, which is visible to anyone at the machine. Task 023 widened
+    the callers from "the dropdowns" to "everything that posts a move", which is every
+    click -- so the ALREADY-FOREGROUND case is now the common one and must be free: it
+    returns without the settle, because nothing changed and there is nothing to settle.
+    Paying 400ms on every click of a menu walk would add minutes to every suite.
     #>
     [CmdletBinding()]
     param(
@@ -739,6 +1197,7 @@ function Set-ScWindowActive {
         [int]$Tries = 3
     )
     Assert-ScDrivable -Hwnd $Hwnd
+    if ([ScDrive.Native]::GetForegroundWindow() -eq $Hwnd) { return $true }
     for ($i = 0; $i -lt $Tries; $i++) {
         if ([ScDrive.Native]::MakeForeground($Hwnd)) {
             if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
@@ -747,6 +1206,37 @@ function Set-ScWindowActive {
         Start-Sleep -Milliseconds 300
     }
     return $false
+}
+
+function Assert-ScWindowActive {
+    <#
+    .SYNOPSIS
+    Set-ScWindowActive, but it THROWS instead of returning false.
+    .DESCRIPTION
+    THE one gate every move-dependent primitive goes through, so that "the window was not
+    foreground" can never be a silent no-op anywhere in this harness.
+
+    Task 022 measured the mechanism (Set-ScWindowActive) and fixed the two primitives that
+    were bleeding at the time. Task 023 consolidated it, because the three symptoms it was
+    attributed to -- the Game Type pick committing the wrong value, the minimap centring
+    click missing, and Send-ScDrag selecting nothing -- share one property: each is a
+    handler that reads the game's OWN tracked cursor position, which a dropped move leaves
+    stale. Any primitive posting a move can hit it, so none of them opts out by default.
+
+    -Because is glued into the message so the failure names the operation that refused,
+    not just the fact that a window is not in front.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][IntPtr]$Hwnd,
+        [string]$Because = 'this input',
+        [int]$Tries = 3
+    )
+    if (Set-ScWindowActive -Hwnd $Hwnd -Tries $Tries) { return }
+    throw ("drive-game: could not bring the game window to the foreground, and $Because " +
+           'is IGNORED while the window is in the background (see Set-ScWindowActive) -- ' +
+           'it would do nothing and report nothing. Refusing to post it. Close whatever ' +
+           'is holding the foreground (a modal dialog, an installer, a lock screen) and re-run.')
 }
 
 function Send-ScCommand {
@@ -867,12 +1357,10 @@ function Send-ScDropdownPick {
     )
     Assert-ScDrivable -Hwnd $Hwnd
     if (-not $NoActivate) {
-        if (-not (Set-ScWindowActive -Hwnd $Hwnd)) {
-            # Loud, not silent: a pick made in the background is the failure mode this
-            # whole comment block exists about, and it would otherwise be discovered as
-            # a wrong unit type several minutes later.
-            throw "drive-game: could not bring the game window to the foreground, and a dropdown pick made while it is in the background does nothing (see Set-ScWindowActive). Refusing to pick."
-        }
+        # Loud, not silent: a pick made in the background is the failure mode this
+        # whole comment block exists about, and it would otherwise be discovered as
+        # a wrong unit type several minutes later.
+        Assert-ScWindowActive -Hwnd $Hwnd -Because 'a dropdown pick, whose walk down the open list is a mouse MOVE and'
     }
     $itemY = $Y + $FirstOffset + $Index * $Pitch
     $atBox  = ConvertTo-ScLParam $X $Y
@@ -1136,6 +1624,7 @@ function Save-ScWindowImage {
         [switch]$FullWindow
     )
     Assert-ScDrivable -Hwnd $Hwnd
+    Assert-ScDrawing
     $full = [IO.Path]::GetFullPath($Path)
     $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
     if ($full.StartsWith($repoRoot, [StringComparison]::OrdinalIgnoreCase) -and

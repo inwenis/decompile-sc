@@ -1,0 +1,35 @@
+﻿<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<test-results xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="nunit_schema_2.5.xsd" name="Pester" total="14" errors="0" failures="0" not-run="0" inconclusive="0" ignored="0" skipped="0" invalid="0" date="2026-08-09" time="05:30:35">
+  <environment machine-name="LAPTOP-ASUS" cwd="C:\git\decompile-sc-task023" user-domain="LAPTOP-ASUS" user="inwen" clr-version="10.0.10" platform="Microsoft Windows 11 Home|C:\WINDOWS|\Device\Harddisk0\Partition3" os-version="10.0.26200" nunit-version="2.5.8.0" />
+  <culture-info current-culture="en-GB" current-uiculture="en-GB" />
+  <test-suite type="TestFixture" name="Pester" executed="True" result="Success" success="True" time="4.1516" asserts="0" description="Pester">
+    <results>
+      <test-suite type="TestFixture" name="C:\git\decompile-sc-task023\tests\drive-game.Tests.ps1" executed="True" result="Success" success="True" time="4.1516" asserts="0" description="C:\git\decompile-sc-task023\tests\drive-game.Tests.ps1">
+        <results>
+          <test-suite type="TestFixture" name="map-browser listing model" executed="True" result="Success" success="True" time="1.1252" asserts="0" description="map-browser listing model">
+            <results>
+              <test-case description="sorts [Up One Level] AMONG the directories, not above them (016-frames\05-browse.png)" name="map-browser listing model.sorts [Up One Level] AMONG the directories, not above them (016-frames\05-browse.png)" time="0.3927" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="moves [Up One Level] down a row for every fixture folder that sorts before it" name="map-browser listing model.moves [Up One Level] down a row for every fixture folder that sorts before it" time="0.1016" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="gives the maps root no parent entry and hides BroodWar (016-frames\06-maps.png)" name="map-browser listing model.gives the maps root no parent entry and hides BroodWar (016-frames\06-maps.png)" time="0.1246" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="puts (1)Enslavers02b.scm on row 4 (015-probe-scroll\02-campaign-listing.png)" name="map-browser listing model.puts (1)Enslavers02b.scm on row 4 (015-probe-scroll\02-campaign-listing.png)" time="0.0805" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="lists directories before map files and ignores non-map files" name="map-browser listing model.lists directories before map files and ignores non-map files" time="0.0967" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="refuses a target below the six visible rows rather than clicking row 6" name="map-browser listing model.refuses a target below the six visible rows rather than clicking row 6" time="0.1604" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="names what IS in the listing when the wanted entry is not" name="map-browser listing model.names what IS in the listing when the wanted entry is not" time="0.0945" asserts="0" success="True" result="Success" executed="True" />
+            </results>
+          </test-suite>
+          <test-suite type="TestFixture" name="fixture ownership registry" executed="True" result="Success" success="True" time="2.0734" asserts="0" description="fixture ownership registry">
+            <results>
+              <test-case description="does not call a suite OWN earlier fixture foreign (the 2026-08-09 self-deadlock)" name="fixture ownership registry.does not call a suite OWN earlier fixture foreign (the 2026-08-09 self-deadlock)" time="0.2156" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="still calls anything undeclared foreign, and refuses to start" name="fixture ownership registry.still calls anything undeclared foreign, and refuses to start" time="0.0962" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="deletes only declared fixtures and leaves everything else alone" name="fixture ownership registry.deletes only declared fixtures and leaves everything else alone" time="0.0834" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="refuses to delete a name the run never declared" name="fixture ownership registry.refuses to delete a name the run never declared" time="0.1198" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="refuses to launch a fixture the run never declared" name="fixture ownership registry.refuses to launch a fixture the run never declared" time="0.1134" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="names the missing-own-fixture case separately from the collision case" name="fixture ownership registry.names the missing-own-fixture case separately from the collision case" time="0.1378" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="rejects a duplicate declaration" name="fixture ownership registry.rejects a duplicate declaration" time="0.1649" asserts="0" success="True" result="Success" executed="True" />
+            </results>
+          </test-suite>
+        </results>
+      </test-suite>
+    </results>
+  </test-suite>
+</test-results>
