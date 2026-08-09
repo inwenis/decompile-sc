@@ -191,15 +191,19 @@ That ordering is a runtime claim, so the plugin logs what it read (`GROUP recall
 engine only sets `0x08` for units it puts in `activePlayerSelection`. A recall emits **no `Select` of
 its own**; the replay still happens only when the player next issues a fanned order.
 
-Three gates keep a group from resurrecting anything:
+Three gates keep a group from resurrecting anything (strengths spelled out in
+[`research/control-groups.md`](../../research/control-groups.md) §7.3 — they are not all equal):
 
 1. task 020's five-term **liveness gate**, run over every member at store and at recall;
 2. **containment** — the engine's own recalled units must all be in the plugin's group, which store
    and add maintain by construction; a violation means the group is stale or foreign, so it is
-   discarded and the plugin falls back to the engine's twelve;
-3. **new-game detection** — if the engine's row for a group is empty now and the plugin previously
-   observed it non-empty, `0x004EEC30` has restarted a game underneath us and the plugin group is
-   dropped, so a later shift-add cannot union fresh units into a previous game's corpses.
+   discarded and the plugin falls back to the engine's twelve. It compares the
+   **(pointer, `CUnit+0xA5`) pair**, because a `CUnit*` is a slot the engine reuses game after game
+   and a bare pointer names a seat rather than a unit;
+3. **an ADD into an empty engine row is an ASSIGN** — which is what the engine's own
+   `hotkeySaveOrAdd` does on an empty row, so it is a mirror rather than a heuristic. After
+   `0x004EEC30` clears the engine's groups at game start, a shift-add cannot union fresh units into
+   a previous game's records.
 
 `GROUPSTATS` is written beside `STATS` on detach, with per-group holdings.
 

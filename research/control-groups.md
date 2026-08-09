@@ -75,9 +75,11 @@ Committed table: [`data/hotkey-xrefs.tsv`](data/hotkey-xrefs.tsv) (the same two-
 
 **41 instructions across 7 functions**, which reproduces `binary-selection-map.md` §2.1's count for
 this array exactly. Entry points were validated first
-([`data/hotkey-funcprobe.tsv`](data/hotkey-funcprobe.tsv), `ENTRY-POINT` for every seeded address;
-the three `in-` rows there are instruction addresses seeded deliberately so the probe would report
-the containing function rather than this task guessing one).
+([`data/hotkey-funcprobe.tsv`](data/hotkey-funcprobe.tsv)): 18 rows, of which the **15 function
+labels all resolve `ENTRY-POINT`** and the **3 `in-` rows resolve `INSIDE-FUNCTION` by design** —
+those are instruction addresses seeded deliberately, so the probe would name the containing function
+instead of this task guessing one. That is how `0x004965A0`, `0x00496D30` and `0x004EEC30` were
+identified, and they are in the spec as their own labels afterwards.
 
 The two `.rdata` hits at `0x00500A9E`/`0x00500AC2` are the byte coincidence
 `binary-selection-map.md` §2.3 note 2 already identified (a virtual-key table whose bytes read as
@@ -372,27 +374,67 @@ only when the player next issues a fanned order, exactly as before this task. (A
 investigating whether replayed `Select`s interrupt in-progress orders — recall does not add a new
 burst of them.)
 
-### 7.3 Staleness: three gates, none of them a probability argument
+### 7.3 Staleness: three gates, and what each one is actually worth
 
-1. **Liveness.** Every entry is re-run through task 020's five-term gate
+Stated per gate, because they are **not** all the same strength and an earlier version of this
+section implied they were.
+
+1. **Liveness — structural.** Every entry is re-run through task 020's five-term gate
    ([`fanout-liveness.md`](fanout-liveness.md) §3) at recall, and again on the way in at store time.
-   A dead, removed, recycled or changed-hands unit is dropped, not resurrected. Reused, not
-   reinvented.
-2. **Containment.** The engine's own post-recall list must be a subset of the plugin group. Store and
-   add maintain that by construction — we store a superset of what the engine stores, and the
-   engine's recall can only ever *drop* entries (§4.2 step 3) — so a violation *means* the group does
-   not describe this selection. The plugin then discards the group and falls back to pre-021
-   behaviour (shadow = the engine's twelve) rather than guessing.
-3. **New game in the same process.** The narrow case the first two do not cover, raised on review.
-   `0x004EEC30` zeroes the engine's groups at game start while the plugin's survive; *recall* is
-   already safe (an empty engine group makes `0x00496B40` return before it queues anything, so the
-   plugin's recall path never runs), but a later **shift-add** would union fresh units into the
-   previous game's corpses. The plugin closes it by reading the *effect* of that clear rather than
-   patching the code that causes it: if the engine's row for a group is empty **now** and the plugin
-   has previously observed it non-empty, the engine has restarted and the plugin group is dropped.
-   The "previously observed" half is what makes it exact — without it the ordinary sequence
-   *Ctrl+1 then Shift+1 before the assign has executed* (the assign is queued, not applied, so the
-   row is legitimately still zero) would read as a restart and throw the player's group away.
+   A dead, removed, changed-hands or recycled unit is dropped, not resurrected.
+
+   Its one probabilistic term is uniqueness: `CUnit+0xA5` is a **5-bit counter** — the re-init at
+   `0x004A0320` writes `(previous + 1) & 0x1F` — so a record whose slot has been re-used passes the
+   uniqueness test whenever the number of re-inits of that slot is a multiple of 32. The other four
+   terms (hitpoints, owner, sprite, player-list reachability) are absolute, and a *live* unit sitting
+   in a recycled slot passes all four. So term 1 alone is 31/32 per unit, not certainty. That is why
+   gate 2 exists and why it compares the pair.
+
+2. **Containment — structural, and it compares (pointer, uniqueness), not the pointer.** The engine's
+   own post-recall list must be a subset of the plugin group. Store and add maintain that by
+   construction — we store a superset of what the engine stores, and the engine's recall can only
+   ever *drop* entries (§4.2 step 3) — so a violation *means* the group does not describe this
+   selection, and the plugin discards it and falls back to pre-021 behaviour (shadow = the engine's
+   twelve) rather than guessing.
+
+   The pair matters: a `CUnit*` is a slot in a fixed 1700-entry global the engine reuses game after
+   game, so comparing bare pointers would let a stale record whose slot now holds a *different* live
+   unit read as contained — passing on exactly the input this gate exists to catch. Review found the
+   first version doing precisely that; `hooktest` part [11] now recycles the uniqueness bytes of the
+   recalled slots and asserts the group is discarded.
+
+3. **New game in the same process — an ADD into an empty engine row is an ASSIGN.** `0x004EEC30`
+   zeroes the engine's groups at game start while the plugin's survive. *Recall* is already covered
+   (an empty engine group makes `0x00496B40` return before it queues anything, so the plugin's recall
+   path never runs; a non-empty one is covered by gate 2). **ADD** is the exposed one, and the rule
+   is a mirror of the engine rather than a guess about the player: `hotkeySaveOrAdd`'s ADD branch
+   scans for the first free slot, so on an empty row it starts at index 0 — in the engine, an add
+   into an empty group already *is* an assign. The plugin does the same.
+
+   **The first version of this got it wrong, and the review caught it.** It tried to be cleverer —
+   "the row is empty now AND I have previously observed it non-empty" — to avoid resetting on the
+   legitimate *Ctrl+N then shift-add before the assign has executed* sequence. But the store is
+   receive-side, so on a **first** Ctrl+N the row is always still empty at that instant and the
+   observation was never recorded: a group assigned once and not touched again was **permanently
+   immune to the reset**. Assign a group, start a new mission, shift-add into it, and the new units
+   were unioned into the previous game's records — after which gate 2 was being maintained against a
+   poisoned baseline. That is ordinary play. The rule above has no memory to get wrong, and
+   `hooktest` part [11] carries the sequence with no extra command in it (the case the old test could
+   not see, because it issued one).
+
+   **What it costs**, stated because it is a real behaviour difference: if the player queues Ctrl+N
+   and a shift-add in the *same turn* and changes the selection between them, the engine ends up with
+   `sel1 ∪ sel2` while the plugin keeps only `sel2`. Nothing is corrupted — the next recall's
+   containment check sees the engine hand back units the group does not hold, discards it and falls
+   back to the engine's twelve. A lost >12 group in a two-commands-in-one-turn case, not a wrong one.
+
+**One asymmetry worth knowing**, since it can cost a group with nothing wrong: `GroupStore` gates
+units on the way IN, and the engine's own store does not. A unit skipped at assign time for
+`hitpoints == 0` can still be stored by the engine (its store checks owner and the tag encoding, not
+hit points) and handed back by its recall — where it reads as foreign to gate 2, and the whole group
+is discarded rather than partly used. Narrow (it needs a unit that is dead-but-not-yet-removed at the
+exact moment of the Ctrl+N) and it fails safe, but it is a real path from "one unlucky unit" to "the
+player loses the group".
 
 A `0x13` the plugin does not understand — wrong length, a group outside `0..9`, an action
 `CMDRECV_Hotkey` does not dispatch — falls back to exactly the pre-021 behaviour: drop the over-cap
@@ -436,10 +478,19 @@ Every emitted byte is asserted on the wire.
 | **death** | a unit past the cap killed by damage (`hitpoints := 0`, uniqueness verified *unchanged* first): 35 come back, the group compacts to 35, and **the corpse's tag is in no emitted `Select`** |
 | **removal** | a unit unlinked from `playerUnitList` (HP and uniqueness verified untouched): 35 come back |
 | containment | a group whose units the engine did not recall is discarded; the shadow list falls back to the engine's twelve; the poisoned group is forgotten |
-| new game | the engine's rows zeroed under us → the stale group is dropped and a shift-add behaves as an assign; and a shift-add *before* the assign has executed does **not** trigger it |
+| new game | the engine's rows zeroed under us → a shift-add into an empty row behaves as an assign and the stale group is dropped |
+| **new game after a group used exactly ONCE** | the sequence the first implementation got wrong (§7.3 gate 3): assign, never touch the group again, new mission, shift-add. Asserted with **no** extra command in it, which is what the version that shipped broken could not see |
+| **recycled slots** | the engine recalls the same pointers with new uniqueness bytes → not contained → group discarded. Bare-pointer containment passed this |
 | shift-add | a second overlapping selection unions to 32, not 40 |
 | unknown `0x13` | group 12 (the engine's own recent ring) and a wrong-length command both fall back to pre-021 behaviour |
 | already-dead unit | never enters a group at store time |
+
+**Both cases added after review were confirmed capable of failing**, by reverting each fix and
+re-running: with the ADD-into-empty-row rule disabled the new-game case reports the group holding
+**41** units (36 from the previous game unioned with 5 fresh ones — the exact defect), and with
+containment back on bare pointers the recycled-slots case reports a shadow list of **36**, i.e. the
+previous game's units handed to the player. An assertion that cannot fail is not evidence, and this
+part had two of them before.
 
 ### 8.3 Not regressed
 
@@ -489,6 +540,9 @@ Every emitted byte is asserted on the wire.
   A human pressing Ctrl+1 exercises it; nothing in this repo can.
 * **Group `0`.** The plugin mirrors groups `0..9` and the test drives group `1`. Group 0 is the same
   code path with a different index and is not separately exercised in game.
+* **The store-side / engine-side gate asymmetry** in §7.3 — a unit skipped at assign time for
+  `hitpoints == 0` that the engine stores anyway can cost the whole group at the next recall. Not
+  observed; reasoned from the two stores' differing checks.
 
 ### Reproducing this
 
@@ -503,9 +557,14 @@ Every emitted byte is asserted on the wire.
 ./tools/ghidra/sweep.ps1 -Mode Run -ProjectDir work/scratch/ghidra-021 -ProgramName StarCraft.exe `
     -Script FuncProbe.java -ScriptArgs work/scratch/ghidra-021/hotkey-funcprobe.tsv, tools/ghidra/specs/hotkey-functions.spec
 
-# the accelerator tables (working copy only, never the pristine install)
-python tools/parse_accelerators.py C:\sc-work\1161-base\StarCraft.exe
-python tools/parse_accelerators.py C:\sc-work\1161-base\Local.dll
+# the accelerator tables (working copy only, never the pristine install). Two modules go
+# into one file, so the first call writes and the second appends; --module defaults to the
+# PE's file name, which is what the committed table's `module` column holds. This
+# reproduces research/data/accelerators.tsv byte-identically.
+python tools/parse_accelerators.py C:\sc-work\1161-base\StarCraft.exe `
+    --tsv research/data/accelerators.tsv --append
+python tools/parse_accelerators.py C:\sc-work\1161-base\Local.dll `
+    --tsv research/data/accelerators.tsv --append
 
 # offline core tests, then the in-game run
 ./tools/plugin/build.ps1 -Test

@@ -86,12 +86,40 @@ $IDLE_ORDER = '0x03'
 # exactly three entries -- Melee, Free For All, Use Map Settings -- and the entry centres
 # land on Send-ScDropdownPick's default 16px/15px offsets, so index 2 is right and the
 # geometry is right. That measurement is what rules the pick's coordinates and index OUT
-# as the cause of a melee start, and leaves the open/hover timing, which is why this call
-# passes -OpenMs/-HoverMs well above their defaults.
+# as the cause of a melee start; the remaining cause was the open/hover timing, and
+# Send-ScDropdownPick's DEFAULTS were raised for it (every suite was exposed, not just
+# this one), so no override is needed here.
 $UMS_INDEX = 2
 
+# The fixture folder is SHARED between workers, and every suite in this repo has
+# historically opened with `Remove-Item -Recurse` on it. That is how one run came within a
+# step of deleting another worker's map out from under their live game (2026-08-09,
+# conductor interim rule). This test therefore:
+#   * names its fixture with its task id, so "mine" is decidable;
+#   * deletes ONLY that file, never the folder;
+#   * refuses to start at all if a fixture it did not create is present, rather than
+#     removing it or risking the menu's row-2 click landing on it.
 $mapDir = Join-Path $GameDir 'Maps\BroodWar\00-testmap'
-$mapPath = Join-Path $mapDir 'lurkers.scx'
+$mapName = '021-lurkers.scx'
+$mapPath = Join-Path $mapDir $mapName
+
+function Remove-MyFixture {
+    if (Test-Path -LiteralPath $mapPath) {
+        Remove-Item -LiteralPath $mapPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Assert-FixtureFolderIsOurs {
+    if (-not (Test-Path -LiteralPath $mapDir)) { return }
+    $foreign = @(Get-ChildItem -LiteralPath $mapDir -Filter *.scx -ErrorAction SilentlyContinue |
+                 Where-Object { $_.Name -ne $mapName })
+    if ($foreign.Count -gt 0) {
+        throw ("test: $mapDir already holds a fixture this test did not create " +
+               "($($foreign.Name -join ', ')). Another worker is probably mid-run. " +
+               "Refusing to start rather than deleting their map or letting the menu's " +
+               "row-2 click land on it -- re-run when they are done.")
+    }
+}
 
 function Assert-That {
     param([string]$What, [bool]$Ok, [string]$Detail = '')
@@ -150,7 +178,8 @@ function Shot([string]$tag) {
 
 try {
     Step "generate the fixture: $UnitCount Lurkers, Use Map Settings, no triggers" {
-        if (Test-Path -LiteralPath $mapDir) { Remove-Item -LiteralPath $mapDir -Recurse -Force }
+        Assert-FixtureFolderIsOurs
+        Remove-MyFixture
         $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
             -UnitCount $UnitCount -UnitType lurker -Player 0 -OutputPath $mapPath 2>&1
         $gen = @($gen | Where-Object { "$_" -notmatch 'WARNING:StormLibFinder' })
@@ -172,7 +201,7 @@ try {
     if (-not $gamePid) { throw 'test: could not parse the game pid from scinject output.' }
     $hwnd = Get-ScGameWindow -ProcessId $gamePid
 
-    Step 'menus: Single Player -> Expansion -> Play Custom -> 00-testmap\lurkers.scx' {
+    Step "menus: Single Player -> Expansion -> Play Custom -> 00-testmap\$mapName" {
         Start-Sleep -Seconds 2
         Send-ScClick -Hwnd $hwnd -X 215 -Y 119        # Single Player
         Send-ScClick -Hwnd $hwnd -X 373 -Y 300        # StarCraft: Brood War (Expansion)
@@ -185,7 +214,7 @@ try {
         Send-ScClick -Hwnd $hwnd -X 117 -Y 140        # [00-testmap]
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok
         Start-Sleep -Milliseconds 800
-        Send-ScClick -Hwnd $hwnd -X 117 -Y 159        # lurkers.scx
+        Send-ScClick -Hwnd $hwnd -X 117 -Y 159        # our fixture: the only .scx here
         Start-Sleep -Milliseconds 500
         # Set the Game Type EXPLICITLY: the combo carries whatever this machine's profile
         # last used, and a stale "Melee" hands the slot melee starting units instead of
@@ -283,7 +312,16 @@ try {
     }
 
     Step "press $Group -- ALL $UnitCount come back" {
-        $mark = Get-ScLogLineCount -LogPath $LogPath
+        # Kept for the NEXT step as well as this one. The HUD-row and circle evidence has
+        # to be scoped to lines written AFTER the recall keypress: the 36-unit drag box in
+        # step [3] already emitted `HUDROW show n=36 page=1/3` and `CIRCLES show: 24/24`,
+        # and the clear in step [5] emits neither pattern (it logs `HUDROW stock restored`,
+        # and ShowOverflowCircles returns silently when there is no overflow). So a step
+        # that searched the whole log would pass on the BOX's lines even if the recall
+        # re-paged nothing and re-attached nothing -- and those two lines are the only
+        # in-game evidence for "the row and circles reflect a >12 recall".
+        $script:recallMark = Get-ScLogLineCount -LogPath $LogPath
+        $mark = $script:recallMark
         Send-ScControlGroupRecall -Hwnd $hwnd -Group $Group
         Start-Sleep -Seconds 3
         $lines = Get-NewLines $mark
@@ -308,6 +346,9 @@ try {
                       Where-Object { $_ })
             Assert-That "  and it read $ev distinct unit tags out of it" `
                 ($tags.Count -eq $ev -and (@($tags | Sort-Object -Unique).Count -eq $ev))
+            # Kept for the HUD-row cross-check in the next step: these tags come from
+            # activePlayerSelection, the row's come from the live dialog's button records.
+            $script:engineVisibleTags = $tags
         }
 
         $r = @($lines | Select-String -Pattern 'GROUP recall: group=(\d+) -> (\d+) unit\(s\) \((\d+) visible from the engine \+ (\d+) restored past the cap, (\d+) dropped')
@@ -338,26 +379,59 @@ try {
 
     Step 'the HUD row and the circles reflect the recall exactly as they do a box' {
         # Merged features (tasks 014/017): a >12 recall must page the row and circle the
-        # over-cap units, the same as a >12 drag box. Read out of the plugin's own
-        # dialog read-back and attach count, not off the pixels.
-        $all = @(Get-Content -LiteralPath $LogPath)
-        $rows = @($all | Select-String -Pattern 'HUDROW show n=(\d+) page=(\d+)/(\d+)')
-        Assert-That 'the HUD row is paging' ($rows.Count -gt 0)
+        # over-cap units, the same as a >12 drag box.
+        #
+        # SCOPED TO THE RECALL, not the whole log -- see the comment at $script:recallMark.
+        # Searching the whole file would find the drag box's own lines and pass whether or
+        # not the recall did anything.
+        $lines = Get-NewLines $script:recallMark
+
+        $rows = @($lines | Select-String -Pattern 'HUDROW show n=(\d+) page=(\d+)/(\d+) slots=(\d+) \[([0-9A-F ]*)\]')
+        Assert-That 'the recall itself made the row re-page' ($rows.Count -gt 0) `
+            '(no HUDROW show line after the recall keypress)'
         if ($rows.Count -gt 0) {
-            $m = [regex]::Match($rows[-1].Line, 'n=(\d+) page=(\d+)/(\d+)')
+            $m = [regex]::Match($rows[-1].Line,
+                'n=(\d+) page=(\d+)/(\d+) slots=(\d+) \[([0-9A-F ]*)\]')
             Write-Host "       $($rows[-1].Line.Trim())"
             Assert-That "  it lists all $UnitCount units ($($m.Groups[1].Value))" `
                 ([int]$m.Groups[1].Value -eq $UnitCount)
             Assert-That "  over 3 pages, showing page 1 ($($m.Groups[2].Value)/$($m.Groups[3].Value))" `
                 ([int]$m.Groups[2].Value -eq 1 -and [int]$m.Groups[3].Value -eq 3)
+            # `n`/`page`/`pages` are the plugin's own counters. `slots` and the tag list
+            # are the genuine read-back OUT OF the live dialog's button records
+            # (sc_hudrow.cpp's `HUDROW show`), so they are the half that can disagree with
+            # us -- assert those, or this step is the plugin marking its own homework.
+            Assert-That "  and it really filled twelve dialog buttons (slots=$($m.Groups[4].Value))" `
+                ([int]$m.Groups[4].Value -eq 12)
+            $rowTags = @($m.Groups[5].Value -split ' ' | Where-Object { $_ })
+            Assert-That "  reading back $($rowTags.Count) distinct tags from the buttons" `
+                ($rowTags.Count -eq 12 -and (@($rowTags | Sort-Object -Unique).Count -eq 12))
+            # CROSS-MODULE: page 1 always shows the engine's own twelve (task 017's rule).
+            # Those twelve are exactly what the recall read out of activePlayerSelection a
+            # moment earlier -- a different module, a different source. Comparing the two
+            # is a real agreement check rather than a restatement.
+            if ($null -ne $script:engineVisibleTags) {
+                $diff = @($rowTags | Where-Object { $script:engineVisibleTags -notcontains $_ }) +
+                        @($script:engineVisibleTags | Where-Object { $rowTags -notcontains $_ })
+                Assert-That '  and the buttons name exactly the units the recall put in activePlayerSelection' `
+                    ($diff.Count -eq 0) "(differing tags: $($diff -join ' '))"
+            }
         }
-        $circ = @($all | Select-String -Pattern 'CIRCLES show: (\d+)/(\d+)')
-        Assert-That 'circles were attached for the over-cap units' ($circ.Count -gt 0)
+
+        $circ = @($lines | Select-String -Pattern 'CIRCLES show: (\d+)/(\d+)')
+        Assert-That 'the recall itself re-attached the circles' ($circ.Count -gt 0) `
+            '(no CIRCLES show line after the recall keypress)'
         if ($circ.Count -gt 0) {
             Write-Host "       $($circ[-1].Line.Trim())"
             $m = [regex]::Match($circ[-1].Line, 'CIRCLES show: (\d+)/(\d+)')
-            Assert-That "  one per over-cap unit ($($m.Groups[1].Value)/$($UnitCount - 12))" `
-                ([int]$m.Groups[2].Value -eq $UnitCount - 12)
+            $got = [int]$m.Groups[1].Value      # ATTACHED
+            $want = [int]$m.Groups[2].Value     # requested
+            # `%d/%d` is shown/requested. The second number is the plugin echoing its own
+            # input, so testing it alone would pass a run where the engine's image free
+            # list was empty and nothing was drawn at all (`0/24`). Test the ATTACHED
+            # count, and that it is non-zero -- the shape test-selection-circles.ps1 uses.
+            Assert-That "  one attached per over-cap unit ($got attached of $want requested)" `
+                ($got -eq $want -and $got -eq $UnitCount - 12 -and $got -gt 0)
         }
         Shot 'recalled-hud'
     }
@@ -492,16 +566,16 @@ finally {
         Write-Host '  FAIL no pid was ever parsed, so nothing could be closed'
         $failures++
     }
-    if (-not $KeepOpen -and (Test-Path -LiteralPath $mapDir)) {
-        Remove-Item -LiteralPath $mapDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    # ONLY our own file, never the folder -- another worker's fixture may be sitting
+    # beside it with their game still reading it.
+    if (-not $KeepOpen) { Remove-MyFixture }
 }
 
 Write-Host ''
 Write-Host '[final] the run must balance'
 $left = if ($gamePid -gt 0) { Get-Process -Id $gamePid -ErrorAction SilentlyContinue } else { $null }
 Assert-That 'the game process this test started is gone' ($KeepOpen -or $null -eq $left)
-Assert-That 'the generated map was cleaned up' ($KeepOpen -or -not (Test-Path -LiteralPath $mapDir))
+Assert-That 'the generated map was cleaned up' ($KeepOpen -or -not (Test-Path -LiteralPath $mapPath))
 
 $hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
 Write-Host "  StarCraft.exe SHA-256 after:  $hashAfter"

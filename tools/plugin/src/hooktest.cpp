@@ -1421,10 +1421,8 @@ static void ControlGroupTests(void) {
         Hotkey(SC_HOTKEY_ASSIGN, 5);
         Check("group 5 holds 36", ScFanoutGroupCount(5), 36);
 
-        // The engine executes the store, and we OBSERVE its row filled. That observation
-        // is the whole of the detector's memory -- without it, the ordinary
-        // "Ctrl+5 then shift-add before the assign has executed" sequence would look
-        // exactly like a restart.
+        // The engine executes the store, so its row is filled. A shift-add now must
+        // KEEP the group -- this is the case the reset must not fire on.
         FakeEngineHotkeyRow(5, kFirstTwelve, 12);
         Hotkey(SC_HOTKEY_ADD, 5);
         Check("a shift-add with the row filled keeps the group", ScFanoutGroupCount(5), 36);
@@ -1437,6 +1435,90 @@ static void ControlGroupTests(void) {
         Check("the stale group was dropped, so the add behaves as an assign",
               ScFanoutGroupCount(5), 1);
         Check("  a reset was counted", ScFanoutGroupStat(SC_GROUPSTAT_RESET) > 0 ? 1 : 0, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // THE CASE THAT USED TO SHIP BROKEN, AND THE ONE THE OLD TEST COULD NOT SEE.
+    //
+    // Review found that the first version of the reset kept a per-group "I have
+    // observed the engine's row filled" flag and only reset when that flag was set. The
+    // store is RECEIVE-SIDE, so on a FIRST Ctrl+N the row is still empty at that
+    // instant and the flag was never recorded -- which made a group used exactly once
+    // permanently immune to the reset. That is ordinary play, not a corner: assign a
+    // group, never touch it again, start a new mission, shift-add into it.
+    //
+    // The block above could not catch it, because it issues an extra shift-add WITH the
+    // row filled before the new game, which is what set the flag. This block is the
+    // sequence with no such command in it, and it is why the mechanism is now the
+    // engine-mirroring rule (an add into an empty row is an assign) with no memory at
+    // all. Deleting that rule fails HERE.
+    // -----------------------------------------------------------------------
+    printf("\n    NEW GAME after a group used exactly ONCE (the shipped-broken case)\n");
+    {
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        ZeroEngineHotkeys();
+        DriveSelection(36);
+        Hotkey(SC_HOTKEY_ASSIGN, 8);              // the ONLY 0x13 of "game A"
+        Check("group 8 holds 36", ScFanoutGroupCount(8), 36);
+        // The engine executes that store some frames later...
+        FakeEngineHotkeyRow(8, kFirstTwelve, 12);
+        // ...and the player never touches group 8 again. New game: the array is zeroed.
+        ZeroEngineHotkeys();
+        {
+            DWORD fresh[5];
+            for (int i = 0; i < 5; ++i) fresh[i] = FakeUnit(40 + i);
+            ScFanoutOnSelect(5, fresh);
+        }
+        Hotkey(SC_HOTKEY_ADD, 8);
+        // Was 25 (36 of game A's records unioned with the new 5) before the fix.
+        Check("the previous game's 36 are gone; the add holds only the new 5",
+              ScFanoutGroupCount(8), 5);
+        Check("  and a reset was counted", ScFanoutGroupStat(SC_GROUPSTAT_RESET) > 0 ? 1 : 0, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // IDENTITY IS THE (POINTER, UNIQUENESS) PAIR, NOT THE POINTER.
+    //
+    // Also from review. A CUnit* is a slot in a fixed global that the engine reuses
+    // game after game, so a stale record whose slot now holds a DIFFERENT live unit
+    // must not read as "contained". The containment gate is the cross-session staleness
+    // detector, and comparing bare pointers would make it pass on exactly the input it
+    // exists to catch. The NEW-GAME containment case earlier in this part uses disjoint
+    // slots (40..51 against a group of 0..35), which is the one shape where comparing
+    // pointers and comparing pairs agree -- so it could not see this either.
+    // -----------------------------------------------------------------------
+    printf("\n    CONTAINMENT compares (pointer, uniqueness), not the pointer alone\n");
+    {
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        ZeroEngineHotkeys();
+        DriveSelection(36);
+        Hotkey(SC_HOTKEY_ASSIGN, 9);
+        Check("group 9 holds 36", ScFanoutGroupCount(9), 36);
+        FakeEngineHotkeyRow(9, kFirstTwelve, 12);
+
+        // Every slot the engine is about to recall is RECYCLED into a different unit --
+        // the same addresses, new uniqueness bytes, exactly what a second game does to
+        // the same 1700-entry array. Bare-pointer containment would call this contained
+        // and hand the player a group built from the previous game's records.
+        for (int i = 0; i < SC_SELECTION_SLOTS; ++i) {
+            BYTE* u = (BYTE*)FakeUnit(i);
+            u[SC_CUNIT_OFF_UNIQUENESS] = (BYTE)(u[SC_CUNIT_OFF_UNIQUENESS] + 1);
+        }
+        { DWORD one[1] = { FakeUnit(40) }; ScFanoutOnSelect(1, one); }
+        FakeEngineVisible(kFirstTwelve, 12);
+        Hotkey(SC_HOTKEY_RECALL, 9);
+
+        Check("the recycled slots are NOT contained, so the group is discarded",
+              ScFanoutGroupStat(SC_GROUPSTAT_DISCARD), 1);
+        Check("  and the shadow list is the engine's twelve alone",
+              ScFanoutShadowCount(), 12);
+        Check("  the poisoned group is forgotten", ScFanoutGroupCount(9), -1);
+        for (int i = 0; i < SC_SELECTION_SLOTS; ++i) {   // put the fixture back
+            BYTE* u = (BYTE*)FakeUnit(i);
+            u[SC_CUNIT_OFF_UNIQUENESS] = (BYTE)(u[SC_CUNIT_OFF_UNIQUENESS] - 1);
+        }
     }
 
     printf("\n    shift-add UNIONS a second selection into the group\n");

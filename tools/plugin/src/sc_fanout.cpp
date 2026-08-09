@@ -216,6 +216,26 @@ static bool ShadowContains(const ShadowUnit* arr, int n, DWORD ptr) {
     return false;
 }
 
+// IDENTITY, not address. A CUnit* is a slot in a fixed 1700-entry global that the engine
+// reuses game after game, so a pointer alone does not name a unit -- it names a seat. The
+// module's own notion of identity everywhere else (UnitLive, PassesGate) is the PAIR
+// (pointer, CUnit+0xA5), and anything that decides "is this the same unit" has to use the
+// pair or it is really asking "is this the same seat".
+//
+// This exists because the control-group code originally used ShadowContains for its
+// containment check, and review pointed out the consequence: a record left over from a
+// previous game whose slot is now occupied by a DIFFERENT live unit would compare equal,
+// so the check that is supposed to detect a cross-session stale group would pass on
+// exactly the input it exists to catch. The offline case that certified it happened to
+// use disjoint slots (40..51 against a group of 0..35), which is the one shape where the
+// two functions agree.
+static bool ShadowContainsUnit(const ShadowUnit* arr, int n, const ShadowUnit* u) {
+    for (int i = 0; i < n; ++i) {
+        if (arr[i].ptr == u->ptr && arr[i].uniqueness == u->uniqueness) return true;
+    }
+    return false;
+}
+
 // Is this a pointer to a real slot of the unit array? The array is a fixed
 // 1700-entry global, so an in-range pointer is always readable -- but the pointer
 // itself has to be validated against the array's bounds and stride first, because a
@@ -783,10 +803,7 @@ static bool StartFanout(const BYTE* order, int orderLen) {
 struct ShadowGroup {
     ShadowUnit units[SC_SHADOW_MAX];
     int        count;
-    bool       stored;      // false = we have never recorded this group in this session
-    bool       sawEngineRow;// we have OBSERVED the engine's own row for this group
-                            // holding something. See NewGameReset below -- this is the
-                            // whole of the new-game detector's memory.
+    bool       stored;   // false = we have never recorded this group in this session
 };
 
 static ShadowGroup g_group[SC_HOTKEY_GROUPS];
@@ -824,48 +841,53 @@ static bool DisagreeingPlayerIds(void) {
     return !(a == b && b == c);
 }
 
-// NEW GAME IN THE SAME PROCESS -- the one stale-group case the liveness gate and the
-// containment check between them do NOT cover, raised by the conductor on the design.
+// AN ADD INTO AN EMPTY ENGINE ROW IS AN ASSIGN. That one rule is the whole of the
+// stale-group defence for the ADD path, and it is a MIRROR of the engine rather than a
+// guess about the player.
 //
-// 0x004EEC30 (and 0x004965A0) zero the WHOLE hotkey array at game start, so after
-// starting a second mission our plugin groups describe units that no longer exist while
-// the engine's own groups are empty. RECALL is already safe -- an empty engine group
-// makes the client handler 0x00496B40 return before it queues anything, so our recall
-// path never runs. ADD is not: `13 02 g` into a group the player never re-assigned in
-// the new game would union fresh units into last game's corpses, and the containment
-// invariant would then be maintained against a poisoned baseline.
+// What it is for. 0x004EEC30 (and 0x004965A0) zero the WHOLE hotkey array at game start,
+// so after starting a second mission in the same process our groups describe units that
+// no longer exist while the engine's own are empty. RECALL is already safe -- an empty
+// engine group makes the client handler 0x00496B40 return before it queues anything, so
+// our recall path never runs at all, and a non-empty one is covered by the containment
+// check. ADD is the exposed one: `13 02 g` into a group the player never re-assigned in
+// the new game would union fresh units into the previous game's records, and every later
+// containment check would then be maintained against a poisoned baseline.
 //
-// This closes it at the source WITHOUT a hook, by reading the effect of that clear
-// rather than patching the code that causes it: the engine's row for this group is
-// empty NOW and we have previously seen it non-empty. `sawEngineRow` is what makes that
-// exact rather than approximate -- without it, the perfectly ordinary sequence
-// "Ctrl+1 then shift-add before the assign has executed" (the assign is queued, not
-// applied, so the row is still legitimately zero) would read as a restart and throw the
-// player's group away.
-static void NewGameReset(void) {
-    int dropped = 0;
-    for (int i = 0; i < SC_HOTKEY_GROUPS; ++i) {
-        if (!g_group[i].stored && !g_group[i].sawEngineRow) continue;
-        if (EngineGroupNonEmpty(i)) continue;
-        if (!g_group[i].sawEngineRow) continue;   // never seen filled: nothing to contradict
-        if (g_group[i].stored) ++dropped;
-        g_group[i].count        = 0;
-        g_group[i].stored       = false;
-        g_group[i].sawEngineRow = false;
-        ++g_statGroupReset;
-    }
-    if (dropped > 0) {
-        ScLog("GROUP reset: the engine's own control groups have been cleared under us "
-              "(0x004EEC30 game start / 0x004965A0) -- dropped %d plugin group(s) rather "
-              "than letting a later shift-add union new units into a previous game's "
-              "corpses", dropped);
-    }
-}
-
-// Called on every 0x13 we understand, AFTER NewGameReset, so the detector's memory only
-// ever advances on an observation of the live array.
-static void NoteEngineRow(int group) {
-    if (EngineGroupNonEmpty(group)) g_group[group].sawEngineRow = true;
+// Why mirroring the engine is the right rule rather than a heuristic: hotkeySaveOrAdd's
+// ADD branch (0x004965D0 with param 0) scans for the first FREE slot, so on an empty row
+// it starts writing at index 0 -- an add into an empty group IS an assign, in the engine.
+// Doing the same thing is therefore not a policy this plugin invented; it is the engine's
+// own behaviour, applied to a bigger list.
+//
+// AN EARLIER VERSION OF THIS GOT IT WRONG and the review caught it, so the trap is
+// written down here. It tried to be cleverer -- "the row is empty now AND I have
+// previously observed it non-empty" -- to avoid resetting on the legitimate sequence
+// `Ctrl+N` then shift-add before the assign has executed (the assign is queued, not
+// applied, so the row is still legitimately zero). But the store is receive-side, so on a
+// FIRST Ctrl+N the row is always still empty at that instant and the observation was
+// never recorded: a group used exactly once was permanently immune to the reset, which is
+// ordinary play, not a corner. The rule below has no memory to get wrong.
+//
+// WHAT IT COSTS, stated because it is a real behaviour difference and not nothing: if the
+// player queues `Ctrl+N` and shift-add in the SAME turn AND changes the selection between
+// them, the engine ends up with sel1 + sel2 while this plugin keeps only sel2. Nothing is
+// corrupted -- the next recall's containment check sees the engine hand back units the
+// group does not hold, discards the group and falls back to the engine's own twelve. It
+// is a lost >12 group in a case that needs two hotkey commands inside one turn, not a
+// wrong one.
+static bool ResetGroupIfEngineRowEmpty(int group) {
+    if (EngineGroupNonEmpty(group)) return false;
+    if (!g_group[group].stored) return false;
+    ScLog("GROUP reset: shift-add into group %d while the engine's own row for it is "
+          "EMPTY -- either a new game cleared it under us (0x004EEC30) or it was never "
+          "assigned. hotkeySaveOrAdd starts an add at slot 0 on an empty row, so this "
+          "add becomes an assign here too, dropping the %d unit(s) held from before.",
+          group, g_group[group].count);
+    g_group[group].count  = 0;
+    g_group[group].stored = false;
+    ++g_statGroupReset;
+    return true;
 }
 
 // The engine's own visible selection, as the recall left it. activePlayerSelection is
@@ -914,13 +936,18 @@ static void GroupStore(int group, bool add) {
     if (group < 0 || group >= SC_HOTKEY_GROUPS) return;
     ShadowGroup* g = &g_group[group];
 
+    // An ADD into an engine row that is empty is an ASSIGN -- the engine's own rule; see
+    // ResetGroupIfEngineRowEmpty. Checked before `before` is read so the log line reports
+    // what this command actually started from.
+    if (add) ResetGroupIfEngineRowEmpty(group);
+
     if (!add || !g->stored) { g->count = 0; }
     const int before = g->count;
 
     int skipped = 0;
     for (int i = 0; i < g_shadowCount && g->count < g_maxUnits; ++i) {
         if (!PassesGate(&g_shadow[i], NULL)) { ++skipped; continue; }
-        if (ShadowContains(g->units, g->count, g_shadow[i].ptr)) continue;
+        if (ShadowContainsUnit(g->units, g->count, &g_shadow[i])) continue;
         g->units[g->count++] = g_shadow[i];
     }
     g->stored = true;
@@ -972,7 +999,10 @@ static void GroupRecall(int group) {
     int  foreign = 0;
     if (contained) {
         for (int i = 0; i < visibleCount; ++i) {
-            if (!ShadowContains(g->units, g->count, visible[i].ptr)) { ++foreign; }
+            // The PAIR, not the pointer: a record from a previous game whose slot now
+            // holds a different live unit must read as foreign, which is the whole point
+            // of this check (see ShadowContainsUnit).
+            if (!ShadowContainsUnit(g->units, g->count, &visible[i])) { ++foreign; }
         }
         contained = (foreign == 0);
     }
@@ -994,7 +1024,7 @@ static void GroupRecall(int group) {
     int restored = 0, dropped = 0;
     if (contained) {
         for (int i = 0; i < g->count && g_shadowCount < g_maxUnits; ++i) {
-            if (ShadowContains(visible, visibleCount, g->units[i].ptr)) continue;
+            if (ShadowContainsUnit(visible, visibleCount, &g->units[i])) continue;
             int why = SC_LIVE_OK;
             if (!PassesGate(&g->units[i], &why)) {
                 ++dropped;
@@ -1065,9 +1095,6 @@ static bool OnHotkeyCommand(const BYTE* buf, unsigned len) {
               *(BYTE*)Rt(SC_VA_ACTIVE_PLAYER_ID), *(BYTE*)Rt(SC_VA_PLAYER_ID_512688),
               *(BYTE*)Rt(SC_VA_PLAYER_ID_512678));
     }
-    NewGameReset();
-    NoteEngineRow(group);
-
     switch (action) {
         case SC_HOTKEY_ASSIGN: GroupStore(group, false); return true;
         case SC_HOTKEY_ADD:    GroupStore(group, true);  return true;

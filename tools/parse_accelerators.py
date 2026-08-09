@@ -28,6 +28,7 @@ Usage:
 """
 
 import argparse
+import os
 import struct
 import sys
 
@@ -159,6 +160,15 @@ def main():
     ap.add_argument("pe")
     ap.add_argument("--ids", help="comma-separated hex resource ids to keep (default: all)")
     ap.add_argument("--tsv", help="also write the rows to this TSV")
+    # The committed table (research/data/accelerators.tsv) spans TWO modules, so it needs a
+    # module column the rows themselves do not carry, and a second run has to append rather
+    # than overwrite. Without these the repro printed in research/control-groups.md 9 could
+    # not actually rebuild the file it points at -- which review caught.
+    ap.add_argument("--module", help="value for a leading `module` column (default: the "
+                                     "PE's file name)")
+    ap.add_argument("--append", action="store_true",
+                    help="append to --tsv instead of overwriting, writing the header only "
+                         "when the file is new or empty")
     args = ap.parse_args()
 
     if "sc-install" in args.pe.replace("\\", "/").lower():
@@ -171,6 +181,8 @@ def main():
     if args.ids:
         keep = {int(x, 16) for x in args.ids.replace("0x", "").split(",")}
 
+    module = args.module or os.path.basename(args.pe)
+
     rows = []
     for res_id, lang, blob in sorted(pe.accelerator_blobs()):
         if keep is not None and res_id not in keep:
@@ -179,6 +191,7 @@ def main():
             # The dispatcher sign-extends the command id (MOVSX), so report both forms.
             signed = cmd - 0x10000 if cmd & 0x8000 else cmd
             rows.append({
+                "module": module,
                 "resId": f"0x{res_id:02X}", "lang": lang,
                 "flags": f"0x{flags:02X}", "mods": mod_name(flags) or "-",
                 "key": key_name(key, flags), "keyCode": f"0x{key:02X}",
@@ -189,8 +202,8 @@ def main():
     if not rows:
         sys.exit("no RT_ACCELERATOR resources matched")
 
-    cols = ["resId", "lang", "flags", "mods", "key", "keyCode", "cmdId", "cmdIdSigned",
-            "postable"]
+    cols = ["module", "resId", "lang", "flags", "mods", "key", "keyCode", "cmdId",
+            "cmdIdSigned", "postable"]
     widths = {c: max(len(c), max(len(str(r[c])) for r in rows)) for c in cols}
     print("  ".join(c.ljust(widths[c]) for c in cols))
     for r in rows:
@@ -200,11 +213,15 @@ def main():
           f"table and a POSTED message can never match it.")
 
     if args.tsv:
-        with open(args.tsv, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write("\t".join(cols) + "\n")
+        fresh = (not args.append) or (not os.path.exists(args.tsv)) \
+                or os.path.getsize(args.tsv) == 0
+        with open(args.tsv, "a" if args.append else "w", encoding="utf-8",
+                  newline="\n") as fh:
+            if fresh:
+                fh.write("\t".join(cols) + "\n")
             for r in rows:
                 fh.write("\t".join(str(r[c]) for c in cols) + "\n")
-        print(f"wrote {args.tsv}")
+        print(f"{'appended to' if args.append and not fresh else 'wrote'} {args.tsv}")
 
 
 if __name__ == "__main__":

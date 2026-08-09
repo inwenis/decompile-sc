@@ -184,7 +184,22 @@ function Get-ScState {
 # from a constant that could drift away from it.
 function New-Fixture {
     param([string]$Name, [string]$EnemyOwner)
-    if (Test-Path -LiteralPath $mapDir) { Remove-Item -LiteralPath $mapDir -Recurse -Force }
+    # INTERIM SHARED-FOLDER GUARD (2026-08-09). This folder is shared between workers and
+    # this line is a recursive delete. Task 022 caught itself one step from deleting task
+    # 021's map out from under a live game, and this suite could do the same to theirs.
+    # Refusing is the whole of the guard on purpose -- the conductor is cutting a task to
+    # fix the shared tooling properly, and a half-redesign here would collide with it.
+    if (Test-Path -LiteralPath $mapDir) {
+        $live = @(Get-Process -Name StarCraft -ErrorAction SilentlyContinue |
+                  Where-Object { $script:launchedPids -notcontains $_.Id })
+        if ($live.Count -gt 0) {
+            throw ("test: refusing to recursive-delete $mapDir while a StarCraft this " +
+                   "test did not launch is alive (pid $($live.Id -join ',')). Another " +
+                   "worker is mid-run and their fixture is in that folder -- re-run when " +
+                   "they are done.")
+        }
+        Remove-Item -LiteralPath $mapDir -Recurse -Force
+    }
     $path = Join-Path $mapDir "$Name.scx"
     $out = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
         -UnitCount $UnitCount -UnitType lurker -Player 0 -UnitHp $UnitHp `
@@ -700,8 +715,14 @@ try {
                 ($script:groupStored -eq $UnitCount)
             # Everything in the group is alive at this instant, which is what makes the
             # drop count in PHASE C attributable to the combat and to nothing else.
+            #
+            # The NUMBER is captured, not substring-matched: `'0 skipped as not live'` as
+            # a bare substring also matches "10 skipped as not live" -- it would pass on
+            # exactly the input it exists to rule out.
+            $skipM = [regex]::Match($g[-1].Line, '(\d+) skipped as not live')
             Assert-That 'nothing was skipped as not-live at store time' `
-                (@($g[-1].Line | Select-String -Pattern '0 skipped as not live').Count -gt 0)
+                ($skipM.Success -and [int]$skipM.Groups[1].Value -eq 0) `
+                ($skipM.Success ? "(skipped $($skipM.Groups[1].Value))" : '(no count in the line)')
         }
     }
 
