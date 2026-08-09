@@ -507,10 +507,14 @@ Three things follow, and the third is the one worth carrying:
 **Not settled, and deliberately kept separate.**
 
 - **The user's actual report — a Ghost that WAS cloaked and stopped attacking — is a different
-  question from all of the above**, which is about a Ghost that could not cloak at all. It is
-  answered separately by the order-stability A/B in
-  [`ability-semantics.md`](ability-semantics.md) §7, run on real Ghosts now that Cloak can be
-  issued.
+  question from all of the above**, which is about a Ghost that could not cloak at all. Nothing in
+  this document speaks to it. It is answered separately, on real cloaking Ghosts, in
+  [`ability-semantics.md`](ability-semantics.md) §7.6, and the answer there is **no**: a
+  fanned-out Cloak issued mid-fight took zero units off their attack orders.
+
+  **The fixture bug in §6.3 is ours and it does not explain the user's report.** Their Ghost was in
+  a real game with cloak researched and working; ours was a generator writing the wrong byte. A
+  tooling bug that happens to be adjacent to a user's question is not an answer to it.
 - The `disabledString` rewrite path (`reason == 0x15` → `0x2FA`) is mapped but no string id in this
   document has been resolved to text; `0x004C36F0` (string → hotkey character) is named and not
   decompiled.
