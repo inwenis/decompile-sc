@@ -352,29 +352,101 @@ idle when it is not:
 
 ## 7. Question 3 — "it stopped attacking"
 
-The hypothesis under test, from the conductor: *the `Select` commands the fan-out replays
-interrupt orders that are already running.* Three pieces of evidence, two of them already in
-this document:
+### 7.1 What was tested, and what was not
 
-1. **The ability handlers do not touch the main order.** `0x004C0720` → `0x00491B30` (the
-   cloak family) writes energy and the SECONDARY order `CUnit+0xA6`; nothing on that path
-   writes `CUnit+0x4D` (§3). `0x004C2F30` (Stim) writes hit points and `CUnit+0x115`, and
-   likewise never the main order (§2). A unit that was attacking has no mechanism in these
-   handlers to stop.
-2. **Measured, at 36 units, four times.** Every `UNITSTATE` line in §5 reads
-   `orders=[0x03:36]` before and after each fanned-out Stim press: four fan-outs, twelve
-   emitted `Select` commands, and **not one unit changed its main order**. That is the
-   hypothesis tested directly, on the one ability family this project can currently drive.
-3. In the combat fixture (`test-ability-in-combat.ps1`), with the group engaged, **not one unit
-   that was busy went idle** across the measured window, and the group kept doing damage
-   throughout it.
+The user reported a **cloaked Ghost** that stopped attacking. What is tested below is the
+**mechanism that report made us suspect**: *do the `Select` commands the fan-out replays
+interrupt orders that are already running?* Those are not the same question, and this document
+does not let them read as one.
 
-What is **not** delivered is the cloaked-Ghost case itself: no keypress tried emitted `0x21`,
-so no run in this task has cloaked anything. §5.3 has the leading explanation — the send-side
-gate of §5.2, with the engine's twelve drawn from the fixture's low-energy tail — and the
-fixture has since been changed to full energy. Until that run happens, question 3's answer
-rests on (1) and (2), which are about the mechanism the hypothesis names, and not on a cloaked
-Ghost that did or did not stop shooting.
+The Ghost/Cloak case itself could not be driven. The key is not `C` — it emits nothing even
+with every unit at full energy, so the send-side gate of §5.2 does not explain it — and when
+the test fell back to clicking where the command card's bottom-left slot should be, the frame
+came back reading **"Select Target"**: that slot is a *targeted* ability, i.e. Lockdown.
+Naming the Cloak button is one keypress sweep on a working command card and is owned by the
+harness task, with this evidence attached.
+
+### 7.2 The static half
+
+The handlers cannot do it. `0x004C0720` → `0x00491B30` (the cloak family) writes energy and
+the SECONDARY order `CUnit+0xA6`; `0x004C2F30` (Stim) writes hit points and `CUnit+0x115`.
+Neither writes `CUnit+0x4D`. A unit that was attacking has no mechanism *in the ability* to
+stop — so if one stops, it is the replayed `Select` or nothing.
+
+### 7.3 The quiet half: 36 units, four fan-outs, no order moved
+
+Every `UNITSTATE` line in §5 reads `orders=[0x03:36]` before and after each fanned-out Stim
+press: four fan-outs, **twelve emitted `Select` commands**, and not one unit changed its main
+order. That is the hypothesis tested directly on a still fixture, where nothing else can move
+an order.
+
+### 7.4 The loud half: the same question during an actual firefight
+
+`tools/plugin/test-ability-in-combat.ps1`: 36 Marines walked into 16 Hydralisks, Stim pressed
+once while the fight is in progress, plugin arm and stock arm.
+
+**A naive version of this measurement produced a false finding against our own feature, and it
+is worth recording because the mistake is an easy one.** Counting units whose main order
+changed across the ability gave **13 of 29 in the plugin arm against 2 of 29 in stock** — six
+times as much disturbance, exactly the shape of result this audit was looking for. It is an
+artefact of the feature working. The move order that starts the fight is *itself* fanned out,
+so the two arms are not in the same state:
+
+| arm | orders at the moment of the keypress |
+|---|---|
+| plugin | `0x03:5 0x06:9 0x0a:17` — five idle, nine moving, seventeen attacking |
+| stock | `0x03:26 0x0a:6` — twenty-six standing still |
+
+Twenty-six idle units cannot have their orders interrupted. Raw churn was measuring how many
+units were doing anything.
+
+So the measurement is **each arm against its own control**: the same fight, the same two
+seconds, with no ability used — one control window immediately before the ability window and a
+second immediately after, because a fight decays (fewer units alive, fewer targets) and one
+control on one side of the ability is not automatically comparable to it. If the two controls
+disagree with each other, the fight is too unstable to measure and the run says so rather than
+averaging them.
+
+**Why a negative result here means something.** A replayed `Select` lands on every unit in the
+chunk at once. If it interrupted running orders, the ability window would show a **landslide**
+against its control — most of the group knocked off what it was doing in one step — not a
+margin of one or two. That is what makes the allowance in the assertions generous rather than
+lax, and it is what makes "no excess" a real answer instead of a quiet one.
+
+Run of 2026-08-09, `0 failure(s)`:
+
+```
+[fanout]  CONTROL before: 30 of 32 alive, 10 changed order, 2 stopped attacking
+[fanout]  CONTROL after : 24 of 26 alive,  4 changed order, 1 stopped attacking
+[fanout]  ABILITY window: 26 of 30 alive,  8 changed order, 1 stopped attacking
+[observe] CONTROL before: 29 of 32 alive,  0 changed order, 0 stopped attacking
+[observe] CONTROL after : 22 of 26 alive,  0 changed order, 0 stopped attacking
+[observe] ABILITY window: 26 of 29 alive,  0 changed order, 0 stopped attacking
+
+excess disturbance caused by the ability: fanout -2, stock 0
+```
+
+**The ability window is quieter than the control window that preceded it** — eight order
+changes against ten — and it sits between the two controls, which is what "no effect" looks
+like in a decaying fight. One unit stopped attacking across the ability; two stopped across the
+control. And the individual changes are mostly `0x03`/`0x06`/`0x02 -> 0x0a`: units arriving and
+*starting* to shoot, the opposite of being interrupted. No landslide, no margin, nothing.
+
+**Which arm is the evidence.** The plugin arm's comparison against its own control is the
+primary result: it is the only arm with enough units actually doing something for an
+interruption to be visible. The stock arm is the corroborator and a weak one, and this run
+shows exactly why — it recorded **zero** order changes in every window, including the two
+controls. A population that never changes an order cannot demonstrate that something failed to
+change one. Reported as a corroborator, not as an equal arm.
+
+### 7.5 What this does and does not answer
+
+It answers: the fan-out's replayed `Select`s do not interrupt orders that are already running,
+on a still fixture and in a live fight, statically and dynamically.
+
+It does not answer: why a cloaked Ghost appeared to stop attacking. That remains open, most
+likely vanilla (the plugin has no AI, targeting or acquisition code in it at all), and the
+honest state of it is "not reproduced, and not yet reproducible with this harness".
 
 ---
 

@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
 PLUGIN-vs-STOCK: does using an ability on a >12 selection IN COMBAT stop the units
-fighting? 36 Ghosts engage 16 Hydralisks, Personnel Cloaking is pressed once mid-fight,
+fighting? 36 Marines engage 16 Hydralisks, Stim Pack is pressed once mid-fight,
 and every unit's order is compared across that press -- with the plugin active, and again
 with `-Mode observe`, which installs no hook at all.
 
@@ -30,9 +30,11 @@ interception, no dispatcher detour. The metric is per unit and matched by CUnit 
 across two scans, so "unit 5 stopped attacking" is a statement about unit 5 and not about
 a histogram that happens to move.
 
-The fixture also answers the ENERGY half of question 1 on the way past: 24 of the 36
-Ghosts start with full energy and 12 start with 5%, which is below the cost, so one
-keypress shows who the engine charges and who it skips.
+The fixture is deliberately NOT the user's cloaked Ghost: nothing in this harness can yet
+make the client emit the Cloak command (the key is not 'C', and the command-card slot where
+it should be turns out to be a targeted ability -- the frame reads "Select Target"). What is
+tested here is the MECHANISM their report made us suspect, on an ability this harness can
+reliably issue. The report says so in those terms rather than letting the two read as one.
 
 .EXAMPLE
 ./tools/plugin/test-ability-in-combat.ps1
@@ -55,9 +57,6 @@ param(
     [int]$EnemyCount = 16,
     [ValidateSet('fanout', 'observe')][string[]]$Modes = @('fanout', 'observe'),
     [int]$EngageTimeoutSec = 60,
-    # The Cloak button's client coordinates on the Ghost command card, used only if the
-    # hotkey emits nothing. Read off a captured frame of this fixture: the card is the
-    # bottom-right 3x3 block and Cloak is its bottom-left cell.
     [switch]$KeepOpen
 )
 
@@ -251,6 +250,15 @@ function Invoke-Arm {
         ArmShot 'engaged'
         if (-not $engaged) { return $result }
 
+        # A CONTROL WINDOW FIRST: the same length of time, in the same fight, with NO
+        # ability used. Units in a firefight change orders constantly on their own -- a
+        # target dies and its killer drops back to Guard, another walks into range and
+        # starts shooting -- so "13 units changed order across the ability" means nothing
+        # until you know what a quiet two seconds looks like. This is what makes the
+        # measurement a comparison rather than an anecdote.
+        Start-Sleep -Seconds 2
+        $result.Baseline = Get-ScWorldState -LogPath $logPath -Tag 'baseline' -MarkerPath $markerPath
+
         # THE MOMENT UNDER TEST: one ability keypress, with the group mid-fight.
         $mark = Get-ScLogLineCount -LogPath $logPath
         Send-ScKey -Hwnd $hwnd -VirtualKey $ABILITY_KEY
@@ -263,6 +271,14 @@ function Invoke-Arm {
         $result.AbilityLines = $lines
         $result.After = Get-ScWorldState -LogPath $logPath -Tag 'after-ability' -MarkerPath $markerPath
         ArmShot 'after-ability'
+
+        # A SECOND control window, immediately after. A fight decays: two seconds later
+        # there are fewer units alive and fewer targets left, so one control taken before
+        # the ability is not automatically comparable to the ability window. Two controls
+        # bracket the drift -- and if they disagree markedly with each other, the fight is
+        # too unstable for the measurement and the run says so instead of averaging them.
+        Start-Sleep -Seconds 2
+        $result.ControlAfter = Get-ScWorldState -LogPath $logPath -Tag 'control-after' -MarkerPath $markerPath
 
         Start-Sleep -Seconds 12
         $result.Later = Get-ScWorldState -LogPath $logPath -Tag 'later' -MarkerPath $markerPath
@@ -338,7 +354,7 @@ Assert-That 'the working copy starts out byte-identical to pristine 1.16.1' `
 
 $arms = @{}
 try {
-    Step "generate the fixture: $UnitCount Ghosts ($DamagedCount of them at $DamagedEnergy% energy) vs $EnemyCount Hydralisks" {
+    Step "generate the fixture: $UnitCount Marines vs $EnemyCount Hydralisks, Stim researched" {
         New-Fixture
     }
 
@@ -351,7 +367,7 @@ try {
             # looks normal, and the units are a standard base instead of the fixture --
             # every later number is then internally consistent nonsense (task 021).
             $melee = @($arm.Boxed.Units | Where-Object { $_.Player -eq 0 -and $_.Type -in 7, 0x40, 0x29, 0x23, 0x2A })
-            Assert-That "[$mode] the fixture spawned $UnitCount Ghosts" ($spawned -eq $UnitCount) `
+            Assert-That "[$mode] the fixture spawned $UnitCount Marines" ($spawned -eq $UnitCount) `
                 ($melee.Count -gt 0 ? "(got $spawned, and player 0 owns SCV/Drone/Larva/Overlord-shaped units -- THIS IS A MELEE START, the Game Type pick did not take)" : "(got $spawned)")
             Assert-That "[$mode] and $EnemyCount Hydralisks" `
                 (@($arm.Boxed.Units | Where-Object { $_.Type -eq $HYDRALISK_TYPE }).Count -eq $EnemyCount)
@@ -366,24 +382,50 @@ try {
             Write-Host ("       [{0}] scans: boxed={1} engaged={2} after={3} later={4} units parsed" -f `
                 $mode, @($arm.Boxed.Units).Count, @($arm.Engaged.Units).Count,
                 @($arm.After.Units).Count, @($arm.Later.Units).Count)
-            $t = Get-Transitions $arm.Engaged $arm.After
+            # Churn with no ability (engaged -> baseline) against churn across the
+            # ability (baseline -> after). Same fight, same length of window.
+            $ctrlBefore = Get-Transitions $arm.Engaged $arm.Baseline
+            $t = Get-Transitions $arm.Baseline $arm.After
+            $ctrlAfter = Get-Transitions $arm.After $arm.ControlAfter
+            # The yardstick is the WORSE of the two controls: taking the larger is the
+            # conservative choice for an assertion that is trying to detect an excess.
+            $ctrl = $(if ($ctrlAfter.Changed -gt $ctrlBefore.Changed) { $ctrlAfter } else { $ctrlBefore })
+            $arm.Control = $ctrl
+            $arm.ControlBefore = $ctrlBefore
+            $arm.ControlAfterT = $ctrlAfter
             $arm.Transitions = $t
             $arm.EnemyHpEngaged = Get-EnemyHp $arm.Engaged
             $arm.EnemyHpAfter = Get-EnemyHp $arm.After
             $arm.EnemyHpLater = Get-EnemyHp $arm.Later
             Write-Host ("       [{0}] orders before: {1}" -f $mode, $t.OrdersBefore)
             Write-Host ("       [{0}] orders after : {1}" -f $mode, $t.OrdersAfter)
-            Write-Host ("       [{0}] alive across the ability: {1} of {2}; main order CHANGED for {3}; went idle: {4} {5}" -f `
+            Write-Host ("       [{0}] CONTROL before: {1} of {2} alive, {3} changed order, {4} stopped attacking" -f `
+                $mode, $ctrlBefore.StillAlive, $ctrlBefore.Before, $ctrlBefore.Changed, $ctrlBefore.WentIdle)
+            Write-Host ("       [{0}] CONTROL after : {1} of {2} alive, {3} changed order, {4} stopped attacking" -f `
+                $mode, $ctrlAfter.StillAlive, $ctrlAfter.Before, $ctrlAfter.Changed, $ctrlAfter.WentIdle)
+            # An unstable fight is a reason to distrust the measurement, not to average it.
+            Assert-That ("[{0}] the two control windows agree well enough to be a yardstick ({1} vs {2} changed)" -f `
+                         $mode, $ctrlBefore.Changed, $ctrlAfter.Changed) `
+                ([math]::Abs($ctrlBefore.Changed - $ctrlAfter.Changed) -le 6) `
+                '(the fight is decaying too fast for a two-second window to mean anything)'
+            Write-Host ("       [{0}] ABILITY window          : {1} of {2} alive, {3} changed order, {4} stopped attacking {5}" -f `
                 $mode, $t.StillAlive, $t.Before, $t.Changed, $t.WentIdle, $t.Detail)
             Write-Host ("       [{0}] enemy hit points: {1} at engage -> {2} after -> {3} twelve seconds later" -f `
                 $mode, $arm.EnemyHpEngaged, $arm.EnemyHpAfter, $arm.EnemyHpLater)
 
-            # THE ASSERTION QUESTION 3 EXISTS FOR, per arm: an ability whose handler never
-            # writes CUnit+0x4D must not move anybody off the order they were already on --
-            # and the fan-out replays a Select before each copy of that ability, which is
-            # exactly what the hypothesis says would interrupt them.
-            Assert-That "[$mode] the ability moved NO unit off its existing order ($($t.Changed) of $($t.StillAlive) changed)" `
-                ($t.Changed -eq 0) $t.Detail
+            # THE ASSERTION QUESTION 3 EXISTS FOR, per arm. "Our replayed Selects interrupt
+            # running orders" predicts a step change: a Select lands on every unit at once,
+            # so the ability window should knock units off their orders WHOLESALE compared
+            # with an ordinary two seconds of the same fight. The control window is the
+            # yardstick, and the allowance is deliberately generous -- the prediction under
+            # test is dozens of units at once, not one or two more than usual.
+            $allowance = 3
+            Assert-That ("[{0}] using the ability disturbs no more orders than not using it ({1} vs {2} in the control)" -f `
+                         $mode, $t.Changed, $ctrl.Changed) `
+                ($t.Changed -le $ctrl.Changed + $allowance) $t.Detail
+            Assert-That ("[{0}] and it does not stop units attacking ({1} vs {2} in the control)" -f `
+                         $mode, $t.WentIdle, $ctrl.WentIdle) `
+                ($t.WentIdle -le $ctrl.WentIdle + $allowance)
             # ... and the group is still fighting afterwards, which is the user's actual
             # complaint. Orders alone could look right while nothing happens.
             Assert-That "[$mode] the group kept doing damage after the ability (enemy $($arm.EnemyHpAfter) -> $($arm.EnemyHpLater))" `
@@ -425,11 +467,26 @@ try {
     if ($arms.Count -ge 2 -and $arms['fanout'].Engaged -and $arms['observe'].Engaged) {
         Step 'PLUGIN vs STOCK: the comparison this question was asked for' {
             $f = $arms['fanout']; $o = $arms['observe']
-            Write-Host ("       fanout : {0}/{1} units changed order across the ability ({2} went idle)" -f $f.Transitions.Changed, $f.Transitions.StillAlive, $f.Transitions.WentIdle)
-            Write-Host ("       observe: {0}/{1} units changed order across the ability ({2} went idle)" -f $o.Transitions.Changed, $o.Transitions.StillAlive, $o.Transitions.WentIdle)
-            Assert-That 'the plugin arm disturbs no more orders than stock does' `
-                ($f.Transitions.Changed -le $o.Transitions.Changed) `
-                "(fanout $($f.Transitions.Changed) vs observe $($o.Transitions.Changed))"
+            Write-Host ("       fanout : ability {0}/{1} changed ({2} stopped attacking); control {3}/{4} changed ({5})" -f `
+                $f.Transitions.Changed, $f.Transitions.StillAlive, $f.Transitions.WentIdle, $f.Control.Changed, $f.Control.StillAlive, $f.Control.WentIdle)
+            Write-Host ("       observe: ability {0}/{1} changed ({2} stopped attacking); control {3}/{4} changed ({5})" -f `
+                $o.Transitions.Changed, $o.Transitions.StillAlive, $o.Transitions.WentIdle, $o.Control.Changed, $o.Control.StillAlive, $o.Control.WentIdle)
+            # NORMALISE BEFORE COMPARING THE ARMS. Raw churn is not comparable between
+            # them and it is important to say why: the fan-out is the thing under test, so
+            # in the plugin arm ALL the units got the move order and are fighting, while in
+            # stock only the engine's twelve did and the rest stand still. Measured on the
+            # first run of this shape: 0x03:5 0x06:9 0x0a:17 in the plugin arm against
+            # 0x03:26 0x0a:6 in stock -- twenty-six idle units cannot have their orders
+            # interrupted. Comparing raw counts there would "find" a difference that is
+            # only the feature working.
+            #
+            # What IS comparable is each arm's own EXCESS over its own control window:
+            # how much more disturbance the ability caused than not using it did.
+            $fDelta = $f.Transitions.Changed - $f.Control.Changed
+            $oDelta = $o.Transitions.Changed - $o.Control.Changed
+            Write-Host ("       excess disturbance caused by the ability: fanout {0}, stock {1}" -f $fDelta, $oDelta)
+            Assert-That 'the ability disturbs no more orders under the plugin than under stock, once each arm is compared with its own control' `
+                ($fDelta -le $oDelta + 5) "(fanout $fDelta vs observe $oDelta)"
             Assert-That 'both arms were still fighting after the ability' `
                 (($f.EnemyHpLater -lt $f.EnemyHpAfter) -and ($o.EnemyHpLater -lt $o.EnemyHpAfter))
             # The stock arm must really be stock: no hook of ours in it at all.
