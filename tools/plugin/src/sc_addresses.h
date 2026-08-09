@@ -467,4 +467,26 @@
 #define SC_CUNIT_OFF_LIST_NEXT 0x6Cu
 #define SC_MAX_UNITS_WALK      2000   // loop bound: never trust a game list to terminate
 
+// The engine's list of ACTIVE dialogs (task 027). Head pointer; each entry is a
+// BinDlg, threaded on the same +0x00 "next" link every dialog walk in this file uses.
+//
+// Evidence, out of THIS binary (Ghidra listing of the event dispatcher 0x00419FD0,
+// the function every posted input event goes through -- 0x004D1AE0's mouse-move
+// dispatch and the window procedure's key cases all call it):
+//
+//     0041a007  PUSH EDI
+//     00419ffd  MOV ECX,dword ptr [0x006d5e34]   ; <- the head
+//     0041a005  JZ ...                           ; empty list -> nothing to offer
+//     0041a008  MOV EDI,dword ptr [ECX]          ; next (SC_BINDLG_OFF_NEXT)
+//     0041a00c  CALL dword ptr [ECX + 0x2a]      ; interact (SC_BINDLG_OFF_INTERACT)
+//     0041a019  JNZ 0x0041a008                   ; ... until the link is null
+//
+// i.e. the dispatcher offers each event to every dialog in this list in turn, using
+// exactly the +0x00/+0x2A layout sc_hudrow already relies on. The plugin only READS
+// it (name, bounds and the same for each dialog's controls) so a suite can find the
+// in-game tips dialog and its OK button instead of clicking a hardcoded point.
+#define SC_VA_DIALOG_LIST 0x006D5E34u
+#define SC_MAX_DIALOGS_WALK 16        // loop bound, same reason as SC_MAX_UNITS_WALK
+#define SC_MAX_CTRLS_WALK   64
+
 #endif // SC_ADDRESSES_H

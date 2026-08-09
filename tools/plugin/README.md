@@ -561,6 +561,19 @@ into, or a write to, the game.
 The log is written **only when the observed state changes**, so quiet stretches are
 normal. The 60-second `HEARTBEAT` line is the liveness signal.
 
+`%SCPLUGIN_DIALOGS%` (default ON; set `0` to silence) adds a `DIALOGS` line whenever
+the engine's set of active dialogs changes — one entry per dialog with its name and
+bounds, and each control that carries text with its own bounds, type and flags:
+
+```
+DIALOGS n=13  dlg='Tips_Dlg' rect=128,32,511,287 ctrl='o.O.K' rect=20,216,123,243 type=1 flags=0x20081A58 ...
+```
+
+Read-only, from the engine's own list (`SC_VA_DIALOG_LIST`, evidence in
+`sc_addresses.h`). Control bounds are LOCAL to their dialog's origin. This is what
+`Dismiss-ScTipsDialog` in `drive-game.ps1` uses to click the tips dialog's real OK
+button instead of a hardcoded point, and to assert the dialog is gone afterwards.
+
 Attach banner, then one block per observed change:
 
 ```
