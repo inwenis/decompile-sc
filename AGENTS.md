@@ -39,6 +39,18 @@ and TOOLING, not redistributed game content.
    something seems missing, ask the user. (Sole exception: `./run.ps1`,
    which the USER launches to serve the Agent Console UI.)
 
+## Absence assertions must first be proved positive (2026-08-09)
+
+An assertion that something is ABSENT is worth nothing until the same pattern has been shown to
+MATCH somewhere it should. Two suites gated "the stock arm installed no hooks" on a string the
+plugin never logs (`HOOK install`, when the real lines are `HOOK <name>: installed at ...` and
+`HOOK: n/n installed`). The check could not fail, and a research doc cited it as the reason the
+control was trustworthy.
+
+So: prove the pattern positive against a log where the thing DID happen, then require it absent
+where it should not have. Pair every absence check with a positive one — "the ability fired in
+this arm" alongside "nothing was interrupted" — or a silently broken run reads as a clean result.
+
 ## Test fixtures: one folder per task (hard rule, 2026-08-09)
 
 **Generate into `Maps\BroodWar\00-t<NNN>\`, your own folder — never the shared
