@@ -1096,9 +1096,18 @@ try {
             ($script:groupStored - $dropped -eq $total)
         # Corroborated against a number this module did not produce: the HUD row's own
         # survivor count from the previous step, read out of the live dialog.
+        #
+        # `-ge`, not `-eq`, and the asymmetry is real rather than slack. The row's number
+        # comes from a fresh DRAG BOX, so it counts survivors inside a rectangle -- the
+        # previous step says as much ("a survivor shoved outside the box rectangle would
+        # read the same way"). A control-group recall is not box-limited: it returns every
+        # stored member that is still alive, wherever it wandered to. So the recall may
+        # legitimately find MORE than the re-box did, and one green run had exactly that
+        # (recall 33, row 32). What would be a real failure is the recall finding FEWER
+        # than a box could see, and that is what this rules out.
         if ($survivors -gt 0) {
-            Assert-That "  and it agrees with the row's independently-read survivor count (recall $total, row $survivors)" `
-                ($total -eq $survivors)
+            Assert-That "  and it finds at least as many as the row's independently-read box (recall $total, row $survivors)" `
+                ($total -ge $survivors) "(a recall finding fewer than a box can see would be the failure)"
         }
 
         $st = Get-ScState 'after-group-recall'
@@ -1117,24 +1126,21 @@ try {
         Assert-That "  and the plugin restored units past what the engine kept (n=$($st.N) > visible=$($st.Visible))" `
             ($st.N -gt $st.Visible -and $st.Visible -le $HUD_SLOTS)
 
-        # ...and no dead member's tag reaches the wire on the order that follows. Same
-        # oracle as PHASE B's regression assertion: the emit path's own read-back.
+        # THE CORPSE IS NOT IN THE SELECTION AT ALL, which is a stronger statement than
+        # "its tag was withheld from a Select": the assertions above show the rebuilt
+        # shadow list contains zero units with hp0 or removed, so there is nothing for a
+        # later order to replay. That is the whole of criterion 4 for this fixture.
+        #
+        # THIS STEP DELIBERATELY ISSUES NO ORDER. Burrow is a TOGGLE and the survivors are
+        # dug in at this point; pressing it here would surface them and leave the next
+        # step -- which presses it to unburrow and then asserts they are above ground --
+        # re-burrowing them instead. That is not a hypothetical, it is what the first run
+        # of this phase did. The wire-level form of the claim ("no dead unit's tag reached
+        # the wire") is already asserted twice over, on the fanned order in PHASE B above
+        # and byte-exactly offline in hooktest part [11], so nothing is lost by not
+        # disturbing this fixture's unit state a second time.
         $deadTags = @($drops | ForEach-Object { $_.Tag } | Sort-Object -Unique)
-        $orderMark = Get-ScLogLineCount -LogPath $LogPath
-        Send-ScKey -Hwnd $hwnd -VirtualKey $BURROW_KEY      # unburrow: an order they can obey
-        Start-Sleep -Seconds 5
-        $after = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $orderMark)
-        $emitted = @()
-        foreach ($l in ($after | Select-String -Pattern 'FANOUT select: in=\d+ out=\d+ dropped=\d+ tags=\[([0-9A-F ]*)\]')) {
-            $emitted += @([regex]::Match($l.Line, 'tags=\[([0-9A-F ]*)\]').Groups[1].Value -split ' ' |
-                          Where-Object { $_ })
-        }
-        Assert-That 'the order after the recall reached the wire' ($emitted.Count -gt 0)
-        $replayed = @($deadTags | Where-Object { $emitted -contains $_ })
-        Assert-That "NO corpse from the recalled group reached the wire (dead: $($deadTags -join ' '))" `
-            ($replayed.Count -eq 0) "(replayed anyway: $($replayed -join ' '))"
-        Assert-That "and the order still reached more than the engine's twelve ($($emitted.Count) tags)" `
-            ($emitted.Count -gt $HUD_SLOTS)
+        Write-Host "       corpses refused by the recall, none of them in the list above: $($deadTags -join ' ')"
         Shot 'after-group-recall' | Out-Null
     }
 
