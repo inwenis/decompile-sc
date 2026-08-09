@@ -39,6 +39,17 @@ and TOOLING, not redistributed game content.
    something seems missing, ask the user. (Sole exception: `./run.ps1`,
    which the USER launches to serve the Agent Console UI.)
 
+## Read a dialog's content from memory, not from its pixels (2026-08-09, task 026)
+
+A frame-region hash is NOT a reliable oracle for what a dialog shows. Task 023 concluded a
+researched fixture "drew a different command card" from two differing region fingerprints;
+task 026's read of the card's own slot table showed both fixtures identical — the hash was a
+false positive. When a claim is about UI CONTENT (which button, which slot, enabled vs greyed),
+read the structure out of process memory (the control array, the statUser records, the button's
+state bits), not a screenshot of it. Frames are corroboration for "did it visibly render at
+all", never the measurement. Same lesson the folder-row "flake" taught: what looks visual is
+usually a readable structure underneath.
+
 ## Absence assertions must first be proved positive (2026-08-09)
 
 An assertion that something is ABSENT is worth nothing until the same pattern has been shown to
@@ -131,20 +142,92 @@ Rules, all three, no exceptions:
 Rule 3 is what prevents the silent failure — playing someone else's map produces internally
 consistent nonsense, which is worse than a crash.
 
-## Posted mouse MOVES need the window foreground (hard rule, 2026-08-09, tasks 022/023)
+## Foreground: only ONE primitive may raise (hard rule, 2026-08-09, task 027 — reverses 022/023)
 
-The game processes a posted click with its window in the background and DROPS the posted
-`WM_MOUSEMOVE`. Anything that reads the game's own tracked cursor position therefore acts
-on a stale point, silently: the Game Type dropdown committing the previous value, the
-minimap centring click missing, `Send-ScDrag` selecting nothing at all.
+**The rule has two halves and you need both. Reading one half alone re-opens a real bug.**
 
-Every primitive in `drive-game.ps1` that posts a move goes through `Assert-ScWindowActive`,
-which verifies the result (`SetForegroundWindow` is refused for a background process and
-returns TRUE while doing nothing) and THROWS rather than posting into a no-op. Do not add
-an input primitive that skips it.
+1. **Posted mouse MOVES, clicks and world DRAG-boxes do NOT need the foreground.** Nothing
+   in the harness may raise the window for them. This is the half that reverses 022/023.
+2. **A DROPDOWN pick DOES** — `Send-ScDropdownPick` is the one and only place in this repo
+   allowed to raise, it does so for the length of one pick, and it hands the foreground
+   back afterwards. Delete that and the Game Type pick silently stops taking. Details at
+   the end of this section.
 
-Confirmed, not merely attributed: one sweep of `test-fanout-orders` and
-`test-selection-circles` against the fix took both from 25 lost assertions to 0.
+Half 1 used to be stated the other way round. It was wrong, and the wrong version cost the
+user their focus on every unattended run — the complaint that opened task 027.
+
+Two kinds of evidence:
+
+- **Static.** The window procedure (`StarCraft.exe` `FUN_004d1d70`, Ghidra) handles
+  `WM_MOUSEMOVE` with three unconditional stores and a return — no foreground check, no
+  active check: `DAT_006cddc0 |= 1; _DAT_006cddc4 = lParam & 0xffff; _DAT_006cddc8 =
+  lParam >> 16;`. The binary's only `GetForegroundWindow` call site (`0x004eddf0`) is a
+  diagnostic.
+- **Live** (`tools/plugin/probe-quiet-input.ps1`, one launch). With the USER'S window
+  holding the foreground throughout, a posted move onto the main menu's Single Player
+  button changed that button's region (`FF975A03A546737B` → `271D215ABFB1EF45`). Then
+  raising the game put it straight BACK to `FF975A03A546737B`: activation re-syncs the
+  game's cursor to the physical mouse, so the raise **destroys** the posted position it
+  was supposed to enable.
+
+Activation is worse than useless here. The same `WM_ACTIVATEAPP` case (`case 0x1c`) runs
+`0x004d1750` and `0x00421730`, which call `SetCursor`/`GetCursorPos`/`SetCursorPos` and
+**`ClipCursor(window rect)`** — every raise confined the user's real mouse to the game
+window.
+
+What 022 actually measured was a DRAWING difference, with a frame oracle: the game gates
+drawing on activation (`0x0041d710` returns 0 while `DAT_0051bfa8`, written by that same
+`WM_ACTIVATEAPP` case, is 0). Under the windowed-mode helper every suite injects, drawing
+does NOT stop — the probe fingerprinted the animated main menu 3 s apart with the window in
+the background and got two different frames — so the pixel oracles (browser rows,
+`Set-ScGameType`) work in the background too.
+
+So:
+
+- `Assert-ScWindowActive` no longer touches the foreground. It refuses to post into a dead
+  or **MINIMISED** window, which is the real hazard (task 012 probe 2), and that is all.
+- `Set-ScWindowActive` still exists, opt-in only: `-RaiseWindow`, or `$env:SCDRIVE_RAISE=1`
+  for a human who wants to watch a run. **No suite may set it.**
+- Do not "fix" a flaky input by activating the window. It will not be the cause, and it
+  will steal the user's focus and trap their mouse while the run lasts.
+
+### Half 2: the dropdown, the one place a raise is allowed
+
+**Measured, not assumed: `Send-ScDropdownPick`.** A menu dropdown is a press-and-hold
+control and the game calls `SetCapture` on button-down (`0x004d1a76`); Windows grants the
+mouse capture only to the FOREGROUND window. `probe-quiet-dropdown.ps1` ran all three arms
+on the Create Game screen: background = pick did not take, background + `AttachThreadInput`
++ `SetActiveWindow` = pick did not take, foreground = took on the first attempt. So that
+primitive raises for the length of ONE pick and then **hands the foreground back** to
+whatever had it (which also makes the game release its `ClipCursor`). Cost: about two
+seconds during the menu walk of the three suites that call `Set-ScGameType`, instead of the
+whole run. A world drag-box is also a held-button walk and needs none of this — so this is
+the dialog control, not held buttons in general.
+
+### How to check a run did not steal focus
+
+`tools/plugin/watch-foreground.ps1` samples `GetForegroundWindow()` every 250 ms and prints
+one line per CHANGE, exiting non-zero if any StarCraft window was ever foreground. Run it
+alongside a suite; do not claim "it did not steal focus" without it.
+
+What a correct run looks like: for the six suites that never pick a game type, **zero**
+changes — `test-fanout-orders` and `test-selection-circles` (the pair 022/023 cited) both
+went 0 failures with the user's window keeping the foreground for the entire run. For the
+three that do pick one, exactly one borrow-and-return pair around the pick (measured:
+foreground at 22:03:39, back to the user's window at 22:03:43). Anything else is a bug.
+
+## The in-game tips dialog is dismissed by ITS OWN button, never by a fixed point (task 027)
+
+`Tips_Dlg` is a normal engine dialog, and every suite used to close it with an
+unconditional click at `(200,261)` — no check that it was there, no check that it went.
+Use `Dismiss-ScTipsDialog -Hwnd -LogPath`: it waits for the dialog in the engine's own
+active-dialog list (the plugin's `DIALOGS` log line, list head `0x006D5E34`), computes the
+OK button's centre from that button's own bounds, clicks it, and **throws if the dialog is
+still up**. A tip dialog left open eats every later click in the run.
+
+Never turn tips off through `HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft` — that is
+live user state (hard rule 5) and the dialog's own "Show Tips at Startup" checkbox writes
+it. Dismiss for this run; leave the user's setting alone.
 
 ## Screenshots vs hard rule 1 (settled)
 

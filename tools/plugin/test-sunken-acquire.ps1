@@ -1,4 +1,4 @@
-#Requires -Version 7
+﻿#Requires -Version 7
 <#
 .SYNOPSIS
 PLUGIN-vs-STOCK: does a Sunken Colony attack a Medic that walks into its range? Same map,
@@ -189,7 +189,9 @@ function Invoke-Arm {
         Start-Sleep -Seconds 6
         Send-ScClick -Hwnd $hwnd -X 544 -Y 387
         Start-Sleep -Seconds 10
-        Send-ScClick -Hwnd $hwnd -X 200 -Y 261
+        # The tips dialog is found in the engine's own dialog list and dismissed by ITS OWN
+        # OK button, then asserted gone (task 027) -- never a fixed point, never the registry.
+        Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $logPath | Out-Null
         Start-Sleep -Seconds 2
 
         Send-ScDrag -Hwnd $hwnd -X1 10 -Y1 10 -X2 630 -Y2 340 -Steps 20

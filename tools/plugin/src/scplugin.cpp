@@ -391,6 +391,117 @@ static void PollMarker(void) {
 }
 
 // ---------------------------------------------------------------------------
+// Active-dialog scan (task 027) -- READ-ONLY
+//
+// Why it exists: every in-game suite dismissed the "StarCraft Tips" dialog by
+// clicking a HARDCODED point (200,261) with no check that a dialog was ever there
+// and no check that it went away. That is the same shape as the map-browser
+// row-by-number bug this repo already has a hard rule about. With the dialog list
+// readable, a suite can find the tips dialog, click ITS OWN OK button wherever the
+// engine put it, and assert the dialog is gone.
+//
+// The walk is the engine's own: head at SC_VA_DIALOG_LIST, "next" at +0x00, controls
+// from +0x42, each with text at +0x14 and bounds at +0x04 -- the layout sc_hudrow
+// already reads (sc_addresses.h carries the per-offset evidence). Every read goes
+// through SafeRead, so a wrong offset produces a missing field, never a fault inside
+// the game. Nothing here writes, hooks or calls into the game.
+//
+// One line per CHANGE of the dialog set, not per tick: a menu that sits still logs
+// once. %SCPLUGIN_DIALOGS%=0 turns it off.
+// ---------------------------------------------------------------------------
+
+static bool g_dialogScan = true;
+
+// Copies a NUL-terminated string out of the game, one byte at a time through
+// SafeRead, and sanitises it for the log: dialog text is game data, so a stray
+// newline or '|' would corrupt the line a parser is about to read.
+static void ReadDlgText(DWORD ptr, char* out, size_t outLen) {
+    out[0] = '\0';
+    if (!ptr || outLen < 2) return;
+    size_t i = 0;
+    for (; i + 1 < outLen; ++i) {
+        BYTE c = 0;
+        if (!SafeRead((const void*)(ptr + i), &c, 1)) break;
+        if (c == 0) break;
+        out[i] = (c < 32 || c > 126 || c == '|' || c == '\'') ? '.' : (char)c;
+    }
+    out[i] = '\0';
+}
+
+// left,top,right,bottom -- four s16 at +0x04 (SC_BINDLG_OFF_BOUNDS).
+static void ReadDlgRect(DWORD dlg, int* r) {
+    for (int i = 0; i < 4; ++i) {
+        unsigned v = 0;
+        r[i] = ReadU16(dlg + SC_BINDLG_OFF_BOUNDS + (unsigned)i * 2, &v) ? (int)(short)v : -1;
+    }
+}
+
+static void ScanDialogs(void) {
+    if (!g_dialogScan) return;
+
+    static char prev[2048] = { 0 };
+    char line[2048];
+    size_t used = 0;
+    line[0] = '\0';
+
+    DWORD dlg = 0;
+    int n = 0;
+    if (ReadU32((DWORD)(DWORD_PTR)Rt(SC_VA_DIALOG_LIST), &dlg)) {
+        while (dlg && n < SC_MAX_DIALOGS_WALK) {
+            char name[64];
+            DWORD text = 0;
+            ReadU32(dlg + SC_BINDLG_OFF_TEXT, &text);
+            ReadDlgText(text, name, sizeof(name));
+            int r[4];
+            ReadDlgRect(dlg, r);
+
+            int w = _snprintf(line + used, sizeof(line) - used, "%s dlg='%s' rect=%d,%d,%d,%d",
+                              used ? " |" : "", name, r[0], r[1], r[2], r[3]);
+            if (w < 0 || (size_t)w >= sizeof(line) - used) break;
+            used += (size_t)w;
+
+            // The controls, so a caller can aim at the real OK button. Only the ones
+            // that carry text -- the artwork children are noise for that job.
+            DWORD ctrl = 0;
+            ReadU32(dlg + SC_BINDLG_OFF_FIRST_CHILD, &ctrl);
+            int c = 0;
+            while (ctrl && c < SC_MAX_CTRLS_WALK) {
+                char ctext[64];
+                DWORD ct = 0;
+                ReadU32(ctrl + SC_BINDLG_OFF_TEXT, &ct);
+                ReadDlgText(ct, ctext, sizeof(ctext));
+                if (ctext[0]) {
+                    int cr[4];
+                    ReadDlgRect(ctrl, cr);
+                    unsigned flags = 0, type = 0;
+                    ReadU32(ctrl + SC_BINDLG_OFF_FLAGS, (DWORD*)&flags);
+                    ReadU16(ctrl + SC_BINDLG_OFF_TYPE, &type);
+                    int cw = _snprintf(line + used, sizeof(line) - used,
+                                       " ctrl='%s' rect=%d,%d,%d,%d type=%u flags=0x%X",
+                                       ctext, cr[0], cr[1], cr[2], cr[3], type, flags);
+                    if (cw < 0 || (size_t)cw >= sizeof(line) - used) break;
+                    used += (size_t)cw;
+                }
+                DWORD next = 0;
+                if (!ReadU32(ctrl + SC_BINDLG_OFF_NEXT, &next)) break;
+                ctrl = next;
+                ++c;
+            }
+
+            DWORD next = 0;
+            if (!ReadU32(dlg + SC_BINDLG_OFF_NEXT, &next)) break;
+            dlg = next;
+            ++n;
+        }
+    }
+
+    if (strcmp(line, prev) == 0) return;
+    strncpy(prev, line, sizeof(prev) - 1);
+    prev[sizeof(prev) - 1] = '\0';
+    ScLog("DIALOGS n=%d%s%s", n, n ? " " : "", line);
+}
+
+// ---------------------------------------------------------------------------
 // Observer thread
 // ---------------------------------------------------------------------------
 
@@ -406,22 +517,40 @@ static DWORD GetPollMs(void) {
 
 static ScMode g_mode = SC_MODE_OBSERVE;
 
-static bool GetEnvFlag(const char* name) {
+static bool GetWorldScan(void) {
     char buf[16];
-    DWORD n = GetEnvironmentVariableA(name, buf, sizeof(buf));
+    DWORD n = GetEnvironmentVariableA("SCPLUGIN_WORLDSCAN", buf, sizeof(buf));
     if (n == 0 || n >= sizeof(buf)) return false;
     return buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y';
 }
 
-static bool GetWorldScan(void) { return GetEnvFlag("SCPLUGIN_WORLDSCAN"); }
+// ON by default, unlike the world scan: it logs one line per CHANGE of the dialog
+// set, so a whole run adds a handful of lines, and the tips-dialog dismissal in
+// every suite depends on it.
+static bool GetDialogScan(void) {
+    char buf[16];
+    DWORD n = GetEnvironmentVariableA("SCPLUGIN_DIALOGS", buf, sizeof(buf));
+    if (n == 0 || n >= sizeof(buf)) return true;
+    return !(buf[0] == '0' || buf[0] == 'n' || buf[0] == 'N');
+}
+
+// OFF by default, same shape as the world scan: %SCPLUGIN_CARDSCAN%=1 turns on the
+// read-only command-card walk (task 026).
+static bool GetCardScan(void) {
+    char buf[16];
+    DWORD n = GetEnvironmentVariableA("SCPLUGIN_CARDSCAN", buf, sizeof(buf));
+    if (n == 0 || n >= sizeof(buf)) return false;
+    return buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y';
+}
 
 static DWORD WINAPI ObserverThread(LPVOID) {
     const DWORD pollMs = GetPollMs();
     g_worldScan = GetWorldScan();
+    g_dialogScan = GetDialogScan();
     // Task 026: the read-only command-card scan. Same shape and same off switch as
     // the world scan, and for the same reason -- it must exist in observe mode too,
     // because "the card the stock game draws" is half of every comparison.
-    ScCardInit(g_base, GetEnvFlag("SCPLUGIN_CARDSCAN"));
+    ScCardInit(g_base, GetCardScan());
     ResolveMarkerPath();
     ScLog("OBSERVER start pollMs=%u mode=%s%s", (unsigned)pollMs, ScModeName(g_mode),
           g_mode == SC_MODE_OBSERVE ? " (read-only; no writes to game memory)" : "");
@@ -439,6 +568,7 @@ static DWORD WINAPI ObserverThread(LPVOID) {
 
     while (!InterlockedCompareExchange(&g_stop, 0, 0)) {
         PollMarker();
+        ScanDialogs();
         Snapshot cur;
         TakeSnapshot(&cur);
         // memcmp compares the padding bytes too, so `prev` must be refreshed with

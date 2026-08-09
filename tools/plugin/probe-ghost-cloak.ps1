@@ -1,4 +1,4 @@
-#Requires -Version 7
+﻿#Requires -Version 7
 <#
 .SYNOPSIS
 Name the Ghost's Personnel Cloaking button -- by READING THE COMMAND CARD OUT OF PROCESS
@@ -215,7 +215,9 @@ function Start-GhostGame {
     Start-Sleep -Seconds 6
     Send-ScClick -Hwnd $h -X 544 -Y 387
     Start-Sleep -Seconds 10
-    Send-ScClick -Hwnd $h -X 200 -Y 261
+    # The tips dialog is found in the engine's own dialog list and dismissed by ITS OWN
+    # OK button, then asserted gone (task 027) -- never a fixed point, never the registry.
+    Dismiss-ScTipsDialog -Hwnd $h -LogPath $logPath | Out-Null
     Start-Sleep -Seconds 3
     $h
 }

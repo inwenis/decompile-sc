@@ -509,6 +509,14 @@ honest state of it is "not reproduced, and not yet reproducible with this harnes
 
 ### 8.1 The Game Type pick has been a silent no-op — and it is a foreground problem
 
+> **SUPERSEDED (task 027, 2026-08-09).** The foreground half of this section is wrong. The
+> window procedure stores a posted `WM_MOUSEMOVE` unconditionally, a posted move registers
+> with the window in the background (measured), and raising the window actively *resets* the
+> game's cursor to the physical mouse while confining the user's mouse via `ClipCursor`.
+> What activation gates is DRAWING, which is what the frame oracle below was reading. See
+> `automated-testing-options.md` §9. The rest of this section — that the pick was a silent
+> no-op and needs a verified change, which `Set-ScGameType` still does — stands.
+
 **The game ignores a posted `WM_MOUSEMOVE` when its window is not the foreground window.**
 Posted clicks are processed either way, which is why every other part of `drive-game.ps1` works
 with the window in the background, and why this went unseen.
