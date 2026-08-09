@@ -128,13 +128,16 @@ static int EngineQueueLength(DWORD unit) {
 }
 
 // ---------------------------------------------------------------------------
-// Money
+// Money -- ONE DIRECTION ONLY
 //
-// Both directions read the SAME two per-type tables the engine's own spend
-// (addToBuildQueue 0x00467250, through setPendingCost 0x0042D140) and its own refund
-// (refundByType 0x0042CEC0) read, and both honour the same units.dat "this type moves
-// no resources" bit. That is what makes "paid exactly once" an arithmetic identity
-// rather than a hope.
+// The plugin never pays for anything. Every item in a record was accepted by the engine's
+// own addToBuildQueue (0x00467250), which checked the player could afford it and deducted
+// the cost there; the plugin only ever moved it out of the ring afterwards. So the only
+// resource write here is the REFUND, for an item that is destroyed while the plugin is
+// holding it, and it reads the same two per-type tables the engine's own refund
+// (refundByType 0x0042CEC0) reads and honours the same units.dat "this type moves no
+// resources" bit. Spend and refund therefore cancel exactly, with the engine on one side
+// of the identity and the plugin on the other.
 // ---------------------------------------------------------------------------
 
 static bool TypeMovesResources(unsigned type) {
@@ -154,21 +157,8 @@ static DWORD* GasOf(BYTE player) {
     return (DWORD*)(RtA(SC_VA_PLAYER_GAS) + (DWORD)player * 4);
 }
 
-static bool CanAfford(BYTE player, unsigned type) {
-    if (player >= SC_MAX_PLAYERS) return false;
-    if (!TypeMovesResources(type)) return true;
-    return *MineralsOf(player) >= MineralCost(type) && *GasOf(player) >= GasCost(type);
-}
-
-// Both of these are no-ops for a type whose cost flag says the engine would not have
-// moved anything either.
-static void Spend(BYTE player, unsigned type) {
-    if (player >= SC_MAX_PLAYERS || !TypeMovesResources(type)) return;
-    *MineralsOf(player) -= MineralCost(type);
-    *GasOf(player)      -= GasCost(type);
-    g_stat[SC_PRODQ_STAT_MINERALS_SPENT] += (int)MineralCost(type);
-    g_stat[SC_PRODQ_STAT_GAS_SPENT]      += (int)GasCost(type);
-}
+// A no-op for a type whose cost flag says the engine would not have moved anything on the
+// way in either.
 static void Refund(BYTE player, unsigned type) {
     if (player >= SC_MAX_PLAYERS || !TypeMovesResources(type)) return;
     *MineralsOf(player) += MineralCost(type);
@@ -218,19 +208,47 @@ static void CollectGarbage(bool deep) {
 }
 
 // ---------------------------------------------------------------------------
-// Promotion: hand as many overflow items as there are free slots to the engine
+// Rebalancing: keep the engine's ring at SC_PRODQ_ENGINE_HOLD, hold the rest
 //
-// This is a bare store into the engine's own ring, at the slot the engine's own
-// free-slot rule picks, and it moves NO resources -- the item was paid for when it was
-// accepted. Nothing else in addToBuildQueue applies here: the cost tables it fills are
-// consumed by its own deduction two instructions later, the secondary order is already
-// set (the queue cannot be non-empty otherwise), and the building-AI mirror arrays it
-// never touches either.
+// Both directions are a bare store into the engine's own ring and move NO resources --
+// the engine paid for every one of these items when it accepted it. Nothing else in
+// addToBuildQueue applies here: the cost tables it fills are consumed by its own
+// deduction two instructions later, the secondary order is already set (the ring cannot
+// be non-empty otherwise), and it never touches the building-AI mirror arrays either.
 // ---------------------------------------------------------------------------
+
+// The slot holding the item accepted MOST RECENTLY. Occupied slots run contiguously from
+// the head -- findFreeBuildQueueSlot (0x004669B0) scans from the head for the first
+// 0xE4 and stops there, so a gap behind the head is unreachable and never occurs -- which
+// makes the newest of `len` items the one at (head + len - 1) % 5.
+static int TailSlot(DWORD unit, int len) {
+    if (len <= 0) return -1;
+    unsigned head = *(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
+    if (head >= SC_BUILD_QUEUE_SLOTS) head = 0;
+    return (int)((head + (unsigned)(len - 1)) % SC_BUILD_QUEUE_SLOTS);
+}
+
+// How many more items this record may take. The bound is against the engine's FIVE, not
+// against the hold: once the plugin stops taking items back, the ring fills to five and
+// stays there, so the largest logical queue reachable is five plus whatever is held --
+// which is exactly `g_maxTotal` when the room is measured this way. Measuring it against
+// the hold instead would let one more item in than the maximum says.
+//
+// Leaving the ring full IS the cap. The client greys its own Train button out at five
+// (research/production-queue.md 4.1), so the press after the maximum is refused by
+// vanilla's own UI, in vanilla's own way -- nothing is silently swallowed and nothing has
+// to be un-spent.
+static int HoldRoom(const ProdRecord* r) {
+    int held = r ? r->count : 0;
+    int room = g_maxTotal - SC_BUILD_QUEUE_SLOTS - held;
+    int cap  = SC_PRODQ_HARD_MAX - held;
+    if (room > cap) room = cap;
+    return room > 0 ? room : 0;
+}
 
 static int PromoteInto(ProdRecord* r) {
     int promoted = 0;
-    while (r->count > 0) {
+    while (r->count > 0 && EngineQueueLength(r->unit) < SC_PRODQ_ENGINE_HOLD) {
         int slot = FindFreeSlot(r->unit);
         if (slot >= SC_BUILD_QUEUE_SLOTS) break;
         WORD type = r->types[0];
@@ -244,10 +262,62 @@ static int PromoteInto(ProdRecord* r) {
     }
     if (promoted && !g_testing) {
         // Tell the status area to redraw, the way the Train handler's own tail does
-        // (0x004C1C7C writes this flag). Without it the fifth icon can lag a frame.
+        // (0x004C1C7C writes this flag). Without it an icon can lag a frame.
         *(BYTE*)Rt(SC_VA_STAT_DIRTY) = 1;
     }
     return promoted;
+}
+
+// Takes the newest items back out of the ring until it is down to the hold, appending
+// each to the record in the order the engine accepted them -- which keeps the logical
+// queue in the player's order, because the only item that can be above the hold is the
+// one that has just arrived.
+//
+// `rp` may point at a NULL record: one is created on the first item actually held, so a
+// building the plugin has nothing to say about never occupies a slot in the table.
+static int HoldBack(DWORD unit, BYTE player, ProdRecord** rp) {
+    int held = 0;
+    for (;;) {
+        int len = EngineQueueLength(unit);
+        if (len <= SC_PRODQ_ENGINE_HOLD) break;
+        if (HoldRoom(*rp) <= 0) break;
+        if (!*rp && g_recCount >= SC_PRODQ_MAX_BUILDINGS) {
+            ScLog("PRODQEV refuse-table unit=0x%08X buildings=%d", (unsigned)unit, g_recCount);
+            break;
+        }
+        int slot = TailSlot(unit, len);
+        WORD type = QueueSlot(unit, slot);
+        if (type == SC_BUILD_QUEUE_EMPTY) break;   // cannot happen; never loop on it
+
+        if (!*rp) {
+            ProdRecord* n = &g_rec[g_recCount++];
+            n->unit       = unit;
+            n->uniqueness = *(BYTE*)(unit + SC_CUNIT_OFF_UNIQUENESS);
+            n->player     = player;
+            n->count      = 0;
+            *rp = n;
+        }
+        SetQueueSlot(unit, slot, SC_BUILD_QUEUE_EMPTY);
+        (*rp)->types[(*rp)->count++] = type;
+        ++held;
+        ++g_stat[SC_PRODQ_STAT_CAPTURED];
+        ScLog("PRODQEV hold unit=0x%08X type=0x%03X <- slot=%d engineLen=%d overflow=%d "
+              "logical=%d",
+              (unsigned)unit, (unsigned)type, slot, len - 1, (*rp)->count,
+              (len - 1) + (*rp)->count);
+    }
+    if (held && !g_testing) *(BYTE*)Rt(SC_VA_STAT_DIRTY) = 1;
+    return held;
+}
+
+// THE INVARIANT, in one place: the ring holds SC_PRODQ_ENGINE_HOLD items whenever the
+// plugin has anything to give it, and never more than that while the plugin can take the
+// excess. Hold first, then promote -- the other order would put an item back only to take
+// it straight out again.
+static void Rebalance(DWORD unit, BYTE player, ProdRecord** rp) {
+    HoldBack(unit, player, rp);
+    if (*rp && (*rp)->count > 0) PromoteInto(*rp);
+    if (*rp && (*rp)->count == 0) { DropRecordAt((int)(*rp - g_rec)); *rp = NULL; }
 }
 
 // ---------------------------------------------------------------------------
@@ -262,51 +332,26 @@ void ScProdQueueOnTrain(DWORD unit, unsigned type, bool wasFull) {
     do {
         if (!UnitPtrValid(unit)) break;
         BYTE player = *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER);
+        if (player >= SC_MAX_PLAYERS) break;
         ProdRecord* r = FindRecord(unit);
 
         if (wasFull) {
-            // The engine ran and could not have taken it: findFreeBuildQueueSlot
-            // returned 5, so addToBuildQueue returned 0 without touching the array or
-            // the player's resources. The item is ours to hold or to refuse.
-            if (type >= SC_MAX_TRAINABLE_UNIT_ID) break;   // the handler's own bound
-            if (player >= SC_MAX_PLAYERS) break;
-
-            int held = r ? r->count : 0;
-            if (SC_BUILD_QUEUE_SLOTS + held >= g_maxTotal || (!r && g_recCount >= SC_PRODQ_MAX_BUILDINGS)) {
-                ++g_stat[SC_PRODQ_STAT_REFUSED_FULL];
-                ScLog("PRODQEV refuse-full unit=0x%08X type=0x%03X logical=%d max=%d",
-                      (unsigned)unit, type, SC_BUILD_QUEUE_SLOTS + held, g_maxTotal);
-                break;
-            }
-            if (!CanAfford(player, type)) {
-                ++g_stat[SC_PRODQ_STAT_REFUSED_COST];
-                ScLog("PRODQEV refuse-cost unit=0x%08X type=0x%03X need=%u/%u have=%u/%u",
-                      (unsigned)unit, type, (unsigned)MineralCost(type), (unsigned)GasCost(type),
-                      (unsigned)*MineralsOf(player), (unsigned)*GasOf(player));
-                break;
-            }
-            if (!r) {
-                r = &g_rec[g_recCount++];
-                r->unit       = unit;
-                r->uniqueness = *(BYTE*)(unit + SC_CUNIT_OFF_UNIQUENESS);
-                r->player     = player;
-                r->count      = 0;
-            }
-            Spend(player, type);
-            r->types[r->count++] = (WORD)type;
-            ++g_stat[SC_PRODQ_STAT_CAPTURED];
-            ScLog("PRODQEV capture unit=0x%08X type=0x%03X overflow=%d logical=%d "
-                  "paid=%u/%u left=%u/%u",
-                  (unsigned)unit, type, r->count, SC_BUILD_QUEUE_SLOTS + r->count,
-                  (unsigned)MineralCost(type), (unsigned)GasCost(type),
-                  (unsigned)*MineralsOf(player), (unsigned)*GasOf(player));
+            // The ring was already full when the command arrived, so the engine dropped
+            // it at its own `CMP EAX,0x5` without touching the array or the player's
+            // resources. Under this design that only happens once the logical queue has
+            // reached its maximum and the plugin has stopped making room -- so it is the
+            // cap doing its job, and the item is refused, not lost.
+            ++g_stat[SC_PRODQ_STAT_REFUSED_FULL];
+            ScLog("PRODQEV refuse-full unit=0x%08X type=0x%03X logical=%d max=%d",
+                  (unsigned)unit, type,
+                  EngineQueueLength(unit) + (r ? r->count : 0), g_maxTotal);
+            break;
         }
 
-        // Whether or not this command was ours, never leave a free slot behind: a slot
-        // that frees between two frames would otherwise let the NEXT command jump the
-        // overflow queue.
-        if (r && r->count > 0) PromoteInto(r);
-        if (r && r->count == 0) DropRecordAt((int)(r - g_rec));
+        // The engine has just accepted and paid for an item. Take the excess back so the
+        // ring stays below the five at which the client stops sending, and give a freed
+        // slot to the oldest held item.
+        Rebalance(unit, player, &r);
     } while (0);
 
     LeaveCriticalSection(&g_lock);
@@ -320,10 +365,7 @@ void ScProdQueueOnTick(DWORD unit) {
     else CollectGarbage(false);
 
     ProdRecord* r = FindRecord(unit);
-    if (r) {
-        PromoteInto(r);
-        if (r->count == 0) DropRecordAt((int)(r - g_rec));
-    }
+    if (r) Rebalance(unit, r->player, &r);
 
     LeaveCriticalSection(&g_lock);
 }
@@ -640,10 +682,11 @@ int ScProdQueueInstall(BYTE* moduleBase) {
     }
 
     g_enabled = true;
-    ScLog("PRODQ config: enabled max=%d (engine keeps its %d, plugin holds up to %d per "
-          "building, %d buildings) -- %%SCPLUGIN_PRODQ_MAX%%",
-          g_maxTotal, SC_BUILD_QUEUE_SLOTS, g_maxTotal - SC_BUILD_QUEUE_SLOTS,
-          SC_PRODQ_MAX_BUILDINGS);
+    ScLog("PRODQ config: enabled max=%d (ring kept at %d of its %d so the client keeps "
+          "sending, plugin holds up to %d per building, %d buildings) -- "
+          "%%SCPLUGIN_PRODQ_MAX%%",
+          g_maxTotal, SC_PRODQ_ENGINE_HOLD, SC_BUILD_QUEUE_SLOTS,
+          g_maxTotal - SC_BUILD_QUEUE_SLOTS, SC_PRODQ_MAX_BUILDINGS);
     return installed;
 }
 

@@ -1721,9 +1721,22 @@ function Get-ScWorldState {
     lines and this throws on the timeout.
 
     Returns one object with .Units (one entry per unit, with Player/Type/Hp/Order/
-    Order2/Stim/Energy/X/Y/Flags) and .Counts (per player: Units, Recount, Complete).
-    A Recount that disagrees with Units means the sample was taken while the game
-    thread was editing the list -- the caller should discard it, not believe it.
+    Order2/Stim/Energy/X/Y/Flags), .Counts (per player: Units, Recount, Complete) and
+    .Screen (the viewport's top-left corner in MAP pixels). A Recount that disagrees with
+    Units means the sample was taken while the game thread was editing the list -- the
+    caller should discard it, not believe it.
+
+    .Screen is how a suite aims a click at a unit WITHOUT measuring anything off a
+    screenshot (AGENTS.md: read a thing's position from memory, not from its pixels):
+
+        $c = Get-ScWorldState ...
+        $u = $c.Units | Where-Object { ... }
+        Send-ScClick -Hwnd $h -X ($u.X - $c.Screen.X) -Y ($u.Y - $c.Screen.Y)
+
+    `client = map - viewport` is the arithmetic the engine's own click handler at
+    0x0046FB40 does when it builds the rectangle it hit-tests, and the plugin reads the
+    pair where that handler reads it. Check the result is inside the play area (x < 640,
+    y < 340) before clicking -- below that is the console, which eats the click.
     #>
     [CmdletBinding()]
     param(
@@ -1748,7 +1761,16 @@ function Get-ScWorldState {
         if ($done.Count -gt 0) {
             $units = @()
             $counts = @{}
+            $screen = $null
             foreach ($l in $lines) {
+                # The viewport's top-left in MAP pixels, so a caller can turn a unit's
+                # `pos=` into a client point to click: client = map - screen. Written once
+                # per scan, before the per-player lines.
+                $v = [regex]::Match($l.Line, 'screen=\((\d+),(\d+)\)')
+                if ($v.Success) {
+                    $screen = [pscustomobject]@{ X = [int]$v.Groups[1].Value; Y = [int]$v.Groups[2].Value }
+                    continue
+                }
                 $m = [regex]::Match($l.Line,
                     'p=(\d+) i=(\d+) unit=0x([0-9A-Fa-f]+) owner=(\d+) type=0x([0-9A-Fa-f]+) hp=(-?\d+) order=0x([0-9A-Fa-f]+) order2=0x([0-9A-Fa-f]+) stim=(\d+) energy=(\d+) pos=\((\d+),(\d+)\) flags=0x([0-9A-Fa-f]+)')
                 if ($m.Success) {
@@ -1778,7 +1800,7 @@ function Get-ScWorldState {
                     }
                 }
             }
-            return [pscustomobject]@{ Label = $label; Units = $units; Counts = $counts }
+            return [pscustomobject]@{ Label = $label; Units = $units; Counts = $counts; Screen = $screen }
         }
         Start-Sleep -Milliseconds 250
     }

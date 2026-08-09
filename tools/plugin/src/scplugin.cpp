@@ -249,6 +249,18 @@ static int CountPlayerUnits(int p, bool* ok) {
 static void ScanWorld(const char* tag) {
     if (!g_worldScan) return;
 
+    // THE VIEWPORT ORIGIN, so a test can turn the `pos=(x,y)` map pixels below into a
+    // point it can click WITHOUT measuring anything off a screenshot (AGENTS.md: read a
+    // thing's position from memory, not from its pixels). client = map - this pair, read
+    // exactly where the engine's own click handler at 0x0046FB40 reads it when it builds
+    // the rectangle it hit-tests. Diagnostic only: nothing in any feature depends on it.
+    {
+        unsigned left = 0xFFFF, top = 0xFFFF;
+        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_SCREEN_LEFT), &left);
+        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_SCREEN_TOP), &top);
+        ScLog("WORLD [%s] screen=(%u,%u)", tag ? tag : "-", left, top);
+    }
+
     // EVERY player, including the empty ones, and player 7 last. A reader waits for
     // the p=7 summary to know the whole scan for this marker has landed; skipping
     // empty players would make that signal depend on which slots happen to own units.

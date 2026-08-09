@@ -32,6 +32,10 @@ Specs, so the runs are repeatable: `tools/ghidra/specs/production-{functions,cal
 * So option (a), widening in place, is refuted twice over, and this task did not attempt it. §5.1.
 * What ships is option (b): a **plugin-side overflow list per building** that feeds the engine's
   five as slots free up, with the money moved exactly once per item. §5.2, §6.
+* **The client refuses to send a sixth Train command**, so the plugin holds the ring one item
+  BELOW five rather than waiting for an over-cap command that never arrives. This was measured in
+  a live game and it contradicts what §4.1 of this document said before that run; the correction
+  and its evidence are in §4.1. It is the single fact the shipped design turns on.
 
 ---
 
@@ -195,7 +199,14 @@ No loop counter, no bound, five copies. A widened array is invisible to it.
 
 ## 4. The paths
 
-### 4.1 Enqueue — and the cap is on the RECEIVE side, not the client
+### 4.1 Enqueue — and where the cap really bites
+
+> **CORRECTION, from the first in-game run.** This section used to end by claiming that the
+> sixth click still puts a command on the wire and that "the whole cap is that one comparison,
+> in one place". **That is wrong**, and the live run disproved it before any of it was built
+> on. The static reading below is still correct as far as it goes — the button *condition* is
+> genuinely queue-blind — but the client stops sending anyway. What was actually measured, and
+> what it means, is at the end of this section under "What the wire says".
 
 Wire command `0x1F` (Train) is 3 bytes: `[0x1F, typeLo, typeHi]`. Two builders emit it
 (`data/command-ids.tsv`, task 011): `0x004C01C0` (`CMDACT_Train`) and `0x004234B0`. The second is
@@ -221,14 +232,56 @@ undefined4 FUN_00428e60(int unit) {
 }
 ```
 
-**It does not look at the queue at all.** So the sixth click on a full queue is *not* refused by
-the UI — the button stays live, the command goes on the wire, and it dies on the receive side at
-`CMP EAX,0x5` inside `addToBuildQueue`, which returns 0 without touching the array or the player's
-resources. The whole cap is that one comparison, in one place.
+**It does not look at the queue at all** — and neither does anything else on the client that
+could. That is worth stating precisely, because it is what made the wrong conclusion tempting:
 
-That is the single most useful fact in this document, because it means a plugin can see the
-over-cap intent **at the moment the engine drops it**, with the real queue state in front of it —
-no client-side prediction, no guessing whether a slot will still be free a turn later.
+* `FieldSweep` over displacements `0x98` and `0xA4` lists **every** instruction in the binary
+  that touches the ring or its head (`data/production-queue-fields.tsv`, 140 rows, 42 functions).
+  The only ones in the UI's own address range are `0x00425600`, `0x004268D0` and `0x00426FF0`,
+  which *draw* the status area, and `0x00428530`, which is the **cancel** button's condition
+  (`return queue[head] < 0x6A`, i.e. "there is something to cancel").
+* Nor does one reach the ring through a helper: `XrefSweep` over the ten functions that do read
+  it — `countTypeInQueue` (`0x00466B70`) included — finds callers only in the building-AI range
+  `0x00433xxx`–`0x00436xxx` and in the two status-area drawers.
+* `0x00428E60`'s own tail call, the requirement VM `0x0046E1C0`, is a 19-case interpreter over
+  the requirement tables; it sets `0x0066FF60` to a refusal code on every failure path and none
+  of its cases reads the queue.
+
+#### What the wire says
+
+The engine's outgoing-command funnel `queueCommand` (`0x00485BD0`) is hooked in every suite, so
+every command this game sends is logged. Pressing the Train hotkey **twelve** times, 250 ms
+apart, at a Command Center with an empty queue and 3000 minerals produced:
+
+```
+[22:49:18.176] CMD id=0x1F len=3 bytes=[1F 07 00]
+[22:49:18.446] CMD id=0x1F len=3 bytes=[1F 07 00]
+[22:49:18.715] CMD id=0x1F len=3 bytes=[1F 07 00]
+[22:49:18.984] CMD id=0x1F len=3 bytes=[1F 07 00]
+[22:49:19.211] CMD id=0x1F len=3 bytes=[1F 07 00]
+                        ... and nothing, for the remaining seven presses
+```
+
+Five commands at exactly the press cadence, then silence for another 1.75 s of presses. The
+frame captured straight afterwards shows the Command Center's queue full — five SCV icons in the
+status area, minerals down by exactly `5 × 50` — and the **Train button on the command card drawn
+dark**, where the frame taken before the burst has it lit.
+
+So the cap has TWO halves, and only the second is the `CMP EAX,0x5`:
+
+1. **The client will not send.** At five queued the Train button is not usable, so no sixth
+   command is ever produced. The predicate behind it was not pinned to an instruction — by the
+   sweeps above it does not read the ring, so it is reached some other way — and the design below
+   does not need it: what matters is the *measured* behaviour, that the button is dark at five
+   and live below five.
+2. **The receiver would refuse anyway**, at `addToBuildQueue`'s `CMP EAX,0x5`, which returns 0
+   without touching the array or the player's resources. This half still matters: a command that
+   arrives from a replay or a network peer is refused here, which is why the plugin still counts
+   that case.
+
+The consequence for the design is decisive. A plugin **cannot** wait for over-cap intent to
+arrive, because it never arrives. It has to keep the ring below five so that the intent keeps
+being expressible — which is what §5.2 does.
 
 The handler around it, `cmdrecvTrain` (`0x004C1C20`), adds three guards of its own: exactly one
 unit selected (`selectionIterator = 0` then `getActivePlayerNextSelection` twice), the type
@@ -348,14 +401,41 @@ Either one alone kills it. So (a) is out, and this task did not spend time on it
 
 The same shadow pattern as the selection fan-out, applied per building:
 
-* the engine keeps its five, unchanged, and keeps deciding everything about them;
+* the engine keeps its ring, unchanged, and keeps deciding everything about what is in it;
 * the plugin holds the tail of the logical queue and hands items over one at a time as slots free.
 
-What makes it cheap here, and what §4.1 is for: the engine **already** processes an over-cap Train
-command and **already** drops it in one identifiable place, so the plugin does not have to predict,
-suppress or synthesise anything on the client side. It watches `cmdrecvTrain`, and when the queue
-was full before the engine ran it knows — with certainty, not inference — that the engine did
-nothing and the item is free to take.
+**Which end the plugin takes its items from is the whole design, and §4.1's correction settles
+it.** The obvious arrangement — let the engine fill its five, then catch the sixth command as the
+engine drops it — cannot work, because there is no sixth command: the client stops sending at
+five. So the plugin works the other way round:
+
+> **Keep the ring at four. Hold everything above it.**
+
+Concretely, after every Train command the engine accepts, and on every production tick:
+
+1. if the ring holds more than `SC_PRODQ_ENGINE_HOLD` (4), take the **newest** item straight back
+   out of it — `buildQueue[tail] = 0xE4` — and append it to the building's record;
+2. if the ring holds fewer than 4 and the record is not empty, put the **oldest** held item into
+   the slot the engine's own free-slot rule picks.
+
+The ring is therefore never full while the player is queueing, the Train button never goes dark,
+and every press keeps reaching the wire. Two properties fall out of it that the "catch the sixth"
+arrangement did not have:
+
+* **The engine pays for everything, and the plugin pays for nothing.** Every item goes in through
+  `addToBuildQueue`, which is also where affordability is checked and the cost deducted (§4.2).
+  Taking an item back out and putting it back in are bare stores. So "paid exactly once" is not a
+  discipline the plugin has to maintain — it is the only thing that can happen.
+* **The cap is vanilla's own.** To stop at `SC_PRODQ_DEFAULT_MAX`, the plugin simply *stops taking
+  items back*. The ring fills to five, the client greys its own button out, and the press after
+  the maximum is refused by the same code that refuses the sixth press in a stock game. Nothing
+  has to be swallowed, un-spent or explained.
+
+The tail is well defined: occupied slots run contiguously from the head, because
+`findFreeBuildQueueSlot` scans from the head and stops at the first `0xE4` — a gap behind the head
+is unreachable and so never occurs — which makes the newest of `n` items the one at
+`(head + n - 1) % 5`. Clearing exactly that slot is what `cancelLastQueued` (`0x00466E40`) does
+too; the plugin does it without the refund, because nothing is being cancelled.
 
 ### 5.3 The resource hazard, and how it is answered
 
@@ -363,19 +443,18 @@ The three failure modes the task named, and the rule that removes each:
 
 | hazard | answer |
 |---|---|
-| an item paid for **twice** | Payment is attached to **acceptance**, never to promotion. An item the engine accepts is paid for by the engine (§4.2); an item the plugin accepts is paid for by the plugin, out of the same two tables; **promotion moves no money at all** — it is a bare `buildQueue[slot] = type` store. There is no path on which both parties pay. |
-| a **wrong refund** on cancel | The plugin refunds with `mineralCost[type] + gasCost[type]` from tables `0x00663888` / `0x0065FD00`, gated on flag byte `0x00664080`, which is instruction-for-instruction what `refundByType` (`0x0042CEC0`) does. Spend and refund inside the plugin are the same two table reads with opposite signs, so they cancel exactly. A cancel that names an engine slot is passed straight through and the engine refunds it as always. |
-| the **UI disagreeing** with reality | The engine's five slots always hold five real, engine-owned items, so the five icons the status area draws stay *true* — they are the next five things this building will build, in order. They are no longer *complete*: items 6..N are not drawn. That is a known, stated limitation (§7), not a discrepancy — nothing on screen claims something false. |
+| an item paid for **twice** | **Only the engine ever pays.** Every item enters through `addToBuildQueue` (§4.2), which deducts the cost once. Holding an item back and handing it over again are bare `buildQueue[slot] = type` stores that touch no resource global — so there is no second payer, and "exactly once" is a property of the shape of the design rather than of the plugin's bookkeeping. The plugin's own `mineralsSpent` counter is asserted to be **0** at the end of both the offline and the in-game suite. |
+| a **wrong refund** on cancel | The plugin refunds with `mineralCost[type] + gasCost[type]` from tables `0x00663888` / `0x0065FD00`, gated on flag byte `0x00664080`, which is instruction-for-instruction what `refundByType` (`0x0042CEC0`) does — the same two reads the engine's own spend used, with the opposite sign, so they cancel exactly. A cancel that names an engine slot is passed straight through and the engine refunds it as always. |
+| the **UI disagreeing** with reality | Every slot the status area draws holds a real item that this building really will build, in order — the plugin only ever removes the newest and re-adds the oldest, so what is on screen is a true *prefix* of the logical queue. It is incomplete, not wrong: items past the ring are not drawn. Known, stated limitation (§7). |
 
 Two more, that the task did not name but the code does:
 
-* **Negative resources.** The receive side checks affordability only when the free slot is the
-  head slot (`setPendingCost` calls `FUN_0042CF70` only for `isHeadSlot`), and the Train button
-  does no cost check at all (§4.1) — so vanilla is already relying on the queue being short. The
-  plugin therefore does its own check before accepting, and refuses (logging `refuse-cost`) rather
-  than letting a balance go below zero.
-* **A building that dies holding paid-for items.** Vanilla refunds its five (§4.4). The plugin
-  refunds its overflow, on the same event.
+* **Negative resources.** Not reachable: the plugin never spends, and the engine's own
+  affordability check runs on the path that does. An item the player cannot afford is refused by
+  `addToBuildQueue` before the plugin sees anything, exactly as in a stock game.
+* **A building that dies holding items.** Vanilla refunds the ones in its ring (§4.4). The plugin
+  refunds the ones it is holding, on the same event — they were paid for, so the money has to come
+  back, and this is the one place the plugin moves any.
 
 ### 5.4 How many? 16
 
@@ -394,7 +473,8 @@ The reasoning, since the task asked for a justified number rather than a big one
   raid.
 * **Cancelling is tail-first and one press at a time** (§6.4), so a very deep queue is tedious to
   unwind. 11 presses is tolerable; 100 would not be.
-* It costs 22 bytes per tracked building, so the number is not a memory decision.
+* It is not a memory decision: a record is `unit` + `uniqueness` + `player` + `count` +
+  `WORD types[24]`, i.e. about 60 bytes, times 32 tracked buildings.
 
 ---
 
@@ -407,7 +487,7 @@ The reasoning, since the task asked for a justified number rather than a big one
 
 | target | address | patch | why there |
 |---|---|---|---|
-| `cmdrecvTrain` | `0x004C1C20` | 11 B / 4 instrs, `56 57 8B F8 C6 05 B6 84 62 00 00` | brackets the engine's own handling, so "the queue was full before it ran" is sampled rather than inferred |
+| `cmdrecvTrain` | `0x004C1C20` | 11 B / 4 instrs, `56 57 8B F8 C6 05 B6 84 62 00 00` | brackets the engine's own handling, so the ring is rebalanced the instant the engine has accepted and paid, before the player can press again |
 | `cmdrecvCancelTrain` | `0x004C0100` | 11 B / 4 instrs, `55 8B EC 57 C6 05 B6 84 62 00 00` | a "cancel the last item" belongs to whoever holds the tail |
 | `productionTick` | `0x00468420` | 9 B / 3 instrs, `56 8B F0 8B 86 DC 00 00 00` | the frame a slot frees is the frame the next item takes it |
 
@@ -427,18 +507,25 @@ Both receive handlers reset `selectionIterator` (`0x006284B6`) and then require
 without calling into the engine: `activePlayerSelection[0]` non-null and `[1]` null, then the
 pointer bounds/stride-validated against the unit array.
 
-### 6.3 Promotion is one store
+### 6.3 Both directions are one store
 
 ```c
+/* hold back: the newest item, off the tail of the ring */
+int tail = (head + engineLen - 1) % 5;
+types[count++] = buildQueue[tail];
+buildQueue[tail] = 0xE4;
+
+/* promote: the oldest held item, into the slot the engine would have used */
 int slot = FindFreeSlot(unit);            /* the re-implementation of 0x004669B0 */
 if (slot < 5) buildQueue[slot] = types[0];
 ```
 
 Nothing else from `addToBuildQueue` applies: the pending-cost tables it fills are consumed by its
 own deduction two instructions later and the plugin is not deducting; the secondary order is
-already set, because a queue that has no free slot cannot be idle; and `addToBuildQueue` never
-writes the AI mirror arrays of §2.6 either — only the *compaction* paths do, and those still run,
-unchanged, on whatever the ring holds. After a promotion the plugin sets `SC_VA_STAT_DIRTY`
+already set, because the ring is never emptied by either move; and `addToBuildQueue` never writes
+the AI mirror arrays of §2.6 either — only the *compaction* paths do, and those still run,
+unchanged, on whatever the ring holds. Clearing the tail is exactly the store `cancelLastQueued`
+(`0x00466E40`) makes, minus its refund. After either move the plugin sets `SC_VA_STAT_DIRTY`
 (`0x0068C1F8`), the same redraw flag the Train handler's own tail writes.
 
 `FindFreeSlot` is re-implemented rather than called because the engine's version wants its
@@ -473,20 +560,22 @@ mid-game cannot strand paid-for items.
 
 ## 7. Known limitations
 
-1. **The status area still draws five icons.** Items 6..N are real, paid for, and will be built,
-   but they are not on screen. The plugin's `PRODQ` log line is the read-back oracle instead (and
-   is what the in-game test asserts on). Extending the production panel would mean a second dialog
-   splice next to task 017's, which is a larger and riskier change than this feature; it is the
-   obvious follow-up.
+1. **The status area draws at most five icons, and usually four.** Everything past them is real,
+   paid for, and will be built, but it is not on screen — and because the plugin keeps the ring at
+   four while the player is queueing, the visible count sits one below vanilla's. The plugin's
+   `PRODQ` log line is the read-back oracle instead (and is what the in-game test asserts on).
+   Extending the production panel would mean a second dialog splice next to task 017's, which is a
+   larger and riskier change than this feature; it is the obvious follow-up.
 2. **Train (`0x1F`) only.** Unit Morph, Train Fighter and Building Morph keep vanilla's five (§4.5).
 3. **A one-frame ordering window.** If a slot frees in the same frame a Train command is processed,
-   the engine can take that slot for the new item ahead of an older overflow item. The plugin closes
-   the window as far as it can — it promotes at the end of every Train command as well as on every
-   tick — so no free slot survives a frame boundary, and no item is ever lost or double-paid; only
-   the relative order of two items queued within one frame of each other can differ.
-4. **Single-player only**, like everything in this repo (AGENTS.md hard rule 3). The plugin moves a
-   player's resources outside the command stream, which is fine for a local simulation and is not
-   something to point at any online service.
+   the engine can take that slot for the new item ahead of an older held item. The plugin closes
+   the window as far as it can — it rebalances at the end of every Train command as well as on
+   every tick — so no free slot survives a frame boundary, and no item is ever lost or
+   double-paid; only the relative order of two items queued within one frame of each other can
+   differ.
+4. **Single-player only**, like everything in this repo (AGENTS.md hard rule 3). The plugin moves
+   items in and out of a building's queue outside the command stream — deterministic locally, and
+   not something to point at any online service.
 
 ---
 
@@ -517,7 +606,24 @@ foreach ($s in 'functions','callees','module','buttons') {
   ./tools/ghidra/sweep.ps1 -Mode Run -ProjectDir work/scratch/025/ghidra -ProgramName StarCraft.exe `
       -Script DecompileMany.java -ScriptArgs "work/scratch/025/prod-$s.tsv", "tools/ghidra/specs/production-$s.spec", 180
 }
+
+# 4.1's correction: hunting the client-side refusal. Each of these came back NEGATIVE, which
+# is what the section reports -- no button condition reads the ring, directly or through a
+# helper. XrefSweep takes DECIMAL lengths.
+#   specs/production-clientgate.spec   the ten helpers that DO read the ring
+#   specs/production-errcode.spec      0x0066FF60, the requirement VM's refusal-code global
+foreach ($s in 'clientgate','errcode') {
+  ./tools/ghidra/sweep.ps1 -Mode Run -ProjectDir work/scratch/025/ghidra -ProgramName StarCraft.exe `
+      -Script XrefSweep.java -ScriptArgs "work/scratch/025/$s-xrefs.tsv", "tools/ghidra/specs/production-$s.spec"
+}
+./tools/ghidra/sweep.ps1 -Mode Run -ProjectDir work/scratch/025/ghidra -ProgramName StarCraft.exe `
+    -Script DecompileMany.java `
+    -ScriptArgs work/scratch/025/gate.tsv, tools/ghidra/specs/production-gate.spec, 180
 ```
+
+The positive half of §4.1's correction is not a sweep at all — it is the wire, and the run that
+produced it is `tools/plugin/test-production-queue.ps1`, whose step 6 now asserts the command count
+directly.
 
 The `.c` and `.body.txt` outputs are whole decompiled functions — derived game content. They stay
 under `work/scratch/` (gitignored) and only the findings above are committed (hard rule 1).

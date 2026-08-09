@@ -10,25 +10,28 @@ Task 025, from the user's words: "enable queuing more then 5 units."
 .DESCRIPTION
 The engine's queue is `u16 buildQueue[5]` at `CUnit+0x98`, a five-slot ring whose head is
 the byte at `+0xA4`, and the 5 is a literal in six functions
-(research/production-queue.md 2-3). The plugin does not widen it. It holds the tail of the
-logical queue itself and hands items to the engine's five as slots free up, paying for each
-item EXACTLY ONCE at the moment it accepts it -- which is what vanilla does
-(production-queue.md 4.2).
+(research/production-queue.md 2-3). The plugin does not widen it. It keeps the ring one
+item BELOW the engine's five and holds the rest itself, because the CLIENT stops sending
+Train commands once the ring holds five -- the first run of this very suite measured that:
+five `CMD id=0x1F` at the press cadence and then silence for seven more presses, with the
+Train button drawn dark. The engine accepts and pays for every item; the plugin only ever
+moves items in and out of the ring, which costs nothing (production-queue.md 4.2, 5.2).
 
 So there are three claims to make in a live game, and this suite makes all three from
 memory reads:
 
   1. MORE THAN FIVE ARE QUEUED. The `PRODQSEL` oracle prints the five slots of
-     `CUnit+0x98` verbatim beside the plugin's own overflow, so `logical=9` is
-     `engineLen=5` (read from the building) plus `overflow=4` (read from the plugin).
-     Nothing here comes from the status area, which still draws five icons.
+     `CUnit+0x98` verbatim beside what the plugin holds, so `logical=9` is `engineLen=5`
+     (read from the building) plus `overflow=4` (read from the plugin). Nothing here comes
+     from the status area, which draws at most five icons whatever the truth is.
   2. THEY BUILD, IN ORDER, ONE PER FREED SLOT. Every promotion logs a `PRODQEV promote`
      line naming the type, the slot it went into and how many are left; the run asserts
-     one per over-cap item, with the count walking down to zero, and then asserts the
+     one per held item, with the count walking down to zero, and then asserts the
      resulting units exist in the engine's own unit list.
-  3. EACH IS PAID FOR ONCE. Minerals are asserted to an exact figure after the burst and
-     asserted UNCHANGED thereafter -- promotion moves no money, so a second payment would
-     show up as a drop while the queue drains.
+  3. EACH IS PAID FOR ONCE, BY THE ENGINE. Minerals are asserted to an exact figure after
+     the burst and asserted UNCHANGED thereafter -- neither holding an item back nor
+     handing it over moves money, so a second payment would show up as a drop while the
+     queue drains. The plugin's own `mineralsSpent` counter is asserted to be ZERO.
 
 WHY THE RESULT CANNOT BE FAKED
 
@@ -37,11 +40,11 @@ WHY THE RESULT CANNOT BE FAKED
   * The positive/negative pair is inside one run and one oracle. Before the clicks,
     `PRODQ ... buildings=0 captured=0` -- the same line that later reads `captured=4`. An
     oracle that could not fail would print the second without the first.
-  * The counters are arithmetic, not narrative: 12 clicks, 4 captured, 3 refused by the
-    cap => 5 went to the engine, which is the engine's cap stated as a subtraction.
-  * The cap refusal is exercised on purpose (`-QueueMax` below `-Clicks`), so "the plugin
-    accepted everything" and "the plugin accepted what it was configured to" are
-    distinguishable.
+  * THE COUNT OF COMMANDS ON THE WIRE IS THE HEADLINE MEASUREMENT. Vanilla sends five and
+    stops; this run presses 12 times and asserts EXACTLY 9 went out, which is the cap
+    itself, moved, measured on the engine's own command funnel rather than inferred.
+  * The cap is exercised on purpose (`-QueueMax` below `-Clicks`), so "it queues without
+    limit" and "it queues what it was configured to" are distinguishable.
   * The map has no hostiles, one unit-less computer slot, and its only trigger sets
     resources once -- so nothing but this test can move a mineral.
 
@@ -73,10 +76,11 @@ param(
     [int]$QueueMax = 9,
     [int]$StartingMinerals = 3000,
     [int]$StartingGas = 1000,
-    # Long enough for nine SCVs. One SCV is 20 game seconds; a single-player custom game
-    # runs at Fastest, so ~9-13 real seconds each. 240s leaves room and the drain loop
-    # exits as soon as the queue is empty.
-    [int]$DrainTimeoutSec = 240,
+    # Long enough for nine SCVs, from the first press to the last unit existing. One SCV is
+    # 20 game seconds; a single-player custom game runs at Fastest, so ~9-13 real seconds
+    # each, and the measured rate is ~16s per unit including the marker round trip. 300s
+    # leaves room, and the drain loop exits as soon as the LOGICAL queue is empty.
+    [int]$DrainTimeoutSec = 300,
     [switch]$KeepOpen
 )
 
@@ -97,10 +101,14 @@ $TRAIN_KEY = 0x53         # 'S', the Command Center command card's Train SCV hot
 $TRAIN_CMD = '0x1F'       # research/data/command-opcodes.tsv
 $ENGINE_SLOTS = 5         # research/production-queue.md 2.3
 
-$expectOverflow = $QueueMax - $ENGINE_SLOTS
-$expectRefused  = $Clicks - $QueueMax
+$ENGINE_HOLD = 4          # SC_PRODQ_ENGINE_HOLD -- what the plugin leaves the ring at
+# At the cap the plugin stops taking items back, so the ring is left FULL and the client
+# refuses the rest on its own. Hence: the logical queue is the engine's five plus what the
+# plugin holds, and the presses past the cap never reach the wire at all.
+$expectOverflow  = $QueueMax - $ENGINE_SLOTS
+$expectNotSent   = $Clicks - $QueueMax
 if ($expectOverflow -lt 1) { throw "test: -QueueMax must exceed the engine's $ENGINE_SLOTS slots." }
-if ($expectRefused -lt 1) { throw 'test: -Clicks must exceed -QueueMax, or the cap refusal is never exercised.' }
+if ($expectNotSent -lt 1) { throw 'test: -Clicks must exceed -QueueMax, or the cap is never exercised.' }
 
 if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t025' }
 $mapDir = $FixtureDir
@@ -312,7 +320,9 @@ try {
         Start-Sleep -Seconds 6
         Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
         Start-Sleep -Seconds 10
-        Send-ScClick -Hwnd $hwnd -X 200 -Y 261        # dismiss the "StarCraft Tips" dialog
+        # The tips dialog is found in the engine's own dialog list and dismissed by ITS OWN
+        # OK button, then asserted gone (task 027) -- never a fixed point, never the registry.
+        Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
         Start-Sleep -Seconds 2
         Shot 'in-game'
     }
@@ -331,11 +341,31 @@ try {
     }
 
     Step 'select the Command Center -- exactly one building, nothing else' {
-        # It is the only thing the player owns, so a box over the play area can only find
-        # it. The assertion below is what makes that a fact about the run rather than a
-        # claim about the fixture: the Train command is SINGLE-gated, and with two units
-        # selected it would silently do nothing at all.
-        Send-ScDrag -Hwnd $hwnd -X1 10 -Y1 10 -X2 630 -Y2 340 -Steps 20
+        # NOT a drag box. The first run of this suite boxed the whole play area and the
+        # engine handed back a neutral MINERAL FIELD (`type=0x0B2 player=11`) that shares
+        # the box with the building -- so a box is not a way to name a specific building
+        # when the only thing you own is one.
+        #
+        # The click point is DERIVED FROM MEMORY instead, never measured off a frame
+        # (AGENTS.md, task 026): the world scan reports the Command Center's own map-pixel
+        # position and the viewport's top-left, and `client = map - viewport` is exactly
+        # the arithmetic the engine's own click handler at 0x0046FB40 does when it builds
+        # the rectangle it hit-tests. So this clicks the building the scan found, and if
+        # the sums ever put it off the play area the step says so instead of clicking
+        # somewhere arbitrary.
+        $w = Get-World 'aim'
+        $cc = @($w.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $CC_TYPE })[0]
+        Assert-That 'the scan reports the viewport origin' ($null -ne $w.Screen)
+        Assert-That 'and the Command Center has a sprite position' `
+            ($null -ne $cc -and $cc.X -gt 0 -and $cc.Y -gt 0)
+        $cx = $cc.X - $w.Screen.X
+        $cy = $cc.Y - $w.Screen.Y
+        Write-Host "       CC at map ($($cc.X),$($cc.Y)), viewport ($($w.Screen.X),$($w.Screen.Y)) -> client ($cx,$cy)"
+        # 340 is the world-area bound every suite in this repo drags inside; below it is
+        # the console, which would eat the click.
+        Assert-That "the building is on screen, inside the play area ($cx,$cy)" `
+            ($cx -ge 0 -and $cx -lt 640 -and $cy -ge 0 -and $cy -lt 340)
+        Send-ScClick -Hwnd $hwnd -X $cx -Y $cy
         Start-Sleep -Seconds 2
         $q = Get-ProdQueue 'selected'
         Assert-That 'exactly one building is selected' ($null -ne $q.Selected) `
@@ -343,6 +373,12 @@ try {
         if ($q.Selected) {
             Assert-That "and it is the Command Center (type 0x$('{0:x}' -f $q.Selected.Type))" `
                 ($q.Selected.Type -eq $CC_TYPE)
+            # The mineral field the box used to grab was player 11. Naming the owner keeps
+            # that failure mode from ever reading as a pass again.
+            Assert-That "owned by the human player 0 ($($q.Selected.Player))" `
+                ($q.Selected.Player -eq 0)
+            Assert-That "and it is the same building the world scan found ($($q.Selected.Unit))" `
+                ($null -eq $script:ccUnit -or $q.Selected.Unit -eq $script:ccUnit)
             Assert-That 'it starts with an empty queue, read from CUnit+0x98' `
                 ($q.Selected.EngineLen -eq 0) "(engine=$($q.Selected.Engine -join ','))"
             Assert-That "it starts with the $StartingMinerals minerals the trigger granted" `
@@ -365,11 +401,17 @@ try {
         Start-Sleep -Seconds 2
         $lines = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
         $cmds = @($lines | Select-String -Pattern "CMD id=$TRAIN_CMD ")
-        # EVERY press reaches the wire -- including the ones over the cap. That is the
-        # finding this whole design rests on (production-queue.md 4.1): the build-menu
-        # button is NOT disabled by a full queue, so the command is sent and the engine
-        # drops it on the receive side, where the plugin can see it.
-        Assert-That "all $Clicks presses emitted $TRAIN_CMD ($($cmds.Count))" ($cmds.Count -eq $Clicks)
+        # THE HEADLINE MEASUREMENT, on the engine's own command funnel. Vanilla puts FIVE
+        # Train commands on the wire and then goes quiet, because the client greys the
+        # button out once the ring holds five -- this suite measured exactly that before
+        # the plugin kept the ring below it. With the plugin, the client keeps offering
+        # the button until the logical queue reaches the configured maximum, so the number
+        # of commands that actually went out IS the cap.
+        Assert-That "$QueueMax of the $Clicks presses reached the wire, not $ENGINE_SLOTS ($($cmds.Count))" `
+            ($cmds.Count -eq $QueueMax)
+        Assert-That "and the $expectNotSent presses past the cap were refused by the client itself" `
+            ($cmds.Count -eq $Clicks - $expectNotSent)
+        $script:cmdsSent = $cmds.Count
         Shot 'queued'
     }
 
@@ -393,18 +435,21 @@ try {
             Assert-That "minerals are down by exactly $QueueMax x $SCV_COST and no more ($($s.Minerals))" `
                 ($s.Minerals -eq $expectMinerals) "(expected $expectMinerals)"
         }
-        Assert-That "the plugin captured exactly $expectOverflow item(s) ($($q.Captured))" `
+        Assert-That "the plugin is holding exactly $expectOverflow item(s) ($($q.Captured))" `
             ($q.Captured -eq $expectOverflow)
-        Assert-That "and refused exactly $expectRefused at the cap ($($q.RefusedFull))" `
-            ($q.RefusedFull -eq $expectRefused)
+        # NOTHING was refused by the plugin: at the cap it simply stops taking items back,
+        # the ring is left full, and vanilla's own UI declines the rest. A refusal here
+        # would mean an over-cap command reached the handler, which the client should
+        # never have sent.
+        Assert-That "and refused nothing itself ($($q.RefusedFull))" ($q.RefusedFull -eq 0)
         Assert-That 'nothing was refused for cost -- the fixture is not resource-starved' `
             ($q.RefusedCost -eq 0)
-        # The engine's own cap, stated as a subtraction over this run's counters rather
-        # than asserted separately: 12 commands went out, 4 were taken by the plugin and
-        # 3 bounced off its cap, so the engine accepted 5 -- exactly its five slots.
-        $engineTook = $Clicks - $q.Captured - $q.RefusedFull
-        Assert-That "the engine itself accepted exactly $ENGINE_SLOTS of the $Clicks ($engineTook)" `
-            ($engineTook -eq $ENGINE_SLOTS)
+        # The engine's cap, stated as a subtraction over this run's own counters: 9
+        # commands went out and 4 of them are with the plugin, so the engine is holding 5
+        # -- its five slots, full, which is what stopped the tenth press.
+        $engineHas = $cmdsSent - $q.Captured
+        Assert-That "the engine itself is holding $ENGINE_SLOTS of the $cmdsSent sent ($engineHas)" `
+            ($engineHas -eq $ENGINE_SLOTS)
         Assert-That 'one building is tracked' ($q.Buildings -eq 1)
         if ($q.Tracked.Count -eq 1) {
             Assert-That "its overflow is all SCVs ($(($q.Tracked[0].OverflowTypes | ForEach-Object { '0x{0:x}' -f $_ }) -join ','))" `
@@ -420,21 +465,28 @@ try {
             $q = Get-ProdQueue 'drain'
             if ($q.Selected) {
                 $seen += "logical=$($q.Selected.Logical) engineLen=$($q.Selected.EngineLen) overflow=$($q.Selected.Overflow)"
-                # WHILE the plugin is still holding something, the engine's five must stay
-                # FULL. A freed slot that sat empty for a whole marker would mean the
+                # WHILE the plugin is still holding something, the ring must never fall
+                # below the hold. A slot that sat empty for a whole marker would mean the
                 # plugin skipped a promotion, which is the defect this asserts against.
+                # It may be at five rather than four -- that is the state the cap leaves
+                # it in -- so the bound is `at least`, not `exactly`.
                 if ($q.Selected.Overflow -gt 0) {
-                    Assert-That "while $($q.Selected.Overflow) are held, the engine's ring stays full ($($q.Selected.EngineLen))" `
-                        ($q.Selected.EngineLen -eq $ENGINE_SLOTS)
+                    Assert-That "while $($q.Selected.Overflow) are held, the ring stays at $ENGINE_HOLD or more ($($q.Selected.EngineLen))" `
+                        ($q.Selected.EngineLen -ge $ENGINE_HOLD)
                 }
             }
-            if ($q.Promoted -ge $expectOverflow -and $q.Buildings -eq 0) { break }
+            # WAIT FOR THE WHOLE LOGICAL QUEUE, not just for the plugin's part of it. The
+            # plugin empties four items before the end -- it hands its last one over while
+            # four are still building -- so exiting on "the plugin is done" would walk
+            # straight into the next step with half the units not yet made.
+            if ($q.Promoted -ge $expectOverflow -and $q.Buildings -eq 0 -and
+                $q.Selected -and $q.Selected.Logical -eq 0) { break }
             Start-Sleep -Seconds 5
         }
         Write-Host "       $($seen -join ' -> ')"
 
         $q = Get-ProdQueue 'drained'
-        Assert-That "every over-cap item was promoted ($($q.Promoted) of $expectOverflow)" `
+        Assert-That "every held item was promoted ($($q.Promoted) of $expectOverflow)" `
             ($q.Promoted -eq $expectOverflow)
         Assert-That 'the plugin is holding nothing any more' ($q.Buildings -eq 0)
         Assert-That 'and nothing was refunded -- no item was lost on the way' ($q.Refunded -eq 0)
@@ -537,8 +589,10 @@ if ($statLine.Count -gt 0) {
     if ($m.Success) {
         $spent = [int]$m.Groups[7].Value
         $back = [int]$m.Groups[8].Value
-        Assert-That "the plugin spent exactly $expectOverflow x $SCV_COST of its own ($spent)" `
-            ($spent -eq $expectOverflow * $SCV_COST)
+        # THE PAY-ONCE CLAIM, from the plugin's side of it: the engine paid for all nine
+        # and the plugin paid for none, so its own spend counter must be flat ZERO. A
+        # design in which the plugin also paid would read 4 x 50 here.
+        Assert-That "the plugin spent NOTHING of its own ($spent)" ($spent -eq 0)
         Assert-That 'and refunded nothing, because nothing was cancelled or lost' ($back -eq 0)
     }
     else { Assert-That 'the detach stats line is parseable' $false "($($statLine[-1].Line))" }

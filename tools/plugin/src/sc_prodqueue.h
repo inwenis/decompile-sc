@@ -3,33 +3,43 @@
 // THE MECHANISM (research/production-queue.md 5)
 //   The engine's queue is a five-slot ring inside the CUnit (u16[5] at +0x98, head byte
 //   at +0xA4) and the 5 is baked into unrolled and modulo-5 arithmetic in six functions
-//   plus the building AI's mirror arrays. It cannot be widened in place, and this
-//   plugin does not try. Instead it keeps a per-building OVERFLOW list of its own and
-//   feeds the engine's five as slots free up -- the same shadow pattern the selection
-//   fan-out uses, applied to production.
+//   plus the building AI's mirror arrays. It cannot be widened in place, and this plugin
+//   does not try. It keeps a per-building OVERFLOW list of its own instead.
+//
+//   WHICH END OF THE QUEUE THE PLUGIN HOLDS IS THE WHOLE DESIGN, and the first in-game
+//   run settled it. The plugin cannot wait for an over-cap command to arrive, because
+//   THE CLIENT NEVER SENDS ONE: with five items queued, the sixth press puts nothing on
+//   the wire at all (measured -- five `CMD id=0x1F` at the press cadence and then silence
+//   for seven more presses) and the Train button is drawn dark. So the plugin keeps the
+//   engine's ring one slot BELOW its cap (SC_PRODQ_ENGINE_HOLD) by taking the newest item
+//   back out of it after every accept. The button stays live, the client keeps sending,
+//   and everything past the hold waits in the plugin's list, in order.
 //
 // THE RESOURCE RULE
-//   A queued item is paid for EXACTLY ONCE, when it is accepted -- which is what
-//   vanilla does, and is why cancelling refunds the right amount whether the item is
-//   sitting in the engine's five or in ours:
+//   THE ENGINE PAYS FOR EVERY ITEM, EXACTLY ONCE, AND THE PLUGIN NEVER SPENDS A MINERAL.
+//   Every item is accepted by the engine's own addToBuildQueue (0x00467250), which is
+//   also where the engine checks affordability and deducts the cost. Moving an item out
+//   of the ring afterwards, and moving it back later, are bare `buildQueue[slot] = type`
+//   stores that touch no resource global:
 //
-//     accepted into the engine's five   -> the ENGINE pays (addToBuildQueue 0x00467250)
-//     accepted into our overflow        -> WE pay, out of the same two cost tables the
-//                                          engine's own refund reads back
-//     promoted from overflow into a slot-> NOBODY pays; it is a bare `buildQueue[slot] =
-//                                          type` store, because the item was paid for
-//                                          when it was accepted
+//     accepted into the ring         -> the ENGINE pays, and checks the player can
+//     held back by the plugin        -> nobody pays; the item is already paid for
+//     promoted back into a free slot -> nobody pays, for the same reason
+//     cancelled or lost while held   -> the PLUGIN refunds, out of the same two cost
+//                                       tables the engine's own refund reads
 //
-//   So the money moves once per item on the way in and once on the way out, and never
-//   in between. Every path that can lose an overflow item -- an explicit cancel, the
-//   building dying, the plugin unloading -- refunds it.
+//   So the plugin's only resource writes are refunds, and `mineralsSpent` in its stats
+//   line is expected to stay 0 for the life of a run -- that is an assertion, not a
+//   coincidence. Every path that can lose a held item -- an explicit cancel, the building
+//   dying, the plugin unloading -- refunds it.
 //
 // WHAT THIS NEVER DOES
-//   It never widens, relocates or re-strides the engine's array; the engine's own five
-//   slots always hold exactly five real items, so the five icons the status area draws
-//   stay truthful (they are the next five things this building will build). It installs
-//   no hook and touches nothing at all unless %SCPLUGIN_PRODQ% asks for it, and it is
-//   inert in `-Mode observe`, which stays the off switch for the whole plugin.
+//   It never widens, relocates or re-strides the engine's array. The slots it does write
+//   hold real types the engine put there, in the order the player asked for, so the icons
+//   the status area draws stay truthful -- there are just fewer of them than the logical
+//   queue holds (the known limitation, research/production-queue.md 7). It installs no
+//   hook and touches nothing at all unless %SCPLUGIN_PRODQ% asks for it, and it is inert
+//   in `-Mode observe`, which stays the off switch for the whole plugin.
 
 #ifndef SC_PRODQUEUE_H
 #define SC_PRODQUEUE_H
@@ -40,6 +50,12 @@
 // launcher/env knob %SCPLUGIN_PRODQ_MAX% moves it inside [SC_BUILD_QUEUE_SLOTS, 24].
 #define SC_PRODQ_DEFAULT_MAX 16
 #define SC_PRODQ_HARD_MAX    24
+// How many items the engine's own ring is allowed to hold while the plugin is managing
+// this building. FOUR, i.e. one below the engine's five, because the client stops sending
+// Train commands at five (see the mechanism note above) and a queue nobody can add to is
+// the bug this feature exists to remove. It is not a cap on anything the player sees:
+// the logical queue is this plus whatever the plugin holds.
+#define SC_PRODQ_ENGINE_HOLD 4
 // How many buildings can hold overflow at once. Beyond this a new building is refused
 // (and says so in the log) rather than evicting one that has already been paid for.
 #define SC_PRODQ_MAX_BUILDINGS 32
@@ -70,13 +86,18 @@ void ScProdQueueLogStats(void);
 // arguments into these.
 // ---------------------------------------------------------------------------
 
-// A Train command (0x1F) has just been handled by the engine for `unit`. `wasFull` is
-// whether the queue was full BEFORE the engine ran; the caller samples it there because
-// afterwards a successful enqueue is indistinguishable from a refused one.
+// A Train command (0x1F) has just been handled by the engine for `unit`: it has accepted
+// the item and paid for it, or refused it. Rebalances the building -- takes the newest
+// items back out of the ring until it is down to SC_PRODQ_ENGINE_HOLD, and promotes if
+// the ring is under it. `wasFull` is whether the ring was full BEFORE the engine ran,
+// sampled there because afterwards a successful enqueue and a refused one look the same;
+// with this design that only happens once the logical queue has reached its maximum and
+// the plugin has stopped making room, so it counts as a refusal.
 void ScProdQueueOnTrain(DWORD unit, unsigned type, bool wasFull);
 
-// The production tick has just run for `unit`. Promotes as many overflow items as there
-// are free slots, and garbage-collects records whose building has gone.
+// The production tick has just run for `unit`. Rebalances the same way: the frame a slot
+// frees is the frame the oldest held item takes it. Also garbage-collects records whose
+// building has gone.
 void ScProdQueueOnTick(DWORD unit);
 
 // A Cancel Train command (0x20) is about to be handled for `unit` with payload
@@ -96,12 +117,16 @@ int  ScProdQueueTrackedBuildings(void);
 
 // Test-only counters, in the same order ScProdQueueLogStats prints them.
 enum ScProdQueueStat {
-    SC_PRODQ_STAT_CAPTURED = 0,   // items accepted into overflow
+    SC_PRODQ_STAT_CAPTURED = 0,   // items taken back out of the ring and held
     SC_PRODQ_STAT_PROMOTED = 1,   // items handed to a freed engine slot
     SC_PRODQ_STAT_CANCELLED = 2,  // items cancelled out of overflow by the player
     SC_PRODQ_STAT_REFUNDED = 3,   // items refunded because their building went away
-    SC_PRODQ_STAT_REFUSED_FULL = 4,   // over SC_PRODQ max, or no record free
-    SC_PRODQ_STAT_REFUSED_COST = 5,   // the player could not afford it
+    SC_PRODQ_STAT_REFUSED_FULL = 4,   // a Train command arrived with the ring already full
+    // Always 0, and kept in the line so that stays visible: affordability is the ENGINE's
+    // check now, made before the plugin sees anything, so an item the player cannot afford
+    // is never offered to it. Same for the two SPENT counters below -- the plugin's own
+    // spend is expected to be flat zero for the life of a run, and both suites assert it.
+    SC_PRODQ_STAT_REFUSED_COST = 5,
     SC_PRODQ_STAT_MINERALS_SPENT = 6,
     SC_PRODQ_STAT_MINERALS_REFUNDED = 7,
     SC_PRODQ_STAT_GAS_SPENT = 8,

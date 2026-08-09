@@ -292,24 +292,31 @@ there is no slack. And the 5 is a literal in six functions, including `countType
 mirror arrays hanging off the building AI. Both halves of the task-021 test fail, so the array is
 left exactly as the engine made it.
 
-**What happens instead.** The build-menu's Train button is *not* disabled by a full queue — its
-condition function `0x00428E60` never looks at the queue — so the sixth click still puts a `0x1F`
-Train command on the wire and the engine drops it on the receive side, at one `CMP EAX,0x5` inside
-`addToBuildQueue` (`0x00467250`). Three detours are enough:
+**What happens instead: the ring is kept one item BELOW five.** The client will not send a sixth
+Train command — measured on the engine's own command funnel, five `CMD id=0x1F` at the press
+cadence and then silence for seven more presses, with the Train button drawn dark. So there is no
+over-cap command to catch, and the plugin works the other way round: after every accept it takes
+the **newest** item straight back out of the ring, and it gives a freed slot to the **oldest** item
+it holds. The button never goes dark, so every press keeps reaching the wire. Three detours:
 
 | detour | what it does |
 |---|---|
-| `cmdrecvTrain` `0x004C1C20` | samples "was the queue full" before the engine runs, and takes the item if the engine could not |
+| `cmdrecvTrain` `0x004C1C20` | the engine has just accepted and paid; rebalance before the player can press again |
 | `productionTick` `0x00468420` | the frame a slot frees, the oldest held item goes into it |
 | `cmdrecvCancelTrain` `0x004C0100` | a "cancel the last queued item" belongs to whoever holds the tail |
 
-**The money moves exactly once per item.** An item the engine accepts is paid for by the engine;
-an item the plugin accepts is paid for by the plugin, out of the same two per-type cost tables
-(`0x00663888` minerals, `0x0065FD00` gas) and gated on the same units.dat flag byte the engine's
-own refund (`0x0042CEC0`) uses. **Promotion moves nothing** — it is a bare `buildQueue[slot] =
-type` store. Cancelling a held item refunds it; so does the building dying, which is what vanilla
-does too (`0x0049FD00` → `0x00466E80`). An item the player cannot afford is refused rather than
-queued into debt, because the engine's own affordability check runs only for the head slot.
+**The engine pays for everything and the plugin pays for nothing.** Every item enters through
+`addToBuildQueue` (`0x00467250`), which is where affordability is checked and the cost deducted —
+so an item the player cannot afford never reaches the plugin at all, and "paid exactly once" is
+the only thing that can happen rather than a discipline to maintain. Moving an item out of the
+ring and back in are bare `buildQueue[slot] = type` stores. The plugin's only resource write is
+the **refund**, for an item destroyed while it is holding it (an explicit cancel, the building
+dying, the plugin unloading), out of the same two per-type cost tables (`0x00663888` minerals,
+`0x0065FD00` gas) and gated on the same units.dat flag byte the engine's own refund
+(`0x0042CEC0`) uses. Its `mineralsSpent` counter is asserted to stay `0`.
+
+**The cap is vanilla's own.** At `-ProdQueueMax` the plugin stops taking items back, the ring
+fills to five, and the client greys the button out exactly as it does in a stock game.
 
 `-ProdQueueMax N` sets the total logical length, the engine's five included; default 16, clamped
 to `[5, 24]`. The reasoning for 16 is in the research doc §5.4 — it is bounded by what a player
@@ -319,7 +326,7 @@ can afford to lose to one raid, not by memory.
 
 ```
 PRODQ config: enabled max=16 (engine keeps its 5, plugin holds up to 11 per building, 32 buildings)
-PRODQEV capture  unit=0x… type=0x007 overflow=1 logical=6 paid=50/0 left=2950/1000
+PRODQEV hold     unit=0x… type=0x007 <- slot=4 engineLen=4 overflow=1 logical=5
 PRODQEV promote  unit=0x… type=0x007 -> slot=0 overflowLeft=0
 PRODQEV cancel-last unit=0x… type=0x007 overflowLeft=0 back=50/0
 PRODQSEL [tag] unit=0x… type=0x06A … engineLen=5 engine=[0x007,0x007,0x007,0x007,0x007] overflow=4 logical=9 minerals=2550 gas=1000
@@ -701,7 +708,7 @@ The one exception is the deprecated `-Windowed` switch, which *does* write
 | `src/sc_hook.h/.cpp` | the inline-detour engine — prologue check, trampoline, thread suspension |
 | `src/sc_fanout.h/.cpp` | the shadow selection and the fan-out |
 | `src/sc_circles.h/.cpp` | task 014's selection circles: one hook, two engine calls, and the reasoning for never touching `selectionIndex` |
-| `src/sc_prodqueue.h/.cpp` | task 025's production queue: three detours, a per-building overflow list, and the pay-once resource rule |
+| `src/sc_prodqueue.h/.cpp` | task 025's production queue: three detours, a per-building overflow list, the ring kept one below five so the client keeps sending, and the engine left as the only payer |
 | `src/hooktest.cpp` | offline unit tests for the detour engine, the fan-out core, the circles and the production queue (`build.ps1 -Test`) |
 | `src/scinject.cpp` | the 32-bit launcher/injector |
 | `build.ps1` | build + PE machine-type gate (+ `-Test`) |
