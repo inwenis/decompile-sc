@@ -532,6 +532,29 @@ a count that does not match.
 
 ---
 
+### 8.4 Four defects in one evening, and not one of them was random
+
+The harness faults found while doing this work were, in order: the Game Type pick (a posted
+mouse MOVE ignored while the window is not foreground), the drag box (the same cause, found on
+another task's failing suites), the fixture-folder row (two workers' maps in one folder, chosen
+positionally), and the folder row one level up — where merely leaving an **empty** directory
+behind moved every row for a suite that navigates somewhere else entirely and does not use the
+shared folder at all.
+
+**Every one of them presented as intermittency, and none of them was random.** Each looked like
+flake for a good reason: the dropdown remembered a value that was sometimes right, the drag box
+depended on which window happened to be foreground, and the folder rows depended on what
+another run had left on disk a minute earlier. Two were labelled "flaky" out loud — once by
+this task — before someone went back and dismantled them.
+
+The rule that falls out, for whoever meets the next one: **in this harness, start from "what is
+deterministic about this" rather than from "run it again".** A positional selector over shared
+mutable state, and an input path that depends on window focus, both produce failures that are
+perfectly reproducible once you know what varies — and re-running is precisely the action that
+hides them.
+
+---
+
 ## 9. Confidence and method
 
 ### Derived here, from this binary
