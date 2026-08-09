@@ -90,6 +90,16 @@ Check with the conductor first; if either is still open, say so and wait.
    refused for a background process and lies about it). Consolidate it so EVERY input primitive
    that depends on a move — drag, minimap click, dropdown — goes through it, not just the dropdown.
 
+## Small item inherited from task 022
+
+**Name the Ghost's Cloak command-card button.** 022 could not drive Cloak: the key is not `C`
+(it emits nothing even at full energy, so it is not the send-side gate either), and clicking
+where the bottom-left button should be produced a frame reading **"Select Target"** — i.e. that
+slot is a TARGETED ability (Lockdown), so the click armed something and issued nothing. One
+keypress sweep against a working command card, with the emitted command id logged per key, names
+it. This matters because the user's original report was about a cloaked Ghost specifically, and
+022 could only answer the underlying mechanism, not that unit.
+
 ## The experiment this task owes
 
 The third defect is **attributed, not confirmed**, for the drag/minimap symptoms. The confirming
