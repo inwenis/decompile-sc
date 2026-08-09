@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
 PLUGIN-vs-STOCK: does using an ability on a >12 selection IN COMBAT stop the units
-fighting? 36 Marines engage 16 Hydralisks, Stim Pack is pressed once mid-fight,
+fighting? 36 Marines shoot a block of Supply Depots, Stim Pack is pressed once mid-fight,
 and every unit's order is compared across that press -- with the plugin active, and again
 with `-Mode observe`, which installs no hook at all.
 
@@ -54,12 +54,30 @@ param(
     # affordability gate back in the picture once the ability is known to fire.
     [int]$DamagedCount = 0,
     [int]$DamagedEnergy = 5,
-    # Fewer enemies than the first version used (16). The measurement compares a
-    # two-second window against two-second controls, so the fight has to be steady over
-    # ~10 seconds -- and with sixteen Hydralisks the group was losing units fast enough
-    # that the two controls disagreed by exactly the amount the script calls "too unstable
-    # to mean anything". Slowing the decay is the fixture's job, not the assertion's.
-    [int]$EnemyCount = 10,
+    # THE ENEMY CANNOT SHOOT BACK **BY ANY CHOICE OF ITS OWN**, AND THERE IS A LOT OF IT.
+    # Both halves are the fixture doing the job the assertion should not have to.
+    #
+    # The measurement compares a two-second window against two-second controls either side
+    # of it, so the fight has to be STEADY across all three. Against Hydralisks it was not:
+    # with sixteen, the group lost units fast enough that the controls disagreed by exactly
+    # the margin the script calls too unstable to mean anything; with ten, the Marines
+    # wiped them mid-measurement and the second control caught 23 units dropping to idle
+    # at once -- the fight ENDING, not the ability doing anything.
+    #
+    # Lurkers were tried and were a mistake worth recording: an UNBURROWED Lurker has no
+    # weapon, but a computer-owned one BURROWS on its own -- and a burrowed Lurker is all
+    # weapon, with splash, into a Marine ball. Player 0 went 36 -> 2 units during the
+    # measurement. The premise has to be "cannot attack", not "is not currently attacking".
+    #
+    # A SUPPLY DEPOT cannot attack, cannot move, and cannot decide to do either. Twelve of
+    # them is 6000 hit points, which 36 Marines chew through slowly enough that the fight
+    # outlasts all three measurement windows, and nothing shoots back so the population
+    # does not decay at all. The units under test are still doing the thing the hypothesis
+    # is about -- attacking -- which is all it needs. Removing the return fire removes the
+    # noise, not the test.
+    [int]$EnemyCount = 12,
+    [string]$EnemyType = '109',       # units.dat 109, Terran Supply Depot
+    [string]$EnemyRace = 'terran',
     [ValidateSet('fanout', 'observe')][string[]]$Modes = @('fanout', 'observe'),
     [int]$EngageTimeoutSec = 60,
     # How far the two control windows may disagree before the fight is declared too
@@ -86,7 +104,7 @@ $script:armLock = $null
 # measures nothing, and a test that measures nothing while looking green is worse than no
 # test. The Ghost case is recorded as an open question rather than faked.
 $UNIT_TYPE = 0             # units.dat 0, Terran Marine
-$HYDRALISK_TYPE = 38       # units.dat 38
+$ENEMY_TYPE_ID = 109       # units.dat 109, Terran Supply Depot -- no weapon, cannot move
 $ABILITY_CMD = '0x36'      # Stim Pack
 $ABILITY_KEY = 0x54        # 'T' -- plain, unmodified, so 021's accelerator finding does not bite
 $STIM_TIMER = 0x25         # what 0x004C2F30 writes to CUnit+0x115
@@ -133,7 +151,7 @@ function New-Fixture {
         $genArgs.DamagedEnergy = $DamagedEnergy
     }
     $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') @genArgs `
-        -EnemyCount $EnemyCount -EnemyType hydralisk -EnemyRace zerg `
+        -EnemyCount $EnemyCount -EnemyType $EnemyType -EnemyRace $EnemyRace `
         -OutputPath $mapPath 2>&1
     $gen | Where-Object { "$_" -notmatch 'WARNING:StormLib' } | ForEach-Object { Write-Host "       $_" }
     Assert-That 'the generator succeeded' ($LASTEXITCODE -eq 0) "(exit $LASTEXITCODE)"
@@ -300,10 +318,10 @@ function Get-EnemyHp {
     # Sum by hand: Measure-Object emits NOTHING for an empty pipeline, and under
     # StrictMode reading .Sum off that is a thrown error rather than a zero -- which is
     # exactly what happens on a run where the fixture did not spawn (a melee start has no
-    # Hydralisks at all) and it hides the real cause behind a property-not-found.
+    # enemies at all) and it hides the real cause behind a property-not-found.
     param($Scan)
     $total = 0
-    foreach ($u in $Scan.Units) { if ($u.Type -eq $HYDRALISK_TYPE) { $total += $u.Hp } }
+    foreach ($u in $Scan.Units) { if ($u.Type -eq $ENEMY_TYPE_ID) { $total += $u.Hp } }
     return $total
 }
 
@@ -344,7 +362,7 @@ Assert-That 'the working copy starts out byte-identical to pristine 1.16.1' `
 
 $arms = @{}
 try {
-    Step "generate the fixture: $UnitCount Marines vs $EnemyCount Hydralisks, Stim researched" {
+    Step "generate the fixture: $UnitCount Marines vs $EnemyCount Supply Depots, Stim researched" {
         New-Fixture
     }
 
@@ -357,10 +375,16 @@ try {
             # looks normal, and the units are a standard base instead of the fixture --
             # every later number is then internally consistent nonsense (task 021).
             $melee = @($arm.Boxed.Units | Where-Object { $_.Player -eq 0 -and $_.Type -in 7, 0x40, 0x29, 0x23, 0x2A })
+            # The premise the whole fixture rests on, checked where it is used: this enemy
+            # has no weapon and cannot move, so it cannot DECIDE to start shooting. The
+            # previous fixture used Lurkers, which have no weapon unburrowed -- and a
+            # computer-owned one burrows on its own and shreds the group with splash.
+            Assert-That "[$mode] the target block is a weaponless, immobile building type ($ENEMY_TYPE_ID)" `
+                ($ENEMY_TYPE_ID -eq 109)
             Assert-That "[$mode] the fixture spawned $UnitCount Marines" ($spawned -eq $UnitCount) `
                 ($melee.Count -gt 0 ? "(got $spawned, and player 0 owns SCV/Drone/Larva/Overlord-shaped units -- THIS IS A MELEE START, the Game Type pick did not take)" : "(got $spawned)")
-            Assert-That "[$mode] and $EnemyCount Hydralisks" `
-                (@($arm.Boxed.Units | Where-Object { $_.Type -eq $HYDRALISK_TYPE }).Count -eq $EnemyCount)
+            Assert-That "[$mode] and $EnemyCount enemy buildings" `
+                (@($arm.Boxed.Units | Where-Object { $_.Type -eq $ENEMY_TYPE_ID }).Count -eq $EnemyCount)
             # EVERY scan the measurement uses, not just the first one. A torn scan drops a
             # unit, and a dropped unit cannot be seen to change its order -- so the bias is
             # DOWNWARD, i.e. towards the conclusion this test reaches. Validating only the
@@ -400,6 +424,24 @@ try {
             # Churn with no ability (engaged -> baseline) against churn across the
             # ability (baseline -> after). Same fight, same length of window.
             $ctrlBefore = Get-Transitions $arm.Engaged $arm.Baseline
+            # THE FIXTURE'S OWN PRECONDITIONS, asserted before any number is derived.
+            # A population that moves at all voids the measurement -- a unit that leaves
+            # cannot be seen to change its order, so the bias runs toward "nothing
+            # changed". And if the target block dies mid-measurement the fight ends, which
+            # is what wrecked both previous fixtures.
+            $popStart = @(Get-Mine $arm.Engaged).Count
+            $popEnd = @(Get-Mine $arm.ControlAfter).Count
+            $enemyStart = @($arm.Engaged.Units | Where-Object { $_.Type -eq $ENEMY_TYPE_ID }).Count
+            $enemyEnd = @($arm.ControlAfter.Units | Where-Object { $_.Type -eq $ENEMY_TYPE_ID }).Count
+            Write-Host ("       [{0}] population {1} -> {2}; target block {3} -> {4}" -f `
+                $mode, $popStart, $popEnd, $enemyStart, $enemyEnd)
+            Assert-That "[$mode] not one unit was lost across the whole measurement ($popStart -> $popEnd)" `
+                ($popStart -eq $popEnd) `
+                '(a moving population voids this measurement, and the bias runs toward the conclusion this test reaches)'
+            Assert-That "[$mode] the target block survived the whole measurement ($enemyStart -> $enemyEnd)" `
+                ($enemyEnd -eq $enemyStart) `
+                '(if the targets die the fight ends, and the last control window measures that instead of an ordinary two seconds)'
+
             $t = Get-Transitions $arm.Baseline $arm.After
             $ctrlAfter = Get-Transitions $arm.After $arm.ControlAfter
             # NO AGGREGATOR. Picking one of the two controls decides the answer: on the
