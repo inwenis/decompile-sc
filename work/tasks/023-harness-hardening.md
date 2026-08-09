@@ -90,6 +90,17 @@ Check with the conductor first; if either is still open, say so and wait.
    refused for a background process and lies about it). Consolidate it so EVERY input primitive
    that depends on a move — drag, minimap click, dropdown — goes through it, not just the dropdown.
 
+## Fourth small item: the ownership rule must handle MULTI-FIXTURE suites
+
+`test-combat-death.ps1` creates two fixtures in sequence (a placement probe, then the combat
+map). The "refuse to start if an `.scx` you did not create is present" rule counted the suite's
+OWN phase-A probe as foreign, so the suite waited for itself — a self-deadlock created by the
+safety rule, not by a collision (022, 2026-08-09). Ownership must be per-suite-run, not
+per-file-at-startup: a suite needs to register every fixture it will create, or mark them as
+its own as it creates them, so a later check cannot mistake its own earlier file for someone
+else's. Make sure the fix does not weaken the rule back into "ignore anything that looks a bit
+like mine".
+
 ## Third small item: two suites generate the SAME fixture name
 
 `test-burrow-fanout.ps1` and `test-hud-row.ps1` both generate `lurkers.scx`. That makes
