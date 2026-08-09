@@ -91,17 +91,31 @@ $IDLE_ORDER = '0x03'
 # this one), so no override is needed here.
 $UMS_INDEX = 2
 
-# The fixture folder is SHARED between workers, and every suite in this repo has
-# historically opened with `Remove-Item -Recurse` on it. That is how one run came within a
-# step of deleting another worker's map out from under their live game (2026-08-09,
-# conductor interim rule). This test therefore:
-#   * names its fixture with its task id, so "mine" is decidable;
-#   * deletes ONLY that file, never the folder;
-#   * refuses to start at all if a fixture it did not create is present, rather than
-#     removing it or risking the menu's row-2 click landing on it.
-$mapDir = Join-Path $GameDir 'Maps\BroodWar\00-testmap'
+# OUR OWN FIXTURE FOLDER, not the shared `00-testmap` (repo rule, 2026-08-09).
+#
+# Being careful inside a shared folder was tried first and it does not work. Workers write
+# into it concurrently, the map browser is clicked by ROW, and a foreign file that sorts
+# first silently becomes the map THIS test loads -- which is not a failure, it is a run
+# that reports confident nonsense. That cost voided runs in both directions before the
+# structural answer was taken: one folder per task, so the interference is removed rather
+# than scheduled around.
+#
+#   * `0` sorts before any letter, so the first-row folder click every suite uses finds it;
+#   * the fixture is still task-named and only that file is ever deleted, on every path;
+#   * the run still REFUSES to start on any `.scx` it did not create -- that is what caught
+#     the original collision, and it stays correct inside our own folder;
+#   * the folder is removed at the end ONLY IF EMPTY, because an empty folder of ours left
+#     behind becomes someone else's first row -- the same bug with the roles swapped.
+$mapDir = Join-Path $GameDir 'Maps\BroodWar\00-t021'
 $mapName = '021-lurkers.scx'
 $mapPath = Join-Path $mapDir $mapName
+
+function Remove-MyFixtureDirIfEmpty {
+    if (-not (Test-Path -LiteralPath $mapDir)) { return }
+    if (@(Get-ChildItem -LiteralPath $mapDir -Force -ErrorAction SilentlyContinue).Count -eq 0) {
+        Remove-Item -LiteralPath $mapDir -Force -ErrorAction SilentlyContinue
+    }
+}
 
 function Remove-MyFixture {
     if (Test-Path -LiteralPath $mapPath) {
@@ -201,7 +215,7 @@ try {
     if (-not $gamePid) { throw 'test: could not parse the game pid from scinject output.' }
     $hwnd = Get-ScGameWindow -ProcessId $gamePid
 
-    Step "menus: Single Player -> Expansion -> Play Custom -> 00-testmap\$mapName" {
+    Step "menus: Single Player -> Expansion -> Play Custom -> 00-t021\$mapName" {
         Start-Sleep -Seconds 2
         Send-ScClick -Hwnd $hwnd -X 215 -Y 119        # Single Player
         Send-ScClick -Hwnd $hwnd -X 373 -Y 300        # StarCraft: Brood War (Expansion)
@@ -211,7 +225,7 @@ try {
         Start-Sleep -Seconds 2
         Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom
         Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 117 -Y 140        # [00-testmap]
+        Send-ScClick -Hwnd $hwnd -X 117 -Y 140        # [00-t021], our own folder -- 0 sorts first
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok
         Start-Sleep -Milliseconds 800
         Send-ScClick -Hwnd $hwnd -X 117 -Y 159        # our fixture: the only .scx here
@@ -568,7 +582,7 @@ finally {
     }
     # ONLY our own file, never the folder -- another worker's fixture may be sitting
     # beside it with their game still reading it.
-    if (-not $KeepOpen) { Remove-MyFixture }
+    if (-not $KeepOpen) { Remove-MyFixture; Remove-MyFixtureDirIfEmpty }
 }
 
 Write-Host ''
