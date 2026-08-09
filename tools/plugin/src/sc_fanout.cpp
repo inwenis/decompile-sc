@@ -412,6 +412,81 @@ static bool InPlayerUnitList(DWORD unit) {
     return false;
 }
 
+// ---------------------------------------------------------------------------
+// SAME-TYPE BUILDING GROUPS (task 024)
+//
+// Vanilla selects ONE building per drag box, and the reason is a single predicate --
+// unit_IsStandardAndMovable (0x0047B770) -- consulted on both sides of the selection
+// path. sc_addresses.h quotes both call sites with their instruction addresses; the
+// short version is:
+//
+//   client  SortAllUnits drops every candidate that fails the predicate, then, if
+//           that emptied the list, substitutes the LAST one it dropped and returns 1.
+//   sim     addUnitToSelectionSlot refuses any slot > 0 to a unit that fails it, so
+//           playersSelections[player] -- the array every order applier iterates --
+//           can hold exactly one building no matter what arrives on the wire.
+//
+// This module relaxes the CLIENT gate (see ScFanoutGrowBuildingGroup) and leaves the
+// SIM gate alone: its first five bytes contain a short JZ and ScHookInstall copies
+// prologue bytes verbatim with no relocation, so a detour there would corrupt the
+// trampoline. Instead the sim gate becomes a NUMBER -- how many of the current
+// selection the simulation will hold at once -- and the fan-out already knows how to
+// deliver an order to more units than the sim can hold: it chunks. For units that
+// number is 12 and nothing changes; for a building group it is 1, so a rally to six
+// Supply Depots goes out as six Select(1)+RightClick pairs.
+// ---------------------------------------------------------------------------
+
+// The engine's own predicate, called (never patched). Test builds point it at a stub
+// instead: in hooktest every static VA resolves into a fake image with no code in it.
+typedef int (__attribute__((fastcall)) *ScMovableFn)(DWORD unit);
+static ScMovableFn g_movableFn = NULL;   // NULL -> call the engine
+static bool        g_buildingGroups = true;   // %SCPLUGIN_BUILDING_GROUPS%
+
+// The test default (see ScFanoutTestBegin): no engine code exists at 0x0047B770 in a
+// test process, so a test that has not said otherwise gets the pre-task-024 answer.
+static int __attribute__((fastcall)) ScTestAllMovable(DWORD unit) { (void)unit; return 1; }
+
+static bool UnitIsStandardAndMovable(DWORD unit) {
+    if (!unit) return false;
+    ScMovableFn f = g_movableFn ? g_movableFn
+                                : (ScMovableFn)Rt(SC_VA_UNIT_IS_STANDARD_AND_MOVABLE);
+    return f(unit) != 0;
+}
+
+// How many units of the CURRENT selection the simulation will hold at once, i.e. the
+// fan-out's chunk size. 12 normally; 1 when the selection is made of units the sim
+// gate refuses a second slot to. Recomputed at every selection commit, never guessed.
+static int g_simSlots = SC_SELECTION_SLOTS;
+
+// units.dat prototype flags for a type, read only so a log line can say WHICH bit the
+// gate objected to. Returns 0 for a type id outside the table's addressable range.
+static DWORD UnitsDatFlags(WORD unitType) {
+    return ((DWORD*)Rt(SC_VA_UNITS_DAT_FLAGS))[unitType];
+}
+
+// Recompute the chunk size from the selection the engine just committed.
+//
+// The FIRST visible unit decides it, and that is not a shortcut: the sim gate lets slot
+// 0 hold anything and refuses a non-movable unit every later slot, so whether a second
+// unit of this kind can ever join is a property of the kind, and every unit of a
+// same-type group answers identically. An empty selection resets to the default rather
+// than keeping a building group's 1 -- a stale 1 would make the next 12-unit selection
+// fan out one unit at a time.
+//
+// Deliberately NOT gated on %SCPLUGIN_BUILDING_GROUPS%: this number is a fact about the
+// ENGINE (addUnitToSelectionSlot really does refuse a building every slot but the
+// first), not about our feature, and reporting it honestly in the off arm is what lets
+// that arm assert the vanilla shape rather than our absence. With the feature off the
+// shadow list never holds more than one building, so `shadowCount > simSlots` is false
+// and nothing is fanned out.
+static void UpdateSimSlots(const ShadowUnit* visible, int visibleCount) {
+    if (visibleCount <= 0 || !visible[0].ptr) {
+        g_simSlots = SC_SELECTION_SLOTS;
+        return;
+    }
+    g_simSlots = UnitIsStandardAndMovable(visible[0].ptr) ? SC_SELECTION_SLOTS : 1;
+}
+
 static bool g_liveness = true;    // %SCPLUGIN_FANOUT_LIVENESS%
 
 // The full test. `why` (optional) gets the first term that failed, so a log line can
@@ -549,6 +624,11 @@ static unsigned g_statStale      = 0;   // units DROPPED from an emitted Select,
 // case -- a unit killed by damage whose slot has not been recycled, which term 1
 // alone (uniqueness) cannot see.
 static unsigned g_statDrop[SC_DROP_NOTAG + 1] = { 0 };
+// Task 024, counted SEPARATELY from g_statDrop on purpose. These units were refused a
+// place in a building GROUP at selection time -- they never reached a plan, so folding
+// them into the emit-side counters would change what "dropped from an emitted Select"
+// means for every test that already asserts on it.
+static unsigned g_statBGroupRefused[SC_DROP_NOTAG + 1] = { 0 };
 
 // ---------------------------------------------------------------------------
 // The deferred plan
@@ -567,27 +647,53 @@ struct Plan {
     ShadowUnit units[SC_SHADOW_MAX];
     int        count;
     int        visibleCount;
+    int        slots;        // how many the sim holds at once == this plan's chunk size
     int        chunkCount;
     int        nextChunk;
 };
 
 static Plan g_plan;
 
+// Chunk `chunk` of the plan: overflow units first, the engine's VISIBLE units last, so
+// the simulation is left holding what the player can see.
+//
+// `slots` is the only thing that changed for task 024, and it changed from a constant
+// into a field. With slots == 12 this is byte-for-byte the previous behaviour: the
+// visible part is at most 12 units, so it is exactly one trailing chunk. With slots ==
+// 1 (a building group, which the sim will not hold two of) BOTH regions split one unit
+// per chunk, which is what makes a rally reach every building.
 static int ChunkBounds(const Plan* p, int chunk, int* start, int* len) {
+    const int slots = p->slots > 0 ? p->slots : SC_SELECTION_SLOTS;
     const int overflow = p->count - p->visibleCount;
-    const int overflowChunks = (overflow + SC_SELECTION_SLOTS - 1) / SC_SELECTION_SLOTS;
+    const int overflowChunks = (overflow + slots - 1) / slots;
     if (chunk < overflowChunks) {
-        *start = chunk * SC_SELECTION_SLOTS;
+        *start = chunk * slots;
         int remain = overflow - *start;
-        *len = remain < SC_SELECTION_SLOTS ? remain : SC_SELECTION_SLOTS;
+        *len = remain < slots ? remain : slots;
         return 1;
     }
-    if (chunk == overflowChunks) {          // the visible chunk, always emitted last
-        *start = overflow;
-        *len   = p->visibleCount;
+    const int visibleChunks = (p->visibleCount + slots - 1) / slots;
+    if (chunk < overflowChunks + visibleChunks) {
+        // The visible chunks are walked BACKWARDS, so the very last Select this plan
+        // emits carries the FIRST visible unit -- the one the engine itself put in slot
+        // 0, and the one its own Select would have left the simulation holding.
+        // With slots == 12 there is exactly one visible chunk and this is a no-op; it
+        // only bites when the sim holds fewer than the player can see, i.e. a building
+        // group, where "leave the simulation holding what the player can see" has to
+        // become "leave it holding the one the engine chose".
+        const int i = visibleChunks - 1 - (chunk - overflowChunks);
+        *start = overflow + i * slots;
+        int remain = p->visibleCount - i * slots;
+        *len = remain < slots ? remain : slots;
         return 1;
     }
     return 0;
+}
+
+static int PlanChunkCount(int count, int visibleCount, int slots) {
+    if (slots <= 0) slots = SC_SELECTION_SLOTS;
+    const int overflow = count - visibleCount;
+    return (overflow + slots - 1) / slots + (visibleCount + slots - 1) / slots;
 }
 
 // Queues one vanilla Select (0x09) for the given units. Returns bytes queued, or 0
@@ -708,17 +814,18 @@ static bool StartFanout(const BYTE* order, int orderLen) {
     memcpy(g_plan.units, g_shadow, sizeof(ShadowUnit) * (size_t)g_shadowCount);
     g_plan.count        = g_shadowCount;
     g_plan.visibleCount = g_visibleCount;
+    g_plan.slots        = g_simSlots;
 
     const int overflow = g_plan.count - g_plan.visibleCount;
-    g_plan.chunkCount = (overflow + SC_SELECTION_SLOTS - 1) / SC_SELECTION_SLOTS + 1;
+    g_plan.chunkCount = PlanChunkCount(g_plan.count, g_plan.visibleCount, g_plan.slots);
     g_plan.nextChunk  = 0;
     g_plan.active     = true;
     ++g_statFanouts;
 
     ScLog("FANOUT start: cmd=0x%02X len=%d units=%d (visible %d + overflow %d) "
-          "-> %d Select+order pairs",
+          "slots=%d -> %d Select+order pairs",
           order[0], orderLen, g_plan.count, g_plan.visibleCount, overflow,
-          g_plan.chunkCount);
+          g_plan.slots, g_plan.chunkCount);
 
     if (DrainPlan() > 0) return true;
 
@@ -1039,6 +1146,10 @@ static void GroupRecall(int group) {
         g_shadow[g_shadowCount++] = visible[i];
     }
     g_visibleCount = visibleCount;
+    // A recall is a selection change like any other, so the chunk size is recomputed
+    // here too. Without this a group recalled after a building group would inherit
+    // simSlots=1 and fan an ordinary 12-unit order out one unit at a time.
+    UpdateSimSlots(visible, visibleCount);
     ++g_shadowVersion;
     if (g_shadowCount > SC_SELECTION_SLOTS) ++g_statGroupWide;
 
@@ -1166,9 +1277,12 @@ bool ScFanoutOnCommand(const BYTE* buf, unsigned len) {
     DrainPlan();
 
     bool suppress = false;
+    // `> g_simSlots`, not `> 12`: the fan-out exists because the SIMULATION cannot hold
+    // the whole selection, and how many it holds is 12 for units and 1 for a same-type
+    // building group (task 024). For units this is the same condition it always was.
     if (g_mode == SC_MODE_FANOUT &&
         IsFanoutCmd(id) &&
-        g_shadowCount > SC_SELECTION_SLOTS &&
+        g_shadowCount > g_simSlots &&
         g_visibleCount > 0 &&
         len <= SC_MAX_ORDER_BYTES) {
         // The length the ENGINE will consume for this id, from its own dispatcher. A
@@ -1248,11 +1362,21 @@ void ScFanoutOnSelect(unsigned count, DWORD* units) {
         g_shadow[g_shadowCount++] = visible[i];
     }
     g_visibleCount = visibleCount;
+    UpdateSimSlots(visible, visibleCount);
     ++g_shadowVersion;
 
     if (added > 0) {
         ScLog("SHADOW captured: %d units (%d visible + %d beyond the cap) "
-              "[accum had %d]", g_shadowCount, visibleCount, added, g_accumCount);
+              "[accum had %d] simSlots=%d",
+              g_shadowCount, visibleCount, added, g_accumCount, g_simSlots);
+    } else if (g_simSlots != SC_SELECTION_SLOTS) {
+        // A building group commits with no overflow at all when it fits in twelve, so
+        // the line above would never fire for the case task 024 is about. This one
+        // reports the shape that matters: how many were selected, and how many of them
+        // the simulation will actually hold.
+        ScLog("SHADOW captured: %d units (%d visible + 0 beyond the cap) simSlots=%d "
+              "-- the sim holds %d of them at a time",
+              g_shadowCount, visibleCount, g_simSlots, g_simSlots);
     } else if (g_verboseCmds) {
         ScLog("SELECT commit: %u units (no overflow captured)", count);
     }
@@ -1370,6 +1494,102 @@ void ScFanoutOnOverflow(unsigned count, DWORD* outList, DWORD unit) {
 // number the 12-cap is measured against.
 // ---------------------------------------------------------------------------
 
+// The hook-free half: given the candidate list the engine was handed and the 12-slot
+// output it produced, grow a one-building result into the whole same-type group.
+//
+// WHEN IT DOES NOTHING, which is nearly always:
+//   * building groups are switched off (%SCPLUGIN_BUILDING_GROUPS%=0), or the mode is
+//     not fanout -- `shadow` mode's contract is "capture and log, change nothing", and
+//     this changes what the player has selected;
+//   * `clicked != 0` -- SortAllUnits' third argument. Only 0x0046FA40, the DRAG BOX,
+//     passes 0 (research/command-path.md 3.3); every click path passes the unit under
+//     the cursor. So single-click, shift-click, ctrl+click and double-click are stock;
+//   * the engine returned anything other than exactly 1 -- more than one means the
+//     movable path found real units and the "last rejected" fallback was never used;
+//   * that one unit passes unit_IsStandardAndMovable -- i.e. it is an ordinary unit
+//     the engine selected on its own merits, not the fallback.
+//
+// So the only way through is the exact shape this task is about: a drag box that
+// contained no selectable movable unit, where the engine fell back to one building.
+//
+// WHAT IT THEN DOES. It keeps the engine's own choice of lead -- the building vanilla
+// would have selected alone -- and appends every other candidate of the SAME TYPE and
+// the SAME OWNER. Keeping vanilla's lead is deliberate: a box holding four Supply
+// Depots and three Barracks already picks one building in vanilla, and picking a
+// different one here would be a second arbitrary rule on top of the engine's. So a
+// mixed-BUILDING box selects the group of whichever type vanilla was already going to
+// select, and a mixed unit/building box is untouched (the engine returns the units).
+//
+// The output array belongs to the caller and holds 12 slots (`local_34[12]` in
+// 0x0046FA40), so at most 12 are written; the rest go to the overflow accumulator the
+// shadow list is built from, exactly where sortOverflowHandler would have put them.
+// Every appended unit passes task 020's liveness gate first, so a building that is
+// already dead never enters the selection or the shadow list.
+unsigned ScFanoutGrowBuildingGroup(DWORD* candidates, DWORD* out, DWORD clicked,
+                                   unsigned ret) {
+    if (!g_buildingGroups || g_mode != SC_MODE_FANOUT) return ret;
+    if (clicked != 0 || ret != 1 || !out || !candidates) return ret;
+
+    const DWORD lead = out[0];
+    if (!UnitPtrValid(lead)) return ret;
+    if (UnitIsStandardAndMovable(lead)) return ret;
+
+    const WORD leadType  = *(WORD*)(lead + SC_CUNIT_OFF_UNIT_ID);
+    const BYTE leadOwner = *(BYTE*)(lead + SC_CUNIT_OFF_PLAYER);
+
+    EnterCriticalSection(&g_lock);
+
+    int n = 1;              // out[0] is the lead the engine already chose
+    int beyond = 0, refused = 0;
+    for (int i = 0; candidates[i] != 0 && i < SC_MAX_UNITS_WALK; ++i) {
+        const DWORD c = candidates[i];
+        if (c == lead) continue;
+        if (!UnitPtrValid(c)) continue;
+        if (*(WORD*)(c + SC_CUNIT_OFF_UNIT_ID) != leadType) continue;
+        if (*(BYTE*)(c + SC_CUNIT_OFF_PLAYER) != leadOwner) continue;
+        // Fail closed. Same type as a unit that failed the gate cannot pass it, but a
+        // future type whose gate verdict depends on per-unit state (0x0047B770 reads
+        // CUnit+0x117/+0x119/+0x124 as well as the type) would, and a movable unit has
+        // no business being added by THIS path.
+        if (UnitIsStandardAndMovable(c)) continue;
+
+        bool dup = false;
+        for (int j = 0; j < n; ++j) if (out[j] == c) { dup = true; break; }
+        if (dup) continue;
+
+        ShadowUnit u;
+        int why = SC_LIVE_OK;
+        if (!ReadUnit(c, &u)) continue;
+        if (!PassesGate(&u, &why)) {
+            ++refused;
+            if (why >= 0 && why <= SC_DROP_NOTAG) ++g_statBGroupRefused[why];
+            LogUnitForensics("BGROUP refused", &u, why);
+            continue;
+        }
+
+        if (n < SC_SELECTION_SLOTS) {
+            out[n++] = c;
+        } else if (!ShadowContains(g_accum, g_accumCount, u.ptr) &&
+                   g_accumCount < SC_SHADOW_MAX) {
+            // Past the engine's twelve: the same place sortOverflowHandler puts a unit,
+            // so the shadow list, the overflow circles and the fan-out all pick these
+            // up with no further special-casing.
+            g_accum[g_accumCount++] = u;
+            ++beyond;
+        }
+    }
+
+    LeaveCriticalSection(&g_lock);
+
+    if (n > 1 || beyond > 0 || refused > 0) {
+        ScLog("BGROUP box: lead=0x%08X type=%u owner=%u flags=0x%08X -> selected %d "
+              "(+%d beyond the cap, %d refused by the liveness gate)",
+              (unsigned)lead, leadType, leadOwner, (unsigned)UnitsDatFlags(leadType),
+              n, beyond, refused);
+    }
+    return (unsigned)n;
+}
+
 static unsigned __attribute__((stdcall)) SC_GAME_ENTRY
 HkSortAllUnits(DWORD* candidates, DWORD* out, DWORD clicked) {
     int candCount = 0;
@@ -1377,9 +1597,11 @@ HkSortAllUnits(DWORD* candidates, DWORD* out, DWORD clicked) {
         while (candidates[candCount] != 0 && candCount < 4096) ++candCount;
     }
     unsigned ret = ((SortAllUnitsFn)g_hkSort.trampoline)(candidates, out, clicked);
-    ScLog("SORT candidates=%d -> selected=%u (accumulated beyond the cap: %d)",
-          candCount, ret, g_accumCount);
-    return ret;
+    unsigned grown = ScFanoutGrowBuildingGroup(candidates, out, clicked, ret);
+    ScLog("SORT candidates=%d -> selected=%u%s (accumulated beyond the cap: %d)",
+          candCount, grown,
+          grown != ret ? " [building group]" : "", g_accumCount);
+    return grown;
 }
 
 // ---------------------------------------------------------------------------
@@ -1431,6 +1653,13 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     // configuration -- it exists so an A/B run can show the defect and so the
     // in-game regression assertion can be shown to be capable of failing.
     g_liveness    = EnvInt("SCPLUGIN_FANOUT_LIVENESS", 1, 0, 1) != 0;
+    // Task 024's same-type building groups. Its own off switch on top of the mode, so
+    // a run can prove the STOCK one-building behaviour with the same binary -- an
+    // "it selected four" assertion is only worth something next to an arm where the
+    // same box selects one.
+    g_buildingGroups = EnvInt("SCPLUGIN_BUILDING_GROUPS", 1, 0, 1) != 0;
+    g_movableFn      = NULL;    // in the game, ask the engine
+    g_simSlots       = SC_SELECTION_SLOTS;
     LoadFanoutCmds();
 
     // Task 014's selection circles. Only in fanout mode -- `shadow` mode's contract is
@@ -1455,9 +1684,10 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
                           i ? " " : "", g_fanoutCmds[i]);
     }
     ScLog("FANOUT config: mode=%s budget=%dB maxUnits=%d logCommands=%d circles=%d "
-          "hudrow=%d liveness=%d cmds=[%s]",
+          "hudrow=%d liveness=%d buildingGroups=%d cmds=[%s]",
           ScModeName(mode), g_budget, g_maxUnits, g_verboseCmds ? 1 : 0,
-          circles ? 1 : 0, hudrow ? 1 : 0, g_liveness ? 1 : 0, cmds);
+          circles ? 1 : 0, hudrow ? 1 : 0, g_liveness ? 1 : 0,
+          g_buildingGroups ? 1 : 0, cmds);
     if (!g_liveness) {
         ScLog("FANOUT WARNING: %%SCPLUGIN_FANOUT_LIVENESS%%=0 -- the emit gate is the "
               "pre-task-020 uniqueness test ALONE. A unit killed by damage will be "
@@ -1548,8 +1778,16 @@ void ScFanoutTestBegin(BYTE* fakeModuleBase, ScQueueFn emit, int budget) {
     g_accumCount = 0;
     g_shadowVersion = 0;
     g_liveness = true;              // the shipped default; [7] flips it explicitly
+    // Task 024. The predicate defaults to "everything is movable" in a test process:
+    // there is no engine code at 0x0047B770 in the fake image, and every pre-existing
+    // part drives the core with ordinary units, so this keeps them byte-identical.
+    // The building-group part overrides it.
+    g_buildingGroups = true;
+    g_movableFn      = &ScTestAllMovable;
+    g_simSlots       = SC_SELECTION_SLOTS;
     g_statStale = 0;
     memset(g_statDrop, 0, sizeof(g_statDrop));
+    memset(g_statBGroupRefused, 0, sizeof(g_statBGroupRefused));
     memset(&g_plan, 0, sizeof(g_plan));
     // Task 021: the shadow control groups are session state, so a test that begins a
     // fresh scenario must not inherit the previous one's groups.
@@ -1588,6 +1826,20 @@ int ScFanoutVisibleCount(void) { return g_visibleCount; }
 // damage-killed unit -- an assertion that cannot fail is not evidence that the fixed
 // one works.
 void ScFanoutTestSetLiveness(bool on) { g_liveness = on; }
+
+// Test-only: supply the movable predicate (task 024). NULL restores "call the engine".
+void ScFanoutTestSetMovable(ScMovablePredicate f) { g_movableFn = (ScMovableFn)f; }
+
+// Test-only: the current chunk size == how many the simulation holds at once.
+int ScFanoutSimSlots(void) { return g_simSlots; }
+
+// Test-only: units the building-group append refused, by reason. Separate from
+// ScFanoutDroppedFor: that one counts units kept off the WIRE, this one counts units
+// kept out of the SELECTION.
+int ScFanoutGroupRefusedFor(int why) {
+    if (why < 0 || why > SC_DROP_NOTAG) return 0;
+    return (int)g_statBGroupRefused[why];
+}
 
 // Test-only: how many units the emit gate has dropped, and how many for `why`.
 int ScFanoutStaleSkipped(void) { return (int)g_statStale; }
@@ -1692,7 +1944,7 @@ void ScFanoutLogUnitStates(const char* tag) {
     WORD     orderKey[32], order2Key[32], typeKey[32];
     unsigned orderCnt[32], order2Cnt[32], typeCnt[32];
     int      orderN = 0, order2N = 0, typeN = 0;
-    int      live = 0, burrowed = 0, uniqOnly = 0;
+    int      live = 0, burrowed = 0, uniqOnly = 0, circled = 0;
     int      orderOverflow = 0, order2Overflow = 0, typeOverflow = 0;
     // Task 022. A cost-bearing ability is a two-sided claim -- every unit gains the
     // effect AND every unit pays -- so the oracle has to carry both halves per unit,
@@ -1704,9 +1956,13 @@ void ScFanoutLogUnitStates(const char* tag) {
     //   stim   CUnit+0x115, set to 0x25 by the 0x36 handler 0x004C2F30 (task 022,
     //          research/ability-semantics.md 2).
     //   energy CUnit+0xA2, the field 0x00491B30 deducts from for the 0x21 family.
-    DWORD    hpKey[32];
-    unsigned hpCnt[32];
+    //   rally  CUnit+0xF8/+0xFA packed (x << 16) | y -- a building's rally point, the
+    //          one order a plain right-click gives a building (task 024). 32-bit for
+    //          the same reason: two 16-bit map coordinates do not fit a WORD key.
+    DWORD    hpKey[32], rallyKey[32];
+    unsigned hpCnt[32], rallyCnt[32];
     int      hpN = 0, hpOverflow = 0;
+    int      rallyN = 0, rallyOverflow = 0;
     WORD     stimKey[32], energyKey[32];
     unsigned stimCnt[32], energyCnt[32];
     int      stimN = 0, energyN = 0, stimOverflow = 0, energyOverflow = 0;
@@ -1773,6 +2029,14 @@ void ScFanoutLogUnitStates(const char* tag) {
         ++live;
         DWORD flags = *(DWORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_FLAGS);
         if (flags & SC_UNIT_FLAG_BURROWED) ++burrowed;
+        // Task 024: does this unit have a SELECTION CIRCLE right now? Sprite flag 0x01
+        // means "a circle image (0x231..0x23A) is attached to this sprite" -- the engine
+        // sets it for the units it selected and sc_circles sets it for the ones past the
+        // cap, so ONE count covers both and a >12 building group can assert that every
+        // building is circled rather than only that our own share of them is. The unit
+        // passed UnitLive above, so its sprite pointer is non-NULL.
+        if (*(BYTE*)(*(DWORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_SPRITE) + SC_CSPRITE_OFF_FLAGS)
+                & SC_SPRITE_FLAG_SEL_CIRCLE) ++circled;
         BYTE stim = *(BYTE*)(g_shadow[i].ptr + SC_CUNIT_OFF_STIM_TIMER);
         if (stim) ++stimmed;
         Hist32::Add(*(DWORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_HITPOINTS),
@@ -1786,6 +2050,14 @@ void ScFanoutLogUnitStates(const char* tag) {
                   order2Key, order2Cnt, &order2N, 32, &order2Overflow);
         Hist::Add(*(WORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_UNIT_ID),
                   typeKey, typeCnt, &typeN, 32, &typeOverflow);
+        // Task 024: the RALLY POINT, packed (x << 16) | y so one histogram bucket
+        // means "every one of these units is rallied to the same map point". That is
+        // the oracle for "a building-valid order reached all N": the Right Click
+        // applier 0x004560D0 writes CUnit+0xF8/+0xFA per building, and a fan-out that
+        // reached only some of them shows up as two buckets, not as a smaller total.
+        Hist32::Add(((DWORD)*(WORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_RALLY_X) << 16) |
+                    (DWORD)*(WORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_RALLY_Y),
+                    rallyKey, rallyCnt, &rallyN, 32, &rallyOverflow);
     }
 
     char orders[256], orders2[256], types[256];
@@ -1796,9 +2068,11 @@ void ScFanoutLogUnitStates(const char* tag) {
     used = Hist::Format(types, (int)sizeof(types), typeKey, typeCnt, typeN);
     if (typeOverflow) _snprintf(types + used, sizeof(types) - used, " +%d-more", typeOverflow);
 
-    char hp[320], stims[256], energies[256];
+    char hp[320], stims[256], energies[256], rally[320];
     used = Hist32::Format(hp, (int)sizeof(hp), hpKey, hpCnt, hpN);
     if (hpOverflow) _snprintf(hp + used, sizeof(hp) - used, " +%d-more", hpOverflow);
+    used = Hist32::Format(rally, (int)sizeof(rally), rallyKey, rallyCnt, rallyN);
+    if (rallyOverflow) _snprintf(rally + used, sizeof(rally) - used, " +%d-more", rallyOverflow);
     used = Hist::Format(stims, (int)sizeof(stims), stimKey, stimCnt, stimN);
     if (stimOverflow) _snprintf(stims + used, sizeof(stims) - used, " +%d-more", stimOverflow);
     used = Hist::Format(energies, (int)sizeof(energies), energyKey, energyCnt, energyN);
@@ -1810,12 +2084,12 @@ void ScFanoutLogUnitStates(const char* tag) {
     ScLog("UNITSTATE [%s] n=%d live=%d visible=%d overflow=%d orders=[%s] orders2=[%s] "
           "types=[%s] burrowed=%d/%d uniqOnly=%d recycled=%d hp0=%d foreign=%d "
           "nosprite=%d removed=%d staleSkipped=%u liveness=%d stimmed=%d/%d "
-          "hp=[%s] stim=[%s] energy=[%s]",
+          "hp=[%s] stim=[%s] energy=[%s] simSlots=%d rally=[%s] circled=%d/%d",
           tag ? tag : "-", g_shadowCount, live, g_visibleCount,
           g_shadowCount - g_visibleCount, orders, orders2, types, burrowed, live,
           uniqOnly, why[SC_DROP_RECYCLED], why[SC_DROP_DEAD], why[SC_DROP_FOREIGN],
           why[SC_DROP_NOSPRITE], why[SC_DROP_REMOVED], g_statStale, g_liveness ? 1 : 0,
-          stimmed, live, hp, stims, energies);
+          stimmed, live, hp, stims, energies, g_simSlots, rally, circled, live);
 
     LeaveCriticalSection(&g_lock);
 }

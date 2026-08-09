@@ -248,6 +248,20 @@ static int CountPlayerUnits(int p, bool* ok) {
 static void ScanWorld(const char* tag) {
     if (!g_worldScan) return;
 
+    // THE VIEWPORT, first, so a reader can turn every pos=(x,y) below into a CLIENT
+    // coordinate: client = map - origin. Without it a script driving the mouse has to
+    // guess where the camera is, and a drag box aimed by guesswork picks up whatever
+    // else happens to be on screen -- which is how task 024's first in-game run boxed
+    // two blocks at once and got the other one's building. The two globals are the ones
+    // the engine's own click handler 0x0046FB40 builds its search rectangle from
+    // (sc_addresses.h); read-only, and read here rather than hooked.
+    {
+        unsigned left = 0xFFFF, top = 0xFFFF;
+        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_SCREEN_LEFT), &left);
+        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_SCREEN_TOP), &top);
+        ScLog("WORLD [%s] screen=(%u,%u)", tag ? tag : "-", left, top);
+    }
+
     // EVERY player, including the empty ones, and player 7 last. A reader waits for
     // the p=7 summary to know the whole scan for this marker has landed; skipping
     // empty players would make that signal depend on which slots happen to own units.

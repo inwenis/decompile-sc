@@ -308,6 +308,60 @@
 // selection-cap.md 4.1, command-path.md 3.
 #define SC_VA_SORT_ALL_UNITS 0x0046F0F0u
 
+// ---------------------------------------------------------------------------
+// THE BOX-SELECT BUILDING GATE -- derived by task 024 from StarCraft.exe 1.16.1
+// itself. Full evidence, with both listings, in research/building-groups.md.
+// ---------------------------------------------------------------------------
+
+// ECX = CUnit*, no stack arguments, returns EAX (0/1), RET. THE multi-select gate:
+// it is the reason a drag box over six Supply Depots selects one of them. It is
+// called from BOTH sides of the selection path and each call is a separate gate:
+//
+//   client  SortAllUnits 0x0046F0F0:  `CALL 0x0047b770` at 0x0046F1A3, `JZ 0x0046F223`
+//           -- a unit that fails is never stored in out12; 0x0046F223 remembers it
+//           instead, and the function tail (0x0046F248 JNZ / 0x0046F27A..0x0046F281)
+//           substitutes that ONE remembered unit and returns a count of 1 when
+//           nothing else was accepted.
+//   sim     addUnitToSelectionSlot 0x0049AF80: `CALL 0x0047b770` at 0x0049AF9D,
+//           reached only when the slot (EBX) is > 0 -- so slot 0 takes anything and
+//           every later slot must pass. CMDRECV_Select calls it at 0x004C2801 with
+//           EBX = how many units it has accepted so far (INC EBX at 0x004C2810).
+//
+// The predicate itself, decompiled (this closes selection-cap.md 8 q9): it FAILS on
+// unitsDatFlags[unitId] & 0x01 (Building) or & 0x800, on CUnit+0xDC & 0x400, on a
+// non-zero CUnit+0x117 / +0x119 / +0x124, and on unit ids 0x0D, 0x24, 0x59, 0x5A,
+// 0x5D..0x60, 0x69, 0xCA and 0xCB..0xD5.
+//
+// The plugin CALLS it (read-only) and never patches it: this is the engine's own
+// answer to "may this unit share a selection", so asking it is exactly right, and
+// re-implementing the predicate would be a second copy to keep in step.
+#define SC_VA_UNIT_IS_STANDARD_AND_MOVABLE 0x0047B770u
+
+// u32[], indexed by the unit TYPE id (CUnit+0x64) -- units.dat's unit-prototype
+// flags. Both selection functions index it the same way: `TEST byte ptr
+// [ECX*0x4 + 0x664080],0x10` at 0x0046F138 (the subunit flag, which makes
+// SortAllUnits follow CUnit+0x70 to the parent) and `DAT_00664080 + unitId*4` inside
+// 0x0047B770 itself. Bit 0x01 is the one that makes a building fail the gate; the
+// plugin only READS it, to log the flags of the type it grouped so a run's evidence
+// says WHICH bit refused the unit rather than asserting the table's identity.
+#define SC_VA_UNITS_DAT_FLAGS 0x00664080u
+#define SC_UNITSDAT_FLAG_BUILDING      0x00000001u
+#define SC_UNITSDAT_FLAG_SINGLE_ENTITY 0x00000800u
+
+// A building's RALLY POINT, written by the Right Click applier 0x004560D0 in the
+// branch its per-type behaviour table selects for a building (the `0x27` case):
+//
+//     *(int*)(unit + 0xFC) = target ? target : unit;
+//     *(u16*)(unit + 0xF8) = target->sprite->x;      // CSprite+0x14
+//     *(u16*)(unit + 0xFA) = target->sprite->y;      // CSprite+0x16
+//
+// READ ONLY here. This is the in-process oracle for "the order reached this
+// building": a rally is the one order a building accepts from a plain right-click,
+// and it lands in fields the plugin can read back per unit.
+#define SC_CUNIT_OFF_RALLY_X    0xF8u
+#define SC_CUNIT_OFF_RALLY_Y    0xFAu
+#define SC_CUNIT_OFF_RALLY_UNIT 0xFCu
+
 // Mixed convention: EAX = current count, ECX = CUnit** out12,
 // stack [+4] = CUnit* unit, [+8] = CUnit* clicked, RET 8.
 // Called once for EVERY unit that passed all selection filters but did not fit in
