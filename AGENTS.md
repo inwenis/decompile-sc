@@ -50,6 +50,23 @@ state bits), not a screenshot of it. Frames are corroboration for "did it visibl
 all", never the measurement. Same lesson the folder-row "flake" taught: what looks visual is
 usually a readable structure underneath.
 
+## A player-input feature is unproven until the wire has been watched (2026-08-09, task 025)
+
+If a feature begins with a player input — a click, a hotkey, a button on the command card —
+an offline proof of your logic can be confidently, completely wrong. The client may never
+send the command you are handling.
+
+Task 025 built over-cap production queueing against a receive-side handler, and every
+offline test passed. In game the queue never grew: pressing Train twelve times put exactly
+FIVE commands on the wire and then nothing, because the client greys its own button out and
+refuses to send a sixth. The handler was waiting for a command that does not exist. The
+whole design had to be inverted (keep the engine's ring below its cap so the button stays
+lit) — and only a real run showed it.
+
+So: for anything that starts with player input, watch the engine's command funnel
+(`queueCommand` 0x00485BD0) in a real game BEFORE trusting your handler. Offline tests
+prove your code does what you meant; only the wire proves the game asks it to.
+
 ## Absence assertions must first be proved positive (2026-08-09)
 
 An assertion that something is ABSENT is worth nothing until the same pattern has been shown to
