@@ -1,4 +1,4 @@
-# StarCraft 1.16.1 plugin — observer (008), command fan-out (011), selection circles (014)
+# StarCraft 1.16.1 plugin — observer (008), command fan-out (011), selection circles (014), production queue (025)
 
 Our own code, running inside StarCraft 1.16.1.
 
@@ -15,6 +15,12 @@ every unit obeys. Design evidence: [`research/command-path.md`](../../research/c
 image to every unit the cap threw away, so 24 box-selected units show 24 circles instead of 12.
 Design evidence: [`research/selection-circles.md`](../../research/selection-circles.md).
 
+**Task 025** added a feature with nothing to do with selection: a building can hold **more than
+five queued items**. The engine's queue is a five-slot ring inside the `CUnit` and the 5 is a
+literal in six functions, so it is not widened — the plugin holds the tail itself and feeds the
+engine's five as slots free. Design evidence:
+[`research/production-queue.md`](../../research/production-queue.md).
+
 | | |
 |---|---|
 | Plugin | `scplugin.dll` — 32-bit, injected into StarCraft.exe |
@@ -22,7 +28,7 @@ Design evidence: [`research/selection-circles.md`](../../research/selection-circ
 | Detour test | `hooktest.exe` — offline unit test for the hook engine; no game involved |
 | Files added to the game directory | **none** by the injection path — the deprecated [`-Windowed`](#windowed-mode-injected-not-proxied) switch is the one exception, and it writes `ddraw.dll` |
 | Writes to `StarCraft.exe` on disk | **never**, in any mode |
-| Writes to game *memory* | **only** in `-Mode hooktest/shadow/fanout`; never in the default `observe` |
+| Writes to game *memory* | **only** in `-Mode hooktest/shadow/fanout`; never in the default `observe`. The production queue additionally needs `-ProdQueue 1` and is ignored outright in `observe` |
 
 ---
 
@@ -315,6 +321,76 @@ circle *with* a bar is one of the engine's 12, circle *without* is one of ours.
 | Recent-selection ring | each emitted `Select` pushes an entry into the engine's alt-click recent-selection groups |
 | Replays | every emitted command is vanilla-shaped, so a replay still parses; but one human intent appears as several `Select`+order pairs, and a very large selection can still exceed the 255-byte frame block if the budget is raised |
 | Multiplayer | never. Offline single-player only, per the project's hard rules |
+
+---
+
+## Production queue: more than five queued units (task 025)
+
+`-ProdQueue 1` (default off). Full derivation, with the disassembly, in
+[`research/production-queue.md`](../../research/production-queue.md).
+
+**Why not just widen the array.** The queue is `u16 buildQueue[5]` at `CUnit+0x98` with the head
+byte at `+0xA4`. Its ten bytes end at `0xA1` and `0xA2` is the energy field task 022 evidenced —
+there is no slack. And the 5 is a literal in six functions, including `countTypeInQueue`
+(`0x00466B70`), which is **unrolled five times** with no loop at all, plus two more five-element
+mirror arrays hanging off the building AI. Both halves of the task-021 test fail, so the array is
+left exactly as the engine made it.
+
+**What happens instead: the ring is kept one item BELOW five.** The client will not send a sixth
+Train command — measured on the engine's own command funnel, five `CMD id=0x1F` at the press
+cadence and then silence for seven more presses, with the Train button drawn dark. So there is no
+over-cap command to catch, and the plugin works the other way round: after every accept it takes
+the **newest** item straight back out of the ring, and it gives a freed slot to the **oldest** item
+it holds. The button never goes dark, so every press keeps reaching the wire. Three detours:
+
+| detour | what it does |
+|---|---|
+| `cmdrecvTrain` `0x004C1C20` | the engine has just accepted and paid; rebalance before the player can press again |
+| `productionTick` `0x00468420` | the frame a slot frees, the oldest held item goes into it |
+| `cmdrecvCancelTrain` `0x004C0100` | a "cancel the last queued item" belongs to whoever holds the tail |
+
+**The engine pays for everything and the plugin pays for nothing.** Every item enters through
+`addToBuildQueue` (`0x00467250`), which is where affordability is checked and the cost deducted —
+so an item the player cannot afford never reaches the plugin at all, and "paid exactly once" is
+the only thing that can happen rather than a discipline to maintain. Moving an item out of the
+ring and back in are bare `buildQueue[slot] = type` stores. The plugin's only resource write is
+the **refund**, for an item destroyed while it is holding it (an explicit cancel, the building
+dying, the plugin unloading), out of the same two per-type cost tables (`0x00663888` minerals,
+`0x0065FD00` gas) and gated on the same units.dat flag byte the engine's own refund
+(`0x0042CEC0`) uses. Its `mineralsSpent` counter is asserted to stay `0`.
+
+**The cap is vanilla's own.** At `-ProdQueueMax` the plugin stops taking items back, the ring
+fills to five, and the client greys the button out exactly as it does in a stock game.
+
+`-ProdQueueMax N` sets the total logical length, the engine's five included; default 16, clamped
+to `[5, 24]`. The reasoning for 16 is in the research doc §5.4 — it is bounded by what a player
+can afford to lose to one raid, not by memory.
+
+### What the log says
+
+```
+PRODQ config: enabled max=16 (engine keeps its 5, plugin holds up to 11 per building, 32 buildings)
+PRODQEV hold     unit=0x… type=0x007 <- slot=4 engineLen=4 overflow=1 logical=5
+PRODQEV promote  unit=0x… type=0x007 -> slot=0 overflowLeft=0
+PRODQEV cancel-last unit=0x… type=0x007 overflowLeft=0 back=50/0
+PRODQSEL [tag] unit=0x… type=0x06A … engineLen=5 engine=[0x007,0x007,0x007,0x007,0x007] overflow=4 logical=9 minerals=2550 gas=1000
+PRODQ    [tag] buildings=1 max=9 captured=4 promoted=0 cancelled=0 refunded=0 refusedFull=3 refusedCost=0
+```
+
+`PRODQSEL`/`PRODQ` are written on every marker, **including when nothing is tracked** — an absence
+has to be positively reported or "the plugin is holding nothing" and "the oracle did not run" are
+the same observation. `engine=[…]` is read straight out of `CUnit+0x98`, which is what lets a test
+assert a queue length from the building's own memory instead of from the status area.
+
+### Known limitations
+
+| | |
+|---|---|
+| The status area still draws five icons | items 6..N are real, paid for and will be built, but they are not on screen. The engine's five are always five *true* entries — the next five this building will build — so nothing shown is wrong, only incomplete. Extending the production panel is the obvious follow-up |
+| Train (`0x1F`) only | Unit Morph (`0x23`), Train Fighter (`0x27`) and Building Morph (`0x35`) keep vanilla's five |
+| A one-frame ordering window | if a slot frees in the same frame a Train command is processed, the engine can take that slot ahead of an older held item. Nothing is lost or double-paid; only the relative order of two items queued within a frame of each other can differ |
+| Refund latency for a destroyed building | the cheap liveness terms run every tick; the player-unit-list walk runs on Train/Cancel commands, so a building destroyed while the player is idle is refunded on their next click |
+| Multiplayer | never — it moves a player's resources outside the command stream |
 
 ---
 
@@ -676,7 +752,8 @@ The one exception is the deprecated `-Windowed` switch, which *does* write
 | `src/sc_hook.h/.cpp` | the inline-detour engine — prologue check, trampoline, thread suspension |
 | `src/sc_fanout.h/.cpp` | the shadow selection and the fan-out |
 | `src/sc_circles.h/.cpp` | task 014's selection circles: one hook, two engine calls, and the reasoning for never touching `selectionIndex` |
-| `src/hooktest.cpp` | offline unit tests for the detour engine, the fan-out core and the circles (`build.ps1 -Test`) |
+| `src/sc_prodqueue.h/.cpp` | task 025's production queue: three detours, a per-building overflow list, the ring kept one below five so the client keeps sending, and the engine left as the only payer |
+| `src/hooktest.cpp` | offline unit tests for the detour engine, the fan-out core, the circles and the production queue (`build.ps1 -Test`) |
 | `src/scinject.cpp` | the 32-bit launcher/injector |
 | `build.ps1` | build + PE machine-type gate (+ `-Test`) |
 | `run-with-plugin.ps1` | launch wrapper (+ windowed shim helper, + dialog check, + `-Mode`) |
@@ -688,6 +765,7 @@ The one exception is the deprecated `-Windowed` switch, which *does* write
 | `test-ability-in-combat.ps1` | **unattended** PLUGIN-vs-STOCK test (task 022): >12 units mid-fight, one ability used once, every unit's order compared across it. Answers "do our replayed Selects interrupt orders that are already running". `-Ability stim` (default, 36 Marines, key `T`) or `-Ability cloak` (task 026: 36 GHOSTS, the user's own unit, clicked on the Cloak card slot located in the live card by its Button action) |
 | `test-sunken-acquire.ps1` | **unattended** PLUGIN-vs-STOCK test (task 022): does a Sunken Colony attack a Medic that walks into range? Same map in both modes, plus a Marine arm as the control that the Sunken can shoot from there at all |
 | `test-control-groups.ps1` | **unattended** end-to-end test of task 021: boxes 36, Ctrl+1, clears the selection, presses 1, and asserts all 36 come back with the engine still holding 12 — then that one order reaches all 36. Also checks the recall's ordering assumption against the live `activePlayerSelection`, the HUD row and circles across a recall, Shift+1, and a recall over an already-active >12 selection |
+| `test-production-queue.ps1` | **unattended** end-to-end test of task 025: generates a one-Command-Center map with starting resources, presses Train more times than the queue can hold, and asserts the queue length out of `CUnit+0x98`, the per-item promotions, and that minerals move exactly once per item |
 | `check-game-windows.ps1` | out-of-process launch health check |
 | `close-game.ps1` | WM_CLOSE the game and verify it exited (hard rule: never leave one running) |
 
@@ -704,6 +782,7 @@ The one exception is the deprecated `-Windowed` switch, which *does* write
 ./tools/plugin/test-sunken-acquire.ps1               # plugin vs stock: does a Sunken shoot a Medic
 ./tools/plugin/test-control-groups.ps1               # Ctrl+1 stores 36, pressing 1 brings 36 back
 ./tools/plugin/test-combat-death.ps1                 # the liveness gate, and a >12 group across deaths
+./tools/plugin/test-production-queue.ps1             # more than 5 queued at one building, paid once
 ```
 
 `test-burrow-fanout.ps1` is the one that needs no stock map: no `.scm`/`.scx` Blizzard shipped can

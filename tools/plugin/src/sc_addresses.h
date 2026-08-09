@@ -521,6 +521,131 @@
 #define SC_CUNIT_OFF_LIST_NEXT 0x6Cu
 #define SC_MAX_UNITS_WALK      2000   // loop bound: never trust a game list to terminate
 
+// ---------------------------------------------------------------------------
+// PRODUCTION QUEUE -- derived by task 025 from StarCraft.exe 1.16.1 itself.
+// Full evidence, with disassembly, in research/production-queue.md; the committed
+// instruction tables are research/data/production-queue-fields.tsv (FieldSweep over
+// displacements 0x98 and 0xA4) and research/data/production-cap-sites.tsv
+// (ImmediateSweep over the fifteen functions that touch the queue). Nothing in this
+// block is inherited from public prior art without being re-derived here.
+//
+// New addresses go at the END of this file on purpose: task 024 is editing the same
+// header concurrently, and appending keeps the conflict surface to one hunk.
+// ---------------------------------------------------------------------------
+
+// u16[5] -- the building's production queue, a RING BUFFER whose head is the byte at
+// +0xA4. Read out of `addToBuildQueue`'s own store,
+//     0046729b  MOV word ptr [EDI + ECX*0x2 + 0x98],AX
+// and confirmed structurally by the clear in `cancelAllAndClearQueue` (0x00466E80),
+// which writes exactly ten bytes -- `[+0x98]=0xE400E4`, `[+0x9C]=0xE400E4`,
+// `word [+0xA0]=0xE4` -- i.e. five u16 slots ending at 0xA1, hard against the energy
+// field already evidenced at 0xA2. There is no slack to widen into.
+#define SC_CUNIT_OFF_BUILD_QUEUE      0x98u
+#define SC_BUILD_QUEUE_SLOTS          5
+
+// u8 -- which slot is the HEAD (the item currently being built). Every reader indexes
+// `buildQueue[(head + i) % 5]`; `findFreeBuildQueueSlot` starts its scan here.
+#define SC_CUNIT_OFF_BUILD_QUEUE_SLOT 0xA4u
+
+// The EMPTY sentinel written into a slot that holds nothing. Nine separate
+// instructions in this binary store exactly this value into the array
+// (production-queue-fields.tsv, the 0x98 writes) and every reader tests against it.
+// 228 is also one past the last real units.dat id, which is why it is safe as a
+// sentinel.
+#define SC_BUILD_QUEUE_EMPTY          0xE4u
+
+// The unit-type bound the Train handler itself applies before it will queue anything:
+//     004c1c55  MOV AX,word ptr [EDI + 0x1]      ; the command's u16 payload
+//     ...       CMP AX,0x6a / JNC skip
+// The plugin uses the same bound, so it can never hold a type the engine would refuse.
+#define SC_MAX_TRAINABLE_UNIT_ID      0x6Au
+
+// u8 -- the production state machine's own state byte, driven by the tick below:
+// 0/1 = "start the head item", 2 = "an item is in progress", 3/4 = idle.
+#define SC_CUNIT_OFF_BUILD_STATE      0xE2u
+// CUnit* -- the incomplete unit the head item is currently building (0 when none).
+#define SC_CUNIT_OFF_BUILD_UNIT       0xECu
+// void* -- the unit's AI record. When it exists AND its [+8] is 3 (a building AI), the
+// cancel/compaction paths mirror the queue into u8[5] at ai+9 and u32[5] at ai+0x18.
+// The plugin never touches it; it is recorded because those mirrors are a second,
+// independent place the 5 is baked in.
+#define SC_CUNIT_OFF_AI               0x134u
+
+// __stdcall(u16 unitType) with EDI = CUnit*, RET 4, returns 1 on success and 0 when the
+// queue is full. THE enqueue: it calls findFreeBuildQueueSlot, and a returned 5 -- the
+// "no free slot" sentinel -- is the whole of the cap:
+//     00467256  CALL 0x004669b0
+//     0046725b  CMP EAX,0x5
+//     00467261  JZ  0x0046728a      ; -> XOR EAX,EAX / RET 4
+// It is also where a queued item is PAID FOR, exactly once, at 0x004672AD..0x004672D6.
+#define SC_VA_ADD_TO_BUILD_QUEUE      0x00467250u
+
+// EDX = CUnit*, returns EAX = the free slot index, or 5 when there is none. Thirteen
+// instructions, and the 5 is written into three of them (loop count, wrap bound, and
+// the sentinel). The plugin re-implements this rather than calling it -- see
+// sc_prodqueue.cpp -- but the address is what the re-implementation is checked against.
+#define SC_VA_FIND_FREE_QUEUE_SLOT    0x004669B0u
+
+// EAX = display index 0..4, EDI = CUnit*. Cancels one queued item: refunds it (through
+// 0x00468280 for the in-progress head, 0x0042CEC0 otherwise) and compacts the ring.
+#define SC_VA_CANCEL_QUEUE_SLOT       0x00466A70u
+// EAX = CUnit*. Walks display indices 4..0 and cancels the LAST occupied one. This is
+// what wire command 0x20 with payload 0xFE reaches.
+#define SC_VA_CANCEL_LAST_QUEUED      0x00466E40u
+// EAX = CUnit*. Cancels (and refunds) all five, then clears the array and the head.
+// Reached from the unit-removal path 0x0049FD00 -- which is the evidence that vanilla
+// REFUNDS a destroyed building's whole queue rather than losing it.
+#define SC_VA_CANCEL_ALL_AND_CLEAR    0x00466E80u
+// ECX = CUnit*, EDI = unit type. "How many of this type are queued" -- and it is
+// UNROLLED FIVE TIMES, one `(head + k) % 5` test per slot. The single clearest proof
+// that this code is not bounds-driven.
+#define SC_VA_COUNT_TYPE_IN_QUEUE     0x00466B70u
+
+// EAX = CUnit*. The secondary-order handler for production, dispatched every frame from
+// the jump table in 0x004EC170 while the building's secondary order is train. It
+// finishes the head item, clears its slot and advances the head `(head + 1) % 5`. The
+// plugin post-hooks it: the frame a slot frees is the frame an overflow item is promoted.
+#define SC_VA_PRODUCTION_TICK         0x00468420u
+
+// EAX = const u8* cmd. The receive-side handler for wire command 0x1F (Train).
+#define SC_VA_CMDRECV_TRAIN           0x004C1C20u
+// __stdcall(const u8* cmd), RET 4. The receive-side handler for 0x20 (Cancel Train).
+// Payload u16: 0xFE = cancel the last queued item, 0xFF = do nothing, else = the
+// display index to cancel.
+#define SC_VA_CMDRECV_CANCEL_TRAIN    0x004C0100u
+#define SC_CANCEL_TRAIN_LAST          0xFEu
+#define SC_CANCEL_TRAIN_NONE          0xFFu
+
+// Wire ids for the production opcodes, from research/data/command-opcodes.tsv.
+#define SC_CMD_TRAIN                  0x1Fu
+#define SC_CMD_CANCEL_TRAIN           0x20u
+
+// The two per-unit-type cost tables, u16 indexed by units.dat id. Named here from
+// setPendingCost (0x0042D140), which loads both and stashes them per player:
+//     0042d149  MOVZX EDI,word ptr [EAX + 0x663888]      ; EAX = type*2  -> minerals
+//     0042d150  MOVZX EAX,word ptr [EAX + 0x65fd00]      ;               -> gas
+// and again from refundByType (0x0042CEC0), which adds the SAME two entries back. A
+// plugin that spends and refunds out of these tables is arithmetically identical to
+// the engine's own pair.
+#define SC_VA_UNIT_MINERAL_COST       0x00663888u
+#define SC_VA_UNIT_GAS_COST           0x0065FD00u
+
+// The two per-player resource counters, u32 indexed by CUnit+0x4C. Same two functions:
+//     004672b4  MOV EDX,dword ptr [EAX + 0x57f0f0]   ; EAX = player*4
+//     004672c2  MOV dword ptr [EAX + 0x57f0f0],EDX
+// with 0x0057F120 the gas counterpart. research/command-opcodes.md 3.3 already quoted
+// this pair as "the spend"; task 025 re-read it out of the enqueue itself.
+#define SC_VA_PLAYER_MINERALS         0x0057F0F0u
+#define SC_VA_PLAYER_GAS              0x0057F120u
+
+// units.dat flag byte at [type*4]. Bit 0 set means the enqueue moves NO resources:
+//     004672a3  TEST byte ptr [EDX*0x4 + 0x664080],0x1
+//     004672ab  JNZ  0x004672dc                       ; skip the deduction
+// The cancel path 0x00466A70 tests the identical byte before refunding, so honouring it
+// is what keeps spend and refund symmetric.
+#define SC_VA_UNIT_COST_FLAGS         0x00664080u
+#define SC_UNIT_COST_FLAG_NO_SPEND    0x01u
+
 // The engine's list of ACTIVE dialogs (task 027). Head pointer; each entry is a
 // BinDlg, threaded on the same +0x00 "next" link every dialog walk in this file uses.
 //

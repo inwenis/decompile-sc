@@ -39,28 +39,6 @@ and TOOLING, not redistributed game content.
    something seems missing, ask the user. (Sole exception: `./run.ps1`,
    which the USER launches to serve the Agent Console UI.)
 
-## Read a dialog's content from memory, not from its pixels (2026-08-09, task 026)
-
-A frame-region hash is NOT a reliable oracle for what a dialog shows. Task 023 concluded a
-researched fixture "drew a different command card" from two differing region fingerprints;
-task 026's read of the card's own slot table showed both fixtures identical — the hash was a
-false positive. When a claim is about UI CONTENT (which button, which slot, enabled vs greyed),
-read the structure out of process memory (the control array, the statUser records, the button's
-state bits), not a screenshot of it. Frames are corroboration for "did it visibly render at
-all", never the measurement. Same lesson the folder-row "flake" taught: what looks visual is
-usually a readable structure underneath.
-
-The point is the ORACLE, not the outcome: once the fixture bug was fixed, the two slot tables
-really did differ (slot 7 greyed vs enabled) — and the read said *which slot and in which
-state*, which is the thing a hash can never say however it comes out.
-
-**The same rule applied to itself.** A read is only an oracle if it cannot be changed by the
-act it is measuring. Task 026's probe named the Cloak slot by its Cloak action, then cloaked
-the Ghost — flipping the slot to its Decloak face — and reported "no Cloak button on the card".
-So: take the read BEFORE the action as well as after, and make the verifier something other
-than the thing that acts. This repo has now met that shape five times; `research/command-card.md`
-§6.4 lists them.
-
 ## Absence assertions must first be proved positive (2026-08-09)
 
 An assertion that something is ABSENT is worth nothing until the same pattern has been shown to
@@ -93,6 +71,24 @@ own indexing verifies nothing. `make_test_map.py` wrote PTEx tech-major and read
 while the engine reads it player-major, so its validator printed
 `PTEx: player 0 has researched 10(...)` for maps on which player 0 had researched nothing. **Check
 a fixture in the engine's memory, not in the generator's read-back.**
+
+**The point is the ORACLE, not the outcome.** Once that fixture bug was fixed, the two slot tables
+really did differ — slot 7 greyed without the tech, enabled with it. The read still wins, because
+it says *which slot and in which state*, which is what a hash cannot say however it comes out.
+
+**And the rule applies to itself: a read is only an oracle if the act being measured cannot change
+it.** Task 026's probe named the Cloak slot by its Cloak *action*, then cloaked the Ghost — which
+flips that slot to its Decloak face — and duly reported "no Cloak button on the card". A false
+negative manufactured by its own success. So take the read BEFORE the action as well as after, and
+make the verifier something other than the thing that acts. This project has now met that shape
+five times over; `research/command-card.md` §6.4 tabulates them.
+
+**One more, from the same task, about measurement windows rather than reads.** When a target
+building died inside a two-second measurement window, every unit shooting it dropped to idle at
+once — bit-for-bit the signature the experiment was looking for, and three times more likely in the
+treatment arm than the control arm *because the feature under test worked*. A confound correlated
+with the arm, pointing at the conclusion, is the one to design out rather than tolerate: fix the
+fixture so it cannot happen, AND gate the run so a window in which it happened cannot be published.
 
 ## Never click a map-browser row by number (hard rule, 2026-08-09, task 023)
 
@@ -299,6 +295,32 @@ clears it. Never hand-write `merged:` — close-task.ps1 stamps it.
 Flow: cut → spawn → monitor (derived status + conductor inbox) → review
 (MANDATORY GATE: no unreviewed change merges; check acceptance criteria
 yourself, do not trust the worker's word) → merge → close.
+
+### Never stop an agent without checking for an in-flight game (2026-08-09 incident)
+
+`stop-agent.ps1` kills the agent's process tree. It does NOT kill a
+StarCraft the agent launched — the game outlives its driver, keeps the
+launch lock, and blocks EVERY other worker until someone notices.
+
+This happened: task 024 messaged "ready for merge", started one last
+regression run six seconds later, and the conductor stopped it mid-run.
+The orphaned game held the machine for ~18 minutes while two workers
+queued behind it, one of them prepared to wait 90.
+
+Before `stop-agent.ps1`, ALWAYS:
+
+1. `Get-Process StarCraft` — if one is running, do not stop the agent yet.
+2. "Ready for merge" does NOT mean "idle". A worker may start verification
+   runs after reporting. Ask it to confirm it is idle, or merge first and
+   stop it when it acknowledges.
+3. After stopping, re-check for a surviving game and for a
+   `C:\sc-work\logs\sc-launch.lock` naming a dead pid.
+
+Killing an orphan is allowed ONLY with positive proof it is orphaned — a
+dead parent, a test output file that has stopped growing, and a lock file
+naming a dead pid. Otherwise the standing rule holds: another worker's
+game is another worker's run, and workers must never kill one themselves
+(ask the conductor).
 
 ## Spawning workers
 
