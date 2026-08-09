@@ -39,6 +39,18 @@ and TOOLING, not redistributed game content.
    something seems missing, ask the user. (Sole exception: `./run.ps1`,
    which the USER launches to serve the Agent Console UI.)
 
+## Screenshots vs hard rule 1 (settled)
+
+The global rule "visual change → screenshot → `pr-image`" does NOT apply to game frames.
+`pr-image` pushes to a branch in this repo, and a game frame reproduces game artwork,
+which hard rule 1 forbids. Hard rule 1 wins — always, without asking.
+
+Instead: prove visual claims with the in-process read-back oracles (`CIRCLES show:`,
+`HUDROW show n=… page=…`, `UNITSTATE`), describe the appearance in the PR body, and keep
+frames on the gitignored diagnostic path for the conductor or user to open locally.
+Workers have correctly declined the screenshot twice (tasks 016, 021); this section exists
+so nobody has to weigh it a third time.
+
 ## Layout
 
 - `work/` — orchestration DATA.
