@@ -90,6 +90,16 @@ Check with the conductor first; if either is still open, say so and wait.
    refused for a background process and lies about it). Consolidate it so EVERY input primitive
    that depends on a move — drag, minimap click, dropdown — goes through it, not just the dropdown.
 
+## Third small item: two suites generate the SAME fixture name
+
+`test-burrow-fanout.ps1` and `test-hud-row.ps1` both generate `lurkers.scx`. That makes
+"delete only your own file" ambiguous between them and blocked a run outright (022, 2026-08-09)
+when one held the other's file open. Give every suite a distinct fixture name — the suite's own
+name is the obvious choice — so ownership is decidable from the filename alone. Related: an
+orphaned `probe.scx` from a stopped task blocked another worker for minutes because nothing
+cleans up after a killed agent; consider whether the per-task folder convention plus a
+conductor-side sweep is enough, or whether suites should adopt their own strays on startup.
+
 ## Second small item: the "CIRCLES stats line on detach" failure
 
 Two tasks investigated this independently and their findings COMBINE into a full diagnosis —
