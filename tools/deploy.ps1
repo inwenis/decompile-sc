@@ -45,8 +45,12 @@ What it does, in order:
      See "Design: self-contained, not a thin repo pointer" below.
   8. Writes <DeployRoot>\Launch-StarCraft-Modded.ps1, a launcher with zero parameters
      that calls the deployed copy of run-with-plugin.ps1 with the feature set baked in:
-     -Mode fanout -InjectWindowedHelper WMode -Circles 1 -HudRow 1 -Sound -NoLaunchLock
-     (fanout + selection circles + HUD row paging, windowed, audible, and structurally
+     -Mode fanout -InjectWindowedHelper WMode -Circles 1 -HudRow 1 -ProdQueue 1
+     -Sound -NoLaunchLock
+     (fanout + selection circles + HUD row paging + over-cap production queue —
+     -ProdQueue defaults to 0 in run-with-plugin.ps1 so suites opt in, but the PLAY
+     build turns it on; building groups are already on by default. Windowed, audible,
+     and structurally
      unable to take the worker launch lock). This is run-with-plugin.ps1's real working
      windowed recipe, not its deprecated/broken -Windowed switch -- see
      tools/plugin/README.md "Windowed mode: injected, not proxied". -Sound and
@@ -426,7 +430,8 @@ try {
         -Sound `
         -NoLaunchLock `
         -Circles 1 `
-        -HudRow 1
+        -HudRow 1 `
+        -ProdQueue 1
 }
 catch {
     $errLog = Join-Path $here 'logs\launch-error.log'
