@@ -233,7 +233,12 @@ try {
                 UnitHp = 12
                 EnemyCount = $ENEMY_COUNT; EnemyType = 'marine'
                 EnemyOwner = 'computer'; EnemyRace = 'terran'
-                EnemyOffsetX = 256; EnemyOffsetY = 0; EnemySpacing = 48; MinEnemyGap = 128
+                # 256 px east leaves 112 px between the two bounding boxes -- INSIDE a
+                # Marine's 128 px range, which is the point: this arm needs them to
+                # engage on the first frame, where every other fixture in this repo
+                # needs the opposite. Hence MinEnemyGap 96: the generator's 128 px floor
+                # exists to keep fixtures idle and would refuse this one.
+                EnemyOffsetX = 256; EnemyOffsetY = 0; EnemySpacing = 48; MinEnemyGap = 96
             }
         }
         else {

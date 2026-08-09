@@ -100,11 +100,18 @@ takes the early exit and the fallback never runs.
 ### 2.3 Which callers this affects
 
 `SortAllUnits` has three call sites: `0x0046FA40` (the drag-box handler) and `0x0046FB40` twice (the
-click handler). **Only `0x0046FA40` passes `clicked = 0`** (`command-path.md` §3.3, re-checked here
-against `0x0046FA40`'s own listing: `FUN_0046f0f0(candidates, local_34, 0)`). The fallback
-substitution at `0x0046F27A` is reachable only on that path — `0x0046F264` sends the
-`clicked != 0` case to `0x0046F268`, which puts the *clicked* unit in slot 0 instead. So
-"box" and "click" are separable at this level without any state of our own.
+click handler). **Only `0x0046FA40` passes `clicked = 0`**, and that is checked here from both ends
+rather than taken from `command-path.md` §3.3, because the whole scope boundary of §5 rests on it:
+
+* `0x0046FA40` calls `FUN_0046f0f0(candidates, local_34, 0)` — the literal 0 is in its own decompile;
+* `0x0046FB40` opens with `iVar3 = FUN_0046f3a0(...)` (`resolveClickedUnit`) and **returns
+  immediately if that is 0**. Both of its `FUN_0046f0f0` calls pass that same `iVar3`, so neither
+  can reach `SortAllUnits` with a null `clicked`.
+
+The fallback substitution at `0x0046F27A` is reachable only on the drag-box path anyway —
+`0x0046F264` sends the `clicked != 0` case to `0x0046F268`, which puts the *clicked* unit in slot 0
+instead. So "box" and "click" are separable at this level with no state of our own, and testing
+`clicked == 0` is exactly "this is a drag box".
 
 ---
 
@@ -336,3 +343,11 @@ Everything offline — `hooktest` part [13] and `run-ci-local.ps1` — is green.
    only if something needs the *simulation* to hold them — nothing in this task did.
 4. **`0x006D0F14`**, the global tested at `0x0046F1AC` right beside the movable gate, disables
    multi-select wholesale when non-zero. Not identified here. **[unresolved]**
+5. **A big building group costs more turn-buffer bytes than a big unit group, by construction.**
+   `slots == 1` means one `Select` per building, so an order to N buildings is `N × (4 + orderLen)`
+   bytes where the same order to N units is `ceil(N/12) × (26 + orderLen)`. Sixteen buildings and a
+   10-byte right-click is 224 bytes against a 200-byte default budget, so the tail defers to the
+   next command — the fan-out's existing, logged behaviour (`FANOUT defer:`), not a new failure
+   mode, and it is why `DrainPlan` was built to spill across frames in the first place
+   (`selection-cap.md` §6.2). Worth knowing before anyone raises the group cap: the byte cost of a
+   building group grows twelve times faster than a unit group's.
