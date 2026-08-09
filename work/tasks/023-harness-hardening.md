@@ -90,6 +90,23 @@ Check with the conductor first; if either is still open, say so and wait.
    refused for a background process and lies about it). Consolidate it so EVERY input primitive
    that depends on a move — drag, minimap click, dropdown — goes through it, not just the dropdown.
 
+## Second small item: the "CIRCLES stats line on detach" failure
+
+Two tasks investigated this independently and their findings COMBINE into a full diagnosis —
+do not re-derive it:
+
+- **021** established it is not their code: the `STATS` line that precedes `GROUPSTATS` is
+  missing too, so the whole of `ScFanoutLogStats` never reached the log — the cause is upstream
+  of anything they added. They confirmed positively that three other logs from the identical
+  build contain all three lines.
+- **022** found the mechanism: the plugin's process-exit path switches the log to a **TRY-lock**
+  and DROPS the line if another thread holds it; the observer thread had written 1.4 s earlier.
+
+So: a benign log-write race at process exit that costs a real test assertion. Decide and
+implement one of — make the exit path wait briefly for the lock rather than dropping, flush
+before switching to the TRY-lock, or (weakest, needs justification) soften the assertion.
+Whichever you choose, the test must still fail if the stats genuinely never ran.
+
 ## Small item inherited from task 022
 
 **Name the Ghost's Cloak command-card button.** 022 could not drive Cloak: the key is not `C`
