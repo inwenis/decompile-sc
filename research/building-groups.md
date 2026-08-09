@@ -299,33 +299,67 @@ fixture is generated per run into this agent's own `Maps\BroodWar\00-t024\` and 
   covers the engine's twelve and the plugin's four in one number; six Barracks rallied by one
   right-click, asserted as a single rally-point bucket over all six from each building's own
   `CUnit+0xF8/+0xFA`; a mixed-building box; and a single click still selecting one.
-* `-Combat` — the same turrets at 12% hit points with a computer force shooting them: a building
-  dies inside the selection, the drop is counted and its reason named (`hp0` / `removed`), and no
-  dead tag reaches an emitted Select.
+* `-Combat` — six **Barracks** at 60% hit points with four computer Marines shooting them: a
+  building dies inside the selection, the drop is counted and its reason named (`hp0` / `removed`),
+  and no dead tag reaches an emitted Select. Barracks and not turrets, for a reason worth writing
+  down: **a Missile Turret accepts no right-click at all.** It is immobile and produces nothing, so
+  it has neither a move order nor a rally point, and a right-click with sixteen of them selected
+  queues *nothing* — measured from the engine's own command stream, which held only `0x37` syncs and
+  not one `0x14`. An arm that commands a type with no command cannot observe the command path: it
+  reported `dropped=0` because nothing was ever considered, and "no dead tag reached the wire" was
+  true only because no wire traffic existed. Barracks are the type §5 already proves a right-click
+  fans out, which is exactly what makes them the right victims.
 
-### 6.1 What the in-game arms have actually reported so far
+### 6.1 What the in-game arms actually reported
 
-Stated plainly rather than left to be inferred, because these arms are the acceptance evidence and
-they are not all in yet.
+All three arms have run to **0 failures** on the no-raise harness (task 027). The numbers, so the
+claims above can be checked against something rather than taken:
 
-**The `-Stock` arm has run, and its substantive assertions passed.** With the feature off, a drag
-box over sixteen buildings selected **one** (`n=1`, `visible=1`), `simSlots` reported **1**, and no
-`BGROUP box:` line was written. That is vanilla §2.2 and §3, measured in the live game rather than
-read off a listing.
+| arm | result | the numbers it reported |
+| --- | --- | --- |
+| `-Stock` | 0 failures | box over 16 turrets → `n=1 visible=1`, `simSlots=1`, no `BGROUP box:` line |
+| default | 0 failures | `BGROUP box: lead=0x00623A68 type=124 owner=0 flags=0x54008101 -> selected 12 (+4 beyond the cap, 0 refused)`; `n=16 visible=12 overflow=4`, `circled=16/16`, over-cap circles `4/4`; rally `FANOUT start: cmd=0x14 units=6 slots=1 -> 6 Select+order pairs`, one rally bucket over all six; mixed box → `0x6F:2`, one type only; single click → `n=1` |
+| `-Combat` | 0 failures | 6/6 boxed alive, first death 19 s later → `5 live of 6`, `hp0=1`; `FANOUT start: cmd=0x14 units=6 slots=1`; **`out=5 dropped=1`, and `6 = 5 + 1`**; the drop named its own term; rally reached the five survivors |
 
-That run also failed one assertion, and the failure was in the TEST, not in the engine or the
-plugin: the box was a full-screen drag after a minimap centring, it reached **both** blocks, and
-vanilla's "last rejected candidate" fallback picked a Barracks rather than a Missile Turret. Which
-building vanilla picks out of a mixed box is arbitrary (§2.2) — so the run measured the right
-behaviour on the wrong block. The fix is not a looser assertion: the suite now reads the viewport
-origin out of the engine (`WORLD [...] screen=(left,top)`, from `0x0062848C`/`0x006284A8`), converts
-each unit's map position into a client coordinate, and drags a box around exactly the block it
-means. That is also what makes the mixed-building arm a deliberate case instead of an accident.
+`StarCraft.exe` was hashed before and after every arm and came back byte-identical to pristine
+1.16.1 each time; each arm closed its own game by pid and left no fixture behind.
 
-**The feature and `-Combat` arms have not been run yet.** In-game runs were suspended part-way
-through this task (the harness raises the game window to the foreground for every posted mouse
-move, which was interrupting the machine's user), and they are the only outstanding work here.
-Everything offline — `hooktest` part [13] and `run-ci-local.ps1` — is green.
+**Focus, measured rather than asserted** (`watch-foreground.ps1` alongside each run): exactly one
+borrow-and-return pair per arm, about two seconds each, around the Use-Map-Settings dropdown — the
+one raise AGENTS.md sanctions, because a dropdown is press-and-hold and Windows grants mouse capture
+only to the foreground window. Focus went back to the user's own window every time; during the
+`-Combat` run the user was using Search and Settings on the same machine and the run did not
+disturb them.
+
+#### What the arms cost to get right, and what that says about the tests
+
+Three of the arms' failures were in the TEST, none in the engine or the plugin, and each one is
+worth keeping written down because each was a case of an assertion that could not fail:
+
+1. **The stock arm boxed the wrong block.** A full-screen drag after a minimap centring reached
+   *both* blocks, and vanilla's "last rejected candidate" fallback picked a Barracks rather than a
+   Missile Turret — the right behaviour measured on the wrong block. Fixed properly rather than
+   loosened: the suite now reads the viewport origin out of the engine (`WORLD [...]
+   screen=(left,top)`, from `0x0062848C`/`0x006284A8`), converts each unit's map position into a
+   client coordinate, and boxes exactly the block it means. That is also what turned the
+   mixed-building case into a deliberate arm instead of an accident.
+2. **The combat fixture killed the group faster than the suite could command it.** Sixteen turrets
+   at 12% hit points against eight Marines died in about fifty seconds; seven were already gone when
+   the box landed and *all* of them by the time the right-click went out. The fan-out was handed a
+   selection with nothing live in it, so "no dead tag reached the wire" passed with **zero tags on
+   the wire**. Two fixes, because there were two defects: the fixture now dies as a trickle (four
+   Marines, 60% hit points — first death 19 s after the box), and the suite now waits for a
+   genuinely MIXED selection (`0 < live < n`) instead of merely `live < n`, so a window that never
+   opens fails *there*, naming itself.
+3. **The combat arm commanded a building type that accepts no command.** See §6's `-Combat` bullet:
+   a right-click on Missile Turrets queues nothing at all. The arm now boxes Barracks, and — the
+   part that matters for the next person — it asserts `FANOUT start:` is present *before* it asks
+   what the fan-out did, so "the engine issued no command" can never again be reported as "no dead
+   tag reached the wire".
+
+The through-line is the rule AGENTS.md already states: an absence assertion is worth nothing until
+the same pattern has been shown to match somewhere it should. All three failures were that rule
+being violated in a new costume, and the fixes are positives placed in front of the absences.
 
 ---
 

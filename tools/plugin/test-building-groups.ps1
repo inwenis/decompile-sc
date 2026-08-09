@@ -24,9 +24,13 @@ thing being varied is set at plugin-install time:
             (AGENTS.md, "absence assertions must first be proved positive").
   (default) The feature: 16 turrets selected from one box, every one circled, 6 Barracks
             rallied by one right-click, a mixed-building box, and a single click.
-  -Combat   The liveness arm: the same 16 turrets, at low HP, with a computer force
-            shooting them. A building dies inside the selection and its tag must appear
-            in no emitted Select -- task 020's gate, reused unchanged.
+  -Combat   The liveness arm: 6 BARRACKS at low HP with a computer force shooting them.
+            A building dies inside the selection and its tag must appear in no emitted
+            Select -- task 020's gate, reused unchanged. Barracks rather than turrets
+            because this arm's claim is about the COMMAND path, and a Missile Turret
+            accepts no right-click at all: immobile and non-production, it has neither a
+            move order nor a rally point, so the engine queues nothing and there is no
+            fan-out to inspect. Measured, not assumed -- see the note by $VICTIM_ID.
 
 THE FIXTURES, generated at run time and deleted afterwards (generated maps are game
 content -- AGENTS.md hard rule 1). One name per arm-shape, both declared up front:
@@ -38,8 +42,10 @@ content -- AGENTS.md hard rule 1). One name per arm-shape, both declared up fron
                               are there because a rally point is the one order a plain
                               right-click gives a building, and only a production building
                               has one.
-  building-groups-combat.scx  the same 16 turrets at 12% hit points, with a computer
-                              force next to them.
+  building-groups-combat.scx  6 Barracks at 60% hit points, 3x2 at 128 px, with 4
+                              computer Marines next to them -- close enough to open fire
+                              at once, few enough that the group dies as a trickle the
+                              suite can command in the middle of.
 
 The camera is moved between the two blocks with a minimap click (Get-ScMinimapPoint, the
 technique task 019 calibrated). They are far enough apart that centring on one puts the
@@ -98,7 +104,30 @@ $TURRET_TYPE   = '0x7C'
 $BARRACKS_TYPE = '0x6F'
 $TURRET_COUNT   = 16
 $BARRACKS_COUNT = 6
-$ENEMY_COUNT    = 8
+# FOUR marines, not eight, and see UnitHp below. Measured, not guessed: the first run of
+# this arm used eight against turrets at 12% hit points and they dealt ~0.96 HP/s each,
+# which wiped all sixteen in about fifty seconds -- seven were already dead when the box
+# landed and ALL of them were dead by the time the right-click went out, so the fan-out
+# built nothing and the arm proved nothing. A liveness arm needs the group to die as a
+# TRICKLE (the same word test-combat-death.ps1 uses for the same reason), not as a volley.
+$ENEMY_COUNT    = 4
+
+# THE -Combat ARM'S VICTIMS ARE BARRACKS, NOT TURRETS, and that is a correctness fix
+# rather than a preference. This arm's claim is about the COMMAND path -- "a dead building
+# in the selection reaches no emitted Select" -- so it needs a building that accepts a
+# right-click at all. A Missile Turret does not: it is immobile and produces nothing, so
+# it has neither a move order nor a rally point. Measured, from the engine's own command
+# stream: a right-click with sixteen turrets selected queued NOTHING (the plugin's CMD log
+# for that run holds only 0x37 sync commands and not one 0x14), so there was no command to
+# fan out, `dropped` was 0 because nothing was ever considered, and the arm could not fail
+# honestly. Barracks are the type the feature arm already proves a right-click fans out
+# (`FANOUT start: cmd=0x14`), which is exactly why they are the right victims here.
+$VICTIM_ID    = if ($Combat) { $BARRACKS_ID } else { $TURRET_ID }
+$VICTIM_TYPE  = if ($Combat) { $BARRACKS_TYPE } else { $TURRET_TYPE }
+$VICTIM_COUNT = if ($Combat) { $BARRACKS_COUNT } else { $TURRET_COUNT }
+# 4x3-tile buildings need the same 128 px grid the feature arm's Barracks block uses; at
+# the turrets' 64 px they would overlap and the engine would refuse to place them.
+$VICTIM_SPACING = if ($Combat) { 128 } else { 64 }
 
 if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-testmap' }
 $mapDir = $FixtureDir
@@ -223,14 +252,24 @@ try {
         # (turrets end at +96, barracks start at +384) and, more to the point, puts each
         # block off screen when the view is centred on the other.
         $genArgs = @{
-            UnitCount = $TURRET_COUNT; UnitType = "$TURRET_ID"; Player = 0
-            GridSpacing = 64; Race = 'terran'; OutputPath = $mapPath
+            UnitCount = $VICTIM_COUNT; UnitType = "$VICTIM_ID"; Player = 0
+            GridSpacing = $VICTIM_SPACING; Race = 'terran'; OutputPath = $mapPath
         }
         if ($Combat) {
-            # The victims must die in seconds rather than minutes, and nothing else about
-            # them changes -- the same lever the combat fixture uses for units.
+            # The victims must die on a schedule this suite can steer between: the first
+            # death AFTER the box (step 5 asserts all six were still alive when the group
+            # formed) and the last one well after the order (step 6 needs live ones left
+            # on the wire to compare the dead ones against). The first run's 12% put the
+            # first death before the box and the last before the order -- both ends wrong.
+            # The number is measured against THIS fixture rather than extrapolated from
+            # the turret one: at 15% (150 HP) four marines focus-firing took one Barracks
+            # all the way down and put 46 more into a second inside the ~20 s before the
+            # box -- about 12 HP/s between them. 60% of a Barracks' 1000 HP is 600, so the
+            # first falls around fifty seconds in: comfortably AFTER the box, and still
+            # inside step 6's 180 s deadline even if the rate turns out half what was
+            # measured.
             $genArgs += @{
-                UnitHp = 12
+                UnitHp = 60
                 EnemyCount = $ENEMY_COUNT; EnemyType = 'marine'
                 EnemyOwner = 'computer'; EnemyRace = 'terran'
                 # 256 px east leaves 112 px between the two bounding boxes -- INSIDE a
@@ -304,7 +343,9 @@ try {
         Start-Sleep -Seconds 6
         Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
         Start-Sleep -Seconds 10
-        Send-ScClick -Hwnd $hwnd -X 200 -Y 261        # dismiss "StarCraft Tips"
+        # The tips dialog is found in the engine's own dialog list and dismissed by ITS OWN
+        # OK button, then asserted gone (task 027) -- never a fixed point, never the registry.
+        Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
         Start-Sleep -Seconds 2
         Shot 'in-game'
     }
@@ -316,22 +357,31 @@ try {
     Step 'the map spawned what it was asked to, and this is where it is' {
         $world = Get-ScWorldState -LogPath $LogPath -Tag 'world' -MarkerPath $markerPath
         $mine = @($world.Units | Where-Object { $_.Owner -eq 0 })
-        $script:turrets = @($mine | Where-Object { $_.Type -eq $TURRET_ID })
-        $turrets = $script:turrets
-        Assert-That "all $TURRET_COUNT Missile Turrets were placed ($($turrets.Count))" `
-            ($turrets.Count -eq $TURRET_COUNT)
-        if ($turrets.Count -eq 0) { throw 'test: no turrets placed -- nothing below can be interpreted.' }
-        $script:turretTile = [pscustomobject]@{
-            X = [int]((($turrets | Measure-Object X -Average).Average) / 32)
-            Y = [int]((($turrets | Measure-Object Y -Average).Average) / 32)
+        # The block this arm boxes: turrets everywhere except -Combat, which boxes Barracks
+        # because they are the only one of the two that accepts a right-click at all.
+        $script:victims = @($mine | Where-Object { $_.Type -eq $VICTIM_ID })
+        $victims = $script:victims
+        $victimName = if ($Combat) { 'Barracks' } else { 'Missile Turrets' }
+        Assert-That "all $VICTIM_COUNT $victimName were placed ($($victims.Count))" `
+            ($victims.Count -eq $VICTIM_COUNT)
+        if ($victims.Count -eq 0) { throw 'test: no victims placed -- nothing below can be interpreted.' }
+        $script:victimTile = [pscustomobject]@{
+            X = [int]((($victims | Measure-Object X -Average).Average) / 32)
+            Y = [int]((($victims | Measure-Object Y -Average).Average) / 32)
         }
-        Write-Host "       turrets centred on tile ($($turretTile.X),$($turretTile.Y))"
+        Write-Host "       $victimName centred on tile ($($victimTile.X),$($victimTile.Y))"
 
         if ($Combat) {
             $foes = @($world.Units | Where-Object { $_.Owner -ne 0 })
             Assert-That "the computer force is there ($($foes.Count))" ($foes.Count -gt 0)
+            Assert-That "the player owns nothing but the $VICTIM_COUNT victims ($($mine.Count))" `
+                ($mine.Count -eq $VICTIM_COUNT)
         }
         else {
+            $script:turrets = $script:victims
+            $turrets = $script:turrets
+            $script:turretTile = $script:victimTile
+            $turretTile = $script:turretTile
             $script:barracks = @($mine | Where-Object { $_.Type -eq $BARRACKS_ID })
             $barracks = $script:barracks
             Assert-That "all $BARRACKS_COUNT Barracks were placed ($($barracks.Count))" `
@@ -384,31 +434,36 @@ try {
         }
     }
     elseif ($Combat) {
-        Step "the box holds all $TURRET_COUNT turrets before anything dies" {
-            $aimed = Select-ScUnitsByMap -Units $script:turrets -TileX $turretTile.X -TileY $turretTile.Y -Tag 'aim-combat'
-            Assert-That 'the turret block is on screen and was boxed' $aimed
+        Step "the box holds all $VICTIM_COUNT Barracks before anything dies" {
+            $aimed = Select-ScUnitsByMap -Units $script:victims -TileX $victimTile.X -TileY $victimTile.Y -Tag 'aim-combat'
+            Assert-That 'the Barracks block is on screen and was boxed' $aimed
             $before = Get-ScState 'combat-before'
-            Assert-That "the selection holds all $TURRET_COUNT ($($before.N))" ($before.N -eq $TURRET_COUNT)
-            Assert-That "every one of them is alive ($($before.Live))" ($before.Live -eq $TURRET_COUNT)
+            Assert-That "the selection holds all $VICTIM_COUNT ($($before.N))" ($before.N -eq $VICTIM_COUNT)
+            Assert-ScAllOneType '  the boxed buildings' $before $VICTIM_TYPE
+            Assert-That "every one of them is alive ($($before.Live))" ($before.Live -eq $VICTIM_COUNT)
             Assert-That "the liveness gate is ON (liveness=$($before.Liveness))" ($before.Liveness -eq 1)
             Write-Host "       $($before.Line)"
             Shot 'combat-before'
         }
 
         Step 'a building in the selection dies, and its tag reaches no Select' {
-            # Wait for the computer force to take one down. The turrets are at 12% hit
-            # points, so this is seconds, not minutes -- but it is polled rather than
-            # slept through, because "it died" is the precondition for everything below
-            # and a fixed sleep would turn a slow kill into a mystery failure.
+            # Wait for a MIXED selection -- some dead AND some still alive -- not merely
+            # for "one died". That distinction is the whole arm. The first run waited on
+            # `live < n` alone, the fixture then killed the rest before the order was
+            # posted, and the fan-out was handed a selection with nothing live in it: it
+            # emitted no Select at all, so "no dead tag reached the wire" passed with
+            # zero tags on the wire. An absence with nothing to fail against is not
+            # evidence (AGENTS.md), so the live ones are now part of the precondition and
+            # a window that never opens fails HERE, naming itself, instead of downstream.
             $deadline = (Get-Date).AddSeconds(180)
             $state = $null
             while ((Get-Date) -lt $deadline) {
                 $state = Get-ScState 'combat-wait'
-                if ($state.Live -lt $state.N) { break }
-                Start-Sleep -Seconds 3
+                if ($state.Live -lt $state.N -and $state.Live -gt 0) { break }
+                Start-Sleep -Seconds 1
             }
-            Assert-That "at least one turret died inside the selection ($($state.Live) live of $($state.N))" `
-                ($state.Live -lt $state.N) "(got $($state.Line))"
+            Assert-That "the selection holds dead AND live buildings at once ($($state.Live) live of $($state.N))" `
+                ($state.Live -lt $state.N -and $state.Live -gt 0) "(got $($state.Line))"
             # hp0 is the task-020 term: a unit killed by DAMAGE whose slot has not been
             # recycled, which the pre-020 uniqueness test cannot see.
             Assert-That "the dead one is seen as dead, not merely as recycled (hp0=$($state.Hp0) removed=$($state.Removed))" `
@@ -421,18 +476,37 @@ try {
             Start-Sleep -Seconds 3
             $lines = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
 
+            # PROVE A COMMAND WAS ISSUED AT ALL, before asking what the fan-out did with
+            # it. This is the assertion the first two runs of this arm were missing, and
+            # missing it is what let them fail silently: a right-click on a selection of
+            # MISSILE TURRETS queues nothing whatsoever (immobile, produces nothing, so no
+            # order to give -- the engine's command stream held only 0x37 syncs), and
+            # "no Select carried a dead tag" is trivially true when no Select was built.
+            $started = @($lines | Select-String -Pattern 'FANOUT start: cmd=0x14')
+            Assert-That 'the right-click actually queued a command for these buildings' `
+                ($started.Count -gt 0) '(no FANOUT start line -- the engine issued no command)'
+            if ($started.Count -gt 0) { Write-Host "       $($started[-1].Line.Trim())" }
+
             $sel = @($lines | Select-String -Pattern 'FANOUT select: in=(\d+) out=(\d+) dropped=(\d+)')
             Assert-That 'the fan-out reported every Select it built' ($sel.Count -gt 0)
-            $emitted = 0; $dropped = 0
+            $considered = 0; $emitted = 0; $dropped = 0
             foreach ($l in $sel) {
-                $m = [regex]::Match($l.Line, 'out=(\d+) dropped=(\d+)')
-                $emitted += [int]$m.Groups[1].Value
-                $dropped += [int]$m.Groups[2].Value
+                $m = [regex]::Match($l.Line, 'in=(\d+) out=(\d+) dropped=(\d+)')
+                $considered += [int]$m.Groups[1].Value
+                $emitted    += [int]$m.Groups[2].Value
+                $dropped    += [int]$m.Groups[3].Value
             }
             $after = Get-ScState 'combat-after'
-            Assert-That "the dead buildings were dropped from the wire (dropped=$dropped)" ($dropped -gt 0)
-            Assert-That "only live buildings were put on it ($emitted emitted, $($after.Live) live)" `
-                ($emitted -le $after.Live)
+            # POSITIVE first: the wire has to have carried something, or every claim
+            # below it is about an empty wire.
+            Assert-That "the live buildings were put on the wire (out=$emitted)" ($emitted -gt 0)
+            Assert-That "the dead buildings were dropped from it (dropped=$dropped)" ($dropped -gt 0)
+            # The fan-out's own accounting, summed over the same lines: every member of
+            # the selection it looked at either went out or was refused, and none was
+            # silently forgotten. Per-line identity, so it holds however many chunks the
+            # turn budget let out before the rest deferred.
+            Assert-That "every building it considered was either emitted or dropped ($considered = $emitted + $dropped)" `
+                ($considered -eq $emitted + $dropped)
             # The forensics line names the unit AND the term that refused it, so "it was
             # dropped" and "it was dropped for the right reason" are different claims.
             $forensics = @($lines | Select-String -Pattern 'FANOUT stale drop: unit=0x[0-9A-F]+ .* why=(hp0|removed|recycled)')
