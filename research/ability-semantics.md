@@ -434,29 +434,39 @@ stand still (`0x03:26 0x0a:6`), and an idle unit cannot have its order interrupt
 therefore compared against **its own** control. The Lurker fixture then produced a second
 false positive — 13 of 23 units "stopping attacking" — which was units dying.
 
-**Why a negative result here means something.** A replayed `Select` lands on every unit in the
+**The positive control inside the negative result.** The runs that find no disturbance are the
+same runs in which **36 units gained the stim effect under the plugin against 12 under stock**.
+That pairing is what makes the negative believable: a quiet result from a run where nothing
+happened proves nothing, while a quiet result from a run where the feature provably did its
+work — at three times the engine's cap, in the same measurement — is evidence.
+
+**And why a negative means something at all.** A replayed `Select` lands on every unit in the
 chunk at once. If it interrupted running orders, the ability window would show a **landslide**
 against its control — most of the group knocked off what it was doing in one step — not a
 margin of one or two. That is what makes the allowance in the assertions generous rather than
-lax, and it is what makes "no excess" an answer rather than a shrug.
+lax.
 
-Run of 2026-08-09 on the third fixture, `0 failure(s)`:
+The third fixture was run three times, all reaching the same answer. The final run, with every
+gate active, `0 failure(s)`:
 
 ```
-[fanout]  CONTROL before: 36 of 36 alive, 3 changed order, 1 stopped attacking
-[fanout]  CONTROL after : 36 of 36 alive, 5 changed order, 3 stopped attacking
-[fanout]  ABILITY window: 36 of 36 alive, 3 changed order, 3 stopped attacking
+[fanout]  CONTROL before: 36 of 36 alive, 4 changed order, 4 stopped attacking
+[fanout]  CONTROL after : 36 of 36 alive, 7 changed order, 6 stopped attacking
+[fanout]  ABILITY window: 36 of 36 alive, 1 changed order, 0 stopped attacking
 [observe] CONTROL before: 36 of 36 alive, 0 changed order, 0 stopped attacking
 [observe] CONTROL after : 36 of 36 alive, 0 changed order, 0 stopped attacking
 [observe] ABILITY window: 36 of 36 alive, 0 changed order, 0 stopped attacking
 
-excess disturbance caused by the ability -- fanout: 0 (strict) / -2 (lenient); stock: 0 / 0
+population 36 -> 36 in both arms, across the whole measurement
+excess disturbance caused by the ability -- fanout: -3 (strict) / -6 (lenient); stock: 0 / 0
 the ability actually fired -- stimmed 0 -> 36 (fanout), 0 -> 12 (stock)
 ```
 
-**Zero excess against the strict control**, in the arm that has the units to show one, on a
-fixture where nothing died in any window. And the two arms' stim counts — 36 against 12 — are
-the feature doing exactly what it is for, in the same run.
+**The ability window is the quietest of the three**: one order change against four and seven in
+the controls either side of it, and **not one unit stopped attacking** while four and six did in
+ordinary two-second stretches of the same fight. The excess is negative against both controls.
+The earlier two runs of this fixture gave `0 / -2` and `-3 / -5`; the answer does not depend on
+which run is read.
 
 **Which arm is the evidence.** The plugin arm against its own control is the primary result: it
 is the only arm with enough units doing anything for an interruption to be visible. The stock
@@ -562,6 +572,22 @@ in-process and name "melee start" and "another worker's map" as the causes rathe
 a count that does not match.
 
 ---
+
+### 8.4b How to build a fight you can actually measure
+
+Three fixtures were needed before the combat measurement meant anything, and the progression is
+the reusable part:
+
+| enemy | why it failed | the lesson |
+|---|---|---|
+| Hydralisks | they shoot back, so the group decays during the windows | an enemy that fights makes the population move, and a moving population cannot be compared window to window |
+| Lurkers, chosen because an **unburrowed** one has no weapon | a computer-owned Lurker **burrows on its own** and becomes a splash weapon; player 0 went 36 → 2 units | the premise must be "cannot attack", not "is not currently attacking" — the enemy gets to choose |
+| Supply Depots | — | a target that cannot attack, cannot move, and cannot decide to do either removes the confound instead of hoping it stays quiet |
+
+Anything measuring behaviour *during* a fight needs the fight to be boring in every respect
+except the one under test. And it needs a positive control in the same run — here, the stim
+count going 0 → 36 under the plugin against 0 → 12 in stock — or a quiet result cannot be told
+apart from a run where nothing happened at all.
 
 ### 8.5 An absence assertion is worth nothing until the pattern is proved to match
 

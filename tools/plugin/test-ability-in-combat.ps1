@@ -308,11 +308,19 @@ function Invoke-Arm {
 # The leading comma keeps the ARRAY an array on the way out: PowerShell unrolls a
 # function's array return, so a wiped group comes back as $null and `.Count` throws under
 # StrictMode -- which is what happens the moment the Hydralisks win an exchange.
-# NOTE THE LEADING COMMA, and the absence of @() at every call site. The comma stops
-# PowerShell unrolling the array on the way out, which is what keeps `.Count` working when
-# the group has been wiped -- but wrapping the result in @() AGAIN produces a one-element
-# array holding the array, and every count collapses to 1. That cost this test two runs: a
-# scan with 33 Marines in it reported "1".
+# ==========================================================================
+# NOTE THE LEADING COMMA, AND NEVER WRITE @(Get-Mine ...) -- IT SILENTLY
+# RETURNS 1. The comma stops PowerShell unrolling the array on the way out,
+# which is what keeps `.Count` working when the group has been wiped. But
+# wrapping the result in @() AGAIN builds a one-element array holding the
+# array, so every count collapses to exactly 1 -- a plausible-looking
+# number, never an error.
+#
+# THIS HAS NOW CAUGHT THIS FILE TWICE, with this note already written above
+# it the second time: once reporting "1" for a scan holding 33 Marines, and
+# again reporting a population of "1" out of 36. If you are adding a count,
+# grep this file for `@(Get-Mine` before you run it.
+# ==========================================================================
 function Get-Mine { param($Scan) ,@($Scan.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $UNIT_TYPE }) }
 function Get-EnemyHp {
     # Sum by hand: Measure-Object emits NOTHING for an empty pipeline, and under
