@@ -400,7 +400,16 @@ placed units are never created, the player gets a standard starting base, and th
 normal while measuring nothing. (Task 021 found the same silent no-op from a different cause — a
 200 ms wait for the list to open — which is the same lesson twice: this control fails quietly.)
 
-Three changes, in `drive-game.ps1`:
+**The same cause has at least three symptoms**, which is what makes it worth this much text.
+Task 021 independently lost 25 assertions across two suites in one sweep to `Send-ScDrag`
+"selecting nothing": a drag IS a sequence of moves, and with the moves dropped the button-down
+and button-up land at the same point, so the box opens and closes on one pixel and selects
+nothing — silently, with three other suites in the same sweep boxing fine, which is exactly the
+intermittency you would expect from something that depends on which window happens to be
+foreground. Their minimap-centring click is a third candidate with the same shape. So
+activation is now part of dragging as well as of picking (`Send-ScDrag -NoActivate` opts out).
+
+Four changes, in `drive-game.ps1`:
 
 - `Set-ScWindowActive` — `AttachThreadInput` and then **verify**, because a plain
   `SetForegroundWindow` from a background process returns TRUE and does nothing.
@@ -411,6 +420,7 @@ Three changes, in `drive-game.ps1`:
   "Number of Players" for the melee types and "Human Slots / Computer Slots" under Use Map
   Settings, so a real change of type is a real change of pixels, and a pick that did nothing is
   a loud failure at the menu instead of a mystery ten assertions later.
+- `Send-ScDrag` activates before dragging, for the reason above.
 
 ### 8.2 StarCraft is single-instance, machine-wide
 
@@ -420,14 +430,33 @@ lock is held only around the launch, so a worker can be holding a running game w
 free. `Wait-ScNoGameRunning` waits for the machine to be free, and this task's suites then hold
 the lock for as long as their own game lives.
 
-### 8.3 The generated-fixture folder is shared, and the suites used to clear it
+### 8.3 The generated-fixture folder was shared, and that is a data-loss bug, not an annoyance
 
-Every suite generates into `Maps\BroodWar\00-testmap` and picks its map by clicking a row — so a
-second file in that folder silently changes which map loads — and every suite started with
-`Remove-Item -Recurse` on it. During this task that came within one step of deleting another
-worker's fixture out from under its running game, and the same collision cost that worker two
-runs. `Wait-ScTestMapDirFree` waits for the folder to hold nothing but this test's own map,
-deletes only its own file, and never the folder. Fixture names now carry the task id.
+Every suite generated into `Maps\BroodWar\00-testmap` and picks its map **by clicking a row**,
+so a second file in that folder silently changes which map loads — and every suite started with
+`Remove-Item -Recurse` on it. Four runs were lost to this in one evening, twice in each
+direction: another worker's suite played this task's 36 Ghosts (their fixture places Lurkers),
+and this task's suite boxed 36 of their Lurkers. Two more runs died when a fixture was deleted
+out from under them mid-run.
+
+Three fixes, in increasing order of how much they actually help:
+
+1. **Wait, and never delete what you did not create** (`Wait-ScTestMapDirFree`). Necessary, and
+   not sufficient: it checks once, before generating, and the folder can change between that
+   check and the browser click.
+2. **Re-check immediately before the launch** (`Assert-ScFixtureStillMine`). This is the one
+   that caught the live incident and named it, instead of producing numbers about the wrong map.
+3. **A folder per task** (`Maps\BroodWar\00-t022`), removed at the end and only when empty.
+   This is the structural fix: the collision cannot happen in either direction, so there is
+   nothing to wait for. The "only when empty" half matters as much as the rest — an empty
+   folder left behind becomes the first row of every other suite's folder click, which is the
+   same bug with the roles swapped.
+
+The general lesson is worth more than the fix: **a positional selector over shared mutable
+state fails silently and produces a run that looks normal.** Anything that picks by row, index
+or ordering has to verify what it got — which is why the fixtures assert their unit types
+in-process and name "melee start" and "another worker's map" as the causes rather than reporting
+a count that does not match.
 
 ---
 

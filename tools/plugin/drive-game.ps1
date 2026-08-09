@@ -295,9 +295,18 @@ function Send-ScDrag {
         [Parameter(Mandatory)][IntPtr]$Hwnd,
         [Parameter(Mandatory)][int]$X1, [Parameter(Mandatory)][int]$Y1,
         [Parameter(Mandatory)][int]$X2, [Parameter(Mandatory)][int]$Y2,
-        [int]$Steps = 12, [int]$StepMs = 40, [int]$SettleMs = 400
+        [int]$Steps = 12, [int]$StepMs = 40, [int]$SettleMs = 400,
+        [switch]$NoActivate
     )
     Assert-ScDrivable -Hwnd $Hwnd
+    # A DRAG IS MADE OF MOUSE MOVES, AND THE GAME DROPS POSTED MOVES WHILE ITS WINDOW IS
+    # NOT FOREGROUND (task 022 -- see Set-ScWindowActive). The down and the up still land,
+    # so the box opens and closes at the same point and the drag selects NOTHING, silently:
+    # no error, no warning, just an empty selection. Task 021 lost 25 assertions across two
+    # suites to exactly that, in a sweep where three other suites boxed fine -- which is the
+    # intermittency this explains. Activation is part of dragging, not an extra;
+    # -NoActivate is for a caller that has already done it.
+    if (-not $NoActivate) { [void](Set-ScWindowActive -Hwnd $Hwnd) }
     if ($Steps -lt 2) { $Steps = 2 }
 
     [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]0, (ConvertTo-ScLParam $X1 $Y1))
@@ -340,6 +349,40 @@ function Send-ScKey {
     Start-Sleep -Milliseconds $HoldMs
     [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_KEYUP, [IntPtr]$VirtualKey, [IntPtr]0xC0000001)
     if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
+}
+
+function Get-ScMapFolderRow {
+    <#
+    .SYNOPSIS
+    Which ROW of the map browser a fixture folder will be on.
+    .DESCRIPTION
+    The browser is clicked positionally, and per-task fixture folders inherit that bug one
+    level up: with `00-t021` and `00-t022` both present, row 1 is 021's and row 2 is 022's,
+    so a hardcoded row-1 click opens somebody else's folder and plays their map.
+
+    Computed from the filesystem rather than assumed: the browser lists directories in name
+    order, so the row is the number of sibling directories sorting before this one. The
+    caller still has to verify what it opened -- this removes the guess, not the need for
+    the check.
+
+    Returns the client Y for that row, using the geometry read off a captured frame (first
+    row at y=140, 19px apart at a 640x480 client).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$MapsDir,
+        [Parameter(Mandatory)][string]$FolderName,
+        [int]$FirstRowY = 140, [int]$Pitch = 19
+    )
+    $dirs = @(Get-ChildItem -LiteralPath $MapsDir -Directory -ErrorAction SilentlyContinue |
+              ForEach-Object { $_.Name } | Sort-Object)
+    $idx = [array]::IndexOf($dirs, $FolderName)
+    if ($idx -lt 0) { throw "drive-game: $FolderName is not a directory under $MapsDir." }
+    [pscustomobject]@{
+        Row = $idx + 1
+        Y   = $FirstRowY + $idx * $Pitch
+        Siblings = ($dirs -join ', ')
+    }
 }
 
 function Remove-ScOwnFixtureDir {

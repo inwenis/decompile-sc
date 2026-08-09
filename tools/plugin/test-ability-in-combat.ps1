@@ -58,8 +58,6 @@ param(
     # The Cloak button's client coordinates on the Ghost command card, used only if the
     # hotkey emits nothing. Read off a captured frame of this fixture: the card is the
     # bottom-right 3x3 block and Cloak is its bottom-left cell.
-    [int]$AbilityButtonX = 523,
-    [int]$AbilityButtonY = 430,
     [switch]$KeepOpen
 )
 
@@ -73,12 +71,19 @@ $failures = 0
 $step = 0
 $script:armLock = $null
 
-$GHOST_TYPE = 1            # units.dat 1 (richchk UnitId 'Terran Ghost')
+# MARINES AND STIM, not Ghosts and Cloak. The question is about a FANNED-OUT ABILITY
+# ISSUED MID-FIGHT, and Stim is the one this harness can reliably make the client emit
+# (task 022 §5): the Ghost's Cloak button neither answers to 'C' nor sits where the
+# command-card geometry was guessed -- clicking there put the game into "Select Target",
+# i.e. it is a targeted ability, so that button is Lockdown. An ability that never fires
+# measures nothing, and a test that measures nothing while looking green is worse than no
+# test. The Ghost case is recorded as an open question rather than faked.
+$UNIT_TYPE = 0             # units.dat 0, Terran Marine
 $HYDRALISK_TYPE = 38       # units.dat 38
-$CLOAK_CMD = '0x21'
-$CLOAK_KEY = 0x43          # 'C', the Ghost command card's Cloak hotkey
-$CLOAK_ORDER2 = 0x6D       # what 0x00491B30 writes to CUnit+0xA6 after it charges energy
-$IDLE_ORDER = 0x03         # the order every fixture in this repo sits on when doing nothing
+$ABILITY_CMD = '0x36'      # Stim Pack
+$ABILITY_KEY = 0x54        # 'T' -- plain, unmodified, so 021's accelerator finding does not bite
+$STIM_TIMER = 0x25         # what 0x004C2F30 writes to CUnit+0x115
+$IDLE_ORDER = 0x03
 # The camera opens centred on the start location and never moves on its own, so a click
 # at client x is an order to (start.x + x - 320). Same constants as test-combat-death.ps1.
 $WALK_X = 540
@@ -92,7 +97,7 @@ $PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C
 # racing for it. The name sorts before every other 00-t* folder ('0' < any letter), so the
 # first-row folder click that every suite here uses still lands on it.
 $mapDir = Join-Path $GameDir 'Maps\BroodWar\00-t022'
-$mapPath = Join-Path $mapDir '022-ghosts.scx'
+$mapPath = Join-Path $mapDir '022-combat.scx'
 
 function Assert-That {
     param([string]$What, [bool]$Ok, [string]$Detail = '')
@@ -112,8 +117,8 @@ function New-Fixture {
     # Wait-ScTestMapDirFree. Never `Remove-Item -Recurse` this directory.
     Wait-ScTestMapDirFree -Dir $mapDir -MyMapPath $mapPath
     $genArgs = @{
-        UnitCount = $UnitCount; UnitType = 'ghost'; Player = 0
-        TechResearched = 'personnel-cloaking'
+        UnitCount = $UnitCount; UnitType = 'marine'; Player = 0
+        TechResearched = 'stim-packs'
     }
     if ($DamagedCount -gt 0) {
         $genArgs.DamagedCount = $DamagedCount
@@ -125,8 +130,8 @@ function New-Fixture {
         -OutputPath $mapPath 2>&1
     $gen | Where-Object { "$_" -notmatch 'WARNING:StormLib' } | ForEach-Object { Write-Host "       $_" }
     Assert-That 'the generator succeeded' ($LASTEXITCODE -eq 0) "(exit $LASTEXITCODE)"
-    Assert-That 'Personnel Cloaking is researched for the human slot' `
-        (@($gen | Select-String -Pattern 'PTEx: player 0 has researched 10\(personnel-cloaking\)').Count -gt 0)
+    Assert-That 'Stim Packs is researched for the human slot' `
+        (@($gen | Select-String -Pattern 'PTEx: player 0 has researched 0\(stim-packs\)').Count -gt 0)
     if ($DamagedCount -gt 0) {
         Assert-That "the low-energy tail is in the map file ($DamagedCount at $DamagedEnergy%)" `
             (@($gen | Select-String -Pattern "tail starts at $DamagedEnergy% energy").Count -gt 0)
@@ -200,7 +205,11 @@ function Invoke-Arm {
         Start-Sleep -Seconds 2
         Send-ScClick -Hwnd $hwnd -X 327 -Y 415
         Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 117 -Y 140
+        # The folder row is POSITIONAL and this task's folder is not necessarily first:
+        # another worker's 00-t021 sorts before 00-t022. Computed from the filesystem.
+        $folderRow = Get-ScMapFolderRow -MapsDir (Split-Path $mapDir -Parent) -FolderName (Split-Path $mapDir -Leaf)
+        Write-Host "       fixture folder is row $($folderRow.Row) (y=$($folderRow.Y)); siblings: $($folderRow.Siblings)"
+        Send-ScClick -Hwnd $hwnd -X 117 -Y $folderRow.Y
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393
         Start-Sleep -Milliseconds 800
         Send-ScClick -Hwnd $hwnd -X 117 -Y 159
@@ -244,25 +253,16 @@ function Invoke-Arm {
 
         # THE MOMENT UNDER TEST: one ability keypress, with the group mid-fight.
         $mark = Get-ScLogLineCount -LogPath $logPath
-        Send-ScKey -Hwnd $hwnd -VirtualKey $CLOAK_KEY
+        Send-ScKey -Hwnd $hwnd -VirtualKey $ABILITY_KEY
         Start-Sleep -Seconds 2
         $lines = @(Get-Content -LiteralPath $logPath | Select-Object -Skip $mark)
-        $result.AbilityVia = 'key'
-        # FALLBACK: click the command-card button itself. The hotkey is the tidier route
-        # and it works for Stim ('T'), but an ability whose button the client has disabled
-        # -- or whose letter is not the one assumed -- emits nothing at all, and a run that
-        # measures an ability nobody used is worse than a run that fails. Clicking the
-        # button is a plain posted click, which this harness has always been able to do.
-        if (@($lines | Select-String -Pattern "CMD id=$CLOAK_CMD ").Count -eq 0) {
-            Write-Host "       the ability key emitted nothing; clicking the command-card button at ($AbilityButtonX,$AbilityButtonY) instead"
-            Send-ScClick -Hwnd $hwnd -X $AbilityButtonX -Y $AbilityButtonY
-            Start-Sleep -Seconds 2
-            $lines = @(Get-Content -LiteralPath $logPath | Select-Object -Skip $mark)
-            $result.AbilityVia = 'button'
-        }
-        $result.CloakLines = $lines
-        $result.After = Get-ScWorldState -LogPath $logPath -Tag 'after-cloak' -MarkerPath $markerPath
-        ArmShot 'after-cloak'
+        # No click fallback. Guessing at a command-card button position is how this test
+        # previously armed a TARGETED ability by mistake -- the frame came back showing
+        # "Select Target" -- and an ability nobody used measures nothing while looking green.
+        # The key is 'T', it is unmodified, and §5 proves the client emits 0x36 for it.
+        $result.AbilityLines = $lines
+        $result.After = Get-ScWorldState -LogPath $logPath -Tag 'after-ability' -MarkerPath $markerPath
+        ArmShot 'after-ability'
 
         Start-Sleep -Seconds 12
         $result.Later = Get-ScWorldState -LogPath $logPath -Tag 'later' -MarkerPath $markerPath
@@ -284,7 +284,12 @@ function Invoke-Arm {
 # The leading comma keeps the ARRAY an array on the way out: PowerShell unrolls a
 # function's array return, so a wiped group comes back as $null and `.Count` throws under
 # StrictMode -- which is what happens the moment the Hydralisks win an exchange.
-function Get-Mine { param($Scan) ,@($Scan.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $GHOST_TYPE }) }
+# NOTE THE LEADING COMMA, and the absence of @() at every call site. The comma stops
+# PowerShell unrolling the array on the way out, which is what keeps `.Count` working when
+# the group has been wiped -- but wrapping the result in @() AGAIN produces a one-element
+# array holding the array, and every count collapses to 1. That cost this test two runs: a
+# scan with 33 Marines in it reported "1".
+function Get-Mine { param($Scan) ,@($Scan.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $UNIT_TYPE }) }
 function Get-EnemyHp {
     # Sum by hand: Measure-Object emits NOTHING for an empty pipeline, and under
     # StrictMode reading .Sum off that is a thrown error rather than a zero -- which is
@@ -296,22 +301,32 @@ function Get-EnemyHp {
     return $total
 }
 
-# Units present in BOTH scans, matched by CUnit pointer, that were doing something other
-# than idling before. "It stopped fighting" is only a claim about a unit that was
-# fighting, and only about one that is still alive to be asked.
+# THE MEASUREMENT THE HYPOTHESIS ASKS FOR: for every unit alive in BOTH scans, matched by
+# CUnit pointer, did its MAIN ORDER change across the ability?
+#
+# An earlier version of this counted units that "went idle", which was the wrong predicate
+# and produced a sample of one: in this engine a unit that auto-acquires from Guard keeps
+# main order 0x03 while it shoots, so "busy" and "idle" are not distinguishable there. An
+# order CHANGE is the thing "the replayed Selects interrupt orders" would actually produce,
+# it needs no assumption about which order id means fighting, and it is comparable between
+# the plugin arm and the stock arm.
 function Get-Transitions {
     param($Before, $After)
     $post = @{}
-    foreach ($u in @(Get-Mine $After)) { $post[$u.Unit] = $u }
-    $busyBefore = @(@(Get-Mine $Before) | Where-Object { $_.Order -ne $IDLE_ORDER })
-    $stillHere = @($busyBefore | Where-Object { $post.ContainsKey($_.Unit) })
-    $wentIdle = @($stillHere | Where-Object { $post[$_.Unit].Order -eq $IDLE_ORDER })
+    foreach ($u in (Get-Mine $After)) { $post[$u.Unit] = $u }
+    $pre = Get-Mine $Before
+    $stillHere = @($pre | Where-Object { $post.ContainsKey($_.Unit) })
+    $changed = @($stillHere | Where-Object { $post[$_.Unit].Order -ne $_.Order })
+    $wentIdle = @($stillHere | Where-Object { $_.Order -ne $IDLE_ORDER -and $post[$_.Unit].Order -eq $IDLE_ORDER })
     [pscustomobject]@{
-        BusyBefore = $busyBefore.Count
+        Before     = $pre.Count
         StillAlive = $stillHere.Count
+        Changed    = $changed.Count
         WentIdle   = $wentIdle.Count
-        Detail     = ($wentIdle | Select-Object -First 6 | ForEach-Object {
-                        "unit=$($_.Unit) 0x$('{0:x}' -f $_.Order)->0x03" }) -join ' '
+        OrdersBefore = (($pre | ForEach-Object { '0x{0:x2}' -f $_.Order } | Group-Object | ForEach-Object { "$($_.Name):$($_.Count)" }) -join ' ')
+        OrdersAfter  = (((Get-Mine $After) | ForEach-Object { '0x{0:x2}' -f $_.Order } | Group-Object | ForEach-Object { "$($_.Name):$($_.Count)" }) -join ' ')
+        Detail     = ($changed | Select-Object -First 6 | ForEach-Object {
+                        "unit=$($_.Unit) 0x$('{0:x2}' -f $_.Order)->0x$('{0:x2}' -f $post[$_.Unit].Order)" }) -join ' '
     }
 }
 
@@ -345,20 +360,30 @@ try {
             Assert-That "[$mode] the two sides engaged within ${EngageTimeoutSec}s" ($null -ne $arm.Engaged)
             if (-not $arm.Engaged) { return }
 
+            # Diagnostics first: a metric computed over the wrong scan is the failure mode
+            # this whole task keeps meeting, so the raw sizes are printed before anything is
+            # derived from them.
+            Write-Host ("       [{0}] scans: boxed={1} engaged={2} after={3} later={4} units parsed" -f `
+                $mode, @($arm.Boxed.Units).Count, @($arm.Engaged.Units).Count,
+                @($arm.After.Units).Count, @($arm.Later.Units).Count)
             $t = Get-Transitions $arm.Engaged $arm.After
             $arm.Transitions = $t
             $arm.EnemyHpEngaged = Get-EnemyHp $arm.Engaged
             $arm.EnemyHpAfter = Get-EnemyHp $arm.After
             $arm.EnemyHpLater = Get-EnemyHp $arm.Later
-            Write-Host ("       [{0}] busy before the keypress: {1}; still alive after: {2}; went idle across it: {3} {4}" -f `
-                $mode, $t.BusyBefore, $t.StillAlive, $t.WentIdle, $t.Detail)
+            Write-Host ("       [{0}] orders before: {1}" -f $mode, $t.OrdersBefore)
+            Write-Host ("       [{0}] orders after : {1}" -f $mode, $t.OrdersAfter)
+            Write-Host ("       [{0}] alive across the ability: {1} of {2}; main order CHANGED for {3}; went idle: {4} {5}" -f `
+                $mode, $t.StillAlive, $t.Before, $t.Changed, $t.WentIdle, $t.Detail)
             Write-Host ("       [{0}] enemy hit points: {1} at engage -> {2} after -> {3} twelve seconds later" -f `
                 $mode, $arm.EnemyHpEngaged, $arm.EnemyHpAfter, $arm.EnemyHpLater)
 
-            # THE ASSERTION QUESTION 3 EXISTS FOR, per arm: an ability whose handler
-            # never writes the main order must not take anybody off theirs.
-            Assert-That "[$mode] not one unit that was busy stopped when the ability was used ($($t.WentIdle) of $($t.StillAlive))" `
-                ($t.WentIdle -eq 0) $t.Detail
+            # THE ASSERTION QUESTION 3 EXISTS FOR, per arm: an ability whose handler never
+            # writes CUnit+0x4D must not move anybody off the order they were already on --
+            # and the fan-out replays a Select before each copy of that ability, which is
+            # exactly what the hypothesis says would interrupt them.
+            Assert-That "[$mode] the ability moved NO unit off its existing order ($($t.Changed) of $($t.StillAlive) changed)" `
+                ($t.Changed -eq 0) $t.Detail
             # ... and the group is still fighting afterwards, which is the user's actual
             # complaint. Orders alone could look right while nothing happens.
             Assert-That "[$mode] the group kept doing damage after the ability (enemy $($arm.EnemyHpAfter) -> $($arm.EnemyHpLater))" `
@@ -369,46 +394,42 @@ try {
     if ($arms.ContainsKey('fanout') -and $arms['fanout'].Engaged) {
         Step 'ARM fanout: the ability really did reach past the cap, and charged per unit' {
             $arm = $arms['fanout']
-            $lines = $arm.CloakLines
-            Assert-That "the ability was issued ($CLOAK_CMD, via $($arm.AbilityVia))" `
-                (@($lines | Select-String -Pattern "CMD id=$CLOAK_CMD ").Count -gt 0)
-            $start = @($lines | Select-String -Pattern "FANOUT start: cmd=$CLOAK_CMD .* units=(\d+)")
+            $lines = $arm.AbilityLines
+            Assert-That "the ability was issued ($ABILITY_CMD)" `
+                (@($lines | Select-String -Pattern "CMD id=$ABILITY_CMD ").Count -gt 0)
+            $start = @($lines | Select-String -Pattern "FANOUT start: cmd=$ABILITY_CMD .* units=(\d+)")
             Assert-That 'it was fanned out' ($start.Count -gt 0)
             if ($start.Count -gt 0) {
                 $u = [int]([regex]::Match($start[-1].Line, 'units=(\d+)').Groups[1].Value)
                 Assert-That "more than twelve units were commanded ($u)" ($u -gt 12)
             }
 
+            # The ability reached past the cap AND was paid for, IN COMBAT -- question 1's
+            # result again, on a fixture where the units are busy rather than standing
+            # still, which is the case the user was actually in.
             $mine = Get-Mine $arm.After
-            $cloaked = @($mine | Where-Object { $_.Order2 -eq $CLOAK_ORDER2 })
-            $notCloaked = @($mine | Where-Object { $_.Order2 -ne $CLOAK_ORDER2 })
-            Assert-That "more units cloaked than the engine's twelve ($($cloaked.Count))" `
-                ($cloaked.Count -gt 12)
-            # THE ENERGY HALF OF QUESTION 1, in game: the units that could pay did, and
-            # the ones that could not were skipped BY THE ENGINE -- same shape as Stim's
-            # hit-point gate, read from each unit's own CUnit+0xA2.
+            $stimmed = @($mine | Where-Object { $_.Stim -gt 0 })
+            Assert-That "more units carry the effect than the engine's twelve ($($stimmed.Count))" `
+                ($stimmed.Count -gt 12)
+            Assert-That "no timer exceeds the handler's own 0x$('{0:x}' -f $STIM_TIMER)" `
+                (@($stimmed | Where-Object { $_.Stim -gt $STIM_TIMER }).Count -eq 0)
             $before = @{}
             foreach ($u in (Get-Mine $arm.Engaged)) { $before[$u.Unit] = $u }
-            $paid = @($cloaked | Where-Object { $before.ContainsKey($_.Unit) -and $_.Energy -lt $before[$_.Unit].Energy })
-            Assert-That "every cloaked unit paid its own energy ($($paid.Count) of $($cloaked.Count))" `
-                ($cloaked.Count -gt 0 -and $paid.Count -eq $cloaked.Count)
-            $poorSpent = @($notCloaked | Where-Object { $before.ContainsKey($_.Unit) -and $_.Energy -lt $before[$_.Unit].Energy })
-            Assert-That "and not one unit that could not afford it was charged ($($notCloaked.Count) skipped, $($poorSpent.Count) charged)" `
-                ($poorSpent.Count -eq 0)
-            Write-Host ("       energies after: cloaked {0}; skipped {1}" -f `
-                (($cloaked | ForEach-Object { $_.Energy } | Sort-Object -Unique) -join ','),
-                (($notCloaked | ForEach-Object { $_.Energy } | Sort-Object -Unique) -join ','))
+            $paid = @($stimmed | Where-Object { $before.ContainsKey($_.Unit) -and $_.Hp -lt $before[$_.Unit].Hp })
+            Assert-That "every unit that gained the effect also paid for it ($($paid.Count) of $($stimmed.Count))" `
+                ($stimmed.Count -gt 0 -and $paid.Count -eq $stimmed.Count) `
+                '(hit points can also fall to enemy fire here, so this is a weaker form of the §5 assertion by design -- the strict per-unit arithmetic lives in test-stim-fanout.ps1, on a fixture with nothing shooting back)'
         }
     }
 
     if ($arms.Count -ge 2 -and $arms['fanout'].Engaged -and $arms['observe'].Engaged) {
         Step 'PLUGIN vs STOCK: the comparison this question was asked for' {
             $f = $arms['fanout']; $o = $arms['observe']
-            Write-Host ("       fanout : {0}/{1} busy units went idle across the ability" -f $f.Transitions.WentIdle, $f.Transitions.StillAlive)
-            Write-Host ("       observe: {0}/{1} busy units went idle across the ability" -f $o.Transitions.WentIdle, $o.Transitions.StillAlive)
-            Assert-That 'the plugin arm does not stop more units than stock does' `
-                ($f.Transitions.WentIdle -le $o.Transitions.WentIdle) `
-                "(fanout $($f.Transitions.WentIdle) vs observe $($o.Transitions.WentIdle))"
+            Write-Host ("       fanout : {0}/{1} units changed order across the ability ({2} went idle)" -f $f.Transitions.Changed, $f.Transitions.StillAlive, $f.Transitions.WentIdle)
+            Write-Host ("       observe: {0}/{1} units changed order across the ability ({2} went idle)" -f $o.Transitions.Changed, $o.Transitions.StillAlive, $o.Transitions.WentIdle)
+            Assert-That 'the plugin arm disturbs no more orders than stock does' `
+                ($f.Transitions.Changed -le $o.Transitions.Changed) `
+                "(fanout $($f.Transitions.Changed) vs observe $($o.Transitions.Changed))"
             Assert-That 'both arms were still fighting after the ability' `
                 (($f.EnemyHpLater -lt $f.EnemyHpAfter) -and ($o.EnemyHpLater -lt $o.EnemyHpAfter))
             # The stock arm must really be stock: no hook of ours in it at all.
@@ -436,7 +457,15 @@ finally {
 Write-Host ''
 Write-Host '[final] the run must balance'
 foreach ($m in $arms.Keys) {
-    $left = Get-Process -Id $arms[$m].Pid -ErrorAction SilentlyContinue
+    # WM_CLOSE is asynchronous and the game unloads the plugin on its way out, so a check
+    # taken the instant close-game returns can see a process that is already exiting. Give
+    # it a bounded moment rather than reporting a stranded process that is not stranded.
+    $left = $null
+    for ($i = 0; $i -lt 20; $i++) {
+        $left = Get-Process -Id $arms[$m].Pid -ErrorAction SilentlyContinue
+        if ($null -eq $left) { break }
+        Start-Sleep -Milliseconds 500
+    }
     Assert-That "the '$m' game process is gone" ($KeepOpen -or $null -eq $left)
 }
 Assert-That 'the generated map was cleaned up' ($KeepOpen -or -not (Test-Path -LiteralPath $mapPath))

@@ -181,7 +181,11 @@ function Invoke-Arm {
         Start-Sleep -Seconds 2
         Send-ScClick -Hwnd $hwnd -X 327 -Y 415
         Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 117 -Y 140
+        # The folder row is POSITIONAL and this task's folder is not necessarily first:
+        # another worker's 00-t021 sorts before 00-t022. Computed from the filesystem.
+        $folderRow = Get-ScMapFolderRow -MapsDir (Split-Path $mapDir -Parent) -FolderName (Split-Path $mapDir -Leaf)
+        Write-Host "       fixture folder is row $($folderRow.Row) (y=$($folderRow.Y)); siblings: $($folderRow.Siblings)"
+        Send-ScClick -Hwnd $hwnd -X 117 -Y $folderRow.Y
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393
         Start-Sleep -Milliseconds 800
         Send-ScClick -Hwnd $hwnd -X 117 -Y 159
