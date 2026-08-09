@@ -69,7 +69,23 @@ param(
     # Lower is how the combat fixture makes its victims die in seconds rather than
     # minutes without changing anything else about them.
     [ValidateRange(1, 100)]
-    [int]$UnitHp
+    [int]$UnitHp,
+    # --- the per-unit-cost variant (task 022) ------------------------------------
+    # Pre-damage the LAST N units of the player's block to -DamagedHp instead of
+    # -UnitHp, same type and same grid. One selection then holds units that can afford
+    # an ability's per-unit cost and units that cannot, so one keypress shows who the
+    # ENGINE skips.
+    [int]$DamagedCount = 0,
+    [ValidateRange(1, 100)]
+    [int]$DamagedHp,
+    # Energy for that same tail, as a percentage of the type's maximum. The energy
+    # counterpart of -DamagedHp, for abilities whose per-unit cost is energy.
+    [ValidateRange(1, 100)]
+    [int]$DamagedEnergy,
+    # Techs to mark available AND already-researched for -Player, written into PTEx.
+    # Without this nothing on a generated map has an ability that needs research --
+    # which is every ability with a per-unit cost (Stim Packs, both cloaks, Siege Mode).
+    [string[]]$TechResearched = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -111,6 +127,10 @@ if ($PSBoundParameters.ContainsKey('MinEnemyGap')) { $pyArgs += @('--min-enemy-g
 if ($EnemyRace) { $pyArgs += @('--enemy-race', $EnemyRace) }
 if ($EnemyOwner) { $pyArgs += @('--enemy-owner', $EnemyOwner) }
 if ($PSBoundParameters.ContainsKey('UnitHp')) { $pyArgs += @('--unit-hp', $UnitHp) }
+if ($DamagedCount -gt 0) { $pyArgs += @('--damaged-count', $DamagedCount) }
+if ($PSBoundParameters.ContainsKey('DamagedHp')) { $pyArgs += @('--damaged-hp', $DamagedHp) }
+if ($PSBoundParameters.ContainsKey('DamagedEnergy')) { $pyArgs += @('--damaged-energy', $DamagedEnergy) }
+foreach ($t in $TechResearched) { $pyArgs += @('--tech-researched', $t) }
 
 & $python @pyArgs
 exit $LASTEXITCODE

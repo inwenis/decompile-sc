@@ -166,6 +166,161 @@ static void LogSnapshot(const Snapshot* s) {
 }
 
 // ---------------------------------------------------------------------------
+// World scan (task 022) -- READ-ONLY, and deliberately INDEPENDENT of the hooks
+//
+// The fan-out's UNITSTATE line walks the SHADOW list, so it exists only in a mode
+// that installs hooks. Task 022 needs an oracle that also works in `-Mode observe`
+// -- the fully stock control run -- because the question it answers is "does the
+// game behave differently with our plugin in it?", and an oracle that only exists
+// on one side of that comparison cannot answer it.
+//
+// So this walks the ENGINE's own per-player unit lists (playerUnitList,
+// SC_VA_PLAYER_UNIT_LIST, threaded on CUnit+0x6C -- sc_addresses.h) and reports one
+// line per unit. Every read goes through SafeRead, exactly like the selection
+// snapshot: a wrong offset produces a missing field, never a fault inside the game.
+// Nothing here writes, hooks, or calls into the game -- it is the task-008 observer
+// pointed at a different global.
+//
+// Off by default (%SCPLUGIN_WORLDSCAN%, launcher flag -WorldScan 1): the existing
+// suites parse this log, and a fixture with 36 units would otherwise add 36 lines
+// per marker to every one of their runs.
+// ---------------------------------------------------------------------------
+
+static bool g_worldScan = false;
+
+// Per player, so one runaway list cannot bury the log. A fixture big enough to hit
+// this is a fixture whose per-unit detail was never going to be readable anyway.
+#define SC_WORLDSCAN_MAX_LINES 64
+
+static bool ReadU8(DWORD addr, unsigned* out) {
+    BYTE v = 0;
+    if (!SafeRead((const void*)addr, &v, 1)) return false;
+    *out = v;
+    return true;
+}
+
+static bool ReadU16(DWORD addr, unsigned* out) {
+    WORD v = 0;
+    if (!SafeRead((const void*)addr, &v, 2)) return false;
+    *out = v;
+    return true;
+}
+
+static bool ReadU32(DWORD addr, DWORD* out) {
+    DWORD v = 0;
+    if (!SafeRead((const void*)addr, &v, 4)) return false;
+    *out = v;
+    return true;
+}
+
+// The same bounds/stride test the fan-out applies before it follows a unit pointer
+// (sc_fanout.cpp UnitPtrValid): inside the unit array, on a CUnit stride, within the
+// index range the wire tag can encode. A link that fails it is a torn read of a list
+// the game thread is editing, not a unit -- following it is what turns a benign race
+// into a fault.
+static bool WorldUnitPtrValid(DWORD ptr) {
+    if (!ptr) return false;
+    DWORD arrayBase = (DWORD)(DWORD_PTR)Rt(SC_VA_UNIT_ARRAY_BASE);
+    if (ptr < arrayBase) return false;
+    DWORD off = ptr - arrayBase;
+    if (off % SC_CUNIT_SIZE != 0) return false;
+    return (off / SC_CUNIT_SIZE + 1) <= SC_MAX_UNIT_INDEX;
+}
+
+// Counts one player's list without logging. Used for the second pass -- see ScanWorld.
+static int CountPlayerUnits(int p, bool* ok) {
+    DWORD head = 0;
+    *ok = false;
+    if (!ReadU32((DWORD)(DWORD_PTR)Rt(SC_VA_PLAYER_UNIT_LIST) + (DWORD)p * 4, &head))
+        return 0;
+    int n = 0;
+    for (DWORD u = head; u && n < SC_MAX_UNITS_WALK; ) {
+        if (!WorldUnitPtrValid(u)) return n;
+        DWORD next = 0;
+        if (!ReadU32(u + SC_CUNIT_OFF_LIST_NEXT, &next)) return n;
+        u = next;
+        ++n;
+    }
+    *ok = true;
+    return n;
+}
+
+static void ScanWorld(const char* tag) {
+    if (!g_worldScan) return;
+
+    // EVERY player, including the empty ones, and player 7 last. A reader waits for
+    // the p=7 summary to know the whole scan for this marker has landed; skipping
+    // empty players would make that signal depend on which slots happen to own units.
+    for (int p = 0; p < SC_MAX_PLAYERS; ++p) {
+        DWORD head = 0;
+        bool  headOk = ReadU32((DWORD)(DWORD_PTR)Rt(SC_VA_PLAYER_UNIT_LIST) + (DWORD)p * 4,
+                               &head);
+
+        DWORD unit = headOk ? head : 0;
+        int   n = 0, logged = 0;
+        bool  walkComplete = headOk && head == 0;
+        // Bounded exactly like the fan-out's own reachability walk: never trust a
+        // game list to terminate.
+        while (unit && n < SC_MAX_UNITS_WALK) {
+            if (!WorldUnitPtrValid(unit)) break;
+            unsigned type = 0xFFFF, order = 0xFF, order2 = 0xFF, owner = 0xFF, energy = 0xFFFF;
+            unsigned stim = 0xFF;
+            DWORD hp = 0xFFFFFFFF, flags = 0, sprite = 0;
+            unsigned px = 0xFFFF, py = 0xFFFF;
+
+            ReadU16(unit + SC_CUNIT_OFF_UNIT_ID, &type);
+            ReadU32(unit + SC_CUNIT_OFF_HITPOINTS, &hp);
+            ReadU8(unit + SC_CUNIT_OFF_ORDER_ID, &order);
+            ReadU8(unit + SC_CUNIT_OFF_ORDER2_ID, &order2);
+            ReadU8(unit + SC_CUNIT_OFF_PLAYER, &owner);
+            ReadU16(unit + SC_CUNIT_OFF_ENERGY, &energy);
+            ReadU8(unit + SC_CUNIT_OFF_STIM_TIMER, &stim);
+            ReadU32(unit + SC_CUNIT_OFF_FLAGS, &flags);
+            if (ReadU32(unit + SC_CUNIT_OFF_SPRITE, &sprite) && sprite) {
+                ReadU16(sprite + SC_CSPRITE_OFF_POS_X, &px);
+                ReadU16(sprite + SC_CSPRITE_OFF_POS_Y, &py);
+            }
+
+            if (logged < SC_WORLDSCAN_MAX_LINES) {
+                // hp and stim on the SAME line for the same unit: the two halves of a
+                // per-unit-cost claim ("it gained the effect AND it paid") are a JOINT
+                // property, and two separate histograms can only ever imply the pairing.
+                ScLog("WORLD [%s] p=%d i=%d unit=0x%08X owner=%u type=0x%03X hp=%d "
+                      "order=0x%02X order2=0x%02X stim=%u energy=%u pos=(%u,%u) "
+                      "flags=0x%08X",
+                      tag ? tag : "-", p, n, (unsigned)unit, owner, type, (int)hp,
+                      order, order2, stim, energy, px, py, (unsigned)flags);
+                ++logged;
+            }
+
+            DWORD next = 0;
+            if (!ReadU32(unit + SC_CUNIT_OFF_LIST_NEXT, &next)) break;
+            unit = next;
+            ++n;
+            if (!next) walkComplete = true;
+        }
+
+        // THE CONTROL'S HONESTY CHECK. This runs on the observer thread, so the game
+        // thread can head-insert or unlink while the walk is in progress. That cannot
+        // fault (every link is validated above and the walk is bounded), but it CAN
+        // make one pass MISS a unit that is in play the whole time -- and an undercount
+        // in an order-stability measurement looks exactly like the defect being hunted
+        // ("a unit stopped existing"). So the count is taken a second time and both are
+        // reported: a reader that sees `units=13 recount=13 complete=1` knows the sample
+        // was not torn, and one that sees a disagreement knows to discard it rather than
+        // to believe it. Sampling on the game thread would be better still, and is not
+        // available here on purpose -- it would need a hook, and the stock arm of this
+        // comparison must install none.
+        bool recountOk = false;
+        int  recount = CountPlayerUnits(p, &recountOk);
+        ScLog("WORLD [%s] p=%d units=%d recount=%d complete=%d%s",
+              tag ? tag : "-", p, n, recount,
+              (walkComplete && recountOk) ? 1 : 0,
+              n > logged ? " (per-unit lines above truncated)" : "");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Marker channel
 //
 // Correlating "what I did on screen" with "what the log says" after the fact is
@@ -216,6 +371,12 @@ static void PollMarker(void) {
     lstrcpynA(g_lastMarker, buf, sizeof(g_lastMarker));
     ScLog("---- MARK: %s ----", g_lastMarker);
 
+    // Task 022: the world scan fires on the same trigger, and BEFORE the shadow dump,
+    // so a run that reads both gets the engine's own view first. It is the only oracle
+    // that exists in observe mode, which is the stock arm of the plugin-vs-stock
+    // comparison.
+    ScanWorld(g_lastMarker);
+
     // Task 015: a marker is the driver saying "look now", so it is also the trigger for
     // the per-unit state dump. Driving it off the marker rather than off a timer is what
     // makes an unattended assertion possible at all -- the test writes a marker, waits for
@@ -240,12 +401,23 @@ static DWORD GetPollMs(void) {
 
 static ScMode g_mode = SC_MODE_OBSERVE;
 
+static bool GetWorldScan(void) {
+    char buf[16];
+    DWORD n = GetEnvironmentVariableA("SCPLUGIN_WORLDSCAN", buf, sizeof(buf));
+    if (n == 0 || n >= sizeof(buf)) return false;
+    return buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y';
+}
+
 static DWORD WINAPI ObserverThread(LPVOID) {
     const DWORD pollMs = GetPollMs();
+    g_worldScan = GetWorldScan();
     ResolveMarkerPath();
     ScLog("OBSERVER start pollMs=%u mode=%s%s", (unsigned)pollMs, ScModeName(g_mode),
           g_mode == SC_MODE_OBSERVE ? " (read-only; no writes to game memory)" : "");
     ScLog("OBSERVER marker file: %s", g_markerPath);
+    ScLog("OBSERVER worldScan=%d (%%SCPLUGIN_WORLDSCAN%%; read-only walk of the engine's "
+          "own per-player unit lists, installs no hook and works in observe mode)",
+          g_worldScan ? 1 : 0);
 
     Snapshot prev;
     memset(&prev, 0xFF, sizeof(prev));  // force a first log line

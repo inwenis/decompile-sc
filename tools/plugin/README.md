@@ -569,6 +569,9 @@ The one exception is the deprecated `-Windowed` switch, which *does* write
 | `test-selection-circles.ps1` | **unattended** end-to-end test: launches, walks the menus, loads a stock map, drives a drag box and an order, asserts on the plugin log |
 | `test-fanout-orders.ps1` | **unattended** end-to-end test of the per-opcode policy: Stop and Hold Position reach all 24 units of a >12 selection, asserted from every unit's own order byte, not from the picture |
 | `test-burrow-fanout.ps1` | **unattended** end-to-end test of an untargeted ABILITY: generates a 36-Lurker Use-Map-Settings map, boxes it, presses Burrow once, asserts `burrowed` goes 0/36 → 36/36 from each unit's own flags. Deletes the map afterwards |
+| `test-stim-fanout.ps1` | **unattended** end-to-end test of an ability with a PER-UNIT COST (task 022): 36 Marines, 24 healthy and 12 pre-damaged to exactly the gate value, one Stim press — every unit's effect state AND hit points read per unit. Also proves the cost cannot kill |
+| `test-ability-in-combat.ps1` | **unattended** PLUGIN-vs-STOCK test (task 022): >12 units mid-fight, one ability keypress, every unit's order compared across it. Answers "do our replayed Selects interrupt orders that are already running" |
+| `test-sunken-acquire.ps1` | **unattended** PLUGIN-vs-STOCK test (task 022): does a Sunken Colony attack a Medic that walks into range? Same map in both modes, plus a Marine arm as the control that the Sunken can shoot from there at all |
 | `check-game-windows.ps1` | out-of-process launch health check |
 | `close-game.ps1` | WM_CLOSE the game and verify it exited (hard rule: never leave one running) |
 
@@ -579,6 +582,9 @@ The one exception is the deprecated `-Windowed` switch, which *does* write
 ./tools/plugin/test-selection-circles.ps1 -NoCircles # the off-switch run
 ./tools/plugin/test-fanout-orders.ps1                # Stop / Hold / Attack / Patrol at >12
 ./tools/plugin/test-burrow-fanout.ps1                # Burrow (an untargeted ABILITY) at 36
+./tools/plugin/test-stim-fanout.ps1                  # Stim at 36: the EFFECT and the per-unit COST
+./tools/plugin/test-ability-in-combat.ps1            # plugin vs stock: an ability used mid-fight
+./tools/plugin/test-sunken-acquire.ps1               # plugin vs stock: does a Sunken shoot a Medic
 ```
 
 `test-burrow-fanout.ps1` is the one that needs no stock map: no `.scm`/`.scx` Blizzard shipped can
