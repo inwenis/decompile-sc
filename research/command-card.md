@@ -27,12 +27,18 @@ observation this document derives from the binary).
    byte-exact Cloak: it builds `{0x21, shiftFlag}` and queues it. The conditionParam is the same
    tech id [`ability-semantics.md`](ability-semantics.md) §3 derived independently from the
    *receive*-side handler `0x00491B30` — two derivations, one number. [§3](#3-the-buttonset-table-and-the-button-record)
-2. **On both fixtures it read GREYED**, and that is the whole answer to tasks 022 and 023. A card
-   button's enabled state is one bit, `control+0x18 & 0x2`, and **both** of the engine's input
-   paths test it and return: the mouse at `0x00459947` and the hotkey predicate at `0x004588C0`.
-   A greyed button emits nothing, arms nothing, and logs nothing — which is exactly the shape of
-   the "the entire ability row is inert" negative. There was never an input to find.
+2. **On both fixtures the generator could build at the time, it read GREYED**, and that is the
+   whole answer to tasks 022 and 023. A card button's enabled state is one bit,
+   `control+0x18 & 0x2`, and **both** of the engine's input paths test it and return: the mouse at
+   `0x00459947` and the hotkey predicate at `0x004588C0`. A greyed button emits nothing, arms
+   nothing, and logs nothing — which is exactly the shape of the "the entire ability row is inert"
+   negative. There was never an input to find.
    [§5](#5-the-two-input-paths-and-the-one-bit-they-both-refuse-on)
+2b. **With the generator fixed, the same slot reads ENABLED and both input paths fire it.** On a
+   fixture whose researched bit the *engine* confirms, slot 7 comes up `enabled`, the key `C`
+   emits `0x21`, and a click at the slot centre computed from the live dialog emits `0x21`. The
+   unit's secondary order goes to `0x6D`. Nothing about the input path ever needed fixing.
+   [§7](#7-what-this-settles-and-what-it-does-not)
 3. **It was greyed because the fixture never granted the tech, and the fixture never granted the
    tech because `make_test_map.py` wrote PTEx with the wrong index order.** The engine reads the
    section **player-major** (`player * 44 + tech`); the generator wrote it **tech-major**
@@ -432,6 +438,32 @@ Fixed here: one shared `ptex_index(tech, player)` so the write and the read cann
 again, and `tests/make-test-map.Tests.ps1` pins the literal offsets the applier dictates (including
 that `(10, 0)` is byte 10 and not byte 120) so the arithmetic cannot regress silently.
 
+**And the check that finally caught it was an INDEPENDENT one**: the card read-back carries the
+engine's own `techResearched` array, so `probe-ghost-cloak.ps1` asks the engine what it granted
+instead of asking the generator what it wrote. Both suites that research a tech now assert against
+that array, not against the generator's stdout.
+
+### 6.4 The recurring shape: a check that shares the flaw it checks
+
+This project has now met the same failure four times, and it is worth naming so the fifth is
+recognised on sight. In each case the verification could not fail:
+
+| # | the check | the flaw it shared |
+| --- | --- | --- |
+| 1 | map browser clicked by row number, "verified" by the row number | both sides assumed the same stale row |
+| 2 | `Get-ScSelectionGroup` asserted against the same parse it was derived from (task 023) | one parser, two roles |
+| 3 | "the stock arm installed no hooks", matched on a string the plugin never logs | the pattern could not match anything |
+| 4 | `read_techs_researched` verifying `write_techs_researched` at the same wrong index (§6.3) | one index function, two roles |
+
+A fifth appeared inside this task's own probe and is the cleanest illustration of all: the probe
+named the Cloak slot by its Cloak action alone, so once the probe had **successfully cloaked the
+Ghost**, the slot showed its Decloak face and the probe reported "no Cloak button on the card".
+A false negative manufactured by its own success. The rule that would have caught every one of
+these: **the thing that verifies must not be the thing that acts, and it must be shown to give a
+different answer in the failing direction** — which is why the read-back is now taken *before* any
+input as well as after, and why `hooktest [13]` reads the same card twice, once with the disabled
+bit set and once clear.
+
 ## 7. What this settles, and what it does not
 
 **Settled.**
@@ -445,15 +477,40 @@ that `(10, 0)` is byte 10 and not byte 120) so the arithmetic cannot regress sil
   level.
 - The send-side ability gate reads `clientSelectionGroup`
   ([`ability-semantics.md`](ability-semantics.md) §5.2's open question).
+- **With the generator fixed, the button comes up enabled and both input paths fire it.** §7.1.
+
+### 7.1 The confirming run (2026-08-09, after the PTEx fix)
+
+The prediction the greyed reading makes is precise, so it is worth stating what was checked
+against what. With `make_test_map.py` writing PTEx player-major, on the same 18-Ghost fixture:
+
+| what was read | before the fix | after the fix |
+| --- | --- | --- |
+| engine's `techResearched` for player 0 | `[24 25 … 43]` — **10 absent** | `[10 24 25 … 43]` |
+| card slot 7, read before any input | `GREYED`, icon `0x00FC`, act `0x00423730` | `enabled`, same icon and action |
+| key `C`, 18-Ghost selection | nothing | `CMD id=0x21` |
+| card slot 7 clicked at its computed centre `(522,454)` | nothing | `CMD id=0x21` |
+| secondary order after it fired | — | `0x6D` on the acting units |
+| the same slot with the Ghost now cloaked | — | shows its **Decloak** face, act `0x00423270`, and `C` emits `0x22` |
+
+Three things follow, and the third is the one worth carrying:
+
+1. **Task 022's A–Z sweep was not a keyboard result.** `C` is the Cloak hotkey and always was; the
+   sweep ran against a greyed button, and `0x004588C0` refuses one before any letter is compared.
+2. **The mouse path was never mis-aimed either.** The click that works is at the centre computed
+   from the live control rect, which is within a few pixels of the coordinate task 022 guessed —
+   the guess was not the problem.
+3. **The read predicted the input, not the other way round.** The enabled/greyed bit was read out
+   of memory first and the input outcome matched it in both directions. That is the standard this
+   repo's UI claims should meet.
 
 **Not settled, and deliberately kept separate.**
 
-- **The user's actual report — a Ghost that WAS cloaked and stopped attacking — is untouched by
-  any of this.** Everything above is about a Ghost that could not cloak at all. The order-stability
-  A/B on a genuinely cloaked Ghost still has to be run, and it needs the game.
-- Whether, with the tech properly researched, the button comes up enabled and `0x21` reaches the
-  wire. That is one in-game run; it is deferred, not attempted and failed. The probe asserts it
-  either way (`tools/plugin/probe-ghost-cloak.ps1` arm E and step [10]).
+- **The user's actual report — a Ghost that WAS cloaked and stopped attacking — is a different
+  question from all of the above**, which is about a Ghost that could not cloak at all. It is
+  answered separately by the order-stability A/B in
+  [`ability-semantics.md`](ability-semantics.md) §7, run on real Ghosts now that Cloak can be
+  issued.
 - The `disabledString` rewrite path (`reason == 0x15` → `0x2FA`) is mapped but no string id in this
   document has been resolved to text; `0x004C36F0` (string → hotkey character) is named and not
   decompiled.
