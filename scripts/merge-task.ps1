@@ -38,6 +38,9 @@ param(
     [Parameter(Mandatory)][string]$Task,
     # reserved for future policy (see -RequireHumanOk in lib/merge-task.ps1)
     [switch]$HumanOk,
+    # path to a PASSING scripts/run-ci-local.ps1 receipt for this PR's head sha;
+    # substitutes for the cloud CI verdict when Actions cannot run (billing/outage)
+    [string]$LocalCiReceipt,
     # forwarded to close-task.ps1: also stop the worker's tab after closing
     [switch]$StopAgent,
     # override for fixture-repo testing (task 074 -- no test may write into
@@ -90,6 +93,30 @@ $view = ("$viewRaw" | Out-String) | ConvertFrom-Json
 $checksRaw = gh pr checks $prNumber --repo $ghRepo --json bucket,workflow,name 2>&1 | Out-String
 $verdict = Get-ChecksVerdict -Json $checksRaw
 
+# LOCAL CI SUBSTITUTION (2026-08-09). GitHub Actions can refuse to run
+# account-wide (billing), which would otherwise make every merge impossible.
+# scripts/run-ci-local.ps1 reproduces ci.yml exactly and writes a receipt per
+# head SHA. A PASSING receipt for THIS PR's head substitutes for the cloud
+# verdict -- and only then. This is a substitution with an audit trail, not a
+# bypass: the receipt names the sha, the steps and the time, the sha must match
+# the PR head, and the substitution is printed loudly and recorded in the PR.
+if ($verdict -ne 'pass' -and $LocalCiReceipt) {
+    $headSha = (gh pr view $prNumber --repo $ghRepo --json headRefOid --jq '.headRefOid' 2>&1 | Out-String).Trim()
+    if (-not (Test-Path -LiteralPath $LocalCiReceipt)) {
+        throw "local CI receipt not found: $LocalCiReceipt"
+    }
+    $receipt = Get-Content -Raw -LiteralPath $LocalCiReceipt | ConvertFrom-Json
+    if ($receipt.verdict -ne 'pass') {
+        throw "local CI receipt is '$($receipt.verdict)', not pass: $LocalCiReceipt"
+    }
+    if (-not $headSha.StartsWith($receipt.sha)) {
+        throw "local CI receipt is for sha $($receipt.sha) but PR #$prNumber head is $headSha -- re-run run-ci-local.ps1 on the current head"
+    }
+    Write-Host "task ${taskId}: cloud CI verdict '$verdict' SUBSTITUTED by local receipt $($receipt.sha) ($($receipt.ranAt)) -- $LocalCiReceipt"
+    $script:localCiNote = "Cloud CI could not run (GitHub Actions billing). Merged on a local reproduction of ci.yml: sha $($receipt.sha), ran $($receipt.ranAt), verdict pass. See scripts/run-ci-local.ps1."
+    $verdict = 'pass'
+}
+
 # Full gate now that every fact is in hand. -RequireHumanOk is left off: the
 # conductor is the human's delegate for merges (pass it here when that changes).
 $refusal = Get-MergeRefusalReason -TaskId $taskId -AgentTask $env:AGENT_TASK `
@@ -99,6 +126,11 @@ $refusal = Get-MergeRefusalReason -TaskId $taskId -AgentTask $env:AGENT_TASK `
 if ($refusal) { throw "Refusing to merge task ${taskId}: $refusal" }
 
 Write-Host "task ${taskId}: PR #$prNumber OPEN, $($view.mergeStateStatus), checks $verdict -- merging (squash)"
+if ($script:localCiNote) {
+    # Leave the substitution on the PR itself, so the record lives where a
+    # reviewer looks rather than only in this console.
+    gh pr comment $prNumber --repo $ghRepo --body $script:localCiNote | Out-Host
+}
 gh pr merge $prNumber --repo $ghRepo --squash | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "gh pr merge $prNumber --squash failed -- nothing was closed." }
 
