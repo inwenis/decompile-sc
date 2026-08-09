@@ -451,27 +451,33 @@ function Send-ScKey {
 # Level 3 is why nothing here is per-fixture-folder: EVERY row this harness clicks is
 # computed from the filesystem, and what actually opened is verified before proceeding.
 #
-# THE LISTING MODEL, read off captured frames rather than assumed. Two frames from two
-# different tasks (C:\sc-work\logs\016-frames\05-browse.png, header "BroodWar", and
-# ...\06-maps.png, header "maps"; the same listing appears again in
-# 015-probe-scroll\01-maps-root.png) show:
+# THE LISTING MODEL, read off captured frames rather than assumed:
 #
 #   * `[Up One Level]` is NOT pinned to the top -- it is sorted among the directories by
-#     its own displayed name. 05-browse.png reads, in order:
+#     its own displayed name. C:\sc-work\logs\016-frames\05-browse.png reads, in order:
 #         [Allied]  [Ladder]  [Up One Level]  [WebMaps]  (2)Astral Balance.scm  ...
 #     which is exactly alphabetical over {Allied, Ladder, Up One Level, WebMaps}. That
 #     single fact IS level 3.
 #   * Directories (including that entry) come first, then map files, each group sorted.
-#   * `Maps\` is the browser's ROOT: 06-maps.png has no `[Up One Level]` row.
-#   * `BroodWar` is NOT LISTED under `Maps\` (06-maps.png starts at `[campaign]`, and the
-#     scrollbar thumb is at the top -- 015-probe-scroll\02-campaign-listing.png shows what
-#     a scrolled-down thumb looks like, so this is not a scrolled view). The mechanism is
-#     not established; the exclusion is recorded as an observation and
-#     Assert-ScBrowserListing re-checks it live on every run, so if it is wrong the run
-#     fails loudly instead of clicking a row off by one.
-#   * Six rows are visible at a 640x480 client; a longer listing scrolls, and this
-#     harness has no scroll primitive -- so a target below row 6 THROWS rather than
-#     clicking whatever is on row 6.
+#   * `Maps\` is the browser's ROOT: it has no `[Up One Level]` row.
+#   * Six rows are visible at a 640x480 client.
+#
+# THE LIST IS SCROLLED WHEN IT OPENS, AND THAT IS NOT A DETAIL -- it is the whole reason
+# this needed a live probe rather than a directory listing. Measured on 2026-08-09
+# (C:\sc-work\logs\023\scroll-frames): with `00-t000` and `00-t023` both present, the
+# freshly-opened browser showed
+#     [00-t023] [Allied] [Ladder] [Up One Level] [WebMaps] (2)Astral Balance.scm
+# -- entry 1 was off the top. Clicking the list's own UP ARROW until the rows stop moving
+# then showed
+#     [00-t000] [00-t023] [Allied] [Ladder] [Up One Level] [WebMaps]
+# which is the filesystem order exactly. So the harness does not model the initial scroll
+# offset at all: `Sync-ScBrowserToTop` puts the list in the ONE state the model describes,
+# and every row is computed from there.
+#
+# (An earlier reading of the same evidence had `BroodWar` "not listed" under `Maps\`,
+# from a frame that starts at `[campaign]`. It was a scrolled view, not an exclusion.
+# Recorded here because a harness that silently skips a directory would put every row
+# below it off by one -- exactly the bug this file exists to kill.)
 #
 # Geometry: the frames above are FULL-WINDOW captures, offset ~(+5,+32) from the client
 # coordinates every click uses (Save-ScWindowImage). Row 1's text sits at image y~172,
@@ -487,9 +493,12 @@ $script:ScBrowserOkX         = 516
 $script:ScBrowserOkY         = 393
 $script:ScBrowserUpEntry     = 'Up One Level'
 $script:ScBrowserMapExt      = @('.scm', '.scx')
-# Directories the browser does not show in its root listing. Observed, not derived --
-# see the block comment above.
-$script:ScBrowserHiddenInRoot = @('BroodWar')
+# The list's own scroll-up arrow, read off the same frames (image (344,173), less the
+# (+5,+32) window-to-client offset).
+$script:ScBrowserUpArrowX    = 339
+$script:ScBrowserUpArrowY    = 141
+$script:ScBrowserDownArrowX  = 339
+$script:ScBrowserDownArrowY  = 211
 
 function Get-ScBrowserRowY {
     param([Parameter(Mandatory)][int]$Row)
@@ -539,11 +548,7 @@ function Get-ScBrowserListing {
 
     $dirNames = @(Get-ChildItem -LiteralPath $full -Directory -ErrorAction Stop |
                   ForEach-Object { $_.Name })
-    if ($isRoot) {
-        $dirNames = @($dirNames | Where-Object { $script:ScBrowserHiddenInRoot -notcontains $_ })
-    } else {
-        $dirNames += $script:ScBrowserUpEntry
-    }
+    if (-not $isRoot) { $dirNames += $script:ScBrowserUpEntry }
     $fileNames = @(Get-ChildItem -LiteralPath $full -File -ErrorAction Stop |
                    Where-Object { $script:ScBrowserMapExt -contains $_.Extension.ToLowerInvariant() } |
                    ForEach-Object { $_.Name })
@@ -603,13 +608,13 @@ function Get-ScBrowserRowOccupancy {
     Which of the six visible rows currently have TEXT on them, read off the live window.
     .DESCRIPTION
     Not OCR and not a picture: Get-ScRegionFingerprint returns a hex digest of one
-    rectangle, and an EMPTY row of the list is flat background, so every empty row
-    fingerprints the same and an occupied one does not. That turns "how many entries is
-    the browser actually showing" into something a script can answer -- which is what
-    makes the filesystem model above CHECKABLE rather than merely plausible.
+    rectangle. Six digests, in row order.
 
-    Returns the six fingerprints in row order. The caller decides what empty means; see
-    Assert-ScBrowserListing, which uses the last visible row as its reference.
+    They answer exactly one question -- DID THIS ROW CHANGE -- and that is all the callers
+    here ask (Sync-ScBrowserToTop: has the list stopped moving; Test-ScBrowserCanScroll:
+    did it move at all). They do NOT say whether a row has text on it: the list control is
+    transparent, so a blank row shows whatever menu artwork is behind it and two blank rows
+    do not match each other.
 
     The strip is 18px tall (one row pitch less a pixel, so neighbouring rows cannot bleed
     into each other) and stops short of the scrollbar at client x~336.
@@ -621,62 +626,116 @@ function Get-ScBrowserRowOccupancy {
     }
 }
 
-function Assert-ScBrowserListing {
+function Sync-ScBrowserToTop {
     <#
     .SYNOPSIS
-    Prove the browser is showing the directory this run thinks it opened.
+    Scroll the map browser's list to its first entry, and know that it got there.
     .DESCRIPTION
-    The computed row is only as good as the listing model behind it, so the model is
-    checked against the live window rather than trusted: the number of OCCUPIED rows must
-    equal the number of entries the filesystem predicts for the directory just opened.
+    THE STEP THAT MAKES THE FILESYSTEM MODEL TRUE. A freshly opened browser is already
+    scrolled -- measured, not assumed (see the block comment above Get-ScBrowserListing:
+    entry 1 was off the top of a listing this harness was about to click row 1 of). Rather
+    than model an offset that depends on what the game remembers, this puts the list in
+    the one state the model describes.
 
-    That is what catches all three levels of the positional-click bug at the moment they
-    happen instead of minutes later:
-      * opened a stock folder by mistake -- `Allied` holds dozens of maps, the count is
-        nothing like 2;
-      * opened nothing at all (the click landed on a file row) -- the listing did not
-        change and the count is the parent's;
-      * the model itself is wrong (a sort order or the `Maps\` exclusion) -- the count
-        disagrees on the very first run rather than silently on somebody else's.
-
-    LIMIT, stated rather than hidden: with six entries or more the visible window is full,
-    there is no empty row to use as a reference, and this can only report that. The
-    fixture folders this harness opens hold one map file plus `[Up One Level]`, so the
-    check is live exactly where it matters. It is also NOT an identity check -- two
-    different folders holding one map each look the same. The identity claim is the
-    suite's own in-process unit assertion after the map loads; this is the early, loud
-    half.
+    It clicks the list's own up arrow in batches and stops when a batch changes nothing,
+    which is what "the top" looks like through the only oracle available here -- the row
+    fingerprints. Termination is therefore observed, not counted: a listing 95 entries long
+    can need far more clicks than any constant a caller would guess, and running out of
+    them silently would leave the list somewhere arbitrary. Running out THROWS instead.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][IntPtr]$Hwnd,
-        [Parameter(Mandatory)][psobject]$Listing
+        [int]$ClicksPerBatch = 8,
+        [int]$MaxBatches = 20
     )
-    $visible = $script:ScBrowserVisibleRows
-    if ($Listing.Count -ge $visible) {
-        Write-Host ("       browser: $($Listing.Dir) has $($Listing.Count) entries, filling all " +
-                    "$visible visible rows -- occupancy not checkable (no empty row to compare against)")
-        return
+    Assert-ScDrivable -Hwnd $Hwnd
+    # One activation for the whole burst; the clicks themselves skip it, because paying
+    # the foreground check per click would dominate a 160-click scroll.
+    Assert-ScWindowActive -Hwnd $Hwnd -Because 'scrolling the map browser, which'
+    $prev = @(Get-ScBrowserRowOccupancy -Hwnd $Hwnd)
+    for ($batch = 1; $batch -le $MaxBatches; $batch++) {
+        for ($i = 0; $i -lt $ClicksPerBatch; $i++) {
+            Send-ScClick -Hwnd $Hwnd -X $script:ScBrowserUpArrowX -Y $script:ScBrowserUpArrowY `
+                         -HoldMs 40 -SettleMs 40 -NoActivate
+        }
+        Start-Sleep -Milliseconds 250
+        $now = @(Get-ScBrowserRowOccupancy -Hwnd $Hwnd)
+        $moved = $false
+        for ($r = 0; $r -lt $now.Count; $r++) { if ($now[$r] -ne $prev[$r]) { $moved = $true } }
+        if (-not $moved) { return }
+        $prev = $now
     }
-    $fp = @(Get-ScBrowserRowOccupancy -Hwnd $Hwnd)
-    $empty = $fp[$visible - 1]
-    $occupied = 0
-    for ($r = 1; $r -le $visible; $r++) { if ($fp[$r - 1] -ne $empty) { $occupied++ } }
+    throw ("drive-game: the map browser list was still moving after $($MaxBatches * $ClicksPerBatch) " +
+           'scroll-up clicks, so its top is not established and no row can be computed from ' +
+           'the filesystem. Refusing to click a row.')
+}
 
-    $bad = @()
-    for ($r = 1; $r -le $Listing.Count; $r++) {
-        if ($fp[$r - 1] -eq $empty) { $bad += "row $r is blank but should read '$($Listing.Entries[$r-1].Name)'" }
+function Get-ScBrowserInfoPanel {
+    <#
+    .SYNOPSIS
+    A fingerprint of the map-information panel -- the browser's own read-back of which map
+    is selected.
+    .DESCRIPTION
+    The panel is blank while the selected row is a FOLDER, and shows the map's name, size,
+    tileset and slot counts while it is a MAP. That is the browser telling us what it
+    thinks it has, which is exactly what a positional click cannot tell us. A digest, not
+    a picture (see Get-ScRegionFingerprint).
+
+    Rectangle in client coordinates at a 640x480 client, covering the title and the
+    size/tileset/slots block.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][IntPtr]$Hwnd)
+    Get-ScRegionFingerprint -Hwnd $Hwnd -X 405 -Y 60 -Width 225 -Height 200
+}
+
+function Assert-ScBrowserMapSelected {
+    <#
+    .SYNOPSIS
+    Prove the row this run just clicked actually SELECTED A MAP.
+    .DESCRIPTION
+    THE CHECK THAT SURVIVED CONTACT. Two others did not, and both failures are worth
+    keeping here because they are the kind that reads as working:
+
+      * counting rows that "have text on them" -- the list control is TRANSPARENT, so a
+        blank row shows menu artwork through it and two blank rows do not match each
+        other (C:\sc-work\logs\023\walk-frames\5-top2.png: the fixture folder correctly
+        opened, four blank rows, four different fingerprints);
+      * clicking the scrollbar's down arrow to measure the list's length -- a SHORT list
+        draws no scrollbar, so that click lands in the list body and selects a row, and
+        the probe reports movement it caused itself.
+
+    What is left is the browser's own read-back. Selecting a FOLDER row blanks the panel
+    -- measured, not assumed: clicking `[00-t000]` while `(2)Astral Balance.scm` was
+    selected changed the panel, and every folder row leaves the same blank one. So the
+    caller grounds the comparison by selecting a folder row first, and then a click that
+    CHANGES the panel selected a map, while a click that leaves it selected a folder or
+    nothing at all.
+
+    That catches the failure that actually costs runs -- the walk did not go where it
+    thought, so the "map row" is a folder row or empty (the browser still in the parent
+    listing, a stale folder shifting every row, a sort order that drifted). It does NOT
+    identify WHICH map: two fixture folders each holding one map look alike here. That
+    claim belongs to the suite's in-process unit assertion after the map loads, which is
+    the only place it can honestly be made.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][IntPtr]$Hwnd,
+        [Parameter(Mandatory)][string]$Before,
+        [Parameter(Mandatory)][string]$After,
+        [Parameter(Mandatory)][psobject]$Listing,
+        [Parameter(Mandatory)][psobject]$Entry
+    )
+    if ($Before -eq $After) {
+        throw ("drive-game: clicking row $($Entry.Row) of $($Listing.Dir) did not select a map -- " +
+               "the map-information panel did not change, which is what a FOLDER row or an EMPTY " +
+               "row does. The filesystem says row $($Entry.Row) is '$($Entry.Name)' " +
+               "($($Listing.Text)), so the browser is not showing what this run thinks it is. " +
+               'Refusing to launch: a run that plays the wrong map reports confident nonsense.')
     }
-    for ($r = $Listing.Count + 1; $r -le $visible; $r++) {
-        if ($fp[$r - 1] -ne $empty) { $bad += "row $r has text on it but the directory has only $($Listing.Count) entries" }
-    }
-    if ($bad.Count -gt 0) {
-        throw ("drive-game: the map browser is NOT showing $($Listing.Dir). Expected " +
-               "$($Listing.Count) entries ($($Listing.Text)); the window shows $occupied occupied " +
-               "row(s) -- $($bad -join '; '). Refusing to go on: a browser showing a different " +
-               'folder is how a run plays somebody else''s map and reports confident nonsense.')
-    }
-    Write-Host "       browser: $($Listing.Dir) -- $($Listing.Count) entries, verified on screen"
+    Write-Host "       browser: row $($Entry.Row) selected a map (info panel $Before -> $After)"
 }
 
 function Enter-ScBrowserEntry {
@@ -713,9 +772,9 @@ function Enter-ScBrowserEntry {
     Send-ScClick -Hwnd $Hwnd -X $script:ScBrowserOkX -Y $script:ScBrowserOkY
     if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
 
-    $opened = Get-ScBrowserListing -Dir $target -MapsRoot $MapsRoot
-    Assert-ScBrowserListing -Hwnd $Hwnd -Listing $opened
-    $opened
+    # The new listing arrives scrolled too, so put it back where the model can read it.
+    Sync-ScBrowserToTop -Hwnd $Hwnd
+    Get-ScBrowserListing -Dir $target -MapsRoot $MapsRoot
 }
 
 function Select-ScBrowserMap {
@@ -751,6 +810,7 @@ function Select-ScBrowserMap {
     }
     $targetDir = [IO.Path]::GetFullPath((Split-Path $mapFull -Parent)).TrimEnd('\')
 
+    Sync-ScBrowserToTop -Hwnd $Hwnd
     $listing = Get-ScBrowserListing -Dir $cur -MapsRoot $mapsRoot
     # Up to the common ancestor. `$targetDir + '\'` guards the prefix test against
     # `...\Maps\BroodWar2` looking like a child of `...\Maps\BroodWar`.
@@ -774,8 +834,24 @@ function Select-ScBrowserMap {
     $entry = Get-ScBrowserEntry -Listing $listing -Name $leaf
     if ($entry.Kind -ne 'file') { throw "drive-game: '$leaf' is not a map file row in $cur." }
     Write-Host "       browser: selecting $leaf (row $($entry.Row), y=$($entry.Y))"
+    # GROUND THE COMPARISON FIRST. Selecting any folder row blanks the map-information
+    # panel, so clicking one before the map row makes "the panel changed" mean "that row
+    # was a map" rather than "that row was a different map from whatever was selected".
+    # Without it the check would pass on a browser sitting in the wrong folder as long as
+    # the row happened to hold some map (see Assert-ScBrowserMapSelected).
+    $folderRow = @($listing.Entries |
+        Where-Object { $_.Kind -ne 'file' -and $_.Row -le $script:ScBrowserVisibleRows } |
+        Select-Object -First 1)
+    if ($folderRow.Count -gt 0) {
+        Send-ScClick -Hwnd $Hwnd -X $script:ScBrowserRowX -Y $folderRow[0].Y
+        Start-Sleep -Milliseconds 300
+    }
+    $panelBefore = Get-ScBrowserInfoPanel -Hwnd $Hwnd
     Send-ScClick -Hwnd $Hwnd -X $script:ScBrowserRowX -Y $entry.Y
     Start-Sleep -Milliseconds 500
+    $panelAfter = Get-ScBrowserInfoPanel -Hwnd $Hwnd
+    Assert-ScBrowserMapSelected -Hwnd $Hwnd -Before $panelBefore -After $panelAfter `
+                                -Listing $listing -Entry $entry
     $entry
 }
 

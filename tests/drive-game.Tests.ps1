@@ -70,15 +70,19 @@ Describe 'map-browser listing model' {
         } finally { Remove-Item -LiteralPath $t.Root -Recurse -Force }
     }
 
-    It 'gives the maps root no parent entry and hides BroodWar (016-frames\06-maps.png)' {
+    It 'gives the maps root no parent entry, and does list BroodWar' {
+        # A frame of this listing starts at [campaign], which was first read as "BroodWar
+        # is excluded". It was a SCROLLED view -- the live probe that established
+        # Sync-ScBrowserToTop showed entry 1 sitting above the visible window. A model
+        # that silently drops a directory puts every row below it off by one, which is
+        # the bug this file exists to catch, so it is pinned here.
         $t = New-TestMapsTree
         try {
             $l = Get-ScBrowserListing -Dir $t.Maps -MapsRoot $t.Maps
             $l.IsRoot | Should -BeTrue
             $l.Entries.Name | Should -Not -Contain 'Up One Level'
-            $l.Entries.Name | Should -Not -Contain 'BroodWar'
-            $l.Entries[0..5].Name | Should -Be @('campaign', 'ladder', 'oldladder', 'replays',
-                                                 'scenario', '(2)Bottleneck.scm')
+            $l.Entries[0..5].Name | Should -Be @('BroodWar', 'campaign', 'ladder', 'oldladder',
+                                                 'replays', 'scenario')
         } finally { Remove-Item -LiteralPath $t.Root -Recurse -Force }
     }
 
