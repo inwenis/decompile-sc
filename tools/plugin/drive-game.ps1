@@ -22,6 +22,23 @@ Why posted messages and not synthetic input:
 - Focus is NOT required (task 012 probe 3). The window must not be MINIMISED (probe 2) --
   `Assert-ScDrivable` refuses in that state rather than posting into a black hole.
 
+KNOWN LIMIT -- POSITIONAL SELECTION IS A CORRECTNESS HAZARD, not a convenience. Every
+menu step in this repo clicks a ROW, not a name: "the map file is row 2, because there is
+exactly one .scx in the folder". That assumption is not checkable from a click, and when
+it breaks the run does not fail -- it succeeds against the wrong thing and reports
+confident nonsense.
+
+It has happened. On 2026-08-09 another worker's `022-ghosts.scx` appeared in the shared
+fixture folder beside `combat.scx`; it sorts first, so a suite's row-2 click loaded THEIR
+map and the test went on to box 36 units of type `0x01` (Ghost) where its own fixture
+places Lurkers (`0x67`). The map was deleted afterwards too, but that was the lesser harm:
+a deleted file is noticed, a silently substituted one is not.
+
+So a test that selects by position must make the assumption behind the position TRUE
+before it clicks -- refuse to start if anything it did not create is in that folder -- and
+must assert what it actually got afterwards (unit types and counts), never just that a
+click landed. AGENTS.md § "Shared test-fixture folder" carries the fixture-naming rules.
+
 KNOWN LIMIT -- modifier keys. `GetKeyState` is in the import table, and Windows does not
 update a thread's key-state table for POSTED keyboard messages. So a game that reads shift
 via `GetKeyState` cannot be shift-clicked this way. `Send-ScClick -Shift` therefore does
