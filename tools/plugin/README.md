@@ -762,7 +762,7 @@ The one exception is the deprecated `-Windowed` switch, which *does* write
 | `test-fanout-orders.ps1` | **unattended** end-to-end test of the per-opcode policy: Stop and Hold Position reach all 24 units of a >12 selection, asserted from every unit's own order byte, not from the picture |
 | `test-burrow-fanout.ps1` | **unattended** end-to-end test of an untargeted ABILITY: generates a 36-Lurker Use-Map-Settings map, boxes it, presses Burrow once, asserts `burrowed` goes 0/36 → 36/36 from each unit's own flags. Deletes the map afterwards |
 | `test-stim-fanout.ps1` | **unattended** end-to-end test of an ability with a PER-UNIT COST (task 022): 36 Marines, 24 healthy and 12 pre-damaged to exactly the gate value, one Stim press — every unit's effect state AND hit points read per unit. Also proves the cost cannot kill |
-| `test-ability-in-combat.ps1` | **unattended** PLUGIN-vs-STOCK test (task 022): >12 units mid-fight, one ability keypress, every unit's order compared across it. Answers "do our replayed Selects interrupt orders that are already running" |
+| `test-ability-in-combat.ps1` | **unattended** PLUGIN-vs-STOCK test (task 022): >12 units mid-fight, one ability used once, every unit's order compared across it. Answers "do our replayed Selects interrupt orders that are already running". `-Ability stim` (default, 36 Marines, key `T`) or `-Ability cloak` (task 026: 36 GHOSTS, the user's own unit, clicked on the Cloak card slot located in the live card by its Button action) |
 | `test-sunken-acquire.ps1` | **unattended** PLUGIN-vs-STOCK test (task 022): does a Sunken Colony attack a Medic that walks into range? Same map in both modes, plus a Marine arm as the control that the Sunken can shoot from there at all |
 | `test-control-groups.ps1` | **unattended** end-to-end test of task 021: boxes 36, Ctrl+1, clears the selection, presses 1, and asserts all 36 come back with the engine still holding 12 — then that one order reaches all 36. Also checks the recall's ordering assumption against the live `activePlayerSelection`, the HUD row and circles across a recall, Shift+1, and a recall over an already-active >12 selection |
 | `test-production-queue.ps1` | **unattended** end-to-end test of task 025: generates a one-Command-Center map with starting resources, presses Train more times than the queue can hold, and asserts the queue length out of `CUnit+0x98`, the per-item promotions, and that minerals move exactly once per item |
@@ -778,6 +778,7 @@ The one exception is the deprecated `-Windowed` switch, which *does* write
 ./tools/plugin/test-burrow-fanout.ps1                # Burrow (an untargeted ABILITY) at 36
 ./tools/plugin/test-stim-fanout.ps1                  # Stim at 36: the EFFECT and the per-unit COST
 ./tools/plugin/test-ability-in-combat.ps1            # plugin vs stock: an ability used mid-fight
+./tools/plugin/test-ability-in-combat.ps1 -Ability cloak  # ... on real cloaking Ghosts (task 026)
 ./tools/plugin/test-sunken-acquire.ps1               # plugin vs stock: does a Sunken shoot a Medic
 ./tools/plugin/test-control-groups.ps1               # Ctrl+1 stores 36, pressing 1 brings 36 back
 ./tools/plugin/test-combat-death.ps1                 # the liveness gate, and a >12 group across deaths

@@ -1,9 +1,8 @@
 ﻿#Requires -Version 7
 <#
 .SYNOPSIS
-Name the Ghost's Personnel Cloaking button -- and, if nothing names it, say WHY with a
-control that separates "the input never reached the card" from "the ability was never on
-the card in the first place".
+Name the Ghost's Personnel Cloaking button -- by READING THE COMMAND CARD OUT OF PROCESS
+MEMORY, and then by driving the slot the read names.
 
 .DESCRIPTION
 THE QUESTION, inherited from task 022. That task could not drive Cloak. It reported that
@@ -12,6 +11,20 @@ produced a frame reading "Select Target" -- i.e. that slot is a TARGETED ability
 (Lockdown), so the click armed something and issued nothing. The underlying mechanism was
 answered without it, but the user's original report was about a CLOAKED GHOST
 specifically, so the unit itself is still unanswered.
+
+WHAT TASK 026 ADDED, AND WHY IT IS THE ARM THAT SETTLES IT. Arms A-D below are all POSTED
+INPUT, and posted input cannot separate "the button refused" from "the click missed" --
+both leave the log empty. Arm E does not click: the plugin walks the card dialog
+(0x0068C148) and reports, per slot, the control's visible/disabled flags and the Button
+record behind it (research/command-card.md). Two things fall out of that read:
+
+  * the ENABLED/GREYED bit, control+0x18 & 0x2. BOTH of the engine's input paths test it
+    and refuse -- the mouse at 0x00459947 and the hotkey predicate at 0x004588C0 -- so a
+    greyed button is silent to every key and every click by construction, which is the
+    exact shape of the arms A-C negative;
+  * the slot RECTANGLES, so arm C clicks a point COMPUTED from the live dialog instead of
+    a coordinate read off a screenshot. That removes the "the click missed" confound that
+    made task 022's reading of the bottom-left slot ambiguous in the first place.
 
 WHAT THIS MEASURES. Every command the client sends goes through queueCommand, which the
 plugin logs as `CMD id=0x.. len=.. bytes=[..]` (research/command-path.md 1). So a keypress
@@ -43,6 +56,11 @@ FOUR ARMS, because a bare negative from one of them means nothing:
      is the FIXTURE, not the input path. If they differ, the ability is on the card and
      the blocker really is the input path.
 
+  E. THE MEMORY READ (task 026), run on BOTH fixtures. No input at all: the card's own
+     nine controls, their flags, and the Button record behind each. It names the Cloak
+     slot, its ability, its conditionParam (the tech id) and its enabled/greyed state,
+     and it is the only arm whose answer does not depend on a posted message arriving.
+
 Positive before negative (AGENTS.md, 2026-08-09): a bare "nothing emitted 0x21" is worth
 nothing unless the same mechanism is shown WORKING, so the run also requires that some key
 and some card slot emitted a basic-card command (Hold 0x2B / Stop 0x1A). Both are asserted
@@ -57,7 +75,7 @@ before the Cloak verdict is read.
 [CmdletBinding()]
 param(
     [string]$GameDir = 'C:\sc-work\1161-base',
-    [string]$LogDir = 'C:\sc-work\logs\023',
+    [string]$LogDir = 'C:\sc-work\logs\026',
     [string]$FixtureDir,
     [int]$UnitCount = 18,
     # A..Z. The command card's hotkeys are plain letters -- no modifier is involved, so
@@ -82,6 +100,22 @@ function Assert-That {
 
 $CLOAK_CMD = '0x21'      # Personnel Cloaking (research/ability-semantics.md 3)
 $GHOST_TYPE = 1
+# The Ghost Cloak BUTTON's action function. This is what NAMES a card slot as Cloak in
+# the memory read, and it is byte-exact rather than inferred: 0x00423730 is
+# `if (sendGate()) { buf = {0x21, shiftFlag}; queueCommand(buf, 2); }`
+# (research/command-card.md 4, listing at work/scratch/card/act-listing.tsv).
+$CLOAK_ACTION = '00423730'
+$DECLOAK_ACTION = '00423270'   # the same slot's other button; it sends 0x22
+# THE SLOT IS A TOGGLE, and the read has to be written for that. The Ghost's buttonset
+# holds BOTH faces at slot 7 and the card draws whichever matches the portrait unit's
+# current state -- Cloak (act 0x00423730, icon 0x00FC) while it is visible, Decloak
+# (act 0x00423270, icon 0x00FD) while it is cloaked. Measured on the 2026-08-09 run: the
+# card read taken after the key sweep had already cloaked the Ghost showed the DECLOAK
+# face, and a probe that named the slot by the Cloak action alone called that "no Cloak
+# button on the card" -- a false negative produced by its own earlier success.
+$CLOAK_PAIR = @($CLOAK_ACTION, $DECLOAK_ACTION)
+function Get-CloakSlots { param($Card) @($Card.Slots | Where-Object { $_.HasButton -and $_.Action -in $CLOAK_PAIR }) }
+function Get-CloakFace  { param($Slot) $(if ($Slot.Action -eq $CLOAK_ACTION) { 'Cloak' } else { 'Decloak' }) }
 
 # The command card, in CLIENT coordinates. Read off a captured frame with the (+5,+32)
 # window offset already subtracted -- the trap that made task 021 "fix" a coordinate that
@@ -92,7 +126,7 @@ $CARD_COLS = @(523, 568, 613)
 $CARD_ROWS = @(375, 418, 458)
 $CARD_RECT = @{ X = 500; Y = 355; Width = 140; Height = 125 }
 
-if (-not $FixtureDir) { $FixtureDir = Join-Path $GameDir 'Maps\BroodWar\00-t023' }
+if (-not $FixtureDir) { $FixtureDir = Join-Path $GameDir 'Maps\BroodWar\00-t026' }
 # Two fixtures, declared together: the ownership rule is per-RUN, so a suite that creates
 # more than one file must name them all up front or its own second fixture reads as
 # somebody else's (the 2026-08-09 self-deadlock, AGENTS.md).
@@ -110,6 +144,35 @@ foreach ($p in @($logPath, $markerPath)) { if (Test-Path -LiteralPath $p) { Remo
 $gamePid = 0
 $launchLock = $null
 $table = @(); $solo = @(); $card = @()
+# Arm E: the two card read-backs, no-tech and with-tech.
+$cardNoTech = $null
+$cardTech   = $null
+
+# One card read-back, printed slot by slot. The print is the point as much as the
+# object is: this is the first time anything in this repo can say what the command
+# card HOLDS rather than what it looks like.
+function Read-Card {
+    param([string]$Tag)
+    $c = Get-ScCardState -LogPath $logPath -Tag $Tag -MarkerPath $markerPath
+    if (-not $c.Ok) { Write-Host "       [card:$Tag] no command card in this process state"; return $c }
+    # The parentheses are load-bearing: `-f` binds tighter than `+`, so a format string
+    # built by concatenating two literals formats only the SECOND half and prints the
+    # first half's placeholders verbatim.
+    Write-Host (("       [card:{0}] cardId={1} (portrait type=0x{2:X3} buttonset={3} energy={4}) " +
+                 "buttons={5} shown={6} greyed={7} reason={8}") -f
+                $Tag, $c.CardId, $c.PortraitType, $c.PortraitSet, $c.PortraitEnergy,
+                $c.SetCount, $c.Shown, $c.Greyed, $c.Reason)
+    Write-Host ("       [card:{0}] player {1} tech: available=[{2}] researched=[{3}]" -f `
+                $Tag, $c.TechPlayer, ($c.TechAvailable -join ' '), ($c.TechResearched -join ' '))
+    foreach ($s in ($c.Slots | Sort-Object Index)) {
+        $btn = if ($s.HasButton) {
+            "act=0x{0} cond=0x{1} cparam={2} name=0x{3:X4}" -f $s.Action, $s.Cond, $s.CondParam, $s.NameStr
+        } else { '(no button)' }
+        Write-Host ("       [card:{0}]   slot {1} {2,-7} icon=0x{3:X4} {4}" -f
+                    $Tag, $s.Index, $s.State, $s.Icon, $btn)
+    }
+    $c
+}
 # The world state read AT THE MOMENT a press or click emitted 0x21, not after the sweep.
 # Cloak is a TOGGLE and it drains energy, so a snapshot taken at the end of a 26-key sweep
 # could deny a cloak that really happened.
@@ -136,9 +199,9 @@ function New-GhostFixture {
 function Start-GhostGame {
     param([string]$MapPath)
     Wait-ScNoGameRunning
-    $script:launchLock = Enter-ScLaunchLock -TaskId '023-ghost-cloak'
+    $script:launchLock = Enter-ScLaunchLock -TaskId '026-ghost-cloak'
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
-        -Mode fanout -WorldScan 1 -InjectWindowedHelper WMode -NoLaunchLock `
+        -Mode fanout -WorldScan 1 -CardScan 1 -InjectWindowedHelper WMode -NoLaunchLock `
         -GameDir $GameDir -LogPath $logPath 6>&1 | ForEach-Object {
             Write-Host "       $_"
             if ("$_" -match 'scinject:\s*PID=(\d+)') { $script:gamePid = [int]$Matches[1] }
@@ -223,11 +286,21 @@ try {
     Send-ScClick -Hwnd $hwnd -X 315 -Y 180
     Start-Sleep -Milliseconds 800
     $ctlState = Get-ScUnitState -LogPath $logPath -Tag 'control-single' -MarkerPath $markerPath
-    Assert-That "the control selection really is a single Ghost (n=$($ctlState.N))" `
-        ($ctlState.N -eq 1 -and $ctlState.Types.ContainsKey('0x01'))
+    $ctlEngineSel = @(Get-ScSelectionGroup -LogPath $logPath)
+    # The engine's selection, not the plugin's shadow -- see Select-One in [4]. Here they
+    # happen to agree (nothing has boxed a >12 group yet in this arm), which is precisely
+    # why the difference went unnoticed until a run where they did not.
+    Assert-That ("the control selection really is a single Ghost (engine={0}, shadow n={1})" -f `
+                 $ctlEngineSel.Count, $ctlState.N) `
+        ($ctlEngineSel.Count -eq 1 -and $ctlState.Types.ContainsKey('0x01'))
     $ctlCard = Get-ScRegionFingerprint -Hwnd $hwnd -X $CARD_RECT.X -Y $CARD_RECT.Y `
                    -Width $CARD_RECT.Width -Height $CARD_RECT.Height
     Write-Host "       command card WITHOUT the tech: $ctlCard"
+    # ARM E, half one: the same card, read out of memory. This is what makes the
+    # fingerprint comparison in [9] mean something specific -- a hash that differs
+    # says "something changed", a slot table says WHICH SLOT and HOW.
+    $cardNoTech = Read-Card -Tag 'card-no-tech'
+    Assert-That 'the no-tech card was read out of process memory' ($cardNoTech.Ok)
     Save-ScWindowImage -Hwnd $hwnd -Path (Join-Path $shotDir '00-card-no-tech.png') -FullWindow | Out-Null
     Stop-GhostGame
 
@@ -245,7 +318,22 @@ try {
     $hwnd = Start-GhostGame -MapPath $mapPath
 
     function Select-Block { Send-ScDrag -Hwnd $hwnd -X1 115 -Y1 25 -X2 515 -Y2 330 -Steps 16 }
-    function Select-One   { Send-ScClick -Hwnd $hwnd -X 315 -Y 180 }
+    # ONE Ghost -- clicked, then VERIFIED AGAINST THE ENGINE'S OWN SELECTION, and retried.
+    #
+    # `Get-ScUnitState`.N is NOT the engine's selection. It is the plugin's SHADOW group:
+    # the same line reads `n=18 live=18 visible=12 overflow=6`, and the shadow survives a
+    # single click that replaces the client selection. Asserting `N -eq 1` therefore asked
+    # the wrong structure -- on the 2026-08-09 run it read 18 while the observer's own
+    # `clientSelectionGroup [0]=0x006237C8` (one entry, no more) showed the click had done
+    # exactly what was intended. Same class as the Get-ScSelectionGroup defect task 023
+    # found: two structures, one name, and the assertion pointed at whichever was handy.
+    function Select-One {
+        for ($i = 1; $i -le 4; $i++) {
+            Send-ScClick -Hwnd $hwnd -X 315 -Y 180 | Out-Null
+            Start-Sleep -Milliseconds 700
+            if (@(Get-ScSelectionGroup -LogPath $logPath).Count -eq 1) { return }
+        }
+    }
     # One key at a time, and what it put on the wire. Returns the table.
     function Invoke-KeySweep {
         param([string]$What, [scriptblock]$Reselect)
@@ -282,16 +370,49 @@ try {
     Assert-That 'none is cloaked before the sweep' `
         (-not $state.Orders2.ContainsKey('0x6D')) "($($state.Line))"
     Save-ScWindowImage -Hwnd $hwnd -Path (Join-Path $shotDir '01-boxed.png') -FullWindow | Out-Null
+    # The >12 block's card, read out of memory. Worth having on its own: the mixed /
+    # multi-select card resolver (0x00458BC0) can substitute a group card, and if it
+    # did, no ability button would be on this card at all.
+    #
+    # THIS IS ALSO THE CANONICAL READ, and the reason it is kept: it is taken BEFORE any
+    # input in this run, so the toggle has not been flipped and slot 7 is showing its
+    # Cloak face. Every later read is of a card whose state this probe has itself changed.
+    $cardBoxed = Read-Card -Tag 'card-boxed'
+    $boxedCloak = @(Get-CloakSlots $cardBoxed) | Select-Object -First 1
+    Assert-That 'the untouched card carries the Cloak button' ($null -ne $boxedCloak)
+    if ($boxedCloak) {
+        Write-Host ("       BEFORE ANY INPUT: slot {0} is showing its {1} face and is {2}" -f `
+                    $boxedCloak.Index, (Get-CloakFace $boxedCloak), $boxedCloak.State)
+        Assert-That 'and before any input it is showing the CLOAK face, not Decloak' `
+            ($boxedCloak.Action -eq $CLOAK_ACTION) "(action 0x$($boxedCloak.Action))"
+        Assert-That 'and with Personnel Cloaking researched it is ENABLED' (-not $boxedCloak.Disabled) `
+            "(state=$($boxedCloak.State); a greyed button here means the fixture never granted the tech)"
+        Assert-That 'the ENGINE agrees the fixture researched Personnel Cloaking (tech 10)' `
+            (@($cardBoxed.TechResearched) -contains 10) `
+            "(engine says [$(@($cardBoxed.TechResearched) -join ' ')])"
+    }
 
     Write-Host ''
     Write-Host "[5] sweep A: the whole $UnitCount-Ghost selection"
-    $table = @(Invoke-KeySweep -What 'many' -Reselect { Select-Block })
+    # NO @() HERE. Invoke-KeySweep already returns its array unrolled-proof (`,$rows`), and
+    # wrapping it again builds a ONE-element array holding the 26-row array. Measured on the
+    # 2026-08-09 run: the summary in [8] then printed a single row whose Key was the whole
+    # alphabet and whose commands were every id concatenated -- so which key fired Cloak was
+    # unreadable, and every per-row count was 1. Same trap test-ability-in-combat.ps1
+    # documents for Get-Mine; it is a property of the leading comma, not of that function.
+    $table = Invoke-KeySweep -What 'many' -Reselect { Select-Block }
 
     Write-Host ''
     Write-Host '[6] sweep B: ONE Ghost, same keys'
     Select-One
+    $engineSel = @(Get-ScSelectionGroup -LogPath $logPath)
     $one = Get-ScUnitState -LogPath $logPath -Tag 'single' -MarkerPath $markerPath
-    Assert-That "the single-unit selection really is one unit (n=$($one.N))" ($one.N -eq 1)
+    # The ENGINE's selection is the claim being made here, so it is the thing asserted.
+    # The plugin's shadow size is printed next to it because the two differing is normal
+    # and used to look like a failure -- see Select-One.
+    Assert-That ("the ENGINE is holding exactly one unit (engine={0}, plugin shadow n={1})" -f `
+                 $engineSel.Count, $one.N) ($engineSel.Count -eq 1) `
+        "(engine holds: $($engineSel -join ' '))"
     Save-ScWindowImage -Hwnd $hwnd -Path (Join-Path $shotDir '02-single.png') -FullWindow | Out-Null
 
     # THE COMPARISON THE WHOLE NEGATIVE RESTS ON, taken on the same selection size as the
@@ -300,34 +421,96 @@ try {
                     -Width $CARD_RECT.Width -Height $CARD_RECT.Height
     Write-Host "       command card WITH the tech:    $techCard"
 
-    $solo = @(Invoke-KeySweep -What 'one ' -Reselect { Select-One })
+    # ===================== ARM E, THE ONE THAT SETTLES IT =====================
+    Write-Host ''
+    Write-Host '[6b] ARM E: the command card, READ OUT OF PROCESS MEMORY (one Ghost, tech researched)'
+    $cardTech = Read-Card -Tag 'card-tech'
+    Assert-That 'the with-tech card was read out of process memory' ($cardTech.Ok)
+    Assert-That 'the card resolved to the Ghost''s own buttonset, not a group card' `
+        ($cardTech.CardId -eq $cardTech.PortraitSet -and $cardTech.OverrideSel -eq 228 -and
+         $cardTech.OverrideSub -eq 228) `
+        "(cardId=$($cardTech.CardId) pset=$($cardTech.PortraitSet) ovrSel=$($cardTech.OverrideSel) ovrSub=$($cardTech.OverrideSub))"
+
+    # THE NAMING. A card slot IS Cloak when its Button's action is the one that builds
+    # command 0x21 -- read out of the binary byte for byte at 0x00423748
+    # (`MOV byte [EBP-4],0x21`), not inferred from an icon or a position.
+    # Either face of the toggle names the slot. Which one is showing is REPORTED rather
+    # than required, because by this point the sweeps above have very likely cloaked the
+    # Ghost and flipped it -- and that flip is itself evidence the ability fired.
+    $cloakSlots = @(Get-CloakSlots $cardTech)
+    Assert-That 'exactly one card slot carries the Cloak toggle (0x00423730 / 0x00423270)' `
+        ($cloakSlots.Count -eq 1) "(found $($cloakSlots.Count))"
+    $cloak = $cloakSlots | Select-Object -First 1
+    if ($cloak) {
+        Write-Host (("       THE GHOST'S CLOAK BUTTON IS CARD SLOT {0}: showing its {5} face, {1}, " +
+                     "icon 0x{2:X4}, conditionParam {3} (Personnel Cloaking), condition 0x{4}") -f
+                    $cloak.Index, $cloak.State, $cloak.Icon, $cloak.CondParam, $cloak.Cond,
+                    (Get-CloakFace $cloak))
+        if ($boxedCloak) {
+            Assert-That 'and it is the same slot the untouched card named' `
+                ($cloak.Index -eq $boxedCloak.Index) "(now $($cloak.Index), was $($boxedCloak.Index))"
+        }
+        Assert-That 'and its conditionParam is Personnel Cloaking (tech 10)' ($cloak.CondParam -eq 10) `
+            "(cparam=$($cloak.CondParam))"
+
+        # WHAT THE TECH IS SUPPOSED TO CHANGE, and it is the STATE, not the presence.
+        # The button sits in the Ghost's buttonset unconditionally; research decides
+        # whether the condition returns 1 (enabled) or -1 (greyed). Task 023 compared a
+        # PIXEL HASH of the card region here and concluded from two differing hashes
+        # that the tech had changed the card. It had not: the slot tables are identical.
+        # A frame hash is not an oracle for card content -- the slot table is.
+        $ctlCloak = @($cardNoTech.Slots | Where-Object { $_.HasButton -and $_.Action -eq $CLOAK_ACTION }) |
+                    Select-Object -First 1
+        Assert-That 'the Cloak button is on the card with OR without the tech (it is the STATE that research changes)' `
+            ($null -ne $ctlCloak) '(no-tech card carried no Cloak button)'
+        if ($ctlCloak) {
+            Write-Host "       no-tech card, same slot $($ctlCloak.Index): $($ctlCloak.State)"
+            Assert-That 'without the tech it is greyed' ($ctlCloak.Disabled) "($($ctlCloak.State))"
+        }
+
+        # THE FIXTURE CHECK the user's observation demanded, done in the engine's own
+        # memory rather than in the generator's read-back of its own write.
+        $researched = @($cardTech.TechResearched)
+        Write-Host "       player $($cardTech.TechPlayer) researched techs, per the engine: [$($researched -join ' ')]"
+        Assert-That 'the ENGINE agrees the fixture researched Personnel Cloaking (tech 10)' `
+            ($researched -contains 10) `
+            "(engine says [$($researched -join ' ')]; if 10 is missing the fixture never granted it and the grey is a FIXTURE bug, not an engine one)"
+        Assert-That 'and with it researched, the Cloak button is ENABLED' (-not $cloak.Disabled) `
+            "(state=$($cloak.State))"
+    }
+
+    $solo = Invoke-KeySweep -What 'one ' -Reselect { Select-One }   # no @() -- see [5]
 
     Write-Host ''
-    Write-Host '[7] sweep C: the nine command-card slots, clicked'
-    $slotNames = @('top-left','top-mid','top-right','mid-left','mid-mid','mid-right',
-                   'bottom-left','bottom-mid','bottom-right')
+    Write-Host '[7] sweep C: the nine command-card slots, clicked at COMPUTED centres'
     Select-One
-    $i = 0
-    foreach ($cy in $CARD_ROWS) {
-        foreach ($cx in $CARD_COLS) {
-            $name = $slotNames[$i]; $i++
-            $mark = Get-ScLogLineCount -LogPath $logPath
-            Send-ScClick -Hwnd $hwnd -X $cx -Y $cy -SettleMs 700
-            $ids = @(Get-EmittedIds -Mark $mark)
-            $armed = @(Get-ArmedIds)
-            $card += [pscustomobject]@{ Key = "$name ($cx,$cy)"; Commands = ($ids -join ' ')
-                                        Armed = ($armed -join ' ') }
-            Write-Host ("       [card] {0,-12} ({1},{2}) -> {3}{4}" -f $name, $cx, $cy,
-                        $(if ($ids.Count) { $ids -join ' ' } else { '(nothing)' }),
-                        $(if ($armed.Count) { "   then a target click issued $($armed -join ' ')" } else { '' }))
-            if (($ids + $armed) -contains $CLOAK_CMD -and -not $cloakProof) {
-                $cloakProof = Get-ScUnitState -LogPath $logPath -Tag "cloaked-$name" -MarkerPath $markerPath
-                Save-ScWindowImage -Hwnd $hwnd -Path (Join-Path $shotDir '03-cloaked.png') -FullWindow | Out-Null
-            }
-            Send-ScClick -Hwnd $hwnd -X 315 -Y 180 -Right     # cancel anything it armed
-            Start-Sleep -Milliseconds 400
-            Select-One
+    # Never a hardcoded slot centre again. Each point is the live control's own rect
+    # plus the dialog's origin (Get-ScCardSlotPoint) -- so a slot that emits nothing
+    # emitted nothing at the place the engine itself hit-tests.
+    $cardGeom = Read-Card -Tag 'card-slots'
+    foreach ($slotNo in 1..9) {
+        $s = Get-ScCardSlot -Card $cardGeom -Slot $slotNo
+        if (-not $s) { Write-Host "       [card] slot $slotNo not present in the dialog"; continue }
+        $p = Get-ScCardSlotPoint -Card $cardGeom -Slot $slotNo
+        $mark = Get-ScLogLineCount -LogPath $logPath
+        Send-ScClick -Hwnd $hwnd -X $p.X -Y $p.Y -SettleMs 700
+        $ids = @(Get-EmittedIds -Mark $mark)
+        $armed = @(Get-ArmedIds)
+        $card += [pscustomobject]@{ Key = "slot $slotNo ($($p.X),$($p.Y)) $($s.State)"
+                                    Commands = ($ids -join ' '); Armed = ($armed -join ' ')
+                                    Slot = $slotNo; State = $s.State
+                                    Action = $(if ($s.HasButton) { $s.Action } else { '' }) }
+        Write-Host ("       [card] slot {0} {1,-7} ({2},{3}) -> {4}{5}" -f $slotNo, $s.State,
+                    $p.X, $p.Y,
+                    $(if ($ids.Count) { $ids -join ' ' } else { '(nothing)' }),
+                    $(if ($armed.Count) { "   then a target click issued $($armed -join ' ')" } else { '' }))
+        if (($ids + $armed) -contains $CLOAK_CMD -and -not $cloakProof) {
+            $cloakProof = Get-ScUnitState -LogPath $logPath -Tag "cloaked-slot$slotNo" -MarkerPath $markerPath
+            Save-ScWindowImage -Hwnd $hwnd -Path (Join-Path $shotDir '03-cloaked.png') -FullWindow | Out-Null
         }
+        Send-ScClick -Hwnd $hwnd -X 315 -Y 180 -Right     # cancel anything it armed
+        Start-Sleep -Milliseconds 400
+        Select-One
     }
 
     Write-Host ''
@@ -357,18 +540,19 @@ try {
         "(from: $(@($cardBasic | ForEach-Object { $_.Key }) -join ', '))"
 
     Write-Host ''
-    Write-Host '[9] the control: did the tech change the command card at all?'
+    Write-Host '[9] the two fingerprints, kept as corroboration and NOT as the oracle'
     Write-Host "       no tech: $ctlCard"
     Write-Host "       tech:    $techCard"
-    $cardChanged = ($ctlCard -ne $techCard)
-    if ($cardChanged) {
-        Write-Host '       the researched fixture DOES draw a different command card, so the'
-        Write-Host '       ability is on the card and a key/click that emits nothing is an'
-        Write-Host '       INPUT-path result.'
-    } else {
-        Write-Host '       the two cards are IDENTICAL. The researched fixture put nothing new'
-        Write-Host '       on the card, so no key and no click could ever have issued Cloak on'
-        Write-Host '       it -- the blocker is the FIXTURE, not the input path.'
+    # AGENTS.md, 2026-08-09: read a dialog's content from memory, never hash its pixels.
+    # Task 023 concluded from exactly this pair of hashes that the researched fixture "drew
+    # a different command card", and the slot tables above show what a hash cannot: WHICH
+    # slot, and in which state. A hash answers "did any pixel change", which is a different
+    # question -- and here the two cards differ partly because the Ghost is CLOAKED by this
+    # point, i.e. because of what this probe did, not because of the tech.
+    Write-Host ('       (a difference here means only "some pixel changed". The slot tables above are ' +
+                'the measurement; these two lines are kept so the old comparison stays visible.)')
+    if ($ctlCard -eq $techCard) {
+        Write-Host '       identical -- which on its own would still say nothing either way.'
     }
 
     if ($hit.Count -ge 1) {
@@ -382,10 +566,88 @@ try {
                 ($cloakProof.Orders2.ContainsKey('0x6D')) "($($cloakProof.Line))"
         }
     }
-    # The verdict, stated so that the run FAILS while the question is open. A probe that
-    # exits 0 on "nothing found" is a probe nobody re-runs.
-    Assert-That "something emitted Personnel Cloaking ($CLOAK_CMD)" ($hit.Count -ge 1) `
-        "(nothing did: no key A-Z at either selection size, and no card slot -- neither on the press itself nor on the target click that follows it; the command card $(if ($cardChanged) { 'DID' } else { 'did NOT' }) change when the tech was researched)"
+
+    Write-Host ''
+    Write-Host '[10] the verdict, reconciled against the memory read'
+    # THE POINT OF TASK 026. Arms A-C can only report silence. Arm E says which of the
+    # two silences it was, and the two must agree -- so the verdict is a JOINT statement
+    # about the read and the input, and it fails if they disagree in either direction.
+    $cloakState = if ($cloak) { $cloak.State } else { 'unknown' }
+    Write-Host "       the memory read says the Cloak button (slot $(if ($cloak) { $cloak.Index } else { '?' })) is: $cloakState"
+
+    # The negative needs a positive next to it in EVERY branch: some slot on this very
+    # card must be enabled and must have fired, or "greyed slots are silent" is untested
+    # and a run where the whole click path was broken would read like a finding.
+    $liveSlot = @($card | Where-Object { $_.State -eq 'enabled' -and
+                                         -not [string]::IsNullOrWhiteSpace((Get-AllIds $_)) })
+    Assert-That 'an ENABLED slot on the same card did fire (the paired positive)' `
+        ($liveSlot.Count -gt 0) "(none of $($card.Count) slots)"
+
+    $techOk = @($cardTech.TechResearched) -contains 10
+
+    if ($cloak -and $cloak.Disabled -and -not $techOk) {
+        # The 2026-08-09 state, and a FIXTURE bug, not an engine one: PTEx never granted
+        # the tech, so the requirement interpreter's researched test fails and the button
+        # is greyed. The run fails above on the researched assertion; this only names it.
+        Write-Host '       => THE FIXTURE DID NOT GRANT THE TECH. The engine does not consider'
+        Write-Host '          Personnel Cloaking researched for this player, so the condition returns'
+        Write-Host '          -1 and the card greys the button. Nothing about the input path is'
+        Write-Host '          implicated, and nothing about a real cloaked Ghost is established.'
+    }
+    elseif ($cloak -and $cloak.Disabled) {
+        # Researched and STILL greyed -- that would be a genuine engine finding. Both
+        # input paths test control+0x18 & 0x2 and refuse (0x00459947 for the mouse,
+        # 0x004588C0 for the hotkey), so silence is the only thing arms A-C could have
+        # produced -- checked here as a prediction rather than excused as an outcome.
+        $slotClick = @($card | Where-Object { $_.Slot -eq $cloak.Index })
+        Assert-That 'a click on the greyed Cloak slot emitted nothing, as the disabled bit predicts' `
+            ($slotClick.Count -eq 1 -and [string]::IsNullOrWhiteSpace((Get-AllIds $slotClick[0]))) `
+            "($($slotClick | ForEach-Object { Get-AllIds $_ }))"
+        Assert-That 'and no key A-Z reached it either, for the same reason' ($hit.Count -eq 0)
+        Write-Host '       => RESEARCHED AND STILL GREYED. That is an engine rule, not a fixture'
+        Write-Host "          artefact. Refuse reason at read time: $($cardTech.Reason)."
+    }
+    elseif ($cloak -and $cloak.Visible) {
+        # ENABLED. The click went to the control's own rect, so nothing emitted is now a
+        # real anomaly rather than an aiming problem.
+        Assert-That "the ENABLED Cloak slot put Personnel Cloaking ($CLOAK_CMD) on the wire" `
+            ($hit.Count -ge 1) `
+            "(the memory read says slot $($cloak.Index) is enabled and the click was aimed at its own rect, so this is no longer an aiming problem)"
+
+        # BOTH PATHS, NAMED. The whole point of the disabled bit is that it gags the mouse
+        # and the keyboard together; with the bit clear both must work, and each is asserted
+        # separately so "one of them fired" cannot stand in for the pair.
+        #
+        # EITHER FACE COUNTS, and it has to. Slot 7 is a toggle, so which command a press
+        # emits depends on whether the Ghost happens to be cloaked when this arm reaches it
+        # -- and the earlier arms in this very probe decide that. Measured across two runs:
+        # the same slot click emitted 0x21 in one and 0x22 in the other, purely because
+        # sweep B's `C` had left the unit in a different state. Requiring 0x21 specifically
+        # made the probe fail on the run where it worked, which is the same self-inflicted
+        # false negative the toggle already caused once in the card read (see $CLOAK_PAIR).
+        $TOGGLE_CMDS = '0x21|0x22'
+        $slotRow = @($card | Where-Object { $_.Slot -eq $cloak.Index })
+        $slotIds = @($slotRow | ForEach-Object { Get-AllIds $_ }) -join ' '
+        Assert-That "the CLICK path issued the ability -- card slot $($cloak.Index) emitted $slotIds" `
+            ($slotRow.Count -eq 1 -and $slotIds -match $TOGGLE_CMDS) `
+            "(slot rows: $(@($card | ForEach-Object { "$($_.Slot)=$(Get-AllIds $_)" }) -join ' '))"
+        $keyHit = @(@($table) + @($solo) | Where-Object { (Get-AllIds $_) -match $TOGGLE_CMDS })
+        Assert-That "the KEY path issued it too -- key(s) $(@($keyHit | ForEach-Object { $_.Key }) -join ',') emitted the ability" `
+            ($keyHit.Count -ge 1) `
+            '(task 022 swept A-Z and got nothing; that sweep ran against a GREYED button, and the hotkey predicate 0x004588C0 refuses one)'
+
+        # THE TOGGLE, ROUND-TRIPPED. Seeing BOTH ids somewhere in one run is what proves
+        # the pair really is one button in two states rather than two unrelated buttons
+        # that happen to share a slot -- and it is asserted over the whole run, not over
+        # one arm, precisely because which arm sees which face is not fixed.
+        $allIds = @(@($table) + @($solo) + @($card) | ForEach-Object { Get-AllIds $_ }) -join ' '
+        Assert-That 'and both faces of the toggle reached the wire in this run (0x21 and 0x22)' `
+            (($allIds -match '0x21') -and ($allIds -match '0x22')) "(ids seen: $allIds)"
+    }
+    else {
+        Assert-That 'the Cloak button is on the card at all' ($null -ne $cloak) `
+            '(no card slot carried the Cloak action; the Ghost buttonset holds one unconditionally)'
+    }
 }
 catch {
     Write-Host "  FAIL the probe threw: $($_.Exception.Message)"

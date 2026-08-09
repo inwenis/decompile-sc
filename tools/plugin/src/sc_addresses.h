@@ -668,4 +668,142 @@
 #define SC_MAX_DIALOGS_WALK 16        // loop bound, same reason as SC_MAX_UNITS_WALK
 #define SC_MAX_CTRLS_WALK   64
 
+// ---------------------------------------------------------------------------
+// COMMAND CARD -- derived by task 026 from StarCraft.exe 1.16.1 itself.
+//
+// Full evidence, with the decompiles and the byte-exact click/hotkey paths, in
+// research/command-card.md; committed sweep tables in research/data/card-*.tsv.
+// Nothing in this block is inherited: the module was found by locating its own
+// .rdata strings in the file image (work/scratch/card/scan-strings.ps1 -- an ASCII
+// scan with file offsets converted through the PE section table parsed from the
+// same file) and sweeping them for references.
+//
+// The card is the SIBLING of the status area task 017 mapped: one dialog loaded
+// from rez\statbtn%c.bin, whose controls are ids 1..9 -- the nine card slots, in
+// reading order. Every slot's behaviour comes from a 20-byte Button record in the
+// per-unit BUTTONSET the current selection resolves to.
+// ---------------------------------------------------------------------------
+
+// BinDlg* -- the command-card dialog. Written by the card init 0x00459B90 (which
+// loads "rez\statbtn%c.bin"), cleared by the teardown 0x00458CF0, read by the
+// layout 0x004591D0, the hotkey handler 0x00458B30 and the mouse router 0x004597C0.
+#define SC_VA_CARD_DIALOG 0x0068C148u
+
+// u16 -- the CURRENT CARD ID: the buttonset the card is drawn from. The per-frame
+// card update 0x004599A0 sets it from the portrait unit's own buttonset id
+// (CUnit+0x94) unless one of the two overrides below is not 0xE4.
+#define SC_VA_CARD_ID 0x0068C14Cu
+
+// u16 -- the two card-id OVERRIDES, 0xE4 (228) = "none". 0x0068C1C4 is the
+// SELECTION override computed by 0x00458BC0: it walks clientSelectionGroup and,
+// when the selected units do not share a buttonset, writes 0xF4 (the basic card)
+// or one of 0xF5/0xF6/0xF7 (the all-of-a-kind group cards). That is
+// research/command-opcodes.md 8's "a MIXED selection is offered only the basic
+// command card", read out of the binary rather than observed. 0x0068C1C8 is the
+// SUBMENU override (build menus etc.).
+#define SC_VA_CARD_OVERRIDE_SEL 0x0068C1C4u
+#define SC_VA_CARD_OVERRIDE_SUB 0x0068C1C8u
+#define SC_CARD_ID_NONE 0x00E4u
+
+// BinDlg* -- the card control currently under the cursor (0x00459770/0x004597C0).
+#define SC_VA_CARD_HOVER 0x0068C1B4u
+
+// u32 -- the REASON CODE every ability condition writes before returning 0 or -1.
+// Set by the tech gate 0x0046DD80 and by the requirement interpreter 0x0046D610;
+// read by the layout function 0x004591D0, which rewrites the button's
+// disabled-reason string to 0x2FA when it reads 0x15.
+#define SC_VA_CARD_REFUSE_REASON 0x0066FF60u
+
+// The BUTTONSET table: 250 entries x 12 bytes. Its length is read off the binary,
+// not assumed -- entry 250 would start at 0x005193A0, which is exactly where the
+// per-unit-type status cond/act table hud-selection-row.md 4.2 already named
+// begins.
+#define SC_VA_BUTTONSET_TABLE 0x005187E8u
+#define SC_BUTTONSET_STRIDE   0x0Cu
+#define SC_BUTTONSET_COUNT    250
+#define SC_BUTTONSET_OFF_N    0x00u   // u16 -- how many buttons
+#define SC_BUTTONSET_OFF_PTR  0x04u   // Button* -- the array
+
+// A Button: 20 bytes. Every offset below is proven by an instruction in this
+// binary (research/command-card.md 3):
+//   +0x00 slot     layout 0x004591D0 compares it against the control's index
+//   +0x02 icon     layout writes it into the control's graphic (+0x24)
+//   +0x04 cond     layout CALLs it; 0 = not on the card, >0 = enabled, <0 = greyed
+//   +0x08 action   the click path 0x0045990F does `CALL dword ptr [ESI+0x8]`
+//   +0x0C condParam  passed to the condition
+//   +0x0E actParam   the click path does `MOV CX,word ptr [ESI+0xE]` first
+//   +0x10 nameStr    the hotkey predicate 0x004588C0 does `MOV CX,[EAX+0x10]`
+//   +0x12 disStr     layout overwrites it with 0x2FA when the refuse reason is 0x15
+#define SC_BUTTON_SIZE           20u
+#define SC_BUTTON_OFF_SLOT       0x00u
+#define SC_BUTTON_OFF_ICON       0x02u
+#define SC_BUTTON_OFF_COND       0x04u
+#define SC_BUTTON_OFF_ACTION     0x08u
+#define SC_BUTTON_OFF_COND_PARAM 0x0Cu
+#define SC_BUTTON_OFF_ACT_PARAM  0x0Eu
+#define SC_BUTTON_OFF_NAME_STR   0x10u
+#define SC_BUTTON_OFF_DIS_STR    0x12u
+
+// The card's nine control ids, 1..9 in reading order. The layout function walks to
+// the child with index == 1 and stops treating children as slots once the index is
+// >= 10 (`if ((short)ctrl->index < 10)`), so the range is the binary's, not a guess.
+#define SC_CARD_FIRST_CONTROL 1
+#define SC_CARD_LAST_CONTROL  9
+#define SC_CARD_SLOTS         9
+
+// THE flag this whole task turns on. 0x00418640 sets bit 1 of control+0x18 and
+// 0x00418E00 clears it; the layout function picks between them on the sign of the
+// condition. BOTH input paths then refuse a control that carries it:
+//   mouse: 0x00459947 (the card button interact's LBUTTONDOWN case) does
+//          `TEST byte ptr [ESI+0x18],0x2` and returns 0 -- the click is swallowed;
+//   key:   0x004588C0 (the hotkey predicate the handler 0x00458B30 passes to the
+//          child walk 0x00417EB0) does the same test and never matches the button.
+// So a greyed card button emits nothing, arms nothing, and logs nothing -- which is
+// exactly the shape of task 022/023's negative.
+#define SC_CTRL_FLAG_DISABLED 0x2u
+
+// CUnit+0x94 -- the unit's own buttonset id. Read by the per-frame card update
+// 0x004599A0 (`MOV ..,[portrait+0x94]`) and by the mixed-selection resolver
+// 0x00458BC0, which uses it BOTH as the buttonset-table index
+// (`(&PTR_005187EC)[id*3]`) and as the value it compares across the selection.
+#define SC_CUNIT_OFF_BUTTONSET 0x94u
+// (CUnit+0xA2, energy in 1/256 fixed point, is SC_CUNIT_OFF_ENERGY above.)
+
+// The per-tech energy cost table the cloak SEND gate 0x00423540 reads:
+// cost = *(u8*)(0x00656380 + techId*2), compared as (cost << 8) <= CUnit+0xA2.
+#define SC_VA_TECH_ENERGY_COST 0x00656380u
+// Personnel Cloaking. Same id ability-semantics.md 3 derived from the receive-side
+// handler 0x00491B30, and the same value the Ghost's Cloak button carries as its
+// conditionParam -- two independent derivations agreeing.
+#define SC_TECH_PERSONNEL_CLOAKING 10
+#define SC_TECH_CLOAKING_FIELD      9
+
+// ---------------------------------------------------------------------------
+// PER-PLAYER TECH STATE -- the memory an ability button is gated on, and therefore
+// the memory that decides whether a fixture really granted a tech.
+//
+// Two pairs of arrays, [player][tech], derived here (research/command-card.md 6):
+//   AVAILABLE  -- read by 0x004CE8A0. The tech gate 0x0046DD80 turns a false here into
+//                 reason 2 and return 0, which HIDES the button.
+//   RESEARCHED -- read by 0x004CE850 and by requirement opcode 0xFF0F inside the
+//                 interpreter 0x0046D610. A false here leaves the requirement count at
+//                 zero, which is the interpreter's `reason = 8; return -1` exit -- and
+//                 -1 is what the card layout turns into a GREYED button.
+// So "visible but greyed" is a precise statement: available yes, researched no.
+//
+// Confirmed by sweep (research/data/card-tech-state.tsv): the only writer of all four
+// is the CHK applier pair 0x004CB670 (PTEC, 24 techs) / 0x004CB7D0 (PTEx, 44), and
+// 0x004CCC80 is the REP STOSD that clears them at game start. The two pairs are
+// adjacent by exactly their own size -- 0x0058CF44 - 0x0058CE24 = 0x120 = 12*24 and
+// 0x0058F128 - 0x0058F038 = 0xF0 = 12*20 -- so the strides are read off the layout
+// rather than asserted.
+#define SC_VA_TECH_AVAILABLE     0x0058CE24u   // u8[12][24]
+#define SC_VA_TECH_RESEARCHED    0x0058CF44u   // u8[12][24]
+#define SC_VA_TECH_AVAILABLE_BW  0x0058F038u   // u8[12][20], techs 24..43
+#define SC_VA_TECH_RESEARCHED_BW 0x0058F128u   // u8[12][20]
+#define SC_TECH_COUNT_VANILLA    24
+#define SC_TECH_COUNT_BW         20            // 44 total
+#define SC_TECH_STRIDE_VANILLA   0x18u
+#define SC_TECH_STRIDE_BW        0x14u
+
 #endif // SC_ADDRESSES_H

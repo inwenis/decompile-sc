@@ -39,17 +39,6 @@ and TOOLING, not redistributed game content.
    something seems missing, ask the user. (Sole exception: `./run.ps1`,
    which the USER launches to serve the Agent Console UI.)
 
-## Read a dialog's content from memory, not from its pixels (2026-08-09, task 026)
-
-A frame-region hash is NOT a reliable oracle for what a dialog shows. Task 023 concluded a
-researched fixture "drew a different command card" from two differing region fingerprints;
-task 026's read of the card's own slot table showed both fixtures identical — the hash was a
-false positive. When a claim is about UI CONTENT (which button, which slot, enabled vs greyed),
-read the structure out of process memory (the control array, the statUser records, the button's
-state bits), not a screenshot of it. Frames are corroboration for "did it visibly render at
-all", never the measurement. Same lesson the folder-row "flake" taught: what looks visual is
-usually a readable structure underneath.
-
 ## A player-input feature is unproven until the wire has been watched (2026-08-09, task 025)
 
 If a feature begins with a player input — a click, a hotkey, a button on the command card —
@@ -78,6 +67,45 @@ control was trustworthy.
 So: prove the pattern positive against a log where the thing DID happen, then require it absent
 where it should not have. Pair every absence check with a positive one — "the ability fired in
 this arm" alongside "nothing was interrupted" — or a silently broken run reads as a clean result.
+
+## Read a dialog's CONTENT from memory; never hash its pixels (hard rule, 2026-08-09, task 026)
+
+**A frame hash answers "did any pixel change". That is not the question, and it is not stable
+across sessions.** Task 023 gated the whole Ghost-cloak result on two region fingerprints of the
+command card and concluded that researching the tech "DOES draw a different command card". It does
+not: reading the card out of process memory shows both fixtures holding the same nine slots, the
+same buttons, in the same states — and on the next session both fixtures hashed to the *same*
+value, the one 023 had recorded for the control. Two sessions of work were spent on a conclusion a
+pixel hash had invented.
+
+So: when a claim is about what a dialog **holds** — which button, which slot, enabled or greyed —
+walk the dialog and read the fields. The engine's UI is ordinary heap data; `sc_card`/`sc_hudrow`
+show the shape, and a read-back needs no hook and works in `-Mode observe`. Keep frame captures for
+corroboration and for the human, never as the oracle.
+
+The same rule caught a second thing the same evening: a tool that verifies its own write with its
+own indexing verifies nothing. `make_test_map.py` wrote PTEx tech-major and read it back tech-major
+while the engine reads it player-major, so its validator printed
+`PTEx: player 0 has researched 10(...)` for maps on which player 0 had researched nothing. **Check
+a fixture in the engine's memory, not in the generator's read-back.**
+
+**The point is the ORACLE, not the outcome.** Once that fixture bug was fixed, the two slot tables
+really did differ — slot 7 greyed without the tech, enabled with it. The read still wins, because
+it says *which slot and in which state*, which is what a hash cannot say however it comes out.
+
+**And the rule applies to itself: a read is only an oracle if the act being measured cannot change
+it.** Task 026's probe named the Cloak slot by its Cloak *action*, then cloaked the Ghost — which
+flips that slot to its Decloak face — and duly reported "no Cloak button on the card". A false
+negative manufactured by its own success. So take the read BEFORE the action as well as after, and
+make the verifier something other than the thing that acts. This project has now met that shape
+five times over; `research/command-card.md` §6.4 tabulates them.
+
+**One more, from the same task, about measurement windows rather than reads.** When a target
+building died inside a two-second measurement window, every unit shooting it dropped to idle at
+once — bit-for-bit the signature the experiment was looking for, and three times more likely in the
+treatment arm than the control arm *because the feature under test worked*. A confound correlated
+with the arm, pointing at the conclusion, is the one to design out rather than tolerate: fix the
+fixture so it cannot happen, AND gate the run so a window in which it happened cannot be published.
 
 ## Never click a map-browser row by number (hard rule, 2026-08-09, task 023)
 

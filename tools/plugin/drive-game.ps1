@@ -1825,6 +1825,163 @@ function Get-ScWorldState {
     throw "drive-game: no complete WORLD scan for marker '$label' within ${TimeoutSec}s (log: $LogPath). Was the game launched with -WorldScan 1?"
 }
 
+function Get-ScCardState {
+    <#
+    .SYNOPSIS
+    Ask the plugin to READ THE COMMAND CARD out of process memory, and parse it.
+    .DESCRIPTION
+    Task 026. Tasks 022 and 023 tried to reach the Ghost's Cloak by posting input at
+    the card -- every key A-Z and all nine slots -- and got a bounded negative: input
+    reaches the card, the ability is on the card, and neither path issues it. That
+    experiment could not distinguish "the button is greyed" from "the click missed",
+    because both produce an empty log.
+
+    This does not click. The plugin walks the card dialog (0x0068C148) and reports,
+    per slot, the control's own visible/disabled flags plus the Button record behind
+    it -- ability condition, action, params and strings (research/command-card.md).
+    Both of the engine's input paths refuse a control with the disabled bit set
+    (the mouse at 0x00459947, the hotkey predicate at 0x004588C0), so that one bit
+    is the whole answer, and it is a READ.
+
+    Same marker handshake as Get-ScWorldState, and like it this installs no hook and
+    therefore works in `-Mode observe` too. Needs the plugin launched with
+    -CardScan 1; without it no CARD lines are written and this throws on the timeout.
+
+    Returns .Slots (one entry per card control, Index/Visible/Disabled/State/Icon/
+    Button/BSlot/BIcon/Cond/Action/CondParam/ActParam/NameStr/DisStr), plus the header
+    fields (CardId, PortraitType, PortraitSet, PortraitEnergy, SetCount, Reason) and
+    .Shown / .Greyed. `Get-ScCardSlot $card 7` picks one slot out.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$LogPath,
+        [Parameter(Mandatory)][string]$Tag,
+        [string]$MarkerPath,
+        [int]$TimeoutSec = 15
+    )
+    if (-not $MarkerPath) { $MarkerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt' }
+    $script:ScMarkerSeq++
+    $label = "$Tag-$script:ScMarkerSeq"
+    Set-Content -LiteralPath $MarkerPath -Value $label -NoNewline
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $esc = [regex]::Escape($label)
+    while ((Get-Date) -lt $deadline) {
+        $lines = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
+                   Select-String -Pattern "CARD \[$esc\]")
+        # The `slots=` summary is written LAST, so waiting for it is what stops a
+        # half-written scan being parsed -- same rule as the WORLD p=7 line.
+        $done = @($lines | Select-String -Pattern 'slots=\d+ shown=')
+        $absent = @($lines | Select-String -Pattern 'dialog=0 ')
+        if ($done.Count -gt 0 -or $absent.Count -gt 0) {
+            $card = [pscustomobject]@{
+                Label = $label; Ok = ($done.Count -gt 0); Slots = @()
+                CardId = -1; OverrideSel = -1; OverrideSub = -1; Reason = -1; RootRect = @(0,0,0,0)
+                PortraitType = -1; PortraitSet = -1; PortraitEnergy = -1; PortraitOwner = -1
+                SetCount = -1; SetButtons = ''
+                Shown = -1; Greyed = -1
+                TechPlayer = -1; TechAvailable = @(); TechResearched = @()
+                Lines = @($lines | ForEach-Object { $_.Line })
+            }
+            foreach ($l in $lines) {
+                $h = [regex]::Match($l.Line,
+                    'dialog=0x([0-9A-Fa-f]+) root=0x([0-9A-Fa-f]+) cardId=(\d+) ovrSel=(\d+) ovrSub=(\d+) portrait=0x([0-9A-Fa-f]+) ptype=0x([0-9A-Fa-f]+) pset=(\d+) penergy=(\d+) powner=(\d+) set=\(n=(\d+) buttons=0x([0-9A-Fa-f]+)\) reason=(\d+) rootrect=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\)')
+                if ($h.Success) {
+                    $card.RootRect = @([int]$h.Groups[14].Value, [int]$h.Groups[15].Value,
+                                       [int]$h.Groups[16].Value, [int]$h.Groups[17].Value)
+                    $card.CardId         = [int]$h.Groups[3].Value
+                    $card.OverrideSel    = [int]$h.Groups[4].Value
+                    $card.OverrideSub    = [int]$h.Groups[5].Value
+                    $card.PortraitType   = [Convert]::ToInt32($h.Groups[7].Value, 16)
+                    $card.PortraitSet    = [int]$h.Groups[8].Value
+                    $card.PortraitEnergy = [int]$h.Groups[9].Value
+                    $card.PortraitOwner  = [int]$h.Groups[10].Value
+                    $card.SetCount       = [int]$h.Groups[11].Value
+                    $card.SetButtons     = $h.Groups[12].Value
+                    $card.Reason         = [int]$h.Groups[13].Value
+                    continue
+                }
+                $s = [regex]::Match($l.Line,
+                    'slot=(\d+) (\w+)\s+ctrl=0x([0-9A-Fa-f]+) flags=0x([0-9A-Fa-f]+) icon=0x([0-9A-Fa-f]+) rect=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\) button=0x([0-9A-Fa-f]+)(?: bslot=(\d+) bicon=0x([0-9A-Fa-f]+) cond=0x([0-9A-Fa-f]+) act=0x([0-9A-Fa-f]+) cparam=(\d+) aparam=(\d+) name=0x([0-9A-Fa-f]+) dis=0x([0-9A-Fa-f]+))?')
+                if ($s.Success) {
+                    $hasBtn = $s.Groups[11].Success
+                    $rect = @([int]$s.Groups[6].Value, [int]$s.Groups[7].Value,
+                              [int]$s.Groups[8].Value, [int]$s.Groups[9].Value)
+                    $card.Slots += [pscustomobject]@{
+                        Index     = [int]$s.Groups[1].Value
+                        State     = $s.Groups[2].Value
+                        Visible   = ($s.Groups[2].Value -ne 'hidden')
+                        Disabled  = ($s.Groups[2].Value -eq 'GREYED')
+                        Control   = $s.Groups[3].Value
+                        Flags     = [Convert]::ToUInt32($s.Groups[4].Value, 16)
+                        Icon      = [Convert]::ToInt32($s.Groups[5].Value, 16)
+                        Rect      = $rect
+                        Button    = $s.Groups[10].Value
+                        HasButton = $hasBtn
+                        BSlot     = $(if ($hasBtn) { [int]$s.Groups[11].Value } else { -1 })
+                        BIcon     = $(if ($hasBtn) { [Convert]::ToInt32($s.Groups[12].Value, 16) } else { -1 })
+                        Cond      = $(if ($hasBtn) { $s.Groups[13].Value.ToUpperInvariant() } else { '' })
+                        Action    = $(if ($hasBtn) { $s.Groups[14].Value.ToUpperInvariant() } else { '' })
+                        CondParam = $(if ($hasBtn) { [int]$s.Groups[15].Value } else { -1 })
+                        ActParam  = $(if ($hasBtn) { [int]$s.Groups[16].Value } else { -1 })
+                        NameStr   = $(if ($hasBtn) { [Convert]::ToInt32($s.Groups[17].Value, 16) } else { -1 })
+                        DisStr    = $(if ($hasBtn) { [Convert]::ToInt32($s.Groups[18].Value, 16) } else { -1 })
+                    }
+                    continue
+                }
+                $k = [regex]::Match($l.Line, 'tech p=(\d+) available=\[([^\]]*)\] researched=\[([^\]]*)\]')
+                if ($k.Success) {
+                    $card.TechPlayer = [int]$k.Groups[1].Value
+                    $card.TechAvailable  = @($k.Groups[2].Value -split '\s+' |
+                                             Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ })
+                    $card.TechResearched = @($k.Groups[3].Value -split '\s+' |
+                                             Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ })
+                    continue
+                }
+                $t = [regex]::Match($l.Line, 'slots=(\d+) shown=(\d+) greyed=(\d+)')
+                if ($t.Success) {
+                    $card.Shown  = [int]$t.Groups[2].Value
+                    $card.Greyed = [int]$t.Groups[3].Value
+                }
+            }
+            return $card
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    throw "drive-game: no complete CARD scan for marker '$label' within ${TimeoutSec}s (log: $LogPath). Was the game launched with -CardScan 1?"
+}
+
+function Get-ScCardSlot {
+    <#
+    .SYNOPSIS
+    One slot out of a Get-ScCardState result, by card slot number (1..9).
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Card, [Parameter(Mandatory)][int]$Slot)
+    @($Card.Slots | Where-Object Index -eq $Slot) | Select-Object -First 1
+}
+
+function Get-ScCardSlotPoint {
+    <#
+    .SYNOPSIS
+    The CLIENT-coordinate centre of a card slot, computed from the live dialog.
+    .DESCRIPTION
+    Never a hardcoded coordinate. A control's rect (+0x04) is relative to its
+    dialog's own origin -- the engine adds them itself at 0x00458850
+    (`dlg->rct.left + child->rct.left`) -- so the point is rootRect + rect, halved.
+
+    This is the card's answer to the "never click a browser row by number" rule:
+    a probe that clicks a guessed slot centre cannot tell "the button refused the
+    click" from "the click landed between buttons", and task 022 lost the whole
+    Ghost question to exactly that ambiguity. Returns @{X;Y}.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Card, [Parameter(Mandatory)][int]$Slot)
+    $s = Get-ScCardSlot -Card $Card -Slot $Slot
+    if (-not $s) { throw "drive-game: the card read-back has no slot $Slot." }
+    @{ X = [int]($Card.RootRect[0] + [math]::Floor(($s.Rect[0] + $s.Rect[2]) / 2))
+       Y = [int]($Card.RootRect[1] + [math]::Floor(($s.Rect[1] + $s.Rect[3]) / 2)) }
+}
+
 function Save-ScWindowImage {
     <#
     .SYNOPSIS

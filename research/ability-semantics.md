@@ -42,6 +42,10 @@ document could only assert: that the **costs** scale the same way the effects do
    this binary rather than inherited. §2.1, §3.
 6. Questions 2 and 3 are answered by plugin-vs-stock comparison on the same fixture, with the
    same read-only oracle in both arms. §6, §7.
+6b. **The user's actual report is answered, on their own unit: NO.** With real Ghosts and
+   Personnel Cloaking genuinely researched (task 026 had to fix the fixture generator first), a
+   fanned-out Cloak issued mid-fight reached all 36 units, charged all 36, and took **zero** units
+   off their attack orders — the count still attacking went *up*, 33 → 34. §7.6.
 7. Three **harness** faults were found on the way, one of which had been silently corrupting
    every in-game suite on this machine. §8.
 
@@ -396,6 +400,12 @@ came back reading **"Select Target"**: that slot is a *targeted* ability, i.e. L
 Naming the Cloak button is one keypress sweep on a working command card and is owned by the
 harness task, with this evidence attached.
 
+> **Amended, task 026** ([`command-card.md`](command-card.md)). It was not a keypress sweep, and
+> no sweep could have found it. The Cloak button is card **slot 7**, it was **greyed**, and both
+> input paths refuse a greyed control on one flag bit — so the key and the click were the same
+> negative twice, not two. The cause was the fixture: its PTEx never granted Personnel Cloaking to
+> player 0. Naming it took a read of the card out of process memory.
+
 ### 7.2 The static half
 
 The handlers cannot do it. `0x004C0720` → `0x00491B30` (the cloak family) writes energy and
@@ -488,9 +498,119 @@ so it is gone.
 It answers: the fan-out's replayed `Select`s do not interrupt orders that are already running,
 on a still fixture and in a live fight, statically and dynamically.
 
-It does not answer: why a cloaked Ghost appeared to stop attacking. That remains open, most
-likely vanilla (the plugin has no AI, targeting or acquisition code in it at all), and the
-honest state of it is "not reproduced, and not yet reproducible with this harness".
+It does not answer: why a cloaked Ghost appeared to stop attacking — **that is answered in §7.6,
+on real Ghosts, and the answer is that the plugin does not cause it.** Why the user's Ghost
+appeared to stop is still unreproduced.
+
+> **Superseded by §7.6 (task 026).** The A/B has now been run on real cloaking Ghosts. Read
+> §7.6 for the answer; this section's Marines-and-Stim measurement stands as the second data
+> point it always was.
+
+### 7.6 The same question, on the user's own unit: 36 Ghosts and real Cloak
+
+`tools/plugin/test-ability-in-combat.ps1 -Ability cloak`. Task 026 made this runnable by fixing
+the fixture generator's PTEx index order ([`command-card.md`](command-card.md) §6.3): before that
+the Cloak button was greyed and no input could reach it. Same measurement as §7.4, same two arms,
+with three things swapped: 36 **Ghosts**, Personnel Cloaking researched *and confirmed in the
+engine's own tech array*, and the ability issued by clicking the Cloak slot located in the live
+command card by its `Button` action `0x00423730` — not by a guessed coordinate.
+
+#### 7.6.1 The confound that had to be removed first, because it points the wrong way
+
+The first two runs of this arm produced a result that looked exactly like the user's report and
+was **not real**, and it is worth recording in full because the shape generalises.
+
+Run 2, plugin arm: **33 of 36 Ghosts went `0x0a` (AttackUnit) → `0x03` across the ability
+window**, against control windows of 1 and 0 changes, and against a stock arm of 0. That reads as
+"our fan-out makes cloaked Ghosts stop attacking" — the user's report, reproduced, and blamed on
+us.
+
+The enemy count in the very same pair of scans went **14 → 13**. A Supply Depot died inside the
+ability window. Every unit that was shooting it drops to idle in that instant, which is
+bit-for-bit the transition the hypothesis under test predicts, so after the fact the two are
+indistinguishable.
+
+**And the confound is correlated with the arm, because the feature works.** In the plugin arm all
+36 units are shooting; in stock only the engine's twelve. The plugin arm therefore kills targets
+about three times faster and is about three times as likely to lose one inside a window — stock's
+block went 16 → 16 in the same run. A confound that fires in the treatment arm and not the
+control arm, in the direction of the hypothesis, is the worst kind available.
+
+Two independent fixes, both kept:
+
+1. **The fixture.** The cloak arm now attacks 16 **Command Centres** (1500 hit points) instead of
+   Supply Depots (500). Three times the hit points is three times the interval between deaths.
+   Still weaponless, still immobile — a computer-owned Command Centre with no orders never lifts
+   off, so the "cannot *decide* to act" premise §8.4b converged on is unchanged.
+2. **The gate.** The three windows are re-taken until the target count is *identical* across all
+   of them, and a run that never gets a clean set **fails** rather than reporting the dirty one.
+   The fixture makes a clean take ordinary; the gate makes a dirty one impossible to publish.
+
+**§7.4's Stim result is not tainted by this**, and the direction is why: a target dying inside a
+window makes that window **noisier**, and §7.4's published finding was that the ability window was
+the **quietest of the three**. The confound runs against that conclusion, so it cannot have
+manufactured it. The gate now applies to that arm too, retroactively.
+
+#### 7.6.2 The clean run
+
+2026-08-09, both arms clean on the first take — targets `16 → 16 → 16 → 16` across all three
+windows in each arm, so nothing died anywhere in the measurement. `0 failures`.
+
+| | plugin (`fanout`) | stock (`observe`) |
+| --- | --- | --- |
+| main orders **before** the ability | `0x06:3 0x0a:33` | `0x03:24 0x0a:12` |
+| main orders **after** | `0x03:1 0x06:1 0x0a:34` | `0x03:24 0x0a:12` |
+| units that changed order across the ability | 2 of 36 | 0 of 36 |
+| … of which had been **attacking** (`0x0a`) | **0** | **0** |
+| control window before / after (changed) | 0 / 0 | 0 / 0 |
+| excess over its own control | 2 | 0 |
+| units the ability reached | **36** (`0 → 36` carrying `0x6D`) | 12 |
+| units that paid energy for it | 36 of 36 | — |
+| enemy hit points, engage → after → +12 s | 5978112 → 5895168 → 5666496 | 6090432 → 6062208 → 5980992 |
+
+**The two changes in the plugin arm are both units still walking into the fight**, and one of them
+is a unit *joining* it: `unit=00622418 0x06→0x0a` (Move → AttackUnit) and `unit=00623678 0x06→0x03`
+(Move → Idle, a unit finishing its walk). The count of units **attacking went up**, 33 → 34.
+**Not one unit that was attacking stopped.**
+
+The stock arm's `0x03:24` is the selection cap, not an interruption: 24 units never received the
+move order at all, which is exactly why §7.4 insists each arm is compared with **its own** control
+rather than with the other arm's raw churn.
+
+#### 7.6.3 The answer to the user's report
+
+**No. Nothing the plugin does makes a cloaked Ghost stop attacking.** On real Ghosts, with
+Personnel Cloaking genuinely researched, a fanned-out Cloak issued mid-fight reached all 36 units,
+charged all 36, and took **zero** units off their attack orders — while the stock arm did the same
+to its twelve, also with zero.
+
+**What the run would have caught, stated so the negative is worth something.** The metric is
+per-unit, matched by `CUnit` pointer across two scans, and it needs no assumption about which
+order id means "fighting". The hypothesis it tests predicts a *wholesale* effect — one replayed
+`Select` lands on every unit at once — so it predicts up to 36 units moving off their orders
+together. Three things establish the instrument was live:
+
+1. **The ability demonstrably fired inside the measured window**: 0 → 36 units carrying secondary
+   order `0x6D`, all 36 charged energy, `FANOUT start … units=36` on the wire. The thing whose
+   side effects are being looked for definitely happened, at full scale, in that window.
+2. **The metric has registered exactly the predicted signature** — §7.6.1's run reported
+   **33 of 36** units going `0x0a → 0x03` in a single window. It was a target death rather than
+   the ability, but it proves the measurement can see a mass drop-to-idle when one occurs. An
+   absence assertion needs the pattern proved positive somewhere, and this is that proof.
+3. **The stock arm is a real control**: no hook installed, no `CMD` line, no `FANOUT` line, each
+   asserted absent only after being shown present in the plugin arm.
+
+**Limits, plainly.** Two-second windows in a fixture whose enemy cannot shoot back, move, or
+choose to do either. An effect that takes longer than two seconds to appear, or one that needs a
+real opponent, is outside what this measures.
+
+**And the greyed-Cloak bug does not explain the user's report either.** That bug was ours and it
+was in the *fixture generator* — their Ghost was in a real game with cloak researched and working.
+The two are kept apart deliberately: [`command-card.md`](command-card.md) explains why the *test*
+could not cloak a Ghost; this section is the only thing here that speaks to the user's Ghost, and
+its answer is that on a correct fixture we measured no plugin effect on a cloaked Ghost's orders.
+Why theirs appeared to stop remains unreproduced, and the plugin contains no AI, targeting or
+acquisition code that could plausibly cause it.
 
 ---
 
@@ -670,9 +790,18 @@ hides them.
   every suite that reaches its map by a hardcoded row is then off by one, with no detection and
   no recovery. This task's own suites compute the row from the filesystem; the five older ones
   do not. Handed to the harness task rather than fixed here.
-- **Why the Ghost's Cloak button could not be driven** (§7.1). Not established.
-- **Which selection the send-side gate consults** — presumably the engine's twelve, but that is
-  an inference from one observation, where all 36 units were identical by the time it fired
-  (§5.2).
+- ~~**Why the Ghost's Cloak button could not be driven** (§7.1).~~ **Closed by task 026**
+  ([`command-card.md`](command-card.md) §0, §5). The button is card slot 7 and it was **greyed**:
+  both of the engine's input paths test `control+0x18 & 0x2` and return, so no key and no click
+  could ever have reached it. It was greyed because the fixture never granted the tech — the PTEx
+  writer's index order disagreed with the engine's, and Stim Packs (tech 0, player 0) is one of the
+  only two cells where the two conventions coincide, which is why every earlier fixture appeared to
+  work. The user spotted it on screen first: "the ghosts didn't have the cloak ability unlocked".
+- ~~**Which selection the send-side gate consults**~~ — **Closed by task 026**
+  ([`command-card.md`](command-card.md) §4.3): it is `clientSelectionGroup`, the engine's own
+  twelve, read out of the binary rather than inferred. Cloak's gate `0x00423540` and Stim's own
+  action `0x004234D0` walk that same array. The consequence §5.2 hypothesised therefore holds: a
+  >12 selection whose visible twelve cannot pay emits nothing even though units past the cap could
+  have paid.
 - The cost table at `0x00656380` is read but not enumerated; only the two cloak entries matter
   here.

@@ -1,10 +1,22 @@
-﻿#Requires -Version 7
+#Requires -Version 7
 <#
 .SYNOPSIS
 PLUGIN-vs-STOCK: does using an ability on a >12 selection IN COMBAT stop the units
-fighting? 36 Marines shoot a block of Supply Depots, Stim Pack is pressed once mid-fight,
-and every unit's order is compared across that press -- with the plugin active, and again
-with `-Mode observe`, which installs no hook at all.
+fighting? A block of Supply Depots is attacked by 36 units, ONE ability is used once
+mid-fight, and every unit's order is compared across that moment -- with the plugin
+active, and again with `-Mode observe`, which installs no hook at all.
+
+Two abilities, the same measurement (`-Ability`):
+
+  stim  (default) 36 Marines, Stim Pack, pressed with 'T'. Task 022's original arm; its
+        numbers and its fixture are unchanged by the parameterisation.
+  cloak           36 GHOSTS, Personnel Cloaking, clicked on the Cloak card slot -- THE
+        USER'S ACTUAL UNIT. Task 026 made this arm possible: it read the command card
+        out of process memory, found the Cloak button greyed because the fixture
+        generator wrote PTEx with the wrong index order, and fixed the generator. The
+        slot is not guessed -- it is located in the live card by its Button action
+        0x00423730 (the code that builds command 0x21) and clicked at the centre the
+        engine's own hit-test computes.
 
 This is task 022's question 3, from the user's report: "when i played a cloacked ghost
 did not attack enemies at some point - check that if we might have changed that behav",
@@ -30,14 +42,20 @@ interception, no dispatcher detour. The metric is per unit and matched by CUnit 
 across two scans, so "unit 5 stopped attacking" is a statement about unit 5 and not about
 a histogram that happens to move.
 
-The fixture is deliberately NOT the user's cloaked Ghost: nothing in this harness can yet
-make the client emit the Cloak command (the key is not 'C', and the command-card slot where
-it should be turns out to be a targeted ability -- the frame reads "Select Target"). What is
-tested here is the MECHANISM their report made us suspect, on an ability this harness can
-reliably issue. The report says so in those terms rather than letting the two read as one.
+WHY THE STIM ARM STILL EXISTS NOW THAT CLOAK CAN BE DRIVEN. It is not a stand-in any
+more, it is a second data point: Stim and Cloak take different paths through the client
+(Stim's handler writes a timer at CUnit+0x115, Cloak's writes the SECONDARY order at
+CUnit+0xA6 and deducts energy), and neither is supposed to touch the main order. An
+interruption that showed up in one and not the other would say something specific. Task
+022's earlier claim -- that nothing in this harness could make the client emit Cloak --
+was TRUE ONLY BECAUSE THE FIXTURE NEVER GRANTED THE TECH; the button was on the card the
+whole time, greyed. See research/command-card.md.
 
 .EXAMPLE
 ./tools/plugin/test-ability-in-combat.ps1
+
+.EXAMPLE
+./tools/plugin/test-ability-in-combat.ps1 -Ability cloak   # Ghosts, the user's own unit
 
 .EXAMPLE
 ./tools/plugin/test-ability-in-combat.ps1 -Modes fanout   # the plugin arm alone
@@ -45,7 +63,12 @@ reliably issue. The report says so in those terms rather than letting the two re
 [CmdletBinding()]
 param(
     [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
-    [string]$LogDir = 'C:\sc-work\logs\022',
+    # WHICH ABILITY IS USED MID-FIGHT. Everything else about the measurement is identical;
+    # see the ability descriptor below for what each one changes.
+    [ValidateSet('stim', 'cloak')][string]$Ability = 'stim',
+    # Defaulted AFTER the param block so it can follow -Ability (see below). Left as a
+    # parameter so a caller can still pin it.
+    [string]$LogDir,
     # Which folder under Maps\ the fixture is generated into; see test-burrow-fanout.ps1.
     # Default is what this suite has always used.
     [string]$FixtureDir,
@@ -83,6 +106,13 @@ param(
     [string]$EnemyRace = 'terran',
     [ValidateSet('fanout', 'observe')][string[]]$Modes = @('fanout', 'observe'),
     [int]$EngageTimeoutSec = 60,
+    # How long to let the fight settle after engagement before the first control window,
+    # for the arms whose descriptor asks for it. Bounded: a fight that never settles is
+    # measured anyway and the control-spread assertion is left to catch it.
+    [int]$SettleTimeoutSec = 45,
+    # How many times the three-window measurement may be re-taken while looking for a set
+    # in which no target died. See the block comment above the loop for why that matters.
+    [int]$MeasureTries = 4,
     # How far the two control windows may disagree before the fight is declared too
     # unstable to measure. Strictly less than this; see the assertion.
     [int]$ControlSpreadLimit = 6,
@@ -99,19 +129,125 @@ $failures = 0
 $step = 0
 $script:armLock = $null
 
-# MARINES AND STIM, not Ghosts and Cloak. The question is about a FANNED-OUT ABILITY
-# ISSUED MID-FIGHT, and Stim is the one this harness can reliably make the client emit
-# (task 022 §5): the Ghost's Cloak button neither answers to 'C' nor sits where the
-# command-card geometry was guessed -- clicking there put the game into "Select Target",
-# i.e. it is a targeted ability, so that button is Lockdown. An ability that never fires
-# measures nothing, and a test that measures nothing while looking green is worse than no
-# test. The Ghost case is recorded as an open question rather than faked.
-$UNIT_TYPE = 0             # units.dat 0, Terran Marine
-$ENEMY_TYPE_ID = 109       # units.dat 109, Terran Supply Depot -- no weapon, cannot move
-$ABILITY_CMD = '0x36'      # Stim Pack
-$ABILITY_KEY = 0x54        # 'T' -- plain, unmodified, so 021's accelerator finding does not bite
-$STIM_TIMER = 0x25         # what 0x004C2F30 writes to CUnit+0x115
+# THE ABILITY DESCRIPTOR. Everything that differs between the two arms lives here, so
+# the measurement below reads the same for both and neither arm can quietly acquire a
+# different yardstick from the other.
+#
+# The EFFECT ORACLE is the load-bearing field. In `-Mode observe` there is no CMD or
+# FANOUT line to look at (no hook is installed), so without a world-visible effect a
+# swallowed input produces 0/0/0 and every assertion passes while measuring nothing. Each
+# ability therefore names a per-unit predicate the read-only world scan can evaluate:
+#   stim  -- CUnit+0x115, the timer 0x004C2F30 writes;
+#   cloak -- CUnit+0xA6, the SECONDARY order 0x00491B30 sets to 0x6D. That handler also
+#            deducts CUnit+0xA2 (energy) and touches the main order nowhere, which is
+#            exactly why this ability is the sharp test of the interruption hypothesis.
+# Set from -EnemyType / the ability descriptor just below the descriptor table. The
+# allowed values are the weaponless, immobile Terran buildings this suite has verified.
+$ENEMY_TYPE_ID = 109
+# units.dat ids this suite will accept as a target block, with the property that matters:
+# no weapon, and no way for the unit to DECIDE to act (a computer-owned Command Centre
+# with no orders never lifts off). "Cannot attack", not "is not currently attacking" --
+# the distinction a burrowing Lurker taught this file the hard way.
+$ENEMY_TYPES_OK = @{ 109 = 'Terran Supply Depot (500 hp)'; 106 = 'Terran Command Centre (1500 hp)' }
 $IDLE_ORDER = 0x03
+$CLOAK_ORDER2 = 0x6D       # research/ability-semantics.md §3
+# The Ghost Cloak BUTTON's action function -- what NAMES a card slot as Cloak in the
+# memory read. Byte-exact, not inferred: 0x00423730 is
+# `if (sendGate()) { buf = {0x21, shiftFlag}; queueCommand(buf, 2); }`
+# (research/command-card.md §4).
+$CLOAK_ACTION = '00423730'
+# The same slot's other face; it sends 0x22. Slot 7 is a TOGGLE, so which of the two the
+# card shows depends on whether the portrait unit is currently cloaked -- and a take that
+# re-uses the ability therefore clicks Decloak. Both are the same button and the same
+# fan-out; what is being measured is a fanned-out command issued mid-fight, in either
+# direction (research/command-card.md §3.1).
+$DECLOAK_ACTION = '00423270'
+$CLOAK_PAIR = @($CLOAK_ACTION, $DECLOAK_ACTION)
+
+$ABILITIES = @{
+    stim = @{
+        Name = 'Stim Pack'; UnitName = 'marine'; UnitType = 0; UnitLabel = 'Marines'
+        Tech = 'stim-packs'; TechPattern = 'PTEx: player 0 has researched 0\(stim-packs\)'
+        Cmd = '0x36'; Cmds = @('0x36')
+        # 'T' -- plain, unmodified, so 021's accelerator finding does not bite.
+        Key = 0x54
+        EffectName = 'the stim effect'
+        Effect = { param($U) $U.Stim -gt 0 }
+        # What 0x004C2F30 writes to CUnit+0x115; nothing may exceed it.
+        Bound = { param($U) $U.Stim -le 0x25 }
+        BoundName = "no timer exceeds the handler's own 0x25"
+        # Stim is paid for in HIT POINTS.
+        Paid = { param($Now, $Before) $Now.Hp -lt $Before.Hp }
+        PaidName = 'hit points'
+        NeedCard = $false
+        EnemyCount = 12
+        # Supply Depot, 500 hit points. Unchanged: this arm's published numbers were
+        # measured against this block.
+        EnemyType = '109'
+        # OFF for stim, deliberately: this arm's published numbers were measured without
+        # it and turning it on would change them for no reason. See the cloak entry.
+        Settle = $false
+    }
+    cloak = @{
+        Name = 'Personnel Cloaking'; UnitName = 'ghost'; UnitType = 1; UnitLabel = 'Ghosts'
+        Tech = 'personnel-cloaking'
+        TechPattern = 'PTEx: player 0 has researched 10\(personnel-cloaking\)'
+        Cmd = '0x21'; Cmds = @('0x21', '0x22')   # Cloak / Decloak -- the two faces of slot 7
+        # NO KEY. The card's hotkey path and its mouse path both test the same disabled
+        # bit, so with the tech researched either would do -- but the CLICK is the one
+        # that can be aimed at the button's own rect, read from the live dialog, which is
+        # what removes the "the input missed" confound task 022 could not remove.
+        Key = $null
+        EffectName = "the cloak secondary order 0x$('{0:x2}' -f $CLOAK_ORDER2)"
+        Effect = { param($U) $U.Order2 -eq $CLOAK_ORDER2 }
+        # Cloak has no timer to bound; the secondary order is the state itself.
+        Bound = $null
+        BoundName = ''
+        # Cloak is paid for in ENERGY (0x00491B30 deducts CUnit+0xA2), and it keeps
+        # draining while it is up, so "lower than before" is a safe direction.
+        Paid = { param($Now, $Before) $Now.Energy -lt $Before.Energy }
+        PaidName = 'energy'
+        NeedCard = $true
+        # MORE TARGETS THAN THE STIM ARM, and for a measured reason: a Ghost out-damages a
+        # Marine per second (10 per shot on a 22-frame cooldown against 6 on 15) and
+        # out-ranges it by three, so more of the group is in range at once. The block has
+        # to outlast three measurement windows -- the assertion that catches this is
+        # "the target block outlasted the measurement", and a block that dies mid-run puts
+        # the end of the fight inside a control window (§8.4b of ability-semantics.md).
+        EnemyCount = 16
+        # A COMMAND CENTRE, NOT A SUPPLY DEPOT, and this is the fixture doing the job an
+        # assertion should not have to. 1500 hit points against the depot's 500, so the
+        # interval between target deaths triples and none can die inside a two-second
+        # window in practice. Measured on the depot block: the plugin arm lost a target
+        # roughly every 13 s (16 -> 13 across one run) and one of those deaths landed
+        # INSIDE the ability window, idling 33 of 36 Ghosts at once -- the exact signature
+        # the hypothesis predicts, manufactured by the fixture. The no-target-died gate
+        # below catches that; this stops it happening. Both are kept: the fixture makes
+        # clean runs the normal case, the gate makes a dirty one impossible to publish.
+        # Still weaponless and immobile -- a computer-owned Command Centre with no orders
+        # cannot lift off, so the "cannot attack, cannot decide to" premise is unchanged.
+        EnemyType = '106'
+        # WAIT FOR THE FIGHT TO SETTLE before the first control window. Measured, not
+        # guessed: on the first cloak run the leading control saw 6 order changes and the
+        # trailing one saw 0 -- a spread of exactly the bound the suite calls too unstable
+        # to measure, and it refused the run. The cause was not decay but ARRIVAL: a Ghost
+        # out-ranges a Marine by three tiles, so the group trickles into range over several
+        # seconds and every arrival is a 0x06 Move -> 0x0a AttackUnit transition that lands
+        # in whichever window catches it. Measuring after the histogram stops moving is the
+        # fix; widening the tolerance would only have hidden it.
+        Settle = $true
+    }
+}
+$ABIL = $ABILITIES[$Ability]
+$UNIT_TYPE = $ABIL.UnitType
+$ABILITY_CMD = $ABIL.Cmd
+$ABILITY_KEY = $ABIL.Key
+# The descriptor supplies the default only when the CALLER did not. -EnemyCount 12 passed
+# explicitly must stay 12 even on the arm whose descriptor says 16.
+if (-not $PSBoundParameters.ContainsKey('EnemyCount')) { $EnemyCount = $ABIL.EnemyCount }
+if (-not $PSBoundParameters.ContainsKey('EnemyType'))  { $EnemyType  = $ABIL.EnemyType }
+$ENEMY_TYPE_ID = [int]$EnemyType
+if (-not $LogDir) { $LogDir = $(if ($Ability -eq 'stim') { 'C:\sc-work\logs\022' } else { 'C:\sc-work\logs\026' }) }
 # The camera opens centred on the start location and never moves on its own, so a click
 # at client x is an order to (start.x + x - 320). Same constants as test-combat-death.ps1.
 $WALK_X = 540
@@ -129,7 +265,10 @@ $PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C
 # folder and overwrite each other's identically-named fixture (task 023 review).
 if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t022' }
 $mapDir = $FixtureDir
-$mapName = 'ability-in-combat.scx'
+# One NAME per fixture, and the two abilities need different units, so they are two
+# different fixtures of the same suite. The stim name is left exactly as it was so a
+# concurrent 022-shaped run sees the file it has always seen.
+$mapName = $(if ($Ability -eq 'stim') { 'ability-in-combat.scx' } else { "ability-in-combat-$Ability.scx" })
 $mapPath = Join-Path $mapDir $mapName
 $fixtures = New-ScFixtureRun -Dir $mapDir -Names @($mapName)
 
@@ -151,8 +290,8 @@ function New-Fixture {
     # `Remove-Item -Recurse` this directory.
     Wait-ScFixtureFolderFree -Run $fixtures
     $genArgs = @{
-        UnitCount = $UnitCount; UnitType = 'marine'; Player = 0
-        TechResearched = 'stim-packs'
+        UnitCount = $UnitCount; UnitType = $ABIL.UnitName; Player = 0
+        TechResearched = $ABIL.Tech
     }
     if ($DamagedCount -gt 0) {
         $genArgs.DamagedCount = $DamagedCount
@@ -164,8 +303,12 @@ function New-Fixture {
         -OutputPath $mapPath 2>&1
     $gen | Where-Object { "$_" -notmatch 'WARNING:StormLib' } | ForEach-Object { Write-Host "       $_" }
     Assert-That 'the generator succeeded' ($LASTEXITCODE -eq 0) "(exit $LASTEXITCODE)"
-    Assert-That 'Stim Packs is researched for the human slot' `
-        (@($gen | Select-String -Pattern 'PTEx: player 0 has researched 0\(stim-packs\)').Count -gt 0)
+    # The generator's own read-back. NOT sufficient on its own -- until task 026 it used
+    # the same wrong PTEx index as the writer and happily confirmed a byte the engine
+    # never read (research/command-card.md §6). The ENGINE's opinion is asserted in the
+    # arm itself, off the card read-back's tech arrays.
+    Assert-That "$($ABIL.Name) is researched for the human slot" `
+        (@($gen | Select-String -Pattern $ABIL.TechPattern).Count -gt 0)
     if ($DamagedCount -gt 0) {
         Assert-That "the low-energy tail is in the map file ($DamagedCount at $DamagedEnergy%)" `
             (@($gen | Select-String -Pattern "tail starts at $DamagedEnergy% energy").Count -gt 0)
@@ -178,8 +321,8 @@ function New-Fixture {
 function Invoke-Arm {
     param([Parameter(Mandatory)][string]$Mode)
 
-    $logPath = Join-Path $LogDir "022-combat-$Mode.log"
-    $shotDir = Join-Path $LogDir "022-combat-$Mode-frames"
+    $logPath = Join-Path $LogDir "$Ability-combat-$Mode.log"
+    $shotDir = Join-Path $LogDir "$Ability-combat-$Mode-frames"
     $markerPath = Join-Path $LogDir 'marker.txt'
     if (Test-Path -LiteralPath $logPath) { Remove-Item -LiteralPath $logPath -Force }
     if (Test-Path -LiteralPath $markerPath) { Remove-Item -LiteralPath $markerPath -Force }
@@ -194,8 +337,12 @@ function Invoke-Arm {
     Wait-ScNoGameRunning
     $script:armLock = Enter-ScLaunchLock -TaskId '022-ability-in-combat'
     $gamePid = 0
+    # -CardScan only where the arm needs it: it is read-only and hookless in both modes,
+    # but it writes a block of CARD lines per marker and there is no reason to carry that
+    # in an arm that never asks for a card.
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
-        -Mode $Mode -WorldScan 1 -InjectWindowedHelper WMode -NoLaunchLock `
+        -Mode $Mode -WorldScan 1 -CardScan ($ABIL.NeedCard ? '1' : '0') `
+        -InjectWindowedHelper WMode -NoLaunchLock `
         -GameDir $GameDir -LogPath $logPath 6>&1 | ForEach-Object {
             Write-Host "       $_"
             if ("$_" -match 'scinject:\s*PID=(\d+)') { $script:armPid = [int]$Matches[1] }
@@ -261,39 +408,154 @@ function Invoke-Arm {
             if ($hp -lt $startEnemyHp) { $engaged = $w; break }
         }
         $result.StartEnemyHp = $startEnemyHp
+        if (-not $engaged) {
+            $result.Engaged = $engaged
+            ArmShot 'engaged'
+            return $result
+        }
+
+        # LET THE FIGHT SETTLE, for the arms that ask for it. "Engaged" only means the
+        # first shots have landed; part of the group can still be walking into range, and
+        # every arrival is an order transition that lands in whichever measurement window
+        # happens to catch it. Waiting until the main-order histogram stops changing makes
+        # the three windows comparable, which is the property the control-spread assertion
+        # tests. Bounded, and the LAST scan taken becomes `engaged` so the first control
+        # window starts from a settled fight rather than from the arrival scan.
+        if ($ABIL.Settle) {
+            $settleDeadline = (Get-Date).AddSeconds($SettleTimeoutSec)
+            $prevHist = $null
+            while ((Get-Date) -lt $settleDeadline) {
+                Start-Sleep -Seconds 3
+                $s = Get-ScWorldState -LogPath $logPath -Tag 'settling' -MarkerPath $markerPath
+                $hist = (((Get-Mine $s) | ForEach-Object { '0x{0:x2}' -f $_.Order } |
+                          Group-Object | ForEach-Object { "$($_.Name):$($_.Count)" }) |
+                         Sort-Object) -join ' '
+                if ($hist -eq $prevHist) { $engaged = $s; break }
+                $prevHist = $hist
+                $engaged = $s
+            }
+            Write-Host ("       [{0}] fight settled at orders [{1}]" -f $Mode, $prevHist)
+            $result.SettledOrders = $prevHist
+        }
         $result.Engaged = $engaged
         ArmShot 'engaged'
-        if (-not $engaged) { return $result }
 
-        # A CONTROL WINDOW FIRST: the same length of time, in the same fight, with NO
-        # ability used. Units in a firefight change orders constantly on their own -- a
-        # target dies and its killer drops back to Guard, another walks into range and
-        # starts shooting -- so "13 units changed order across the ability" means nothing
-        # until you know what a quiet two seconds looks like. This is what makes the
-        # measurement a comparison rather than an anecdote.
-        Start-Sleep -Seconds 2
-        $result.Baseline = Get-ScWorldState -LogPath $logPath -Tag 'baseline' -MarkerPath $markerPath
+        # ============================================================================
+        # THE MEASUREMENT, AND THE CONFOUND IT HAS TO SURVIVE
+        #
+        # Three windows of the same length in the same fight: a control with no ability,
+        # then the ability, then a second control. Units in a firefight change orders
+        # constantly on their own, so "33 units changed order across the ability" means
+        # nothing until you know what an ordinary two seconds looks like.
+        #
+        # BUT: when a TARGET DIES, every unit that was shooting it drops from 0x0a
+        # (AttackUnit) to 0x03 in the same instant -- which is bit-for-bit the signature
+        # the hypothesis under test predicts. Measured on the 2026-08-09 cloak run: 33 of
+        # 36 Ghosts went 0x0a -> 0x03 across the ability window, and the enemy count in
+        # the very same pair of scans went 14 -> 13. A building had died inside the
+        # window. Reported as-is that would have been a headline finding against our own
+        # plugin, produced entirely by the fixture.
+        #
+        # It bites the plugin arm and not the stock arm BECAUSE THE FEATURE WORKS: in
+        # fanout all 36 units are shooting, in stock only the engine's twelve, so the
+        # plugin arm kills targets about three times faster and is three times as likely
+        # to have one die inside a window. A confound correlated with the arm is the worst
+        # kind, so it is not tolerated and not averaged -- the window is RE-TAKEN until
+        # no target dies in any of the three, and a run that never gets a clean set fails
+        # rather than reporting the dirty one.
+        # ============================================================================
+        $clean = $false
+        for ($take = 1; $take -le $MeasureTries; $take++) {
+            $ref = $result.Engaged
+            $refEnemies = Get-EnemyCount $ref
 
-        # THE MOMENT UNDER TEST: one ability keypress, with the group mid-fight.
-        $mark = Get-ScLogLineCount -LogPath $logPath
-        Send-ScKey -Hwnd $hwnd -VirtualKey $ABILITY_KEY
-        Start-Sleep -Seconds 2
-        $lines = @(Get-Content -LiteralPath $logPath | Select-Object -Skip $mark)
-        # No click fallback. Guessing at a command-card button position is how this test
-        # previously armed a TARGETED ability by mistake -- the frame came back showing
-        # "Select Target" -- and an ability nobody used measures nothing while looking green.
-        # The key is 'T', it is unmodified, and §5 proves the client emits 0x36 for it.
-        $result.AbilityLines = $lines
-        $result.After = Get-ScWorldState -LogPath $logPath -Tag 'after-ability' -MarkerPath $markerPath
+            Start-Sleep -Seconds 2
+            $baseline = Get-ScWorldState -LogPath $logPath -Tag "baseline" -MarkerPath $markerPath
+
+            # THE CARD, READ OUT OF MEMORY, for the arm that clicks one (task 026). Taken
+            # BEFORE the ability so the slot the click aims at is the slot this take
+            # measured, and so a greyed button is caught as a fixture failure here rather
+            # than as a mysterious zero later. The tech arrays in the same read are THE
+            # ENGINE's opinion of the fixture, which the generator's own read-back cannot
+            # give. Re-read every take: slot 7 is a TOGGLE and shows whichever face
+            # matches the portrait unit's current state.
+            $cloakSlot = $null
+            if ($ABIL.NeedCard) {
+                $card = Get-ScCardState -LogPath $logPath -Tag "card" -MarkerPath $markerPath
+                $result.Card = $card
+                $hits = @($card.Slots | Where-Object { $_.HasButton -and $_.Action -in $CLOAK_PAIR })
+                if ($hits.Count -ne 1) {
+                    throw ("test: the live command card carries $($hits.Count) slots with the Cloak " +
+                           "toggle (0x$CLOAK_ACTION / 0x$DECLOAK_ACTION), expected exactly one. " +
+                           "Card: $($card.Lines -join ' | ')")
+                }
+                $cloakSlot = $hits[0]
+                $result.CloakSlot = $cloakSlot
+                $result.TechResearched = @($card.TechResearched)
+                Write-Host ("       [{0}] take {1}: card slot {2} is {3}, showing its {4} face; engine says player {5} researched [{6}]" -f `
+                    $Mode, $take, $cloakSlot.Index, $cloakSlot.State,
+                    ($cloakSlot.Action -eq $CLOAK_ACTION ? 'Cloak' : 'Decloak'),
+                    $card.TechPlayer, (@($card.TechResearched) -join ' '))
+                if ($cloakSlot.Disabled) {
+                    throw ("test: the Cloak button is GREYED on the live card, so no input could issue it and " +
+                           "this arm would measure nothing. Engine-researched techs: [$(@($card.TechResearched) -join ' ')].")
+                }
+            }
+
+            # THE MOMENT UNDER TEST: one ability use, with the group mid-fight.
+            $mark = Get-ScLogLineCount -LogPath $logPath
+            if ($null -ne $ABILITY_KEY) {
+                # No click fallback for the keyed ability. Guessing at a command-card
+                # button position is how this test previously armed a TARGETED ability by
+                # mistake -- the frame came back showing "Select Target" -- and an ability
+                # nobody used measures nothing while looking green. The key is 'T', it is
+                # unmodified, and task 022 §5 proves the client emits 0x36 for it.
+                Send-ScKey -Hwnd $hwnd -VirtualKey $ABILITY_KEY
+            }
+            else {
+                # And no guessed coordinate for the clicked one either: the point is the
+                # live control's own rect plus its dialog's origin, the sum the engine
+                # forms at 0x00458850. That is what makes a silent result mean "the button
+                # refused" rather than "the click landed between buttons".
+                $p = Get-ScCardSlotPoint -Card $result.Card -Slot $cloakSlot.Index
+                Write-Host ("       [{0}] take {1}: clicking card slot {2} at its own computed centre ({3},{4})" -f `
+                    $Mode, $take, $cloakSlot.Index, $p.X, $p.Y)
+                Send-ScClick -Hwnd $hwnd -X $p.X -Y $p.Y
+            }
+            Start-Sleep -Seconds 2
+            $lines = @(Get-Content -LiteralPath $logPath | Select-Object -Skip $mark)
+            $after = Get-ScWorldState -LogPath $logPath -Tag "after-ability" -MarkerPath $markerPath
+
+            # A SECOND control window, immediately after. A fight decays: two seconds
+            # later there are fewer targets left, so one control taken before the ability
+            # is not automatically comparable to the ability window. Two controls bracket
+            # the drift -- and if they disagree markedly, the fight is too unstable for
+            # the measurement and the run says so instead of averaging them.
+            Start-Sleep -Seconds 2
+            $controlAfter = Get-ScWorldState -LogPath $logPath -Tag "control-after" -MarkerPath $markerPath
+
+            $enemyRun = @($refEnemies, (Get-EnemyCount $baseline), (Get-EnemyCount $after),
+                          (Get-EnemyCount $controlAfter))
+            $clean = @($enemyRun | Select-Object -Unique).Count -eq 1
+            Write-Host ("       [{0}] take {1}: targets alive across the three windows: {2}{3}" -f `
+                $Mode, $take, ($enemyRun -join ' -> '),
+                ($clean ? '  (clean)' : '  <- a target died inside a window; re-taking'))
+
+            $result.AbilityLines = $lines
+            $result.Baseline = $baseline
+            $result.After = $after
+            $result.ControlAfter = $controlAfter
+            $result.Takes = $take
+            $result.CleanTake = $clean
+            $result.EnemyRun = $enemyRun
+            if ($clean) { break }
+
+            # Not clean. Let the group re-acquire and settle before the next take -- the
+            # order churn a death causes is exactly what must not be inside a window.
+            Start-Sleep -Seconds 5
+            $result.Engaged = Get-ScWorldState -LogPath $logPath -Tag "resettling" -MarkerPath $markerPath
+        }
         ArmShot 'after-ability'
-
-        # A SECOND control window, immediately after. A fight decays: two seconds later
-        # there are fewer units alive and fewer targets left, so one control taken before
-        # the ability is not automatically comparable to the ability window. Two controls
-        # bracket the drift -- and if they disagree markedly with each other, the fight is
-        # too unstable for the measurement and the run says so instead of averaging them.
-        Start-Sleep -Seconds 2
-        $result.ControlAfter = Get-ScWorldState -LogPath $logPath -Tag 'control-after' -MarkerPath $markerPath
 
         Start-Sleep -Seconds 12
         $result.Later = Get-ScWorldState -LogPath $logPath -Tag 'later' -MarkerPath $markerPath
@@ -339,6 +601,15 @@ function Get-EnemyHp {
     foreach ($u in $Scan.Units) { if ($u.Type -eq $ENEMY_TYPE_ID) { $total += $u.Hp } }
     return $total
 }
+# HOW MANY TARGETS ARE STILL ALIVE. The count, not the hit points: what wrecks a window is
+# a target being DESTROYED (every unit shooting it drops to 0x03 at once), and hit points
+# falling steadily is the fight working normally.
+function Get-EnemyCount {
+    param($Scan)
+    $n = 0
+    foreach ($u in $Scan.Units) { if ($u.Type -eq $ENEMY_TYPE_ID) { $n++ } }
+    return $n
+}
 
 # THE MEASUREMENT THE HYPOTHESIS ASKS FOR: for every unit alive in BOTH scans, matched by
 # CUnit pointer, did its MAIN ORDER change across the ability?
@@ -377,12 +648,12 @@ Assert-That 'the working copy starts out byte-identical to pristine 1.16.1' `
 
 $arms = @{}
 try {
-    Step "generate the fixture: $UnitCount Marines vs $EnemyCount Supply Depots, Stim researched" {
+    Step "generate the fixture: $UnitCount $($ABIL.UnitLabel) vs $EnemyCount Supply Depots, $($ABIL.Name) researched" {
         New-Fixture
     }
 
     foreach ($mode in $Modes) {
-        Step "ARM '$mode': engage, then press Cloak once mid-fight" {
+        Step "ARM '$mode': engage, then use $($ABIL.Name) once mid-fight" {
             $arm = Invoke-Arm -Mode $mode
             $arms[$mode] = $arm
             $spawned = (Get-Mine $arm.Boxed).Count
@@ -394,9 +665,10 @@ try {
             # has no weapon and cannot move, so it cannot DECIDE to start shooting. The
             # previous fixture used Lurkers, which have no weapon unburrowed -- and a
             # computer-owned one burrows on its own and shreds the group with splash.
-            Assert-That "[$mode] the target block is a weaponless, immobile building type ($ENEMY_TYPE_ID)" `
-                ($ENEMY_TYPE_ID -eq 109)
-            Assert-That "[$mode] the fixture spawned $UnitCount Marines" ($spawned -eq $UnitCount) `
+            Assert-That ("[{0}] the target block is a weaponless, immobile building type ({1} = {2})" -f `
+                         $mode, $ENEMY_TYPE_ID, ($ENEMY_TYPES_OK[$ENEMY_TYPE_ID] ?? 'NOT ON THE VERIFIED LIST')) `
+                ($ENEMY_TYPES_OK.ContainsKey($ENEMY_TYPE_ID))
+            Assert-That "[$mode] the fixture spawned $UnitCount $($ABIL.UnitLabel)" ($spawned -eq $UnitCount) `
                 ($melee.Count -gt 0 ? "(got $spawned, and player 0 owns SCV/Drone/Larva/Overlord-shaped units -- THIS IS A MELEE START, the Game Type pick did not take)" : "(got $spawned)")
             Assert-That "[$mode] and $EnemyCount enemy buildings" `
                 (@($arm.Boxed.Units | Where-Object { $_.Type -eq $ENEMY_TYPE_ID }).Count -eq $EnemyCount)
@@ -416,19 +688,48 @@ try {
             Assert-That "[$mode] the two sides engaged within ${EngageTimeoutSec}s" ($null -ne $arm.Engaged)
             if (-not $arm.Engaged) { return }
 
+            # THE FIXTURE, AS THE ENGINE SEES IT -- not as the generator says it wrote it.
+            # Task 026: the generator verified its own PTEx write with the same wrong index
+            # it wrote with, so it reported a researched tech on a map where the engine read
+            # a different byte entirely. The card read-back carries the engine's own
+            # per-player tech arrays, so this is the independent check.
+            if ($ABIL.NeedCard) {
+                Assert-That "[$mode] the ENGINE agrees $($ABIL.Name) is researched for this player" `
+                    (@($arm.TechResearched) -contains 10) `
+                    "(engine says [$(@($arm.TechResearched) -join ' ')])"
+                Assert-That "[$mode] and the Cloak card slot was ENABLED when it was clicked (slot $($arm.CloakSlot.Index), $($arm.CloakSlot.State))" `
+                    (-not $arm.CloakSlot.Disabled)
+            }
+
             # THE ABILITY MUST BE SHOWN TO HAVE FIRED IN *THIS* ARM, and in the stock arm
             # there is no CMD/FANOUT line to look at -- the command hook is not installed.
             # Without a substitute, a swallowed keypress produces 0/0/0 and every
             # assertion below passes while measuring nothing at all. The effect itself is
             # visible to the world scan in both arms, so that is the signal: units that
-            # were not stimmed before the keypress and are stimmed after it.
-            $stimBefore = @((Get-Mine $arm.Baseline) | Where-Object { $_.Stim -gt 0 }).Count
-            $stimAfter  = @((Get-Mine $arm.After)    | Where-Object { $_.Stim -gt 0 }).Count
-            $arm.StimBefore = $stimBefore
-            $arm.StimAfter = $stimAfter
-            Assert-That "[$mode] the ability actually fired -- units carrying the stim effect went $stimBefore -> $stimAfter" `
-                ($stimAfter -gt $stimBefore) `
-                '(no unit gained the effect, so this arm measured a keypress that did nothing and its numbers mean nothing)'
+            # did not carry the effect before the input and do carry it after.
+            $effBefore = @((Get-Mine $arm.Baseline) | Where-Object { & $ABIL.Effect $_ }).Count
+            $effAfter  = @((Get-Mine $arm.After)    | Where-Object { & $ABIL.Effect $_ }).Count
+            $arm.EffectBefore = $effBefore
+            $arm.EffectAfter = $effAfter
+            $arm.EffectDelta = [math]::Abs($effAfter - $effBefore)
+            # A CHANGE, not an increase. Cloak is a TOGGLE: if the measurement had to be
+            # re-taken, the take that counts may have switched the ability OFF, which is
+            # the same fanned-out command issued mid-fight and the same test of whether a
+            # replayed Select interrupts a running order. Stim only ever goes up, and this
+            # is satisfied either way.
+            Assert-That "[$mode] the ability actually fired -- units carrying $($ABIL.EffectName) went $effBefore -> $effAfter" `
+                ($effAfter -ne $effBefore) `
+                '(no unit changed effect state, so this arm measured an input that did nothing and its numbers mean nothing)'
+
+            # THE MEASUREMENT MUST BE UNCONFOUNDED, and this is the assertion that makes
+            # every number below readable. A target destroyed inside a window idles every
+            # unit that was shooting it -- indistinguishable from the effect under test,
+            # and three times more likely in the plugin arm because the fan-out triples
+            # the group's damage. Never averaged, never tolerated: no clean take, no result.
+            Assert-That ("[{0}] the measurement landed in a window where no target died (take {1} of {2}; targets {3})" -f `
+                         $mode, $arm.Takes, $MeasureTries, ($arm.EnemyRun -join ' -> ')) `
+                ($arm.CleanTake) `
+                '(a target died inside one of the three windows; every unit shooting it drops to 0x03 at once, which is exactly the signature this test looks for. Re-run rather than believing these numbers)'
 
             # Diagnostics first: a metric computed over the wrong scan is the failure mode
             # this whole task keeps meeting, so the raw sizes are printed before anything is
@@ -536,9 +837,13 @@ try {
         Step 'ARM fanout: the ability really did reach past the cap, and charged per unit' {
             $arm = $arms['fanout']
             $lines = $arm.AbilityLines
-            Assert-That "the ability was issued ($ABILITY_CMD)" `
-                (@($lines | Select-String -Pattern "CMD id=$ABILITY_CMD ").Count -gt 0)
-            $start = @($lines | Select-String -Pattern "FANOUT start: cmd=$ABILITY_CMD .* units=(\d+)")
+            # EITHER FACE OF THE TOGGLE. A re-taken measurement can land on the ability
+            # being switched off, which is command 0x22 rather than 0x21 -- the same
+            # button, the same fan-out path, and the same question.
+            $cmdPat = ($ABIL.Cmds | ForEach-Object { [regex]::Escape($_) }) -join '|'
+            $issued = @($lines | Select-String -Pattern "CMD id=($cmdPat) ")
+            Assert-That "the ability was issued ($($ABIL.Cmds -join ' or '))" ($issued.Count -gt 0)
+            $start = @($lines | Select-String -Pattern "FANOUT start: cmd=($cmdPat) .* units=(\d+)")
             Assert-That 'it was fanned out' ($start.Count -gt 0)
             if ($start.Count -gt 0) {
                 $u = [int]([regex]::Match($start[-1].Line, 'units=(\d+)').Groups[1].Value)
@@ -549,17 +854,32 @@ try {
             # result again, on a fixture where the units are busy rather than standing
             # still, which is the case the user was actually in.
             $mine = Get-Mine $arm.After
-            $stimmed = @($mine | Where-Object { $_.Stim -gt 0 })
-            Assert-That "more units carry the effect than the engine's twelve ($($stimmed.Count))" `
-                ($stimmed.Count -gt 12)
-            Assert-That "no timer exceeds the handler's own 0x$('{0:x}' -f $STIM_TIMER)" `
-                (@($stimmed | Where-Object { $_.Stim -gt $STIM_TIMER }).Count -eq 0)
-            $before = @{}
-            foreach ($u in (Get-Mine $arm.Engaged)) { $before[$u.Unit] = $u }
-            $paid = @($stimmed | Where-Object { $before.ContainsKey($_.Unit) -and $_.Hp -lt $before[$_.Unit].Hp })
-            Assert-That "every unit that gained the effect also paid for it ($($paid.Count) of $($stimmed.Count))" `
-                ($stimmed.Count -gt 0 -and $paid.Count -eq $stimmed.Count) `
-                '(hit points can also fall to enemy fire here, so this is a weaker form of the §5 assertion by design -- the strict per-unit arithmetic lives in test-stim-fanout.ps1, on a fixture with nothing shooting back)'
+            $affected = @($mine | Where-Object { & $ABIL.Effect $_ })
+            # The MAGNITUDE of the change, so a take that toggled the ability off counts
+            # the same as one that toggled it on: either way more than the engine's twelve
+            # units obeyed a single command, which is the fan-out doing its job.
+            Assert-That ("the command reached more than the engine's twelve (effect count {0} -> {1}, delta {2})" -f `
+                         $arm.EffectBefore, $arm.EffectAfter, $arm.EffectDelta) `
+                ($arm.EffectDelta -gt 12)
+            if ($ABIL.Bound) {
+                Assert-That $ABIL.BoundName `
+                    (@($affected | Where-Object { -not (& $ABIL.Bound $_) }).Count -eq 0)
+            }
+            # THE COST, per unit -- but only on a take that switched the ability ON. A
+            # toggle-off take leaves nobody carrying the effect, so there is nothing to
+            # charge and asserting over an empty set would be a check that cannot fail.
+            if ($arm.EffectAfter -gt $arm.EffectBefore) {
+                $before = @{}
+                foreach ($u in (Get-Mine $arm.Engaged)) { $before[$u.Unit] = $u }
+                $paid = @($affected | Where-Object { $before.ContainsKey($_.Unit) -and (& $ABIL.Paid $_ $before[$_.Unit]) })
+                Assert-That "every unit that gained the effect also paid for it in $($ABIL.PaidName) ($($paid.Count) of $($affected.Count))" `
+                    ($affected.Count -gt 0 -and $paid.Count -eq $affected.Count) `
+                    '(this is a weaker form of the per-unit arithmetic by design -- hit points can also fall to enemy fire and energy also regenerates; the strict version lives in test-stim-fanout.ps1, on a fixture with nothing shooting back)'
+            }
+            else {
+                Write-Host ("       the measured take switched the ability OFF ({0} -> {1} carrying it), so there is no per-unit cost to check here" -f `
+                    $arm.EffectBefore, $arm.EffectAfter)
+            }
         }
     }
 

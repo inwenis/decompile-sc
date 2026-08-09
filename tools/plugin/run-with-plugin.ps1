@@ -195,7 +195,14 @@ param(
     # switch and restores stock "one building per box" -- which is the control arm
     # test-building-groups.ps1 measures the feature against, in the same binary.
     # Only meaningful in -Mode fanout, same as -Circles and -HudRow.
-    [ValidateSet('0', '1')][string]$BuildingGroups = '1'
+    [ValidateSet('0', '1')][string]$BuildingGroups = '1',
+    # Task 026: the read-only COMMAND-CARD scan. On each marker the observer walks the
+    # card dialog (0x0068C148) and logs one `CARD` line per slot -- the control's
+    # visible/greyed flags plus the Button record behind it (slot, icon, condition,
+    # action, params, strings). Like -WorldScan it installs no hook and writes nothing,
+    # so it exists in -Mode observe too. Off by default: the existing suites parse this
+    # log and this adds eleven lines per marker.
+    [ValidateSet('0', '1')][string]$CardScan = '0'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -303,6 +310,7 @@ try {
     $env:SCPLUGIN_PRODQ          = $ProdQueue
     $env:SCPLUGIN_PRODQ_MAX      = "$ProdQueueMax"
     $env:SCPLUGIN_BUILDING_GROUPS = $BuildingGroups
+    $env:SCPLUGIN_CARDSCAN       = $CardScan
     if ($Liveness -eq '0') {
         Write-Warning 'run-with-plugin: -Liveness 0 — the fan-out emit gate is back to the pre-task-020 uniqueness test ALONE. A unit killed by damage will be replayed into a Select. This is a deliberate defect-reproduction run.'
     }

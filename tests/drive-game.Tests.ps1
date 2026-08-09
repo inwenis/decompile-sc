@@ -265,3 +265,131 @@ Describe 'fixture folder default' {
             Should -Be 'C:\g\Maps\BroodWar\00-tprobex'
     }
 }
+
+# ---------------------------------------------------------------------------
+# Get-ScCardState -- the command-card read-back parser (task 026)
+#
+# This one is here for a specific reason: an in-game run is the scarcest thing in this
+# repo (they serialise on a machine-wide lock and, on 2026-08-09, on the user's own
+# screen), and a parser that silently matches nothing turns a launch into a timeout and
+# a wasted slot. The lines below are the exact printf shapes in sc_card.cpp, including
+# the `%-7s` state padding and the ScLog timestamp prefix, so a change to either side
+# has to break a test here rather than a run there.
+# ---------------------------------------------------------------------------
+
+Describe 'Get-ScCardState' {
+    BeforeAll {
+        # The label is "<tag>-<seq>" with a module-private counter, so the fixture log
+        # carries every label the call could pick rather than guessing the seq.
+        function New-CardLog {
+            param([string]$Tag, [string[]]$Body)
+            $path = Join-Path ([IO.Path]::GetTempPath()) ("sc-card-" + [Guid]::NewGuid().ToString('n') + ".log")
+            $lines = foreach ($seq in 1..60) {
+                foreach ($b in $Body) { "2026-08-09 21:00:00.000  " + ($b -replace '<L>', "$Tag-$seq") }
+            }
+            Set-Content -LiteralPath $path -Value $lines
+            $path
+        }
+
+        # A Ghost card, verbatim in shape from the 2026-08-09 read-back.
+        $script:GhostCardBody = @(
+            'CARD [<L>] dialog=0x0068C148 root=0x0068C148 cardId=1 ovrSel=228 ovrSub=228 portrait=0x0059CE18 ptype=0x001 pset=1 penergy=51200 powner=0 set=(n=9 buttons=0x00517AB8) reason=8 rootrect=(500,358,639,479)'
+            'CARD [<L>] slot=1 enabled ctrl=0x0AB10100 flags=0x00000009 icon=0x00E4 rect=(3,6,35,38) button=0x00517AB8 bslot=1 bicon=0x00E4 cond=0x004282D0 act=0x00424440 cparam=0 aparam=0 name=0x0298 dis=0x0000'
+            'CARD [<L>] slot=6 hidden  ctrl=0x0AB10256 flags=0x00000001 icon=0xFFFF rect=(95,48,127,80) button=0x00000000 (no button record)'
+            'CARD [<L>] slot=7 GREYED  ctrl=0x0AB102AC flags=0x0000000B icon=0x00FC rect=(3,90,35,122) button=0x00517B0C bslot=7 bicon=0x00FC cond=0x004293E0 act=0x00423730 cparam=10 aparam=10 name=0x0158 dis=0x0163'
+            'CARD [<L>] tech p=0 available=[0 1 10 11] researched=[10]'
+            'CARD [<L>] slots=9 shown=7 greyed=2'
+        )
+    }
+
+    It 'parses the header, including the dialog origin' {
+        $log = New-CardLog -Tag 'hdr' -Body $script:GhostCardBody
+        try {
+            $c = Get-ScCardState -LogPath $log -Tag 'hdr' `
+                    -MarkerPath (Join-Path (Split-Path $log -Parent) 'marker.txt') -TimeoutSec 5
+            $c.Ok | Should -BeTrue
+            $c.CardId | Should -Be 1
+            $c.OverrideSel | Should -Be 228
+            $c.PortraitType | Should -Be 1
+            $c.PortraitSet | Should -Be 1
+            $c.SetCount | Should -Be 9
+            $c.RootRect | Should -Be @(500, 358, 639, 479)
+            $c.Shown | Should -Be 7
+            $c.Greyed | Should -Be 2
+        } finally { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
+    }
+
+    It 'reads slot 7 as the greyed Cloak button, with its Button record' {
+        $log = New-CardLog -Tag 'slot' -Body $script:GhostCardBody
+        try {
+            $c = Get-ScCardState -LogPath $log -Tag 'slot' `
+                    -MarkerPath (Join-Path (Split-Path $log -Parent) 'marker.txt') -TimeoutSec 5
+            $s = Get-ScCardSlot -Card $c -Slot 7
+            $s.State     | Should -Be 'GREYED'
+            $s.Visible   | Should -BeTrue
+            $s.Disabled  | Should -BeTrue
+            $s.Flags     | Should -Be 0xB
+            $s.HasButton | Should -BeTrue
+            $s.BSlot     | Should -Be 7
+            # The two fields the whole task turns on: the action names the ability, the
+            # conditionParam names the tech.
+            $s.Action    | Should -Be '00423730'
+            $s.CondParam | Should -Be 10
+        } finally { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
+    }
+
+    It 'distinguishes hidden from greyed, and a slot with no Button record' {
+        $log = New-CardLog -Tag 'hid' -Body $script:GhostCardBody
+        try {
+            $c = Get-ScCardState -LogPath $log -Tag 'hid' `
+                    -MarkerPath (Join-Path (Split-Path $log -Parent) 'marker.txt') -TimeoutSec 5
+            $s6 = Get-ScCardSlot -Card $c -Slot 6
+            $s6.Visible   | Should -BeFalse
+            $s6.Disabled  | Should -BeFalse
+            $s6.HasButton | Should -BeFalse
+            (Get-ScCardSlot -Card $c -Slot 1).Disabled | Should -BeFalse
+        } finally { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
+    }
+
+    It 'parses the per-player tech state as id lists' {
+        $log = New-CardLog -Tag 'tech' -Body $script:GhostCardBody
+        try {
+            $c = Get-ScCardState -LogPath $log -Tag 'tech' `
+                    -MarkerPath (Join-Path (Split-Path $log -Parent) 'marker.txt') -TimeoutSec 5
+            $c.TechPlayer     | Should -Be 0
+            $c.TechAvailable  | Should -Be @(0, 1, 10, 11)
+            $c.TechResearched | Should -Be @(10)
+        } finally { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
+    }
+
+    It 'computes a slot centre as dialog origin + control rect, never a constant' {
+        $log = New-CardLog -Tag 'pt' -Body $script:GhostCardBody
+        try {
+            $c = Get-ScCardState -LogPath $log -Tag 'pt' `
+                    -MarkerPath (Join-Path (Split-Path $log -Parent) 'marker.txt') -TimeoutSec 5
+            $p = Get-ScCardSlotPoint -Card $c -Slot 7
+            $p.X | Should -Be (500 + [math]::Floor((3 + 35) / 2))    # 519
+            $p.Y | Should -Be (358 + [math]::Floor((90 + 122) / 2))  # 464
+        } finally { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
+    }
+
+    It 'reports not-ok rather than hanging when the process has no card' {
+        $log = New-CardLog -Tag 'none' -Body @(
+            'CARD [<L>] dialog=0 (no command card in this process state)')
+        try {
+            $c = Get-ScCardState -LogPath $log -Tag 'none' `
+                    -MarkerPath (Join-Path (Split-Path $log -Parent) 'marker.txt') -TimeoutSec 5
+            $c.Ok | Should -BeFalse
+            $c.Slots.Count | Should -Be 0
+        } finally { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
+    }
+
+    It 'throws with the -CardScan hint when no CARD line ever arrives' {
+        $log = New-CardLog -Tag 'quiet' -Body @('WORLD [<L>] p=7 units=0 recount=0 complete=1')
+        try {
+            { Get-ScCardState -LogPath $log -Tag 'quiet' `
+                    -MarkerPath (Join-Path (Split-Path $log -Parent) 'marker.txt') -TimeoutSec 1 } |
+                Should -Throw -ExpectedMessage '*-CardScan 1*'
+        } finally { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
+    }
+}
