@@ -1194,9 +1194,11 @@ function Set-ScGameType {
     The Game Type combo is the single most consequential control in this whole harness --
     get it wrong and the fixture loads as a melee game, the map's placed units are never
     created, and the failure surfaces minutes later as "the wrong units are on the map".
-    It is also the least reliable one: it remembers what this machine last used (so a
-    no-op pick can look like a success for months), and the pick needs the window
-    foreground (Set-ScWindowActive), which another process can take away mid-drag.
+    It is also the least reliable one: it remembers what this machine last used, so a
+    no-op pick can look like a success for months. (Task 022 attributed that no-op to the
+    window not being foreground; task 027 measured otherwise and removed the raise -- see
+    Set-ScWindowActive. The verified-change check below is what actually makes the pick
+    trustworthy, and it is unchanged.)
 
     So this does not pick and hope. It picks a KNOWN OTHER entry first, fingerprints the
     map-information panel, then picks the wanted entry and requires the panel to have
