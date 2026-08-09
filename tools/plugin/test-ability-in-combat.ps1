@@ -106,6 +106,10 @@ param(
     [string]$EnemyRace = 'terran',
     [ValidateSet('fanout', 'observe')][string[]]$Modes = @('fanout', 'observe'),
     [int]$EngageTimeoutSec = 60,
+    # How long to let the fight settle after engagement before the first control window,
+    # for the arms whose descriptor asks for it. Bounded: a fight that never settles is
+    # measured anyway and the control-spread assertion is left to catch it.
+    [int]$SettleTimeoutSec = 45,
     # How far the two control windows may disagree before the fight is declared too
     # unstable to measure. Strictly less than this; see the assertion.
     [int]$ControlSpreadLimit = 6,
@@ -160,6 +164,9 @@ $ABILITIES = @{
         PaidName = 'hit points'
         NeedCard = $false
         EnemyCount = 12
+        # OFF for stim, deliberately: this arm's published numbers were measured without
+        # it and turning it on would change them for no reason. See the cloak entry.
+        Settle = $false
     }
     cloak = @{
         Name = 'Personnel Cloaking'; UnitName = 'ghost'; UnitType = 1; UnitLabel = 'Ghosts'
@@ -188,6 +195,15 @@ $ABILITIES = @{
         # "the target block outlasted the measurement", and a block that dies mid-run puts
         # the end of the fight inside a control window (§8.4b of ability-semantics.md).
         EnemyCount = 16
+        # WAIT FOR THE FIGHT TO SETTLE before the first control window. Measured, not
+        # guessed: on the first cloak run the leading control saw 6 order changes and the
+        # trailing one saw 0 -- a spread of exactly the bound the suite calls too unstable
+        # to measure, and it refused the run. The cause was not decay but ARRIVAL: a Ghost
+        # out-ranges a Marine by three tiles, so the group trickles into range over several
+        # seconds and every arrival is a 0x06 Move -> 0x0a AttackUnit transition that lands
+        # in whichever window catches it. Measuring after the histogram stops moving is the
+        # fix; widening the tolerance would only have hidden it.
+        Settle = $true
     }
 }
 $ABIL = $ABILITIES[$Ability]
@@ -358,9 +374,37 @@ function Invoke-Arm {
             if ($hp -lt $startEnemyHp) { $engaged = $w; break }
         }
         $result.StartEnemyHp = $startEnemyHp
+        if (-not $engaged) {
+            $result.Engaged = $engaged
+            ArmShot 'engaged'
+            return $result
+        }
+
+        # LET THE FIGHT SETTLE, for the arms that ask for it. "Engaged" only means the
+        # first shots have landed; part of the group can still be walking into range, and
+        # every arrival is an order transition that lands in whichever measurement window
+        # happens to catch it. Waiting until the main-order histogram stops changing makes
+        # the three windows comparable, which is the property the control-spread assertion
+        # tests. Bounded, and the LAST scan taken becomes `engaged` so the first control
+        # window starts from a settled fight rather than from the arrival scan.
+        if ($ABIL.Settle) {
+            $settleDeadline = (Get-Date).AddSeconds($SettleTimeoutSec)
+            $prevHist = $null
+            while ((Get-Date) -lt $settleDeadline) {
+                Start-Sleep -Seconds 3
+                $s = Get-ScWorldState -LogPath $logPath -Tag 'settling' -MarkerPath $markerPath
+                $hist = (((Get-Mine $s) | ForEach-Object { '0x{0:x2}' -f $_.Order } |
+                          Group-Object | ForEach-Object { "$($_.Name):$($_.Count)" }) |
+                         Sort-Object) -join ' '
+                if ($hist -eq $prevHist) { $engaged = $s; break }
+                $prevHist = $hist
+                $engaged = $s
+            }
+            Write-Host ("       [{0}] fight settled at orders [{1}]" -f $Mode, $prevHist)
+            $result.SettledOrders = $prevHist
+        }
         $result.Engaged = $engaged
         ArmShot 'engaged'
-        if (-not $engaged) { return $result }
 
         # A CONTROL WINDOW FIRST: the same length of time, in the same fight, with NO
         # ability used. Units in a firefight change orders constantly on their own -- a

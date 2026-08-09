@@ -50,6 +50,17 @@ state bits), not a screenshot of it. Frames are corroboration for "did it visibl
 all", never the measurement. Same lesson the folder-row "flake" taught: what looks visual is
 usually a readable structure underneath.
 
+The point is the ORACLE, not the outcome: once the fixture bug was fixed, the two slot tables
+really did differ (slot 7 greyed vs enabled) — and the read said *which slot and in which
+state*, which is the thing a hash can never say however it comes out.
+
+**The same rule applied to itself.** A read is only an oracle if it cannot be changed by the
+act it is measuring. Task 026's probe named the Cloak slot by its Cloak action, then cloaked
+the Ghost — flipping the slot to its Decloak face — and reported "no Cloak button on the card".
+So: take the read BEFORE the action as well as after, and make the verifier something other
+than the thing that acts. This repo has now met that shape five times; `research/command-card.md`
+§6.4 lists them.
+
 ## Absence assertions must first be proved positive (2026-08-09)
 
 An assertion that something is ABSENT is worth nothing until the same pattern has been shown to
