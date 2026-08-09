@@ -92,6 +92,39 @@ enum ScFanoutDrop {
 // defect can be reproduced deliberately.
 void ScFanoutTestSetLiveness(bool on);
 
+// ---------------------------------------------------------------------------
+// Same-type building groups (task 024: a drag box over N buildings selects all N)
+//
+// The client-side half is hook-free for the same reason the rest of the core is:
+// "what does a box full of buildings turn into" is decidable from the candidate list
+// and the engine's 12-slot output alone, so it is driven and asserted offline.
+// ---------------------------------------------------------------------------
+
+// The engine's unit_IsStandardAndMovable (0x0047B770) -- ECX = CUnit*, returns 0/1.
+typedef int (__attribute__((fastcall)) *ScMovablePredicate)(unsigned long unit);
+
+// Given SortAllUnits' own arguments and the count it returned, the count the engine
+// should use instead. Returns `ret` unchanged unless this is a drag box (clicked == 0)
+// whose result is the engine's one-building fallback, in which case it appends the rest
+// of that building's same-type same-owner group to `out` (max 12) and puts any beyond
+// the twelfth into the overflow accumulator.
+unsigned ScFanoutGrowBuildingGroup(unsigned long* candidates, unsigned long* out,
+                                   unsigned long clicked, unsigned ret);
+
+// Test-only: supply the movable predicate instead of calling into the game. A test
+// process has no engine code at 0x0047B770 -- only a fake image -- so every test that
+// drives the core sets this. Passing NULL restores "call the engine".
+void ScFanoutTestSetMovable(ScMovablePredicate f);
+
+// Test-only: how many units of the current selection the simulation will hold at once,
+// which is also the fan-out's chunk size. 12 for units, 1 for a building group.
+int ScFanoutSimSlots(void);
+
+// Test-only: units the building-group append refused, by ScFanoutDrop reason. Counted
+// apart from ScFanoutDroppedFor because they are refused a place in the SELECTION, not
+// a place on the wire -- they never reach a fan-out plan at all.
+int ScFanoutGroupRefusedFor(int why);
+
 // Test-only counters: units dropped from emitted Selects, in total and by reason.
 int ScFanoutStaleSkipped(void);
 int ScFanoutDroppedFor(int why);
