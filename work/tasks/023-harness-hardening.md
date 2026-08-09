@@ -78,6 +78,14 @@ Check with the conductor first; if either is still open, say so and wait.
    fixture before proceeding. Deterministic, and it fails loudly rather than opening someone
    else's work. Same treatment for the map row inside the folder, which has the identical defect
    (`022-ghosts.scx` sorting before `combat.scx` is how the first incident happened).
+
+   **This bug has THREE levels, and a per-task-folder fix covers only two of them.** Level 3,
+   found by 022 on 2026-08-09: merely CREATING a directory shifts the rows for a suite that does
+   not use the shared folder at all. `test-selection-circles` loads a stock campaign map from
+   `Maps\campaign`, and an extra empty directory left behind under `Maps\BroodWar` moved every
+   folder row by one, so it opened the wrong folder, never loaded its map, and timed out — which
+   reads exactly like menu flake. **Every browser click must be computed from the filesystem and
+   verified against what actually opened.** Nothing less covers level 3.
 2. **Shared suites hardcode the fixture folder.** `test-combat-death.ps1` is run by more than one
    task, so it cannot simply be pointed at one task's folder. Parameterise the fixture folder
    (default preserving today's behaviour) so any task can run it into its own.
