@@ -42,6 +42,10 @@ document could only assert: that the **costs** scale the same way the effects do
    this binary rather than inherited. §2.1, §3.
 6. Questions 2 and 3 are answered by plugin-vs-stock comparison on the same fixture, with the
    same read-only oracle in both arms. §6, §7.
+6b. **The user's actual report is answered, on their own unit: NO.** With real Ghosts and
+   Personnel Cloaking genuinely researched (task 026 had to fix the fixture generator first), a
+   fanned-out Cloak issued mid-fight reached all 36 units, charged all 36, and took **zero** units
+   off their attack orders — the count still attacking went *up*, 33 → 34. §7.6.
 7. Three **harness** faults were found on the way, one of which had been silently corrupting
    every in-game suite on this machine. §8.
 
@@ -494,9 +498,9 @@ so it is gone.
 It answers: the fan-out's replayed `Select`s do not interrupt orders that are already running,
 on a still fixture and in a live fight, statically and dynamically.
 
-It does not answer: why a cloaked Ghost appeared to stop attacking. That remains open, most
-likely vanilla (the plugin has no AI, targeting or acquisition code in it at all), and the
-honest state of it is "not reproduced, and not yet reproducible with this harness".
+It does not answer: why a cloaked Ghost appeared to stop attacking — **that is answered in §7.6,
+on real Ghosts, and the answer is that the plugin does not cause it.** Why the user's Ghost
+appeared to stop is still unreproduced.
 
 > **Superseded by §7.6 (task 026).** The A/B has now been run on real cloaking Ghosts. Read
 > §7.6 for the answer; this section's Marines-and-Stim measurement stands as the second data
@@ -546,6 +550,67 @@ Two independent fixes, both kept:
 window makes that window **noisier**, and §7.4's published finding was that the ability window was
 the **quietest of the three**. The confound runs against that conclusion, so it cannot have
 manufactured it. The gate now applies to that arm too, retroactively.
+
+#### 7.6.2 The clean run
+
+2026-08-09, both arms clean on the first take — targets `16 → 16 → 16 → 16` across all three
+windows in each arm, so nothing died anywhere in the measurement. `0 failures`.
+
+| | plugin (`fanout`) | stock (`observe`) |
+| --- | --- | --- |
+| main orders **before** the ability | `0x06:3 0x0a:33` | `0x03:24 0x0a:12` |
+| main orders **after** | `0x03:1 0x06:1 0x0a:34` | `0x03:24 0x0a:12` |
+| units that changed order across the ability | 2 of 36 | 0 of 36 |
+| … of which had been **attacking** (`0x0a`) | **0** | **0** |
+| control window before / after (changed) | 0 / 0 | 0 / 0 |
+| excess over its own control | 2 | 0 |
+| units the ability reached | **36** (`0 → 36` carrying `0x6D`) | 12 |
+| units that paid energy for it | 36 of 36 | — |
+| enemy hit points, engage → after → +12 s | 5978112 → 5895168 → 5666496 | 6090432 → 6062208 → 5980992 |
+
+**The two changes in the plugin arm are both units still walking into the fight**, and one of them
+is a unit *joining* it: `unit=00622418 0x06→0x0a` (Move → AttackUnit) and `unit=00623678 0x06→0x03`
+(Move → Idle, a unit finishing its walk). The count of units **attacking went up**, 33 → 34.
+**Not one unit that was attacking stopped.**
+
+The stock arm's `0x03:24` is the selection cap, not an interruption: 24 units never received the
+move order at all, which is exactly why §7.4 insists each arm is compared with **its own** control
+rather than with the other arm's raw churn.
+
+#### 7.6.3 The answer to the user's report
+
+**No. Nothing the plugin does makes a cloaked Ghost stop attacking.** On real Ghosts, with
+Personnel Cloaking genuinely researched, a fanned-out Cloak issued mid-fight reached all 36 units,
+charged all 36, and took **zero** units off their attack orders — while the stock arm did the same
+to its twelve, also with zero.
+
+**What the run would have caught, stated so the negative is worth something.** The metric is
+per-unit, matched by `CUnit` pointer across two scans, and it needs no assumption about which
+order id means "fighting". The hypothesis it tests predicts a *wholesale* effect — one replayed
+`Select` lands on every unit at once — so it predicts up to 36 units moving off their orders
+together. Three things establish the instrument was live:
+
+1. **The ability demonstrably fired inside the measured window**: 0 → 36 units carrying secondary
+   order `0x6D`, all 36 charged energy, `FANOUT start … units=36` on the wire. The thing whose
+   side effects are being looked for definitely happened, at full scale, in that window.
+2. **The metric has registered exactly the predicted signature** — §7.6.1's run reported
+   **33 of 36** units going `0x0a → 0x03` in a single window. It was a target death rather than
+   the ability, but it proves the measurement can see a mass drop-to-idle when one occurs. An
+   absence assertion needs the pattern proved positive somewhere, and this is that proof.
+3. **The stock arm is a real control**: no hook installed, no `CMD` line, no `FANOUT` line, each
+   asserted absent only after being shown present in the plugin arm.
+
+**Limits, plainly.** Two-second windows in a fixture whose enemy cannot shoot back, move, or
+choose to do either. An effect that takes longer than two seconds to appear, or one that needs a
+real opponent, is outside what this measures.
+
+**And the greyed-Cloak bug does not explain the user's report either.** That bug was ours and it
+was in the *fixture generator* — their Ghost was in a real game with cloak researched and working.
+The two are kept apart deliberately: [`command-card.md`](command-card.md) explains why the *test*
+could not cloak a Ghost; this section is the only thing here that speaks to the user's Ghost, and
+its answer is that on a correct fixture we measured no plugin effect on a cloaked Ghost's orders.
+Why theirs appeared to stop remains unreproduced, and the plugin contains no AI, targeting or
+acquisition code that could plausibly cause it.
 
 ---
 
