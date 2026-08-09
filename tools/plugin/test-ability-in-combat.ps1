@@ -54,7 +54,12 @@ param(
     # affordability gate back in the picture once the ability is known to fire.
     [int]$DamagedCount = 0,
     [int]$DamagedEnergy = 5,
-    [int]$EnemyCount = 16,
+    # Fewer enemies than the first version used (16). The measurement compares a
+    # two-second window against two-second controls, so the fight has to be steady over
+    # ~10 seconds -- and with sixteen Hydralisks the group was losing units fast enough
+    # that the two controls disagreed by exactly the amount the script calls "too unstable
+    # to mean anything". Slowing the decay is the fixture's job, not the assertion's.
+    [int]$EnemyCount = 10,
     [ValidateSet('fanout', 'observe')][string[]]$Modes = @('fanout', 'observe'),
     [int]$EngageTimeoutSec = 60,
     # How far the two control windows may disagree before the fight is declared too

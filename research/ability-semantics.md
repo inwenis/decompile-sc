@@ -316,16 +316,26 @@ a fixture and not a mechanism.
 ## 6. Question 2 — the Sunken and the Medic
 
 `tools/plugin/test-sunken-acquire.ps1`, unattended, **0 failure(s)**, run of 2026-08-09. Four
-arms over one fixture: six units walked into a lone Sunken Colony and watched for 30 s, with
-the plugin active and again with `-Mode observe`, and the whole thing repeated with Marines in
-the Medics' place.
+arms over one fixture: **eighteen** units walked into a lone Sunken Colony and watched for 30 s,
+with the plugin active and again with `-Mode observe`, and the whole thing repeated with
+Marines in the Medics' place.
 
-| arm | closest unit | my hit points (start → lowest seen) | survivors | Sunken order | attacked? |
-|---|---|---|---|---|---|
-| Medics, `fanout` | 197px | 92160 → **88768** | 6/6 | `0x12` → `0x13` | **yes** |
-| Medics, `observe` | 197px | 92160 → **88368** | 6/6 | `0x12` → `0x13` | **yes** |
-| Marines, `fanout` | 131px | 61440 → **0** | 0/6 | `0x12` → `0x13` → `0x12` | **yes** |
-| Marines, `observe` | 131px | 61440 → **0** | 0/6 | `0x12` → `0x13` → `0x12` | **yes** |
+Eighteen and not six. The first version of this fixture used six units, which review caught: at
+six the fan-out never fires, so the "plugin" arm was stock plus four pass-through hooks and the
+comparison answered *"does loading the plugin change acquisition"* rather than *"does our
+fan-out change it"* — and the user's report came from a session with more than twelve units
+selected. The plugin arm now asserts `FANOUT start … units=18` so it fails loudly if it ever
+drops out of the regime the question is about.
+
+| arm | my hit points (start → lowest seen) | survivors | Sunken order | attacked? |
+|---|---|---|---|---|
+| Medics, `fanout` | 276480 → **271488** | 18/18 | `0x12` → `0x13` | **yes** |
+| Medics, `observe` | 276480 → **271488** | 18/18 | `0x12` → `0x13` | **yes** |
+| Marines, `fanout` | 184320 → **153600** | 15/18 | Sunken destroyed | **yes** |
+| Marines, `observe` | 184320 → **148480** | 15/18 | Sunken destroyed | **yes** |
+
+The two Medic arms reach the **same** lowest hit-point total, 271488, with and without the
+plugin.
 
 **The Sunken attacks Medics, and the plugin arm and the stock arm agree on every measure.**
 The answer to "is this a bug we introduced" is no, and it is a measurement rather than a
@@ -549,6 +559,26 @@ a count that does not match.
 
 ---
 
+### 8.5 An absence assertion is worth nothing until the pattern is proved to match
+
+Two of this task's own defects were the same mistake. The control-integrity check that
+certifies "the stock arm really is stock" searched for `HOOK install` — a string the plugin
+never writes; the real ones are `HOOK %s: installed at %p` and `HOOK: %d/%d installed` — so it
+matched nothing anywhere and passed identically on a fan-out log. And the stock arm of the
+combat test had nothing at all confirming the ability had fired, so a swallowed keypress would
+have produced `0/0/0` and satisfied every assertion below it.
+
+Both are the same shape: **a test that can only pass.** The fix is a rule, not a patch:
+
+> An assertion that something is ABSENT is worth nothing until the same pattern has been proved
+> to MATCH somewhere it should. And every absence check needs a positive companion — "the thing
+> whose effect I am denying actually happened in this arm" — or a silently broken run reads as
+> a clean result.
+
+Here that means each pattern (`HOOK .*installed`, `CMD id=`, `FANOUT start`) is asserted
+present in the plugin arm's log first and only then required absent from the stock arm's, and
+each arm must separately show the ability took effect on units before its numbers are used.
+
 ### 8.4 Four defects in one evening, and not one of them was random
 
 The harness faults found while doing this work were, in order: the Game Type pick (a posted
@@ -594,11 +624,14 @@ hides them.
 
 ### Open
 
-- **The Ghost's Cloak keypress.** The button is on the card and the tech is researched, but no
-  key tried emitted `0x21`; task 021's finding that posted modifier keys cannot work
-  (`TranslateAcceleratorA` reads a key-state table Windows never updates for posted messages)
-  suggests the same `WM_COMMAND` route they used for control groups. §5.3.
+- **A stranded per-task fixture folder still breaks five suites silently.** If a run is killed
+  between generating its fixture and cleaning up, `00-t022` survives with a file in it — and
+  every suite that reaches its map by a hardcoded row is then off by one, with no detection and
+  no recovery. This task's own suites compute the row from the filesystem; the five older ones
+  do not. Handed to the harness task rather than fixed here.
+- **Why the Ghost's Cloak button could not be driven** (§7.1). Not established.
 - **Which selection the send-side gate consults** — presumably the engine's twelve, but that is
-  an inference from one observation where all 36 units were identical (§5.2).
+  an inference from one observation, where all 36 units were identical by the time it fired
+  (§5.2).
 - The cost table at `0x00656380` is read but not enumerated; only the two cloak entries matter
   here.
