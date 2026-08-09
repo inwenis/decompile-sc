@@ -342,6 +342,25 @@ function Send-ScKey {
     if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
 }
 
+function Remove-ScOwnFixtureDir {
+    <#
+    .SYNOPSIS
+    Delete a fixture folder this run created, but only if it is EMPTY.
+    .DESCRIPTION
+    A suite with its own fixture folder must take it away again: every suite in this
+    directory reaches its map with a first-row folder click, so an empty folder left
+    behind changes which folder that click lands on for everyone else. Refusing to delete
+    a non-empty one is the same rule as everywhere else here -- never remove a file this
+    run did not create.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Dir)
+    if (-not (Test-Path -LiteralPath $Dir)) { return }
+    $left = @(Get-ChildItem -LiteralPath $Dir -Force -ErrorAction SilentlyContinue)
+    if ($left.Count -eq 0) { Remove-Item -LiteralPath $Dir -Force -ErrorAction SilentlyContinue }
+    else { Write-Host "       leaving $Dir in place: it still holds $($left.Count) file(s) this run did not create" }
+}
+
 function Wait-ScTestMapDirFree {
     <#
     .SYNOPSIS

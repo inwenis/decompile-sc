@@ -147,7 +147,12 @@ function Shot([string]$tag) {
 
 try {
     Step "generate the fixture: $UnitCount Lurkers, Use Map Settings, no triggers" {
-        if (Test-Path -LiteralPath $mapDir) { Remove-Item -LiteralPath $mapDir -Recurse -Force }
+        # AGENTS.md rule 4 (task 022): the generated-fixture folder is SHARED between workers and
+        # the map browser picks by ROW, so a foreign .scx silently changes which map loads --
+        # and a recursive delete here takes another worker's fixture out from under its running
+        # game. This suite is not otherwise touched by task 022; this is the compliance change,
+        # nothing else.
+        Wait-ScTestMapDirFree -Dir $mapDir -MyMapPath $mapPath
         $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
             -UnitCount $UnitCount -UnitType lurker -Player 0 -OutputPath $mapPath 2>&1
         $gen | ForEach-Object { Write-Host "       $_" }
@@ -332,7 +337,7 @@ finally {
     }
     # The fixture is game content: it is generated for the run and never survives it.
     if (-not $KeepOpen -and (Test-Path -LiteralPath $mapDir)) {
-        Remove-Item -LiteralPath $mapDir -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $mapPath -Force -ErrorAction SilentlyContinue
     }
 }
 

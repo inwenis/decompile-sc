@@ -55,6 +55,11 @@ param(
     [int]$EnemyCount = 16,
     [ValidateSet('fanout', 'observe')][string[]]$Modes = @('fanout', 'observe'),
     [int]$EngageTimeoutSec = 60,
+    # The Cloak button's client coordinates on the Ghost command card, used only if the
+    # hotkey emits nothing. Read off a captured frame of this fixture: the card is the
+    # bottom-right 3x3 block and Cloak is its bottom-left cell.
+    [int]$AbilityButtonX = 523,
+    [int]$AbilityButtonY = 430,
     [switch]$KeepOpen
 )
 
@@ -80,7 +85,13 @@ $WALK_X = 540
 $WALK_Y = 240
 
 $PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C6A46'
-$mapDir = Join-Path $GameDir 'Maps\BroodWar\00-testmap'
+# THIS TASK'S OWN FIXTURE FOLDER, not the shared 00-testmap.
+# The map browser picks by ROW, so sharing a folder means two workers pick each other's
+# maps -- which happened twice during task 022, once in each direction, and cost a run
+# each time. A folder of our own removes the interference in both directions rather than
+# racing for it. The name sorts before every other 00-t* folder ('0' < any letter), so the
+# first-row folder click that every suite here uses still lands on it.
+$mapDir = Join-Path $GameDir 'Maps\BroodWar\00-t022'
 $mapPath = Join-Path $mapDir '022-ghosts.scx'
 
 function Assert-That {
@@ -125,6 +136,24 @@ function New-Fixture {
 # One arm: launch in $Mode, walk into the enemy, press Cloak, and take the three scans
 # the comparison needs. Returns the metrics; assertions that only make sense for one arm
 # are made by the caller.
+# The shared-folder race has TWO halves and the wait before generation only covers one:
+# another worker can clear the folder, or drop a file into it, between the moment this
+# fixture is written and the moment the map browser is clicked -- and the browser picks by
+# ROW, so a foreign file silently changes which map loads. Re-checked here, as late as
+# possible, and named as the cause if it fails.
+function Assert-ScFixtureStillMine {
+    param([Parameter(Mandatory)][string]$Dir, [Parameter(Mandatory)][string]$MapPath)
+    $mine = Split-Path $MapPath -Leaf
+    if (-not (Test-Path -LiteralPath $MapPath)) {
+        throw "test: $mine is gone from $Dir between generation and launch -- another worker's cleanup took it. Regenerate; do not interpret this run."
+    }
+    $foreign = @(Get-ChildItem -LiteralPath $Dir -File -ErrorAction SilentlyContinue |
+                 Where-Object { $_.Name -ne $mine })
+    if ($foreign.Count -gt 0) {
+        throw ("test: {0} also holds {1}, which this test did not create. The map browser picks by ROW, so the wrong map would load. Refusing to start." -f $Dir, (($foreign | ForEach-Object { $_.Name }) -join ', '))
+    }
+}
+
 function Invoke-Arm {
     param([Parameter(Mandatory)][string]$Mode)
 
@@ -140,6 +169,7 @@ function Invoke-Arm {
     # that collides is a game that is still ALIVE. So: wait for the machine to be free,
     # then hold the lock for as long as this arm's game exists, and tell run-with-plugin
     # not to take it again underneath us.
+    Assert-ScFixtureStillMine -Dir $mapDir -MapPath $mapPath
     Wait-ScNoGameRunning
     $script:armLock = Enter-ScLaunchLock -TaskId '022-ability-in-combat'
     $gamePid = 0
@@ -216,7 +246,21 @@ function Invoke-Arm {
         $mark = Get-ScLogLineCount -LogPath $logPath
         Send-ScKey -Hwnd $hwnd -VirtualKey $CLOAK_KEY
         Start-Sleep -Seconds 2
-        $result.CloakLines = @(Get-Content -LiteralPath $logPath | Select-Object -Skip $mark)
+        $lines = @(Get-Content -LiteralPath $logPath | Select-Object -Skip $mark)
+        $result.AbilityVia = 'key'
+        # FALLBACK: click the command-card button itself. The hotkey is the tidier route
+        # and it works for Stim ('T'), but an ability whose button the client has disabled
+        # -- or whose letter is not the one assumed -- emits nothing at all, and a run that
+        # measures an ability nobody used is worse than a run that fails. Clicking the
+        # button is a plain posted click, which this harness has always been able to do.
+        if (@($lines | Select-String -Pattern "CMD id=$CLOAK_CMD ").Count -eq 0) {
+            Write-Host "       the ability key emitted nothing; clicking the command-card button at ($AbilityButtonX,$AbilityButtonY) instead"
+            Send-ScClick -Hwnd $hwnd -X $AbilityButtonX -Y $AbilityButtonY
+            Start-Sleep -Seconds 2
+            $lines = @(Get-Content -LiteralPath $logPath | Select-Object -Skip $mark)
+            $result.AbilityVia = 'button'
+        }
+        $result.CloakLines = $lines
         $result.After = Get-ScWorldState -LogPath $logPath -Tag 'after-cloak' -MarkerPath $markerPath
         ArmShot 'after-cloak'
 
@@ -237,7 +281,10 @@ function Invoke-Arm {
 }
 
 # --- per-arm derived numbers ---------------------------------------------------
-function Get-Mine { param($Scan) @($Scan.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $GHOST_TYPE }) }
+# The leading comma keeps the ARRAY an array on the way out: PowerShell unrolls a
+# function's array return, so a wiped group comes back as $null and `.Count` throws under
+# StrictMode -- which is what happens the moment the Hydralisks win an exchange.
+function Get-Mine { param($Scan) ,@($Scan.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $GHOST_TYPE }) }
 function Get-EnemyHp {
     # Sum by hand: Measure-Object emits NOTHING for an empty pipeline, and under
     # StrictMode reading .Sum off that is a thrown error rather than a zero -- which is
@@ -255,8 +302,8 @@ function Get-EnemyHp {
 function Get-Transitions {
     param($Before, $After)
     $post = @{}
-    foreach ($u in (Get-Mine $After)) { $post[$u.Unit] = $u }
-    $busyBefore = @(Get-Mine $Before | Where-Object { $_.Order -ne $IDLE_ORDER })
+    foreach ($u in @(Get-Mine $After)) { $post[$u.Unit] = $u }
+    $busyBefore = @(@(Get-Mine $Before) | Where-Object { $_.Order -ne $IDLE_ORDER })
     $stillHere = @($busyBefore | Where-Object { $post.ContainsKey($_.Unit) })
     $wentIdle = @($stillHere | Where-Object { $post[$_.Unit].Order -eq $IDLE_ORDER })
     [pscustomobject]@{
@@ -323,7 +370,7 @@ try {
         Step 'ARM fanout: the ability really did reach past the cap, and charged per unit' {
             $arm = $arms['fanout']
             $lines = $arm.CloakLines
-            Assert-That "the key emitted $CLOAK_CMD" `
+            Assert-That "the ability was issued ($CLOAK_CMD, via $($arm.AbilityVia))" `
                 (@($lines | Select-String -Pattern "CMD id=$CLOAK_CMD ").Count -gt 0)
             $start = @($lines | Select-String -Pattern "FANOUT start: cmd=$CLOAK_CMD .* units=(\d+)")
             Assert-That 'it was fanned out' ($start.Count -gt 0)
@@ -383,6 +430,7 @@ finally {
     if (-not $KeepOpen -and (Test-Path -LiteralPath $mapPath)) {
         Remove-Item -LiteralPath $mapPath -Force -ErrorAction SilentlyContinue
     }
+    Remove-ScOwnFixtureDir -Dir $mapDir
 }
 
 Write-Host ''

@@ -72,7 +72,13 @@ $WALK_Y = 240
 $ENEMY_OFFSET_X = 448
 
 $PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C6A46'
-$mapDir = Join-Path $GameDir 'Maps\BroodWar\00-testmap'
+# THIS TASK'S OWN FIXTURE FOLDER, not the shared 00-testmap.
+# The map browser picks by ROW, so sharing a folder means two workers pick each other's
+# maps -- which happened twice during task 022, once in each direction, and cost a run
+# each time. A folder of our own removes the interference in both directions rather than
+# racing for it. The name sorts before every other 00-t* folder ('0' < any letter), so the
+# first-row folder click that every suite here uses still lands on it.
+$mapDir = Join-Path $GameDir 'Maps\BroodWar\00-t022'
 
 function Assert-That {
     param([string]$What, [bool]$Ok, [string]$Detail = '')
@@ -105,6 +111,24 @@ function Get-MinDistance {
     $best
 }
 
+# The shared-folder race has TWO halves and the wait before generation only covers one:
+# another worker can clear the folder, or drop a file into it, between the moment this
+# fixture is written and the moment the map browser is clicked -- and the browser picks by
+# ROW, so a foreign file silently changes which map loads. Re-checked here, as late as
+# possible, and named as the cause if it fails.
+function Assert-ScFixtureStillMine {
+    param([Parameter(Mandatory)][string]$Dir, [Parameter(Mandatory)][string]$MapPath)
+    $mine = Split-Path $MapPath -Leaf
+    if (-not (Test-Path -LiteralPath $MapPath)) {
+        throw "test: $mine is gone from $Dir between generation and launch -- another worker's cleanup took it. Regenerate; do not interpret this run."
+    }
+    $foreign = @(Get-ChildItem -LiteralPath $Dir -File -ErrorAction SilentlyContinue |
+                 Where-Object { $_.Name -ne $mine })
+    if ($foreign.Count -gt 0) {
+        throw ("test: {0} also holds {1}, which this test did not create. The map browser picks by ROW, so the wrong map would load. Refusing to start." -f $Dir, (($foreign | ForEach-Object { $_.Name }) -join ', '))
+    }
+}
+
 # One arm: one unit type, one plugin mode.
 function Invoke-Arm {
     param([Parameter(Mandatory)][string]$UnitType, [Parameter(Mandatory)][string]$Mode)
@@ -127,6 +151,7 @@ function Invoke-Arm {
     $gen | Where-Object { "$_" -notmatch 'WARNING:StormLib' } | ForEach-Object { Write-Host "       $_" }
     Assert-That "[$tag] the generator succeeded" ($LASTEXITCODE -eq 0) "(exit $LASTEXITCODE)"
 
+    Assert-ScFixtureStillMine -Dir $mapDir -MapPath $mapPath
     Wait-ScNoGameRunning
     $script:armLock = Enter-ScLaunchLock -TaskId "022-sunken-$tag"
     $script:armPid = 0
@@ -209,6 +234,7 @@ function Invoke-Arm {
         if (-not $KeepOpen -and (Test-Path -LiteralPath $mapPath)) {
             Remove-Item -LiteralPath $mapPath -Force -ErrorAction SilentlyContinue
         }
+        Remove-ScOwnFixtureDir -Dir $mapDir
     }
     return $result
 }
