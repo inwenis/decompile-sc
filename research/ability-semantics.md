@@ -407,64 +407,68 @@ press: four fan-outs, **twelve emitted `Select` commands**, and not one unit cha
 order. That is the hypothesis tested directly on a still fixture, where nothing else can move
 an order.
 
-### 7.4 The loud half: the same question during an actual firefight
+### 7.4 The loud half: the same question while the units are actually shooting
 
-`tools/plugin/test-ability-in-combat.ps1`: 36 Marines walked into 16 Hydralisks, Stim pressed
-once while the fight is in progress, plugin arm and stock arm.
+`tools/plugin/test-ability-in-combat.ps1`: 36 Marines shooting a block of enemy buildings, Stim
+pressed once mid-fight, plugin arm and stock arm, the ability window bracketed by a no-ability
+control window on either side.
 
-**A naive version of this measurement produced a false finding against our own feature, and it
-is worth recording because the mistake is an easy one.** Counting units whose main order
-changed across the ability gave **13 of 29 in the plugin arm against 2 of 29 in stock** — six
-times as much disturbance, exactly the shape of result this audit was looking for. It is an
-artefact of the feature working. The move order that starts the fight is *itself* fanned out,
-so the two arms are not in the same state:
+**Three fixtures were needed, and the two that failed are the interesting part.** Both failed
+the same way and the suite refused to publish either — the numbers below are from the third.
 
-| arm | orders at the moment of the keypress |
-|---|---|
-| plugin | `0x03:5 0x06:9 0x0a:17` — five idle, nine moving, seventeen attacking |
-| stock | `0x03:26 0x0a:6` — twenty-six standing still |
+| fixture | what went wrong | how it showed |
+|---|---|---|
+| 16 Hydralisks | the group lost units fast enough that a two-second window meant nothing | the two controls disagreed by exactly the margin the script calls too unstable, and the run sat precisely on that boundary |
+| 24 Lurkers — chosen because an **unburrowed** Lurker has no weapon | a computer-owned Lurker **burrows on its own**, and a burrowed one is all weapon, with splash | player 0 went 36 → 2 units mid-measurement; the baseline scan came back torn (`units=32 recount=30`); the "excess" it produced was a massacre |
+| 12 Supply Depots | — | population 36/36 in every window, in both arms |
 
-Twenty-six idle units cannot have their orders interrupted. Raw churn was measuring how many
-units were doing anything.
+The lesson is one line: the premise has to be **"cannot attack"**, not "is not currently
+attacking". A Supply Depot cannot attack, cannot move, and cannot decide to do either.
 
-So the measurement is **each arm against its own control**: the same fight, the same two
-seconds, with no ability used — one control window immediately before the ability window and a
-second immediately after, because a fight decays (fewer units alive, fewer targets) and one
-control on one side of the ability is not automatically comparable to it. If the two controls
-disagree with each other, the fight is too unstable to measure and the run says so rather than
-averaging them.
+**A naive comparison would have produced a false finding against our own feature**, twice over.
+The first version compared raw order-churn between the arms and got 13 of 29 (plugin) against 2
+of 29 (stock) — six times the disturbance, exactly the shape this audit was hunting. It is an
+artefact of the feature working: the move order that starts the fight is itself fanned out, so
+in the plugin arm every unit is engaged (`0x03:5 0x06:9 0x0a:17`) while in stock twenty-six
+stand still (`0x03:26 0x0a:6`), and an idle unit cannot have its order interrupted. Each arm is
+therefore compared against **its own** control. The Lurker fixture then produced a second
+false positive — 13 of 23 units "stopping attacking" — which was units dying.
 
 **Why a negative result here means something.** A replayed `Select` lands on every unit in the
 chunk at once. If it interrupted running orders, the ability window would show a **landslide**
 against its control — most of the group knocked off what it was doing in one step — not a
 margin of one or two. That is what makes the allowance in the assertions generous rather than
-lax, and it is what makes "no excess" a real answer instead of a quiet one.
+lax, and it is what makes "no excess" an answer rather than a shrug.
 
-Run of 2026-08-09, `0 failure(s)`:
+Run of 2026-08-09 on the third fixture, `0 failure(s)`:
 
 ```
-[fanout]  CONTROL before: 30 of 32 alive, 10 changed order, 2 stopped attacking
-[fanout]  CONTROL after : 24 of 26 alive,  4 changed order, 1 stopped attacking
-[fanout]  ABILITY window: 26 of 30 alive,  8 changed order, 1 stopped attacking
-[observe] CONTROL before: 29 of 32 alive,  0 changed order, 0 stopped attacking
-[observe] CONTROL after : 22 of 26 alive,  0 changed order, 0 stopped attacking
-[observe] ABILITY window: 26 of 29 alive,  0 changed order, 0 stopped attacking
+[fanout]  CONTROL before: 36 of 36 alive, 3 changed order, 1 stopped attacking
+[fanout]  CONTROL after : 36 of 36 alive, 5 changed order, 3 stopped attacking
+[fanout]  ABILITY window: 36 of 36 alive, 3 changed order, 3 stopped attacking
+[observe] CONTROL before: 36 of 36 alive, 0 changed order, 0 stopped attacking
+[observe] CONTROL after : 36 of 36 alive, 0 changed order, 0 stopped attacking
+[observe] ABILITY window: 36 of 36 alive, 0 changed order, 0 stopped attacking
 
-excess disturbance caused by the ability: fanout -2, stock 0
+excess disturbance caused by the ability -- fanout: 0 (strict) / -2 (lenient); stock: 0 / 0
+the ability actually fired -- stimmed 0 -> 36 (fanout), 0 -> 12 (stock)
 ```
 
-**The ability window is quieter than the control window that preceded it** — eight order
-changes against ten — and it sits between the two controls, which is what "no effect" looks
-like in a decaying fight. One unit stopped attacking across the ability; two stopped across the
-control. And the individual changes are mostly `0x03`/`0x06`/`0x02 -> 0x0a`: units arriving and
-*starting* to shoot, the opposite of being interrupted. No landslide, no margin, nothing.
+**Zero excess against the strict control**, in the arm that has the units to show one, on a
+fixture where nothing died in any window. And the two arms' stim counts — 36 against 12 — are
+the feature doing exactly what it is for, in the same run.
 
-**Which arm is the evidence.** The plugin arm's comparison against its own control is the
-primary result: it is the only arm with enough units actually doing something for an
-interruption to be visible. The stock arm is the corroborator and a weak one, and this run
-shows exactly why — it recorded **zero** order changes in every window, including the two
-controls. A population that never changes an order cannot demonstrate that something failed to
-change one. Reported as a corroborator, not as an equal arm.
+**Which arm is the evidence.** The plugin arm against its own control is the primary result: it
+is the only arm with enough units doing anything for an interruption to be visible. The stock
+arm recorded **zero** order changes in all three of its windows; a population that never
+changes an order cannot demonstrate that something failed to change one. Corroborator, not an
+equal arm.
+
+**No aggregator.** Both controls are asserted and both reported. An earlier version took the
+larger of the two and called it conservative; it is the lenient choice — a bigger control
+raises the bar an excess has to clear — and on the run it was published from, the sign of the
+headline flipped depending on which control was used. That is a number the reader cannot check,
+so it is gone.
 
 ### 7.5 What this does and does not answer
 

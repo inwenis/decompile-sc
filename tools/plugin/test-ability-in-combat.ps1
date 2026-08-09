@@ -429,8 +429,11 @@ try {
             # cannot be seen to change its order, so the bias runs toward "nothing
             # changed". And if the target block dies mid-measurement the fight ends, which
             # is what wrecked both previous fixtures.
-            $popStart = @(Get-Mine $arm.Engaged).Count
-            $popEnd = @(Get-Mine $arm.ControlAfter).Count
+            # NO @() around Get-Mine -- it returns the array unrolled-proof already, and
+            # wrapping it again makes a one-element array holding the array. Same trap this
+            # file documents above; it reported a population of "1" the first time.
+            $popStart = (Get-Mine $arm.Engaged).Count
+            $popEnd = (Get-Mine $arm.ControlAfter).Count
             $enemyStart = @($arm.Engaged.Units | Where-Object { $_.Type -eq $ENEMY_TYPE_ID }).Count
             $enemyEnd = @($arm.ControlAfter.Units | Where-Object { $_.Type -eq $ENEMY_TYPE_ID }).Count
             Write-Host ("       [{0}] population {1} -> {2}; target block {3} -> {4}" -f `
@@ -438,9 +441,17 @@ try {
             Assert-That "[$mode] not one unit was lost across the whole measurement ($popStart -> $popEnd)" `
                 ($popStart -eq $popEnd) `
                 '(a moving population voids this measurement, and the bias runs toward the conclusion this test reaches)'
-            Assert-That "[$mode] the target block survived the whole measurement ($enemyStart -> $enemyEnd)" `
-                ($enemyEnd -eq $enemyStart) `
-                '(if the targets die the fight ends, and the last control window measures that instead of an ordinary two seconds)'
+            # The property that matters is that THE FIGHT DOES NOT END during the windows,
+            # not that no target is ever destroyed: 36 Marines will chew through a 500-point
+            # building every couple of seconds, and losing one of twelve changes nothing
+            # about whether the group is still shooting. What ruined the earlier fixtures
+            # was the block being WIPED, after which every unit drops to idle at once and
+            # the last control window measures the end of the fight. So: most of the block
+            # still standing, and -- asserted separately below -- damage still being dealt
+            # at the end.
+            Assert-That "[$mode] the target block outlasted the measurement ($enemyStart -> $enemyEnd of $EnemyCount)" `
+                ($enemyEnd -ge [math]::Ceiling($enemyStart / 2) -and $enemyEnd -gt 0) `
+                '(a wiped block ends the fight, and the last control window then measures that instead of an ordinary two seconds)'
 
             $t = Get-Transitions $arm.Baseline $arm.After
             $ctrlAfter = Get-Transitions $arm.After $arm.ControlAfter
