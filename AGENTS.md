@@ -39,6 +39,41 @@ and TOOLING, not redistributed game content.
    something seems missing, ask the user. (Sole exception: `./run.ps1`,
    which the USER launches to serve the Agent Console UI.)
 
+## Test fixtures: one folder per task (hard rule, 2026-08-09)
+
+**Generate into `Maps\BroodWar\00-t<NNN>\`, your own folder — never the shared
+`00-testmap`.** This removes the contention in both directions instead of racing for it:
+nobody else's row click can land on your map, and yours cannot land on theirs. `0` sorts
+before any letter, so the first-row folder click every suite uses still finds it.
+
+Remove the folder at the end of the run, and only if it is empty — an empty folder of yours
+left behind becomes the first row for everyone else, which is the same bug with the roles
+swapped.
+
+The rules below still apply INSIDE your own folder (they are what caught the incidents):
+
+## Shared test-fixture folder (hard rule, 2026-08-09 incident)
+
+Every in-game suite generates its map into ONE shared folder in the working copy, and the
+map browser is clicked **by ROW, not by name** — so a file another worker drops in there
+changes which map YOUR test loads. On 2026-08-09 task 021's run played task 022's fixture
+(36 Ghosts where it places Lurkers) and then recursive-deleted the folder.
+
+Rules, all three, no exceptions:
+
+1. **Task-prefix every generated fixture** (`021-lurkers.scx`), so "mine" is decidable.
+2. **Delete only your own named files**, on every path including `finally`. Never
+   `Remove-Item -Recurse` that folder.
+3. **Refuse to start if any `.scx` you did not create is present** — whether or not a game
+   is running. Process-liveness is NOT a sufficient test: the other worker's run may begin
+   seconds after yours generates its fixture.
+4. **Re-check immediately before clicking the browser row**, not only at generate time. The
+   folder can be cleared or added to in between — task 022 lost a run to exactly that. Throw
+   with the cause named rather than playing whatever is there.
+
+Rule 3 is what prevents the silent failure — playing someone else's map produces internally
+consistent nonsense, which is worse than a crash.
+
 ## Screenshots vs hard rule 1 (settled)
 
 The global rule "visual change → screenshot → `pr-image`" does NOT apply to game frames.
