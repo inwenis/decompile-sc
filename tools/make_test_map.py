@@ -306,6 +306,18 @@ UNIT_TYPE_IDS = {
     "command-center": 106,
     "supply-depot": 109,
     "barracks": 111,
+    # Task 028's cancel fixture. Its command card carries the Cancel button -- the
+    # one that emits "cancel the last queued item" (actionParam 0xFE), the only wire
+    # form a plugin holding queue overflow can be asked to serve -- at slot 9 with
+    # no other button sharing that slot, needs no Pylon to produce (a Gateway
+    # would), and supplies 9 psi of its own, so a queue of Probes needs no second
+    # building to be legal.
+    #
+    # A Terran producer would in fact have done: slot 9 there is shared with Land and
+    # Lift Off, but their conditions are complementary to Cancel's, so the control
+    # shows Cancel exactly while something is queued (research/production-queue.md
+    # 8.3, measured in game after the button table suggested otherwise).
+    "nexus": 154,
 }
 
 # Which race each named unit type belongs to. Only used to pick a sensible default
@@ -319,6 +331,7 @@ UNIT_TYPE_RACES = {
     "zealot": SIDE_PROTOSS, "dragoon": SIDE_PROTOSS,
     "lurker": SIDE_ZERG,
     "command-center": SIDE_TERRAN, "supply-depot": SIDE_TERRAN, "barracks": SIDE_TERRAN,
+    "nexus": SIDE_PROTOSS,
 }
 
 # ---------------------------------------------------------------------------

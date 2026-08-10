@@ -779,6 +779,48 @@
 #define SC_TECH_CLOAKING_FIELD      9
 
 // ---------------------------------------------------------------------------
+// The PRODUCTION QUEUE STRIP in the status pane (task 028)
+//
+// The five icons a player clicks to cancel a queued unit are ordinary controls of
+// the statdata dialog (SC_VA_STATDATA_DIALOG), ids 2..6, and everything below is
+// read out of two functions of this binary:
+//
+//   queueLayout 0x004268D0 -- the layout the per-unit-type status act 0x00427890
+//     dispatches to for a producing building. It walks to the child with
+//     `index == 2` and then steps `next` FIVE times, k = 0..4, doing:
+//        type = unit->buildQueue[(unit->buildQueueSlot + k) % 5];     // CUnit+0x98/+0xA4
+//        if (type == 0xE4) { statUser->icon = k + 6; statUser->mode = 6;
+//                            0x00418640(ctrl); }        // DISABLE  (flags |= 0x2)
+//        else              { statUser->icon = type; statUser->mode = 3;
+//                            statUser->type = type; 0x00418E00(ctrl); }  // ENABLE
+//     So DISPLAY INDEX k is head-relative, an EMPTY slot's icon is DISABLED, and the
+//     icon a slot draws is the queued unit type itself.
+//
+//   statusCtrlActivate 0x004573A0 -- the activation the control interact 0x00457F30
+//     calls (at 0x00457F75) on the USER event. It switches on control->index and
+//     cases 2,3,4,5,6 all fall into one block:
+//        004573D6  ADD ECX,-0x2          ; ECX = control->index
+//        004573D9  MOV word [EBP+9],CX   ; payload = index - 2
+//        004573E5  MOV byte [EBP+8],0x20 ; Cancel Train
+//        004573E9  CALL 0x00485BD0       ; queueCommand(buf, 3)
+//     i.e. clicking icon k emits {0x20, k} and the receiver's non-0xFE branch calls
+//     cancelBuildQueueSlot(EAX = k), which refunds and compacts.
+//
+// The disabled bit is SC_CTRL_FLAG_DISABLED, the same one the card's two input paths
+// refuse -- so "which queue icons can the player actually click" is a read.
+#define SC_STATQ_FIRST_CONTROL 2
+#define SC_STATQ_LAST_CONTROL  6
+#define SC_STATQ_SLOTS         5
+
+// The queue icon's statUser record: 12 bytes, allocated by the status control's
+// CREATE case (0x00457CA0: `SMemAlloc(0xC, "statdata.cpp", 0x273)` -> control+0x26)
+// and written by queueLayout as quoted above.
+#define SC_STATUSER_OFF_GRP  0x00u   // the GRP the icon is drawn from
+#define SC_STATUSER_OFF_ICON 0x04u   // s16 -- the frame drawn: the unit type, or k+6 when empty
+#define SC_STATUSER_OFF_MODE 0x06u   // u16 -- 3 for an occupied slot, 6 for an empty one
+#define SC_STATUSER_OFF_TYPE 0x08u   // s16 -- the unit type again, occupied slots only
+
+// ---------------------------------------------------------------------------
 // PER-PLAYER TECH STATE -- the memory an ability button is gated on, and therefore
 // the memory that decides whether a fixture really granted a tech.
 //
