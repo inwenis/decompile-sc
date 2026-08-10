@@ -247,6 +247,103 @@ static int CountPlayerUnits(int p, bool* ok) {
     return n;
 }
 
+// ---------------------------------------------------------------------------
+// Screen/viewport scan (task 032) -- READ-ONLY
+//
+// Why it exists: research/renderer-viewport.md is a static map, and a static map of a
+// subsystem nobody had touched before is exactly the kind of claim this project has been
+// burned by. AGENTS.md's standing rule is to READ THE ENGINE'S OWN MEMORY rather than reason
+// about it, so every number that document asserts about the live layout -- the screen
+// Bitmap's width/height/pointer, each graphic layer's rectangle and draw callback, the
+// scroll maxima and the tile-granular origin -- is printed here straight out of the running
+// process and quoted back into the document beside the disassembly it was predicted from.
+//
+// It installs NO hook, calls nothing in the game and writes nothing, so it runs in
+// -Mode observe. Off by default (%SCPLUGIN_SCREENSCAN%, launcher flag -ScreenScan 1): it
+// adds ten lines per marker and the existing suites parse this same log.
+//
+// The layer draw callbacks are printed as STATIC VAs (runtime minus the relocation delta)
+// so they can be compared directly against the addresses in sc_addresses.h and the Ghidra
+// listing, which is the whole point of reading them.
+// ---------------------------------------------------------------------------
+
+static bool g_screenScan = false;
+
+static void ScanScreen(const char* tag) {
+    if (!g_screenScan) return;
+    const char* t = tag ? tag : "-";
+    const DWORD delta = (DWORD)(DWORD_PTR)g_base - SC_PREFERRED_IMAGE_BASE;
+
+    // The screen Bitmap. `data` is the 640*480 SMemAlloc from 0x004DB060; a non-zero value
+    // here is the evidence that the buffer exists and that the descriptor is the live one.
+    {
+        DWORD b = (DWORD)(DWORD_PTR)Rt(SC_VA_SCREEN_BITMAP);
+        unsigned w = 0xFFFF, h = 0xFFFF;
+        DWORD data = 0;
+        bool okW = ReadU16(b + SC_BITMAP_OFF_WIDTH, &w);
+        bool okH = ReadU16(b + SC_BITMAP_OFF_HEIGHT, &h);
+        bool okD = ReadU32(b + SC_BITMAP_OFF_DATA, &data);
+        ScLog("SCREEN [%s] bitmap@0x%08X w=%s%u h=%s%u data=%s0x%08X bytes=%u",
+              t, (unsigned)SC_VA_SCREEN_BITMAP,
+              okW ? "" : "?", w, okH ? "" : "?", h, okD ? "" : "?", (unsigned)data,
+              (okW && okH) ? w * h : 0);
+    }
+
+    // The eight graphic layers. Printed in DRAW ORDER -- 7 first, 0 last -- because that is
+    // the order 0x0041E280 walks them in, and "layer 0 is the cursor" is only meaningful
+    // next to the direction of the walk.
+    for (int i = SC_GRAPHIC_LAYERS - 1; i >= 0; --i) {
+        DWORD l = (DWORD)(DWORD_PTR)Rt(SC_VA_GRAPHIC_LAYERS) + (DWORD)i * SC_LAYER_STRIDE;
+        unsigned used = 0xFF, flags = 0xFF;
+        unsigned left = 0, top = 0, width = 0, height = 0;
+        DWORD param = 0, draw = 0;
+        ReadU8(l + SC_LAYER_OFF_USED, &used);
+        ReadU8(l + SC_LAYER_OFF_FLAGS, &flags);
+        ReadU16(l + SC_LAYER_OFF_LEFT, &left);
+        ReadU16(l + SC_LAYER_OFF_TOP, &top);
+        ReadU16(l + SC_LAYER_OFF_WIDTH, &width);
+        ReadU16(l + SC_LAYER_OFF_HEIGHT, &height);
+        ReadU32(l + SC_LAYER_OFF_PARAM, &param);
+        ReadU32(l + SC_LAYER_OFF_DRAW, &draw);
+        ScLog("SCREEN [%s] layer=%d used=%u flags=0x%02X rect=(%d,%d %ux%u) param=0x%08X "
+              "draw=0x%08X drawStatic=0x%08X",
+              t, i, used, flags, (int)(short)left, (int)(short)top, width, height,
+              (unsigned)param, (unsigned)draw,
+              (unsigned)(draw ? draw - delta : 0));
+    }
+
+    // The viewport: origin in map pixels, the same pair in tiles, the scroll maxima the
+    // clamp compares against, and the map's own size. Together these are the numbers a
+    // wider playfield would have to change, so a run records what they actually were.
+    {
+        unsigned left = 0xFFFF, top = 0xFFFF, tx = 0xFFFF, ty = 0xFFFF;
+        unsigned mapTw = 0xFFFF, mapTh = 0xFFFF, mapPw = 0xFFFF, mapPh = 0xFFFF;
+        DWORD maxX = 0xFFFFFFFF, maxY = 0xFFFFFFFF;
+        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_SCREEN_LEFT), &left);
+        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_SCREEN_TOP), &top);
+        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_SCREEN_TILE_X), &tx);
+        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_SCREEN_TILE_Y), &ty);
+        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_MAP_TILE_W), &mapTw);
+        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_MAP_TILE_H), &mapTh);
+        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_MAP_PIXEL_W), &mapPw);
+        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_MAP_PIXEL_H), &mapPh);
+        ReadU32((DWORD)(DWORD_PTR)Rt(SC_VA_SCROLL_MAX_X), &maxX);
+        ReadU32((DWORD)(DWORD_PTR)Rt(SC_VA_SCROLL_MAX_Y), &maxY);
+
+        // The prediction, stated in the log rather than only in the document: the clamp is
+        // built as (mapTiles - viewportTiles) * 32, with +8 on the vertical axis
+        // (0x0049BB90). Printing what it SHOULD be beside what it IS makes a wrong reading
+        // of that function visible in the run instead of surviving into research/.
+        long predX = ((long)mapTw - SC_VIEWPORT_TILES_X) * 32;
+        long predY = ((long)mapTh - SC_VIEWPORT_TILES_Y) * 32 + 8;
+        ScLog("SCREEN [%s] origin=(%u,%u) tile=(%u,%u) map=%ux%u tiles (%ux%u px) "
+              "scrollMax=(%d,%d) predicted=(%ld,%ld) match=%d",
+              t, left, top, tx, ty, mapTw, mapTh, mapPw, mapPh,
+              (int)maxX, (int)maxY, predX, predY,
+              ((long)(int)maxX == predX && (long)(int)maxY == predY) ? 1 : 0);
+    }
+}
+
 static void ScanWorld(const char* tag) {
     if (!g_worldScan) return;
 
@@ -397,6 +494,9 @@ static void PollMarker(void) {
     // Task 026: and so does the command-card read-back. It goes BEFORE the shadow
     // dump for the same reason the world scan does -- the engine's own view first.
     ScCardScan(g_lastMarker);
+
+    // Task 032: the renderer's own view of itself. Same trigger, same read-only shape.
+    ScanScreen(g_lastMarker);
 
     // Task 015: a marker is the driver saying "look now", so it is also the trigger for
     // the per-unit state dump. Driving it off the marker rather than off a timer is what
@@ -566,9 +666,19 @@ static bool GetCardScan(void) {
     return buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y';
 }
 
+// OFF by default, same shape as the world scan and for the same reason: %SCPLUGIN_SCREENSCAN%=1
+// turns on the read-only renderer/viewport read-back (task 032).
+static bool GetScreenScan(void) {
+    char buf[16];
+    DWORD n = GetEnvironmentVariableA("SCPLUGIN_SCREENSCAN", buf, sizeof(buf));
+    if (n == 0 || n >= sizeof(buf)) return false;
+    return buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y';
+}
+
 static DWORD WINAPI ObserverThread(LPVOID) {
     const DWORD pollMs = GetPollMs();
     g_worldScan = GetWorldScan();
+    g_screenScan = GetScreenScan();
     g_dialogScan = GetDialogScan();
     // Task 026: the read-only command-card scan. Same shape and same off switch as
     // the world scan, and for the same reason -- it must exist in observe mode too,
@@ -584,6 +694,10 @@ static DWORD WINAPI ObserverThread(LPVOID) {
     ScLog("OBSERVER cardScan=%d (%%SCPLUGIN_CARDSCAN%%; read-only walk of the command-card "
           "dialog 0x0068C148, installs no hook and works in observe mode)",
           ScCardEnabled() ? 1 : 0);
+    ScLog("OBSERVER screenScan=%d (%%SCPLUGIN_SCREENSCAN%%; read-only read-back of the screen "
+          "Bitmap 0x006CEFF0, the 8 graphic layers 0x006CEF50 and the scroll clamp, installs "
+          "no hook and works in observe mode)",
+          g_screenScan ? 1 : 0);
 
     Snapshot prev;
     memset(&prev, 0xFF, sizeof(prev));  // force a first log line
