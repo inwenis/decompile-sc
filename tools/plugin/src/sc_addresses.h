@@ -806,4 +806,59 @@
 #define SC_TECH_STRIDE_VANILLA   0x18u
 #define SC_TECH_STRIDE_BW        0x14u
 
+// ---------------------------------------------------------------------------
+// The client-side gate in front of GROUP PRODUCTION (task 030)
+//
+// Measured first, then read. With four Command Centers selected, the command card was
+// walked out of the engine's own memory and the Train button was not greyed but ABSENT
+// -- `button=0x00000000`, no Button record assigned to its control. The same card with
+// ONE selected has it enabled. The three slots that vanish are exactly the three whose
+// condition is 0x00428E60 (Train, and the two addon buttons) and the two that survive
+// are exactly the two that are not (0x00429520 rally, 0x004287D0). So the refusal is in
+// that one function, caught in the act rather than inferred.
+//
+// Its whole body, from this binary (work/scratch/030/cond-listing.tsv):
+//
+//   00428E60  55              PUSH EBP
+//   00428E61  8B EC           MOV  EBP,ESP
+//   00428E63  8B C1           MOV  EAX,ECX                  ; EAX = the type, from ECX
+//   00428E65  80 3D 3D 72 59 00 01  CMP byte ptr [0x0059723D],0x1
+//   00428E6C  56              PUSH ESI
+//   00428E6D  8B 75 08        MOV  ESI,dword ptr [EBP + 0x8]   ; ESI = the unit
+//   00428E70  57              PUSH EDI
+//   00428E71  76 1E           JBE  0x00428E91               ; count <= 1 -> ALLOW
+//   00428E73  66 8B 7E 64     MOV  DI,word ptr [ESI + 0x64]
+//   ... three CMP/JZ against 0x23, 0x2B, 0x26 (the Zerg types that multi-select anyway)
+//   00428E89  5F 33 C0 5E 5D C2 04 00   POP EDI / XOR EAX,EAX / POP ESI / POP EBP / RET 4
+//   00428E91  52              PUSH EDX                      ; the player
+//   00428E92  E8 29 53 04 00  CALL 0x0046E1C0               ; the requirement gate
+//   00428E97  5F 5E 5D C2 04 00         POP EDI / POP ESI / POP EBP / RET 4
+//
+// So the convention is `__stdcall(CUnit* unit)` with **ECX = the button's type param**
+// and **EDX = the player**, and the count is a BYTE. None of that was guessed: EDX is
+// corroborated independently by the neighbouring condition 0x00429520, which compares
+// its own EDX against the unit's owner byte at CUnit+0x4C.
+#define SC_VA_BTN_TRAIN_CONDITION  0x00428E60u
+// The multi-select count the condition tests. A BYTE (`CMP byte ptr [..],1`). Named for
+// what it gates rather than from prior art -- and the plugin LOGS it beside the selection
+// size, so "this is the client's selection count" is a reading the in-game suite asserts
+// (it must read 4 with four buildings boxed) and not a label.
+#define SC_VA_CLIENT_SELECTION_COUNT 0x0059723Du
+// The condition's tail call: the player's requirement/tech interpreter. Convention, read
+// off its own body: **ESI = the PRODUCING unit**, **AX = the type being built**, and the
+// player as its one stack argument (the `PUSH EDX` above), `RET 4`.
+//
+// It is emphatically NOT a player-only check, which is what decides what happens to a
+// group whose buildings cannot all build the unit: opcode 0xFF02 compares the required
+// type against the producer's own `CUnit+0x64` and returns -1 (reason 0x19) when it does
+// not match, and opcodes 0xFF04 / 0xFF0C check the producer's own ADDON pointer at
+// `CUnit+0xC0`. The Train handler tests `== 1` exactly, so a -1 refuses before
+// addToBuildQueue runs and therefore before any resource moves.
+#define SC_VA_REQUIREMENT_GATE     0x0046E1C0u
+// The Train handler's own bound on the type it will accept (`< 0x6A`,
+// research/production-queue.md 4.1). Reused here as the discriminator between the Train
+// buttons and the two ADDON buttons that share this condition: a Train button's param is
+// a unit type below this, an addon button's is a building type (107, 108) above it.
+#define SC_TRAIN_TYPE_LIMIT        0x6Au
+
 #endif // SC_ADDRESSES_H
