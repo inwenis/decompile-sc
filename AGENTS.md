@@ -56,6 +56,28 @@ So: for anything that starts with player input, watch the engine's command funne
 (`queueCommand` 0x00485BD0) in a real game BEFORE trusting your handler. Offline tests
 prove your code does what you meant; only the wire proves the game asks it to.
 
+## Your DIAGNOSTICS are under the same rule as your assertions (2026-08-10, task 030)
+
+The "a check that cannot fail is worth nothing" rule applies to the lines you print while
+debugging, not only to the ones the suite asserts on. A wrong number in a log is worse than
+no number, because you will reason from it.
+
+Task 030 added `lit=%d` to a format string and did not add the argument. The run printed
+`lit=4`, which read as "the detour allowed the button four times", and an hour went into
+explaining why the gate returned 0 — when the gate had never been called at all. The real
+state was ZERO log lines from that function.
+
+So, for any diagnostic you are about to trust:
+
+- A count you print must be a count something incremented. Check the format string has an
+  argument for every specifier — a missing one prints stack garbage, not a zero.
+- Prefer printing WHICH BRANCH was taken over printing that a branch was taken. Task 030's
+  fix was to count all seven exit terms (off / count<=1 / not-a-train-button / bad-unit /
+  not-a-group / type-mismatch / handled) and print them together, so "it refused" always
+  names the test that refused.
+- "No log line appeared" and "the function returned false" look identical in a quiet log.
+  Log entry as well as outcome, at least once, so absence is distinguishable from refusal.
+
 ## Absence assertions must first be proved positive (2026-08-09)
 
 An assertion that something is ABSENT is worth nothing until the same pattern has been shown to
