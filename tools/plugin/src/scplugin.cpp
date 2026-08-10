@@ -41,6 +41,7 @@
 #include "sc_log.h"
 #include "sc_prodfan.h"
 #include "sc_prodqueue.h"
+#include "sc_upgrades.h"
 
 static volatile LONG g_stop = 0;
 
@@ -525,6 +526,12 @@ static void PollMarker(void) {
     // many gain an item in a stock game") is taken with this oracle, and an oracle that
     // only exists in the treatment arm proves nothing about the control arm. Read-only.
     ScProdFanLogState(g_lastMarker);
+    // Task 029: the upgrade-queue oracle, on the same trigger. It prints the building's
+    // OWN research state -- CUnit+0xC8/0xC9/0xC6/0xCD -- beside the plugin's queue, so an
+    // unattended run reads "which upgrade, at which level, with how long left" out of the
+    // engine's memory instead of off the status area. Read-only; a no-op when
+    // %SCPLUGIN_UPGQ% never switched the feature on.
+    ScUpgQueueLogState(g_lastMarker);
 }
 
 // ---------------------------------------------------------------------------
@@ -823,8 +830,14 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
                 ScLog("PRODQ: %%SCPLUGIN_PRODQ%% is set but the mode is observe -- "
                       "IGNORED. Observe writes nothing to game memory.");
             }
+            // Task 029, same gate and same reason.
+            if (ScUpgQueueEnabled()) {
+                ScLog("UPGQ: %%SCPLUGIN_UPGQ%% is set but the mode is observe -- "
+                      "IGNORED. Observe writes nothing to game memory.");
+            }
         } else {
             ScProdQueueInstall(g_base);
+            ScUpgQueueInstall(g_base);
         }
         // The observer runs on its own thread; DllMain itself does nothing but
         // start it, so we never hold the loader lock while polling.
@@ -849,6 +862,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         ScFanoutLogStats();   // the run's counters, on both detach paths
         ScProdQueueLogStats();
         ScProdFanLogStats();
+        ScUpgQueueLogStats();
         if (lpReserved == NULL) {
             if (g_observer) joined = (WaitForSingleObject(g_observer, 5000) == WAIT_OBJECT_0);
             // Un-splice only on the FreeLibrary path. On process exit the address
@@ -864,6 +878,10 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             // anywhere in this sequence; it goes here so the card is back to stock
             // before the fan-out's own hooks leave.
             ScProdFanRemoveGate();
+            // Task 029 has nothing to give back before it un-splices -- every item it
+            // holds is unpaid -- so its order relative to the others does not matter. It
+            // still goes before the fan-out's, so the whole splice comes out newest-first.
+            ScUpgQueueRemove();
             ScFanoutRemove();
         }
 

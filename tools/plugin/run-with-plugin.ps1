@@ -212,6 +212,15 @@ param(
     # (the `PRODFAN` lines) runs whatever this says, because the stock arm is measured
     # with it too.
     [ValidateSet('0', '1')][string]$ProdFan = '0',
+    # Task 029: queue more than one upgrade or research at one building. Off by default --
+    # it installs eight detours of its own and it moves a player's resources (indirectly:
+    # the ENGINE pays for every item, at the moment it starts, and the plugin never touches
+    # a resource global), so it is opt-in per run. Ignored outright in -Mode observe, which
+    # stays read-only whatever this says. This is the flag the deployed launcher turns on.
+    [ValidateSet('0', '1')][string]$UpgradeQueue = '0',
+    # Total logical queue length per building, the engine's ONE included. Clamped by the
+    # plugin to [1, 16].
+    [int]$UpgradeQueueMax = 8,
     # Task 032: the read-only RENDERER/VIEWPORT read-back. On each marker the observer logs
     # the screen Bitmap descriptor (0x006CEFF0), all eight graphic layers (0x006CEF50) in
     # draw order with their rectangles and draw callbacks, and the viewport origin plus the
@@ -327,6 +336,8 @@ try {
     $env:SCPLUGIN_BUILDING_GROUPS = $BuildingGroups
     $env:SCPLUGIN_CARDSCAN       = $CardScan
     $env:SCPLUGIN_PRODFAN        = $ProdFan
+    $env:SCPLUGIN_UPGQ           = $UpgradeQueue
+    $env:SCPLUGIN_UPGQ_MAX       = "$UpgradeQueueMax"
     $env:SCPLUGIN_SCREENSCAN     = $ScreenScan
     if ($Liveness -eq '0') {
         Write-Warning 'run-with-plugin: -Liveness 0 — the fan-out emit gate is back to the pre-task-020 uniqueness test ALONE. A unit killed by damage will be replayed into a Select. This is a deliberate defect-reproduction run.'

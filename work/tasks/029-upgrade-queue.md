@@ -4,7 +4,8 @@
 
 agent: 029
 model: opus
-pr: -
+pr: https://github.com/inwenis/decompile-sc/pull/34
+merged: 2026-08-10
 
 ## Workspace
 
