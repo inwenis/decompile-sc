@@ -56,6 +56,29 @@ So: for anything that starts with player input, watch the engine's command funne
 (`queueCommand` 0x00485BD0) in a real game BEFORE trusting your handler. Offline tests
 prove your code does what you meant; only the wire proves the game asks it to.
 
+## Assert the ENGINE'S OWN RESULT, not your bookkeeping (2026-08-10, task 029)
+
+"N items are in my queue" is a claim about the plugin. "The engine's level array went up" is
+a claim about the game. Only the second one is the feature. A suite that stops at the count
+passes for a version that queues things the engine will later refuse.
+
+Task 029 queued upgrade levels by asking the card's condition whether the next level may be
+researched — with the level array still at its CURRENT value. Requirements in this engine are
+PER LEVEL (requirement opcode 0xFF1F reads the player's level and jumps to that level's own
+block), so the answer returned was level N's answer to a question about level N+1. The card
+duly offered Infantry Weapons 2, and the engine's own gate refused it at promotion because
+level 2 needed a prerequisite building the fixture did not have.
+
+Nothing was lost — the promotion-time gate is the backstop and it worked — but the UI had
+promised something it could not deliver, and **the queue-length assertion passed the whole
+time**. It was caught only because the suite also read the engine's own level array.
+
+So: for any feature that makes the engine do something, assert the thing the ENGINE changed —
+its arrays, its unit fields, its resource globals — not merely that your own structure holds
+the right number of items. And where a plugin evaluates an engine predicate on the engine's
+behalf, evaluate it in the state the action will ACTUALLY run in, not the state you are in
+when you ask.
+
 ## Your DIAGNOSTICS are under the same rule as your assertions (2026-08-10, task 030)
 
 The "a check that cannot fail is worth nothing" rule applies to the lines you print while
