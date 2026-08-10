@@ -203,6 +203,15 @@ param(
     # so it exists in -Mode observe too. Off by default: the existing suites parse this
     # log and this adds eleven lines per marker.
     [ValidateSet('0', '1')][string]$CardScan = '0',
+    # Task 030: one Train click queues a unit at EVERY selected production building.
+    # Off by default and opt-in per run for the same reason -ProdQueue is: it is the
+    # second feature here that MOVES A PLAYER'S RESOURCES -- N buildings means N units
+    # paid for, by the engine, from one click. It only ever fans command 0x1F out across
+    # a same-type BUILDING group (simSlots == 1), so it is meaningful only in
+    # -Mode fanout, and it is ignored outright in -Mode observe. Its read-only oracle
+    # (the `PRODFAN` lines) runs whatever this says, because the stock arm is measured
+    # with it too.
+    [ValidateSet('0', '1')][string]$ProdFan = '0',
     # Task 029: queue more than one upgrade or research at one building. Off by default --
     # it installs eight detours of its own and it moves a player's resources (indirectly:
     # the ENGINE pays for every item, at the moment it starts, and the plugin never touches
@@ -326,6 +335,7 @@ try {
     $env:SCPLUGIN_PRODQ_MAX      = "$ProdQueueMax"
     $env:SCPLUGIN_BUILDING_GROUPS = $BuildingGroups
     $env:SCPLUGIN_CARDSCAN       = $CardScan
+    $env:SCPLUGIN_PRODFAN        = $ProdFan
     $env:SCPLUGIN_UPGQ           = $UpgradeQueue
     $env:SCPLUGIN_UPGQ_MAX       = "$UpgradeQueueMax"
     $env:SCPLUGIN_SCREENSCAN     = $ScreenScan

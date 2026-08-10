@@ -39,6 +39,7 @@
 #include "sc_fanout.h"
 #include "sc_hook.h"
 #include "sc_log.h"
+#include "sc_prodfan.h"
 #include "sc_prodqueue.h"
 #include "sc_upgrades.h"
 
@@ -519,6 +520,12 @@ static void PollMarker(void) {
     // %SCPLUGIN_PRODQ% never switched the feature on.
     ScProdQueueLogState(g_lastMarker);
 
+    // Task 030: one line per building in the shadow selection, each carrying that
+    // building's own five queue slots. Unlike the line above it does NOT depend on its
+    // feature being enabled -- the baseline measurement ("with N buildings selected, how
+    // many gain an item in a stock game") is taken with this oracle, and an oracle that
+    // only exists in the treatment arm proves nothing about the control arm. Read-only.
+    ScProdFanLogState(g_lastMarker);
     // Task 029: the upgrade-queue oracle, on the same trigger. It prints the building's
     // OWN research state -- CUnit+0xC8/0xC9/0xC6/0xCD -- beside the plugin's queue, so an
     // unattended run reads "which upgrade, at which level, with how long left" out of the
@@ -797,6 +804,24 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         g_mode = ScFanoutResolveMode();
         LogAttachBanner();
         ScFanoutInstall(g_base, g_mode);
+        // Task 030. The oracle needs the module base in EVERY mode, because the stock
+        // arm of this feature's comparison runs in observe and is measured with it. The
+        // FEATURE half is gated the same way task 025's is: observe writes nothing to
+        // game memory and emits no command, whatever else the environment asks for.
+        {
+            bool prodfanWanted = ScProdFanEnabled();
+            if (g_mode == SC_MODE_OBSERVE && prodfanWanted) {
+                ScLog("PRODFAN: %%SCPLUGIN_PRODFAN%% is set but the mode is observe -- "
+                      "the fan-out is IGNORED. The read-only oracle still runs.");
+            }
+            ScProdFanInit(g_base, prodfanWanted && g_mode != SC_MODE_OBSERVE);
+            // The button-condition detour goes in under its own thread suspension, after
+            // the fan-out's splice has been made and resumed. Without the button the
+            // player cannot issue the command at all, so this is the half of the feature
+            // that has to succeed for the other half to mean anything -- and a failure
+            // here turns the whole feature off rather than leaving it half-armed.
+            if (ScProdFanEnabled()) ScProdFanInstallGate();
+        }
         // Task 025. Gated on %SCPLUGIN_PRODQ% AND on not being in observe mode:
         // observe is the whole plugin's off switch and must stay byte-for-byte the
         // task-008 read-only observer, whatever else is set in the environment.
@@ -836,6 +861,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         if (lpReserved != NULL) ScLogSetTryLock();
         ScFanoutLogStats();   // the run's counters, on both detach paths
         ScProdQueueLogStats();
+        ScProdFanLogStats();
         ScUpgQueueLogStats();
         if (lpReserved == NULL) {
             if (g_observer) joined = (WaitForSingleObject(g_observer, 5000) == WAIT_OBJECT_0);
@@ -848,6 +874,10 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             // holding before it un-splices. The other order would leave paid-for items
             // with no hook left to promote or refund them.
             ScProdQueueRemove();
+            // Task 030's detour holds nothing and moves nothing, so it can come out
+            // anywhere in this sequence; it goes here so the card is back to stock
+            // before the fan-out's own hooks leave.
+            ScProdFanRemoveGate();
             // Task 029 has nothing to give back before it un-splices -- every item it
             // holds is unpaid -- so its order relative to the others does not matter. It
             // still goes before the fan-out's, so the whole splice comes out newest-first.

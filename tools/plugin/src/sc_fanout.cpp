@@ -44,6 +44,7 @@
 #include "sc_hook.h"
 #include "sc_hudrow.h"
 #include "sc_log.h"
+#include "sc_prodfan.h"
 
 // ---------------------------------------------------------------------------
 // Tunables (all overridable by environment variable, all logged at attach)
@@ -1277,11 +1278,43 @@ bool ScFanoutOnCommand(const BYTE* buf, unsigned len) {
     DrainPlan();
 
     bool suppress = false;
+
+    // Task 030 -- the ONE opcode that becomes eligible without being in kOpcodes' fan-out
+    // column. Train (0x1F) is passthrough there for two good reasons (it is SINGLE-gated
+    // and it spends: research/command-opcodes.md 3.2, 3.3), and neither is being waved
+    // away. What changes is that for a same-type BUILDING group every chunk of the plan
+    // is exactly ONE building -- simSlots is 1 because the simulation refuses a building
+    // every slot but slot 0 -- so "one item per chunk" IS "one item per building", which
+    // is what the player asked for, and each item still enters through the engine's own
+    // cmdrecvTrain and is paid for by the engine's own addToBuildQueue. The whole
+    // argument and the refusal cases live in sc_prodfan.cpp; this is the wiring.
+    bool prodFanTrain = false;
+    if (id == SC_CMD_TRAIN && !IsFanoutCmd(id) && g_mode == SC_MODE_FANOUT &&
+        g_visibleCount > 0 && g_shadowCount > 0) {
+        WORD types[SC_SHADOW_MAX];
+        int n = 0;
+        for (int i = 0; i < g_shadowCount && n < SC_SHADOW_MAX; ++i) {
+            if (!g_shadow[i].ptr) continue;
+            types[n++] = *(WORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_UNIT_ID);
+        }
+        int verdict = ScProdFanDecide(types, n, g_simSlots, len);
+        if (verdict == SC_PRODFAN_OK) {
+            prodFanTrain = true;
+        } else if (verdict != SC_PRODFAN_OFF && verdict != SC_PRODFAN_ONE_BUILDING) {
+            // Logged and counted, never silent: a refusal the player cannot see is
+            // indistinguishable from a feature that quietly did nothing.
+            ScLog("PRODFAN refused: cmd 0x1F with %d building(s) selected, simSlots=%d "
+                  "-- %s; the engine's own single-building handling runs untouched",
+                  n, g_simSlots, ScProdFanVerdictName(verdict));
+            ScProdFanCountRefusal();
+        }
+    }
+
     // `> g_simSlots`, not `> 12`: the fan-out exists because the SIMULATION cannot hold
     // the whole selection, and how many it holds is 12 for units and 1 for a same-type
     // building group (task 024). For units this is the same condition it always was.
     if (g_mode == SC_MODE_FANOUT &&
-        IsFanoutCmd(id) &&
+        (IsFanoutCmd(id) || prodFanTrain) &&
         g_shadowCount > g_simSlots &&
         g_visibleCount > 0 &&
         len <= SC_MAX_ORDER_BYTES) {
@@ -1298,6 +1331,9 @@ bool ScFanoutOnCommand(const BYTE* buf, unsigned len) {
             // Suppress only if at least one Select+order pair really went out; the
             // first pair already carried this exact order.
             suppress = StartFanout(buf, (int)len);
+            // Counted only when a pair actually went out, so `reached` is buildings the
+            // wire really carried an order to -- not buildings that were selected.
+            if (prodFanTrain && suppress) ScProdFanCountFanout(g_plan.chunkCount);
         }
     }
 

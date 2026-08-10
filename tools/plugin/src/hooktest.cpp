@@ -26,6 +26,7 @@
 #include "sc_hook.h"
 #include "sc_hudrow.h"
 #include "sc_log.h"
+#include "sc_prodfan.h"
 #include "sc_prodqueue.h"
 #include "sc_upgrades.h"
 
@@ -3190,6 +3191,88 @@ static void CardScanTests(void) {
 }
 
 // ---------------------------------------------------------------------------
+// [18] Group production (task 030): the policy that decides whether ONE Train click
+// reaches every selected production building.
+//
+// This is the pure half of the feature and it is worth testing on its own, because it is
+// the thing standing between "the fan-out delivers one item per building" and the two
+// ways that could go wrong: firing for a selection it was never meant to fire for, and
+// paying for a building that cannot build the unit.
+//
+// ScProdFanDecide is called from TWO places in the shipped plugin -- the button-condition
+// detour, which decides whether the player is offered the button at all, and the command
+// path, which decides whether the command is fanned out. Testing it once therefore tests
+// both, and that shared call is also the guarantee that this feature cannot fire for a
+// selection task 024 would not have produced.
+// ---------------------------------------------------------------------------
+static void ProdFanTests(void) {
+    printf("\n[18] group production: one Train click, one item per building\n");
+
+    const WORD CC = 106, BARRACKS = 111;
+    WORD same4[4]  = { CC, CC, CC, CC };
+    WORD mixed3[3] = { CC, BARRACKS, CC };
+    WORD one[1]    = { CC };
+
+    printf("\n    the off switch\n");
+    ScProdFanTestSetEnabled(false);
+    Check("disabled: even the right selection is refused",
+          ScProdFanDecide(same4, 4, 1, 3), SC_PRODFAN_OFF);
+
+    ScProdFanTestSetEnabled(true);
+
+    printf("\n    the case this feature exists for\n");
+    Check("four same-type buildings, chunk size 1 -> fan out",
+          ScProdFanDecide(same4, 4, 1, 3), SC_PRODFAN_OK);
+    Check("and two is already a group",
+          ScProdFanDecide(same4, 2, 1, 3), SC_PRODFAN_OK);
+
+    printf("\n    the hazard command-opcodes.md 3.2 keeps 0x1F passthrough for\n");
+    // A >12 UNIT selection chunks 12 + 1, and that lone tail chunk would train from a
+    // unit the player's own selection never could. simSlots is the whole distinction:
+    // for a building group EVERY chunk is one building, uniformly.
+    Check("a UNIT selection (simSlots 12) is refused however large",
+          ScProdFanDecide(same4, 4, 12, 3), SC_PRODFAN_NOT_GROUP);
+    Check("and at 13 units too -- the 12+1 split is exactly the trap",
+          ScProdFanDecide(same4, 13, 12, 3), SC_PRODFAN_NOT_GROUP);
+
+    printf("\n    one building is vanilla's own path and must stay byte-for-byte stock\n");
+    Check("a single building is not fanned out",
+          ScProdFanDecide(one, 1, 1, 3), SC_PRODFAN_ONE_BUILDING);
+    Check("nor is an empty selection",
+          ScProdFanDecide(one, 0, 1, 3), SC_PRODFAN_ONE_BUILDING);
+
+    printf("\n    ACCEPTANCE CRITERION 5: a selection whose buildings differ\n");
+    // The task file allows either "refuse" or "queue only where the unit is valid".
+    // This refuses, and refuses the WHOLE command rather than the odd building: a partial
+    // fan-out would spend the player's minerals on a subset they never chose. It is also
+    // belt and braces -- the engine's own requirement interpreter (0x0046E1C0, opcode
+    // 0xFF02) compares the required type against the PRODUCER's own CUnit+0x64 and
+    // returns -1, so a wrong-kind building would be refused for free even if this line
+    // were not here. Two independent refusals, and the plugin's is the outer one.
+    Check("a mixed building group is refused outright",
+          ScProdFanDecide(mixed3, 3, 1, 3), SC_PRODFAN_MIXED_TYPES);
+    WORD mixedTail[3] = { CC, CC, BARRACKS };
+    Check("including when the odd one out is last",
+          ScProdFanDecide(mixedTail, 3, 1, 3), SC_PRODFAN_MIXED_TYPES);
+
+    printf("\n    the length guard, the same one the fan-out applies to every id\n");
+    Check("0x1F at 2 bytes is not the command 0x1F is supposed to be",
+          ScProdFanDecide(same4, 4, 1, 2), SC_PRODFAN_BAD_LEN);
+    Check("nor at 11", ScProdFanDecide(same4, 4, 1, 11), SC_PRODFAN_BAD_LEN);
+
+    printf("\n    every verdict names itself in the log\n");
+    Check("ok",            strcmp(ScProdFanVerdictName(SC_PRODFAN_OK), "ok"), 0);
+    Check("mixed types",   strcmp(ScProdFanVerdictName(SC_PRODFAN_MIXED_TYPES),
+                                  "mixed-building-types"), 0);
+    Check("not a group",   strcmp(ScProdFanVerdictName(SC_PRODFAN_NOT_GROUP),
+                                  "not-a-building-group"), 0);
+
+    ScProdFanTestSetEnabled(false);
+    Check("the feature is off again after the test",
+          ScProdFanDecide(same4, 4, 1, 3), SC_PRODFAN_OFF);
+}
+
+// ---------------------------------------------------------------------------
 // [16] the status pane's production-queue strip (task 028), against a fake dialog.
 //
 // WHY IT NEEDS A TEST. This walk is the thing that decides WHERE the run clicks to
@@ -3502,6 +3585,7 @@ int main(void) {
     CardScanTests();
     StatusStripTests();
     UpgradeQueueTests();
+    ProdFanTests();
     ExitLogTests();
 
     printf("\nhooktest: %d failure(s)\n", g_failures);
