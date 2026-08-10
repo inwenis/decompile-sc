@@ -46,7 +46,7 @@ What it does, in order:
   8. Writes <DeployRoot>\Launch-StarCraft-Modded.ps1, a launcher with zero parameters
      that calls the deployed copy of run-with-plugin.ps1 with the feature set baked in:
      -Mode fanout -InjectWindowedHelper WMode -Circles 1 -HudRow 1 -ProdQueue 1
-     -ProdFan 1 -Sound -NoLaunchLock
+     -ProdFan 1 -UpgradeQueue 1 -Sound -NoLaunchLock
      (fanout + selection circles + HUD row paging + over-cap production queue +
      group production fan-out — -ProdQueue and -ProdFan both default to 0 in
      run-with-plugin.ps1 so suites opt in, but the PLAY build turns them on; building
