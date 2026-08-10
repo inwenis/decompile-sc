@@ -1982,6 +1982,136 @@ function Get-ScCardSlotPoint {
        Y = [int]($Card.RootRect[1] + [math]::Floor(($s.Rect[1] + $s.Rect[3]) / 2)) }
 }
 
+function Get-ScStatusQueue {
+    <#
+    .SYNOPSIS
+    Ask the plugin to READ THE PRODUCTION-QUEUE STRIP out of process memory, and parse it.
+    .DESCRIPTION
+    Task 028. Cancelling a queued unit is NOT a command-card action in vanilla: the
+    card's slot-9 Cancel button sends "cancel the LAST queued item" (actionParam
+    0xFE), and the control that addresses a SPECIFIC queued item is one of five
+    icons in the STATUS PANE -- children of the statdata dialog 0x0068C1F0 with
+    control ids 2..6, one per display index.
+
+    This does not click. The plugin walks that strip the way the engine's own
+    layout 0x004268D0 does and reports, per icon: the enabled bit BOTH input paths
+    refuse, the unit type the icon is drawing (its statUser record), the rect, and
+    the type in the building's OWN ring at (head + display) % 5 -- so "what the
+    player sees" and "what the building holds" are two independent reads that a
+    suite can compare instead of a screenshot.
+
+    An EMPTY queue slot's icon is DISABLED by the layout (0x00418640), so
+    `.Clickable` is literally how many queued items the player can cancel by
+    clicking. Needs -CardScan 1, the same switch as Get-ScCardState.
+
+    Returns .Slots (Display/Index/State/Visible/Disabled/Control/Flags/Graphic/
+    Rect/User/UIcon/UMode/UType/QueueType), the header fields (Dialog/Root/
+    RootRect/Portrait/PortraitType/PortraitOwner/Head/Engine/QueueOk) and
+    .Shown / .Clickable.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$LogPath,
+        [Parameter(Mandatory)][string]$Tag,
+        [string]$MarkerPath,
+        [int]$TimeoutSec = 15
+    )
+    if (-not $MarkerPath) { $MarkerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt' }
+    $script:ScMarkerSeq++
+    $label = "$Tag-$script:ScMarkerSeq"
+    Set-Content -LiteralPath $MarkerPath -Value $label -NoNewline
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $esc = [regex]::Escape($label)
+    while ((Get-Date) -lt $deadline) {
+        $lines = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
+                   Select-String -Pattern "STATQ \[$esc\]")
+        # The `slots=` summary is written LAST and unconditionally -- so waiting for it
+        # is what stops a half-written walk being parsed, AND makes "the strip is up but
+        # nothing is clickable" an answer rather than a timeout.
+        $done = @($lines | Select-String -Pattern 'slots=\d+ shown=')
+        $absent = @($lines | Select-String -Pattern 'dialog=0 ')
+        if ($done.Count -gt 0 -or $absent.Count -gt 0) {
+            $st = [pscustomobject]@{
+                Label = $label; Ok = ($done.Count -gt 0); Slots = @()
+                Dialog = ''; Root = ''; RootRect = @(0,0,0,0)
+                Portrait = ''; PortraitType = -1; PortraitOwner = -1
+                Head = -1; QueueOk = $false; Engine = @()
+                Shown = -1; Clickable = -1
+                Lines = @($lines | ForEach-Object { $_.Line })
+            }
+            foreach ($l in $lines) {
+                $h = [regex]::Match($l.Line,
+                    'dialog=0x([0-9A-Fa-f]+) root=0x([0-9A-Fa-f]+) rootrect=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\) portrait=0x([0-9A-Fa-f]+) ptype=0x([0-9A-Fa-f]+) powner=(\d+) head=(\d+) queueOk=(\d+) engine=\[([^\]]*)\]')
+                if ($h.Success) {
+                    $st.Dialog = $h.Groups[1].Value
+                    $st.Root = $h.Groups[2].Value
+                    $st.RootRect = @([int]$h.Groups[3].Value, [int]$h.Groups[4].Value,
+                                     [int]$h.Groups[5].Value, [int]$h.Groups[6].Value)
+                    $st.Portrait = $h.Groups[7].Value
+                    $st.PortraitType = [Convert]::ToInt32($h.Groups[8].Value, 16)
+                    $st.PortraitOwner = [int]$h.Groups[9].Value
+                    $st.Head = [int]$h.Groups[10].Value
+                    $st.QueueOk = ($h.Groups[11].Value -eq '1')
+                    $st.Engine = @($h.Groups[12].Value -split ',' |
+                                   Where-Object { $_ -match '^0x' } |
+                                   ForEach-Object { [Convert]::ToInt32(($_ -replace '^0x'), 16) })
+                    continue
+                }
+                $s = [regex]::Match($l.Line,
+                    'disp=(\d+) (\w+)\s+idx=(-?\d+) ctrl=0x([0-9A-Fa-f]+) flags=0x([0-9A-Fa-f]+) graphic=0x([0-9A-Fa-f]+) rect=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\) user=0x([0-9A-Fa-f]+) uicon=0x([0-9A-Fa-f]+) umode=(\d+) utype=0x([0-9A-Fa-f]+) qtype=0x([0-9A-Fa-f]+)')
+                if ($s.Success) {
+                    $st.Slots += [pscustomobject]@{
+                        Display  = [int]$s.Groups[1].Value
+                        State    = $s.Groups[2].Value
+                        Visible  = ($s.Groups[2].Value -ne 'hidden')
+                        Disabled = ($s.Groups[2].Value -eq 'GREYED')
+                        Index    = [int]$s.Groups[3].Value
+                        Control  = $s.Groups[4].Value
+                        Flags    = [Convert]::ToUInt32($s.Groups[5].Value, 16)
+                        Graphic  = [Convert]::ToInt32($s.Groups[6].Value, 16)
+                        Rect     = @([int]$s.Groups[7].Value, [int]$s.Groups[8].Value,
+                                     [int]$s.Groups[9].Value, [int]$s.Groups[10].Value)
+                        User     = $s.Groups[11].Value
+                        UIcon    = [Convert]::ToInt32($s.Groups[12].Value, 16)
+                        UMode    = [int]$s.Groups[13].Value
+                        UType    = [Convert]::ToInt32($s.Groups[14].Value, 16)
+                        QueueType = [Convert]::ToInt32($s.Groups[15].Value, 16)
+                    }
+                    continue
+                }
+                $t = [regex]::Match($l.Line, 'slots=(\d+) shown=(\d+) clickable=(\d+)')
+                if ($t.Success) {
+                    $st.Shown = [int]$t.Groups[2].Value
+                    $st.Clickable = [int]$t.Groups[3].Value
+                }
+            }
+            return $st
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    throw "drive-game: no complete STATQ walk for marker '$label' within ${TimeoutSec}s (log: $LogPath). Was the game launched with -CardScan 1?"
+}
+
+function Get-ScStatusSlotPoint {
+    <#
+    .SYNOPSIS
+    The CLIENT-coordinate centre of one production-queue icon, from the live dialog.
+    .DESCRIPTION
+    Same arithmetic and the same reason as Get-ScCardSlotPoint: a control's rect
+    (+0x04) is dialog-relative and the engine adds the dialog origin itself, so the
+    point is rootRect + rect, halved. -Display is the DISPLAY INDEX, which is both
+    the walk position the layout uses and the payload the click emits
+    ({0x20, display}); the caller should assert `Index == Display + 2` first, since
+    the engine takes one number from each. Returns @{X;Y}.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Status, [Parameter(Mandatory)][int]$Display)
+    $s = @($Status.Slots | Where-Object Display -eq $Display) | Select-Object -First 1
+    if (-not $s) { throw "drive-game: the status-strip read-back has no display index $Display." }
+    @{ X = [int]($Status.RootRect[0] + [math]::Floor(($s.Rect[0] + $s.Rect[2]) / 2))
+       Y = [int]($Status.RootRect[1] + [math]::Floor(($s.Rect[1] + $s.Rect[3]) / 2)) }
+}
+
 function Save-ScWindowImage {
     <#
     .SYNOPSIS

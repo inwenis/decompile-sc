@@ -131,6 +131,165 @@ int ScCardSnapshot(ScCardHeader* hdr, ScCardSlot* out, int max) {
 }
 
 // ---------------------------------------------------------------------------
+// The status pane's production-queue strip (task 028)
+//
+// Reproduces queueLayout's own walk (0x004268D0), quoted in sc_addresses.h:
+//
+//     root = statdataDialog;
+//     if (*(s16*)(root + 0x22) != 0) root = *(BinDlg**)(root + 0x32);
+//     for (ctrl = root->firstChild; ctrl; ctrl = ctrl->next) if (ctrl->index == 2) break;
+//     for (k = 0; ctrl && k < 5; ++k, ctrl = ctrl->next) { ... buildQueue[(head + k) % 5] ... }
+//
+// The engine takes the DISPLAY INDEX from the walk position and the click payload
+// from `index - 2` (statusCtrlActivate 0x004573A0). Those are two different numbers
+// that the engine assumes are equal, so both are reported and the caller asserts it.
+// ---------------------------------------------------------------------------
+
+int ScStatusSnapshot(ScStatusHeader* hdr, ScStatusSlot* out, int max) {
+    if (!hdr) return 0;
+    memset(hdr, 0, sizeof(*hdr));
+
+    if (!RdU32(Rt(SC_VA_STATDATA_DIALOG), &hdr->dialog) || hdr->dialog == 0) return 0;
+    hdr->ok = true;
+
+    hdr->root = hdr->dialog;
+    WORD type = 0;
+    if (RdU16(hdr->dialog + SC_BINDLG_OFF_TYPE, &type) && (short)type != 0) {
+        DWORD parent = 0;
+        if (RdU32(hdr->dialog + SC_BINDLG_OFF_PARENT, &parent) && parent) hdr->root = parent;
+    }
+    Rd(hdr->root + SC_BINDLG_OFF_BOUNDS, hdr->rootRect, sizeof(hdr->rootRect));
+
+    // The queue the strip is DRAWING is the portrait unit's, not the selection's --
+    // 0x004268D0 reads DAT_00597248 for every one of its five slots. Reading the same
+    // global is what makes "icon k shows type t" checkable against the building's ring.
+    if (RdU32(Rt(SC_VA_ACTIVE_PORTRAIT_UNIT), &hdr->portrait) && hdr->portrait) {
+        RdU16(hdr->portrait + SC_CUNIT_OFF_UNIT_ID, &hdr->portraitType);
+        RdU8(hdr->portrait + SC_CUNIT_OFF_PLAYER, &hdr->portraitOwner);
+        bool ok = RdU8(hdr->portrait + SC_CUNIT_OFF_BUILD_QUEUE_SLOT, &hdr->head);
+        for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) {
+            ok = RdU16(hdr->portrait + SC_CUNIT_OFF_BUILD_QUEUE + (DWORD)i * 2,
+                       &hdr->queue[i]) && ok;
+        }
+        hdr->queueOk = ok;
+    }
+
+    DWORD ctrl = 0;
+    if (!RdU32(hdr->root + SC_BINDLG_OFF_FIRST_CHILD, &ctrl)) return 0;
+
+    // Find the strip's first icon the way the layout does -- by index, not by position.
+    // Bounded because this runs on the observer thread against a list the game thread
+    // owns; a torn `next` must end the walk, not spin it.
+    DWORD first = 0;
+    for (int guard = 0; ctrl && guard < SC_MAX_CTRLS_WALK; ++guard) {
+        WORD idxW = 0;
+        if (!RdU16(ctrl + SC_BINDLG_OFF_INDEX, &idxW)) break;
+        if ((short)idxW == SC_STATQ_FIRST_CONTROL) { first = ctrl; break; }
+        DWORD next = 0;
+        if (!RdU32(ctrl + SC_BINDLG_OFF_NEXT, &next)) break;
+        ctrl = next;
+    }
+    if (!first) return 0;
+
+    int found = 0;
+    ctrl = first;
+    for (int k = 0; ctrl && k < SC_STATQ_SLOTS; ++k) {
+        if (found >= max || !out) break;
+        ScStatusSlot* s = &out[found];
+        memset(s, 0, sizeof(*s));
+        s->display = k;
+        s->control = ctrl;
+
+        WORD idxW = 0;
+        s->index = RdU16(ctrl + SC_BINDLG_OFF_INDEX, &idxW) ? (short)idxW : -1;
+        RdU32(ctrl + SC_BINDLG_OFF_FLAGS, &s->flags);
+        s->visible  = (s->flags & SC_CTRL_FLAG_VISIBLE) != 0;
+        s->disabled = (s->flags & SC_CTRL_FLAG_DISABLED) != 0;
+        RdU16(ctrl + SC_BINDLG_OFF_GRAPHIC, &s->graphic);
+        RdU32(ctrl + SC_BINDLG_OFF_USER, &s->user);
+        Rd(ctrl + SC_BINDLG_OFF_BOUNDS, s->rect, sizeof(s->rect));
+
+        if (s->user) {
+            // All three fields or none, same rule as the card's Button record: a
+            // half-read statUser reads as an icon drawing a wrong unit type.
+            s->userOk = RdU16(s->user + SC_STATUSER_OFF_ICON, &s->uIcon) &&
+                        RdU16(s->user + SC_STATUSER_OFF_MODE, &s->uMode) &&
+                        RdU16(s->user + SC_STATUSER_OFF_TYPE, &s->uType);
+        }
+
+        // The building's own slot for this display index -- the engine's arithmetic,
+        // (head + k) % 5, so the icon and the ring can be compared without the caller
+        // having to redo it.
+        s->queueType = SC_BUILD_QUEUE_EMPTY;
+        if (hdr->queueOk) {
+            s->queueType = hdr->queue[((unsigned)hdr->head + (unsigned)k) % SC_BUILD_QUEUE_SLOTS];
+        }
+
+        if (s->visible) {
+            ++hdr->shown;
+            if (!s->disabled) ++hdr->clickable;
+        }
+        ++found;
+
+        DWORD next = 0;
+        if (!RdU32(ctrl + SC_BINDLG_OFF_NEXT, &next)) break;
+        ctrl = next;
+    }
+
+    hdr->slots = found;
+    return found;
+}
+
+void ScStatusScan(const char* tag) {
+    if (!g_enabled) return;
+
+    ScStatusHeader hdr;
+    ScStatusSlot   slots[SC_STATQ_SLOTS];
+    int n = ScStatusSnapshot(&hdr, slots, SC_STATQ_SLOTS);
+
+    const char* t = tag ? tag : "-";
+    if (!hdr.ok) {
+        ScLog("STATQ [%s] dialog=0 (no status pane in this process state)", t);
+        return;
+    }
+
+    char eng[96];
+    int used = 0;
+    eng[0] = '\0';
+    for (int i = 0; i < SC_BUILD_QUEUE_SLOTS && used + 8 < (int)sizeof(eng); ++i) {
+        used += _snprintf(eng + used, sizeof(eng) - used, "%s0x%03X",
+                          i ? "," : "", hdr.queueOk ? (unsigned)hdr.queue[i] : 0xFFFu);
+    }
+
+    ScLog("STATQ [%s] dialog=0x%08X root=0x%08X rootrect=(%d,%d,%d,%d) portrait=0x%08X "
+          "ptype=0x%03X powner=%u head=%u queueOk=%d engine=[%s]",
+          t, (unsigned)hdr.dialog, (unsigned)hdr.root,
+          hdr.rootRect[0], hdr.rootRect[1], hdr.rootRect[2], hdr.rootRect[3],
+          (unsigned)hdr.portrait, (unsigned)hdr.portraitType, (unsigned)hdr.portraitOwner,
+          (unsigned)hdr.head, hdr.queueOk ? 1 : 0, eng);
+
+    for (int i = 0; i < n; ++i) {
+        const ScStatusSlot* s = &slots[i];
+        const char* state = !s->visible ? "hidden" : (s->disabled ? "GREYED" : "enabled");
+        ScLog("STATQ [%s] disp=%d %-7s idx=%d ctrl=0x%08X flags=0x%08X graphic=0x%04X "
+              "rect=(%d,%d,%d,%d) user=0x%08X uicon=0x%04X umode=%u utype=0x%03X "
+              "qtype=0x%03X",
+              t, s->display, state, s->index, (unsigned)s->control, (unsigned)s->flags,
+              (unsigned)s->graphic, s->rect[0], s->rect[1], s->rect[2], s->rect[3],
+              (unsigned)s->user,
+              s->userOk ? (unsigned)s->uIcon : 0xFFFFu,
+              s->userOk ? (unsigned)s->uMode : 0xFFFFu,
+              s->userOk ? (unsigned)s->uType : 0xFFFu,
+              (unsigned)s->queueType);
+    }
+
+    // Written LAST and unconditionally, like the card's: a reader waits for this line,
+    // and "the strip is up but nothing is clickable" has to be a positive answer rather
+    // than a missing one (AGENTS.md, absence assertions).
+    ScLog("STATQ [%s] slots=%d shown=%d clickable=%d", t, hdr.slots, hdr.shown, hdr.clickable);
+}
+
+// ---------------------------------------------------------------------------
 // The tech state behind the buttons
 // ---------------------------------------------------------------------------
 

@@ -382,11 +382,36 @@ has to be positively reported or "the plugin is holding nothing" and "the oracle
 the same observation. `engine=[…]` is read straight out of `CUnit+0x98`, which is what lets a test
 assert a queue length from the building's own memory instead of from the status area.
 
+### Cancelling, and the two controls that do it (task 028)
+
+Proved in a real game, both cases, by the same suite: `tools/plugin/test-production-queue.ps1`.
+Full derivation in [`research/production-queue.md`](../../research/production-queue.md) §8.
+
+**They are different controls and they send different payloads**, and that is the whole reason
+the two cases take different code:
+
+| control | where it lives | what it sends | who serves it |
+|---|---|---|---|
+| a **queue icon** | status pane (`0x0068C1F0`), control ids 2..6, one per display index | `{0x20, k}` | the ENGINE — `cancelBuildQueueSlot(k)` refunds and compacts; the plugin passes it straight through |
+| the **Cancel button** | command card, slot 9 | `{0x20, 0xFE}` — "cancel the last queued item" | the PLUGIN, whenever it is holding the tail; otherwise the engine's `cancelLastQueued` |
+
+Two things follow that a screenshot cannot tell you and this plugin now reads out of memory
+(`-CardScan 1`, `STATQ` lines — no hook, works in `-Mode observe`):
+
+* **an empty queue slot's icon is DISABLED** by the status layout (`0x00418640`, the same bit both
+  input paths refuse), so "how many queued items can the player click" is a read of five flag
+  words — measured 5 of 5 with a full ring, 3 of 5 with three queued;
+* **the strip draws the ring and nothing else.** With a nine-item logical queue the player sees
+  five icons; the four the plugin holds are not drawn and cannot be clicked. The Cancel button is
+  what reaches them — it means "the last item", which is always the plugin's while it holds any,
+  so a player walks the overflow down tail-first, one press each.
+
 ### Known limitations
 
 | | |
 |---|---|
 | The status area still draws five icons | items 6..N are real, paid for and will be built, but they are not on screen. The engine's five are always five *true* entries — the next five this building will build — so nothing shown is wrong, only incomplete. Extending the production panel is the obvious follow-up |
+| …and they are also the only items the player can CANCEL by clicking | the queue icons address the ring; an overflow item is reachable only through the card's Cancel button, tail-first. Task 028 measured this rather than assuming it |
 | Train (`0x1F`) only | Unit Morph (`0x23`), Train Fighter (`0x27`) and Building Morph (`0x35`) keep vanilla's five |
 | A one-frame ordering window | if a slot frees in the same frame a Train command is processed, the engine can take that slot ahead of an older held item. Nothing is lost or double-paid; only the relative order of two items queued within a frame of each other can differ |
 | Refund latency for a destroyed building | the cheap liveness terms run every tick; the player-unit-list walk runs on Train/Cancel commands, so a building destroyed while the player is idle is refunded on their next click |
