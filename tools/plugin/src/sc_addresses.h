@@ -969,5 +969,148 @@
 #define SC_VA_UPGRADE_GAS_FACTOR     0x006557C0u
 #define SC_VA_TECH_MINERAL_COST      0x00656248u
 #define SC_VA_TECH_GAS_COST          0x006561F0u
+// RENDERER / VIEWPORT -- derived by task 032 from StarCraft.exe 1.16.1 itself.
+//
+// Full evidence, with the decompiles, in research/renderer-viewport.md. Nothing here is
+// inherited from public prior art: the renderer is the one subsystem BWAPI, GPTP and OpenBW
+// all skip (research/prior-art.md 9), so there was nothing to inherit. The modules were found
+// by locating the binary's own __FILE__ strings ("Starcraft\SWAR\lang\gds\vidinimo.cpp" and
+// friends) in the file image and sweeping them for references
+// (work/scratch/032/make-module-spec.py -> modules.spec -> XrefSweep).
+//
+// EVERYTHING BELOW IS READ-ONLY to this plugin. Task 032 is an investigation; it installs no
+// hook, patches no constant, and the only code that touches these is the read-only SCREEN
+// scan in scplugin.cpp, off by default behind %SCPLUGIN_SCREENSCAN%.
+// ---------------------------------------------------------------------------
+
+// THE screen buffer descriptor: { u16 width; u16 height; u8* data }. The whole game --
+// terrain, sprites, fog, HUD, dialogs, cursor -- is composed into this one 8-bit linear
+// buffer, and the frame is one blit out of it.
+//
+// Written twice with the same three values: the graphics-layer init 0x0041E050
+// (gds\image.cpp) sets {640,480,NULL}, and the video init 0x004DB060 (gds\vidinimo.cpp) sets
+// them again and fills the pointer with SMemAlloc(0x4B000) -- 640*480 bytes, the storm
+// allocator call that names its own source file:
+//     004db077  PUSH 0x4b000
+//     004db07c  MOV word ptr [0x006ceff0],0x280
+//     004db085  MOV word ptr [0x006ceff2],0x1e0
+#define SC_VA_SCREEN_BITMAP        0x006CEFF0u
+#define SC_BITMAP_OFF_WIDTH        0x00u   // u16
+#define SC_BITMAP_OFF_HEIGHT       0x02u   // u16
+#define SC_BITMAP_OFF_DATA         0x04u   // u8*
+#define SC_SCREEN_W                640
+#define SC_SCREEN_H                480
+
+// GraphicLayer[8], 20 bytes each. The frame composer 0x0041E280 walks them from index 7 down
+// to 0 -- so layer 7 is the BOTTOM and layer 0 is drawn LAST, on top -- and calls each one's
+// draw callback with (layer->param, &clipRect).
+//
+// The stride is the binary's, not a guess: 0x004BD630 indexes the block as
+// `(&DAT_006CEF51)[i * 0x14]` (bytes) and `(&DAT_006CEF56)[i * 10]` (u16), and the gds\image.cpp
+// init 0x0041E050 zeroes exactly 0x28 dwords = 160 bytes = 8 * 20 starting here, ending
+// precisely where SC_VA_SCREEN_BITMAP begins.
+#define SC_VA_GRAPHIC_LAYERS       0x006CEF50u
+#define SC_GRAPHIC_LAYERS          8
+#define SC_LAYER_STRIDE            0x14u
+#define SC_LAYER_OFF_USED          0x00u   // u8
+#define SC_LAYER_OFF_FLAGS         0x01u   // u8; bit 0 = needs redraw
+#define SC_LAYER_OFF_LEFT          0x02u   // s16
+#define SC_LAYER_OFF_TOP           0x04u   // s16
+#define SC_LAYER_OFF_WIDTH         0x06u   // s16
+#define SC_LAYER_OFF_HEIGHT        0x08u   // s16
+#define SC_LAYER_OFF_PARAM         0x0Cu   // void*  -- first argument to the draw callback
+#define SC_LAYER_OFF_DRAW          0x10u   // void (*)(void* param, s16 clip[5])
+
+// Which layer is which, read off the writer of each layer's +0x10 draw slot:
+//   0  0x004BDFA0, installed by 0x004D1560 (cur.cpp)          -- cursor, drawn last
+//   1  0x004810F0, installed by 0x00481330 (mask.cpp band)    -- full-screen mask/fade
+//   2  0x0041CB50, installed by 0x0041A030, 640x480           -- DIALOGS: it walks
+//                                                                SC_VA_DIALOG_LIST
+//   3  0x0048D5C0, installed by 0x0048D700                    -- build-placement preview
+//   4  0x0048D5C0, same installer                             -- second placement slot
+//   5  0x004BD580, installed by 0x004BD630, 640x400           -- THE PLAYFIELD
+//   6  no writer of its draw slot anywhere in the binary      -- unused
+//   7  no writer either                                       -- unused
+#define SC_LAYER_CURSOR       0
+#define SC_LAYER_MASK         1
+#define SC_LAYER_DIALOGS      2
+#define SC_LAYER_PLACEMENT_A  3
+#define SC_LAYER_PLACEMENT_B  4
+#define SC_LAYER_PLAYFIELD    5
+
+// THE PLAYFIELD SIZE, and it is not stored anywhere -- it is an immediate in every function
+// that clips to it. 640x400 out of the 640x480 screen; the console art and the HUD dialogs
+// are drawn OVER the bottom of it rather than beside it. Sites read for research/renderer-
+// viewport.md, each one an independent copy of the same two numbers:
+//   0x004BD630  layer 5's own width/height, beside SetRect(&DAT_005993B0, 0, 0, 639, 399)
+//   0x004D57B0  per-IMAGE screen clip: `if (0x280 - x <= w) w = 0x280 - x;` and the same
+//               with 400 for the height -- every sprite on screen goes through this
+//   0x0045CC90  the generic "clip this rect to the playfield" helper
+//   0x0046FB40  the click handler's search rect { left, top, left + 0x280, top + 400 }
+//   0x0048D660  build-placement: refuses a point with x >= 0x280 or y >= 400
+//   0x004808E0  fog draw: walks the dirty grid `while (x < 0x280)` / `while (y < 400)`
+//   0x004BCDC0  terrain draw: same walk, same two bounds
+//   0x0047EBF0, 0x0047EE20, 0x004808F8  fog-of-war clipping
+#define SC_PLAYFIELD_W             640
+#define SC_PLAYFIELD_H             400
+
+// The DIRTY-BLOCK GRID: u8[30][40], one byte per 16x16 pixel block of the 640x480 screen.
+// Established by the marker 0x0041E0D0, which clamps x to 0x27F and y to 0x1DF, shifts both
+// right by 4 and writes at `&DAT_006CEFF8 + row * 0x28 + col`. Three separate functions clear
+// it as "300 dwords" (0x0041D710, 0x004BD630, 0x0041E280) = 1200 bytes = 40 * 30, and the
+// presentation layer is told the same geometry explicitly: 0x0041D470 calls
+// `Ordinal_440(0x280, 0x1e0, 0x10, 0x10)`.
+//
+// IT CANNOT GROW IN PLACE. 0x006CEFF8 + 0x4B0 == 0x006CF4A8, which is a live global (the
+// current render-target Bitmap*, written by 0x0041E280 and 0x0041DF40 among others).
+#define SC_VA_DIRTY_GRID           0x006CEFF8u
+#define SC_DIRTY_BLOCK             16
+#define SC_DIRTY_COLS              40      // 0x28, the row stride in 0x0041E0D0
+#define SC_DIRTY_ROWS              30
+#define SC_VA_RENDER_TARGET        0x006CF4A8u  // the global immediately after the grid
+
+// The terrain scratch surface the tile blitter 0x004BCDC0 reads through: pitch 0x2A0 = 672,
+// total 0x49800 = 301056 = 672 * 448, addressed modulo its own size so a scroll wraps rather
+// than copies. 672 = 640 + 32 and 448 = 400 + 48 -- the playfield plus a tile of margin.
+#define SC_TERRAIN_SCRATCH_PITCH   0x2A0u
+#define SC_TERRAIN_SCRATCH_SIZE    0x49800u
+
+// The scroll clamp. 0x0049BB90 establishes both maxima from the map's tile dimensions and the
+// VIEWPORT'S SIZE IN TILES:
+//     DAT_00628488 = (mapTileW - 0x14) * 0x20;        // 20 tiles = 640 px
+//     DAT_006284B0 = (mapTileH - 0x0C) * 0x20 + 8;    // 12 tiles = 384 px, +8
+// and the two scroll steppers 0x0049C0C0 (x) / 0x0049C280 (y) clamp against exactly these.
+#define SC_VA_SCROLL_MAX_X         0x00628488u  // u32
+#define SC_VA_SCROLL_MAX_Y         0x006284B0u  // u32
+#define SC_VA_MAP_PIXEL_W          0x006284A4u  // u16, mapTileW << 5
+#define SC_VA_MAP_PIXEL_H          0x006284A6u  // u16, mapTileH << 5
+#define SC_VIEWPORT_TILES_X        20     // 0x14 in 0x0049BB90 and 0x004A4D20
+#define SC_VIEWPORT_TILES_Y        12     // 0x0C in 0x0049BB90 (0x0D in 0x004A4D20)
+
+// The TILE-granular viewport origin, written by every scroll stepper as origin >> 5, and the
+// map's tile dimensions beside it. The minimap reads the first pair (0x004A4D20, 0x004A5A80)
+// and the second (0x004A3A40, 0x004A41B0, 0x004A4400).
+#define SC_VA_SCREEN_TILE_X        0x0057F1D0u  // u16
+#define SC_VA_SCREEN_TILE_Y        0x0057F1D2u  // u16
+#define SC_VA_MAP_TILE_W           0x0057F1D4u  // u16
+#define SC_VA_MAP_TILE_H           0x0057F1D6u  // u16
+
+// The engine's own renderer functions. NOT hooked, called or patched by this plugin; recorded
+// because every claim above names one of them.
+#define SC_VA_VIDEO_INIT           0x004DB060u  // gds\vidinimo.cpp: sets the screen Bitmap
+#define SC_VA_DDRAW_INIT           0x0041D930u  // gds\vidinimo_PC.cpp: SetDisplayMode(640,480,8)
+#define SC_VA_GFX_LAYER_INIT       0x0041E050u  // gds\image.cpp: zeroes the layer block
+#define SC_VA_FRAME_COMPOSE        0x0041E280u  // walks layers 7..0, builds each clip rect
+#define SC_VA_MARK_DIRTY           0x0041E0D0u  // the dirty-grid marker
+#define SC_VA_PRESENT_BLIT         0x0041D420u  // lock, Ordinal_432(dst, screen, pitch, 0x280), unlock
+#define SC_VA_SURFACE_REBUILD      0x0041D470u  // Ordinal_440(0x280, 0x1e0, 0x10, 0x10)
+#define SC_VA_PLAYFIELD_DRAW       0x004BD580u  // layer 5's callback: the whole playfield chain
+#define SC_VA_TERRAIN_DRAW         0x004BCDC0u  // the tile blitter
+#define SC_VA_IMAGE_SCREEN_CLIP    0x004D57B0u  // per-image clip to 640x400
+#define SC_VA_RECT_CLIP_PLAYFIELD  0x0045CC90u  // generic rect clip to 640x400
+#define SC_VA_SCROLL_SET_BOUNDS    0x0049BB90u  // establishes both scroll maxima
+#define SC_VA_SCROLL_STEP_X        0x0049C0C0u
+#define SC_VA_SCROLL_STEP_Y        0x0049C280u
+#define SC_VA_MINIMAP_CLICK        0x004A4D20u  // centres the camera; bakes 20 x 13 tiles
 
 #endif // SC_ADDRESSES_H

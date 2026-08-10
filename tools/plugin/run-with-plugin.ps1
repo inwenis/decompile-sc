@@ -211,7 +211,13 @@ param(
     [ValidateSet('0', '1')][string]$UpgradeQueue = '0',
     # Total logical queue length per building, the engine's ONE included. Clamped by the
     # plugin to [1, 16].
-    [int]$UpgradeQueueMax = 8
+    [int]$UpgradeQueueMax = 8,
+    # Task 032: the read-only RENDERER/VIEWPORT read-back. On each marker the observer logs
+    # the screen Bitmap descriptor (0x006CEFF0), all eight graphic layers (0x006CEF50) in
+    # draw order with their rectangles and draw callbacks, and the viewport origin plus the
+    # scroll maxima. Installs no hook and writes nothing, so it exists in -Mode observe too.
+    # Off by default: ten lines per marker, and the existing suites parse this log.
+    [ValidateSet('0', '1')][string]$ScreenScan = '0'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -322,6 +328,7 @@ try {
     $env:SCPLUGIN_CARDSCAN       = $CardScan
     $env:SCPLUGIN_UPGQ           = $UpgradeQueue
     $env:SCPLUGIN_UPGQ_MAX       = "$UpgradeQueueMax"
+    $env:SCPLUGIN_SCREENSCAN     = $ScreenScan
     if ($Liveness -eq '0') {
         Write-Warning 'run-with-plugin: -Liveness 0 — the fan-out emit gate is back to the pre-task-020 uniqueness test ALONE. A unit killed by damage will be replayed into a Select. This is a deliberate defect-reproduction run.'
     }
