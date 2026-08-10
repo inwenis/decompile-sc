@@ -1,4 +1,5 @@
-// sc_card.h -- READ the command card out of the running process (task 026).
+// sc_card.h -- READ the console's two clickable dialogs out of the running process:
+// the COMMAND CARD (task 026) and the status pane's PRODUCTION QUEUE STRIP (task 028).
 //
 // THE PROBLEM. Task 022 could not drive the Ghost's Personnel Cloaking, and task
 // 023's four-arm probe narrowed it to a bounded negative: input reaches the card,
@@ -24,6 +25,17 @@
 // therefore see a card the game thread is mid-way through relaying; that is
 // harmless (every pointer is validated, the walk is bounded) and visible, because
 // each line carries the raw flags it read.
+//
+// THE SECOND DIALOG (task 028). "Cancel a queued unit" is NOT a command-card action
+// in vanilla: the card's Cancel button (buttonset slot 9, actionParam 0xFE) sends
+// "cancel the LAST queued item", and the five icons that address a SPECIFIC queued
+// item live in the other console dialog -- the status pane, SC_VA_STATDATA_DIALOG,
+// control ids 2..6, one per display index. ScStatusSnapshot walks those the way
+// queueLayout 0x004268D0 does (sc_addresses.h quotes it) and reports, per icon, the
+// enabled bit BOTH input paths refuse and the unit type the icon is drawing, beside
+// the building's own five ring slots. So "which queued item can the player click,
+// and what does it show" is a read of the dialog, never a guess at a coordinate and
+// never a hash of a frame.
 
 #ifndef SC_CARD_H
 #define SC_CARD_H
@@ -94,6 +106,55 @@ struct ScCardTechState {
     BYTE available[44];
     BYTE researched[44];
 };
+
+// ---------------------------------------------------------------------------
+// The status pane's production-queue strip (task 028)
+// ---------------------------------------------------------------------------
+
+struct ScStatusSlot {
+    int   display;       // 0..4 -- the WALK position, which is what the engine calls
+                         // the display index; the payload a click on it sends
+    DWORD control;       // BinDlg*
+    int   index;         // control+0x20. The engine assumes index == display + 2
+                         // (queueLayout walks by `next`, statusCtrlActivate sends
+                         // index - 2), so a run asserts that rather than trusting it
+    DWORD flags;         // control+0x18
+    bool  visible;       // flags & SC_CTRL_FLAG_VISIBLE
+    bool  disabled;      // flags & SC_CTRL_FLAG_DISABLED -- an EMPTY queue slot's icon
+    WORD  graphic;       // control+0x24
+    DWORD user;          // control+0x26 -- the 12-byte statUser record
+    bool  userOk;        // that record was readable
+    WORD  uIcon;         // statUser+0x04 -- the frame drawn: the unit type, or k+6 empty
+    WORD  uMode;         // statUser+0x06 -- 3 occupied, 6 empty
+    WORD  uType;         // statUser+0x08 -- the unit type, occupied slots only
+    WORD  queueType;     // the building's OWN buildQueue[(head + display) % 5]
+    short rect[4];       // control+0x04, dialog-relative, same arithmetic as a card slot
+};
+
+struct ScStatusHeader {
+    bool  ok;            // the dialog pointer was readable and non-null
+    DWORD dialog;        // 0x0068C1F0
+    DWORD root;          // the dialog record the children hang off
+    short rootRect[4];   // the dialog's own origin
+    DWORD portrait;      // 0x00597248 -- whose queue the strip is showing
+    WORD  portraitType;  // CUnit+0x64
+    BYTE  portraitOwner; // CUnit+0x4C
+    bool  queueOk;       // the portrait unit's ring was readable
+    BYTE  head;          // CUnit+0xA4
+    WORD  queue[SC_BUILD_QUEUE_SLOTS];   // CUnit+0x98, in SLOT order (not display order)
+    int   slots;         // how many icon controls the walk found (5 when the strip is up)
+    int   shown;         // how many are visible
+    int   clickable;     // how many are visible AND NOT disabled -- what the player can click
+};
+
+// Walks the strip and logs one STATQ line per icon plus a header and a summary.
+// No-op when disabled. Same %SCPLUGIN_CARDSCAN% switch as the card: both are
+// read-only walks of the same console, and a suite that wants one wants both.
+void ScStatusScan(const char* tag);
+
+// The pure walk, for the test seam: fills `out` (at most SC_STATQ_SLOTS) and `hdr`,
+// returns the number of icon controls found. Reads nothing else and logs nothing.
+int ScStatusSnapshot(ScStatusHeader* hdr, ScStatusSlot* out, int max);
 
 // %SCPLUGIN_CARDSCAN%; off by default (the existing suites parse this log).
 void ScCardInit(BYTE* moduleBase, bool enabled);

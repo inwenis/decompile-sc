@@ -2839,6 +2839,221 @@ static void CardScanTests(void) {
     g_fake = NULL;
 }
 
+// ---------------------------------------------------------------------------
+// [16] the status pane's production-queue strip (task 028), against a fake dialog.
+//
+// WHY IT NEEDS A TEST. This walk is the thing that decides WHERE the run clicks to
+// cancel a queued unit, and what it then claims the player could see. Two failure
+// modes would both look like a clean result in game:
+//
+//   * a walk that reports every icon clickable would send the suite clicking an
+//     EMPTY queue slot's icon and reading the silence as "the engine refused" --
+//     the disabled bit here is the same bit that made task 022's Ghost negative,
+//     so it is driven in both directions over the same dialog, exactly as [14] does;
+//   * a walk that takes the display index from the control's `index` field rather
+//     than from the walk POSITION would agree with the engine on a normal dialog and
+//     disagree on a re-ordered one -- and the engine takes one from each
+//     (queueLayout by position, statusCtrlActivate by index - 2). So the fake is
+//     also built with its child list deliberately out of order, and the reading must
+//     make that visible instead of hiding it.
+// ---------------------------------------------------------------------------
+
+#define FAKE_STAT_DLG_VA  0x006B0000u
+#define FAKE_STAT_USER_VA 0x006B2000u
+
+static DWORD FakeStatCtl(int i)  { return (DWORD)FakeRt(FAKE_STAT_DLG_VA) + 0x100u + (DWORD)i * SC_BINDLG_SIZE; }
+static DWORD FakeQIconUser(int i) { return (DWORD)FakeRt(FAKE_STAT_USER_VA) + (DWORD)i * 0x10u; }
+
+// Over the dialog, its controls and the statUser records -- "read-only" is a claim
+// about behaviour, so it is measured here the way [14] measures the card's.
+static DWORD FakeStatusChecksum(void) {
+    const BYTE* p = (const BYTE*)FakeRt(FAKE_STAT_DLG_VA);
+    DWORD h = 2166136261u;
+    for (unsigned i = 0; i < 0x3000u; ++i) { h ^= p[i]; h *= 16777619u; }
+    return h;
+}
+
+// `queued` is the logical queue in DISPLAY order (0xE4 = empty), `head` the ring head
+// the icons are read through, so the fake exercises the (head + k) % 5 arithmetic
+// rather than assuming head == 0. `swap` puts controls 3 and 4 in the wrong order in
+// the child list.
+static void BuildFakeStatusPane(const WORD* queuedByDisplay, BYTE head, bool swap) {
+    DWORD root = (DWORD)FakeRt(FAKE_STAT_DLG_VA);
+    memset((void*)(DWORD_PTR)root, 0, SC_BINDLG_SIZE);
+    *(WORD*)(DWORD_PTR)(root + SC_BINDLG_OFF_TYPE) = 0;
+    {
+        short* rr = (short*)(DWORD_PTR)(root + SC_BINDLG_OFF_BOUNDS);
+        rr[0] = 0; rr[1] = 358; rr[2] = 639; rr[3] = 479;      // the console's own origin
+    }
+
+    // One leading child the strip does NOT own (index 1), so "find the child with
+    // index == 2" is a real search rather than "take the first one".
+    DWORD lead = FakeStatCtl(9);
+    memset((void*)(DWORD_PTR)lead, 0, SC_BINDLG_SIZE);
+    *(WORD*) (DWORD_PTR)(lead + SC_BINDLG_OFF_TYPE)  = 2;
+    *(short*)(DWORD_PTR)(lead + SC_BINDLG_OFF_INDEX) = 1;
+    *(DWORD*)(DWORD_PTR)(lead + SC_BINDLG_OFF_NEXT)  = FakeStatCtl(0);
+    *(DWORD*)(DWORD_PTR)(root + SC_BINDLG_OFF_FIRST_CHILD) = lead;
+
+    for (int k = 0; k < SC_STATQ_SLOTS; ++k) {
+        DWORD c = FakeStatCtl(k);
+        memset((void*)(DWORD_PTR)c, 0, SC_BINDLG_SIZE);
+        *(WORD*) (DWORD_PTR)(c + SC_BINDLG_OFF_TYPE)   = 2;
+        *(short*)(DWORD_PTR)(c + SC_BINDLG_OFF_INDEX)  = (short)(SC_STATQ_FIRST_CONTROL + k);
+        *(DWORD*)(DWORD_PTR)(c + SC_BINDLG_OFF_PARENT) = root;
+        *(DWORD*)(DWORD_PTR)(c + SC_BINDLG_OFF_NEXT)   = (k < SC_STATQ_SLOTS - 1) ? FakeStatCtl(k + 1) : 0;
+        short* r = (short*)(DWORD_PTR)(c + SC_BINDLG_OFF_BOUNDS);
+        r[0] = (short)(220 + k * 22); r[1] = 8;
+        r[2] = (short)(r[0] + 20);    r[3] = 28;
+
+        DWORD u = FakeQIconUser(k);
+        memset((void*)(DWORD_PTR)u, 0, 0x10);
+        *(DWORD*)(DWORD_PTR)(c + SC_BINDLG_OFF_USER) = u;
+
+        WORD type = queuedByDisplay[k];
+        DWORD flags = SC_CTRL_FLAG_DRAWN | SC_CTRL_FLAG_VISIBLE;
+        if (type == SC_BUILD_QUEUE_EMPTY) {
+            // What 0x004268D0 writes for an empty slot: a placeholder frame, mode 6,
+            // and 0x00418640 -- the DISABLE.
+            *(WORD*)(DWORD_PTR)(u + SC_STATUSER_OFF_ICON) = (WORD)(k + 6);
+            *(WORD*)(DWORD_PTR)(u + SC_STATUSER_OFF_MODE) = 6;
+            flags |= SC_CTRL_FLAG_DISABLED;
+            *(WORD*)(DWORD_PTR)(c + SC_BINDLG_OFF_GRAPHIC) = 0;
+        } else {
+            *(WORD*)(DWORD_PTR)(u + SC_STATUSER_OFF_ICON) = type;
+            *(WORD*)(DWORD_PTR)(u + SC_STATUSER_OFF_MODE) = 3;
+            *(WORD*)(DWORD_PTR)(u + SC_STATUSER_OFF_TYPE) = type;
+            *(WORD*)(DWORD_PTR)(c + SC_BINDLG_OFF_GRAPHIC) = type;
+        }
+        *(DWORD*)(DWORD_PTR)(c + SC_BINDLG_OFF_FLAGS) = flags;
+    }
+
+    if (swap) {
+        // Controls 3 and 4 (display 1 and 2) linked the other way round.
+        *(DWORD*)(DWORD_PTR)(FakeStatCtl(0) + SC_BINDLG_OFF_NEXT) = FakeStatCtl(2);
+        *(DWORD*)(DWORD_PTR)(FakeStatCtl(2) + SC_BINDLG_OFF_NEXT) = FakeStatCtl(1);
+        *(DWORD*)(DWORD_PTR)(FakeStatCtl(1) + SC_BINDLG_OFF_NEXT) = FakeStatCtl(3);
+    }
+
+    // The building whose ring the icons are drawn from, in SLOT order: display k is
+    // slot (head + k) % 5, so the fake writes each display entry into the slot the
+    // engine would read it from.
+    DWORD unit = FakeUnit(0);
+    *(WORD*)(DWORD_PTR)(unit + SC_CUNIT_OFF_UNIT_ID) = 154;              // a Nexus
+    *(BYTE*)(DWORD_PTR)(unit + SC_CUNIT_OFF_PLAYER)  = 0;
+    *(BYTE*)(DWORD_PTR)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT) = head;
+    for (int k = 0; k < SC_BUILD_QUEUE_SLOTS; ++k) {
+        *(WORD*)(DWORD_PTR)(unit + SC_CUNIT_OFF_BUILD_QUEUE + (DWORD)((head + k) % 5) * 2) =
+            queuedByDisplay[k];
+    }
+
+    *(DWORD*)FakeRt(SC_VA_STATDATA_DIALOG)      = root;
+    *(DWORD*)FakeRt(SC_VA_ACTIVE_PORTRAIT_UNIT) = unit;
+}
+
+static void StatusStripTests(void) {
+    printf("\n[16] the status pane's production-queue strip, against a fake dialog\n");
+
+    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
+                                 PAGE_READWRITE);
+    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+    ScCardTestBegin(g_fake, FakeCardRead);
+
+    ScStatusHeader hdr;
+    ScStatusSlot   slots[SC_STATQ_SLOTS];
+
+    // --- (a) three Probes queued, two empty slots, head NOT at zero -----------
+    const WORD PROBE = 64;
+    WORD q3[SC_STATQ_SLOTS] = { PROBE, PROBE, PROBE, SC_BUILD_QUEUE_EMPTY, SC_BUILD_QUEUE_EMPTY };
+    BuildFakeStatusPane(q3, 3, false);
+    DWORD before = FakeStatusChecksum();
+    int n = ScStatusSnapshot(&hdr, slots, SC_STATQ_SLOTS);
+    Check("five queue icons found", n, SC_STATQ_SLOTS);
+    Check("the header resolved the status dialog", hdr.ok ? 1 : 0, 1);
+    Check("the walk wrote nothing (checksum)",
+          (long long)(FakeStatusChecksum() == before), 1);
+    Check("the portrait unit's ring was readable", hdr.queueOk ? 1 : 0, 1);
+    Check("head reads back", hdr.head, 3);
+    Check("all five icons are visible", hdr.shown, SC_STATQ_SLOTS);
+    // THE HEADLINE: only the three occupied ones can be clicked at all.
+    Check("only the three OCCUPIED icons are clickable", hdr.clickable, 3);
+    for (int k = 0; k < 3; ++k) {
+        Check("  an occupied icon is enabled", slots[k].disabled ? 1 : 0, 0);
+        Check("  and draws the queued unit type", slots[k].uIcon, PROBE);
+        Check("  which is the type in the ring at (head + k) % 5", slots[k].queueType, PROBE);
+        Check("  its control index is display + 2", slots[k].index, k + SC_STATQ_FIRST_CONTROL);
+    }
+    Check("the first empty icon is GREYED", slots[3].disabled ? 1 : 0, 1);
+    Check("  its statUser mode is the empty one", slots[3].uMode, 6);
+    Check("  and its ring slot really is empty", slots[3].queueType, SC_BUILD_QUEUE_EMPTY);
+    // The click point the suite computes, the same sum as a card slot.
+    Check("display 1's centre computes to x",
+          hdr.rootRect[0] + (slots[1].rect[0] + slots[1].rect[2]) / 2, 0 + (242 + 262) / 2);
+    Check("display 1's centre computes to y",
+          hdr.rootRect[1] + (slots[1].rect[1] + slots[1].rect[3]) / 2, 358 + (8 + 28) / 2);
+
+    // --- (b) THE OTHER DIRECTION: a full queue, nothing greyed ----------------
+    // Without this, (a)'s "two are greyed" proves nothing -- an oracle that always
+    // said GREYED would pass it.
+    WORD q5[SC_STATQ_SLOTS] = { PROBE, PROBE, PROBE, PROBE, PROBE };
+    BuildFakeStatusPane(q5, 0, false);
+    n = ScStatusSnapshot(&hdr, slots, SC_STATQ_SLOTS);
+    Check("with five queued, every icon is clickable", hdr.clickable, SC_STATQ_SLOTS);
+    Check("  and none reads GREYED", hdr.shown - hdr.clickable, 0);
+
+    // --- (c) an empty queue: the strip is up, nothing can be clicked ----------
+    WORD q0[SC_STATQ_SLOTS] = { SC_BUILD_QUEUE_EMPTY, SC_BUILD_QUEUE_EMPTY, SC_BUILD_QUEUE_EMPTY,
+                                SC_BUILD_QUEUE_EMPTY, SC_BUILD_QUEUE_EMPTY };
+    BuildFakeStatusPane(q0, 2, false);
+    n = ScStatusSnapshot(&hdr, slots, SC_STATQ_SLOTS);
+    Check("an empty queue still reports five icons", n, SC_STATQ_SLOTS);
+    Check("  none of which is clickable", hdr.clickable, 0);
+
+    // --- (d) a re-ordered child list is VISIBLE, not silently absorbed --------
+    // The engine takes the display index from the walk position and the payload from
+    // index - 2. If those ever disagree the suite must see it here.
+    BuildFakeStatusPane(q3, 3, true);
+    n = ScStatusSnapshot(&hdr, slots, SC_STATQ_SLOTS);
+    Check("the swapped list still yields five icons", n, SC_STATQ_SLOTS);
+    Check("display 1 now carries control index 4, not 3", slots[1].index, 4);
+    Check("  so `index == display + 2` is FALSE and a run can catch it",
+          (long long)(slots[1].index == slots[1].display + SC_STATQ_FIRST_CONTROL), 0);
+
+    // --- (e) an unreadable statUser is reported, not followed ------------------
+    BuildFakeStatusPane(q3, 3, false);
+    *(DWORD*)(DWORD_PTR)(FakeStatCtl(1) + SC_BINDLG_OFF_USER) = FAKE_CARD_BAD_VA;
+    unsigned failsBefore = g_cardReadFails;
+    n = ScStatusSnapshot(&hdr, slots, SC_STATQ_SLOTS);
+    Check("a bad statUser yields userOk=0", slots[1].userOk ? 1 : 0, 0);
+    Check("  and the reader refused it rather than faulting",
+          (long long)(g_cardReadFails > failsBefore), 1);
+    Check("  the other four icons still read", n, SC_STATQ_SLOTS);
+
+    // --- (f) a looped `next` terminates ---------------------------------------
+    BuildFakeStatusPane(q3, 3, false);
+    *(DWORD*)(DWORD_PTR)(FakeStatCtl(4) + SC_BINDLG_OFF_NEXT) = FakeStatCtl(0);
+    n = ScStatusSnapshot(&hdr, slots, SC_STATQ_SLOTS);
+    Check("a cyclic child list still returns (bounded walk)", n, SC_STATQ_SLOTS);
+
+    // --- (g) no strip at all ---------------------------------------------------
+    BuildFakeStatusPane(q3, 3, false);
+    {
+        // A dialog whose children carry no index 2: the strip is not up.
+        DWORD lead = FakeStatCtl(9);
+        *(DWORD*)(DWORD_PTR)(lead + SC_BINDLG_OFF_NEXT) = 0;
+        n = ScStatusSnapshot(&hdr, slots, SC_STATQ_SLOTS);
+        Check("no icon control means no slots, but the dialog still reports ok",
+              (n == 0 && hdr.ok) ? 1 : 0, 1);
+    }
+    *(DWORD*)FakeRt(SC_VA_STATDATA_DIALOG) = 0;
+    n = ScStatusSnapshot(&hdr, slots, SC_STATQ_SLOTS);
+    Check("a null status dialog reports not-ok, no slots", (n == 0 && !hdr.ok) ? 1 : 0, 1);
+
+    ScCardTestEnd();
+    VirtualFree(g_fake, 0, MEM_RELEASE);
+    g_fake = NULL;
+}
+
 int main(void) {
     // Unbuffered: this binary writes executable memory and drives a fake image, so the
     // interesting failure is a fault, and a faulting run must still say WHICH case it
@@ -2935,6 +3150,7 @@ int main(void) {
     ProdQueueTests();
     BuildingGroupTests();
     CardScanTests();
+    StatusStripTests();
     ExitLogTests();
 
     printf("\nhooktest: %d failure(s)\n", g_failures);
