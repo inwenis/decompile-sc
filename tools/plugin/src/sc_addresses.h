@@ -806,4 +806,126 @@
 #define SC_TECH_STRIDE_VANILLA   0x18u
 #define SC_TECH_STRIDE_BW        0x14u
 
+// ---------------------------------------------------------------------------
+// UPGRADES AND RESEARCH (task 029). Evidence: research/upgrade-queue.md, whose every
+// address carries how it was found; the committed instruction table is
+// research/data/upgrade-fields.tsv.
+//
+// A building researches ONE thing at a time because it has ONE FIELD for it. The two
+// fields below were derived from the two button conditions that read them -- which
+// cross-check each other, one requiring "idle" and the other requiring "busy":
+//   0x00428900  return unit->0xC9 != '='   (61)  -> show Cancel Upgrade
+//   0x004287D0  requires 0xC8 == ',' (44) AND 0xC9 == '=' (61) -> allow Lift Off
+// 61 and 44 are one past the last upgrades.dat / techdata.dat id, the same
+// one-past-the-end sentinel the build queue uses at 0xE4.
+//
+// THESE BYTES ARE A UNION ARM. 0x00469240 stores a CUnit* at +0xC8 for a unit that is
+// not a researching building, so every read must be gated on the BUILDING flag -- which
+// is what all three engine readers do.
+#define SC_CUNIT_OFF_RESEARCH_TIME     0xC6u  // u16, counts down once per frame
+#define SC_CUNIT_OFF_TECH_PROGRESS     0xC8u  // u8 techdata.dat id being researched
+#define SC_CUNIT_OFF_UPGRADE_PROGRESS  0xC9u  // u8 upgrades.dat id being researched
+#define SC_CUNIT_OFF_UPGRADE_LEVEL     0xCDu  // u8, the level being upgraded TO
+#define SC_TECH_NONE     44u   // 0x2C
+#define SC_UPGRADE_NONE  61u   // 0x3D
+#define SC_TECH_COUNT    44
+#define SC_UPGRADE_COUNT 61
+
+// CUnit+0xDC bits, from the guards the engine puts in front of the two fields above:
+// upgradeTick 0x004546A0 opens `flags & 2`, and the upgrade gate 0x0046DFC0 refuses with
+// reason 0x14 when `flags & 1` is clear.
+#define SC_UNIT_FLAG_BUILDING   0x2u
+#define SC_UNIT_FLAG_COMPLETED  0x1u
+
+// The LOCAL player id, as the two receive handlers read it -- `MOV EDI,[0x00512678]` at
+// 0x004C1B49 and 0x004C1BC9, and `CMP [ESI+0x4C], [0x00512678]` inside
+// cmdrecvCancelUpgrade. NOT the same global as SC_VA_ACTIVE_PLAYER_ID (0x0051267C), which
+// selNext 0x0049A850 multiplies by 12 to index the selection array; the two are adjacent
+// and were kept apart deliberately.
+#define SC_VA_LOCAL_PLAYER_ID  0x00512678u
+
+// The detour targets. Every one is an ENTRY-POINT verdict from HookProbe over
+// tools/ghidra/specs/upgrade-hooks.spec, with a relocation-safe patch window.
+//
+//   btnUpgradeCondition / btnTechCondition
+//       The CARD's own conditions -- 20-byte wrappers that marshal CL/EDX into the gate.
+//       Hooked INSTEAD of the gates themselves, which was the design's first choice: the
+//       gates have a third caller each in the building-AI range (0x00434670, 0x004345C0),
+//       and a computer player told a busy building is free would issue an upgrade that
+//       startUpgrade would then apply on top of the running one. The conditions have no
+//       CALL references at all -- the button table reaches them as DATA -- so hooking
+//       them touches the card and nothing else.
+//   cmdrecvUpgrade / cmdrecvTech
+//       __stdcall(const u8* cmd), RET 4; the id is cmd[1]; the acting building is the
+//       sole selected unit; the player is [0x00512678].
+//   upgradeTick / techTick
+//       The order handlers. EAX = CUnit*, void, bare RET. They count 0xC6 down and, on
+//       completion, clear 0xC9/0xC8 and raise the level / set the researched byte.
+//   cmdrecvCancelUpgrade / cmdrecvCancelTech
+//       0x33 / 0x31. NO arguments at all -- they resolve the building through the same
+//       selection test -- and both end in a bare RET, so a plain void(void) detour fits.
+#define SC_VA_BTN_UPGRADE_COND       0x00429450u
+#define SC_VA_BTN_TECH_COND          0x00429500u
+#define SC_VA_CMDRECV_UPGRADE        0x004C1B20u
+#define SC_VA_CMDRECV_TECH           0x004C1BA0u
+#define SC_VA_CMDRECV_CANCEL_UPGRADE 0x004BFFC0u
+#define SC_VA_CMDRECV_CANCEL_TECH    0x004C0070u
+#define SC_VA_UPGRADE_TICK           0x004546A0u
+#define SC_VA_TECH_TICK              0x004548B0u
+
+// The engine's own accept path, called at promotion time so that the ENGINE pays.
+// Conventions read straight off cmdrecvUpgrade's listing (0x004C1B3F..0x004C1B71):
+//   upgradeGate  __stdcall(unit) with BX = id, EDI = player  -> EAX, 1 = accept
+//   startUpgrade AL = id, ECX = unit -> EAX non-zero on success (and it PAYS)
+//   startTech    AL = id, EDX = unit -> EAX non-zero on success (and it PAYS)
+//   afterAccept  CL = order id, ESI = unit, void
+#define SC_VA_UPGRADE_GATE   0x0046DFC0u
+#define SC_VA_TECH_GATE      0x0046DE90u
+#define SC_VA_START_UPGRADE  0x00454A80u
+#define SC_VA_START_TECH     0x00454B70u
+#define SC_VA_AFTER_ACCEPT   0x00475310u
+#define SC_ORDER_UPGRADE  0x4Cu   // `MOV CL,0x4C` at 0x004C1B6F -- and the order the live
+                                  // probe measured on a researching Engineering Bay
+#define SC_ORDER_RESEARCH 0x4Bu   // `MOV CL,0x4B` at 0x004C1BEF
+
+// The four redraw globals both handlers write after a successful accept
+// (0x004C1B78..0x004C1B8F). SC_VA_STAT_DIRTY (0x0068C1F8) is already defined above.
+#define SC_VA_REDRAW_CARD    0x0068C1B0u  // u32
+#define SC_VA_REDRAW_CONSOLE 0x0068AC74u  // u8
+#define SC_VA_REDRAW_SEL_A   0x0068C1E8u  // u32, cleared
+#define SC_VA_REDRAW_SEL_B   0x0068C1ECu  // u32, cleared
+
+// Per-player upgrade levels, named off the two accessors whose whole bodies are the
+// index computation -- 0x004CE7A0 (current) and 0x004CE7F0 (max) -- and confirmed by the
+// same expression appearing verbatim in startUpgrade, upgradeRefund, the affordability
+// helper 0x0042D190, the time helper 0x00453F70 and requirement opcode 0xFF1F.
+#define SC_VA_UPGRADE_LEVEL      0x0058D2B0u  // u8[12][46]
+#define SC_VA_UPGRADE_MAX_LEVEL  0x0058D088u  // u8[12][46]
+#define SC_VA_UPGRADE_LEVEL_BW   0x0058F2FEu  // u8[?][15], upgrades 46..60 (base biased)
+#define SC_VA_UPGRADE_MAX_BW     0x0058F24Au
+#define SC_UPGRADE_STRIDE_VANILLA 0x2Eu  // 46
+#define SC_UPGRADE_STRIDE_BW      0x0Fu  // 15
+#define SC_UPGRADE_COUNT_VANILLA  46
+
+// "This PLAYER is already researching this UPGRADE / TECH, somewhere." Bitfields, set by
+// the two starts, cleared by the two ticks and the two cancels, tested by 0x004281B0 and
+// 0x00428240 which the gates call. This is the rule that keeps two buildings off the same
+// upgrade -- the plugin does not touch it, which is why queueing level N+1 behind level N
+// is refused (research/upgrade-queue.md 8.2).
+#define SC_VA_UPGRADE_INPROGRESS_BITS 0x0058F3E0u  // 8 bytes per player
+#define SC_VA_TECH_INPROGRESS_BITS    0x0058F230u  // 6 bytes per player
+#define SC_UPGRADE_BITS_STRIDE 8u
+#define SC_TECH_BITS_STRIDE    6u
+
+// Costs. An upgrade's is base + factor*currentLevel out of four u16 tables (0x0042D190,
+// 0x00454170 and 0x00453F70 all read the same pairs); a tech's is two flat u16 lookups
+// (startTech 0x00454B70 reads them inline). The plugin reads these ONLY to decide whether
+// the player can afford an item before handing it to the engine -- it never spends.
+#define SC_VA_UPGRADE_MINERAL_BASE   0x00655740u
+#define SC_VA_UPGRADE_MINERAL_FACTOR 0x006559C0u
+#define SC_VA_UPGRADE_GAS_BASE       0x00655840u
+#define SC_VA_UPGRADE_GAS_FACTOR     0x006557C0u
+#define SC_VA_TECH_MINERAL_COST      0x00656248u
+#define SC_VA_TECH_GAS_COST          0x006561F0u
+
 #endif // SC_ADDRESSES_H
