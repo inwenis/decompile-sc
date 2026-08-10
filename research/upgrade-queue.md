@@ -543,6 +543,32 @@ A level-headroom term (`running + queued + 1 <= maxLevel`) keeps the card honest
 stop at the ceiling instead of being queued and dropped at promotion. Dropping them would
 have been safe — no money moves — but it would have read as the feature losing them.
 
+### 7.6 `SC_VA_STAT_DIRTY` redraws the status area, NOT the command card
+
+Measured, at a cost of one in-game run. The plugin's first version asked for a redraw after
+queueing an item the way `sc_prodqueue` does — `*(BYTE*)0x0068C1F8 = 1` — and the card did
+not relay. The symptom was visible in the plugin's own counters before it was visible on
+screen: `unblocked=2` for a whole run in which the card layout should have evaluated the
+upgrade conditions many times over. The layout had run exactly once, right after the engine's
+own accept tail set its five globals, and the controls had held the buttons assigned then
+ever since — so at the cap the card went on offering an upgrade the plugin would have had to
+refuse.
+
+The five globals both handlers write after a successful accept (`0x004C1B78`…`0x004C1B8F`)
+are the complete set, and writing all five is what relays the card:
+
+```
+0x0068C1B0 = 1   (u32)   the card
+0x0068AC74 = 1   (u8)
+0x0068C1F8 = 1   (u8)    the status area -- SC_VA_STAT_DIRTY
+0x0068C1E8 = 0   (u32)
+0x0068C1EC = 0   (u32)
+```
+
+So anything that changes what the card should OFFER — as opposed to what the status area
+should draw — has to write `0x0068C1B0` as well. This is a general fact about the engine,
+not a fact about this feature.
+
 ---
 
 ## 8. Known limitations
