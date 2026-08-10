@@ -399,6 +399,12 @@ static void PollMarker(void) {
     // dump for the same reason the world scan does -- the engine's own view first.
     ScCardScan(g_lastMarker);
 
+    // Task 028: and the status pane's production-queue strip, on the same switch. The
+    // card and the strip are the two dialogs a player can click to cancel a queued
+    // unit -- the card's slot-9 button sends "cancel the LAST item", the strip's five
+    // icons address a SPECIFIC one -- so a run that reads one wants the other beside it.
+    ScStatusScan(g_lastMarker);
+
     // Task 015: a marker is the driver saying "look now", so it is also the trigger for
     // the per-unit state dump. Driving it off the marker rather than off a timer is what
     // makes an unattended assertion possible at all -- the test writes a marker, waits for
@@ -590,7 +596,8 @@ static DWORD WINAPI ObserverThread(LPVOID) {
           "own per-player unit lists, installs no hook and works in observe mode)",
           g_worldScan ? 1 : 0);
     ScLog("OBSERVER cardScan=%d (%%SCPLUGIN_CARDSCAN%%; read-only walk of the command-card "
-          "dialog 0x0068C148, installs no hook and works in observe mode)",
+          "dialog 0x0068C148 AND the status pane's queue strip 0x0068C1F0, installs no "
+          "hook and works in observe mode)",
           ScCardEnabled() ? 1 : 0);
 
     Snapshot prev;

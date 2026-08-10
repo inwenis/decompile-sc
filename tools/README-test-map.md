@@ -509,6 +509,21 @@ Three building names were added to the unit table for that fixture: `command-cen
 to test with — it trains SCVs at 50 minerals and 1 supply each **and** provides 10 supply of its
 own, so a queue of nine needs no Supply Depot to have landed on buildable ground.
 
+A fourth was added by task 028: `nexus` (154), the cancel fixture. Its card carries the Cancel
+button at slot 9 with no other button sharing that slot, it trains Probes (50 minerals, 1 supply —
+the same arithmetic as an SCV), it supplies 9 psi of its own, and it needs no Pylon, which a
+Gateway would. (A Terran producer would have done too: its slot 9 is shared with Land and Lift Off,
+but those conditions are complementary to Cancel's, so the control shows Cancel exactly while
+something is queued — `research/production-queue.md` §8.3, measured in game after the button table
+suggested otherwise.)
+
+```powershell
+# task 028's cancel fixture: two Nexuses, 3000 minerals
+./tools/make-test-map.ps1 -UnitCount 2 -UnitType nexus -Player 0 -Race protoss `
+    -ClearPlayerUnits -GridSpacing 160 -StartingMinerals 3000 -StartingGas 1000 `
+    -OutputPath 'C:\sc-work\1161-base\Maps\BroodWar\00-t028\production-queue.scx'
+```
+
 ## Known limitations
 
 - Unit placement is a simple grid centred on the start location's pixel
@@ -518,9 +533,9 @@ own, so a queue of nine needs no Supply Depot to have landed on buildable ground
   overlapping a cliff edge) -- worth an eyeball check if you swap templates.
 - `-UnitType` and `-EnemyType` have a handful of built-in names between them
   (Marine, Ghost, Medic, Goliath, Siege Tank (Tank Mode), Zergling, Hydralisk,
-  Ultralisk, Zealot, Dragoon, Lurker, and the three task-025 buildings
-  Command Center, Supply Depot and Barracks); any other unit needs its
-  units.dat integer id passed directly.
+  Ultralisk, Zealot, Dragoon, Lurker, the three task-025 buildings
+  Command Center, Supply Depot and Barracks, and task 028's Nexus); any other
+  unit needs its units.dat integer id passed directly.
 - A template that uses the negative-size CHK chunk trick (map protection) is
   refused outright: this tool cannot re-serialise one faithfully, and would
   rather fail than quietly change what the game reads.

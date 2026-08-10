@@ -36,6 +36,11 @@ Specs, so the runs are repeatable: `tools/ghidra/specs/production-{functions,cal
   BELOW five rather than waiting for an over-cap command that never arrives. This was measured in
   a live game and it contradicts what §4.1 of this document said before that run; the correction
   and its evidence are in §4.1. It is the single fact the shipped design turns on.
+* **Cancelling has two controls, not one**, and they reach different halves of the design: a
+  **queue icon** in the status pane sends `{0x20, displayIndex}` and the ENGINE refunds it; the
+  card's **Cancel button** sends `{0x20, 0xFE}` — "the last queued item" — which is the plugin's
+  while it holds any, and is the only wire form that can reach an overflow item at all. Both are
+  now proved in a real game, refund by refund. §8.
 
 ---
 
@@ -566,6 +571,11 @@ mid-game cannot strand paid-for items.
    `PRODQ` log line is the read-back oracle instead (and is what the in-game test asserts on).
    Extending the production panel would mean a second dialog splice next to task 017's, which is a
    larger and riskier change than this feature; it is the obvious follow-up.
+
+   **The same limit applies to INPUT, which task 028 measured rather than inferred**: those five
+   icons are also the only queued items a click can address (§8.1), so an overflow item can be
+   cancelled only through the card's Cancel button, which always means "the last one" — tail-first,
+   one press each. That is enough to reach every held item, and it is what a player actually has.
 2. **Train (`0x1F`) only.** Unit Morph, Train Fighter and Building Morph keep vanilla's five (§4.5).
 3. **A one-frame ordering window.** If a slot frees in the same frame a Train command is processed,
    the engine can take that slot for the new item ahead of an older held item. The plugin closes
@@ -579,7 +589,284 @@ mid-game cannot strand paid-for items.
 
 ---
 
-## 8. Reproducing this
+## 8. Cancelling a queued unit — which control, and why there are two (task 028)
+
+§4.4 established what the *receiver* does with a Cancel Train command. This section
+establishes what, on the client, can ever send one — because task 025 proved its cancel path
+offline only, and "a player-input feature is unproven until the wire has been watched" is a rule
+this repo wrote after being wrong about exactly that (§4.1's correction). Everything in §8.1–8.3
+is read out of the binary; §8.4–8.5 is one live run.
+
+**There are exactly two controls, they send different payloads, and each reaches a different
+half of the plugin's design.** Neither is where a first guess puts it.
+
+### 8.1 The queue strip is a dialog, and its five icons are controls 2..6
+
+`data/command-ids.tsv` lists two functions that build a `0x20` command: `0x00423490` and
+`0x004C01A0`. Neither is a caller of anything interesting on its own, so the search was done the
+other way round — over the **117** `E8 rel32` call sites that reach `queueCommand` (`0x00485BD0`),
+decoding the `MOV byte ptr [...], imm8` that each one stores into its buffer first
+(`work/scratch/028/cmdsites.py`, a byte scan over `.text` with the PE section table parsed from the
+same file). Four sites store `0x20`, and only **one of them is inside the status-area module**:
+
+```
+call 0x004573E9  cmdByte=0x20   ; in FUN_004573A0
+call 0x004234C4  cmdByte=0x20   ; the card button's action, §8.2
+call 0x004C01B4  cmdByte=0x20   ; FUN_004C01A0 -- see below
+call 0x004C01D4  cmdByte=0x20   ; the 0x1F twin next to it
+```
+
+`0x004C01A0` is a `CMDACT_CancelTrain(AX)` that **nothing calls**: an `E8` scan for its address
+across `.text` and a dword scan for it across the whole image both return zero hits. It is dead
+code, and no claim here rests on it.
+
+`FUN_004573A0` is the live one. It is `__stdcall(BinDlg* control)`, called at `0x00457F75` from the
+USER case of `0x00457F30` — which is entries `[1..5]` of the 44-entry per-index interact table at
+`0x00504AF0` that [`hud-selection-row.md`](hud-selection-row.md) §2 already evidenced, i.e. the
+interact bound at CREATE time to **control ids 2..6**. Decompiled, its whole body is a switch on
+the control's own index:
+
+```c
+void FUN_004573a0(BinDlg* ctrl) {
+  if (isReplay /*0x006D0F14*/ != 0) return;
+  switch (ctrl->index) {                 // ctrl+0x20
+    case 2: case 3: case 4: case 5: case 6:
+        queueCommand({0x20, ctrl->index - 2}, 3);    // <- the five queue icons
+    ...
+```
+
+with the payload visible in the listing:
+
+```
+004573D6  ADD  ECX,-0x2                ; ECX = control->index
+004573D9  MOV  word ptr [EBP + 0x9],CX ; the payload
+004573E5  MOV  byte ptr [EBP + 0x8],0x20
+004573E9  CALL 0x00485bd0              ; queueCommand(buf, 3)
+```
+
+So **clicking queue icon k sends `{0x20, k}`**, which §4.4's third branch turns into
+`cancelBuildQueueSlot(EAX = k)` — refund, then compact.
+
+The icons are filled by `queueLayout` (`0x004268D0`), the layout the per-unit-type status act
+`0x00427890` dispatches to for a producing building (`0x005193A0 + unitId*0xC`, the table
+[`hud-selection-row.md`](hud-selection-row.md) §4.2 named; rows 106, 111, 154 and 160 all carry the
+same cond/act pair `0x00425180` / `0x00427890`). Its loop is the whole data model:
+
+```c
+for (ctrl = firstChildWithIndex(2), k = 0; ctrl && k < 5; ctrl = ctrl->next, ++k) {
+    type = portraitUnit->buildQueue[(portraitUnit->buildQueueSlot + k) % 5];   /* +0x98, +0xA4 */
+    if (type == 0xE4) { statUser->icon = k + 6; statUser->mode = 6; disable(ctrl); }  /* 0x00418640 */
+    else              { statUser->icon = type;  statUser->mode = 3;
+                        statUser->type = type;  enable(ctrl); }                       /* 0x00418E00 */
+}
+```
+
+Three facts fall out, and the test suite asserts all three from memory:
+
+1. **The display index is head-relative**: icon k shows `buildQueue[(head + k) % 5]`, which is the
+   same arithmetic `cancelBuildQueueSlot` does with the payload — so the icon and the slot it
+   cancels are the same item by construction.
+2. **An empty queue slot's icon is DISABLED**, by the same `0x00418640` that greys a command-card
+   button. Both of the engine's input paths refuse that bit ([`command-card.md`](command-card.md)
+   §5), so *how many items the player can click* is a read of five flag words.
+3. **The engine takes the display index from the walk POSITION and the payload from
+   `index - 2`** — two numbers it never checks against each other. The read-back reports both, and
+   the suite asserts `index == display + 2` rather than assuming it.
+
+### 8.2 The card's Cancel button is the only thing that can send `0xFE`
+
+The other live emitter is the button record at `0x00517340`, dumped from the file image:
+
+```
+00517340  slot=9  icon=0x00EC  cond=0x00428530  act=0x00423490  cparam=0  aparam=0x00FE  name=0x02B5
+```
+
+`0x00423490` is four instructions: it stores `0x20` and the button's `actionParam` (`CX`, loaded by
+the click path at `0x00459918`) and calls `queueCommand`. So the button sends **`{0x20, 0xFE}`** —
+"cancel the last queued item" — and its condition is one comparison:
+
+```c
+bool FUN_00428530(CUnit* u) { return u->buildQueue[u->buildQueueSlot % 5] < 0x6A; }
+```
+
+i.e. "the head slot holds a real unit type". Nothing else in the binary emits `0xFE`.
+
+**That matters because `0xFE` is the plugin's only door.** The plugin holds the *tail* of the
+logical queue, so the only cancel that is legitimately its own is "cancel the last item" (§6.4);
+a payload of `0`…`4` names a slot in the engine's ring and is passed straight through. If no
+control can send `0xFE`, the plugin's refund path — its one resource write anywhere — is
+unreachable, and an offline proof of it proves nothing about a real game.
+
+### 8.3 On a Terran producer that slot is SHARED — and the button table alone gets it wrong
+
+A card control takes the **first** button whose condition survives, and slots never shift
+([`command-card.md`](command-card.md) §3.2). So a slot-9 button that sorts ahead of Cancel in its
+buttonset hides it whenever its own condition holds. Scanning all 250 buttonsets for the record
+(`work/scratch/028/cancelbtn.py`):
+
+| buttonset | what sits at slot 9 ahead of Cancel |
+|---|---|
+| 72 (Carrier), 81, 82, 83, 108, 154 (Nexus), 155, 160 (Gateway), 167 | — nothing |
+| 106 (Command Center), 111 (Barracks), 113 (Factory), 114 (Starport), 130 | icon `0x011B` cond `0x004283F0` (Land), then icon `0x011A` cond `0x004287D0` (Lift Off) |
+
+**This document originally concluded from that table that a Terran producer can never show the
+Cancel button. The live card read says otherwise, and the table was not enough to see why.** Both
+readings are recorded here because the shape of the mistake is the point: `0x004283F0` needs the
+building **not** grounded (`CUnit+0xDC & 0x2` clear) and `0x004287D0` needs it grounded, which
+looks like a partition that always leaves one of them standing. It is not, because Lift Off's
+condition has three more terms:
+
+```c
+bool btnLiftOffCond(CUnit* u) {           /* 0x004287D0 */
+    return (u->flags & 2)                 /* a grounded building */
+        && busy(u) == 0                   /* 0x00401500 */
+        && u->[0xC8] == 0x2C && u->[0xC9] == 0x3D;
+}
+```
+
+and `busy` (`0x00401500`) is, in its first term, the *same test the Cancel button makes*:
+
+```c
+bool busy(CUnit* u) {                     /* 1 = this building is producing */
+    return !( u->buildQueue[u->buildQueueSlot % 5] == 0xE4 && ...two morph/build cases... );
+}
+```
+
+`btnCancelTrainCond` is `queue[head % 5] < 0x6A`; `busy` is `queue[head % 5] != 0xE4`. **The two
+conditions are complementary**, so the control does not belong to one of them — it changes hands:
+Lift Off while the queue is empty, Cancel the moment anything is queued. Which is the sensible
+game rule (you cannot lift off mid-production) arrived at from the wrong end.
+
+Measured, on the same control record, in one run (`CARD` lines, the Command Center this suite
+also places):
+
+```
+idle     slot=9 enabled ctrl=0x04A5A20A icon=0x011A button=0x00517FC4 cond=0x004287D0 act=0x00423230 aparam=0
+training slot=9 enabled ctrl=0x04A5A20A icon=0x00EC button=0x00517FD8 cond=0x00428530 act=0x00423490 aparam=254
+```
+
+Same `ctrl`, two buttons, and the second is the one that sends `0xFE`.
+
+**So the Cancel button is reachable on every production building, exactly when it is useful**, and
+the plugin's overflow-cancel path has a vanilla control everywhere rather than only on Protoss
+producers. Task 028's fixture is a **Nexus** anyway — it carries Cancel at slot 9 unshared, trains
+Probes on the same 50-minerals-1-supply arithmetic as an SCV, and needs no Pylon — but that is now
+a convenience, not a necessity, and the suite reads the Terran card in the same run to keep this
+section honest.
+
+The transferable half is the one [`command-card.md`](command-card.md) §6.4 already tabulates: a
+button table says which buttons *exist*; only the running dialog says which one a control *holds*.
+This is the sixth time in this repo that a static answer to a "what does the player see" question
+has been wrong, and the first where the check that caught it was already built into the run.
+
+### 8.4 What the player actually sees, read from the dialogs
+
+`sc_card.cpp`'s second walk (`ScStatusSnapshot`, `STATQ` lines, same `-CardScan 1` switch as the
+card) reports the strip the way §8.1 describes it. From the live run, with the plugin holding four
+items over the engine's five:
+
+* the strip holds **five** icon controls, ids 2..6, every one `index == display + 2`;
+* with a **nine-item logical queue** all five read `enabled` and every one draws a Probe (`0x040`)
+  that its own ring slot holds — **the four the plugin is holding are not drawn at all**;
+* with **three** queued, exactly three read `enabled` and the other two read `GREYED` with `0xE4`
+  behind them.
+
+So the answer to "can the UI address an overflow item?" is **no, not by the strip** — it draws the
+ring, five slots, and nothing else. What the player sees is a queue that stops at five, and what
+they can click is exactly the items in it. The **card's Cancel button** is the control that reaches
+the rest: it means "the last item", the plugin owns that item, and pressing it repeatedly walks the
+logical queue down tail-first. That is the same limitation §7.1 already stated about drawing, now
+stated about *input* as well, and it is the honest answer rather than a workaround.
+
+### 8.5 The proof, in a real game
+
+`tools/plugin/test-production-queue.ps1` (extended, not forked) drives both cases unattended, on a
+fixture of two Nexuses and one Command Center, all the human player's. Every number below is read
+from the building's own `CUnit+0x98`, the player's resource global, or the engine's command funnel
+— never from the screen. Both clicks land on a point computed from the live control rect.
+
+**Case 1 — an item the PLUGIN holds.** Twelve Train clicks put nine commands on the wire, leaving
+`engineLen=5 engine=[0x040,0x040,0x040,0x040,0x040] overflow=4 logical=9 minerals=2550`
+(3000 − 9 × 50). The card's slot 9 then reads `cond=0x00428530 act=0x00423490 aparam=254 enabled`
+— it read *no Cancel button at all* on the same walk before the burst, which is the negative half
+of the pair. One click at its computed centre:
+
+```
+CMD id=0x20 len=3 bytes=[20 FE 00]
+PRODQEV cancel-last unit=0x00623D08 type=0x040 overflowLeft=3 back=50/0
+```
+
+logical `9 → 8`, minerals `2550 → 2600` — **exactly one Probe's 50 back, once**. The plugin's
+`cancelled` counter goes to 1 and its `refunded` (building-gone) counter stays 0.
+
+**Case 2 — an item in the ENGINE's ring.** After the queue drains, three more clicks leave
+`engineLen=3 overflow=0` with the plugin tracking nothing at all — so a cancel now *cannot* be the
+plugin's. The strip reads three icons `enabled` and two `GREYED` with `0xE4` behind them; the icon
+for display 1 carries control index 3. One click at its computed centre:
+
+```
+CMD id=0x20 len=3 bytes=[20 01 00]
+```
+
+the ring goes `3 → 2` with both survivors still Probes, minerals `2450 → 2500`, and the **plugin's
+cancel counter does not move** — the engine refunded it, through `cancelBuildQueueSlot`, exactly as
+§6.4 says it should.
+
+**Neither case double-refunds and neither loses an item.** The run's detach line reads
+
+```
+PRODQSTATS captured=5 promoted=4 cancelled=1 refunded=0 refusedFull=0 refusedCost=0
+           mineralsSpent=0 mineralsRefunded=50 gasSpent=0 gasRefunded=0 tracked=0
+```
+
+`mineralsSpent=0` is the pay-once claim from the plugin's side; `mineralsRefunded=50` is one
+refund, not two. `captured=5` is worth reading twice: the plugin took **five** items back over the
+run though only four were ever over the cap, because cancelling one freed room under the maximum
+and the next rebalance took another out of the ring. `promoted = captured − cancelled` (4 = 5 − 1)
+is the conservation law for its list, and the suite asserts it in that form rather than against a
+literal, which is what made the extra capture visible instead of a failure.
+
+And the money reconciles at every point where all three terms are known — `spent = built + queued
++ cancelled`, which is the same number as `accepted`: after the burst 450 = 9 × 50; after the
+plugin's cancel 400 = (9 − 1) × 50; after the engine's 500 = (12 − 2) × 50. **`built` is counted
+from the wire and not from the unit list, and that is a finding rather than a convenience**: the
+engine creates the unit when production *starts* (§4.3), so a unit being built is in the world and
+in the ring at the same time and adding the two double-counts it. The first run of this arm read
+"1 built + 9 queued + 1 cancelled" for nine accepted items and failed its own identity by exactly
+that one.
+
+### 8.6 Reproducing §8
+
+`peek.py`, `cmdsites.py` and `cancelbtn.py` are throwaway PE-offset readers under
+`work/scratch/028/` (gitignored, like `work/scratch/025/peek.py` in §9): each parses the PE section
+table out of the same file it reads, so every VA→offset conversion is derived rather than assumed,
+and none of their output is committed.
+
+```powershell
+# the two live emitters, and the dead one: every queueCommand call site with the command
+# byte it stores first
+python work/scratch/028/cmdsites.py C:\sc-work\1161-base\StarCraft.exe 0x20
+python work/scratch/028/peek.py     C:\sc-work\1161-base\StarCraft.exe callers 0x004C01A0   # empty
+python work/scratch/028/peek.py     C:\sc-work\1161-base\StarCraft.exe refs    0x004C01A0   # empty
+
+# the button record, the buttonsets that carry it, and what masks it
+python work/scratch/028/peek.py      C:\sc-work\1161-base\StarCraft.exe button 0x00517340
+python work/scratch/028/cancelbtn.py C:\sc-work\1161-base\StarCraft.exe 0 200
+
+# the decompiles quoted above. 0x00457F30, 0x00425180 and 0x00427890 are reachable only
+# through data tables, so auto-analysis leaves them undefined -- recover them first.
+./tools/ghidra/sweep.ps1 -Mode Run -ProjectDir work/scratch/ghidra-sweep -ProgramName StarCraft.exe `
+    -Script DisassembleAt.java `
+    -ScriptArgs work/scratch/028/recover.tsv, tools/ghidra/specs/cancel-code-recovery.spec
+foreach ($s in 'cancel-controls','cancel-controls-2') {
+  ./tools/ghidra/sweep.ps1 -Mode Run -ProjectDir work/scratch/ghidra-sweep -ProgramName StarCraft.exe `
+      -Script DecompileMany.java -ScriptArgs "work/scratch/028/decomp/index-$s.tsv", "tools/ghidra/specs/$s.spec", 180
+}
+```
+
+---
+
+## 9. Reproducing this
 
 ```powershell
 # once: import + analyse into a persistent project (~3 min)
