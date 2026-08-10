@@ -2,10 +2,12 @@
 <#
 .SYNOPSIS
 End-to-end, UNATTENDED proof that a production building can hold MORE THAN FIVE queued
-items -- with the queue read out of the building's own memory, not off the screen, and
-with the player's minerals accounted to the last one.
+items AND that CANCELLING one gives back exactly its cost -- both for an item the engine
+is holding and for an item the PLUGIN is holding -- with every number read out of the
+building's own memory, not off the screen.
 
 Task 025, from the user's words: "enable queuing more then 5 units."
+Task 028, from the user's words: "why is there no test that cancels a unit?"
 
 .DESCRIPTION
 The engine's queue is `u16 buildQueue[5]` at `CUnit+0x98`, a five-slot ring whose head is
@@ -33,6 +35,49 @@ memory reads:
      handing it over moves money, so a second payment would show up as a drop while the
      queue drains. The plugin's own `mineralsSpent` counter is asserted to be ZERO.
 
+TASK 028 ADDS THE OTHER DIRECTION: CANCELLING, IN A REAL GAME, BOTH WAYS
+
+Nothing had ever clicked cancel in a running game -- task 025 proved the cancel path
+offline only, which AGENTS.md's own rule ("a player-input feature is unproven until the
+wire has been watched") says is not proof. There are two cases and they take different
+code, so this suite drives both, with the CONTROL LOCATED BY READING THE DIALOG THAT
+OWNS IT (research/production-queue.md 8):
+
+  4. AN ITEM THE PLUGIN HOLDS. The card's slot-9 Cancel button sends {0x20, 0xFE},
+     "cancel the LAST queued item" -- which, while the plugin holds the tail of the
+     logical queue, is the plugin's item and not the engine's. The suite reads the card,
+     asserts slot 9 really carries that button (action 0x00423490, actionParam 254) and
+     is not greyed, clicks the centre computed from the live control rect, and then
+     requires: one `CMD id=0x20` with payload 0xFE on the wire, the plugin's own
+     `cancel-last` event, the LOGICAL queue one shorter, minerals up by exactly one
+     unit's cost, and the plugin's refund counter up by exactly that -- ONCE.
+  5. AN ITEM THE ENGINE'S RING HOLDS. That is a different control: the five icons of the
+     PRODUCTION QUEUE STRIP in the status pane (statdata dialog, control ids 2..6). A
+     click on icon k sends {0x20, k} and the engine's own cancelBuildQueueSlot refunds
+     it. The suite reads the strip, clicks the icon for display index 1, and requires the
+     engine's ring to be one shorter with minerals up by one unit's cost -- and the
+     PLUGIN to have done nothing at all (its `cancelled` counter stays where it was).
+  6. THE TOTALS RECONCILE, from memory: spent = built + queued + cancelled, at every
+     point where all four are known, so a double refund or a lost item cannot hide
+     inside a number that merely looks plausible.
+
+WHY THE FIXTURE IS A NEXUS, AND WHAT THE FIRST RUN CORRECTED ABOUT THAT
+
+The fixture is a Protoss Nexus because slot 9 of its buttonset carries the Cancel button
+with nothing ahead of it, while every Terran producer's slot 9 is SHARED with Land and
+Lift Off -- and a card control takes the first button whose condition survives, slots
+never shifting. Reading the button table alone, that looked like it made the Cancel button
+unreachable on a Command Center, which is why this suite trains Probes rather than SCVs.
+
+THE FIRST RUN SHOWED THAT WAS WRONG, which is exactly what reading a dialog instead of
+reasoning about a table is for. Lift Off's condition (0x004287D0) requires the "is this
+building busy" helper 0x00401500 to return 0, and that helper returns 1 precisely when the
+head slot holds a real unit type -- the same thing the Cancel button's own condition tests.
+The two are complementary: the control shows Lift Off while the queue is empty and Cancel
+the moment anything is queued. The suite now asserts that pair in game on the Command
+Center it also places, and the Nexus stays as the fixture because the arms are written for
+it and it is proved (research/production-queue.md 8.3).
+
 WHY THE RESULT CANNOT BE FAKED
 
   * The queue length is read from `CUnit+0x98` on the game's side of the wire. The plugin
@@ -54,6 +99,13 @@ field and Use Map Settings hands out none, so task 025 added `--starting-mineral
 the generator's own validation proves from the bytes that the trigger carries no
 game-ending action.
 
+MEASUREMENT WINDOWS. A cancel is measured across a window in which a queued unit may
+also FINISH, and a finished unit shortens the queue by one without moving a single
+mineral. That confound is not tolerated and not merely hoped against: every cancel arm
+counts the units that exist before and after, and asserts the queue dropped by
+`1 + completions` while minerals rose by exactly one unit's cost. So a completion inside
+the window changes what the assertion expects instead of quietly passing or failing it.
+
 .EXAMPLE
 ./tools/plugin/test-production-queue.ps1
 
@@ -66,20 +118,29 @@ param(
     [string]$LogPath = 'C:\sc-work\logs\025\production-queue.log',
     [string]$ShotDir = 'C:\sc-work\logs\025\production-frames',
     [string]$FixtureDir,
-    # How many times the Train hotkey is pressed. Deliberately MORE than -QueueMax, so the
+    # How many times the Train button is clicked. Deliberately MORE than -QueueMax, so the
     # cap refusal is exercised rather than assumed absent.
     [int]$Clicks = 12,
     # The plugin's total logical queue length, the engine's five included. 9 = 5 engine +
-    # 4 plugin, which is both comfortably over the vanilla cap and inside the 10 supply a
-    # lone Command Center provides -- so the fixture needs no Supply Depot to be placeable
-    # for the run to mean anything.
+    # 4 plugin, which is both comfortably over the vanilla cap and inside the 18 psi two
+    # Nexuses provide -- so the fixture needs no Pylon to be placeable for the run to mean
+    # anything.
     [int]$QueueMax = 9,
+    # The ENGINE-ring cancel arm's queue: small enough that the plugin holds NOTHING
+    # (below SC_PRODQ_ENGINE_HOLD), which is what makes that arm the engine's own path
+    # with the plugin passing the command straight through.
+    [int]$EngineArmQueue = 3,
+    # Which queue icon that arm clicks. 1, not 0: display 0 is the item already BUILDING,
+    # whose refund the engine takes down a different branch (0x00468280 rather than
+    # refundByType). Both refund the same cost; this arm is about a queued item.
+    [int]$EngineArmDisplay = 1,
     [int]$StartingMinerals = 3000,
     [int]$StartingGas = 1000,
-    # Long enough for nine SCVs, from the first press to the last unit existing. One SCV is
-    # 20 game seconds; a single-player custom game runs at Fastest, so ~9-13 real seconds
-    # each, and the measured rate is ~16s per unit including the marker round trip. 300s
-    # leaves room, and the drain loop exits as soon as the LOGICAL queue is empty.
+    # Long enough for nine Probes, from the first click to the last unit existing. One
+    # Probe is 20 game seconds; a single-player custom game runs at Fastest, so ~9-13 real
+    # seconds each, and the measured rate is ~16s per unit including the marker round
+    # trip. 300s leaves room, and the drain loop exits as soon as the LOGICAL queue is
+    # empty.
     [int]$DrainTimeoutSec = 300,
     [switch]$KeepOpen
 )
@@ -92,14 +153,49 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 
 $failures = 0
 $step = 0
+# How many items this run has cancelled so far. Every later expectation is written
+# against it rather than against a literal, so the two cancel arms cannot drift out of
+# step with the counts the drain and the reconciliation expect.
+$script:cancels = 0
+# ... and how many of those the PLUGIN served (as opposed to the engine). Only the
+# plugin's own refund shows up in its stats line.
+$script:pluginCancels = 0
+# How many Train commands the ENGINE has accepted so far, counted on its own command
+# funnel. Every one of them was paid for there, so this is the run's ledger: see
+# Assert-Reconciles for why it is counted here and not derived from the unit list.
+$script:accepted = 0
 
 # Pinned constants, asserted rather than reported.
-$CC_TYPE   = 106          # units.dat 106, richchk UnitId 'Terran Command Center'
-$SCV_TYPE  = 7            # units.dat 7,   richchk UnitId 'Terran SCV'
-$SCV_COST  = 50           # minerals; asserted against the run's own arithmetic below
-$TRAIN_KEY = 0x53         # 'S', the Command Center command card's Train SCV hotkey
-$TRAIN_CMD = '0x1F'       # research/data/command-opcodes.tsv
+$NEXUS_TYPE = 154         # units.dat 154, richchk UnitId 'Protoss Nexus'
+$CC_TYPE    = 106         # units.dat 106, richchk UnitId 'Terran Command Center'
+$PROBE_TYPE = 64          # units.dat 64,  richchk UnitId 'Protoss Probe'
+$PROBE_COST = 50          # minerals; asserted against the run's own arithmetic below
+$TRAIN_CMD  = '0x1F'      # research/data/command-opcodes.tsv
+$CANCEL_CMD = '0x20'      # same table: Cancel Train
 $ENGINE_SLOTS = 5         # research/production-queue.md 2.3
+
+# The card's Train button, read out of buttonset 154 in the file image
+# (work/scratch/028/peek.py): slot 1, condition 0x00428E60, action 0x004234B0, and
+# actionParam = the unit type it trains. The suite CLICKS this button at the centre
+# computed from the live control rect rather than pressing a guessed hotkey letter.
+$TRAIN_ACT   = '004234B0'   # as the card read-back reports it: uppercase hex, no 0x
+$TRAIN_SLOT  = 1
+# The card's Cancel button: slot 9, condition 0x00428530 ("the head slot holds a real
+# type"), action 0x00423490, actionParam 0xFE -- "cancel the LAST queued item", the one
+# wire form the plugin can be asked to serve for an item it is holding.
+$CANCEL_ACT    = '00423490'
+$CANCEL_SLOT   = 9
+# The button that SHARES slot 9 with Cancel on every Terran producer: Lift Off (record
+# 0x00517FC4, condition 0x004287D0, action 0x00423230). The two conditions are
+# complementary -- Lift Off's requires the building NOT to be busy producing, Cancel's
+# requires it to have something at the head of its ring -- so the control swaps between
+# them, which the Command Center arm reads in both states.
+$LIFTOFF_ACT   = '00423230'
+$CANCEL_APARAM = 254
+# The status pane's queue strip: five controls, ids 2..6, one per display index, and a
+# click on display k emits {0x20, k} (research/production-queue.md 8.1).
+$STATQ_FIRST_CONTROL = 2
+$STATQ_SLOTS         = 5
 
 $ENGINE_HOLD = 4          # SC_PRODQ_ENGINE_HOLD -- what the plugin leaves the ring at
 # At the cap the plugin stops taking items back, so the ring is left FULL and the client
@@ -110,7 +206,7 @@ $expectNotSent   = $Clicks - $QueueMax
 if ($expectOverflow -lt 1) { throw "test: -QueueMax must exceed the engine's $ENGINE_SLOTS slots." }
 if ($expectNotSent -lt 1) { throw 'test: -Clicks must exceed -QueueMax, or the cap is never exercised.' }
 
-if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t025' }
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t028' }
 $mapDir = $FixtureDir
 $mapName = 'production-queue.scx'
 $mapPath = Join-Path $mapDir $mapName
@@ -146,6 +242,115 @@ function Step {
 $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
 function Get-World { param([string]$Tag, [int]$TimeoutSec = 20)
     Get-ScWorldState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -TimeoutSec $TimeoutSec }
+
+# The two dialog read-backs, on the same marker channel. Neither clicks anything and
+# neither needs a hook: they walk the card (0x0068C148) and the status pane (0x0068C1F0)
+# and report what each control holds -- which is the only way this repo is allowed to
+# claim anything about a dialog (AGENTS.md, "read a dialog's CONTENT from memory").
+function Get-Card { param([string]$Tag, [int]$TimeoutSec = 20)
+    Get-ScCardState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -TimeoutSec $TimeoutSec }
+function Get-StatusQueue { param([string]$Tag, [int]$TimeoutSec = 20)
+    Get-ScStatusQueue -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -TimeoutSec $TimeoutSec }
+
+# How many of the trained type player 0 owns right now. The cancel arms need it because a
+# queued unit can FINISH inside the measurement window, which shortens the queue by one
+# without moving a mineral -- so the expected drop is `1 + completions`, and completions
+# is counted rather than assumed to be zero.
+function Get-TraineeCount {
+    param([string]$Tag)
+    $w = Get-World $Tag
+    @($w.Units | Where-Object { $_.Type -eq $PROBE_TYPE -and $_.Player -eq 0 }).Count
+}
+
+# One cancel, measured end to end. `Do` is the click; everything either side of it is the
+# evidence. Returns the before/after readings so a caller can assert the case-specific
+# parts (which counter moved) on top of the two that are common to both cases: the
+# LOGICAL queue lost exactly one item, and the player got exactly one unit's cost back.
+function Invoke-CancelAndMeasure {
+    param(
+        [Parameter(Mandatory)][string]$Tag,
+        [Parameter(Mandatory)][scriptblock]$Do,
+        # The payload byte this click must put on the wire: 0xFE for "the last queued
+        # item", or a display index for one queue icon. Mandatory, because THE WIRE IS
+        # ASSERTED BEFORE ANY REFUND CLAIM IS MADE -- AGENTS.md's rule from task 025, whose
+        # first design was inert and whose offline proof said otherwise. If the command
+        # never went out, nothing below it means anything and the run says so first.
+        [Parameter(Mandatory)][int]$ExpectPayload,
+        [int]$SettleSec = 3
+    )
+    $unitsBefore = Get-TraineeCount "$Tag-units-before"
+    $before = Get-ProdQueue "$Tag-before"
+    $mark = Get-ScLogLineCount -LogPath $LogPath
+    & $Do
+    Start-Sleep -Seconds $SettleSec
+    $after = Get-ProdQueue "$Tag-after"
+    $unitsAfter = Get-TraineeCount "$Tag-units-after"
+    $lines = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
+
+    $completed = $unitsAfter - $unitsBefore
+    $r = [pscustomobject]@{
+        Before = $before; After = $after
+        Completed = $completed
+        UnitsBefore = $unitsBefore; UnitsAfter = $unitsAfter
+        Cmds = @($lines | Select-String -Pattern "CMD id=$CANCEL_CMD ")
+        Lines = $lines
+    }
+
+    # THE WIRE FIRST, before anything below it is claimed. One Cancel Train command, and
+    # its payload is the byte that decides WHICH of the two cases this is: 0xFE means "the
+    # last queued item" (the plugin's, while it holds any), a small number names a slot in
+    # the engine's own ring.
+    Assert-That "[$Tag] exactly one $CANCEL_CMD reached queueCommand ($($r.Cmds.Count))" `
+        ($r.Cmds.Count -eq 1) "($(($r.Cmds | ForEach-Object { $_.Line.Trim() }) -join ' | '))"
+    Assert-That ("[$Tag] and its payload is 0x{0:X2}" -f $ExpectPayload) `
+        (@($r.Cmds | Select-String -Pattern ('bytes=\[20 {0:X2} 00\]' -f $ExpectPayload)).Count -eq 1) `
+        "($(($r.Cmds | ForEach-Object { $_.Line.Trim() }) -join ' | '))"
+
+    # THE TWO ASSERTIONS BOTH CASES OWE, from the building's memory and the player's
+    # resource global -- never from the screen.
+    $wantLogical = $before.Selected.Logical - 1 - $completed
+    Assert-That ("[$Tag] the LOGICAL queue drops by one: $($before.Selected.Logical) -> $($after.Selected.Logical)" +
+                 ($completed -gt 0 ? " (and $completed finished building in the window)" : '')) `
+        ($after.Selected.Logical -eq $wantLogical) "(expected $wantLogical)"
+    Assert-That "[$Tag] minerals go up by exactly one Probe's $PROBE_COST ($($before.Selected.Minerals) -> $($after.Selected.Minerals))" `
+        ($after.Selected.Minerals -eq $before.Selected.Minerals + $PROBE_COST) `
+        "(expected $($before.Selected.Minerals + $PROBE_COST))"
+    return $r
+}
+
+# THE RECONCILIATION: spent = built + queued + cancelled.
+#
+# `built + queued + cancelled` is the same number as ACCEPTED -- every item the engine
+# took a Train command for either exists, is still waiting, or was cancelled; there is no
+# fourth place for one to be. So the identity is asserted in that form, and it has to be,
+# because BUILT CANNOT BE COUNTED FROM THE UNIT LIST WHILE THE QUEUE IS RUNNING:
+#
+#   the engine creates the unit when production STARTS, not when it finishes
+#   (research/production-queue.md 4.3 -- FUN_00468200, stashed at CUnit+0xEC), so the item
+#   being built is in the world AND in the ring at the same time, and adding the two
+#   double-counts it by exactly one.
+#
+# That is measured, not theorised: the first run of this arm read 1 unit and a 9-item
+# logical queue for 9 accepted items, and the sum came out one too high.
+#
+# So: `accepted` comes from the engine's own command funnel (the CMD id=0x1F lines this
+# run counted), `cancelled` from the cancels this run made, and the money from the
+# player's resource global. Every item is paid once at accept and refunded once at cancel,
+# so the balance must be exactly `(accepted - cancelled) x cost` -- a double refund reads
+# too high here and a swallowed item too low.
+#
+# The other half of the identity -- that no item was LOST -- is asserted where it can be
+# said without ambiguity: at the end of the drain, when the logical queue is zero and
+# nothing is in progress, the units that exist must be exactly `accepted - cancelled`.
+function Assert-Reconciles {
+    param([Parameter(Mandatory)][string]$Tag, [Parameter(Mandatory)]$Q,
+          [Parameter(Mandatory)][int]$Accepted, [Parameter(Mandatory)][int]$Cancelled)
+    $net    = $StartingMinerals - $Q.Selected.Minerals
+    $expect = ($Accepted - $Cancelled) * $PROBE_COST
+    Assert-That ("[$Tag] spent = built + queued + cancelled: ($Accepted accepted - $Cancelled cancelled)" +
+                 " x $PROBE_COST = $expect") `
+        ($net -eq $expect) "(the player is actually $net down)"
+}
 
 # The production-queue oracle. Same marker handshake as Get-ScWorldState, but it waits for
 # the `PRODQ [label] buildings=` SUMMARY line -- which the plugin writes LAST for a marker,
@@ -247,14 +452,23 @@ function Shot([string]$tag) {
 }
 
 try {
-    Step "generate the fixture: one Command Center, $StartingMinerals minerals" {
+    Step "generate the fixture: two Nexuses + one Command Center, $StartingMinerals minerals" {
         Wait-ScFixtureFolderFree -Run $fixtures
-        # One building and nothing else. A lone Command Center supplies 10 of its own
-        # supply and trains SCVs at 1 each, so a queue of $QueueMax can be built without
-        # a single Supply Depot -- one fewer thing that has to land on buildable ground.
+        # TWO Nexuses, because two supply 18 psi between them and a queue of $QueueMax
+        # Probes needs 9 -- so no Pylon has to land on buildable ground for the run to
+        # mean anything. Only ONE of them is ever selected; the second is supply.
+        #
+        # And ONE Command Center, owned by the PLAYER too (-EnemyOwner player is the
+        # generator's "same block, human-owned" mode). It is not scenery: the claim that
+        # a Terran producer's card cannot show the Cancel button is a claim about a
+        # dialog, and this repo proves those by reading the dialog rather than by
+        # reasoning about a button table. So the run trains at it and reads its card.
         $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
-            -UnitCount 1 -UnitType command-center -Player 0 -ClearPlayerUnits `
-            -GridSpacing 160 -StartingMinerals $StartingMinerals -StartingGas $StartingGas `
+            -UnitCount 2 -UnitType nexus -Player 0 -ClearPlayerUnits -Race protoss `
+            -GridSpacing 160 `
+            -EnemyCount 1 -EnemyType command-center -EnemyOwner player `
+            -EnemyOffsetX 288 -EnemyOffsetY 0 -MinEnemyGap 150 `
+            -StartingMinerals $StartingMinerals -StartingGas $StartingGas `
             -OutputPath $mapPath 2>&1
         $gen | ForEach-Object { Write-Host "       $_" }
         Assert-That 'the generator succeeded' ($LASTEXITCODE -eq 0) "(exit $LASTEXITCODE)"
@@ -271,13 +485,17 @@ try {
 
     Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
     Wait-ScNoGameRunning
-    $launchLock = Enter-ScLaunchLock -TaskId '025-production-queue'
+    $launchLock = Enter-ScLaunchLock -TaskId '028-production-cancel-refund'
     # hooktest mode: the ONE queueCommand hook, so `CMD id=` lines exist, and none of the
     # selection machinery. The production queue is a per-building feature and has nothing
     # to do with selection fan-out -- running in `fanout` would put four unrelated hooks
     # in the picture for no gain.
+    #
+    # -CardScan 1 adds the two READ-ONLY dialog walks (command card + status-pane queue
+    # strip). They install no hook and write nothing, which is why they can be on in a run
+    # that is also asserting the plugin's own writes.
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
-        -Mode hooktest -LogCommands 1 -Circles 0 -HudRow 0 -WorldScan 1 `
+        -Mode hooktest -LogCommands 1 -Circles 0 -HudRow 0 -WorldScan 1 -CardScan 1 `
         -ProdQueue 1 -ProdQueueMax $QueueMax `
         -InjectWindowedHelper WMode -NoLaunchLock `
         -GameDir $GameDir -LogPath $LogPath 6>&1 | ForEach-Object {
@@ -327,40 +545,44 @@ try {
         Shot 'in-game'
     }
 
-    Step 'the map spawned exactly one Command Center and nothing else' {
+    Step 'the map spawned the two Nexuses and the Command Center, and nothing else' {
         $w = Get-World 'spawned'
         $mine = @($w.Units | Where-Object { $_.Player -eq 0 })
+        $nexuses = @($mine | Where-Object { $_.Type -eq $NEXUS_TYPE })
         $ccs = @($mine | Where-Object { $_.Type -eq $CC_TYPE })
-        Assert-That "player 0 owns exactly one Command Center ($($ccs.Count))" ($ccs.Count -eq 1)
-        Assert-That "and owns nothing else ($($mine.Count) unit(s) total)" ($mine.Count -eq 1) `
+        Assert-That "player 0 owns exactly two Nexuses ($($nexuses.Count))" ($nexuses.Count -eq 2)
+        Assert-That "and exactly one Command Center ($($ccs.Count))" ($ccs.Count -eq 1)
+        Assert-That "and owns nothing else ($($mine.Count) unit(s) total)" ($mine.Count -eq 3) `
             "(types seen: $((($mine | ForEach-Object { '0x{0:x}' -f $_.Type }) | Sort-Object -Unique) -join ' '))"
         Assert-That 'the world scan of player 0 was not taken mid-edit' `
             ($w.Counts[0].Units -eq $w.Counts[0].Recount -and $w.Counts[0].Complete -eq 1) `
             "(units=$($w.Counts[0].Units) recount=$($w.Counts[0].Recount) complete=$($w.Counts[0].Complete))"
-        $script:ccUnit = if ($ccs.Count -gt 0) { $ccs[0].Unit } else { $null }
+        # The FIRST Nexus is the one every later step selects; the other is supply.
+        $script:nexusUnit = if ($nexuses.Count -gt 0) { $nexuses[0].Unit } else { $null }
     }
 
-    Step 'select the Command Center -- exactly one building, nothing else' {
+    Step 'select a Nexus -- exactly one building, nothing else' {
         # NOT a drag box. The first run of this suite boxed the whole play area and the
         # engine handed back a neutral MINERAL FIELD (`type=0x0B2 player=11`) that shares
         # the box with the building -- so a box is not a way to name a specific building
         # when the only thing you own is one.
         #
         # The click point is DERIVED FROM MEMORY instead, never measured off a frame
-        # (AGENTS.md, task 026): the world scan reports the Command Center's own map-pixel
+        # (AGENTS.md, task 026): the world scan reports the building's own map-pixel
         # position and the viewport's top-left, and `client = map - viewport` is exactly
         # the arithmetic the engine's own click handler at 0x0046FB40 does when it builds
         # the rectangle it hit-tests. So this clicks the building the scan found, and if
         # the sums ever put it off the play area the step says so instead of clicking
         # somewhere arbitrary.
         $w = Get-World 'aim'
-        $cc = @($w.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $CC_TYPE })[0]
+        $cc = @($w.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $NEXUS_TYPE -and
+                                          ($null -eq $script:nexusUnit -or $_.Unit -eq $script:nexusUnit) })[0]
         Assert-That 'the scan reports the viewport origin' ($null -ne $w.Screen)
-        Assert-That 'and the Command Center has a sprite position' `
+        Assert-That 'and the Nexus has a sprite position' `
             ($null -ne $cc -and $cc.X -gt 0 -and $cc.Y -gt 0)
         $cx = $cc.X - $w.Screen.Left
         $cy = $cc.Y - $w.Screen.Top
-        Write-Host "       CC at map ($($cc.X),$($cc.Y)), viewport ($($w.Screen.Left),$($w.Screen.Top)) -> client ($cx,$cy)"
+        Write-Host "       Nexus at map ($($cc.X),$($cc.Y)), viewport ($($w.Screen.Left),$($w.Screen.Top)) -> client ($cx,$cy)"
         # 340 is the world-area bound every suite in this repo drags inside; below it is
         # the console, which would eat the click.
         Assert-That "the building is on screen, inside the play area ($cx,$cy)" `
@@ -371,14 +593,15 @@ try {
         Assert-That 'exactly one building is selected' ($null -ne $q.Selected) `
             "($(($q.Lines | Select-Object -First 2) -join ' | '))"
         if ($q.Selected) {
-            Assert-That "and it is the Command Center (type 0x$('{0:x}' -f $q.Selected.Type))" `
-                ($q.Selected.Type -eq $CC_TYPE)
+            Assert-That "and it is the Nexus (type 0x$('{0:x}' -f $q.Selected.Type))" `
+                ($q.Selected.Type -eq $NEXUS_TYPE)
             # The mineral field the box used to grab was player 11. Naming the owner keeps
             # that failure mode from ever reading as a pass again.
             Assert-That "owned by the human player 0 ($($q.Selected.Player))" `
                 ($q.Selected.Player -eq 0)
             Assert-That "and it is the same building the world scan found ($($q.Selected.Unit))" `
-                ($null -eq $script:ccUnit -or $q.Selected.Unit -eq $script:ccUnit)
+                ($null -eq $script:nexusUnit -or $q.Selected.Unit -eq $script:nexusUnit)
+            $script:nexusUnit = $q.Selected.Unit
             Assert-That 'it starts with an empty queue, read from CUnit+0x98' `
                 ($q.Selected.EngineLen -eq 0) "(engine=$($q.Selected.Engine -join ','))"
             Assert-That "it starts with the $StartingMinerals minerals the trigger granted" `
@@ -392,12 +615,49 @@ try {
         Shot 'selected'
     }
 
-    Step "press Train x$Clicks in one burst" {
+    Step 'READ the command card: which control trains, and which one cancels' {
+        # THE CONTROL IS LOCATED BY READING THE DIALOG THAT OWNS IT. No hotkey letter is
+        # guessed and no coordinate is measured off a frame: the card read-back names the
+        # Button record behind each slot -- its action and its actionParam -- and
+        # Get-ScCardSlotPoint computes the click point from the live control rect, which
+        # is the sum the engine itself forms at 0x00458850.
+        $card = Get-Card 'card-idle'
+        Assert-That 'the card read-back answered' ($card.Ok)
+        Assert-That "the card resolves to the Nexus buttonset ($($card.CardId))" `
+            ($card.CardId -eq $NEXUS_TYPE) "(portrait set $($card.PortraitSet))"
+
+        $train = Get-ScCardSlot -Card $card -Slot $TRAIN_SLOT
+        Assert-That "slot $TRAIN_SLOT carries a Button record" ($null -ne $train -and $train.HasButton)
+        if ($train -and $train.HasButton) {
+            Assert-That "slot $TRAIN_SLOT is the Train action 0x$TRAIN_ACT (0x$($train.Action))" `
+                ($train.Action -eq $TRAIN_ACT)
+            Assert-That "and its actionParam is the Probe, type $PROBE_TYPE ($($train.ActParam))" `
+                ($train.ActParam -eq $PROBE_TYPE)
+            Assert-That 'and it is not greyed -- the run can actually press it' `
+                ($train.Visible -and -not $train.Disabled) "(state $($train.State))"
+        }
+        $script:trainPoint = Get-ScCardSlotPoint -Card $card -Slot $TRAIN_SLOT
+        Write-Host "       Train button -> client ($($script:trainPoint.X),$($script:trainPoint.Y))"
+
+        # THE NEGATIVE HALF, before anything is queued: the Cancel button's condition is
+        # "the head slot holds a real unit type" (0x00428530), so with an empty queue it
+        # must NOT be on the card. Reading it here is what makes the positive reading
+        # after the burst mean something.
+        $cancelIdle = Get-ScCardSlot -Card $card -Slot $CANCEL_SLOT
+        $idleIsCancel = $cancelIdle -and $cancelIdle.HasButton -and $cancelIdle.Action -eq $CANCEL_ACT
+        Assert-That 'with an empty queue there is no Cancel button on the card' `
+            (-not $idleIsCancel) `
+            "(slot $CANCEL_SLOT holds act=$($cancelIdle.Action) aparam=$($cancelIdle.ActParam))"
+    }
+
+    Step "click Train x$Clicks in one burst" {
         $mark = Get-ScLogLineCount -LogPath $LogPath
-        # One burst, no marker in the middle: an SCV takes ~9s to build and the burst takes
-        # ~3s, so no slot can free while it is running -- which is what makes the counter
-        # arithmetic below exact rather than approximate.
-        for ($i = 1; $i -le $Clicks; $i++) { Send-ScKey -Hwnd $hwnd -VirtualKey $TRAIN_KEY }
+        # One burst, no marker in the middle: a Probe takes ~9s to build and the burst
+        # takes ~3s, so no slot can free while it is running -- which is what makes the
+        # counter arithmetic below exact rather than approximate.
+        for ($i = 1; $i -le $Clicks; $i++) {
+            Send-ScClick -Hwnd $hwnd -X $script:trainPoint.X -Y $script:trainPoint.Y -SettleMs 120
+        }
         Start-Sleep -Seconds 2
         $lines = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
         $cmds = @($lines | Select-String -Pattern "CMD id=$TRAIN_CMD ")
@@ -412,6 +672,10 @@ try {
         Assert-That "and the $expectNotSent presses past the cap were refused by the client itself" `
             ($cmds.Count -eq $Clicks - $expectNotSent)
         $script:cmdsSent = $cmds.Count
+        # THE LEDGER. Every command that reached the funnel was accepted and paid for
+        # there (refusedFull/refusedCost are asserted zero below), so this is what the
+        # money has to reconcile against for the rest of the run.
+        $script:accepted += $cmds.Count
         Shot 'queued'
     }
 
@@ -424,15 +688,15 @@ try {
             # READ FROM THE BUILDING'S OWN MEMORY. Five occupied slots at CUnit+0x98.
             Assert-That "the engine's five slots are all occupied ($($s.EngineLen))" `
                 ($s.EngineLen -eq $ENGINE_SLOTS) "(engine=$(($s.Engine | ForEach-Object { '0x{0:x}' -f $_ }) -join ','))"
-            Assert-EverySlot -Selected $s -WantType $SCV_TYPE
+            Assert-EverySlot -Selected $s -WantType $PROBE_TYPE
             Assert-That "the plugin holds the other $expectOverflow ($($s.Overflow))" `
                 ($s.Overflow -eq $expectOverflow)
             Assert-That "so the logical queue is $QueueMax, which is MORE THAN $ENGINE_SLOTS ($($s.Logical))" `
                 ($s.Logical -eq $QueueMax -and $s.Logical -gt $ENGINE_SLOTS)
             # PAID EXACTLY ONCE, each. $QueueMax accepted items, $expectRefused refused
             # ones that must have cost nothing at all.
-            $expectMinerals = $StartingMinerals - $QueueMax * $SCV_COST
-            Assert-That "minerals are down by exactly $QueueMax x $SCV_COST and no more ($($s.Minerals))" `
+            $expectMinerals = $StartingMinerals - $QueueMax * $PROBE_COST
+            Assert-That "minerals are down by exactly $QueueMax x $PROBE_COST and no more ($($s.Minerals))" `
                 ($s.Minerals -eq $expectMinerals) "(expected $expectMinerals)"
         }
         Assert-That "the plugin is holding exactly $expectOverflow item(s) ($($q.Captured))" `
@@ -452,10 +716,98 @@ try {
             ($engineHas -eq $ENGINE_SLOTS)
         Assert-That 'one building is tracked' ($q.Buildings -eq 1)
         if ($q.Tracked.Count -eq 1) {
-            Assert-That "its overflow is all SCVs ($(($q.Tracked[0].OverflowTypes | ForEach-Object { '0x{0:x}' -f $_ }) -join ','))" `
-                (@($q.Tracked[0].OverflowTypes | Where-Object { $_ -ne $SCV_TYPE }).Count -eq 0)
+            Assert-That "its overflow is all Probes ($(($q.Tracked[0].OverflowTypes | ForEach-Object { '0x{0:x}' -f $_ }) -join ','))" `
+                (@($q.Tracked[0].OverflowTypes | Where-Object { $_ -ne $PROBE_TYPE }).Count -eq 0)
         }
         $script:mineralsAfterBurst = if ($q.Selected) { $q.Selected.Minerals } else { -1 }
+        Assert-Reconciles 'queued' $q -Accepted $script:accepted -Cancelled $script:cancels
+    }
+
+    # ---------------------------------------------------------------------------
+    # TASK 028: what the player can actually SEE and CLICK, with nine queued
+    # ---------------------------------------------------------------------------
+    Step 'READ the status pane: five icons for a nine-item queue' {
+        $st = Get-StatusQueue 'strip-full'
+        Assert-That 'the status-strip read-back answered' ($st.Ok)
+        Assert-That "the strip is showing this Nexus ($($st.Portrait))" `
+            ($st.PortraitType -eq $NEXUS_TYPE -and $st.PortraitOwner -eq 0)
+        Assert-That "it holds exactly $STATQ_SLOTS icon controls ($($st.Slots.Count))" `
+            ($st.Slots.Count -eq $STATQ_SLOTS)
+        # The engine takes the display index from the WALK ORDER and the click payload
+        # from `index - 2`. Two numbers, assumed equal by the engine and never checked by
+        # it, so this run checks them.
+        $misordered = @($st.Slots | Where-Object { $_.Index -ne ($_.Display + $STATQ_FIRST_CONTROL) })
+        Assert-That 'every icon carries control index = display + 2, as the engine assumes' `
+            ($misordered.Count -eq 0) `
+            "(bad: $(($misordered | ForEach-Object { "disp$($_.Display)=idx$($_.Index)" }) -join ' '))"
+        # THE FINDING, and it is a read, not an inference: the strip draws the RING and
+        # nothing else. Five icons, all clickable, all Probes -- while the building's
+        # logical queue is nine. The four the plugin holds are not on the screen at all.
+        Assert-That "all $ENGINE_SLOTS icons are clickable -- the ring is full ($($st.Clickable))" `
+            ($st.Clickable -eq $ENGINE_SLOTS)
+        $wrong = @($st.Slots | Where-Object { $_.UType -ne $PROBE_TYPE -or $_.QueueType -ne $PROBE_TYPE })
+        Assert-That 'and every icon draws the Probe its own ring slot holds' `
+            ($wrong.Count -eq 0) `
+            "(bad: $(($wrong | ForEach-Object { "disp$($_.Display) uicon=0x$('{0:x}' -f $_.UIcon) qtype=0x$('{0:x}' -f $_.QueueType)" }) -join ' '))"
+        Write-Host "       the player sees $($st.Clickable) icons for a queue of $QueueMax -- the $expectOverflow the plugin holds are NOT drawn"
+        $script:stripWithOverflow = $st
+    }
+
+    Step 'READ the card again: NOW the Cancel button is there' {
+        # The positive half of the pair taken before the burst. Same walk, same slot,
+        # different answer -- which is what makes "no Cancel button when the queue is
+        # empty" a measurement rather than a missing line.
+        $card = Get-Card 'card-queued'
+        Assert-That 'the card read-back answered' ($card.Ok)
+        $cancel = Get-ScCardSlot -Card $card -Slot $CANCEL_SLOT
+        Assert-That "slot $CANCEL_SLOT carries a Button record" ($null -ne $cancel -and $cancel.HasButton)
+        if ($cancel -and $cancel.HasButton) {
+            Assert-That "slot $CANCEL_SLOT is the Cancel action 0x$CANCEL_ACT (0x$($cancel.Action))" `
+                ($cancel.Action -eq $CANCEL_ACT)
+            # 0xFE is the whole reason this button is the plugin's: it means "cancel the
+            # LAST queued item", which is the item the plugin is holding.
+            Assert-That "and its actionParam is 0x00FE, cancel-the-last ($($cancel.ActParam))" `
+                ($cancel.ActParam -eq $CANCEL_APARAM)
+            Assert-That 'and it is not greyed -- the click can reach the action' `
+                ($cancel.Visible -and -not $cancel.Disabled) "(state $($cancel.State))"
+        }
+        $script:cancelPoint = Get-ScCardSlotPoint -Card $card -Slot $CANCEL_SLOT
+        Write-Host "       Cancel button -> client ($($script:cancelPoint.X),$($script:cancelPoint.Y))"
+    }
+
+    Step 'CANCEL AN ITEM THE PLUGIN IS HOLDING -- the refund path with real money on it' {
+        # The payload the card's Cancel button carries: "the LAST queued item", which is
+        # the plugin's while it holds any. Asserted on the wire inside the helper, before
+        # a single refund number is looked at.
+        $r = Invoke-CancelAndMeasure -Tag 'plugin-cancel' -ExpectPayload $CANCEL_APARAM -Do {
+            Send-ScClick -Hwnd $hwnd -X $script:cancelPoint.X -Y $script:cancelPoint.Y
+        }
+        # THE PLUGIN CONSUMED IT. Its own event line, once, naming the type and the money.
+        $ev = @($r.Lines | Select-String -Pattern 'PRODQEV cancel-last ')
+        Assert-That "the plugin cancelled it itself, exactly once ($($ev.Count))" ($ev.Count -eq 1)
+        if ($ev.Count -eq 1) {
+            Write-Host "       $($ev[0].Line.Trim())"
+            Assert-That "and gave back one Probe's $PROBE_COST minerals and no gas" `
+                ($ev[0].Line -match "type=0x0*$('{0:X}' -f $PROBE_TYPE) " -and
+                 $ev[0].Line -match "back=$PROBE_COST/0")
+        }
+        Assert-That "the plugin's cancelled counter is 1 ($($r.After.Cancelled))" `
+            ($r.After.Cancelled -eq 1)
+        # NOT the other counter: `refunded` counts items given back because their BUILDING
+        # went away. Nothing died here, so a bump in it would mean the run measured
+        # something else entirely.
+        Assert-That "and its building-gone refund counter is still 0 ($($r.After.Refunded))" `
+            ($r.After.Refunded -eq 0)
+        # The engine's own ring was NOT the thing that shrank: it still holds five (or
+        # four, if the plugin has already rebalanced into it), and the item that went is
+        # the one the plugin was holding.
+        Assert-That "the overflow the plugin holds is what absorbed the cancel ($($r.Before.Selected.Overflow) -> $($r.After.Selected.Overflow), ring $($r.Before.Selected.EngineLen) -> $($r.After.Selected.EngineLen))" `
+            ($r.After.Selected.EngineLen + $r.After.Selected.Overflow -eq $QueueMax - 1 - $r.Completed)
+        $script:cancels++
+        $script:pluginCancels++
+        $script:mineralsAfterBurst = $r.After.Selected.Minerals
+        Assert-Reconciles 'after-plugin-cancel' $r.After -Accepted $script:accepted -Cancelled $script:cancels
+        Shot 'plugin-cancelled'
     }
 
     Step "watch it drain: every over-cap item is promoted into a freed slot, in order" {
@@ -479,41 +831,53 @@ try {
             # plugin empties four items before the end -- it hands its last one over while
             # four are still building -- so exiting on "the plugin is done" would walk
             # straight into the next step with half the units not yet made.
-            if ($q.Promoted -ge $expectOverflow -and $q.Buildings -eq 0 -and
-                $q.Selected -and $q.Selected.Logical -eq 0) { break }
+            if ($q.Buildings -eq 0 -and $q.Selected -and $q.Selected.Logical -eq 0) { break }
             Start-Sleep -Seconds 5
         }
         Write-Host "       $($seen -join ' -> ')"
 
         $q = Get-ProdQueue 'drained'
-        Assert-That "every held item was promoted ($($q.Promoted) of $expectOverflow)" `
-            ($q.Promoted -eq $expectOverflow)
+        # THE CONSERVATION LAW FOR THE PLUGIN'S OWN LIST, which is what "no item was lost"
+        # means on its side: everything it ever took back it either handed over or
+        # cancelled. `captured` is NOT `-QueueMax - 5` any more once a cancel has
+        # happened -- the cancel frees room under the cap, so the next rebalance takes one
+        # more item back out of the ring and the plugin ends up holding the same four
+        # again. Measured: captured 5, promoted 4, cancelled 1. Writing the expectation as
+        # a literal would have hidden that; writing it as the law makes it visible.
+        $expectPromoted = $q.Captured - $q.Cancelled
+        Assert-That "everything the plugin captured was promoted or cancelled: $($q.Captured) - $($q.Cancelled) = $($q.Promoted)" `
+            ($q.Promoted -eq $expectPromoted)
+        Assert-That "and it captured one more than the burst left it, because the cancel made room ($($q.Captured))" `
+            ($q.Captured -eq $expectOverflow + $script:cancels)
         Assert-That 'the plugin is holding nothing any more' ($q.Buildings -eq 0)
-        Assert-That 'and nothing was refunded -- no item was lost on the way' ($q.Refunded -eq 0)
+        Assert-That 'and nothing was refunded for a lost building -- no item vanished' ($q.Refunded -eq 0)
+        Assert-That "the cancel counter is still exactly $script:cancels -- nothing cancelled itself" `
+            ($q.Cancelled -eq $script:cancels)
 
         # PER ITEM. One promote line each, naming the type and the slot it went into, with
-        # the remaining count walking down to zero. A single line saying "4 promoted"
-        # would not distinguish four promotions from one promotion counted four times.
+        # the remaining count walking down to zero. A single line saying "3 promoted"
+        # would not distinguish three promotions from one promotion counted three times.
         $ev = @(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'PRODQEV promote ')
-        Assert-That "exactly $expectOverflow promote events ($($ev.Count))" ($ev.Count -eq $expectOverflow)
+        Assert-That "exactly $expectPromoted promote events ($($ev.Count))" ($ev.Count -eq $expectPromoted)
         for ($i = 0; $i -lt $ev.Count; $i++) {
             $m = [regex]::Match($ev[$i].Line, 'type=0x([0-9A-Fa-f]+) -> slot=(\d+) overflowLeft=(\d+)')
-            $wantLeft = $expectOverflow - 1 - $i
-            $okType = $m.Success -and [Convert]::ToInt32($m.Groups[1].Value, 16) -eq $SCV_TYPE
+            $wantLeft = $expectPromoted - 1 - $i
+            $okType = $m.Success -and [Convert]::ToInt32($m.Groups[1].Value, 16) -eq $PROBE_TYPE
             $okSlot = $m.Success -and [int]$m.Groups[2].Value -ge 0 -and [int]$m.Groups[2].Value -lt $ENGINE_SLOTS
             $okLeft = $m.Success -and [int]$m.Groups[3].Value -eq $wantLeft
-            Assert-That ("promotion {0}: an SCV into a real slot, {1} left after it" -f ($i + 1), $wantLeft) `
+            Assert-That ("promotion {0}: a Probe into a real slot, {1} left after it" -f ($i + 1), $wantLeft) `
                 ($okType -and $okSlot -and $okLeft) "($($ev[$i].Line.Trim()))"
         }
     }
 
-    Step "all $QueueMax units exist, and not one was paid for twice" {
+    Step 'every surviving item became a unit, and not one was paid for twice' {
+        $expectBuilt = $QueueMax - $script:cancels
         $w = Get-World 'built'
-        $scvs = @($w.Units | Where-Object { $_.Type -eq $SCV_TYPE -and $_.Player -eq 0 })
-        Assert-That "player 0 owns $QueueMax SCVs -- every queued item became a unit ($($scvs.Count))" `
-            ($scvs.Count -eq $QueueMax)
-        Assert-That 'the Command Center is still there' `
-            (@($w.Units | Where-Object { $_.Type -eq $CC_TYPE -and $_.Player -eq 0 }).Count -eq 1)
+        $probes = @($w.Units | Where-Object { $_.Type -eq $PROBE_TYPE -and $_.Player -eq 0 })
+        Assert-That "player 0 owns $expectBuilt Probes -- every queued item that was not cancelled became a unit ($($probes.Count))" `
+            ($probes.Count -eq $expectBuilt)
+        Assert-That 'both Nexuses are still there' `
+            (@($w.Units | Where-Object { $_.Type -eq $NEXUS_TYPE -and $_.Player -eq 0 }).Count -eq 2)
         Assert-That 'the world scan was not taken mid-edit' `
             ($w.Counts[0].Units -eq $w.Counts[0].Recount -and $w.Counts[0].Complete -eq 1)
 
@@ -522,16 +886,177 @@ try {
             ($null -ne $q.Selected -and $q.Selected.EngineLen -eq 0 -and $q.Selected.Logical -eq 0) `
             "($(($q.Lines | Where-Object { $_ -match 'PRODQSEL' } | Select-Object -First 1)))"
         # THE PAY-ONCE ASSERTION. Promotion moves no money, so the balance must be exactly
-        # what it was when the burst finished -- four promotions later. A second payment
-        # would show as a drop of 4 x 50 here and nowhere else.
+        # what it was after the cancel -- three promotions later. A second payment would
+        # show as a drop of 3 x 50 here and nowhere else.
         if ($q.Selected) {
             Assert-That "minerals are UNCHANGED across the whole drain ($($q.Selected.Minerals))" `
                 ($q.Selected.Minerals -eq $script:mineralsAfterBurst) `
-                "(was $script:mineralsAfterBurst after the burst)"
+                "(was $script:mineralsAfterBurst after the cancel)"
         }
-        Assert-That "and still exactly $StartingMinerals - $QueueMax x $SCV_COST" `
-            ($null -ne $q.Selected -and $q.Selected.Minerals -eq ($StartingMinerals - $QueueMax * $SCV_COST))
+        Assert-That "and still exactly $StartingMinerals - ($QueueMax - $script:cancels) x $PROBE_COST" `
+            ($null -ne $q.Selected -and
+             $q.Selected.Minerals -eq ($StartingMinerals - ($QueueMax - $script:cancels) * $PROBE_COST))
+        Assert-Reconciles 'drained' $q -Accepted $script:accepted -Cancelled $script:cancels
         Shot 'built'
+    }
+
+    # ---------------------------------------------------------------------------
+    # TASK 028: the OTHER cancel -- an item inside the ENGINE's own ring, cancelled
+    # through the control vanilla actually gives the player for it
+    # ---------------------------------------------------------------------------
+    Step "queue $EngineArmQueue more, so the plugin holds NOTHING and the ring is the whole queue" {
+        $mark = Get-ScLogLineCount -LogPath $LogPath
+        for ($i = 1; $i -le $EngineArmQueue; $i++) {
+            Send-ScClick -Hwnd $hwnd -X $script:trainPoint.X -Y $script:trainPoint.Y -SettleMs 120
+        }
+        Start-Sleep -Seconds 2
+        $lines = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
+        $sent = @($lines | Select-String -Pattern "CMD id=$TRAIN_CMD ").Count
+        Assert-That "$EngineArmQueue Train commands went out ($sent)" ($sent -eq $EngineArmQueue)
+        $script:accepted += $sent
+
+        $q = Get-ProdQueue 'engine-arm-queued'
+        Assert-That "the ring holds all $EngineArmQueue of them ($($q.Selected.EngineLen))" `
+            ($q.Selected.EngineLen -eq $EngineArmQueue)
+        # THE PRECONDITION that makes this arm the ENGINE's case: below the hold, the
+        # plugin takes nothing back, so there is no overflow for it to serve a cancel from
+        # and the command must pass straight through to the engine's own handler.
+        Assert-That 'and the plugin is holding nothing at all' `
+            ($q.Selected.Overflow -eq 0 -and $q.Buildings -eq 0)
+        $script:cancelledBeforeEngineArm = $q.Cancelled
+    }
+
+    Step 'READ the status pane again: only the queued icons can be clicked' {
+        $st = Get-StatusQueue 'strip-partial'
+        Assert-That 'the status-strip read-back answered' ($st.Ok)
+        Assert-That "it still holds $STATQ_SLOTS icon controls ($($st.Slots.Count))" `
+            ($st.Slots.Count -eq $STATQ_SLOTS)
+        # THE OTHER DIRECTION of the earlier reading, on the same walk: with three queued
+        # instead of five, exactly three icons are clickable and the other two are GREYED
+        # by the layout's own 0x00418640 call. An oracle that always said "clickable"
+        # passed the first reading and fails here.
+        Assert-That "exactly $EngineArmQueue icons are clickable ($($st.Clickable))" `
+            ($st.Clickable -eq $EngineArmQueue)
+        $empties = @($st.Slots | Where-Object { $_.Display -ge $EngineArmQueue })
+        Assert-That "and the other $($empties.Count) are GREYED, with empty ring slots behind them" `
+            (@($empties | Where-Object { -not $_.Disabled -or $_.QueueType -ne 0xE4 }).Count -eq 0) `
+            "($(($empties | ForEach-Object { "disp$($_.Display)=$($_.State)/0x$('{0:x}' -f $_.QueueType)" }) -join ' '))"
+
+        $target = @($st.Slots | Where-Object Display -eq $EngineArmDisplay)[0]
+        Assert-That "display $EngineArmDisplay is an enabled icon drawing a Probe" `
+            ($null -ne $target -and -not $target.Disabled -and $target.UType -eq $PROBE_TYPE -and
+             $target.QueueType -eq $PROBE_TYPE) `
+            "(state $($target.State) uicon=0x$('{0:x}' -f $target.UIcon) qtype=0x$('{0:x}' -f $target.QueueType))"
+        Assert-That "and its control id is $($EngineArmDisplay + $STATQ_FIRST_CONTROL), the id whose click sends payload $EngineArmDisplay" `
+            ($target.Index -eq $EngineArmDisplay + $STATQ_FIRST_CONTROL)
+        $script:iconPoint = Get-ScStatusSlotPoint -Status $st -Display $EngineArmDisplay
+        Write-Host "       queue icon $EngineArmDisplay -> client ($($script:iconPoint.X),$($script:iconPoint.Y))"
+    }
+
+    Step "CANCEL AN ITEM IN THE ENGINE'S RING -- the vanilla control, the engine's refund" {
+        # The payload here is the DISPLAY INDEX of the icon clicked, not 0xFE -- that one
+        # byte is the whole difference between the two cases, and the helper asserts it on
+        # the wire before any refund number is read.
+        $r = Invoke-CancelAndMeasure -Tag 'engine-cancel' -ExpectPayload $EngineArmDisplay -Do {
+            Send-ScClick -Hwnd $hwnd -X $script:iconPoint.X -Y $script:iconPoint.Y
+        }
+        # THE ENGINE DID IT, NOT THE PLUGIN. The ring itself is one shorter, read from
+        # CUnit+0x98, and the plugin's cancel counter has not moved -- so this refund came
+        # out of the engine's cancelBuildQueueSlot and the plugin passed the command
+        # through, which is the behaviour the two-case design claims.
+        Assert-That "the engine's own ring is one shorter ($($r.Before.Selected.EngineLen) -> $($r.After.Selected.EngineLen))" `
+            ($r.After.Selected.EngineLen -eq $r.Before.Selected.EngineLen - 1 - $r.Completed)
+        Assert-That "the plugin's cancel counter did NOT move ($($r.After.Cancelled))" `
+            ($r.After.Cancelled -eq $script:cancelledBeforeEngineArm)
+        Assert-That 'and the plugin never consumed a cancel this arm' `
+            (@($r.Lines | Select-String -Pattern 'PRODQEV cancel-last ').Count -eq 0)
+        Assert-That 'the plugin is still holding nothing' `
+            ($r.After.Selected.Overflow -eq 0 -and $r.After.Buildings -eq 0)
+        # PER ITEM on the engine's side: every slot still occupied holds a Probe, and the
+        # compaction the engine does on cancel left no hole behind the head.
+        $left = @($r.After.Selected.Engine | Where-Object { $_ -ne 0xE4 })
+        Assert-That "the $($left.Count) slot(s) still occupied all hold Probes" `
+            (@($left | Where-Object { $_ -ne $PROBE_TYPE }).Count -eq 0) `
+            "($(($r.After.Selected.Engine | ForEach-Object { '0x{0:x}' -f $_ }) -join ','))"
+        $script:cancels++
+        Assert-Reconciles 'after-engine-cancel' $r.After -Accepted $script:accepted -Cancelled $script:cancels
+        Shot 'engine-cancelled'
+    }
+
+    Step 'and the strip agrees afterwards: one fewer icon can be clicked' {
+        $st = Get-StatusQueue 'strip-after-cancel'
+        $q = Get-ProdQueue 'after-engine-cancel'
+        Assert-That "the clickable icons now match the ring exactly ($($st.Clickable) vs engineLen $($q.Selected.EngineLen))" `
+            ($st.Clickable -eq $q.Selected.EngineLen)
+    }
+
+    # ---------------------------------------------------------------------------
+    # TASK 028: the same read on a TERRAN producer, whose slot 9 is SHARED between
+    # Lift Off and Cancel. Which one is drawn is a claim about a dialog, so it is
+    # READ -- and the first (static) reading of the button table got it wrong.
+    # ---------------------------------------------------------------------------
+    Step 'a Command Center: slot 9 holds Lift Off when idle and Cancel when training' {
+        $w = Get-World 'cc-aim'
+        $cc = @($w.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $CC_TYPE })[0]
+        $cx = if ($cc) { $cc.X - $w.Screen.Left } else { -1 }
+        $cy = if ($cc) { $cc.Y - $w.Screen.Top } else { -1 }
+        $onScreen = ($null -ne $cc -and $cx -ge 0 -and $cx -lt 630 -and $cy -ge 0 -and $cy -lt 340)
+        Write-Host "       Command Center at client ($cx,$cy) -- on screen: $onScreen"
+        if (-not $onScreen) {
+            # A definite outcome either way: this arm never silently disappears. The
+            # static half stands on its own (buttonset 106 is in the binary), and the
+            # acceptance criteria do not rest on it.
+            Assert-That 'the Command Center is off the opening viewport, so this arm is not measured' `
+                $true "(client $cx,$cy -- the claim about Terran cards stays static-only for this run)"
+            return
+        }
+        Send-ScClick -Hwnd $hwnd -X $cx -Y $cy
+        Start-Sleep -Seconds 2
+        $q = Get-ProdQueue 'cc-selected'
+        Assert-That "the Command Center is the selected building (type 0x$('{0:x}' -f $q.Selected.Type))" `
+            ($null -ne $q.Selected -and $q.Selected.Type -eq $CC_TYPE)
+
+        $card = Get-Card 'cc-card-idle'
+        $train = Get-ScCardSlot -Card $card -Slot $TRAIN_SLOT
+        Assert-That "its card resolves to buttonset $CC_TYPE ($($card.CardId))" ($card.CardId -eq $CC_TYPE)
+        Assert-That "slot $TRAIN_SLOT is Train SCV (act 0x$($train.Action), aparam $($train.ActParam))" `
+            ($train.HasButton -and $train.Action -eq $TRAIN_ACT -and $train.ActParam -eq 7)
+        # THE FIRST HALF OF THE PAIR, while the queue is empty: slot 9 belongs to LIFT OFF
+        # (button 0x00517FC4, cond 0x004287D0, act 0x00423230), which sorts ahead of the
+        # Cancel button in this buttonset and therefore hides it.
+        $idle9 = Get-ScCardSlot -Card $card -Slot $CANCEL_SLOT
+        Write-Host ("       idle: slot 9 state={0} act=0x{1} aparam={2} icon=0x{3:x}" -f
+                    $idle9.State, $idle9.Action, $idle9.ActParam, $idle9.Icon)
+        Assert-That 'with an empty queue slot 9 is Lift Off, not Cancel' `
+            ($idle9.HasButton -and $idle9.Action -eq $LIFTOFF_ACT)
+        $p = Get-ScCardSlotPoint -Card $card -Slot $TRAIN_SLOT
+        Send-ScClick -Hwnd $hwnd -X $p.X -Y $p.Y
+        Start-Sleep -Seconds 2
+
+        $q = Get-ProdQueue 'cc-queued'
+        Assert-That "the Command Center now has something queued ($($q.Selected.EngineLen))" `
+            ($q.Selected.EngineLen -ge 1)
+        # THE SECOND HALF OF THE PAIR, and the point of the arm: the two conditions are
+        # complementary. Lift Off's (0x004287D0) requires the "is this building busy"
+        # helper 0x00401500 to return 0, and that helper returns 1 exactly when the head
+        # slot holds a real type -- which is exactly when the Cancel button's own
+        # condition (0x00428530) is true. So the same control swaps from one to the other
+        # the moment anything is queued, and the Cancel button IS reachable on a Terran
+        # producer, at precisely the times it would be useful.
+        $card = Get-Card 'cc-card-queued'
+        $slot9 = Get-ScCardSlot -Card $card -Slot $CANCEL_SLOT
+        Write-Host ("       training: slot 9 state={0} act=0x{1} aparam={2} icon=0x{3:x}" -f
+                    $slot9.State, $slot9.Action, $slot9.ActParam, $slot9.Icon)
+        Assert-That 'with something queued the SAME control now holds the Cancel button' `
+            ($slot9.HasButton -and $slot9.Action -eq $CANCEL_ACT -and $slot9.ActParam -eq $CANCEL_APARAM)
+        Assert-That 'and it is the same control record, so this is one slot changing hands' `
+            ($slot9.Control -eq $idle9.Control) "($($slot9.Control) vs $($idle9.Control))"
+        Assert-That 'and it is enabled -- a Terran player really can press it' `
+            ($slot9.Visible -and -not $slot9.Disabled) "(state $($slot9.State))"
+        # And the strip is still the control that CAN address its queue, on this card too.
+        $st = Get-StatusQueue 'cc-strip'
+        Assert-That "its queue strip has $($q.Selected.EngineLen) clickable icon(s) ($($st.Clickable))" `
+            ($st.Clickable -eq $q.Selected.EngineLen)
     }
 
     Step 'the engine was never asked to do anything outside the production path' {
@@ -587,13 +1112,25 @@ if ($statLine.Count -gt 0) {
     $m = [regex]::Match($statLine[-1].Line,
         'captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+) refusedFull=(\d+) refusedCost=(\d+) mineralsSpent=(\d+) mineralsRefunded=(\d+)')
     if ($m.Success) {
+        $cancelled = [int]$m.Groups[3].Value
+        $refunded  = [int]$m.Groups[4].Value
         $spent = [int]$m.Groups[7].Value
         $back = [int]$m.Groups[8].Value
         # THE PAY-ONCE CLAIM, from the plugin's side of it: the engine paid for all nine
         # and the plugin paid for none, so its own spend counter must be flat ZERO. A
         # design in which the plugin also paid would read 4 x 50 here.
         Assert-That "the plugin spent NOTHING of its own ($spent)" ($spent -eq 0)
-        Assert-That 'and refunded nothing, because nothing was cancelled or lost' ($back -eq 0)
+        # THE REFUND, ONCE. The plugin served exactly the cancels that were its own, and
+        # gave back exactly one unit's cost for each. This is the counter that would read
+        # 2 x 50 on a double refund and 0 on a swallowed item, and neither would show up
+        # in the player's balance as anything but a number that still looked plausible.
+        Assert-That "the plugin served exactly $script:pluginCancels cancel(s) of its own ($cancelled)" `
+            ($cancelled -eq $script:pluginCancels)
+        Assert-That "and refunded exactly $script:pluginCancels x $PROBE_COST minerals for them ($back)" `
+            ($back -eq $script:pluginCancels * $PROBE_COST)
+        # The engine's own cancel is NOT in these numbers, and that is the point: it never
+        # reached the plugin's refund path at all.
+        Assert-That 'nothing was refunded for a building that went away' ($refunded -eq 0)
     }
     else { Assert-That 'the detach stats line is parseable' $false "($($statLine[-1].Line))" }
 }

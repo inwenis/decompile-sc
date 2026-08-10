@@ -450,9 +450,26 @@ Write-Host "launcher written: $launcherPath"
 # --- 5. desktop shortcut -------------------------------------------------------
 $desktop = [Environment]::GetFolderPath('Desktop')
 $shortcutPath = Join-Path $desktop $ShortcutName
-$pwshExe = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
-if (-not $pwshExe) { $pwshExe = Join-Path $PSHOME 'pwsh.exe' }
-if (-not (Test-Path -LiteralPath $pwshExe)) { throw "deploy: could not resolve pwsh.exe (looked at $pwshExe)" }
+# A .lnk stores an ABSOLUTE path, so it must be a VERSION-STABLE one. The Store build of
+# PowerShell lives at C:\Program Files\WindowsApps\Microsoft.PowerShell_<version>_x64__...\,
+# and that directory is renamed on every update -- baking it produced a shortcut that died
+# the moment the user reinstalled PowerShell (2026-08-10: "the desktop shortcut stopped
+# working"). Prefer paths that survive an upgrade, and refuse the versioned one outright.
+$pwshCandidates = @(
+    (Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe')                    # MSI install, stable
+    (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe')           # Store alias, stable
+    (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source              # whatever is on PATH
+    (Join-Path $PSHOME 'pwsh.exe')                                           # this session's host
+)
+$pwshExe = $null
+foreach ($cand in $pwshCandidates) {
+    if (-not $cand) { continue }
+    if ($cand -like '*\WindowsApps\Microsoft.PowerShell_*') { continue }  # version-pinned, dies on update
+    if (Test-Path -LiteralPath $cand) { $pwshExe = $cand; break }
+}
+if (-not $pwshExe) {
+    throw ("deploy: could not resolve a version-stable pwsh.exe. Tried: {0}" -f ($pwshCandidates -join '; '))
+}
 
 $deployedExe = Join-Path $gameDeployDir 'StarCraft.exe'
 $shell = New-Object -ComObject WScript.Shell
