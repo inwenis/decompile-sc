@@ -431,7 +431,8 @@ try {
         -NoLaunchLock `
         -Circles 1 `
         -HudRow 1 `
-        -ProdQueue 1
+        -ProdQueue 1 `
+        -UpgradeQueue 1
 }
 catch {
     $errLog = Join-Path $here 'logs\launch-error.log'
