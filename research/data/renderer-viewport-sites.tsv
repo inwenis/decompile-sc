@@ -1,0 +1,81 @@
+funcEntry	insAddr	value	role	subsystem	note
+0x0041D930	0x0041DA3D	0x1E0	display-mode	present	IDirectDraw::SetDisplayMode height
+0x0041D930	0x0041DA42	0x280	display-mode	present	IDirectDraw::SetDisplayMode width
+0x0041D930	0x0041DB9C	0x280	surface-desc	present	fallback offscreen surface dwWidth
+0x0041D930	0x0041DBA3	0x1E0	surface-desc	present	fallback offscreen surface dwHeight
+0x004DB060	0x004DB077	0x4B000	buffer-size	screen-bitmap	SMemAlloc of the 640*480 screen buffer
+0x004DB060	0x004DB07C	0x280	screen-width	screen-bitmap	screenBitmap.width
+0x004DB060	0x004DB085	0x1E0	screen-height	screen-bitmap	screenBitmap.height
+0x0041E050	0x0041E07B	0x280	screen-width	screen-bitmap	screenBitmap.width, second writer (gds\image.cpp)
+0x0041E050	0x0041E084	0x1E0	screen-height	screen-bitmap	screenBitmap.height, second writer
+0x0041D420	0x0041D450	0x280	blit-pitch	present	SOURCE pitch of the one blit that presents the frame
+0x0041D470	0x0041D52C	0x1E0	region-geometry	present	Ordinal_440 height
+0x0041D470	0x0041D531	0x280	region-geometry	present	Ordinal_440 width; the call also passes 0x10,0x10 block size
+0x0041E0D0	0x0041E0F5	0x27F	dirty-clamp	dirty-grid	x1 upper bound
+0x0041E0D0	0x0041E0FD	0x27F	dirty-clamp	dirty-grid	x2 clamp
+0x0041E0D0	0x0041E11A	0x1DF	dirty-clamp	dirty-grid	y1 upper bound
+0x0041E0D0	0x0041E122	0x1DF	dirty-clamp	dirty-grid	y2 clamp
+0x0041E280	0x0041E2D5	0x280	composer-extent	compose	whole-screen-clear branch: full-screen rect width
+0x0041E280	0x0041E2DC	0x1E0	composer-extent	compose	whole-screen-clear branch: full-screen rect height
+0x0041E280	0x0041E2F2	0x1E0	composer-extent	compose	MOV EDI,0x1e0 -- the height every layer descriptor gets
+0x0041E280	0x0041E323	0x27F	composer-clip	compose	x2 = -left + 639
+0x0041E280	0x0041E32F	0x1DF	composer-clip	compose	y2 = -top + 479
+0x0041E280	0x0041E33E	0x280	composer-extent	compose	width field of every layer descriptor
+0x0041A030	0x0041A049	0x280	layer-rect	layer2-dialogs	dialog layer width
+0x0041A030	0x0041A052	0x1E0	layer-rect	layer2-dialogs	dialog layer height
+0x004BD630	0x004BD633	0x18F	playfield-rect	layer5-playfield	SetRect bottom = 399
+0x004BD630	0x004BD638	0x27F	playfield-rect	layer5-playfield	SetRect right = 639
+0x004BD630	0x004BD675	0x280	layer-rect	layer5-playfield	playfield layer width
+0x004BD630	0x004BD67E	0x190	layer-rect	layer5-playfield	playfield layer height
+0x004D57B0	0x004D5856	0x280	image-clip	sprites	per-image right clip: w = 640 - x
+0x004D57B0	0x004D5887	0x190	image-clip	sprites	per-image bottom clip: h = 400 - y
+0x0045CC90	0x0045CCB1	0x280	rect-clip	clipping	reject if left >= 640
+0x0045CC90	0x0045CCBC	0x190	rect-clip	clipping	reject if top >= 400
+0x0045CC90	0x0045CCD6	0x280	rect-clip	clipping	clamp right to 640
+0x0045CC90	0x0045CCF0	0x190	rect-clip	clipping	clamp bottom to 400
+0x0046FB40	0x0046FC75	0x280	click-rect	input	search rect right = screenLeft + 640
+0x0046FB40	0x0046FC87	0x190	click-rect	input	search rect bottom = screenTop + 400
+0x0046FB40	0x0046FE18	0x280	click-rect	input	same rect, drag-box arm
+0x0046FB40	0x0046FE2A	0x190	click-rect	input	same rect, drag-box arm
+0x0048D660	0x0048D663	0x280	placement-bound	placement	refuse x >= 640
+0x0048D660	0x0048D66D	0x190	placement-bound	placement	refuse y >= 400
+0x004808E0	0x004808E4	0x280	grid-walk	fog	inner loop bound
+0x004808E0	0x004808EB	0x190	grid-walk	fog	outer loop bound
+0x004BCDC0	0x004BCDC0	0x190	grid-walk	terrain	outer loop bound (inline); inner bound is 0x28 columns
+0x0047EBF0	0x0047EC7B	0x280	fog-clip	fog	scrolled arm
+0x0047EBF0	0x0047ECBC	0x190	fog-clip	fog	scrolled arm
+0x0047EBF0	0x0047ED97	0x280	fog-clip	fog	scrolled arm
+0x0047EBF0	0x0047EDB8	0x190	fog-clip	fog	scrolled arm
+0x0047EBF0	0x0047EDC0	0x190	fog-clip	fog	scrolled arm
+0x0047EE20	0x0047EEA0	0x280	fog-clip	fog	static arm
+0x0047EE20	0x0047EEDD	0x190	fog-clip	fog	static arm
+0x0047EE20	0x0047EEFF	0x280	fog-clip	fog	static arm
+0x0047EE20	0x0047EF0B	0x280	fog-clip	fog	static arm
+0x0047EE20	0x0047EF24	0x190	fog-clip	fog	static arm
+0x0047EE20	0x0047EF2C	0x190	fog-clip	fog	static arm
+0x004808F8	0x0048090E	0x280	fog-clip	fog	clipping helper
+0x004808F8	0x0048092C	0x280	fog-clip	fog	clipping helper
+0x004808F8	0x00480948	0x280	fog-clip	fog	clipping helper
+0x004808F8	0x00480953	0x190	fog-clip	fog	clipping helper
+0x00481480	0x004814EA	0x280	layer-park	layer1-mask	parks layer 1 at left=640 to hide it
+0x00481480	0x004814F3	0x190	layer-park	layer1-mask	parks layer 1 at top=400
+0x0049BB90	0x0049BB90	0x14	viewport-tiles	scroll	maxScreenLeft = (mapTileW - 20) * 32
+0x0049BB90	0x0049BB90	0x0C	viewport-tiles	scroll	maxScreenTop = (mapTileH - 12) * 32 + 8
+0x004A4D20	0x004A4D20	0x14	viewport-tiles	minimap	click-to-centre half-extent, x
+0x004A4D20	0x004A4D20	0x0D	viewport-tiles	minimap	click-to-centre half-extent, y (13, not 12)
+0x0048CB80	0x0048CB97	0x1DF	screen-clamp	unread	found by sweep, function not decompiled
+0x0048CB80	0x0048CB9E	0x1DF	screen-clamp	unread	found by sweep, function not decompiled
+0x0048CB80	0x0048CBE8	0x1DF	screen-clamp	unread	found by sweep, function not decompiled
+0x0048CB80	0x0048CBEF	0x1DF	screen-clamp	unread	found by sweep, function not decompiled
+0x004B1FA0	0x004B22E9	0x1DF	screen-clamp	unread	found by sweep, function not decompiled
+0x004B1FA0	0x004B22F0	0x1DF	screen-clamp	unread	found by sweep, function not decompiled
+0x00481510	0x004815E6	0x27F	screen-clamp	unread	found by sweep, function not decompiled
+0x00481510	0x00481620	0x1DF	screen-clamp	unread	found by sweep, function not decompiled
+0x004D1940	0x004D196D	0x27F	mouse-clamp	windowproc	found by sweep, function not decompiled
+0x004D1940	0x004D198E	0x1DF	mouse-clamp	windowproc	found by sweep, function not decompiled
+0x004D19C0	0x004D19F9	0x27F	mouse-clamp	windowproc	found by sweep, function not decompiled
+0x004D19C0	0x004D1A1A	0x1DF	mouse-clamp	windowproc	found by sweep, function not decompiled
+0x004D1A50	0x004D1A89	0x27F	mouse-clamp	windowproc	found by sweep, function not decompiled
+0x004D1A50	0x004D1AAA	0x1DF	mouse-clamp	windowproc	found by sweep, function not decompiled
+0x004D1D70	0x004D24EC	0x27F	mouse-clamp	windowproc	writes 639 into the cursor-x global 0x006CDDC4
+0x004D1D70	0x004D250C	0x1DF	mouse-clamp	windowproc	writes 479 into the cursor-y global 0x006CDDC8
