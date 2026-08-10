@@ -543,6 +543,41 @@ A level-headroom term (`running + queued + 1 <= maxLevel`) keeps the card honest
 stop at the ceiling instead of being queued and dropped at promotion. Dropping them would
 have been safe — no money moves — but it would have read as the feature losing them.
 
+**And the headroom term alone was not enough, which cost one in-game run to find out.**
+An upgrade's requirements are per LEVEL. The interpreter's opcode `0xFF1F` reads the player's
+current level and *jumps to that level's own requirement block*:
+
+```c
+case 0xff1f:
+  cVar6 = currentLevel(player, id);
+  if      (cVar6 == 1) uVar7 = 0xff20;
+  else if (cVar6 == 2) uVar7 = 0xff21;
+  else                 uVar7 = 0xff1f;
+  while (uVar1 != uVar7) { ++in_EAX; uVar1 = stream[in_EAX]; }   /* skip to that block */
+```
+
+So evaluating the condition with the level still at its present value asks "may level N+1 be
+researched?" and gets **level N's answer**. A lone Engineering Bay with Infantry Weapons
+level 1 running duly offered level 2 — and the engine's own gate then refused it at
+promotion, because level 2 needs a prerequisite building the fixture did not have:
+
+```
+UPGQEV promote  unit=... kind=upgrade id=0 -> started, queuedLeft=1 minerals=2800
+UPGQEV drop-gate unit=... kind=upgrade id=7 -- the engine's own gate refused it,
+                 queuedLeft=0 (nothing to refund)
+```
+
+Nothing was lost and nothing was paid — the promotion-time gate is the backstop and it did
+its job — but the card had promised something it could not deliver. So the level array is
+**also** raised, for the length of the condition call, to the level this press is asking FOR
+minus one. The engine then evaluates the requirement block that will actually apply and
+answers −1 (greyed) or 0 by itself, which is the same answer vanilla gives a player who tries
+to research level 2 without the prerequisite.
+
+That is three temporary, restored-before-return writes in one call — `0xC9`, `0xC8`, the
+in-progress bit and the level byte — and every one of them exists so the ENGINE, not the
+plugin, decides the answer.
+
 ### 7.6 `SC_VA_STAT_DIRTY` redraws the status area, NOT the command card
 
 Measured, at a cost of one in-game run. The plugin's first version asked for a redraw after

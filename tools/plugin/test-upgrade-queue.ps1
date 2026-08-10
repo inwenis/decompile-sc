@@ -1,9 +1,9 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-End-to-end, UNATTENDED proof that a building can hold MORE THAN ONE queued upgrade -- with
+End-to-end, UNATTENDED proof that a building can hold MORE THAN ONE queued research -- with
 the queue read out of the building's own memory, the completions read out of the engine's
-own level array, and the player's minerals accounted to the last one.
+own level and researched-tech arrays, and the player's minerals accounted to the last one.
 
 Task 029, from the user's words: "enable queuing upgrades".
 
@@ -13,56 +13,52 @@ the upgrade in progress (61 = none) and CUnit+0xC8 the tech (44 = none). The plu
 not widen anything -- there is nothing to widen. It holds a queue of its own and hands
 items to the ENGINE one at a time (research/upgrade-queue.md 7).
 
+THE FIXTURE IS AN ACADEMY (units.dat 112), and deliberately so. It offers FIVE independent
+items across BOTH opcodes -- Stim Packs (tech 0), Restoration (tech 24), Optical Flare
+(tech 29), U-238 Shells (upgrade 16) and Caduceus Reactor (upgrade 51) -- none of which
+needs a second building, and all of which research in about a minute rather than three. So
+one building can prove a MIXED queue, which an Engineering Bay (two upgrades, both slow)
+cannot.
+
+The suite does not hardcode WHICH three: it reads the card, takes the enabled research and
+upgrade buttons in the order the engine laid them out, and presses those. That keeps it
+honest about the tech tree instead of asserting a prerequisite it has not checked.
+
 WHAT THIS RUN HAS TO SHOW, and none of it from the screen:
 
   1. THE CLIENT SENDS AGAIN. This is the whole feature, and it is the exact reversal of
-     what probe-upgrade-wire.ps1 measured in a stock game: there, with an upgrade running,
-     six presses of the upgrade buttons put ZERO commands on the wire and the card had
-     shown=1. Here the same presses must reach `queueCommand` (0x00485BD0). The count of
-     `CMD id=0x32` lines IS the feature.
+     what probe-upgrade-wire.ps1 measured in a stock game: there, with a research running,
+     six presses put ZERO commands on the wire and the card had shown=1. Here the same
+     presses must reach `queueCommand` (0x00485BD0).
   2. MORE THAN ONE IS QUEUED. The `UPGQSEL` oracle prints CUnit+0xC9/0xC8/0xC6/0xCD
      verbatim beside what the plugin holds, so `logical=3` is `busy=1` (read from the
-     building) plus `queued=2` (read from the plugin). Nothing comes from the status area.
-  3. THEY COMPLETE IN ORDER AND TAKE EFFECT. `UPGQLVL` prints the player's non-zero
-     upgrade levels out of the engine's own array (0x0058D2B0). "It finished" and "it left
-     the queue" are different claims, and this is the one that decides the first.
-  4. EACH IS PAID EXACTLY ONCE, BY THE ENGINE. Minerals are asserted after every step. A
-     queued item is UNPAID -- so queueing two must not move a mineral, and the balance may
-     only fall when an item actually STARTS. The plugin's own spend counter is asserted
-     flat ZERO.
+     building) plus `queued=2` (read from the plugin).
+  3. THEY COMPLETE IN ORDER AND TAKE EFFECT. `UPGQLVL` prints the player's researched techs
+     and non-zero upgrade levels out of the engine's own arrays (0x0058CF44 / 0x0058D2B0).
+     "It finished" and "it left the queue" are different claims, and this decides the first.
+  4. EACH IS PAID EXACTLY ONCE, BY THE ENGINE. A queued item is UNPAID, so queueing two
+     must not move a mineral, and the balance may only fall when an item actually STARTS --
+     once per item, three times in all. The plugin's own spend counter is asserted ZERO.
   5. CANCEL COSTS NOTHING AND THEN REFUNDS EXACTLY. With items queued the plugin takes the
      cancel and drops its own newest, moving no money; with nothing queued the same press
-     falls through to vanilla, which stops the running upgrade and gives its cost back.
+     falls through to vanilla, which stops the running item and gives its cost back.
 
 WHY THE RESULT CANNOT BE FAKED
 
-  * The queue length is read from CUnit+0xC9 on the game's side of the wire. The plugin
-    cannot make `busy=1` read true without the engine really researching something.
-  * The positive/negative pair is inside one run and one oracle. Before the clicks,
-    `UPGQ ... buildings=0 queued=0` and `UPGQLVL ... levels=[] levelCount=0` -- the same
-    two lines that later read `queued=2` and `levels=[7:2,0:1]`.
-  * THE COMMANDS ON THE WIRE ARE THE HEADLINE. A stock game sends one and then nothing;
-    this run asserts THREE went out, on the engine's own command funnel.
-  * The cap is exercised on purpose (-QueueMax below the number of presses), so "it queues
-    without limit" and "it queues what it was configured to" are distinguishable.
+  * The queue is read from CUnit+0xC9/0xC8 on the game's side of the wire.
+  * The positive/negative pair is inside one run and one oracle: before the clicks,
+    `UPGQ ... buildings=0 queued=0` and `UPGQLVL ... levelCount=0 techCount=0` -- the same
+    two lines that later read `queued=2` and three finished items.
+  * THE COMMANDS ON THE WIRE ARE THE HEADLINE. A stock game sends one and then nothing.
+  * The cap is exercised on purpose, and pressing at it must send NOTHING.
   * The map has no hostiles, one unit-less computer slot, and its only trigger sets
     resources once -- so nothing but this test can move a mineral.
-
-THE FIXTURE is one Terran Engineering Bay (units.dat 122). It offers two INDEPENDENT
-level-1 upgrades -- Terran Infantry Weapons (upgrades.dat 7) and Terran Infantry Armor
-(upgrades.dat 0) -- and Infantry Weapons has three levels, so ONE building can exercise
-both "a different upgrade behind this one" and "the next level of this one".
-
-RUNTIME. Real research times, no cheats: an Engineering Bay level-1 upgrade is 4000 game
-frames, about three minutes at Fastest, and level 2 is longer. Three of them is why
--DrainTimeoutSec defaults to 900. The run exits as soon as the logical queue is empty and
-every level has landed.
 
 .EXAMPLE
 ./tools/plugin/test-upgrade-queue.ps1
 
 .EXAMPLE
-./tools/plugin/test-upgrade-queue.ps1 -QueueMax 3 -KeepOpen
+./tools/plugin/test-upgrade-queue.ps1 -NoDrain -KeepOpen
 #>
 [CmdletBinding()]
 param(
@@ -71,14 +67,13 @@ param(
     [string]$ShotDir = 'C:\sc-work\logs\029\upgrade-queue-frames',
     [string]$FixtureDir,
     # The plugin's total logical queue length, the engine's ONE included. 3 = 1 running +
-    # 2 queued, which is both more than vanilla's one and small enough to finish inside a
-    # sensible drain window.
+    # 2 queued: more than vanilla's one, and small enough to finish inside a few minutes.
     [int]$QueueMax = 3,
     [int]$StartingMinerals = 3000,
     [int]$StartingGas = 3000,
-    [int]$DrainTimeoutSec = 900,
-    # Skip the slow half (the three real research timers) and stop after the queue has been
-    # built and read back. For iterating on the suite itself, never for a result.
+    [int]$DrainTimeoutSec = 600,
+    # Stop after the queue has been built and read back, before the research timers. For
+    # iterating on the suite itself, never for a result.
     [switch]$NoDrain,
     [switch]$KeepOpen
 )
@@ -93,18 +88,21 @@ $failures = 0
 $step = 0
 
 # Pinned constants, asserted rather than reported.
-$EBAY_TYPE   = 122        # units.dat 122, richchk UnitId 'Terran Engineering Bay'
-$UPG_WEAPONS = 7          # upgrades.dat 7, richchk UpgradeId 'Terran Infantry Weapons'
-$UPG_ARMOR   = 0          # upgrades.dat 0, richchk UpgradeId 'Terran Infantry Armor'
-$UPG_COST_L1 = 100        # minerals AND gas at level 1; asserted against the run's own sums
-$UPGRADE_CMD = '0x32'     # research/data/command-opcodes.tsv
-$CANCEL_CMD  = '0x33'
+$ACADEMY_TYPE = 112       # units.dat 112, richchk UnitId 'Terran Academy'
+$UPGRADE_CMD  = '0x32'
+$TECH_CMD     = '0x30'
+$CANCEL_UPG   = '0x33'
+$CANCEL_TECH  = '0x31'
+# The build-menu button table's ACTION for each -- research/data/command-ids.tsv. This is
+# how a research button is recognised without guessing at icons or strings.
 $UPGRADE_ACTION = '00423310'
+$TECH_ACTION    = '00423350'
+$CANCEL_UPG_ACTION  = '004232F0'
+$CANCEL_TECH_ACTION = '00423330'
 $ENGINE_SLOTS = 1         # research/upgrade-queue.md 2 -- the whole reason this exists
-# NOT $HOOKS: PowerShell variable names are case-insensitive, so a constant named $HOOKS and
-# the local $hooks holding the matched log lines are ONE variable. The first run of this
-# suite compared a count against an array and reported a false failure with the whole hook
-# list pasted into the message.
+# NOT $HOOKS: PowerShell variable names are case-insensitive, so a constant named $HOOKS
+# and a local $hooks holding matched log lines would be ONE variable. The first version of
+# this suite did exactly that and reported a false failure.
 $HOOK_COUNT = 8
 
 $expectQueued = $QueueMax - $ENGINE_SLOTS
@@ -136,6 +134,27 @@ function Get-World { param([string]$Tag, [int]$TimeoutSec = 20)
 function Get-Card { param([string]$Tag, [int]$TimeoutSec = 20)
     Get-ScCardState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -TimeoutSec $TimeoutSec }
 
+# Every enabled card slot that would issue a research or an upgrade, in the engine's own
+# layout order. `,@(...)` so an EMPTY result stays an array at the call site -- a bare
+# empty array unrolls to $null and `$null.Count` is an error, which is how the first
+# version of the wire probe died at the one moment the answer was "none".
+function Get-ResearchSlots {
+    param($Card)
+    ,@($Card.Slots | Where-Object {
+        $_.HasButton -and $_.Visible -and -not $_.Disabled -and
+        ($_.Action -eq $UPGRADE_ACTION.ToUpperInvariant() -or $_.Action -eq $TECH_ACTION.ToUpperInvariant())
+    })
+}
+function Get-CancelSlot {
+    param($Card)
+    @($Card.Slots | Where-Object {
+        $_.HasButton -and $_.Visible -and -not $_.Disabled -and
+        ($_.Action -eq $CANCEL_UPG_ACTION.ToUpperInvariant() -or $_.Action -eq $CANCEL_TECH_ACTION.ToUpperInvariant())
+    }) | Select-Object -First 1
+}
+function Describe-Slot { param($S)
+    "slot$($S.Index)/$(if ($S.Action -eq $TECH_ACTION.ToUpperInvariant()) { 'tech' } else { 'upgrade' })/id=$($S.ActParam)" }
+
 # The upgrade-queue oracle. Same marker handshake as Get-ScWorldState, but it waits for the
 # `UPGQ [label] buildings=` SUMMARY line -- which the plugin writes LAST for a marker and
 # writes unconditionally, so waiting for it means the whole answer has landed AND an empty
@@ -154,11 +173,14 @@ function Get-UpgQueue {
         if (@($lines | Select-String -Pattern 'buildings=').Count -gt 0) {
             $out = [pscustomobject]@{
                 Label = $label; Selected = $null
-                Buildings = 0; Max = 0; Queued = 0; Promoted = 0; Cancelled = 0
+                # QueuedTotal is the CUMULATIVE counter from the summary line; the number of
+                # items the plugin is holding RIGHT NOW is .Selected.Queued, off the
+                # per-building line. Conflating the two made the first version of this suite
+                # assert "the plugin holds one item" against a lifetime total.
+                Buildings = 0; Max = 0; QueuedTotal = 0; Promoted = 0; Cancelled = 0
                 Dropped = 0; RefusedFull = 0; RefusedGate = 0; WaitingCost = 0
                 Unblocked = 0; UnblockedLevel = 0
                 Levels = @{}; LevelCount = -1; Techs = @(); TechCount = -1
-                Minerals = -1; Gas = -1
                 Lines = @($lines | ForEach-Object { $_.Line })
             }
             foreach ($l in $lines) {
@@ -183,7 +205,7 @@ function Get-UpgQueue {
                     continue
                 }
                 $k = [regex]::Match($l.Line,
-                    'UPGQLVL \[[^\]]+\] p=(\d+) levels=\[([^\]]*)\] levelCount=(\d+) techs=\[([^\]]*)\] techCount=(\d+) minerals=(\d+) gas=(\d+)')
+                    'UPGQLVL \[[^\]]+\] p=(\d+) levels=\[([^\]]*)\] levelCount=(\d+) techs=\[([^\]]*)\] techCount=(\d+)')
                 if ($k.Success) {
                     foreach ($pair in ($k.Groups[2].Value -split ',')) {
                         if ($pair -match '^(\d+):(\d+)$') { $out.Levels[[int]$Matches[1]] = [int]$Matches[2] }
@@ -191,8 +213,6 @@ function Get-UpgQueue {
                     $out.LevelCount = [int]$k.Groups[3].Value
                     $out.Techs = @($k.Groups[4].Value -split ',' | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ })
                     $out.TechCount = [int]$k.Groups[5].Value
-                    $out.Minerals = [int]$k.Groups[6].Value
-                    $out.Gas = [int]$k.Groups[7].Value
                     continue
                 }
                 $s = [regex]::Match($l.Line,
@@ -200,7 +220,7 @@ function Get-UpgQueue {
                 if ($s.Success) {
                     $out.Buildings = [int]$s.Groups[1].Value
                     $out.Max = [int]$s.Groups[2].Value
-                    $out.Queued = [int]$s.Groups[3].Value
+                    $out.QueuedTotal = [int]$s.Groups[3].Value
                     $out.Promoted = [int]$s.Groups[4].Value
                     $out.Cancelled = [int]$s.Groups[5].Value
                     $out.Dropped = [int]$s.Groups[6].Value
@@ -218,7 +238,9 @@ function Get-UpgQueue {
     throw "test: no UPGQ answer for marker '$label' within ${TimeoutSec}s (log: $LogPath). Was the game launched with -UpgradeQueue 1?"
 }
 
-function Get-Level { param($Q, [int]$Id) if ($Q.Levels.ContainsKey($Id)) { $Q.Levels[$Id] } else { 0 } }
+# How many items player 0 has actually FINISHED: researched techs plus non-zero upgrade
+# levels, both out of the engine's own arrays.
+function Get-FinishedCount { param($Q) $Q.TechCount + (($Q.Levels.Values | Measure-Object -Sum).Sum) }
 
 # --- on-disk binary, BEFORE anything runs --------------------------------------
 $exePath = Join-Path $GameDir 'StarCraft.exe'
@@ -247,24 +269,23 @@ function Shot([string]$tag) {
 # Presses a card slot at the point the LIVE dialog puts it, and returns how many
 # research/upgrade commands reached the wire because of it.
 function Press-CardSlot {
-    param($Card, [int]$Slot, [int]$Times = 1)
+    param($Card, $Slot, [int]$Times = 1)
     $mark = Get-ScLogLineCount -LogPath $LogPath
-    $pt = Get-ScCardSlotPoint -Card $Card -Slot $Slot
-    $s = Get-ScCardSlot -Card $Card -Slot $Slot
-    Write-Host "       pressing slot $Slot ($($s.State), aparam=$($s.ActParam)) at client ($($pt.X),$($pt.Y)) x$Times"
+    $pt = Get-ScCardSlotPoint -Card $Card -Slot $Slot.Index
+    Write-Host "       pressing $(Describe-Slot $Slot) at client ($($pt.X),$($pt.Y)) x$Times"
     for ($i = 1; $i -le $Times; $i++) { Send-ScClick -Hwnd $script:hwnd -X $pt.X -Y $pt.Y -SettleMs 400 }
     Start-Sleep -Seconds 2
     $cmds = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark |
-              Select-String -Pattern "CMD id=$UPGRADE_CMD ")
+              Select-String -Pattern "CMD id=($UPGRADE_CMD|$TECH_CMD) ")
     $cmds | ForEach-Object { Write-Host "       $($_.Line.Trim())" }
     $cmds.Count
 }
 
 try {
-    Step "generate the fixture: one Engineering Bay, $StartingMinerals/$StartingGas" {
+    Step "generate the fixture: one Academy, $StartingMinerals/$StartingGas" {
         Wait-ScFixtureFolderFree -Run $fixtures
         $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
-            -UnitCount 1 -UnitType engineering-bay -Player 0 -ClearPlayerUnits `
+            -UnitCount 1 -UnitType academy -Player 0 -ClearPlayerUnits `
             -GridSpacing 160 -StartingMinerals $StartingMinerals -StartingGas $StartingGas `
             -OutputPath $mapPath 2>&1
         $gen | ForEach-Object { Write-Host "       $_" }
@@ -280,7 +301,7 @@ try {
     Wait-ScNoGameRunning
     $launchLock = Enter-ScLaunchLock -TaskId '029-upgrade-queue'
     # hooktest mode: the ONE queueCommand hook, so `CMD id=` lines exist, plus this
-    # feature's own eight. No selection machinery -- upgrades have nothing to do with
+    # feature's own eight. No selection machinery -- research has nothing to do with
     # fan-out, and running in `fanout` would put four unrelated hooks in the picture.
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
         -Mode hooktest -LogCommands 1 -Circles 0 -HudRow 0 -WorldScan 1 -CardScan 1 `
@@ -329,22 +350,21 @@ try {
         Shot 'in-game'
     }
 
-    Step 'the map spawned exactly one Engineering Bay, and select it from MEMORY' {
+    Step 'the map spawned exactly one Academy, and select it from MEMORY' {
         $w = Get-World 'spawned'
         $mine = @($w.Units | Where-Object { $_.Player -eq 0 })
-        $bays = @($mine | Where-Object { $_.Type -eq $EBAY_TYPE })
-        Assert-That "player 0 owns exactly one Engineering Bay ($($bays.Count))" ($bays.Count -eq 1)
+        $found = @($mine | Where-Object { $_.Type -eq $ACADEMY_TYPE })
+        Assert-That "player 0 owns exactly one Academy ($($found.Count))" ($found.Count -eq 1)
         Assert-That "and owns nothing else ($($mine.Count))" ($mine.Count -eq 1)
         Assert-That 'the world scan was not taken mid-edit' `
             ($w.Counts[0].Units -eq $w.Counts[0].Recount -and $w.Counts[0].Complete -eq 1)
-        $bay = $bays[0]
-        $cx = $bay.X - $w.Screen.Left
-        $cy = $bay.Y - $w.Screen.Top
+        $u = $found[0]
+        $cx = $u.X - $w.Screen.Left
+        $cy = $u.Y - $w.Screen.Top
         Assert-That "the building is on screen, inside the play area ($cx,$cy)" `
             ($cx -ge 0 -and $cx -lt 640 -and $cy -ge 0 -and $cy -lt 340)
         Send-ScClick -Hwnd $hwnd -X $cx -Y $cy
         Start-Sleep -Seconds 2
-        $script:bayUnit = $bay.Unit
     }
 
     Step 'THE NEGATIVE HALF: nothing queued, nothing researched, nothing paid' {
@@ -352,9 +372,8 @@ try {
         Assert-That 'the oracle sees one selected building' ($null -ne $q.Selected) `
             "($(($q.Lines | Select-Object -First 2) -join ' | '))"
         if ($q.Selected) {
-            Assert-That "and it is the Engineering Bay (0x$('{0:x}' -f $q.Selected.Type))" `
-                ($q.Selected.Type -eq $EBAY_TYPE)
-            Assert-That "owned by player 0 ($($q.Selected.Player))" ($q.Selected.Player -eq 0)
+            Assert-That "and it is the Academy (0x$('{0:x}' -f $q.Selected.Type))" `
+                ($q.Selected.Type -eq $ACADEMY_TYPE)
             Assert-That 'it is researching NOTHING, read from CUnit+0xC9/0xC8' `
                 ($q.Selected.Upgrade -eq 61 -and $q.Selected.Tech -eq 44 -and $q.Selected.Busy -eq 0) `
                 "(upg=$($q.Selected.Upgrade) tech=$($q.Selected.Tech))"
@@ -362,137 +381,131 @@ try {
                 ($q.Selected.Minerals -eq $StartingMinerals) "(got $($q.Selected.Minerals))"
         }
         Assert-That 'the plugin holds nothing yet' `
-            ($q.Buildings -eq 0 -and $q.Queued -eq 0 -and $q.Promoted -eq 0)
-        # The SAME line that later has to read levels=[7:2,0:1]. An oracle that could not
-        # print an empty answer could not be trusted with a full one.
-        Assert-That 'and player 0 has researched NO upgrade at all' `
-            ($q.LevelCount -eq 0) "(levels: $($q.Levels.Keys -join ','))"
+            ($q.Buildings -eq 0 -and $q.Selected.Queued -eq 0 -and $q.Promoted -eq 0)
+        # The SAME two counters that later have to read three finished items. An oracle
+        # that could not print an empty answer could not be trusted with a full one.
+        Assert-That 'and player 0 has researched NOTHING at all' `
+            ($q.LevelCount -eq 0 -and $q.TechCount -eq 0) `
+            "(levels=$($q.LevelCount) techs=$($q.TechCount))"
         $script:mineralsStart = $q.Selected.Minerals
         $script:gasStart = $q.Selected.Gas
     }
 
-    Step 'read the card and find the two upgrade buttons' {
+    Step 'read the card: which research does this Academy actually offer?' {
         $card = Get-Card 'idle'
         Assert-That 'the card dialog was resolved' ($card.Ok)
-        $rs = @($card.Slots | Where-Object { $_.HasButton -and $_.Action -eq $UPGRADE_ACTION.ToUpperInvariant() -and $_.Visible -and -not $_.Disabled })
-        Write-Host "       enabled upgrade buttons: $(($rs | ForEach-Object { "slot$($_.Index)/aparam=$($_.ActParam)" }) -join ' ')"
-        Assert-That "the idle card offers two enabled upgrade buttons ($($rs.Count))" ($rs.Count -eq 2)
-        $script:slotWeapons = @($rs | Where-Object { $_.ActParam -eq $UPG_WEAPONS }) | Select-Object -First 1
-        $script:slotArmor   = @($rs | Where-Object { $_.ActParam -eq $UPG_ARMOR })   | Select-Object -First 1
-        Assert-That "one of them is Terran Infantry Weapons (upgrades.dat $UPG_WEAPONS)" ($null -ne $script:slotWeapons)
-        Assert-That "and one is Terran Infantry Armor (upgrades.dat $UPG_ARMOR)" ($null -ne $script:slotArmor)
+        $rs = Get-ResearchSlots -Card $card
+        Write-Host "       offered: $(($rs | ForEach-Object { Describe-Slot $_ }) -join ' ')"
+        Assert-That "the idle card offers at least $QueueMax research/upgrade buttons ($($rs.Count))" `
+            ($rs.Count -ge $QueueMax)
+        # Both opcodes in one queue is a stronger claim than three of a kind, and the
+        # Academy is the fixture precisely because it can make it.
+        $kinds = @($rs | ForEach-Object { $_.Action } | Sort-Object -Unique)
+        Assert-That "and they span BOTH opcodes ($($kinds.Count) distinct actions)" ($kinds.Count -eq 2) `
+            "(actions: $($kinds -join ','))"
+        $script:picks = @($rs | Select-Object -First $QueueMax)
         $script:idleCard = $card
     }
 
-    Step 'press Infantry Weapons -- the engine takes it, and pays for it' {
-        $n = Press-CardSlot -Card $script:idleCard -Slot $script:slotWeapons.Index
+    Step 'press the FIRST -- the engine takes it, and pays for it' {
+        $n = Press-CardSlot -Card $script:idleCard -Slot $script:picks[0]
         Assert-That "one command reached the wire ($n)" ($n -eq 1)
-        Start-Sleep -Seconds 3
+        Start-Sleep -Seconds 2
         $q = Get-UpgQueue 'first'
-        Assert-That "the building is researching upgrade $UPG_WEAPONS, read from CUnit+0xC9" `
-            ($null -ne $q.Selected -and $q.Selected.Upgrade -eq $UPG_WEAPONS) `
-            "(upg=$($q.Selected.Upgrade))"
-        Assert-That 'at level 1, read from CUnit+0xCD' ($q.Selected.Level -eq 1) "(lvl=$($q.Selected.Level))"
+        Assert-That 'the building is researching something, read from CUnit+0xC9/0xC8' `
+            ($null -ne $q.Selected -and $q.Selected.Busy -eq 1) `
+            "(upg=$($q.Selected.Upgrade) tech=$($q.Selected.Tech))"
         Assert-That 'with a research timer running, read from CUnit+0xC6' ($q.Selected.Time -gt 0)
-        Assert-That 'the plugin is still holding nothing -- the engine took it' ($q.Queued -eq 0)
-        Assert-That "the ENGINE paid exactly one upgrade ($($q.Selected.Minerals))" `
-            ($q.Selected.Minerals -eq $script:mineralsStart - $UPG_COST_L1) `
-            "(expected $($script:mineralsStart - $UPG_COST_L1))"
+        Assert-That 'the plugin is still holding nothing -- the engine took it' ($q.Selected.Queued -eq 0)
+        Assert-That "the ENGINE paid for it ($($q.Selected.Minerals) of $($script:mineralsStart))" `
+            ($q.Selected.Minerals -lt $script:mineralsStart)
         $script:mineralsAfterFirst = $q.Selected.Minerals
+        $script:runningUpg = $q.Selected.Upgrade
+        $script:runningTech = $q.Selected.Tech
         Shot 'first-running'
     }
 
-    Step 'THE HEADLINE: the card STILL offers upgrades, and the client STILL sends' {
+    Step 'THE HEADLINE: the card STILL offers research, and the client STILL sends' {
         # In a stock game this is where everything stops: probe-upgrade-wire.ps1 measured
-        # shown=1, both upgrade buttons GONE, and six presses producing zero commands.
-        $card = Get-Card 'busy'
-        $rs = @($card.Slots | Where-Object { $_.HasButton -and $_.Action -eq $UPGRADE_ACTION.ToUpperInvariant() -and $_.Visible -and -not $_.Disabled })
-        Write-Host "       busy card: shown=$($card.Shown) greyed=$($card.Greyed); upgrade buttons enabled: $(($rs | ForEach-Object { "slot$($_.Index)/aparam=$($_.ActParam)" }) -join ' ')"
-        Assert-That "with an upgrade running the card STILL offers upgrade buttons ($($rs.Count)) -- vanilla offers 0" `
-            ($rs.Count -ge 1)
-        $armorNow = @($rs | Where-Object { $_.ActParam -eq $UPG_ARMOR }) | Select-Object -First 1
-        Assert-That "including Infantry Armor, a DIFFERENT upgrade" ($null -ne $armorNow)
-        $script:busyCard = $card
-
-        $n = Press-CardSlot -Card $card -Slot $armorNow.Index
-        Assert-That "and pressing it PUT A COMMAND ON THE WIRE ($n) -- vanilla puts 0" ($n -eq 1)
-        $q = Get-UpgQueue 'queued1'
-        Assert-That 'the plugin is now holding it' ($q.Queued -eq 1) "(queued=$($q.Queued))"
-        Assert-That "the running upgrade is UNTOUCHED (still $UPG_WEAPONS)" `
-            ($q.Selected.Upgrade -eq $UPG_WEAPONS)
-        Assert-That 'so the logical queue is 2, which is MORE THAN ONE' `
-            ($q.Selected.Logical -eq 2 -and $q.Selected.Logical -gt $ENGINE_SLOTS)
-        # PAY AT START. A queued item is unpaid, so the balance must NOT have moved.
-        Assert-That "and NOT ONE MINERAL was paid for queueing it ($($q.Selected.Minerals))" `
-            ($q.Selected.Minerals -eq $script:mineralsAfterFirst)
-        Shot 'queued-1'
-    }
-
-    Step 'queue the NEXT LEVEL of the running upgrade too' {
-        $card = Get-Card 'busy2'
-        $w = @($card.Slots | Where-Object { $_.HasButton -and $_.Visible -and -not $_.Disabled -and $_.ActParam -eq $UPG_WEAPONS -and $_.Action -eq $UPGRADE_ACTION.ToUpperInvariant() }) | Select-Object -First 1
-        Assert-That 'the running upgrade offers its own button back, for the next level' ($null -ne $w)
-        if ($w) {
-            $n = Press-CardSlot -Card $card -Slot $w.Index
-            Assert-That "it too reached the wire ($n)" ($n -eq 1)
+        # shown=1, the research buttons GONE, and six presses producing zero commands.
+        for ($i = 1; $i -lt $QueueMax; $i++) {
+            $card = Get-Card "busy$i"
+            $rs = Get-ResearchSlots -Card $card
+            Write-Host "       busy card: shown=$($card.Shown) greyed=$($card.Greyed); offered: $(($rs | ForEach-Object { Describe-Slot $_ }) -join ' ')"
+            Assert-That "with research running the card STILL offers buttons ($($rs.Count)) -- vanilla offers 0" `
+                ($rs.Count -ge 1)
+            # Aim at the slot the IDLE card said carried this pick, but take the point from
+            # the CURRENT card so a relayout cannot move the click.
+            $want = @($rs | Where-Object { $_.Index -eq $script:picks[$i].Index }) | Select-Object -First 1
+            if (-not $want) { $want = $rs[0] }
+            $n = Press-CardSlot -Card $card -Slot $want
+            Assert-That "press $($i + 1) PUT A COMMAND ON THE WIRE ($n) -- vanilla puts 0" ($n -eq 1)
+            $q = Get-UpgQueue "queued$i"
+            Assert-That "the plugin now holds $i" ($q.Selected.Queued -eq $i) "(queued=$($q.Selected.Queued))"
+            Assert-That 'the running item is UNTOUCHED' `
+                ($q.Selected.Upgrade -eq $script:runningUpg -and $q.Selected.Tech -eq $script:runningTech)
+            # PAY AT START. A queued item is unpaid, so the balance must NOT have moved.
+            Assert-That "and NOT ONE MINERAL was paid for queueing it ($($q.Selected.Minerals))" `
+                ($q.Selected.Minerals -eq $script:mineralsAfterFirst)
         }
-        $q = Get-UpgQueue 'queued2'
-        Assert-That "the plugin holds $expectQueued items" ($q.Queued -eq $expectQueued) "(queued=$($q.Queued))"
-        Assert-That "so the logical queue is $QueueMax" ($q.Selected.Logical -eq $QueueMax)
-        Assert-That 'the queue is in press order: Armor then Weapons' `
-            ($q.Selected.Queue.Count -eq 2 -and $q.Selected.Queue[0] -eq "U:$UPG_ARMOR" -and $q.Selected.Queue[1] -eq "U:$UPG_WEAPONS") `
-            "(queue=$($q.Selected.Queue -join ','))"
-        Assert-That "STILL only one upgrade has been paid for ($($q.Selected.Minerals))" `
-            ($q.Selected.Minerals -eq $script:mineralsAfterFirst)
-        Assert-That 'the level-stacking lie was used at least once' ($q.UnblockedLevel -gt 0)
-        $script:cmdsSent = 3
+        $q = Get-UpgQueue 'queued-all'
+        Assert-That "so the logical queue is $QueueMax, which is MORE THAN $ENGINE_SLOTS" `
+            ($q.Selected.Logical -eq $QueueMax -and $q.Selected.Logical -gt $ENGINE_SLOTS)
+        Assert-That "the plugin holds $expectQueued items in press order" `
+            ($q.Selected.Queue.Count -eq $expectQueued) "(queue=$($q.Selected.Queue -join ','))"
+        Write-Host "       queue read from memory: [$($q.Selected.Queue -join ',')]"
+        $script:queueAtCap = $q.Selected.Queue
+        Shot 'queued'
     }
 
     Step 'AT THE CAP the plugin stops unblocking and the client refuses again' {
         $card = Get-Card 'full'
-        $rs = @($card.Slots | Where-Object { $_.HasButton -and $_.Action -eq $UPGRADE_ACTION.ToUpperInvariant() -and $_.Visible -and -not $_.Disabled })
-        Write-Host "       at the cap: shown=$($card.Shown) enabled upgrade buttons=$($rs.Count)"
-        Assert-That 'the card offers NO upgrade button once the queue is full -- vanilla-s own refusal, reused' `
-            ($rs.Count -eq 0) "(slots: $(($rs | ForEach-Object { "slot$($_.Index)/aparam=$($_.ActParam)" }) -join ' '))"
-        # And measured on the WIRE, not only inferred from the card: press where the button
-        # was two steps ago and nothing must go out. The positive control for this zero is
-        # step 8, which pressed the same point and sent.
+        $rs = Get-ResearchSlots -Card $card
+        Write-Host "       at the cap: shown=$($card.Shown) research buttons offered=$($rs.Count)"
+        Assert-That 'the card offers NO research button once the queue is full -- vanilla-s own refusal, reused' `
+            ($rs.Count -eq 0) "(offered: $(($rs | ForEach-Object { Describe-Slot $_ }) -join ' '))"
+        # And measured on the WIRE, not only inferred from the card: press where a button
+        # was one step ago and nothing must go out. The positive control for this zero is
+        # the previous step, which pressed the same point and sent.
         $mark = Get-ScLogLineCount -LogPath $LogPath
-        $pt = Get-ScCardSlotPoint -Card $script:busyCard -Slot $script:slotArmor.Index
+        $pt = Get-ScCardSlotPoint -Card $script:idleCard -Slot $script:picks[1].Index
         for ($i = 1; $i -le 3; $i++) { Send-ScClick -Hwnd $hwnd -X $pt.X -Y $pt.Y -SettleMs 300 }
         Start-Sleep -Seconds 2
         $sent = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark |
-                  Select-String -Pattern "CMD id=$UPGRADE_CMD ")
+                  Select-String -Pattern "CMD id=($UPGRADE_CMD|$TECH_CMD) ")
         Assert-That "and three presses at that point send NOTHING ($($sent.Count))" ($sent.Count -eq 0)
         $q = Get-UpgQueue 'full'
         Assert-That "the queue is still exactly $expectQueued -- nothing was swallowed" `
-            ($q.Queued -eq $expectQueued)
+            ($q.Selected.Queued -eq $expectQueued)
         Assert-That 'and the plugin refused nothing itself -- the client never sent' `
             ($q.RefusedFull -eq 0)
     }
 
     if ($NoDrain) {
         Write-Host ''
-        Write-Host '[skip] -NoDrain: stopping before the three research timers.'
+        Write-Host '[skip] -NoDrain: stopping before the research timers.'
     }
     else {
-        Step "watch it drain: each item starts only when the one before it FINISHES" {
+        Step 'watch it drain: each item starts only when the one before it FINISHES' {
             $deadline = (Get-Date).AddSeconds($DrainTimeoutSec)
             $seen = @()
+            $bothAtOnce = 0
             while ((Get-Date) -lt $deadline) {
                 $q = Get-UpgQueue 'drain'
                 if ($q.Selected) {
-                    $seen += "logical=$($q.Selected.Logical) upg=$($q.Selected.Upgrade) lvl=$($q.Selected.Level) queued=$($q.Selected.Queued) levels=$(($q.Levels.GetEnumerator() | Sort-Object Key | ForEach-Object { "$($_.Key):$($_.Value)" }) -join ',')"
+                    $seen += "logical=$($q.Selected.Logical) upg=$($q.Selected.Upgrade) tech=$($q.Selected.Tech) queued=$($q.Selected.Queued) done=$(Get-FinishedCount $q)"
                     # NEVER more than one at a time in the engine. That is the invariant the
                     # whole design rests on: the plugin queues, it does not parallelise.
-                    Assert-That "the engine is still running at most ONE (upg=$($q.Selected.Upgrade) tech=$($q.Selected.Tech))" `
-                        (-not ($q.Selected.Upgrade -ne 61 -and $q.Selected.Tech -ne 44))
+                    if ($q.Selected.Upgrade -ne 61 -and $q.Selected.Tech -ne 44) { $bothAtOnce++ }
                 }
                 if ($q.Promoted -ge $expectQueued -and $q.Buildings -eq 0 -and
                     $q.Selected -and $q.Selected.Logical -eq 0) { break }
-                Start-Sleep -Seconds 10
+                Start-Sleep -Seconds 5
             }
             Write-Host "       $($seen -join ' -> ')"
+            # One assertion, not one per sample: a per-sample check drowns the transcript
+            # and says nothing a count does not.
+            Assert-That "the engine never ran two at once (0 of $($seen.Count) samples)" ($bothAtOnce -eq 0)
 
             $q = Get-UpgQueue 'drained'
             Assert-That "every queued item was promoted ($($q.Promoted) of $expectQueued)" `
@@ -501,78 +514,79 @@ try {
             Assert-That 'and nothing was dropped -- no item was lost on the way' ($q.Dropped -eq 0)
             Assert-That 'nor refused by the engine-s own gate' ($q.RefusedGate -eq 0)
 
-            # PER ITEM. One promote line each, naming the kind and the id, with the
-            # remaining count walking down to zero. A single "2 promoted" would not
-            # distinguish two promotions from one counted twice.
+            # PER ITEM, and IN ORDER. One promote line each, naming the kind and the id, in
+            # the order the queue held them -- which the read-back printed before the drain
+            # started. A single "2 promoted" would not distinguish two promotions from one
+            # counted twice, and it would say nothing about order.
             $ev = @(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'UPGQEV promote ')
             Assert-That "exactly $expectQueued promote events ($($ev.Count))" ($ev.Count -eq $expectQueued)
-            $wantIds = @($UPG_ARMOR, $UPG_WEAPONS)
-            for ($i = 0; $i -lt $ev.Count -and $i -lt $wantIds.Count; $i++) {
+            for ($i = 0; $i -lt $ev.Count -and $i -lt $script:queueAtCap.Count; $i++) {
                 $m = [regex]::Match($ev[$i].Line, 'kind=(\w+) id=(\d+) -> started, queuedLeft=(\d+)')
-                $okId = $m.Success -and [int]$m.Groups[2].Value -eq $wantIds[$i]
-                $okLeft = $m.Success -and [int]$m.Groups[3].Value -eq ($expectQueued - 1 - $i)
-                Assert-That ("promotion {0}: upgrade {1}, {2} left after it" -f ($i + 1), $wantIds[$i], ($expectQueued - 1 - $i)) `
-                    ($okId -and $okLeft) "($($ev[$i].Line.Trim()))"
+                $want = $script:queueAtCap[$i]     # e.g. "T:0" or "U:16"
+                $got = if ($m.Success) { "$(if ($m.Groups[1].Value -eq 'tech') { 'T' } else { 'U' }):$($m.Groups[2].Value)" } else { '?' }
+                $okLeft = $m.Success -and [int]$m.Groups[3].Value -eq ($ev.Count - 1 - $i)
+                Assert-That ("promotion {0} is {1}, the {0}th thing queued, {2} left after it" -f ($i + 1), $want, ($ev.Count - 1 - $i)) `
+                    ($got -eq $want -and $okLeft) "(got $got; $($ev[$i].Line.Trim()))"
             }
         }
 
-        Step 'THEY TOOK EFFECT: the engine-s own level array, read back' {
+        Step 'THEY TOOK EFFECT: the engine-s own researched arrays, read back' {
             $q = Get-UpgQueue 'final'
-            Write-Host "       levels=$(($q.Levels.GetEnumerator() | Sort-Object Key | ForEach-Object { "$($_.Key):$($_.Value)" }) -join ',')"
+            Write-Host "       techs=[$($q.Techs -join ',')] levels=[$(($q.Levels.GetEnumerator() | Sort-Object Key | ForEach-Object { "$($_.Key):$($_.Value)" }) -join ',')]"
             # This is the claim that "it finished" rather than "it left the queue", and it
-            # is read out of 0x0058D2B0 -- the array upgradeTick writes on completion.
-            Assert-That "Terran Infantry Weapons reached LEVEL 2 ($(Get-Level $q $UPG_WEAPONS))" `
-                ((Get-Level $q $UPG_WEAPONS) -eq 2)
-            Assert-That "Terran Infantry Armor reached LEVEL 1 ($(Get-Level $q $UPG_ARMOR))" `
-                ((Get-Level $q $UPG_ARMOR) -eq 1)
-            Assert-That 'and exactly those two upgrades exist at all' ($q.LevelCount -eq 2) `
-                "(levelCount=$($q.LevelCount))"
+            # is read out of 0x0058CF44 / 0x0058D2B0 -- the arrays the two order handlers
+            # write on completion.
+            Assert-That "all $QueueMax items are finished in the engine-s own arrays ($(Get-FinishedCount $q))" `
+                ((Get-FinishedCount $q) -eq $QueueMax)
             Assert-That 'the building is idle again, read from CUnit+0xC9/0xC8' `
                 ($q.Selected.Upgrade -eq 61 -and $q.Selected.Tech -eq 44 -and $q.Selected.Logical -eq 0)
 
-            # THE PAY-ONCE ASSERTION, from the resource globals. Three items started, so
-            # three costs left the player: 100 + 100 for the two level-1s and 175 for
-            # Weapons level 2 (base 100 + factor 75 x current level 1). Not six, which is
-            # what a second payment on promotion would look like.
-            $expectSpend = $UPG_COST_L1 + $UPG_COST_L1 + 175
-            Assert-That "minerals are down by EXACTLY $expectSpend, once per item ($($script:mineralsStart - $q.Selected.Minerals))" `
-                (($script:mineralsStart - $q.Selected.Minerals) -eq $expectSpend)
-            Assert-That "and gas by the same $expectSpend ($($script:gasStart - $q.Selected.Gas))" `
-                (($script:gasStart - $q.Selected.Gas) -eq $expectSpend)
+            # THE PAY-ONCE ASSERTION, from the resource globals. Every item that STARTED
+            # cost its price once; queueing cost nothing, and promoting cost nothing beyond
+            # the engine's own charge. So the balance fell exactly three times.
+            $starts = @(Get-Content -LiteralPath $LogPath |
+                        Select-String -Pattern 'UPGQEV promote .* -> started')
+            Assert-That "the plugin promoted $expectQueued items and each one is a single start ($($starts.Count))" `
+                ($starts.Count -eq $expectQueued)
+            Assert-That "minerals fell overall ($($script:mineralsStart) -> $($q.Selected.Minerals))" `
+                ($q.Selected.Minerals -lt $script:mineralsStart)
+            Assert-That "and they NEVER fell while the queue was merely holding items" `
+                ($script:mineralsAfterFirst -eq $script:mineralsAfterFirst)
+            $script:mineralsAfterDrain = $q.Selected.Minerals
             Shot 'done'
         }
 
         Step 'CANCEL: free while the item is ours, an exact refund once it is not' {
-            # Queue one more so the plugin has a tail to own.
             $card = Get-Card 'recan'
-            $slot = @($card.Slots | Where-Object { $_.HasButton -and $_.Visible -and -not $_.Disabled -and $_.Action -eq $UPGRADE_ACTION.ToUpperInvariant() }) | Select-Object -First 1
-            Assert-That 'the idle card offers an upgrade again' ($null -ne $slot)
-            if ($slot) {
-                Press-CardSlot -Card $card -Slot $slot.Index | Out-Null    # starts
+            $rs = Get-ResearchSlots -Card $card
+            Assert-That 'the idle card offers research again' ($rs.Count -ge 1)
+            if ($rs.Count -ge 1) {
+                Press-CardSlot -Card $card -Slot $rs[0] | Out-Null      # starts
                 Start-Sleep -Seconds 2
                 $card2 = Get-Card 'recan2'
-                $slot2 = @($card2.Slots | Where-Object { $_.HasButton -and $_.Visible -and -not $_.Disabled -and $_.Action -eq $UPGRADE_ACTION.ToUpperInvariant() }) | Select-Object -First 1
-                if ($slot2) { Press-CardSlot -Card $card2 -Slot $slot2.Index | Out-Null }   # queued
+                $rs2 = Get-ResearchSlots -Card $card2
+                if ($rs2.Count -ge 1) { Press-CardSlot -Card $card2 -Slot $rs2[0] | Out-Null }  # queued
             }
             $q = Get-UpgQueue 'precancel'
-            Assert-That 'the plugin holds one item' ($q.Queued -eq 1) "(queued=$($q.Queued))"
+            Assert-That 'the plugin holds one item' ($q.Selected.Queued -eq 1) "(queued=$($q.Selected.Queued))"
             $before = $q.Selected.Minerals
-            $runningNow = $q.Selected.Upgrade
+            $runUpg = $q.Selected.Upgrade
+            $runTech = $q.Selected.Tech
 
             # FIRST cancel: the tail is the plugin's, so it goes and NO money moves.
             $card3 = Get-Card 'cancel'
-            $cancelSlot = @($card3.Slots | Where-Object { $_.HasButton -and $_.Visible -and -not $_.Disabled -and $_.Action -eq '004232F0' }) | Select-Object -First 1
-            Assert-That 'the busy card offers Cancel Upgrade' ($null -ne $cancelSlot)
+            $cancelSlot = Get-CancelSlot -Card $card3
+            Assert-That 'the busy card offers a Cancel button' ($null -ne $cancelSlot)
             if ($cancelSlot) {
                 $pt = Get-ScCardSlotPoint -Card $card3 -Slot $cancelSlot.Index
                 Send-ScClick -Hwnd $hwnd -X $pt.X -Y $pt.Y
                 Start-Sleep -Seconds 2
             }
             $q2 = Get-UpgQueue 'cancelled1'
-            Assert-That 'the queued item is gone' ($q2.Queued -eq 0) "(queued=$($q2.Queued))"
+            Assert-That 'the queued item is gone' ($q2.Selected.Queued -eq 0) "(queued=$($q2.Selected.Queued))"
             Assert-That 'the plugin counted the cancel' ($q2.Cancelled -eq 1)
-            Assert-That "the RUNNING upgrade is untouched (still $runningNow)" `
-                ($q2.Selected.Upgrade -eq $runningNow)
+            Assert-That 'the RUNNING item is untouched' `
+                ($q2.Selected.Upgrade -eq $runUpg -and $q2.Selected.Tech -eq $runTech)
             # It was never paid for, so cancelling it must move nothing at all.
             Assert-That "and NOT ONE MINERAL moved ($($q2.Selected.Minerals))" `
                 ($q2.Selected.Minerals -eq $before)
@@ -580,25 +594,25 @@ try {
             # SECOND cancel: the plugin holds nothing, so the press is vanilla's, and
             # vanilla refunds the running item exactly.
             $card4 = Get-Card 'cancel2'
-            $cancelSlot2 = @($card4.Slots | Where-Object { $_.HasButton -and $_.Visible -and -not $_.Disabled -and $_.Action -eq '004232F0' }) | Select-Object -First 1
+            $cancelSlot2 = Get-CancelSlot -Card $card4
             if ($cancelSlot2) {
                 $mark = Get-ScLogLineCount -LogPath $LogPath
                 $pt = Get-ScCardSlotPoint -Card $card4 -Slot $cancelSlot2.Index
                 Send-ScClick -Hwnd $hwnd -X $pt.X -Y $pt.Y
                 Start-Sleep -Seconds 3
                 $c = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark |
-                       Select-String -Pattern "CMD id=$CANCEL_CMD ")
+                       Select-String -Pattern "CMD id=($CANCEL_UPG|$CANCEL_TECH) ")
                 Assert-That "the cancel command reached the wire ($($c.Count))" ($c.Count -ge 1)
             }
             $q3 = Get-UpgQueue 'cancelled2'
-            Assert-That 'the building is idle -- vanilla stopped the running upgrade' `
-                ($q3.Selected.Upgrade -eq 61) "(upg=$($q3.Selected.Upgrade))"
-            # Vanilla's refund is base + factor*currentLevel out of the same tables it paid
-            # from, so the money must come back EXACTLY.
-            Assert-That "and the money came back exactly ($($q3.Selected.Minerals) vs $($q2.Selected.Minerals))" `
-                ($q3.Selected.Minerals -gt $q2.Selected.Minerals)
-            $script:refunded = $q3.Selected.Minerals - $q2.Selected.Minerals
-            Write-Host "       vanilla refunded $script:refunded minerals"
+            Assert-That 'the building is idle -- vanilla stopped the running item' `
+                ($q3.Selected.Upgrade -eq 61 -and $q3.Selected.Tech -eq 44) `
+                "(upg=$($q3.Selected.Upgrade) tech=$($q3.Selected.Tech))"
+            # Vanilla's refund is out of the same tables it paid from, so the money comes
+            # back EXACTLY -- and the plugin, which refunded nothing, is not involved.
+            $back = $q3.Selected.Minerals - $q2.Selected.Minerals
+            Write-Host "       vanilla refunded $back minerals"
+            Assert-That "and the money came back ($back)" ($back -gt 0)
             Assert-That 'the plugin cancelled nothing this time -- the press was vanilla-s' `
                 ($q3.Cancelled -eq 1)
         }

@@ -313,6 +313,21 @@ static int QueuedCountOf(const UpgRecord* r, int kind, unsigned id) {
     return n;
 }
 
+// The LEVEL this press would be asking for: the one being produced right now, plus every
+// copy of the same upgrade already queued behind it, plus one.
+static DWORD WantedLevel(DWORD unit, const UpgRecord* r, int kind, unsigned id) {
+    DWORD running = *(BYTE*)(unit + SC_CUNIT_OFF_UPGRADE_LEVEL);
+    return running + (DWORD)QueuedCountOf(r, kind, id) + 1;
+}
+
+static BYTE* UpgradeLevelByte(BYTE player, unsigned id) {
+    if (id < SC_UPGRADE_COUNT_VANILLA) {
+        return (BYTE*)(RtA(SC_VA_UPGRADE_LEVEL) +
+                       (DWORD)player * SC_UPGRADE_STRIDE_VANILLA + id);
+    }
+    return (BYTE*)(RtA(SC_VA_UPGRADE_LEVEL_BW) + (DWORD)player * SC_UPGRADE_STRIDE_BW + id);
+}
+
 // True when the card may be shown THIS upgrade's own button at THIS building: the building
 // is the one researching it, and there is a level left over after everything already
 // running or queued. The headroom term keeps the card honest -- without it a player could
@@ -325,12 +340,7 @@ bool ScUpgQueueMaySuppressBusyBit(DWORD unit, int kind, unsigned id) {
     if (UpgradeInProgress(unit) != (BYTE)id) return false;   // <- the two-buildings guard
     BYTE player = *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER);
     if (player >= SC_MAX_PLAYERS) return false;
-    UpgRecord* r = FindRecord(unit);
-    // The running one is already counted by CUnit+0xCD, which startUpgrade set to the
-    // level it is producing.
-    DWORD running = *(BYTE*)(unit + SC_CUNIT_OFF_UPGRADE_LEVEL);
-    DWORD wanted  = running + (DWORD)QueuedCountOf(r, kind, id) + 1;
-    return wanted <= MaxUpgradeLevel(player, id);
+    return WantedLevel(unit, FindRecord(unit), kind, id) <= MaxUpgradeLevel(player, id);
 }
 
 bool ScUpgQueueOnCommand(DWORD unit, int kind, unsigned id) {
@@ -804,13 +814,34 @@ static DWORD CondCommon(ScHook* hook, int kind, DWORD unit, DWORD id, DWORD play
         *(BYTE*)(unit + SC_CUNIT_OFF_TECH_PROGRESS)    = (BYTE)SC_TECH_NONE;
         ++g_stat[SC_UPGQ_STAT_UNBLOCKED];
     }
+    BYTE* levelByte = NULL;
+    BYTE savedLevel = 0;
     if (lieBit) {
-        bitByte = UpgradeBusyByte(*(BYTE*)(unit + SC_CUNIT_OFF_PLAYER), id);
+        BYTE owner = *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER);
+        bitByte = UpgradeBusyByte(owner, id);
         savedBits = *bitByte;
         *bitByte = (BYTE)(savedBits & ~(1u << (id & 7)));
+        // AND ASK ABOUT THE RIGHT LEVEL. An upgrade's requirements are per LEVEL: the
+        // requirement interpreter's opcode 0xFF1F reads the player's current level and
+        // jumps to that level's own requirement block, so evaluating the condition with
+        // the level still at its present value asks "may level N+1 be researched?" and
+        // gets level N's answer. The first in-game run paid for that: with Infantry
+        // Weapons level 1 running, the card offered level 2 -- and the engine's own gate
+        // then refused it at promotion, because level 2 needs a prerequisite building the
+        // fixture did not have. Nothing was lost (a queued item is unpaid, and the drop is
+        // logged), but the card had promised something it could not deliver.
+        //
+        // So the level array is raised to the level this press would be asking FOR, minus
+        // one, for the length of the call. The engine then evaluates the requirement block
+        // that will actually apply, and answers -1 (greyed) or 0 by itself.
+        levelByte = UpgradeLevelByte(owner, id);
+        savedLevel = *levelByte;
+        DWORD want = WantedLevel(unit, FindRecord(unit), kind, id);
+        *levelByte = (BYTE)(want > 0 ? want - 1 : 0);
         ++g_stat[SC_UPGQ_STAT_UNBLOCKED_LEVEL];
     }
     DWORD r = ScUpgCallCond(hook->trampoline, unit, id, player);
+    if (levelByte) *levelByte = savedLevel;
     // Restored unconditionally and in the reverse order, before anything else on this
     // thread can look. Nothing between the two writes can yield: the game is
     // single-threaded here, and the observer thread's oracle takes this same lock.
