@@ -144,6 +144,13 @@ bool ScUpgQueueOnCancel(DWORD unit);
 // queue is below the maximum.
 bool ScUpgQueueShouldUnblock(DWORD unit);
 
+// May the card also be shown the RUNNING upgrade's own button, so its next level can be
+// queued behind it? True only for the building whose CUnit+0xC9 already holds this very
+// id, and only while a level is left after everything running and queued -- which is what
+// keeps a SECOND building from being offered the same upgrade and the pair from paying
+// twice for one level. Exposed so a test can assert that guard directly.
+bool ScUpgQueueMaySuppressBusyBit(DWORD unit, int kind, unsigned id);
+
 // The promotion seam. The real one calls into the engine; hooktest replaces it, because
 // there is no engine in a test process. Returns 1 when the item was started.
 typedef int (*ScUpgStartFn)(DWORD unit, int kind, unsigned id);
@@ -172,7 +179,12 @@ enum ScUpgQueueStat {
     // item, at start, and this module never moves a resource. Both suites assert them.
     SC_UPGQ_STAT_MINERALS_SPENT = 8,
     SC_UPGQ_STAT_GAS_SPENT = 9,
-    SC_UPGQ_STAT__COUNT = 10
+    // The narrower, level-stacking lie: how often the per-player in-progress BIT was
+    // suppressed as well, which only ever happens for the building already running that
+    // exact upgrade. Counted separately from UNBLOCKED so a run can say which of the two
+    // lies it needed.
+    SC_UPGQ_STAT_UNBLOCKED_LEVEL = 10,
+    SC_UPGQ_STAT__COUNT = 11
 };
 int ScUpgQueueStat(int which);
 

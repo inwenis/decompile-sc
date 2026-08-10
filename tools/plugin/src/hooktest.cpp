@@ -2801,6 +2801,69 @@ static void UpgradeQueueTests(void) {
         Check("and so is its gas counter", ScUpgQueueStat(SC_UPGQ_STAT_GAS_SPENT), 0);
     }
 
+    // -----------------------------------------------------------------------
+    // LEVEL STACKING, and the engine rule it must not break.
+    //
+    // The dangerous version of this feature would suppress upgradeBusy for everybody. The
+    // shipped version suppresses it only for the building whose own CUnit+0xC9 already
+    // holds that upgrade id -- so the assertions below are a PAIR: the running building
+    // may stack, and a SECOND building of the same player may not. A test that only made
+    // the first claim would pass for the dangerous version too.
+    // -----------------------------------------------------------------------
+    printf("\n    LEVEL STACKING: the running building may queue its own next level\n");
+    UqBegin(8, 5000, 5000);
+    *(BYTE*)((DWORD)FakeRt(SC_VA_UPGRADE_MAX_LEVEL) +
+             UQ_PLAYER * SC_UPGRADE_STRIDE_VANILLA + UQ_UPG_A) = 3;
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);
+    *(BYTE*)(UqBuilding() + SC_CUNIT_OFF_UPGRADE_LEVEL) = 1;   // startUpgrade wrote this
+    Check("the building running Weapons may be offered Weapons again",
+          ScUpgQueueMaySuppressBusyBit(UqBuilding(), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 1);
+    // THE GUARD. A second building of the SAME player, idle, must never be offered it --
+    // that is the engine rule that stops two buildings paying for one level.
+    *(BYTE*)(FakeUnit(1) + SC_CUNIT_OFF_UPGRADE_PROGRESS) = (BYTE)SC_UPGRADE_NONE;
+    Check("a SECOND, idle building of the same player may NOT",
+          ScUpgQueueMaySuppressBusyBit(FakeUnit(1), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 0);
+    // ... and neither may a second building researching something ELSE.
+    *(BYTE*)(FakeUnit(2) + SC_CUNIT_OFF_UPGRADE_PROGRESS) = (BYTE)UQ_UPG_B;
+    Check("nor a second building researching a DIFFERENT upgrade",
+          ScUpgQueueMaySuppressBusyBit(FakeUnit(2), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 0);
+    Check("and a TECH is never level-stacked -- it has no levels",
+          ScUpgQueueMaySuppressBusyBit(UqBuilding(), SC_UPGQ_KIND_TECH, UQ_TECH_A) ? 1 : 0, 0);
+
+    printf("\n    ... and it stops at the LEVEL CEILING rather than losing presses\n");
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);   // level 2 queued
+    Check("one queued", UqQueued(), 1);
+    Check("level 3 may still be offered",
+          ScUpgQueueMaySuppressBusyBit(UqBuilding(), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 1);
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);   // level 3 queued
+    Check("two queued", UqQueued(), 2);
+    Check("but level 4 is NOT -- the ceiling is 3",
+          ScUpgQueueMaySuppressBusyBit(UqBuilding(), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 0);
+    Check("still paid for exactly the ONE that is running",
+          (long long)*UqMinerals(), 5000 - 100);
+
+    printf("\n    the stacked levels start in order, each paying its OWN level's price\n");
+    // base 100 + factor 75 * currentLevel, which is what the engine's own cost helper
+    // computes -- so level 2 costs 175 and level 3 costs 250. The plugin queues an ID, not
+    // a price: the level (and therefore the cost) is resolved when the item STARTS.
+    {
+        DWORD before = *UqMinerals();
+        *(BYTE*)((DWORD)FakeRt(SC_VA_UPGRADE_LEVEL) +
+                 UQ_PLAYER * SC_UPGRADE_STRIDE_VANILLA + UQ_UPG_A) = 1;   // L1 completed
+        UqFinishRunning(); ScUpgQueueOnTick(UqBuilding());
+        Check("level 2 started", g_uqStarted, 2);
+        Check("and it cost 100 + 75*1", (long long)(before - *UqMinerals()), 175);
+        before = *UqMinerals();
+        *(BYTE*)((DWORD)FakeRt(SC_VA_UPGRADE_LEVEL) +
+                 UQ_PLAYER * SC_UPGRADE_STRIDE_VANILLA + UQ_UPG_A) = 2;   // L2 completed
+        UqFinishRunning(); ScUpgQueueOnTick(UqBuilding());
+        Check("level 3 started", g_uqStarted, 3);
+        Check("and it cost 100 + 75*2", (long long)(before - *UqMinerals()), 250);
+        Check("the queue is empty", UqQueued(), 0);
+        Check("and the plugin still spent nothing of its own",
+              ScUpgQueueStat(SC_UPGQ_STAT_MINERALS_SPENT), 0);
+    }
+
     printf("\n    the feature's OFF switch really is off\n");
     ScUpgQueueTestBegin(NULL, 0, NULL);
     Check("no command is consumed",
@@ -2808,6 +2871,8 @@ static void UpgradeQueueTests(void) {
     Check("no cancel is consumed", ScUpgQueueOnCancel(UqBuilding()) ? 1 : 0, 0);
     Check("nothing is ever unblocked",
           ScUpgQueueShouldUnblock(UqBuilding()) ? 1 : 0, 0);
+    Check("and no level is ever stacked either",
+          ScUpgQueueMaySuppressBusyBit(UqBuilding(), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 0);
 }
 
 static void ExitLogTests(void) {

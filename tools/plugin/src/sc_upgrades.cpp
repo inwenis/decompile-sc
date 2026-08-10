@@ -249,6 +249,75 @@ bool ScUpgQueueShouldUnblock(DWORD unit) {
     return QueueRoom(unit, r) > 0;
 }
 
+// ---------------------------------------------------------------------------
+// LEVEL STACKING -- Weapons 2 queued behind Weapons 1, and why it is safe
+//
+// The card refuses the running upgrade's OWN button through a second, independent test:
+// the gate calls upgradeBusy (0x004281B0), which reads a PER-PLAYER, PER-UPGRADE
+// in-progress bitfield at 0x0058F3E0. Suppressing that test naively would break a real
+// engine rule -- it is also what stops TWO BUILDINGS researching the same upgrade at once,
+// and the consequence of breaking it is not cosmetic. Both buildings would set
+// `CUnit+0xCD = currentLevel + 1`, i.e. the SAME target level; when the first finished,
+// upgradeTick's guard `currentLevel < unit->0xCD` would already be false at the second, so
+// it would end immediately, raise nothing, and the player would have paid twice for one
+// level (upgradeTick 0x004546A0, quoted in research/upgrade-queue.md 6).
+//
+// So the suppression is scoped by a condition a second building CANNOT satisfy:
+//
+//     this building's own 0xC9 already holds this very upgrade id.
+//
+// A second Engineering Bay's 0xC9 holds 61, or a different id, so its button stays hidden
+// and the two-buildings rule is untouched. Only the building that already owns the upgrade
+// is allowed to be asked about it again.
+//
+// The LEVEL is not a problem either, and this was verified rather than assumed:
+// startUpgrade (0x00454A80) computes `0xCD = currentLevel + 1` from the level array AT THE
+// MOMENT IT RUNS, and the plugin promotes through that same function. So a queued Weapons
+// is not "level 2" when it is queued -- it is "the next level", resolved when it starts.
+// ---------------------------------------------------------------------------
+
+static DWORD MaxUpgradeLevel(BYTE player, unsigned id) {
+    if (id < SC_UPGRADE_COUNT_VANILLA) {
+        return *(BYTE*)(RtA(SC_VA_UPGRADE_MAX_LEVEL) +
+                        (DWORD)player * SC_UPGRADE_STRIDE_VANILLA + id);
+    }
+    return *(BYTE*)(RtA(SC_VA_UPGRADE_MAX_BW) + (DWORD)player * SC_UPGRADE_STRIDE_BW + id);
+}
+
+static BYTE* UpgradeBusyByte(BYTE player, unsigned id) {
+    return (BYTE*)(RtA(SC_VA_UPGRADE_INPROGRESS_BITS) +
+                   (DWORD)player * SC_UPGRADE_BITS_STRIDE + (id >> 3));
+}
+
+static int QueuedCountOf(const UpgRecord* r, int kind, unsigned id) {
+    int n = 0;
+    if (!r) return 0;
+    for (int i = 0; i < r->count; ++i) {
+        if (r->items[i].kind == (BYTE)kind && r->items[i].id == (BYTE)id) ++n;
+    }
+    return n;
+}
+
+// True when the card may be shown THIS upgrade's own button at THIS building: the building
+// is the one researching it, and there is a level left over after everything already
+// running or queued. The headroom term keeps the card honest -- without it a player could
+// stack five Weapons presses behind a 3-level upgrade and watch two of them be dropped at
+// promotion, which is safe (no money moves) but reads as the feature losing them.
+bool ScUpgQueueMaySuppressBusyBit(DWORD unit, int kind, unsigned id) {
+    if (!g_enabled || !unit || !IsResearchableBuilding(unit)) return false;
+    if (kind != SC_UPGQ_KIND_UPGRADE) return false;   // a tech has no levels to stack
+    if (id >= SC_UPGRADE_COUNT) return false;
+    if (UpgradeInProgress(unit) != (BYTE)id) return false;   // <- the two-buildings guard
+    BYTE player = *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER);
+    if (player >= SC_MAX_PLAYERS) return false;
+    UpgRecord* r = FindRecord(unit);
+    // The running one is already counted by CUnit+0xCD, which startUpgrade set to the
+    // level it is producing.
+    DWORD running = *(BYTE*)(unit + SC_CUNIT_OFF_UPGRADE_LEVEL);
+    DWORD wanted  = running + (DWORD)QueuedCountOf(r, kind, id) + 1;
+    return wanted <= MaxUpgradeLevel(player, id);
+}
+
 bool ScUpgQueueOnCommand(DWORD unit, int kind, unsigned id) {
     if (!g_enabled || !unit) return false;
     bool consumed = false;
@@ -404,24 +473,26 @@ void ScUpgQueueLogState(const char* tag) {
     }
     // ALWAYS a summary line, even with zero records.
     ScLog("UPGQ [%s] buildings=%d max=%d queued=%d promoted=%d cancelled=%d dropped=%d "
-          "refusedFull=%d refusedGate=%d waitingCost=%d unblocked=%d",
+          "refusedFull=%d refusedGate=%d waitingCost=%d unblocked=%d unblockedLevel=%d",
           tag ? tag : "-", g_recCount, g_maxTotal,
           g_stat[SC_UPGQ_STAT_QUEUED], g_stat[SC_UPGQ_STAT_PROMOTED],
           g_stat[SC_UPGQ_STAT_CANCELLED], g_stat[SC_UPGQ_STAT_DROPPED],
           g_stat[SC_UPGQ_STAT_REFUSED_FULL], g_stat[SC_UPGQ_STAT_REFUSED_GATE],
-          g_stat[SC_UPGQ_STAT_WAITING_COST], g_stat[SC_UPGQ_STAT_UNBLOCKED]);
+          g_stat[SC_UPGQ_STAT_WAITING_COST], g_stat[SC_UPGQ_STAT_UNBLOCKED],
+          g_stat[SC_UPGQ_STAT_UNBLOCKED_LEVEL]);
     LeaveCriticalSection(&g_lock);
 }
 
 void ScUpgQueueLogStats(void) {
     if (!g_enabled) return;
     ScLog("UPGQSTATS queued=%d promoted=%d cancelled=%d dropped=%d refusedFull=%d "
-          "refusedGate=%d waitingCost=%d unblocked=%d mineralsSpent=%d gasSpent=%d "
-          "tracked=%d",
+          "refusedGate=%d waitingCost=%d unblocked=%d unblockedLevel=%d mineralsSpent=%d "
+          "gasSpent=%d tracked=%d",
           g_stat[SC_UPGQ_STAT_QUEUED], g_stat[SC_UPGQ_STAT_PROMOTED],
           g_stat[SC_UPGQ_STAT_CANCELLED], g_stat[SC_UPGQ_STAT_DROPPED],
           g_stat[SC_UPGQ_STAT_REFUSED_FULL], g_stat[SC_UPGQ_STAT_REFUSED_GATE],
           g_stat[SC_UPGQ_STAT_WAITING_COST], g_stat[SC_UPGQ_STAT_UNBLOCKED],
+          g_stat[SC_UPGQ_STAT_UNBLOCKED_LEVEL],
           g_stat[SC_UPGQ_STAT_MINERALS_SPENT], g_stat[SC_UPGQ_STAT_GAS_SPENT], g_recCount);
 }
 
@@ -665,12 +736,16 @@ static DWORD SoleSelectedUnit(void) {
 // sentinels, then put them straight back. The clear/call/restore runs inside the same
 // critical section the oracle takes, so the observer thread can never sample a building
 // mid-lie and report it idle.
-static DWORD CondCommon(ScHook* hook, DWORD unit, DWORD id, DWORD player) {
+static DWORD CondCommon(ScHook* hook, int kind, DWORD unit, DWORD id, DWORD player) {
     if (!g_enabled || !unit) return ScUpgCallCond(hook->trampoline, unit, id, player);
 
     EnterCriticalSection(&g_lock);
     bool lie = ScUpgQueueShouldUnblock(unit);
-    BYTE savedUpg = 0, savedTech = 0;
+    // The second, narrower lie: the per-player in-progress BIT, suppressed only for the
+    // building that is already researching this very upgrade. See MaySuppressBusyBit.
+    bool lieBit = lie && ScUpgQueueMaySuppressBusyBit(unit, kind, (unsigned)id);
+    BYTE savedUpg = 0, savedTech = 0, savedBits = 0;
+    BYTE* bitByte = NULL;
     if (lie) {
         savedUpg  = *(BYTE*)(unit + SC_CUNIT_OFF_UPGRADE_PROGRESS);
         savedTech = *(BYTE*)(unit + SC_CUNIT_OFF_TECH_PROGRESS);
@@ -678,7 +753,17 @@ static DWORD CondCommon(ScHook* hook, DWORD unit, DWORD id, DWORD player) {
         *(BYTE*)(unit + SC_CUNIT_OFF_TECH_PROGRESS)    = (BYTE)SC_TECH_NONE;
         ++g_stat[SC_UPGQ_STAT_UNBLOCKED];
     }
+    if (lieBit) {
+        bitByte = UpgradeBusyByte(*(BYTE*)(unit + SC_CUNIT_OFF_PLAYER), id);
+        savedBits = *bitByte;
+        *bitByte = (BYTE)(savedBits & ~(1u << (id & 7)));
+        ++g_stat[SC_UPGQ_STAT_UNBLOCKED_LEVEL];
+    }
     DWORD r = ScUpgCallCond(hook->trampoline, unit, id, player);
+    // Restored unconditionally and in the reverse order, before anything else on this
+    // thread can look. Nothing between the two writes can yield: the game is
+    // single-threaded here, and the observer thread's oracle takes this same lock.
+    if (bitByte) *bitByte = savedBits;
     if (lie) {
         *(BYTE*)(unit + SC_CUNIT_OFF_UPGRADE_PROGRESS) = savedUpg;
         *(BYTE*)(unit + SC_CUNIT_OFF_TECH_PROGRESS)    = savedTech;
@@ -688,10 +773,10 @@ static DWORD CondCommon(ScHook* hook, DWORD unit, DWORD id, DWORD player) {
 }
 
 extern "C" DWORD SC_GAME_ENTRY ScUpgCondUpgradeC(DWORD unit, DWORD id, DWORD player) {
-    return CondCommon(&g_hkCondUpg, unit, id, player);
+    return CondCommon(&g_hkCondUpg, SC_UPGQ_KIND_UPGRADE, unit, id, player);
 }
 extern "C" DWORD SC_GAME_ENTRY ScUpgCondTechC(DWORD unit, DWORD id, DWORD player) {
-    return CondCommon(&g_hkCondTech, unit, id, player);
+    return CondCommon(&g_hkCondTech, SC_UPGQ_KIND_TECH, unit, id, player);
 }
 
 // __stdcall(unit) with CL = the button's conditionParam and EDX = the player, RET 4 --
