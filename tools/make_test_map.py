@@ -306,6 +306,15 @@ UNIT_TYPE_IDS = {
     "command-center": 106,
     "supply-depot": 109,
     "barracks": 111,
+    # Task 029's upgrade-queue fixture. An Engineering Bay is the cheapest building
+    # that RESEARCHES: it offers two independent level-1 upgrades -- Terran Infantry
+    # Armor (upgrades.dat 0) and Terran Infantry Weapons (upgrades.dat 7) -- so two
+    # distinct items can be queued at one building without touching the messy
+    # level-N/level-N+1 case, and it needs no prerequisite building of its own.
+    # An Academy is the companion fixture for the OTHER opcode: it carries techs
+    # (0x30 Tech) as well as an upgrade (0x32), so a mixed queue is expressible.
+    "engineering-bay": 122,
+    "academy": 112,
     # Task 028's cancel fixture. Its command card carries the Cancel button -- the
     # one that emits "cancel the last queued item" (actionParam 0xFE), the only wire
     # form a plugin holding queue overflow can be asked to serve -- at slot 9 with
@@ -331,6 +340,7 @@ UNIT_TYPE_RACES = {
     "zealot": SIDE_PROTOSS, "dragoon": SIDE_PROTOSS,
     "lurker": SIDE_ZERG,
     "command-center": SIDE_TERRAN, "supply-depot": SIDE_TERRAN, "barracks": SIDE_TERRAN,
+    "engineering-bay": SIDE_TERRAN, "academy": SIDE_TERRAN,
     "nexus": SIDE_PROTOSS,
 }
 

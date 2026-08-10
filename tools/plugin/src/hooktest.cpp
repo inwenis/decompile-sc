@@ -27,6 +27,7 @@
 #include "sc_hudrow.h"
 #include "sc_log.h"
 #include "sc_prodqueue.h"
+#include "sc_upgrades.h"
 
 static int g_failures = 0;
 
@@ -2531,6 +2532,355 @@ static void ProdQueueTests(void) {
     ScProdQueueTestBegin(NULL, 0);   // leave the core inert for the parts after this
 }
 
+// ---------------------------------------------------------------------------
+// [17] the upgrade-queue core (task 029), with no game and no hooks.
+//
+// Numbered 17, not 16: task 028's status-strip tests took 16 on main while this task was
+// in flight, and the two collided on the merge. Two parts sharing a number defeats the
+// only thing the numbers are for -- naming which part failed in a redirected log -- and
+// this repo has now had that collision three times, each time invisible to both sides
+// because each merged cleanly on its own.
+//
+// WHAT THIS HAS TO DECIDE, and why offline is the right place for it. The claim the
+// whole feature rests on is "the plugin never moves a resource, and every item is paid
+// for exactly once, by the engine, at the moment it starts". In a game run a stray
+// mineral is invisible; here the fake image's resource globals are a counter this test
+// owns, and the promotion seam (ScUpgStartFn) is a function this test writes -- so the
+// engine's half can be modelled EXACTLY, including its refusals, and the arithmetic is
+// decidable.
+//
+// The fake starter below is startUpgrade/startTech as research/upgrade-queue.md 5 reads
+// them: check affordability, and only then set the field and subtract the cost. A test
+// whose starter paid nothing would let a plugin that also paid look correct.
+// ---------------------------------------------------------------------------
+
+#define UQ_BUILDING 0
+#define UQ_PLAYER   1
+#define UQ_UPG_A    7      // Terran Infantry Weapons
+#define UQ_UPG_B    0      // Terran Infantry Armor
+#define UQ_TECH_A   0      // Stim Packs
+
+static int g_uqStarted = 0;      // how many times the fake engine actually started one
+static int g_uqGateRefuse = -1;  // an id the fake gate refuses outright, or -1
+
+static DWORD UqBuilding(void) { return FakeUnit(UQ_BUILDING); }
+
+static DWORD* UqMinerals(void) {
+    return (DWORD*)((DWORD)FakeRt(SC_VA_PLAYER_MINERALS) + UQ_PLAYER * 4);
+}
+static DWORD* UqGas(void) {
+    return (DWORD*)((DWORD)FakeRt(SC_VA_PLAYER_GAS) + UQ_PLAYER * 4);
+}
+static BYTE* UqUpgField(void)  { return (BYTE*)(UqBuilding() + SC_CUNIT_OFF_UPGRADE_PROGRESS); }
+static BYTE* UqTechField(void) { return (BYTE*)(UqBuilding() + SC_CUNIT_OFF_TECH_PROGRESS); }
+
+static void UqSetU16(DWORD table, unsigned index, WORD v) {
+    *(WORD*)((DWORD)FakeRt(table) + index * 2) = v;
+}
+
+// The engine's own accept path, modelled: affordability first, then the field and the
+// deduction. Returns 1 started, 0 cannot pay, -1 the gate refused.
+static int UqFakeStart(DWORD unit, int kind, unsigned id) {
+    if ((int)id == g_uqGateRefuse) return -1;
+    DWORD m, g;
+    if (kind == SC_UPGQ_KIND_TECH) {
+        m = *(WORD*)((DWORD)FakeRt(SC_VA_TECH_MINERAL_COST) + id * 2);
+        g = *(WORD*)((DWORD)FakeRt(SC_VA_TECH_GAS_COST) + id * 2);
+    } else {
+        DWORD lvl = *(BYTE*)((DWORD)FakeRt(SC_VA_UPGRADE_LEVEL) +
+                             UQ_PLAYER * SC_UPGRADE_STRIDE_VANILLA + id);
+        m = (WORD)(*(WORD*)((DWORD)FakeRt(SC_VA_UPGRADE_MINERAL_BASE) + id * 2) +
+                   *(WORD*)((DWORD)FakeRt(SC_VA_UPGRADE_MINERAL_FACTOR) + id * 2) * lvl);
+        g = (WORD)(*(WORD*)((DWORD)FakeRt(SC_VA_UPGRADE_GAS_BASE) + id * 2) +
+                   *(WORD*)((DWORD)FakeRt(SC_VA_UPGRADE_GAS_FACTOR) + id * 2) * lvl);
+    }
+    if (*UqMinerals() < m || *UqGas() < g) return 0;
+    if (kind == SC_UPGQ_KIND_TECH) *(BYTE*)(unit + SC_CUNIT_OFF_TECH_PROGRESS) = (BYTE)id;
+    else                           *(BYTE*)(unit + SC_CUNIT_OFF_UPGRADE_PROGRESS) = (BYTE)id;
+    *UqMinerals() -= m;
+    *UqGas()      -= g;
+    ++g_uqStarted;
+    return 1;
+}
+
+// The engine finishing whatever is running: clear the field, as upgradeTick/techTick do.
+static void UqFinishRunning(void) {
+    *UqUpgField()  = (BYTE)SC_UPGRADE_NONE;
+    *UqTechField() = (BYTE)SC_TECH_NONE;
+}
+
+static int UqQueued(void) {
+    int n = ScUpgQueueCount(UqBuilding());
+    return n < 0 ? 0 : n;
+}
+
+static void UqBegin(int maxTotal, DWORD minerals, DWORD gas) {
+    MakeUnits(8, UQ_PLAYER);
+    // A completed BUILDING. Both terms matter: CUnit+0xC8/0xC9 are a union arm and the
+    // module refuses to read them for anything that is not a finished building.
+    for (int i = 0; i < 8; ++i) {
+        *(DWORD*)(FakeUnit(i) + SC_CUNIT_OFF_FLAGS) =
+            SC_UNIT_FLAG_BUILDING | SC_UNIT_FLAG_COMPLETED;
+        *(BYTE*)(FakeUnit(i) + SC_CUNIT_OFF_UPGRADE_PROGRESS) = (BYTE)SC_UPGRADE_NONE;
+        *(BYTE*)(FakeUnit(i) + SC_CUNIT_OFF_TECH_PROGRESS)    = (BYTE)SC_TECH_NONE;
+        *(BYTE*)(FakeUnit(i) + SC_CUNIT_OFF_UPGRADE_LEVEL)    = 0;
+        *(WORD*)(FakeUnit(i) + SC_CUNIT_OFF_RESEARCH_TIME)    = 0;
+    }
+    // Costs, in the shape the engine reads them: upgrades are base + factor*level.
+    UqSetU16(SC_VA_UPGRADE_MINERAL_BASE, UQ_UPG_A, 100);
+    UqSetU16(SC_VA_UPGRADE_GAS_BASE,     UQ_UPG_A, 100);
+    UqSetU16(SC_VA_UPGRADE_MINERAL_FACTOR, UQ_UPG_A, 75);
+    UqSetU16(SC_VA_UPGRADE_GAS_FACTOR,     UQ_UPG_A, 75);
+    UqSetU16(SC_VA_UPGRADE_MINERAL_BASE, UQ_UPG_B, 100);
+    UqSetU16(SC_VA_UPGRADE_GAS_BASE,     UQ_UPG_B, 100);
+    UqSetU16(SC_VA_UPGRADE_MINERAL_FACTOR, UQ_UPG_B, 75);
+    UqSetU16(SC_VA_UPGRADE_GAS_FACTOR,     UQ_UPG_B, 75);
+    UqSetU16(SC_VA_TECH_MINERAL_COST, UQ_TECH_A, 100);
+    UqSetU16(SC_VA_TECH_GAS_COST,     UQ_TECH_A, 100);
+    *(BYTE*)((DWORD)FakeRt(SC_VA_UPGRADE_LEVEL) +
+             UQ_PLAYER * SC_UPGRADE_STRIDE_VANILLA + UQ_UPG_A) = 0;
+    *UqMinerals() = minerals;
+    *UqGas()      = gas;
+    g_uqStarted = 0;
+    g_uqGateRefuse = -1;
+    ScUpgQueueTestBegin(g_fake, maxTotal, &UqFakeStart);
+}
+
+// One press: the engine's handler, modelled. The plugin gets first refusal; if it does
+// not consume the command, the engine's own body runs and starts the item.
+static void UqPress(int kind, unsigned id) {
+    if (ScUpgQueueOnCommand(UqBuilding(), kind, id)) return;
+    UqFakeStart(UqBuilding(), kind, id);
+}
+
+static void UpgradeQueueTests(void) {
+    printf("\n[17] the upgrade-queue core: more than one research at a building\n");
+
+    if (!g_fake) {
+        g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
+                                     PAGE_READWRITE);
+        if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+    }
+
+    printf("\n    an IDLE building is left entirely to the engine\n");
+    UqBegin(8, 1000, 1000);
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);
+    Check("the engine started it", g_uqStarted, 1);
+    Check("and it is in the building's own field", (long long)*UqUpgField(), UQ_UPG_A);
+    Check("the plugin holds nothing", ScUpgQueueCount(UqBuilding()), -1);
+    Check("and tracks no building", ScUpgQueueTrackedBuildings(), 0);
+    Check("the engine paid once", (long long)*UqMinerals(), 1000 - 100);
+
+    printf("\n    the SECOND press is held by the plugin, and costs nothing\n");
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_B);
+    Check("still only one engine start", g_uqStarted, 1);
+    Check("the running upgrade is UNTOUCHED", (long long)*UqUpgField(), UQ_UPG_A);
+    Check("the plugin holds the second", UqQueued(), 1);
+    Check("its id", ScUpgQueueIdAt(UqBuilding(), 0), UQ_UPG_B);
+    // THE HEADLINE OF THIS PART. A held item is unpaid, so the balance has not moved.
+    Check("NOTHING was paid for the held item", (long long)*UqMinerals(), 1000 - 100);
+    Check("the plugin spent nothing of its own",
+          ScUpgQueueStat(SC_UPGQ_STAT_MINERALS_SPENT), 0);
+
+    printf("\n    it is promoted when the building frees, and THEN the engine pays\n");
+    UqFinishRunning();
+    ScUpgQueueOnTick(UqBuilding());
+    Check("the engine started the second", g_uqStarted, 2);
+    Check("it is now the running upgrade", (long long)*UqUpgField(), UQ_UPG_B);
+    Check("the plugin holds nothing", UqQueued(), 0);
+    Check("paid EXACTLY twice, once each", (long long)*UqMinerals(), 1000 - 2 * 100);
+    Check("and the plugin still spent nothing",
+          ScUpgQueueStat(SC_UPGQ_STAT_MINERALS_SPENT), 0);
+
+    printf("\n    FIFO across BOTH opcodes: upgrade, tech, upgrade -- in that order\n");
+    UqBegin(8, 1000, 1000);
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);     // starts
+    UqPress(SC_UPGQ_KIND_TECH,    UQ_TECH_A);    // held
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_B);     // held
+    Check("two are held", UqQueued(), 2);
+    Check("first held is the TECH", ScUpgQueueKindAt(UqBuilding(), 0), SC_UPGQ_KIND_TECH);
+    Check("second held is an UPGRADE", ScUpgQueueKindAt(UqBuilding(), 1), SC_UPGQ_KIND_UPGRADE);
+    UqFinishRunning(); ScUpgQueueOnTick(UqBuilding());
+    Check("the TECH went first, into its own field", (long long)*UqTechField(), UQ_TECH_A);
+    Check("and the upgrade field is idle", (long long)*UqUpgField(), (long long)SC_UPGRADE_NONE);
+    UqFinishRunning(); ScUpgQueueOnTick(UqBuilding());
+    Check("then the upgrade", (long long)*UqUpgField(), UQ_UPG_B);
+    Check("three starts in all", g_uqStarted, 3);
+    Check("three costs, no more", (long long)*UqMinerals(), 1000 - 3 * 100);
+
+    printf("\n    the CAP is the plugin's, and past it a command is refused not lost\n");
+    UqBegin(3, 5000, 5000);            // 1 running + 2 held
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_B);
+    UqPress(SC_UPGQ_KIND_TECH,    UQ_TECH_A);
+    Check("two held, which is the cap", UqQueued(), 2);
+    Check("the card would stop offering here",
+          ScUpgQueueShouldUnblock(UqBuilding()) ? 1 : 0, 0);
+    UqPress(SC_UPGQ_KIND_UPGRADE, 5);  // one past the cap
+    Check("it was NOT queued", UqQueued(), 2);
+    Check("it was NOT started either", g_uqStarted, 1);
+    Check("and it was counted as refused",
+          ScUpgQueueStat(SC_UPGQ_STAT_REFUSED_FULL), 1);
+    Check("only the running one was ever paid for", (long long)*UqMinerals(), 5000 - 100);
+
+    printf("\n    below the cap the card IS unblocked -- the negative half of that pair\n");
+    UqBegin(8, 1000, 1000);
+    Check("an IDLE building is never unblocked (it needs no help)",
+          ScUpgQueueShouldUnblock(UqBuilding()) ? 1 : 0, 0);
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);
+    Check("a BUSY building with room is unblocked",
+          ScUpgQueueShouldUnblock(UqBuilding()) ? 1 : 0, 1);
+    Check("a unit that is not a building never is",
+          (*(DWORD*)(FakeUnit(2) + SC_CUNIT_OFF_FLAGS) = 0,
+           ScUpgQueueShouldUnblock(FakeUnit(2)) ? 1 : 0), 0);
+
+    printf("\n    CANCEL takes the plugin's TAIL, refunds nothing, and stops being ours\n");
+    UqBegin(8, 1000, 1000);
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_B);
+    UqPress(SC_UPGQ_KIND_TECH,    UQ_TECH_A);
+    Check("two held", UqQueued(), 2);
+    Check("the first cancel is consumed by the plugin",
+          ScUpgQueueOnCancel(UqBuilding()) ? 1 : 0, 1);
+    Check("and it took the NEWEST", UqQueued(), 1);
+    Check("which leaves the older one", ScUpgQueueIdAt(UqBuilding(), 0), UQ_UPG_B);
+    // Nothing was paid for a held item, so a cancel must move NO money. This is the
+    // assertion that would fail loudest if the design ever charged at queue time
+    // without also refunding here.
+    Check("no money moved on the cancel", (long long)*UqMinerals(), 1000 - 100);
+    Check("the second cancel is ours too", ScUpgQueueOnCancel(UqBuilding()) ? 1 : 0, 1);
+    Check("now the plugin holds nothing", UqQueued(), 0);
+    // ... and with nothing held the press belongs to the engine again, which is what
+    // makes "cancel eventually stops the RUNNING one" true.
+    Check("so the next cancel falls through to vanilla",
+          ScUpgQueueOnCancel(UqBuilding()) ? 1 : 0, 0);
+    Check("still only one payment in the whole sequence", (long long)*UqMinerals(), 1000 - 100);
+
+    printf("\n    a player who cannot pay WAITS -- the item is kept, not dropped\n");
+    UqBegin(8, 250, 250);              // enough for two at 100, not three
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_B);
+    UqPress(SC_UPGQ_KIND_TECH,    UQ_TECH_A);
+    UqFinishRunning(); ScUpgQueueOnTick(UqBuilding());
+    Check("the second started", g_uqStarted, 2);
+    Check("balance is down to 50", (long long)*UqMinerals(), 50);
+    UqFinishRunning(); ScUpgQueueOnTick(UqBuilding());
+    Check("the third could NOT start", g_uqStarted, 2);
+    Check("but it is still queued, not lost", UqQueued(), 1);
+    Check("and nothing was spent trying", (long long)*UqMinerals(), 50);
+    Check("the wait was counted",
+          ScUpgQueueStat(SC_UPGQ_STAT_WAITING_COST) > 0 ? 1 : 0, 1);
+    *UqMinerals() = 500; *UqGas() = 500;          // income arrives
+    ScUpgQueueOnTick(UqBuilding());
+    Check("and it starts as soon as the player can pay", g_uqStarted, 3);
+    Check("paying exactly its own cost, once", (long long)*UqMinerals(), 400);
+
+    printf("\n    an item the ENGINE's gate refuses is dropped, and costs nothing\n");
+    UqBegin(8, 1000, 1000);
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_B);
+    g_uqGateRefuse = UQ_UPG_B;
+    UqFinishRunning(); ScUpgQueueOnTick(UqBuilding());
+    Check("it was not started", g_uqStarted, 1);
+    Check("it was dropped rather than retried forever", UqQueued(), 0);
+    Check("counted as a gate refusal", ScUpgQueueStat(SC_UPGQ_STAT_REFUSED_GATE), 1);
+    Check("and no money moved", (long long)*UqMinerals(), 1000 - 100);
+
+    printf("\n    a building that DIES simply forgets its queue -- there is nothing to refund\n");
+    UqBegin(8, 1000, 1000);
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_B);
+    Check("one held", UqQueued(), 1);
+    {
+        DWORD before = *UqMinerals();
+        *(DWORD*)(UqBuilding() + SC_CUNIT_OFF_HITPOINTS) = 0;   // dead
+        ScUpgQueueOnTick(FakeUnit(1));   // any tick collects garbage
+        Check("the record is gone", ScUpgQueueTrackedBuildings(), 0);
+        Check("it was counted as dropped",
+              ScUpgQueueStat(SC_UPGQ_STAT_DROPPED), 1);
+        // THE POINT OF PAY-AT-START, in one line: a dead building owes the player
+        // nothing, because the plugin never took anything.
+        Check("and NOT ONE MINERAL came back or went away",
+              (long long)*UqMinerals(), (long long)before);
+        Check("the plugin's spend counter is still flat zero",
+              ScUpgQueueStat(SC_UPGQ_STAT_MINERALS_SPENT), 0);
+        Check("and so is its gas counter", ScUpgQueueStat(SC_UPGQ_STAT_GAS_SPENT), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // LEVEL STACKING, and the engine rule it must not break.
+    //
+    // The dangerous version of this feature would suppress upgradeBusy for everybody. The
+    // shipped version suppresses it only for the building whose own CUnit+0xC9 already
+    // holds that upgrade id -- so the assertions below are a PAIR: the running building
+    // may stack, and a SECOND building of the same player may not. A test that only made
+    // the first claim would pass for the dangerous version too.
+    // -----------------------------------------------------------------------
+    printf("\n    LEVEL STACKING: the running building may queue its own next level\n");
+    UqBegin(8, 5000, 5000);
+    *(BYTE*)((DWORD)FakeRt(SC_VA_UPGRADE_MAX_LEVEL) +
+             UQ_PLAYER * SC_UPGRADE_STRIDE_VANILLA + UQ_UPG_A) = 3;
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);
+    *(BYTE*)(UqBuilding() + SC_CUNIT_OFF_UPGRADE_LEVEL) = 1;   // startUpgrade wrote this
+    Check("the building running Weapons may be offered Weapons again",
+          ScUpgQueueMaySuppressBusyBit(UqBuilding(), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 1);
+    // THE GUARD. A second building of the SAME player, idle, must never be offered it --
+    // that is the engine rule that stops two buildings paying for one level.
+    *(BYTE*)(FakeUnit(1) + SC_CUNIT_OFF_UPGRADE_PROGRESS) = (BYTE)SC_UPGRADE_NONE;
+    Check("a SECOND, idle building of the same player may NOT",
+          ScUpgQueueMaySuppressBusyBit(FakeUnit(1), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 0);
+    // ... and neither may a second building researching something ELSE.
+    *(BYTE*)(FakeUnit(2) + SC_CUNIT_OFF_UPGRADE_PROGRESS) = (BYTE)UQ_UPG_B;
+    Check("nor a second building researching a DIFFERENT upgrade",
+          ScUpgQueueMaySuppressBusyBit(FakeUnit(2), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 0);
+    Check("and a TECH is never level-stacked -- it has no levels",
+          ScUpgQueueMaySuppressBusyBit(UqBuilding(), SC_UPGQ_KIND_TECH, UQ_TECH_A) ? 1 : 0, 0);
+
+    printf("\n    ... and it stops at the LEVEL CEILING rather than losing presses\n");
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);   // level 2 queued
+    Check("one queued", UqQueued(), 1);
+    Check("level 3 may still be offered",
+          ScUpgQueueMaySuppressBusyBit(UqBuilding(), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 1);
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);   // level 3 queued
+    Check("two queued", UqQueued(), 2);
+    Check("but level 4 is NOT -- the ceiling is 3",
+          ScUpgQueueMaySuppressBusyBit(UqBuilding(), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 0);
+    Check("still paid for exactly the ONE that is running",
+          (long long)*UqMinerals(), 5000 - 100);
+
+    printf("\n    the stacked levels start in order, each paying its OWN level's price\n");
+    // base 100 + factor 75 * currentLevel, which is what the engine's own cost helper
+    // computes -- so level 2 costs 175 and level 3 costs 250. The plugin queues an ID, not
+    // a price: the level (and therefore the cost) is resolved when the item STARTS.
+    {
+        DWORD before = *UqMinerals();
+        *(BYTE*)((DWORD)FakeRt(SC_VA_UPGRADE_LEVEL) +
+                 UQ_PLAYER * SC_UPGRADE_STRIDE_VANILLA + UQ_UPG_A) = 1;   // L1 completed
+        UqFinishRunning(); ScUpgQueueOnTick(UqBuilding());
+        Check("level 2 started", g_uqStarted, 2);
+        Check("and it cost 100 + 75*1", (long long)(before - *UqMinerals()), 175);
+        before = *UqMinerals();
+        *(BYTE*)((DWORD)FakeRt(SC_VA_UPGRADE_LEVEL) +
+                 UQ_PLAYER * SC_UPGRADE_STRIDE_VANILLA + UQ_UPG_A) = 2;   // L2 completed
+        UqFinishRunning(); ScUpgQueueOnTick(UqBuilding());
+        Check("level 3 started", g_uqStarted, 3);
+        Check("and it cost 100 + 75*2", (long long)(before - *UqMinerals()), 250);
+        Check("the queue is empty", UqQueued(), 0);
+        Check("and the plugin still spent nothing of its own",
+              ScUpgQueueStat(SC_UPGQ_STAT_MINERALS_SPENT), 0);
+    }
+
+    printf("\n    the feature's OFF switch really is off\n");
+    ScUpgQueueTestBegin(NULL, 0, NULL);
+    Check("no command is consumed",
+          ScUpgQueueOnCommand(UqBuilding(), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 0);
+    Check("no cancel is consumed", ScUpgQueueOnCancel(UqBuilding()) ? 1 : 0, 0);
+    Check("nothing is ever unblocked",
+          ScUpgQueueShouldUnblock(UqBuilding()) ? 1 : 0, 0);
+    Check("and no level is ever stacked either",
+          ScUpgQueueMaySuppressBusyBit(UqBuilding(), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 0);
+}
+
 static void ExitLogTests(void) {
     printf("\n[12] the exit log path writes even when the lock is dead-owned\n");
 
@@ -3151,6 +3501,7 @@ int main(void) {
     BuildingGroupTests();
     CardScanTests();
     StatusStripTests();
+    UpgradeQueueTests();
     ExitLogTests();
 
     printf("\nhooktest: %d failure(s)\n", g_failures);
