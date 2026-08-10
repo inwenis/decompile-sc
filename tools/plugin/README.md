@@ -394,6 +394,79 @@ assert a queue length from the building's own memory instead of from the status 
 
 ---
 
+## Upgrade queue: more than one research at a building (task 029)
+
+`-UpgradeQueue 1` (default off). Full derivation, with the disassembly and the live wire
+measurement, in [`research/upgrade-queue.md`](../../research/upgrade-queue.md).
+
+**A building researches one thing at a time because it has ONE FIELD for it.** `CUnit+0xC9`
+is the upgrade in progress (61 = none), `CUnit+0xC8` the tech (44 = none) — both derived from
+the two button conditions that read them, `0x00428900` (`return unit->0xC9 != 61`) and
+`0x004287D0` (Lift Off needs both sentinels). There is no array to widen.
+
+**The client refuses to send the second command, and harder than the Train button did.**
+Measured with `probe-upgrade-wire.ps1`: with an upgrade running, six presses of the two
+upgrade buttons put ZERO commands on the wire, and the card read out of memory has `shown=1`
+— the upgrade buttons are not greyed but *gone*, replaced by a lone Cancel Upgrade. The
+refusal is requirement opcode `0xFF0A` inside the interpreter `0x0046D610`, which returns 0
+(not −1), and a 0 makes the card layout skip the button entirely.
+
+So the shape is three parts:
+
+| | target | why there |
+|---|---|---|
+| UNBLOCK | `btnUpgradeCondition` `0x00429450`, `btnTechCondition` `0x00429500` | evaluate the ORIGINAL condition with `0xC9`/`0xC8` momentarily at their idle sentinels, so the card offers the buttons and the client sends again. **The card conditions, not the gates** — the building AI calls the gates too, and a computer player told a busy building is free would start an upgrade on top of the running one |
+| HOLD | `cmdrecvUpgrade` `0x004C1B20`, `cmdrecvTech` `0x004C1BA0` | queue the id and skip the engine's body. The skip is not optional: neither `startUpgrade` nor `startTech` checks whether something is already running |
+| PROMOTE | `upgradeTick` `0x004546A0`, `techTick` `0x004548B0` | when the building goes idle, hand the oldest held item to the engine's own accept path — gate, then `startUpgrade`/`startTech` |
+
+plus `cmdrecvCancelUpgrade` `0x004BFFC0` / `cmdrecvCancelTech` `0x004C0070`, so a cancel
+unwinds the plugin's own tail first. Eight detours, all or nothing.
+
+**The plugin never touches a resource global, in either direction.** A held item is one id
+and a kind and carries no money; the ENGINE pays for it when it actually starts, from its own
+cost tables. So double payment is structurally impossible, a cancel needs no refund, and a
+building that dies owes the player nothing. Both `mineralsSpent` and `gasSpent` in the stats
+line are asserted flat ZERO by both suites.
+
+**The cap is vanilla's own.** At `-UpgradeQueueMax` the plugin stops unblocking, the
+condition tells the truth, the layout hides the button, and the client refuses on its own —
+measured in game as three presses producing zero commands.
+
+**Levels stack, scoped.** Weapons 2 can be queued behind Weapons 1, by also suppressing the
+per-player in-progress bit at `0x0058F3E0` — but ONLY for the building whose own `0xC9`
+already holds that id. That is the condition a second building cannot satisfy, so two
+buildings still cannot research the same upgrade, which matters: they would both pay and only
+one level would land.
+
+`-UpgradeQueueMax N` sets the total logical length, the engine's ONE included; default 8,
+clamped `[1, 16]`. Env: `%SCPLUGIN_UPGQ%`, `%SCPLUGIN_UPGQ_MAX%`.
+
+### What the log says
+
+```
+UPGQ config: enabled max=3 (the engine holds 1, the plugin holds up to 2 per building, ...)
+UPGQEV queue unit=0x00623E58 kind=upgrade id=0 queued=1 logical=2 max=3 (unpaid -- ...)
+UPGQEV promote unit=0x00623E58 kind=upgrade id=0 -> started, queuedLeft=1 minerals=2800 gas=2800
+UPGQSEL [tag] unit=... upg=7 tech=44 lvl=1 time=3117 busy=1 queued=2 queue=[U:0,U:7] logical=3 ...
+UPGQLVL [tag] p=0 levels=[0:1,7:2] levelCount=2 techs=[] techCount=0 minerals=2625 gas=2625
+UPGQSTATS queued=2 promoted=2 ... mineralsSpent=0 gasSpent=0 tracked=0
+```
+
+`UPGQSEL` is the building's own memory; `UPGQLVL` is the engine's level array (`0x0058D2B0`)
+and researched-tech array (`0x0058CF44`), i.e. the difference between "it left the queue" and
+"it finished".
+
+### Known limitations
+
+| | |
+|---|---|
+| The queue is not drawn | the status area shows the running item's progress bar, which is true; the items behind it are not on screen. `UPGQ` is the read-back oracle instead |
+| `0x32` / `0x30` only | unit training, morphs and addons keep vanilla's behaviour — that is `sc_prodqueue`'s half |
+| A queued item is not reserved | nothing is paid until an item starts, so a player who spends the money elsewhere finds the queue waiting rather than researching. It resumes by itself, and `waitingCost` says it is doing so |
+| Multiplayer | never — same reason as the production queue |
+
+---
+
 ## Toolchain (pinned)
 
 There was no C++ compiler on this machine at all (`setup.ps1` reports no `cl`, no
@@ -753,7 +826,8 @@ The one exception is the deprecated `-Windowed` switch, which *does* write
 | `src/sc_fanout.h/.cpp` | the shadow selection and the fan-out |
 | `src/sc_circles.h/.cpp` | task 014's selection circles: one hook, two engine calls, and the reasoning for never touching `selectionIndex` |
 | `src/sc_prodqueue.h/.cpp` | task 025's production queue: three detours, a per-building overflow list, the ring kept one below five so the client keeps sending, and the engine left as the only payer |
-| `src/hooktest.cpp` | offline unit tests for the detour engine, the fan-out core, the circles and the production queue (`build.ps1 -Test`) |
+| `src/sc_upgrades.h/.cpp` | task 029's upgrade queue: eight detours, a per-building queue of unpaid ids, the card's own button conditions unblocked so the client keeps sending, and the engine left as the only payer |
+| `src/hooktest.cpp` | offline unit tests for the detour engine, the fan-out core, the circles, the production queue and the upgrade queue (`build.ps1 -Test`) |
 | `src/scinject.cpp` | the 32-bit launcher/injector |
 | `build.ps1` | build + PE machine-type gate (+ `-Test`) |
 | `run-with-plugin.ps1` | launch wrapper (+ windowed shim helper, + dialog check, + `-Mode`) |
@@ -766,6 +840,8 @@ The one exception is the deprecated `-Windowed` switch, which *does* write
 | `test-sunken-acquire.ps1` | **unattended** PLUGIN-vs-STOCK test (task 022): does a Sunken Colony attack a Medic that walks into range? Same map in both modes, plus a Marine arm as the control that the Sunken can shoot from there at all |
 | `test-control-groups.ps1` | **unattended** end-to-end test of task 021: boxes 36, Ctrl+1, clears the selection, presses 1, and asserts all 36 come back with the engine still holding 12 — then that one order reaches all 36. Also checks the recall's ordering assumption against the live `activePlayerSelection`, the HUD row and circles across a recall, Shift+1, and a recall over an already-active >12 selection |
 | `test-production-queue.ps1` | **unattended** end-to-end test of task 025: generates a one-Command-Center map with starting resources, presses Train more times than the queue can hold, and asserts the queue length out of `CUnit+0x98`, the per-item promotions, and that minerals move exactly once per item |
+| `probe-upgrade-wire.ps1` | the task-029 measurement that came BEFORE its design: with an upgrade already running, does the client send a second one? Reads the card out of memory before and after, presses where the button was, and cancels to prove the zeros were a refusal and not a missed click |
+| `test-upgrade-queue.ps1` | **unattended** end-to-end test of task 029: one Engineering Bay, three upgrades queued at it (including the next level of the running one), asserted out of `CUnit+0xC9`/`0xC8`, completed in order out of the engine's own level array, and paid exactly once each out of the resource globals. Also checks the cap refuses on the wire and that cancel is free while the item is the plugin's and an exact refund once it is not |
 | `check-game-windows.ps1` | out-of-process launch health check |
 | `close-game.ps1` | WM_CLOSE the game and verify it exited (hard rule: never leave one running) |
 

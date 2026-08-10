@@ -214,6 +214,21 @@ static void CollectGarbage(bool deep) {
     }
 }
 
+// ASK FOR THE CARD TO BE REBUILT, the way the engine's own accept tail does
+// (0x004C1B78..0x004C1B8F). Setting SC_VA_STAT_DIRTY alone is NOT enough and the first
+// in-game run proved it: the status area redrew but the command card did not, so after the
+// second and third queueing press the card still held the buttons it had been laid out with
+// one press earlier -- and at the cap it went on offering an upgrade the plugin would then
+// have to refuse. The card is relaid on 0x0068C1B0, not on 0x0068C1F8.
+static void RequestRedraw(void) {
+    if (g_testing) return;
+    *(DWORD*)Rt(SC_VA_REDRAW_CARD)    = 1;
+    *(BYTE*) Rt(SC_VA_REDRAW_CONSOLE) = 1;
+    *(BYTE*) Rt(SC_VA_STAT_DIRTY)     = 1;
+    *(DWORD*)Rt(SC_VA_REDRAW_SEL_A)   = 0;
+    *(DWORD*)Rt(SC_VA_REDRAW_SEL_B)   = 0;
+}
+
 // The engine's one slot plus whatever this record holds.
 static int LogicalLength(DWORD unit, const UpgRecord* r) {
     int engine = EngineBusy(unit) ? SC_UPGQ_ENGINE_SLOTS : 0;
@@ -365,7 +380,7 @@ bool ScUpgQueueOnCommand(DWORD unit, int kind, unsigned id) {
               "(unpaid -- the engine pays when it starts)",
               (unsigned)unit, kind == SC_UPGQ_KIND_TECH ? "tech" : "upgrade", id,
               r->count, LogicalLength(unit, r), g_maxTotal);
-        if (!g_testing) *(BYTE*)Rt(SC_VA_STAT_DIRTY) = 1;
+        RequestRedraw();
     } while (0);
 
     LeaveCriticalSection(&g_lock);
@@ -408,7 +423,7 @@ bool ScUpgQueueOnCancel(DWORD unit) {
               (unsigned)unit, it.kind == SC_UPGQ_KIND_TECH ? "tech" : "upgrade",
               (unsigned)it.id, r->count);
         if (r->count == 0) DropRecordAt((int)(r - g_rec));
-        if (!g_testing) *(BYTE*)Rt(SC_VA_STAT_DIRTY) = 1;
+        RequestRedraw();
         consumed = true;
     }
 
@@ -451,6 +466,42 @@ static void LogUnitLine(const char* what, const char* tag, DWORD unit, const Upg
           player < SC_MAX_PLAYERS ? (unsigned)GasOf(player) : 0u);
 }
 
+// THE "IT TOOK EFFECT" ORACLE. An item that finished is not the same claim as an item that
+// left the queue, and the difference is in two arrays the engine writes on completion:
+// upgradeTick raises upgradeLevel[player][id] (0x0058D2B0) and techTick sets
+// techResearched[player][tech] (0x0058CF44 / 0x0058F128, the pair task 026 evidenced from
+// the other direction). Only the NON-ZERO entries are listed, with an explicit count, so
+// an empty answer is still an answer -- the before/after pair a test needs is
+// `levels=[] techs=[]` first and `levels=[7:1] techs=[]` later, from the same line.
+static void LogPlayerProgress(const char* tag, BYTE player) {
+    if (player >= SC_MAX_PLAYERS) return;
+    char lv[192]; int lvUsed = 0; int lvN = 0; lv[0] = '\0';
+    for (unsigned id = 0; id < SC_UPGRADE_COUNT; ++id) {
+        DWORD lvl = CurrentUpgradeLevel(player, id);
+        if (!lvl) continue;
+        ++lvN;
+        if (lvUsed + 12 < (int)sizeof(lv)) {
+            lvUsed += _snprintf(lv + lvUsed, sizeof(lv) - lvUsed, "%s%u:%u",
+                                lvUsed ? "," : "", id, (unsigned)lvl);
+        }
+    }
+    char tc[192]; int tcUsed = 0; int tcN = 0; tc[0] = '\0';
+    for (unsigned t = 0; t < SC_TECH_COUNT; ++t) {
+        BYTE done = (t < (unsigned)SC_TECH_COUNT_VANILLA)
+            ? *(BYTE*)(RtA(SC_VA_TECH_RESEARCHED) + (DWORD)player * SC_TECH_STRIDE_VANILLA + t)
+            : *(BYTE*)(RtA(SC_VA_TECH_RESEARCHED_BW) + (DWORD)player * SC_TECH_STRIDE_BW + t);
+        if (!done) continue;
+        ++tcN;
+        if (tcUsed + 8 < (int)sizeof(tc)) {
+            tcUsed += _snprintf(tc + tcUsed, sizeof(tc) - tcUsed, "%s%u", tcUsed ? "," : "", t);
+        }
+    }
+    ScLog("UPGQLVL [%s] p=%u levels=[%s] levelCount=%d techs=[%s] techCount=%d "
+          "minerals=%u gas=%u",
+          tag ? tag : "-", (unsigned)player, lv, lvN, tc, tcN,
+          (unsigned)MineralsOf(player), (unsigned)GasOf(player));
+}
+
 void ScUpgQueueLogState(const char* tag) {
     if (!g_enabled || !g_lockReady) return;
     EnterCriticalSection(&g_lock);
@@ -462,8 +513,12 @@ void ScUpgQueueLogState(const char* tag) {
     {
         DWORD* sel = (DWORD*)Rt(SC_VA_ACTIVE_PLAYER_SELECTION);
         DWORD u = sel[0];
-        if (u && !sel[1] && UnitPtrValid(u)) LogUnitLine("UPGQSEL", tag, u, FindRecord(u));
-        else ScLog("UPGQSEL [%s] (no single unit selected)", tag ? tag : "-");
+        if (u && !sel[1] && UnitPtrValid(u)) {
+            LogUnitLine("UPGQSEL", tag, u, FindRecord(u));
+            LogPlayerProgress(tag, *(BYTE*)(u + SC_CUNIT_OFF_PLAYER));
+        } else {
+            ScLog("UPGQSEL [%s] (no single unit selected)", tag ? tag : "-");
+        }
     }
 
     for (int i = 0; i < g_recCount; ++i) {
@@ -657,11 +712,7 @@ static int EngineStartItem(DWORD unit, int kind, unsigned id) {
 
     ScUpgCallAfterAccept(Rt(SC_VA_AFTER_ACCEPT), unit,
                          tech ? SC_ORDER_RESEARCH : SC_ORDER_UPGRADE);
-    *(DWORD*)Rt(SC_VA_REDRAW_CARD)    = 1;
-    *(BYTE*) Rt(SC_VA_REDRAW_CONSOLE) = 1;
-    *(BYTE*) Rt(SC_VA_STAT_DIRTY)     = 1;
-    *(DWORD*)Rt(SC_VA_REDRAW_SEL_A)   = 0;
-    *(DWORD*)Rt(SC_VA_REDRAW_SEL_B)   = 0;
+    RequestRedraw();
     return 1;
 }
 

@@ -39,8 +39,11 @@ Specs, so the runs are repeatable: `tools/ghidra/specs/upgrade-{functions,callee
 * The money is in exactly two functions, `startUpgrade` `0x00454A80` and `startTech`
   `0x00454B70`, and **both take the building in a register** — which is what makes a
   plugin-side queue possible without the plugin ever spending. §5.
-* What ships is: unblock the gate, hold the extra commands, and hand them back to the
-  engine's own accept path as the building frees. §7.
+* What ships is: unblock the card's own button conditions, hold the extra commands, and hand
+  them back to the engine's own accept path as the building frees. §7.
+* A second, narrower lie lets the levels of ONE upgrade stack, scoped so that two buildings
+  still cannot research the same upgrade — the engine rule that would otherwise be broken,
+  and what breaking it would cost. §7.5.
 
 ---
 
@@ -444,12 +447,23 @@ index rule.
 
 ### 7.2 What ships: unblock, hold, promote
 
-**(a) UNBLOCK.** Detour `upgradeGate` `0x0046DFC0` and `techGate` `0x0046DE90`. When the
-feature is on, the unit is a building, it is currently researching, and its logical queue is
-below the cap: evaluate the ORIGINAL gate with `0xC9`/`0xC8` temporarily set to their idle
-sentinels, and restore them before returning. The card offers the upgrade buttons again and
-the client starts sending. Everything else keeps vanilla's answer, because Lift Off and the
-Cancel button read the fields directly rather than through the gate.
+**(a) UNBLOCK.** Detour the two CARD BUTTON CONDITIONS — `btnUpgradeCondition`
+`0x00429450` and `btnTechCondition` `0x00429500`, which are byte-for-byte the same 20-byte
+wrapper marshalling `CL`/`EDX` into the gate. When the feature is on, the unit is a
+completed building, it is currently researching, and its logical queue is below the cap:
+evaluate the ORIGINAL condition with `0xC9`/`0xC8` temporarily set to their idle sentinels,
+and restore them before returning. The card offers the upgrade buttons again and the client
+starts sending. Everything else keeps vanilla's answer, because Lift Off and the Cancel
+button read the fields directly rather than through the gate.
+
+> **The conditions, and NOT the gates. This was the design's first choice and it was
+> wrong.** `HookProbe`'s caller list settles it: each gate has THREE callers, and the third
+> is in the building-AI range — `0x00434670` calls `upgradeGate`, `0x004345C0` calls
+> `techGate`. A computer player told that a busy building is free would issue an upgrade,
+> and §4.3's last row says what happens next: `startUpgrade` does not check, so it would
+> apply the new upgrade on top of the running one and pay for it. The conditions have no
+> CALL references at all — the button table reaches them as DATA — so hooking them touches
+> the card and nothing else.
 
 **At the cap the plugin stops lying.** The gate tells the truth, the layout hides the button,
 and the client refuses on its own — the cap is vanilla's own mechanism, which is the property
@@ -496,19 +510,56 @@ While researching, the card offers exactly one button and it means "cancel". Mat
 * the plugin holds nothing → straight through to vanilla, which cancels the running item and
   refunds it exactly.
 
+### 7.5 Stacking the levels of ONE upgrade, and the engine rule that nearly forbade it
+
+Weapons 2 behind Weapons 1 needs a second lie, because the card refuses the running
+upgrade's own button through a test §7.2(a) does not touch: `upgradeBusy` `0x004281B0`
+(§4.2), the per-player-per-upgrade bitfield at `0x0058F3E0`.
+
+**Suppressing that naively would break a real engine rule.** The same bit is what stops TWO
+BUILDINGS researching the same upgrade at once, and the consequence is not cosmetic. Both
+would call `startUpgrade`, both would pay, and both would set `CUnit+0xCD = currentLevel +
+1` — the SAME target level. When the first finished and raised the level, the second's next
+tick would find `currentLevel < unit->0xCD` already false, skip the early return, complete
+immediately, and raise nothing (§6). The player would have paid twice for one level.
+
+So the suppression is scoped by a condition a second building **cannot** satisfy:
+
+> this building's own `CUnit+0xC9` already holds this very upgrade id.
+
+A second Engineering Bay's `0xC9` holds 61, or a different id, so its button stays hidden
+and the two-buildings rule is untouched. Only the building that already owns the upgrade is
+allowed to be asked about it again. `hooktest` part [16] asserts that as a **pair** — the
+running building may stack, an idle sibling and a sibling researching something else may
+not — because a test making only the first claim would pass for the dangerous version too.
+
+The LEVEL needed no work at all, and this was verified rather than assumed: `startUpgrade`
+computes `0xCD = currentLevel + 1` from the level array **at the moment it runs**, and
+promotion goes through that same function. A queued Weapons is not "level 2"; it is "the
+next level", resolved when it starts — which is also why it pays that level's own price
+(`base + factor × level`, §5.1), measured offline at 175 and 250 for a 100/75 upgrade.
+
+A level-headroom term (`running + queued + 1 <= maxLevel`) keeps the card honest, so presses
+stop at the ceiling instead of being queued and dropped at promotion. Dropping them would
+have been safe — no money moves — but it would have read as the feature losing them.
+
 ---
 
 ## 8. Known limitations
 
-1. **Held items are not drawn.** The status area shows the running item only.
-2. **The SAME upgrade cannot be queued twice**, i.e. level N+1 cannot be lined up behind
-   level N. This is refused by the engine rather than by the plugin: `upgradeBusy`
-   (§4.2) hides that upgrade's own button for as long as it is running, and the plugin does
-   not touch that test. The task named this as an acceptable answer if stated; this is the
-   statement.
-3. **`0x32` Upgrade and `0x30` Tech only.** Unit training, morphs and addons keep vanilla's
+1. **Held items are not drawn.** The status area shows the running item's progress bar,
+   which is true; the queue behind it is not on screen. The plugin's `UPGQ` line is the
+   read-back oracle instead, and is what the in-game suite asserts on. Extending the status
+   area would mean a dialog splice, a larger and riskier change than this feature.
+2. **`0x32` Upgrade and `0x30` Tech only.** Unit training, morphs and addons keep vanilla's
    behaviour (`research/production-queue.md` is the other half).
-4. **Single-player only**, like everything in this repo (AGENTS.md hard rule 3).
+3. **One building.** Not cross-building, and no auto-repeat.
+4. **A queued item is not reserved.** Because nothing is paid until an item starts, a player
+   who queues three upgrades and then spends the money elsewhere will find the queue waiting
+   rather than researching. It resumes by itself as income arrives, and the `waitingCost`
+   counter says it is doing so. This is the price of pay-at-start, and it is the right way
+   round: the alternative reserves money the player may need.
+5. **Single-player only**, like everything in this repo (AGENTS.md hard rule 3).
 
 ---
 
