@@ -21,6 +21,15 @@ canonicalised (device prefix, slash direction, 8.3 names, links) before the
 guard runs and everything downstream uses that canonical form; and the log goes
 to a path outside the repo (C:/sc-work/ is gitignored).
 
+Foreground (issue #30). The game activates its own window when it creates it, and on an
+idle desktop nothing ever takes it back -- task 029 measured 72 seconds of stolen
+foreground on a 72-second run. Task 027 fixed the per-CLICK raise; this is the LAUNCH,
+which it never covered. So a worker launch records the foreground window before
+CreateProcess and hands it back once the game's window exists. Gated exactly like the
+launch lock: $env:AGENT_TASK (never set for the user's own shortcut) plus
+-NoForegroundRestore as an independent second guard, because a human who double-clicked
+their game wants to SEE it. See tools/plugin/sc-foreground.ps1.
+
 Launch lock (task018). Two workers launching concurrently is not hypothetical -- it
 happened live during task018's own development: a second worker's StarCraft process
 shared this one's plugin/geometry closely enough that its own cleanup logic mistook one
@@ -165,6 +174,14 @@ param(
     # already cover it, specifically so a held/wedged lock can never turn into the user
     # double-clicking their game and silently getting nothing.
     [switch]$NoLaunchLock,
+    # Issue #30: hand the foreground back to whatever window had it before this launch,
+    # once the game's window exists. On by default for WORKERS ONLY -- the same
+    # $env:AGENT_TASK gate the launch lock uses -- and this switch is the second,
+    # independent guard, baked into the deployed launcher: the user double-clicked their
+    # shortcut in order to play, and pushing the game behind their editor would be a
+    # worse bug than the focus theft this fixes. $env:SCDRIVE_RAISE=1 (drive-game.ps1's
+    # existing "a human is watching this run" knob) also turns it off.
+    [switch]$NoForegroundRestore,
     # Task 020: the emit-side liveness gate. '1' (the default, and the shipped
     # behaviour) refuses to put a dead / removed-from-play unit's tag into a
     # replayed Select. '0' is a KNOWN-BAD configuration that restores the
@@ -266,6 +283,9 @@ $repoRoot  = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 # Cross-worker launch serialisation -- see "Launch lock" below and
 # tools/plugin/sc-launch-lock.ps1.
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
+# Record-and-restore of the pre-launch foreground window -- see "Foreground" below and
+# tools/plugin/sc-foreground.ps1.
+. (Join-Path $scriptDir 'sc-foreground.ps1')
 
 $PRISTINE_ROOT = 'C:\sc-install'
 $givenGameDir  = $GameDir
@@ -295,6 +315,15 @@ if (-not (Test-Path -LiteralPath $GameDir)) {
 $takeLock = (-not $NoLaunchLock) -and [bool]$env:AGENT_TASK
 $lock = $null
 if ($takeLock) { $lock = Enter-ScLaunchLock -TimeoutMinutes 5 }
+
+# --- foreground restore (issue #30) -------------------------------------------
+# Same gate as the lock, for the same reason and with the same second guard: this must
+# be unreachable from the user's own play path. SCDRIVE_RAISE=1 is the existing "a human
+# is watching this run" knob (drive-game.ps1 Set-ScWindowActive) and turns it off too.
+# $preLaunchFg stays Zero until the moment before CreateProcess, so the finally below
+# cannot restore anything on a -NoLaunch/-RemoveWindowed run that never launched.
+$restoreForeground = (-not $NoForegroundRestore) -and [bool]$env:AGENT_TASK -and ($env:SCDRIVE_RAISE -ne '1')
+$preLaunchFg = [IntPtr]::Zero
 
 try {
     $ddraw = Join-Path $GameDir 'ddraw.dll'
@@ -394,6 +423,26 @@ try {
     # to the health check below. Resolving the game by process name instead would
     # throw whenever any other StarCraft is running on the machine -- after a launch
     # that actually succeeded.
+    # WHOSE WINDOW THIS IS ABOUT TO BE TAKEN FROM (issue #30). Recorded here, the last
+    # moment before CreateProcess, because the game activates its window the instant it
+    # creates one -- roughly four seconds before its own log opens, so there is no
+    # in-game signal to record against. Skipped if a StarCraft window already holds the
+    # foreground: that is another worker's run, and raising it back would be worse than
+    # doing nothing.
+    if ($restoreForeground) {
+        $fg = Get-ScForegroundWindow
+        if ($fg -eq [IntPtr]::Zero) {
+            Write-Host 'run-with-plugin: no foreground window to record; the game will keep the foreground it takes.'
+        }
+        elseif (Test-ScForegroundIsGame -Hwnd $fg) {
+            Write-Host 'run-with-plugin: a StarCraft window already holds the foreground (another run); not recording it.'
+        }
+        else {
+            $preLaunchFg = $fg
+            Write-Host "run-with-plugin: foreground before launch -- $(Get-ScForegroundLabel -Hwnd $preLaunchFg); it will be handed back once the game window exists."
+        }
+    }
+
     $injOut = [System.Collections.Generic.List[string]]::new()
     & $inj @injArgs 2>&1 | ForEach-Object { Write-Host $_; $injOut.Add("$_") }
     $rc = $LASTEXITCODE
@@ -403,6 +452,28 @@ try {
     $gamePid = 0
     foreach ($line in $injOut) {
         if ($line -match 'scinject:\s*PID=(\d+)\b') { $gamePid = [int]$Matches[1] }
+    }
+
+    # --- hand the foreground back, at the FIRST moment this script can (issue #30) ---
+    # Timed on one launch, with the launch stages stamped against an in-process foreground
+    # sampler:
+    #     T+5.28  scinject starts the game
+    #     T+5.53  the game's window creation takes the foreground
+    #     T+9.60  scinject returns -- the first instant this script runs again
+    #     T+12.19 check-game-windows
+    # So ~4.1 s of the hold is structural: scinject blocks for its own settle and nothing
+    # here executes during it. What was NOT structural was the 2.5 s after it -- the mute
+    # and the health-check sleep -- which the restore used to sit behind. Doing it here
+    # cuts the hold from ~6.8 s to ~4.2 s.
+    #
+    # The window exists by now: scinject has already returned from WaitForInputIdle, which
+    # is what "once the game window exists" means in practice. The finally below repeats
+    # this as the safety net, for the case where the game activates itself again while the
+    # health check runs.
+    if ($preLaunchFg -ne [IntPtr]::Zero) {
+        if (Restore-ScForeground -Hwnd $preLaunchFg -Tries 2) {
+            Write-Host "run-with-plugin: foreground handed back -- $(Get-ScForegroundLabel -Hwnd $preLaunchFg)"
+        }
     }
 
     # --- sound (task018) -------------------------------------------------------
@@ -460,6 +531,32 @@ try {
     }
 }
 finally {
+    # --- hand the foreground back (issue #30) ---------------------------------
+    # In the finally, not after the health check, so a launch that throws with the game
+    # already on screen (a modal DirectDraw error box is exactly that case) still gives
+    # the user their window back before the failure propagates.
+    #
+    # By here check-game-windows.ps1 has enumerated the game's top-level windows, so the
+    # window whose creation stole the foreground exists -- which is the condition the fix
+    # is specified against ("restore it once the game window exists").
+    #
+    # NEVER FATAL, on the same reasoning as Send-ScDropdownPick's hand-back: the launch
+    # has already happened, and a shell that will not give the foreground up is a
+    # cosmetic loss, not a failed launch.
+    if ($preLaunchFg -ne [IntPtr]::Zero) {
+        # Whether the early restore above still holds. If it does this is a no-op and says
+        # nothing -- printing "handed back" twice would read as two borrows, not one.
+        $alreadyBack = (Get-ScForegroundWindow) -eq $preLaunchFg
+        if (Restore-ScForeground -Hwnd $preLaunchFg) {
+            if (-not $alreadyBack) {
+                Write-Host "run-with-plugin: foreground handed back -- $(Get-ScForegroundLabel -Hwnd $preLaunchFg)"
+            }
+        }
+        else {
+            Write-Warning ('run-with-plugin: could not hand the foreground back after launch; the game may be left in front. ' +
+                           "It now belongs to $(Get-ScForegroundLabel -Hwnd (Get-ScForegroundWindow)). The launch itself is unaffected.")
+        }
+    }
     if ($lock) { Exit-ScLaunchLock -Lock $lock }
 }
 

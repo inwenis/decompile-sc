@@ -33,11 +33,61 @@
 
 static int g_failures = 0;
 
+// ---------------------------------------------------------------------------
+// Parts: numbered by the order they RUN, never by hand (issue #35)
+//
+// Three separate branches claimed a part number that another branch had already
+// taken -- 024 and 026 both took [13], 021 and 025 both took [11], 028 and 029 both
+// took [16]. Every one of them was invisible until somebody merged both sides: the
+// declarations sit in different regions of this file (or in different files), so git
+// reports no conflict and both parts simply arrive with the same number.
+//
+// The number exists for exactly one purpose: naming which part failed in a redirected
+// overnight log. Two parts sharing one defeats that purpose precisely when it is
+// needed. So the number is no longer a thing a branch claims -- Part() assigns it from
+// the order the parts actually run in, and prints the part's NAME beside it. There is
+// nothing left to collide over, and adding a part is one call with no shared resource
+// to check first.
+//
+// The NAME is now the real identifier: Check() prints it on every failing line, so a
+// reader greppping a 4000-line log for FAIL learns the subsystem without scrolling back
+// to a header. Duplicate names are refused below, for the same reason duplicate numbers
+// were a defect.
+//
+// The call order at the bottom of main() is deliberately chosen so the derived numbers
+// still match the ones research/ already cites (control-groups.md cites part [11] four
+// times, selection-circles.md cites [8], and so on). NEW PARTS GO AT THE END and take
+// the next number automatically. Reordering existing calls renumbers them and silently
+// invalidates those citations, so don't -- unless you are also fixing the citations.
+// ---------------------------------------------------------------------------
+#define SC_MAX_PARTS 64
+static int g_partCount = 0;
+static const char* g_partNames[SC_MAX_PARTS];
+static const char* g_partName = "(before any part)";
+
+static void Part(const char* name) {
+    for (int i = 0; i < g_partCount && i < SC_MAX_PARTS; ++i) {
+        if (strcmp(g_partNames[i], name) == 0) {
+            printf("  FAIL duplicate hooktest part name '%s' -- already part [%d]\n", name, i + 1);
+            ++g_failures;
+        }
+    }
+    if (g_partCount < SC_MAX_PARTS) { g_partNames[g_partCount] = name; }
+    else { printf("  FAIL more than %d parts; raise SC_MAX_PARTS\n", SC_MAX_PARTS); ++g_failures; }
+    ++g_partCount;
+    g_partName = name;
+    printf("\n[%d] %s\n", g_partCount, name);
+}
+
 static void Check(const char* what, long long got, long long want) {
     if (got == want) {
         printf("  ok   %-46s = %lld\n", what, got);
     } else {
-        printf("  FAIL %-46s = %lld (expected %lld)\n", what, got, want);
+        // The part NAME on the failing line itself. "part [16] failed" was unanswerable
+        // when two parts held [16]; "[16] the status pane's production-queue strip" is
+        // answerable however the numbering came out.
+        printf("  FAIL %-46s = %lld (expected %lld)   <- [%d] %s\n",
+               what, got, want, g_partCount, g_partName);
         ++g_failures;
     }
 }
@@ -331,7 +381,7 @@ static int ExpectOrderAt(const char* what, int off) {
 }
 
 static void FanoutCoreTests(void) {
-    printf("\n[7] the fan-out core: 36 units, one right-click, no game, no hooks\n");
+    Part("the fan-out core: 36 units, one right-click, no game, no hooks");
 
     g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
                                  PAGE_READWRITE);
@@ -638,7 +688,7 @@ static FanoutOutcome RunOne(const BYTE* cmd, int len) {
 }
 
 static void OpcodePolicyTests(void) {
-    printf("\n[9] the per-opcode policy: which commands reach all 36 units\n");
+    Part("the per-opcode policy: which commands reach all 36 units");
 
     g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
                                  PAGE_READWRITE);
@@ -883,7 +933,7 @@ static bool NoSelectionIndexWasWritten(int n) {
 }
 
 static void CircleTests(void) {
-    printf("\n[8] selection circles: fake sprites, fake engine primitives\n");
+    Part("selection circles: fake sprites, fake engine primitives");
 
     g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
                                  PAGE_READWRITE);
@@ -1248,7 +1298,7 @@ static bool Hotkey(BYTE action, BYTE group) {
 static const int kFirstTwelve[12] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
 
 static void ControlGroupTests(void) {
-    printf("\n[11] shadow control groups: Ctrl+N over 12, and N brings them back\n");
+    Part("shadow control groups: Ctrl+N over 12, and N brings them back");
 
     g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
                                  PAGE_READWRITE);
@@ -1591,7 +1641,7 @@ static void ControlGroupTests(void) {
 }
 
 static void HudRowTests(void) {
-    printf("\n[10] HUD-row paging: fake dialog tree, fake engine primitives\n");
+    Part("HUD-row paging: fake dialog tree, fake engine primitives");
 
     g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
                                  PAGE_READWRITE);
@@ -2010,7 +2060,7 @@ static void MakeCandidates(DWORD* buf, const int* idx, int n) {
 }
 
 static void BuildingGroupTests(void) {
-    printf("\n[13] same-type building groups: one box, N buildings, N rallies\n");
+    Part("same-type building groups: one box, N buildings, N rallies");
 
     // Its own fake image, like every other part: each one releases the previous one's.
     g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
@@ -2268,7 +2318,7 @@ static void SetFakeEngineSelection(const int* idx, int n) {
 }
 
 static void BuildingParityTests(void) {
-    printf("\n[20] building-group parity: extend a group, recall a group\n");
+    Part("building-group parity: extend a group, recall a group");
 
     g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
                                  PAGE_READWRITE);
@@ -2626,7 +2676,7 @@ static void PqBegin(int maxTotal, DWORD minerals, DWORD gas) {
 }
 
 static void ProdQueueTests(void) {
-    printf("\n[15] the production-queue core: >5 queued, no game, no hooks\n");
+    Part("the production-queue core: >5 queued, no game, no hooks");
 
     if (!g_fake) {
         g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
@@ -3007,7 +3057,7 @@ static void UqPress(int kind, unsigned id) {
 }
 
 static void UpgradeQueueTests(void) {
-    printf("\n[17] the upgrade-queue core: more than one research at a building\n");
+    Part("the upgrade-queue core: more than one research at a building");
 
     if (!g_fake) {
         g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
@@ -3235,7 +3285,7 @@ static void UpgradeQueueTests(void) {
 }
 
 static void ExitLogTests(void) {
-    printf("\n[12] the exit log path writes even when the lock is dead-owned\n");
+    Part("the exit log path writes even when the lock is dead-owned");
 
     char path[MAX_PATH];
     ScLogResolvePath(path, sizeof(path));
@@ -3425,7 +3475,7 @@ static const ScCardSlot* FindSlot(const ScCardSlot* s, int n, int index) {
 }
 
 static void CardScanTests(void) {
-    printf("\n[14] the command-card read-back, against a fake card dialog\n");
+    Part("the command-card read-back, against a fake card dialog");
 
     // Every part allocates its own fake image and releases it again (the previous
     // part has already freed g_fake by the time this runs).
@@ -3558,7 +3608,7 @@ static void CardScanTests(void) {
 // selection task 024 would not have produced.
 // ---------------------------------------------------------------------------
 static void ProdFanTests(void) {
-    printf("\n[18] group production: one Train click, one item per building\n");
+    Part("group production: one Train click, one item per building");
 
     const WORD CC = 106, BARRACKS = 111;
     WORD same4[4]  = { CC, CC, CC, CC };
@@ -3840,7 +3890,7 @@ static DWORD QiIndicator(void) {
 }
 
 static void QueueIndTests(void) {
-    printf("\n[19] the queue-overflow indicator: composer, splice, and the fifth icon\n");
+    Part("the queue-overflow indicator: composer, splice, and the fifth icon");
 
     g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
                                  PAGE_READWRITE);
@@ -4037,7 +4087,7 @@ static void QueueIndTests(void) {
 }
 
 static void StatusStripTests(void) {
-    printf("\n[16] the status pane's production-queue strip, against a fake dialog\n");
+    Part("the status pane's production-queue strip, against a fake dialog");
 
     g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
                                  PAGE_READWRITE);
@@ -4165,13 +4215,13 @@ int main(void) {
 
     unsigned slots[4] = { 11, 22, 33, 44 };
 
-    printf("\n[1] baseline (unhooked)\n");
+    Part("baseline (unhooked)");
     Check("TgtFastcall(5,3) = 5*2+3+7", TgtFastcall(5, 3), 20);
     Check("TgtStdcall(5,3)  = 5+3*3",   TgtStdcall(5, 3), 14);
     CallMixed(2, slots, 100, 1000);
     Check("TgtMixed -> 2+11+100+1000", g_mixedResult, 1113);
 
-    printf("\n[2] the signature check refuses a wrong prologue\n");
+    Part("the signature check refuses a wrong prologue");
     {
         ScHook bogus;
         const BYTE wrong[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0x00 };
@@ -4181,7 +4231,7 @@ int main(void) {
         Check("nothing was patched: TgtFastcall(5,3)", TgtFastcall(5, 3), 20);
     }
 
-    printf("\n[3] install the three detours\n");
+    Part("install the three detours");
     {
         const BYTE pFast[]  = { 0x55, 0x8B, 0xEC, 0x51, 0xA1 };
         const BYTE pStd[]   = { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x5C };
@@ -4199,15 +4249,15 @@ int main(void) {
         Check("install sortOverflow-shaped (5B window)", m ? 1 : 0, 1);
     }
 
-    printf("\n[4] detours run, trampolines still compute the original result\n");
+    Part("detours run, trampolines still compute the original result");
     Check("TgtFastcall(5,3) -> original 20 + 1000", TgtFastcall(5, 3), 1020);
     Check("  detour entered", g_fastCalls, 1);
     Check("TgtFastcall(9,1) -> original 26 + 1000", TgtFastcall(9, 1), 1026);
     Check("TgtStdcall(5,3)  -> original 14 + 2000", TgtStdcall(5, 3), 2014);
     Check("  detour entered", g_stdCalls, 1);
 
-    printf("\n[5] the register-convention thunk sees EAX/ECX AND the stack args,\n"
-           "    and the original still runs with every register intact\n");
+    Part("the register-convention thunk sees EAX/ECX AND the stack args");
+    printf("    and the original still runs with every register intact\n");
     g_mixedResult = 0;
     CallMixed(2, slots, 100, 1000);
     Check("observer saw count (EAX)",     g_lastMixedCount, 2);
@@ -4223,7 +4273,7 @@ int main(void) {
     Check("200 calls, stack stays balanced", g_mixedResult, 1 + 11 + 1 + 1);
     Check("  thunk entered 200 times",       g_mixedCalls, 200);
 
-    printf("\n[6] removal restores the originals exactly\n");
+    Part("removal restores the originals exactly");
     Check("remove fast",  ScHookRemove(&g_hFast) ? 1 : 0, 1);
     Check("remove std",   ScHookRemove(&g_hStd) ? 1 : 0, 1);
     Check("remove mixed", ScHookRemove(&g_hMixed) ? 1 : 0, 1);
@@ -4237,20 +4287,37 @@ int main(void) {
     Check("no detour ran after removal (std)",   g_stdCalls - stdBefore, 0);
     Check("no detour ran after removal (mixed)", g_mixedCalls - mixedBefore, 0);
 
-    FanoutCoreTests();
-    OpcodePolicyTests();
-    CircleTests();
-    HudRowTests();
-    ControlGroupTests();
-    ProdQueueTests();
-    BuildingGroupTests();
-    BuildingParityTests();
-    CardScanTests();
-    StatusStripTests();
-    UpgradeQueueTests();
-    ProdFanTests();
-    QueueIndTests();
-    ExitLogTests();
+    // THIS ORDER IS THE PART NUMBERING (issue #35). Part() numbers by the order these
+    // run, so the list below is the only place a number is decided -- and it is ordered
+    // to reproduce the numbers research/ already cites ([8] selection circles, [11]
+    // shadow control groups, [12] the exit log, [16] the status strip, ...) rather than
+    // to renumber six parts and quietly falsify a dozen citations.
+    //
+    // ADD NEW PARTS AT THE END. That is the whole mechanism: the next number is
+    // whatever the previous one was plus one, nobody claims it, and two branches adding
+    // a part each end up with different numbers however they merge.
+    //
+    // [19] and [20] ARE THAT MECHANISM'S FIRST LIVE TEST. Tasks 033 and 036 merged while
+    // this branch was in flight, each hand-numbering a new part: 033 wrote [19] for the
+    // queue indicator, 036 wrote [20] for building-group parity -- and 036's ran BEFORE
+    // 033's, so on main the parts printed 20 then 19. They did not collide this time; the
+    // numbers were simply already lying about the order. Ordered here so the derived
+    // numbers match the ones each branch published, and both headers converted to Part(),
+    // which is what the numbers now come from.
+    FanoutCoreTests();       // [7]
+    CircleTests();           // [8]
+    OpcodePolicyTests();     // [9]
+    HudRowTests();           // [10]
+    ControlGroupTests();     // [11]
+    ExitLogTests();          // [12]
+    BuildingGroupTests();    // [13]
+    CardScanTests();         // [14]
+    ProdQueueTests();        // [15]
+    StatusStripTests();      // [16]
+    UpgradeQueueTests();     // [17]
+    ProdFanTests();          // [18]
+    QueueIndTests();         // [19]  task 033
+    BuildingParityTests();   // [20]  task 036
 
     printf("\nhooktest: %d failure(s)\n", g_failures);
     ScLogClose();

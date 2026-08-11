@@ -39,14 +39,15 @@ What it does, in order:
      and after the mirror and throws if anything preserved actually changed. See "What
      survives a redeploy, and what does not" below.
   7. Copies the freshly built plugin binaries, plus run-with-plugin.ps1 and its
-     check-game-windows.ps1/sc-canonical-path.ps1/sc-audio-mute.ps1/sc-launch-lock.ps1
-     dependencies, into <DeployRoot>\plugin -- so the deployed install does not depend
+     check-game-windows.ps1/sc-canonical-path.ps1/sc-audio-mute.ps1/sc-launch-lock.ps1/
+     sc-foreground.ps1 dependencies, into <DeployRoot>\plugin -- so the deployed install
+     does not depend
      on this repo (or this worktree, which is disposable) still existing on disk later.
      See "Design: self-contained, not a thin repo pointer" below.
   8. Writes <DeployRoot>\Launch-StarCraft-Modded.ps1, a launcher with zero parameters
      that calls the deployed copy of run-with-plugin.ps1 with the feature set baked in:
      -Mode fanout -InjectWindowedHelper WMode -Circles 1 -HudRow 1 -ProdQueue 1
-     -ProdFan 1 -UpgradeQueue 1 -QueueIndicator 1 -Sound -NoLaunchLock
+     -ProdFan 1 -UpgradeQueue 1 -QueueIndicator 1 -Sound -NoLaunchLock -NoForegroundRestore
      (fanout + selection circles + HUD row paging + over-cap production queue +
      group production fan-out — -ProdQueue and -ProdFan both default to 0 in
      run-with-plugin.ps1 so suites opt in, but the PLAY build turns them on; building
@@ -397,7 +398,8 @@ Copy-Item -LiteralPath (Join-Path $pluginDir 'check-game-windows.ps1') -Destinat
 Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-canonical-path.ps1')  -Destination (Join-Path $pluginDeployDir 'sc-canonical-path.ps1')  -Force
 Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-audio-mute.ps1')      -Destination (Join-Path $pluginDeployDir 'sc-audio-mute.ps1')      -Force
 Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-launch-lock.ps1')     -Destination (Join-Path $pluginDeployDir 'sc-launch-lock.ps1')     -Force
-Write-Host 'plugin runtime copied: scplugin.dll, scinject.exe, run-with-plugin.ps1, check-game-windows.ps1, sc-canonical-path.ps1, sc-audio-mute.ps1, sc-launch-lock.ps1'
+Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-foreground.ps1')      -Destination (Join-Path $pluginDeployDir 'sc-foreground.ps1')      -Force
+Write-Host 'plugin runtime copied: scplugin.dll, scinject.exe, run-with-plugin.ps1, check-game-windows.ps1, sc-canonical-path.ps1, sc-audio-mute.ps1, sc-launch-lock.ps1, sc-foreground.ps1'
 
 # --- 4. write the zero-argument launcher --------------------------------------
 $launcherPath = Join-Path $deployRootFull 'Launch-StarCraft-Modded.ps1'
@@ -410,6 +412,12 @@ this file rather than editing it by hand. Baked feature set: fan-out + selection
 sound ON (run-with-plugin.ps1 mutes by default for unattended
 test suites -- -Sound here is what keeps the user's own play audible; see
 tools/README-deploy.md "Sound").
+
+-NoForegroundRestore is baked in for the same class of reason (issue #30): a worker
+launch hands the foreground back to whatever window had it before, because an unattended
+suite must not own the user's screen. THIS launcher is the user asking for the game, so
+the game keeps the foreground it takes. run-with-plugin.ps1's own $env:AGENT_TASK check
+would already cover it; this makes it structural.
 
 -NoLaunchLock is baked in deliberately, on top of run-with-plugin.ps1's own
 $env:AGENT_TASK check (never true here, since nothing sets that variable for the user's
@@ -437,6 +445,7 @@ try {
         -InjectWindowedHelper WMode `
         -Sound `
         -NoLaunchLock `
+        -NoForegroundRestore `
         -Circles 1 `
         -HudRow 1 `
         -ProdQueue 1 `

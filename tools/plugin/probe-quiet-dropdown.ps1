@@ -92,10 +92,17 @@ $hwnd = [IntPtr]::Zero
 if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPath -Force }
 
 function Try-Pick([string]$arm) {
-    # Set-ScGameType is the oracle: it picks a known OTHER entry, fingerprints the
-    # map-information panel, picks the wanted one, and demands the panel changed.
+    # Set-ScGameType is the oracle. It no longer fingerprints the map-information panel:
+    # since issue #29 it READS the selected entry out of the engine's dialog list and
+    # requires the pick to have produced the wanted one by name, which is a strictly
+    # sharper verdict for this probe than "some pixels changed" ever was.
+    #
+    # -Force because this probe's whole question is whether a pick TAKES under three
+    # foreground arms. Without it the sticky remembered value would let Set-ScGameType
+    # skip the pick and report success having driven nothing -- the experiment measuring
+    # its own shortcut.
     try {
-        Set-ScGameType -Hwnd $hwnd -Tries 1
+        Set-ScGameType -Hwnd $hwnd -LogPath $LogPath -Tries 1 -Force
         Write-Host "       ARM ${arm}: PICK TOOK"
         return $true
     } catch {
