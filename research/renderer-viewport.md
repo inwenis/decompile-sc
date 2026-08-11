@@ -654,6 +654,28 @@ count, with the flag setter last and the branch left at its own address so its r
 unchanged. **The generator now refuses this class outright**: if a replacement writes EFLAGS
 where the original did not, it walks forward and fails on the first reader.
 
+**And re-pointing a base pointer is not enough when the arithmetic AROUND it encodes the old
+stride.** This one showed up three times in three different syntactic shapes, none of which
+contains a base address to notice:
+
+| where | shape | what it really is |
+| ----- | ----- | ----------------- |
+| `FUN_0047EA60` | `mov esi,0x280; sub esi,ebx` | a framebuffer row step, held as pitch − run width |
+| 0x004B1FA0 | `lea ecx,[eax+eax*4-0x55]; shl ecx,3` | a byte COUNT, `40*(row-17)` |
+| 0x0048CB80 | `add ecx,0x28` | a walk step of one grid row |
+
+The relocation machinery re-points every instruction that NAMES the grid, and would have left
+all three of these alone — they name nothing. A stride is a number that describes a layout
+without pointing at it, which is exactly why a search for the layout's address cannot find it.
+
+**The consequence is the reason it matters: all three produce MISSED REDRAWS, not crashes.**
+A crash tells you. A block that is never marked dirty, or a row filled 40 bytes wide out of
+50, simply keeps whatever was there before — and that survives into a screenshot and reads as
+a rendering quirk. It is how the first round of this task produced a confident "the helper is
+just cropping" verdict out of a shredded frame. The family is *damage that renders*, and the
+defence is not more reading: it is the row-by-row interior diff of §12.2, calibrated against a
+control that is known to be pixel-identical.
+
 ### 12.6 The presentation half — §10 item 2, answered
 
 **`WMode.dll` presents 640x480 whatever display mode it is asked for**, measured by
