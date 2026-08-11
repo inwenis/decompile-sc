@@ -410,12 +410,53 @@ Two things follow that a screenshot cannot tell you and this plugin now reads ou
 
 | | |
 |---|---|
-| The status area still draws five icons | items 6..N are real, paid for and will be built, but they are not on screen. The engine's five are always five *true* entries — the next five this building will build — so nothing shown is wrong, only incomplete. Extending the production panel is the obvious follow-up |
-| …and they are also the only items the player can CANCEL by clicking | the queue icons address the ring; an overflow item is reachable only through the card's Cancel button, tail-first. Task 028 measured this rather than assuming it |
+| ~~The status area still draws five icons~~ | **FIXED by `-QueueIndicator 1` (task 033)**: the icons past the engine's ring are drawn from the plugin's own queue and a `+N` covers the rest. Without that flag the old limitation stands — items 6..N are real, paid for and will be built, but they are not on screen |
+| ~~…and they are also the only items the player can CANCEL by clicking~~ | **also fixed with it**: a click on an icon the plugin drew is served by the plugin (it cancels that exact held item and refunds it once). Without the flag, an overflow item is reachable only through the card's Cancel button, tail-first |
 | Train (`0x1F`) only | Unit Morph (`0x23`), Train Fighter (`0x27`) and Building Morph (`0x35`) keep vanilla's five |
 | A one-frame ordering window | if a slot frees in the same frame a Train command is processed, the engine can take that slot ahead of an older held item. Nothing is lost or double-paid; only the relative order of two items queued within a frame of each other can differ |
 | Refund latency for a destroyed building | the cheap liveness terms run every tick; the player-unit-list walk runs on Train/Cancel commands, so a building destroyed while the player is idle is refunded on their next click |
 | Multiplayer | never — it moves a player's resources outside the command stream |
+
+---
+
+## Queue indicator: showing what the strip cannot draw (task 033)
+
+`-QueueIndicator 1` (default off; on in the deployed play build). Full derivation of the text
+path, with the listings, in [`research/status-pane-text.md`](../../research/status-pane-text.md).
+
+It answers three things the user asked for after playing the deployed build:
+
+| they said | it now shows |
+|---|---|
+| *"when i queue more then 5 units the 5'th slot is emtpy"* | the icons the engine leaves empty are filled from the plugin's own overflow and lit |
+| *"is the info showing that? (some +x number somewhere in tug?)"* | `+N` over the last icon, for whatever is queued past those five |
+| *"queueing upgrades … there is no queue insidcating the queu"* | `+N upg` for a building with queued research, which has no icons at all |
+
+and one nobody had asked for but task 030 needed: with several producing buildings selected the
+strip is not drawn at all, so it says `N bldgs  M queued` — the only thing on screen that says a
+Train click reached more than one building.
+
+**How it draws.** One control of type LSTATIC spliced into the status dialog, `pszText` pointing
+at a plugin buffer, interact/update taken from the engine's own per-type default tables. The
+engine draws it, in the pane's own font. No art is added and no pixel is plotted by hand.
+
+**One hook**, the per-frame HUD driver `0x004D93F0`, running *after* the original so the pane has
+already been laid out. Off → the dialog's child list is byte-for-byte stock.
+
+**The cancel rule that comes with it.** A lit icon is a clickable icon, and clicking icon *k*
+makes the engine call `cancelBuildQueueSlot(k)`. When the ring slot behind that icon is empty the
+engine would refund by the sentinel type `0xE4`, reading both cost tables out of bounds — so the
+plugin takes any such click itself and cancels the item it actually holds. Vanilla cannot produce
+that click (an empty slot's icon is drawn disabled), so a stock game is unchanged.
+
+### Known limitations
+
+| | |
+|---|---|
+| The strip still stops at five icons | past that it is a number, not a picture. Widening the strip means inventing control positions over Blizzard art, which the game-file rules forbid |
+| The `+N` overlays the last icon | there is no free margin in the status pane's 269×91 — the live bounds are tabulated in `research/status-pane-text.md` §8 |
+| While the unit row is PAGING, the strip indicator stands down | one indicator at a time; `sc_hudrow`'s own `page i/j` owns that corner then |
+| Upgrades are a count, not a list | it says how many are queued, not which — the card still lights an already-queued upgrade. Marking those is a card change, not a status-pane one |
 
 ---
 

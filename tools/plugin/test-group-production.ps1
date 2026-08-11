@@ -363,7 +363,7 @@ try {
     $prodFan = ($Arm -eq 'baseline') ? '0' : '1'
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
         -Mode fanout -LogCommands 1 -Circles 0 -HudRow 0 -WorldScan 1 -CardScan 1 `
-        -BuildingGroups 1 -ProdQueue 0 -ProdFan $prodFan `
+        -BuildingGroups 1 -ProdQueue 0 -ProdFan $prodFan -QueueIndicator 1 `
         -InjectWindowedHelper WMode -NoLaunchLock `
         -GameDir $GameDir -LogPath $LogPath 6>&1 | ForEach-Object {
             Write-Host $_
@@ -603,6 +603,48 @@ try {
         }
         $script:groupQueued = $f.TotalQueued
         $script:mineralsAfterGroup = $f.Minerals
+
+        # TASK 033, and it is the ONLY thing on screen that says the click reached more than
+        # one building. With N buildings selected the engine takes its multi-select branch:
+        # the production strip is not drawn at all, the wireframe row is, and vanilla shows
+        # ONE queue for the whole group -- so a "+N" would have nothing to sit beside. What
+        # the indicator says there instead is how many of the selected buildings are queueing
+        # and how many items they hold between them. Read back out of the live dialog through
+        # the control's own pszText pointer, never echoed from the module's buffer.
+        $qi = @(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'QIND \[') |
+              Select-Object -Last 1
+        if ($qi) {
+            Write-Host "       $($qi.Line)"
+            $m = [regex]::Match($qi.Line,
+                'mode=(\d+) linked=(\d+) visible=(\d+) text="([^"]*)".* bldgs=(\d+) queued=(\d+)')
+            Assert-That 'the indicator read-back line parsed' ($m.Success) "($($qi.Line))"
+            if ($m.Success) {
+                $mode = [int]$m.Groups[1].Value
+                $bldgs = [int]$m.Groups[5].Value
+                $queued = [int]$m.Groups[6].Value
+                if ($Arm -eq 'feature') {
+                    Assert-That "it is in GROUP mode (2), not the single-building one ($mode)" `
+                        ($mode -eq 2)
+                    Assert-That "it names all $Buildings queueing buildings ($bldgs)" `
+                        ($bldgs -eq $Buildings)
+                    Assert-That "and the $expectTotal items they hold between them ($queued)" `
+                        ($queued -eq $expectTotal)
+                    Assert-That "the control is linked and the ENGINE's visible bit is set" `
+                        ($m.Groups[2].Value -eq '1' -and $m.Groups[3].Value -eq '1')
+                    Assert-That "its text says so in words (`"$($m.Groups[4].Value)`")" `
+                        ($m.Groups[4].Value -eq "$Buildings bldgs  $expectTotal queued")
+                } else {
+                    # THE CONTROL ARM. With the fan-out off, one click reaches one building,
+                    # so there is no group to report and the indicator must say nothing --
+                    # which is what makes the reading above a measurement.
+                    Assert-That "with the fan-out off the indicator says nothing (mode=$mode)" `
+                        ($mode -eq 0)
+                }
+            }
+        }
+        else {
+            Assert-That 'the indicator oracle produced a line at all' $false
+        }
         Shot 'group-read'
     }
 

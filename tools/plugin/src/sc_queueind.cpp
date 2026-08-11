@@ -58,6 +58,18 @@ static bool  g_dialogLogged = false;
 
 static unsigned g_stat[SC_QIND_STAT__COUNT];
 
+// WHAT THE STRIP HELD when the GAME THREAD last left it, snapshotted at the end of the
+// frame path. It exists because the observer thread cannot answer this question honestly:
+// the engine's own layout re-greys the slots the plugin fills, and it runs INSIDE the same
+// driver call, a few microseconds before FillOverflowIcons puts them back. Nothing is drawn
+// in between -- the dialog is rendered later, by graphic layer 2 -- so the player never sees
+// the intermediate state, but an asynchronous reader lands in it often enough to make a
+// suite flaky (measured: the same assertion passed one run and failed the next). A snapshot
+// taken by the thread that does the writing is coherent by construction.
+struct QIconSnap { short icon; WORD mode; DWORD flags; };
+static QIconSnap g_icons[SC_STATQ_SLOTS];
+static int       g_iconsN = 0;
+
 static void* Rt(DWORD staticVa) {
     return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE));
 }
@@ -392,6 +404,17 @@ static void FillOverflowIcons(DWORD root, const ScQueueIndView* v, DWORD unit) {
         CallUpdate(c);
         ++g_stat[SC_QIND_STAT_ICONS];
     }
+
+    // The snapshot, taken after the fill, by the thread that did it.
+    g_iconsN = 0;
+    DWORD sc = FindChildById(root, SC_STATQ_FIRST_CONTROL);
+    for (int k = 0; k < SC_STATQ_SLOTS && sc; ++k, sc = NextOf(sc)) {
+        DWORD su = *(DWORD*)(sc + SC_BINDLG_OFF_USER);
+        QIconSnap* q = &g_icons[g_iconsN++];
+        q->flags = *(DWORD*)(sc + SC_BINDLG_OFF_FLAGS);
+        q->icon  = su ? *(short*)(su + SC_STATUSER_OFF_ICON) : -1;
+        q->mode  = su ? *(WORD*) (su + SC_STATUSER_OFF_MODE) : 0;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -469,12 +492,41 @@ void ScQueueIndLogState(const char* tag) {
 
     int ink = linked ? ScQueueIndSurfaceInk(root, b[0], b[1], b[2], b[3]) : -1;
 
+    // THE POSITIVE CONTROL for that number. `ink=0` has two readings -- "we drew nothing"
+    // and "the probe cannot see this surface" -- and only one of them is a bug, so the same
+    // probe is run over a rect the ENGINE fills: the first queue icon (id 2), which draws a
+    // unit portrait whenever anything is queued. A run where refInk is 0 as well says the
+    // probe is blind and its verdict on the indicator means nothing (AGENTS.md: prove the
+    // pattern positive somewhere it should match, before trusting it where it should not).
+    int refInk = -1;
+    {
+        DWORD ref = FindChildById(root, SC_STATQ_FIRST_CONTROL);
+        if (ref) {
+            short* rb2 = (short*)(ref + SC_BINDLG_OFF_BOUNDS);
+            refInk = ScQueueIndSurfaceInk(root, rb2[0], rb2[1], rb2[2], rb2[3]);
+        }
+    }
+
+    // The strip as the game thread last left it (see g_icons): `icon:mode:state` per slot.
+    char icons[96];
+    int used = 0;
+    icons[0] = ' ';
+    for (int i = 0; i < g_iconsN && used + 16 < (int)sizeof(icons); ++i) {
+        used += _snprintf(icons + used, sizeof(icons) - (size_t)used, "%s0x%03X:%u:%s",
+                          i ? "," : "", (unsigned)(WORD)g_icons[i].icon,
+                          (unsigned)g_icons[i].mode,
+                          (g_icons[i].flags & SC_CTRL_FLAG_DISABLED) ? "grey" :
+                          ((g_icons[i].flags & SC_CTRL_FLAG_VISIBLE) ? "lit" : "hidden"));
+    }
+
     ScLog("QIND [%s] mode=%d linked=%d visible=%d text=\"%s\" bounds=(%d,%d,%d,%d) ink=%d "
+          "refInk=%d icons=[%s] "
           "sel=%d engineLen=%d overflow=%d upg=%d bldgs=%d queued=%d hudPages=%d "
           "anchor=0x%08X",
           t, g_mode, linked ? 1 : 0,
           (flags & SC_CTRL_FLAG_VISIBLE) ? 1 : 0, live,
           linked ? b[0] : 0, linked ? b[1] : 0, linked ? b[2] : 0, linked ? b[3] : 0, ink,
+          refInk, icons,
           v.selection, v.engineLen, v.overflow, v.upgrades, v.buildings, v.queued,
           v.hudPages, (unsigned)g_anchor);
 }
@@ -646,6 +698,7 @@ void ScQueueIndInit(BYTE* moduleBase, bool enabled) {
     g_anchor   = 0;
     g_text[0]  = '\0';
     g_dialogLogged = false;
+    g_iconsN = 0;
     memset(g_ctrl, 0, sizeof(g_ctrl));
     ScLog("QIND: %s (%%SCPLUGIN_QUEUEIND%%). Draws a \"+N\" over the last queue icon when "
           "the logical queue is longer than the strip can show, and a \"N bldgs M queued\" "

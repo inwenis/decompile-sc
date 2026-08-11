@@ -836,6 +836,17 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         // observe is the whole plugin's off switch and must stay byte-for-byte the
         // task-008 read-only observer, whatever else is set in the environment.
         if (g_mode == SC_MODE_OBSERVE) {
+            // Task 033: observe never reaches ScFanoutInstall, so the indicator is
+            // initialised here instead -- DISABLED, but with a module base, so its
+            // read-only oracle still answers on the marker channel. "Nothing is drawn with
+            // the feature off" is half of what this run has to show, and an oracle that
+            // goes silent in the control arm cannot show it (AGENTS.md: prove an absence
+            // against a pattern that has matched somewhere).
+            ScQueueIndInit(g_base, false);
+            if (ScQueueIndEnabled()) {
+                ScLog("QIND: %%SCPLUGIN_QUEUEIND%% is set but the mode is observe -- "
+                      "IGNORED. Observe writes nothing to game memory.");
+            }
             if (ScProdQueueEnabled()) {
                 ScLog("PRODQ: %%SCPLUGIN_PRODQ%% is set but the mode is observe -- "
                       "IGNORED. Observe writes nothing to game memory.");

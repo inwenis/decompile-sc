@@ -1713,11 +1713,20 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     const bool hudrow = (mode == SC_MODE_FANOUT) && EnvInt("SCPLUGIN_HUDROW", 1, 0, 1) != 0;
     ScHudRowInit(moduleBase, hudrow);
 
-    // Task 033's queue-overflow indicator. Same shape again: fanout mode only, because it
-    // draws (and `shadow` mode's contract is "capture and log, change nothing"), with
-    // %SCPLUGIN_QUEUEIND% as its own off switch. It goes in here rather than in
-    // scplugin.cpp so its one detour lands under the SAME thread suspension as the others.
-    const bool queueind = (mode == SC_MODE_FANOUT) && ScQueueIndEnabled();
+    // Task 033's queue-overflow indicator, with %SCPLUGIN_QUEUEIND% as its own off switch.
+    //
+    // The mode gate is NOT "fanout only" like the two above, and the difference is the
+    // contract rather than the feature: `observe` writes nothing to game memory at all and
+    // `shadow` promises "capture and log, change nothing" -- drawing is a change, so both
+    // refuse it. `hooktest` makes no such promise (task 025's production queue, which moves
+    // a player's RESOURCES, runs in it), and it is the mode a production run wants, because
+    // it puts no selection machinery in the picture. What this indicator reports is a
+    // production queue, so it has to exist there.
+    //
+    // It goes in here rather than in scplugin.cpp so its one detour lands under the SAME
+    // thread suspension as the others.
+    const bool queueind = (mode == SC_MODE_FANOUT || mode == SC_MODE_HOOKTEST) &&
+                          ScQueueIndEnabled();
     ScQueueIndInit(moduleBase, queueind);
 
     char cmds[192];
