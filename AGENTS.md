@@ -308,10 +308,24 @@ launch each (in-process sampler, 150 ms, `C:\sc-work\logs\035\fg2-*.txt`):
 | | game holds the foreground | how it ended |
 |---|---|---|
 | before (`-NoForegroundRestore`) | 09:27:07.5 → 09:27:35.7, **28.2 s of a 28 s run** | the game was CLOSED |
-| after (default) | 09:27:44.1 → 09:27:50.7, **6.6 s** | handed back to the pre-launch window, which then kept it for the rest of the run |
+| after (default) | **~4 s**, then handed back | handed back to the pre-launch window, which then kept it for the rest of the run |
 
-The residual ~6 s is the launch sequence itself (scinject's settle, the health check); the
-restore runs as soon as `check-game-windows.ps1` has proved the window exists.
+**The residual is structural, and it is worth knowing why.** Stamping the launch stages
+against the sampler, one launch:
+
+```
+T+5.28  scinject starts the game
+T+5.53  the game's window creation takes the foreground
+T+9.60  scinject RETURNS -- the first instant run-with-plugin.ps1 runs again
+T+12.19 check-game-windows
+```
+
+`scinject.exe` blocks for its own settle, so nothing in PowerShell executes between T+5.5
+and T+9.6: **~4 s of the hold cannot be reached from here at all.** The restore therefore
+fires the moment scinject returns (the game's window already exists — scinject has been
+through `WaitForInputIdle`), with a second attempt after the health check as a safety net.
+Shortening it further would mean changing scinject's injection timing, which is not a
+foreground problem.
 
 **Workers only.** The gate is `$env:AGENT_TASK` — never set for the user's own shortcut —
 plus `-NoForegroundRestore`, which `tools/deploy.ps1` bakes into the deployed launcher.
@@ -322,11 +336,18 @@ restore off too, for a human watching a run.
 
 `tools/plugin/watch-foreground.ps1` samples `GetForegroundWindow()` every 250 ms and prints
 one line per CHANGE, exiting non-zero if any StarCraft window was ever foreground. Run it
-alongside a suite; do not claim "it did not steal focus" without it. **Run it in your own
-process, or check its pids against the game's**: a run of it launched with
-`Start-Process -WindowStyle Hidden -RedirectStandardOutput` produced a trace naming
-StarCraft pids that had never existed, while the launching process read the foreground
-correctly at the same moments. The trace above was taken in-process for that reason.
+alongside a suite; do not claim "it did not steal focus" without it.
+
+**Always check a trace's pids against the pid the launch printed.** Task 035 saw two traces
+name StarCraft pids that were not the game it had just launched, and briefly concluded the
+tool was fabricating them under
+`Start-Process -WindowStyle Hidden -RedirectStandardOutput`. It is not: run head to head
+against an in-process sampler through one launch, that exact invocation agreed on the
+window handle, the pid and the second. What the odd traces were actually showing is the
+thing the pid check is for — **another StarCraft on the machine**, which on a multi-worker
+box is a competing launch bouncing off the game's single-instance check. The reading was
+right and the assumption "the StarCraft in my trace is my StarCraft" was wrong. Nothing any
+earlier task concluded with this tool is affected.
 
 What a correct run looks like: **one borrow-and-return pair for the LAUNCH** (~6 s, above),
 then for the six suites that never pick a game type, nothing else — `test-fanout-orders`

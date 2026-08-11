@@ -443,6 +443,28 @@ try {
         if ($line -match 'scinject:\s*PID=(\d+)\b') { $gamePid = [int]$Matches[1] }
     }
 
+    # --- hand the foreground back, at the FIRST moment this script can (issue #30) ---
+    # Timed on one launch, with the launch stages stamped against an in-process foreground
+    # sampler:
+    #     T+5.28  scinject starts the game
+    #     T+5.53  the game's window creation takes the foreground
+    #     T+9.60  scinject returns -- the first instant this script runs again
+    #     T+12.19 check-game-windows
+    # So ~4.1 s of the hold is structural: scinject blocks for its own settle and nothing
+    # here executes during it. What was NOT structural was the 2.5 s after it -- the mute
+    # and the health-check sleep -- which the restore used to sit behind. Doing it here
+    # cuts the hold from ~6.8 s to ~4.2 s.
+    #
+    # The window exists by now: scinject has already returned from WaitForInputIdle, which
+    # is what "once the game window exists" means in practice. The finally below repeats
+    # this as the safety net, for the case where the game activates itself again while the
+    # health check runs.
+    if ($preLaunchFg -ne [IntPtr]::Zero) {
+        if (Restore-ScForeground -Hwnd $preLaunchFg -Tries 2) {
+            Write-Host "run-with-plugin: foreground handed back -- $(Get-ScForegroundLabel -Hwnd $preLaunchFg)"
+        }
+    }
+
     # --- sound (task018) -------------------------------------------------------
     # Muted by default (see .DESCRIPTION "Sound"); -Sound actively CLEARS the mute
     # rather than merely skipping it (cheap insurance -- see "Sound" for what that
@@ -511,8 +533,13 @@ finally {
     # has already happened, and a shell that will not give the foreground up is a
     # cosmetic loss, not a failed launch.
     if ($preLaunchFg -ne [IntPtr]::Zero) {
+        # Whether the early restore above still holds. If it does this is a no-op and says
+        # nothing -- printing "handed back" twice would read as two borrows, not one.
+        $alreadyBack = (Get-ScForegroundWindow) -eq $preLaunchFg
         if (Restore-ScForeground -Hwnd $preLaunchFg) {
-            Write-Host "run-with-plugin: foreground handed back -- $(Get-ScForegroundLabel -Hwnd $preLaunchFg)"
+            if (-not $alreadyBack) {
+                Write-Host "run-with-plugin: foreground handed back -- $(Get-ScForegroundLabel -Hwnd $preLaunchFg)"
+            }
         }
         else {
             Write-Warning ('run-with-plugin: could not hand the foreground back after launch; the game may be left in front. ' +
