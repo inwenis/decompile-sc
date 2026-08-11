@@ -226,7 +226,24 @@ param(
     # draw order with their rectangles and draw callbacks, and the viewport origin plus the
     # scroll maxima. Installs no hook and writes nothing, so it exists in -Mode observe too.
     # Off by default: ten lines per marker, and the existing suites parse this log.
-    [ValidateSet('0', '1')][string]$ScreenScan = '0'
+    [ValidateSet('0', '1')][string]$ScreenScan = '0',
+    # Task 034: the WIDER PLAYFIELD. Rewrites the operands that carry the screen's
+    # geometry so the engine composes a bigger frame (research/renderer-viewport.md 9.3).
+    # Off by default and ignored outright in -Mode observe, like every other feature that
+    # writes game memory. Two things make it different from the others and both are
+    # enforced here rather than left to the caller:
+    #   * it must be injected EARLY. Every pitch it patches describes a buffer the game
+    #     allocates during startup, so a patch that lands after the video init would be a
+    #     promise the allocation cannot keep. Passing this switch adds scinject --early;
+    #     the plugin ALSO refuses on its own if it finds the framebuffer already there,
+    #     so the two guards are independent.
+    #   * it changes what DirectDraw is asked for, so it is only sane windowed --
+    #     -InjectWindowedHelper WMode (or -Windowed) is what the runs use.
+    [ValidateSet('0', '1')][string]$Widescreen = '0',
+    # Which stage of research/renderer-viewport.md 9.3 to apply. 0 = the display mode
+    # alone (expect a small image in the corner of a bigger one); 1 = + the screen
+    # surface; 2 = + the playfield geometry. Meaningless unless -Widescreen 1.
+    [ValidateSet('0', '1', '2')][string]$WidescreenStage = '1'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -339,6 +356,8 @@ try {
     $env:SCPLUGIN_UPGQ           = $UpgradeQueue
     $env:SCPLUGIN_UPGQ_MAX       = "$UpgradeQueueMax"
     $env:SCPLUGIN_SCREENSCAN     = $ScreenScan
+    $env:SCPLUGIN_WIDESCREEN     = $Widescreen
+    $env:SCPLUGIN_WS_STAGE       = $WidescreenStage
     if ($Liveness -eq '0') {
         Write-Warning 'run-with-plugin: -Liveness 0 — the fan-out emit gate is back to the pre-task-020 uniqueness test ALONE. A unit killed by damage will be replayed into a Select. This is a deliberate defect-reproduction run.'
     }
@@ -371,6 +390,20 @@ try {
             if (-not (Test-Path -LiteralPath $hp)) { throw "run-with-plugin: $hp not found" }
             $injArgs += @('--early-dll', $hp)
             Write-Host "run-with-plugin: will early-inject $hp"
+        }
+    }
+
+    # Task 034. --early puts our DllMain in front of the game's entry point, which is
+    # the only place the geometry patches are correct (see -Widescreen above). It is
+    # attached to THIS switch alone so no other run's injection point changes.
+    if ($Widescreen -eq '1') {
+        $injArgs += '--early'
+        Write-Host "run-with-plugin: -Widescreen 1 (stage $WidescreenStage) — the plugin is injected EARLY so the geometry patches land before the video init"
+        if ($Mode -eq 'observe') {
+            Write-Warning 'run-with-plugin: -Widescreen 1 with -Mode observe — the plugin will IGNORE it. Observe writes nothing to game memory; use -Mode hooktest or higher.'
+        }
+        if (-not $Windowed -and $InjectWindowedHelper -eq 'none') {
+            Write-Warning 'run-with-plugin: -Widescreen 1 without a windowed-mode helper — the game will ask DirectDraw for a non-stock display mode fullscreen. Use -Windowed or -InjectWindowedHelper WMode.'
         }
     }
 

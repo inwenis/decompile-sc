@@ -41,6 +41,7 @@
 #include "sc_log.h"
 #include "sc_prodfan.h"
 #include "sc_prodqueue.h"
+#include "sc_screen.h"
 #include "sc_upgrades.h"
 
 static volatile LONG g_stop = 0;
@@ -720,6 +721,13 @@ static DWORD WINAPI ObserverThread(LPVOID) {
           "Bitmap 0x006CEFF0, the 8 graphic layers 0x006CEF50 and the scroll clamp, installs "
           "no hook and works in observe mode)",
           g_screenScan ? 1 : 0);
+    // Task 034: which ARM this run is. Printed next to the read-back's own switch
+    // because every SCREEN line below is only interpretable against it -- 800x480
+    // is the result in one arm and a defect in the other.
+    ScLog("OBSERVER widescreen=%d (%%SCPLUGIN_WIDESCREEN%%; %s)",
+          ScScreenActive() ? 1 : 0,
+          ScScreenActive() ? "the screen geometry HAS been repatched"
+                           : "stock geometry, nothing repatched");
 
     Snapshot prev;
     memset(&prev, 0xFF, sizeof(prev));  // force a first log line
@@ -803,6 +811,12 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         ScLogOpen();
         g_mode = ScFanoutResolveMode();
         LogAttachBanner();
+        // Task 034, and FIRST of everything that writes: the widescreen patch set
+        // rewrites the operands of functions that run during the game's own
+        // startup, so it is only correct if it lands before the video init. It
+        // refuses (and changes nothing) if it finds the framebuffer already
+        // allocated, which is what happens on the default late injection.
+        ScScreenInstall(g_base, g_mode);
         ScFanoutInstall(g_base, g_mode);
         // Task 030. The oracle needs the module base in EVERY mode, because the stock
         // arm of this feature's comparison runs in observe and is measured with it. The
@@ -863,6 +877,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         ScProdQueueLogStats();
         ScProdFanLogStats();
         ScUpgQueueLogStats();
+        ScScreenLogStats();
         if (lpReserved == NULL) {
             if (g_observer) joined = (WaitForSingleObject(g_observer, 5000) == WAIT_OBJECT_0);
             // Un-splice only on the FreeLibrary path. On process exit the address
@@ -883,6 +898,10 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             // still goes before the fan-out's, so the whole splice comes out newest-first.
             ScUpgQueueRemove();
             ScFanoutRemove();
+            // Task 034 last, mirroring its install-first position: the geometry
+            // patches are the outermost change, so they come out after every
+            // detour that might still be running against them.
+            ScScreenRemove();
         }
 
         ScLog("DETACH pid=%u", (unsigned)GetCurrentProcessId());

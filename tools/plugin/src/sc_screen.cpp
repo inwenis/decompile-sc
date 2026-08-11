@@ -1,0 +1,337 @@
+// sc_screen.cpp -- see sc_screen.h.
+//
+// WHY THIS SHAPE
+//
+// research/renderer-viewport.md's central finding is that the playfield's size
+// is not stored anywhere: it is an immediate in every function that clips to it.
+// So there is no variable to set and no hook to install -- widening the screen
+// is a few dozen instruction-operand rewrites, and the only interesting
+// engineering question is how to make a few dozen hand-derived byte writes into
+// game code something a reviewer can trust.
+//
+// Three things do that, and they are the design:
+//
+//   1. THE TABLE IS GENERATED, NOT WRITTEN. tools/renderer_patch_sites.py reads
+//      the same StarCraft.exe, disassembles each declared site, LOCATES the old
+//      value inside the instruction rather than trusting a hand-counted offset,
+//      and refuses to emit a site whose bytes are not what the map says. The
+//      header it produces carries the original and patched disassembly as
+//      comments beside every record.
+//
+//   2. EVERY SITE IS RE-VERIFIED IN THE LIVE PROCESS, and the whole table is
+//      refused on the first mismatch. This is the detour engine's rule
+//      (sc_hook.cpp: "is the code at `target` the code we disassembled?")
+//      applied to data-sized patches. A half-applied geometry is far worse than
+//      none: it does not fail, it corrupts.
+//
+//   3. IT REFUSES TO RUN LATE. Every patch here is only correct if it lands
+//      BEFORE the video init allocates the framebuffer -- patching the pitch of
+//      a buffer that has already been allocated at the old size is a heap
+//      overrun in someone else's process. The install checks the framebuffer
+//      pointer (0x006CEFF4, zero until the init runs) and refuses if the game
+//      is already up. That is why the launcher passes scinject --early for a
+//      widescreen run.
+//
+// THE ONE RELOCATION. The dirty-block grid at 0x006CEFF8 is a fixed u8[30][40]
+// with a live global 0x4B0 bytes later (the render-target pointer, named by 126
+// instructions), so it cannot grow in place. It moves to plugin-owned memory and
+// the 11 instructions that name it absolutely are re-pointed. The row addressing
+// that turns a row index into a byte offset is a `lea r,[c+c*4]` feeding a SIB
+// scale of 8 -- x5 then x8 == the stock stride of 40 -- and the stride is
+// reachable only because x25 fits `imul r32,r/m32,imm8` in the same three bytes
+// and the scale can drop to 2. That coincidence is what makes stage 1 possible
+// at all; see the generator for the full argument.
+
+#include <windows.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "sc_screen.h"
+#include "sc_addresses.h"
+#include "sc_log.h"
+#include "sc_screen_patches.h"
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
+static BYTE*  g_base = NULL;
+static bool   g_active = false;
+static int    g_stage = 1;
+static BYTE*  g_grid = NULL;          // the relocated dirty grid
+static int    g_applied = 0;
+static int    g_refused = 0;
+
+// Saved originals, so a FreeLibrary detach can put the process back.
+#define SC_WS_MAX_SAVED 128
+static struct {
+    void* addr;
+    BYTE  len;
+    BYTE  bytes[SC_WS_MAX_PATCH_LEN];
+} g_saved[SC_WS_MAX_SAVED];
+static int g_savedCount = 0;
+
+static void* Rt(DWORD staticVa) {
+    return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE));
+}
+
+static void HexDump(const BYTE* p, int n, char* out, int outLen) {
+    int used = 0;
+    out[0] = '\0';
+    for (int i = 0; i < n && used + 3 < outLen; ++i) {
+        used += _snprintf(out + used, outLen - used, "%02X", p[i]);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Environment
+// ---------------------------------------------------------------------------
+
+bool ScScreenWidescreenWanted(void) {
+    char buf[16];
+    DWORD n = GetEnvironmentVariableA("SCPLUGIN_WIDESCREEN", buf, sizeof(buf));
+    if (n == 0 || n >= sizeof(buf)) return false;
+    return buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y';
+}
+
+int ScScreenStageWanted(void) {
+    char buf[16];
+    DWORD n = GetEnvironmentVariableA("SCPLUGIN_WS_STAGE", buf, sizeof(buf));
+    if (n == 0 || n >= sizeof(buf)) return 1;
+    int v = buf[0] - '0';
+    if (v < 0) v = 0;
+    if (v > 2) v = 2;
+    return v;
+}
+
+bool ScScreenActive(void) { return g_active; }
+
+// ---------------------------------------------------------------------------
+// Safe reads -- a wrong static address must produce a refusal, never a fault
+// inside the game.
+// ---------------------------------------------------------------------------
+
+static bool RangeReadable(const void* addr, size_t n) {
+    MEMORY_BASIC_INFORMATION mbi;
+    if (VirtualQuery(addr, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
+    if (mbi.State != MEM_COMMIT) return false;
+    if (mbi.Protect & PAGE_GUARD) return false;
+    const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
+                           PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+                           PAGE_EXECUTE_WRITECOPY;
+    if ((mbi.Protect & readable) == 0) return false;
+    const BYTE* start = (const BYTE*)addr;
+    const BYTE* regEnd = (const BYTE*)mbi.BaseAddress + mbi.RegionSize;
+    return start >= (const BYTE*)mbi.BaseAddress && start + n <= regEnd;
+}
+
+// ---------------------------------------------------------------------------
+// The gate: has the video init already run?
+//
+// 0x006CEFF4 is the framebuffer pointer. It lives in BSS and is zero until
+// FUN_004DB060 (or one of its two twins) calls SMemAlloc. A non-zero value means
+// the buffer exists at the OLD size, and every pitch this table rewrites would
+// then be a promise the allocation cannot keep.
+// ---------------------------------------------------------------------------
+
+static bool VideoAlreadyUp(DWORD* dataOut, unsigned* wOut, unsigned* hOut) {
+    const BYTE* desc = (const BYTE*)Rt(SC_VA_SCREEN_BITMAP);
+    DWORD data = 0;
+    WORD w = 0, h = 0;
+    if (!RangeReadable(desc, 8)) return false;   // unreadable -> not up yet
+    memcpy(&w, desc + SC_BITMAP_OFF_WIDTH, 2);
+    memcpy(&h, desc + SC_BITMAP_OFF_HEIGHT, 2);
+    memcpy(&data, desc + SC_BITMAP_OFF_DATA, 4);
+    if (dataOut) *dataOut = data;
+    if (wOut) *wOut = w;
+    if (hOut) *hOut = h;
+    return data != 0;
+}
+
+// ---------------------------------------------------------------------------
+// Apply
+// ---------------------------------------------------------------------------
+
+static bool VerifyAll(int maxStage, int* checked) {
+    bool ok = true;
+    int n = 0;
+    for (size_t i = 0; i < SC_WS_PATCH_COUNT; ++i) {
+        const ScScreenPatch* p = &SC_WS_PATCHES[i];
+        if (p->stage > maxStage) continue;
+        ++n;
+        const BYTE* at = (const BYTE*)Rt(p->va);
+        if (!RangeReadable(at, p->len)) {
+            ScLog("WIDESCREEN REFUSED %s @0x%08X: not readable", p->name, (unsigned)p->va);
+            ok = false;
+            continue;
+        }
+        if (memcmp(at, p->expect, p->len) != 0) {
+            char got[SC_WS_MAX_PATCH_LEN * 2 + 1], want[SC_WS_MAX_PATCH_LEN * 2 + 1];
+            HexDump(at, p->len, got, sizeof(got));
+            HexDump(p->expect, p->len, want, sizeof(want));
+            ScLog("WIDESCREEN REFUSED %s @0x%08X: bytes are %s, table expects %s "
+                  "(wrong build, or already patched)", p->name, (unsigned)p->va, got, want);
+            ok = false;
+        }
+    }
+    if (checked) *checked = n;
+    return ok;
+}
+
+static bool WriteOne(const ScScreenPatch* p) {
+    BYTE bytes[SC_WS_MAX_PATCH_LEN];
+    memcpy(bytes, p->patch, p->len);
+
+    // Relocation fixups: the record carries a zeroed dword that only the running
+    // process can fill, because the relocated grid's address comes from
+    // VirtualAlloc. The addend is the offset INTO the new grid the instruction
+    // should name -- recomputed by the generator for the new stride, not copied.
+    if (p->fixupOff != SC_WS_NO_FIXUP) {
+        if (!g_grid) return false;
+        DWORD target = (DWORD)(DWORD_PTR)(g_grid + p->fixupAddend);
+        memcpy(bytes + p->fixupOff, &target, 4);
+    }
+
+    void* at = Rt(p->va);
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(at, p->len, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+        ScLog("WIDESCREEN %s @0x%08X: VirtualProtect failed gle=%u",
+              p->name, (unsigned)p->va, (unsigned)GetLastError());
+        return false;
+    }
+
+    if (g_savedCount < SC_WS_MAX_SAVED) {
+        g_saved[g_savedCount].addr = at;
+        g_saved[g_savedCount].len = p->len;
+        memcpy(g_saved[g_savedCount].bytes, at, p->len);
+        ++g_savedCount;
+    }
+
+    memcpy(at, bytes, p->len);
+    FlushInstructionCache(GetCurrentProcess(), at, p->len);
+    DWORD ignore = 0;
+    VirtualProtect(at, p->len, oldProtect, &ignore);
+
+    char before[SC_WS_MAX_PATCH_LEN * 2 + 1], after[SC_WS_MAX_PATCH_LEN * 2 + 1];
+    HexDump(p->expect, p->len, before, sizeof(before));
+    HexDump(bytes, p->len, after, sizeof(after));
+    ScLog("WIDESCREEN patch stage=%d %-28s @0x%08X %s -> %s  (%s)",
+          p->stage, p->name, (unsigned)p->va, before, after, p->note);
+    return true;
+}
+
+void ScScreenInstall(BYTE* base, ScMode mode) {
+    g_base = base;
+
+    const bool wanted = ScScreenWidescreenWanted();
+    if (!wanted) {
+        ScLog("WIDESCREEN off (%%SCPLUGIN_WIDESCREEN%% unset or 0) -- the screen stays "
+              "stock %dx%d; nothing in this module runs", SC_WS_STOCK_W, SC_WS_STOCK_H);
+        return;
+    }
+
+    // Observe is the whole plugin's off switch and must stay byte-for-byte the
+    // task-008 read-only observer, whatever else the environment asks for --
+    // the same gate task 025 and 029 are under.
+    if (mode == SC_MODE_OBSERVE) {
+        ScLog("WIDESCREEN: %%SCPLUGIN_WIDESCREEN%% is set but the mode is observe -- "
+              "IGNORED. Observe writes nothing to game memory.");
+        return;
+    }
+
+    g_stage = ScScreenStageWanted();
+
+    DWORD data = 0;
+    unsigned w = 0, h = 0;
+    if (VideoAlreadyUp(&data, &w, &h)) {
+        ScLog("WIDESCREEN REFUSED: the video init has already run (screen bitmap "
+              "%ux%u data=0x%08X). Every pitch in this table describes a buffer that "
+              "is allocated at startup, so patching now would overrun it. Inject early "
+              "(scinject --early / run-with-plugin.ps1 -Widescreen 1, which passes it).",
+              w, h, (unsigned)data);
+        g_refused = 1;
+        return;
+    }
+
+    ScLog("WIDESCREEN install: target %dx%d, playfield %dx%d, stage<=%d "
+          "(%%SCPLUGIN_WS_STAGE%%), grid %dx%d blocks = %d bytes",
+          SC_WS_SCREEN_W, SC_WS_SCREEN_H, SC_WS_PLAYFIELD_W, SC_WS_PLAYFIELD_H,
+          g_stage, SC_WS_GRID_COLS, SC_WS_GRID_ROWS, SC_WS_GRID_BYTES);
+
+    // --- verify the whole table BEFORE writing a single byte ----------------
+    int checked = 0;
+    if (!VerifyAll(g_stage, &checked)) {
+        ScLog("WIDESCREEN REFUSED: %d site(s) checked and at least one did not match. "
+              "NOTHING was written -- a half-applied geometry corrupts silently instead "
+              "of failing.", checked);
+        g_refused = 1;
+        return;
+    }
+    ScLog("WIDESCREEN: %d site(s) verified against the live image", checked);
+
+    // --- relocate the dirty grid -------------------------------------------
+    // Only stage 1 and above needs it; stage 0 touches the display mode alone.
+    if (g_stage >= 1) {
+        g_grid = (BYTE*)VirtualAlloc(NULL, SC_WS_GRID_BYTES, MEM_COMMIT | MEM_RESERVE,
+                                     PAGE_READWRITE);
+        if (!g_grid) {
+            ScLog("WIDESCREEN REFUSED: VirtualAlloc(%d) for the relocated dirty grid "
+                  "failed gle=%u", SC_WS_GRID_BYTES, (unsigned)GetLastError());
+            g_refused = 1;
+            return;
+        }
+        // VirtualAlloc hands back zeroed pages, which is the state the BSS array
+        // it replaces starts in. Stated rather than assumed: a grid that came up
+        // full of 1s would mark the whole screen dirty on frame one, which looks
+        // like a working feature and hides a real bug.
+        int refs = 0;
+        for (size_t i = 0; i < SC_WS_PATCH_COUNT; ++i) {
+            if (SC_WS_PATCHES[i].fixupOff != SC_WS_NO_FIXUP &&
+                SC_WS_PATCHES[i].stage <= g_stage) ++refs;
+        }
+        ScLog("WIDESCREEN: dirty grid relocated 0x%08X -> %p (%d bytes, %dx%d), "
+              "%d absolute reference(s) re-pointed",
+              (unsigned)SC_WS_STOCK_GRID_VA, g_grid, SC_WS_GRID_BYTES,
+              SC_WS_GRID_COLS, SC_WS_GRID_ROWS, refs);
+    }
+
+    // --- write ---------------------------------------------------------------
+    for (size_t i = 0; i < SC_WS_PATCH_COUNT; ++i) {
+        const ScScreenPatch* p = &SC_WS_PATCHES[i];
+        if (p->stage > g_stage) continue;
+        if (WriteOne(p)) ++g_applied;
+        else ++g_refused;
+    }
+
+    g_active = (g_applied > 0 && g_refused == 0);
+    ScLog("WIDESCREEN %s: %d patch(es) applied, %d refused, stage<=%d",
+          g_active ? "ACTIVE" : "INCOMPLETE", g_applied, g_refused, g_stage);
+}
+
+void ScScreenRemove(void) {
+    if (!g_savedCount) return;
+    int n = 0;
+    for (int i = g_savedCount - 1; i >= 0; --i) {
+        DWORD oldProtect = 0;
+        if (!VirtualProtect(g_saved[i].addr, g_saved[i].len, PAGE_EXECUTE_READWRITE,
+                            &oldProtect)) continue;
+        memcpy(g_saved[i].addr, g_saved[i].bytes, g_saved[i].len);
+        FlushInstructionCache(GetCurrentProcess(), g_saved[i].addr, g_saved[i].len);
+        DWORD ignore = 0;
+        VirtualProtect(g_saved[i].addr, g_saved[i].len, oldProtect, &ignore);
+        ++n;
+    }
+    g_savedCount = 0;
+    g_active = false;
+    // The relocated grid is deliberately LEAKED, exactly like a trampoline: the
+    // game thread may be inside a loop holding a pointer into it right now.
+    ScLog("WIDESCREEN removed: %d site(s) restored (the relocated grid is left "
+          "allocated on purpose -- a live loop may still hold a pointer into it)", n);
+}
+
+void ScScreenLogStats(void) {
+    if (!ScScreenWidescreenWanted()) return;
+    ScLog("WIDESCREEN STATS active=%d stage=%d applied=%d refused=%d grid=%p "
+          "target=%dx%d", g_active ? 1 : 0, g_stage, g_applied, g_refused,
+          g_grid, SC_WS_SCREEN_W, SC_WS_SCREEN_H);
+}
