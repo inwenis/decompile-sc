@@ -616,12 +616,15 @@ try {
         if ($qi) {
             Write-Host "       $($qi.Line)"
             $m = [regex]::Match($qi.Line,
-                'mode=(\d+) linked=(\d+) visible=(\d+) text="([^"]*)".* bldgs=(\d+) queued=(\d+)')
+                'mode=(\d+) linked=(\d+) visible=(\d+) text="([^"]*)" ' +
+                'bounds=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\) ink=(-?\d+).* bldgs=(\d+) queued=(\d+)')
             Assert-That 'the indicator read-back line parsed' ($m.Success) "($($qi.Line))"
             if ($m.Success) {
                 $mode = [int]$m.Groups[1].Value
-                $bldgs = [int]$m.Groups[5].Value
-                $queued = [int]$m.Groups[6].Value
+                $boxW = [int]$m.Groups[7].Value - [int]$m.Groups[5].Value
+                $ink = [int]$m.Groups[9].Value
+                $bldgs = [int]$m.Groups[10].Value
+                $queued = [int]$m.Groups[11].Value
                 if ($Arm -eq 'feature') {
                     Assert-That "it is in GROUP mode (2), not the single-building one ($mode)" `
                         ($mode -eq 2)
@@ -633,6 +636,15 @@ try {
                         ($m.Groups[2].Value -eq '1' -and $m.Groups[3].Value -eq '1')
                     Assert-That "its text says so in words (`"$($m.Groups[4].Value)`")" `
                         ($m.Groups[4].Value -eq "$Buildings bldgs  $expectTotal queued")
+                    # THE BOX HAS TO FIT THE STRING. Every assertion above passes for a
+                    # TRUNCATED line -- a clipped string is still ink -- and the first live
+                    # run of this step drew "4 bldgs  4 queued" into a box 22 pixels wide,
+                    # clamped to the one wireframe button it anchors to. 5 px/char is a
+                    # conservative floor for the small font.
+                    $need = $m.Groups[4].Value.Length * 5
+                    Assert-That "and its box is wide enough to draw all of it ($boxW px for $need)" `
+                        ($boxW -ge $need)
+                    Assert-That "and the engine put ink in it (ink=$ink)" ($ink -gt 0)
                 } else {
                     # THE CONTROL ARM. With the fan-out off, one click reaches one building,
                     # so there is no group to report and the indicator must say nothing --

@@ -3644,6 +3644,11 @@ static void QueueIndTests(void) {
             // silently (research/status-pane-text.md 3). The in-game ink assertion is what
             // proves the number is big enough; this proves the box was not left flat.
             Check("  the box is at least SC_QIND_BOX_H tall", b[3] - b[1] >= SC_QIND_BOX_H, 1);
+            // ... AND wide enough for the string it holds. A box too SHORT draws nothing;
+            // a box too NARROW draws a TRUNCATION, which reads as a working feature and is
+            // therefore worse. Found live, not here -- see the group case below.
+            Check("  and wide enough for the string it holds",
+                  (b[2] - b[0]) >= (int)strlen(ScQueueIndCurrentText()) * SC_QIND_CHAR_W ? 1 : 0, 1);
             Check("  and sits inside the anchor icon (id 6)",
                   (long long)(b[0] >= *(short*)(QiCtl(4) + SC_BINDLG_OFF_BOUNDS) &&
                               b[2] <= *(short*)(QiCtl(4) + SC_BINDLG_OFF_BOUNDS + 4)), 1);
@@ -3675,6 +3680,43 @@ static void QueueIndTests(void) {
         ScQueueIndOnFrame();
         Check("a settled frame re-shows nothing", (long long)(g_qiShows - shows), 0);
         Check("  and re-draws nothing", (long long)(g_qiUpdates - updates), 0);
+    }
+
+    printf("\n    the GROUP line gets a box sized for IT, not for the button it starts on\n");
+    // The defect this covers was found in a live run rather than here: the group text is
+    // ~17 characters and the wireframe button it anchors to is 34 pixels wide, so clamping
+    // the box to the anchor truncated it -- and every assertion above (mode, text, linked,
+    // visible, ink>0) still passed, because a truncated string is still ink. The strip's
+    // "+N" is short and stays inside its icon; the row's line may run across buttons, which
+    // is why leaving it repaints the whole row.
+    {
+        // Two producing buildings in the engine's own selection is what GROUP mode needs.
+        DWORD* g = (DWORD*)FakeRt(SC_VA_CLIENT_SELECTION_GROUP);
+        for (int i = 0; i < 12; ++i) g[i] = 0;
+        g[0] = PqBuilding();
+        g[1] = FakeUnit(1);
+        for (int k = 0; k < SC_BUILD_QUEUE_SLOTS; ++k) {
+            *(WORD*)(FakeUnit(1) + SC_CUNIT_OFF_BUILD_QUEUE + (DWORD)k * 2) =
+                (k < 2) ? (WORD)PQ_TYPE_B : (WORD)SC_BUILD_QUEUE_EMPTY;
+        }
+        *(BYTE*)FakeRt(SC_VA_CLIENT_SELECTION_COUNT) = 2;
+        ScQueueIndOnFrame();
+        Check("the indicator is in GROUP mode", ScQueueIndCurrentMode(), SC_QIND_GROUP);
+        DWORD ind = QiIndicator();
+        if (ind) {
+            short* b = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
+            const char* text = (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
+            int need = (int)strlen(text) * SC_QIND_CHAR_W;
+            printf("      box=(%d,%d,%d,%d) for \"%s\" (needs %d px)\n",
+                   b[0], b[1], b[2], b[3], text, need);
+            Check("  its box is wider than the 34px button it anchors to",
+                  (b[2] - b[0]) > 34 ? 1 : 0, 1);
+            Check("  and wide enough for the whole string", (b[2] - b[0]) >= need ? 1 : 0, 1);
+            Check("  still SC_QIND_BOX_H tall", b[3] - b[1] >= SC_QIND_BOX_H, 1);
+        }
+        *(BYTE*)FakeRt(SC_VA_CLIENT_SELECTION_COUNT) = 1;
+        for (int i = 0; i < 12; ++i) g[i] = 0;
+        ScQueueIndOnFrame();
     }
 
     printf("\n    the queue drains: the text goes away and the control is hidden again\n");

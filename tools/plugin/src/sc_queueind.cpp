@@ -128,6 +128,10 @@ static bool Readable(DWORD addr, DWORD len) {
     return addr + len <= regionEnd;
 }
 
+// Forward: the box sizing needs the surface width, and the surface reader lives with the
+// ink probe further down.
+static DWORD SurfaceOf(DWORD root);
+
 static DWORD ChildOf(DWORD dlg)  { return *(DWORD*)(dlg + SC_BINDLG_OFF_FIRST_CHILD); }
 static DWORD NextOf(DWORD ctrl)  { return *(DWORD*)(ctrl + SC_BINDLG_OFF_NEXT); }
 static short IndexOf(DWORD ctrl) { return *(short*)(ctrl + SC_BINDLG_OFF_INDEX); }
@@ -330,19 +334,46 @@ static void Unsplice(DWORD root) {
 // Put the box on the anchor control, in the anchor's own coordinate space (control bounds
 // are parent-relative -- updateControl 0x0041C400 adds the parent's origin itself). The
 // bounds come from the LIVE control every time the anchor changes, never from a constant.
-static void PlaceOn(DWORD anchor) {
+//
+// THE BOX HAS TO FIT THE STRING, in both directions, and neither failure is loud:
+//   * too SHORT and the engine draws nothing at all (research/status-pane-text.md 5 --
+//     the defect that made sc_hudrow's page indicator invisible for weeks);
+//   * too NARROW and it draws a TRUNCATION, which is worse than nothing because it reads
+//     as a working feature. Measured in a live group run before this was fixed: a box
+//     22px wide clamped to one wireframe button, holding "4 bldgs  4 queued".
+// So the width is computed from the string rather than from the anchor. SC_QIND_CHAR_W is
+// a deliberate over-estimate of the small font's advance -- over-reserving costs nothing
+// (the box is a clip rect, not a fill), under-reserving costs the tail of the string.
+static void PlaceOn(DWORD anchor, DWORD root, int mode, int textLen) {
     DWORD ind = (DWORD)&g_ctrl[0];
     short* a = (short*)(anchor + SC_BINDLG_OFF_BOUNDS);
     short* b = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
     short left = (short)(a[0] + SC_QIND_INSET_X);
     short top  = (short)(a[1] + SC_QIND_INSET_Y);
-    b[0] = left;
-    b[1] = top;
-    // Never grow past the anchor's own right/bottom edge: the anchor is a control the
-    // engine repaints, and staying inside it is what guarantees our pixels are painted
-    // over when the indicator goes away.
-    b[2] = (short)(left + SC_QIND_BOX_W > a[2] ? a[2] : left + SC_QIND_BOX_W);
-    b[3] = (short)(top + SC_QIND_BOX_H > a[3] ? a[3] : top + SC_QIND_BOX_H);
+    int   want = textLen * SC_QIND_CHAR_W;
+    if (want < SC_QIND_BOX_W) want = SC_QIND_BOX_W;
+
+    if (mode == SC_QIND_GROUP) {
+        // The row's twelve buttons are one strip, so the text may run across them; the
+        // anchor is only where it STARTS. The clean-up path repaints the whole row for
+        // exactly this reason (RepaintUnder).
+        top = (short)(a[1] + 1);
+        int right = left + want;
+        int surfW = 0;
+        DWORD d = SurfaceOf(root);
+        if (d) surfW = (int)*(WORD*)(d + SC_SURFACE_OFF_W);
+        if (surfW > 0 && right > surfW - 1) right = surfW - 1;
+        b[0] = left; b[1] = top;
+        b[2] = (short)right;
+        b[3] = (short)(top + SC_QIND_BOX_H);
+    } else {
+        // A "+N" is short and belongs inside the icon it annotates: staying within a
+        // control the engine repaints is what guarantees our pixels are painted over when
+        // the indicator goes away.
+        b[0] = left; b[1] = top;
+        b[2] = (short)(left + want > a[2] ? a[2] : left + want);
+        b[3] = (short)(top + SC_QIND_BOX_H > a[3] ? a[3] : top + SC_QIND_BOX_H);
+    }
     g_anchor = anchor;
 }
 
@@ -572,9 +603,17 @@ void ScQueueIndLogDialog(const char* tag) {
 // Repaint whatever the indicator was covering. The anchor is an engine-owned control, so
 // asking the engine to update it is exactly how its own pixels come back -- which is why
 // the box is kept inside the anchor's bounds in the first place.
-static void RepaintAnchor(void) {
+static void RepaintUnder(DWORD root) {
     if (!g_anchor) return;
     if (*(DWORD*)(g_anchor + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) CallUpdate(g_anchor);
+    // The group line can run across several wireframe buttons, so repainting the anchor
+    // alone would strand its tail on the dialog surface.
+    if (g_mode == SC_QIND_GROUP && root) {
+        DWORD c = FindChildById(root, SC_HUD_FIRST_SMALL_BUTTON);
+        for (int i = 0; i < SC_HUD_BUTTON_COUNT && c; ++i, c = NextOf(c)) {
+            if (*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) CallUpdate(c);
+        }
+    }
 }
 
 void ScQueueIndOnFrame(void) {
@@ -620,7 +659,7 @@ void ScQueueIndOnFrame(void) {
         if (g_shown) {
             CallHide((DWORD)&g_ctrl[0]);
             g_shown = false;
-            RepaintAnchor();
+            RepaintUnder(root);
             ++g_stat[SC_QIND_STAT_HIDES];
             ScLog("QIND hide (nothing to show: sel=%d overflow=%d bldgs=%d hudPages=%d)",
                   v.selection, v.overflow, v.buildings, v.hudPages);
@@ -632,9 +671,11 @@ void ScQueueIndOnFrame(void) {
     if (!EnsureSpliced(root)) return;
     if (!g_dialogLogged) { ScQueueIndLogDialog("attach"); g_dialogLogged = true; }
 
-    const bool moved   = (anchor != g_anchor);
+    const bool moved   = (anchor != g_anchor) || (mode != g_mode);
     const bool changed = (strcmp(want, g_text) != 0);
-    if (moved) PlaceOn(anchor);
+    // The box is a function of the STRING as well as the anchor, so it is recomputed
+    // whenever either moves.
+    if (moved || changed) PlaceOn(anchor, root, mode, (int)strlen(want));
     if (changed) {
         memcpy(g_text, want, sizeof(g_text) < sizeof(want) ? sizeof(g_text) : sizeof(want));
         g_text[sizeof(g_text) - 1] = '\0';

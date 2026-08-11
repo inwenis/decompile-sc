@@ -53,6 +53,12 @@
 // taller than the font rather than merely tall enough to look right.
 #define SC_QIND_BOX_H 16
 #define SC_QIND_BOX_W 40
+// A deliberate OVER-estimate of the small font's advance per character. The box is a clip
+// rectangle, not a fill, so reserving too much costs nothing and reserving too little
+// truncates the string -- which reads as a working feature and is therefore worse than
+// drawing nothing at all. Measured live before this existed: "4 bldgs  4 queued" in a box
+// 22 pixels wide.
+#define SC_QIND_CHAR_W 7
 
 // Which thing the indicator is currently saying. Kept as an enum so the log line and the
 // offline test can name the case rather than matching on the rendered string.
