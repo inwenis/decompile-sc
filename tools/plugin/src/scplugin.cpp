@@ -153,6 +153,25 @@ static void TakeSnapshot(Snapshot* s) {
     }
 }
 
+// Task 036: one tagged line holding all three selection layers, written on the marker
+// rather than on change (see the call site for why). Counts are non-NULL entries, which
+// is the engine's own termination rule for every one of these arrays -- they are filled
+// densely from slot 0 and every walker in the binary stops at the first NULL.
+static void LogSelectionArrays(const char* tag) {
+    Snapshot s;
+    TakeSnapshot(&s);
+    char gbuf[512], abuf[512], rbuf[512];
+    FormatSlots(s.group,     gbuf, sizeof(gbuf));
+    FormatSlots(s.active,    abuf, sizeof(abuf));
+    FormatSlots(s.playerRow, rbuf, sizeof(rbuf));
+    ScLog("SELSNAP [%s] client=%d clientCount=%u active=%d sim=%d player=%u ok=0x%02X",
+          tag ? tag : "-", NonNull(s.group), (unsigned)s.count, NonNull(s.active),
+          NonNull(s.playerRow), (unsigned)(s.playerId & 0xFF), (unsigned)s.ok);
+    ScLog("    SELSNAP clientSelectionGroup   %s", gbuf);
+    ScLog("    SELSNAP activePlayerSelection  %s", abuf);
+    ScLog("    SELSNAP playersSelections      %s", rbuf);
+}
+
 static void LogSnapshot(const Snapshot* s) {
     char gbuf[512], abuf[512], rbuf[512], g2buf[512];
     FormatSlots(s->group,     gbuf,  sizeof(gbuf));
@@ -493,6 +512,20 @@ static void PollMarker(void) {
     // that exists in observe mode, which is the stock arm of the plugin-vs-stock
     // comparison.
     ScanWorld(g_lastMarker);
+
+    // Task 036: the three selection arrays, tagged, on the same trigger.
+    //
+    // LogSnapshot below already prints all three -- but only when the snapshot CHANGED
+    // since the last 250 ms tick, which is exactly wrong for the question this task had
+    // to answer. "Did that shift-click do anything?" needs a read AT a named instant,
+    // and a change-gated line is silent precisely when the answer is "nothing happened".
+    // Worse, silence there is indistinguishable from "the observer stopped".
+    //
+    // The three arrays are three different layers and a symptom does not say which one
+    // refused (research/building-groups.md 2, 3): `client` is what the STOCK status row
+    // draws, `active` is what the client selected, `sim` is what the simulation holds and
+    // what every order applier iterates. Read-only.
+    LogSelectionArrays(g_lastMarker);
 
     // Task 026: and so does the command-card read-back. It goes BEFORE the shadow
     // dump for the same reason the world scan does -- the engine's own view first.

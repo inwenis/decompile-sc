@@ -1988,6 +1988,21 @@ static void SetFakeType(int i, WORD type) {
     *(WORD*)(FakeUnit(i) + SC_CUNIT_OFF_UNIT_ID) = type;
 }
 
+// The units.dat prototype flags, in the fake image, agreeing with FakeMovable above.
+//
+// Task 036 made the plugin ask TWO questions where task 024 asked one -- "the predicate
+// refused it" AND "units.dat says it is a building" -- because the predicate also refuses
+// plenty of things that are not buildings, and a feature named building groups must not
+// widen anything for those. The fake table has to carry the same split the stub does, or
+// every case in this part would exercise the not-a-building branch and pass for the wrong
+// reason. Called after every MakeUnits/ScFanoutTestBegin, since those reset the image.
+static void SetFakeUnitsDatFlags(void) {
+    DWORD* flags = (DWORD*)FakeRt(SC_VA_UNITS_DAT_FLAGS);
+    for (int t = 0; t < 256; ++t) {
+        flags[t] = (t >= 106) ? SC_UNITSDAT_FLAG_BUILDING : 0u;
+    }
+}
+
 // The candidate list SortAllUnits is handed: CUnit pointers, NULL-terminated.
 static void MakeCandidates(DWORD* buf, const int* idx, int n) {
     for (int i = 0; i < n; ++i) buf[i] = FakeUnit(idx[i]);
@@ -2006,6 +2021,7 @@ static void BuildingGroupTests(void) {
     ResetQueueCounters();
     ScFanoutTestBegin(g_fake, &CaptureEmit, 400);
     ScFanoutTestSetMovable(&FakeMovable);
+    SetFakeUnitsDatFlags();
 
     // 0..3 Supply Depots, 4..6 Barracks, 7..9 Marines. Same owner throughout; the
     // owner split gets its own case below.
@@ -2127,6 +2143,7 @@ static void BuildingGroupTests(void) {
         for (int i = 16; i < 64; ++i) SetFakeType(i, FAKE_TYPE_MARINE);
         ScFanoutTestBegin(g_fake, &CaptureEmit, 4000);
         ScFanoutTestSetMovable(&FakeMovable);
+        SetFakeUnitsDatFlags();
 
         DWORD cand[20];
         int idx[16];
@@ -2159,8 +2176,21 @@ static void BuildingGroupTests(void) {
         DWORD out[SC_SELECTION_SLOTS] = { 0 };
         out[0] = FakeUnit(3);
 
-        Check("a CLICK (clicked != 0) is untouched",
-              (int)ScFanoutGrowBuildingGroup(cand, out, FakeUnit(3), 1), 1);
+        // TASK 036 CHANGED THIS ONE, and it is left here rather than moved so the
+        // reversal is visible next to what it reversed. Task 024 asserted that a
+        // `clicked != 0` call was untouched, because it believed every click path passed
+        // one. It does -- but only TWO click paths reach SortAllUnits at all, and both
+        // are the ctrl-click / double-click "select all of this type on screen" branches
+        // (sc_addresses.h SC_VA_CLICK_SELECT_HANDLER). A plain click and a shift-click
+        // never call it. So the growth is now exactly as correct here as it is for a box.
+        {
+            DWORD cout[SC_SELECTION_SLOTS] = { 0 };
+            cout[0] = FakeUnit(3);
+            unsigned cn = ScFanoutGrowBuildingGroup(cand, cout, FakeUnit(3), 1);
+            Check("a double-click / ctrl-click (clicked != 0) grows the same group", (int)cn, 4);
+            Check("  and the CLICKED building is still the lead",
+                  cout[0] == FakeUnit(3) ? 1 : 0, 1);
+        }
         Check("a count other than 1 is untouched -- the engine found real units",
               (int)ScFanoutGrowBuildingGroup(cand, out, 0, 2), 2);
 
@@ -2183,6 +2213,7 @@ static void BuildingGroupTests(void) {
         for (int i = 0; i < 64; ++i) SetFakeType(i, FAKE_TYPE_MARINE);
         ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
         ScFanoutTestSetMovable(&FakeMovable);
+        SetFakeUnitsDatFlags();
         DriveSelection(36);
         Check("36 ordinary units still chunk by twelve", ScFanoutSimSlots(), SC_SELECTION_SLOTS);
         g_captureLen = 0; g_captureCount = 0;
@@ -2191,6 +2222,255 @@ static void BuildingGroupTests(void) {
         Check("  bytes queued unchanged from part [7]", g_captureLen, 108);
     }
 
+    ScFanoutTestSetMovable(NULL);
+    VirtualFree(g_fake, 0, MEM_RELEASE);
+    g_fake = NULL;
+}
+
+// ---------------------------------------------------------------------------
+// [20] Building-group PARITY (task 036): extending a group, and recalling one.
+//
+// Two mechanisms, neither of which goes through SortAllUnits:
+//
+//   the EXTEND override -- ScFanoutMovableDecide, the decision half of the detour on
+//   unit_IsStandardAndMovable. It is asked (unit, return address, the engine's verdict)
+//   and answers what the caller should see. Everything about it is decidable offline:
+//   the allowlist, the "is the lead a building" test, and the same-type-and-owner rule.
+//
+//   the RECALL re-install -- a control group of buildings must end up in the ENGINE's
+//   client selection, not only in the shadow list, because the stock status row draws
+//   the engine's array. The engine call is replaced by a recorder here, so the test can
+//   assert WHAT would have been installed as well as that something was.
+// ---------------------------------------------------------------------------
+
+// The recorder standing in for CreateNewUnitSelectionsFromList. It does what the engine
+// does that this plugin depends on: write the list into activePlayerSelection, densely
+// from slot 0 and NULL-terminated -- which is what ReadEngineVisible reads back.
+static DWORD g_reinstallList[SC_SELECTION_SLOTS];
+static int   g_reinstallCount = -1;
+static int   g_reinstallCalls = 0;
+
+static void FakeCreateSelections(unsigned long* list, int count) {
+    g_reinstallCount = count;
+    ++g_reinstallCalls;
+    DWORD* active = (DWORD*)FakeRt(SC_VA_ACTIVE_PLAYER_SELECTION);
+    for (int i = 0; i < SC_SELECTION_SLOTS; ++i) active[i] = 0;
+    for (int i = 0; i < count && i < SC_SELECTION_SLOTS; ++i) {
+        g_reinstallList[i] = (DWORD)list[i];
+        active[i] = (DWORD)list[i];
+    }
+}
+
+static void SetFakeEngineSelection(const int* idx, int n) {
+    DWORD* active = (DWORD*)FakeRt(SC_VA_ACTIVE_PLAYER_SELECTION);
+    for (int i = 0; i < SC_SELECTION_SLOTS; ++i) active[i] = 0;
+    for (int i = 0; i < n && i < SC_SELECTION_SLOTS; ++i) active[i] = FakeUnit(idx[i]);
+}
+
+static void BuildingParityTests(void) {
+    printf("\n[20] building-group parity: extend a group, recall a group\n");
+
+    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
+                                 PAGE_READWRITE);
+    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+
+    MakeUnits(64, 1);
+    ResetQueueCounters();
+    ScFanoutTestBegin(g_fake, &CaptureEmit, 4000);
+    ScFanoutTestSetMovable(&FakeMovable);
+    SetFakeUnitsDatFlags();
+
+    // 0..5 Barracks, 6..9 Supply Depots, 10.. Marines.
+    for (int i = 0; i < 6; ++i)   SetFakeType(i, FAKE_TYPE_BARRACKS);
+    for (int i = 6; i < 10; ++i)  SetFakeType(i, FAKE_TYPE_DEPOT);
+    for (int i = 10; i < 64; ++i) SetFakeType(i, FAKE_TYPE_MARINE);
+
+    // The four allowlisted return addresses, in the fake image's own address space.
+    const DWORD retShiftLead = (DWORD)FakeRt(SC_RET_MOVABLE_SHIFT_LEAD);
+    const DWORD retShiftHit  = (DWORD)FakeRt(SC_RET_MOVABLE_SHIFT_CLICKED);
+    const DWORD retCombNew   = (DWORD)FakeRt(SC_RET_MOVABLE_COMBINE_NEW);
+    const DWORD retCombOld   = (DWORD)FakeRt(SC_RET_MOVABLE_COMBINE_OLD);
+
+    printf("\n    the extend override answers ONLY at the four call sites\n");
+    {
+        const int leadIdx[1] = { 0 };
+        SetFakeEngineSelection(leadIdx, 1);            // lead: a Barracks
+
+        // POSITIVE FIRST, so the negatives below are worth something: the same unit, the
+        // same lead, allowed at an allowlisted site.
+        Check("a sibling Barracks is allowed at the shift-click site",
+              ScFanoutMovableDecide(FakeUnit(1), retShiftHit, 0), 1);
+
+        // ... and refused everywhere else in the binary, with the engine's own answer
+        // handed straight back. 0x0046F1AA is SortAllUnits' own call site -- a real
+        // address, deliberately, so this is "not in the allowlist" rather than "not a
+        // code address at all".
+        Check("SortAllUnits' own call site is NOT in the allowlist",
+              ScFanoutMovableDecide(FakeUnit(1), (DWORD)FakeRt(0x0046F1AAu), 0), 0);
+        Check("nor is an arbitrary return address",
+              ScFanoutMovableDecide(FakeUnit(1), (DWORD)FakeRt(0x00401000u), 0), 0);
+        Check("and a PASSING verdict is handed back unchanged off-allowlist",
+              ScFanoutMovableDecide(FakeUnit(20), (DWORD)FakeRt(0x00401000u), 1), 1);
+    }
+
+    printf("\n    with a BUILDING lead, membership is same type and same owner\n");
+    {
+        const int leadIdx[1] = { 0 };
+        SetFakeEngineSelection(leadIdx, 1);
+        Check("the lead itself passes at its own site",
+              ScFanoutMovableDecide(FakeUnit(0), retShiftLead, 0), 1);
+        Check("a sibling Barracks joins",  ScFanoutMovableDecide(FakeUnit(2), retShiftHit, 0), 1);
+        Check("a Supply Depot does not",   ScFanoutMovableDecide(FakeUnit(6), retShiftHit, 0), 0);
+        // The engine SAID YES for a Marine. Refusing it here is not a regression: with a
+        // building lead, vanilla refused the whole operation at the lead's own call site,
+        // so this replaces "nothing happens" with "nothing happens".
+        Check("a Marine does not, even though the engine allowed it",
+              ScFanoutMovableDecide(FakeUnit(20), retShiftHit, 1), 0);
+
+        *(BYTE*)(FakeUnit(3) + SC_CUNIT_OFF_PLAYER) = 2;
+        BuildFakePlayerList(64, 1);
+        Check("another player's Barracks does not",
+              ScFanoutMovableDecide(FakeUnit(3), retShiftHit, 0), 0);
+        *(BYTE*)(FakeUnit(3) + SC_CUNIT_OFF_PLAYER) = 1;
+        BuildFakePlayerList(64, 1);
+
+        const DWORD hpWas = *(DWORD*)(FakeUnit(4) + SC_CUNIT_OFF_HITPOINTS);
+        *(DWORD*)(FakeUnit(4) + SC_CUNIT_OFF_HITPOINTS) = 0;
+        Check("a destroyed Barracks does not", ScFanoutMovableDecide(FakeUnit(4), retShiftHit, 0), 0);
+        *(DWORD*)(FakeUnit(4) + SC_CUNIT_OFF_HITPOINTS) = hpWas;
+
+        // Both combine sites take the same rule -- that is what makes shift+box and
+        // shift+ctrl-click agree with shift-click instead of each having its own answer.
+        Check("the combine sites answer identically (existing lead)",
+              ScFanoutMovableDecide(FakeUnit(0), retCombOld, 0), 1);
+        Check("the combine sites answer identically (incoming list)",
+              ScFanoutMovableDecide(FakeUnit(5), retCombNew, 0), 1);
+        Check("... and refuse a different building type there too",
+              ScFanoutMovableDecide(FakeUnit(6), retCombNew, 0), 0);
+    }
+
+    printf("\n    with a UNIT lead nothing is overridden at all\n");
+    {
+        const int marineLead[1] = { 20 };
+        SetFakeEngineSelection(marineLead, 1);
+        const int seen = ScFanoutExtendStat(SC_EXTEND_SEEN);
+        Check("a Marine joining Marines is the engine's own answer",
+              ScFanoutMovableDecide(FakeUnit(21), retShiftHit, 1), 1);
+        Check("a Barracks shift-clicked onto Marines stays refused",
+              ScFanoutMovableDecide(FakeUnit(0), retShiftHit, 0), 0);
+        // The counter is the proof that this branch was never entered, rather than
+        // entered and coincidentally agreeing.
+        Check("  and the override never even ran", ScFanoutExtendStat(SC_EXTEND_SEEN) - seen, 0);
+    }
+
+    printf("\n    with the feature OFF the override is inert\n");
+    {
+        const int leadIdx[1] = { 0 };
+        SetFakeEngineSelection(leadIdx, 1);
+        ScFanoutTestSetBuildingGroups(false);
+        const int seen = ScFanoutExtendStat(SC_EXTEND_SEEN);
+        Check("a sibling Barracks is refused again", ScFanoutMovableDecide(FakeUnit(1), retShiftHit, 0), 0);
+        Check("  because the override did not run", ScFanoutExtendStat(SC_EXTEND_SEEN) - seen, 0);
+        ScFanoutTestSetBuildingGroups(true);
+        Check("and allowed once more when it is back on",
+              ScFanoutMovableDecide(FakeUnit(1), retShiftHit, 0), 1);
+    }
+
+    printf("\n    a control group of buildings recalls into the ENGINE's own selection\n");
+    {
+        MakeUnits(64, 1);
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 4000);
+        ScFanoutTestSetMovable(&FakeMovable);
+        SetFakeUnitsDatFlags();
+        for (int i = 0; i < 6; ++i)   SetFakeType(i, FAKE_TYPE_BARRACKS);
+        for (int i = 6; i < 64; ++i)  SetFakeType(i, FAKE_TYPE_MARINE);
+        ScFanoutTestSetCreateSelections(&FakeCreateSelections);
+        g_reinstallCount = -1; g_reinstallCalls = 0;
+
+        // Six Barracks selected, exactly as the drag box leaves them.
+        DWORD sel[6];
+        for (int i = 0; i < 6; ++i) sel[i] = FakeUnit(i);
+        ScFanoutOnSelect(6, sel);
+        Check("the shadow list holds six buildings", ScFanoutShadowCount(), 6);
+        Check("the sim holds ONE of them at a time", ScFanoutSimSlots(), 1);
+
+        // Ctrl+1.
+        const BYTE assign[3] = { 0x13, SC_HOTKEY_ASSIGN, 0x01 };
+        (void)ScFanoutOnCommand(assign, sizeof(assign));
+        Check("the plugin's group holds all six", ScFanoutGroupCount(1), 6);
+
+        // Press 1. THE ENGINE HANDS BACK ONE, which is not a fault in its recall: its own
+        // row was filled from playersSelections, and the sim gate capped that at one
+        // building. This is the measured shape -- the in-game -Measure arm read exactly
+        // `GROUP recall enter: ... visible=1` against six stored.
+        const int engineGave[1] = { 0 };
+        SetFakeEngineSelection(engineGave, 1);
+        const BYTE recall[3] = { 0x13, SC_HOTKEY_RECALL, 0x01 };
+        (void)ScFanoutOnCommand(recall, sizeof(recall));
+
+        Check("the engine's client selection was rebuilt exactly once", g_reinstallCalls, 1);
+        Check("  with all six buildings, not the one it handed back", g_reinstallCount, 6);
+        bool allSix = true;
+        for (int i = 0; i < 6; ++i) {
+            bool found = false;
+            for (int j = 0; j < g_reinstallCount && j < SC_SELECTION_SLOTS; ++j) {
+                if (g_reinstallList[j] == FakeUnit(i)) found = true;
+            }
+            if (!found) allSix = false;
+        }
+        Check("  and each of them by its own pointer", allSix ? 1 : 0, 1);
+        Check("the shadow list still holds six", ScFanoutShadowCount(), 6);
+        Check("  and the engine is now holding all six of them, not one",
+              ScFanoutVisibleCount(), 6);
+        Check("  so nothing is past the cap any more",
+              ScFanoutShadowCount() - ScFanoutVisibleCount(), 0);
+        Check("the chunk size is still ONE -- the SIM gate is untouched", ScFanoutSimSlots(), 1);
+
+        // The order still reaches every one of them, one Select per building. This is the
+        // half that already worked before task 036 and must not have been disturbed by
+        // re-ordering the shadow list.
+        g_captureLen = 0; g_captureCount = 0;
+        (void)ScFanoutOnCommand(kRightClick, sizeof(kRightClick));
+        Check("6 pairs x (Select + order)", g_captureCount, 12);
+        Check("every building is on the wire by its own tag", CaptureTagCount(10), 6);
+        bool all6 = true;
+        for (int i = 0; i < 6; ++i) if (!CaptureHasTag(ExpectTag(i), 10)) all6 = false;
+        Check("  and each of the six is one of them", all6 ? 1 : 0, 1);
+    }
+
+    printf("\n    a control group of UNITS recalls exactly as task 021 left it\n");
+    {
+        // THE REGRESSION GUARD on the branch above. With 36 Marines the engine hands back
+        // its own twelve and the re-install must not run at all -- if it did, the shadow
+        // list's overflow-first invariant would be rebuilt from a different source and
+        // part [11]'s numbers would move.
+        MakeUnits(64, 1);
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 4000);
+        ScFanoutTestSetMovable(&FakeMovable);
+        SetFakeUnitsDatFlags();
+        for (int i = 0; i < 64; ++i) SetFakeType(i, FAKE_TYPE_MARINE);
+        ScFanoutTestSetCreateSelections(&FakeCreateSelections);
+        g_reinstallCount = -1; g_reinstallCalls = 0;
+
+        DriveSelection(36);
+        Check("36 units captured", ScFanoutShadowCount(), 36);
+        const BYTE assign[3] = { 0x13, SC_HOTKEY_ASSIGN, 0x02 };
+        (void)ScFanoutOnCommand(assign, sizeof(assign));
+        Check("the group holds 36", ScFanoutGroupCount(2), 36);
+
+        int twelve[SC_SELECTION_SLOTS];
+        for (int i = 0; i < SC_SELECTION_SLOTS; ++i) twelve[i] = 24 + i;   // the visible tail
+        SetFakeEngineSelection(twelve, SC_SELECTION_SLOTS);
+        const BYTE recall[3] = { 0x13, SC_HOTKEY_RECALL, 0x02 };
+        (void)ScFanoutOnCommand(recall, sizeof(recall));
+
+        Check("the engine's selection was NOT rebuilt for a unit group", g_reinstallCalls, 0);
+        Check("all 36 came back", ScFanoutShadowCount(), 36);
+        Check("  with the engine holding twelve", ScFanoutVisibleCount(), SC_SELECTION_SLOTS);
+        Check("  and the chunk size back at twelve", ScFanoutSimSlots(), SC_SELECTION_SLOTS);
+    }
+
+    ScFanoutTestSetCreateSelections(NULL);
     ScFanoutTestSetMovable(NULL);
     VirtualFree(g_fake, 0, MEM_RELEASE);
     g_fake = NULL;
@@ -3964,6 +4244,7 @@ int main(void) {
     ControlGroupTests();
     ProdQueueTests();
     BuildingGroupTests();
+    BuildingParityTests();
     CardScanTests();
     StatusStripTests();
     UpgradeQueueTests();

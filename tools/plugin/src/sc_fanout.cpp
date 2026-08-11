@@ -448,10 +448,19 @@ static bool        g_buildingGroups = true;   // %SCPLUGIN_BUILDING_GROUPS%
 // test process, so a test that has not said otherwise gets the pre-task-024 answer.
 static int __attribute__((fastcall)) ScTestAllMovable(DWORD unit) { (void)unit; return 1; }
 
+// Task 036 installs a detour on 0x0047B770 (see the EXTENDING A BUILDING GROUP block
+// below), and this is its trampoline. Everything in this plugin asks the ENGINE'S OWN
+// answer through it, never the detoured entry point: the detour exists to change what
+// four named instruction addresses in the GAME see, and letting our own reasoning read
+// the changed answer would make the override argue with itself (its very first act is to
+// ask this question about the selection's lead).
+extern "C" void* g_scMovableTrampoline;
+
 static bool UnitIsStandardAndMovable(DWORD unit) {
     if (!unit) return false;
     ScMovableFn f = g_movableFn ? g_movableFn
-                                : (ScMovableFn)Rt(SC_VA_UNIT_IS_STANDARD_AND_MOVABLE);
+                  : g_scMovableTrampoline ? (ScMovableFn)g_scMovableTrampoline
+                                          : (ScMovableFn)Rt(SC_VA_UNIT_IS_STANDARD_AND_MOVABLE);
     return f(unit) != 0;
 }
 
@@ -464,6 +473,22 @@ static int g_simSlots = SC_SELECTION_SLOTS;
 // gate objected to. Returns 0 for a type id outside the table's addressable range.
 static DWORD UnitsDatFlags(WORD unitType) {
     return ((DWORD*)Rt(SC_VA_UNITS_DAT_FLAGS))[unitType];
+}
+
+// "Is this unit a BUILDING?" -- the units.dat prototype flag, bit 0x01, which is the
+// FIRST term unit_IsStandardAndMovable tests (`TEST DL,0x1 / JNZ` at 0x0047B77E).
+//
+// Task 036 asks this in addition to the predicate wherever it widens a behaviour, and
+// the two are NOT the same question: the predicate also fails for a "single entity"
+// type, for four PER-UNIT fields (CUnit+0xDC bit 0x400, +0x117, +0x119, +0x124) and for
+// a list of ids -- so an ordinary UNIT can fail it too, transiently, and a feature named
+// "building groups" has no business widening anything for those. The conductor's review
+// asked for exactly this narrowing: the sim gate exists for units as well, and its
+// refusing must not be read as "this is a building group".
+static bool UnitIsBuilding(DWORD unit) {
+    if (!unit) return false;
+    return (UnitsDatFlags(*(WORD*)(unit + SC_CUNIT_OFF_UNIT_ID))
+            & SC_UNITSDAT_FLAG_BUILDING) != 0;
 }
 
 // Recompute the chunk size from the selection the engine just committed.
@@ -631,6 +656,13 @@ static unsigned g_statDrop[SC_DROP_NOTAG + 1] = { 0 };
 // them into the emit-side counters would change what "dropped from an emitted Select"
 // means for every test that already asserts on it.
 static unsigned g_statBGroupRefused[SC_DROP_NOTAG + 1] = { 0 };
+// Task 036: the predicate override at the four extend sites. `seen` counts calls that
+// arrived at one of those sites with a BUILDING lead -- i.e. the cases vanilla was about
+// to refuse outright -- and the other two count what this plugin answered instead. Kept
+// apart from every other counter because they describe a decision, not a drop.
+static unsigned g_statExtendSeen    = 0;
+static unsigned g_statExtendAllow   = 0;
+static unsigned g_statExtendRefuse  = 0;
 
 // ---------------------------------------------------------------------------
 // The deferred plan
@@ -1035,6 +1067,32 @@ static void ShowOverflowCircles(void) {
     ScCirclesShow(circ, n);
 }
 
+// CreateNewUnitSelectionsFromList (0x0049AE40) -- EAX = CUnit**, one stdcall argument
+// (count), RET 4. No C calling convention describes that, so it goes through a two-line
+// asm shim. It is the engine's own "replace the whole client selection" funnel: it
+// detaches the selection graphics of everything currently in activePlayerSelection and
+// attaches them to the list it is given, writing the (possibly subunit-substituted)
+// result back into that same array -- so `list` must be the caller's own scratch.
+//
+// The count is a MEMORY operand and the function pointer a REGISTER one, deliberately:
+// `pushl` reads its source before ESP moves, but the `calll` runs after, so an
+// ESP-relative operand there would be four bytes off.
+//
+// g_createSelFn is the test seam. In a test process 0x0049AE40 is a fake image with no
+// code in it, exactly as with the movable predicate.
+typedef void (*ScCreateSelectionFn)(DWORD* list, int count);
+static ScCreateSelectionFn g_createSelFn = NULL;
+
+static void CallCreateNewUnitSelections(DWORD* list, int count) {
+    if (g_createSelFn) { g_createSelFn(list, count); return; }
+    void* fn = Rt(SC_VA_CREATE_NEW_UNIT_SELECTIONS);
+    __asm__ __volatile__("pushl %[n]\n\t"
+                         "calll *%[fn]"
+                         : "+a"(list)
+                         : [n] "m"(count), [fn] "r"(fn)
+                         : "ecx", "edx", "cc", "memory");
+}
+
 // Ctrl+N / shift-add. `add` false = the engine's ASSIGN (replace), true = its ADD.
 //
 // Units are gated on the way IN as well as on the way out. The shadow list
@@ -1126,32 +1184,117 @@ static void GroupRecall(int group) {
         g->stored = false;
     }
 
-    // Rebuild: overflow FIRST, the engine's visible units LAST -- the invariant the
-    // whole module rests on (the final Select+order pair of a fan-out must leave the
-    // simulation holding exactly what the player can see).
+    // A BUILDING GROUP RECALLS AS A GROUP (task 036).
+    //
+    // The engine can only ever hand back ONE building here, and that is not a fault in
+    // its recall: hotkeySaveOrAdd fills the engine's group row from playersSelections,
+    // which the SIM gate has already capped at one building (research/building-groups.md
+    // 3), and the client recall keeps a predicate-failing entry only while the row holds
+    // exactly one (`CMP ESI,0x1 / JLE` at 0x00496BEE). So the row holds one, the recall
+    // returns one, and the STOCK STATUS ROW -- which draws clientSelectionGroup, copied
+    // from activePlayerSelection, and NOT this plugin's shadow list -- shows one. That is
+    // the "it only shows 1 in the row after I press the group number" the user reported:
+    // the group was there in plugin memory the whole time and no engine-visible surface
+    // was carrying it.
+    //
+    // So the group is put back into the ENGINE's own client selection, with the engine's
+    // own function -- CreateNewUnitSelectionsFromList, the very call 0x00496B40 made a
+    // few instructions ago, with our list instead of its one. Everything downstream is
+    // then engine code: it attaches each unit's selection graphics itself, the status row
+    // fills from the dirty flags 0x00496B40 has ALREADY set (0x0059723C / 0x0068C1F8 and
+    // friends, written before it queued this command), and the command card sees a real
+    // multi-selection instead of a single building.
+    //
+    // NOT done by writing selectionHotkeys instead, which looks like the tidier fix and
+    // is not: a row holding N buildings is emptied by the client recall's own gate (with
+    // N > 1 every building fails it), and the receive-side recall 0x00496940 COMPACTS the
+    // row in place as it validates -- so the injection would be destroyed permanently
+    // rather than merely ignored, and the player would lose the group entirely.
+    //
+    // Deliberately NOT extended to unit groups: for those the engine already hands back
+    // its own twelve and task 021's arrangement is proven at 36 units. This branch runs
+    // only when the engine's own predicate says the recalled lead is a building.
+    // Both tests, for the reason spelled out at UnitIsBuilding: the sim gate refuses a
+    // second slot to plenty of things that are not buildings (a "single entity" type, a
+    // unit with any of four per-unit fields set), and this branch must not read one of
+    // those as a building group and re-select twelve of them.
+    const bool buildingGroup = g_buildingGroups && g_mode == SC_MODE_FANOUT &&
+                               contained && visibleCount > 0 &&
+                               !UnitIsStandardAndMovable(visible[0].ptr) &&
+                               UnitIsBuilding(visible[0].ptr);
+
     g_shadowCount = 0;
-    int restored = 0, dropped = 0;
-    if (contained) {
-        for (int i = 0; i < g->count && g_shadowCount < g_maxUnits; ++i) {
-            if (ShadowContainsUnit(visible, visibleCount, &g->units[i])) continue;
+    int restored = 0, dropped = 0, reinstalled = 0;
+
+    if (buildingGroup) {
+        // One pass over the group IN ITS OWN ORDER, so the engine gets a prefix of it and
+        // the shadow list can still be assembled overflow-first / visible-last.
+        ShadowUnit kept[SC_SHADOW_MAX];
+        int keptN = 0;
+        for (int i = 0; i < g->count && keptN < g_maxUnits; ++i) {
             int why = SC_LIVE_OK;
             if (!PassesGate(&g->units[i], &why)) {
                 ++dropped;
                 LogUnitForensics("GROUP recall drop", &g->units[i], why);
                 continue;
             }
-            g_shadow[g_shadowCount++] = g->units[i];
+            kept[keptN++] = g->units[i];
+        }
+        const int want = keptN < SC_SELECTION_SLOTS ? keptN : SC_SELECTION_SLOTS;
+        DWORD list[SC_SELECTION_SLOTS];
+        for (int i = 0; i < want; ++i) list[i] = kept[i].ptr;
+        CallCreateNewUnitSelections(list, want);
+
+        // Read the engine BACK rather than assuming it took what it was given: the
+        // invariant this module rests on is "the tail of the shadow list is what the
+        // engine holds", and the only honest source for that is the array the engine
+        // just wrote. It also substitutes subunit parents on the way through, which a
+        // list of ours would not reflect.
+        ShadowUnit now[SC_SELECTION_SLOTS];
+        const int nowN = ReadEngineVisible(now, SC_SELECTION_SLOTS);
+        reinstalled = nowN;
+        for (int i = 0; i < keptN && g_shadowCount < g_maxUnits; ++i) {
+            if (ShadowContainsUnit(now, nowN, &kept[i])) continue;
+            g_shadow[g_shadowCount++] = kept[i];
             ++restored;
         }
+        for (int i = 0; i < nowN && g_shadowCount < SC_SHADOW_MAX; ++i) {
+            g_shadow[g_shadowCount++] = now[i];
+        }
+        g_visibleCount = nowN;
+        UpdateSimSlots(now, nowN);
+        ScLog("GROUP recall reinstall: the engine handed back %d of the %d building(s) this "
+              "group holds (its own row is filled from playersSelections, which the sim gate "
+              "caps at one) -- CreateNewUnitSelectionsFromList re-selected %d of them, so the "
+              "status row and the engine's own circles now carry the group",
+              visibleCount, g->count, reinstalled);
     }
-    for (int i = 0; i < visibleCount && g_shadowCount < SC_SHADOW_MAX; ++i) {
-        g_shadow[g_shadowCount++] = visible[i];
+    else {
+        // Rebuild: overflow FIRST, the engine's visible units LAST -- the invariant the
+        // whole module rests on (the final Select+order pair of a fan-out must leave the
+        // simulation holding exactly what the player can see).
+        if (contained) {
+            for (int i = 0; i < g->count && g_shadowCount < g_maxUnits; ++i) {
+                if (ShadowContainsUnit(visible, visibleCount, &g->units[i])) continue;
+                int why = SC_LIVE_OK;
+                if (!PassesGate(&g->units[i], &why)) {
+                    ++dropped;
+                    LogUnitForensics("GROUP recall drop", &g->units[i], why);
+                    continue;
+                }
+                g_shadow[g_shadowCount++] = g->units[i];
+                ++restored;
+            }
+        }
+        for (int i = 0; i < visibleCount && g_shadowCount < SC_SHADOW_MAX; ++i) {
+            g_shadow[g_shadowCount++] = visible[i];
+        }
+        g_visibleCount = visibleCount;
+        // A recall is a selection change like any other, so the chunk size is recomputed
+        // here too. Without this a group recalled after a building group would inherit
+        // simSlots=1 and fan an ordinary 12-unit order out one unit at a time.
+        UpdateSimSlots(visible, visibleCount);
     }
-    g_visibleCount = visibleCount;
-    // A recall is a selection change like any other, so the chunk size is recomputed
-    // here too. Without this a group recalled after a building group would inherit
-    // simSlots=1 and fan an ordinary 12-unit order out one unit at a time.
-    UpdateSimSlots(visible, visibleCount);
     ++g_shadowVersion;
     if (g_shadowCount > SC_SELECTION_SLOTS) ++g_statGroupWide;
 
@@ -1538,16 +1681,26 @@ void ScFanoutOnOverflow(unsigned count, DWORD* outList, DWORD unit) {
 //   * building groups are switched off (%SCPLUGIN_BUILDING_GROUPS%=0), or the mode is
 //     not fanout -- `shadow` mode's contract is "capture and log, change nothing", and
 //     this changes what the player has selected;
-//   * `clicked != 0` -- SortAllUnits' third argument. Only 0x0046FA40, the DRAG BOX,
-//     passes 0 (research/command-path.md 3.3); every click path passes the unit under
-//     the cursor. So single-click, shift-click, ctrl+click and double-click are stock;
 //   * the engine returned anything other than exactly 1 -- more than one means the
-//     movable path found real units and the "last rejected" fallback was never used;
+//     movable path found real units and no fallback was involved;
 //   * that one unit passes unit_IsStandardAndMovable -- i.e. it is an ordinary unit
-//     the engine selected on its own merits, not the fallback.
+//     the engine selected on its own merits.
 //
-// So the only way through is the exact shape this task is about: a drag box that
-// contained no selectable movable unit, where the engine fell back to one building.
+// TASK 036 REMOVED THE `clicked == 0` CONDITION, and the reason it is safe to is a fact
+// about the callers rather than a judgement. SortAllUnits has three call sites:
+// 0x0046FA40 (the drag box, `clicked = 0`) and 0x0046FB40 twice, at 0x0046FCAD and
+// 0x0046FE41 -- and BOTH of those are the ctrl-click / double-click "select all of this
+// type on screen" branches, whose candidate list is a scan of the screen rect. A PLAIN
+// click and a SHIFT-click never reach this function at all: the plain click calls
+// 0x0049AE40(1) and CMDACT_Select(1) directly, and shift-click has its own inline
+// add/remove block (sc_addresses.h SC_VA_CLICK_SELECT_HANDLER, with the branch table).
+// So `clicked != 0` here means exactly "ctrl-click or double-click", which is the input
+// the user asked for, and the click paths that must stay stock cannot arrive here.
+//
+// The signature is the same on both. With `clicked != 0` the engine seeds `out[0] =
+// clicked` and starts its count at 1 (0x0046F0F5..0x0046F103) before the filter loop, so
+// a screen full of buildings still leaves `ret == 1` with the clicked building in slot 0
+// -- the identical shape the box's "last rejected candidate" fallback produces.
 //
 // WHAT IT THEN DOES. It keeps the engine's own choice of lead -- the building vanilla
 // would have selected alone -- and appends every other candidate of the SAME TYPE and
@@ -1565,11 +1718,16 @@ void ScFanoutOnOverflow(unsigned count, DWORD* outList, DWORD unit) {
 unsigned ScFanoutGrowBuildingGroup(DWORD* candidates, DWORD* out, DWORD clicked,
                                    unsigned ret) {
     if (!g_buildingGroups || g_mode != SC_MODE_FANOUT) return ret;
-    if (clicked != 0 || ret != 1 || !out || !candidates) return ret;
+    if (ret != 1 || !out || !candidates) return ret;
 
     const DWORD lead = out[0];
     if (!UnitPtrValid(lead)) return ret;
-    if (UnitIsStandardAndMovable(lead)) return ret;
+    // Both tests, same reason as everywhere else in task 036 (see UnitIsBuilding): the
+    // predicate failing is not by itself "this is a building". Task 024 shipped with the
+    // predicate alone, which was safe while `clicked == 0` also had to hold -- a box that
+    // selected exactly one thing that was not a building was already a vanishing case --
+    // and is not, now that every ctrl-click and double-click arrives here too.
+    if (UnitIsStandardAndMovable(lead) || !UnitIsBuilding(lead)) return ret;
 
     const WORD leadType  = *(WORD*)(lead + SC_CUNIT_OFF_UNIT_ID);
     const BYTE leadOwner = *(BYTE*)(lead + SC_CUNIT_OFF_PLAYER);
@@ -1619,13 +1777,165 @@ unsigned ScFanoutGrowBuildingGroup(DWORD* candidates, DWORD* out, DWORD clicked,
     LeaveCriticalSection(&g_lock);
 
     if (n > 1 || beyond > 0 || refused > 0) {
-        ScLog("BGROUP box: lead=0x%08X type=%u owner=%u flags=0x%08X -> selected %d "
+        // `via` names the INPUT, from SortAllUnits' own third argument -- the one fact
+        // that separates the drag box from the two type-match click paths, and the field
+        // an unattended run asserts a double click on rather than inferring it.
+        ScLog("BGROUP %s: lead=0x%08X type=%u owner=%u flags=0x%08X -> selected %d "
               "(+%d beyond the cap, %d refused by the liveness gate)",
+              clicked ? "click" : "box",
               (unsigned)lead, leadType, leadOwner, (unsigned)UnitsDatFlags(leadType),
               n, beyond, refused);
     }
     return (unsigned)n;
 }
+
+// ---------------------------------------------------------------------------
+// EXTENDING A BUILDING GROUP -- shift-click, shift+box, shift+ctrl-click (task 036)
+//
+// Growing SortAllUnits' result covers the two paths that REPLACE the selection (the drag
+// box, and ctrl-click / double-click). The paths that EXTEND one do not go through it:
+//
+//   shift-click ADD  is an inline block in the click handler. It asks
+//                    unit_IsStandardAndMovable about the existing selection's lead
+//                    (CALL at 0x0046FD27) and about the clicked unit (0x0046FD44), and
+//                    returns without appending if either says no.
+//   shift+box and    go through combineSelectionsLists (0x0046F290), which asks the same
+//   shift+ctrl-click question about the incoming list's lead (0x0046F2C8) and the existing
+//                    list's lead (0x0046F2E8) and, on either failure, returns the EXISTING
+//                    count untouched -- so the merge simply does not happen.
+//
+// Neither is a function this plugin can wrap: one is a basic block in the middle of a
+// 900-byte handler, the other has a register-passed destination list. So the thing that
+// is detoured is the PREDICATE, and it is scoped by the RETURN ADDRESS -- it answers
+// differently at exactly the four instruction addresses above (sc_addresses.h,
+// SC_RET_MOVABLE_*) and hands back the engine's own verdict everywhere else in the
+// binary. There is no other consumer to disturb, because there is no other call site in
+// the allowlist.
+//
+// THE RULE, and why it cannot regress anything a player could see today:
+//
+//     When the LEAD of the selection being extended is a building, membership at these
+//     four sites becomes "same type and same owner as that lead". Otherwise the engine's
+//     own answer stands, unchanged.
+//
+// The lead being a building is precisely the case in which vanilla refuses the whole
+// operation -- the lead's OWN call site returns 0 and the handler bails -- so every
+// outcome under the rule replaces "nothing happens" with something. That is also why the
+// rule may safely REFUSE where vanilla would have allowed: a Marine shift-clicked onto a
+// building group is refused here, and vanilla refused it too, one call site earlier.
+//
+// A building group therefore stays ONE TYPE on every path: the box is same-type by
+// construction (task 024), double-click and ctrl-click are same-type by the engine's own
+// filter, and this is what makes shift agree with them. A mixed building+unit or
+// building+building selection is refused, and that is the answer to "what does a mixed
+// selection do" rather than an omission -- research/building-groups.md 9.
+//
+// WHERE THE LEAD COMES FROM. activePlayerSelection[0]. At the shift-click sites the
+// handler has copied that array into a local a few instructions earlier; both callers of
+// combineSelectionsLists copy it into a local too (0x0046FA40's 12-dword loop,
+// 0x0046FC9A's `LEA EDI,[EBP-0x6c]` + `MOVSD.REP`), and the merge appends to that copy
+// without touching slot 0. So one read answers all four sites and none of them needs the
+// plugin to remember anything between calls.
+// ---------------------------------------------------------------------------
+
+extern "C" int ScFanoutMovableDecide(DWORD unit, DWORD retAddr, int verdict);
+extern "C" void ScFanoutMovableThunk(void);
+extern "C" void* g_scMovableTrampoline;
+void* g_scMovableTrampoline = NULL;
+
+// ECX = CUnit*, no stack arguments, plain RET. The thunk keeps ECX for the original,
+// then hands (unit, returnAddress, the original's verdict) to a normal C function whose
+// return value becomes the caller's EAX. EBX/ESI/EDI are untouched by construction (GCC
+// preserves them across the C call), and the flags the game TESTs are set by its own
+// `TEST EAX,EAX` after the call, not by us.
+asm(
+    ".text\n"
+    ".globl _ScFanoutMovableThunk\n"
+"_ScFanoutMovableThunk:\n"
+    "  pushl %ecx\n"                     // [esp]=unit, [esp+4]=the game's return address
+    "  call *_g_scMovableTrampoline\n"   // ECX still = unit; EAX = the engine's verdict
+    "  pushl %edx\n"                     // caller-saved, preserved anyway
+    "  pushl %ecx\n"
+    "  pushl %eax\n"                     // arg3: verdict
+    "  pushl 16(%esp)\n"                 // arg2: return address  (esp+16 == entry esp)
+    "  pushl 16(%esp)\n"                 // arg1: unit            (esp+16 == entry esp-4)
+    "  call _ScFanoutMovableDecide\n"
+    "  addl $12, %esp\n"                 // cdecl: caller cleans the three arguments
+    "  popl %ecx\n"
+    "  popl %edx\n"
+    "  addl $4, %esp\n"                  // drop the saved unit
+    "  ret\n"
+);
+
+// The four allowlisted return addresses, relocated to this process's load address. A
+// static VA would be wrong under any base other than 0x00400000, and the plugin already
+// relocates every other address it uses.
+static bool IsExtendSite(DWORD retAddr) {
+    return retAddr == (DWORD)(DWORD_PTR)Rt(SC_RET_MOVABLE_SHIFT_LEAD)
+        || retAddr == (DWORD)(DWORD_PTR)Rt(SC_RET_MOVABLE_SHIFT_CLICKED)
+        || retAddr == (DWORD)(DWORD_PTR)Rt(SC_RET_MOVABLE_COMBINE_NEW)
+        || retAddr == (DWORD)(DWORD_PTR)Rt(SC_RET_MOVABLE_COMBINE_OLD);
+}
+
+static const char* ExtendSiteName(DWORD retAddr) {
+    if (retAddr == (DWORD)(DWORD_PTR)Rt(SC_RET_MOVABLE_SHIFT_LEAD))    return "shift-click/lead";
+    if (retAddr == (DWORD)(DWORD_PTR)Rt(SC_RET_MOVABLE_SHIFT_CLICKED)) return "shift-click/clicked";
+    if (retAddr == (DWORD)(DWORD_PTR)Rt(SC_RET_MOVABLE_COMBINE_NEW))   return "combine/new-list";
+    if (retAddr == (DWORD)(DWORD_PTR)Rt(SC_RET_MOVABLE_COMBINE_OLD))   return "combine/existing";
+    return "?";
+}
+
+extern "C" int SC_GAME_ENTRY
+ScFanoutMovableDecide(DWORD unit, DWORD retAddr, int verdict) {
+    if (!g_buildingGroups || g_mode != SC_MODE_FANOUT) return verdict;
+    if (!IsExtendSite(retAddr)) return verdict;
+
+    const DWORD lead = *(DWORD*)Rt(SC_VA_ACTIVE_PLAYER_SELECTION);
+    if (!UnitPtrValid(lead)) return verdict;
+    // Not a building group -> the engine decides, exactly as it does today. This is the
+    // branch every ordinary unit selection takes, so shift-clicking Marines is untouched.
+    //
+    // BOTH tests, not just the predicate. The predicate also fails for a "single entity"
+    // type and for four per-unit fields, so an ordinary UNIT can fail it -- and this
+    // feature is called building groups. Requiring the units.dat Building bit as well
+    // keeps every widening here to the thing it is named after.
+    if (UnitIsStandardAndMovable(lead) || !UnitIsBuilding(lead)) return verdict;
+
+    ++g_statExtendSeen;
+    if (!UnitPtrValid(unit)) { ++g_statExtendRefuse; return 0; }
+
+    const WORD leadType  = *(WORD*)(lead + SC_CUNIT_OFF_UNIT_ID);
+    const BYTE leadOwner = *(BYTE*)(lead + SC_CUNIT_OFF_PLAYER);
+    const WORD type      = *(WORD*)(unit + SC_CUNIT_OFF_UNIT_ID);
+    const BYTE owner     = *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER);
+
+    int  why  = SC_LIVE_OK;
+    bool live = true;
+    ShadowUnit u;
+    if (!ReadUnit(unit, &u)) { live = false; why = SC_DROP_NOTAG; }
+    else live = PassesGate(&u, &why);
+
+    const bool allow = (type == leadType) && (owner == leadOwner) && live;
+    if (allow) ++g_statExtendAllow; else ++g_statExtendRefuse;
+
+    // One line per call, and it names WHICH test decided -- task 030's rule. Four calls
+    // per shift-click at most, and only ever when the lead is a building, so this cannot
+    // grow into the per-order pile ShouldLogForensics exists to prevent.
+    ScLog("BGROUP extend [%s]: lead=0x%08X type=%u owner=%u | unit=0x%08X type=%u owner=%u "
+          "live=%d(%s) engineSaid=%d -> %s",
+          ExtendSiteName(retAddr), (unsigned)lead, leadType, leadOwner,
+          (unsigned)unit, type, owner, live ? 1 : 0, DropWhyName(why), verdict,
+          allow ? "ALLOW" : "refuse");
+    return allow ? 1 : 0;
+}
+
+static ScHook g_hkMovable;
+
+// Verified prologue -- ScHookInstall refuses to patch if memory disagrees. Two whole
+// instructions, seven bytes, neither PC-relative (sc_addresses.h SC_MOVABLE_PATCH_LEN):
+//     0047B770  66 8B 41 64   MOV AX,word ptr [ECX + 0x64]
+//     0047B774  0F B7 D0      MOVZX EDX,AX
+static const BYTE kPrologueMovable[] = { 0x66, 0x8B, 0x41, 0x64, 0x0F, 0xB7, 0xD0 };
 
 static unsigned __attribute__((stdcall)) SC_GAME_ENTRY
 HkSortAllUnits(DWORD* candidates, DWORD* out, DWORD clicked) {
@@ -1635,8 +1945,15 @@ HkSortAllUnits(DWORD* candidates, DWORD* out, DWORD clicked) {
     }
     unsigned ret = ((SortAllUnitsFn)g_hkSort.trampoline)(candidates, out, clicked);
     unsigned grown = ScFanoutGrowBuildingGroup(candidates, out, clicked, ret);
-    ScLog("SORT candidates=%d -> selected=%u%s (accumulated beyond the cap: %d)",
-          candCount, grown,
+    // `clicked` is the discriminator between the two input paths that reach here and it
+    // is logged, not inferred: 0x0046FA40 (the DRAG BOX) is the only caller that passes
+    // 0, and 0x0046FB40's two call sites (0x0046FCAD, 0x0046FE41) pass the unit under
+    // the cursor -- they are the ctrl-click / double-click "select all of this type on
+    // screen" paths. research/building-groups.md 2.3 and 8.1. Without this field a log
+    // reading `candidates=37 -> selected=1` cannot say WHICH path refused.
+    ScLog("SORT candidates=%d clicked=0x%08X -> engine=%u selected=%u%s "
+          "(accumulated beyond the cap: %d)",
+          candCount, (unsigned)clicked, ret, grown,
           grown != ret ? " [building group]" : "", g_accumCount);
     return grown;
 }
@@ -1774,6 +2091,20 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
         if (ScHookInstall(&g_hkSort, "SortAllUnits", Rt(SC_VA_SORT_ALL_UNITS),
                           (void*)&HkSortAllUnits, 6,
                           kPrologueSort, (int)sizeof(kPrologueSort))) ++installed;
+
+        // Task 036. Installed in shadow mode too, like the four above, and INERT there:
+        // ScFanoutMovableDecide returns the engine's own verdict unless the mode is
+        // fanout AND %SCPLUGIN_BUILDING_GROUPS% is on AND the call came from one of four
+        // named instruction addresses. So the stock arm runs with the detour spliced and
+        // still behaves exactly like vanilla, which is what makes that arm's "one
+        // building" mean something about the FEATURE rather than about the hooks.
+        if (ScHookInstall(&g_hkMovable, "unit_IsStandardAndMovable",
+                          Rt(SC_VA_UNIT_IS_STANDARD_AND_MOVABLE),
+                          (void*)&ScFanoutMovableThunk, SC_MOVABLE_PATCH_LEN,
+                          kPrologueMovable, (int)sizeof(kPrologueMovable))) {
+            g_scMovableTrampoline = g_hkMovable.trampoline;
+            ++installed;
+        }
     }
 
     // Task 014's one extra hook. It goes in under the same suspension as the rest so
@@ -1793,8 +2124,13 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     // selection hooks would fan out a shadow list nothing ever fills. Roll back.
     // The circle hook counts too -- without it our circles would never come off, and
     // stale circles under units the player has deselected is worse than none. The
-    // HUD-row dispatcher detour is one hook.
-    const int expected = ((mode >= SC_MODE_SHADOW) ? 4 : 1) + (circles ? 1 : 0)
+    // HUD-row dispatcher detour is one hook, and so is task 033's HUD driver.
+    //
+    // The shadow-mode count is FIVE, not four: queueCommand, CMDACT_Select,
+    // sortOverflowHandler, SortAllUnits, and task 036's unit_IsStandardAndMovable.
+    // Both halves of this expression moved at once (033 added the queueind term while
+    // 036 bumped the base), so it is spelled out rather than merged by shape.
+    const int expected = ((mode >= SC_MODE_SHADOW) ? 5 : 1) + (circles ? 1 : 0)
                        + (hudrow ? 1 : 0) + (queueind ? 1 : 0);
     if (installed != expected) {
         ScLog("HOOK: only %d of %d hooks installed -- ROLLING BACK, the plugin is "
@@ -1850,6 +2186,11 @@ void ScFanoutTestBegin(BYTE* fakeModuleBase, ScQueueFn emit, int budget) {
     memset(g_group, 0, sizeof(g_group));
     g_statGroupAssign = g_statGroupAdd = g_statGroupRecall = 0;
     g_statGroupWide = g_statGroupDiscard = g_statGroupReset = 0;
+    // Task 036: the extend override's counters and its engine-call seam. The seam is
+    // cleared rather than kept, so a part that forgets to set it faults loudly on the
+    // fake image instead of silently reusing the previous part's recorder.
+    g_statExtendSeen = g_statExtendAllow = g_statExtendRefuse = 0;
+    g_createSelFn = NULL;
 }
 
 // Test-only: how many units the plugin holds for a control group, and the module's
@@ -1885,6 +2226,21 @@ void ScFanoutTestSetLiveness(bool on) { g_liveness = on; }
 
 // Test-only: supply the movable predicate (task 024). NULL restores "call the engine".
 void ScFanoutTestSetMovable(ScMovablePredicate f) { g_movableFn = (ScMovableFn)f; }
+
+void ScFanoutTestSetBuildingGroups(bool on) { g_buildingGroups = on; }
+
+void ScFanoutTestSetCreateSelections(ScCreateSelectionsFn f) {
+    g_createSelFn = (ScCreateSelectionFn)f;
+}
+
+int ScFanoutExtendStat(int which) {
+    switch (which) {
+        case SC_EXTEND_SEEN:   return (int)g_statExtendSeen;
+        case SC_EXTEND_ALLOW:  return (int)g_statExtendAllow;
+        case SC_EXTEND_REFUSE: return (int)g_statExtendRefuse;
+        default: return -1;
+    }
+}
 
 // Test-only: the current chunk size == how many the simulation holds at once.
 int ScFanoutSimSlots(void) { return g_simSlots; }
