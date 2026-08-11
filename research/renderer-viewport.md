@@ -249,6 +249,17 @@ by 0x0041D260, 0x0041DEB0 and 0x0045EA30. The array is boxed in by the linker's 
 0x0047EBF0 (5), 0x0041E0D0 (5), 0x004B1FA0 (4), 0x0041E280 (4), 0x004BD630 (3), 0x0041E050
 (3), 0x0041D710 (3), and one each in 0x00497000, 0x0042D280, 0x0041DE20.
 
+> **Corrected by task 034, and the correction is the reason the relocation was affordable.**
+> 62 is the count of instructions that *touch* the array, most of them stepping a pointer
+> a loop already loaded. The number that matters for a relocation is how many instructions
+> NAME the address, because those are the ones that have to be rewritten — and that is
+> **21**, found by scanning `.text` for the encoded dword (every x86-32 absolute reference
+> encodes it as a plain little-endian dword, so the scan is exhaustive by construction;
+> `work/scratch/034/scan_refs.py`). Eighteen name the array's base, and three name a row
+> inside it — `grid + 18*40` from 0x004B1FA0 and `grid + 1*40 + 26` from 0x0048CB80, whose
+> offsets have to be RECOMPUTED for a new stride rather than rebased, or they land in the
+> wrong row. §12 has the rest.
+
 ## 6. The terrain scratch surface
 
 `FUN_004BCDC0` is the tile blitter. It walks the dirty grid and copies runs of dirty blocks
@@ -263,7 +274,7 @@ do {                                                    // rows
     if (*p == 1) { run = 1; while (++col < 0x28 && *++p) ++run; FUN_0040C2BD(run*0x10, off); ... }
     off += 0x10; ++col; ++p;
   } while (col < 0x28);
-  off += 0x2790;                                        // 672 * 16 - 640 + 16 -> next 16 scanlines
+  off += 0x2780;                                        // 672 * 16 - 640 -> next 16 scanlines
   y += 0x10;
 } while (y < 400);
 ```
@@ -271,6 +282,20 @@ do {                                                    // rows
 `0x49800 = 301056 = 672 × 448`, addressed modulo its own size so scrolling wraps instead of
 copying. **672 = 640 + 32 and 448 = 400 + 48** — the playfield plus one tile of margin. Both
 the pitch (`0x2A0`) and the wrap size (`0x49800`) are immediates in this function.
+
+> **Two corrections from task 034, which patched this function rather than only reading it.**
+>
+> 1. The row step is `0x2780`, not `0x2790` — read off the encoding at 0x004BCE6E
+>    (`81 c7 80 27 00 00`). It is `672*16 - 640` with no `+ 16`, because the column loop's
+>    own `add edi,0x10` has already supplied the last one. A patch built on the `+ 16`
+>    reading would have skewed every terrain row by 16 bytes.
+> 2. **§10 item 3's open question is answered: the producer is `FUN_0040AAE0`**, plus the
+>    run-writer family at 0x0040C3E0–0x0040C4B0. It writes tiles INTO the scratch surface
+>    with the same pitch (`mov ebx,0x2a0` at 0x0040AAFE) and the same wrap
+>    (0x0040AAF0, 0x0040AB19, 0x0040ABAA), and it reaches the surface through the same
+>    global. The surface's own allocation is `push 0x49800` at 0x004BD745 inside
+>    `FUN_004BD6F0`, storing to **0x00628454** — one of four SMemAlloc calls that function
+>    makes in a row, and the one whose size is 672×448.
 
 ## 7. The viewport in map coordinates
 
@@ -382,6 +407,13 @@ That is **~60 instruction sites plus two fixed-size buffers plus two data assets
 
 ### 9.2 Verdict: NO-GO on 1.16.1, at this project's price point
 
+> **Task 034 executed 9.3 stages 0-2 and this verdict did not survive contact.** The engine
+> half is done: a live game composes an 800×480 frame and draws an 800×400 playfield into
+> it, with every HUD dialog at its stock coordinates. What stops a human seeing it is not
+> the engine at all — it is the windowed-mode helper, which presents 640 columns whatever
+> it is asked for. **Read §12 before this section**; the paragraphs below are 032's estimate,
+> kept because the difference between them and the measurement is the finding.
+
 Stated plainly, because the task explicitly allows this answer and it is the honest one:
 
 **A wider viewport with a stock HUD is not a runtime-patch feature on 1.16.1. It is a
@@ -431,6 +463,10 @@ corner of a bigger black rectangle, which is strictly worse than what the user h
 ## 10. What this task did NOT determine
 
 Listed because leaving it out would make the map read as more complete than it is.
+
+> **Task 034 closed items 2 and 3 by running them.** Item 2 (how WMode behaves at another
+> resolution) is answered in §12.5; item 3 (what fills the terrain scratch surface) is
+> answered in the §6 note. Items 1, 4, 5 and 6 are still open.
 
 1. **The minimap's viewport rectangle** — the white box. `FUN_004A4D20` (click-to-centre) is
    located and read; the function that *draws* the rectangle is not. No function in the

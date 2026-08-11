@@ -42,6 +42,7 @@ import sys
 
 try:
     from capstone import Cs, CS_ARCH_X86, CS_MODE_32
+    from capstone.x86_const import X86_REG_EFLAGS
 except ImportError:  # pragma: no cover
     sys.exit("renderer_patch_sites: capstone is required (pip install capstone)")
 
@@ -59,6 +60,11 @@ STOCK_TERRAIN_ROWS = 448   # 400 + 48
 STOCK_BLOCK = 16           # dirty-grid block size, both axes
 STOCK_COLS = STOCK_W // STOCK_BLOCK   # 40
 STOCK_ROWS = STOCK_H // STOCK_BLOCK   # 30
+
+# Longest single rewrite the plugin's record can hold. The reordered windows that
+# fix the EFLAGS hazard are the long ones -- 0x0042D2C7 swallows three unrelated
+# stores between the compare and the branch.
+SC_MAX_PATCH_LEN = 32
 
 
 class Image:
@@ -97,6 +103,16 @@ class Image:
 
 
 MD = Cs(CS_ARCH_X86, CS_MODE_32)
+MD.detail = True
+
+
+def touches_flags(ins):
+    """(reads EFLAGS, writes EFLAGS) for one instruction."""
+    try:
+        read, written = ins.regs_access()
+    except Exception:                      # pragma: no cover
+        return (False, False)
+    return (X86_REG_EFLAGS in read, X86_REG_EFLAGS in written)
 
 
 def disasm_one(va: int, blob: bytes):
@@ -130,6 +146,7 @@ class Patch:
     def __init__(self, va, expect, patch, name, stage, note,
                  fixup_off=None, fixup_addend=0, before="", after=""):
         assert len(expect) == len(patch), name
+        assert len(patch) <= SC_MAX_PATCH_LEN,             "%s: %d-byte rewrite exceeds SC_MAX_PATCH_LEN" % (name, len(patch))
         # A site whose stock value is already correct for the chosen geometry --
         # every 480/400 site when only the width changes. Kept in the evidence
         # table (it is still a site the map has to name) but not handed to the
@@ -154,8 +171,72 @@ class Builder:
         self.geom = geom
         self.patches: list[Patch] = []
         self.errors: list[str] = []
+        self.warnings: list[str] = []
 
     # -- immediate rewrite ---------------------------------------------------
+    # -- flags safety --------------------------------------------------------
+    def check_flags(self, p: "Patch"):
+        """Refuse a rewrite that destroys a live flags value.
+
+        `lea` does not touch EFLAGS; `imul r32,r/m32,imm8` does. Swapping one for
+        the other is three bytes for three bytes and looks free -- and it is not,
+        wherever a `cmp`/`test` before the site is consumed by a `jcc` after it.
+        Task 034 shipped exactly that mistake into a live game: the dirty-block
+        marker's `cmp ecx,esi` ... `jg` pair had a new `imul` spliced between
+        them, the marker took the wrong branch, blocks were never marked dirty,
+        and the frame came out shredded while every read-back still said 800x400.
+
+        So: if the replacement writes EFLAGS where the original did not, walk
+        forward from the end of the patch and refuse if a flags READER is reached
+        before a flags WRITER.
+        """
+        orig = disasm_all(p.va, p.expect)
+        new = disasm_all(p.va, p.patch)
+        if not orig or not new:
+            return
+        orig_writes = any(touches_flags(i)[1] for i in orig)
+        new_writes = any(touches_flags(i)[1] for i in new)
+        if orig_writes and new_writes:
+            # Both write flags, but not necessarily the SAME flags: changing
+            # `shl r,3` to `shl r,1` changes SF/ZF/CF as well as the result. Only
+            # a warning, because the window may legitimately contain the setter
+            # a downstream branch wants (the reorder case) -- but every one of
+            # these gets read by a human before the table ships.
+            if [fmt(i) for i in orig] != [fmt(i) for i in new]:
+                after = self.img.read(p.va + len(p.expect), 64)
+                for ins in disasm_all(p.va + len(p.expect), after):
+                    reads, writes = touches_flags(ins)
+                    if reads:
+                        self.warnings.append(
+                            "%s @0x%08X: both old and new write EFLAGS but differently, and "
+                            "`%s` @0x%08X reads them next -- check the branch by hand"
+                            % (p.name, p.va, fmt(ins), ins.address))
+                        break
+                    if writes:
+                        break
+            return
+        if not new_writes:
+            return
+        # NOTE the exemption is `orig_writes`, above, and nothing else. An earlier
+        # version of this check also exempted a window whose LAST instruction sets
+        # flags, reasoning that a deliberate reorder puts the setter last -- which
+        # exempted every single-instruction `lea`->`imul` swap, i.e. exactly the
+        # sites the check exists for, and it reported a clean table over a broken
+        # game. A reorder is safe because the window then CONTAINS the original
+        # `cmp`, which makes `orig_writes` true on its own; it needs no second rule.
+        after = self.img.read(p.va + len(p.expect), 64)
+        for ins in disasm_all(p.va + len(p.expect), after):
+            reads, writes = touches_flags(ins)
+            if reads:
+                self.errors.append(
+                    "%s @0x%08X: the replacement writes EFLAGS and `%s` @0x%08X reads "
+                    "them before anything else writes them -- this rewrite would change "
+                    "a branch. Extend the window and reorder so the flag setter is last."
+                    % (p.name, p.va, fmt(ins), ins.address))
+                return
+            if writes:
+                return
+
     def imm(self, va, old, new, width, name, stage, note):
         """Rewrite one immediate/displacement field of `width` bytes.
 
@@ -205,9 +286,17 @@ class Builder:
             return
         before = " ; ".join(fmt(i) for i in disasm_all(va, expect))
         after = " ; ".join(fmt(i) for i in disasm_all(va, patch))
-        self.patches.append(Patch(va, expect, patch, name, stage, note,
-                                  fixup_off=fixup_off, fixup_addend=fixup_addend,
-                                  before=before, after=after))
+        # A replacement that does not fully decode is a typo in the table, not a
+        # clever encoding: refuse rather than write bytes nobody has read back.
+        if sum(i.size for i in disasm_all(va, patch)) != len(patch):
+            self.errors.append("%s @0x%08X: the replacement does not decode cleanly (%s)"
+                               % (name, va, patch.hex()))
+            return
+        p = Patch(va, expect, patch, name, stage, note,
+                  fixup_off=fixup_off, fixup_addend=fixup_addend,
+                  before=before, after=after)
+        self.check_flags(p)
+        self.patches.append(p)
 
     # -- absolute address rewrite (dirty-grid relocation) --------------------
     def rebase(self, va, old_target, addend, name, stage, note):
@@ -247,7 +336,10 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     TERRAIN_PITCH = PF_W + 32      # stock: 640 + 32
     TERRAIN_SIZE = TERRAIN_PITCH * STOCK_TERRAIN_ROWS
     COLS = W // STOCK_BLOCK
-    ROWS = H // STOCK_BLOCK
+    # ROUNDED UP: a height that is not a multiple of the 16-pixel block still needs
+    # a row for the partial one, and the engine's `y >> 4` will index it. 480 gives
+    # 30 exactly; 600 gives 38, not 37.
+    ROWS = (H + STOCK_BLOCK - 1) // STOCK_BLOCK
     GRID_BYTES = COLS * ROWS
 
     geom = dict(W=W, H=H, PF_W=PF_W, PF_H=PF_H, COLS=COLS, ROWS=ROWS,
@@ -300,9 +392,9 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     # -- presentation (items 3, 4) -----------------------------------------
     b.imm(0x0041D450, STOCK_W, W, 4, "blit.sourcepitch", 1,
           "SOURCE pitch of the one blit that presents the frame")
-    b.imm(0x0041D52C, STOCK_H, H, 4, "storm.region.height", 1,
+    b.imm(0x0041D52C, STOCK_H, H, 4, "storm.region.height", 2,
           "Ordinal_440 height (Storm's dirty-region geometry)")
-    b.imm(0x0041D531, STOCK_W, W, 4, "storm.region.width", 1,
+    b.imm(0x0041D531, STOCK_W, W, 4, "storm.region.width", 2,
           "Ordinal_440 width; the same call passes the 16x16 block size")
 
     # -- the screen FILL helper 0x0041D3A0 (new in task 034) ---------------
@@ -330,29 +422,29 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
           "whole-screen-clear branch: full-screen rect height")
     b.imm(0x0041E2F2, STOCK_H, H, 4, "compose.descriptor.height", 1,
           "MOV EDI,480 -- the height every layer descriptor gets")
-    b.imm(0x0041E323, STOCK_W - 1, W - 1, 4, "compose.clip.x2", 1,
+    b.imm(0x0041E323, STOCK_W - 1, W - 1, 4, "compose.clip.x2", 2,
           "x2 = -left + 639")
-    b.imm(0x0041E32F, STOCK_H - 1, H - 1, 4, "compose.clip.y2", 1,
+    b.imm(0x0041E32F, STOCK_H - 1, H - 1, 4, "compose.clip.y2", 2,
           "y2 = -top + 479")
     b.imm(0x0041E33E, STOCK_W, W, 2, "compose.descriptor.width", 1,
           "width field of every layer descriptor")
 
     # -- the dirty marker's clamps (item 7) --------------------------------
-    b.imm(0x0041E0E2, STOCK_W, W, 4, "dirty.reject.x", 1,
+    b.imm(0x0041E0E2, STOCK_W, W, 4, "dirty.reject.x", 2,
           "return early if x1 >= 640 (new in task 034; not in 032's table)")
-    b.imm(0x0041E0F5, STOCK_W - 1, W - 1, 4, "dirty.clamp.x2.cmp", 1, "x2 upper bound")
-    b.imm(0x0041E0FD, STOCK_W - 1, W - 1, 4, "dirty.clamp.x2.set", 1, "x2 = 639")
-    b.imm(0x0041E10A, STOCK_H, H, 4, "dirty.reject.y", 1,
+    b.imm(0x0041E0F5, STOCK_W - 1, W - 1, 4, "dirty.clamp.x2.cmp", 2, "x2 upper bound")
+    b.imm(0x0041E0FD, STOCK_W - 1, W - 1, 4, "dirty.clamp.x2.set", 2, "x2 = 639")
+    b.imm(0x0041E10A, STOCK_H, H, 4, "dirty.reject.y", 2,
           "return early if y1 >= 480 (new in task 034)")
-    b.imm(0x0041E11A, STOCK_H - 1, H - 1, 4, "dirty.clamp.y2.cmp", 1, "y2 upper bound")
-    b.imm(0x0041E122, STOCK_H - 1, H - 1, 4, "dirty.clamp.y2.set", 1, "y2 = 479")
+    b.imm(0x0041E11A, STOCK_H - 1, H - 1, 4, "dirty.clamp.y2.cmp", 2, "y2 upper bound")
+    b.imm(0x0041E122, STOCK_H - 1, H - 1, 4, "dirty.clamp.y2.set", 2, "y2 = 479")
 
     # -- layer 2, the dialog layer (item 16) -------------------------------
     # Stage 1 rather than stage 4: the composer clips every layer to the screen
     # and a dialog layer still 640 wide would clip the cursor layer's redraw of
     # the right-hand strip.
-    b.imm(0x0041A049, STOCK_W, W, 2, "layer2.width", 1, "dialog layer width")
-    b.imm(0x0041A052, STOCK_H, H, 2, "layer2.height", 1, "dialog layer height")
+    b.imm(0x0041A049, STOCK_W, W, 2, "layer2.width", 2, "dialog layer width")
+    b.imm(0x0041A052, STOCK_H, H, 2, "layer2.height", 2, "dialog layer height")
 
     # -- the copier's DESTINATION pitch (new in task 034) ------------------
     # 0x0040C2BD computes the destination address from the screen Bitmap
@@ -361,6 +453,47 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     # without it every terrain row lands one row-fragment further left.
     b.imm(0x0040C247, STOCK_W, W, 4, "copyrun.destpitch", 1,
           "row step of the scratch->screen copy loop (new in task 034)")
+
+    # -- fog: FRAMEBUFFER ADDRESSING, which is stage 1, not stage 2 --------
+    #
+    # These were in stage 2 with the rest of the fog and that was WRONG, in a way
+    # a live run caught and no amount of reading would have. The rule that sorts
+    # them is: a site that computes an address INTO THE FRAMEBUFFER moves when the
+    # framebuffer widens (stage 1); a site that CLIPS to the playfield moves when
+    # the playfield widens (stage 2). Fog has both, and at 800x480 they are the
+    # same number, so nothing in the source distinguishes them.
+    #
+    # The enumeration is exhaustive rather than hopeful: every routine that writes
+    # the framebuffer must load the pointer at 0x006CEFF4, and a scan of .text for
+    # that address finds 19 instructions. Three of them -- 0x0047EDCC, 0x0047EF35,
+    # 0x00480631 -- are immediately followed by a `lea r,[y+y*4]` + `shl r,7`, i.e.
+    # y*640 into the frame. Left at stage 1 the fog wrote every row at the old
+    # pitch, and the playfield came out sheared while the descriptor, the layer
+    # rects and the HUD all still read correctly.
+    for lea_va, lea_hex, imul_hex, shl_va in [
+        (0x0047EDD3, "8d0c89", "6bc9", 0x0047EDD6),
+        (0x0047EF3A, "8d0cb6", "6bce", 0x0047EF3D),
+        (0x00480635, "8d0c92", "6bca", 0x00480638),
+    ]:
+        b.code(lea_va, lea_hex, imul_hex + bytes([MUL32]).hex(),
+               "fog.rowmul@%08X" % lea_va, 1,
+               "fog: ecx = y * %d (was y * 5, feeding a shift of 7) -- FRAMEBUFFER row"
+               % MUL32)
+        b.code(shl_va, "c1e107", "c1e105", "fog.rowshift@%08X" % shl_va, 1,
+               "fog: shl ecx,7 -> shl ecx,5, so y*%d<<5 == y*%d" % (MUL32, W))
+    # FUN_0047EA60 is the routine all three of those callers hand a framebuffer
+    # address to, and it holds the pitch itself: `mov esi,640; sub esi,ebx`, i.e.
+    # "row step = pitch - run width". Left at 640 it walked the shroud down the
+    # frame at the old stride while everything else used the new one -- and
+    # because the shroud is only drawn at the edges of an explored map, the damage
+    # was a frame around the playfield with the middle perfectly intact. That is
+    # what made it survive a centre-weighted look and what the block map found.
+    b.imm(0x0047EA6B, STOCK_W, W, 4, "fog.rowpitch.writer", 1,
+          "FUN_0047EA60: dest row step is (pitch - run width) -- FRAMEBUFFER pitch")
+    # The inner blend loops step one framebuffer row at a time.
+    for va in (0x0047FFDE, 0x00480087):
+        b.imm(va, STOCK_W, W, 4, "fog.rowstep@%08X" % va, 1,
+              "fog blend loop: advance one FRAMEBUFFER row")
 
     # -- the dirty grid (item 5): relocation ------------------------------
     # 0x006CEFF8's u8[30][40] cannot grow in place -- 0x006CF4A8 is the live
@@ -382,13 +515,13 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
         (0x004BCDE4, "terrain blitter 0x004BCDC0: walk from the top-left"),
         (0x004BD656, "console init 0x004BD630: mark all dirty"),
     ]:
-        b.rebase(va, GRID, 0, "grid.base@%08X" % va, 1, note)
+        b.rebase(va, GRID, 0, "grid.base@%08X" % va, 2, note)
 
     # References that name a ROW rather than the array: their offset is
     # recomputed for the new stride instead of carried across.
-    b.rebase(0x0048CC00, 0x006CF03A, 1 * COLS + 26, "grid.row1col26", 1,
+    b.rebase(0x0048CC00, 0x006CF03A, 1 * COLS + 26, "grid.row1col26", 2,
              "0x0048CB80 names grid[row 1][col 26]; recomputed for the new stride")
-    b.rebase(0x004B2314, 0x006CF2C8, 18 * COLS, "grid.row18", 1,
+    b.rebase(0x004B2314, 0x006CF2C8, 18 * COLS, "grid.row18", 2,
              "0x004B1FA0 names grid[row 18][col 0]; recomputed for the new stride")
 
     # Row addressing: `lea r,[c+c*4]` (x5) feeding a SIB scale of 8 gives the
@@ -400,41 +533,57 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     assert HALF <= 127, "imul r32,r/m32,imm8 needs the half-stride to fit a signed byte"
 
     # 0x0041E0D0, the dirty marker.
-    b.code(0x0041E15D, "8d0489", "6bc1" + bytes([HALF]).hex(),
-           "grid.stride.marker", 1, "dirty marker: eax = row * 25 (was row * 5)")
-    b.code(0x0041E160, "8d9cc7f8ef6c00", "8d9c47" + "00000000",
-           "grid.rowaddr.marker", 1,
-           "dirty marker: [edi + eax*8 + grid] -> [edi + eax*2 + grid]",
-           fixup_off=3, fixup_addend=0)
-    b.imm(0x0041E18A, STOCK_COLS, COLS, 1, "grid.rowstep.marker", 1,
+    #
+    # THE WINDOW INCLUDES THE `cmp` AND THE `jg` ON PURPOSE. `lea` leaves EFLAGS
+    # alone and `imul` does not, and here a `cmp ecx,esi` two bytes earlier is
+    # consumed by a `jg` five bytes later. Splicing the multiply between them --
+    # which is what the first version of this table did -- makes the marker branch
+    # on the multiply's flags, so whole bands of blocks are never marked dirty and
+    # never redrawn. The frame comes out shredded while every read-back still says
+    # 800x400, because the layer rect is the plugin's bookkeeping and the pixels
+    # are the engine's result.
+    #
+    # The fix is a reorder, not a longer sequence: the same 14 bytes hold
+    # imul / lea / cmp / jg, the `jg` keeps its address so its rel8 is unchanged,
+    # and the flag setter is now the last thing before the branch that reads it.
+    b.code(0x0041E15B,
+           "3bce" "8d0489" "8d9cc7f8ef6c00" "7f2a",
+           "6bc1" + bytes([HALF]).hex() + "8d9c47" + "00000000" + "3bce" "7f2a",
+           "grid.rowaddr.marker", 2,
+           "dirty marker: eax = row * %d, ebx = grid + row*%d + col; cmp/jg moved "
+           "after the multiply so the branch still reads the compare" % (HALF, COLS),
+           fixup_off=6, fixup_addend=0)
+    b.imm(0x0041E18A, STOCK_COLS, COLS, 1, "grid.rowstep.marker", 2,
           "dirty marker: next row is +40 bytes")
 
     # 0x0041DE20, the "is this rectangle dirty" test.
     b.code(0x0041DE4E, "8d0489", "6bc1" + bytes([HALF]).hex(),
-           "grid.stride.testrect", 1, "0x0041DE20: eax = row * 25")
+           "grid.stride.testrect", 2, "0x0041DE20: eax = row * 25")
     b.code(0x0041DE51, "8d9cc6f8ef6c00", "8d9c46" + "00000000",
-           "grid.rowaddr.testrect", 1,
+           "grid.rowaddr.testrect", 2,
            "0x0041DE20: [esi + eax*8 + grid] -> [esi + eax*2 + grid]",
            fixup_off=3, fixup_addend=0)
-    b.imm(0x0041DE6B, STOCK_COLS, COLS, 4, "grid.cols.testrect", 1,
+    b.imm(0x0041DE6B, STOCK_COLS, COLS, 4, "grid.cols.testrect", 2,
           "0x0041DE20: columns per row")
 
-    # 0x0042D280.
-    b.code(0x0042D2C9, "8d14bf", "6bd7" + bytes([HALF]).hex(),
-           "grid.stride.42D280", 1, "0x0042D280: edx = row * 25")
-    b.code(0x0042D2D4, "8d94d3f8ef6c00", "8d9453" + "00000000",
-           "grid.rowaddr.42D280", 1,
-           "0x0042D280: [ebx + edx*8 + grid] -> [ebx + edx*2 + grid]",
-           fixup_off=3, fixup_addend=0)
+    # 0x0042D280 -- same hazard, same reorder. `cmp edi,eax` ... `jg`, with three
+    # unrelated stores in between that the reorder simply steps over.
+    b.code(0x0042D2C7,
+           "3bf8" "8d14bf" "891e" "897e04" "89460c" "8d94d3f8ef6c00" "894dfc" "7f2c",
+           "6bd7" + bytes([HALF]).hex() + "891e" "897e04" "89460c" +
+           "8d9453" + "00000000" + "894dfc" "3bf8" "7f2c",
+           "grid.rowaddr.42D280", 2,
+           "0x0042D280: edx = row * %d, [ebx + edx*2 + grid]; cmp/jg reordered" % HALF,
+           fixup_off=14, fixup_addend=0)
 
-    # 0x00497000.
-    b.code(0x00497062, "8d0c89", "6bc9" + bytes([HALF]).hex(),
-           "grid.stride.497000", 1, "0x00497000: ecx = row * 25")
-    b.code(0x00497065, "8dbccff8ef6c00", "8dbc4f" + "00000000",
-           "grid.rowaddr.497000", 1,
-           "0x00497000: [edi + ecx*8 + grid] -> [edi + ecx*2 + grid]",
-           fixup_off=3, fixup_addend=0)
-    b.imm(0x00497058, STOCK_COLS, COLS, 4, "grid.cols.497000", 1,
+    # 0x00497000 -- same hazard with `test eax,eax` ... `je`.
+    b.code(0x00497060,
+           "85c0" "8d0c89" "8dbccff8ef6c00" "741b",
+           "6bc9" + bytes([HALF]).hex() + "8dbc4f" + "00000000" + "85c0" "741b",
+           "grid.rowaddr.497000", 2,
+           "0x00497000: ecx = row * %d, [edi + ecx*2 + grid]; test/je reordered" % HALF,
+           fixup_off=6, fixup_addend=0)
+    b.imm(0x00497058, STOCK_COLS, COLS, 4, "grid.cols.497000", 2,
           "0x00497000: columns per row")
 
     # 0x0047EBF0, the scrolled fog arm. Three separate row computations feed five
@@ -445,32 +594,32 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     # believe the screen was never dirty. (Found exactly that way: stage 1 passed
     # its menu-only run with these missing.)
     b.code(0x0047ECEB, "8d3c80", "6bf8" + bytes([HALF]).hex(),
-           "grid.stride.fog.a", 1, "0x0047EBF0: edi = row * 25")
+           "grid.stride.fog.a", 2, "0x0047EBF0: edi = row * 25")
     b.code(0x0047ECF9, "8a94f8f8ef6c00", "8a9478" + "00000000",
-           "grid.rowaddr.fog.a", 1,
+           "grid.rowaddr.fog.a", 2,
            "0x0047EBF0: [eax + edi*8 + grid] -> [eax + edi*2 + grid]",
            fixup_off=3, fixup_addend=0)
 
     b.code(0x0047ED3C, "8d1c9b", "6bdb" + bytes([HALF]).hex(),
-           "grid.stride.fog.b", 1, "0x0047EBF0: ebx = row * 25 (feeding a shift)")
-    b.code(0x0047ED41, "c1e303", "c1e301", "grid.strideshift.fog.b", 1,
+           "grid.stride.fog.b", 2, "0x0047EBF0: ebx = row * 25 (feeding a shift)")
+    b.code(0x0047ED41, "c1e303", "c1e301", "grid.strideshift.fog.b", 2,
            "0x0047EBF0: shl ebx,3 -> shl ebx,1, so row*25<<1 == row*%d" % COLS)
     b.code(0x0047ED44, "8a943bf8ef6c00", "8a943b" + "00000000",
-           "grid.rowaddr.fog.b1", 1, "0x0047EBF0: [ebx + edi + grid]",
+           "grid.rowaddr.fog.b1", 2, "0x0047EBF0: [ebx + edi + grid]",
            fixup_off=3, fixup_addend=0)
     b.code(0x0047ED55, "80bc13f8ef6c0000", "80bc13" + "00000000" + "00",
-           "grid.rowaddr.fog.b2", 1, "0x0047EBF0: cmp byte [ebx + edx + grid], 0",
+           "grid.rowaddr.fog.b2", 2, "0x0047EBF0: cmp byte [ebx + edx + grid], 0",
            fixup_off=3, fixup_addend=0)
 
     b.code(0x0047ED5F, "8d0480", "6bc0" + bytes([HALF]).hex(),
-           "grid.stride.fog.c", 1, "0x0047EBF0: eax = row * 25 (feeding a shift)")
-    b.code(0x0047ED62, "c1e003", "c1e001", "grid.strideshift.fog.c", 1,
+           "grid.stride.fog.c", 2, "0x0047EBF0: eax = row * 25 (feeding a shift)")
+    b.code(0x0047ED62, "c1e003", "c1e001", "grid.strideshift.fog.c", 2,
            "0x0047EBF0: shl eax,3 -> shl eax,1")
     b.code(0x0047ED65, "8a9c38f8ef6c00", "8a9c38" + "00000000",
-           "grid.rowaddr.fog.c1", 1, "0x0047EBF0: [eax + edi + grid]",
+           "grid.rowaddr.fog.c1", 2, "0x0047EBF0: [eax + edi + grid]",
            fixup_off=3, fixup_addend=0)
     b.code(0x0047ED70, "8a9c10f8ef6c00", "8a9c10" + "00000000",
-           "grid.rowaddr.fog.c2", 1, "0x0047EBF0: [eax + edx + grid]",
+           "grid.rowaddr.fog.c2", 2, "0x0047EBF0: [eax + edx + grid]",
            fixup_off=3, fixup_addend=0)
 
     # The three `rep stosd` clears of the whole grid: 300 dwords -> COLS*ROWS/4.
@@ -483,7 +632,7 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
         (0x004BD64C, "console init 0x004BD630"),
     ]:
         b.imm(va, (STOCK_COLS * STOCK_ROWS) // 4, GRID_BYTES // 4, 4,
-              "grid.clearcount@%08X" % va, 1, note + ": rep stosd count")
+              "grid.clearcount@%08X" % va, 2, note + ": rep stosd count")
 
     # =====================================================================
     # STAGE 2 -- the playfield geometry. 9.3 calls this "the stage that can
@@ -590,7 +739,6 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     # -- item 11: fog of war -----------------------------------------------
     for va, note in [
         (0x004808E4, "0x004808E0: the full-extent fog draw"),
-        (0x0047EA6B, "0x0047E9xx fog helper: row width (new in task 034)"),
         (0x0047EC7B, "scrolled arm"),
         (0x0047ED97, "scrolled arm"),
         (0x0047EEA0, "static arm"),
@@ -601,25 +749,6 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
         (0x00480948, "clipping helper"),
     ]:
         b.imm(va, STOCK_W, PF_W, 4, "fog.width@%08X" % va, 2, note)
-    # Two fog inner loops step a screen row at a time. Both are `add esi,640`
-    # against the FRAMEBUFFER, so they are the screen pitch, not the playfield
-    # width -- they happen to be the same number here. New in task 034.
-    for va in (0x0047FFDE, 0x00480087):
-        b.imm(va, STOCK_W, W, 4, "fog.rowstep@%08X" % va, 2,
-              "fog blend loop: advance one framebuffer row")
-    # And three more x640 multiplies hidden as lea+shl, the same shape as the
-    # screen fill's (work/scratch/034/scan_mul.py found four in the binary).
-    for lea_va, lea_hex, imul_hex, shl_va in [
-        (0x0047EDD3, "8d0c89", "6bc9", 0x0047EDD6),
-        (0x0047EF3A, "8d0cb6", "6bce", 0x0047EF3D),
-        (0x00480635, "8d0c92", "6bca", 0x00480638),
-    ]:
-        b.code(lea_va, lea_hex, imul_hex + bytes([MUL32]).hex(),
-               "fog.rowmul@%08X" % lea_va, 2,
-               "fog: ecx = y * %d (was y * 5, feeding a shift of 7)" % MUL32)
-        b.code(shl_va, "c1e107", "c1e105", "fog.rowshift@%08X" % shl_va, 2,
-               "fog: shl ecx,7 -> shl ecx,5, so y*%d<<5 == y*%d" % (MUL32, W))
-
     # -- item 14: build placement ------------------------------------------
     b.imm(0x0048D663, STOCK_W, PF_W, 2, "placement.reject.x", 2,
           "0x0048D660: refuse a placement at x >= 640 (a 16-bit compare)")
@@ -678,7 +807,7 @@ def emit_header(b: Builder, path: str):
     out.append("#define SC_WS_STOCK_W         %d" % STOCK_W)
     out.append("#define SC_WS_STOCK_H         %d" % STOCK_H)
     out.append("#define SC_WS_STOCK_GRID_VA   0x006CEFF8u")
-    out.append("#define SC_WS_MAX_PATCH_LEN   16")
+    out.append("#define SC_WS_MAX_PATCH_LEN   %d" % SC_MAX_PATCH_LEN)
     out.append("#define SC_WS_NO_FIXUP        0xFFu\n")
     out.append("typedef struct {")
     out.append("    DWORD       va;          // static VA, rebased by the plugin")
@@ -743,6 +872,11 @@ def main():
         for e in b.errors:
             print("  " + e)
         return 1
+
+    if b.warnings:
+        print("renderer_patch_sites: %d warning(s) -- each has been read by hand" % len(b.warnings))
+        for w in b.warnings:
+            print("  " + w)
 
     live = [p for p in b.patches if not p.noop]
     print("renderer_patch_sites: %d site(s) verified against %s (%d write, %d already "

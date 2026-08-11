@@ -64,6 +64,16 @@ param(
     # Widescreen arm only -- for iterating. The control is what makes the result
     # mean anything, so this is for development, not for a result.
     [switch]$NoControl,
+    # Write one in-game PNG per arm to this directory, for a HUMAN to open.
+    # The read-back cannot answer "does the windowed helper actually PRESENT the
+    # extra columns", and nothing in a log can. A frame can, and AGENTS.md
+    # "Screenshots vs hard rule 1" permits exactly this: a frame kept on the
+    # gitignored diagnostic path for the conductor or user to open locally.
+    # It is NEVER committed and never goes through pr-image -- a game frame
+    # reproduces game artwork. Save-ScWindowImage refuses to write inside the
+    # repo, so that rule is enforced rather than remembered.
+    [switch]$CaptureFrames,
+    [string]$FrameDir = 'C:\sc-work\logs\034-frames',
     [switch]$KeepOpen
 )
 
@@ -132,11 +142,14 @@ function Read-ScreenLayout {
     $lines = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $from |
                Where-Object { $_ -match "SCREEN \[$Tag\]" -or $_ -match 'DIALOGS ' })
 
-    $r = @{ Tag = $Tag; Layers = @(); Bitmap = $null; Dialogs = $null }
+    $r = @{ Tag = $Tag; Layers = @(); Bitmap = $null; Dialogs = $null; Origin = $null }
     foreach ($l in $lines) {
         if ($l -match 'bitmap@(0x[0-9A-Fa-f]+) w=(\d+) h=(\d+) data=(0x[0-9A-Fa-f]+) bytes=(\d+)') {
             $r.Bitmap = @{ At = $Matches[1]; W = [int]$Matches[2]; H = [int]$Matches[3]
                            Data = $Matches[4]; Bytes = [int]$Matches[5] }
+        }
+        elseif ($l -match 'origin=\((\d+),(\d+)\)') {
+            $r.Origin = "$($Matches[1]),$($Matches[2])"
         }
         elseif ($l -match 'layer=(\d+) used=(\d+) flags=(0x[0-9A-Fa-f]+) rect=\((-?\d+),(-?\d+) (\d+)x(\d+)\) param=(0x[0-9A-Fa-f]+) draw=(0x[0-9A-Fa-f]+) drawStatic=(0x[0-9A-Fa-f]+)') {
             $r.Layers += [pscustomobject]@{
@@ -196,7 +209,7 @@ function Invoke-Arm {
     $gamePid = 0
     $result = @{ Name = $Name; Menu = $null; InGame = $null; Log = $LogPath
                  Widescreen = $Widescreen; Walked = $false; WalkError = $null
-                 WindowW = 0; WindowH = 0 }
+                 WindowW = 0; WindowH = 0; Frame = $null }
 
     Write-Host ''
     Write-Host "test-widescreen: ARM '$Name' (-Widescreen $Widescreen, stage $Stage)"
@@ -260,6 +273,16 @@ function Invoke-Arm {
                 $result.Walked = ($null -ne $l5 -and $l5.Used -ne 0)
                 if (-not $result.Walked) { $result.WalkError = 'every click was sent but the playfield layer is still not installed' }
                 Show-Reading $result.InGame $Name
+                if ($true) {
+                    New-Item -ItemType Directory -Path $FrameDir -Force | Out-Null
+                    $png = Join-Path $FrameDir "s$Stage-$Name-ingame.png"
+                    # Client area, not -FullWindow: the question is what the game
+                    # PRESENTS, and the border would only add pixels that are not
+                    # the game's.
+                    Save-ScWindowImage -Hwnd $h -Path $png | Out-Null
+                    $result.Frame = $png
+                    Write-Host "       frame captured: $png"
+                }
             }
             catch {
                 $result.WalkError = $_.Exception.Message
@@ -349,10 +372,22 @@ try {
         Assert-True "the buffer is width*height = $($WS_W * $WS_H) bytes" `
             ($wsMenu.Bitmap.Bytes -eq ($WS_W * $WS_H)) "(got $($wsMenu.Bitmap.Bytes))"
 
+        # Layer 2 is a STAGE 2 site, not a stage 1 one. Stage 1 widens the
+        # framebuffer's PITCH and nothing else: every rectangle, clip and dirty
+        # bound stays stock, so the engine keeps composing a 640-wide picture into
+        # an 800-wide buffer. That separation is what makes stage 1 checkable at
+        # all -- its frame must be pixel-identical to the control's.
         $l2 = $wsMenu.Layers | Where-Object Index -eq 2
-        Assert-True "the dialog layer covers the whole new screen (${WS_W}x${WS_H})" `
-            ($null -ne $l2 -and $l2.Width -eq $WS_W -and $l2.Height -eq $WS_H) `
-            "(got $($l2.Width)x$($l2.Height))"
+        if ($Stage -eq '2') {
+            Assert-True "the dialog layer covers the whole new screen (${WS_W}x${WS_H})" `
+                ($null -ne $l2 -and $l2.Width -eq $WS_W -and $l2.Height -eq $WS_H) `
+                "(got $($l2.Width)x$($l2.Height))"
+        }
+        else {
+            Assert-True "stage 1 leaves the dialog layer at the stock ${STOCK_W}x${STOCK_H}" `
+                ($null -ne $l2 -and $l2.Width -eq $STOCK_W -and $l2.Height -eq $STOCK_H) `
+                "(got $($l2.Width)x$($l2.Height))"
+        }
     }
 
     # What the helper PRESENTS, beside what the engine composed. Two different
@@ -413,6 +448,50 @@ try {
                 "(got $($l5.Width)x$($l5.Height))"
         }
 
+        # ---- THE PLAYFIELD INTERIOR ----------------------------------------
+        # This block exists because its absence shipped a broken frame. The first
+        # version of this suite proved the framebuffer descriptor and the layer
+        # rectangles carried the new size, and concluded the picture was right.
+        # It was not: the playfield between the sampled regions was shredded, and
+        # the read-back could not see it because a layer rect is the plugin's
+        # bookkeeping, not the engine's result (AGENTS.md, task 029).
+        #
+        # Both arms load the same fixture at the same start location, so the
+        # camera origin is the same and the LEFT 640 COLUMNS SHOW THE SAME MAP in
+        # either arm -- at stage 2 the widescreen frame simply draws more to the
+        # right, which the windowed helper crops. So the control frame is a
+        # per-pixel expectation for the region both frames share, and any
+        # disagreement is damage.
+        if (-not $NoControl -and $arms['control'].Walked -and $ws.Frame -and $arms['control'].Frame) {
+            # Positive first: the comparison is only meaningful if both arms are
+            # looking at the same place. An identical origin is what makes the
+            # control frame an expectation rather than a coincidence.
+            Assert-True 'both arms have the camera at the same origin (so the frames are comparable)' `
+                ($null -ne $g.Origin -and $g.Origin -eq $arms['control'].InGame.Origin) `
+                "(ws=$($g.Origin) control=$($arms['control'].InGame.Origin))"
+
+            $diffOut = & python (Join-Path $scriptDir 'frame-diff.py') `
+                        $arms['control'].Frame $ws.Frame 2>&1
+            $m = @{}
+            foreach ($line in $diffOut) {
+                if ("$line" -match '^([a-z_]+)=(.*)$') { $m[$Matches[1]] = $Matches[2] }
+            }
+            $rowMedian = [double]($m['rowmatch_median'] ?? 0)
+            $blackDelta = [double]($m['black_delta'] ?? 1)
+            $badRows = [int]($m['bad_rows'] ?? 999)
+            $rows = [int]($m['rows_sampled'] ?? 1)
+            Write-Host ("       playfield interior {0}: rowmatch median {1}, black delta {2}, bad rows {3}/{4}" -f
+                        $m['region'], $rowMedian, $blackDelta, $badRows, $rows)
+            if ($badRows -gt 0) { Write-Host "       first bad rows: $($m['bad_row_ys'])" }
+
+            Assert-True 'the playfield interior matches the control frame row by row' `
+                ($rowMedian -ge 0.90) "(median $rowMedian, want >= 0.90)"
+            Assert-True 'the widescreen frame is not blacker than the control (nothing went undrawn)' `
+                ([math]::Abs($blackDelta) -le 0.03) "(delta $blackDelta, want |d| <= 0.03)"
+            Assert-True 'almost no row of the playfield disagrees with the control' `
+                ($badRows -le [math]::Ceiling($rows * 0.05)) "($badRows of $rows rows bad)"
+        }
+
         # The HUD must not have moved. Its dialogs carry absolute coordinates
         # (research/hud-selection-row.md, research/command-card.md) and the whole
         # premise of this task is that they stay where they are, with the extra
@@ -445,6 +524,14 @@ finally {
         try { Remove-ScOwnFixtureDir -Dir $fixtures.Dir | Out-Null } catch { Write-Host "  warn: $($_.Exception.Message)" }
     }
     if ($launchLock) { try { Exit-ScLaunchLock -Lock $launchLock } catch { } }
+}
+
+if ($CaptureFrames) {
+    Write-Host ''
+    Write-Host 'test-widescreen: frames for a human to open (gitignored path, never committed):'
+    foreach ($k in @('ws', 'control')) {
+        if ($arms[$k] -and $arms[$k].Frame) { Write-Host "       $($arms[$k].Name): $($arms[$k].Frame)" }
+    }
 }
 
 Write-Host ''

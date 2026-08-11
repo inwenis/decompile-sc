@@ -12,63 +12,69 @@ stage	va	len	changed	name	before	after	expect	patch	note
 1	0x0041DDDE	9	1	screenbitmap.width.third	mov word ptr [0x6ceff0], 0x280	mov word ptr [0x6ceff0], 0x320	66C705F0EF6C008002	66C705F0EF6C002003	screenBitmap.width, third writer at 0x0041DDDE (new in task 034)
 1	0x0041DDE7	9	0	screenbitmap.height.third	mov word ptr [0x6ceff2], 0x1e0	mov word ptr [0x6ceff2], 0x1e0	66C705F2EF6C00E001	66C705F2EF6C00E001	screenBitmap.height, third writer
 1	0x0041D450	5	1	blit.sourcepitch	push 0x280	push 0x320	6880020000	6820030000	SOURCE pitch of the one blit that presents the frame
-1	0x0041D52C	5	0	storm.region.height	push 0x1e0	push 0x1e0	68E0010000	68E0010000	Ordinal_440 height (Storm's dirty-region geometry)
-1	0x0041D531	5	1	storm.region.width	push 0x280	push 0x320	6880020000	6820030000	Ordinal_440 width; the same call passes the 16x16 block size
+2	0x0041D52C	5	0	storm.region.height	push 0x1e0	push 0x1e0	68E0010000	68E0010000	Ordinal_440 height (Storm's dirty-region geometry)
+2	0x0041D531	5	1	storm.region.width	push 0x280	push 0x320	6880020000	6820030000	Ordinal_440 width; the same call passes the 16x16 block size
 1	0x0041D3D9	5	1	fillscreen.pitch.imm	push 0x280	push 0x320	6880020000	6820030000	0x0041D3A0: destination pitch passed to the fill
 1	0x0041D3E6	3	1	fillscreen.rowmul	lea edi, [eax + eax*4]	imul edi, eax, 0x19	8D3C80	6BF819	0x0041D3A0: edi = y * 25 (was y * 5, feeding a shift of 7)
 1	0x0041D3EF	3	1	fillscreen.rowshift	shl edi, 7	shl edi, 5	C1E707	C1E705	0x0041D3A0: shl edi,7 -> shl edi,5, so y*25<<5 == y*800
 1	0x0041E2D5	7	1	compose.clearrect.width	mov dword ptr [ebp - 0xc], 0x280	mov dword ptr [ebp - 0xc], 0x320	C745F480020000	C745F420030000	whole-screen-clear branch: full-screen rect width
 1	0x0041E2DC	7	0	compose.clearrect.height	mov dword ptr [ebp - 8], 0x1e0	mov dword ptr [ebp - 8], 0x1e0	C745F8E0010000	C745F8E0010000	whole-screen-clear branch: full-screen rect height
 1	0x0041E2F2	5	0	compose.descriptor.height	mov edi, 0x1e0	mov edi, 0x1e0	BFE0010000	BFE0010000	MOV EDI,480 -- the height every layer descriptor gets
-1	0x0041E323	5	1	compose.clip.x2	add eax, 0x27f	add eax, 0x31f	057F020000	051F030000	x2 = -left + 639
-1	0x0041E32F	6	0	compose.clip.y2	add ecx, 0x1df	add ecx, 0x1df	81C1DF010000	81C1DF010000	y2 = -top + 479
+2	0x0041E323	5	1	compose.clip.x2	add eax, 0x27f	add eax, 0x31f	057F020000	051F030000	x2 = -left + 639
+2	0x0041E32F	6	0	compose.clip.y2	add ecx, 0x1df	add ecx, 0x1df	81C1DF010000	81C1DF010000	y2 = -top + 479
 1	0x0041E33E	6	1	compose.descriptor.width	mov word ptr [ebp - 8], 0x280	mov word ptr [ebp - 8], 0x320	66C745F88002	66C745F82003	width field of every layer descriptor
-1	0x0041E0E2	5	1	dirty.reject.x	cmp eax, 0x280	cmp eax, 0x320	3D80020000	3D20030000	return early if x1 >= 640 (new in task 034; not in 032's table)
-1	0x0041E0F5	6	1	dirty.clamp.x2.cmp	cmp ebx, 0x27f	cmp ebx, 0x31f	81FB7F020000	81FB1F030000	x2 upper bound
-1	0x0041E0FD	5	1	dirty.clamp.x2.set	mov ebx, 0x27f	mov ebx, 0x31f	BB7F020000	BB1F030000	x2 = 639
-1	0x0041E10A	6	0	dirty.reject.y	cmp ecx, 0x1e0	cmp ecx, 0x1e0	81F9E0010000	81F9E0010000	return early if y1 >= 480 (new in task 034)
-1	0x0041E11A	6	0	dirty.clamp.y2.cmp	cmp esi, 0x1df	cmp esi, 0x1df	81FEDF010000	81FEDF010000	y2 upper bound
-1	0x0041E122	5	0	dirty.clamp.y2.set	mov esi, 0x1df	mov esi, 0x1df	BEDF010000	BEDF010000	y2 = 479
-1	0x0041A049	9	1	layer2.width	mov word ptr [0x6cef7e], 0x280	mov word ptr [0x6cef7e], 0x320	66C7057EEF6C008002	66C7057EEF6C002003	dialog layer width
-1	0x0041A052	9	0	layer2.height	mov word ptr [0x6cef80], 0x1e0	mov word ptr [0x6cef80], 0x1e0	66C70580EF6C00E001	66C70580EF6C00E001	dialog layer height
+2	0x0041E0E2	5	1	dirty.reject.x	cmp eax, 0x280	cmp eax, 0x320	3D80020000	3D20030000	return early if x1 >= 640 (new in task 034; not in 032's table)
+2	0x0041E0F5	6	1	dirty.clamp.x2.cmp	cmp ebx, 0x27f	cmp ebx, 0x31f	81FB7F020000	81FB1F030000	x2 upper bound
+2	0x0041E0FD	5	1	dirty.clamp.x2.set	mov ebx, 0x27f	mov ebx, 0x31f	BB7F020000	BB1F030000	x2 = 639
+2	0x0041E10A	6	0	dirty.reject.y	cmp ecx, 0x1e0	cmp ecx, 0x1e0	81F9E0010000	81F9E0010000	return early if y1 >= 480 (new in task 034)
+2	0x0041E11A	6	0	dirty.clamp.y2.cmp	cmp esi, 0x1df	cmp esi, 0x1df	81FEDF010000	81FEDF010000	y2 upper bound
+2	0x0041E122	5	0	dirty.clamp.y2.set	mov esi, 0x1df	mov esi, 0x1df	BEDF010000	BEDF010000	y2 = 479
+2	0x0041A049	9	1	layer2.width	mov word ptr [0x6cef7e], 0x280	mov word ptr [0x6cef7e], 0x320	66C7057EEF6C008002	66C7057EEF6C002003	dialog layer width
+2	0x0041A052	9	0	layer2.height	mov word ptr [0x6cef80], 0x1e0	mov word ptr [0x6cef80], 0x1e0	66C70580EF6C00E001	66C70580EF6C00E001	dialog layer height
 1	0x0040C247	6	1	copyrun.destpitch	add edi, 0x280	add edi, 0x320	81C780020000	81C720030000	row step of the scratch->screen copy loop (new in task 034)
-1	0x0041D755	5	1	grid.base@0041D755	mov edi, 0x6ceff8	mov [grid+0x0]	BFF8EF6C00	BF00000000	drawing gate 0x0041D710: clear all
-1	0x0041E025	5	1	grid.base@0041E025	push 0x6ceff8	push [grid+0x0]	68F8EF6C00	6800000000	Storm update-region call: the grid IS the region list
-1	0x0041E03C	5	1	grid.base@0041E03C	mov edi, 0x6ceff8	mov [grid+0x0]	BFF8EF6C00	BF00000000	0x0041DF80: clear all after presenting
-1	0x0041E06F	5	1	grid.base@0041E06F	mov edi, 0x6ceff8	mov [grid+0x0]	BFF8EF6C00	BF00000000	video init 0x0041E050: clear all
-1	0x0041E3DF	5	1	grid.base@0041E3DF	push 0x6ceff8	push [grid+0x0]	68F8EF6C00	6800000000	composer: hand the grid to Storm
-1	0x0041E3F6	5	1	grid.base@0041E3F6	mov edi, 0x6ceff8	mov [grid+0x0]	BFF8EF6C00	BF00000000	composer: clear all after presenting
-1	0x004808FB	5	1	grid.base@004808FB	mov edi, 0x6ceff8	mov [grid+0x0]	BFF8EF6C00	BF00000000	fog draw 0x004808F8: walk from the top-left
-1	0x004BCDE4	5	1	grid.base@004BCDE4	mov ecx, 0x6ceff8	mov [grid+0x0]	B9F8EF6C00	B900000000	terrain blitter 0x004BCDC0: walk from the top-left
-1	0x004BD656	5	1	grid.base@004BD656	mov edi, 0x6ceff8	mov [grid+0x0]	BFF8EF6C00	BF00000000	console init 0x004BD630: mark all dirty
-1	0x0048CC00	5	1	grid.row1col26	mov ecx, 0x6cf03a	mov [grid+0x4C]	B93AF06C00	B900000000	0x0048CB80 names grid[row 1][col 26]; recomputed for the new stride
-1	0x004B2314	5	1	grid.row18	mov edi, 0x6cf2c8	mov [grid+0x384]	BFC8F26C00	BF00000000	0x004B1FA0 names grid[row 18][col 0]; recomputed for the new stride
-1	0x0041E15D	3	1	grid.stride.marker	lea eax, [ecx + ecx*4]	imul eax, ecx, 0x19	8D0489	6BC119	dirty marker: eax = row * 25 (was row * 5)
-1	0x0041E160	7	1	grid.rowaddr.marker	lea ebx, [edi + eax*8 + 0x6ceff8]	lea ebx, [edi + eax*2]	8D9CC7F8EF6C00	8D9C4700000000	dirty marker: [edi + eax*8 + grid] -> [edi + eax*2 + grid]
-1	0x0041E18A	3	1	grid.rowstep.marker	add ebx, 0x28	add ebx, 0x32	83C328	83C332	dirty marker: next row is +40 bytes
-1	0x0041DE4E	3	1	grid.stride.testrect	lea eax, [ecx + ecx*4]	imul eax, ecx, 0x19	8D0489	6BC119	0x0041DE20: eax = row * 25
-1	0x0041DE51	7	1	grid.rowaddr.testrect	lea ebx, [esi + eax*8 + 0x6ceff8]	lea ebx, [esi + eax*2]	8D9CC6F8EF6C00	8D9C4600000000	0x0041DE20: [esi + eax*8 + grid] -> [esi + eax*2 + grid]
-1	0x0041DE6B	5	1	grid.cols.testrect	mov esi, 0x28	mov esi, 0x32	BE28000000	BE32000000	0x0041DE20: columns per row
-1	0x0042D2C9	3	1	grid.stride.42D280	lea edx, [edi + edi*4]	imul edx, edi, 0x19	8D14BF	6BD719	0x0042D280: edx = row * 25
-1	0x0042D2D4	7	1	grid.rowaddr.42D280	lea edx, [ebx + edx*8 + 0x6ceff8]	lea edx, [ebx + edx*2]	8D94D3F8EF6C00	8D945300000000	0x0042D280: [ebx + edx*8 + grid] -> [ebx + edx*2 + grid]
-1	0x00497062	3	1	grid.stride.497000	lea ecx, [ecx + ecx*4]	imul ecx, ecx, 0x19	8D0C89	6BC919	0x00497000: ecx = row * 25
-1	0x00497065	7	1	grid.rowaddr.497000	lea edi, [edi + ecx*8 + 0x6ceff8]	lea edi, [edi + ecx*2]	8DBCCFF8EF6C00	8DBC4F00000000	0x00497000: [edi + ecx*8 + grid] -> [edi + ecx*2 + grid]
-1	0x00497058	5	1	grid.cols.497000	mov edx, 0x28	mov edx, 0x32	BA28000000	BA32000000	0x00497000: columns per row
-1	0x0047ECEB	3	1	grid.stride.fog.a	lea edi, [eax + eax*4]	imul edi, eax, 0x19	8D3C80	6BF819	0x0047EBF0: edi = row * 25
-1	0x0047ECF9	7	1	grid.rowaddr.fog.a	mov dl, byte ptr [eax + edi*8 + 0x6ceff8]	mov dl, byte ptr [eax + edi*2]	8A94F8F8EF6C00	8A947800000000	0x0047EBF0: [eax + edi*8 + grid] -> [eax + edi*2 + grid]
-1	0x0047ED3C	3	1	grid.stride.fog.b	lea ebx, [ebx + ebx*4]	imul ebx, ebx, 0x19	8D1C9B	6BDB19	0x0047EBF0: ebx = row * 25 (feeding a shift)
-1	0x0047ED41	3	1	grid.strideshift.fog.b	shl ebx, 3	shl ebx, 1	C1E303	C1E301	0x0047EBF0: shl ebx,3 -> shl ebx,1, so row*25<<1 == row*50
-1	0x0047ED44	7	1	grid.rowaddr.fog.b1	mov dl, byte ptr [ebx + edi + 0x6ceff8]	mov dl, byte ptr [ebx + edi]	8A943BF8EF6C00	8A943B00000000	0x0047EBF0: [ebx + edi + grid]
-1	0x0047ED55	8	1	grid.rowaddr.fog.b2	cmp byte ptr [ebx + edx + 0x6ceff8], 0	cmp byte ptr [ebx + edx], 0	80BC13F8EF6C0000	80BC130000000000	0x0047EBF0: cmp byte [ebx + edx + grid], 0
-1	0x0047ED5F	3	1	grid.stride.fog.c	lea eax, [eax + eax*4]	imul eax, eax, 0x19	8D0480	6BC019	0x0047EBF0: eax = row * 25 (feeding a shift)
-1	0x0047ED62	3	1	grid.strideshift.fog.c	shl eax, 3	shl eax, 1	C1E003	C1E001	0x0047EBF0: shl eax,3 -> shl eax,1
-1	0x0047ED65	7	1	grid.rowaddr.fog.c1	mov bl, byte ptr [eax + edi + 0x6ceff8]	mov bl, byte ptr [eax + edi]	8A9C38F8EF6C00	8A9C3800000000	0x0047EBF0: [eax + edi + grid]
-1	0x0047ED70	7	1	grid.rowaddr.fog.c2	mov bl, byte ptr [eax + edx + 0x6ceff8]	mov bl, byte ptr [eax + edx]	8A9C10F8EF6C00	8A9C1000000000	0x0047EBF0: [eax + edx + grid]
-1	0x0041D750	5	1	grid.clearcount@0041D750	mov ecx, 0x12c	mov ecx, 0x177	B92C010000	B977010000	drawing gate 0x0041D710: rep stosd count
-1	0x0041E035	5	1	grid.clearcount@0041E035	mov ecx, 0x12c	mov ecx, 0x177	B92C010000	B977010000	0x0041DF80: rep stosd count
-1	0x0041E06A	5	1	grid.clearcount@0041E06A	mov ecx, 0x12c	mov ecx, 0x177	B92C010000	B977010000	video init 0x0041E050: rep stosd count
-1	0x0041E3EF	5	1	grid.clearcount@0041E3EF	mov ecx, 0x12c	mov ecx, 0x177	B92C010000	B977010000	composer 0x0041E280: rep stosd count
-1	0x004BD64C	5	1	grid.clearcount@004BD64C	mov ecx, 0x12c	mov ecx, 0x177	B92C010000	B977010000	console init 0x004BD630: rep stosd count
+1	0x0047EDD3	3	1	fog.rowmul@0047EDD3	lea ecx, [ecx + ecx*4]	imul ecx, ecx, 0x19	8D0C89	6BC919	fog: ecx = y * 25 (was y * 5, feeding a shift of 7) -- FRAMEBUFFER row
+1	0x0047EDD6	3	1	fog.rowshift@0047EDD6	shl ecx, 7	shl ecx, 5	C1E107	C1E105	fog: shl ecx,7 -> shl ecx,5, so y*25<<5 == y*800
+1	0x0047EF3A	3	1	fog.rowmul@0047EF3A	lea ecx, [esi + esi*4]	imul ecx, esi, 0x19	8D0CB6	6BCE19	fog: ecx = y * 25 (was y * 5, feeding a shift of 7) -- FRAMEBUFFER row
+1	0x0047EF3D	3	1	fog.rowshift@0047EF3D	shl ecx, 7	shl ecx, 5	C1E107	C1E105	fog: shl ecx,7 -> shl ecx,5, so y*25<<5 == y*800
+1	0x00480635	3	1	fog.rowmul@00480635	lea ecx, [edx + edx*4]	imul ecx, edx, 0x19	8D0C92	6BCA19	fog: ecx = y * 25 (was y * 5, feeding a shift of 7) -- FRAMEBUFFER row
+1	0x00480638	3	1	fog.rowshift@00480638	shl ecx, 7	shl ecx, 5	C1E107	C1E105	fog: shl ecx,7 -> shl ecx,5, so y*25<<5 == y*800
+1	0x0047EA6B	5	1	fog.rowpitch.writer	mov esi, 0x280	mov esi, 0x320	BE80020000	BE20030000	FUN_0047EA60: dest row step is (pitch - run width) -- FRAMEBUFFER pitch
+1	0x0047FFDE	6	1	fog.rowstep@0047FFDE	add esi, 0x280	add esi, 0x320	81C680020000	81C620030000	fog blend loop: advance one FRAMEBUFFER row
+1	0x00480087	6	1	fog.rowstep@00480087	add esi, 0x280	add esi, 0x320	81C680020000	81C620030000	fog blend loop: advance one FRAMEBUFFER row
+2	0x0041D755	5	1	grid.base@0041D755	mov edi, 0x6ceff8	mov [grid+0x0]	BFF8EF6C00	BF00000000	drawing gate 0x0041D710: clear all
+2	0x0041E025	5	1	grid.base@0041E025	push 0x6ceff8	push [grid+0x0]	68F8EF6C00	6800000000	Storm update-region call: the grid IS the region list
+2	0x0041E03C	5	1	grid.base@0041E03C	mov edi, 0x6ceff8	mov [grid+0x0]	BFF8EF6C00	BF00000000	0x0041DF80: clear all after presenting
+2	0x0041E06F	5	1	grid.base@0041E06F	mov edi, 0x6ceff8	mov [grid+0x0]	BFF8EF6C00	BF00000000	video init 0x0041E050: clear all
+2	0x0041E3DF	5	1	grid.base@0041E3DF	push 0x6ceff8	push [grid+0x0]	68F8EF6C00	6800000000	composer: hand the grid to Storm
+2	0x0041E3F6	5	1	grid.base@0041E3F6	mov edi, 0x6ceff8	mov [grid+0x0]	BFF8EF6C00	BF00000000	composer: clear all after presenting
+2	0x004808FB	5	1	grid.base@004808FB	mov edi, 0x6ceff8	mov [grid+0x0]	BFF8EF6C00	BF00000000	fog draw 0x004808F8: walk from the top-left
+2	0x004BCDE4	5	1	grid.base@004BCDE4	mov ecx, 0x6ceff8	mov [grid+0x0]	B9F8EF6C00	B900000000	terrain blitter 0x004BCDC0: walk from the top-left
+2	0x004BD656	5	1	grid.base@004BD656	mov edi, 0x6ceff8	mov [grid+0x0]	BFF8EF6C00	BF00000000	console init 0x004BD630: mark all dirty
+2	0x0048CC00	5	1	grid.row1col26	mov ecx, 0x6cf03a	mov [grid+0x4C]	B93AF06C00	B900000000	0x0048CB80 names grid[row 1][col 26]; recomputed for the new stride
+2	0x004B2314	5	1	grid.row18	mov edi, 0x6cf2c8	mov [grid+0x384]	BFC8F26C00	BF00000000	0x004B1FA0 names grid[row 18][col 0]; recomputed for the new stride
+2	0x0041E15B	14	1	grid.rowaddr.marker	cmp ecx, esi ; lea eax, [ecx + ecx*4] ; lea ebx, [edi + eax*8 + 0x6ceff8] ; jg 0x41e193	imul eax, ecx, 0x19 ; lea ebx, [edi + eax*2] ; cmp ecx, esi ; jg 0x41e193	3BCE8D04898D9CC7F8EF6C007F2A	6BC1198D9C47000000003BCE7F2A	dirty marker: eax = row * 25, ebx = grid + row*50 + col; cmp/jg moved after the multiply so the branch still reads the compare
+2	0x0041E18A	3	1	grid.rowstep.marker	add ebx, 0x28	add ebx, 0x32	83C328	83C332	dirty marker: next row is +40 bytes
+2	0x0041DE4E	3	1	grid.stride.testrect	lea eax, [ecx + ecx*4]	imul eax, ecx, 0x19	8D0489	6BC119	0x0041DE20: eax = row * 25
+2	0x0041DE51	7	1	grid.rowaddr.testrect	lea ebx, [esi + eax*8 + 0x6ceff8]	lea ebx, [esi + eax*2]	8D9CC6F8EF6C00	8D9C4600000000	0x0041DE20: [esi + eax*8 + grid] -> [esi + eax*2 + grid]
+2	0x0041DE6B	5	1	grid.cols.testrect	mov esi, 0x28	mov esi, 0x32	BE28000000	BE32000000	0x0041DE20: columns per row
+2	0x0042D2C7	25	1	grid.rowaddr.42D280	cmp edi, eax ; lea edx, [edi + edi*4] ; mov dword ptr [esi], ebx ; mov dword ptr [esi + 4], edi ; mov dword ptr [esi + 0xc], eax ; lea edx, [ebx + edx*8 + 0x6ceff8] ; mov dword ptr [ebp - 4], ecx ; jg 0x42d30c	imul edx, edi, 0x19 ; mov dword ptr [esi], ebx ; mov dword ptr [esi + 4], edi ; mov dword ptr [esi + 0xc], eax ; lea edx, [ebx + edx*2] ; mov dword ptr [ebp - 4], ecx ; cmp edi, eax ; jg 0x42d30c	3BF88D14BF891E897E0489460C8D94D3F8EF6C00894DFC7F2C	6BD719891E897E0489460C8D945300000000894DFC3BF87F2C	0x0042D280: edx = row * 25, [ebx + edx*2 + grid]; cmp/jg reordered
+2	0x00497060	14	1	grid.rowaddr.497000	test eax, eax ; lea ecx, [ecx + ecx*4] ; lea edi, [edi + ecx*8 + 0x6ceff8] ; je 0x497089	imul ecx, ecx, 0x19 ; lea edi, [edi + ecx*2] ; test eax, eax ; je 0x497089	85C08D0C898DBCCFF8EF6C00741B	6BC9198DBC4F0000000085C0741B	0x00497000: ecx = row * 25, [edi + ecx*2 + grid]; test/je reordered
+2	0x00497058	5	1	grid.cols.497000	mov edx, 0x28	mov edx, 0x32	BA28000000	BA32000000	0x00497000: columns per row
+2	0x0047ECEB	3	1	grid.stride.fog.a	lea edi, [eax + eax*4]	imul edi, eax, 0x19	8D3C80	6BF819	0x0047EBF0: edi = row * 25
+2	0x0047ECF9	7	1	grid.rowaddr.fog.a	mov dl, byte ptr [eax + edi*8 + 0x6ceff8]	mov dl, byte ptr [eax + edi*2]	8A94F8F8EF6C00	8A947800000000	0x0047EBF0: [eax + edi*8 + grid] -> [eax + edi*2 + grid]
+2	0x0047ED3C	3	1	grid.stride.fog.b	lea ebx, [ebx + ebx*4]	imul ebx, ebx, 0x19	8D1C9B	6BDB19	0x0047EBF0: ebx = row * 25 (feeding a shift)
+2	0x0047ED41	3	1	grid.strideshift.fog.b	shl ebx, 3	shl ebx, 1	C1E303	C1E301	0x0047EBF0: shl ebx,3 -> shl ebx,1, so row*25<<1 == row*50
+2	0x0047ED44	7	1	grid.rowaddr.fog.b1	mov dl, byte ptr [ebx + edi + 0x6ceff8]	mov dl, byte ptr [ebx + edi]	8A943BF8EF6C00	8A943B00000000	0x0047EBF0: [ebx + edi + grid]
+2	0x0047ED55	8	1	grid.rowaddr.fog.b2	cmp byte ptr [ebx + edx + 0x6ceff8], 0	cmp byte ptr [ebx + edx], 0	80BC13F8EF6C0000	80BC130000000000	0x0047EBF0: cmp byte [ebx + edx + grid], 0
+2	0x0047ED5F	3	1	grid.stride.fog.c	lea eax, [eax + eax*4]	imul eax, eax, 0x19	8D0480	6BC019	0x0047EBF0: eax = row * 25 (feeding a shift)
+2	0x0047ED62	3	1	grid.strideshift.fog.c	shl eax, 3	shl eax, 1	C1E003	C1E001	0x0047EBF0: shl eax,3 -> shl eax,1
+2	0x0047ED65	7	1	grid.rowaddr.fog.c1	mov bl, byte ptr [eax + edi + 0x6ceff8]	mov bl, byte ptr [eax + edi]	8A9C38F8EF6C00	8A9C3800000000	0x0047EBF0: [eax + edi + grid]
+2	0x0047ED70	7	1	grid.rowaddr.fog.c2	mov bl, byte ptr [eax + edx + 0x6ceff8]	mov bl, byte ptr [eax + edx]	8A9C10F8EF6C00	8A9C1000000000	0x0047EBF0: [eax + edx + grid]
+2	0x0041D750	5	1	grid.clearcount@0041D750	mov ecx, 0x12c	mov ecx, 0x177	B92C010000	B977010000	drawing gate 0x0041D710: rep stosd count
+2	0x0041E035	5	1	grid.clearcount@0041E035	mov ecx, 0x12c	mov ecx, 0x177	B92C010000	B977010000	0x0041DF80: rep stosd count
+2	0x0041E06A	5	1	grid.clearcount@0041E06A	mov ecx, 0x12c	mov ecx, 0x177	B92C010000	B977010000	video init 0x0041E050: rep stosd count
+2	0x0041E3EF	5	1	grid.clearcount@0041E3EF	mov ecx, 0x12c	mov ecx, 0x177	B92C010000	B977010000	composer 0x0041E280: rep stosd count
+2	0x004BD64C	5	1	grid.clearcount@004BD64C	mov ecx, 0x12c	mov ecx, 0x177	B92C010000	B977010000	console init 0x004BD630: rep stosd count
 2	0x004BD745	5	1	terrain.alloc	push 0x49800	push 0x5b000	6800980400	6800B00500	SMemAlloc size of the terrain scratch surface
 2	0x0040AAFE	5	1	terrain.pitch@0040AAFE	mov ebx, 0x2a0	mov ebx, 0x340	BBA0020000	BB40030000	terrain WRITER 0x0040AAE0: row stride
 2	0x0040C23A	6	1	terrain.pitch@0040C23A	add esi, 0x2a0	add esi, 0x340	81C6A0020000	81C640030000	scratch->screen copy: source row step
@@ -118,7 +124,6 @@ stage	va	len	changed	name	before	after	expect	patch	note
 2	0x0045CCCE	6	1	rectclip.cmp.right	cmp esi, 0x280	cmp esi, 0x320	81FE80020000	81FE20030000	0x0045CC90 right-edge test (new in task 034; not in 032's table)
 2	0x0045CCD6	7	1	rectclip.clamp.right	mov dword ptr [eax + 8], 0x280	mov dword ptr [eax + 8], 0x320	C7400880020000	C7400820030000	clamp right to 640
 2	0x004808E4	5	1	fog.width@004808E4	push 0x280	push 0x320	6880020000	6820030000	0x004808E0: the full-extent fog draw
-2	0x0047EA6B	5	1	fog.width@0047EA6B	mov esi, 0x280	mov esi, 0x320	BE80020000	BE20030000	0x0047E9xx fog helper: row width (new in task 034)
 2	0x0047EC7B	6	1	fog.width@0047EC7B	cmp esi, 0x280	cmp esi, 0x320	81FE80020000	81FE20030000	scrolled arm
 2	0x0047ED97	5	1	fog.width@0047ED97	mov eax, 0x280	mov eax, 0x320	B880020000	B820030000	scrolled arm
 2	0x0047EEA0	5	1	fog.width@0047EEA0	cmp eax, 0x280	cmp eax, 0x320	3D80020000	3D20030000	static arm
@@ -127,14 +132,6 @@ stage	va	len	changed	name	before	after	expect	patch	note
 2	0x0048090E	5	1	fog.width@0048090E	cmp eax, 0x280	cmp eax, 0x320	3D80020000	3D20030000	clipping helper
 2	0x0048092C	5	1	fog.width@0048092C	cmp eax, 0x280	cmp eax, 0x320	3D80020000	3D20030000	clipping helper
 2	0x00480948	6	1	fog.width@00480948	cmp edx, 0x280	cmp edx, 0x320	81FA80020000	81FA20030000	clipping helper
-2	0x0047FFDE	6	1	fog.rowstep@0047FFDE	add esi, 0x280	add esi, 0x320	81C680020000	81C620030000	fog blend loop: advance one framebuffer row
-2	0x00480087	6	1	fog.rowstep@00480087	add esi, 0x280	add esi, 0x320	81C680020000	81C620030000	fog blend loop: advance one framebuffer row
-2	0x0047EDD3	3	1	fog.rowmul@0047EDD3	lea ecx, [ecx + ecx*4]	imul ecx, ecx, 0x19	8D0C89	6BC919	fog: ecx = y * 25 (was y * 5, feeding a shift of 7)
-2	0x0047EDD6	3	1	fog.rowshift@0047EDD6	shl ecx, 7	shl ecx, 5	C1E107	C1E105	fog: shl ecx,7 -> shl ecx,5, so y*25<<5 == y*800
-2	0x0047EF3A	3	1	fog.rowmul@0047EF3A	lea ecx, [esi + esi*4]	imul ecx, esi, 0x19	8D0CB6	6BCE19	fog: ecx = y * 25 (was y * 5, feeding a shift of 7)
-2	0x0047EF3D	3	1	fog.rowshift@0047EF3D	shl ecx, 7	shl ecx, 5	C1E107	C1E105	fog: shl ecx,7 -> shl ecx,5, so y*25<<5 == y*800
-2	0x00480635	3	1	fog.rowmul@00480635	lea ecx, [edx + edx*4]	imul ecx, edx, 0x19	8D0C92	6BCA19	fog: ecx = y * 25 (was y * 5, feeding a shift of 7)
-2	0x00480638	3	1	fog.rowshift@00480638	shl ecx, 7	shl ecx, 5	C1E107	C1E105	fog: shl ecx,7 -> shl ecx,5, so y*25<<5 == y*800
 2	0x0048D663	4	1	placement.reject.x	cmp ax, 0x280	cmp ax, 0x320	663D8002	663D2003	0x0048D660: refuse a placement at x >= 640 (a 16-bit compare)
 2	0x0048D5F2	6	1	placement.rect.right	lea edi, [ecx + 0x280]	lea edi, [ecx + 0x320]	8DB980020000	8DB920030000	0x0048D5C0's extent: right = left + 640 (new in task 034)
 2	0x004814EA	9	1	layer1.park.x	mov word ptr [0x6cef66], 0x280	mov word ptr [0x6cef66], 0x320	66C70566EF6C008002	66C70566EF6C002003	parks the mask layer just off the right edge of the playfield
