@@ -405,6 +405,34 @@ every instruction in the binary). The distilled table is
 That is **~60 instruction sites plus two fixed-size buffers plus two data assets**, and items
 5, 8, 19 and 20 are not "patch a constant" work at all.
 
+> **Every row above, after task 034 executed stages 0-2.** "Confirmed" means the site was
+> patched and the game ran with it; "not reached" means it belongs to stage 3+ and was never
+> attempted, not that it is doubted.
+>
+> | # | status after execution |
+> | - | ---------------------- |
+> | 1 | **confirmed** — 4 sites; stage 0 runs and the game comes up |
+> | 2 | **CORRECTED** — there are THREE writers of the descriptor, not two. `FUN_0041DDD0` allocates its own 0x4B000 and describes it at 0x0041DDDE/0x0041DDE7 (§12.4) |
+> | 3 | **confirmed** — one immediate, exactly as described |
+> | 4 | **confirmed** — declared as `storm.region.width`; applied, never independently observed |
+> | 5 | **CORRECTED twice** — 21 instructions NAME the grid, not 62 (§5 note); and re-pointing them is not enough, because the stride is also open-coded as a byte count (0x004B1FA0), a walk step (0x0048CB80) and three fog row addresses (§12.5) |
+> | 6 | **confirmed** |
+> | 7 | **confirmed** — and its clamp is why an incoherent bisect subset drops redraws (§12.9) |
+> | 8 | **CORRECTED** — the producer is `FUN_0040AAE0` (§6 note, closing §10 item 3); the row step is 0x2780 not 0x2790; and there are FOUR 8-row run-writers, not two (§12.7) |
+> | 9 | **confirmed** |
+> | 10 | **confirmed** |
+> | 11 | **CORRECTED and split** — fog has framebuffer-ADDRESSING sites (stage 1) and playfield-CLIPPING sites (stage 2), which are the same number at 800x480 and nothing in the source distinguishes them. Plus 15 block-writer sites §9.1 did not know about (§12.8) |
+> | 12-15, 17 | **not reached** — stage 3+, never attempted |
+> | 16 | **confirmed** — layer 2 reads 800x480 in a running game |
+> | 18 | **still not located** — §10 item 1 stands |
+> | 19 | **decided, not solved** — no new art, by the user's explicit call. The strip beside the console stays blank |
+> | 20 | **deliberately unmoved** — the HUD dialogs stay at stock coordinates, verified byte-identical between arms at every stage |
+>
+> **Not in §9.1 at all, found only by running it:** the fog 8x8 block writers (15 sites,
+> §12.8), the third video-init copy, the scratch→screen copier's destination pitch, the shroud
+> writer's pitch-minus-width row step, the two extra scratch run-writers, and the EFLAGS
+> hazard class (§12.5) — which is not a site but a way for any of them to be wrong.
+
 ### 9.2 Verdict: NO-GO on 1.16.1, at this project's price point
 
 > **Task 034 is executing 9.3 stages 0-2. Read §12 before this section** — the estimate
@@ -465,6 +493,12 @@ Ordered so each stage is independently verifiable and the game still runs after 
 > | 0 | display mode only | the game comes up; the framebuffer descriptor is still stock |
 > | 1 | **the framebuffer pitch alone** — buffer size and descriptor, blit source pitch, the copier's destination pitch, the screen fill, and every fog/shroud routine that addresses the frame. No rect, clip, bound or grid moves. | **the frame is pixel-identical to the control's.** A binary condition, not a judgement |
 > | 2 | the playfield: dirty grid (relocate + stride) AND terrain scratch together, Storm region, layer rects, composer clip, per-image and rect clips, fog extents, placement | layer 5 reads the new size AND the interior matches the control where both show the same map |
+>
+> **Outcome, measured:** stage 0 and stage 1 pass their conditions in a running game. **Stage 2
+> does not** — it applies cleanly and the read-back carries the new size, and the frame is
+> wrecked (§12.9). It was also shown NOT to decompose: every subset of it that leaves part of
+> the geometry stock is incoherent in a way that predicts its own damage, so the stage is one
+> atomic change of ~121 sites rather than a sequence.
 >
 > Stages 3-5 are unchanged from 032's plan and are listed below. None of them was attempted.
 
@@ -534,9 +568,24 @@ otherwise have been an inference.
 
 ## 12. Task 034 — executing §9.3, stages 0-2
 
-§9.3 was a plan nobody had run. This section is what running it taught. The most useful part
-is not the site count: it is that **the read-back this project trusts was not sufficient
-here**, and §12.2 is the account of how that was found out.
+§9.3 was a plan nobody had run. This section is what running it taught.
+
+**Where it ended up, so nobody has to read to the bottom for it:**
+
+- **stage 0 and stage 1 work.** The engine composes into an 800-pitch framebuffer and the
+  picture is indistinguishable from the stock one at the resolution the instrument can
+  measure (§12.2).
+- **stage 2 does not.** The read-back says 800x400 and the frame says otherwise — 332 of 380
+  rows damaged, 21 points blacker than the control. It was attempted twice, bisected, and left
+  broken (§12.9).
+- **and none of that is the blocker.** `WMode.dll` presents 640 columns whatever it is asked
+  for, so a perfect stage 2 would still put zero new pixels on the monitor through the current
+  launcher (§12.10). The question was never whether the engine can compose a wider frame — it
+  can — but whether anything can present one.
+
+The most transferable parts are not the site count: they are that **the read-back this project
+trusts was not sufficient here** (§12.2), and that **an enumeration built by scanning for a
+name is not exhaustive** (§12.8).
 
 ### 12.1 The target, and why 800x480 rather than 800x600
 
@@ -576,9 +625,35 @@ separating:
 So the suite now compares the **playfield interior** against the control frame row by row
 (`tools/plugin/frame-diff.py`), and that check was proved able to fail before it was trusted:
 pointed at the broken build it reported **184 of 190 rows bad and a median row match of 27%**.
-It was also calibrated against noise, which turns out to be zero: **at stage 0 the two arms
-are pixel-identical** — median 1.000, no bad rows, black delta 0 — so the game is
-deterministic across runs here, and any disagreement is damage rather than timing.
+
+> **The noise-floor half of that sentence was wrong, and this is the correction.** It used to
+> read "calibrated against noise, which turns out to be zero: at stage 0 the two arms are
+> pixel-identical — median 1.000, no bad rows, black delta 0". Measured again at FULL
+> resolution, stage 0 — where both arms compose the identical 640x480 picture — differs by
+> **586 of 307200 pixels in seven isolated 32x32 blocks**. Animated map doodads, caught at
+> different phases, because the frame is grabbed by wall clock.
+>
+> The old reading came from comparing every SECOND pixel against a 90%-per-row threshold,
+> which a few hundred pixels cannot move. It is the same family as the three samplers above,
+> one level up: not a check looking in the wrong place, but a check too coarse to see what it
+> claimed. "Pixel-identical" was never available as a pass condition and was reported as met.
+>
+> **What replaces it is shape, because damage and animation separate cleanly there and not in
+> the count.** A wrong pitch damages whole ROWS across the whole width; animation differs in
+> isolated blobs and spans no row. `frame-diff.py` now reports, at full resolution, the
+> number of differing pixels, the 32x32 blocks they touch, and `wide_rows` — rows whose
+> differing pixels span more than half the region. The suite asserts on `wide_rows` and
+> reports the pixel count beside the measured noise floor.
+>
+> | | broken stage 1 | noise floor (stage 0) | stage 1 fixed | stage 2 |
+> | - | - | - | - | - |
+> | differing pixels of 307200 | 127k+ | 586 | 743 | 131944 |
+> | 32x32 blocks touched | 215 | 7 | 7 | 215 |
+> | **rows damaged across the width** | 163 of 190 | **0** | **0** | **332 of 380** |
+> | widest single-row diff span | 635px | 278px | 23px | 621px |
+>
+> `wide_rows` fired on a real broken build before it was ever trusted — stage 2 supplied the
+> positive control in the same suite on the same map, so no build had to be broken on purpose.
 
 The frames stay on the gitignored diagnostic path and are never committed (hard rule 1,
 AGENTS.md "Screenshots vs hard rule 1"); what crosses into this document is row indices and
@@ -711,21 +786,127 @@ ALL stages. For stages 0-2 alone:
 
 | | §9.1 estimate | measured |
 | - | ------------- | -------- |
-| instruction sites, stages 0-2 | ~60 for all stages | **140 declared, 127 written** |
-| of those, not in §8's table | — | **~27** |
+| instruction sites, stages 0-2 | ~60 for all stages | **166 declared, 153 written** |
+| — of those, stage 1 (framebuffer pitch alone) | — | **41 declared, 36 written** |
+| — of those, stage 2 (the playfield) | — | **121 declared, 115 written** |
+| of those, not in §8's table | — | **~44** |
 | distinct kinds of edit | "patch a constant" | 6: imm8/imm16/imm32, SIB scale, shift count, absolute address |
 | dirty-grid references to re-point | 62 instructions | **21** (see the §5 note) |
-| terrain-scratch sites | "immediates in this function" | **38 across 9 functions** |
+| terrain-scratch sites | "immediates in this function" | **40 across 9 functions** |
 
-The estimate was low by about a factor of two on stages 0-2 alone, and wrong in shape: §9.1
-assumed every site was an immediate.
+The estimate was low by **a factor of nearly three** on stages 0-2 alone, and wrong in shape:
+§9.1 assumed every site was an immediate. And the count kept growing under execution rather
+than converging — 140 sites when the first stage-1 build ran, 149 after a shape sweep, 164
+after the fog block writers, 166 after the scratch-writer pair. **Every increment came from a
+live run failing, never from re-reading.**
 
-### 12.8 How to reproduce
+### 12.8 Stage 1: fifteen sites a scan for the framebuffer POINTER cannot reach
+
+The first stage-1 build failed its own binary condition: **163 of 190 interior rows disagreed
+with the control**, and the block map named the cause immediately — a perfect rectangle in the
+middle with damage all around it. The explored area was pixel-perfect; everything under fog or
+shroud was wrong. Numerically, nothing was displaced: identity is the best mapping (0.63) and
+every stride-remap and vertical-squeeze hypothesis scores ~0.25.
+
+`FUN_00480600` draws fog in 8x8 blocks and hands a framebuffer pointer to one of three block
+writers. Two step with `add esi,640` and were declared. The third, `FUN_004800A0` (the
+fully-shrouded case), is UNROLLED and holds the pitch as **fourteen displacements** —
+`[ecx + k*640]` and `[ecx + k*640 + 4]` for k=1..7 — and the outer loop advances a block row
+with `add ecx,8*640` at 0x004806D0. Fifteen instructions, **of which exactly one spells 640**.
+
+**The rule this establishes, which is the one to carry forward.** The old enumeration was built
+by scanning `.text` for the framebuffer pointer 0x006CEFF4, and this document claimed that made
+it exhaustive. It does not:
+
+> **A routine that is HANDED a pointer writes through it without ever naming it.** An
+> enumeration built by scanning for a NAME — an address, a global, a symbol — covers only the
+> routines that mention it, never the callees they pass it to. `FUN_004800A0` sits 1405 bytes
+> from the nearest reference to the pointer it writes through.
+
+`tools/renderer_pitch_sweep.py` is the generalisation: sweep for `k*pitch + d`, not for the
+pitch. Two details are load-bearing:
+
+1. **searching multiples alone finds 7 of those 14 stores.** The `+4` twins — the second dword
+   of an 8-byte-wide block row — are not multiples of anything. Half a fix, in a subsystem
+   where half a fix renders.
+2. **capstone stops at the first byte it cannot decode**, and `.text` is full of int3 padding
+   and jump tables. The first version of the sweep covered about 3% of the section and printed
+   "nothing found". A sweep that scans 3% and reports zero is indistinguishable from a correct
+   all-clear.
+
+### 12.9 Stage 2: attempted, not reached — and what the bisect established
+
+Stage 2 applies cleanly (153 sites, 0 refused) and **the read-back is entirely green**: the
+framebuffer reads 800x480, the dialog layer 800x480, **layer 5 reads 800x400 at (0,0)** with
+its draw callback still 0x004BD580, and the HUD dialogs are byte-identical to the control's.
+The frame is wrecked: **332 of 380 rows damaged across the width, and 16-21 points more black
+than the control** — large areas never drawn, at playfield scale.
+
+Two fixes were attempted, and the second is recorded because it is instructive that it failed:
+the scratch-surface sweep (§12.7's +2) found two genuine undeclared row steps, they applied
+cleanly, and **the damage did not move**. A real defect that is not the defect.
+
+A group filter (`%SCPLUGIN_WS_ONLY%`) was then added to bisect the 121 sites. What it
+established, and what it deliberately does not:
+
+| build | sites | rows damaged across width | black delta |
+| ----- | ----- | ------------------------- | ----------- |
+| stage 1 only | 36 | 0 | 0.000 |
+| stage 2, whole | 153 | 332 | **+0.210** |
+| grid + dirty + terrain (the coupled core) | 126 | 331 | **+0.185** |
+| everything EXCEPT that core | 65 | 208 | +0.014 |
+| ditto, minus fog | 50 | 148 | +0.000 |
+
+**The black delta is the attributable signal, and it says the dominant defect is in the
+grid/terrain core.** The core alone reproduces the +0.19 "never drawn" component; every build
+without it collapses to ~0.
+
+**The banding in the last two rows is my subset's own artifact, not evidence.** Declaring the
+playfield 800 wide WITHOUT the dirty-rect clamps means `FUN_0041E0D0` still does
+`if (x1 > 0x27f) return` and rejects whole dirty rects outright, so those builds drop redraws
+by construction. The filter's source carries this warning and it applied to the reading of its
+own output — which is the honest form of a bisect over coupled sites.
+
+**So the real finding about stage 2 is structural: it does not decompose.** §12.5 established
+that items 5 and 8 cannot be separated; the bisect extends that to the whole stage. Every
+subset that excludes part of the geometry is incoherent in a way that predicts its own damage,
+so "which group is at fault" is not a well-formed question here. Stage 2 is one atomic change
+of ~121 sites, and it is not currently correct.
+
+### 12.10 The gating fact is presentation, not corruption
+
+**Every frame this task has ever captured shows only the LEFT 640 columns of an 800-wide
+composition** — `WMode.dll` presents 640x480 whatever it is asked for (§12.6), so the window is
+650x517 in both arms at every stage. The extra 160 columns have never been seen by anything, in
+any run.
+
+This reorders the whole problem. Even a perfectly rendering stage 2 would put **zero** new
+pixels on a monitor through the current launcher. The blocker was never "can the engine compose
+a wider frame" — it can, and the descriptor and every layer rect prove it — but **"can anything
+present one"**. The only route that could is true fullscreen with no helper, which switches the
+user's 3840x2160 desktop to a small mode and rearranges their desktop icons (hard rule 5), so
+it is a decision for the user rather than a step to take unattended.
+
+### 12.11 A negative result that is not over-read
+
+The same shape sweep was pointed at the dirty grid's row stride (40, anchored on 0x006CEFF8)
+and **the result is not usable**. 40 is small enough that its multiples are the whole binary:
+200, 320, 400 and 480 all match it, and every hit read by hand was the playfield HEIGHT, a
+struct field offset, or a dialog coordinate. It is recorded here as a bounded negative — the
+method works for 640 and 672 and does NOT work for 40 — rather than dropped, because a sweep
+whose hits are all noise looks exactly like a sweep with nothing to find.
+
+### 12.12 How to reproduce
 
 ```powershell
 python tools/renderer_patch_sites.py --check          # every site verifies against the exe
+python tools/renderer_pitch_sweep.py                  # stride-shaped operands, undeclared ones flagged
+python tools/renderer_pitch_sweep.py --pitch 672 --anchor 0x00628454   # the scratch surface
 ./tools/plugin/test-widescreen.ps1 -Stage 1           # two arms, frames compared row by row
 ./tools/plugin/probe-widescreen-present.ps1 -Stage 0  # what the helper actually presents
+
+$env:SCPLUGIN_WS_ONLY = 'grid,dirty,terrain'          # bisect stage 2 by group (read the
+./tools/plugin/test-widescreen.ps1 -Stage 2           #   coupling warning in sc_screen.cpp)
 ```
 
 The suite reads the target geometry out of the generated header, so regenerating at another
