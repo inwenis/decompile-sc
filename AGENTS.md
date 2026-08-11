@@ -230,7 +230,7 @@ consistent nonsense, which is worse than a crash.
 
 ## Foreground: only ONE primitive may raise (hard rule, 2026-08-09, task 027 — reverses 022/023)
 
-**The rule has two halves and you need both. Reading one half alone re-opens a real bug.**
+**The rule has three halves and you need all of them. Reading one alone re-opens a real bug.**
 
 1. **Posted mouse MOVES, clicks and world DRAG-boxes do NOT need the foreground.** Nothing
    in the harness may raise the window for them. This is the half that reverses 022/023.
@@ -238,6 +238,9 @@ consistent nonsense, which is worse than a crash.
    allowed to raise, it does so for the length of one pick, and it hands the foreground
    back afterwards. Delete that and the Game Type pick silently stops taking. Details at
    the end of this section.
+3. **The GAME raises itself at launch, and the harness hands that back too** (issue #30).
+   Nothing in the harness asks for it — the game activates its own window when it creates
+   one — so the fix is symmetric with the pick: record, then restore. Half 3 below.
 
 Half 1 used to be stated the other way round. It was wrong, and the wrong version cost the
 user their focus on every unattended run — the complaint that opened task 027.
@@ -290,17 +293,52 @@ seconds during the menu walk of the three suites that call `Set-ScGameType`, ins
 whole run. A world drag-box is also a held-button walk and needs none of this — so this is
 the dialog control, not held buttons in general.
 
+### Half 3: the LAUNCH borrows too, and gives it back (issue #30, task 035)
+
+The game activates its own window when it creates one, and until 2026-08-11 nothing handed
+that back. On a busy desktop it looked like a few seconds of flicker; on an idle one the
+game simply kept the foreground for the whole run (task 029 measured 72 s of a 72-second
+run, and what looked like a "hand back" was the process exiting).
+
+So a worker launch now records the foreground window immediately before `CreateProcess`
+and restores it once the game's window exists — `tools/plugin/sc-foreground.ps1`, called
+from `run-with-plugin.ps1`. Measured before and after, same machine, same minute, one
+launch each (in-process sampler, 150 ms, `C:\sc-work\logs\035\fg2-*.txt`):
+
+| | game holds the foreground | how it ended |
+|---|---|---|
+| before (`-NoForegroundRestore`) | 09:27:07.5 → 09:27:35.7, **28.2 s of a 28 s run** | the game was CLOSED |
+| after (default) | 09:27:44.1 → 09:27:50.7, **6.6 s** | handed back to the pre-launch window, which then kept it for the rest of the run |
+
+The residual ~6 s is the launch sequence itself (scinject's settle, the health check); the
+restore runs as soon as `check-game-windows.ps1` has proved the window exists.
+
+**Workers only.** The gate is `$env:AGENT_TASK` — never set for the user's own shortcut —
+plus `-NoForegroundRestore`, which `tools/deploy.ps1` bakes into the deployed launcher.
+Someone who double-clicked their game wants to see it. `$env:SCDRIVE_RAISE=1` turns the
+restore off too, for a human watching a run.
+
 ### How to check a run did not steal focus
 
 `tools/plugin/watch-foreground.ps1` samples `GetForegroundWindow()` every 250 ms and prints
 one line per CHANGE, exiting non-zero if any StarCraft window was ever foreground. Run it
-alongside a suite; do not claim "it did not steal focus" without it.
+alongside a suite; do not claim "it did not steal focus" without it. **Run it in your own
+process, or check its pids against the game's**: a run of it launched with
+`Start-Process -WindowStyle Hidden -RedirectStandardOutput` produced a trace naming
+StarCraft pids that had never existed, while the launching process read the foreground
+correctly at the same moments. The trace above was taken in-process for that reason.
 
-What a correct run looks like: for the six suites that never pick a game type, **zero**
-changes — `test-fanout-orders` and `test-selection-circles` (the pair 022/023 cited) both
-went 0 failures with the user's window keeping the foreground for the entire run. For the
-three that do pick one, exactly one borrow-and-return pair around the pick (measured:
-foreground at 22:03:39, back to the user's window at 22:03:43). Anything else is a bug.
+What a correct run looks like: **one borrow-and-return pair for the LAUNCH** (~6 s, above),
+then for the six suites that never pick a game type, nothing else — `test-fanout-orders`
+and `test-selection-circles` (the pair 022/023 cited) both went 0 failures with the user's
+window keeping the foreground for the rest of the run. For the three that do pick a game
+type, one further pair around each pick (measured: foreground at 22:03:39, back to the
+user's window at 22:03:43). Anything else is a bug.
+
+Note what the launch fix does for the pick: `Send-ScDropdownPick` returns the foreground to
+whatever held it *before the pick*, and on an idle desktop that used to be the game itself,
+because the launch had taken it and never given it up. With the launch handing back, the
+pick's hand-back lands on the user's window, which is what it was always meant to do.
 
 ## The in-game tips dialog is dismissed by ITS OWN button, never by a fixed point (task 027)
 
