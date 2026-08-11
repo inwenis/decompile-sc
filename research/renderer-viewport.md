@@ -249,6 +249,17 @@ by 0x0041D260, 0x0041DEB0 and 0x0045EA30. The array is boxed in by the linker's 
 0x0047EBF0 (5), 0x0041E0D0 (5), 0x004B1FA0 (4), 0x0041E280 (4), 0x004BD630 (3), 0x0041E050
 (3), 0x0041D710 (3), and one each in 0x00497000, 0x0042D280, 0x0041DE20.
 
+> **Corrected by task 034, and the correction is the reason the relocation was affordable.**
+> 62 is the count of instructions that *touch* the array, most of them stepping a pointer
+> a loop already loaded. The number that matters for a relocation is how many instructions
+> NAME the address, because those are the ones that have to be rewritten — and that is
+> **21**, found by scanning `.text` for the encoded dword (every x86-32 absolute reference
+> encodes it as a plain little-endian dword, so the scan is exhaustive by construction;
+> `work/scratch/034/scan_refs.py`). Eighteen name the array's base, and three name a row
+> inside it — `grid + 18*40` from 0x004B1FA0 and `grid + 1*40 + 26` from 0x0048CB80, whose
+> offsets have to be RECOMPUTED for a new stride rather than rebased, or they land in the
+> wrong row. §12 has the rest.
+
 ## 6. The terrain scratch surface
 
 `FUN_004BCDC0` is the tile blitter. It walks the dirty grid and copies runs of dirty blocks
@@ -263,7 +274,7 @@ do {                                                    // rows
     if (*p == 1) { run = 1; while (++col < 0x28 && *++p) ++run; FUN_0040C2BD(run*0x10, off); ... }
     off += 0x10; ++col; ++p;
   } while (col < 0x28);
-  off += 0x2790;                                        // 672 * 16 - 640 + 16 -> next 16 scanlines
+  off += 0x2780;                                        // 672 * 16 - 640 -> next 16 scanlines
   y += 0x10;
 } while (y < 400);
 ```
@@ -271,6 +282,20 @@ do {                                                    // rows
 `0x49800 = 301056 = 672 × 448`, addressed modulo its own size so scrolling wraps instead of
 copying. **672 = 640 + 32 and 448 = 400 + 48** — the playfield plus one tile of margin. Both
 the pitch (`0x2A0`) and the wrap size (`0x49800`) are immediates in this function.
+
+> **Two corrections from task 034, which patched this function rather than only reading it.**
+>
+> 1. The row step is `0x2780`, not `0x2790` — read off the encoding at 0x004BCE6E
+>    (`81 c7 80 27 00 00`). It is `672*16 - 640` with no `+ 16`, because the column loop's
+>    own `add edi,0x10` has already supplied the last one. A patch built on the `+ 16`
+>    reading would have skewed every terrain row by 16 bytes.
+> 2. **§10 item 3's open question is answered: the producer is `FUN_0040AAE0`**, plus the
+>    run-writer family at 0x0040C3E0–0x0040C4B0. It writes tiles INTO the scratch surface
+>    with the same pitch (`mov ebx,0x2a0` at 0x0040AAFE) and the same wrap
+>    (0x0040AAF0, 0x0040AB19, 0x0040ABAA), and it reaches the surface through the same
+>    global. The surface's own allocation is `push 0x49800` at 0x004BD745 inside
+>    `FUN_004BD6F0`, storing to **0x00628454** — one of four SMemAlloc calls that function
+>    makes in a row, and the one whose size is 672×448.
 
 ## 7. The viewport in map coordinates
 
@@ -380,7 +405,42 @@ every instruction in the binary). The distilled table is
 That is **~60 instruction sites plus two fixed-size buffers plus two data assets**, and items
 5, 8, 19 and 20 are not "patch a constant" work at all.
 
+> **Every row above, after task 034 executed stages 0-2.** "Confirmed" means the site was
+> patched and the game ran with it; "not reached" means it belongs to stage 3+ and was never
+> attempted, not that it is doubted.
+>
+> | # | status after execution |
+> | - | ---------------------- |
+> | 1 | **confirmed** — 4 sites; stage 0 runs and the game comes up |
+> | 2 | **CORRECTED** — there are THREE writers of the descriptor, not two. `FUN_0041DDD0` allocates its own 0x4B000 and describes it at 0x0041DDDE/0x0041DDE7 (§12.4) |
+> | 3 | **confirmed** — one immediate, exactly as described |
+> | 4 | **confirmed** — declared as `storm.region.width`; applied, never independently observed |
+> | 5 | **CORRECTED twice** — 21 instructions NAME the grid, not 62 (§5 note); and re-pointing them is not enough, because the stride is also open-coded as a byte count (0x004B1FA0), a walk step (0x0048CB80) and three fog row addresses (§12.5) |
+> | 6 | **confirmed** |
+> | 7 | **confirmed** — and its clamp is why an incoherent bisect subset drops redraws (§12.9) |
+> | 8 | **CORRECTED** — the producer is `FUN_0040AAE0` (§6 note, closing §10 item 3); the row step is 0x2780 not 0x2790; and there are FOUR 8-row run-writers, not two (§12.7) |
+> | 9 | **confirmed** |
+> | 10 | **confirmed** |
+> | 11 | **CORRECTED and split** — fog has framebuffer-ADDRESSING sites (stage 1) and playfield-CLIPPING sites (stage 2), which are the same number at 800x480 and nothing in the source distinguishes them. Plus 15 block-writer sites §9.1 did not know about (§12.8) |
+> | 12-15, 17 | **not reached** — stage 3+, never attempted |
+> | 16 | **confirmed** — layer 2 reads 800x480 in a running game |
+> | 18 | **still not located** — §10 item 1 stands |
+> | 19 | **decided, not solved** — no new art, by the user's explicit call. The strip beside the console stays blank |
+> | 20 | **deliberately unmoved** — the HUD dialogs stay at stock coordinates, verified byte-identical between arms at every stage |
+>
+> **Not in §9.1 at all, found only by running it:** the fog 8x8 block writers (15 sites,
+> §12.8), the third video-init copy, the scratch→screen copier's destination pitch, the shroud
+> writer's pitch-minus-width row step, the two extra scratch run-writers, and the EFLAGS
+> hazard class (§12.5) — which is not a site but a way for any of them to be wrong.
+
 ### 9.2 Verdict: NO-GO on 1.16.1, at this project's price point
+
+> **Task 034 is executing 9.3 stages 0-2. Read §12 before this section** — the estimate
+> below has been replaced by a measurement, and the measurement is larger and a different
+> shape. What 032 could not know is that a read-back is not sufficient here: the layer
+> rectangle and the framebuffer descriptor can all report the new size over a visibly
+> broken frame, because those are the plugin's bookkeeping and the frame is the engine's
+> result. §12.4 is the part worth reading even if the feature never lands.
 
 Stated plainly, because the task explicitly allows this answer and it is the honest one:
 
@@ -415,11 +475,35 @@ winning — game logic and HUD behaviour, where a hook is a hook and the data mo
 
 Ordered so each stage is independently verifiable and the game still runs after each one.
 
+> **CORRECTED BY EXECUTION — task 034. The table below is 032's plan and its stage 1/2
+> boundary is wrong.** Two things force a different split, and both are in §12.5:
+>
+> - **items 5 and 8 cannot be separated.** The terrain blitter `FUN_004BCDC0` walks the
+>   dirty grid LINEARLY — one byte per column, never re-based per row — so its column count
+>   must equal the grid's stride. Widening the grid without widening the blitter's walk
+>   desynchronises them by (stride − columns) bytes every row, which is a shredded frame.
+> - **the framebuffer's PITCH and the playfield's WIDTH are different changes** and want
+>   different stages. Everything that computes an address into the frame moves when the
+>   buffer widens; everything that clips moves when the playfield widens.
+>
+> The staging that actually works, and the one to inherit:
+>
+> | stage | scope | pass condition |
+> | ----- | ----- | -------------- |
+> | 0 | display mode only | the game comes up; the framebuffer descriptor is still stock |
+> | 1 | **the framebuffer pitch alone** — buffer size and descriptor, blit source pitch, the copier's destination pitch, the screen fill, and every fog/shroud routine that addresses the frame. No rect, clip, bound or grid moves. | **the frame is pixel-identical to the control's.** A binary condition, not a judgement |
+> | 2 | the playfield: dirty grid (relocate + stride) AND terrain scratch together, Storm region, layer rects, composer clip, per-image and rect clips, fog extents, placement | layer 5 reads the new size AND the interior matches the control where both show the same map |
+>
+> **Outcome, measured:** stage 0 and stage 1 pass their conditions in a running game. **Stage 2
+> does not** — it applies cleanly and the read-back carries the new size, and the frame is
+> wrecked (§12.9). It was also shown NOT to decompose: every subset of it that leaves part of
+> the geometry stock is incoherent in a way that predicts its own damage, so the stage is one
+> atomic change of ~121 sites rather than a sequence.
+>
+> Stages 3-5 are unchanged from 032's plan and are listed below. None of them was attempted.
+
 | stage | scope | proves |
 | ----- | ----- | ------ |
-| 0 | Measure WMode at a non-640x480 mode before anything else: patch only 0x0041DA42/0x0041DA3D to 800x600 and confirm the window still comes up under the injected helper. Expect a 640x480 image in the corner of an 800x600 mode. | that the presentation half survives at all — the cheapest possible falsification, and it is where I would stop if it failed |
-| 1 | Screen surface: items 2, 3, 4 + relocate the dirty grid (item 5) into plugin-owned memory and re-point all 62 references, + composer/marker clamps (6, 7). | a correctly presented 800x600 frame with a 640x400 playfield in the corner. Nothing looks better yet |
-| 2 | Playfield geometry: items 8, 9, 10, 11, 14 + the terrain scratch surface. | terrain, sprites and fog fill the new area. **This is the stage that can actually look wrong**, and the one I would expect to consume most of the budget |
 | 3 | Input and camera: items 12, 13, 15, 17. | clicks land where they look, the camera reaches the map edges |
 | 4 | HUD: items 16, 19, 20. | a stock HUD anchored to the bottom of a wider screen |
 | 5 | Minimap viewport rectangle (item 18), once located. | the minimap agrees with the camera |
@@ -431,6 +515,10 @@ corner of a bigger black rectangle, which is strictly worse than what the user h
 ## 10. What this task did NOT determine
 
 Listed because leaving it out would make the map read as more complete than it is.
+
+> **Task 034 closed items 2 and 3 by running them.** Item 2 (how WMode behaves at another
+> resolution) is answered in §12.5; item 3 (what fills the terrain scratch surface) is
+> answered in the §6 note. Items 1, 4, 5 and 6 are still open.
 
 1. **The minimap's viewport rectangle** — the white box. `FUN_004A4D20` (click-to-centre) is
    located and read; the function that *draws* the rectangle is not. No function in the
@@ -477,3 +565,349 @@ kind of claim this project has been burned by before. It earned its keep on the 
 small way: the two-arm design is what turns "layer 5 is 640x400" into "layer 5 is the
 playfield", and the parked layer 1 at `(640,400)` confirmed a reading of two `MOV`s that would
 otherwise have been an inference.
+
+## 12. Task 034 — executing §9.3, stages 0-2
+
+§9.3 was a plan nobody had run. This section is what running it taught.
+
+**Where it ended up, so nobody has to read to the bottom for it:**
+
+- **stage 0 and stage 1 work.** The engine composes into an 800-pitch framebuffer and the
+  picture is indistinguishable from the stock one at the resolution the instrument can
+  measure (§12.2).
+- **stage 2 does not.** The read-back says 800x400 and the frame says otherwise — 332 of 380
+  rows damaged, 21 points blacker than the control. It was attempted twice, bisected, and left
+  broken (§12.9).
+- **and none of that is the blocker.** `WMode.dll` presents 640 columns whatever it is asked
+  for, so a perfect stage 2 would still put zero new pixels on the monitor through the current
+  launcher (§12.10). The question was never whether the engine can compose a wider frame — it
+  can — but whether anything can present one.
+
+The most transferable parts are not the site count: they are that **the read-back this project
+trusts was not sufficient here** (§12.2), and that **an enumeration built by scanning for a
+name is not exhaustive** (§12.8).
+
+### 12.1 The target, and why 800x480 rather than 800x600
+
+§9.3 suggested 800x600. 800x480 is strictly cheaper and looks better:
+
+- the height stays 480, so the console stays exactly where it is (y=400..479) and **every
+  480/400/479/399 immediate in §8 is left alone** — 13 of the declared sites are already
+  correct at this geometry and are verified but never written;
+- the dead space is one 160x80 block beside the console rather than an L-shape;
+- 5:3 is closer to a 16:9 monitor than 4:3 is.
+
+The generator is parametric, and the whole table was regenerated at 800x600 as an experiment
+(§12.6), so this is a configuration and not a fork.
+
+### 12.2 The read-back said 800x400 over a shredded frame
+
+The first build that ran end to end passed seventeen assertions. The framebuffer descriptor
+read 800x480. Layer 5 read 800x400 at (0,0). Every HUD dialog rectangle was byte-identical to
+the control arm's. Three independent pixel samplers — the HUD band, the top strip, and the
+rightmost non-black column — agreed to 98.9%.
+
+The frame was visibly wrecked: horizontal bands across the playfield, terrain displaced in
+strips, the shroud edge stepped instead of smooth. A human opened the capture and saw it in
+one glance.
+
+Every number above is true. The conclusion drawn from them was false, for two reasons worth
+separating:
+
+1. **A layer rectangle is the plugin's bookkeeping, not the engine's result.** This is
+   AGENTS.md's "assert the ENGINE'S OWN RESULT" rule (task 029) meeting a subsystem whose
+   result is *pixels*. `layer5.width == 800` says the record was written. It says nothing
+   about what was drawn through it.
+2. **The three samplers could not fail.** They covered the HUD band, the top strip and the
+   right edge — all three outside the playfield. The damage was inside it. A sampler that
+   never looks where the damage is has no failure mode, however precise its percentages.
+
+So the suite now compares the **playfield interior** against the control frame row by row
+(`tools/plugin/frame-diff.py`), and that check was proved able to fail before it was trusted:
+pointed at the broken build it reported **184 of 190 rows bad and a median row match of 27%**.
+
+> **The noise-floor half of that sentence was wrong, and this is the correction.** It used to
+> read "calibrated against noise, which turns out to be zero: at stage 0 the two arms are
+> pixel-identical — median 1.000, no bad rows, black delta 0". Measured again at FULL
+> resolution, stage 0 — where both arms compose the identical 640x480 picture — differs by
+> **586 of 307200 pixels in seven isolated 32x32 blocks**. Animated map doodads, caught at
+> different phases, because the frame is grabbed by wall clock.
+>
+> The old reading came from comparing every SECOND pixel against a 90%-per-row threshold,
+> which a few hundred pixels cannot move. It is the same family as the three samplers above,
+> one level up: not a check looking in the wrong place, but a check too coarse to see what it
+> claimed. "Pixel-identical" was never available as a pass condition and was reported as met.
+>
+> **What replaces it is shape, because damage and animation separate cleanly there and not in
+> the count.** A wrong pitch damages whole ROWS across the whole width; animation differs in
+> isolated blobs and spans no row. `frame-diff.py` now reports, at full resolution, the
+> number of differing pixels, the 32x32 blocks they touch, and `wide_rows` — rows whose
+> differing pixels span more than half the region. The suite asserts on `wide_rows` and
+> reports the pixel count beside the measured noise floor.
+>
+> | | broken stage 1 | noise floor (stage 0) | stage 1 fixed | stage 2 |
+> | - | - | - | - | - |
+> | differing pixels of 307200 | 127k+ | 586 | 743 | 131944 |
+> | 32x32 blocks touched | 215 | 7 | 7 | 215 |
+> | **rows damaged across the width** | 163 of 190 | **0** | **0** | **332 of 380** |
+> | widest single-row diff span | 635px | 278px | 23px | 621px |
+>
+> `wide_rows` fired on a real broken build before it was ever trusted — stage 2 supplied the
+> positive control in the same suite on the same map, so no build had to be broken on purpose.
+
+The frames stay on the gitignored diagnostic path and are never committed (hard rule 1,
+AGENTS.md "Screenshots vs hard rule 1"); what crosses into this document is row indices and
+match percentages.
+
+### 12.3 How ~130 byte-patches were made reviewable
+
+There is no viewport variable to set (§9.2 reason 1), so the feature is instruction-operand
+rewrites. Three things carry the weight:
+
+1. **`tools/renderer_patch_sites.py` generates the table.** For each declared site it
+   disassembles the same `StarCraft.exe`, LOCATES the old value inside the instruction rather
+   than trusting a hand-counted offset, refuses a site whose bytes are not what this document
+   says, and emits the before/after disassembly beside every record.
+2. **`sc_screen.cpp` re-verifies every site in the live process and refuses the whole table on
+   the first mismatch** — `sc_hook.cpp`'s rule applied to data-sized patches. All-or-nothing
+   matters: a half-applied geometry does not fail, it corrupts.
+3. **It refuses to run late.** Every pitch describes a buffer allocated during startup, so the
+   plugin checks the framebuffer pointer (0x006CEFF4, zero until the video init runs) and
+   refuses if the game is already up.
+
+### 12.4 The four shapes an immediate sweep cannot see
+
+The most transferable finding here, and a permanent caveat on every immediate-sweep estimate
+this project makes. **A sweep for the literal 640 finds the sites that spell 640. It does not
+find the sites that compute it.**
+
+1. **A third copy of the video init.** 032 found two writers of the screen Bitmap descriptor.
+   There are three: `FUN_0041DDD0` allocates its own `0x4B000` buffer (0x0041DDD9) and
+   describes it at 0x0041DDDE/0x0041DDE7, with the same `vidinimo.cpp` file and line as
+   `FUN_004DB060`.
+2. **`x * 640` built as `lea r,[x+x*4]` + `shl r,7`.** Five, then a shift. Four sites in the
+   binary: the screen fill 0x0041D3E6, and three in fog — 0x0047EDD3, 0x0047EF3A, 0x00480635.
+   All four are framebuffer row addresses.
+3. **`t * 672` built as `(t<<9) + (t<<7) + (t<<5)`.** One site, 0x0040C275–0x0040C281, in the
+   full-playfield terrain blit `FUN_0040C253`. No 672 appears anywhere in that function, and
+   it positions every terrain row the non-dirty path draws.
+4. **A pitch held as `pitch − width`.** `FUN_0047EA60`, the shroud writer, does
+   `mov esi,0x280; sub esi,ebx` — the row step is the framebuffer pitch minus the run width,
+   and the constant never appears in an address computation at all.
+
+Point 4 survived longest, and its symptom is worth recording: shroud is drawn only at the
+EDGES of an explored map, so leaving it at the old pitch produced a broken frame around a
+perfectly intact centre. Damage in the middle of a picture is easy to see; damage at the
+border is exactly what a centre-weighted check misses.
+
+Points 2, 3 and 4 are also why the patch is possible at all: `imul r32,r/m32,imm8` is three
+bytes, exactly what `lea r,[c+c*4]` costs, so x5 becomes x25 in place; a SIB scale drops from
+8 to 2 for a 50-column stride; 832 is a sum of three powers of two just as 672 is; and
+800 = 25<<5 just as 640 = 5<<7. A target width that broke any of those would have needed code
+INSERTED, which this plugin's patcher cannot do.
+
+### 12.5 Two corrections to §9.3's own staging
+
+**Items 5 and 8 are not separable.** §9.3 puts the dirty grid in stage 1 and the terrain
+scratch surface in stage 2. They cannot be split, and the terrain blitter is why:
+`FUN_004BCDC0` walks the grid LINEARLY, advancing one byte per column and never re-basing per
+row, so its column count must equal the grid's stride. Widening the grid without widening the
+blitter's walk desynchronises them by (stride − columns) bytes every row.
+
+So stage 1 here is **the framebuffer pitch and nothing else** — every rectangle, clip, dirty
+bound and the grid itself stay stock, and the engine composes a 640-wide picture into an
+800-pitch buffer. That is a weaker stage than §9.3 imagined and a far more checkable one: its
+frame must be pixel-identical to the control's, which is a binary condition rather than a
+judgement.
+
+**And `lea` → `imul` is not a free swap.** `lea` leaves EFLAGS alone and `imul` does not. At
+three grid sites a `cmp`/`test` before the splice is consumed by a `jcc` after it —
+0x0041E15D (`cmp ecx,esi` … `jg`), 0x0042D2C9 (`cmp edi,eax` … `jg`) and 0x00497062
+(`test eax,eax` … `je`). The first is the dirty-block MARKER, so it branched on the multiply
+and whole bands of blocks were never marked dirty. The fix is a reorder inside the same byte
+count, with the flag setter last and the branch left at its own address so its rel8 is
+unchanged. **The generator now refuses this class outright**: if a replacement writes EFLAGS
+where the original did not, it walks forward and fails on the first reader.
+
+**And re-pointing a base pointer is not enough when the arithmetic AROUND it encodes the old
+stride.** This one showed up three times in three different syntactic shapes, none of which
+contains a base address to notice:
+
+| where | shape | what it really is |
+| ----- | ----- | ----------------- |
+| `FUN_0047EA60` | `mov esi,0x280; sub esi,ebx` | a framebuffer row step, held as pitch − run width |
+| 0x004B1FA0 | `lea ecx,[eax+eax*4-0x55]; shl ecx,3` | a byte COUNT, `40*(row-17)` |
+| 0x0048CB80 | `add ecx,0x28` | a walk step of one grid row |
+
+The relocation machinery re-points every instruction that NAMES the grid, and would have left
+all three of these alone — they name nothing. A stride is a number that describes a layout
+without pointing at it, which is exactly why a search for the layout's address cannot find it.
+
+**The consequence is the reason it matters: all three produce MISSED REDRAWS, not crashes.**
+A crash tells you. A block that is never marked dirty, or a row filled 40 bytes wide out of
+50, simply keeps whatever was there before — and that survives into a screenshot and reads as
+a rendering quirk. It is how the first round of this task produced a confident "the helper is
+just cropping" verdict out of a shredded frame. The family is *damage that renders*, and the
+defence is not more reading: it is the row-by-row interior diff of §12.2, calibrated against a
+control that is known to be pixel-identical.
+
+### 12.6 The presentation half — §10 item 2, answered
+
+**`WMode.dll` presents 640x480 whatever display mode it is asked for**, measured by
+`tools/plugin/probe-widescreen-present.ps1` in two arms through both vectors:
+
+| measurement | result |
+| ----------- | ------ |
+| client area, both arms, at 800x480 and at 800x600 | 640x480 |
+| HUD band, widescreen vs stock, sampled | 98.9% identical |
+| top strip | 100% identical |
+| rightmost non-black column, both arms | x=639 of 640 |
+
+Identical pixels rule out scaling — a 0.8x squeeze moves every HUD pixel — so the helper shows
+columns 0..639 at 1:1 and discards the rest. **800x600 does not rescue it**: the table was
+regenerated at that size and re-run, with the same verdict, so this is not "the mode is
+non-standard".
+
+**The other vector says nothing, and a control is what established that.** `WMode.dll` copied
+in as `ddraw.dll` (the `research/launch-baseline.md` recipe) brings up a "Direct Draw Error"
+box — and does so in the **stock arm too**, with the geometry unpatched. That vector is not
+working on this machine at present, in either arm, and is not evidence about widescreen.
+Reported without the second arm it would have been a wrong finding.
+
+**One presentation path is deliberately untested.** True fullscreen with no helper is the only
+route that could put 800 columns on a monitor, and it was not run unattended: it switches the
+user's 3840x2160 desktop to a small mode, and that rearranges desktop icons — live user state
+that does not come back when the mode does (hard rule 5).
+
+### 12.7 The measured bill, against §9.1's estimate
+
+§9.1 estimated "~60 instruction sites plus two fixed-size buffers plus two data assets" for
+ALL stages. For stages 0-2 alone:
+
+| | §9.1 estimate | measured |
+| - | ------------- | -------- |
+| instruction sites, stages 0-2 | ~60 for all stages | **166 declared, 153 written** |
+| — of those, stage 1 (framebuffer pitch alone) | — | **41 declared, 36 written** |
+| — of those, stage 2 (the playfield) | — | **121 declared, 115 written** |
+| of those, not in §8's table | — | **~44** |
+| distinct kinds of edit | "patch a constant" | 6: imm8/imm16/imm32, SIB scale, shift count, absolute address |
+| dirty-grid references to re-point | 62 instructions | **21** (see the §5 note) |
+| terrain-scratch sites | "immediates in this function" | **40 across 9 functions** |
+
+The estimate was low by **a factor of nearly three** on stages 0-2 alone, and wrong in shape:
+§9.1 assumed every site was an immediate. And the count kept growing under execution rather
+than converging — 140 sites when the first stage-1 build ran, 149 after a shape sweep, 164
+after the fog block writers, 166 after the scratch-writer pair. **Every increment came from a
+live run failing, never from re-reading.**
+
+### 12.8 Stage 1: fifteen sites a scan for the framebuffer POINTER cannot reach
+
+The first stage-1 build failed its own binary condition: **163 of 190 interior rows disagreed
+with the control**, and the block map named the cause immediately — a perfect rectangle in the
+middle with damage all around it. The explored area was pixel-perfect; everything under fog or
+shroud was wrong. Numerically, nothing was displaced: identity is the best mapping (0.63) and
+every stride-remap and vertical-squeeze hypothesis scores ~0.25.
+
+`FUN_00480600` draws fog in 8x8 blocks and hands a framebuffer pointer to one of three block
+writers. Two step with `add esi,640` and were declared. The third, `FUN_004800A0` (the
+fully-shrouded case), is UNROLLED and holds the pitch as **fourteen displacements** —
+`[ecx + k*640]` and `[ecx + k*640 + 4]` for k=1..7 — and the outer loop advances a block row
+with `add ecx,8*640` at 0x004806D0. Fifteen instructions, **of which exactly one spells 640**.
+
+**The rule this establishes, which is the one to carry forward.** The old enumeration was built
+by scanning `.text` for the framebuffer pointer 0x006CEFF4, and this document claimed that made
+it exhaustive. It does not:
+
+> **A routine that is HANDED a pointer writes through it without ever naming it.** An
+> enumeration built by scanning for a NAME — an address, a global, a symbol — covers only the
+> routines that mention it, never the callees they pass it to. `FUN_004800A0` sits 1405 bytes
+> from the nearest reference to the pointer it writes through.
+
+`tools/renderer_pitch_sweep.py` is the generalisation: sweep for `k*pitch + d`, not for the
+pitch. Two details are load-bearing:
+
+1. **searching multiples alone finds 7 of those 14 stores.** The `+4` twins — the second dword
+   of an 8-byte-wide block row — are not multiples of anything. Half a fix, in a subsystem
+   where half a fix renders.
+2. **capstone stops at the first byte it cannot decode**, and `.text` is full of int3 padding
+   and jump tables. The first version of the sweep covered about 3% of the section and printed
+   "nothing found". A sweep that scans 3% and reports zero is indistinguishable from a correct
+   all-clear.
+
+### 12.9 Stage 2: attempted, not reached — and what the bisect established
+
+Stage 2 applies cleanly (153 sites, 0 refused) and **the read-back is entirely green**: the
+framebuffer reads 800x480, the dialog layer 800x480, **layer 5 reads 800x400 at (0,0)** with
+its draw callback still 0x004BD580, and the HUD dialogs are byte-identical to the control's.
+The frame is wrecked: **332 of 380 rows damaged across the width, and 16-21 points more black
+than the control** — large areas never drawn, at playfield scale.
+
+Two fixes were attempted, and the second is recorded because it is instructive that it failed:
+the scratch-surface sweep (§12.7's +2) found two genuine undeclared row steps, they applied
+cleanly, and **the damage did not move**. A real defect that is not the defect.
+
+A group filter (`%SCPLUGIN_WS_ONLY%`) was then added to bisect the 121 sites. What it
+established, and what it deliberately does not:
+
+| build | sites | rows damaged across width | black delta |
+| ----- | ----- | ------------------------- | ----------- |
+| stage 1 only | 36 | 0 | 0.000 |
+| stage 2, whole | 153 | 332 | **+0.210** |
+| grid + dirty + terrain (the coupled core) | 126 | 331 | **+0.185** |
+| everything EXCEPT that core | 65 | 208 | +0.014 |
+| ditto, minus fog | 50 | 148 | +0.000 |
+
+**The black delta is the attributable signal, and it says the dominant defect is in the
+grid/terrain core.** The core alone reproduces the +0.19 "never drawn" component; every build
+without it collapses to ~0.
+
+**The banding in the last two rows is my subset's own artifact, not evidence.** Declaring the
+playfield 800 wide WITHOUT the dirty-rect clamps means `FUN_0041E0D0` still does
+`if (x1 > 0x27f) return` and rejects whole dirty rects outright, so those builds drop redraws
+by construction. The filter's source carries this warning and it applied to the reading of its
+own output — which is the honest form of a bisect over coupled sites.
+
+**So the real finding about stage 2 is structural: it does not decompose.** §12.5 established
+that items 5 and 8 cannot be separated; the bisect extends that to the whole stage. Every
+subset that excludes part of the geometry is incoherent in a way that predicts its own damage,
+so "which group is at fault" is not a well-formed question here. Stage 2 is one atomic change
+of ~121 sites, and it is not currently correct.
+
+### 12.10 The gating fact is presentation, not corruption
+
+**Every frame this task has ever captured shows only the LEFT 640 columns of an 800-wide
+composition** — `WMode.dll` presents 640x480 whatever it is asked for (§12.6), so the window is
+650x517 in both arms at every stage. The extra 160 columns have never been seen by anything, in
+any run.
+
+This reorders the whole problem. Even a perfectly rendering stage 2 would put **zero** new
+pixels on a monitor through the current launcher. The blocker was never "can the engine compose
+a wider frame" — it can, and the descriptor and every layer rect prove it — but **"can anything
+present one"**. The only route that could is true fullscreen with no helper, which switches the
+user's 3840x2160 desktop to a small mode and rearranges their desktop icons (hard rule 5), so
+it is a decision for the user rather than a step to take unattended.
+
+### 12.11 A negative result that is not over-read
+
+The same shape sweep was pointed at the dirty grid's row stride (40, anchored on 0x006CEFF8)
+and **the result is not usable**. 40 is small enough that its multiples are the whole binary:
+200, 320, 400 and 480 all match it, and every hit read by hand was the playfield HEIGHT, a
+struct field offset, or a dialog coordinate. It is recorded here as a bounded negative — the
+method works for 640 and 672 and does NOT work for 40 — rather than dropped, because a sweep
+whose hits are all noise looks exactly like a sweep with nothing to find.
+
+### 12.12 How to reproduce
+
+```powershell
+python tools/renderer_patch_sites.py --check          # every site verifies against the exe
+python tools/renderer_pitch_sweep.py                  # stride-shaped operands, undeclared ones flagged
+python tools/renderer_pitch_sweep.py --pitch 672 --anchor 0x00628454   # the scratch surface
+./tools/plugin/test-widescreen.ps1 -Stage 1           # two arms, frames compared row by row
+./tools/plugin/probe-widescreen-present.ps1 -Stage 0  # what the helper actually presents
+
+$env:SCPLUGIN_WS_ONLY = 'grid,dirty,terrain'          # bisect stage 2 by group (read the
+./tools/plugin/test-widescreen.ps1 -Stage 2           #   coupling warning in sc_screen.cpp)
+```
+
+The suite reads the target geometry out of the generated header, so regenerating at another
+size cannot leave it asserting the old numbers.
