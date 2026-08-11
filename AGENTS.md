@@ -388,11 +388,20 @@ queued behind it, one of them prepared to wait 90.
 
 Before `stop-agent.ps1`, ALWAYS:
 
-1. `Get-Process StarCraft` — if one is running, do not stop the agent yet.
+1. `Get-Process StarCraft` **in the same breath as the kill, not minutes
+   earlier**. A check from five minutes ago is worthless: the agent may have
+   started a run in between — and if you have just told it to GO, that is
+   exactly what it is doing. (2026-08-11: the conductor said GO, saw a stale
+   heartbeat, and stopped the agent four minutes later. The agent had received
+   the GO and launched at 11:04; the kill orphaned that game.)
 2. "Ready for merge" does NOT mean "idle". A worker may start verification
    runs after reporting. Ask it to confirm it is idle, or merge first and
    stop it when it acknowledges.
-3. After stopping, re-check for a surviving game and for a
+3. **A stale heartbeat does not mean deaf.** It means the agent's turn ended —
+   which is also what it looks like while a Monitor is armed and waiting. Before
+   concluding an agent is unresponsive, send it something and give it time to
+   answer; do not infer death from silence alone.
+4. After stopping, re-check for a surviving game and for a
    `C:\sc-work\logs\sc-launch.lock` naming a dead pid.
 
 Killing an orphan is allowed ONLY with positive proof it is orphaned — a
