@@ -26,6 +26,7 @@
 #include "sc_hook.h"
 #include "sc_hudrow.h"
 #include "sc_log.h"
+#include "sc_queueind.h"
 
 #define HUD_MAX 256
 
@@ -262,17 +263,43 @@ static DWORD FindChildById(DWORD root, short id) {
 // Shadow refresh + display list
 // ---------------------------------------------------------------------------
 
+// Is this engine-held unit one WE already know to be dead? Death is our own liveness
+// verdict (UnitAlive: uniqueness match + HP > 0) applied to the entry we captured, so a
+// unit we are not tracking counts as live -- it is a genuine difference and must be
+// allowed to diverge.
+static bool EngineSlotLive(DWORD unit) {
+    for (int i = 0; i < g_n; ++i) {
+        if (g_list[i].unit == unit) return g_alive[i] != 0;
+    }
+    return true;
+}
+
 // Does the engine's own client selection (clientSelectionGroup, 0x00597208,
 // walked to the sentinel 0x597238) still match the visible tail of our shadow
 // list, as a SET? The engine mutates clientSelectionGroup on death and on some
 // selection edits WITHOUT going through CMDACT_Select (so sc_fanout's version
 // counter would not move); comparing here catches those and snaps us to page 1.
+//
+// BOTH SIDES ARE FILTERED FOR LIVENESS, and that is the whole point of the function
+// rather than a detail (task 033, from the user's play-test: ">12 selected, some die, the
+// row shows only the survivors"). The engine zeroes hitPoints in its damage primitive
+// 0x004797B0 and clears the unit out of clientSelectionGroup on a LATER path, so for at
+// least one frame a dead unit is still IN the engine's list while our tail has already
+// dropped it. Comparing a live-filtered tail against an unfiltered engine list turned that
+// ordinary one-frame skew into "an engine-side removal", and since the divergence latch is
+// permanent until the next commit, one frame of it stranded the row on stock -- displaying
+// a page of corpses -- for the rest of the selection. Filtering both sides with the SAME
+// liveness test makes an ordinary death cancel out on both sides, and leaves the case the
+// latch actually exists for (a LIVE unit the engine dropped without a commit: transport
+// load, mind control, trigger RemoveUnit) still detected.
 static bool EngineSelectionMatchesVisible(void) {
     DWORD eng[SC_HUD_BUTTON_COUNT];
     int engN = 0;
     DWORD* slot = (DWORD*)Rt(SC_VA_CLIENT_SELECTION_GROUP);
     for (int i = 0; i < SC_HUD_BUTTON_COUNT; ++i) {
-        if (slot[i] && engN < SC_HUD_BUTTON_COUNT) eng[engN++] = slot[i];
+        if (slot[i] && EngineSlotLive(slot[i]) && engN < SC_HUD_BUTTON_COUNT) {
+            eng[engN++] = slot[i];
+        }
     }
     const int overflowN = g_n - g_vis;
     int visN = 0;
@@ -491,7 +518,14 @@ static void EnsureIndicator(DWORD root, DWORD firstBtn) {
         ib[0] = (short)(b[0] + 2);        // left
         ib[1] = (short)(b[1] + 1);        // top
         ib[2] = (short)(b[0] + 150);      // right
-        ib[3] = (short)(b[1] + 10);       // bottom
+        // Bottom, and this number is load-bearing rather than cosmetic. The engine's
+        // string draw (SC_VA_DRAW_STRING) refuses to draw AT ALL when
+        // `top + fontHeight > clip.bottom`, and the clip box is the control's own bounds
+        // (research/status-pane-text.md 3). This box used to be nine pixels tall, which is
+        // under the height of the font the SC_CTRL_FONT_SMALLEST bit selects -- so the
+        // indicator was spliced, its text was written, the module logged it, the suite
+        // asserted it out of the module's OWN BUFFER, and the player saw nothing. Task 033.
+        ib[3] = (short)(b[1] + 1 + SC_QIND_BOX_H);
         *(DWORD*)(ind + SC_BINDLG_OFF_FLAGS)    = SC_CTRL_FLAG_VISIBLE | SC_CTRL_FONT_SMALLEST;
         *(short*)(ind + SC_BINDLG_OFF_INDEX)    = (short)0xFFE0;   // negative: binder-proof
         *(WORD*) (ind + SC_BINDLG_OFF_TYPE)     = (WORD)SC_CTRL_TYPE_LSTATIC;
@@ -545,8 +579,32 @@ static void LogReadback(DWORD firstBtn) {
         used += _snprintf(buf + used, (size_t)room, "%s%04X", shown ? " " : "", tag);
         ++shown;
     }
-    ScLog("HUDROW show n=%d page=%d/%d slots=%d [%s] indicator=\"%s\"",
-          g_dispN, g_page + 1, g_pageCount, shown, buf, g_indText);
+    // The indicator, read back the same way -- out of the CONTROL, not out of g_indText.
+    // The difference matters: printing our own buffer says what the module INTENDED, which
+    // is exactly the self-echo AGENTS.md's "assert the engine's own result" rule is about,
+    // and it is what let a nine-pixel-tall (i.e. never drawn) indicator pass for weeks.
+    // `ink` counts non-background bytes the engine left in the dialog's own surface inside
+    // that control's rect: it cannot say WHAT was drawn -- the text field above does that
+    // -- but it is the only thing here that can say anything was drawn at all.
+    DWORD ind = (DWORD)&g_indCtrl[0];
+    bool linked = false;
+    for (DWORD c = ChildOf(g_dialog); c && !linked; c = NextOf(c)) if (c == ind) linked = true;
+    const char* live = "";
+    int ink = -1;
+    DWORD flags = 0;
+    short* ib = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
+    if (linked) {
+        flags = *(DWORD*)(ind + SC_BINDLG_OFF_FLAGS);
+        DWORD p = *(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
+        if (Readable(p, 1)) live = (const char*)p;
+        ink = ScQueueIndSurfaceInk(g_dialog, ib[0], ib[1], ib[2], ib[3]);
+    }
+
+    ScLog("HUDROW show n=%d page=%d/%d slots=%d [%s] indicator=\"%s\" indLinked=%d "
+          "indVisible=%d indBounds=(%d,%d,%d,%d) indInk=%d",
+          g_dispN, g_page + 1, g_pageCount, shown, buf, live, linked ? 1 : 0,
+          (flags & SC_CTRL_FLAG_VISIBLE) ? 1 : 0,
+          linked ? ib[0] : 0, linked ? ib[1] : 0, linked ? ib[2] : 0, linked ? ib[3] : 0, ink);
 }
 
 // Where the buttons are, so an automated test can aim a right-click at one --

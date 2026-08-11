@@ -90,8 +90,14 @@ function Get-HudShow {
     param([int]$FromLine, [int]$TimeoutSec = 15)
     $hits = @(Wait-ScLogMatch -LogPath $LogPath -FromLine $FromLine -TimeoutSec $TimeoutSec `
         -Pattern 'HUDROW show n=\d+ page=\d+/\d+ slots=\d+')
+    # Task 033 widened this line. `Indicator` is now read through the CONTROL's own
+    # pszText pointer rather than printed from the module's buffer, and the four fields
+    # after it are what say the player can actually SEE it: linked into the dialog's child
+    # chain, the engine's own visible bit, the box, and the ink the engine's text routine
+    # left in the dialog surface inside that box.
     $m = [regex]::Match($hits[-1],
-        'HUDROW show n=(\d+) page=(\d+)/(\d+) slots=(\d+) \[([0-9A-F ]*)\] indicator="([^"]*)"')
+        'HUDROW show n=(\d+) page=(\d+)/(\d+) slots=(\d+) \[([0-9A-F ]*)\] indicator="([^"]*)" ' +
+        'indLinked=(\d+) indVisible=(\d+) indBounds=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\) indInk=(-?\d+)')
     if (-not $m.Success) { throw "test: unparseable HUDROW show line: $($hits[-1])" }
     @{
         N         = [int]$m.Groups[1].Value
@@ -100,6 +106,11 @@ function Get-HudShow {
         Slots     = [int]$m.Groups[4].Value
         Tags      = @($m.Groups[5].Value -split ' ' | Where-Object { $_ })
         Indicator = $m.Groups[6].Value
+        IndLinked = $m.Groups[7].Value -eq '1'
+        IndVisible= $m.Groups[8].Value -eq '1'
+        IndBox    = @([int]$m.Groups[9].Value, [int]$m.Groups[10].Value,
+                      [int]$m.Groups[11].Value, [int]$m.Groups[12].Value)
+        IndInk    = [int]$m.Groups[13].Value
         Line      = $hits[-1]
     }
 }
@@ -286,6 +297,16 @@ try {
         Assert-That 'the indicator text changed across the flip' `
             ($p2.Indicator -ne $page1.Indicator -and $p2.Indicator -match '13-24' -and $p2.Indicator -match '\(2/3\)') `
             "(page1='$($page1.Indicator)' page2='$($p2.Indicator)')"
+        # TASK 033. Everything above reads a STRING; none of it says the player can see it.
+        # This suite asserted that string out of the module's own buffer until now, and the
+        # indicator has been nine pixels tall since task 017 -- shorter than the font, which
+        # makes the engine's text routine return without drawing anything at all. So: the
+        # string is now read back through the CONTROL's pszText, and the three assertions
+        # below are the ones that would have caught it.
+        Assert-That 'the indicator control is linked into the status dialog' ($p2.IndLinked)
+        Assert-That "and the ENGINE's own visible bit is set on it" ($p2.IndVisible)
+        Assert-That "and the engine DREW it: ink=$($p2.IndInk) inside ($($p2.IndBox -join ','))" `
+            ($p2.IndInk -gt 0)
         Write-Host "       $($p2.Line)"
         $script:page2 = $p2
 
