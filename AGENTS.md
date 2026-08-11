@@ -79,6 +79,23 @@ the right number of items. And where a plugin evaluates an engine predicate on t
 behalf, evaluate it in the state the action will ACTUALLY run in, not the state you are in
 when you ask.
 
+**The UI shape of this, 2026-08-11, task 033: a read-back of your own buffer is not a
+read-back.** `sc_hudrow` spliced a page indicator, wrote `"36 units 13-24 (2/3)"` into it, and
+`test-hud-row.ps1` asserted that string — out of the module's own buffer. Green for weeks, and
+NOTHING WAS EVER DRAWN: the engine's string draw refuses when `top + fontHeight > clip.bottom`
+and the control's box was nine pixels tall. The user found it by asking how to page. The fix
+for the ORACLE is to count what the engine actually left behind — task 033 counts non-background
+bytes (`ink`) in the dialog's own 8-bit surface inside the control's bounds, with the same count
+over a known-drawn control as the positive control, so `ink=0` cannot be confused with a blind
+probe. That is a read-back; asking your own buffer what you put in it is not.
+
+**And a check that fails at RANDOM is worth as little as one that cannot fail** (same task): the
+fifth-icon assertion passed one run and failed the next because the observer thread sampled
+between the plugin filling a slot and the engine's layout re-greying it, microseconds later,
+inside one driver call — invisible to the player, who only ever sees the frame. Both times the
+fix was to ask the thread that OWNS the data: snapshot on the game thread at end of frame for
+frame state, keep the async walk for the building's own memory, which the frame path never writes.
+
 ## Your DIAGNOSTICS are under the same rule as your assertions (2026-08-10, task 030)
 
 The "a check that cannot fail is worth nothing" rule applies to the lines you print while
