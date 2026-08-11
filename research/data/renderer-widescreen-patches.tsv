@@ -82,6 +82,10 @@ stage	va	len	changed	name	before	after	expect	patch	note
 2	0x0040C402	6	1	terrain.pitch@0040C402	add edx, 0x2a0	add edx, 0x340	81C2A0020000	81C240030000	scratch writer (8-pixel run): row step
 2	0x0040C44C	6	1	terrain.pitch@0040C44C	add edx, 0x2a0	add edx, 0x340	81C2A0020000	81C240030000	scratch writer (8-pixel run): row step
 2	0x004BCDD1	6	1	terrain.pitch@004BCDD1	imul eax, eax, 0x2a0	imul eax, eax, 0x340	69C0A0020000	69C040030000	terrain blitter: screenTop * pitch
+2	0x0049BC51	6	1	terrain.pitch@0049BC51	imul eax, eax, 0x2a0	imul eax, eax, 0x340	69C0A0020000	69C040030000	scroll: row * terrain pitch
+2	0x0049BD70	6	1	terrain.pitch@0049BD70	imul eax, eax, 0x2a0	imul eax, eax, 0x340	69C0A0020000	69C040030000	scroll: row * terrain pitch
+2	0x0049BE2C	6	1	terrain.pitch@0049BE2C	imul edi, edi, 0x2a0	imul edi, edi, 0x340	69FFA0020000	69FF40030000	scroll: row * terrain pitch
+2	0x0049C7A8	6	1	terrain.pitch@0049C7A8	imul eax, eax, 0x2a0	imul eax, eax, 0x340	69C0A0020000	69C040030000	scroll: row * terrain pitch
 2	0x0040C27E	3	1	terrain.pitch.shift.b	shl ebx, 7	shl ebx, 8	C1E307	C1E308	0x0040C253: shl ebx,7 -> shl ebx,8 (the 128 term becomes 256)
 2	0x0040C281	3	1	terrain.pitch.shift.c	shl ecx, 5	shl ecx, 6	C1E105	C1E106	0x0040C253: shl ecx,5 -> shl ecx,6 (the 32 term becomes 64)
 2	0x0040AAF0	6	1	terrain.wrap@0040AAF0	add esi, 0x49800	add esi, 0x5b000	81C600980400	81C600B00500	terrain writer: end-of-surface pointer

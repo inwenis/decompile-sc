@@ -407,12 +407,12 @@ That is **~60 instruction sites plus two fixed-size buffers plus two data assets
 
 ### 9.2 Verdict: NO-GO on 1.16.1, at this project's price point
 
-> **Task 034 executed 9.3 stages 0-2 and this verdict did not survive contact.** The engine
-> half is done: a live game composes an 800×480 frame and draws an 800×400 playfield into
-> it, with every HUD dialog at its stock coordinates. What stops a human seeing it is not
-> the engine at all — it is the windowed-mode helper, which presents 640 columns whatever
-> it is asked for. **Read §12 before this section**; the paragraphs below are 032's estimate,
-> kept because the difference between them and the measurement is the finding.
+> **Task 034 is executing 9.3 stages 0-2. Read §12 before this section** — the estimate
+> below has been replaced by a measurement, and the measurement is larger and a different
+> shape. What 032 could not know is that a read-back is not sufficient here: the layer
+> rectangle and the framebuffer descriptor can all report the new size over a visibly
+> broken frame, because those are the plugin's bookkeeping and the frame is the engine's
+> result. §12.4 is the part worth reading even if the feature never lands.
 
 Stated plainly, because the task explicitly allows this answer and it is the honest one:
 
@@ -513,3 +513,180 @@ kind of claim this project has been burned by before. It earned its keep on the 
 small way: the two-arm design is what turns "layer 5 is 640x400" into "layer 5 is the
 playfield", and the parked layer 1 at `(640,400)` confirmed a reading of two `MOV`s that would
 otherwise have been an inference.
+
+## 12. Task 034 — executing §9.3, stages 0-2
+
+§9.3 was a plan nobody had run. This section is what running it taught. The most useful part
+is not the site count: it is that **the read-back this project trusts was not sufficient
+here**, and §12.2 is the account of how that was found out.
+
+### 12.1 The target, and why 800x480 rather than 800x600
+
+§9.3 suggested 800x600. 800x480 is strictly cheaper and looks better:
+
+- the height stays 480, so the console stays exactly where it is (y=400..479) and **every
+  480/400/479/399 immediate in §8 is left alone** — 13 of the declared sites are already
+  correct at this geometry and are verified but never written;
+- the dead space is one 160x80 block beside the console rather than an L-shape;
+- 5:3 is closer to a 16:9 monitor than 4:3 is.
+
+The generator is parametric, and the whole table was regenerated at 800x600 as an experiment
+(§12.6), so this is a configuration and not a fork.
+
+### 12.2 The read-back said 800x400 over a shredded frame
+
+The first build that ran end to end passed seventeen assertions. The framebuffer descriptor
+read 800x480. Layer 5 read 800x400 at (0,0). Every HUD dialog rectangle was byte-identical to
+the control arm's. Three independent pixel samplers — the HUD band, the top strip, and the
+rightmost non-black column — agreed to 98.9%.
+
+The frame was visibly wrecked: horizontal bands across the playfield, terrain displaced in
+strips, the shroud edge stepped instead of smooth. A human opened the capture and saw it in
+one glance.
+
+Every number above is true. The conclusion drawn from them was false, for two reasons worth
+separating:
+
+1. **A layer rectangle is the plugin's bookkeeping, not the engine's result.** This is
+   AGENTS.md's "assert the ENGINE'S OWN RESULT" rule (task 029) meeting a subsystem whose
+   result is *pixels*. `layer5.width == 800` says the record was written. It says nothing
+   about what was drawn through it.
+2. **The three samplers could not fail.** They covered the HUD band, the top strip and the
+   right edge — all three outside the playfield. The damage was inside it. A sampler that
+   never looks where the damage is has no failure mode, however precise its percentages.
+
+So the suite now compares the **playfield interior** against the control frame row by row
+(`tools/plugin/frame-diff.py`), and that check was proved able to fail before it was trusted:
+pointed at the broken build it reported **184 of 190 rows bad and a median row match of 27%**.
+It was also calibrated against noise, which turns out to be zero: **at stage 0 the two arms
+are pixel-identical** — median 1.000, no bad rows, black delta 0 — so the game is
+deterministic across runs here, and any disagreement is damage rather than timing.
+
+The frames stay on the gitignored diagnostic path and are never committed (hard rule 1,
+AGENTS.md "Screenshots vs hard rule 1"); what crosses into this document is row indices and
+match percentages.
+
+### 12.3 How ~130 byte-patches were made reviewable
+
+There is no viewport variable to set (§9.2 reason 1), so the feature is instruction-operand
+rewrites. Three things carry the weight:
+
+1. **`tools/renderer_patch_sites.py` generates the table.** For each declared site it
+   disassembles the same `StarCraft.exe`, LOCATES the old value inside the instruction rather
+   than trusting a hand-counted offset, refuses a site whose bytes are not what this document
+   says, and emits the before/after disassembly beside every record.
+2. **`sc_screen.cpp` re-verifies every site in the live process and refuses the whole table on
+   the first mismatch** — `sc_hook.cpp`'s rule applied to data-sized patches. All-or-nothing
+   matters: a half-applied geometry does not fail, it corrupts.
+3. **It refuses to run late.** Every pitch describes a buffer allocated during startup, so the
+   plugin checks the framebuffer pointer (0x006CEFF4, zero until the video init runs) and
+   refuses if the game is already up.
+
+### 12.4 The four shapes an immediate sweep cannot see
+
+The most transferable finding here, and a permanent caveat on every immediate-sweep estimate
+this project makes. **A sweep for the literal 640 finds the sites that spell 640. It does not
+find the sites that compute it.**
+
+1. **A third copy of the video init.** 032 found two writers of the screen Bitmap descriptor.
+   There are three: `FUN_0041DDD0` allocates its own `0x4B000` buffer (0x0041DDD9) and
+   describes it at 0x0041DDDE/0x0041DDE7, with the same `vidinimo.cpp` file and line as
+   `FUN_004DB060`.
+2. **`x * 640` built as `lea r,[x+x*4]` + `shl r,7`.** Five, then a shift. Four sites in the
+   binary: the screen fill 0x0041D3E6, and three in fog — 0x0047EDD3, 0x0047EF3A, 0x00480635.
+   All four are framebuffer row addresses.
+3. **`t * 672` built as `(t<<9) + (t<<7) + (t<<5)`.** One site, 0x0040C275–0x0040C281, in the
+   full-playfield terrain blit `FUN_0040C253`. No 672 appears anywhere in that function, and
+   it positions every terrain row the non-dirty path draws.
+4. **A pitch held as `pitch − width`.** `FUN_0047EA60`, the shroud writer, does
+   `mov esi,0x280; sub esi,ebx` — the row step is the framebuffer pitch minus the run width,
+   and the constant never appears in an address computation at all.
+
+Point 4 survived longest, and its symptom is worth recording: shroud is drawn only at the
+EDGES of an explored map, so leaving it at the old pitch produced a broken frame around a
+perfectly intact centre. Damage in the middle of a picture is easy to see; damage at the
+border is exactly what a centre-weighted check misses.
+
+Points 2, 3 and 4 are also why the patch is possible at all: `imul r32,r/m32,imm8` is three
+bytes, exactly what `lea r,[c+c*4]` costs, so x5 becomes x25 in place; a SIB scale drops from
+8 to 2 for a 50-column stride; 832 is a sum of three powers of two just as 672 is; and
+800 = 25<<5 just as 640 = 5<<7. A target width that broke any of those would have needed code
+INSERTED, which this plugin's patcher cannot do.
+
+### 12.5 Two corrections to §9.3's own staging
+
+**Items 5 and 8 are not separable.** §9.3 puts the dirty grid in stage 1 and the terrain
+scratch surface in stage 2. They cannot be split, and the terrain blitter is why:
+`FUN_004BCDC0` walks the grid LINEARLY, advancing one byte per column and never re-basing per
+row, so its column count must equal the grid's stride. Widening the grid without widening the
+blitter's walk desynchronises them by (stride − columns) bytes every row.
+
+So stage 1 here is **the framebuffer pitch and nothing else** — every rectangle, clip, dirty
+bound and the grid itself stay stock, and the engine composes a 640-wide picture into an
+800-pitch buffer. That is a weaker stage than §9.3 imagined and a far more checkable one: its
+frame must be pixel-identical to the control's, which is a binary condition rather than a
+judgement.
+
+**And `lea` → `imul` is not a free swap.** `lea` leaves EFLAGS alone and `imul` does not. At
+three grid sites a `cmp`/`test` before the splice is consumed by a `jcc` after it —
+0x0041E15D (`cmp ecx,esi` … `jg`), 0x0042D2C9 (`cmp edi,eax` … `jg`) and 0x00497062
+(`test eax,eax` … `je`). The first is the dirty-block MARKER, so it branched on the multiply
+and whole bands of blocks were never marked dirty. The fix is a reorder inside the same byte
+count, with the flag setter last and the branch left at its own address so its rel8 is
+unchanged. **The generator now refuses this class outright**: if a replacement writes EFLAGS
+where the original did not, it walks forward and fails on the first reader.
+
+### 12.6 The presentation half — §10 item 2, answered
+
+**`WMode.dll` presents 640x480 whatever display mode it is asked for**, measured by
+`tools/plugin/probe-widescreen-present.ps1` in two arms through both vectors:
+
+| measurement | result |
+| ----------- | ------ |
+| client area, both arms, at 800x480 and at 800x600 | 640x480 |
+| HUD band, widescreen vs stock, sampled | 98.9% identical |
+| top strip | 100% identical |
+| rightmost non-black column, both arms | x=639 of 640 |
+
+Identical pixels rule out scaling — a 0.8x squeeze moves every HUD pixel — so the helper shows
+columns 0..639 at 1:1 and discards the rest. **800x600 does not rescue it**: the table was
+regenerated at that size and re-run, with the same verdict, so this is not "the mode is
+non-standard".
+
+**The other vector says nothing, and a control is what established that.** `WMode.dll` copied
+in as `ddraw.dll` (the `research/launch-baseline.md` recipe) brings up a "Direct Draw Error"
+box — and does so in the **stock arm too**, with the geometry unpatched. That vector is not
+working on this machine at present, in either arm, and is not evidence about widescreen.
+Reported without the second arm it would have been a wrong finding.
+
+**One presentation path is deliberately untested.** True fullscreen with no helper is the only
+route that could put 800 columns on a monitor, and it was not run unattended: it switches the
+user's 3840x2160 desktop to a small mode, and that rearranges desktop icons — live user state
+that does not come back when the mode does (hard rule 5).
+
+### 12.7 The measured bill, against §9.1's estimate
+
+§9.1 estimated "~60 instruction sites plus two fixed-size buffers plus two data assets" for
+ALL stages. For stages 0-2 alone:
+
+| | §9.1 estimate | measured |
+| - | ------------- | -------- |
+| instruction sites, stages 0-2 | ~60 for all stages | **140 declared, 127 written** |
+| of those, not in §8's table | — | **~27** |
+| distinct kinds of edit | "patch a constant" | 6: imm8/imm16/imm32, SIB scale, shift count, absolute address |
+| dirty-grid references to re-point | 62 instructions | **21** (see the §5 note) |
+| terrain-scratch sites | "immediates in this function" | **38 across 9 functions** |
+
+The estimate was low by about a factor of two on stages 0-2 alone, and wrong in shape: §9.1
+assumed every site was an immediate.
+
+### 12.8 How to reproduce
+
+```powershell
+python tools/renderer_patch_sites.py --check          # every site verifies against the exe
+./tools/plugin/test-widescreen.ps1 -Stage 1           # two arms, frames compared row by row
+./tools/plugin/probe-widescreen-present.ps1 -Stage 0  # what the helper actually presents
+```
+
+The suite reads the target geometry out of the generated header, so regenerating at another
+size cannot leave it asserting the old numbers.

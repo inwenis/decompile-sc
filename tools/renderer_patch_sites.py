@@ -655,6 +655,14 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
         (0x0040C402, "scratch writer (8-pixel run): row step"),
         (0x0040C44C, "scratch writer (8-pixel run): row step"),
         (0x004BCDD1, "terrain blitter: screenTop * pitch"),
+        # Four more of the same multiply in the scroll band. The first sweep for
+        # 0x2A0 truncated its output before these; a second pass with a general
+        # multiplier dataflow (work/scratch/034/scan_mul2.py) found them by shape
+        # rather than by immediate, which is why they are here and not lost.
+        (0x0049BC51, "scroll: row * terrain pitch"),
+        (0x0049BD70, "scroll: row * terrain pitch"),
+        (0x0049BE2C, "scroll: row * terrain pitch"),
+        (0x0049C7A8, "scroll: row * terrain pitch"),
     ]:
         b.imm(va, STOCK_TERRAIN_PITCH, TERRAIN_PITCH, 4,
               "terrain.pitch@%08X" % va, 2, note)
