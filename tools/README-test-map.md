@@ -524,6 +524,125 @@ suggested otherwise.)
     -OutputPath 'C:\sc-work\1161-base\Maps\BroodWar\00-t028\production-queue.scx'
 ```
 
+## Unit settings — `-UnitBuildTime` and friends (task 031)
+
+A Use Map Settings map may override, **per unit type**, its hit points, shield points, armor,
+build time, mineral cost and gas cost. Task 031 wanted one of those and measured why first:
+`test-production-queue` spends the large majority of its wall clock waiting for its queue of
+Probes to build, at 20 game seconds each. Nothing else in that suite comes close.
+
+```powershell
+# a Probe takes 8 game seconds on this map instead of 20
+./tools/make-test-map.ps1 -UnitCount 2 -UnitType nexus -Player 0 -Race protoss `
+    -ClearPlayerUnits -GridSpacing 160 -StartingMinerals 3000 `
+    -UnitBuildTime 'probe=8' -OutputPath '...\production-queue.scx'
+```
+
+Each flag is `TYPE=VALUE` and repeatable: `-UnitBuildTime` (GAME seconds), `-UnitMaxHp`,
+`-UnitShields`, `-UnitArmor`, `-UnitMineralCost`, `-UnitGasCost`. They are **opt-in**: pass none
+and the generator's output is byte-identical to what it produced before task 031 — verified by
+generating the same fixture with the previous version of the generator and this one and comparing
+the CHK bytes, which is what let this land while other tasks were mid-run against the same tool.
+
+### The section is `UNIx`, and that was proved in a running game
+
+The task said not to assume it. Four things say so, and only the last could have contradicted the
+others:
+
+1. **The Brood War template has no `UNIS` at all.** `(2)Fading Realm.scx` carries `UNIx` (4168
+   bytes), `PTEx`, `UPGx` and `TECx`, and none of `UNIS`/`PTEC`/`UPGS`/`TECS`/`UPGR`.
+2. **The engine's own section tables.** `StarCraft.exe` holds three CHK section-application plans
+   at `.rdata` `0x500560`, `0x500588` and `0x5005B0`, each a run of `{table, count}` pairs. The
+   Brood War plan points at the 15-entry table at **`0x5004A8`**:
+   `STR MTXM THG2 MASK UNIx UPGx TECx PUNI PUPx PTEx UNIT UPRP MRGN TRIG COLR`. **There is no
+   `UNIS` entry in it.** The other two plans list both, with `UNIx` *after* `UNIS`, so it wins
+   there too.
+3. **That table is checkable against something already known.** It gives `PTEx -> 0x004CB7D0`,
+   the exact applier address task 026 verified independently against a running game
+   (`research/command-card.md` §6).
+4. **A running game broke the tie.** `tools/plugin/probe-unit-settings.ps1` builds ONE map on
+   which the two sections disagree — `UNIx` says a Marine has 25 hit points, an added `UNIS`
+   decoy says 12, `units.dat` says 40 — loads it, and reads `hp` out of `CUnit+0x08`. The decoy is
+   **appended as the last chunk in the file**, so `UNIS` holds the file-order advantage and has to
+   lose on its own. Result, 2026-08-10: `hp values seen: 6400`, i.e. 25 hit points on every one of
+   them. **UNIx.** A "neither" answer (10240) was reachable and would have sunk the approach.
+
+This is the discipline task 026 wrote down after `make_test_map.py` wrote `PTEx` tech-major and
+read it back tech-major and confirmed its own mistake: **check a fixture in the engine's memory,
+not in the generator's read-back.** `validate_map` still re-reads `UNIx` out of the finished file
+and prints every field of every touched unit — including `usesDefault`, which is the byte that
+decides whether *any* override is read at all — but that is a check on the bytes, not on the game.
+
+### The layout, and why it is a reading rather than a guess
+
+228 units, 130 weapons, and the arrays in this order:
+
+| array | offset | width | note |
+| --- | --- | --- | --- |
+| `usesDefault` | 0 | u8 | **1 = ignore everything below for that unit** |
+| `hitPoints` | 228 | u32 | stored ×256, the same fixed point as `CUnit+0x08` |
+| `shieldPoints` | 1140 | u16 | |
+| `armor` | 1596 | u8 | |
+| `buildTime` | 1824 | u16 | **stored ×15 — the flags take GAME seconds** |
+| `mineralCost` | 2280 | u16 | |
+| `gasCost` | 2736 | u16 | |
+| `stringNumber` | 3192 | u16 | |
+| `baseWeaponDamage` | 3648 | u16[130] | indexed by WEAPON, so no `--unit-` flag writes it |
+| `upgradeBonusDamage` | 3908 | u16[130] | |
+
+`228 + 912 + 456 + 228 + 456 + 456 + 456 + 456 + 260 + 260 == 4168`, exactly the section's size on
+disk. And decoding the template with it returns the real, checkable stats of every unit anyone can
+verify by hand — Marine 40 hp / 24 s / 50 minerals, SCV 60 / 20 / 50, Probe 20 / 20 / 50, Nexus
+750 / 120 / 400, Command Center 1500 / 120 / 400, Supply Depot 500 / 40 / 100, Barracks
+1000 / 80 / 150. Five units agreeing on one divisor is what makes ×15 a unit rather than a
+coincidence. Pinned in `tests/make-test-map.Tests.ps1`.
+
+### Which knob is safe where
+
+**Build time is setup; hit points are usually the measurement.** That is the whole of it.
+
+- **`-UnitBuildTime` is safe almost everywhere.** It changes how long a suite *waits*, not what it
+  asserts. The one thing it can break is an assertion that depends on nothing finishing during a
+  window — `test-production-queue` counts the Train commands that reach the wire, and a unit
+  completing mid-burst would free a slot and let a tenth command out. Measured on the SCV version
+  of that suite before task 028 turned it Protoss: at **1** game second all twelve clicks reached
+  the wire and the suite reported **21 failures**. So its build time is 8 game seconds against a
+  burst of about three, and the burst step now **asserts** that nothing was promoted, so the
+  assumption fails loudly instead of the queue being blamed.
+- **`-UnitMaxHp` / `-UnitShields` / `-UnitArmor` must not go near a suite that measures combat or
+  liveness** — `test-combat-death`, `test-ability-in-combat`, `test-sunken-acquire`, and
+  `test-building-groups`'s combat arm. Task 026 lost a run to a target dying inside a two-second
+  measurement window, producing bit-for-bit the signature the experiment was hunting, and it then
+  went the *other* way on purpose (Command Centers at 1500 hp instead of Supply Depots at 500). To
+  start the placed units damaged, use `-UnitHp`, which is a percentage of an unchanged maximum and
+  touches no unit type.
+- **`-UnitMineralCost` / `-UnitGasCost` save no time at all** — nothing in any suite waits on a
+  resource — and they break any suite whose assertions do the arithmetic
+  (`test-production-queue` reconciles every mineral against the commands it accepted). Only with
+  that suite changed in the same commit.
+
+### What it does not do
+
+`UNIS` is deliberately **not** written, and a template without a `UNIx` section is refused with the
+reason rather than falling back: on a map the engine treats as Brood War, a `UNIS` override is
+never applied, so the fallback would produce a file that looks right and does nothing — the exact
+shape of the `PTEx` bug. A build time of **0** is refused too: nothing here has observed what the
+engine's production tick does with it, and 1 game second (~0.7 real seconds, measured) is already
+as fast as a fixture needs.
+
+Supply cost is not in this section and cannot be overridden here (it lives in `units.dat`), which
+is worth knowing: the probe's own first run put 12 one-supply Marines on a map whose only Command
+Center supplies 10, and the SCV it trained never appeared even though the Train command was on the
+wire.
+
+And a trap that is not about this section at all, but which a faster build time makes much easier
+to hit: **a unit still being trained is already linked into the player's unit list.** From one
+run's log, the same type before and after: `type=0x007 hp=13484 flags=0x00130000` and
+`type=0x007 hp=15360 flags=0x00130001` — hit points ramping up towards the SCV's 60 with the
+completed bit (`SC_UNIT_FLAG_COMPLETED`, `0x01`) clear, then set at maximum. So counting units of a
+type out of that list answers "how many exist", not "how many have been built", and a test that
+treats the two as the same reads a unit that does not exist yet. That cost task 031 a run.
+
 ## Known limitations
 
 - Unit placement is a simple grid centred on the start location's pixel

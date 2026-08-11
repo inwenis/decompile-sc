@@ -92,7 +92,30 @@ param(
     # and Use Map Settings hands out none, so without this a producing building can
     # afford roughly one unit. Cannot be combined with -KeepTriggers.
     [int]$StartingMinerals,
-    [int]$StartingGas
+    [int]$StartingGas,
+    # --- unit settings, the map's own UNIx override (task 031) -------------------
+    # Per-unit-TYPE overrides for this map only, each 'TYPE=VALUE' and repeatable.
+    #
+    # -UnitBuildTime is the fixture speed-up and the only one of these that is safe
+    # nearly everywhere: build time is SETUP, not measurement. `test-production-queue`
+    # spent 153 of its 224 seconds waiting for nine SCVs at 20 game seconds each;
+    # 'scv=1' deletes that term and changes nothing the suite asserts on.
+    #
+    # -UnitMaxHp / -UnitShields / -UnitArmor change how long a FIGHT takes, so they are
+    # dangerous in any suite that measures combat or liveness -- task 026 lost a run to a
+    # target dying inside a measurement window and producing exactly the signature the
+    # experiment was hunting. For "start the placed units damaged" use -UnitHp, which is a
+    # percentage of an unchanged maximum.
+    #
+    # -UnitMineralCost / -UnitGasCost save no time at all (nothing waits on a resource)
+    # and break any suite whose assertions do the arithmetic -- `test-production-queue`
+    # asserts 2550 = 3000 - 9 x 50. Only with that suite updated in the same change.
+    [string[]]$UnitBuildTime = @(),
+    [string[]]$UnitMaxHp = @(),
+    [string[]]$UnitShields = @(),
+    [string[]]$UnitArmor = @(),
+    [string[]]$UnitMineralCost = @(),
+    [string[]]$UnitGasCost = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -142,6 +165,15 @@ foreach ($t in $TechResearched) { $pyArgs += @('--tech-researched', $t) }
 # it", same as the enemy offsets above.
 if ($PSBoundParameters.ContainsKey('StartingMinerals')) { $pyArgs += @('--starting-minerals', $StartingMinerals) }
 if ($PSBoundParameters.ContainsKey('StartingGas')) { $pyArgs += @('--starting-gas', $StartingGas) }
+# Empty by default, so a caller that passes none of these produces byte-identical output
+# to before task 031 -- which is what let this land while three other tasks were mid-run
+# against the same generator.
+foreach ($s in $UnitBuildTime)    { $pyArgs += @('--unit-build-time', $s) }
+foreach ($s in $UnitMaxHp)        { $pyArgs += @('--unit-max-hp', $s) }
+foreach ($s in $UnitShields)      { $pyArgs += @('--unit-shields', $s) }
+foreach ($s in $UnitArmor)        { $pyArgs += @('--unit-armor', $s) }
+foreach ($s in $UnitMineralCost)  { $pyArgs += @('--unit-mineral-cost', $s) }
+foreach ($s in $UnitGasCost)      { $pyArgs += @('--unit-gas-cost', $s) }
 
 & $python @pyArgs
 exit $LASTEXITCODE

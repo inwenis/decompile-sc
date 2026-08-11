@@ -36,7 +36,14 @@ BeforeAll {
         ) -join "`n"
         $out = & $script:Python -c "$prelude`n$Snippet" 2>&1
         if ($LASTEXITCODE -ne 0) { throw "python failed: $out" }
-        ($out | Out-String).Trim()
+        # richchk's StormLib loader writes a warning to stderr on every archive it opens.
+        # Dropped by name, and only by name, so a snippet that really fails still arrives
+        # whole -- the exit-code check above happens first and carries the full output.
+        $out = @($out | Where-Object { "$_" -notmatch 'StormLibFinder' })
+        # Normalised to LF: Out-String joins with the platform's newline, so a
+        # multi-line expectation written with `n in this file would otherwise never
+        # match on Windows however right the snippet is.
+        (($out | Out-String).Trim()) -replace "`r`n", "`n"
     }
 }
 
@@ -119,5 +126,164 @@ try:
 except ValueError:
     print("raised")
 '@ | Should -Be 'raised'
+    }
+}
+
+<#
+UNIx, the map's own unit-settings override (task 031).
+
+The layout here was NOT taken from prose. These cases pin it against the two things that
+can contradict it: the section's real size, and the real stats of units anyone can check
+by hand. If an offset drifts, `Marine has 40 hit points` stops being true and the case
+below says so -- which is the same discipline the PTEx cases use, for the same reason
+(a generator that verifies its own write with its own indexing verifies nothing).
+
+What none of this proves is that the ENGINE reads these bytes. That is
+tools/plugin/probe-unit-settings.ps1's job, in a running game, and no unit test can stand
+in for it.
+#>
+Describe 'make_test_map UNIx layout' {
+    BeforeEach {
+        if (-not $script:Python) { Set-ItResult -Skipped -Because 'no python available' }
+    }
+
+    It 'is the Brood War 228-unit, 130-weapon layout: 4168 bytes' {
+        Invoke-MapPy 'print(m.UNIX_SIZE, m.UNIX_UNITS, m.UNIX_WEAPONS)' | Should -Be '4168 228 130'
+    }
+
+    It 'puts each array where the size arithmetic requires' {
+        Invoke-MapPy @'
+print(m.UNIX_OFF_USE_DEFAULT, m.UNIX_OFF_HIT_POINTS, m.UNIX_OFF_SHIELD_POINTS,
+      m.UNIX_OFF_ARMOR, m.UNIX_OFF_BUILD_TIME, m.UNIX_OFF_MINERAL_COST,
+      m.UNIX_OFF_GAS_COST, m.UNIX_OFF_STRING_NUMBER, m.UNIX_OFF_BASE_DAMAGE,
+      m.UNIX_OFF_UPGRADE_DAMAGE)
+'@ | Should -Be '0 228 1140 1596 1824 2280 2736 3192 3648 3908'
+    }
+
+    It 'stores build time as GAME SECONDS x 15 and hit points x 256' {
+        Invoke-MapPy 'print(m.BUILD_TIME_PER_GAME_SECOND, m.HP_FIXED_POINT)' | Should -Be '15 256'
+    }
+
+    # THE CASE THAT WOULD CATCH A WRONG OFFSET. Decoding a section this tool never wrote
+    # and getting five units' real, publicly-known stats back is what makes the layout a
+    # reading rather than a guess.
+    It 'decodes the Brood War template to the real stats of five units' {
+        $template = 'C:\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx'
+        if (-not (Test-Path -LiteralPath $template)) {
+            Set-ItResult -Skipped -Because 'the template map is not on this machine'
+        }
+        Invoke-MapPy @"
+from pathlib import Path
+s = m.parse_chk_sections(m.read_chk_bytes(Path(r'$template')))
+u = s[m.find_section(s, 'UNIx')].payload
+print(len(u))
+for name in ('marine', 'scv', 'command-center', 'supply-depot', 'barracks'):
+    i = m.resolve_unit_id(name)
+    e = m.read_unit_settings(u, [i])[i]
+    print(name, e['max-hp'], e['build-time'], e['mineral-cost'])
+"@ | Should -Be (@(
+            '4168',
+            'marine 40 24 50',
+            'scv 60 20 50',
+            'command-center 1500 120 400',
+            'supply-depot 500 40 100',
+            'barracks 1000 80 150'
+        ) -join "`n")
+    }
+}
+
+Describe 'make_test_map UNIx write/read round trip' {
+    BeforeEach {
+        if (-not $script:Python) { Set-ItResult -Skipped -Because 'no python available' }
+    }
+
+    It 'writes the build time at the engine offset, scaled, for the right unit only' {
+        Invoke-MapPy @'
+import struct
+buf = bytearray(m.UNIX_SIZE)
+out = m.set_unit_settings(bytes(buf), {"build-time": [(7, 1)]})
+at7 = struct.unpack_from("<H", out, m.UNIX_OFF_BUILD_TIME + 2 * 7)[0]
+at6 = struct.unpack_from("<H", out, m.UNIX_OFF_BUILD_TIME + 2 * 6)[0]
+at8 = struct.unpack_from("<H", out, m.UNIX_OFF_BUILD_TIME + 2 * 8)[0]
+print(at7, at6, at8)
+'@ | Should -Be '15 0 0'
+    }
+
+    # usesDefault is the byte that decides whether ANY override is read. This is the
+    # exact shape of the PTEx `playerUsesDefault` bug: right numbers, dead section.
+    It 'clears usesDefault for every unit it touches, and for no other' {
+        Invoke-MapPy @'
+buf = bytearray(b"\x01" * m.UNIX_SIZE)
+out = m.set_unit_settings(bytes(buf), {"build-time": [(7, 1)], "max-hp": [(0, 25)]})
+print([i for i in range(m.UNIX_UNITS) if out[m.UNIX_OFF_USE_DEFAULT + i] == 0])
+'@ | Should -Be '[0, 7]'
+    }
+
+    It 'reads back what it wrote, in the caller units rather than raw' {
+        Invoke-MapPy @'
+buf = bytearray(m.UNIX_SIZE)
+out = m.set_unit_settings(bytes(buf), {
+    "build-time": [(7, 3)], "max-hp": [(7, 60)], "mineral-cost": [(7, 0)],
+    "gas-cost": [(7, 7)], "armor": [(7, 2)], "shields": [(7, 9)]})
+e = m.read_unit_settings(out, [7])[7]
+print(e["build-time"], e["max-hp"], e["mineral-cost"], e["gas-cost"], e["armor"],
+      e["shields"], e["uses-default"])
+'@ | Should -Be '3 60 0 7 2 9 0'
+    }
+
+    It 'leaves every other unit in the section alone' {
+        Invoke-MapPy @'
+src = bytes(range(256)) * (m.UNIX_SIZE // 256) + bytes(m.UNIX_SIZE % 256)
+out = m.set_unit_settings(src, {"build-time": [(7, 1)]})
+diff = [i for i in range(m.UNIX_SIZE) if src[i] != out[i]]
+print(diff)
+'@ | Should -Be "[$([int]0 + 7), $((1824) + 14), $((1824) + 15)]"
+    }
+
+    It 'refuses a UNIx of the wrong size rather than writing into it' {
+        Invoke-MapPy @'
+try:
+    m.set_unit_settings(bytes(100), {"build-time": [(7, 1)]})
+    print("NO-RAISE")
+except ValueError:
+    print("raised")
+'@ | Should -Be 'raised'
+    }
+
+    # Not a range check -- a refusal to ship a fixture whose behaviour nobody has looked
+    # at. Zero is a legal u16; what the engine's production tick does with it is unknown.
+    It 'refuses a ZERO build time, while allowing zero everywhere else' {
+        Invoke-MapPy @'
+try:
+    m.set_unit_settings(bytes(m.UNIX_SIZE), {"build-time": [(7, 0)]})
+    print("build-time NO-RAISE")
+except ValueError:
+    print("build-time raised")
+m.set_unit_settings(bytes(m.UNIX_SIZE), {"mineral-cost": [(7, 0)], "armor": [(7, 0)]})
+print("others fine")
+'@ | Should -Be "build-time raised`nothers fine"
+    }
+
+    It 'refuses a value the field cannot hold rather than truncating it' {
+        Invoke-MapPy @'
+for field, value in (("build-time", 5000), ("armor", 300), ("max-hp", -1)):
+    try:
+        m.set_unit_settings(bytes(m.UNIX_SIZE), {field: [(7, value)]})
+        print(field, "NO-RAISE")
+    except ValueError:
+        print(field, "raised")
+'@ | Should -Be "build-time raised`narmor raised`nmax-hp raised"
+    }
+
+    It 'parses TYPE=VALUE by name and by raw units.dat id, and refuses junk' {
+        Invoke-MapPy @'
+print(m.parse_unit_setting("scv=1"), m.parse_unit_setting(" 7 = 20 "))
+for bad in ("scv", "nosuchunit=1", "scv=fast"):
+    try:
+        m.parse_unit_setting(bad)
+        print(bad, "NO-RAISE")
+    except ValueError:
+        print(bad, "raised")
+'@ | Should -Be "(7, 1) (7, 20)`nscv raised`nnosuchunit=1 raised`nscv=fast raised"
     }
 }
