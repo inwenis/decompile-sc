@@ -447,11 +447,29 @@ winning — game logic and HUD behaviour, where a hook is a hook and the data mo
 
 Ordered so each stage is independently verifiable and the game still runs after each one.
 
+> **CORRECTED BY EXECUTION — task 034. The table below is 032's plan and its stage 1/2
+> boundary is wrong.** Two things force a different split, and both are in §12.5:
+>
+> - **items 5 and 8 cannot be separated.** The terrain blitter `FUN_004BCDC0` walks the
+>   dirty grid LINEARLY — one byte per column, never re-based per row — so its column count
+>   must equal the grid's stride. Widening the grid without widening the blitter's walk
+>   desynchronises them by (stride − columns) bytes every row, which is a shredded frame.
+> - **the framebuffer's PITCH and the playfield's WIDTH are different changes** and want
+>   different stages. Everything that computes an address into the frame moves when the
+>   buffer widens; everything that clips moves when the playfield widens.
+>
+> The staging that actually works, and the one to inherit:
+>
+> | stage | scope | pass condition |
+> | ----- | ----- | -------------- |
+> | 0 | display mode only | the game comes up; the framebuffer descriptor is still stock |
+> | 1 | **the framebuffer pitch alone** — buffer size and descriptor, blit source pitch, the copier's destination pitch, the screen fill, and every fog/shroud routine that addresses the frame. No rect, clip, bound or grid moves. | **the frame is pixel-identical to the control's.** A binary condition, not a judgement |
+> | 2 | the playfield: dirty grid (relocate + stride) AND terrain scratch together, Storm region, layer rects, composer clip, per-image and rect clips, fog extents, placement | layer 5 reads the new size AND the interior matches the control where both show the same map |
+>
+> Stages 3-5 are unchanged from 032's plan and are listed below. None of them was attempted.
+
 | stage | scope | proves |
 | ----- | ----- | ------ |
-| 0 | Measure WMode at a non-640x480 mode before anything else: patch only 0x0041DA42/0x0041DA3D to 800x600 and confirm the window still comes up under the injected helper. Expect a 640x480 image in the corner of an 800x600 mode. | that the presentation half survives at all — the cheapest possible falsification, and it is where I would stop if it failed |
-| 1 | Screen surface: items 2, 3, 4 + relocate the dirty grid (item 5) into plugin-owned memory and re-point all 62 references, + composer/marker clamps (6, 7). | a correctly presented 800x600 frame with a 640x400 playfield in the corner. Nothing looks better yet |
-| 2 | Playfield geometry: items 8, 9, 10, 11, 14 + the terrain scratch surface. | terrain, sprites and fog fill the new area. **This is the stage that can actually look wrong**, and the one I would expect to consume most of the budget |
 | 3 | Input and camera: items 12, 13, 15, 17. | clicks land where they look, the camera reaches the map edges |
 | 4 | HUD: items 16, 19, 20. | a stock HUD anchored to the bottom of a wider screen |
 | 5 | Minimap viewport rectangle (item 18), once located. | the minimap agrees with the camera |
