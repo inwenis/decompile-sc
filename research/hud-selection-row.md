@@ -437,6 +437,22 @@ type tables `0x005014AC`/`0x00501504` give it draw/interact for free), id in unu
 Cost on top of (a): trivial. Value: the row stops *silently* paging — the count the user
 asked for ("show more units") is permanently visible even without flipping.
 
+> **This shipped, and it did not draw. (Task 033, 2026-08-11.)** The control was spliced, the
+> string was written and the suite went green — asserting that string **out of the module's own
+> buffer**, which proves the plugin's intent and nothing about the player's screen. The box was
+> nine pixels tall, and the engine's text routine returns without drawing anything at all when
+> `top + fontHeight > clip.bottom`, where the clip box is the control's own bounds
+> ([`status-pane-text.md`](status-pane-text.md) §5). So for weeks the row paged silently
+> anyway, and on 2026-08-11 the user asked the conductor how to page through it — a question
+> a visible `(2/3)` would have answered.
+>
+> Fixed in task 033: the box is `SC_QIND_BOX_H` tall, and `HUDROW show` now reports
+> `indLinked` / `indVisible` / `indBounds` / `indInk`, the last being a count of non-background
+> bytes the engine left in the dialog's own surface inside that box. `test-hud-row.ps1` asserts
+> `indInk > 0`. This is AGENTS.md's "assert the ENGINE's own result, not your bookkeeping" meeting
+> a *drawing* claim: reading a control's fields says what it HOLDS; only the surface says
+> anything was DRAWN.
+
 ## 8. Recommendation
 
 **(c): paging with the native page-indicator control; right-click on the row flips pages.**
@@ -499,9 +515,13 @@ decompiles everywhere they overlap — `UnitStatCond/Act_Selection`, the wirefra
 
 **Open, stated rather than hidden**:
 
-1. The exact bounds of the 12 buttons (and of usable free margin) live in
+1. ~~The exact bounds of the 12 buttons (and of usable free margin) live in
    `rez\statdata.bin`; stage B should read them from the live dialog at attach and log
-   them, not hardcode.
+   them, not hardcode.~~ **ANSWERED** — stage B logs the button rects (`HUDROW rects`), and
+   task 033 added a full child dump of the same dialog (`QINDDLG`: id, type, flags, bounds,
+   update handler, text, one line per control). The production strip's live bounds are
+   tabulated in [`status-pane-text.md`](status-pane-text.md) §8; every position in both
+   modules is computed from a control's live bounds rather than from those numbers.
 2. `0x00457DE0` (mouse-over/tooltip path) was located but not decompiled; paging does not
    alter it (the buttons stay engine-owned), but the indicator control's bounds must not
    overlap a tooltip hotspot without checking.

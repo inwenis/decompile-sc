@@ -543,9 +543,20 @@ instructions and it is quoted in §2.2 beside the C.
   building → the plugin pops its own tail, refunds it, and the engine's handler does not run. The
   last item of the logical queue really is the plugin's, so this is the correct owner.
 * payload `0xFE` and the plugin holds nothing → straight through, vanilla.
-* payload `0` … `4` (a specific queue icon) → **always** straight through. The engine cancels and
-  refunds that slot as usual; the freed slot is filled from overflow on the next tick, so the
-  logical queue shortens by exactly one, which is what the player asked for.
+* payload `0` … `4` (a specific queue icon) → **it depends on what the ring holds behind that
+  icon, and the test is the engine's own arithmetic** (task 033; before it, this was
+  unconditionally "straight through"):
+  * `buildQueue[(head + payload) % 5] != 0xE4` — a real ring item → **straight through**, exactly
+    as before. The engine cancels and refunds that slot as usual; the freed slot is filled from
+    overflow on the next tick, so the logical queue shortens by exactly one.
+  * `== 0xE4` — the ring does not hold it → **the plugin's**. It cancels its own
+    `overflow[payload − engineLen]` and refunds it once, or swallows the click if it no longer
+    has one. **Vanilla can never produce this click** (an empty slot's icon is drawn DISABLED and
+    both of the engine's input paths refuse a disabled control,
+    [`command-card.md`](command-card.md) §5) — task 033's indicator can, because it draws those
+    icons from the plugin's overflow and lights them. Passing such a click through would have the
+    engine refund **by the sentinel type 228**, reading `mineralCost[228]`/`gasCost[228]` past the
+    end of both tables and crediting the player whatever is there.
 * payload `0xFF` → straight through (it is the engine's no-op).
 
 ### 6.5 Garbage collection
@@ -565,12 +576,30 @@ mid-game cannot strand paid-for items.
 
 ## 7. Known limitations
 
-1. **The status area draws at most five icons, and usually four.** Everything past them is real,
-   paid for, and will be built, but it is not on screen — and because the plugin keeps the ring at
-   four while the player is queueing, the visible count sits one below vanilla's. The plugin's
-   `PRODQ` log line is the read-back oracle instead (and is what the in-game test asserts on).
-   Extending the production panel would mean a second dialog splice next to task 017's, which is a
-   larger and riskier change than this feature; it is the obvious follow-up.
+1. ~~**The status area draws at most five icons, and usually four.**~~ **FIXED by task 033** — and
+   the user found it first, playing the deployed build: *"when i queue more then 5 units the 5'th
+   slot is emtpy"*, and *"when more then 5 units a queued - is the info showing that? (some +x
+   number somewhere in tug?)"*. Both are this limitation, seen from the outside.
+
+   What was true, and why: everything past the ring's items is real, paid for and will be built,
+   but it was not on screen — and because the plugin keeps the ring at four while the player is
+   queueing, the visible count sat one below vanilla's.
+
+   What task 033 does, on the DISPLAY side only (the ring still stops at
+   `SC_PRODQ_ENGINE_HOLD` = 4 — raising it is the very thing that makes the client stop sending,
+   §4.1):
+
+   * the icons the engine leaves empty are filled from the plugin's own overflow, writing the same
+     three `statUser` fields `queueLayout` writes for an occupied slot (§8.1), so the strip shows
+     five again;
+   * a `"+N"` is drawn over the last icon for whatever is queued past those five, as ENGINE-DRAWN
+     TEXT through a spliced static-text control ([`status-pane-text.md`](status-pane-text.md)) —
+     no art added;
+   * and because a lit icon is a CLICKABLE icon, the cancel side moved with it: §6.4's "payload
+     0…4 always passes straight through" is no longer true, and the reason is in §6.4 below.
+
+   The `PRODQ` log line remains the read-back oracle for the queue itself; `QIND` is the one for
+   what the pane is showing.
 
    **The same limit applies to INPUT, which task 028 measured rather than inferred**: those five
    icons are also the only queued items a click can address (§8.1), so an overflow item can be
