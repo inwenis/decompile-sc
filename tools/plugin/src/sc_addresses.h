@@ -1179,4 +1179,101 @@
 #define SC_VA_SCROLL_STEP_Y        0x0049C280u
 #define SC_VA_MINIMAP_CLICK        0x004A4D20u  // centres the camera; bakes 20 x 13 tiles
 
+// ---------------------------------------------------------------------------
+// THE OTHER SELECTION INPUT PATHS -- derived by task 036 from StarCraft.exe 1.16.1.
+// Full evidence, with the decompiles and listings these came from, in
+// research/building-groups.md 8. Appended at the END of this file, as the task asked.
+//
+// Task 024 relaxed the client gate for the DRAG BOX. `unit_IsStandardAndMovable`
+// (0x0047B770) is consulted on three more client paths, and each refuses a building in
+// its own way -- which is why one relaxation did not make buildings behave like units.
+// ---------------------------------------------------------------------------
+
+// The click handler. __fastcall-ish (EDX/ECX carry the click), no stack arguments; it
+// resolves the unit under the cursor with 0x0046F3A0 and returns at once if there is
+// none. It owns FOUR distinct branches, told apart by two bytes of the engine's own
+// keyDown[256] table (0x00596A18) and by its double-click flag:
+//
+//   ctrl or double-click, no shift  0x0046FE41  CALL SortAllUnits(rect, out12, clicked)
+//                                               then applyNewSelect  -> REPLACE
+//   shift AND (ctrl or dbl)         0x0046FCAD  CALL SortAllUnits(rect, out12, clicked)
+//                                   0x0046FCDD  then combineSelectionsLists -> ADD
+//   shift alone, unit NOT selected   the inline ADD gate at 0x0046FD1B (below)
+//   shift alone, unit IS selected    the inline REMOVE compaction at 0x0046FD77 --
+//                                    memmove by CSprite+0x0B, then 0x0049AE40 and
+//                                    CMDACT_Select. NO movable gate: shift-click
+//                                    REMOVE already works for buildings in vanilla.
+//   plain click                      0x0049AE40(1) + CMDACT_Select(1) directly --
+//                                    SortAllUnits is NEVER called.
+//
+// THE CONSEQUENCE THAT SCOPES TASK 036's CHANGE: the only calls to SortAllUnits with a
+// non-zero `clicked` are the two type-match sites above. A plain click and a shift-click
+// do not reach it at all. So "clicked != 0" identifies the ctrl-click / double-click
+// "select all of this type on screen" path exactly, with no state of our own.
+#define SC_VA_CLICK_SELECT_HANDLER 0x0046FB40u
+#define SC_VA_SORT_CALL_CLICK      0x0046FE41u  // ctrl/dbl, no shift
+#define SC_VA_SORT_CALL_SHIFTCLICK 0x0046FCADu  // shift AND (ctrl or dbl)
+#define SC_VA_KEYDOWN_TABLE        0x00596A18u  // BYTE[256], written by the window proc
+#define SC_VA_KEYDOWN_SHIFT        0x00596A28u  // keyDown[VK_SHIFT]   -- 0x00596A18 + 0x10
+#define SC_VA_KEYDOWN_CONTROL      0x00596A29u  // keyDown[VK_CONTROL] -- + 0x11
+#define SC_VA_KEYDOWN_ALT          0x00596A2Au  // keyDown[VK_MENU]    -- + 0x12
+
+// The double-click flag the click handler ANDs with "the clicked unit is already
+// selected" (CSprite+0x0E & 0x08) at 0x0046FB6E. Written in exactly ONE function --
+// 0x0046FF70, the mouse-event tick -- which zeroes it for every event type but 3 and 5
+// and sets it to 1 for type 6. Type 6 is what the window procedure (0x004D1D70 case
+// 0x203) hands to 0x004D1A50 for WM_LBUTTONDBLCLK, and nothing else produces it. That is
+// what lets a POSTED WM_LBUTTONDBLCLK drive a real double click in an unattended run: the
+// game does no timing of its own here, it trusts the message.
+#define SC_VA_DOUBLE_CLICK_FLAG    0x0066FF58u  // u32
+#define SC_VA_MOUSE_EVENT_TICK     0x0046FF70u
+
+// THE FOUR CALL SITES OF unit_IsStandardAndMovable THAT REFUSE A BUILDING GROUP, by the
+// address of the instruction AFTER the CALL -- i.e. the return address the detour sees.
+// Taken from the listings in work/scratch/ghidra-036 (ListingDump over each function);
+// each is quoted in research/building-groups.md 8.
+//
+//   shift-click ADD, inside the click handler (0x0046FD1B..0x0046FD5F):
+//     0046FD24  MOV ECX,[EBP-0x3c]     ; the existing selection's FIRST unit
+//     0046FD27  CALL 0x0047b770        ; -> returns to 0x0046FD2C
+//     0046FD2E  JZ   0x0046fe95        ; refuse
+//     0046FD42  MOV ECX,EBX            ; the CLICKED unit
+//     0046FD44  CALL 0x0047b770        ; -> returns to 0x0046FD49
+//     0046FD4B  JZ   0x0046fe95        ; refuse
+//   combineSelectionsLists (0x0046F290), the shift+box / shift+ctrl merge:
+//     0046F2C6  MOV ECX,[EAX]          ; the NEW list's first unit
+//     0046F2C8  CALL 0x0047b770        ; -> returns to 0x0046F2CD
+//     0046F2E6  MOV ECX,EBX            ; the EXISTING list's first unit (EDI[0])
+//     0046F2E8  CALL 0x0047b770        ; -> returns to 0x0046F2ED
+//     on either failure it returns the EXISTING count and the merge never happens.
+//
+// Both callers of combineSelectionsLists copy activePlayerSelection into a local FIRST
+// (0x0046FA40's 12-dword loop; 0x0046FC9A's `LEA EDI,[EBP-0x6c]` + `MOVSD.REP`), so
+// EDI[0] is activePlayerSelection[0] at both sites -- which is what lets one rule
+// ("what is the lead of the selection being extended?") cover all four.
+#define SC_RET_MOVABLE_SHIFT_LEAD    0x0046FD2Cu
+#define SC_RET_MOVABLE_SHIFT_CLICKED 0x0046FD49u
+#define SC_RET_MOVABLE_COMBINE_NEW   0x0046F2CDu
+#define SC_RET_MOVABLE_COMBINE_OLD   0x0046F2EDu
+
+// unit_IsStandardAndMovable's own first two instructions, the patch window a detour
+// needs. Seven bytes, two whole instructions, NEITHER PC-relative:
+//     0047B770  66 8B 41 64        MOV AX,word ptr [ECX + 0x64]
+//     0047B774  0F B7 D0           MOVZX EDX,AX
+#define SC_MOVABLE_PATCH_LEN       7
+
+// The client-side control-group recall's own copy of the gate (0x00496B40):
+//     00496BE5  CALL 0x0047b770
+//     00496BEC  JNZ 0x00496bf7      ; passed -> keep this entry
+//     00496BEE  CMP ESI,0x1         ; ESI = how many tags the group row holds
+//     00496BF1  JLE 0x00496bf7      ; a ONE-entry group is kept whatever it is
+//     00496BF3  XOR EDI,EDI         ; otherwise drop it
+// So the engine will recall a single building, and would drop every building out of a
+// group that held several. It never has to: hotkeySaveOrAdd fills the row from
+// playersSelections, which the SIM gate (0x0049AF80) has already capped at one building.
+// That is why task 036 does NOT write the engine's group row -- a row holding N buildings
+// would be emptied by this test, and the receive-side recall (0x00496940) would COMPACT
+// the row as it went, destroying the injection permanently.
+#define SC_VA_HOTKEY_RECALL_GATE   0x00496BE5u
+
 #endif // SC_ADDRESSES_H

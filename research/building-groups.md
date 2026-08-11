@@ -363,20 +363,258 @@ being violated in a new costume, and the fixes are positives placed in front of 
 
 ---
 
-## 7. Open, and deliberately not done
+## 7. Open after task 024, and what happened to each
 
-1. **Ctrl+click "select all of this type on screen" for buildings.** It goes through `0x0046FB40`
-   with `clicked != 0` and is untouched here. It is the obvious next step and needs no new
-   research — only a decision about whether it should behave like the box.
-2. **More than twelve buildings and the HUD row.** The row pages the shadow list (task 017) and was
-   not exercised with buildings; the in-game arms run with `-HudRow 0`, as the other fan-out suites
-   do.
-3. **Gate B properly relaxed.** Doing it would need a relocating trampoline (a length-disassembler
-   for the patched window) or an inline patch of the `JZ` at `0x0049AFA4`, and it would let the
-   simulation hold a real multi-building selection instead of one-at-a-time chunks. Worth costing
-   only if something needs the *simulation* to hold them — nothing in this task did.
+1. **Ctrl+click "select all of this type on screen" for buildings.** ~~Untouched here.~~ Done in
+   task 036 — §8.2. It needed no new research about the gate, but it did need the caller map in
+   §8.1 before the change could be scoped honestly.
+2. **More than twelve buildings and the HUD row.** Still open. The row pages the shadow list
+   (task 017) and was not exercised with buildings; task 024's in-game arms run with `-HudRow 0`.
+   Task 036's suite runs with `-HudRow 1` but its groups are six, below the twelve at which the
+   plugin's row takes over, so this is still not exercised.
+3. **Gate B properly relaxed.** Still open, and task 036 found a second reason to leave it alone
+   (§8.4): the client-side control-group recall carries its OWN copy of the predicate, so relaxing
+   the simulation without relaxing that would produce a group the simulation holds and the client
+   cannot show.
 4. **`0x006D0F14`**, the global tested at `0x0046F1AC` right beside the movable gate, disables
    multi-select wholesale when non-zero. Not identified here. **[unresolved]**
+
+---
+
+## 8. The other three input paths (task 036)
+
+*Derived from the same binary and the same pipeline. Ghidra project `work/scratch/ghidra-036`,
+spec [`tools/ghidra/specs/selection-input-paths.spec`](../tools/ghidra/specs/selection-input-paths.spec),
+`DecompileMany.java` for the C and `ListingDump.java` for every instruction address quoted below.*
+
+Task 024 shipped the drag box and the user played it. Every other way of selecting a group of
+buildings still did not work — their words, 2026-08-11: *"i can`t select building with double click
+(simillar buildings)"*, *"i can`t use ctrl or shift to modify building group"*, *"when i create a
+control group with buildings and use it to select them it only shows 1 in tug after i click the
+group number"*.
+
+Three symptoms, one cause and three different mechanisms. §5.3's table said those paths were
+"unchanged, one building … those paths call `SortAllUnits` with `clicked != 0`". **The first half
+of that was right and the second half was wrong for two of the three**, and the correction is what
+made the fix scopeable.
+
+### 8.1 The click handler has four branches, and only two of them call `SortAllUnits`
+
+`0x0046FB40` resolves the unit under the cursor (`0x0046F3A0`, returns immediately if there is
+none) and then splits on two bytes of the engine's own `keyDown[256]` table at `0x00596A18` —
+`0x00596A28` is `VK_SHIFT`, `0x00596A29` is `VK_CONTROL` — plus a double-click flag:
+
+| branch | condition | what it does |
+|---|---|---|
+| ctrl or double-click, no shift | `0x0046FE41` | `SortAllUnits(rectScan, out12, clicked)` → `applyNewSelect` — REPLACE |
+| shift **and** (ctrl or dbl) | `0x0046FCAD` | `SortAllUnits(rectScan, out12, clicked)` → `combineSelectionsLists` (`0x0046FCDD`) — ADD |
+| shift alone, unit not selected | `0x0046FD1B`..`0x0046FD5F` | an INLINE add gate, then `applyNewSelect` |
+| shift alone, unit already selected | `0x0046FD77`.. | an INLINE remove: `memmove` by `CSprite+0x0B`, then `0x0049AE40` + `CMDACT_Select` |
+| plain click | `0x0046FBD6` | `0x0049AE40(1)` and `CMDACT_Select(1)` directly |
+
+**So a plain click and a shift-click never reach `SortAllUnits` at all.** That inverts §5.3's
+scoping argument in a useful direction: `clicked != 0` at `SortAllUnits` does not mean "some click
+path", it means *exactly* "ctrl-click or double-click type match". Nothing else in the binary
+passes a non-zero third argument.
+
+And with `clicked != 0` the function pre-seeds its own output before the filter loop:
+
+```
+0046F0F5  MOV EAX,dword ptr [EBP + 0x10]     ; clicked
+0046F0F8  TEST EAX,EAX
+0046F0FA  JZ  ...
+0046F0FC  MOV ECX,dword ptr [EBP + 0xc]      ; out12
+0046F0FF  MOV dword ptr [ECX],EAX            ; out12[0] = clicked
+0046F103  MOV dword ptr [EBP + -0x4],1       ; ... and the count starts at ONE
+```
+
+A screen full of buildings therefore leaves `ret == 1` with the clicked building in slot 0 — the
+identical shape the box's "last rejected candidate" fallback produces (§2.2). One condition
+removed from `ScFanoutGrowBuildingGroup` covers both.
+
+### 8.2 The double-click is a MESSAGE, not a timer
+
+The click handler's double-click term is `(clickedSprite->flags & 0x08) && DAT_0066FF58` at
+`0x0046FB6E` — "the unit is already selected AND the double-click flag is set". That flag is
+written in exactly one function, `0x0046FF70` (the mouse-event tick), and only from the event type
+at `+0x0C`: types 3 and 5 leave it alone, every other type zeroes it, and **type 6 sets it**. Type
+6 is what the window procedure hands to `0x004D1A50` for message `0x0203` — `WM_LBUTTONDBLCLK`.
+
+The engine does no double-click timing of its own; it trusts Windows. That is a load-bearing
+finding for this repo's harness in the same way the accelerator finding was
+([`control-groups.md`](control-groups.md) §5): **a posted `WM_LBUTTONDBLCLK` is a real double click
+as far as every layer above the window procedure is concerned**, and no `GetMessageTime`,
+`GetDoubleClickTime` or key-state table is consulted on the way. `test-building-parity.ps1` drives
+it as an ordinary click followed by a posted `0x0203` — which is also the order Windows delivers a
+real one in, and the leading click is what satisfies the "already selected" half.
+
+### 8.3 The two paths that EXTEND a selection ask the predicate directly
+
+Neither is a function a plugin can wrap. Both consult `unit_IsStandardAndMovable` at four
+instruction addresses, and each address is quoted here with the instruction after it — the return
+address, which is what scopes task 036's detour:
+
+```
+; shift-click ADD, inside the click handler
+0046FD1B  CMP EDI,0xc              ; the existing selection's length
+0046FD1E  JGE 0x0046fe95           ; full -> refuse
+0046FD24  MOV ECX,[EBP-0x3c]       ; the existing selection's FIRST unit
+0046FD27  CALL 0x0047b770          ; returns to 0046FD2C
+0046FD2E  JZ  0x0046fe95           ; refuse
+0046FD35  CALL 0x00401170          ; NOT a building gate: "multi-select is on AND this is mine"
+0046FD42  MOV ECX,EBX              ; the CLICKED unit
+0046FD44  CALL 0x0047b770          ; returns to 0046FD49
+0046FD4B  JZ  0x0046fe95           ; refuse
+0046FD5F  MOV [EBP+EDI*4-0x3c],EBX ; append
+
+; combineSelectionsLists 0x0046F290 -- shift+box and shift+ctrl-click
+0046F2C6  MOV ECX,[EAX]            ; the NEW list's first unit
+0046F2C8  CALL 0x0047b770          ; returns to 0046F2CD
+0046F2E6  MOV ECX,EBX              ; the EXISTING list's first unit
+0046F2E8  CALL 0x0047b770          ; returns to 0046F2ED
+0046F2FD  MOV EAX,ESI / RET 0xc    ; either failure -> return the EXISTING count, no merge
+```
+
+`0x00401170` was read rather than assumed, because a second gate in the same block would have made
+the predicate relaxation useless: it is
+`DAT_006D0F14 == 0 && unit->player == DAT_00512684` — the global multi-select switch and an
+ownership test. A building passes it.
+
+**Shift-click REMOVE has no gate at all.** The branch at `0x0046FD77` compacts the selection by
+`CSprite+0x0B` and calls `0x0049AE40` directly. So in *vanilla*, a player can shift-click a building
+OUT of a selection but not INTO one — measured, not deduced (§8.5). Worth knowing before anyone
+reads a bug report: "remove works, add does not" is the stock game, not a half-finished feature.
+
+Both callers of `combineSelectionsLists` copy `activePlayerSelection` into a local before calling
+(`0x0046FA40`'s 12-dword loop; `0x0046FC9A`'s `LEA EDI,[EBP-0x6c]` + `MOVSD.REP`), and the merge
+appends without touching slot 0 — so `activePlayerSelection[0]` is the lead at all four sites, and
+one read answers all four.
+
+### 8.4 The control group: the store is what is capped, and the display is honest
+
+The recall is the one with a concrete symptom and it turned out not to be a display bug at all.
+
+The engine's own group row is filled by `hotkeySaveOrAdd` from `playersSelections`
+([`control-groups.md`](control-groups.md) §3) — and gate B has already capped that at **one**
+building (§3). So the row holds one tag. The client-side recall `0x00496B40` then carries its own
+copy of the predicate:
+
+```
+00496BE5  CALL 0x0047b770
+00496BEC  JNZ 0x00496bf7      ; passed -> keep this entry
+00496BEE  CMP ESI,0x1         ; ESI = how many tags the row holds
+00496BF1  JLE 0x00496bf7      ; a ONE-entry group is kept whatever it is
+00496BF3  XOR EDI,EDI         ; otherwise drop it
+```
+
+which hands that one building back, writes it into `activePlayerSelection`, and the stock status
+row — which draws `clientSelectionGroup`, copied from `activePlayerSelection` by
+`updateSelectedUnitData` `0x004C38B0` — shows **1**. Exactly what the user saw, and the row was
+never wrong: it was faithfully drawing a genuinely one-unit engine selection.
+
+**This is also why writing `selectionHotkeys` would be the wrong fix**, and it is worth stating
+because it is the first thing anyone tries. A row holding N buildings is emptied by the gate above
+(with `N > 1` every building fails it), and the receive-side recall `0x00496940` **compacts the row
+in place** as it validates ([`control-groups.md`](control-groups.md) §4.2 step 3) — so the
+injection would be destroyed permanently rather than merely ignored, and the player would lose the
+group. The fix is instead to hand the group to the engine's own client selection through
+`CreateNewUnitSelectionsFromList` (`0x0049AE40`, **EAX = `CUnit**`, one stdcall argument, `RET 4`**
+— confirmed here from `PUSH EDI / LEA EAX,[EBP-0x3c] / CALL` at `0x0046FDC2`), which is the very
+call `0x00496B40` made a few instructions earlier.
+
+### 8.5 What each path actually did, measured before anything was changed
+
+`tools/plugin/test-building-parity.ps1 -Measure`, one game, six Barracks and six Marines, all
+player-owned. Three engine arrays read at each named instant through the plugin's `SELSNAP` line —
+`client` = `clientSelectionGroup` (what the stock row draws), `active` = `activePlayerSelection`
+(the client's selection), `sim` = `playersSelections[player]` (what every order applier iterates) —
+beside the plugin's own shadow list. **A symptom does not say which layer refused; three numbers
+that disagree do.**
+
+| input | shadow | client `active` | row `client` | `sim` | diagnosis |
+|---|---|---|---|---|---|
+| drag box (task 024) | 6 | 6 | 6 | 1 | works — the shipped behaviour |
+| **double-click** | 1 | 1 | 1 | 1 | **client refusal** |
+| **ctrl-click** | 1 | 1 | 1 | 1 | **client refusal** |
+| **shift-click ADD** | 1 | 1 | 1 | 1 | **client refusal** |
+| shift-click REMOVE | 5 | 5 | 5 | — | already worked in vanilla |
+| **shift+box** | 3 | 3 | 3 | — | **client refusal** |
+| **control-group recall** | 6 | **1** | **1** | 1 | **client refusal, at the STORE** |
+
+The last row is the one the symptom could not have told anyone: the plugin held all six the whole
+time and the right-click that followed rallied all six (`rally=[0x27C01E8:6] over 6 live`), so the
+*selection* was never lost — only the engine-visible half of it. `GROUP recall enter: group=1
+activePlayerSelection holds visible=1` is the engine's own recall reporting what it had to give.
+
+None of the three is an engine drop and none is a display bug.
+
+---
+
+## 9. What task 036 changed, and the mixed-selection decision
+
+### 9.1 Three changes, one principle: let the engine do the work
+
+1. **Double-click and ctrl-click** — `ScFanoutGrowBuildingGroup` lost its `clicked == 0`
+   condition. §8.1 is the whole justification: the only calls with a non-zero `clicked` are the two
+   type-match branches, and the result shape there is identical to the box's.
+2. **Shift-click, shift+box, shift+ctrl-click** — one detour on `unit_IsStandardAndMovable`
+   (`0x0047B770`; patch window seven bytes, `66 8B 41 64 0F B7 D0`, two whole instructions, neither
+   PC-relative), scoped by RETURN ADDRESS to the four sites in §8.3 and inert at every other call
+   site in the binary. The rule: **when the lead of the selection being extended is a building,
+   membership at those four sites becomes "same type and same owner as the lead, and alive"**.
+3. **Control-group recall** — when the recalled lead is a building, the group is re-installed into
+   the engine's own client selection with `0x0049AE40` (§8.4). The plugin still writes no byte of
+   `selectionHotkeys`, `playersSelections` or the engine's group storage.
+
+Gate B is still not patched, and `simSlots` is still 1 for a building group — so orders still fan
+out one `Select`+order pair per building, unchanged from task 024.
+
+### 9.2 Why relaxing the predicate at those four sites cannot regress vanilla
+
+The lead being a building is *precisely* the case in which vanilla refuses the whole operation: the
+lead's own call site returns 0 and the handler bails. So every outcome under the new rule replaces
+"nothing happens" with something. That is also what licenses the rule to **refuse** where the engine
+would have allowed — a Marine shift-clicked onto a building group is refused here, and vanilla
+refused it too, one call site earlier. The override is only ever consulted after the lead has
+already failed.
+
+### 9.3 The mixed-selection decision, stated
+
+**A building group is ONE TYPE, on every path.** A building may join a selection whose lead is a
+building of the same type and the same owner; anything else stays refused.
+
+- the box is same-type by construction (§5.1);
+- double-click and ctrl-click are same-type by the engine's own filter, which compares each
+  candidate's `CUnit+0x64` against the clicked unit's (`0x0046F1E5`);
+- shift-click and shift+box are made to agree by §9.1's rule.
+
+Refusing rather than allowing is a deliberate answer to the task's constraint that no command may
+fan out to a building that cannot execute it. Two reasons, and the second is the load-bearing one:
+
+1. `simSlots` is computed from the first visible unit and its correctness rests on "same kind ⇒
+   same verdict" (§4) — a selection holding both a Marine and a Barracks would report 12, and the
+   Barracks would silently never receive the order.
+2. The engine's per-building requirement interpreter (`0x0046E1C0`, task 030) is a real backstop
+   and it would refuse cleanly — but a backstop that refuses is still a command the player issued
+   and did not get. Keeping the selection homogeneous means the question never arises.
+
+**A mixed-BUILDING box is unchanged from task 024**: vanilla's own lead, widened to that lead's
+type (§5.1). What is new is only that shift can no longer produce a mixture the box cannot.
+
+### 9.4 Two per-unit narrowings the review asked for
+
+The predicate failing is **not** the same question as "this is a building": §4 shows it also fails
+on the units.dat *single entity* flag, on four PER-UNIT fields, and on an id list. Task 024 could
+lean on the predicate alone because `clicked == 0` had to hold as well, and a box that selected
+exactly one non-building thing was already a vanishing case. That is no longer true once every
+ctrl-click and double-click arrives at the same function, and it was never true for the recall
+branch — the simulation gate exists for units too, and its refusing must not be read as "this is a
+building group".
+
+So all three new paths ask **both** questions: the predicate refused it, *and* `unitsDatFlags[type]`
+carries bit `0x01`. The flag word is read from the live process and logged
+(`BGROUP box: … flags=0x…`), which is what makes `0x00664080` a measured table here rather than an
+inherited claim.
 5. **A big building group costs more turn-buffer bytes than a big unit group, by construction.**
    `slots == 1` means one `Select` per building, so an order to N buildings is `N × (4 + orderLen)`
    bytes where the same order to N units is `ceil(N/12) × (26 + orderLen)`. Sixteen buildings and a
