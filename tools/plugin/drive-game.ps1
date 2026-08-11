@@ -1617,6 +1617,83 @@ function Get-ScMinimapPoint {
 
 $script:ScMarkerSeq = 0
 
+function Set-ScMarker {
+    <#
+    .SYNOPSIS
+    Write one label into the plugin's marker file. The ONE place any marker is written.
+    .DESCRIPTION
+    ISSUE #37. Every marker write used to be `Set-Content -LiteralPath $MarkerPath`, and
+    a sweep caught it throwing mid-run:
+
+        FAIL a test step threw: The process cannot access the file
+        'C:\sc-work\logs\031\sweep\marker.txt' because it is being used by another process
+
+    The issue filed it as a rare race between the write and the plugin's observer thread,
+    which polls that same file about four times a second. Measured, it is not rare and it
+    is not subtle -- `Set-Content` opens the file with FileShare.NONE, so ANY reader
+    holding it open makes the write throw, including the plugin's own deliberately
+    permissive one. The race is only in the OVERLAP, not in the outcome: given overlap,
+    the failure is certain.
+
+    Measured on 2026-08-11, one reader held open with the flags scplugin.cpp PollMarker
+    actually uses (GENERIC_READ, FILE_SHARE_READ|WRITE|DELETE), three writers tried
+    against it:
+
+        reader share            Set-Content   File.WriteAllText   FileShare.RW|Delete
+        R|W|D (the plugin's)    FAIL          ok                  ok
+        R|W   (no DELETE)       FAIL          ok                  ok
+        none  (worst case)      FAIL          FAIL                FAIL
+
+    So the fix is the SHARE MODE, not a retry: open FileShare.ReadWrite|Delete, the most
+    permissive there is. That tolerates the observer, and -- unlike File.WriteAllText,
+    whose default is FileShare.Read -- it also tolerates a second driver holding the same
+    marker, which is the case that made task 031's eight-suite sweep hit this at all.
+
+    WRITE-TO-TEMP-THEN-RENAME, the fix the issue proposed, was tried first and is WORSE:
+    with the marker open by that same permissive reader, both [IO.File]::Move(overwrite)
+    and a raw MoveFileEx(MOVEFILE_REPLACE_EXISTING) fail with ERROR_ACCESS_DENIED (5).
+    A rename cannot replace an open destination on this filesystem even when the holder
+    granted FILE_SHARE_DELETE, so it removes nothing and fails harder than the write it
+    was meant to replace. Not used, and recorded here so nobody re-suggests it.
+
+    The retry is still here, bounded and backing off, for the residue the share mode
+    cannot cover: another process holding a WRITE handle (a second driver mid-write, an
+    editor, a virus scanner). It is a backstop, not the mechanism.
+
+    TORN READS are not a concern at this size. The write is one Write() of under ~40
+    bytes onto a truncated file, so an observer poll landing inside it sees either the
+    empty file -- which PollMarker already returns from without logging -- or the whole
+    label. Nothing in between has ever been observed and nothing shorter can be written.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$MarkerPath,
+        [Parameter(Mandatory)][string]$Label,
+        [int]$Tries = 10,
+        [int]$BackoffMs = 50
+    )
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($Label)
+    $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+    $last = $null
+    for ($i = 1; $i -le $Tries; $i++) {
+        try {
+            $fs = [System.IO.FileStream]::new($MarkerPath, [System.IO.FileMode]::Create,
+                                              [System.IO.FileAccess]::Write, $share)
+            try { $fs.Write($bytes, 0, $bytes.Length) } finally { $fs.Dispose() }
+            return
+        }
+        catch [System.IO.IOException] {
+            # Sharing violation or a transient lock. Anything else (a bad path, a
+            # read-only directory) is not retryable and rethrows immediately.
+            $last = $_
+            Start-Sleep -Milliseconds ($BackoffMs * $i)
+        }
+    }
+    throw ("drive-game: could not write the marker '$Label' to $MarkerPath after $Tries attempt(s). " +
+           "Last error: $($last.Exception.Message). Something other than the game's observer is " +
+           'holding that file open for writing -- another driver, an editor, or a scanner.')
+}
+
 function Get-ScUnitState {
     <#
     .SYNOPSIS
@@ -1641,7 +1718,7 @@ function Get-ScUnitState {
     if (-not $MarkerPath) { $MarkerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt' }
     $script:ScMarkerSeq++
     $label = "$Tag-$script:ScMarkerSeq"
-    Set-Content -LiteralPath $MarkerPath -Value $label -NoNewline
+    Set-ScMarker -MarkerPath $MarkerPath -Label $label
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         $line = Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
@@ -1762,7 +1839,7 @@ function Get-ScWorldState {
     if (-not $MarkerPath) { $MarkerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt' }
     $script:ScMarkerSeq++
     $label = "$Tag-$script:ScMarkerSeq"
-    Set-Content -LiteralPath $MarkerPath -Value $label -NoNewline
+    Set-ScMarker -MarkerPath $MarkerPath -Label $label
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     $esc = [regex]::Escape($label)
     while ((Get-Date) -lt $deadline) {
@@ -1862,7 +1939,7 @@ function Get-ScCardState {
     if (-not $MarkerPath) { $MarkerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt' }
     $script:ScMarkerSeq++
     $label = "$Tag-$script:ScMarkerSeq"
-    Set-Content -LiteralPath $MarkerPath -Value $label -NoNewline
+    Set-ScMarker -MarkerPath $MarkerPath -Label $label
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     $esc = [regex]::Escape($label)
     while ((Get-Date) -lt $deadline) {
@@ -2019,7 +2096,7 @@ function Get-ScStatusQueue {
     if (-not $MarkerPath) { $MarkerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt' }
     $script:ScMarkerSeq++
     $label = "$Tag-$script:ScMarkerSeq"
-    Set-Content -LiteralPath $MarkerPath -Value $label -NoNewline
+    Set-ScMarker -MarkerPath $MarkerPath -Label $label
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     $esc = [regex]::Escape($label)
     while ((Get-Date) -lt $deadline) {

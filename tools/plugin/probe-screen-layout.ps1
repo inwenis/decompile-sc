@@ -83,7 +83,9 @@ function Read-ScreenLayout {
     param([Parameter(Mandatory)][string]$Tag)
 
     $from = Get-ScLogLineCount -LogPath $logPath
-    Set-Content -LiteralPath $markerPath -Value $Tag -Encoding ascii
+    # Set-ScMarker, not Set-Content: the latter opens the marker with FileShare.None and
+    # therefore throws whenever the plugin's observer happens to have it open (issue #37).
+    Set-ScMarker -MarkerPath $markerPath -Label $Tag
     # Ten lines land per marker (bitmap + 8 layers + viewport); wait for the LAST of them,
     # the viewport line, so a partially-written set is never parsed.
     Wait-ScLogMatch -LogPath $logPath -Pattern "SCREEN \[$Tag\] origin=" -TimeoutSec 30 -FromLine $from | Out-Null
