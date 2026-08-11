@@ -1759,6 +1759,59 @@ static void HudRowTests(void) {
         *(BYTE*)(FakeUnit(16) + SC_CUNIT_OFF_UNIQUENESS) -= 1;
     }
 
+    printf("\n    VISIBLE units dying re-flow the row; they do NOT hand it back to stock\n");
+    // Task 033, from the user playing the deployed build: "when i have more than 12 units
+    // selected and some die - the group display in tug doesn't get updated (i might have 30
+    // units selected but the group shows 6 cuz 6 of the ones from tug died)".
+    //
+    // The skew this reproduces: the engine zeroes hitPoints in its damage primitive
+    // (0x004797B0) and clears the unit out of clientSelectionGroup on a LATER path, so for
+    // at least one frame our liveness test says "dead" while the engine's own selection
+    // still lists it. Counting a LIVE-FILTERED tail against an UNFILTERED engine list makes
+    // that ordinary skew look like an engine-side REMOVAL -- and the divergence latch is
+    // permanent until the next commit, so one frame of it stranded the row on stock for the
+    // rest of the selection, showing only the survivors of the engine's twelve.
+    //
+    // clientSelectionGroup is deliberately NOT updated here. That IS the case.
+    {
+        Drive36Sync();
+        ScHudRowOnDispatch();
+        Check("paged before the deaths", ScHudRowPageCount(), 3);
+        for (int i = 0; i < 6; ++i) *(DWORD*)(FakeUnit(i) + SC_CUNIT_OFF_HITPOINTS) = 0;
+        ResetHudCounters();
+        ScHudRowOnDispatch();
+        Check("  the row did NOT hand back to stock", (long long)g_origDispatchCalls, 0);
+        Check("  did NOT latch diverged", ScHudRowIsDiverged() ? 1 : 0, 0);
+        Check("  30 live units -> still 3 pages", ScHudRowPageCount(), 3);
+        Check("  snapped back to page 1", ScHudRowCurrentPage() + 1, 1);
+        {
+            int shown = 0; bool allLive = true;
+            for (int i = 0; i < 12; ++i) {
+                if (!(*(DWORD*)(FakeCtl(1 + i) + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE))
+                    continue;
+                ++shown;
+                DWORD u = ShownStatUserUnit(i);
+                if (!u || *(DWORD*)(u + SC_CUNIT_OFF_HITPOINTS) == 0) allLive = false;
+            }
+            Check("  the row is FULL again: 12 slots shown", shown, 12);
+            Check("  and every displayed unit is ALIVE", allLive ? 1 : 0, 1);
+        }
+        {
+            // ... and when the engine's own removal path catches up a frame later and drops
+            // the six, nothing changes: the same twelve live units stay on the row.
+            DWORD survivors[12];
+            for (int i = 0; i < 6; ++i) survivors[i] = FakeUnit(6 + i);
+            SetEngineSelection(survivors, 6);
+            ResetHudCounters();
+            ScHudRowOnDispatch();
+            Check("  engine catching up does not diverge either",
+                  ScHudRowIsDiverged() ? 1 : 0, 0);
+            Check("  and still does not hand back to stock", (long long)g_origDispatchCalls, 0);
+        }
+        for (int i = 0; i < 6; ++i) *(DWORD*)(FakeUnit(i) + SC_CUNIT_OFF_HITPOINTS) = 40 * 256;
+        SetEngineSelectionFirst(12);
+    }
+
     printf("\n    PERSISTENT engine divergence hands back to stock and stays there\n");
     // An engine-side removal that bypassed CMDACT_Select (transport, mind control,
     // trigger RemoveUnit): the visible unit is gone from clientSelectionGroup but the

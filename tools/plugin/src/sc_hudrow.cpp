@@ -262,17 +262,43 @@ static DWORD FindChildById(DWORD root, short id) {
 // Shadow refresh + display list
 // ---------------------------------------------------------------------------
 
+// Is this engine-held unit one WE already know to be dead? Death is our own liveness
+// verdict (UnitAlive: uniqueness match + HP > 0) applied to the entry we captured, so a
+// unit we are not tracking counts as live -- it is a genuine difference and must be
+// allowed to diverge.
+static bool EngineSlotLive(DWORD unit) {
+    for (int i = 0; i < g_n; ++i) {
+        if (g_list[i].unit == unit) return g_alive[i] != 0;
+    }
+    return true;
+}
+
 // Does the engine's own client selection (clientSelectionGroup, 0x00597208,
 // walked to the sentinel 0x597238) still match the visible tail of our shadow
 // list, as a SET? The engine mutates clientSelectionGroup on death and on some
 // selection edits WITHOUT going through CMDACT_Select (so sc_fanout's version
 // counter would not move); comparing here catches those and snaps us to page 1.
+//
+// BOTH SIDES ARE FILTERED FOR LIVENESS, and that is the whole point of the function
+// rather than a detail (task 033, from the user's play-test: ">12 selected, some die, the
+// row shows only the survivors"). The engine zeroes hitPoints in its damage primitive
+// 0x004797B0 and clears the unit out of clientSelectionGroup on a LATER path, so for at
+// least one frame a dead unit is still IN the engine's list while our tail has already
+// dropped it. Comparing a live-filtered tail against an unfiltered engine list turned that
+// ordinary one-frame skew into "an engine-side removal", and since the divergence latch is
+// permanent until the next commit, one frame of it stranded the row on stock -- displaying
+// a page of corpses -- for the rest of the selection. Filtering both sides with the SAME
+// liveness test makes an ordinary death cancel out on both sides, and leaves the case the
+// latch actually exists for (a LIVE unit the engine dropped without a commit: transport
+// load, mind control, trigger RemoveUnit) still detected.
 static bool EngineSelectionMatchesVisible(void) {
     DWORD eng[SC_HUD_BUTTON_COUNT];
     int engN = 0;
     DWORD* slot = (DWORD*)Rt(SC_VA_CLIENT_SELECTION_GROUP);
     for (int i = 0; i < SC_HUD_BUTTON_COUNT; ++i) {
-        if (slot[i] && engN < SC_HUD_BUTTON_COUNT) eng[engN++] = slot[i];
+        if (slot[i] && EngineSlotLive(slot[i]) && engN < SC_HUD_BUTTON_COUNT) {
+            eng[engN++] = slot[i];
+        }
     }
     const int overflowN = g_n - g_vis;
     int visN = 0;
