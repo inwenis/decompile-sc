@@ -52,6 +52,8 @@ stage	va	len	changed	name	before	after	expect	patch	note
 2	0x004BD656	5	1	grid.base@004BD656	mov edi, 0x6ceff8	mov [grid+0x0]	BFF8EF6C00	BF00000000	console init 0x004BD630: mark all dirty
 2	0x0048CC00	5	1	grid.row1col26	mov ecx, 0x6cf03a	mov [grid+0x4C]	B93AF06C00	B900000000	0x0048CB80 names grid[row 1][col 26]; recomputed for the new stride
 2	0x004B2314	5	1	grid.row18	mov edi, 0x6cf2c8	mov [grid+0x384]	BFC8F26C00	BF00000000	0x004B1FA0 names grid[row 18][col 0]; recomputed for the new stride
+2	0x004B2303	7	1	grid.row18.count	lea ecx, [eax + eax*4 - 0x55] ; shl ecx, 3	lea ecx, [eax - 0x11] ; imul ecx, ecx, 0x32 ; nop 	8D4C80ABC1E103	8D48EF6BC93290	0x004B1FA0: ecx = (row - 17) * 50, was (row - 17) * 40
+2	0x0048CC1F	3	1	grid.rowstep.48CB80	add ecx, 0x28	add ecx, 0x32	83C128	83C132	0x0048CB80: next row of the grid is +40 bytes
 2	0x0041E15B	14	1	grid.rowaddr.marker	cmp ecx, esi ; lea eax, [ecx + ecx*4] ; lea ebx, [edi + eax*8 + 0x6ceff8] ; jg 0x41e193	imul eax, ecx, 0x19 ; lea ebx, [edi + eax*2] ; cmp ecx, esi ; jg 0x41e193	3BCE8D04898D9CC7F8EF6C007F2A	6BC1198D9C47000000003BCE7F2A	dirty marker: eax = row * 25, ebx = grid + row*50 + col; cmp/jg moved after the multiply so the branch still reads the compare
 2	0x0041E18A	3	1	grid.rowstep.marker	add ebx, 0x28	add ebx, 0x32	83C328	83C332	dirty marker: next row is +40 bytes
 2	0x0041DE4E	3	1	grid.stride.testrect	lea eax, [ecx + ecx*4]	imul eax, ecx, 0x19	8D0489	6BC119	0x0041DE20: eax = row * 25

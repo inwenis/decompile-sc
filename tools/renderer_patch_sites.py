@@ -523,6 +523,20 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
              "0x0048CB80 names grid[row 1][col 26]; recomputed for the new stride")
     b.rebase(0x004B2314, 0x006CF2C8, 18 * COLS, "grid.row18", 2,
              "0x004B1FA0 names grid[row 18][col 0]; recomputed for the new stride")
+    # ...and the BYTE COUNT that fill uses is stride arithmetic too:
+    # `lea ecx,[eax+eax*4-0x55]` then `shl ecx,3` is 40*(row-17), i.e. "every row
+    # from 18 down to `row`". Re-pointing the base without rebuilding the count
+    # would fill 40 bytes per row of a 50-byte row and leave the right of every
+    # one of them unmarked -- a missed redraw, not a crash, which is the kind
+    # that survives into a screenshot.
+    assert COLS <= 127, "imul r32,r/m32,imm8 needs the column count to fit a signed byte"
+    b.code(0x004B2303, "8d4c80ab" "c1e103",
+           "8d48ef" + "6bc9" + bytes([COLS]).hex() + "90",
+           "grid.row18.count", 2,
+           "0x004B1FA0: ecx = (row - 17) * %d, was (row - 17) * %d" % (COLS, STOCK_COLS))
+    # The same function's sibling at 0x0048CB80 walks rows with an explicit step.
+    b.imm(0x0048CC1F, STOCK_COLS, COLS, 1, "grid.rowstep.48CB80", 2,
+          "0x0048CB80: next row of the grid is +40 bytes")
 
     # Row addressing: `lea r,[c+c*4]` (x5) feeding a SIB scale of 8 gives the
     # stock stride of 40. For 50 the multiply becomes x25 and the scale becomes

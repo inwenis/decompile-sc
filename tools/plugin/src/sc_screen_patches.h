@@ -286,6 +286,18 @@ static const ScScreenPatch SC_WS_PATCHES[] = {
       { 0xBF, 0xC8, 0xF2, 0x6C, 0x00 },
       { 0xBF, 0x00, 0x00, 0x00, 0x00 },
       "grid.row18", "0x004B1FA0 names grid[row 18][col 0]; recomputed for the new stride" },
+    // 0x004B2303  lea ecx, [eax + eax*4 - 0x55] ; shl ecx, 3
+    //             -> lea ecx, [eax - 0x11] ; imul ecx, ecx, 0x32 ; nop 
+    { 0x004B2303u,  7, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x8D, 0x4C, 0x80, 0xAB, 0xC1, 0xE1, 0x03 },
+      { 0x8D, 0x48, 0xEF, 0x6B, 0xC9, 0x32, 0x90 },
+      "grid.row18.count", "0x004B1FA0: ecx = (row - 17) * 50, was (row - 17) * 40" },
+    // 0x0048CC1F  add ecx, 0x28
+    //             -> add ecx, 0x32
+    { 0x0048CC1Fu,  3, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x83, 0xC1, 0x28 },
+      { 0x83, 0xC1, 0x32 },
+      "grid.rowstep.48CB80", "0x0048CB80: next row of the grid is +40 bytes" },
     // 0x0041E15B  cmp ecx, esi ; lea eax, [ecx + ecx*4] ; lea ebx, [edi + eax*8 + 0x6ceff8] ; jg 0x41e193
     //             -> imul eax, ecx, 0x19 ; lea ebx, [edi + eax*2] ; cmp ecx, esi ; jg 0x41e193
     { 0x0041E15Bu, 14, 2, 6u, 0x0u,
