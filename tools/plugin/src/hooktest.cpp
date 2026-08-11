@@ -3494,10 +3494,20 @@ int main(void) {
     // process and the crash looks like it happened at the end of the previous part.
     setvbuf(stdout, NULL, _IONBF, 0);
 
+    // PER PROCESS, not one path for the whole machine. Every worktree used to write
+    // %TEMP%\scplugin-hooktest.log, so two workers running run-ci-local.ps1 at the same
+    // time fought over one file -- task 030 saw the hooktest gate fail once and pass on a
+    // re-run at the SAME commit, which is the worst possible shape for a gate: it makes a
+    // real failure indistinguishable from a collision. A caller that wants the log
+    // somewhere specific can still set SCPLUGIN_LOG itself; this only fills in a default
+    // that cannot collide.
     char tmp[MAX_PATH];
-    GetTempPathA(MAX_PATH, tmp);
-    lstrcatA(tmp, "scplugin-hooktest.log");
-    SetEnvironmentVariableA("SCPLUGIN_LOG", tmp);
+    if (GetEnvironmentVariableA("SCPLUGIN_LOG", tmp, MAX_PATH) == 0) {
+        char dir[MAX_PATH];
+        GetTempPathA(MAX_PATH, dir);
+        wsprintfA(tmp, "%sscplugin-hooktest-%lu.log", dir, GetCurrentProcessId());
+        SetEnvironmentVariableA("SCPLUGIN_LOG", tmp);
+    }
     ScLogOpen();
     printf("hooktest: log -> %s\n", tmp);
 
