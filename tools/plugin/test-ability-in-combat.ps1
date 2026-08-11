@@ -187,6 +187,14 @@ $ABILITIES = @{
         # OFF for stim, deliberately: this arm's published numbers were measured without
         # it and turning it on would change them for no reason. See the cloak entry.
         Settle = $false
+        # NOT A TOGGLE: a TIMED buff that OUTLIVES a take (issue #39). 0x004C2F30 writes
+        # 0x25 to CUnit+0x115 and the engine counts it down over roughly twelve seconds,
+        # which is longer than one three-window take plus its resettle. So a retake that
+        # simply pressed T again would find every unit already carrying the effect, and
+        # the did-it-fire oracle -- "how many units carry it, before vs after" -- would
+        # read a delta of zero and fail the arm for a reason that is entirely the
+        # harness's. See the retake loop, which waits for the effect to lapse.
+        Toggle = $false
     }
     cloak = @{
         Name = 'Personnel Cloaking'; UnitName = 'ghost'; UnitType = 1; UnitLabel = 'Ghosts'
@@ -236,6 +244,12 @@ $ABILITIES = @{
         # in whichever window catches it. Measuring after the histogram stops moving is the
         # fix; widening the tolerance would only have hidden it.
         Settle = $true
+        # A TOGGLE (issue #39). Slot 7's second use is Decloak -- command 0x22, the same
+        # button and the same fan-out -- so a retake that clicks it again produces a
+        # LARGE effect delta in the other direction (36 -> 0) rather than the zero delta
+        # a re-applied timed buff produces. Nothing to wait for; the assertions below
+        # already read the magnitude of the change rather than its sign.
+        Toggle = $true
     }
 }
 $ABIL = $ABILITIES[$Ability]
@@ -464,8 +478,60 @@ function Invoke-Arm {
         # no target dies in any of the three, and a run that never gets a clean set fails
         # rather than reporting the dirty one.
         # ============================================================================
+        # ============================================================================
+        # AND THE SECOND CONFOUND, WHICH THE RETAKE ITSELF CREATED (issue #39)
+        #
+        # The retake above re-uses the ability, because a measurement window with no
+        # ability use in it is not an ability window -- "apply once and retake only the
+        # measurement" cannot work, there is nothing left to measure. But a TIMED buff
+        # OUTLIVES a take: 0x004C2F30 writes 0x25 to CUnit+0x115 and the engine counts
+        # that down over roughly twelve seconds, which is longer than one three-window
+        # take plus its resettle.
+        #
+        # So from take 2 every Marine was already stimmed, the did-it-fire oracle --
+        # units carrying the effect, before against after -- read a delta of ZERO, and
+        # the suite failed. Reproducibly, on every sweep, for a reason entirely its own:
+        # 36 Marines against 500 hp Supply Depots kill a target inside a two-second
+        # window most runs, so the retake path is the common case, not the rare one.
+        #
+        # The fix is to make a retake start from the state take 1 started from: nobody
+        # carrying the effect. Wait for it to lapse, then take again. A TOGGLE (cloak)
+        # needs none of this -- its second use is Decloak, a large delta in the other
+        # direction, which the assertions already read by magnitude.
+        # ============================================================================
+        function Wait-EffectLapsed {
+            param([Parameter(Mandatory)][object]$Reference, [int]$TimeoutSec = 40)
+            $carrying = @((Get-Mine $Reference) | Where-Object { & $ABIL.Effect $_ }).Count
+            if ($carrying -eq 0) { return $Reference }
+            Write-Host ("       [{0}] waiting for {1} to lapse on {2} unit(s) before the next take" -f `
+                $Mode, $ABIL.EffectName, $carrying)
+            $deadline = (Get-Date).AddSeconds($TimeoutSec)
+            $w = $Reference
+            while ((Get-Date) -lt $deadline) {
+                Start-Sleep -Seconds 2
+                $w = Get-ScWorldState -LogPath $logPath -Tag 'lapsing' -MarkerPath $markerPath
+                $carrying = @((Get-Mine $w) | Where-Object { & $ABIL.Effect $_ }).Count
+                if ($carrying -eq 0) {
+                    Write-Host ("       [{0}] {1} has lapsed; taking again from a clean state" -f $Mode, $ABIL.EffectName)
+                    return $w
+                }
+            }
+            # LOUD, not a zero delta later. The issue's third suggestion, and the reason
+            # this class of mistake will name itself next time instead of arriving as an
+            # unexplained red suite.
+            throw ("test: $($ABIL.EffectName) is still on $carrying unit(s) after ${TimeoutSec}s, so the " +
+                   'next take would re-apply it to units that already carry it and the ' +
+                   'did-it-fire check would read a delta of zero. Refusing to measure that ' +
+                   '(issue #39). The units are being re-stimmed by something, or the timeout is too short.')
+        }
+
         $clean = $false
         for ($take = 1; $take -le $MeasureTries; $take++) {
+            # Every take starts from "nobody carries the effect", take 1 included -- so
+            # this is also the assertion that the fixture handed us a clean start, and it
+            # is proved positive on any retake, where the same read returns non-zero
+            # before the wait and zero after it.
+            if (-not $ABIL.Toggle) { $result.Engaged = Wait-EffectLapsed -Reference $result.Engaged }
             $ref = $result.Engaged
             $refEnemies = Get-EnemyCount $ref
 
