@@ -185,6 +185,32 @@ The general form of that mistake is already an AGENTS.md rule ("assert the ENGIN
 not your bookkeeping", task 029). This is the same rule meeting a *drawing* claim: reading a
 control's fields proves what it HOLDS, and only the surface proves anything was DRAWN.
 
+### 5.1 The other direction, which is worse, and which ink does NOT catch
+
+A box that is too **short** draws nothing, and a surface ink count catches that immediately. A box
+that is too **narrow** draws the string TRUNCATED — and every field read passes, *and the ink
+count passes too*, because a clipped string is still ink.
+
+Task 033 shipped that bug into its own first live group run: with four Command Centers selected
+the indicator drew `"4 bldgs  4 queued"` into a box **22 pixels wide**, because the box was
+clamped to the 34-pixel wireframe button it was anchored to. `mode=2 linked=1 visible=1
+text="4 bldgs  4 queued" ink=352` — five correct readings describing a display the player could
+not read.
+
+So the box is sized from the STRING, not from the control it hangs off:
+
+```c
+int want = strlen(text) * SC_QIND_CHAR_W;   // a deliberate OVER-estimate of the advance
+```
+
+over-reserving costs nothing (the box is a clip rectangle, not a fill) and under-reserving costs
+the tail of the sentence. Where the box may then extend past the control it started on, the
+clean-up path has to repaint everything it covered rather than just the anchor.
+
+**The transferable form:** an oracle that proves a thing HAPPENED is not an oracle that proves it
+happened *completely*. `ink > 0` answers "did the engine draw"; only comparing the box against
+what it has to hold answers "could all of it fit".
+
 ## 6. What a plugin has to do
 
 `tools/plugin/src/sc_queueind.cpp`, and it is nine fields:
