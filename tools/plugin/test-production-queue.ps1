@@ -298,6 +298,74 @@ function Get-Card { param([string]$Tag, [int]$TimeoutSec = 20)
 function Get-StatusQueue { param([string]$Tag, [int]$TimeoutSec = 20)
     Get-ScStatusQueue -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -TimeoutSec $TimeoutSec }
 
+# Task 033's indicator, read back OUT OF THE LIVE DIALOG on the same marker channel: is
+# its control linked into the status pane's child chain, has the engine's own visible bit
+# been set on it, and what string does its pszText pointer actually hold. `ink` counts
+# non-background bytes the engine left in the dialog's surface inside the control's rect --
+# the only field here that can say anything was DRAWN -- and `refInk` is the same count over
+# a queue icon, i.e. the positive control that says the probe can see this surface at all.
+$script:qindSeq = 0
+function ConvertFrom-QIndLine {
+    param($Hit)
+    $m = [regex]::Match($Hit.Line,
+                'QIND \[[^\]]+\] mode=(\d+) linked=(\d+) visible=(\d+) text="([^"]*)" ' +
+                'bounds=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\) ink=(-?\d+) refInk=(-?\d+) ' +
+                'icons=\[([^\]]*)\] ' +
+                'sel=(\d+) engineLen=(\d+) overflow=(\d+) upg=(\d+) bldgs=(\d+) queued=(\d+)')
+    if (-not $m.Success) { throw "test: unparseable QIND line: $($Hit.Line)" }
+    return [pscustomobject]@{
+        Mode = [int]$m.Groups[1].Value; Linked = $m.Groups[2].Value -eq '1'
+        Visible = $m.Groups[3].Value -eq '1'; Text = $m.Groups[4].Value
+        Left = [int]$m.Groups[5].Value; Top = [int]$m.Groups[6].Value
+        Right = [int]$m.Groups[7].Value; Bottom = [int]$m.Groups[8].Value
+        Ink = [int]$m.Groups[9].Value; RefInk = [int]$m.Groups[10].Value
+        Icons = @($m.Groups[11].Value -split ',' | Where-Object { $_ } | ForEach-Object {
+            $p = $_ -split ':'
+            [pscustomobject]@{ Icon = [Convert]::ToInt32(($p[0] -replace '^0x'), 16)
+                               Mode = [int]$p[1]; State = $p[2] } })
+        Sel = [int]$m.Groups[12].Value; EngineLen = [int]$m.Groups[13].Value
+        Overflow = [int]$m.Groups[14].Value; Upg = [int]$m.Groups[15].Value
+        Buildings = [int]$m.Groups[16].Value; Queued = [int]$m.Groups[17].Value
+        Line = $Hit.Line
+    }
+}
+
+# Reads the indicator line the observer already wrote for SOMEBODY ELSE'S marker, taking
+# the newest one past $FromLine. This exists so an assertion can be added to this suite
+# without adding a marker round trip: two of the arms below are TIMING-SENSITIVE (the
+# plugin-cancel arm asserts the ring is still full when the cancel lands, which is only
+# true before the first Probe completes), and a spare second between the burst and the
+# cancel is enough to break them. The freshness gate is $FromLine plus the state
+# assertions the caller makes on the numbers in the line.
+function Get-QIndAfter {
+    param([int]$FromLine, [int]$TimeoutSec = 20)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        $hit = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
+                 Select-Object -Skip $FromLine | Select-String -Pattern 'QIND \[') |
+               Select-Object -Last 1
+        if ($hit) { return ConvertFrom-QIndLine $hit }
+        Start-Sleep -Milliseconds 250
+    }
+    throw "test: no QIND line after line $FromLine within ${TimeoutSec}s (log: $LogPath)."
+}
+
+function Get-QInd {
+    param([string]$Tag, [int]$TimeoutSec = 20)
+    $script:qindSeq++
+    $label = "qi-$Tag-$script:qindSeq"
+    Set-Content -LiteralPath $markerPath -Value $label -NoNewline
+    $esc = [regex]::Escape($label)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        $hit = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
+                 Select-String -Pattern "QIND \[$esc\]") | Select-Object -Last 1
+        if ($hit) { return ConvertFrom-QIndLine $hit }
+        Start-Sleep -Milliseconds 250
+    }
+    throw "test: no QIND answer for marker '$label' within ${TimeoutSec}s (log: $LogPath)."
+}
+
 # How many of the trained type player 0 owns right now. The cancel arms need it because a
 # queued unit can FINISH inside the measurement window, which shortens the queue by one
 # without moving a mineral -- so the expected drop is `1 + completions`, and completions
@@ -584,7 +652,7 @@ try {
     # that is also asserting the plugin's own writes.
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
         -Mode hooktest -LogCommands 1 -Circles 0 -HudRow 0 -WorldScan 1 -CardScan 1 `
-        -ProdQueue 1 -ProdQueueMax $QueueMax `
+        -ProdQueue 1 -ProdQueueMax $QueueMax -QueueIndicator 1 `
         -InjectWindowedHelper WMode -NoLaunchLock `
         -GameDir $GameDir -LogPath $LogPath 6>&1 | ForEach-Object {
             Write-Host $_
@@ -620,7 +688,7 @@ try {
         Start-Sleep -Seconds 2
         Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
         Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
-        Set-ScGameType -Hwnd $hwnd -Index 2      # Use Map Settings, verified
+        Set-ScGameType -Hwnd $hwnd -LogPath $logPath -Index 2      # Use Map Settings, verified
         Shot 'lobby'
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing
         Start-Sleep -Seconds 6
@@ -835,6 +903,9 @@ try {
     # TASK 028: what the player can actually SEE and CLICK, with nine queued
     # ---------------------------------------------------------------------------
     Step 'READ the status pane: five icons for a nine-item queue' {
+        # The line mark the indicator step below reads from, so it costs no extra marker
+        # round trip -- see Get-QIndAfter for why a spare second here is expensive.
+        $script:stripMark = Get-ScLogLineCount -LogPath $LogPath
         $st = Get-StatusQueue 'strip-full'
         Assert-That 'the status-strip read-back answered' ($st.Ok)
         Assert-That "the strip is showing this Nexus ($($st.Portrait))" `
@@ -859,6 +930,37 @@ try {
             "(bad: $(($wrong | ForEach-Object { "disp$($_.Display) uicon=0x$('{0:x}' -f $_.UIcon) qtype=0x$('{0:x}' -f $_.QueueType)" }) -join ' '))"
         Write-Host "       the player sees $($st.Clickable) icons for a queue of $QueueMax -- the $expectOverflow the plugin holds are NOT drawn"
         $script:stripWithOverflow = $st
+    }
+
+    Step 'THE INDICATOR says what the strip cannot show (task 033)' {
+        # The user asked for this in as many words: "when more then 5 units a queued - is
+        # the info showing that? (some +x number somewhere in tug?)". At the CAP the plugin
+        # has stopped taking items back, so the ring is full at five and the four it holds
+        # are the ones no icon can draw -- which is exactly what the "+N" is for.
+        # The observer writes the QIND line on EVERY marker, so the strip read above has
+        # already produced one; taking that line costs nothing, where a marker of our own
+        # would delay the timing-sensitive cancel arm below.
+        $qi = Get-QIndAfter $script:stripMark
+        Write-Host "       $($qi.Line)"
+        Assert-That 'the indicator control is spliced into the status dialog' ($qi.Linked)
+        Assert-That "and the ENGINE's own visible bit is set on it" ($qi.Visible)
+        # Read through the control's pszText pointer, not echoed from the module's buffer:
+        # that distinction is what let sc_hudrow's indicator pass its own test for weeks
+        # while drawing nothing (AGENTS.md: assert the engine's own result).
+        Assert-That "its text says +$expectOverflow -- the items the strip cannot draw (`"$($qi.Text)`")" `
+            ($qi.Text -eq "+$expectOverflow")
+        Assert-That "and the numbers behind it are the building's own ($($qi.EngineLen) + $($qi.Overflow))" `
+            ($qi.EngineLen -eq $ENGINE_SLOTS -and $qi.Overflow -eq $expectOverflow)
+        # THE DRAW ITSELF. A control can be linked, visible and hold the right string and
+        # still put no pixel on the screen -- the engine's text routine refuses to draw at
+        # all when the box is shorter than the font. refInk is the positive control: if the
+        # probe cannot see the surface, BOTH numbers are 0 and the ink assertion means
+        # nothing, so it is asserted first.
+        Assert-That "the ink probe can see the dialog's surface (refInk=$($qi.RefInk) over a queue icon)" `
+            ($qi.RefInk -gt 0)
+        Assert-That "and the engine DREW the indicator: ink=$($qi.Ink) inside ($($qi.Left),$($qi.Top),$($qi.Right),$($qi.Bottom))" `
+            ($qi.Ink -gt 0)
+        $script:qindDrawn = $qi
     }
 
     Step 'READ the card again: NOW the Cancel button is there' {
@@ -916,6 +1018,61 @@ try {
         $script:mineralsAfterBurst = $r.After.Selected.Minerals
         Assert-Reconciles 'after-plugin-cancel' $r.After -Accepted $script:accepted -Cancelled $script:cancels
         Shot 'plugin-cancelled'
+    }
+
+    Step 'THE FIFTH ICON: below the cap the plugin draws the slot the engine leaves empty' {
+        # The user's second report: "when i queue more then 5 units the 5'th slot is emtpy".
+        # It is task 025's SC_PRODQ_ENGINE_HOLD = 4 showing through -- the ring is kept one
+        # below its cap so the client keeps sending Train commands. The cancel above put the
+        # logical queue back under the maximum, so the plugin is holding the ring at four
+        # again, which is precisely the state where display 4 has nothing behind it.
+        #
+        # Both halves are read from the ENGINE's own dialog: the strip walk says which icons
+        # are drawn and clickable, and the indicator line says what the plugin put there.
+        $qi = Get-QInd 'fifth-icon'
+        Write-Host "       $($qi.Line)"
+        if ($qi.EngineLen -ge $ENGINE_SLOTS) {
+            Write-Host "       SKIPPED: the ring is still full ($($qi.EngineLen)) -- nothing was left empty to fill"
+        }
+        else {
+            Assert-That "the engine's ring is at the hold, so display $($qi.EngineLen) is its first empty slot ($($qi.EngineLen))" `
+                ($qi.EngineLen -eq $ENGINE_HOLD)
+            Assert-That "and the plugin still holds items to draw there ($($qi.Overflow))" `
+                ($qi.Overflow -gt 0)
+            # THE HEADLINE: five icons drawn and lit for a queue whose ring holds four.
+            # Before task 033 this read four, and the fifth came back GREYED with 0xE4
+            # behind it (research/production-queue.md 8.4 recorded exactly that).
+            #
+            # Asserted from the indicator's OWN snapshot, which the GAME THREAD takes at the
+            # end of the frame that filled the icons -- not from the observer's asynchronous
+            # walk. The engine's layout re-greys these slots microseconds before the plugin
+            # re-fills them, inside the same driver call and before anything is drawn, so an
+            # async reader can sample a state the player never sees. It did, and it made this
+            # assertion pass one run and fail the next.
+            $lit = @($qi.Icons | Where-Object { $_.State -eq 'lit' })
+            Assert-That "all $STATQ_SLOTS icons are lit, not $ENGINE_HOLD ($($lit.Count)): [$(($qi.Icons | ForEach-Object { "0x$('{0:x}' -f $_.Icon):$($_.State)" }) -join ' ')]" `
+                ($lit.Count -eq $STATQ_SLOTS)
+            $fifth = $qi.Icons[$ENGINE_SLOTS - 1]
+            if ($fifth) {
+                Assert-That "the fifth icon draws a Probe (icon=0x$('{0:x}' -f $fifth.Icon))" `
+                    ($fifth.Icon -eq $PROBE_TYPE)
+                Assert-That "with the OCCUPIED mode the engine writes for a real item ($($fifth.Mode))" `
+                    ($fifth.Mode -eq 3)
+                Assert-That 'and it is NOT greyed' ($fifth.State -eq 'lit')
+            }
+            # ... and the engine's own ring slot behind it is still EMPTY. That is the point
+            # of the whole exercise: the item is real and paid for, but it lives in the
+            # plugin, which is why a click on that icon is the plugin's to serve and never
+            # reaches cancelBuildQueueSlot. This one IS the async walk -- the ring is the
+            # BUILDING's memory, which nothing in this frame path writes, so it cannot race.
+            $st = Get-StatusQueue 'strip-fifth'
+            Assert-That 'the status-strip read-back answered' ($st.Ok)
+            $ring = @($st.Slots | Where-Object { $_.Display -eq ($ENGINE_SLOTS - 1) })[0]
+            if ($ring) {
+                Assert-That "while the RING slot behind it is still empty (0x$('{0:x}' -f $ring.QueueType))" `
+                    ($ring.QueueType -eq 0xE4)
+            }
+        }
     }
 
     Step "watch it drain: every over-cap item is promoted into a freed slot, in order" {
@@ -1018,6 +1175,22 @@ try {
     # TASK 028: the OTHER cancel -- an item inside the ENGINE's own ring, cancelled
     # through the control vanilla actually gives the player for it
     # ---------------------------------------------------------------------------
+    Step 'AND IT GOES AWAY: an empty queue puts the indicator back out of sight' {
+        # The other half of criterion 3, and the half a "does it appear" test cannot give
+        # you: with the logical queue drained there is nothing the strip cannot show, so the
+        # engine's visible bit must be OFF our control again and the module must say it is
+        # showing nothing. The control stays LINKED on purpose -- it is ours, hiding it is
+        # one flag write, and re-splicing it every time a queue empties would be churn.
+        $qi = Get-QInd 'drained'
+        Write-Host "       $($qi.Line)"
+        Assert-That "the building's logical queue really is empty ($($qi.EngineLen) + $($qi.Overflow))" `
+            ($qi.EngineLen + $qi.Overflow -eq 0)
+        Assert-That 'the indicator reports itself showing nothing (mode 0)' ($qi.Mode -eq 0)
+        Assert-That "and the engine's visible bit is CLEAR on the control" (-not $qi.Visible)
+        Assert-That "the ink probe still works, so 'hidden' is a reading and not a blind spot (refInk=$($qi.RefInk))" `
+            ($qi.RefInk -ge 0)
+    }
+
     Step "queue $EngineArmQueue more, so the plugin holds NOTHING and the ring is the whole queue" {
         $mark = Get-ScLogLineCount -LogPath $LogPath
         for ($i = 1; $i -le $EngineArmQueue; $i++) {
@@ -1178,8 +1351,16 @@ try {
         # Nothing here fans anything out -- the suite runs in hooktest mode, which installs
         # no selection hooks at all. Proved positively first: the mode line says hooktest,
         # so "no FANOUT lines" is a real absence and not a missing feature.
-        Assert-That 'the run really was in hooktest mode' `
-            (@($log | Select-String -Pattern 'HOOK: 1/1 installed, mode=hooktest').Count -gt 0)
+        # The COUNT is not pinned: task 033's indicator installs a second detour in this
+        # mode when -QueueIndicator is on. What has to hold is the mode (so "no FANOUT
+        # lines" below is a real absence) and that every hook the run wanted went in.
+        $hookLine = @($log | Select-String -Pattern 'HOOK: (\d+)/(\d+) installed, mode=hooktest')
+        Assert-That 'the run really was in hooktest mode' ($hookLine.Count -gt 0)
+        if ($hookLine.Count -gt 0) {
+            $hm = [regex]::Match($hookLine[-1].Line, 'HOOK: (\d+)/(\d+) installed')
+            Assert-That "and every hook it wanted went in ($($hm.Groups[1].Value)/$($hm.Groups[2].Value))" `
+                ($hm.Groups[1].Value -eq $hm.Groups[2].Value)
+        }
         Assert-That 'and nothing was fanned out' `
             (@($log | Select-String -Pattern 'FANOUT start:').Count -eq 0)
         Assert-That 'no hook rolled back at any point' `

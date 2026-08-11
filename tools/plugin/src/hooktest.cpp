@@ -25,6 +25,7 @@
 #include "sc_fanout.h"
 #include "sc_hook.h"
 #include "sc_hudrow.h"
+#include "sc_queueind.h"
 #include "sc_log.h"
 #include "sc_prodfan.h"
 #include "sc_prodqueue.h"
@@ -32,11 +33,61 @@
 
 static int g_failures = 0;
 
+// ---------------------------------------------------------------------------
+// Parts: numbered by the order they RUN, never by hand (issue #35)
+//
+// Three separate branches claimed a part number that another branch had already
+// taken -- 024 and 026 both took [13], 021 and 025 both took [11], 028 and 029 both
+// took [16]. Every one of them was invisible until somebody merged both sides: the
+// declarations sit in different regions of this file (or in different files), so git
+// reports no conflict and both parts simply arrive with the same number.
+//
+// The number exists for exactly one purpose: naming which part failed in a redirected
+// overnight log. Two parts sharing one defeats that purpose precisely when it is
+// needed. So the number is no longer a thing a branch claims -- Part() assigns it from
+// the order the parts actually run in, and prints the part's NAME beside it. There is
+// nothing left to collide over, and adding a part is one call with no shared resource
+// to check first.
+//
+// The NAME is now the real identifier: Check() prints it on every failing line, so a
+// reader greppping a 4000-line log for FAIL learns the subsystem without scrolling back
+// to a header. Duplicate names are refused below, for the same reason duplicate numbers
+// were a defect.
+//
+// The call order at the bottom of main() is deliberately chosen so the derived numbers
+// still match the ones research/ already cites (control-groups.md cites part [11] four
+// times, selection-circles.md cites [8], and so on). NEW PARTS GO AT THE END and take
+// the next number automatically. Reordering existing calls renumbers them and silently
+// invalidates those citations, so don't -- unless you are also fixing the citations.
+// ---------------------------------------------------------------------------
+#define SC_MAX_PARTS 64
+static int g_partCount = 0;
+static const char* g_partNames[SC_MAX_PARTS];
+static const char* g_partName = "(before any part)";
+
+static void Part(const char* name) {
+    for (int i = 0; i < g_partCount && i < SC_MAX_PARTS; ++i) {
+        if (strcmp(g_partNames[i], name) == 0) {
+            printf("  FAIL duplicate hooktest part name '%s' -- already part [%d]\n", name, i + 1);
+            ++g_failures;
+        }
+    }
+    if (g_partCount < SC_MAX_PARTS) { g_partNames[g_partCount] = name; }
+    else { printf("  FAIL more than %d parts; raise SC_MAX_PARTS\n", SC_MAX_PARTS); ++g_failures; }
+    ++g_partCount;
+    g_partName = name;
+    printf("\n[%d] %s\n", g_partCount, name);
+}
+
 static void Check(const char* what, long long got, long long want) {
     if (got == want) {
         printf("  ok   %-46s = %lld\n", what, got);
     } else {
-        printf("  FAIL %-46s = %lld (expected %lld)\n", what, got, want);
+        // The part NAME on the failing line itself. "part [16] failed" was unanswerable
+        // when two parts held [16]; "[16] the status pane's production-queue strip" is
+        // answerable however the numbering came out.
+        printf("  FAIL %-46s = %lld (expected %lld)   <- [%d] %s\n",
+               what, got, want, g_partCount, g_partName);
         ++g_failures;
     }
 }
@@ -330,7 +381,7 @@ static int ExpectOrderAt(const char* what, int off) {
 }
 
 static void FanoutCoreTests(void) {
-    printf("\n[7] the fan-out core: 36 units, one right-click, no game, no hooks\n");
+    Part("the fan-out core: 36 units, one right-click, no game, no hooks");
 
     g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
                                  PAGE_READWRITE);
@@ -637,7 +688,7 @@ static FanoutOutcome RunOne(const BYTE* cmd, int len) {
 }
 
 static void OpcodePolicyTests(void) {
-    printf("\n[9] the per-opcode policy: which commands reach all 36 units\n");
+    Part("the per-opcode policy: which commands reach all 36 units");
 
     g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
                                  PAGE_READWRITE);
@@ -882,7 +933,7 @@ static bool NoSelectionIndexWasWritten(int n) {
 }
 
 static void CircleTests(void) {
-    printf("\n[8] selection circles: fake sprites, fake engine primitives\n");
+    Part("selection circles: fake sprites, fake engine primitives");
 
     g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
                                  PAGE_READWRITE);
@@ -1247,7 +1298,7 @@ static bool Hotkey(BYTE action, BYTE group) {
 static const int kFirstTwelve[12] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
 
 static void ControlGroupTests(void) {
-    printf("\n[11] shadow control groups: Ctrl+N over 12, and N brings them back\n");
+    Part("shadow control groups: Ctrl+N over 12, and N brings them back");
 
     g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
                                  PAGE_READWRITE);
@@ -1590,7 +1641,7 @@ static void ControlGroupTests(void) {
 }
 
 static void HudRowTests(void) {
-    printf("\n[10] HUD-row paging: fake dialog tree, fake engine primitives\n");
+    Part("HUD-row paging: fake dialog tree, fake engine primitives");
 
     g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
                                  PAGE_READWRITE);
@@ -1757,6 +1808,59 @@ static void HudRowTests(void) {
                   (text && strstr(text, "35 units")) ? 1 : 0, 1);
         }
         *(BYTE*)(FakeUnit(16) + SC_CUNIT_OFF_UNIQUENESS) -= 1;
+    }
+
+    printf("\n    VISIBLE units dying re-flow the row; they do NOT hand it back to stock\n");
+    // Task 033, from the user playing the deployed build: "when i have more than 12 units
+    // selected and some die - the group display in tug doesn't get updated (i might have 30
+    // units selected but the group shows 6 cuz 6 of the ones from tug died)".
+    //
+    // The skew this reproduces: the engine zeroes hitPoints in its damage primitive
+    // (0x004797B0) and clears the unit out of clientSelectionGroup on a LATER path, so for
+    // at least one frame our liveness test says "dead" while the engine's own selection
+    // still lists it. Counting a LIVE-FILTERED tail against an UNFILTERED engine list makes
+    // that ordinary skew look like an engine-side REMOVAL -- and the divergence latch is
+    // permanent until the next commit, so one frame of it stranded the row on stock for the
+    // rest of the selection, showing only the survivors of the engine's twelve.
+    //
+    // clientSelectionGroup is deliberately NOT updated here. That IS the case.
+    {
+        Drive36Sync();
+        ScHudRowOnDispatch();
+        Check("paged before the deaths", ScHudRowPageCount(), 3);
+        for (int i = 0; i < 6; ++i) *(DWORD*)(FakeUnit(i) + SC_CUNIT_OFF_HITPOINTS) = 0;
+        ResetHudCounters();
+        ScHudRowOnDispatch();
+        Check("  the row did NOT hand back to stock", (long long)g_origDispatchCalls, 0);
+        Check("  did NOT latch diverged", ScHudRowIsDiverged() ? 1 : 0, 0);
+        Check("  30 live units -> still 3 pages", ScHudRowPageCount(), 3);
+        Check("  snapped back to page 1", ScHudRowCurrentPage() + 1, 1);
+        {
+            int shown = 0; bool allLive = true;
+            for (int i = 0; i < 12; ++i) {
+                if (!(*(DWORD*)(FakeCtl(1 + i) + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE))
+                    continue;
+                ++shown;
+                DWORD u = ShownStatUserUnit(i);
+                if (!u || *(DWORD*)(u + SC_CUNIT_OFF_HITPOINTS) == 0) allLive = false;
+            }
+            Check("  the row is FULL again: 12 slots shown", shown, 12);
+            Check("  and every displayed unit is ALIVE", allLive ? 1 : 0, 1);
+        }
+        {
+            // ... and when the engine's own removal path catches up a frame later and drops
+            // the six, nothing changes: the same twelve live units stay on the row.
+            DWORD survivors[12];
+            for (int i = 0; i < 6; ++i) survivors[i] = FakeUnit(6 + i);
+            SetEngineSelection(survivors, 6);
+            ResetHudCounters();
+            ScHudRowOnDispatch();
+            Check("  engine catching up does not diverge either",
+                  ScHudRowIsDiverged() ? 1 : 0, 0);
+            Check("  and still does not hand back to stock", (long long)g_origDispatchCalls, 0);
+        }
+        for (int i = 0; i < 6; ++i) *(DWORD*)(FakeUnit(i) + SC_CUNIT_OFF_HITPOINTS) = 40 * 256;
+        SetEngineSelectionFirst(12);
     }
 
     printf("\n    PERSISTENT engine divergence hands back to stock and stays there\n");
@@ -1934,6 +2038,21 @@ static void SetFakeType(int i, WORD type) {
     *(WORD*)(FakeUnit(i) + SC_CUNIT_OFF_UNIT_ID) = type;
 }
 
+// The units.dat prototype flags, in the fake image, agreeing with FakeMovable above.
+//
+// Task 036 made the plugin ask TWO questions where task 024 asked one -- "the predicate
+// refused it" AND "units.dat says it is a building" -- because the predicate also refuses
+// plenty of things that are not buildings, and a feature named building groups must not
+// widen anything for those. The fake table has to carry the same split the stub does, or
+// every case in this part would exercise the not-a-building branch and pass for the wrong
+// reason. Called after every MakeUnits/ScFanoutTestBegin, since those reset the image.
+static void SetFakeUnitsDatFlags(void) {
+    DWORD* flags = (DWORD*)FakeRt(SC_VA_UNITS_DAT_FLAGS);
+    for (int t = 0; t < 256; ++t) {
+        flags[t] = (t >= 106) ? SC_UNITSDAT_FLAG_BUILDING : 0u;
+    }
+}
+
 // The candidate list SortAllUnits is handed: CUnit pointers, NULL-terminated.
 static void MakeCandidates(DWORD* buf, const int* idx, int n) {
     for (int i = 0; i < n; ++i) buf[i] = FakeUnit(idx[i]);
@@ -1941,7 +2060,7 @@ static void MakeCandidates(DWORD* buf, const int* idx, int n) {
 }
 
 static void BuildingGroupTests(void) {
-    printf("\n[13] same-type building groups: one box, N buildings, N rallies\n");
+    Part("same-type building groups: one box, N buildings, N rallies");
 
     // Its own fake image, like every other part: each one releases the previous one's.
     g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
@@ -1952,6 +2071,7 @@ static void BuildingGroupTests(void) {
     ResetQueueCounters();
     ScFanoutTestBegin(g_fake, &CaptureEmit, 400);
     ScFanoutTestSetMovable(&FakeMovable);
+    SetFakeUnitsDatFlags();
 
     // 0..3 Supply Depots, 4..6 Barracks, 7..9 Marines. Same owner throughout; the
     // owner split gets its own case below.
@@ -2073,6 +2193,7 @@ static void BuildingGroupTests(void) {
         for (int i = 16; i < 64; ++i) SetFakeType(i, FAKE_TYPE_MARINE);
         ScFanoutTestBegin(g_fake, &CaptureEmit, 4000);
         ScFanoutTestSetMovable(&FakeMovable);
+        SetFakeUnitsDatFlags();
 
         DWORD cand[20];
         int idx[16];
@@ -2105,8 +2226,21 @@ static void BuildingGroupTests(void) {
         DWORD out[SC_SELECTION_SLOTS] = { 0 };
         out[0] = FakeUnit(3);
 
-        Check("a CLICK (clicked != 0) is untouched",
-              (int)ScFanoutGrowBuildingGroup(cand, out, FakeUnit(3), 1), 1);
+        // TASK 036 CHANGED THIS ONE, and it is left here rather than moved so the
+        // reversal is visible next to what it reversed. Task 024 asserted that a
+        // `clicked != 0` call was untouched, because it believed every click path passed
+        // one. It does -- but only TWO click paths reach SortAllUnits at all, and both
+        // are the ctrl-click / double-click "select all of this type on screen" branches
+        // (sc_addresses.h SC_VA_CLICK_SELECT_HANDLER). A plain click and a shift-click
+        // never call it. So the growth is now exactly as correct here as it is for a box.
+        {
+            DWORD cout[SC_SELECTION_SLOTS] = { 0 };
+            cout[0] = FakeUnit(3);
+            unsigned cn = ScFanoutGrowBuildingGroup(cand, cout, FakeUnit(3), 1);
+            Check("a double-click / ctrl-click (clicked != 0) grows the same group", (int)cn, 4);
+            Check("  and the CLICKED building is still the lead",
+                  cout[0] == FakeUnit(3) ? 1 : 0, 1);
+        }
         Check("a count other than 1 is untouched -- the engine found real units",
               (int)ScFanoutGrowBuildingGroup(cand, out, 0, 2), 2);
 
@@ -2129,6 +2263,7 @@ static void BuildingGroupTests(void) {
         for (int i = 0; i < 64; ++i) SetFakeType(i, FAKE_TYPE_MARINE);
         ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
         ScFanoutTestSetMovable(&FakeMovable);
+        SetFakeUnitsDatFlags();
         DriveSelection(36);
         Check("36 ordinary units still chunk by twelve", ScFanoutSimSlots(), SC_SELECTION_SLOTS);
         g_captureLen = 0; g_captureCount = 0;
@@ -2137,6 +2272,255 @@ static void BuildingGroupTests(void) {
         Check("  bytes queued unchanged from part [7]", g_captureLen, 108);
     }
 
+    ScFanoutTestSetMovable(NULL);
+    VirtualFree(g_fake, 0, MEM_RELEASE);
+    g_fake = NULL;
+}
+
+// ---------------------------------------------------------------------------
+// [20] Building-group PARITY (task 036): extending a group, and recalling one.
+//
+// Two mechanisms, neither of which goes through SortAllUnits:
+//
+//   the EXTEND override -- ScFanoutMovableDecide, the decision half of the detour on
+//   unit_IsStandardAndMovable. It is asked (unit, return address, the engine's verdict)
+//   and answers what the caller should see. Everything about it is decidable offline:
+//   the allowlist, the "is the lead a building" test, and the same-type-and-owner rule.
+//
+//   the RECALL re-install -- a control group of buildings must end up in the ENGINE's
+//   client selection, not only in the shadow list, because the stock status row draws
+//   the engine's array. The engine call is replaced by a recorder here, so the test can
+//   assert WHAT would have been installed as well as that something was.
+// ---------------------------------------------------------------------------
+
+// The recorder standing in for CreateNewUnitSelectionsFromList. It does what the engine
+// does that this plugin depends on: write the list into activePlayerSelection, densely
+// from slot 0 and NULL-terminated -- which is what ReadEngineVisible reads back.
+static DWORD g_reinstallList[SC_SELECTION_SLOTS];
+static int   g_reinstallCount = -1;
+static int   g_reinstallCalls = 0;
+
+static void FakeCreateSelections(unsigned long* list, int count) {
+    g_reinstallCount = count;
+    ++g_reinstallCalls;
+    DWORD* active = (DWORD*)FakeRt(SC_VA_ACTIVE_PLAYER_SELECTION);
+    for (int i = 0; i < SC_SELECTION_SLOTS; ++i) active[i] = 0;
+    for (int i = 0; i < count && i < SC_SELECTION_SLOTS; ++i) {
+        g_reinstallList[i] = (DWORD)list[i];
+        active[i] = (DWORD)list[i];
+    }
+}
+
+static void SetFakeEngineSelection(const int* idx, int n) {
+    DWORD* active = (DWORD*)FakeRt(SC_VA_ACTIVE_PLAYER_SELECTION);
+    for (int i = 0; i < SC_SELECTION_SLOTS; ++i) active[i] = 0;
+    for (int i = 0; i < n && i < SC_SELECTION_SLOTS; ++i) active[i] = FakeUnit(idx[i]);
+}
+
+static void BuildingParityTests(void) {
+    Part("building-group parity: extend a group, recall a group");
+
+    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
+                                 PAGE_READWRITE);
+    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+
+    MakeUnits(64, 1);
+    ResetQueueCounters();
+    ScFanoutTestBegin(g_fake, &CaptureEmit, 4000);
+    ScFanoutTestSetMovable(&FakeMovable);
+    SetFakeUnitsDatFlags();
+
+    // 0..5 Barracks, 6..9 Supply Depots, 10.. Marines.
+    for (int i = 0; i < 6; ++i)   SetFakeType(i, FAKE_TYPE_BARRACKS);
+    for (int i = 6; i < 10; ++i)  SetFakeType(i, FAKE_TYPE_DEPOT);
+    for (int i = 10; i < 64; ++i) SetFakeType(i, FAKE_TYPE_MARINE);
+
+    // The four allowlisted return addresses, in the fake image's own address space.
+    const DWORD retShiftLead = (DWORD)FakeRt(SC_RET_MOVABLE_SHIFT_LEAD);
+    const DWORD retShiftHit  = (DWORD)FakeRt(SC_RET_MOVABLE_SHIFT_CLICKED);
+    const DWORD retCombNew   = (DWORD)FakeRt(SC_RET_MOVABLE_COMBINE_NEW);
+    const DWORD retCombOld   = (DWORD)FakeRt(SC_RET_MOVABLE_COMBINE_OLD);
+
+    printf("\n    the extend override answers ONLY at the four call sites\n");
+    {
+        const int leadIdx[1] = { 0 };
+        SetFakeEngineSelection(leadIdx, 1);            // lead: a Barracks
+
+        // POSITIVE FIRST, so the negatives below are worth something: the same unit, the
+        // same lead, allowed at an allowlisted site.
+        Check("a sibling Barracks is allowed at the shift-click site",
+              ScFanoutMovableDecide(FakeUnit(1), retShiftHit, 0), 1);
+
+        // ... and refused everywhere else in the binary, with the engine's own answer
+        // handed straight back. 0x0046F1AA is SortAllUnits' own call site -- a real
+        // address, deliberately, so this is "not in the allowlist" rather than "not a
+        // code address at all".
+        Check("SortAllUnits' own call site is NOT in the allowlist",
+              ScFanoutMovableDecide(FakeUnit(1), (DWORD)FakeRt(0x0046F1AAu), 0), 0);
+        Check("nor is an arbitrary return address",
+              ScFanoutMovableDecide(FakeUnit(1), (DWORD)FakeRt(0x00401000u), 0), 0);
+        Check("and a PASSING verdict is handed back unchanged off-allowlist",
+              ScFanoutMovableDecide(FakeUnit(20), (DWORD)FakeRt(0x00401000u), 1), 1);
+    }
+
+    printf("\n    with a BUILDING lead, membership is same type and same owner\n");
+    {
+        const int leadIdx[1] = { 0 };
+        SetFakeEngineSelection(leadIdx, 1);
+        Check("the lead itself passes at its own site",
+              ScFanoutMovableDecide(FakeUnit(0), retShiftLead, 0), 1);
+        Check("a sibling Barracks joins",  ScFanoutMovableDecide(FakeUnit(2), retShiftHit, 0), 1);
+        Check("a Supply Depot does not",   ScFanoutMovableDecide(FakeUnit(6), retShiftHit, 0), 0);
+        // The engine SAID YES for a Marine. Refusing it here is not a regression: with a
+        // building lead, vanilla refused the whole operation at the lead's own call site,
+        // so this replaces "nothing happens" with "nothing happens".
+        Check("a Marine does not, even though the engine allowed it",
+              ScFanoutMovableDecide(FakeUnit(20), retShiftHit, 1), 0);
+
+        *(BYTE*)(FakeUnit(3) + SC_CUNIT_OFF_PLAYER) = 2;
+        BuildFakePlayerList(64, 1);
+        Check("another player's Barracks does not",
+              ScFanoutMovableDecide(FakeUnit(3), retShiftHit, 0), 0);
+        *(BYTE*)(FakeUnit(3) + SC_CUNIT_OFF_PLAYER) = 1;
+        BuildFakePlayerList(64, 1);
+
+        const DWORD hpWas = *(DWORD*)(FakeUnit(4) + SC_CUNIT_OFF_HITPOINTS);
+        *(DWORD*)(FakeUnit(4) + SC_CUNIT_OFF_HITPOINTS) = 0;
+        Check("a destroyed Barracks does not", ScFanoutMovableDecide(FakeUnit(4), retShiftHit, 0), 0);
+        *(DWORD*)(FakeUnit(4) + SC_CUNIT_OFF_HITPOINTS) = hpWas;
+
+        // Both combine sites take the same rule -- that is what makes shift+box and
+        // shift+ctrl-click agree with shift-click instead of each having its own answer.
+        Check("the combine sites answer identically (existing lead)",
+              ScFanoutMovableDecide(FakeUnit(0), retCombOld, 0), 1);
+        Check("the combine sites answer identically (incoming list)",
+              ScFanoutMovableDecide(FakeUnit(5), retCombNew, 0), 1);
+        Check("... and refuse a different building type there too",
+              ScFanoutMovableDecide(FakeUnit(6), retCombNew, 0), 0);
+    }
+
+    printf("\n    with a UNIT lead nothing is overridden at all\n");
+    {
+        const int marineLead[1] = { 20 };
+        SetFakeEngineSelection(marineLead, 1);
+        const int seen = ScFanoutExtendStat(SC_EXTEND_SEEN);
+        Check("a Marine joining Marines is the engine's own answer",
+              ScFanoutMovableDecide(FakeUnit(21), retShiftHit, 1), 1);
+        Check("a Barracks shift-clicked onto Marines stays refused",
+              ScFanoutMovableDecide(FakeUnit(0), retShiftHit, 0), 0);
+        // The counter is the proof that this branch was never entered, rather than
+        // entered and coincidentally agreeing.
+        Check("  and the override never even ran", ScFanoutExtendStat(SC_EXTEND_SEEN) - seen, 0);
+    }
+
+    printf("\n    with the feature OFF the override is inert\n");
+    {
+        const int leadIdx[1] = { 0 };
+        SetFakeEngineSelection(leadIdx, 1);
+        ScFanoutTestSetBuildingGroups(false);
+        const int seen = ScFanoutExtendStat(SC_EXTEND_SEEN);
+        Check("a sibling Barracks is refused again", ScFanoutMovableDecide(FakeUnit(1), retShiftHit, 0), 0);
+        Check("  because the override did not run", ScFanoutExtendStat(SC_EXTEND_SEEN) - seen, 0);
+        ScFanoutTestSetBuildingGroups(true);
+        Check("and allowed once more when it is back on",
+              ScFanoutMovableDecide(FakeUnit(1), retShiftHit, 0), 1);
+    }
+
+    printf("\n    a control group of buildings recalls into the ENGINE's own selection\n");
+    {
+        MakeUnits(64, 1);
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 4000);
+        ScFanoutTestSetMovable(&FakeMovable);
+        SetFakeUnitsDatFlags();
+        for (int i = 0; i < 6; ++i)   SetFakeType(i, FAKE_TYPE_BARRACKS);
+        for (int i = 6; i < 64; ++i)  SetFakeType(i, FAKE_TYPE_MARINE);
+        ScFanoutTestSetCreateSelections(&FakeCreateSelections);
+        g_reinstallCount = -1; g_reinstallCalls = 0;
+
+        // Six Barracks selected, exactly as the drag box leaves them.
+        DWORD sel[6];
+        for (int i = 0; i < 6; ++i) sel[i] = FakeUnit(i);
+        ScFanoutOnSelect(6, sel);
+        Check("the shadow list holds six buildings", ScFanoutShadowCount(), 6);
+        Check("the sim holds ONE of them at a time", ScFanoutSimSlots(), 1);
+
+        // Ctrl+1.
+        const BYTE assign[3] = { 0x13, SC_HOTKEY_ASSIGN, 0x01 };
+        (void)ScFanoutOnCommand(assign, sizeof(assign));
+        Check("the plugin's group holds all six", ScFanoutGroupCount(1), 6);
+
+        // Press 1. THE ENGINE HANDS BACK ONE, which is not a fault in its recall: its own
+        // row was filled from playersSelections, and the sim gate capped that at one
+        // building. This is the measured shape -- the in-game -Measure arm read exactly
+        // `GROUP recall enter: ... visible=1` against six stored.
+        const int engineGave[1] = { 0 };
+        SetFakeEngineSelection(engineGave, 1);
+        const BYTE recall[3] = { 0x13, SC_HOTKEY_RECALL, 0x01 };
+        (void)ScFanoutOnCommand(recall, sizeof(recall));
+
+        Check("the engine's client selection was rebuilt exactly once", g_reinstallCalls, 1);
+        Check("  with all six buildings, not the one it handed back", g_reinstallCount, 6);
+        bool allSix = true;
+        for (int i = 0; i < 6; ++i) {
+            bool found = false;
+            for (int j = 0; j < g_reinstallCount && j < SC_SELECTION_SLOTS; ++j) {
+                if (g_reinstallList[j] == FakeUnit(i)) found = true;
+            }
+            if (!found) allSix = false;
+        }
+        Check("  and each of them by its own pointer", allSix ? 1 : 0, 1);
+        Check("the shadow list still holds six", ScFanoutShadowCount(), 6);
+        Check("  and the engine is now holding all six of them, not one",
+              ScFanoutVisibleCount(), 6);
+        Check("  so nothing is past the cap any more",
+              ScFanoutShadowCount() - ScFanoutVisibleCount(), 0);
+        Check("the chunk size is still ONE -- the SIM gate is untouched", ScFanoutSimSlots(), 1);
+
+        // The order still reaches every one of them, one Select per building. This is the
+        // half that already worked before task 036 and must not have been disturbed by
+        // re-ordering the shadow list.
+        g_captureLen = 0; g_captureCount = 0;
+        (void)ScFanoutOnCommand(kRightClick, sizeof(kRightClick));
+        Check("6 pairs x (Select + order)", g_captureCount, 12);
+        Check("every building is on the wire by its own tag", CaptureTagCount(10), 6);
+        bool all6 = true;
+        for (int i = 0; i < 6; ++i) if (!CaptureHasTag(ExpectTag(i), 10)) all6 = false;
+        Check("  and each of the six is one of them", all6 ? 1 : 0, 1);
+    }
+
+    printf("\n    a control group of UNITS recalls exactly as task 021 left it\n");
+    {
+        // THE REGRESSION GUARD on the branch above. With 36 Marines the engine hands back
+        // its own twelve and the re-install must not run at all -- if it did, the shadow
+        // list's overflow-first invariant would be rebuilt from a different source and
+        // part [11]'s numbers would move.
+        MakeUnits(64, 1);
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 4000);
+        ScFanoutTestSetMovable(&FakeMovable);
+        SetFakeUnitsDatFlags();
+        for (int i = 0; i < 64; ++i) SetFakeType(i, FAKE_TYPE_MARINE);
+        ScFanoutTestSetCreateSelections(&FakeCreateSelections);
+        g_reinstallCount = -1; g_reinstallCalls = 0;
+
+        DriveSelection(36);
+        Check("36 units captured", ScFanoutShadowCount(), 36);
+        const BYTE assign[3] = { 0x13, SC_HOTKEY_ASSIGN, 0x02 };
+        (void)ScFanoutOnCommand(assign, sizeof(assign));
+        Check("the group holds 36", ScFanoutGroupCount(2), 36);
+
+        int twelve[SC_SELECTION_SLOTS];
+        for (int i = 0; i < SC_SELECTION_SLOTS; ++i) twelve[i] = 24 + i;   // the visible tail
+        SetFakeEngineSelection(twelve, SC_SELECTION_SLOTS);
+        const BYTE recall[3] = { 0x13, SC_HOTKEY_RECALL, 0x02 };
+        (void)ScFanoutOnCommand(recall, sizeof(recall));
+
+        Check("the engine's selection was NOT rebuilt for a unit group", g_reinstallCalls, 0);
+        Check("all 36 came back", ScFanoutShadowCount(), 36);
+        Check("  with the engine holding twelve", ScFanoutVisibleCount(), SC_SELECTION_SLOTS);
+        Check("  and the chunk size back at twelve", ScFanoutSimSlots(), SC_SELECTION_SLOTS);
+    }
+
+    ScFanoutTestSetCreateSelections(NULL);
     ScFanoutTestSetMovable(NULL);
     VirtualFree(g_fake, 0, MEM_RELEASE);
     g_fake = NULL;
@@ -2292,7 +2676,7 @@ static void PqBegin(int maxTotal, DWORD minerals, DWORD gas) {
 }
 
 static void ProdQueueTests(void) {
-    printf("\n[15] the production-queue core: >5 queued, no game, no hooks\n");
+    Part("the production-queue core: >5 queued, no game, no hooks");
 
     if (!g_fake) {
         g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
@@ -2390,16 +2774,34 @@ static void ProdQueueTests(void) {
     Check("a further cancel is the ENGINE's",
           ScProdQueueOnCancel(PqBuilding(), SC_CANCEL_TRAIN_LAST) ? 1 : 0, 0);
 
-    printf("\n    a cancel that names a SLOT is never ours -- the engine refunds it\n");
+    printf("\n    a cancel naming a slot the RING HOLDS is the engine's; one it does not is ours\n");
+    // Task 033 changed this contract, and the change is the whole point of the fifth icon.
+    // The ring holds four (SC_PRODQ_ENGINE_HOLD) and the plugin holds one, so display
+    // indices 0..3 name real ring items -- the engine's, passed through, exactly as before
+    // -- while display 4 names a slot holding 0xE4. Before task 033 that click could not
+    // exist (an empty slot's icon is drawn DISABLED); now the indicator draws that icon
+    // from the plugin's overflow and lights it, so the click is real and the plugin owns
+    // the item behind it. Handing it to the engine would refund by type 0xE4.
     PqBegin(16, 1000, 500);
     for (int i = 0; i < 5; ++i) PqTrain(PQ_TYPE_A);
-    for (unsigned slot = 0; slot < SC_BUILD_QUEUE_SLOTS; ++slot) {
-        Check("slot cancel passes through", ScProdQueueOnCancel(PqBuilding(), slot) ? 1 : 0, 0);
+    Check("the ring holds four, the plugin one", PqEngineLen(), SC_PRODQ_ENGINE_HOLD);
+    for (unsigned slot = 0; slot < (unsigned)SC_PRODQ_ENGINE_HOLD; ++slot) {
+        Check("a slot the ring HOLDS passes through",
+              ScProdQueueOnCancel(PqBuilding(), slot) ? 1 : 0, 0);
     }
     Check("0xFF (the no-op form) passes through",
           ScProdQueueOnCancel(PqBuilding(), SC_CANCEL_TRAIN_NONE) ? 1 : 0, 0);
-    Check("what the plugin holds is untouched", ScProdQueueOverflowCount(PqBuilding()), 1);
-    Check("money untouched",    (long long)*PqMinerals(), 1000 - 5 * 50);
+    Check("none of that touched what the plugin holds",
+          ScProdQueueOverflowCount(PqBuilding()), 1);
+    Check("nor the money", (long long)*PqMinerals(), 1000 - 5 * 50);
+    Check("the display index past the ring is CONSUMED",
+          ScProdQueueOnCancel(PqBuilding(), (unsigned)SC_PRODQ_ENGINE_HOLD) ? 1 : 0, 1);
+    Check("  and it refunded exactly that one item",
+          (long long)*PqMinerals(), 1000 - 4 * 50);
+    Check("  the plugin holds nothing now", ScProdQueueTrackedBuildings(), 0);
+    Check("a repeat of the same click is SWALLOWED, not passed to the engine",
+          ScProdQueueOnCancel(PqBuilding(), (unsigned)SC_PRODQ_ENGINE_HOLD) ? 1 : 0, 1);
+    Check("  and refunds nothing a second time", (long long)*PqMinerals(), 1000 - 4 * 50);
 
     printf("\n    THE CAP: the plugin stops taking items back, and vanilla's own five refuses\n");
     PqBegin(8, 1000, 500);              // 8 = the engine's five plus three held
@@ -2655,7 +3057,7 @@ static void UqPress(int kind, unsigned id) {
 }
 
 static void UpgradeQueueTests(void) {
-    printf("\n[17] the upgrade-queue core: more than one research at a building\n");
+    Part("the upgrade-queue core: more than one research at a building");
 
     if (!g_fake) {
         g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
@@ -2883,7 +3285,7 @@ static void UpgradeQueueTests(void) {
 }
 
 static void ExitLogTests(void) {
-    printf("\n[12] the exit log path writes even when the lock is dead-owned\n");
+    Part("the exit log path writes even when the lock is dead-owned");
 
     char path[MAX_PATH];
     ScLogResolvePath(path, sizeof(path));
@@ -3073,7 +3475,7 @@ static const ScCardSlot* FindSlot(const ScCardSlot* s, int n, int index) {
 }
 
 static void CardScanTests(void) {
-    printf("\n[14] the command-card read-back, against a fake card dialog\n");
+    Part("the command-card read-back, against a fake card dialog");
 
     // Every part allocates its own fake image and releases it again (the previous
     // part has already freed g_fake by the time this runs).
@@ -3206,7 +3608,7 @@ static void CardScanTests(void) {
 // selection task 024 would not have produced.
 // ---------------------------------------------------------------------------
 static void ProdFanTests(void) {
-    printf("\n[18] group production: one Train click, one item per building\n");
+    Part("group production: one Train click, one item per building");
 
     const WORD CC = 106, BARRACKS = 111;
     WORD same4[4]  = { CC, CC, CC, CC };
@@ -3384,8 +3786,308 @@ static void BuildFakeStatusPane(const WORD* queuedByDisplay, BYTE head, bool swa
     *(DWORD*)FakeRt(SC_VA_ACTIVE_PORTRAIT_UNIT) = unit;
 }
 
+// ---------------------------------------------------------------------------
+// [19] the queue-overflow indicator (task 033), against a fake status pane.
+//
+// Two things are decidable here and both are the feature: WHAT the module decides to say
+// (the composer is pure), and WHAT IT LEAVES IN THE DIALOG when it says it -- the spliced
+// control's own fields, the five icons' statUser records, and the fact that all of it goes
+// away again when the queue drops back under.
+//
+// What is NOT provable offline is that the engine's text routine actually puts ink on the
+// dialog surface. That needs a running game, and it is what tools/plugin/test-queue-
+// indicator.ps1 asserts (`QIND ... ink=`) -- the same gap that let sc_hudrow's indicator
+// pass its own test for weeks while drawing nothing.
+// ---------------------------------------------------------------------------
+
+#define FAKE_QIND_DLG_VA 0x006B8000u
+
+static DWORD QiCtl(int i) { return (DWORD)FakeRt(FAKE_QIND_DLG_VA) + 0x100u + (DWORD)i * SC_BINDLG_SIZE; }
+static DWORD QiUser(int i) { return (DWORD)FakeRt(FAKE_QIND_DLG_VA) + 0x800u + (DWORD)i * 0x10u; }
+static DWORD QiRoot(void) { return (DWORD)FakeRt(FAKE_QIND_DLG_VA); }
+
+static unsigned g_qiShows = 0, g_qiHides = 0, g_qiUpdates = 0, g_qiDriverCalls = 0;
+static void QiShow(DWORD c)   { ++g_qiShows;   *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) |= SC_CTRL_FLAG_VISIBLE; }
+static void QiHide(DWORD c)   { ++g_qiHides;   *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) &= ~(DWORD)SC_CTRL_FLAG_VISIBLE; }
+static void QiUpdate(DWORD c) { ++g_qiUpdates; (void)c; }
+static void QiOrigDriver(void) { ++g_qiDriverCalls; }
+
+// Root + the five queue icons (ids 2..6) laid out the way the live dialog reports them
+// (work/scratch/033, STATQ rects: 38x35 icons, the last one at the right-hand end) + one
+// wireframe button (id 0x21) so the GROUP anchor exists. The five icons start in the state
+// the ENGINE's own layout leaves them in: occupied for the ring's items, greyed for the
+// rest -- so "the plugin filled the fifth" is a change this test can see happen.
+static void BuildFakeQIndPane(int engineLen, WORD type) {
+    DWORD root = QiRoot();
+    memset((void*)root, 0, SC_BINDLG_SIZE);
+    *(WORD*)(root + SC_BINDLG_OFF_TYPE) = 0;
+    short* rr = (short*)(root + SC_BINDLG_OFF_BOUNDS);
+    rr[0] = 138; rr[1] = 388; rr[2] = 407; rr[3] = 479;
+
+    for (int k = 0; k < SC_STATQ_SLOTS; ++k) {
+        DWORD c = QiCtl(k);
+        memset((void*)c, 0, SC_BINDLG_SIZE);
+        *(WORD*) (c + SC_BINDLG_OFF_TYPE)   = 2;
+        *(short*)(c + SC_BINDLG_OFF_INDEX)  = (short)(SC_STATQ_FIRST_CONTROL + k);
+        *(DWORD*)(c + SC_BINDLG_OFF_PARENT) = root;
+        *(DWORD*)(c + SC_BINDLG_OFF_NEXT)   = QiCtl(k + 1);
+        short* r = (short*)(c + SC_BINDLG_OFF_BOUNDS);
+        if (k == 0) { r[0] = 104; r[1] = 14; }
+        else        { r[0] = (short)(104 + (k - 1) * 39); r[1] = 53; }
+        r[2] = (short)(r[0] + 38); r[3] = (short)(r[1] + 35);
+
+        DWORD u = QiUser(k);
+        memset((void*)u, 0, 0x10);
+        *(DWORD*)(c + SC_BINDLG_OFF_USER) = u;
+        DWORD flags = SC_CTRL_FLAG_DRAWN | SC_CTRL_FLAG_VISIBLE | SC_CTRL_FONT_SMALLEST;
+        if (k < engineLen) {
+            *(WORD*)(u + SC_STATUSER_OFF_ICON) = type;
+            *(WORD*)(u + SC_STATUSER_OFF_MODE) = 3;
+            *(WORD*)(u + SC_STATUSER_OFF_TYPE) = type;
+        } else {
+            *(WORD*)(u + SC_STATUSER_OFF_ICON) = (WORD)(k + 6);   // the placeholder frame
+            *(WORD*)(u + SC_STATUSER_OFF_MODE) = 6;
+            flags |= SC_CTRL_FLAG_DISABLED;                        // 0x00418640
+        }
+        *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) = flags;
+    }
+    // The wireframe row's first button, the GROUP anchor.
+    {
+        DWORD c = QiCtl(SC_STATQ_SLOTS);
+        memset((void*)c, 0, SC_BINDLG_SIZE);
+        *(WORD*) (c + SC_BINDLG_OFF_TYPE)   = 2;
+        *(short*)(c + SC_BINDLG_OFF_INDEX)  = SC_HUD_FIRST_SMALL_BUTTON;
+        *(DWORD*)(c + SC_BINDLG_OFF_PARENT) = root;
+        *(DWORD*)(c + SC_BINDLG_OFF_NEXT)   = 0;
+        short* r = (short*)(c + SC_BINDLG_OFF_BOUNDS);
+        r[0] = 166; r[1] = 398; r[2] = 200; r[3] = 430;
+        *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) = SC_CTRL_FLAG_VISIBLE;
+    }
+    *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD) = QiCtl(0);
+
+    *(DWORD*)((DWORD)FakeRt(SC_VA_DEFAULT_INTERACT_TABLE) + SC_CTRL_TYPE_LSTATIC * 4) = 0x33333333u;
+    *(DWORD*)((DWORD)FakeRt(SC_VA_DEFAULT_UPDATE_TABLE)   + SC_CTRL_TYPE_LSTATIC * 4) = 0x44444444u;
+    *(DWORD*)FakeRt(SC_VA_STATDATA_DIALOG)      = root;
+    *(DWORD*)FakeRt(SC_VA_ACTIVE_PORTRAIT_UNIT) = PqBuilding();
+    *(BYTE*) FakeRt(SC_VA_CLIENT_SELECTION_COUNT) = 1;
+}
+
+static int QiChildren(void) {
+    int n = 0;
+    for (DWORD c = *(DWORD*)(QiRoot() + SC_BINDLG_OFF_FIRST_CHILD); c && n < 32;
+         c = *(DWORD*)(c + SC_BINDLG_OFF_NEXT)) ++n;
+    return n;
+}
+
+// The indicator, found by walking the LIVE child chain -- never by asking the module where
+// it put it. Returns 0 when it is not linked.
+static DWORD QiIndicator(void) {
+    for (DWORD c = *(DWORD*)(QiRoot() + SC_BINDLG_OFF_FIRST_CHILD); c;
+         c = *(DWORD*)(c + SC_BINDLG_OFF_NEXT)) {
+        if (*(short*)(c + SC_BINDLG_OFF_INDEX) < 0) return c;
+    }
+    return 0;
+}
+
+static void QueueIndTests(void) {
+    Part("the queue-overflow indicator: composer, splice, and the fifth icon");
+
+    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
+                                 PAGE_READWRITE);
+    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+
+    printf("\n    the composer, driven directly -- one case per line it can produce\n");
+    {
+        char t[48];
+        ScQueueIndView v;
+
+        memset(&v, 0, sizeof(v)); v.selection = 1; v.engineLen = 3;
+        Check("three queued, nothing hidden -> nothing said",
+              ScQueueIndCompose(t, sizeof(t), &v), SC_QIND_NONE);
+        Check("  and the string is empty", (long long)(t[0] == '\0'), 1);
+
+        memset(&v, 0, sizeof(v)); v.selection = 1; v.engineLen = 4; v.overflow = 1;
+        Check("a five-item logical queue fills the strip and says nothing",
+              ScQueueIndCompose(t, sizeof(t), &v), SC_QIND_NONE);
+        Check("  five icons drawable", ScQueueIndDrawableSlots(&v), 5);
+
+        memset(&v, 0, sizeof(v)); v.selection = 1; v.engineLen = 4; v.overflow = 5;
+        Check("nine queued -> \"+4\"", ScQueueIndCompose(t, sizeof(t), &v), SC_QIND_STRIP);
+        Check("  the string is exactly that", (long long)(strcmp(t, "+4") == 0), 1);
+        Check("  and only five icons are drawable", ScQueueIndDrawableSlots(&v), 5);
+
+        memset(&v, 0, sizeof(v)); v.selection = 1; v.upgrades = 3;
+        Check("queued upgrades -> \"+3 upg\"", ScQueueIndCompose(t, sizeof(t), &v),
+              SC_QIND_UPGRADE);
+        Check("  the string is exactly that", (long long)(strcmp(t, "+3 upg") == 0), 1);
+
+        memset(&v, 0, sizeof(v)); v.selection = 4; v.buildings = 4; v.queued = 12;
+        Check("a group -> the group line", ScQueueIndCompose(t, sizeof(t), &v), SC_QIND_GROUP);
+        Check("  naming both numbers",
+              (long long)(strcmp(t, "4 bldgs  12 queued") == 0), 1);
+
+        memset(&v, 0, sizeof(v)); v.selection = 4; v.buildings = 1; v.queued = 3;
+        Check("one producing building in a group -> nothing (vanilla shows it already)",
+              ScQueueIndCompose(t, sizeof(t), &v), SC_QIND_NONE);
+
+        memset(&v, 0, sizeof(v)); v.selection = 30; v.buildings = 4; v.queued = 12;
+        v.hudPages = 3;
+        Check("while the ROW is paging, its own indicator owns the space",
+              ScQueueIndCompose(t, sizeof(t), &v), SC_QIND_NONE);
+    }
+
+    printf("\n    the frame path: nine queued at one building\n");
+    // A real overflow, built the engine's way through the production-queue core: nine
+    // Train presses leave the ring at four and the plugin holding five.
+    // PQ_TYPE_B (0x07), not PQ_TYPE_A (0x00): the icon assertions below read a unit type
+    // out of a statUser record, and a type id of ZERO would also be what an untouched
+    // record reads -- the assertion has to be able to fail.
+    PqBegin(16, 3000, 500);
+    for (int i = 0; i < 9; ++i) PqTrain(PQ_TYPE_B);
+    Check("the ring holds four", PqEngineLen(), SC_PRODQ_ENGINE_HOLD);
+    Check("the plugin holds five", PqOverflow(), 5);
+
+    BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
+    ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiOrigDriver);
+    Check("nothing spliced before the first frame", QiChildren(), SC_STATQ_SLOTS + 1);
+
+    ScQueueIndOnFrame();
+    Check("the indicator is now linked into the child chain", QiChildren(), SC_STATQ_SLOTS + 2);
+    {
+        DWORD ind = QiIndicator();
+        Check("  and the walk finds it", ind ? 1 : 0, 1);
+        if (ind) {
+            const char* text = (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
+            // Read out of the CONTROL, not out of the module: this is the assertion
+            // sc_hudrow's suite was missing.
+            Check("  its pszText says \"+4\"", (long long)(text && strcmp(text, "+4") == 0), 1);
+            Check("  the engine's visible bit is set on it",
+                  (*(DWORD*)(ind + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) ? 1 : 0, 1);
+            Check("  it is a static-text control", (long long)*(WORD*)(ind + SC_BINDLG_OFF_TYPE),
+                  (long long)SC_CTRL_TYPE_LSTATIC);
+            Check("  drawn by the engine's own handler for that type",
+                  (long long)*(DWORD*)(ind + SC_BINDLG_OFF_UPDATE), (long long)0x44444444u);
+            Check("  its id is negative, so the CREATE binder skips it",
+                  (long long)(*(short*)(ind + SC_BINDLG_OFF_INDEX) < 0), 1);
+            short* b = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
+            // The box has to be TALLER than the font or the engine's own draw refuses,
+            // silently (research/status-pane-text.md 3). The in-game ink assertion is what
+            // proves the number is big enough; this proves the box was not left flat.
+            Check("  the box is at least SC_QIND_BOX_H tall", b[3] - b[1] >= SC_QIND_BOX_H, 1);
+            // ... AND wide enough for the string it holds. A box too SHORT draws nothing;
+            // a box too NARROW draws a TRUNCATION, which reads as a working feature and is
+            // therefore worse. Found live, not here -- see the group case below.
+            Check("  and wide enough for the string it holds",
+                  (b[2] - b[0]) >= (int)strlen(ScQueueIndCurrentText()) * SC_QIND_CHAR_W ? 1 : 0, 1);
+            Check("  and sits inside the anchor icon (id 6)",
+                  (long long)(b[0] >= *(short*)(QiCtl(4) + SC_BINDLG_OFF_BOUNDS) &&
+                              b[2] <= *(short*)(QiCtl(4) + SC_BINDLG_OFF_BOUNDS + 4)), 1);
+        }
+    }
+    Check("the original driver ran first, every frame", (long long)g_qiDriverCalls, 0);
+
+    printf("\n    ... and the FIFTH icon is drawn from the plugin's own overflow\n");
+    // The user: "when i queue more then 5 units the 5'th slot is emtpy". Display 4 is the
+    // slot task 025's ENGINE_HOLD=4 leaves empty; the engine greyed it in the fake, and
+    // the module must have filled it with the first held item and lit it.
+    {
+        DWORD c = QiCtl(4), u = QiUser(4);
+        Check("display 4 draws the held unit type",
+              (long long)*(WORD*)(u + SC_STATUSER_OFF_ICON), (long long)PQ_TYPE_B);
+        Check("  with the OCCUPIED mode the engine writes", (long long)*(WORD*)(u + SC_STATUSER_OFF_MODE), 3);
+        Check("  and its type field set too", (long long)*(WORD*)(u + SC_STATUSER_OFF_TYPE),
+              (long long)PQ_TYPE_B);
+        Check("  the greyed bit is gone, so it draws lit",
+              (*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_DISABLED) ? 1 : 0, 0);
+        Check("  the four ENGINE icons were not touched",
+              (long long)(*(WORD*)(QiUser(0) + SC_STATUSER_OFF_MODE) == 3 &&
+                          *(WORD*)(QiUser(3) + SC_STATUSER_OFF_MODE) == 3), 1);
+    }
+    {
+        // A settled strip costs nothing: a second frame with the same state re-writes
+        // neither the icons nor the text.
+        unsigned shows = g_qiShows, updates = g_qiUpdates;
+        ScQueueIndOnFrame();
+        Check("a settled frame re-shows nothing", (long long)(g_qiShows - shows), 0);
+        Check("  and re-draws nothing", (long long)(g_qiUpdates - updates), 0);
+    }
+
+    printf("\n    the GROUP line gets a box sized for IT, not for the button it starts on\n");
+    // The defect this covers was found in a live run rather than here: the group text is
+    // ~17 characters and the wireframe button it anchors to is 34 pixels wide, so clamping
+    // the box to the anchor truncated it -- and every assertion above (mode, text, linked,
+    // visible, ink>0) still passed, because a truncated string is still ink. The strip's
+    // "+N" is short and stays inside its icon; the row's line may run across buttons, which
+    // is why leaving it repaints the whole row.
+    {
+        // Two producing buildings in the engine's own selection is what GROUP mode needs.
+        DWORD* g = (DWORD*)FakeRt(SC_VA_CLIENT_SELECTION_GROUP);
+        for (int i = 0; i < 12; ++i) g[i] = 0;
+        g[0] = PqBuilding();
+        g[1] = FakeUnit(1);
+        for (int k = 0; k < SC_BUILD_QUEUE_SLOTS; ++k) {
+            *(WORD*)(FakeUnit(1) + SC_CUNIT_OFF_BUILD_QUEUE + (DWORD)k * 2) =
+                (k < 2) ? (WORD)PQ_TYPE_B : (WORD)SC_BUILD_QUEUE_EMPTY;
+        }
+        *(BYTE*)FakeRt(SC_VA_CLIENT_SELECTION_COUNT) = 2;
+        ScQueueIndOnFrame();
+        Check("the indicator is in GROUP mode", ScQueueIndCurrentMode(), SC_QIND_GROUP);
+        DWORD ind = QiIndicator();
+        if (ind) {
+            short* b = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
+            const char* text = (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
+            int need = (int)strlen(text) * SC_QIND_CHAR_W;
+            printf("      box=(%d,%d,%d,%d) for \"%s\" (needs %d px)\n",
+                   b[0], b[1], b[2], b[3], text, need);
+            Check("  its box is wider than the 34px button it anchors to",
+                  (b[2] - b[0]) > 34 ? 1 : 0, 1);
+            Check("  and wide enough for the whole string", (b[2] - b[0]) >= need ? 1 : 0, 1);
+            Check("  still SC_QIND_BOX_H tall", b[3] - b[1] >= SC_QIND_BOX_H, 1);
+        }
+        *(BYTE*)FakeRt(SC_VA_CLIENT_SELECTION_COUNT) = 1;
+        for (int i = 0; i < 12; ++i) g[i] = 0;
+        ScQueueIndOnFrame();
+    }
+
+    printf("\n    the queue drains: the text goes away and the control is hidden again\n");
+    // Cancel the five held items the way the card's Cancel button does.
+    for (int i = 0; i < 5; ++i) ScProdQueueOnCancel(PqBuilding(), SC_CANCEL_TRAIN_LAST);
+    Check("the plugin holds nothing", PqOverflow(), 0);
+    ScQueueIndOnFrame();
+    {
+        DWORD ind = QiIndicator();
+        Check("the control is still linked (it is ours, and cheap)", ind ? 1 : 0, 1);
+        Check("  but the engine's visible bit is CLEAR",
+              ind && (*(DWORD*)(ind + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) ? 1 : 0, 0);
+        Check("  and the module says it is showing nothing", ScQueueIndCurrentMode(),
+              SC_QIND_NONE);
+    }
+
+    printf("\n    with the feature OFF nothing is spliced and nothing is written\n");
+    {
+        PqBegin(16, 3000, 500);
+        for (int i = 0; i < 9; ++i) PqTrain(PQ_TYPE_B);
+        BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
+        ScQueueIndTestBegin(NULL, &QiShow, &QiHide, &QiUpdate, &QiOrigDriver);  // disabled
+        unsigned shows = g_qiShows;
+        ScQueueIndOnFrame();
+        ScQueueIndOnFrame();
+        Check("no child was added", QiChildren(), SC_STATQ_SLOTS + 1);
+        Check("no control was shown", (long long)(g_qiShows - shows), 0);
+        Check("display 4 is still the engine's greyed placeholder",
+              (*(DWORD*)(QiCtl(4) + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_DISABLED) ? 1 : 0, 1);
+        Check("  still drawing the placeholder frame, not a unit",
+              (long long)*(WORD*)(QiUser(4) + SC_STATUSER_OFF_MODE), 6);
+    }
+
+    ScQueueIndTestBegin(NULL, NULL, NULL, NULL, NULL);
+    ScProdQueueTestBegin(NULL, SC_PRODQ_DEFAULT_MAX);
+    VirtualFree(g_fake, 0, MEM_RELEASE);
+    g_fake = NULL;
+}
+
 static void StatusStripTests(void) {
-    printf("\n[16] the status pane's production-queue strip, against a fake dialog\n");
+    Part("the status pane's production-queue strip, against a fake dialog");
 
     g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
                                  PAGE_READWRITE);
@@ -3513,13 +4215,13 @@ int main(void) {
 
     unsigned slots[4] = { 11, 22, 33, 44 };
 
-    printf("\n[1] baseline (unhooked)\n");
+    Part("baseline (unhooked)");
     Check("TgtFastcall(5,3) = 5*2+3+7", TgtFastcall(5, 3), 20);
     Check("TgtStdcall(5,3)  = 5+3*3",   TgtStdcall(5, 3), 14);
     CallMixed(2, slots, 100, 1000);
     Check("TgtMixed -> 2+11+100+1000", g_mixedResult, 1113);
 
-    printf("\n[2] the signature check refuses a wrong prologue\n");
+    Part("the signature check refuses a wrong prologue");
     {
         ScHook bogus;
         const BYTE wrong[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0x00 };
@@ -3529,7 +4231,7 @@ int main(void) {
         Check("nothing was patched: TgtFastcall(5,3)", TgtFastcall(5, 3), 20);
     }
 
-    printf("\n[3] install the three detours\n");
+    Part("install the three detours");
     {
         const BYTE pFast[]  = { 0x55, 0x8B, 0xEC, 0x51, 0xA1 };
         const BYTE pStd[]   = { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x5C };
@@ -3547,15 +4249,15 @@ int main(void) {
         Check("install sortOverflow-shaped (5B window)", m ? 1 : 0, 1);
     }
 
-    printf("\n[4] detours run, trampolines still compute the original result\n");
+    Part("detours run, trampolines still compute the original result");
     Check("TgtFastcall(5,3) -> original 20 + 1000", TgtFastcall(5, 3), 1020);
     Check("  detour entered", g_fastCalls, 1);
     Check("TgtFastcall(9,1) -> original 26 + 1000", TgtFastcall(9, 1), 1026);
     Check("TgtStdcall(5,3)  -> original 14 + 2000", TgtStdcall(5, 3), 2014);
     Check("  detour entered", g_stdCalls, 1);
 
-    printf("\n[5] the register-convention thunk sees EAX/ECX AND the stack args,\n"
-           "    and the original still runs with every register intact\n");
+    Part("the register-convention thunk sees EAX/ECX AND the stack args");
+    printf("    and the original still runs with every register intact\n");
     g_mixedResult = 0;
     CallMixed(2, slots, 100, 1000);
     Check("observer saw count (EAX)",     g_lastMixedCount, 2);
@@ -3571,7 +4273,7 @@ int main(void) {
     Check("200 calls, stack stays balanced", g_mixedResult, 1 + 11 + 1 + 1);
     Check("  thunk entered 200 times",       g_mixedCalls, 200);
 
-    printf("\n[6] removal restores the originals exactly\n");
+    Part("removal restores the originals exactly");
     Check("remove fast",  ScHookRemove(&g_hFast) ? 1 : 0, 1);
     Check("remove std",   ScHookRemove(&g_hStd) ? 1 : 0, 1);
     Check("remove mixed", ScHookRemove(&g_hMixed) ? 1 : 0, 1);
@@ -3585,18 +4287,37 @@ int main(void) {
     Check("no detour ran after removal (std)",   g_stdCalls - stdBefore, 0);
     Check("no detour ran after removal (mixed)", g_mixedCalls - mixedBefore, 0);
 
-    FanoutCoreTests();
-    OpcodePolicyTests();
-    CircleTests();
-    HudRowTests();
-    ControlGroupTests();
-    ProdQueueTests();
-    BuildingGroupTests();
-    CardScanTests();
-    StatusStripTests();
-    UpgradeQueueTests();
-    ProdFanTests();
-    ExitLogTests();
+    // THIS ORDER IS THE PART NUMBERING (issue #35). Part() numbers by the order these
+    // run, so the list below is the only place a number is decided -- and it is ordered
+    // to reproduce the numbers research/ already cites ([8] selection circles, [11]
+    // shadow control groups, [12] the exit log, [16] the status strip, ...) rather than
+    // to renumber six parts and quietly falsify a dozen citations.
+    //
+    // ADD NEW PARTS AT THE END. That is the whole mechanism: the next number is
+    // whatever the previous one was plus one, nobody claims it, and two branches adding
+    // a part each end up with different numbers however they merge.
+    //
+    // [19] and [20] ARE THAT MECHANISM'S FIRST LIVE TEST. Tasks 033 and 036 merged while
+    // this branch was in flight, each hand-numbering a new part: 033 wrote [19] for the
+    // queue indicator, 036 wrote [20] for building-group parity -- and 036's ran BEFORE
+    // 033's, so on main the parts printed 20 then 19. They did not collide this time; the
+    // numbers were simply already lying about the order. Ordered here so the derived
+    // numbers match the ones each branch published, and both headers converted to Part(),
+    // which is what the numbers now come from.
+    FanoutCoreTests();       // [7]
+    CircleTests();           // [8]
+    OpcodePolicyTests();     // [9]
+    HudRowTests();           // [10]
+    ControlGroupTests();     // [11]
+    ExitLogTests();          // [12]
+    BuildingGroupTests();    // [13]
+    CardScanTests();         // [14]
+    ProdQueueTests();        // [15]
+    StatusStripTests();      // [16]
+    UpgradeQueueTests();     // [17]
+    ProdFanTests();          // [18]
+    QueueIndTests();         // [19]  task 033
+    BuildingParityTests();   // [20]  task 036
 
     printf("\nhooktest: %d failure(s)\n", g_failures);
     ScLogClose();

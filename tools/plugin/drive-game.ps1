@@ -1144,8 +1144,14 @@ function Get-ScRegionFingerprint {
     Frames are a diagnostic in this repo, never an oracle -- reading text off one is not
     something a script can do reliably. But comparing the SAME rectangle before and after
     an action is different: it answers "did this region change at all", which is a real
-    yes/no. Set-ScGameType uses it, and nothing about it reproduces game artwork: the
-    return value is a hex digest.
+    yes/no, and nothing about it reproduces game artwork: the return value is a hex digest.
+
+    Set-ScGameType used to be its main caller and no longer is (issue #29). "Did this
+    region change at all" was the wrong question there: it cannot separate "the pick did
+    not take" from "the value was already right", and the Game Type combo's real value was
+    readable out of the engine's dialog list the whole time. What is left using this is the
+    map-browser row reads, where the question genuinely is "is this row different from that
+    one" rather than "what does this row say".
     #>
     [CmdletBinding()]
     param(
@@ -1186,56 +1192,215 @@ function Get-ScRegionFingerprint {
     } finally { $bmp.Dispose() }
 }
 
+# --- the Game Type, read out of the engine's dialog memory (issue #29) --------
+#
+# The dropdown's entries, by position, for the two-player maps this harness generates.
+# Read off a held-open frame originally (task 016, re-checked by 022); now also CHECKED
+# on every use, because the read below reports what the engine actually selected -- so a
+# map whose list is a different shape (a four-player map has Top vs Bottom in it) fails
+# here, immediately, instead of playing a melee game with the wrong units on it.
+$script:ScGameTypeByIndex = @{ 0 = 'Melee'; 1 = 'Free For All'; 2 = 'Use Map Settings' }
+
+# Control type 13 in the engine's dialog list. Observed on the Create Game screen: the
+# Game Type box, the player-name box and the race box are the three of them.
+$script:SC_CTRL_COMBO = 13
+
+function Get-ScGameTypeControl {
+    <#
+    .SYNOPSIS
+    The Create Game screen's Game Type combo, READ OUT OF THE ENGINE'S DIALOG LIST:
+    which entry is selected, and where the box is. $null if the screen is not up.
+    .DESCRIPTION
+    ISSUE #29, and AGENTS.md's hard rule "read a dialog's CONTENT from memory; never hash
+    its pixels" applied to the one control that had escaped it.
+
+    The old oracle could not answer the question it was asked. It picked a known OTHER
+    entry, fingerprinted the map-information panel, picked the wanted one and required the
+    pixels to have CHANGED -- so "the pick did not take" and "the value was already
+    right" produced identical evidence, and the sticky remembered value makes the second
+    case the common one. It was also the only reason the harness ever raised the game
+    window: the pick needs the foreground (task 027 measured that three ways), and a pick
+    that can be SKIPPED needs no foreground at all.
+
+    Nothing new was needed to read it. Task 027's own active-dialog scan already walks the
+    list at SC_VA_DIALOG_LIST and logs every control that carries text, and the Game Type
+    combo's text IS the selected entry's label:
+
+      DIALOGS n=1  dlg='Create' rect=0,0,639,479 ... ctrl='Game Type' rect=58,262,169,281
+        type=9 flags=0x408 ctrl='Use Map Settings' rect=180,261,351,277 type=13 flags=0x20020418
+
+    The combo is found by its ROW, not by its index among the controls and not by a fixed
+    rect: the one type-13 control that starts to the RIGHT of the 'Game Type' label and
+    overlaps it vertically. That is the same discipline Dismiss-ScTipsDialog uses for the
+    OK button and Select-ScBrowserMap uses for a map row -- ask the engine where its own
+    control is, then aim at that.
+
+    The returned ClickX/ClickY are the box's own centre (dialog origin + control rect),
+    which also retires the hardcoded (265,268) the picker used to be given. On the frame
+    above the two agree to a pixel, which is why nobody noticed it was a fixed point.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$LogPath)
+
+    $create = @(Get-ScDialogs -LogPath $LogPath | Where-Object { $_.Name -eq 'Create' })
+    if ($create.Count -eq 0) { return $null }
+    $dlg = $create[0]
+
+    $label = @($dlg.Controls | Where-Object { $_.Text -eq 'Game Type' })
+    if ($label.Count -ne 1) { return $null }
+    $row = $label[0]
+
+    $combo = @($dlg.Controls | Where-Object {
+        $_.Type -eq $script:SC_CTRL_COMBO -and
+        $_.Left -ge $row.Right -and
+        $_.Top -lt $row.Bottom -and $_.Bottom -gt $row.Top
+    })
+    if ($combo.Count -eq 0) { return $null }
+    $c = $combo[0]
+
+    # The map-information panel, from the same read: under Use Map Settings the engine
+    # SHOWS 'Human Slots'/'Computer Slots' and hides 'Number of Players' (flag 0x8 on the
+    # shown ones, 0x0 on the hidden one). Reported as corroboration, never as the verdict
+    # -- the combo's own text is the fact, and a second reading of the same dialog is not
+    # an independent oracle. It is here so a surprising result has context beside it.
+    $shown = @($dlg.Controls |
+               Where-Object { $_.Text -match '^(Number of Players|Human Slots|Computer Slots)' -and ($_.Flags -band 0x8) } |
+               # 'Human Slots:.2' -- the plugin sanitises the engine's separator to '.', so
+               # the label is everything before it, without its colon.
+               ForEach-Object { (($_.Text -split '\.')[0]).TrimEnd(':') })
+
+    [pscustomobject]@{
+        Value  = $c.Text
+        Left   = $c.Left; Top = $c.Top; Right = $c.Right; Bottom = $c.Bottom
+        ClickX = $dlg.Left + [int](($c.Left + $c.Right) / 2)
+        ClickY = $dlg.Top  + [int](($c.Top + $c.Bottom) / 2)
+        PanelShows = $shown
+    }
+}
+
+function Get-ScGameType {
+    <# .SYNOPSIS The Game Type currently selected on the Create Game screen, by name, or
+       $null if that screen is not up. A FACT read from the engine, not a pixel diff. #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$LogPath)
+    $c = Get-ScGameTypeControl -LogPath $LogPath
+    if ($c) { $c.Value } else { $null }
+}
+
+function Wait-ScGameTypeControl {
+    <#
+    .SYNOPSIS
+    The Game Type combo once the Create Game screen is up, optionally waiting for a
+    specific value. $null on timeout -- the caller decides whether that is a failure.
+    .DESCRIPTION
+    The plugin logs a DIALOGS line whenever the dialog SET CHANGES, which a game-type pick
+    always does (the combo's own text is part of that line), so this polls the newest line
+    rather than racing the 250 ms tick. -Want makes it wait for a particular entry, which
+    is what turns "I clicked" into "the engine now holds that value".
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$LogPath,
+        [string]$Want,
+        [int]$TimeoutSec = 10
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ($true) {
+        $c = Get-ScGameTypeControl -LogPath $LogPath
+        if ($c -and (-not $Want -or $c.Value -eq $Want)) { return $c }
+        if ((Get-Date) -ge $deadline) { return $null }
+        Start-Sleep -Milliseconds 250
+    }
+}
+
 function Set-ScGameType {
     <#
     .SYNOPSIS
-    Set the Create Game screen's Game Type, and PROVE it changed.
+    Make the Create Game screen's Game Type be the wanted one, reading the engine to find
+    out whether it already is -- and skipping the pick, and the foreground raise, if so.
     .DESCRIPTION
     The Game Type combo is the single most consequential control in this whole harness --
     get it wrong and the fixture loads as a melee game, the map's placed units are never
     created, and the failure surfaces minutes later as "the wrong units are on the map".
-    It is also the least reliable one: it remembers what this machine last used, so a
-    no-op pick can look like a success for months. (Task 022 attributed that no-op to the
-    window not being foreground; task 027 measured otherwise and removed the raise -- see
-    Set-ScWindowActive. The verified-change check below is what actually makes the pick
-    trustworthy, and it is unchanged.)
+    It is also sticky: it remembers what this machine last used, so a no-op pick can look
+    like a success for months.
 
-    So this does not pick and hope. It picks a KNOWN OTHER entry first, fingerprints the
-    map-information panel, then picks the wanted entry and requires the panel to have
-    CHANGED. That panel reads "Number of Players: N" for the melee-style types and
-    "Human Slots / Computer Slots" under Use Map Settings, so a real change of type is a
-    real change of pixels -- and a pick that silently did nothing leaves the two
-    fingerprints identical, which is a failure here instead of a mystery later.
+    WHAT CHANGED (issue #29). The old version proved the pick with a PIXEL FINGERPRINT of
+    the map-information panel: pick a known OTHER entry, hash, pick the wanted one, require
+    the hash to differ. Two costs, both real:
 
-    The list's contents and order were read off a held-open frame (task 016, re-checked
-    by task 022): for the two-player maps this harness generates it is exactly
-    {Melee, Free For All, Use Map Settings}, drawn below the box at +16, +31, +46 client
-    pixels whatever the current value is.
+      1. It could not tell "the pick did not take" from "the value was already right" --
+         both leave the two hashes equal -- so the common case and the failure case
+         produced the same evidence.
+      2. It was the ONLY reason this harness still raised the game window. A dropdown pick
+         genuinely needs the foreground (task 027, three measured arms), so the pick costs
+         the user their window for about two seconds. A pick that is SKIPPED costs nothing.
+
+    Now the value is READ (Get-ScGameTypeControl, out of the engine's own dialog list) and:
+
+      * already the wanted entry -> no pick, no raise, no dropdown at all;
+      * otherwise pick, then WAIT FOR THE ENGINE TO READ BACK the wanted entry by name.
+        Not "something changed" -- the right value, or a retry, or a throw naming what the
+        combo actually says.
+
+    That also checks the index/name table for free: -Index 2 means "Use Map Settings", and
+    if this map's list is a different shape (a four-player map carries Top vs Bottom) the
+    read says so here instead of the run playing the wrong game type.
+
+    -Force picks even when the value already matches. Only probe-quiet-dropdown.ps1 wants
+    that: it is measuring whether a pick TAKES under three foreground arms, so skipping the
+    pick would be skipping its experiment.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][IntPtr]$Hwnd,
+        # The plugin log this run is writing. Not optional: the alternative to reading the
+        # engine is the pixel oracle this replaced, and quietly falling back to it would be
+        # a verification that shares the flaw it is fixing.
+        [Parameter(Mandatory)][string]$LogPath,
         [int]$Index = 2,          # Use Map Settings
-        [int]$OtherIndex = 0,     # Melee -- any entry that is not $Index
-        [int]$X = 265, [int]$Y = 268,
-        [int]$Tries = 3
+        # The entry the pick must produce. Defaults from -Index via ScGameTypeByIndex.
+        [string]$Name,
+        # Overrides for the combo's own centre, which is normally computed from the
+        # engine's rect. Here for a caller driving a screen this cannot read.
+        [int]$X = 0, [int]$Y = 0,
+        [int]$Tries = 3,
+        [switch]$Force
     )
-    # The map-information panel, client coordinates at 640x480. Wide enough to cover both
-    # the "Number of Players" line and the two-line Human/Computer Slots that replaces it.
-    $panel = @{ X = 400; Y = 270; Width = 210; Height = 40 }
+    $want = if ($Name) { $Name } else { $script:ScGameTypeByIndex[$Index] }
+    if (-not $want) { throw "drive-game: no name known for game-type index $Index; pass -Name." }
+
+    $c = Wait-ScGameTypeControl -LogPath $LogPath -TimeoutSec 15
+    if (-not $c) {
+        throw ("drive-game: the Create Game screen's Game Type combo is not in the engine's dialog " +
+               "list (log: $LogPath). Either that screen is not up, or the plugin's dialog scan is " +
+               'off (%SCPLUGIN_DIALOGS%=0). Refusing to pick blind.')
+    }
+
+    if (-not $Force -and $c.Value -eq $want) {
+        Write-Host ("       game type is already '{0}' (read from the engine's dialog list; panel shows {1}) -- no pick, no raise" -f `
+            $c.Value, (($c.PanelShows -join ', ') -replace '^$', 'nothing yet'))
+        return
+    }
+
+    $px = if ($X) { $X } else { $c.ClickX }
+    $py = if ($Y) { $Y } else { $c.ClickY }
     for ($try = 1; $try -le $Tries; $try++) {
-        Send-ScDropdownPick -Hwnd $Hwnd -X $X -Y $Y -Index $OtherIndex
-        $before = Get-ScRegionFingerprint -Hwnd $Hwnd @panel
-        Send-ScDropdownPick -Hwnd $Hwnd -X $X -Y $Y -Index $Index
-        $after = Get-ScRegionFingerprint -Hwnd $Hwnd @panel
-        if ($before -ne $after) {
-            Write-Host "       game type set (panel $before -> $after, attempt $try)"
+        Write-Host ("       game type is '{0}', want '{1}' -- picking index {2} at the combo's own centre ({3},{4}), attempt {5}" -f `
+            $c.Value, $want, $Index, $px, $py, $try)
+        Send-ScDropdownPick -Hwnd $Hwnd -X $px -Y $py -Index $Index
+        $now = Wait-ScGameTypeControl -LogPath $LogPath -Want $want -TimeoutSec 6
+        if ($now) {
+            Write-Host ("       game type set to '{0}' (engine dialog read; panel shows {1})" -f `
+                $now.Value, (($now.PanelShows -join ', ') -replace '^$', 'nothing yet'))
             return
         }
-        Write-Host "       game type pick did not take (panel unchanged: $before), retrying"
+        $c = (Get-ScGameTypeControl -LogPath $LogPath) ?? $c
         Start-Sleep -Milliseconds 600
     }
-    throw "drive-game: could not set the Game Type after $Tries attempt(s) -- the map-information panel never changed, so the pick is not taking. A fixture loaded under the wrong game type produces the wrong units, so this refuses to continue."
+    throw ("drive-game: could not set the Game Type to '$want' after $Tries attempt(s) -- the engine's " +
+           "dialog list still reads '$($c.Value)'. A fixture loaded under the wrong game type produces " +
+           'the wrong units, so this refuses to continue.')
 }
 
 function Wait-ScNoGameRunning {
@@ -1317,7 +1482,9 @@ function Set-ScWindowActive {
     on a stock launch. Under the windowed-mode helper every suite injects it is not: the
     probe fingerprinted the animated main menu 3 s apart with the window in the background
     and got two different frames, so the pixel oracles (Get-ScRegionFingerprint, the
-    browser-row reads, Set-ScGameType) work in the background too.
+    browser-row reads) work in the background too. Set-ScGameType was on that list until
+    issue #29 replaced its fingerprint with a read of the engine's dialog list, which needs
+    no drawing at all.
 
     So this function stays -- for a human who wants to watch a run, and as the thing
     -RaiseWindow reaches for -- but nothing in the harness calls it by default.
@@ -1477,12 +1644,16 @@ function Send-ScDropdownPick {
 
     THIS IS THE ONE INPUT IN THE HARNESS THAT REALLY DOES NEED THE FOREGROUND, and task
     027 measured it three ways rather than assuming it (probe-quiet-dropdown.ps1, one
-    launch, all three arms on the Create Game screen, using Set-ScGameType's own
-    verified-change oracle):
+    launch, all three arms on the Create Game screen, using Set-ScGameType's own verdict):
 
       A  background, no raise                                  -> pick did NOT take
       B  background + AttachThreadInput(game) + SetActiveWindow -> pick did NOT take
       C  foreground                                             -> pick took, attempt 1
+
+    ...AND THE CHEAPEST WAY TO PAY THAT COST IS NOT TO PICK. Since issue #29 the caller
+    reads the combo's current entry out of the engine's dialog list first and skips the
+    pick -- and therefore this raise -- whenever the value is already what it wants, which
+    on a machine with a sticky remembered game type is most runs.
 
     So the cheap "share the input queue without taking the foreground" answer is dead for
     this control, on measurement and not on theory. The likely mechanism: this is a
@@ -1617,6 +1788,83 @@ function Get-ScMinimapPoint {
 
 $script:ScMarkerSeq = 0
 
+function Set-ScMarker {
+    <#
+    .SYNOPSIS
+    Write one label into the plugin's marker file. The ONE place any marker is written.
+    .DESCRIPTION
+    ISSUE #37. Every marker write used to be `Set-Content -LiteralPath $MarkerPath`, and
+    a sweep caught it throwing mid-run:
+
+        FAIL a test step threw: The process cannot access the file
+        'C:\sc-work\logs\031\sweep\marker.txt' because it is being used by another process
+
+    The issue filed it as a rare race between the write and the plugin's observer thread,
+    which polls that same file about four times a second. Measured, it is not rare and it
+    is not subtle -- `Set-Content` opens the file with FileShare.NONE, so ANY reader
+    holding it open makes the write throw, including the plugin's own deliberately
+    permissive one. The race is only in the OVERLAP, not in the outcome: given overlap,
+    the failure is certain.
+
+    Measured on 2026-08-11, one reader held open with the flags scplugin.cpp PollMarker
+    actually uses (GENERIC_READ, FILE_SHARE_READ|WRITE|DELETE), three writers tried
+    against it:
+
+        reader share            Set-Content   File.WriteAllText   FileShare.RW|Delete
+        R|W|D (the plugin's)    FAIL          ok                  ok
+        R|W   (no DELETE)       FAIL          ok                  ok
+        none  (worst case)      FAIL          FAIL                FAIL
+
+    So the fix is the SHARE MODE, not a retry: open FileShare.ReadWrite|Delete, the most
+    permissive there is. That tolerates the observer, and -- unlike File.WriteAllText,
+    whose default is FileShare.Read -- it also tolerates a second driver holding the same
+    marker, which is the case that made task 031's eight-suite sweep hit this at all.
+
+    WRITE-TO-TEMP-THEN-RENAME, the fix the issue proposed, was tried first and is WORSE:
+    with the marker open by that same permissive reader, both [IO.File]::Move(overwrite)
+    and a raw MoveFileEx(MOVEFILE_REPLACE_EXISTING) fail with ERROR_ACCESS_DENIED (5).
+    A rename cannot replace an open destination on this filesystem even when the holder
+    granted FILE_SHARE_DELETE, so it removes nothing and fails harder than the write it
+    was meant to replace. Not used, and recorded here so nobody re-suggests it.
+
+    The retry is still here, bounded and backing off, for the residue the share mode
+    cannot cover: another process holding a WRITE handle (a second driver mid-write, an
+    editor, a virus scanner). It is a backstop, not the mechanism.
+
+    TORN READS are not a concern at this size. The write is one Write() of under ~40
+    bytes onto a truncated file, so an observer poll landing inside it sees either the
+    empty file -- which PollMarker already returns from without logging -- or the whole
+    label. Nothing in between has ever been observed and nothing shorter can be written.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$MarkerPath,
+        [Parameter(Mandatory)][string]$Label,
+        [int]$Tries = 10,
+        [int]$BackoffMs = 50
+    )
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($Label)
+    $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+    $last = $null
+    for ($i = 1; $i -le $Tries; $i++) {
+        try {
+            $fs = [System.IO.FileStream]::new($MarkerPath, [System.IO.FileMode]::Create,
+                                              [System.IO.FileAccess]::Write, $share)
+            try { $fs.Write($bytes, 0, $bytes.Length) } finally { $fs.Dispose() }
+            return
+        }
+        catch [System.IO.IOException] {
+            # Sharing violation or a transient lock. Anything else (a bad path, a
+            # read-only directory) is not retryable and rethrows immediately.
+            $last = $_
+            Start-Sleep -Milliseconds ($BackoffMs * $i)
+        }
+    }
+    throw ("drive-game: could not write the marker '$Label' to $MarkerPath after $Tries attempt(s). " +
+           "Last error: $($last.Exception.Message). Something other than the game's observer is " +
+           'holding that file open for writing -- another driver, an editor, or a scanner.')
+}
+
 function Get-ScUnitState {
     <#
     .SYNOPSIS
@@ -1641,7 +1889,7 @@ function Get-ScUnitState {
     if (-not $MarkerPath) { $MarkerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt' }
     $script:ScMarkerSeq++
     $label = "$Tag-$script:ScMarkerSeq"
-    Set-Content -LiteralPath $MarkerPath -Value $label -NoNewline
+    Set-ScMarker -MarkerPath $MarkerPath -Label $label
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         $line = Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
@@ -1762,7 +2010,7 @@ function Get-ScWorldState {
     if (-not $MarkerPath) { $MarkerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt' }
     $script:ScMarkerSeq++
     $label = "$Tag-$script:ScMarkerSeq"
-    Set-Content -LiteralPath $MarkerPath -Value $label -NoNewline
+    Set-ScMarker -MarkerPath $MarkerPath -Label $label
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     $esc = [regex]::Escape($label)
     while ((Get-Date) -lt $deadline) {
@@ -1862,7 +2110,7 @@ function Get-ScCardState {
     if (-not $MarkerPath) { $MarkerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt' }
     $script:ScMarkerSeq++
     $label = "$Tag-$script:ScMarkerSeq"
-    Set-Content -LiteralPath $MarkerPath -Value $label -NoNewline
+    Set-ScMarker -MarkerPath $MarkerPath -Label $label
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     $esc = [regex]::Escape($label)
     while ((Get-Date) -lt $deadline) {
@@ -2019,7 +2267,7 @@ function Get-ScStatusQueue {
     if (-not $MarkerPath) { $MarkerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt' }
     $script:ScMarkerSeq++
     $label = "$Tag-$script:ScMarkerSeq"
-    Set-Content -LiteralPath $MarkerPath -Value $label -NoNewline
+    Set-ScMarker -MarkerPath $MarkerPath -Label $label
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     $esc = [regex]::Escape($label)
     while ((Get-Date) -lt $deadline) {

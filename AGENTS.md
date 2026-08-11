@@ -79,6 +79,23 @@ the right number of items. And where a plugin evaluates an engine predicate on t
 behalf, evaluate it in the state the action will ACTUALLY run in, not the state you are in
 when you ask.
 
+**The UI shape of this, 2026-08-11, task 033: a read-back of your own buffer is not a
+read-back.** `sc_hudrow` spliced a page indicator, wrote `"36 units 13-24 (2/3)"` into it, and
+`test-hud-row.ps1` asserted that string — out of the module's own buffer. Green for weeks, and
+NOTHING WAS EVER DRAWN: the engine's string draw refuses when `top + fontHeight > clip.bottom`
+and the control's box was nine pixels tall. The user found it by asking how to page. The fix
+for the ORACLE is to count what the engine actually left behind — task 033 counts non-background
+bytes (`ink`) in the dialog's own 8-bit surface inside the control's bounds, with the same count
+over a known-drawn control as the positive control, so `ink=0` cannot be confused with a blind
+probe. That is a read-back; asking your own buffer what you put in it is not.
+
+**And a check that fails at RANDOM is worth as little as one that cannot fail** (same task): the
+fifth-icon assertion passed one run and failed the next because the observer thread sampled
+between the plugin filling a slot and the engine's layout re-greying it, microseconds later,
+inside one driver call — invisible to the player, who only ever sees the frame. Both times the
+fix was to ask the thread that OWNS the data: snapshot on the game thread at end of frame for
+frame state, keep the async walk for the building's own memory, which the frame path never writes.
+
 ## Your DIAGNOSTICS are under the same rule as your assertions (2026-08-10, task 030)
 
 The "a check that cannot fail is worth nothing" rule applies to the lines you print while
@@ -100,6 +117,37 @@ So, for any diagnostic you are about to trust:
   names the test that refused.
 - "No log line appeared" and "the function returned false" look identical in a quiet log.
   Log entry as well as outcome, at least once, so absence is distinguishable from refusal.
+
+## An enumeration that scanned for a NAME is not exhaustive (2026-08-11, task 034)
+
+Two failure modes of "I searched the binary and found them all", both met in one task.
+
+**1. A routine that is HANDED a pointer never names it.** Task 034 enumerated framebuffer
+writers by scanning `.text` for the pointer `0x006CEFF4` and called that exhaustive. It is not:
+`FUN_004800A0` writes the framebuffer through a pointer passed in a register, sits 1405 bytes
+from the nearest reference to it, and is UNROLLED — holding the pitch as fourteen displacements
+`[ecx + k*640]` and `[ecx + k*640 + 4]`, of which exactly ONE spells 640. Fifteen instructions
+no pointer scan could reach.
+
+So sweep for the SHAPE of the arithmetic — `k*pitch + d` — not for the pitch and not for the
+pointer. `tools/renderer_pitch_sweep.py` does this. Note that searching multiples alone finds
+only half of them (the `+4` twins are not multiples of anything), and half a fix in a rendering
+path renders rather than crashes.
+
+**2. A disassembly sweep that stops early reports ZERO and looks like a clean bill of health.**
+Capstone halts at the first byte it cannot decode; the first version of that sweep therefore
+covered only the bytes before the first jump table — about 3% of `.text` — and printed "nothing
+found". A tool that scans 3% and reports zero hits is the worst possible output, because it is
+indistinguishable from a correct all-clear. Make such sweeps resume past undecodable bytes AND
+report the fraction of the section they actually covered.
+
+**3. And the same task's oracle was too COARSE rather than wrong.** It reported stage 0 as
+"pixel-identical"; measured at full resolution, 586 of 307200 pixels differ — animated doodads
+caught at different phases, invisible to a check that sampled every second pixel against a
+90%-per-row threshold. The fix was to assert on SHAPE, not count: a wrong pitch damages whole
+ROWS across the full width, while animation differs in isolated blobs spanning no row. Assert
+the thing that distinguishes damage from noise, and report the noise floor beside it rather than
+asserting against zero.
 
 ## Absence assertions must first be proved positive (2026-08-09)
 
@@ -213,7 +261,7 @@ consistent nonsense, which is worse than a crash.
 
 ## Foreground: only ONE primitive may raise (hard rule, 2026-08-09, task 027 — reverses 022/023)
 
-**The rule has two halves and you need both. Reading one half alone re-opens a real bug.**
+**The rule has three halves and you need all of them. Reading one alone re-opens a real bug.**
 
 1. **Posted mouse MOVES, clicks and world DRAG-boxes do NOT need the foreground.** Nothing
    in the harness may raise the window for them. This is the half that reverses 022/023.
@@ -221,6 +269,9 @@ consistent nonsense, which is worse than a crash.
    allowed to raise, it does so for the length of one pick, and it hands the foreground
    back afterwards. Delete that and the Game Type pick silently stops taking. Details at
    the end of this section.
+3. **The GAME raises itself at launch, and the harness hands that back too** (issue #30).
+   Nothing in the harness asks for it — the game activates its own window when it creates
+   one — so the fix is symmetric with the pick: record, then restore. Half 3 below.
 
 Half 1 used to be stated the other way round. It was wrong, and the wrong version cost the
 user their focus on every unattended run — the complaint that opened task 027.
@@ -273,17 +324,73 @@ seconds during the menu walk of the three suites that call `Set-ScGameType`, ins
 whole run. A world drag-box is also a held-button walk and needs none of this — so this is
 the dialog control, not held buttons in general.
 
+### Half 3: the LAUNCH borrows too, and gives it back (issue #30, task 035)
+
+The game activates its own window when it creates one, and until 2026-08-11 nothing handed
+that back. On a busy desktop it looked like a few seconds of flicker; on an idle one the
+game simply kept the foreground for the whole run (task 029 measured 72 s of a 72-second
+run, and what looked like a "hand back" was the process exiting).
+
+So a worker launch now records the foreground window immediately before `CreateProcess`
+and restores it once the game's window exists — `tools/plugin/sc-foreground.ps1`, called
+from `run-with-plugin.ps1`. Measured before and after, same machine, same minute, one
+launch each (in-process sampler, 150 ms, `C:\sc-work\logs\035\fg2-*.txt`):
+
+| | game holds the foreground | how it ended |
+|---|---|---|
+| before (`-NoForegroundRestore`) | 09:27:07.5 → 09:27:35.7, **28.2 s of a 28 s run** | the game was CLOSED |
+| after (default) | **~4 s**, then handed back | handed back to the pre-launch window, which then kept it for the rest of the run |
+
+**The residual is structural, and it is worth knowing why.** Stamping the launch stages
+against the sampler, one launch:
+
+```
+T+5.28  scinject starts the game
+T+5.53  the game's window creation takes the foreground
+T+9.60  scinject RETURNS -- the first instant run-with-plugin.ps1 runs again
+T+12.19 check-game-windows
+```
+
+`scinject.exe` blocks for its own settle, so nothing in PowerShell executes between T+5.5
+and T+9.6: **~4 s of the hold cannot be reached from here at all.** The restore therefore
+fires the moment scinject returns (the game's window already exists — scinject has been
+through `WaitForInputIdle`), with a second attempt after the health check as a safety net.
+Shortening it further would mean changing scinject's injection timing, which is not a
+foreground problem.
+
+**Workers only.** The gate is `$env:AGENT_TASK` — never set for the user's own shortcut —
+plus `-NoForegroundRestore`, which `tools/deploy.ps1` bakes into the deployed launcher.
+Someone who double-clicked their game wants to see it. `$env:SCDRIVE_RAISE=1` turns the
+restore off too, for a human watching a run.
+
 ### How to check a run did not steal focus
 
 `tools/plugin/watch-foreground.ps1` samples `GetForegroundWindow()` every 250 ms and prints
 one line per CHANGE, exiting non-zero if any StarCraft window was ever foreground. Run it
 alongside a suite; do not claim "it did not steal focus" without it.
 
-What a correct run looks like: for the six suites that never pick a game type, **zero**
-changes — `test-fanout-orders` and `test-selection-circles` (the pair 022/023 cited) both
-went 0 failures with the user's window keeping the foreground for the entire run. For the
-three that do pick one, exactly one borrow-and-return pair around the pick (measured:
-foreground at 22:03:39, back to the user's window at 22:03:43). Anything else is a bug.
+**Always check a trace's pids against the pid the launch printed.** Task 035 saw two traces
+name StarCraft pids that were not the game it had just launched, and briefly concluded the
+tool was fabricating them under
+`Start-Process -WindowStyle Hidden -RedirectStandardOutput`. It is not: run head to head
+against an in-process sampler through one launch, that exact invocation agreed on the
+window handle, the pid and the second. What the odd traces were actually showing is the
+thing the pid check is for — **another StarCraft on the machine**, which on a multi-worker
+box is a competing launch bouncing off the game's single-instance check. The reading was
+right and the assumption "the StarCraft in my trace is my StarCraft" was wrong. Nothing any
+earlier task concluded with this tool is affected.
+
+What a correct run looks like: **one borrow-and-return pair for the LAUNCH** (~6 s, above),
+then for the six suites that never pick a game type, nothing else — `test-fanout-orders`
+and `test-selection-circles` (the pair 022/023 cited) both went 0 failures with the user's
+window keeping the foreground for the rest of the run. For the three that do pick a game
+type, one further pair around each pick (measured: foreground at 22:03:39, back to the
+user's window at 22:03:43). Anything else is a bug.
+
+Note what the launch fix does for the pick: `Send-ScDropdownPick` returns the foreground to
+whatever held it *before the pick*, and on an idle desktop that used to be the game itself,
+because the launch had taken it and never given it up. With the launch handing back, the
+pick's hand-back lands on the user's window, which is what it was always meant to do.
 
 ## The in-game tips dialog is dismissed by ITS OWN button, never by a fixed point (task 027)
 
@@ -371,11 +478,20 @@ queued behind it, one of them prepared to wait 90.
 
 Before `stop-agent.ps1`, ALWAYS:
 
-1. `Get-Process StarCraft` — if one is running, do not stop the agent yet.
+1. `Get-Process StarCraft` **in the same breath as the kill, not minutes
+   earlier**. A check from five minutes ago is worthless: the agent may have
+   started a run in between — and if you have just told it to GO, that is
+   exactly what it is doing. (2026-08-11: the conductor said GO, saw a stale
+   heartbeat, and stopped the agent four minutes later. The agent had received
+   the GO and launched at 11:04; the kill orphaned that game.)
 2. "Ready for merge" does NOT mean "idle". A worker may start verification
    runs after reporting. Ask it to confirm it is idle, or merge first and
    stop it when it acknowledges.
-3. After stopping, re-check for a surviving game and for a
+3. **A stale heartbeat does not mean deaf.** It means the agent's turn ended —
+   which is also what it looks like while a Monitor is armed and waiting. Before
+   concluding an agent is unresponsive, send it something and give it time to
+   answer; do not infer death from silence alone.
+4. After stopping, re-check for a surviving game and for a
    `C:\sc-work\logs\sc-launch.lock` naming a dead pid.
 
 Killing an orphan is allowed ONLY with positive proof it is orphaned — a

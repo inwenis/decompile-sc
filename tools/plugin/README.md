@@ -410,12 +410,53 @@ Two things follow that a screenshot cannot tell you and this plugin now reads ou
 
 | | |
 |---|---|
-| The status area still draws five icons | items 6..N are real, paid for and will be built, but they are not on screen. The engine's five are always five *true* entries — the next five this building will build — so nothing shown is wrong, only incomplete. Extending the production panel is the obvious follow-up |
-| …and they are also the only items the player can CANCEL by clicking | the queue icons address the ring; an overflow item is reachable only through the card's Cancel button, tail-first. Task 028 measured this rather than assuming it |
+| ~~The status area still draws five icons~~ | **FIXED by `-QueueIndicator 1` (task 033)**: the icons past the engine's ring are drawn from the plugin's own queue and a `+N` covers the rest. Without that flag the old limitation stands — items 6..N are real, paid for and will be built, but they are not on screen |
+| ~~…and they are also the only items the player can CANCEL by clicking~~ | **also fixed with it**: a click on an icon the plugin drew is served by the plugin (it cancels that exact held item and refunds it once). Without the flag, an overflow item is reachable only through the card's Cancel button, tail-first |
 | Train (`0x1F`) only | Unit Morph (`0x23`), Train Fighter (`0x27`) and Building Morph (`0x35`) keep vanilla's five |
 | A one-frame ordering window | if a slot frees in the same frame a Train command is processed, the engine can take that slot ahead of an older held item. Nothing is lost or double-paid; only the relative order of two items queued within a frame of each other can differ |
 | Refund latency for a destroyed building | the cheap liveness terms run every tick; the player-unit-list walk runs on Train/Cancel commands, so a building destroyed while the player is idle is refunded on their next click |
 | Multiplayer | never — it moves a player's resources outside the command stream |
+
+---
+
+## Queue indicator: showing what the strip cannot draw (task 033)
+
+`-QueueIndicator 1` (default off; on in the deployed play build). Full derivation of the text
+path, with the listings, in [`research/status-pane-text.md`](../../research/status-pane-text.md).
+
+It answers three things the user asked for after playing the deployed build:
+
+| they said | it now shows |
+|---|---|
+| *"when i queue more then 5 units the 5'th slot is emtpy"* | the icons the engine leaves empty are filled from the plugin's own overflow and lit |
+| *"is the info showing that? (some +x number somewhere in tug?)"* | `+N` over the last icon, for whatever is queued past those five |
+| *"queueing upgrades … there is no queue insidcating the queu"* | `+N upg` for a building with queued research, which has no icons at all |
+
+and one nobody had asked for but task 030 needed: with several producing buildings selected the
+strip is not drawn at all, so it says `N bldgs  M queued` — the only thing on screen that says a
+Train click reached more than one building.
+
+**How it draws.** One control of type LSTATIC spliced into the status dialog, `pszText` pointing
+at a plugin buffer, interact/update taken from the engine's own per-type default tables. The
+engine draws it, in the pane's own font. No art is added and no pixel is plotted by hand.
+
+**One hook**, the per-frame HUD driver `0x004D93F0`, running *after* the original so the pane has
+already been laid out. Off → the dialog's child list is byte-for-byte stock.
+
+**The cancel rule that comes with it.** A lit icon is a clickable icon, and clicking icon *k*
+makes the engine call `cancelBuildQueueSlot(k)`. When the ring slot behind that icon is empty the
+engine would refund by the sentinel type `0xE4`, reading both cost tables out of bounds — so the
+plugin takes any such click itself and cancels the item it actually holds. Vanilla cannot produce
+that click (an empty slot's icon is drawn disabled), so a stock game is unchanged.
+
+### Known limitations
+
+| | |
+|---|---|
+| The strip still stops at five icons | past that it is a number, not a picture. Widening the strip means inventing control positions over Blizzard art, which the game-file rules forbid |
+| The `+N` overlays the last icon | there is no free margin in the status pane's 269×91 — the live bounds are tabulated in `research/status-pane-text.md` §8 |
+| While the unit row is PAGING, the strip indicator stands down | one indicator at a time; `sc_hudrow`'s own `page i/j` owns that corner then |
+| Upgrades are a count, not a list | it says how many are queued, not which — the card still lights an already-queued upgrade. Marking those is a card change, not a status-pane one |
 
 ---
 
@@ -598,6 +639,26 @@ and the game is not launched.
 > The very first run of this test failed, usefully: GNU as assembles `mov %esp,%ebp` as `89 E5`
 > while StarCraft's VC6-era build uses `8B EC`, and the prologue check refused to patch. That is
 > the check doing its job on a one-byte encoding difference.
+
+#### Adding a part (issue #35)
+
+`hooktest.exe` is organised into numbered **parts** — `[7] the fan-out core`, `[8] selection
+circles`, and so on — and the number exists for one reason: naming which part failed in a
+redirected overnight log.
+
+**Do not write the number.** Call `Part("what this part proves")` as the part's first statement
+and add the call at the **end** of the list at the bottom of `main()`. `Part()` numbers by the
+order the parts run and prints the part's NAME, and `Check()` puts that name on every failing
+line — so two branches adding a part each get different numbers however they merge.
+
+Three branches used to claim a number another branch had already taken (024/026 → `[13]`,
+021/025 → `[11]`, 028/029 → `[16]`), and every one of them merged cleanly on its own, because
+the declarations sit in different regions of the file. `run-ci-local.ps1`'s `hooktest-parts`
+step now fails on a hand-written header or a duplicate part name; it is a **required** step, so
+unlike `hooktest` itself it cannot skip on a machine with no 32-bit toolchain.
+
+Reordering the list in `main()` renumbers the parts, and `research/` cites several of them by
+number — so add at the end rather than inserting.
 
 `build.ps1` then **fails the build** unless both artifacts read
 `Machine = 0x014C` and optional-header magic `0x010B` (PE32), parsed straight out
@@ -791,6 +852,23 @@ Read-only, from the engine's own list (`SC_VA_DIALOG_LIST`, evidence in
 `sc_addresses.h`). Control bounds are LOCAL to their dialog's origin. This is what
 `Dismiss-ScTipsDialog` in `drive-game.ps1` uses to click the tips dialog's real OK
 button instead of a hardcoded point, and to assert the dialog is gone afterwards.
+
+**It also answers "what Game Type is selected"** (issue #29). The Create Game screen's
+combo carries the selected entry's label as its own text, so the line already contains
+the answer the harness used to hash pixels for:
+
+```
+DIALOGS n=1  dlg='Create' rect=0,0,639,479 ... ctrl='Game Type' rect=58,262,169,281 type=9 flags=0x408
+             ctrl='Use Map Settings' rect=180,261,351,277 type=13 flags=0x20020418
+```
+
+`Get-ScGameType` finds it by ROW — the one type-13 control starting to the right of the
+`Game Type` label and overlapping it vertically — because the screen carries three type-13
+combos (game type, player name, race). `Set-ScGameType` then **skips the pick entirely**
+when the value is already right, which is what removed the last foreground raise from an
+unattended run. The map-information lines in the same read (`Human Slots:` /
+`Computer Slots:` shown, `Number of Players:` hidden, flag `0x8`) are printed as
+corroboration; the combo's own text is the verdict.
 
 Attach banner, then one block per observed change:
 

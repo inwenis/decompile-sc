@@ -390,6 +390,51 @@ bool ScProdQueueOnCancel(DWORD unit, unsigned payload) {
               (unsigned)MineralCost(type), (unsigned)GasCost(type));
         if (r->count == 0) DropRecordAt((int)(r - g_rec));
         consumed = true;
+    } else if (payload < SC_BUILD_QUEUE_SLOTS &&
+               QueueSlot(unit, (int)(((unsigned)*(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT)
+                                      + payload) % SC_BUILD_QUEUE_SLOTS))
+                   == SC_BUILD_QUEUE_EMPTY) {
+        // A specific queue ICON whose RING SLOT IS EMPTY, payload = its display index.
+        //
+        // Clicking icon k emits {0x20, k} and the engine calls cancelBuildQueueSlot(k),
+        // which refunds `buildQueue[(head + k) % 5]` and compacts
+        // (research/production-queue.md 8.1). The test above is that same arithmetic, made
+        // on the building's own memory: if the slot the payload names holds 0xE4 then this
+        // icon is NOT drawing an engine item, and handing the click to the engine would
+        // have it refund BY THE SENTINEL TYPE 228 -- reading two cost tables out of bounds
+        // and crediting the player whatever is there.
+        //
+        // Vanilla can never produce such a click: an empty slot's icon is drawn DISABLED
+        // and both of the engine's input paths refuse a disabled control
+        // (research/command-card.md 5). Task 033's indicator CAN, because it draws those
+        // icons from the plugin's own overflow (the user: "when i queue more then 5 units
+        // the 5'th slot is emtpy") and lights them. So the plugin owns every such click:
+        // it cancels its own item, or swallows the click if it no longer has one.
+        const int engineLen = EngineQueueLength(unit);
+        const int idx = (int)payload - engineLen;
+        {
+            if (r && idx >= 0 && idx < r->count) {
+                WORD type = r->types[idx];
+                Refund(r->player, type);
+                for (int i = idx + 1; i < r->count; ++i) r->types[i - 1] = r->types[i];
+                --r->count;
+                ++g_stat[SC_PRODQ_STAT_CANCELLED];
+                ScLog("PRODQEV cancel-icon unit=0x%08X display=%u -> overflow[%d] "
+                      "type=0x%03X overflowLeft=%d back=%u/%u",
+                      (unsigned)unit, payload, idx, (unsigned)type, r->count,
+                      (unsigned)MineralCost(type), (unsigned)GasCost(type));
+                if (r->count == 0) DropRecordAt((int)(r - g_rec));
+            } else {
+                // Nothing behind that icon any more -- it drained between the draw and the
+                // click. SWALLOW rather than pass through: the engine's own handler would
+                // refund an EMPTY ring slot, and the player's minerals are on the other
+                // side of that call. Vanilla cannot reach this case at all.
+                ScLog("PRODQEV cancel-icon unit=0x%08X display=%u names an empty ring slot "
+                      "(engineLen=%d overflow=%d) -- swallowed, the engine is not asked to "
+                      "refund 0xE4", (unsigned)unit, payload, engineLen, r ? r->count : 0);
+            }
+            consumed = true;
+        }
     }
 
     LeaveCriticalSection(&g_lock);
