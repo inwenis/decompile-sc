@@ -300,6 +300,14 @@ UNIT_TYPE_IDS = {
     # side wins a fight. Confirmed in game rather than assumed -- see
     # tools/README-test-map.md "Combat variant".
     "lurker": 103,
+    # Neither of these is ever PLACED by this tool. They are named because they are what
+    # the production fixtures TRAIN, and `--unit-build-time probe=8` is the fixture
+    # speed-up task 031 exists for -- a flag needs a name for its target even when the
+    # target only ever comes out of a building. Both cross-checked against the template's
+    # own UNIx entry rather than taken from a table: SCV 60 hit points / build 300 (20 game
+    # seconds) / 50 minerals, Probe 20 hit points / build 300 / 50 minerals.
+    "scv": 7,
+    "probe": 64,
     # Task 025's production fixture. A Command Center is the cheapest way to get a
     # building that TRAINS -- it produces SCVs (50 minerals, 1 supply) and it supplies
     # 10 of its own, so a fixture needs it plus a couple of depots and nothing else.
@@ -335,13 +343,13 @@ UNIT_TYPE_IDS = {
 # overridden with --race.
 UNIT_TYPE_RACES = {
     "marine": SIDE_TERRAN, "ghost": SIDE_TERRAN, "medic": SIDE_TERRAN,
-    "goliath": SIDE_TERRAN, "siege-tank": SIDE_TERRAN,
+    "goliath": SIDE_TERRAN, "siege-tank": SIDE_TERRAN, "scv": SIDE_TERRAN,
     "zergling": SIDE_ZERG, "hydralisk": SIDE_ZERG, "ultralisk": SIDE_ZERG,
     "zealot": SIDE_PROTOSS, "dragoon": SIDE_PROTOSS,
     "lurker": SIDE_ZERG,
     "command-center": SIDE_TERRAN, "supply-depot": SIDE_TERRAN, "barracks": SIDE_TERRAN,
     "engineering-bay": SIDE_TERRAN, "academy": SIDE_TERRAN,
-    "nexus": SIDE_PROTOSS,
+    "nexus": SIDE_PROTOSS, "probe": SIDE_PROTOSS,
 }
 
 # ---------------------------------------------------------------------------
@@ -606,6 +614,182 @@ def read_techs_researched(payload: bytes, player: int) -> list[int]:
                 and payload[PTEX_OFF_PLAYER_AVAILABLE + idx]
                 and not payload[PTEX_OFF_USES_DEFAULT + idx]):
             out.append(tech)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# UNIT SETTINGS (task 031)
+# ---------------------------------------------------------------------------
+# A Use Map Settings map may override, per unit type, its hit points, shield points,
+# armor, BUILD TIME, mineral cost and gas cost. Task 031 wanted the build time: a suite
+# that trains nine SCVs spends 153 of its 224 seconds waiting for them at 20 game seconds
+# each, which measured out at 68% of that whole run. Set the build time to one second and
+# that term goes away without changing a single thing the suite asserts on.
+#
+# THE SECTION THE ENGINE READS IS UNIx, NOT UNIS. The task said not to assume it, and
+# there are four independent reasons, the last of which is the one that counts:
+#
+#  1. The Brood War template carries no UNIS AT ALL. (2)Fading Realm.scx holds UNIx (4168
+#     bytes), PTEx, UPGx and TECx, and none of UNIS/PTEC/UPGS/TECS/UPGR.
+#  2. StarCraft.exe holds three CHK section-application plans at .rdata 0x500560,
+#     0x500588 and 0x5005B0, each a run of {section table, count} pairs. The third --
+#     the Brood War one -- points at the table at 0x5004A8, whose fifteen entries are
+#     STR MTXM THG2 MASK UNIx UPGx TECx PUNI PUPx PTEx UNIT UPRP MRGN TRIG COLR. There is
+#     no UNIS entry in it, so on a Brood War map a UNIS section is never applied at all.
+#     The other two plans list both, with UNIx AFTER UNIS, so it wins there as well.
+#  3. That same table gives `PTEx -> 0x004CB7D0`, which is the exact applier address task
+#     026 verified independently against the running game (research/command-card.md 6).
+#     A table that is right about the one entry we already proved is a table worth
+#     reading, and this is what makes 1 and 2 evidence rather than a plausible story.
+#  4. AND IT WAS READ BACK OUT OF A RUNNING GAME, which is the only one of the four that
+#     could have contradicted the others. tools/plugin/probe-unit-settings.ps1 builds ONE
+#     map whose UNIx says a Marine has 25 hit points and whose (added) UNIS says 12, loads
+#     it, and reads hp out of CUnit -- so the answer distinguishes UNIx from UNIS from
+#     neither, instead of merely confirming what was expected. See that script's header
+#     for the reading.
+#
+# THE LAYOUT, verified the same way the PTEx layout was: it reproduces, to the byte, the
+# real stats of every unit anyone here can check by hand, out of a section this tool did
+# not write. Marine 40hp / build 360 / 50 minerals; SCV 60 / 300 / 50; Command Center
+# 1500 / 1800 / 400; Supply Depot 500 / 600 / 100; Barracks 1000 / 1200 / 150; Lurker
+# 125 hp / 50 minerals / 100 gas. And the sizes: 228 + 912 + 456 + 228 + 456 + 456 + 456
+# + 456 + 260 + 260 == 4168, which is exactly the section's size on disk.
+#
+# BUILD TIME IS IN GAME SECONDS x 15 -- 300 for the SCV's 20, 360 for the Marine's 24,
+# 600 for the Supply Depot's 40, 1200 for the Barracks' 80, 1800 for the Command Center's
+# 120. Five units agreeing on one divisor is what makes it a unit and not a coincidence,
+# and the flags below take game seconds so nobody has to remember it.
+#
+# HIT POINTS ARE STORED x256, the same fixed point CUnit+0x08 uses, which is what makes
+# the in-game read-back a direct comparison rather than a conversion.
+UNIX_UNITS = 228
+UNIX_WEAPONS = 130                 # UNIS, the vanilla section, has 100 here
+UNIX_OFF_USE_DEFAULT = 0                                             # u8  [unit]
+UNIX_OFF_HIT_POINTS = UNIX_UNITS                                     # u32 [unit], x256
+UNIX_OFF_SHIELD_POINTS = UNIX_OFF_HIT_POINTS + 4 * UNIX_UNITS        # u16 [unit]
+UNIX_OFF_ARMOR = UNIX_OFF_SHIELD_POINTS + 2 * UNIX_UNITS             # u8  [unit]
+UNIX_OFF_BUILD_TIME = UNIX_OFF_ARMOR + UNIX_UNITS                    # u16 [unit], x15
+UNIX_OFF_MINERAL_COST = UNIX_OFF_BUILD_TIME + 2 * UNIX_UNITS         # u16 [unit]
+UNIX_OFF_GAS_COST = UNIX_OFF_MINERAL_COST + 2 * UNIX_UNITS           # u16 [unit]
+UNIX_OFF_STRING_NUMBER = UNIX_OFF_GAS_COST + 2 * UNIX_UNITS          # u16 [unit]
+UNIX_OFF_BASE_DAMAGE = UNIX_OFF_STRING_NUMBER + 2 * UNIX_UNITS       # u16 [weapon]
+UNIX_OFF_UPGRADE_DAMAGE = UNIX_OFF_BASE_DAMAGE + 2 * UNIX_WEAPONS    # u16 [weapon]
+UNIX_SIZE = UNIX_OFF_UPGRADE_DAMAGE + 2 * UNIX_WEAPONS               # 4168
+
+BUILD_TIME_PER_GAME_SECOND = 15
+HP_FIXED_POINT = 256
+
+# The settable fields, and the WIDTH of each, because a u8 field silently truncating a
+# caller's 500 is the kind of thing this tool is supposed to refuse rather than do.
+# Base weapon damage is deliberately absent: it is indexed by WEAPON, not by unit, so a
+# `--unit-...` flag would be lying about what it changes. Nothing here has needed it.
+UNIT_SETTING_FIELDS = {
+    #  name            offset                    struct  max
+    "max-hp":        (UNIX_OFF_HIT_POINTS,    "<I", 0xFFFFFFFF // HP_FIXED_POINT),
+    "shields":       (UNIX_OFF_SHIELD_POINTS, "<H", 0xFFFF),
+    "armor":         (UNIX_OFF_ARMOR,         "<B", 0xFF),
+    "build-time":    (UNIX_OFF_BUILD_TIME,    "<H", 0xFFFF // BUILD_TIME_PER_GAME_SECOND),
+    "mineral-cost":  (UNIX_OFF_MINERAL_COST,  "<H", 0xFFFF),
+    "gas-cost":      (UNIX_OFF_GAS_COST,      "<H", 0xFFFF),
+}
+
+# Fields whose stored value is not the value a caller types.
+UNIT_SETTING_SCALE = {
+    "max-hp": HP_FIXED_POINT,
+    "build-time": BUILD_TIME_PER_GAME_SECOND,
+}
+
+
+def unit_setting_scale(field: str) -> int:
+    return UNIT_SETTING_SCALE.get(field, 1)
+
+
+def parse_unit_setting(spec: str) -> tuple[int, int]:
+    """`scv=1` -> (7, 1). The unit half takes the same names as --unit-type."""
+    if "=" not in spec:
+        raise ValueError(
+            f"Unit setting {spec!r} is not TYPE=VALUE (for example: scv=1)."
+        )
+    name, _, value = spec.partition("=")
+    unit_id = resolve_unit_id(name.strip())
+    if unit_id >= UNIX_UNITS:
+        raise ValueError(
+            f"Unit id {unit_id} is outside the {UNIX_UNITS} entries UNIx carries."
+        )
+    try:
+        amount = int(value.strip())
+    except ValueError:
+        raise ValueError(f"Unit setting {spec!r}: {value!r} is not an integer.") from None
+    return unit_id, amount
+
+
+def set_unit_settings(payload: bytes, settings: dict[str, list[tuple[int, int]]]) -> bytes:
+    """UNIx with the given per-unit overrides applied.
+
+    `usesDefault` is CLEARED for every unit touched. That byte is the whole mechanism:
+    leave it at 1 and the engine reads units.dat and the override arrays are dead --
+    exactly the shape of the PTEx `playerUsesDefault` bug above, which is why it is done
+    here, once, next to the write, rather than left to a caller to remember.
+
+    Every unit's OTHER fields are left holding whatever the template had, which for a
+    StarEdit-written map is that unit's real stats; clearing usesDefault therefore changes
+    nothing except the field asked for. That is checked, not assumed: read_unit_settings
+    reports every field of every touched unit and the validator prints them.
+    """
+    if len(payload) != UNIX_SIZE:
+        raise ValueError(
+            f"UNIx is {len(payload)} bytes, expected {UNIX_SIZE}; this tool only "
+            f"understands the Brood War {UNIX_UNITS}-unit, {UNIX_WEAPONS}-weapon layout."
+        )
+    buf = bytearray(payload)
+    for field, pairs in settings.items():
+        if field not in UNIT_SETTING_FIELDS:
+            raise ValueError(f"Unknown unit setting {field!r}")
+        offset, fmt, limit = UNIT_SETTING_FIELDS[field]
+        scale = unit_setting_scale(field)
+        width = struct.calcsize(fmt)
+        for unit_id, amount in pairs:
+            if amount < 0:
+                raise ValueError(f"--unit-{field} {unit_id}={amount}: must not be negative")
+            # A build time of ZERO is refused rather than written. Nothing here knows what
+            # the engine's production tick does when the remaining time starts at 0 -- it
+            # may complete instantly, it may divide by it to draw the progress bar -- and
+            # a fixture whose behaviour nobody has looked at is worse than a slow one. One
+            # game second is ~0.7 real seconds, which is as fast as any suite has needed.
+            if field == "build-time" and amount == 0:
+                raise ValueError(
+                    f"--unit-build-time {unit_id}=0: refusing. Nothing in this repo has "
+                    f"observed what the engine does with a zero build time, and 1 game "
+                    f"second (~0.7 real seconds) is already as fast as a fixture needs. "
+                    f"Pass 1."
+                )
+            if amount > limit:
+                raise ValueError(
+                    f"--unit-{field} {unit_id}={amount}: the field holds at most {limit}."
+                )
+            struct.pack_into(fmt, buf, offset + width * unit_id, amount * scale)
+            buf[UNIX_OFF_USE_DEFAULT + unit_id] = 0
+    return bytes(buf)
+
+
+def read_unit_settings(payload: bytes, unit_ids: list[int]) -> dict[int, dict]:
+    """What UNIx says about these units, in the caller's own units rather than raw.
+
+    The read is a SEPARATE walk of the section, not a replay of what was written, so a
+    validator using it is checking the bytes rather than its own intent. It still cannot
+    prove the ENGINE agrees -- only a running game can, which is what
+    tools/plugin/probe-unit-settings.ps1 is for (AGENTS.md, task 026).
+    """
+    if len(payload) != UNIX_SIZE:
+        raise ValueError(f"UNIx is {len(payload)} bytes, expected {UNIX_SIZE}")
+    out = {}
+    for unit_id in unit_ids:
+        entry = {"uses-default": payload[UNIX_OFF_USE_DEFAULT + unit_id]}
+        for field, (offset, fmt, _limit) in UNIT_SETTING_FIELDS.items():
+            width = struct.calcsize(fmt)
+            (raw,) = struct.unpack_from(fmt, payload, offset + width * unit_id)
+            entry[field] = raw // unit_setting_scale(field)
+        out[unit_id] = entry
     return out
 
 
@@ -900,6 +1084,7 @@ def generate_map(
     damaged_energy_percent: int | None = None,
     starting_minerals: int | None = None,
     starting_gas: int | None = None,
+    unit_settings: dict[str, list[tuple[int, int]]] | None = None,
 ) -> None:
     unit_id = resolve_unit_id(unit_type)
     if not 0 <= player <= 7:
@@ -1186,6 +1371,31 @@ def generate_map(
             template,
         )
 
+    # UNIT SETTINGS (task 031). Opt-in and additive: with no --unit-* flag this block does
+    # not run, no section is touched, and the file this tool writes is byte-for-byte what
+    # it wrote before. That property is not decoration -- three other tasks were mid-run
+    # against this generator when it was added.
+    if unit_settings:
+        unix_idx = find_section(sections, "UNIx")
+        if unix_idx < 0:
+            # NOT quietly falling back to UNIS. The Brood War section-application table at
+            # 0x5004A8 has no UNIS entry, so on a map the engine treats as Brood War a
+            # UNIS override is never applied -- a fallback here would write bytes that
+            # look right in the file and do nothing in the game, which is precisely the
+            # class of failure the PTEx bug was.
+            raise ValueError(
+                f"Template {template} has no UNIx section, so this tool cannot override "
+                f"unit settings on it. Use a Brood War template: the engine's Brood War "
+                f"CHK section table (StarCraft.exe 0x5004A8) lists UNIx and no UNIS, so "
+                f"writing UNIS instead would produce a map whose settings the engine "
+                f"never reads."
+            )
+        sections = replace_section(
+            sections, "UNIx",
+            set_unit_settings(sections[unix_idx].payload, unit_settings),
+            template,
+        )
+
     new_chk = serialize_chk_sections(sections)
     output.parent.mkdir(parents=True, exist_ok=True)
     save_chk_bytes_to_mpq(new_chk, template, output)
@@ -1226,6 +1436,7 @@ def validate_map(
     damaged_energy_percent: int | None = None,
     starting_minerals: int | None = None,
     starting_gas: int | None = None,
+    unit_settings: dict[str, list[tuple[int, int]]] | None = None,
 ) -> None:
     unit_id = resolve_unit_id(unit_type)
     enemy_id = resolve_unit_id(enemy_type) if enemy_count else 0
@@ -1467,6 +1678,35 @@ def validate_map(
                 f"{player}; it lists {have}"
             )
 
+    # THE UNIT SETTINGS ARE READ BACK OUT OF THE FILE (task 031), never replayed from
+    # what the caller asked for. That distinction is the whole of the PTEx lesson: a tool
+    # that verifies its own write with its own intent verifies nothing. It is still only
+    # the FILE's word -- what the ENGINE does with these bytes is proved in a running game
+    # by tools/plugin/probe-unit-settings.ps1, and nowhere here.
+    unix_read: dict[int, dict] = {}
+    if unit_settings:
+        unix_idx = find_section(sections, "UNIx")
+        if unix_idx < 0:
+            raise AssertionError(f"{path}: no UNIx section, so no unit settings to check")
+        touched = sorted({u for pairs in unit_settings.values() for u, _ in pairs})
+        unix_read = read_unit_settings(sections[unix_idx].payload, touched)
+        for field, pairs in unit_settings.items():
+            for unit_id_, want in pairs:
+                got = unix_read[unit_id_][field]
+                if got != want:
+                    raise AssertionError(
+                        f"{path}: UNIx says unit {unit_id_} has {field}={got}, asked for "
+                        f"{want}"
+                    )
+                # usesDefault is the byte that decides whether ANY of it is read. A map
+                # with the right numbers and this byte still set is a map on which every
+                # override is dead, and it would otherwise validate perfectly.
+                if unix_read[unit_id_]["uses-default"] != 0:
+                    raise AssertionError(
+                        f"{path}: UNIx still has usesDefault set for unit {unit_id_}, so "
+                        f"the engine would read units.dat and ignore every override on it"
+                    )
+
     changed = None
     if template is not None and template.exists():
         changed = diff_against_template(path, template)
@@ -1480,6 +1720,8 @@ def validate_map(
             expected |= {"TRIG", "MBRF"}
         if tech_researched:
             expected |= {"PTEx"}
+        if unit_settings:
+            expected |= {"UNIx"}
         unexpected = [c for c in changed if c not in expected]
         if unexpected:
             raise AssertionError(
@@ -1498,6 +1740,18 @@ def validate_map(
         if damaged_energy_percent is not None:
             print(f"  and that same tail starts at {damaged_energy_percent}% energy, "
                   f"for the energy-costed half of the same question")
+    if unix_read:
+        unit_names = {v: k for k, v in UNIT_TYPE_IDS.items()}
+        for unit_id_, entry in sorted(unix_read.items()):
+            asked = {f for f, pairs in unit_settings.items() if any(u == unit_id_ for u, _ in pairs)}
+            shown = " ".join(
+                ("*" if f in asked else "") + f"{f}={entry[f]}"
+                for f in UNIT_SETTING_FIELDS
+            )
+            print(f"  UNIx: {unit_names.get(unit_id_, unit_id_)} ({unit_id_}) "
+                  f"usesDefault={entry['uses-default']} {shown}")
+        print("        (* = overridden by this run; build-time is in GAME seconds, and "
+              "every other field is left as the template had it)")
     if tech_researched:
         names = {v: k for k, v in TECH_IDS.items()}
         print("  PTEx: player {} has researched {}".format(
@@ -1675,6 +1929,48 @@ def main() -> int:
         "--starting-gas", type=int, default=None,
         help="The vespene counterpart of --starting-minerals; same single trigger.",
     )
+    # --- unit settings, the map's own UNIx override (task 031) ---------------
+    # One flag per field rather than one --unit-setting FIELD:TYPE=VALUE, because the
+    # fields are NOT interchangeable in the way that matters: build time is setup and is
+    # safe almost everywhere, while hit points are frequently the thing a suite measures.
+    # Separate flags let each carry its own warning, and make a risky one greppable.
+    parser.add_argument(
+        "--unit-build-time", type=str, action="append", default=None, metavar="TYPE=SECONDS",
+        help="Override a unit type's BUILD TIME, in GAME seconds, for this map only "
+             "(TYPE=SECONDS, repeatable; e.g. scv=1, default 20). This is the fixture "
+             "speed-up: it is SETUP, not measurement, so it is safe in every suite that "
+             "waits for something to be built. Written to UNIx, which is the section the "
+             "Brood War engine reads. 0 is refused -- see set_unit_settings.",
+    )
+    parser.add_argument(
+        "--unit-max-hp", type=str, action="append", default=None, metavar="TYPE=HP",
+        help="Override a unit type's MAXIMUM hit points (TYPE=HP, repeatable). DANGEROUS "
+             "in any suite that measures combat or liveness: task 026 lost a run to a "
+             "target dying inside a two-second measurement window, and the signature was "
+             "identical to the effect being measured. Prefer --unit-hp, which sets the "
+             "PLACED units' starting percentage and leaves the type alone.",
+    )
+    parser.add_argument(
+        "--unit-mineral-cost", type=str, action="append", default=None, metavar="TYPE=N",
+        help="Override a unit type's mineral cost (TYPE=N, repeatable). Only useful with "
+             "the calling suite's own arithmetic updated in the same change -- "
+             "test-production-queue asserts 2550 = 3000 - 9 x 50 -- and it saves no time, "
+             "since nothing waits on a resource.",
+    )
+    parser.add_argument(
+        "--unit-gas-cost", type=str, action="append", default=None, metavar="TYPE=N",
+        help="The vespene counterpart of --unit-mineral-cost. Same caveat.",
+    )
+    parser.add_argument(
+        "--unit-shields", type=str, action="append", default=None, metavar="TYPE=N",
+        help="Override a unit type's shield points (TYPE=N, repeatable). Protoss only; "
+             "same measurement hazard as --unit-max-hp.",
+    )
+    parser.add_argument(
+        "--unit-armor", type=str, action="append", default=None, metavar="TYPE=N",
+        help="Override a unit type's armor (TYPE=N, repeatable). Same measurement hazard "
+             "as --unit-max-hp -- it changes how long a fight takes.",
+    )
     parser.add_argument(
         "--validate-only",
         type=Path,
@@ -1690,6 +1986,20 @@ def main() -> int:
 
     try:
         techs = [resolve_tech_id(t) for t in (args.tech_researched or [])]
+        # Field name -> [(unit id, value)]. Empty when no --unit-* flag was passed, which
+        # is what keeps the generator's output byte-identical for every existing caller.
+        unit_settings = {
+            field: [parse_unit_setting(s) for s in specs]
+            for field, specs in (
+                ("build-time", args.unit_build_time),
+                ("max-hp", args.unit_max_hp),
+                ("mineral-cost", args.unit_mineral_cost),
+                ("gas-cost", args.unit_gas_cost),
+                ("shields", args.unit_shields),
+                ("armor", args.unit_armor),
+            )
+            if specs
+        }
         if args.validate_only is not None:
             validate_map(
                 args.validate_only, args.unit_count, args.unit_type, args.player,
@@ -1697,6 +2007,7 @@ def main() -> int:
                 args.enemy_count, args.enemy_type, args.enemy_owner, args.min_enemy_gap,
                 args.unit_hp, args.damaged_count, args.damaged_hp, techs,
                 args.damaged_energy, args.starting_minerals, args.starting_gas,
+                unit_settings,
             )
             return 0
 
@@ -1709,7 +2020,7 @@ def main() -> int:
             resolve_race(args.enemy_race, args.enemy_type) if args.enemy_count else None,
             args.enemy_owner, args.min_enemy_gap, args.unit_hp,
             args.damaged_count, args.damaged_hp, techs, args.damaged_energy,
-            args.starting_minerals, args.starting_gas,
+            args.starting_minerals, args.starting_gas, unit_settings,
         )
         print(f"wrote {args.output}")
         if not args.no_validate:
@@ -1719,6 +2030,7 @@ def main() -> int:
                 args.enemy_count, args.enemy_type, args.enemy_owner, args.min_enemy_gap,
                 args.unit_hp, args.damaged_count, args.damaged_hp, techs,
                 args.damaged_energy, args.starting_minerals, args.starting_gas,
+                unit_settings,
             )
         return 0
     except (ValueError, FileNotFoundError, AssertionError) as exc:

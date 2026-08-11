@@ -136,6 +136,48 @@ param(
     [int]$EngineArmDisplay = 1,
     [int]$StartingMinerals = 3000,
     [int]$StartingGas = 1000,
+    # THE FIXTURE SPEED-UP (task 031). The map's own UNIx section overrides the Probe's
+    # build time for THIS MAP only; vanilla is 20 game seconds, and the Probes building one
+    # after another were measured as the single largest term in this suite's wall clock.
+    # 0 restores the vanilla fixture exactly -- the flag is not passed at all, and the map
+    # the generator writes is byte-for-byte the pre-031 one.
+    #
+    # WHY IT DOES NOT WEAKEN THE TEST. Every claim this suite makes is about the QUEUE: how
+    # many items are in the ring, how many the plugin holds, that each is promoted into a
+    # freed slot in order, what a cancel refunds, and that each item is paid for exactly
+    # once. Build time is how long the engine takes between one item finishing and the next
+    # starting -- the setup this suite waits through, not anything it asserts on.
+    #
+    # WHAT IT CAN BREAK, and why this number is what it is. TWO windows constrain it, both
+    # measured on this suite rather than reasoned about, and a game second is ~0.7 real
+    # seconds (measured: tools/plugin/probe-unit-settings.ps1 trains one at build time 1 and
+    # it exists 0.7s later).
+    #
+    #  1. THE BURST. Exactly $QueueMax of the $Clicks clicks may reach the wire, and that
+    #     holds only while NO SLOT FREES while they are going out: a Probe completing
+    #     mid-burst drops the ring to 4, the plugin promotes into it, the logical queue
+    #     falls below the cap and the client sends a TENTH command. Measured on the SCV
+    #     version of this suite before task 028 turned it Protoss: at 1 game second ALL
+    #     TWELVE clicks reached the wire and the suite reported 21 failures. The burst is
+    #     ~2s, so this is the easy constraint.
+    #  2. THE PLUGIN-CANCEL ARM, which is the tight one. It asserts the plugin ends up
+    #     having captured one MORE item than the burst left it, because the cancel frees
+    #     room under the cap and the next rebalance takes one more out of the ring. That is
+    #     only true if the ring is still FULL when the cancel lands -- if a Probe has
+    #     already completed, the ring is at 4 already and there is nothing extra to take.
+    #     The cancel lands about 6s after the first click, so the first completion has to be
+    #     later than that. At 8 game seconds (~5.6s) it is not, and the run failed exactly
+    #     there: `and it captured one more than the burst left it, because the cancel made
+    #     room (4)`.
+    #
+    # 12 game seconds is ~8.4s, which clears the 6s cancel window with room, and still cuts
+    # the drain from ~125s to ~76s. Anything much lower re-opens (2); 0 restores vanilla.
+    #
+    # Neither margin is left to this comment. The burst step ASSERTS its invariant
+    # (`promoted` still 0), and Get-TraineeCount below now counts only COMPLETED units, so
+    # the cancel arms' own arithmetic stops mistaking a build that has STARTED for one that
+    # has finished -- which is what made the 8-second run fail its first assertion too.
+    [int]$ProbeBuildSeconds = 12,
     # Long enough for nine Probes, from the first click to the last unit existing. One
     # Probe is 20 game seconds; a single-player custom game runs at Fastest, so ~9-13 real
     # seconds each, and the measured rate is ~16s per unit including the marker round
@@ -169,6 +211,10 @@ $script:accepted = 0
 $NEXUS_TYPE = 154         # units.dat 154, richchk UnitId 'Protoss Nexus'
 $CC_TYPE    = 106         # units.dat 106, richchk UnitId 'Terran Command Center'
 $PROBE_TYPE = 64          # units.dat 64,  richchk UnitId 'Protoss Probe'
+# CUnit+0xDC bit 0x01. A unit being trained is already in the player's unit list with this
+# CLEAR; it is set when the unit is actually there. See Get-TraineeCount below and
+# tools/plugin/src/sc_addresses.h for the observation this comes from.
+$SC_UNIT_FLAG_COMPLETED = 0x01
 $PROBE_COST = 50          # minerals; asserted against the run's own arithmetic below
 $TRAIN_CMD  = '0x1F'      # research/data/command-opcodes.tsv
 $CANCEL_CMD = '0x20'      # same table: Cancel Train
@@ -257,9 +303,33 @@ function Get-StatusQueue { param([string]$Tag, [int]$TimeoutSec = 20)
 # without moving a mineral -- so the expected drop is `1 + completions`, and completions
 # is counted rather than assumed to be zero.
 function Get-TraineeCount {
+    <#
+    COMPLETED Probes only, and the flag test is the whole point (task 031).
+
+    A unit still being TRAINED is already linked into the player's unit list, so counting
+    the list answers "how many exist", not "how many have been BUILT". Observed in this
+    suite's own log, the same type before and after:
+
+        in progress   type=0x007 hp=13484 flags=0x00130000
+        finished      type=0x007 hp=15360 flags=0x00130001
+
+    -- hit points ramping up towards the type's maximum with bit 0x01 clear, then set once
+    it is there (SC_UNIT_FLAG_COMPLETED, tools/plugin/src/sc_addresses.h).
+
+    This function's answer feeds `$completed`, which the cancel arms subtract from the
+    expected queue length -- so counting a STARTED build as a finished one makes the arm
+    expect one item fewer than the engine has and fail an assertion about cancelling.
+    Task 031 hit exactly that when it shortened the Probe's build time: the first run
+    reported `the LOGICAL queue drops by one: 8 -> 7 ... (expected 6)`. The same mis-count
+    can happen on the vanilla fixture whenever a build happens to finish inside a cancel
+    window -- it is simply rarer there, which is the worst kind of rare.
+    #>
     param([string]$Tag)
     $w = Get-World $Tag
-    @($w.Units | Where-Object { $_.Type -eq $PROBE_TYPE -and $_.Player -eq 0 }).Count
+    @($w.Units | Where-Object {
+        $_.Type -eq $PROBE_TYPE -and $_.Player -eq 0 -and
+        ($_.Flags -band $SC_UNIT_FLAG_COMPLETED)
+    }).Count
 }
 
 # One cancel, measured end to end. `Do` is the click; everything either side of it is the
@@ -463,13 +533,18 @@ try {
         # a Terran producer's card cannot show the Cancel button is a claim about a
         # dialog, and this repo proves those by reading the dialog rather than by
         # reasoning about a button table. So the run trains at it and reads its card.
-        $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
-            -UnitCount 2 -UnitType nexus -Player 0 -ClearPlayerUnits -Race protoss `
-            -GridSpacing 160 `
-            -EnemyCount 1 -EnemyType command-center -EnemyOwner player `
-            -EnemyOffsetX 288 -EnemyOffsetY 0 -MinEnemyGap 150 `
-            -StartingMinerals $StartingMinerals -StartingGas $StartingGas `
-            -OutputPath $mapPath 2>&1
+        # -UnitBuildTime is opt-in: at 0 the argument is not passed at all and the map is
+        # byte-for-byte the one this suite generated before task 031.
+        $genArgs = @{
+            UnitCount = 2; UnitType = 'nexus'; Player = 0; ClearPlayerUnits = $true
+            Race = 'protoss'; GridSpacing = 160
+            EnemyCount = 1; EnemyType = 'command-center'; EnemyOwner = 'player'
+            EnemyOffsetX = 288; EnemyOffsetY = 0; MinEnemyGap = 150
+            StartingMinerals = $StartingMinerals; StartingGas = $StartingGas
+            OutputPath = $mapPath
+        }
+        if ($ProbeBuildSeconds -gt 0) { $genArgs.UnitBuildTime = @("probe=$ProbeBuildSeconds") }
+        $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') @genArgs 2>&1
         $gen | ForEach-Object { Write-Host "       $_" }
         Assert-That 'the generator succeeded' ($LASTEXITCODE -eq 0) "(exit $LASTEXITCODE)"
         Assert-That 'it wrote the map' (Test-Path -LiteralPath $mapPath)
@@ -481,6 +556,19 @@ try {
             (@($gen | Select-String -Pattern 'TRIG holds 2400 byte').Count -gt 0)
         Assert-That 'the map differs from its template only where this tool meant it to' `
             (@($gen | Select-String -Pattern 'differs from the template ONLY in: OWNR SIDE UNIT TRIG FORC').Count -gt 0)
+        # POSITIVE, and only worth anything because the negative case is reachable: at
+        # -ProbeBuildSeconds 0 no UNIx is written and the else branch asserts it is ABSENT
+        # from the section diff (AGENTS.md: prove an absence positive somewhere first).
+        if ($ProbeBuildSeconds -gt 0) {
+            Assert-That "the fixture overrides the Probe's build time to ${ProbeBuildSeconds}s in UNIx" `
+                (@($gen | Select-String -Pattern "probe \(64\) usesDefault=0 .*\*build-time=$ProbeBuildSeconds ").Count -gt 0)
+            Assert-That 'and UNIx is one of the sections that differ from the template' `
+                (@($gen | Select-String -Pattern 'ONLY in: OWNR SIDE UNIT TRIG FORC UNIx').Count -gt 0)
+        }
+        else {
+            Assert-That 'the vanilla fixture touches no UNIx at all' `
+                (@($gen | Select-String -Pattern 'ONLY in: OWNR SIDE UNIT TRIG FORC$').Count -gt 0)
+        }
     }
 
     Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
@@ -672,6 +760,26 @@ try {
         Assert-That "and the $expectNotSent presses past the cap were refused by the client itself" `
             ($cmds.Count -eq $Clicks - $expectNotSent)
         $script:cmdsSent = $cmds.Count
+
+        # THE ASSUMPTION THE COUNT ABOVE RESTS ON, checked rather than commented. If a slot
+        # freed while the clicks were going out, the plugin would have promoted an item into
+        # it, the logical queue would have fallen below the cap, and the client would have
+        # sent a TENTH command -- so both assertions above would fail with nothing to say
+        # about why. A faster fixture is exactly what causes that (task 031,
+        # -ProbeBuildSeconds), so the cause is named here instead of being guessed at.
+        #
+        # `promoted` IS THE INVARIANT, not "how many Probes exist". An earlier version of
+        # this guard counted units and failed a run whose fixture was fine, because a unit
+        # still being TRAINED is already linked into the player's unit list -- that run's log
+        # has `hp=13484 flags=0x00130000` beside the finished ones' `hp=15360
+        # flags=0x00130001`, i.e. HP ramping up with the completed bit (0x01) still clear.
+        # A slot frees when a unit FINISHES, and the plugin's promotion counter is the
+        # engine-side record of exactly that.
+        $burst = Get-ProdQueue 'burst-end'
+        Assert-That "no queue slot freed while the burst was going out (promoted=$($burst.Promoted)) -- the wire count depends on it" `
+            ($burst.Promoted -eq 0) `
+            "(-ProbeBuildSeconds $ProbeBuildSeconds is too short for a $Clicks-click burst)"
+
         # THE LEDGER. Every command that reached the funnel was accepted and paid for
         # there (refusedFull/refusedCost are asserted zero below), so this is what the
         # money has to reconcile against for the rest of the run.
@@ -832,7 +940,13 @@ try {
             # four are still building -- so exiting on "the plugin is done" would walk
             # straight into the next step with half the units not yet made.
             if ($q.Buildings -eq 0 -and $q.Selected -and $q.Selected.Logical -eq 0) { break }
-            Start-Sleep -Seconds 5
+            # 2s, not 5. This is a DETECTION loop, not a measurement window: every pass
+            # takes a fresh PRODQ reading and re-asserts the ring invariant, so polling
+            # more often strictly adds evidence and only costs a marker round trip. At the
+            # old 5s the drain's tail was mostly waiting for the next look, which matters
+            # once the builds themselves are seconds rather than tens of seconds
+            # (task 031, -ProbeBuildSeconds).
+            Start-Sleep -Seconds 2
         }
         Write-Host "       $($seen -join ' -> ')"
 

@@ -166,6 +166,17 @@
 // behaviour table for exactly that combination. READ ONLY, same as the order id.
 #define SC_CUNIT_OFF_FLAGS       0xDCu
 #define SC_UNIT_FLAG_BURROWED    0x10u
+// Bit 0x01 is COMPLETED, and it matters to anything that counts units out of the player's
+// unit list: a unit still being trained is ALREADY LINKED INTO THAT LIST. Observed in one
+// run of test-production-queue (task 031, 2026-08-10), same unit type in the same log:
+//   in progress  type=0x007 hp=13484 flags=0x00130000
+//   finished     type=0x007 hp=15360 flags=0x00130001
+// -- HP ramping up towards the SCV's 60 (15360 in the engine's 1/256) with the bit clear,
+// and the bit set once it is at maximum. So "how many SCVs exist" is not "how many have
+// been built", and a test that treats it as such reads a unit that does not exist yet.
+// That cost task 031 a run: a guard meant to prove nothing had FINISHED during a burst
+// counted an under-construction unit and failed a suite whose fixture was fine.
+#define SC_UNIT_FLAG_COMPLETED   0x01u
 
 // u16 -- the unit's ENERGY, in the engine's 1/256 fixed point (a 200-energy caster
 // reads 0xC800). Named by task 015 from 0x00491B30, the deduct the 0x21 handler calls;
