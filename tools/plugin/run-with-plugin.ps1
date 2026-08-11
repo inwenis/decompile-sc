@@ -212,6 +212,16 @@ param(
     # (the `PRODFAN` lines) runs whatever this says, because the stock arm is measured
     # with it too.
     [ValidateSet('0', '1')][string]$ProdFan = '0',
+    # Task 033: the QUEUE-OVERFLOW INDICATOR. When a building's logical queue is longer
+    # than the five icons of the production strip can draw, the plugin draws the icons the
+    # engine left empty from its OWN overflow and puts a "+N" over the last one; with
+    # several producing buildings selected it says how many of them are queueing. All of it
+    # is ENGINE-DRAWN TEXT through a spliced static-text control -- no art is added
+    # (research/status-pane-text.md). Off by default because it DRAWS: '0' leaves the
+    # status dialog's child list byte-for-byte stock. Only meaningful in -Mode fanout,
+    # same as -Circles and -HudRow, and worth little without -ProdQueue 1, which is what
+    # creates the overflow it reports.
+    [ValidateSet('0', '1')][string]$QueueIndicator = '0',
     # Task 029: queue more than one upgrade or research at one building. Off by default --
     # it installs eight detours of its own and it moves a player's resources (indirectly:
     # the ENGINE pays for every item, at the moment it starts, and the plugin never touches
@@ -336,6 +346,7 @@ try {
     $env:SCPLUGIN_BUILDING_GROUPS = $BuildingGroups
     $env:SCPLUGIN_CARDSCAN       = $CardScan
     $env:SCPLUGIN_PRODFAN        = $ProdFan
+    $env:SCPLUGIN_QUEUEIND       = $QueueIndicator
     $env:SCPLUGIN_UPGQ           = $UpgradeQueue
     $env:SCPLUGIN_UPGQ_MAX       = "$UpgradeQueueMax"
     $env:SCPLUGIN_SCREENSCAN     = $ScreenScan

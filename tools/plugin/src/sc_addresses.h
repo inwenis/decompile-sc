@@ -1179,4 +1179,99 @@
 #define SC_VA_SCROLL_STEP_Y        0x0049C280u
 #define SC_VA_MINIMAP_CLICK        0x004A4D20u  // centres the camera; bakes 20 x 13 tiles
 
+// ---------------------------------------------------------------------------
+// HOW THE STATUS PANE DRAWS TEXT (task 033)
+//
+// Full evidence, with the listings, in research/status-pane-text.md. Every address below
+// was read out of THIS binary: the two entries come from the default per-control-type
+// handler tables dumped straight out of .rdata (work/scratch/033/peek.py, which parses the
+// PE section table out of the same file it reads), and everything under them is a CALL
+// target read off the listing of the function above it
+// (work/scratch/033/listing-statictext.tsv, listing-textblit.tsv).
+//
+// The chain, in one line:
+//   dialog layer 2 draw 0x0041CB50 -> control's fxnUpdate (+0x2E) -> for a static-text
+//   control the DEFAULT table entry SC_VA_STATIC_TEXT_UPDATE -> SC_VA_DRAW_CONTROL_TEXT ->
+//   font + style + SC_VA_DRAW_STRING, with the string taken from control+0x14 (pszText).
+//
+// So a plugin control draws text by being type SC_CTRL_TYPE_LSTATIC with pszText pointing
+// at its own buffer. It plots no pixels and adds no art.
+// ---------------------------------------------------------------------------
+
+// Update handler for control types 9/10/11, i.e. entries [9]/[10]/[11] of the default
+// update table SC_VA_DEFAULT_UPDATE_TABLE. All three are the same nine instructions and
+// differ only in the justification byte they store at SC_VA_TEXT_JUSTIFY:
+//     8B 41 14   MOV EAX,[ECX+0x14]      ; pszText -- ECX is the control
+//     85 C0      TEST EAX,EAX
+//     74 12      JZ ret                  ; no string -> draw nothing at all
+//     6A 00 6A 00 33 C0
+//     C6 05 10 E1 6C 00 11   MOV byte [0x006CE110],0x11    ; 0x11 / 0x12 / 0x14
+//     E8 ..                  CALL 0x004EF870
+//     C2 08 00               RET 0x8
+#define SC_VA_STATIC_TEXT_UPDATE   0x004EF9E0u  // type 9  (LSTATIC), justify 0x11
+#define SC_VA_STATIC_TEXT_UPDATE10 0x004EF9C0u  // type 10, justify 0x12
+#define SC_VA_STATIC_TEXT_UPDATE11 0x004EF9A0u  // type 11, justify 0x14
+#define SC_VA_STATIC_TEXT_INTERACT 0x00419190u  // shared by all three (table [9..11])
+
+// The draw itself. ECX = control, EAX = optional position override, two stack dwords are
+// added to the position, RET 8. It picks the font from `control->flags & 0x4C00`
+// (0x0400 -> the handle at 0x006CE0F4, which is what SC_CTRL_FONT_SMALLEST selects), sets
+// a style index, takes the string from control+0x14, and takes BOTH the position and the
+// clip box from the control's own bounds: position (bounds.left, bounds.top), clip
+// (bounds.left, bounds.top, bounds.right, bounds.bottom).
+#define SC_VA_DRAW_CONTROL_TEXT    0x004EF870u
+#define SC_VA_SET_FONT             0x0041FB30u  // ECX = font handle; ECX = 0 restores
+#define SC_VA_SET_TEXT_STYLE       0x0041F610u  // EAX = style index (2 normal, 5 disabled)
+#define SC_VA_DRAW_STRING          0x004202B0u  // clips, then runs the glyph loop 0x004200D0
+#define SC_VA_TEXT_JUSTIFY         0x006CE110u  // u8, set by the update handler per type
+#define SC_VA_TEXT_FONT_HEIGHT     0x006CE111u  // u8, set by SC_VA_SET_FONT
+
+// THE RULE A BOX HAS TO SATISFY, off SC_VA_DRAW_STRING's own clip test: the string is
+// drawn only when
+//     left >= clip.left && top >= clip.top && left <= clip.right &&
+//     top + fontHeight <= clip.bottom
+// and the clip box is the control's own bounds. A box only as tall as the font's advance
+// therefore draws NOTHING, silently -- which is why SC_QIND_BOX_H is generous.
+
+// The per-frame HUD driver (hud-selection-row.md 4.1) -- it calls updateSelectedUnitData,
+// the command-card update 0x004599A0, and then the status dispatcher 0x00458120 at
+// 0x004D940F. sc_queueind detours THIS and runs after the original, so its control is
+// re-shown after the engine's own hide-all sweep, in both the single-unit and the
+// multi-select branch. Patch window 5 bytes / 1 instruction, `A0 3C 72 59 00`
+// (MOV AL,[0x0059723C]) -- absolute, so reloc-safe; three callers
+// (work/scratch/033/hookprobe/).
+#define SC_VA_STAT_DISPLAY_DRIVER  0x004D93F0u
+
+// WHERE A CONTROL'S fxnUpdate IS CALLED FROM, and onto WHAT.
+//
+// Graphic layer 2's callback 0x0041CB50 (research/renderer-viewport.md) walks the global
+// dialog list 0x006D5E34 and calls SC_VA_DIALOG_DRAW_WALK per visible dialog. That function
+// is where the per-control handler is reached, and the two instructions that matter are
+// adjacent (work/scratch/033/listing-dlgdrawwalk.tsv):
+//     0041C08F  MOV EDI,[EBP+0x8]        ; the control
+//     0041C092  CMP word [EDI+0x22],0x0  ; a child? then
+//     0041C09C  MOV EDI,[EDI+0x32]       ;   EDI = its parent dialog
+//     ...
+//     0041C1D9  ADD EDI,0x36             ; the DIALOG's surface descriptor
+//     0041C1DF  MOV [0x006CF4A8],EDI     ; ... becomes the current render target
+//     0041C1E5  CALL dword ptr [ECX+0x2E]; ... and then the control draws itself
+// So a control's text lands in its DIALOG's own 8-bit surface, and the descriptor the draw
+// clips against is at dlg+0x36, restored to the previous target on the way out.
+#define SC_VA_DIALOG_DRAW_WALK     0x0041C080u
+#define SC_VA_DIALOG_LAYER_DRAW    0x0041CB50u
+#define SC_VA_RENDER_TARGET        0x006CF4A8u  // {u16 w, u16 h, u8* bits}*
+
+// The surface descriptor itself: {u16 w, u16 h, u8* bits}, 8 bits per pixel. The offsets
+// are the ones 0x0041C080 installs (above). The allocator 0x004C35F0 fills a descriptor
+// with SMemAlloc(h * w, "Starcraft\\SWAR\\lang\\status.cpp", 0xB5) and points 0x006CF4A8
+// at it, and the SECOND triple below is where the same decompile puts it -- the two
+// disagree by 0x2A, which is a register the decompiler could not resolve rather than a
+// fact, so the reader tries the evidenced one FIRST and the other only as a fallback, and
+// says which it used. Nothing but a diagnostic depends on the answer.
+#define SC_BINDLG_OFF_SURFACE      0x36u   // {w, h, bits} -- 0x0041C1D9, load-bearing
+#define SC_BINDLG_OFF_SURFACE_ALT  0x0Cu   // {w, h, bits} -- 0x004C35F0's own arithmetic
+#define SC_SURFACE_OFF_W           0x00u   // u16
+#define SC_SURFACE_OFF_H           0x02u   // u16
+#define SC_SURFACE_OFF_BITS        0x04u   // u8*
+
 #endif // SC_ADDRESSES_H

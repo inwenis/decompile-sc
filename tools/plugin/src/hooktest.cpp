@@ -25,6 +25,7 @@
 #include "sc_fanout.h"
 #include "sc_hook.h"
 #include "sc_hudrow.h"
+#include "sc_queueind.h"
 #include "sc_log.h"
 #include "sc_prodfan.h"
 #include "sc_prodqueue.h"
@@ -2443,16 +2444,34 @@ static void ProdQueueTests(void) {
     Check("a further cancel is the ENGINE's",
           ScProdQueueOnCancel(PqBuilding(), SC_CANCEL_TRAIN_LAST) ? 1 : 0, 0);
 
-    printf("\n    a cancel that names a SLOT is never ours -- the engine refunds it\n");
+    printf("\n    a cancel naming a slot the RING HOLDS is the engine's; one it does not is ours\n");
+    // Task 033 changed this contract, and the change is the whole point of the fifth icon.
+    // The ring holds four (SC_PRODQ_ENGINE_HOLD) and the plugin holds one, so display
+    // indices 0..3 name real ring items -- the engine's, passed through, exactly as before
+    // -- while display 4 names a slot holding 0xE4. Before task 033 that click could not
+    // exist (an empty slot's icon is drawn DISABLED); now the indicator draws that icon
+    // from the plugin's overflow and lights it, so the click is real and the plugin owns
+    // the item behind it. Handing it to the engine would refund by type 0xE4.
     PqBegin(16, 1000, 500);
     for (int i = 0; i < 5; ++i) PqTrain(PQ_TYPE_A);
-    for (unsigned slot = 0; slot < SC_BUILD_QUEUE_SLOTS; ++slot) {
-        Check("slot cancel passes through", ScProdQueueOnCancel(PqBuilding(), slot) ? 1 : 0, 0);
+    Check("the ring holds four, the plugin one", PqEngineLen(), SC_PRODQ_ENGINE_HOLD);
+    for (unsigned slot = 0; slot < (unsigned)SC_PRODQ_ENGINE_HOLD; ++slot) {
+        Check("a slot the ring HOLDS passes through",
+              ScProdQueueOnCancel(PqBuilding(), slot) ? 1 : 0, 0);
     }
     Check("0xFF (the no-op form) passes through",
           ScProdQueueOnCancel(PqBuilding(), SC_CANCEL_TRAIN_NONE) ? 1 : 0, 0);
-    Check("what the plugin holds is untouched", ScProdQueueOverflowCount(PqBuilding()), 1);
-    Check("money untouched",    (long long)*PqMinerals(), 1000 - 5 * 50);
+    Check("none of that touched what the plugin holds",
+          ScProdQueueOverflowCount(PqBuilding()), 1);
+    Check("nor the money", (long long)*PqMinerals(), 1000 - 5 * 50);
+    Check("the display index past the ring is CONSUMED",
+          ScProdQueueOnCancel(PqBuilding(), (unsigned)SC_PRODQ_ENGINE_HOLD) ? 1 : 0, 1);
+    Check("  and it refunded exactly that one item",
+          (long long)*PqMinerals(), 1000 - 4 * 50);
+    Check("  the plugin holds nothing now", ScProdQueueTrackedBuildings(), 0);
+    Check("a repeat of the same click is SWALLOWED, not passed to the engine",
+          ScProdQueueOnCancel(PqBuilding(), (unsigned)SC_PRODQ_ENGINE_HOLD) ? 1 : 0, 1);
+    Check("  and refunds nothing a second time", (long long)*PqMinerals(), 1000 - 4 * 50);
 
     printf("\n    THE CAP: the plugin stops taking items back, and vanilla's own five refuses\n");
     PqBegin(8, 1000, 500);              // 8 = the engine's five plus three held
@@ -3437,6 +3456,264 @@ static void BuildFakeStatusPane(const WORD* queuedByDisplay, BYTE head, bool swa
     *(DWORD*)FakeRt(SC_VA_ACTIVE_PORTRAIT_UNIT) = unit;
 }
 
+// ---------------------------------------------------------------------------
+// [19] the queue-overflow indicator (task 033), against a fake status pane.
+//
+// Two things are decidable here and both are the feature: WHAT the module decides to say
+// (the composer is pure), and WHAT IT LEAVES IN THE DIALOG when it says it -- the spliced
+// control's own fields, the five icons' statUser records, and the fact that all of it goes
+// away again when the queue drops back under.
+//
+// What is NOT provable offline is that the engine's text routine actually puts ink on the
+// dialog surface. That needs a running game, and it is what tools/plugin/test-queue-
+// indicator.ps1 asserts (`QIND ... ink=`) -- the same gap that let sc_hudrow's indicator
+// pass its own test for weeks while drawing nothing.
+// ---------------------------------------------------------------------------
+
+#define FAKE_QIND_DLG_VA 0x006B8000u
+
+static DWORD QiCtl(int i) { return (DWORD)FakeRt(FAKE_QIND_DLG_VA) + 0x100u + (DWORD)i * SC_BINDLG_SIZE; }
+static DWORD QiUser(int i) { return (DWORD)FakeRt(FAKE_QIND_DLG_VA) + 0x800u + (DWORD)i * 0x10u; }
+static DWORD QiRoot(void) { return (DWORD)FakeRt(FAKE_QIND_DLG_VA); }
+
+static unsigned g_qiShows = 0, g_qiHides = 0, g_qiUpdates = 0, g_qiDriverCalls = 0;
+static void QiShow(DWORD c)   { ++g_qiShows;   *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) |= SC_CTRL_FLAG_VISIBLE; }
+static void QiHide(DWORD c)   { ++g_qiHides;   *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) &= ~(DWORD)SC_CTRL_FLAG_VISIBLE; }
+static void QiUpdate(DWORD c) { ++g_qiUpdates; (void)c; }
+static void QiOrigDriver(void) { ++g_qiDriverCalls; }
+
+// Root + the five queue icons (ids 2..6) laid out the way the live dialog reports them
+// (work/scratch/033, STATQ rects: 38x35 icons, the last one at the right-hand end) + one
+// wireframe button (id 0x21) so the GROUP anchor exists. The five icons start in the state
+// the ENGINE's own layout leaves them in: occupied for the ring's items, greyed for the
+// rest -- so "the plugin filled the fifth" is a change this test can see happen.
+static void BuildFakeQIndPane(int engineLen, WORD type) {
+    DWORD root = QiRoot();
+    memset((void*)root, 0, SC_BINDLG_SIZE);
+    *(WORD*)(root + SC_BINDLG_OFF_TYPE) = 0;
+    short* rr = (short*)(root + SC_BINDLG_OFF_BOUNDS);
+    rr[0] = 138; rr[1] = 388; rr[2] = 407; rr[3] = 479;
+
+    for (int k = 0; k < SC_STATQ_SLOTS; ++k) {
+        DWORD c = QiCtl(k);
+        memset((void*)c, 0, SC_BINDLG_SIZE);
+        *(WORD*) (c + SC_BINDLG_OFF_TYPE)   = 2;
+        *(short*)(c + SC_BINDLG_OFF_INDEX)  = (short)(SC_STATQ_FIRST_CONTROL + k);
+        *(DWORD*)(c + SC_BINDLG_OFF_PARENT) = root;
+        *(DWORD*)(c + SC_BINDLG_OFF_NEXT)   = QiCtl(k + 1);
+        short* r = (short*)(c + SC_BINDLG_OFF_BOUNDS);
+        if (k == 0) { r[0] = 104; r[1] = 14; }
+        else        { r[0] = (short)(104 + (k - 1) * 39); r[1] = 53; }
+        r[2] = (short)(r[0] + 38); r[3] = (short)(r[1] + 35);
+
+        DWORD u = QiUser(k);
+        memset((void*)u, 0, 0x10);
+        *(DWORD*)(c + SC_BINDLG_OFF_USER) = u;
+        DWORD flags = SC_CTRL_FLAG_DRAWN | SC_CTRL_FLAG_VISIBLE | SC_CTRL_FONT_SMALLEST;
+        if (k < engineLen) {
+            *(WORD*)(u + SC_STATUSER_OFF_ICON) = type;
+            *(WORD*)(u + SC_STATUSER_OFF_MODE) = 3;
+            *(WORD*)(u + SC_STATUSER_OFF_TYPE) = type;
+        } else {
+            *(WORD*)(u + SC_STATUSER_OFF_ICON) = (WORD)(k + 6);   // the placeholder frame
+            *(WORD*)(u + SC_STATUSER_OFF_MODE) = 6;
+            flags |= SC_CTRL_FLAG_DISABLED;                        // 0x00418640
+        }
+        *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) = flags;
+    }
+    // The wireframe row's first button, the GROUP anchor.
+    {
+        DWORD c = QiCtl(SC_STATQ_SLOTS);
+        memset((void*)c, 0, SC_BINDLG_SIZE);
+        *(WORD*) (c + SC_BINDLG_OFF_TYPE)   = 2;
+        *(short*)(c + SC_BINDLG_OFF_INDEX)  = SC_HUD_FIRST_SMALL_BUTTON;
+        *(DWORD*)(c + SC_BINDLG_OFF_PARENT) = root;
+        *(DWORD*)(c + SC_BINDLG_OFF_NEXT)   = 0;
+        short* r = (short*)(c + SC_BINDLG_OFF_BOUNDS);
+        r[0] = 166; r[1] = 398; r[2] = 200; r[3] = 430;
+        *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) = SC_CTRL_FLAG_VISIBLE;
+    }
+    *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD) = QiCtl(0);
+
+    *(DWORD*)((DWORD)FakeRt(SC_VA_DEFAULT_INTERACT_TABLE) + SC_CTRL_TYPE_LSTATIC * 4) = 0x33333333u;
+    *(DWORD*)((DWORD)FakeRt(SC_VA_DEFAULT_UPDATE_TABLE)   + SC_CTRL_TYPE_LSTATIC * 4) = 0x44444444u;
+    *(DWORD*)FakeRt(SC_VA_STATDATA_DIALOG)      = root;
+    *(DWORD*)FakeRt(SC_VA_ACTIVE_PORTRAIT_UNIT) = PqBuilding();
+    *(BYTE*) FakeRt(SC_VA_CLIENT_SELECTION_COUNT) = 1;
+}
+
+static int QiChildren(void) {
+    int n = 0;
+    for (DWORD c = *(DWORD*)(QiRoot() + SC_BINDLG_OFF_FIRST_CHILD); c && n < 32;
+         c = *(DWORD*)(c + SC_BINDLG_OFF_NEXT)) ++n;
+    return n;
+}
+
+// The indicator, found by walking the LIVE child chain -- never by asking the module where
+// it put it. Returns 0 when it is not linked.
+static DWORD QiIndicator(void) {
+    for (DWORD c = *(DWORD*)(QiRoot() + SC_BINDLG_OFF_FIRST_CHILD); c;
+         c = *(DWORD*)(c + SC_BINDLG_OFF_NEXT)) {
+        if (*(short*)(c + SC_BINDLG_OFF_INDEX) < 0) return c;
+    }
+    return 0;
+}
+
+static void QueueIndTests(void) {
+    printf("\n[19] the queue-overflow indicator: composer, splice, and the fifth icon\n");
+
+    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
+                                 PAGE_READWRITE);
+    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+
+    printf("\n    the composer, driven directly -- one case per line it can produce\n");
+    {
+        char t[48];
+        ScQueueIndView v;
+
+        memset(&v, 0, sizeof(v)); v.selection = 1; v.engineLen = 3;
+        Check("three queued, nothing hidden -> nothing said",
+              ScQueueIndCompose(t, sizeof(t), &v), SC_QIND_NONE);
+        Check("  and the string is empty", (long long)(t[0] == '\0'), 1);
+
+        memset(&v, 0, sizeof(v)); v.selection = 1; v.engineLen = 4; v.overflow = 1;
+        Check("a five-item logical queue fills the strip and says nothing",
+              ScQueueIndCompose(t, sizeof(t), &v), SC_QIND_NONE);
+        Check("  five icons drawable", ScQueueIndDrawableSlots(&v), 5);
+
+        memset(&v, 0, sizeof(v)); v.selection = 1; v.engineLen = 4; v.overflow = 5;
+        Check("nine queued -> \"+4\"", ScQueueIndCompose(t, sizeof(t), &v), SC_QIND_STRIP);
+        Check("  the string is exactly that", (long long)(strcmp(t, "+4") == 0), 1);
+        Check("  and only five icons are drawable", ScQueueIndDrawableSlots(&v), 5);
+
+        memset(&v, 0, sizeof(v)); v.selection = 1; v.upgrades = 3;
+        Check("queued upgrades -> \"+3 upg\"", ScQueueIndCompose(t, sizeof(t), &v),
+              SC_QIND_UPGRADE);
+        Check("  the string is exactly that", (long long)(strcmp(t, "+3 upg") == 0), 1);
+
+        memset(&v, 0, sizeof(v)); v.selection = 4; v.buildings = 4; v.queued = 12;
+        Check("a group -> the group line", ScQueueIndCompose(t, sizeof(t), &v), SC_QIND_GROUP);
+        Check("  naming both numbers",
+              (long long)(strcmp(t, "4 bldgs  12 queued") == 0), 1);
+
+        memset(&v, 0, sizeof(v)); v.selection = 4; v.buildings = 1; v.queued = 3;
+        Check("one producing building in a group -> nothing (vanilla shows it already)",
+              ScQueueIndCompose(t, sizeof(t), &v), SC_QIND_NONE);
+
+        memset(&v, 0, sizeof(v)); v.selection = 30; v.buildings = 4; v.queued = 12;
+        v.hudPages = 3;
+        Check("while the ROW is paging, its own indicator owns the space",
+              ScQueueIndCompose(t, sizeof(t), &v), SC_QIND_NONE);
+    }
+
+    printf("\n    the frame path: nine queued at one building\n");
+    // A real overflow, built the engine's way through the production-queue core: nine
+    // Train presses leave the ring at four and the plugin holding five.
+    // PQ_TYPE_B (0x07), not PQ_TYPE_A (0x00): the icon assertions below read a unit type
+    // out of a statUser record, and a type id of ZERO would also be what an untouched
+    // record reads -- the assertion has to be able to fail.
+    PqBegin(16, 3000, 500);
+    for (int i = 0; i < 9; ++i) PqTrain(PQ_TYPE_B);
+    Check("the ring holds four", PqEngineLen(), SC_PRODQ_ENGINE_HOLD);
+    Check("the plugin holds five", PqOverflow(), 5);
+
+    BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
+    ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiOrigDriver);
+    Check("nothing spliced before the first frame", QiChildren(), SC_STATQ_SLOTS + 1);
+
+    ScQueueIndOnFrame();
+    Check("the indicator is now linked into the child chain", QiChildren(), SC_STATQ_SLOTS + 2);
+    {
+        DWORD ind = QiIndicator();
+        Check("  and the walk finds it", ind ? 1 : 0, 1);
+        if (ind) {
+            const char* text = (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
+            // Read out of the CONTROL, not out of the module: this is the assertion
+            // sc_hudrow's suite was missing.
+            Check("  its pszText says \"+4\"", (long long)(text && strcmp(text, "+4") == 0), 1);
+            Check("  the engine's visible bit is set on it",
+                  (*(DWORD*)(ind + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) ? 1 : 0, 1);
+            Check("  it is a static-text control", (long long)*(WORD*)(ind + SC_BINDLG_OFF_TYPE),
+                  (long long)SC_CTRL_TYPE_LSTATIC);
+            Check("  drawn by the engine's own handler for that type",
+                  (long long)*(DWORD*)(ind + SC_BINDLG_OFF_UPDATE), (long long)0x44444444u);
+            Check("  its id is negative, so the CREATE binder skips it",
+                  (long long)(*(short*)(ind + SC_BINDLG_OFF_INDEX) < 0), 1);
+            short* b = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
+            // The box has to be TALLER than the font or the engine's own draw refuses,
+            // silently (research/status-pane-text.md 3). The in-game ink assertion is what
+            // proves the number is big enough; this proves the box was not left flat.
+            Check("  the box is at least SC_QIND_BOX_H tall", b[3] - b[1] >= SC_QIND_BOX_H, 1);
+            Check("  and sits inside the anchor icon (id 6)",
+                  (long long)(b[0] >= *(short*)(QiCtl(4) + SC_BINDLG_OFF_BOUNDS) &&
+                              b[2] <= *(short*)(QiCtl(4) + SC_BINDLG_OFF_BOUNDS + 4)), 1);
+        }
+    }
+    Check("the original driver ran first, every frame", (long long)g_qiDriverCalls, 0);
+
+    printf("\n    ... and the FIFTH icon is drawn from the plugin's own overflow\n");
+    // The user: "when i queue more then 5 units the 5'th slot is emtpy". Display 4 is the
+    // slot task 025's ENGINE_HOLD=4 leaves empty; the engine greyed it in the fake, and
+    // the module must have filled it with the first held item and lit it.
+    {
+        DWORD c = QiCtl(4), u = QiUser(4);
+        Check("display 4 draws the held unit type",
+              (long long)*(WORD*)(u + SC_STATUSER_OFF_ICON), (long long)PQ_TYPE_B);
+        Check("  with the OCCUPIED mode the engine writes", (long long)*(WORD*)(u + SC_STATUSER_OFF_MODE), 3);
+        Check("  and its type field set too", (long long)*(WORD*)(u + SC_STATUSER_OFF_TYPE),
+              (long long)PQ_TYPE_B);
+        Check("  the greyed bit is gone, so it draws lit",
+              (*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_DISABLED) ? 1 : 0, 0);
+        Check("  the four ENGINE icons were not touched",
+              (long long)(*(WORD*)(QiUser(0) + SC_STATUSER_OFF_MODE) == 3 &&
+                          *(WORD*)(QiUser(3) + SC_STATUSER_OFF_MODE) == 3), 1);
+    }
+    {
+        // A settled strip costs nothing: a second frame with the same state re-writes
+        // neither the icons nor the text.
+        unsigned shows = g_qiShows, updates = g_qiUpdates;
+        ScQueueIndOnFrame();
+        Check("a settled frame re-shows nothing", (long long)(g_qiShows - shows), 0);
+        Check("  and re-draws nothing", (long long)(g_qiUpdates - updates), 0);
+    }
+
+    printf("\n    the queue drains: the text goes away and the control is hidden again\n");
+    // Cancel the five held items the way the card's Cancel button does.
+    for (int i = 0; i < 5; ++i) ScProdQueueOnCancel(PqBuilding(), SC_CANCEL_TRAIN_LAST);
+    Check("the plugin holds nothing", PqOverflow(), 0);
+    ScQueueIndOnFrame();
+    {
+        DWORD ind = QiIndicator();
+        Check("the control is still linked (it is ours, and cheap)", ind ? 1 : 0, 1);
+        Check("  but the engine's visible bit is CLEAR",
+              ind && (*(DWORD*)(ind + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) ? 1 : 0, 0);
+        Check("  and the module says it is showing nothing", ScQueueIndCurrentMode(),
+              SC_QIND_NONE);
+    }
+
+    printf("\n    with the feature OFF nothing is spliced and nothing is written\n");
+    {
+        PqBegin(16, 3000, 500);
+        for (int i = 0; i < 9; ++i) PqTrain(PQ_TYPE_B);
+        BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
+        ScQueueIndTestBegin(NULL, &QiShow, &QiHide, &QiUpdate, &QiOrigDriver);  // disabled
+        unsigned shows = g_qiShows;
+        ScQueueIndOnFrame();
+        ScQueueIndOnFrame();
+        Check("no child was added", QiChildren(), SC_STATQ_SLOTS + 1);
+        Check("no control was shown", (long long)(g_qiShows - shows), 0);
+        Check("display 4 is still the engine's greyed placeholder",
+              (*(DWORD*)(QiCtl(4) + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_DISABLED) ? 1 : 0, 1);
+        Check("  still drawing the placeholder frame, not a unit",
+              (long long)*(WORD*)(QiUser(4) + SC_STATUSER_OFF_MODE), 6);
+    }
+
+    ScQueueIndTestBegin(NULL, NULL, NULL, NULL, NULL);
+    ScProdQueueTestBegin(NULL, SC_PRODQ_DEFAULT_MAX);
+    VirtualFree(g_fake, 0, MEM_RELEASE);
+    g_fake = NULL;
+}
+
 static void StatusStripTests(void) {
     printf("\n[16] the status pane's production-queue strip, against a fake dialog\n");
 
@@ -3649,6 +3926,7 @@ int main(void) {
     StatusStripTests();
     UpgradeQueueTests();
     ProdFanTests();
+    QueueIndTests();
     ExitLogTests();
 
     printf("\nhooktest: %d failure(s)\n", g_failures);

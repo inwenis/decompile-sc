@@ -26,6 +26,7 @@
 #include "sc_hook.h"
 #include "sc_hudrow.h"
 #include "sc_log.h"
+#include "sc_queueind.h"
 
 #define HUD_MAX 256
 
@@ -517,7 +518,14 @@ static void EnsureIndicator(DWORD root, DWORD firstBtn) {
         ib[0] = (short)(b[0] + 2);        // left
         ib[1] = (short)(b[1] + 1);        // top
         ib[2] = (short)(b[0] + 150);      // right
-        ib[3] = (short)(b[1] + 10);       // bottom
+        // Bottom, and this number is load-bearing rather than cosmetic. The engine's
+        // string draw (SC_VA_DRAW_STRING) refuses to draw AT ALL when
+        // `top + fontHeight > clip.bottom`, and the clip box is the control's own bounds
+        // (research/status-pane-text.md 3). This box used to be nine pixels tall, which is
+        // under the height of the font the SC_CTRL_FONT_SMALLEST bit selects -- so the
+        // indicator was spliced, its text was written, the module logged it, the suite
+        // asserted it out of the module's OWN BUFFER, and the player saw nothing. Task 033.
+        ib[3] = (short)(b[1] + 1 + SC_QIND_BOX_H);
         *(DWORD*)(ind + SC_BINDLG_OFF_FLAGS)    = SC_CTRL_FLAG_VISIBLE | SC_CTRL_FONT_SMALLEST;
         *(short*)(ind + SC_BINDLG_OFF_INDEX)    = (short)0xFFE0;   // negative: binder-proof
         *(WORD*) (ind + SC_BINDLG_OFF_TYPE)     = (WORD)SC_CTRL_TYPE_LSTATIC;
@@ -571,8 +579,32 @@ static void LogReadback(DWORD firstBtn) {
         used += _snprintf(buf + used, (size_t)room, "%s%04X", shown ? " " : "", tag);
         ++shown;
     }
-    ScLog("HUDROW show n=%d page=%d/%d slots=%d [%s] indicator=\"%s\"",
-          g_dispN, g_page + 1, g_pageCount, shown, buf, g_indText);
+    // The indicator, read back the same way -- out of the CONTROL, not out of g_indText.
+    // The difference matters: printing our own buffer says what the module INTENDED, which
+    // is exactly the self-echo AGENTS.md's "assert the engine's own result" rule is about,
+    // and it is what let a nine-pixel-tall (i.e. never drawn) indicator pass for weeks.
+    // `ink` counts non-background bytes the engine left in the dialog's own surface inside
+    // that control's rect: it cannot say WHAT was drawn -- the text field above does that
+    // -- but it is the only thing here that can say anything was drawn at all.
+    DWORD ind = (DWORD)&g_indCtrl[0];
+    bool linked = false;
+    for (DWORD c = ChildOf(g_dialog); c && !linked; c = NextOf(c)) if (c == ind) linked = true;
+    const char* live = "";
+    int ink = -1;
+    DWORD flags = 0;
+    short* ib = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
+    if (linked) {
+        flags = *(DWORD*)(ind + SC_BINDLG_OFF_FLAGS);
+        DWORD p = *(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
+        if (Readable(p, 1)) live = (const char*)p;
+        ink = ScQueueIndSurfaceInk(g_dialog, ib[0], ib[1], ib[2], ib[3]);
+    }
+
+    ScLog("HUDROW show n=%d page=%d/%d slots=%d [%s] indicator=\"%s\" indLinked=%d "
+          "indVisible=%d indBounds=(%d,%d,%d,%d) indInk=%d",
+          g_dispN, g_page + 1, g_pageCount, shown, buf, live, linked ? 1 : 0,
+          (flags & SC_CTRL_FLAG_VISIBLE) ? 1 : 0,
+          linked ? ib[0] : 0, linked ? ib[1] : 0, linked ? ib[2] : 0, linked ? ib[3] : 0, ink);
 }
 
 // Where the buttons are, so an automated test can aim a right-click at one --

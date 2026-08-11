@@ -41,6 +41,7 @@
 #include "sc_log.h"
 #include "sc_prodfan.h"
 #include "sc_prodqueue.h"
+#include "sc_queueind.h"
 #include "sc_upgrades.h"
 
 static volatile LONG g_stop = 0;
@@ -532,6 +533,15 @@ static void PollMarker(void) {
     // engine's memory instead of off the status area. Read-only; a no-op when
     // %SCPLUGIN_UPGQ% never switched the feature on.
     ScUpgQueueLogState(g_lastMarker);
+
+    // Task 033: what the QUEUE-OVERFLOW INDICATOR is actually showing, read back out of
+    // the live dialog -- is its control linked into the child chain, does the engine's own
+    // visible bit sit on it, and what string does its pszText pointer really hold. It runs
+    // whether or not the feature is enabled, for the same reason task 030's oracle does:
+    // "nothing is drawn with the feature off" is half the acceptance criteria, and an
+    // oracle that only exists in the treatment arm cannot measure the control arm.
+    // Read-only.
+    ScQueueIndLogState(g_lastMarker);
 }
 
 // ---------------------------------------------------------------------------

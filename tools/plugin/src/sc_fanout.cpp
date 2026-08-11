@@ -43,6 +43,7 @@
 #include "sc_fanout.h"
 #include "sc_hook.h"
 #include "sc_hudrow.h"
+#include "sc_queueind.h"
 #include "sc_log.h"
 #include "sc_prodfan.h"
 
@@ -1712,6 +1713,13 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     const bool hudrow = (mode == SC_MODE_FANOUT) && EnvInt("SCPLUGIN_HUDROW", 1, 0, 1) != 0;
     ScHudRowInit(moduleBase, hudrow);
 
+    // Task 033's queue-overflow indicator. Same shape again: fanout mode only, because it
+    // draws (and `shadow` mode's contract is "capture and log, change nothing"), with
+    // %SCPLUGIN_QUEUEIND% as its own off switch. It goes in here rather than in
+    // scplugin.cpp so its one detour lands under the SAME thread suspension as the others.
+    const bool queueind = (mode == SC_MODE_FANOUT) && ScQueueIndEnabled();
+    ScQueueIndInit(moduleBase, queueind);
+
     char cmds[192];
     int used = 0;
     cmds[0] = '\0';
@@ -1720,9 +1728,9 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
                           i ? " " : "", g_fanoutCmds[i]);
     }
     ScLog("FANOUT config: mode=%s budget=%dB maxUnits=%d logCommands=%d circles=%d "
-          "hudrow=%d liveness=%d buildingGroups=%d cmds=[%s]",
+          "hudrow=%d queueind=%d liveness=%d buildingGroups=%d cmds=[%s]",
           ScModeName(mode), g_budget, g_maxUnits, g_verboseCmds ? 1 : 0,
-          circles ? 1 : 0, hudrow ? 1 : 0, g_liveness ? 1 : 0,
+          circles ? 1 : 0, hudrow ? 1 : 0, queueind ? 1 : 0, g_liveness ? 1 : 0,
           g_buildingGroups ? 1 : 0, cmds);
     if (!g_liveness) {
         ScLog("FANOUT WARNING: %%SCPLUGIN_FANOUT_LIVENESS%%=0 -- the emit gate is the "
@@ -1767,6 +1775,9 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     // returns 0 or 1.
     if (hudrow) installed += ScHudRowInstallHooks();
 
+    // Task 033's one HUD-driver detour, same suspension, same 0-or-1 contract.
+    if (queueind) installed += ScQueueIndInstallHooks();
+
     ScHookResumeThreads();
 
     // A partial install is not a working plugin: the queueCommand hook without the
@@ -1775,7 +1786,7 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     // stale circles under units the player has deselected is worse than none. The
     // HUD-row dispatcher detour is one hook.
     const int expected = ((mode >= SC_MODE_SHADOW) ? 4 : 1) + (circles ? 1 : 0)
-                       + (hudrow ? 1 : 0);
+                       + (hudrow ? 1 : 0) + (queueind ? 1 : 0);
     if (installed != expected) {
         ScLog("HOOK: only %d of %d hooks installed -- ROLLING BACK, the plugin is "
               "passive for this run", installed, expected);
@@ -1925,6 +1936,7 @@ void ScFanoutRemove(void) {
           "them (see tools/plugin/README.md, off switch 3)", ScCirclesCount());
 
     ScHookSuspendThreads();
+    ScQueueIndRemoveHooks();
     ScHudRowRemoveHooks();
     ScCirclesRemoveHook();
     ScHookRemove(&g_hkSort);
@@ -1961,6 +1973,7 @@ void ScFanoutLogStats(void) {
     }
     ScCirclesLogStats();
     ScHudRowLogStats();
+    ScQueueIndLogStats();
 }
 
 // The oracle for "did the order reach every unit". Walks the shadow list -- which is the
