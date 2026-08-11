@@ -561,13 +561,25 @@ static const ScScreenPatch SC_WS_PATCHES[] = {
     { 0x0040C402u,  6, 2, SC_WS_NO_FIXUP, 0x0u,
       { 0x81, 0xC2, 0xA0, 0x02, 0x00, 0x00 },
       { 0x81, 0xC2, 0x40, 0x03, 0x00, 0x00 },
-      "terrain.pitch@0040C402", "scratch writer (8-pixel run): row step" },
+      "terrain.pitch@0040C402", "scratch writer (8-pixel run, forward): row step" },
     // 0x0040C44C  add edx, 0x2a0
     //             -> add edx, 0x340
     { 0x0040C44Cu,  6, 2, SC_WS_NO_FIXUP, 0x0u,
       { 0x81, 0xC2, 0xA0, 0x02, 0x00, 0x00 },
       { 0x81, 0xC2, 0x40, 0x03, 0x00, 0x00 },
-      "terrain.pitch@0040C44C", "scratch writer (8-pixel run): row step" },
+      "terrain.pitch@0040C44C", "scratch writer (8-pixel run, forward): row step" },
+    // 0x0040C495  add edx, 0x2a0
+    //             -> add edx, 0x340
+    { 0x0040C495u,  6, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x81, 0xC2, 0xA0, 0x02, 0x00, 0x00 },
+      { 0x81, 0xC2, 0x40, 0x03, 0x00, 0x00 },
+      "terrain.pitch@0040C495", "scratch writer (8-pixel run, reverse): row step" },
+    // 0x0040C4C4  add edx, 0x2a0
+    //             -> add edx, 0x340
+    { 0x0040C4C4u,  6, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x81, 0xC2, 0xA0, 0x02, 0x00, 0x00 },
+      { 0x81, 0xC2, 0x40, 0x03, 0x00, 0x00 },
+      "terrain.pitch@0040C4C4", "scratch writer (8-pixel run, forward 2): row step" },
     // 0x004BCDD1  imul eax, eax, 0x2a0
     //             -> imul eax, eax, 0x340
     { 0x004BCDD1u,  6, 2, SC_WS_NO_FIXUP, 0x0u,

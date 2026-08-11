@@ -98,6 +98,13 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--exe", default=DEFAULT_EXE)
     ap.add_argument("--pitch", type=int, default=STOCK_PITCH)
+    # The same shape search applies to every stride in the renderer, not just the
+    # framebuffer's: the dirty grid's row stride is 40 (anchor 0x006CEFF8) and the
+    # terrain scratch surface's pitch is 672 (anchor 0x00628454, its pointer).
+    # Only the anchor used for ranking changes.
+    ap.add_argument("--anchor", action="append", type=lambda s: int(s, 0), default=None,
+                    help="address whose references rank a hit (repeatable); "
+                         "default is the framebuffer pointer and the screen Bitmap")
     ap.add_argument("--max-k", type=int, default=64, help="largest multiple to look for")
     ap.add_argument("--max-d", type=int, default=16, help="largest within-row offset to look for")
     ap.add_argument("--near", type=lambda s: int(s, 0), default=0x600,
@@ -113,7 +120,7 @@ def main() -> int:
     blob = data[tptr:tptr + min(trsz, tvsz)]
 
     refs = []
-    for target in (FRAME_PTR, FRAME_BMP):
+    for target in (a.anchor if a.anchor else (FRAME_PTR, FRAME_BMP)):
         enc = struct.pack("<I", target)
         i = blob.find(enc)
         while i != -1:

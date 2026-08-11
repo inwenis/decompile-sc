@@ -97,8 +97,10 @@ stage	va	len	changed	name	before	after	expect	patch	note
 2	0x0040AAFE	5	1	terrain.pitch@0040AAFE	mov ebx, 0x2a0	mov ebx, 0x340	BBA0020000	BB40030000	terrain WRITER 0x0040AAE0: row stride
 2	0x0040C23A	6	1	terrain.pitch@0040C23A	add esi, 0x2a0	add esi, 0x340	81C6A0020000	81C640030000	scratch->screen copy: source row step
 2	0x0040C240	5	1	terrain.pitch@0040C240	add eax, 0x2a0	add eax, 0x340	05A0020000	0540030000	scratch->screen copy: source offset row step
-2	0x0040C402	6	1	terrain.pitch@0040C402	add edx, 0x2a0	add edx, 0x340	81C2A0020000	81C240030000	scratch writer (8-pixel run): row step
-2	0x0040C44C	6	1	terrain.pitch@0040C44C	add edx, 0x2a0	add edx, 0x340	81C2A0020000	81C240030000	scratch writer (8-pixel run): row step
+2	0x0040C402	6	1	terrain.pitch@0040C402	add edx, 0x2a0	add edx, 0x340	81C2A0020000	81C240030000	scratch writer (8-pixel run, forward): row step
+2	0x0040C44C	6	1	terrain.pitch@0040C44C	add edx, 0x2a0	add edx, 0x340	81C2A0020000	81C240030000	scratch writer (8-pixel run, forward): row step
+2	0x0040C495	6	1	terrain.pitch@0040C495	add edx, 0x2a0	add edx, 0x340	81C2A0020000	81C240030000	scratch writer (8-pixel run, reverse): row step
+2	0x0040C4C4	6	1	terrain.pitch@0040C4C4	add edx, 0x2a0	add edx, 0x340	81C2A0020000	81C240030000	scratch writer (8-pixel run, forward 2): row step
 2	0x004BCDD1	6	1	terrain.pitch@004BCDD1	imul eax, eax, 0x2a0	imul eax, eax, 0x340	69C0A0020000	69C040030000	terrain blitter: screenTop * pitch
 2	0x0049BC51	6	1	terrain.pitch@0049BC51	imul eax, eax, 0x2a0	imul eax, eax, 0x340	69C0A0020000	69C040030000	scroll: row * terrain pitch
 2	0x0049BD70	6	1	terrain.pitch@0049BD70	imul eax, eax, 0x2a0	imul eax, eax, 0x340	69C0A0020000	69C040030000	scroll: row * terrain pitch

@@ -104,6 +104,45 @@ int ScScreenStageWanted(void) {
     return v;
 }
 
+// %SCPLUGIN_WS_ONLY% -- comma-separated NAME PREFIXES. When set, a patch at the
+// TOP stage is written only if its name starts with one of them; every lower
+// stage is written in full, because a stage is the base the selection sits on.
+// Stage 2 is 121 sites in one lump and its damage cannot be attributed from
+// outside the process, so this exists to bisect it.
+//
+// COUPLING WARNING, and it is not a footnote. These groups are NOT independent.
+// research/renderer-viewport.md 12.5: the terrain blitter walks the dirty grid
+// LINEARLY, one byte per column, never re-basing per row -- so the grid's stride
+// and the blitter's column count must move TOGETHER or they desynchronise by
+// (stride - columns) bytes every row. Selecting `terrain` without `grid`
+// produces a DIFFERENTLY broken picture, not a partial fix, and reading it as
+// "terrain is the culprit" would be a wrong finding manufactured by the tool.
+// Only coherent subsets mean anything: {grid, terrain, dirty} move as one.
+static char g_only[256];
+static bool g_onlySet = false;
+
+static void LoadOnlyFilter(void) {
+    DWORD n = GetEnvironmentVariableA("SCPLUGIN_WS_ONLY", g_only, sizeof(g_only));
+    g_onlySet = (n > 0 && n < sizeof(g_only));
+    if (!g_onlySet) g_only[0] = '\0';
+}
+
+static bool NameSelected(const char* name) {
+    if (!g_onlySet) return true;
+    const char* p = g_only;
+    while (*p) {
+        while (*p == ' ' || *p == ',') ++p;
+        if (!*p) break;
+        const char* comma = strchr(p, ',');
+        size_t len = comma ? (size_t)(comma - p) : strlen(p);
+        while (len && p[len - 1] == ' ') --len;
+        if (len && strncmp(name, p, len) == 0) return true;
+        if (!comma) break;
+        p = comma + 1;
+    }
+    return false;
+}
+
 bool ScScreenActive(void) { return g_active; }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +279,7 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
     }
 
     g_stage = ScScreenStageWanted();
+    LoadOnlyFilter();
 
     DWORD data = 0;
     unsigned w = 0, h = 0;
@@ -296,9 +336,11 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
     }
 
     // --- write ---------------------------------------------------------------
+    int skipped = 0;
     for (size_t i = 0; i < SC_WS_PATCH_COUNT; ++i) {
         const ScScreenPatch* p = &SC_WS_PATCHES[i];
         if (p->stage > g_stage) continue;
+        if (p->stage == g_stage && !NameSelected(p->name)) { ++skipped; continue; }
         if (WriteOne(p)) ++g_applied;
         else ++g_refused;
     }
@@ -306,6 +348,11 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
     g_active = (g_applied > 0 && g_refused == 0);
     ScLog("WIDESCREEN %s: %d patch(es) applied, %d refused, stage<=%d",
           g_active ? "ACTIVE" : "INCOMPLETE", g_applied, g_refused, g_stage);
+    // Announced even when nothing is filtered, so a run that FORGOT to clear the
+    // variable cannot be read as a full-stage result. An unannounced subset is
+    // the same class of mistake as an assertion that cannot fail.
+    ScLog("WIDESCREEN filter: %%SCPLUGIN_WS_ONLY%%=%s -- %d stage-%d site(s) skipped",
+          g_onlySet ? g_only : "(unset, whole stage applied)", skipped, g_stage);
 }
 
 void ScScreenRemove(void) {

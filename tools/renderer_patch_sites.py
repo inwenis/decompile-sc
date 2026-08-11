@@ -709,8 +709,19 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
         (0x0040AAFE, "terrain WRITER 0x0040AAE0: row stride"),
         (0x0040C23A, "scratch->screen copy: source row step"),
         (0x0040C240, "scratch->screen copy: source offset row step"),
-        (0x0040C402, "scratch writer (8-pixel run): row step"),
-        (0x0040C44C, "scratch writer (8-pixel run): row step"),
+        # FOUR of these run-writers exist, not two. 0x0040C495 and 0x0040C4C4
+        # were found by tools/renderer_pitch_sweep.py --pitch 672, and the way
+        # they hid is worth naming: each of the four is an 8-row loop whose WRAP
+        # test (`cmp edx,0x49800` / `sub edx,0x49800`) was declared and whose row
+        # STEP was not, so the surface size was right everywhere and the stride
+        # was right in half the writers. Terrain went into the wrong rows of the
+        # scratch surface, which is every pixel of the playfield rather than an
+        # edge case -- stage 2's first run came back with 332 of 380 rows damaged
+        # and 16 points more black than the control.
+        (0x0040C402, "scratch writer (8-pixel run, forward): row step"),
+        (0x0040C44C, "scratch writer (8-pixel run, forward): row step"),
+        (0x0040C495, "scratch writer (8-pixel run, reverse): row step"),
+        (0x0040C4C4, "scratch writer (8-pixel run, forward 2): row step"),
         (0x004BCDD1, "terrain blitter: screenTop * pitch"),
         # Four more of the same multiply in the scroll band. The first sweep for
         # 0x2A0 truncated its output before these; a second pass with a general
