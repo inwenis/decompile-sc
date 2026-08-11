@@ -599,6 +599,26 @@ and the game is not launched.
 > while StarCraft's VC6-era build uses `8B EC`, and the prologue check refused to patch. That is
 > the check doing its job on a one-byte encoding difference.
 
+#### Adding a part (issue #35)
+
+`hooktest.exe` is organised into numbered **parts** — `[7] the fan-out core`, `[8] selection
+circles`, and so on — and the number exists for one reason: naming which part failed in a
+redirected overnight log.
+
+**Do not write the number.** Call `Part("what this part proves")` as the part's first statement
+and add the call at the **end** of the list at the bottom of `main()`. `Part()` numbers by the
+order the parts run and prints the part's NAME, and `Check()` puts that name on every failing
+line — so two branches adding a part each get different numbers however they merge.
+
+Three branches used to claim a number another branch had already taken (024/026 → `[13]`,
+021/025 → `[11]`, 028/029 → `[16]`), and every one of them merged cleanly on its own, because
+the declarations sit in different regions of the file. `run-ci-local.ps1`'s `hooktest-parts`
+step now fails on a hand-written header or a duplicate part name; it is a **required** step, so
+unlike `hooktest` itself it cannot skip on a machine with no 32-bit toolchain.
+
+Reordering the list in `main()` renumbers the parts, and `research/` cites several of them by
+number — so add at the end rather than inserting.
+
 `build.ps1` then **fails the build** unless both artifacts read
 `Machine = 0x014C` and optional-header magic `0x010B` (PE32), parsed straight out
 of the file bytes. This is not ceremony: if `-m32` ever silently produced an x64

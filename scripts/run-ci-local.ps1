@@ -151,6 +151,49 @@ try {
         'tools/ byte-compiled'
     }
 
+    # ISSUE #35 -- the collision gate, and REQUIRED because it needs nothing but the
+    # source. hooktest part numbers used to be written by hand and three branches each
+    # claimed one another branch had already taken (024/026 -> [13], 021/025 -> [11],
+    # 028/029 -> [16]). Every one merged cleanly on its own -- the declarations are in
+    # different regions of the file, so git sees no conflict -- and was found only by
+    # the person who merged the second side.
+    #
+    # hooktest.cpp now derives the number from the order the parts run (see Part()), so
+    # a collision is no longer expressible. This step is what keeps it that way: it
+    # fails if anyone writes a part header by hand again, and it fails on a duplicate
+    # part NAME, which is the identifier that replaced the number.
+    #
+    # Deliberately NOT the same step as 'hooktest' below: that one needs the pinned
+    # 32-bit toolchain and legitimately skips on a machine without it, and a gate for a
+    # cross-branch collision must not be skippable on the branch that introduces one.
+    Step 'hooktest-parts' -Required {
+        $src = Join-Path $WorkDir 'tools/plugin/src/hooktest.cpp'
+        if (-not (Test-Path -LiteralPath $src)) { return Skip-Step 'no tools/plugin/src/hooktest.cpp' }
+        $text = Get-Content -Raw -LiteralPath $src
+
+        $handWritten = @([regex]::Matches($text, 'printf\("\\n\[\d+\]'))
+        if ($handWritten.Count -gt 0) {
+            throw ("$($handWritten.Count) hand-written part header(s) in hooktest.cpp " +
+                   "($($handWritten.ForEach({ $_.Value }) -join ', ')) -- use Part(`"name`"), " +
+                   'which numbers by run order so two branches cannot claim the same number.')
+        }
+
+        $names = @([regex]::Matches($text, '(?m)^\s*Part\("([^"]+)"\)').ForEach({ $_.Groups[1].Value }))
+        # PROVED POSITIVE: a regex that matched nothing would make the duplicate check
+        # below vacuously green, which is the exact shape AGENTS.md's absence rule warns
+        # about. If Part() is ever renamed, this fails loudly instead of passing hollow.
+        if ($names.Count -lt 10) {
+            throw "found only $($names.Count) Part(...) declarations in hooktest.cpp; the part scan is not matching (did Part() get renamed?)"
+        }
+        $dupes = @($names | Group-Object | Where-Object { $_.Count -gt 1 })
+        if ($dupes.Count -gt 0) {
+            throw ("duplicate hooktest part name(s): " +
+                   (($dupes | ForEach-Object { "'$($_.Name)' x$($_.Count)" }) -join ', ') +
+                   ' -- the part name is what a failing log line is identified by, so two parts cannot share one.')
+        }
+        "$($names.Count) hooktest parts, all uniquely named, none hand-numbered"
+    }
+
     Step 'ruff' {
         $py = if (Test-Path '.venv/Scripts/python.exe') { '.venv/Scripts/python.exe' } else { 'python' }
         & $py -m ruff --version *> $null
