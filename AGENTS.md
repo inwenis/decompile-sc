@@ -118,6 +118,37 @@ So, for any diagnostic you are about to trust:
 - "No log line appeared" and "the function returned false" look identical in a quiet log.
   Log entry as well as outcome, at least once, so absence is distinguishable from refusal.
 
+## An enumeration that scanned for a NAME is not exhaustive (2026-08-11, task 034)
+
+Two failure modes of "I searched the binary and found them all", both met in one task.
+
+**1. A routine that is HANDED a pointer never names it.** Task 034 enumerated framebuffer
+writers by scanning `.text` for the pointer `0x006CEFF4` and called that exhaustive. It is not:
+`FUN_004800A0` writes the framebuffer through a pointer passed in a register, sits 1405 bytes
+from the nearest reference to it, and is UNROLLED — holding the pitch as fourteen displacements
+`[ecx + k*640]` and `[ecx + k*640 + 4]`, of which exactly ONE spells 640. Fifteen instructions
+no pointer scan could reach.
+
+So sweep for the SHAPE of the arithmetic — `k*pitch + d` — not for the pitch and not for the
+pointer. `tools/renderer_pitch_sweep.py` does this. Note that searching multiples alone finds
+only half of them (the `+4` twins are not multiples of anything), and half a fix in a rendering
+path renders rather than crashes.
+
+**2. A disassembly sweep that stops early reports ZERO and looks like a clean bill of health.**
+Capstone halts at the first byte it cannot decode; the first version of that sweep therefore
+covered only the bytes before the first jump table — about 3% of `.text` — and printed "nothing
+found". A tool that scans 3% and reports zero hits is the worst possible output, because it is
+indistinguishable from a correct all-clear. Make such sweeps resume past undecodable bytes AND
+report the fraction of the section they actually covered.
+
+**3. And the same task's oracle was too COARSE rather than wrong.** It reported stage 0 as
+"pixel-identical"; measured at full resolution, 586 of 307200 pixels differ — animated doodads
+caught at different phases, invisible to a check that sampled every second pixel against a
+90%-per-row threshold. The fix was to assert on SHAPE, not count: a wrong pitch damages whole
+ROWS across the full width, while animation differs in isolated blobs spanning no row. Assert
+the thing that distinguishes damage from noise, and report the noise floor beside it rather than
+asserting against zero.
+
 ## Absence assertions must first be proved positive (2026-08-09)
 
 An assertion that something is ABSENT is worth nothing until the same pattern has been shown to
