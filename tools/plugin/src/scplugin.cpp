@@ -41,6 +41,7 @@
 #include "sc_log.h"
 #include "sc_prodfan.h"
 #include "sc_prodqueue.h"
+#include "sc_queueind.h"
 #include "sc_upgrades.h"
 
 static volatile LONG g_stop = 0;
@@ -150,6 +151,25 @@ static void TakeSnapshot(Snapshot* s) {
         DWORD rowVa = SC_VA_PLAYERS_SELECTIONS + p * SC_SELECTION_SLOTS * 4;
         if (SafeRead(Rt(rowVa), s->playerRow, sizeof(s->playerRow))) s->ok |= OK_ROW;
     }
+}
+
+// Task 036: one tagged line holding all three selection layers, written on the marker
+// rather than on change (see the call site for why). Counts are non-NULL entries, which
+// is the engine's own termination rule for every one of these arrays -- they are filled
+// densely from slot 0 and every walker in the binary stops at the first NULL.
+static void LogSelectionArrays(const char* tag) {
+    Snapshot s;
+    TakeSnapshot(&s);
+    char gbuf[512], abuf[512], rbuf[512];
+    FormatSlots(s.group,     gbuf, sizeof(gbuf));
+    FormatSlots(s.active,    abuf, sizeof(abuf));
+    FormatSlots(s.playerRow, rbuf, sizeof(rbuf));
+    ScLog("SELSNAP [%s] client=%d clientCount=%u active=%d sim=%d player=%u ok=0x%02X",
+          tag ? tag : "-", NonNull(s.group), (unsigned)s.count, NonNull(s.active),
+          NonNull(s.playerRow), (unsigned)(s.playerId & 0xFF), (unsigned)s.ok);
+    ScLog("    SELSNAP clientSelectionGroup   %s", gbuf);
+    ScLog("    SELSNAP activePlayerSelection  %s", abuf);
+    ScLog("    SELSNAP playersSelections      %s", rbuf);
 }
 
 static void LogSnapshot(const Snapshot* s) {
@@ -493,6 +513,20 @@ static void PollMarker(void) {
     // comparison.
     ScanWorld(g_lastMarker);
 
+    // Task 036: the three selection arrays, tagged, on the same trigger.
+    //
+    // LogSnapshot below already prints all three -- but only when the snapshot CHANGED
+    // since the last 250 ms tick, which is exactly wrong for the question this task had
+    // to answer. "Did that shift-click do anything?" needs a read AT a named instant,
+    // and a change-gated line is silent precisely when the answer is "nothing happened".
+    // Worse, silence there is indistinguishable from "the observer stopped".
+    //
+    // The three arrays are three different layers and a symptom does not say which one
+    // refused (research/building-groups.md 2, 3): `client` is what the STOCK status row
+    // draws, `active` is what the client selected, `sim` is what the simulation holds and
+    // what every order applier iterates. Read-only.
+    LogSelectionArrays(g_lastMarker);
+
     // Task 026: and so does the command-card read-back. It goes BEFORE the shadow
     // dump for the same reason the world scan does -- the engine's own view first.
     ScCardScan(g_lastMarker);
@@ -532,6 +566,15 @@ static void PollMarker(void) {
     // engine's memory instead of off the status area. Read-only; a no-op when
     // %SCPLUGIN_UPGQ% never switched the feature on.
     ScUpgQueueLogState(g_lastMarker);
+
+    // Task 033: what the QUEUE-OVERFLOW INDICATOR is actually showing, read back out of
+    // the live dialog -- is its control linked into the child chain, does the engine's own
+    // visible bit sit on it, and what string does its pszText pointer really hold. It runs
+    // whether or not the feature is enabled, for the same reason task 030's oracle does:
+    // "nothing is drawn with the feature off" is half the acceptance criteria, and an
+    // oracle that only exists in the treatment arm cannot measure the control arm.
+    // Read-only.
+    ScQueueIndLogState(g_lastMarker);
 }
 
 // ---------------------------------------------------------------------------
@@ -826,6 +869,17 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         // observe is the whole plugin's off switch and must stay byte-for-byte the
         // task-008 read-only observer, whatever else is set in the environment.
         if (g_mode == SC_MODE_OBSERVE) {
+            // Task 033: observe never reaches ScFanoutInstall, so the indicator is
+            // initialised here instead -- DISABLED, but with a module base, so its
+            // read-only oracle still answers on the marker channel. "Nothing is drawn with
+            // the feature off" is half of what this run has to show, and an oracle that
+            // goes silent in the control arm cannot show it (AGENTS.md: prove an absence
+            // against a pattern that has matched somewhere).
+            ScQueueIndInit(g_base, false);
+            if (ScQueueIndEnabled()) {
+                ScLog("QIND: %%SCPLUGIN_QUEUEIND%% is set but the mode is observe -- "
+                      "IGNORED. Observe writes nothing to game memory.");
+            }
             if (ScProdQueueEnabled()) {
                 ScLog("PRODQ: %%SCPLUGIN_PRODQ%% is set but the mode is observe -- "
                       "IGNORED. Observe writes nothing to game memory.");

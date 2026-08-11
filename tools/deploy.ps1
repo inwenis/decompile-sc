@@ -47,14 +47,18 @@ What it does, in order:
   8. Writes <DeployRoot>\Launch-StarCraft-Modded.ps1, a launcher with zero parameters
      that calls the deployed copy of run-with-plugin.ps1 with the feature set baked in:
      -Mode fanout -InjectWindowedHelper WMode -Circles 1 -HudRow 1 -ProdQueue 1
-     -ProdFan 1 -UpgradeQueue 1 -Sound -NoLaunchLock -NoForegroundRestore
+     -ProdFan 1 -UpgradeQueue 1 -QueueIndicator 1 -Sound -NoLaunchLock -NoForegroundRestore
      (fanout + selection circles + HUD row paging + over-cap production queue +
      group production fan-out — -ProdQueue and -ProdFan both default to 0 in
      run-with-plugin.ps1 so suites opt in, but the PLAY build turns them on; building
      groups are already on by default. -ProdFan is the task-030 feature: with several
      production buildings selected, one Train click queues a unit at every one of them,
      and it is the second flag here that moves the player's resources, which is why it is
-     opt-in per run everywhere else. Windowed, audible, and structurally
+     opt-in per run everywhere else. -QueueIndicator is the task-033 feature and the
+     only one here that DRAWS: it fills the production strip's icons past the engine's
+     ring from the plugin's own queue and puts a "+N" on the rest, so the two flags above
+     it stop being invisible. It draws with the engine's own text routine and adds no art.
+     Windowed, audible, and structurally
      unable to take the worker launch lock). This is run-with-plugin.ps1's real working
      windowed recipe, not its deprecated/broken -Windowed switch -- see
      tools/plugin/README.md "Windowed mode: injected, not proxied". -Sound and
@@ -446,7 +450,8 @@ try {
         -HudRow 1 `
         -ProdQueue 1 `
         -ProdFan 1 `
-        -UpgradeQueue 1
+        -UpgradeQueue 1 `
+        -QueueIndicator 1
 }
 catch {
     $errLog = Join-Path $here 'logs\launch-error.log'

@@ -116,9 +116,46 @@ unsigned ScFanoutGrowBuildingGroup(unsigned long* candidates, unsigned long* out
 // drives the core sets this. Passing NULL restores "call the engine".
 void ScFanoutTestSetMovable(ScMovablePredicate f);
 
+// Test-only: drive %SCPLUGIN_BUILDING_GROUPS% directly, so the OFF arm can be asserted
+// offline as well as in game. ScFanoutTestBegin leaves it ON, the shipped default.
+void ScFanoutTestSetBuildingGroups(bool on);
+
 // Test-only: how many units of the current selection the simulation will hold at once,
 // which is also the fan-out's chunk size. 12 for units, 1 for a building group.
 int ScFanoutSimSlots(void);
+
+// ---------------------------------------------------------------------------
+// EXTENDING a building group (task 036: shift-click, shift+box, shift+ctrl-click)
+//
+// The paths that extend a selection rather than replace it do not go through
+// SortAllUnits at all -- one is a basic block inside the click handler, the other has a
+// register-passed destination list -- so what is detoured is the PREDICATE they both
+// consult, scoped to the four instruction addresses that consult it on their behalf
+// (sc_addresses.h SC_RET_MOVABLE_*). This is the decision half, callable with no hook
+// installed and no game in the process.
+//
+//   unit     the CUnit* the engine asked about (its ECX).
+//   retAddr  where the CALL would have returned to. Anything outside the four
+//            allowlisted sites gets `verdict` back untouched -- there is no other
+//            consumer of this override anywhere in the binary.
+//   verdict  what the engine's own predicate answered.
+//
+// Returns what the caller should see. It differs from `verdict` only when the lead of
+// the selection being extended (activePlayerSelection[0]) is a BUILDING -- the case in
+// which vanilla refuses the whole operation one call site earlier -- and then the answer
+// is "same type and same owner as that lead, and alive".
+extern "C" int ScFanoutMovableDecide(unsigned long unit, unsigned long retAddr, int verdict);
+
+// Test-only: stand in for CreateNewUnitSelectionsFromList (0x0049AE40), which a control
+// group of buildings is re-installed into the engine's client selection with. A test
+// process has no engine code there, only a fake image. NULL restores "call the engine".
+typedef void (*ScCreateSelectionsFn)(unsigned long* list, int count);
+void ScFanoutTestSetCreateSelections(ScCreateSelectionsFn f);
+
+// Test-only: the extend override's own counters -- calls that reached one of the four
+// sites with a building lead, and how that split into allow/refuse.
+enum ScExtendStat { SC_EXTEND_SEEN = 0, SC_EXTEND_ALLOW = 1, SC_EXTEND_REFUSE = 2 };
+int ScFanoutExtendStat(int which);
 
 // Test-only: units the building-group append refused, by ScFanoutDrop reason. Counted
 // apart from ScFanoutDroppedFor because they are refused a place in the SELECTION, not

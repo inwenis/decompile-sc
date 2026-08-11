@@ -1179,4 +1179,198 @@
 #define SC_VA_SCROLL_STEP_Y        0x0049C280u
 #define SC_VA_MINIMAP_CLICK        0x004A4D20u  // centres the camera; bakes 20 x 13 tiles
 
+// ---------------------------------------------------------------------------
+
+// THE OTHER SELECTION INPUT PATHS -- derived by task 036 from StarCraft.exe 1.16.1.
+// Full evidence, with the decompiles and listings these came from, in
+// research/building-groups.md 8. Appended at the END of this file, as the task asked.
+//
+// Task 024 relaxed the client gate for the DRAG BOX. `unit_IsStandardAndMovable`
+// (0x0047B770) is consulted on three more client paths, and each refuses a building in
+// its own way -- which is why one relaxation did not make buildings behave like units.
+// ---------------------------------------------------------------------------
+
+// The click handler. __fastcall-ish (EDX/ECX carry the click), no stack arguments; it
+// resolves the unit under the cursor with 0x0046F3A0 and returns at once if there is
+// none. It owns FOUR distinct branches, told apart by two bytes of the engine's own
+// keyDown[256] table (0x00596A18) and by its double-click flag:
+//
+//   ctrl or double-click, no shift  0x0046FE41  CALL SortAllUnits(rect, out12, clicked)
+//                                               then applyNewSelect  -> REPLACE
+//   shift AND (ctrl or dbl)         0x0046FCAD  CALL SortAllUnits(rect, out12, clicked)
+//                                   0x0046FCDD  then combineSelectionsLists -> ADD
+//   shift alone, unit NOT selected   the inline ADD gate at 0x0046FD1B (below)
+//   shift alone, unit IS selected    the inline REMOVE compaction at 0x0046FD77 --
+//                                    memmove by CSprite+0x0B, then 0x0049AE40 and
+//                                    CMDACT_Select. NO movable gate: shift-click
+//                                    REMOVE already works for buildings in vanilla.
+//   plain click                      0x0049AE40(1) + CMDACT_Select(1) directly --
+//                                    SortAllUnits is NEVER called.
+//
+// THE CONSEQUENCE THAT SCOPES TASK 036's CHANGE: the only calls to SortAllUnits with a
+// non-zero `clicked` are the two type-match sites above. A plain click and a shift-click
+// do not reach it at all. So "clicked != 0" identifies the ctrl-click / double-click
+// "select all of this type on screen" path exactly, with no state of our own.
+#define SC_VA_CLICK_SELECT_HANDLER 0x0046FB40u
+#define SC_VA_SORT_CALL_CLICK      0x0046FE41u  // ctrl/dbl, no shift
+#define SC_VA_SORT_CALL_SHIFTCLICK 0x0046FCADu  // shift AND (ctrl or dbl)
+#define SC_VA_KEYDOWN_TABLE        0x00596A18u  // BYTE[256], written by the window proc
+#define SC_VA_KEYDOWN_SHIFT        0x00596A28u  // keyDown[VK_SHIFT]   -- 0x00596A18 + 0x10
+#define SC_VA_KEYDOWN_CONTROL      0x00596A29u  // keyDown[VK_CONTROL] -- + 0x11
+#define SC_VA_KEYDOWN_ALT          0x00596A2Au  // keyDown[VK_MENU]    -- + 0x12
+
+// The double-click flag the click handler ANDs with "the clicked unit is already
+// selected" (CSprite+0x0E & 0x08) at 0x0046FB6E. Written in exactly ONE function --
+// 0x0046FF70, the mouse-event tick -- which zeroes it for every event type but 3 and 5
+// and sets it to 1 for type 6. Type 6 is what the window procedure (0x004D1D70 case
+// 0x203) hands to 0x004D1A50 for WM_LBUTTONDBLCLK, and nothing else produces it. That is
+// what lets a POSTED WM_LBUTTONDBLCLK drive a real double click in an unattended run: the
+// game does no timing of its own here, it trusts the message.
+#define SC_VA_DOUBLE_CLICK_FLAG    0x0066FF58u  // u32
+#define SC_VA_MOUSE_EVENT_TICK     0x0046FF70u
+
+// THE FOUR CALL SITES OF unit_IsStandardAndMovable THAT REFUSE A BUILDING GROUP, by the
+// address of the instruction AFTER the CALL -- i.e. the return address the detour sees.
+// Taken from the listings in work/scratch/ghidra-036 (ListingDump over each function);
+// each is quoted in research/building-groups.md 8.
+//
+//   shift-click ADD, inside the click handler (0x0046FD1B..0x0046FD5F):
+//     0046FD24  MOV ECX,[EBP-0x3c]     ; the existing selection's FIRST unit
+//     0046FD27  CALL 0x0047b770        ; -> returns to 0x0046FD2C
+//     0046FD2E  JZ   0x0046fe95        ; refuse
+//     0046FD42  MOV ECX,EBX            ; the CLICKED unit
+//     0046FD44  CALL 0x0047b770        ; -> returns to 0x0046FD49
+//     0046FD4B  JZ   0x0046fe95        ; refuse
+//   combineSelectionsLists (0x0046F290), the shift+box / shift+ctrl merge:
+//     0046F2C6  MOV ECX,[EAX]          ; the NEW list's first unit
+//     0046F2C8  CALL 0x0047b770        ; -> returns to 0x0046F2CD
+//     0046F2E6  MOV ECX,EBX            ; the EXISTING list's first unit (EDI[0])
+//     0046F2E8  CALL 0x0047b770        ; -> returns to 0x0046F2ED
+//     on either failure it returns the EXISTING count and the merge never happens.
+//
+// Both callers of combineSelectionsLists copy activePlayerSelection into a local FIRST
+// (0x0046FA40's 12-dword loop; 0x0046FC9A's `LEA EDI,[EBP-0x6c]` + `MOVSD.REP`), so
+// EDI[0] is activePlayerSelection[0] at both sites -- which is what lets one rule
+// ("what is the lead of the selection being extended?") cover all four.
+#define SC_RET_MOVABLE_SHIFT_LEAD    0x0046FD2Cu
+#define SC_RET_MOVABLE_SHIFT_CLICKED 0x0046FD49u
+#define SC_RET_MOVABLE_COMBINE_NEW   0x0046F2CDu
+#define SC_RET_MOVABLE_COMBINE_OLD   0x0046F2EDu
+
+// unit_IsStandardAndMovable's own first two instructions, the patch window a detour
+// needs. Seven bytes, two whole instructions, NEITHER PC-relative:
+//     0047B770  66 8B 41 64        MOV AX,word ptr [ECX + 0x64]
+//     0047B774  0F B7 D0           MOVZX EDX,AX
+#define SC_MOVABLE_PATCH_LEN       7
+
+// The client-side control-group recall's own copy of the gate (0x00496B40):
+//     00496BE5  CALL 0x0047b770
+//     00496BEC  JNZ 0x00496bf7      ; passed -> keep this entry
+//     00496BEE  CMP ESI,0x1         ; ESI = how many tags the group row holds
+//     00496BF1  JLE 0x00496bf7      ; a ONE-entry group is kept whatever it is
+//     00496BF3  XOR EDI,EDI         ; otherwise drop it
+// So the engine will recall a single building, and would drop every building out of a
+// group that held several. It never has to: hotkeySaveOrAdd fills the row from
+// playersSelections, which the SIM gate (0x0049AF80) has already capped at one building.
+// That is why task 036 does NOT write the engine's group row -- a row holding N buildings
+// would be emptied by this test, and the receive-side recall (0x00496940) would COMPACT
+// the row as it went, destroying the injection permanently.
+#define SC_VA_HOTKEY_RECALL_GATE   0x00496BE5u
+
+// ---------------------------------------------------------------------------
+// HOW THE STATUS PANE DRAWS TEXT (task 033)
+//
+// Full evidence, with the listings, in research/status-pane-text.md. Every address below
+// was read out of THIS binary: the two entries come from the default per-control-type
+// handler tables dumped straight out of .rdata (work/scratch/033/peek.py, which parses the
+// PE section table out of the same file it reads), and everything under them is a CALL
+// target read off the listing of the function above it
+// (work/scratch/033/listing-statictext.tsv, listing-textblit.tsv).
+//
+// The chain, in one line:
+//   dialog layer 2 draw 0x0041CB50 -> control's fxnUpdate (+0x2E) -> for a static-text
+//   control the DEFAULT table entry SC_VA_STATIC_TEXT_UPDATE -> SC_VA_DRAW_CONTROL_TEXT ->
+//   font + style + SC_VA_DRAW_STRING, with the string taken from control+0x14 (pszText).
+//
+// So a plugin control draws text by being type SC_CTRL_TYPE_LSTATIC with pszText pointing
+// at its own buffer. It plots no pixels and adds no art.
+// ---------------------------------------------------------------------------
+
+// Update handler for control types 9/10/11, i.e. entries [9]/[10]/[11] of the default
+// update table SC_VA_DEFAULT_UPDATE_TABLE. All three are the same nine instructions and
+// differ only in the justification byte they store at SC_VA_TEXT_JUSTIFY:
+//     8B 41 14   MOV EAX,[ECX+0x14]      ; pszText -- ECX is the control
+//     85 C0      TEST EAX,EAX
+//     74 12      JZ ret                  ; no string -> draw nothing at all
+//     6A 00 6A 00 33 C0
+//     C6 05 10 E1 6C 00 11   MOV byte [0x006CE110],0x11    ; 0x11 / 0x12 / 0x14
+//     E8 ..                  CALL 0x004EF870
+//     C2 08 00               RET 0x8
+#define SC_VA_STATIC_TEXT_UPDATE   0x004EF9E0u  // type 9  (LSTATIC), justify 0x11
+#define SC_VA_STATIC_TEXT_UPDATE10 0x004EF9C0u  // type 10, justify 0x12
+#define SC_VA_STATIC_TEXT_UPDATE11 0x004EF9A0u  // type 11, justify 0x14
+#define SC_VA_STATIC_TEXT_INTERACT 0x00419190u  // shared by all three (table [9..11])
+
+// The draw itself. ECX = control, EAX = optional position override, two stack dwords are
+// added to the position, RET 8. It picks the font from `control->flags & 0x4C00`
+// (0x0400 -> the handle at 0x006CE0F4, which is what SC_CTRL_FONT_SMALLEST selects), sets
+// a style index, takes the string from control+0x14, and takes BOTH the position and the
+// clip box from the control's own bounds: position (bounds.left, bounds.top), clip
+// (bounds.left, bounds.top, bounds.right, bounds.bottom).
+#define SC_VA_DRAW_CONTROL_TEXT    0x004EF870u
+#define SC_VA_SET_FONT             0x0041FB30u  // ECX = font handle; ECX = 0 restores
+#define SC_VA_SET_TEXT_STYLE       0x0041F610u  // EAX = style index (2 normal, 5 disabled)
+#define SC_VA_DRAW_STRING          0x004202B0u  // clips, then runs the glyph loop 0x004200D0
+#define SC_VA_TEXT_JUSTIFY         0x006CE110u  // u8, set by the update handler per type
+#define SC_VA_TEXT_FONT_HEIGHT     0x006CE111u  // u8, set by SC_VA_SET_FONT
+
+// THE RULE A BOX HAS TO SATISFY, off SC_VA_DRAW_STRING's own clip test: the string is
+// drawn only when
+//     left >= clip.left && top >= clip.top && left <= clip.right &&
+//     top + fontHeight <= clip.bottom
+// and the clip box is the control's own bounds. A box only as tall as the font's advance
+// therefore draws NOTHING, silently -- which is why SC_QIND_BOX_H is generous.
+
+// The per-frame HUD driver (hud-selection-row.md 4.1) -- it calls updateSelectedUnitData,
+// the command-card update 0x004599A0, and then the status dispatcher 0x00458120 at
+// 0x004D940F. sc_queueind detours THIS and runs after the original, so its control is
+// re-shown after the engine's own hide-all sweep, in both the single-unit and the
+// multi-select branch. Patch window 5 bytes / 1 instruction, `A0 3C 72 59 00`
+// (MOV AL,[0x0059723C]) -- absolute, so reloc-safe; three callers
+// (work/scratch/033/hookprobe/).
+#define SC_VA_STAT_DISPLAY_DRIVER  0x004D93F0u
+
+// WHERE A CONTROL'S fxnUpdate IS CALLED FROM, and onto WHAT.
+//
+// Graphic layer 2's callback 0x0041CB50 (research/renderer-viewport.md) walks the global
+// dialog list 0x006D5E34 and calls SC_VA_DIALOG_DRAW_WALK per visible dialog. That function
+// is where the per-control handler is reached, and the two instructions that matter are
+// adjacent (work/scratch/033/listing-dlgdrawwalk.tsv):
+//     0041C08F  MOV EDI,[EBP+0x8]        ; the control
+//     0041C092  CMP word [EDI+0x22],0x0  ; a child? then
+//     0041C09C  MOV EDI,[EDI+0x32]       ;   EDI = its parent dialog
+//     ...
+//     0041C1D9  ADD EDI,0x36             ; the DIALOG's surface descriptor
+//     0041C1DF  MOV [0x006CF4A8],EDI     ; ... becomes the current render target
+//     0041C1E5  CALL dword ptr [ECX+0x2E]; ... and then the control draws itself
+// So a control's text lands in its DIALOG's own 8-bit surface, and the descriptor the draw
+// clips against is at dlg+0x36, restored to the previous target on the way out.
+#define SC_VA_DIALOG_DRAW_WALK     0x0041C080u
+#define SC_VA_DIALOG_LAYER_DRAW    0x0041CB50u
+#define SC_VA_RENDER_TARGET        0x006CF4A8u  // {u16 w, u16 h, u8* bits}*
+
+// The surface descriptor itself: {u16 w, u16 h, u8* bits}, 8 bits per pixel. The offsets
+// are the ones 0x0041C080 installs (above). The allocator 0x004C35F0 fills a descriptor
+// with SMemAlloc(h * w, "Starcraft\\SWAR\\lang\\status.cpp", 0xB5) and points 0x006CF4A8
+// at it, and the SECOND triple below is where the same decompile puts it -- the two
+// disagree by 0x2A, which is a register the decompiler could not resolve rather than a
+// fact, so the reader tries the evidenced one FIRST and the other only as a fallback, and
+// says which it used. Nothing but a diagnostic depends on the answer.
+#define SC_BINDLG_OFF_SURFACE      0x36u   // {w, h, bits} -- 0x0041C1D9, load-bearing
+#define SC_BINDLG_OFF_SURFACE_ALT  0x0Cu   // {w, h, bits} -- 0x004C35F0's own arithmetic
+#define SC_SURFACE_OFF_W           0x00u   // u16
+#define SC_SURFACE_OFF_H           0x02u   // u16
+#define SC_SURFACE_OFF_BITS        0x04u   // u8*
+
+
 #endif // SC_ADDRESSES_H
