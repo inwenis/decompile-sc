@@ -625,6 +625,16 @@ acquisition code that could plausibly cause it.
 > What activation gates is DRAWING, which is what the frame oracle below was reading. See
 > `automated-testing-options.md` §9. The rest of this section — that the pick was a silent
 > no-op and needs a verified change, which `Set-ScGameType` still does — stands.
+>
+> **AND THE ORACLE HAS CHANGED (task 035, issue #29, 2026-08-11).** The verified change is no
+> longer a pixel fingerprint of the map-information panel. `Set-ScGameType` now READS the
+> combo's selected entry out of the engine's active-dialog list — the same list task 027's
+> `DIALOGS` scan already walked — and requires the pick to have produced the wanted entry
+> **by name**. The fingerprint could not distinguish "the pick did not take" from "the value
+> was already right", which on a machine with a sticky remembered value is the common case;
+> the read can, so a run whose game type is already correct now **skips the pick entirely**,
+> and with it the last foreground raise in the harness. This is AGENTS.md's "read a dialog's
+> CONTENT from memory; never hash its pixels" reaching the one control that had escaped it.
 
 **The game ignores a posted `WM_MOUSEMOVE` when its window is not the foreground window.**
 Posted clicks are processed either way, which is why every other part of `drive-game.ps1` works
@@ -659,11 +669,12 @@ Four changes, in `drive-game.ps1`:
   `SetForegroundWindow` from a background process returns TRUE and does nothing.
 - `Send-ScDropdownPick` activates the window itself and **throws** rather than picking blind, so
   every existing caller is fixed without being edited.
-- `Set-ScGameType` — picks a known *other* entry, fingerprints the map-information panel, picks
-  the wanted entry, and requires the panel to have **changed**. That panel reads
-  "Number of Players" for the melee types and "Human Slots / Computer Slots" under Use Map
-  Settings, so a real change of type is a real change of pixels, and a pick that did nothing is
-  a loud failure at the menu instead of a mystery ten assertions later.
+- `Set-ScGameType` — picked a known *other* entry, fingerprinted the map-information panel,
+  picked the wanted entry, and required the panel to have **changed**. A pick that did nothing
+  became a loud failure at the menu instead of a mystery ten assertions later.
+  **Superseded by the memory read (issue #29); see the note at the top of this section.** The
+  fingerprint's blind spot was the case it was most often in: "already right" and "did not take"
+  hash identically.
 - `Send-ScDrag` activates before dragging, for the reason above.
 
 ### 8.2 StarCraft is single-instance, machine-wide

@@ -373,7 +373,7 @@ function Invoke-Arm {
         # at 159; that half was the original incident (a foreign .scx sorting before ours).
         Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
         Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
-        Set-ScGameType -Hwnd $hwnd -Index 2      # Use Map Settings, verified (see Set-ScGameType)
+        Set-ScGameType -Hwnd $hwnd -LogPath $logPath -Index 2      # Use Map Settings, verified (see Set-ScGameType)
         ArmShot 'lobby'
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393
         Start-Sleep -Seconds 6

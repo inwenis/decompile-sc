@@ -812,6 +812,23 @@ Read-only, from the engine's own list (`SC_VA_DIALOG_LIST`, evidence in
 `Dismiss-ScTipsDialog` in `drive-game.ps1` uses to click the tips dialog's real OK
 button instead of a hardcoded point, and to assert the dialog is gone afterwards.
 
+**It also answers "what Game Type is selected"** (issue #29). The Create Game screen's
+combo carries the selected entry's label as its own text, so the line already contains
+the answer the harness used to hash pixels for:
+
+```
+DIALOGS n=1  dlg='Create' rect=0,0,639,479 ... ctrl='Game Type' rect=58,262,169,281 type=9 flags=0x408
+             ctrl='Use Map Settings' rect=180,261,351,277 type=13 flags=0x20020418
+```
+
+`Get-ScGameType` finds it by ROW — the one type-13 control starting to the right of the
+`Game Type` label and overlapping it vertically — because the screen carries three type-13
+combos (game type, player name, race). `Set-ScGameType` then **skips the pick entirely**
+when the value is already right, which is what removed the last foreground raise from an
+unattended run. The map-information lines in the same read (`Human Slots:` /
+`Computer Slots:` shown, `Number of Players:` hidden, flag `0x8`) are printed as
+corroboration; the combo's own text is the verdict.
+
 Attach banner, then one block per observed change:
 
 ```
