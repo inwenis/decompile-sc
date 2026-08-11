@@ -480,9 +480,16 @@ try {
             $blackDelta = [double]($m['black_delta'] ?? 1)
             $badRows = [int]($m['bad_rows'] ?? 999)
             $rows = [int]($m['rows_sampled'] ?? 1)
+            $diffPx = [int]($m['diff_px'] ?? 999999)
+            $diffBlocks = [int]($m['diff_blocks'] ?? 9999)
+            $wideRows = [int]($m['wide_rows'] ?? 9999)
+            $spanMax = [int]($m['diff_span_max'] ?? 9999)
             Write-Host ("       playfield interior {0}: rowmatch median {1}, black delta {2}, bad rows {3}/{4}" -f
                         $m['region'], $rowMedian, $blackDelta, $badRows, $rows)
+            Write-Host ("       full resolution: {0} differing pixels in {1} 32x32 block(s), widest row span {2}px, {3} wide row(s)" -f
+                        $diffPx, $diffBlocks, $spanMax, $wideRows)
             if ($badRows -gt 0) { Write-Host "       first bad rows: $($m['bad_row_ys'])" }
+            if ($wideRows -gt 0) { Write-Host "       wide rows: $($m['wide_row_ys'])" }
 
             Assert-True 'the playfield interior matches the control frame row by row' `
                 ($rowMedian -ge 0.90) "(median $rowMedian, want >= 0.90)"
@@ -490,6 +497,28 @@ try {
                 ([math]::Abs($blackDelta) -le 0.03) "(delta $blackDelta, want |d| <= 0.03)"
             Assert-True 'almost no row of the playfield disagrees with the control' `
                 ($badRows -le [math]::Ceiling($rows * 0.05)) "($badRows of $rows rows bad)"
+
+            # THE DAMAGE SIGNATURE, at full resolution. "Pixel-identical" is not
+            # available as a pass condition and this suite used to imply it was:
+            # two runs of the SAME build differ by a few hundred pixels because
+            # animated map doodads are caught at different phases (measured at
+            # stage 0, where both arms compose the identical picture: 586 of
+            # 307200 pixels, 7 isolated 32x32 blocks). The earlier "stage 0 is
+            # pixel-identical" reading came from sampling every second pixel,
+            # which those few hundred cannot move.
+            #
+            # What separates the two is SHAPE, not count. A wrong pitch damages
+            # whole ROWS across the whole width -- the broken stage-1 build
+            # disagreed on 163 of 190 rows, each spanning x=5..639. Animation
+            # differs in isolated blobs and spans no row. So the assertion is on
+            # the row span, and the pixel count is REPORTED beside the measured
+            # noise floor rather than asserted against zero.
+            Assert-True 'no row of the playfield is damaged across its width (the stride-error signature)' `
+                ($wideRows -eq 0) "($wideRows row(s) with a diff span over half the width; span max ${spanMax}px)"
+            if ($diffPx -gt 3000) {
+                Report-Finding ("$diffPx pixels differ in $diffBlocks block(s) -- far above the ~600-pixel " +
+                                'animation noise floor measured at stage 0, so this is unlikely to be animation')
+            }
         }
 
         # The HUD must not have moved. Its dialogs carry absolute coordinates

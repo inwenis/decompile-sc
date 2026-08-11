@@ -463,13 +463,18 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     # the playfield widens (stage 2). Fog has both, and at 800x480 they are the
     # same number, so nothing in the source distinguishes them.
     #
-    # The enumeration is exhaustive rather than hopeful: every routine that writes
-    # the framebuffer must load the pointer at 0x006CEFF4, and a scan of .text for
-    # that address finds 19 instructions. Three of them -- 0x0047EDCC, 0x0047EF35,
-    # 0x00480631 -- are immediately followed by a `lea r,[y+y*4]` + `shl r,7`, i.e.
-    # y*640 into the frame. Left at stage 1 the fog wrote every row at the old
-    # pitch, and the playfield came out sheared while the descriptor, the layer
-    # rects and the HUD all still read correctly.
+    # Found by scanning .text for the framebuffer pointer 0x006CEFF4, which finds
+    # 19 instructions. Three of them -- 0x0047EDCC, 0x0047EF35, 0x00480631 -- are
+    # immediately followed by a `lea r,[y+y*4]` + `shl r,7`, i.e. y*640 into the
+    # frame. Left at stage 1 the fog wrote every row at the old pitch, and the
+    # playfield came out sheared while the descriptor, the layer rects and the HUD
+    # all still read correctly.
+    #
+    # THAT SCAN IS NOT AN EXHAUSTIVE ENUMERATION, and an earlier version of this
+    # comment claimed it was. "Every routine that writes the framebuffer must load
+    # 0x006CEFF4" is false: a routine that is HANDED the pointer by its caller
+    # writes the framebuffer without ever naming it. The block writers below are
+    # exactly that, and the first stage-1 run failed because of them.
     for lea_va, lea_hex, imul_hex, shl_va in [
         (0x0047EDD3, "8d0c89", "6bc9", 0x0047EDD6),
         (0x0047EF3A, "8d0cb6", "6bce", 0x0047EF3D),
@@ -494,6 +499,38 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     for va in (0x0047FFDE, 0x00480087):
         b.imm(va, STOCK_W, W, 4, "fog.rowstep@%08X" % va, 1,
               "fog blend loop: advance one FRAMEBUFFER row")
+
+    # -- fog, the 8x8 BLOCK GRID: the sites the pointer scan cannot reach ----
+    #
+    # FUN_00480600 draws fog in 8x8 blocks over the framebuffer: `add ecx,8` per
+    # column (0x004806B7) and one row of blocks per outer turn. For each block it
+    # calls one of three writers with ecx as the destination -- FUN_0047FF10 and
+    # FUN_00480000 step with `add esi,640` (declared above), and FUN_004800A0,
+    # the fully-shrouded case, is UNROLLED and holds its pitch as fourteen
+    # displacements.
+    #
+    # This is the third syntactic shape of §12.5's rule (a stride is a number that
+    # describes a layout without pointing at it) and the one that hid best:
+    #
+    #   * `mov [ecx + k*640], eax` for k=1..7 -- only k=1 spells 640 at all; the
+    #     rest are 1280, 1920, 2560, 3200, 3840, 4480, which no sweep for the
+    #     pitch's own value will match;
+    #   * and each row's SECOND dword is at k*640 + 4, which is not a multiple of
+    #     the pitch at all. A sweep that looked only for multiples found seven of
+    #     these fourteen instructions and would have shipped half a fix.
+    #
+    # Missing them put every shrouded 8x8 block in the wrong row of an 800-pitch
+    # frame, which is why the first stage-1 run came back with the EXPLORED area
+    # pixel-perfect and everything under fog wrong -- 163 of 190 interior rows.
+    FOG_BLOCK_CLEAR = 0x004800B4          # first of 14 x 6-byte stores
+    for i in range(14):
+        k, d = 1 + i // 2, (i % 2) * 4
+        b.imm(FOG_BLOCK_CLEAR + 6 * i, STOCK_W * k + d, W * k + d, 4,
+              "fog.blockclear.r%d%s" % (k, "hi" if d else "lo"), 1,
+              "FUN_004800A0: shrouded 8x8 block, row %d of 8 at (pitch*%d)+%d" % (k, k, d))
+    # The outer loop advances a whole block row: 8 * pitch.
+    b.imm(0x004806D0, STOCK_W * 8, W * 8, 4, "fog.blockrowstep", 1,
+          "fog draw: advance 8 FRAMEBUFFER rows (one block row)")
 
     # -- the dirty grid (item 5): relocation ------------------------------
     # 0x006CEFF8's u8[30][40] cannot grow in place -- 0x006CF4A8 is the live

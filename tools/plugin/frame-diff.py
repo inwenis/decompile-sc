@@ -18,6 +18,27 @@ So this samples the playfield INTERIOR and reports:
               every N rows name a block-granular cause; a single contiguous run
               names a clipping one.
 
+AND, at FULL resolution (every pixel, no step), the SHAPE of the disagreement:
+
+  diff_px     how many pixels differ at all
+  diff_blocks how many 32x32 blocks contain any of them
+  wide_rows   rows whose differing pixels SPAN more than half the region's width
+
+The last one is the discriminator, and it exists because "identical" turned out
+not to be available. Two runs of the SAME build are not pixel-identical: at
+stage 0, where both arms compose the same 640x480 picture, 586 of 307200 pixels
+differ, in seven isolated 32x32 blocks -- animated map doodads caught at
+different phases, since the frame is grabbed by wall clock. An earlier version
+of this task reported stage 0 as "pixel-identical, median 1.000" because it only
+ever compared every SECOND pixel against a 90%-per-row threshold, which those
+few hundred pixels cannot move.
+
+So the count alone cannot separate damage from animation -- but the shape can.
+Geometry damage from a wrong pitch is ROW-STRUCTURED and WIDE: the broken
+stage-1 build disagreed across 163 of 190 rows, spanning x=5..639. Animation
+noise is BLOB-STRUCTURED and LOCAL: a handful of 32x32 blocks, no row spanned.
+`wide_rows` is 0 for the second and large for the first.
+
 It is a DIAGNOSTIC and a test oracle, never a proof of appearance -- the thing it
 cannot tell you is whether a frame that matches the control looks good, only that
 it looks like the control. It prints numbers and row indices; it reproduces no
@@ -85,6 +106,39 @@ def main():
         rowmatches.append(m)
         if m < 0.90:
             badrows.append(y)
+
+    # ---- full resolution, and the SHAPE of what differs ------------------
+    # Every pixel this time: the sampled pass above is deliberately coarse (it
+    # has to survive animation), and a stride error that only damages one row in
+    # four would otherwise be reported by a sampler that happens to skip it.
+    diff_px = 0
+    blocks = set()
+    wide_rows = []
+    span_max = 0
+    width = x1 - x0
+    for y in range(y0, y1):
+        first = last = -1
+        n = 0
+        for x in range(x0, x1):
+            if pa[x, y] != pb[x, y]:
+                n += 1
+                if first < 0:
+                    first = x
+                last = x
+                blocks.add((x // 32, y // 32))
+        diff_px += n
+        if first >= 0:
+            span = last - first + 1
+            span_max = max(span_max, span)
+            if span > width // 2:
+                wide_rows.append(y)
+
+    print("diff_px=%d" % diff_px)
+    print("diff_px_frac=%.5f" % (diff_px / float(width * (y1 - y0))))
+    print("diff_blocks=%d" % len(blocks))
+    print("diff_span_max=%d" % span_max)
+    print("wide_rows=%d" % len(wide_rows))
+    print("wide_row_ys=%s" % ",".join(str(y) for y in wide_rows[:40]))
 
     rowmatches.sort()
     median = rowmatches[len(rowmatches) // 2] if rowmatches else 1.0

@@ -220,6 +220,96 @@ static const ScScreenPatch SC_WS_PATCHES[] = {
       { 0x81, 0xC6, 0x80, 0x02, 0x00, 0x00 },
       { 0x81, 0xC6, 0x20, 0x03, 0x00, 0x00 },
       "fog.rowstep@00480087", "fog blend loop: advance one FRAMEBUFFER row" },
+    // 0x004800B4  mov dword ptr [ecx + 0x280], eax
+    //             -> mov dword ptr [ecx + 0x320], eax
+    { 0x004800B4u,  6, 1, SC_WS_NO_FIXUP, 0x0u,
+      { 0x89, 0x81, 0x80, 0x02, 0x00, 0x00 },
+      { 0x89, 0x81, 0x20, 0x03, 0x00, 0x00 },
+      "fog.blockclear.r1lo", "FUN_004800A0: shrouded 8x8 block, row 1 of 8 at (pitch*1)+0" },
+    // 0x004800BA  mov dword ptr [ecx + 0x284], eax
+    //             -> mov dword ptr [ecx + 0x324], eax
+    { 0x004800BAu,  6, 1, SC_WS_NO_FIXUP, 0x0u,
+      { 0x89, 0x81, 0x84, 0x02, 0x00, 0x00 },
+      { 0x89, 0x81, 0x24, 0x03, 0x00, 0x00 },
+      "fog.blockclear.r1hi", "FUN_004800A0: shrouded 8x8 block, row 1 of 8 at (pitch*1)+4" },
+    // 0x004800C0  mov dword ptr [ecx + 0x500], eax
+    //             -> mov dword ptr [ecx + 0x640], eax
+    { 0x004800C0u,  6, 1, SC_WS_NO_FIXUP, 0x0u,
+      { 0x89, 0x81, 0x00, 0x05, 0x00, 0x00 },
+      { 0x89, 0x81, 0x40, 0x06, 0x00, 0x00 },
+      "fog.blockclear.r2lo", "FUN_004800A0: shrouded 8x8 block, row 2 of 8 at (pitch*2)+0" },
+    // 0x004800C6  mov dword ptr [ecx + 0x504], eax
+    //             -> mov dword ptr [ecx + 0x644], eax
+    { 0x004800C6u,  6, 1, SC_WS_NO_FIXUP, 0x0u,
+      { 0x89, 0x81, 0x04, 0x05, 0x00, 0x00 },
+      { 0x89, 0x81, 0x44, 0x06, 0x00, 0x00 },
+      "fog.blockclear.r2hi", "FUN_004800A0: shrouded 8x8 block, row 2 of 8 at (pitch*2)+4" },
+    // 0x004800CC  mov dword ptr [ecx + 0x780], eax
+    //             -> mov dword ptr [ecx + 0x960], eax
+    { 0x004800CCu,  6, 1, SC_WS_NO_FIXUP, 0x0u,
+      { 0x89, 0x81, 0x80, 0x07, 0x00, 0x00 },
+      { 0x89, 0x81, 0x60, 0x09, 0x00, 0x00 },
+      "fog.blockclear.r3lo", "FUN_004800A0: shrouded 8x8 block, row 3 of 8 at (pitch*3)+0" },
+    // 0x004800D2  mov dword ptr [ecx + 0x784], eax
+    //             -> mov dword ptr [ecx + 0x964], eax
+    { 0x004800D2u,  6, 1, SC_WS_NO_FIXUP, 0x0u,
+      { 0x89, 0x81, 0x84, 0x07, 0x00, 0x00 },
+      { 0x89, 0x81, 0x64, 0x09, 0x00, 0x00 },
+      "fog.blockclear.r3hi", "FUN_004800A0: shrouded 8x8 block, row 3 of 8 at (pitch*3)+4" },
+    // 0x004800D8  mov dword ptr [ecx + 0xa00], eax
+    //             -> mov dword ptr [ecx + 0xc80], eax
+    { 0x004800D8u,  6, 1, SC_WS_NO_FIXUP, 0x0u,
+      { 0x89, 0x81, 0x00, 0x0A, 0x00, 0x00 },
+      { 0x89, 0x81, 0x80, 0x0C, 0x00, 0x00 },
+      "fog.blockclear.r4lo", "FUN_004800A0: shrouded 8x8 block, row 4 of 8 at (pitch*4)+0" },
+    // 0x004800DE  mov dword ptr [ecx + 0xa04], eax
+    //             -> mov dword ptr [ecx + 0xc84], eax
+    { 0x004800DEu,  6, 1, SC_WS_NO_FIXUP, 0x0u,
+      { 0x89, 0x81, 0x04, 0x0A, 0x00, 0x00 },
+      { 0x89, 0x81, 0x84, 0x0C, 0x00, 0x00 },
+      "fog.blockclear.r4hi", "FUN_004800A0: shrouded 8x8 block, row 4 of 8 at (pitch*4)+4" },
+    // 0x004800E4  mov dword ptr [ecx + 0xc80], eax
+    //             -> mov dword ptr [ecx + 0xfa0], eax
+    { 0x004800E4u,  6, 1, SC_WS_NO_FIXUP, 0x0u,
+      { 0x89, 0x81, 0x80, 0x0C, 0x00, 0x00 },
+      { 0x89, 0x81, 0xA0, 0x0F, 0x00, 0x00 },
+      "fog.blockclear.r5lo", "FUN_004800A0: shrouded 8x8 block, row 5 of 8 at (pitch*5)+0" },
+    // 0x004800EA  mov dword ptr [ecx + 0xc84], eax
+    //             -> mov dword ptr [ecx + 0xfa4], eax
+    { 0x004800EAu,  6, 1, SC_WS_NO_FIXUP, 0x0u,
+      { 0x89, 0x81, 0x84, 0x0C, 0x00, 0x00 },
+      { 0x89, 0x81, 0xA4, 0x0F, 0x00, 0x00 },
+      "fog.blockclear.r5hi", "FUN_004800A0: shrouded 8x8 block, row 5 of 8 at (pitch*5)+4" },
+    // 0x004800F0  mov dword ptr [ecx + 0xf00], eax
+    //             -> mov dword ptr [ecx + 0x12c0], eax
+    { 0x004800F0u,  6, 1, SC_WS_NO_FIXUP, 0x0u,
+      { 0x89, 0x81, 0x00, 0x0F, 0x00, 0x00 },
+      { 0x89, 0x81, 0xC0, 0x12, 0x00, 0x00 },
+      "fog.blockclear.r6lo", "FUN_004800A0: shrouded 8x8 block, row 6 of 8 at (pitch*6)+0" },
+    // 0x004800F6  mov dword ptr [ecx + 0xf04], eax
+    //             -> mov dword ptr [ecx + 0x12c4], eax
+    { 0x004800F6u,  6, 1, SC_WS_NO_FIXUP, 0x0u,
+      { 0x89, 0x81, 0x04, 0x0F, 0x00, 0x00 },
+      { 0x89, 0x81, 0xC4, 0x12, 0x00, 0x00 },
+      "fog.blockclear.r6hi", "FUN_004800A0: shrouded 8x8 block, row 6 of 8 at (pitch*6)+4" },
+    // 0x004800FC  mov dword ptr [ecx + 0x1180], eax
+    //             -> mov dword ptr [ecx + 0x15e0], eax
+    { 0x004800FCu,  6, 1, SC_WS_NO_FIXUP, 0x0u,
+      { 0x89, 0x81, 0x80, 0x11, 0x00, 0x00 },
+      { 0x89, 0x81, 0xE0, 0x15, 0x00, 0x00 },
+      "fog.blockclear.r7lo", "FUN_004800A0: shrouded 8x8 block, row 7 of 8 at (pitch*7)+0" },
+    // 0x00480102  mov dword ptr [ecx + 0x1184], eax
+    //             -> mov dword ptr [ecx + 0x15e4], eax
+    { 0x00480102u,  6, 1, SC_WS_NO_FIXUP, 0x0u,
+      { 0x89, 0x81, 0x84, 0x11, 0x00, 0x00 },
+      { 0x89, 0x81, 0xE4, 0x15, 0x00, 0x00 },
+      "fog.blockclear.r7hi", "FUN_004800A0: shrouded 8x8 block, row 7 of 8 at (pitch*7)+4" },
+    // 0x004806D0  add ecx, 0x1400
+    //             -> add ecx, 0x1900
+    { 0x004806D0u,  6, 1, SC_WS_NO_FIXUP, 0x0u,
+      { 0x81, 0xC1, 0x00, 0x14, 0x00, 0x00 },
+      { 0x81, 0xC1, 0x00, 0x19, 0x00, 0x00 },
+      "fog.blockrowstep", "fog draw: advance 8 FRAMEBUFFER rows (one block row)" },
     // 0x0041D755  mov edi, 0x6ceff8
     //             -> mov [grid+0x0]
     { 0x0041D755u,  5, 2, 1u, 0x0u,

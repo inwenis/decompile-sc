@@ -41,6 +41,21 @@ stage	va	len	changed	name	before	after	expect	patch	note
 1	0x0047EA6B	5	1	fog.rowpitch.writer	mov esi, 0x280	mov esi, 0x320	BE80020000	BE20030000	FUN_0047EA60: dest row step is (pitch - run width) -- FRAMEBUFFER pitch
 1	0x0047FFDE	6	1	fog.rowstep@0047FFDE	add esi, 0x280	add esi, 0x320	81C680020000	81C620030000	fog blend loop: advance one FRAMEBUFFER row
 1	0x00480087	6	1	fog.rowstep@00480087	add esi, 0x280	add esi, 0x320	81C680020000	81C620030000	fog blend loop: advance one FRAMEBUFFER row
+1	0x004800B4	6	1	fog.blockclear.r1lo	mov dword ptr [ecx + 0x280], eax	mov dword ptr [ecx + 0x320], eax	898180020000	898120030000	FUN_004800A0: shrouded 8x8 block, row 1 of 8 at (pitch*1)+0
+1	0x004800BA	6	1	fog.blockclear.r1hi	mov dword ptr [ecx + 0x284], eax	mov dword ptr [ecx + 0x324], eax	898184020000	898124030000	FUN_004800A0: shrouded 8x8 block, row 1 of 8 at (pitch*1)+4
+1	0x004800C0	6	1	fog.blockclear.r2lo	mov dword ptr [ecx + 0x500], eax	mov dword ptr [ecx + 0x640], eax	898100050000	898140060000	FUN_004800A0: shrouded 8x8 block, row 2 of 8 at (pitch*2)+0
+1	0x004800C6	6	1	fog.blockclear.r2hi	mov dword ptr [ecx + 0x504], eax	mov dword ptr [ecx + 0x644], eax	898104050000	898144060000	FUN_004800A0: shrouded 8x8 block, row 2 of 8 at (pitch*2)+4
+1	0x004800CC	6	1	fog.blockclear.r3lo	mov dword ptr [ecx + 0x780], eax	mov dword ptr [ecx + 0x960], eax	898180070000	898160090000	FUN_004800A0: shrouded 8x8 block, row 3 of 8 at (pitch*3)+0
+1	0x004800D2	6	1	fog.blockclear.r3hi	mov dword ptr [ecx + 0x784], eax	mov dword ptr [ecx + 0x964], eax	898184070000	898164090000	FUN_004800A0: shrouded 8x8 block, row 3 of 8 at (pitch*3)+4
+1	0x004800D8	6	1	fog.blockclear.r4lo	mov dword ptr [ecx + 0xa00], eax	mov dword ptr [ecx + 0xc80], eax	8981000A0000	8981800C0000	FUN_004800A0: shrouded 8x8 block, row 4 of 8 at (pitch*4)+0
+1	0x004800DE	6	1	fog.blockclear.r4hi	mov dword ptr [ecx + 0xa04], eax	mov dword ptr [ecx + 0xc84], eax	8981040A0000	8981840C0000	FUN_004800A0: shrouded 8x8 block, row 4 of 8 at (pitch*4)+4
+1	0x004800E4	6	1	fog.blockclear.r5lo	mov dword ptr [ecx + 0xc80], eax	mov dword ptr [ecx + 0xfa0], eax	8981800C0000	8981A00F0000	FUN_004800A0: shrouded 8x8 block, row 5 of 8 at (pitch*5)+0
+1	0x004800EA	6	1	fog.blockclear.r5hi	mov dword ptr [ecx + 0xc84], eax	mov dword ptr [ecx + 0xfa4], eax	8981840C0000	8981A40F0000	FUN_004800A0: shrouded 8x8 block, row 5 of 8 at (pitch*5)+4
+1	0x004800F0	6	1	fog.blockclear.r6lo	mov dword ptr [ecx + 0xf00], eax	mov dword ptr [ecx + 0x12c0], eax	8981000F0000	8981C0120000	FUN_004800A0: shrouded 8x8 block, row 6 of 8 at (pitch*6)+0
+1	0x004800F6	6	1	fog.blockclear.r6hi	mov dword ptr [ecx + 0xf04], eax	mov dword ptr [ecx + 0x12c4], eax	8981040F0000	8981C4120000	FUN_004800A0: shrouded 8x8 block, row 6 of 8 at (pitch*6)+4
+1	0x004800FC	6	1	fog.blockclear.r7lo	mov dword ptr [ecx + 0x1180], eax	mov dword ptr [ecx + 0x15e0], eax	898180110000	8981E0150000	FUN_004800A0: shrouded 8x8 block, row 7 of 8 at (pitch*7)+0
+1	0x00480102	6	1	fog.blockclear.r7hi	mov dword ptr [ecx + 0x1184], eax	mov dword ptr [ecx + 0x15e4], eax	898184110000	8981E4150000	FUN_004800A0: shrouded 8x8 block, row 7 of 8 at (pitch*7)+4
+1	0x004806D0	6	1	fog.blockrowstep	add ecx, 0x1400	add ecx, 0x1900	81C100140000	81C100190000	fog draw: advance 8 FRAMEBUFFER rows (one block row)
 2	0x0041D755	5	1	grid.base@0041D755	mov edi, 0x6ceff8	mov [grid+0x0]	BFF8EF6C00	BF00000000	drawing gate 0x0041D710: clear all
 2	0x0041E025	5	1	grid.base@0041E025	push 0x6ceff8	push [grid+0x0]	68F8EF6C00	6800000000	Storm update-region call: the grid IS the region list
 2	0x0041E03C	5	1	grid.base@0041E03C	mov edi, 0x6ceff8	mov [grid+0x0]	BFF8EF6C00	BF00000000	0x0041DF80: clear all after presenting
