@@ -537,6 +537,12 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     # The same function's sibling at 0x0048CB80 walks rows with an explicit step.
     b.imm(0x0048CC1F, STOCK_COLS, COLS, 1, "grid.rowstep.48CB80", 2,
           "0x0048CB80: next row of the grid is +40 bytes")
+    # 0x0042D280 fills a row and then steps to the next one the same way. Found by
+    # sweeping every grid-touching function for stride-shaped operands rather than
+    # for the grid's address -- a stride names no address, so the relocation pass
+    # cannot see it (see the "damage that renders" note in the doc's 12.5).
+    b.imm(0x0042D305, STOCK_COLS, COLS, 1, "grid.rowstep.42D280", 2,
+          "0x0042D280: next row of the grid is +40 bytes")
 
     # Row addressing: `lea r,[c+c*4]` (x5) feeding a SIB scale of 8 gives the
     # stock stride of 40. For 50 the multiply becomes x25 and the scale becomes
@@ -771,6 +777,20 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
         (0x00480948, "clipping helper"),
     ]:
         b.imm(va, STOCK_W, PF_W, 4, "fog.width@%08X" % va, 2, note)
+    # The fog wraps a horizontal coordinate modulo 648 == 640 + 8, in BOTH arms
+    # and with the same three-instruction shape (compare, subtract, add-back)
+    # around an 8-pixel-granular walk. Six sites, three per arm; the symmetry is
+    # what makes "playfield width + one 8-pixel unit" a reading rather than a
+    # guess, since nothing else in the pair would be mirrored.
+    #
+    # STATED AS INFERRED: this is the one site group here whose meaning comes from
+    # shape rather than from a decompiled use. If stage 2's interior diff shows a
+    # seam in the fog, this is the first suspect -- and the diff can see it, which
+    # is why carrying it is safe.
+    for va in (0x0047EC53, 0x0047EC66, 0x0047EC72, 0x0047EE83, 0x0047EE8D, 0x0047EE98):
+        b.imm(va, STOCK_W + 8, PF_W + 8, 4, "fog.wrap@%08X" % va, 2,
+              "fog coordinate wrap at (playfield width + 8), inferred from shape")
+
     # -- item 14: build placement ------------------------------------------
     b.imm(0x0048D663, STOCK_W, PF_W, 2, "placement.reject.x", 2,
           "0x0048D660: refuse a placement at x >= 640 (a 16-bit compare)")

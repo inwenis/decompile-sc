@@ -298,6 +298,12 @@ static const ScScreenPatch SC_WS_PATCHES[] = {
       { 0x83, 0xC1, 0x28 },
       { 0x83, 0xC1, 0x32 },
       "grid.rowstep.48CB80", "0x0048CB80: next row of the grid is +40 bytes" },
+    // 0x0042D305  add edx, 0x28
+    //             -> add edx, 0x32
+    { 0x0042D305u,  3, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x83, 0xC2, 0x28 },
+      { 0x83, 0xC2, 0x32 },
+      "grid.rowstep.42D280", "0x0042D280: next row of the grid is +40 bytes" },
     // 0x0041E15B  cmp ecx, esi ; lea eax, [ecx + ecx*4] ; lea ebx, [edi + eax*8 + 0x6ceff8] ; jg 0x41e193
     //             -> imul eax, ecx, 0x19 ; lea ebx, [edi + eax*2] ; cmp ecx, esi ; jg 0x41e193
     { 0x0041E15Bu, 14, 2, 6u, 0x0u,
@@ -802,6 +808,42 @@ static const ScScreenPatch SC_WS_PATCHES[] = {
       { 0x81, 0xFA, 0x80, 0x02, 0x00, 0x00 },
       { 0x81, 0xFA, 0x20, 0x03, 0x00, 0x00 },
       "fog.width@00480948", "clipping helper" },
+    // 0x0047EC53  cmp esi, 0x288
+    //             -> cmp esi, 0x328
+    { 0x0047EC53u,  6, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x81, 0xFE, 0x88, 0x02, 0x00, 0x00 },
+      { 0x81, 0xFE, 0x28, 0x03, 0x00, 0x00 },
+      "fog.wrap@0047EC53", "fog coordinate wrap at (playfield width + 8), inferred from shape" },
+    // 0x0047EC66  sub esi, 0x288
+    //             -> sub esi, 0x328
+    { 0x0047EC66u,  6, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x81, 0xEE, 0x88, 0x02, 0x00, 0x00 },
+      { 0x81, 0xEE, 0x28, 0x03, 0x00, 0x00 },
+      "fog.wrap@0047EC66", "fog coordinate wrap at (playfield width + 8), inferred from shape" },
+    // 0x0047EC72  add esi, 0x288
+    //             -> add esi, 0x328
+    { 0x0047EC72u,  6, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x81, 0xC6, 0x88, 0x02, 0x00, 0x00 },
+      { 0x81, 0xC6, 0x28, 0x03, 0x00, 0x00 },
+      "fog.wrap@0047EC72", "fog coordinate wrap at (playfield width + 8), inferred from shape" },
+    // 0x0047EE83  cmp eax, 0x288
+    //             -> cmp eax, 0x328
+    { 0x0047EE83u,  5, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x3D, 0x88, 0x02, 0x00, 0x00 },
+      { 0x3D, 0x28, 0x03, 0x00, 0x00 },
+      "fog.wrap@0047EE83", "fog coordinate wrap at (playfield width + 8), inferred from shape" },
+    // 0x0047EE8D  sub eax, 0x288
+    //             -> sub eax, 0x328
+    { 0x0047EE8Du,  5, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x2D, 0x88, 0x02, 0x00, 0x00 },
+      { 0x2D, 0x28, 0x03, 0x00, 0x00 },
+      "fog.wrap@0047EE8D", "fog coordinate wrap at (playfield width + 8), inferred from shape" },
+    // 0x0047EE98  add eax, 0x288
+    //             -> add eax, 0x328
+    { 0x0047EE98u,  5, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x05, 0x88, 0x02, 0x00, 0x00 },
+      { 0x05, 0x28, 0x03, 0x00, 0x00 },
+      "fog.wrap@0047EE98", "fog coordinate wrap at (playfield width + 8), inferred from shape" },
     // 0x0048D663  cmp ax, 0x280
     //             -> cmp ax, 0x320
     { 0x0048D663u,  4, 2, SC_WS_NO_FIXUP, 0x0u,

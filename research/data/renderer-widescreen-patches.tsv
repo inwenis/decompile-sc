@@ -54,6 +54,7 @@ stage	va	len	changed	name	before	after	expect	patch	note
 2	0x004B2314	5	1	grid.row18	mov edi, 0x6cf2c8	mov [grid+0x384]	BFC8F26C00	BF00000000	0x004B1FA0 names grid[row 18][col 0]; recomputed for the new stride
 2	0x004B2303	7	1	grid.row18.count	lea ecx, [eax + eax*4 - 0x55] ; shl ecx, 3	lea ecx, [eax - 0x11] ; imul ecx, ecx, 0x32 ; nop 	8D4C80ABC1E103	8D48EF6BC93290	0x004B1FA0: ecx = (row - 17) * 50, was (row - 17) * 40
 2	0x0048CC1F	3	1	grid.rowstep.48CB80	add ecx, 0x28	add ecx, 0x32	83C128	83C132	0x0048CB80: next row of the grid is +40 bytes
+2	0x0042D305	3	1	grid.rowstep.42D280	add edx, 0x28	add edx, 0x32	83C228	83C232	0x0042D280: next row of the grid is +40 bytes
 2	0x0041E15B	14	1	grid.rowaddr.marker	cmp ecx, esi ; lea eax, [ecx + ecx*4] ; lea ebx, [edi + eax*8 + 0x6ceff8] ; jg 0x41e193	imul eax, ecx, 0x19 ; lea ebx, [edi + eax*2] ; cmp ecx, esi ; jg 0x41e193	3BCE8D04898D9CC7F8EF6C007F2A	6BC1198D9C47000000003BCE7F2A	dirty marker: eax = row * 25, ebx = grid + row*50 + col; cmp/jg moved after the multiply so the branch still reads the compare
 2	0x0041E18A	3	1	grid.rowstep.marker	add ebx, 0x28	add ebx, 0x32	83C328	83C332	dirty marker: next row is +40 bytes
 2	0x0041DE4E	3	1	grid.stride.testrect	lea eax, [ecx + ecx*4]	imul eax, ecx, 0x19	8D0489	6BC119	0x0041DE20: eax = row * 25
@@ -138,6 +139,12 @@ stage	va	len	changed	name	before	after	expect	patch	note
 2	0x0048090E	5	1	fog.width@0048090E	cmp eax, 0x280	cmp eax, 0x320	3D80020000	3D20030000	clipping helper
 2	0x0048092C	5	1	fog.width@0048092C	cmp eax, 0x280	cmp eax, 0x320	3D80020000	3D20030000	clipping helper
 2	0x00480948	6	1	fog.width@00480948	cmp edx, 0x280	cmp edx, 0x320	81FA80020000	81FA20030000	clipping helper
+2	0x0047EC53	6	1	fog.wrap@0047EC53	cmp esi, 0x288	cmp esi, 0x328	81FE88020000	81FE28030000	fog coordinate wrap at (playfield width + 8), inferred from shape
+2	0x0047EC66	6	1	fog.wrap@0047EC66	sub esi, 0x288	sub esi, 0x328	81EE88020000	81EE28030000	fog coordinate wrap at (playfield width + 8), inferred from shape
+2	0x0047EC72	6	1	fog.wrap@0047EC72	add esi, 0x288	add esi, 0x328	81C688020000	81C628030000	fog coordinate wrap at (playfield width + 8), inferred from shape
+2	0x0047EE83	5	1	fog.wrap@0047EE83	cmp eax, 0x288	cmp eax, 0x328	3D88020000	3D28030000	fog coordinate wrap at (playfield width + 8), inferred from shape
+2	0x0047EE8D	5	1	fog.wrap@0047EE8D	sub eax, 0x288	sub eax, 0x328	2D88020000	2D28030000	fog coordinate wrap at (playfield width + 8), inferred from shape
+2	0x0047EE98	5	1	fog.wrap@0047EE98	add eax, 0x288	add eax, 0x328	0588020000	0528030000	fog coordinate wrap at (playfield width + 8), inferred from shape
 2	0x0048D663	4	1	placement.reject.x	cmp ax, 0x280	cmp ax, 0x320	663D8002	663D2003	0x0048D660: refuse a placement at x >= 640 (a 16-bit compare)
 2	0x0048D5F2	6	1	placement.rect.right	lea edi, [ecx + 0x280]	lea edi, [ecx + 0x320]	8DB980020000	8DB920030000	0x0048D5C0's extent: right = left + 640 (new in task 034)
 2	0x004814EA	9	1	layer1.park.x	mov word ptr [0x6cef66], 0x280	mov word ptr [0x6cef66], 0x320	66C70566EF6C008002	66C70566EF6C002003	parks the mask layer just off the right edge of the playfield
