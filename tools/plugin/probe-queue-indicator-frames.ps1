@@ -21,10 +21,17 @@ the GRP blits frame #unitType out of the borders. That is a different wrong pict
 TYPE and a constant one per type, which is exactly the shape of the report: an SCV is type 7,
 a Marine is type 0, a Firebat 32, a Medic 34.
 
-So this probe varies THE UNIT TYPE, not the building: one building, every Train button its
-card offers, a queue of more than five for each, a frame each. The Academy in the barracks
-fixture is there to unlock the Firebat and the Medic, i.e. to make the second and third
-renderings reachable at all.
+So this probe varies THE UNIT TYPE: one map holding a Command Center and a Barracks, every
+Train button each card offers, a queue of more than five for each, a frame each. Both cases the
+user could name precisely are in one run -- the SCV that became a stuck "2" and the Marine that
+blacked out.
+
+WHY BOTH BUILDINGS ARE IN ONE MAP, and it is not tidiness: the Command Center is the only
+SUPPLY on it. A Terran player starts with no psi and the sim refuses a Train it cannot house
+while the button stays lit -- the first version of this probe put a lone Barracks and an Academy
+on the map, watched all eight Train commands reach the engine's own funnel (`trainSeen=8`) and
+read back an empty queue. The generator has two placement groups, so a Command Center is the one
+that pays for itself: 10 psi AND the user's first case.
 
 WHAT IS THE ORACLE AND WHAT IS THE PICTURE (AGENTS.md, "Read a dialog's CONTENT from memory;
 never hash its pixels"): the assertions read the live statUser records -- which GRP, which
@@ -33,25 +40,20 @@ while it was hidden. The PNGs are for the human, never asserted on, and never en
 (hard rule 1).
 
 .EXAMPLE
-./tools/plugin/probe-queue-indicator-frames.ps1 -Fixture barracks -Arm fixed
+./tools/plugin/probe-queue-indicator-frames.ps1 -Arm fixed
 .EXAMPLE
-./tools/plugin/probe-queue-indicator-frames.ps1 -Fixture command-center -Arm defect -BuildDir C:\git\decompile-sc\work\scratch\039\arms\defect
+./tools/plugin/probe-queue-indicator-frames.ps1 -Arm defect -BuildDir C:\git\decompile-sc\work\scratch\039\arms\defect
 #>
 [CmdletBinding()]
 param(
     [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
-    # Which building the fixture places. barracks brings an Academy with it, because the
-    # Firebat and the Medic are the second and third renderings and neither is trainable
-    # without one.
-    [ValidateSet('command-center', 'barracks')]
-    [string]$Fixture = 'barracks',
     # DEFECT is the same tree with the three fixes reverted (work/scratch/039/defect-arm.patch).
     # It only labels the log, the frames and the assertions' expectations -- the build itself
     # comes from -BuildDir.
     [ValidateSet('defect', 'fixed')]
     [string]$Arm = 'fixed',
     [string]$BuildDir,
-    [string]$LogPath = "C:\sc-work\logs\039\qind-frames-$Fixture-$Arm.log",
+    [string]$LogPath = "C:\sc-work\logs\039\qind-frames-$Arm.log",
     [string]$FrameDir = 'C:\sc-work\logs\039-frames',
     [string]$FixtureDir,
     # More than five, so the plugin is holding at least one item the strip cannot draw and the
@@ -71,8 +73,20 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 $failures = 0
 $step = 0
 
-# units.dat ids, from tools/make_test_map.py's own table (task 029).
-$BUILDING_TYPE = @{ 'command-center' = 106; 'barracks' = 111 }[$Fixture]
+# units.dat ids, from tools/make_test_map.py's own table (task 029). BOTH buildings are in one
+# map and both are walked, in this order: the Command Center is the user's own first case AND
+# the only supply on the map, so nothing the Barracks trains would be accepted without it.
+$BUILDINGS = @(
+    [pscustomobject]@{ Name = 'command-center'; Type = 106 },
+    [pscustomobject]@{ Name = 'barracks';       Type = 111 }
+)
+# Names for the frame files, so a path says WHICH unit's picture it holds. Anything not in the
+# table is named by its id rather than guessed at -- an unnamed type is still a valid case.
+$UNIT_NAMES = @{ 0 = 'marine'; 1 = 'ghost'; 7 = 'scv'; 32 = 'firebat'; 34 = 'medic'; 64 = 'probe' }
+function Get-UnitName([int]$Type) {
+    if ($UNIT_NAMES.ContainsKey($Type)) { return $UNIT_NAMES[$Type] }
+    return "type$Type"
+}
 # The card's Train button, as the read-back reports actions: uppercase hex, no 0x. Its
 # actionParam IS the unit type, which is what makes "one frame per type" drivable from the
 # card rather than from a table of ids (research/production-queue.md 8).
@@ -84,7 +98,7 @@ $STRIP_SLOTS = 5
 
 if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t039' }
 $mapDir = $FixtureDir
-$mapName = "qind-frames-$Fixture.scx"
+$mapName = 'qind-frames.scx'
 $mapPath = Join-Path $mapDir $mapName
 $fixtures = New-ScFixtureRun -Dir $mapDir -Names @($mapName)
 
@@ -171,7 +185,7 @@ $launchLock = $null
 # hands these paths to the user, and "frame-007.png" tells them nothing about which case it is.
 function Shot([string]$tag) {
     if ($script:hwnd -eq [IntPtr]::Zero) { return }
-    $p = Join-Path $FrameDir ("{0}-{1}-{2}.png" -f $Fixture, $tag, $Arm)
+    $p = Join-Path $FrameDir ("{0}-{1}.png" -f $tag, $Arm)
     Save-ScWindowImage -Hwnd $script:hwnd -Path $p -FullWindow | Out-Null
     Write-Host "       frame: $p"
     return $p
@@ -180,23 +194,28 @@ function Shot([string]$tag) {
 $script:framesWritten = @()
 
 try {
-    Step "generate the fixture: one $Fixture$(if ($Fixture -eq 'barracks') { ' + an Academy' })" {
+    Step 'generate the fixture: a Command Center and a Barracks, both the player''s' {
         Wait-ScFixtureFolderFree -Run $fixtures
+        # WHY THE COMMAND CENTER IS IN EVERY RUN AND NOT ONLY IN ITS OWN CASE: it is the
+        # SUPPLY. The generator has two placement groups, a Terran player starts with no psi,
+        # and the sim refuses a Train it cannot house -- the first run of this probe queued
+        # eight Marines at a lone Barracks, watched all eight reach the command funnel
+        # (`trainSeen=8`), and read back an empty queue, because a Barracks and an Academy
+        # between them supply nothing. A Command Center supplies 10 and trains the SCV, which
+        # is the user's own first case, so it earns its place twice.
+        #
+        # And the build times are pushed out on purpose: a unit that COMPLETES inside the
+        # measurement window frees a queue slot and takes a supply point with it, which is the
+        # confound AGENTS.md says to design out rather than tolerate (task 026). At 180 game
+        # seconds nothing finishes while this probe is looking.
         $genArgs = @{
-            UnitCount = 1; UnitType = $Fixture; Player = 0; ClearPlayerUnits = $true
+            UnitCount = 1; UnitType = 'command-center'; Player = 0; ClearPlayerUnits = $true
             GridSpacing = 160
             StartingMinerals = $StartingMinerals; StartingGas = $StartingGas
+            UnitBuildTime = @('scv=180', 'marine=180')
+            EnemyCount = 1; EnemyType = 'barracks'; EnemyOwner = 'player'
+            EnemyOffsetX = 288; EnemyOffsetY = 0
             OutputPath = $mapPath
-        }
-        # The Academy rides in the "enemy" block, owned by the PLAYER -- the generator's only
-        # second placement group, and the same trick test-production-queue.ps1 uses to get a
-        # Command Center next to its Nexuses.
-        if ($Fixture -eq 'barracks') {
-            $genArgs['EnemyCount'] = 1
-            $genArgs['EnemyType'] = 'academy'
-            $genArgs['EnemyOwner'] = 'player'
-            $genArgs['EnemyOffsetX'] = 288
-            $genArgs['EnemyOffsetY'] = 0
         }
         $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') @genArgs 2>&1
         $gen | ForEach-Object { Write-Host "       $_" }
@@ -206,7 +225,7 @@ try {
 
     Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
     Wait-ScNoGameRunning
-    $launchLock = Enter-ScLaunchLock -TaskId "039-frames-$Fixture-$Arm"
+    $launchLock = Enter-ScLaunchLock -TaskId "039-frames-$Arm"
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
         -Mode hooktest -LogCommands 1 -Circles 0 -HudRow 0 -WorldScan 1 -CardScan 1 `
         -ProdQueue 1 -ProdQueueMax 16 -QueueIndicator 1 `
@@ -239,116 +258,131 @@ try {
         Start-Sleep -Seconds 2
     }
 
-    Step "select the $Fixture -- click point derived from MEMORY, not from a frame" {
-        $w = Get-World 'aim'
-        $b = @($w.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $BUILDING_TYPE })[0]
-        Assert-That "the map spawned the $Fixture" ($null -ne $b)
-        if ($b) {
-            $cx = $b.X - $w.Screen.Left
-            $cy = $b.Y - $w.Screen.Top
-            Assert-That "it is on screen ($cx,$cy)" `
-                ($cx -ge 0 -and $cx -lt 640 -and $cy -ge 0 -and $cy -lt 340)
-            Send-ScClick -Hwnd $hwnd -X $cx -Y $cy
-            Start-Sleep -Seconds 2
-        }
-        $script:framesWritten += (Shot 'idle-empty-queue')
-    }
+    foreach ($building in $BUILDINGS) {
+        $bName = $building.Name
+        $bType = $building.Type
 
-    # THE NEGATIVE HALF, and it is what makes every reading below a measurement: with an empty
-    # queue the indicator must be showing NOTHING, and the probe must still be able to read the
-    # surface. surfInk answers that in this state and refInk cannot -- neither the strip nor the
-    # wireframe row is up when one building sits idle, which is exactly why refInk is -1 here
-    # and why it is not allowed to fall back to a control nobody can see.
-    Step 'the indicator says nothing before anything is queued' {
-        $q = Get-QInd 'idle'
-        Write-Host "       $($q.Line)"
-        Assert-That "it is showing nothing (mode=$($q.Mode))" ($q.Mode -eq 0)
-        Assert-That "and the probe can still read this surface (surfInk=$($q.SurfInk))" `
-            ($q.SurfInk -gt 0)
-    }
-
-    $script:trainSlots = @()
-    Step 'read the card and take every Train button it offers' {
-        $card = Get-Card 'idle'
-        Assert-That 'the card dialog was resolved' ($card.Ok)
-        $script:trainSlots = @($card.Slots | Where-Object {
-            $_.HasButton -and $_.Action -eq $TRAIN_ACT -and $_.Visible -and -not $_.Disabled })
-        foreach ($t in $script:trainSlots) {
-            Write-Host ("       slot {0}: Train unit type {1} (icon 0x{2:x})" -f $t.Index, $t.ActParam, $t.Icon)
-        }
-        Assert-That "at least one Train button is enabled ($($script:trainSlots.Count))" `
-            ($script:trainSlots.Count -ge 1)
-        if ($Fixture -eq 'barracks') {
-            # The Academy is in this fixture for exactly this: without it a Barracks offers one
-            # unit type and one rendering, and the user reported THREE.
-            Assert-That "the Academy unlocked more than one unit type ($($script:trainSlots.Count))" `
-                ($script:trainSlots.Count -ge 2)
-        }
-        $script:idleCard = $card
-    }
-
-    foreach ($t in $script:trainSlots) {
-        $type = [int]$t.ActParam
-        $name = "type$type"
-        Step "QUEUE $Clicks x unit type $type and look at the FIFTH slot" {
-            $pt = Get-ScCardSlotPoint -Card $script:idleCard -Slot $t.Index
-            for ($i = 1; $i -le $Clicks; $i++) {
-                Send-ScClick -Hwnd $hwnd -X $pt.X -Y $pt.Y -SettleMs 150
+        Step "select the $bName -- click point derived from MEMORY, not from a frame" {
+            $w = Get-World "aim-$bName"
+            $b = @($w.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $bType }) |
+                 Select-Object -First 1
+            Assert-That "the map spawned the $bName" ($null -ne $b)
+            if ($b) {
+                $cx = $b.X - $w.Screen.Left
+                $cy = $b.Y - $w.Screen.Top
+                Assert-That "it is on screen ($cx,$cy)" `
+                    ($cx -ge 0 -and $cx -lt 640 -and $cy -ge 0 -and $cy -lt 340)
+                Send-ScClick -Hwnd $hwnd -X $cx -Y $cy
+                Start-Sleep -Seconds 2
             }
-            Start-Sleep -Seconds 3
+            $script:framesWritten += (Shot "$bName-idle-empty-queue")
+        }
 
-            $q = Get-QInd "queued-$name"
+        # THE NEGATIVE HALF, and it is what makes every reading below a measurement: with an
+        # empty queue the indicator must be showing NOTHING, and the probe must still be able to
+        # read the surface. surfInk answers that in this state and refInk cannot -- neither the
+        # strip nor the wireframe row is up when one building sits idle, which is exactly why
+        # refInk is -1 here and why it is not allowed to fall back to a hidden control.
+        Step "the indicator says nothing at the $bName before anything is queued" {
+            $q = Get-QInd "idle-$bName"
             Write-Host "       $($q.Line)"
-            $strip = Get-Strip "queued-$name"
-
-            Assert-That "more than five are queued (engine $($q.EngineLen) + plugin $($q.Overflow))" `
-                (($q.EngineLen + $q.Overflow) -gt $STRIP_SLOTS)
-            Assert-That "the strip is full: $($strip.Shown) icon(s) shown, $($strip.Clickable) clickable" `
-                ($strip.Shown -eq $STRIP_SLOTS)
-
-            # THE DEFECT ITSELF, read out of the live record rather than off the picture: which
-            # GRP the fifth slot draws from. I = the engine's icon art (a unit portrait), B =
-            # the button-BORDER art, in which frame #unitType is not a unit at all.
-            $fifth = if ($q.Icons.Count -ge $STRIP_SLOTS) { $q.Icons[$STRIP_SLOTS - 1] } else { $null }
-            Assert-That 'the read-back reported all five icons' ($null -ne $fifth) `
-                "(got $($q.Icons.Count))"
-            if ($fifth) {
-                $want = ($Arm -eq 'fixed')
-                Assert-That "the fifth icon draws from the ICON grp (art=$($fifth.Art))" `
-                    (($fifth.Art -eq 'I') -eq $want) `
-                    "(arm=${Arm}: B means the frame index is aimed at the button borders)"
-                Assert-That "and carries the slot's own label (label=$($fifth.Label))" `
-                    ($fifth.Label -eq $want)
-                Assert-That "and its frame index is the unit type ($($fifth.Icon) vs $type)" `
-                    ($fifth.Icon -eq $type)
-            }
-            # slotDiff: slot 0 and slot 4 hold the same unit type and the same border graphic,
-            # so once the strip has settled the bytes that differ are the ones this plugin put
-            # there -- tens for our "+N" over the same picture, hundreds for a different one.
-            Write-Host "       slotDiff=$($q.SlotDiff) boxDiff=$($q.BoxDiff) ink=$($q.Ink) surfInk=$($q.SurfInk)"
-            Assert-That "the indicator's own box holds bytes this plugin put there (boxDiff=$($q.BoxDiff))" `
-                ($q.BoxDiff -gt 0)
-
-            $script:framesWritten += (Shot "fifth-slot-$name")
-            Start-Sleep -Seconds 2
-            $script:framesWritten += (Shot "fifth-slot-$name-settled")
+            Assert-That "it is showing nothing (mode=$($q.Mode))" ($q.Mode -eq 0)
+            Assert-That "and the probe can still read this surface (surfInk=$($q.SurfInk))" `
+                ($q.SurfInk -gt 0)
         }
 
-        Step "cancel that queue back to empty before the next type" {
-            $card = Get-Card "busy-$name"
-            $cancel = @($card.Slots | Where-Object { $_.HasButton -and $_.Action -eq $CANCEL_ACT })[0]
-            if (-not $cancel) {
-                Assert-That 'the card offers a Cancel button' $false
-            } else {
-                $pt = Get-ScCardSlotPoint -Card $card -Slot $cancel.Index
-                for ($i = 1; $i -le ($Clicks + 4); $i++) {
-                    Send-ScClick -Hwnd $hwnd -X $pt.X -Y $pt.Y -SettleMs 200
+        $script:trainSlots = @()
+        Step "read the $bName's card and take every Train button it offers" {
+            $card = Get-Card "idle-$bName"
+            Assert-That 'the card dialog was resolved' ($card.Ok)
+            $script:trainSlots = @($card.Slots | Where-Object {
+                $_.HasButton -and $_.Action -eq $TRAIN_ACT -and $_.Visible -and -not $_.Disabled })
+            foreach ($ts in $script:trainSlots) {
+                Write-Host ("       slot {0}: Train unit type {1} ({2})" -f `
+                            $ts.Index, $ts.ActParam, (Get-UnitName $ts.ActParam))
+            }
+            Assert-That "at least one Train button is enabled ($($script:trainSlots.Count))" `
+                ($script:trainSlots.Count -ge 1)
+            $script:idleCard = $card
+        }
+
+        foreach ($t in $script:trainSlots) {
+            $type = [int]$t.ActParam
+            # NOT $name: `Step` takes a -Name parameter and the scriptblock runs in a scope that
+            # can see it, so a variable called $name inside one silently becomes the step's own
+            # title. The first run of this probe wrote its frames to
+            # "barracks-fifth-slot-QUEUE 8 x unit type 0 and look at the FIFTH slot-defect.png".
+            $typeTag = Get-UnitName $type
+            $caseTag = "$bName-$typeTag"
+
+            Step "QUEUE $Clicks x $typeTag (type $type) at the $bName and look at the FIFTH slot" {
+                $pt = Get-ScCardSlotPoint -Card $script:idleCard -Slot $t.Index
+                for ($i = 1; $i -le $Clicks; $i++) {
+                    Send-ScClick -Hwnd $hwnd -X $pt.X -Y $pt.Y -SettleMs 150
                 }
                 Start-Sleep -Seconds 3
-                $q = Get-QInd "drained-$name"
-                Assert-That "the queue is empty again (engine $($q.EngineLen) + plugin $($q.Overflow))" `
-                    (($q.EngineLen + $q.Overflow) -eq 0) `
-                    '(a leftover item would make the NEXT type read against a stale strip)'
+
+                $q = Get-QInd "queued-$caseTag"
+                Write-Host "       $($q.Line)"
+                $strip = Get-Strip "queued-$caseTag"
+
+                Assert-That "more than five are queued (engine $($q.EngineLen) + plugin $($q.Overflow))" `
+                    (($q.EngineLen + $q.Overflow) -gt $STRIP_SLOTS) `
+                    '(a Terran player with no psi has every Train refused by the SIM while the button stays lit -- check supply before blaming the click)'
+                Assert-That "the strip is full: $($strip.Shown) icon(s) shown, $($strip.Clickable) clickable" `
+                    ($strip.Shown -eq $STRIP_SLOTS)
+
+                # THE DEFECT ITSELF, read out of the live record rather than off the picture:
+                # which GRP the fifth slot draws from. I = the engine's icon art (a unit
+                # portrait), B = the button-BORDER art, in which frame #unitType is not a unit.
+                $fifth = if ($q.Icons.Count -ge $STRIP_SLOTS) { $q.Icons[$STRIP_SLOTS - 1] } else { $null }
+                Assert-That 'the read-back reported all five icons' ($null -ne $fifth) `
+                    "(got $($q.Icons.Count))"
+                if ($fifth) {
+                    $want = ($Arm -eq 'fixed')
+                    Assert-That "the fifth icon draws from the ICON grp (art=$($fifth.Art))" `
+                        (($fifth.Art -eq 'I') -eq $want) `
+                        "(arm=${Arm}: B means the frame index is aimed at the button borders)"
+                    Assert-That "and carries the slot's own label (label=$($fifth.Label))" `
+                        ($fifth.Label -eq $want)
+                    Assert-That "and its frame index is the unit type ($($fifth.Icon) vs $type)" `
+                        ($fifth.Icon -eq $type)
+                }
+                # slotDiff: slot 0 and slot 4 hold the same unit type and the same border
+                # graphic, so once the strip has settled the bytes that differ are the ones this
+                # plugin put there -- tens for our "+N" over the same picture, hundreds for a
+                # different picture entirely, which is the defect.
+                Write-Host "       slotDiff=$($q.SlotDiff) boxDiff=$($q.BoxDiff) ink=$($q.Ink) surfInk=$($q.SurfInk)"
+                Assert-That "the indicator's own box holds bytes this plugin put there (boxDiff=$($q.BoxDiff))" `
+                    ($q.BoxDiff -gt 0)
+
+                $script:framesWritten += (Shot "fifth-slot-$caseTag")
+                Start-Sleep -Seconds 2
+                $script:framesWritten += (Shot "fifth-slot-$caseTag-settled")
+            }
+
+            Step "cancel the $typeTag queue back to empty before the next case" {
+                $card = Get-Card "busy-$caseTag"
+                # SLOT 9 IS SHARED. It carries Lift Off while the building is idle and Cancel
+                # while it is training, and the two are complementary on the same control
+                # (research/production-queue.md 8.3). Taking it by ACTION rather than by slot
+                # number is what stops this loop clicking Lift Off eight times -- which is what
+                # the first run of this probe did, on a Barracks whose queue was empty.
+                $cancel = @($card.Slots | Where-Object {
+                    $_.HasButton -and $_.Action -eq $CANCEL_ACT }) | Select-Object -First 1
+                if (-not $cancel) {
+                    Assert-That 'the card offers a Cancel button while the queue is up' $false
+                } else {
+                    $pt = Get-ScCardSlotPoint -Card $card -Slot $cancel.Index
+                    for ($i = 1; $i -le ($Clicks + 4); $i++) {
+                        Send-ScClick -Hwnd $hwnd -X $pt.X -Y $pt.Y -SettleMs 200
+                    }
+                    Start-Sleep -Seconds 3
+                    $q = Get-QInd "drained-$caseTag"
+                    Assert-That "the queue is empty again (engine $($q.EngineLen) + plugin $($q.Overflow))" `
+                        (($q.EngineLen + $q.Overflow) -eq 0) `
+                        '(a leftover item would make the NEXT case read against a stale strip)'
+                }
             }
         }
     }
@@ -370,7 +404,7 @@ finally {
 }
 
 Write-Host ''
-Write-Host "probe ($Fixture, $Arm arm): $failures failure(s)"
+Write-Host "probe (Command Center + Barracks, $Arm arm): $failures failure(s)"
 Write-Host "log:    $LogPath"
 Write-Host 'frames (diagnostic, NOT committable -- AGENTS.md hard rule 1):'
 foreach ($f in $script:framesWritten) { if ($f) { Write-Host "  $f" } }
