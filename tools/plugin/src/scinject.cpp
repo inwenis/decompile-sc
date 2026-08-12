@@ -166,7 +166,7 @@ int main(int argc, char** argv) {
     if (argc < 3) {
         fprintf(stderr,
             "usage: scinject.exe <game-exe> <plugin-dll> [--early-dll <path>]... "
-            "[--early] [--no-plugin] [--wait-ms N] [--no-wait-exit]\n");
+            "[--early] [--no-plugin] [--wait-ms N] [--no-wait-exit] [--desktop <name>]\n");
         return 1;
     }
 
@@ -182,12 +182,20 @@ int main(int argc, char** argv) {
     bool noPlugin = false;   // A/B control: launch through the same path, our code absent
     char early[MAX_EARLY][MAX_PATH];
     int  earlyCount = 0;
+    // task 040: name the target desktop explicitly rather than relying on
+    // inheritance from the calling thread's current desktop -- measured that the
+    // inheritance chain does not reliably hold through PowerShell's own
+    // process-launch path. NULL (unset) keeps the default behaviour for every
+    // other caller: STARTUPINFO.lpDesktop stays NULL, so CreateProcess inherits
+    // the caller's desktop as it always did.
+    const char* desktopName = NULL;
 
     for (int i = 3; i < argc; ++i) {
         if (strcmp(argv[i], "--wait-ms") == 0 && i + 1 < argc) settleMs = (DWORD)atoi(argv[++i]);
         else if (strcmp(argv[i], "--no-wait-exit") == 0) waitExit = false;
         else if (strcmp(argv[i], "--early") == 0) pluginEarly = true;
         else if (strcmp(argv[i], "--no-plugin") == 0) noPlugin = true;
+        else if (strcmp(argv[i], "--desktop") == 0 && i + 1 < argc) desktopName = argv[++i];
         else if (strcmp(argv[i], "--early-dll") == 0 && i + 1 < argc) {
             if (earlyCount >= MAX_EARLY) { fprintf(stderr, "scinject: too many --early-dll\n"); return 1; }
             StripDevicePrefix(argv[++i], raw, sizeof(raw));
@@ -223,6 +231,7 @@ int main(int argc, char** argv) {
     STARTUPINFOA si; PROCESS_INFORMATION pi;
     ZeroMemory(&si, sizeof(si)); si.cb = sizeof(si);
     ZeroMemory(&pi, sizeof(pi));
+    if (desktopName) si.lpDesktop = (char*)desktopName;
 
     // CREATE_SUSPENDED always, for two reasons: the pid is known before a single
     // instruction runs, and it is the window in which --early-dll injection has
