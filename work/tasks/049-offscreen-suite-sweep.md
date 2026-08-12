@@ -100,6 +100,29 @@ mechanism's own defects) shipped separately as PR #57 and task 045 is closed.
   of this task is unrestricted — but every `-Visible` run you need is a message
   to the conductor first, not a judgement call.
 
+### Handoff from task 045's worker (2026-08-12), things the PR does not say
+
+- **`-SuiteArgs` is safe; `-Command` is not.** `-SuiteArgs` reaches the child via
+  `Export-Clixml`/`Import-Clixml`, so hashtables, switches and spaced paths all
+  survive. `-Command` is spliced into the generated child script as raw text
+  inside an expandable here-string — a value containing an unescaped `"@`
+  corrupts the child script. Suites only ever go through `-SuiteArgs`, so this is
+  a `-Command`-only footgun; know it before reaching for `-Command` to probe.
+- **Do not try to force the desktop-teardown race.** 045 failed in 20 attempts;
+  the timing is tighter than a subprocess-driving script can control. If a suite
+  intermittently dies with the host-startup signature (Win32 0xE9, or no
+  `run-offscreen(child):` line), that IS the same class — it is now caught
+  loudly, and the guard is already proven through the exit-code path. Report it,
+  do not chase it.
+- `Assert-ScDesktopHidden` behaves exactly as documented. The console problem was
+  one level up and unrelated to desktop isolation: Windows Terminal's DefTerm
+  hand-off ignores `lpDesktop`.
+- **Your real constraint is the GAME LOCK, not spawns.** With `CREATE_NO_WINDOW`
+  merged, console spawns cost nothing. But ~18 suites each launching the actual
+  game is a serious claim on a machine other workers are sharing. Tell the
+  conductor your intended batch size and expect to be sequenced; do not open with
+  all of them.
+
 ## Steps (suggested)
 
 1. Enumerate every `tools/plugin/test-*.ps1` and the probe scripts a worker
