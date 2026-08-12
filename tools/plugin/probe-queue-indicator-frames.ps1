@@ -340,21 +340,44 @@ try {
                     "(got $($q.Icons.Count))"
                 if ($fifth) {
                     $want = ($Arm -eq 'fixed')
-                    Assert-That "the fifth icon draws from the ICON grp (art=$($fifth.Art))" `
-                        (($fifth.Art -eq 'I') -eq $want) `
+                    $wantArt = $want ? 'I' : 'B'
+                    Assert-That "the fifth icon draws from the $(if ($want) { 'ICON' } else { 'BUTTON-BORDER' }) grp (art=$($fifth.Art))" `
+                        ($fifth.Art -eq $wantArt) `
                         "(arm=${Arm}: B means the frame index is aimed at the button borders)"
-                    Assert-That "and carries the slot's own label (label=$($fifth.Label))" `
+                    Assert-That "and $(if ($want) { 'carries' } else { 'carries NO' }) slot label (label=$($fifth.Label))" `
                         ($fifth.Label -eq $want)
                     Assert-That "and its frame index is the unit type ($($fifth.Icon) vs $type)" `
                         ($fifth.Icon -eq $type)
                 }
-                # slotDiff: slot 0 and slot 4 hold the same unit type and the same border
-                # graphic, so once the strip has settled the bytes that differ are the ones this
-                # plugin put there -- tens for our "+N" over the same picture, hundreds for a
-                # different picture entirely, which is the defect.
+                # EACH ARM ASSERTS ITS OWN SIGNATURE, so both runs are expected to come out at
+                # ZERO failures and any failure means the world is not as this task claims. A
+                # probe that only knows what "fixed" looks like reports the defect arm as a
+                # mess of failures, and a mess is not a measurement.
+                #
+                # slotDiff: slots 0 and 4 hold the same unit type and the same border graphic,
+                # so once the strip has settled every differing byte is this plugin's --
+                #   fixed   tens: the same picture with our "+N" drawn on it;
+                #   defect  hundreds: a different picture entirely (measured: 470).
+                # boxDiff: the indicator's box against the same box with none of our line in it --
+                #   fixed   > 0: the line is on the screen;
+                #   defect  0: spliced at the HEAD, the engine's own controls paint over it in
+                #           the same frame, so truthful fields (mode=1 visible=1 text="+3") sit
+                #           behind a picture the player sees instead. That zero IS the z-order
+                #           defect, measured.
                 Write-Host "       slotDiff=$($q.SlotDiff) boxDiff=$($q.BoxDiff) ink=$($q.Ink) surfInk=$($q.SurfInk)"
-                Assert-That "the indicator's own box holds bytes this plugin put there (boxDiff=$($q.BoxDiff))" `
-                    ($q.BoxDiff -gt 0)
+                if ($Arm -eq 'fixed') {
+                    Assert-That "the indicator's line is ON the screen (boxDiff=$($q.BoxDiff) bytes are ours)" `
+                        ($q.BoxDiff -gt 0)
+                    Assert-That "and the fifth icon is the same picture as the first, plus our text (slotDiff=$($q.SlotDiff))" `
+                        ($q.SlotDiff -gt 0 -and $q.SlotDiff -lt 200)
+                } else {
+                    Assert-That "the head splice puts NOTHING of ours on the screen (boxDiff=$($q.BoxDiff))" `
+                        ($q.BoxDiff -eq 0) `
+                        '(this is the z-order defect: the control is visible and holds the right string)'
+                    Assert-That "and the fifth icon is a DIFFERENT picture from the first (slotDiff=$($q.SlotDiff) bytes)" `
+                        ($q.SlotDiff -ge 200) `
+                        '(the frame index is being read out of the button-border art)'
+                }
 
                 $script:framesWritten += (Shot "fifth-slot-$caseTag")
                 Start-Sleep -Seconds 2
@@ -362,27 +385,44 @@ try {
             }
 
             Step "cancel the $typeTag queue back to empty before the next case" {
-                $card = Get-Card "busy-$caseTag"
-                # SLOT 9 IS SHARED. It carries Lift Off while the building is idle and Cancel
-                # while it is training, and the two are complementary on the same control
-                # (research/production-queue.md 8.3). Taking it by ACTION rather than by slot
-                # number is what stops this loop clicking Lift Off eight times -- which is what
-                # the first run of this probe did, on a Barracks whose queue was empty.
-                $cancel = @($card.Slots | Where-Object {
-                    $_.HasButton -and $_.Action -eq $CANCEL_ACT }) | Select-Object -First 1
-                if (-not $cancel) {
-                    Assert-That 'the card offers a Cancel button while the queue is up' $false
-                } else {
-                    $pt = Get-ScCardSlotPoint -Card $card -Slot $cancel.Index
-                    for ($i = 1; $i -le ($Clicks + 4); $i++) {
-                        Send-ScClick -Hwnd $hwnd -X $pt.X -Y $pt.Y -SettleMs 200
+                # SLOT 9 IS SHARED, AND THAT IS WHY THIS LOOP RE-READS BEFORE EVERY CLICK.
+                # The control carries Cancel while the building is training and Lift Off while
+                # it is idle -- complementary conditions on ONE control
+                # (research/production-queue.md 8.3). A loop that reads the card once and then
+                # clicks a fixed number of times is therefore clicking Lift Off the moment the
+                # queue runs out, and that is not theory: the run before this one drained eight
+                # items, clicked four more times, and PUT THE COMMAND CENTER IN THE AIR. Every
+                # later step then read a flying building's card (`cardId=230`, one button) and
+                # reported "no Train button", which looks nothing like the actual cause.
+                #
+                # So: ask the queue first, stop the moment it is empty, and never press a
+                # button whose meaning has changed since it was read.
+                $left = -1
+                for ($i = 1; $i -le ($Clicks + 6); $i++) {
+                    $q = Get-QInd "draining-$caseTag"
+                    $left = $q.EngineLen + $q.Overflow
+                    if ($left -le 0) { break }
+                    $card = Get-Card "busy-$caseTag"
+                    $cancel = @($card.Slots | Where-Object {
+                        $_.HasButton -and $_.Action -eq $CANCEL_ACT -and $_.Visible -and
+                        -not $_.Disabled }) | Select-Object -First 1
+                    if (-not $cancel) {
+                        Assert-That "the card offers a Cancel button while $left item(s) are queued" $false
+                        break
                     }
-                    Start-Sleep -Seconds 3
-                    $q = Get-QInd "drained-$caseTag"
-                    Assert-That "the queue is empty again (engine $($q.EngineLen) + plugin $($q.Overflow))" `
-                        (($q.EngineLen + $q.Overflow) -eq 0) `
-                        '(a leftover item would make the NEXT case read against a stale strip)'
+                    $pt = Get-ScCardSlotPoint -Card $card -Slot $cancel.Index
+                    Send-ScClick -Hwnd $hwnd -X $pt.X -Y $pt.Y -SettleMs 250
                 }
+                Assert-That "the queue is empty again ($left left)" ($left -eq 0) `
+                    '(a leftover item would make the NEXT case read against a stale strip)'
+
+                # AND THE BUILDING IS STILL THE ONE WE ARE MEASURING. A lift-off, a lost
+                # selection or a click that landed on the terrain all produce readings that are
+                # internally consistent and about the wrong unit -- the failure mode this
+                # project keeps meeting. One read, named, before the next case starts.
+                $strip = Get-Strip "still-selected-$caseTag"
+                Assert-That "the pane still holds the $bName (portrait type $($strip.PortraitType))" `
+                    ([int]$strip.PortraitType -eq $bType)
             }
         }
     }
