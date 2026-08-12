@@ -45,6 +45,9 @@ function Invoke-QueueEpisode {
     # COMPLETED only: a unit under construction is already linked into the player's list, so a
     # raw count answers "how many exist", and every claim here is about how many were BUILT.
     $scvBefore = Get-OwnedCount -Eng $Before -Type $SCV_TYPE -Completed
+    # The same count WITHOUT the completion filter: the baseline for "a unit appeared", which is
+    # what an item leaving a queue looks like from the engine's side.
+    $scvRawBefore = Get-OwnedCount -Eng $Before -Type $SCV_TYPE
     $refusedFullBefore = $Before.RefusedFull
     $refusedCostBefore = $Before.RefusedCost
     $promotedBefore = $Before.Promoted
@@ -146,6 +149,11 @@ function Invoke-QueueEpisode {
     # the same window is the correction term, and the sum becomes exactly assertable.
     $scvAfterBurst = Get-OwnedCount -Eng $after -Type $SCV_TYPE -Completed
     $completed = $scvAfterBurst - $scvBefore
+    # Units of the type that APPEARED during the window, in any state of completion. This is
+    # what "left a queue" means to the engine (see the bound below for why it is not `completed`
+    # and not PRODFAN's `buildUnit`), and it is needed outside the refusal guard as well, so it
+    # is read once here.
+    $left = (Get-OwnedCount -Eng $after -Type $SCV_TYPE) - $scvRawBefore
     $promoted = $after.Promoted - $promotedBefore
     $sumBefore = 0; foreach ($u in $Units) { $sumBefore += $logicalBefore[$u] }
     $sumAfter = 0; foreach ($u in $Units) { $sumAfter += (Get-Logical -Eng $after -Unit $u).Logical }
@@ -160,24 +168,33 @@ function Invoke-QueueEpisode {
         Assert-Inv -Id 'INV-R' -What "the selected buildings gained no more than the $queued item(s) queued ($sumBefore -> $sumAfter)" `
             -Ok ($sumAfter -le $sumBefore + $queued) `
             -Detail "(promoted=$promoted; a promotion moves an item between the ring and the plugin and must not change this total)"
-        # AN ITEM IN PRODUCTION HAS ALREADY LEFT THE QUEUE. Between "queued" and "built" there
-        # is a third state this bound first ignored: the engine pulls the item out of the ring
-        # the moment the building STARTS it, and it does not become a completed unit until the
-        # build time is up. So a single press onto an empty queue reads back as ring 0 with
-        # nothing built -- and the first version of this check called that a lost item and
-        # failed a correct build for it.
+        # WHAT LEAVES A QUEUE IS A UNIT APPEARING. Two earlier versions of this term were wrong
+        # in the same direction, and both cost a run:
         #
-        # It is not a guess: PRODFAN prints `buildUnit` per selected building, which is the
-        # engine's own pointer to the thing that building is making right now, so the number of
-        # items in flight is read rather than assumed. At most one per building, by construction.
-        $producing = @($after.Rows | Where-Object { $_.BuildUnit -and $_.BuildUnit -ne '00000000' }).Count
-        $floor = $sumBefore + $queued - $completed - $producing
-        Assert-Inv -Id 'INV-R' -What "and lost no more than the $completed built + $producing in production ($sumAfter >= $floor)" `
+        #   `completed`  counts only units that FINISHED. The engine takes an item out of the
+        #                ring the moment production STARTS, so a one-press burst read back as
+        #                ring 0 with nothing built and the bound called that a loss.
+        #   `buildUnit`  PRODFAN's own "what is this building making" pointer, which sounds
+        #                exactly right and is ZERO in this state. Measured on the parent build:
+        #                `engineLen=0 buildState=0 buildUnit=0x00000000` on the row, while the
+        #                WORLD scan showed the missing item as an SCV with the COMPLETED bit
+        #                CLEAR and hp=8466 of 15360. The unit exists; that field does not name
+        #                it. A plausible field is not a reading.
+        #
+        # So the term is the engine's own unit list, counting units of the type REGARDLESS of
+        # completion: an item leaves a queue exactly when it appears there.
+        #
+        # It is a count for the WHOLE PLAYER, and that is why this stays a bound rather than
+        # becoming an equality: the unit list does not say which building made one, and the
+        # buildings this episode did not select are draining their own queues throughout.
+        # Measured: 10 -> 17 units across an episode that queued ONE item. An over-estimate of
+        # what left these queues is safe in a lower bound and fatal in an equality.
+        $floor = $sumBefore + $queued - $left
+        Assert-Inv -Id 'INV-R' -What "and lost no more than the $left unit(s) that appeared during the burst ($sumAfter >= $floor)" `
             -Ok ($sumAfter -ge $floor) `
-            -Detail '(an item leaves a queue only by being started or finished, and both are read from the engine)'
+            -Detail "(an item leaves a queue exactly when it appears in the engine's unit list, finished or not; $completed of those have finished)"
     }
-    if ($completed -eq 0 -and $refusals -eq 0 -and
-        @($after.Rows | Where-Object { $_.BuildUnit -and $_.BuildUnit -ne '00000000' }).Count -eq 0) {
+    if ($left -eq 0 -and $refusals -eq 0) {
         # Nothing left any queue in this window, so the per-building numbers are exactly
         # predictable and are worth asserting one building at a time.
         foreach ($u in $Units) {
@@ -187,7 +204,7 @@ function Invoke-QueueEpisode {
                 -Ok ($l.Logical -eq $want)
         }
     } else {
-        Note "$completed unit(s) completed, $(@($after.Rows | Where-Object { $_.BuildUnit -and $_.BuildUnit -ne '00000000' }).Count) in production and $refusals command(s) refused during the burst; the per-building split is not predictable (the engine's unit list does not say WHICH building finished one), so the bounds above are asserted instead"
+        Note "$left unit(s) appeared ($completed of them finished) and $refusals command(s) were refused during the burst; the per-building split is not predictable (the engine's unit list does not say WHICH building made one), so the bounds above are asserted instead"
     }
     # This one holds either way: it is about where the ring is HELD, not about how many items
     # are in the queue, and that is the whole mechanism of task 025 (keep the engine's ring
