@@ -1014,6 +1014,12 @@ try {
         # lives in the same surface, so every rect in it reads saturated (this run: 1330 of
         # 1330 bytes over a queue icon). What can fail is boxDiff -- the same box compared
         # against a copy of itself taken while the indicator was hidden.
+        # AND WHAT boxDiff CLAIMS HERE, exactly. This box sits inside queue icon 6, which is
+        # the icon this module also FILLS, and the baseline predates that fill -- so in STRIP
+        # mode the number is "bytes inside the box this plugin is responsible for", the icon
+        # and the text together, not "the text drew". The text-specific oracle in this mode is
+        # slotDiff below, where both slots hold the same art and the string is all that is
+        # left to differ. In GROUP mode the band belongs to no control and boxDiff IS the text.
         Assert-That "the box holds bytes this plugin put there: boxDiff=$($qi.BoxDiff) (ink=$($qi.Ink), saturated by the pane art)" `
             ($qi.BoxDiff -gt 0)
         Assert-That ("the fifth icon draws the SAME picture as the first: slotDiff=$($qi.SlotDiff) bytes, " +

@@ -152,6 +152,15 @@ int ScQueueIndSlotDiff(DWORD root, int slotA, int slotB);
 // saturated (measured live: 1330 of 1330 bytes over a queue icon, 448 of 448 inside the
 // indicator's own box) and `ink > 0` is true before anything of ours is drawn.
 //
+// WHAT IT COUNTS DEPENDS ON THE MODE, and the difference matters when you assert on it:
+//   GROUP    the band belongs to no control, so every differing byte is the LINE. This is a
+//            text oracle outright.
+//   STRIP    the "+N" box sits inside queue icon 6 -- the same icon this module fills -- and
+//            the baseline is taken before that fill is painted. So a first reading counts the
+//            icon we wrote AND the text: "bytes this plugin is responsible for", not "the text
+//            drew". The text-specific oracle in that mode is ScQueueIndSlotDiff, where slot 0
+//            and slot 4 hold the same art and the only difference left is the string.
+//
 // The copy is taken on the GAME thread, at two moments, both of which are "the pane as it
 // looks without us":
 //   * on frames the indicator is hidden -- but NOT the frame it hides on, where the repaint
