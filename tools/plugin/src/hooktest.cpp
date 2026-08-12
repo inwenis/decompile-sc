@@ -3922,9 +3922,38 @@ static void BuildFakeStatusPane(const WORD* queuedByDisplay, BYTE head, bool swa
 
 #define FAKE_QIND_DLG_VA 0x006B8000u
 
+// The fake pane holds the five queue icons AND the twelve wireframe buttons, because the
+// group line is now placed from the ROW's own rects (task 039) and a fake with one button
+// in it would let a placement bug through.
+#define QI_BTN_COUNT SC_HUD_BUTTON_COUNT
+#define QI_CTL_COUNT (SC_STATQ_SLOTS + QI_BTN_COUNT)
+
 static DWORD QiCtl(int i) { return (DWORD)FakeRt(FAKE_QIND_DLG_VA) + 0x100u + (DWORD)i * SC_BINDLG_SIZE; }
 static DWORD QiUser(int i) { return (DWORD)FakeRt(FAKE_QIND_DLG_VA) + 0x800u + (DWORD)i * 0x10u; }
+static DWORD QiLabel(int i) { return (DWORD)FakeRt(FAKE_QIND_DLG_VA) + 0x900u + (DWORD)i * 8u; }
+static DWORD QiFont(void)  { return (DWORD)FakeRt(FAKE_QIND_DLG_VA) + 0x980u; }
+static DWORD QiBits(void)  { return (DWORD)FakeRt(FAKE_QIND_DLG_VA) + 0x2000u; }
 static DWORD QiRoot(void) { return (DWORD)FakeRt(FAKE_QIND_DLG_VA); }
+
+// The two GRP handles the engine picks between. Values, not art: this module only ever
+// compares them and copies one of them, so a fake pointer into the fake image is exactly
+// as much of a GRP as the code under test can tell.
+static DWORD QiGrpIcons(void) { return (DWORD)FakeRt(FAKE_QIND_DLG_VA) + 0x990u; }
+static DWORD QiGrpBtns(void)  { return (DWORD)FakeRt(FAKE_QIND_DLG_VA) + 0x9A0u; }
+
+// The pane's own geometry, as the live dialog reports it (work/scratch/033 QINDDLG dump,
+// and the same numbers again in this task's run): a 270x92 surface, the strip's five icons
+// 38x35 with slot 0 above the other four, and the row's twelve buttons in TWO ROWS of six
+// -- which is the fact the group line's band depends on.
+#define QI_SURF_W 270
+#define QI_SURF_H 92
+static const short kQiBtnX[6] = { 30, 66, 102, 138, 174, 210 };
+static void QiBtnRect(int i, short* r) {
+    r[0] = kQiBtnX[i / 2];
+    r[1] = (short)((i % 2) ? 45 : 8);
+    r[2] = (short)(r[0] + 32);
+    r[3] = (short)(r[1] + 33);
+}
 
 static unsigned g_qiShows = 0, g_qiHides = 0, g_qiUpdates = 0, g_qiDriverCalls = 0;
 static void QiShow(DWORD c)   { ++g_qiShows;   *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) |= SC_CTRL_FLAG_VISIBLE; }
@@ -3932,17 +3961,41 @@ static void QiHide(DWORD c)   { ++g_qiHides;   *(DWORD*)(c + SC_BINDLG_OFF_FLAGS
 static void QiUpdate(DWORD c) { ++g_qiUpdates; (void)c; }
 static void QiOrigDriver(void) { ++g_qiDriverCalls; }
 
-// Root + the five queue icons (ids 2..6) laid out the way the live dialog reports them
-// (work/scratch/033, STATQ rects: 38x35 icons, the last one at the right-hand end) + one
-// wireframe button (id 0x21) so the GROUP anchor exists. The five icons start in the state
-// the ENGINE's own layout leaves them in: occupied for the ring's items, greyed for the
-// rest -- so "the plugin filled the fifth" is a change this test can see happen.
+// Root + the five queue icons (ids 2..6) + the twelve wireframe buttons (ids 0x21..0x2C),
+// laid out the way the live dialog reports them (work/scratch/033 and 039 QINDDLG dumps).
+//
+// THE FIVE ICONS START IN THE STATE THE ENGINE'S OWN LAYOUT LEAVES THEM IN, and that means
+// all FIVE fields queueLayout writes, not the three this fixture used to model: an occupied
+// slot draws from the ICON grp and carries its slot label, an empty one draws the
+// placeholder frame FROM THE BUTTON-BORDER GRP and carries no label at all. Task 039's bug
+// was leaving that grp behind, and a fake that zeroed the field could not see it happen --
+// the old assertions passed on a build that drew the wrong picture for every queued type.
 static void BuildFakeQIndPane(int engineLen, WORD type) {
     DWORD root = QiRoot();
     memset((void*)root, 0, SC_BINDLG_SIZE);
     *(WORD*)(root + SC_BINDLG_OFF_TYPE) = 0;
     short* rr = (short*)(root + SC_BINDLG_OFF_BOUNDS);
     rr[0] = 138; rr[1] = 388; rr[2] = 407; rr[3] = 479;
+
+    // The dialog's own 8-bit surface, at the offset the draw walk installs. The group
+    // line's band is clamped into it, so a fake without one cannot place that line.
+    memset((void*)QiBits(), 0, QI_SURF_W * QI_SURF_H);
+    *(WORD*) (root + SC_BINDLG_OFF_SURFACE + SC_SURFACE_OFF_W)    = QI_SURF_W;
+    *(WORD*) (root + SC_BINDLG_OFF_SURFACE + SC_SURFACE_OFF_H)    = QI_SURF_H;
+    *(DWORD*)(root + SC_BINDLG_OFF_SURFACE + SC_SURFACE_OFF_BITS) = QiBits();
+
+    // The engine's two GRP handles and its five slot labels, in the globals the module
+    // reads them from.
+    *(DWORD*)FakeRt(SC_VA_GRP_CMDICONS) = QiGrpIcons();
+    *(DWORD*)FakeRt(SC_VA_GRP_CMDBTNS)  = QiGrpBtns();
+    for (int k = 0; k < SC_STATQ_SLOTS; ++k) {
+        _snprintf((char*)QiLabel(k), 8, "%d ", k + 1);
+        ((DWORD*)FakeRt(SC_VA_STATQ_SLOT_LABELS))[k] = QiLabel(k);
+    }
+    // A font whose header says 10 pixels -- over the nine that were measured too short.
+    memset((void*)QiFont(), 0, 16);
+    *(BYTE*)(QiFont() + SC_FONT_OFF_HEIGHT) = 10;
+    *(DWORD*)FakeRt(SC_VA_FONT_SMALLEST) = QiFont();
 
     for (int k = 0; k < SC_STATQ_SLOTS; ++k) {
         DWORD c = QiCtl(k);
@@ -3961,26 +4014,30 @@ static void BuildFakeQIndPane(int engineLen, WORD type) {
         *(DWORD*)(c + SC_BINDLG_OFF_USER) = u;
         DWORD flags = SC_CTRL_FLAG_DRAWN | SC_CTRL_FLAG_VISIBLE | SC_CTRL_FONT_SMALLEST;
         if (k < engineLen) {
-            *(WORD*)(u + SC_STATUSER_OFF_ICON) = type;
-            *(WORD*)(u + SC_STATUSER_OFF_MODE) = 3;
-            *(WORD*)(u + SC_STATUSER_OFF_TYPE) = type;
+            *(DWORD*)(u + SC_STATUSER_OFF_GRP)  = QiGrpIcons();
+            *(WORD*) (u + SC_STATUSER_OFF_ICON) = type;
+            *(WORD*) (u + SC_STATUSER_OFF_MODE) = 3;
+            *(WORD*) (u + SC_STATUSER_OFF_TYPE) = type;
+            *(DWORD*)(c + SC_BINDLG_OFF_TEXT)   = QiLabel(k);
         } else {
-            *(WORD*)(u + SC_STATUSER_OFF_ICON) = (WORD)(k + 6);   // the placeholder frame
-            *(WORD*)(u + SC_STATUSER_OFF_MODE) = 6;
-            flags |= SC_CTRL_FLAG_DISABLED;                        // 0x00418640
+            *(DWORD*)(u + SC_STATUSER_OFF_GRP)  = QiGrpBtns();   // 0x00426A5A/0x00426A63
+            *(WORD*) (u + SC_STATUSER_OFF_ICON) = (WORD)(k + 6); // the placeholder frame
+            *(WORD*) (u + SC_STATUSER_OFF_MODE) = 6;
+            *(DWORD*)(c + SC_BINDLG_OFF_TEXT)   = 0;             // 0x00426A74
+            flags |= SC_CTRL_FLAG_DISABLED;                      // 0x00418640
         }
         *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) = flags;
     }
-    // The wireframe row's first button, the GROUP anchor.
-    {
-        DWORD c = QiCtl(SC_STATQ_SLOTS);
+    // The wireframe row: twelve buttons, two rows of six, the shape the band sits under.
+    for (int i = 0; i < QI_BTN_COUNT; ++i) {
+        DWORD c = QiCtl(SC_STATQ_SLOTS + i);
         memset((void*)c, 0, SC_BINDLG_SIZE);
         *(WORD*) (c + SC_BINDLG_OFF_TYPE)   = 2;
-        *(short*)(c + SC_BINDLG_OFF_INDEX)  = SC_HUD_FIRST_SMALL_BUTTON;
+        *(short*)(c + SC_BINDLG_OFF_INDEX)  = (short)(SC_HUD_FIRST_SMALL_BUTTON + i);
         *(DWORD*)(c + SC_BINDLG_OFF_PARENT) = root;
-        *(DWORD*)(c + SC_BINDLG_OFF_NEXT)   = 0;
-        short* r = (short*)(c + SC_BINDLG_OFF_BOUNDS);
-        r[0] = 166; r[1] = 398; r[2] = 200; r[3] = 430;
+        *(DWORD*)(c + SC_BINDLG_OFF_NEXT)   = (i + 1 < QI_BTN_COUNT)
+                                            ? QiCtl(SC_STATQ_SLOTS + i + 1) : 0;
+        QiBtnRect(i, (short*)(c + SC_BINDLG_OFF_BOUNDS));
         *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) = SC_CTRL_FLAG_VISIBLE;
     }
     *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD) = QiCtl(0);
@@ -3990,6 +4047,15 @@ static void BuildFakeQIndPane(int engineLen, WORD type) {
     *(DWORD*)FakeRt(SC_VA_STATDATA_DIALOG)      = root;
     *(DWORD*)FakeRt(SC_VA_ACTIVE_PORTRAIT_UNIT) = PqBuilding();
     *(BYTE*) FakeRt(SC_VA_CLIENT_SELECTION_COUNT) = 1;
+}
+
+// The LAST child of the fake pane, which is where a control has to be to be drawn on top
+// of the ones before it (the redraw walk 0x0041C683 takes them head to tail).
+static DWORD QiLastChild(void) {
+    DWORD last = 0;
+    for (DWORD c = *(DWORD*)(QiRoot() + SC_BINDLG_OFF_FIRST_CHILD); c;
+         c = *(DWORD*)(c + SC_BINDLG_OFF_NEXT)) last = c;
+    return last;
 }
 
 static int QiChildren(void) {
@@ -4069,13 +4135,27 @@ static void QueueIndTests(void) {
 
     BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
     ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiOrigDriver);
-    Check("nothing spliced before the first frame", QiChildren(), SC_STATQ_SLOTS + 1);
+    Check("nothing spliced before the first frame", QiChildren(), QI_CTL_COUNT);
+    // THE POSITIVE HALF of the icon assertions below: the fifth slot starts out pointing at
+    // the button-border art, because that is what the engine's layout leaves on a slot it
+    // drew EMPTY. Without this line "the plugin set the icon GRP" could pass on a fixture
+    // that was already holding it.
+    Check("the engine left the fifth slot drawing from the PLACEHOLDER grp",
+          (long long)(*(DWORD*)(QiUser(4) + SC_STATUSER_OFF_GRP) == QiGrpBtns()), 1);
+    Check("  and with no slot label at all",
+          (long long)*(DWORD*)(QiCtl(4) + SC_BINDLG_OFF_TEXT), 0);
 
     ScQueueIndOnFrame();
-    Check("the indicator is now linked into the child chain", QiChildren(), SC_STATQ_SLOTS + 2);
+    Check("the indicator is now linked into the child chain", QiChildren(), QI_CTL_COUNT + 1);
     {
         DWORD ind = QiIndicator();
         Check("  and the walk finds it", ind ? 1 : 0, 1);
+        // Z-ORDER, and it is a position in a list rather than a preference. The dialog's
+        // redraw walk takes the children head to tail, so the LAST one is the one drawn
+        // over the others; at the head -- where this control used to be spliced -- the
+        // engine's own controls painted over it in the same frame, every frame.
+        Check("  and it is the LAST child, so it is painted over the others, not under",
+              (long long)(ind == QiLastChild()), 1);
         if (ind) {
             const char* text = (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
             // Read out of the CONTROL, not out of the module: this is the assertion
@@ -4102,6 +4182,14 @@ static void QueueIndTests(void) {
             Check("  and sits inside the anchor icon (id 6)",
                   (long long)(b[0] >= *(short*)(QiCtl(4) + SC_BINDLG_OFF_BOUNDS) &&
                               b[2] <= *(short*)(QiCtl(4) + SC_BINDLG_OFF_BOUNDS + 4)), 1);
+            // AND THE VERY FIRST SHOW ALREADY HAS A BASELINE. The copy taken on hidden frames
+            // needs a splice to exist, and the splice happens on this frame -- so without the
+            // second capture site (just before the show) a pane that goes straight from an
+            // empty queue to "+4" reports boxDiff=-1 for as long as it stays up, and every
+            // suite asserting on it skips instead of measuring. -1 is "no answer"; this must
+            // be a number, and offline that number is 0 because nothing paints here.
+            Check("  and the first show already has a baseline, so boxDiff answers",
+                  (long long)(ScQueueIndBoxDiff(QiRoot()) >= 0), 1);
         }
     }
     Check("the original driver ran first, every frame", (long long)g_qiDriverCalls, 0);
@@ -4117,11 +4205,40 @@ static void QueueIndTests(void) {
         Check("  with the OCCUPIED mode the engine writes", (long long)*(WORD*)(u + SC_STATUSER_OFF_MODE), 3);
         Check("  and its type field set too", (long long)*(WORD*)(u + SC_STATUSER_OFF_TYPE),
               (long long)PQ_TYPE_B);
+        // THE FIELD THAT DECIDES WHICH PICTURE. An icon index means nothing without the GRP
+        // it indexes: with the placeholder art still in this field the engine's own draw
+        // (0x00456C30 reads both out of this record) blits frame #unitType out of the
+        // command-button borders -- which is what the user saw as a stuck glyph on a
+        // Command Center, a black slot on one Barracks and a flashing one on another.
+        Check("  and it draws from the ICON grp, not the placeholder art it replaced",
+              (long long)(*(DWORD*)(u + SC_STATUSER_OFF_GRP) == QiGrpIcons()), 1);
+        Check("  and carries the engine's own label for slot 5, like the other four",
+              (long long)(*(DWORD*)(c + SC_BINDLG_OFF_TEXT) == QiLabel(4)), 1);
         Check("  the greyed bit is gone, so it draws lit",
               (*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_DISABLED) ? 1 : 0, 0);
         Check("  the four ENGINE icons were not touched",
               (long long)(*(WORD*)(QiUser(0) + SC_STATUSER_OFF_MODE) == 3 &&
-                          *(WORD*)(QiUser(3) + SC_STATUSER_OFF_MODE) == 3), 1);
+                          *(WORD*)(QiUser(3) + SC_STATUSER_OFF_MODE) == 3 &&
+                          *(DWORD*)(QiUser(0) + SC_STATUSER_OFF_GRP) == QiGrpIcons() &&
+                          *(DWORD*)(QiCtl(0) + SC_BINDLG_OFF_TEXT) == QiLabel(0)), 1);
+    }
+    {
+        // ... and with no GRP loaded (the status module's globals are null before a map is
+        // up) nothing is filled at all. Drawing a frame index into art that is not there is
+        // the failure this whole task is about, so "no answer" has to mean "draw nothing".
+        BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
+        *(DWORD*)FakeRt(SC_VA_GRP_CMDICONS) = 0;
+        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiOrigDriver);
+        ScQueueIndOnFrame();
+        Check("with no icon GRP loaded the fifth slot is left alone",
+              (long long)*(WORD*)(QiUser(4) + SC_STATUSER_OFF_MODE), 6);
+        Check("  and the refusal is counted, not silent",
+              (long long)(ScQueueIndStat(SC_QIND_STAT_NOGRP) > 0), 1);
+        Check("  and no icon was filled", ScQueueIndStat(SC_QIND_STAT_ICONS), 0);
+        // Put the pane and the module back the way the rest of this test expects them.
+        BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
+        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiOrigDriver);
+        ScQueueIndOnFrame();
     }
     {
         // A settled strip costs nothing: a second frame with the same state re-writes
@@ -4159,11 +4276,48 @@ static void QueueIndTests(void) {
             int need = (int)strlen(text) * SC_QIND_CHAR_W;
             printf("      box=(%d,%d,%d,%d) for \"%s\" (needs %d px)\n",
                    b[0], b[1], b[2], b[3], text, need);
-            Check("  its box is wider than the 34px button it anchors to",
-                  (b[2] - b[0]) > 34 ? 1 : 0, 1);
+            Check("  its box is wider than the 32px button the row starts with",
+                  (b[2] - b[0]) > 32 ? 1 : 0, 1);
             Check("  and wide enough for the whole string", (b[2] - b[0]) >= need ? 1 : 0, 1);
-            Check("  still SC_QIND_BOX_H tall", b[3] - b[1] >= SC_QIND_BOX_H, 1);
+            // BELOW THE ROW, not on it. The user could not read this line because it was
+            // drawn in the icons' own rectangles; the fix is a place of its own, computed
+            // from the buttons' live bounds -- so what this asserts is that the box clears
+            // EVERY one of the twelve, not merely the one it is anchored to.
+            short lowest = 0;
+            int overlaps = 0;
+            for (int i = 0; i < QI_BTN_COUNT; ++i) {
+                short r[4];
+                QiBtnRect(i, r);
+                if (r[3] > lowest) lowest = r[3];
+                if (b[0] < r[2] && b[2] > r[0] && b[1] < r[3] && b[3] > r[1]) ++overlaps;
+            }
+            Check("  it starts below the LOWEST button of the row, all twelve considered",
+                  b[1] >= lowest ? 1 : 0, 1);
+            Check("  and overlaps none of them", (long long)overlaps, 0);
+            Check("  and stays inside the dialog's own surface",
+                  (b[2] <= QI_SURF_W && b[3] <= QI_SURF_H) ? 1 : 0, 1);
+            // The height rule the engine's string draw applies, checked against the font
+            // header the fixture set (10): a box shorter than the font draws NOTHING.
+            Check("  and is at least as tall as the font", (b[3] - b[1]) >= 10, 1);
         }
+
+        // ... and when the band cannot hold the font, the line is REFUSED rather than
+        // written into a box the engine will silently decline to draw. A 30-pixel font is
+        // not a real one; it is the smallest change that makes the space too small, and it
+        // proves the refusal exists rather than assuming the band is always big enough.
+        {
+            *(BYTE*)(QiFont() + SC_FONT_OFF_HEIGHT) = 30;
+            ScQueueIndOnFrame();
+            Check("a font too tall for the band suppresses the group line",
+                  ScQueueIndCurrentMode(), SC_QIND_NONE);
+            Check("  and the control is not left showing",
+                  (long long)(ScQueueIndIsShown() ? 1 : 0), 0);
+            *(BYTE*)(QiFont() + SC_FONT_OFF_HEIGHT) = 10;
+            ScQueueIndOnFrame();
+            Check("  and it comes back when the font fits again",
+                  ScQueueIndCurrentMode(), SC_QIND_GROUP);
+        }
+
         *(BYTE*)FakeRt(SC_VA_CLIENT_SELECTION_COUNT) = 1;
         for (int i = 0; i < 12; ++i) g[i] = 0;
         ScQueueIndOnFrame();
@@ -4183,6 +4337,67 @@ static void QueueIndTests(void) {
               SC_QIND_NONE);
     }
 
+    printf("\n    boxDiff: the box measured against a copy of itself with none of ours in it\n");
+    // THE ORACLE EVERY PIXEL CLAIM IN THIS MODULE NOW RESTS ON, and the reason it is a
+    // DIFFERENCE and not a count. `ink` inside the indicator's box counts THE PANE'S OWN ART:
+    // this task's first live run read 448 of 448 bytes set inside that box, and 1330 of 1330
+    // over a queue icon, before anything of ours had been drawn. So `ink > 0` is true whatever
+    // the plugin does, and the suites that asserted it could not fail. What CAN fail is the
+    // same rect compared against a copy of it taken while the indicator was hidden.
+    {
+        DWORD  ind = QiIndicator();
+        short* ib  = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
+        short  was[4] = { ib[0], ib[1], ib[2], ib[3] };
+        BYTE*  px  = (BYTE*)QiBits();
+
+        // The drain above hid the control ON THE LAST FRAME, and no copy is taken on that
+        // frame (see below), so this is the frame that takes one.
+        ScQueueIndOnFrame();
+        Check("with nothing of ours on the surface, the box differs from its copy by nothing",
+              ScQueueIndBoxDiff(QiRoot()), 0);
+
+        // Seven bytes inside the box -- what a drawn glyph looks like to this probe.
+        for (int i = 0; i < 7; ++i) px[(was[1] + 1) * QI_SURF_W + was[0] + i] = (BYTE)(0x50 + i);
+        Check("  bytes written inside the box are counted, one for one",
+              ScQueueIndBoxDiff(QiRoot()), 7);
+
+        // A copy of a DIFFERENT rect is not a copy of this one. -1 says so; a count would be
+        // a number about the wrong pixels, which is worse than no number (AGENTS.md, task 030).
+        ib[0] = (short)(was[0] + 1); ib[2] = (short)(was[2] + 1);
+        Check("  a box that has MOVED reports -1 rather than a count against the wrong rect",
+              ScQueueIndBoxDiff(QiRoot()), -1);
+        ib[0] = was[0]; ib[2] = was[2];
+        for (int i = 0; i < 7; ++i) px[(was[1] + 1) * QI_SURF_W + was[0] + i] = 0;
+
+        // THE FRAME THE COPY MUST NOT BE TAKEN ON. Hiding only marks the region dirty -- the
+        // paint is the dialog's own redraw walk, which has not run when ScQueueIndOnFrame
+        // returns -- so on that one frame the surface still holds OUR OWN line. A copy taken
+        // then would make the next boxDiff read 0 with the text plainly on the screen: a
+        // check that fails at random, which AGENTS.md rates no better than one that cannot
+        // fail. The show below takes its own copy first (the surface is clean here), and the
+        // seven bytes are written AFTER it, standing in for the line the engine draws.
+        for (int i = 0; i < 5; ++i) PqTrain(PQ_TYPE_B);
+        ScQueueIndOnFrame();
+        Check("the indicator comes back for the same queue", ScQueueIndCurrentMode(),
+              SC_QIND_STRIP);
+        Check("  in the same box, so the same copy still applies",
+              (long long)(ib[0] == was[0] && ib[1] == was[1] &&
+                          ib[2] == was[2] && ib[3] == was[3]), 1);
+        for (int i = 0; i < 7; ++i) px[(was[1] + 1) * QI_SURF_W + was[0] + i] = (BYTE)(0x50 + i);
+        Check("  and what is drawn into the box while it is up is ours",
+              ScQueueIndBoxDiff(QiRoot()), 7);
+
+        for (int i = 0; i < 5; ++i) ScProdQueueOnCancel(PqBuilding(), SC_CANCEL_TRAIN_LAST);
+        ScQueueIndOnFrame();                       // the frame it hides on
+        Check("the frame it HIDES on takes no copy, so our bytes are still counted as ours",
+              ScQueueIndBoxDiff(QiRoot()), 7);
+        ScQueueIndOnFrame();                       // the next one does
+        Check("  and the frame after it does take one, so the box reads clean again",
+              ScQueueIndBoxDiff(QiRoot()), 0);
+
+        for (int i = 0; i < 7; ++i) px[(was[1] + 1) * QI_SURF_W + was[0] + i] = 0;
+    }
+
     printf("\n    with the feature OFF nothing is spliced and nothing is written\n");
     {
         PqBegin(16, 3000, 500);
@@ -4192,12 +4407,14 @@ static void QueueIndTests(void) {
         unsigned shows = g_qiShows;
         ScQueueIndOnFrame();
         ScQueueIndOnFrame();
-        Check("no child was added", QiChildren(), SC_STATQ_SLOTS + 1);
+        Check("no child was added", QiChildren(), QI_CTL_COUNT);
         Check("no control was shown", (long long)(g_qiShows - shows), 0);
         Check("display 4 is still the engine's greyed placeholder",
               (*(DWORD*)(QiCtl(4) + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_DISABLED) ? 1 : 0, 1);
         Check("  still drawing the placeholder frame, not a unit",
               (long long)*(WORD*)(QiUser(4) + SC_STATUSER_OFF_MODE), 6);
+        Check("  out of the placeholder art, untouched",
+              (long long)(*(DWORD*)(QiUser(4) + SC_STATUSER_OFF_GRP) == QiGrpBtns()), 1);
     }
 
     ScQueueIndTestBegin(NULL, NULL, NULL, NULL, NULL);
@@ -4242,7 +4459,7 @@ static void UpgQueueIndTests(void) {
     UqPress(SC_UPGQ_KIND_TECH,    UQ_TECH_A);  // held
     Check("the plugin is holding two", UqQueued(), 2);
 
-    Check("nothing spliced before the first frame", QiChildren(), SC_STATQ_SLOTS + 1);
+    Check("nothing spliced before the first frame", QiChildren(), QI_CTL_COUNT);
     ScQueueIndOnFrame();
 
     // THE ASSERTIONS QueueIndTests NEVER MADE for this mode -- the ones that actually ask
@@ -4262,6 +4479,12 @@ static void UpgQueueIndTests(void) {
             Check("the box is at least SC_QIND_BOX_H tall", b[3] - b[1] >= SC_QIND_BOX_H, 1);
             Check("and wide enough for the string it holds",
                   (b[2] - b[0]) >= (int)strlen(ScQueueIndCurrentText()) * SC_QIND_CHAR_W ? 1 : 0, 1);
+            // ... which on the LIVE pane means sliding left off icon 6's own start: the
+            // icon begins at x=231 of a 270-wide surface and "+2 upg" needs 42px, so a box
+            // clamped to the surface edge would have held 38 and cut the string. The fake
+            // only started saying so once it carried the real surface (task 039).
+            Check("and it stays inside the dialog's surface",
+                  (b[2] <= QI_SURF_W) ? 1 : 0, 1);
         }
     }
 

@@ -615,16 +615,30 @@ try {
               Select-Object -Last 1
         if ($qi) {
             Write-Host "       $($qi.Line)"
+            # BY NAME, NOT BY POSITION: this line gained boxDiff and then surfInk inside one
+            # task, and a positional parse shifts every group after the insertion without
+            # failing -- it just starts reading bldgs out of queued.
             $m = [regex]::Match($qi.Line,
-                'mode=(\d+) linked=(\d+) visible=(\d+) text="([^"]*)" ' +
-                'bounds=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\) ink=(-?\d+).* bldgs=(\d+) queued=(\d+)')
+                'mode=(?<mode>\d+) linked=(?<linked>\d+) visible=(?<visible>\d+) ' +
+                'text="(?<text>[^"]*)" ' +
+                'bounds=\((?<left>-?\d+),(?<top>-?\d+),(?<right>-?\d+),(?<bottom>-?\d+)\) ' +
+                'ink=(?<ink>-?\d+) refInk=(?<refInk>-?\d+) refId=(?<refId>-?\d+) ' +
+                'surfInk=(?<surfInk>-?\d+) slotDiff=(?<slotDiff>-?\d+) boxDiff=(?<boxDiff>-?\d+) ' +
+                'fontH=(?<fontH>\d+).* bldgs=(?<bldgs>\d+) queued=(?<queued>\d+)')
             Assert-That 'the indicator read-back line parsed' ($m.Success) "($($qi.Line))"
             if ($m.Success) {
-                $mode = [int]$m.Groups[1].Value
-                $boxW = [int]$m.Groups[7].Value - [int]$m.Groups[5].Value
-                $ink = [int]$m.Groups[9].Value
-                $bldgs = [int]$m.Groups[10].Value
-                $queued = [int]$m.Groups[11].Value
+                $mode = [int]$m.Groups['mode'].Value
+                $boxL = [int]$m.Groups['left'].Value
+                $boxT = [int]$m.Groups['top'].Value
+                $boxW = [int]$m.Groups['right'].Value - $boxL
+                $boxH = [int]$m.Groups['bottom'].Value - $boxT
+                $ink = [int]$m.Groups['ink'].Value
+                $refInk = [int]$m.Groups['refInk'].Value
+                $surfInk = [int]$m.Groups['surfInk'].Value
+                $boxDiff = [int]$m.Groups['boxDiff'].Value
+                $fontH = [int]$m.Groups['fontH'].Value
+                $bldgs = [int]$m.Groups['bldgs'].Value
+                $queued = [int]$m.Groups['queued'].Value
                 if ($Arm -eq 'feature') {
                     Assert-That "it is in GROUP mode (2), not the single-building one ($mode)" `
                         ($mode -eq 2)
@@ -633,18 +647,60 @@ try {
                     Assert-That "and the $expectTotal items they hold between them ($queued)" `
                         ($queued -eq $expectTotal)
                     Assert-That "the control is linked and the ENGINE's visible bit is set" `
-                        ($m.Groups[2].Value -eq '1' -and $m.Groups[3].Value -eq '1')
-                    Assert-That "its text says so in words (`"$($m.Groups[4].Value)`")" `
-                        ($m.Groups[4].Value -eq "$Buildings bldgs  $expectTotal queued")
+                        ($m.Groups['linked'].Value -eq '1' -and $m.Groups['visible'].Value -eq '1')
+                    Assert-That "its text says so in words (`"$($m.Groups['text'].Value)`")" `
+                        ($m.Groups['text'].Value -eq "$Buildings bldgs  $expectTotal queued")
                     # THE BOX HAS TO FIT THE STRING. Every assertion above passes for a
                     # TRUNCATED line -- a clipped string is still ink -- and the first live
                     # run of this step drew "4 bldgs  4 queued" into a box 22 pixels wide,
                     # clamped to the one wireframe button it anchors to. 5 px/char is a
                     # conservative floor for the small font.
-                    $need = $m.Groups[4].Value.Length * 5
+                    $need = $m.Groups['text'].Value.Length * 5
                     Assert-That "and its box is wide enough to draw all of it ($boxW px for $need)" `
                         ($boxW -ge $need)
-                    Assert-That "and the engine put ink in it (ink=$ink)" ($ink -gt 0)
+                    # AND IT IS NOT ON TOP OF THE ICON ROW. The user, on the deployed build:
+                    # "there was some text printed in the spot where the 12 icons are ... but
+                    # it was behind the buildings icons so couldn't rly tell". The line now
+                    # goes in the band BELOW the row, so the check is against the row's own
+                    # rects, read out of the same dialog dump the plugin logs at attach --
+                    # never against a constant, because which buttons are up depends on how
+                    # many buildings are selected.
+                    $rowBottom = 0
+                    foreach ($d in @(Get-Content -LiteralPath $LogPath |
+                                     Select-String -Pattern 'QINDDLG \[.*\] id=(3[3-9]|4[0-4]) ')) {
+                        $r = [regex]::Match($d.Line, 'rect=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\)')
+                        if ($r.Success -and [int]$r.Groups[4].Value -gt $rowBottom) {
+                            $rowBottom = [int]$r.Groups[4].Value
+                        }
+                    }
+                    Assert-That "the row's twelve buttons were found in the dialog dump (lowest edge y=$rowBottom)" `
+                        ($rowBottom -gt 0)
+                    Assert-That "and the line starts BELOW all of them (top=$boxT vs $rowBottom)" `
+                        ($boxT -ge $rowBottom)
+                    # The engine's string draw refuses outright when the box is shorter than
+                    # the font -- the defect that made task 033's first indicator invisible
+                    # for weeks -- so the band's height is checked against the font's own.
+                    Assert-That "the band is at least as tall as the font ($boxH >= $fontH)" `
+                        ($boxH -ge $fontH -and $fontH -gt 0)
+                    # THE DRAW, and NOT with ink. The pane's own art is in this surface, so
+                    # every rect reads saturated and `ink > 0` is true before anything of
+                    # ours exists -- measured in this task's first live run, 1330 of 1330
+                    # bytes over a queue icon. boxDiff is the same box compared against a
+                    # copy of itself the game thread took while the indicator was HIDDEN, so
+                    # it counts the bytes this line is responsible for and zero is a real
+                    # failure.
+                    #
+                    # The two halves that keep a zero honest: surfInk says the probe can read
+                    # this surface at all, and refInk says it can read a control the ENGINE
+                    # fills -- here the wireframe row, which is up precisely because this is a
+                    # group selection. Without them, boxDiff=0 and "the probe is blind" are
+                    # the same reading.
+                    Assert-That "the probe can read the dialog surface at all (surfInk=$surfInk)" `
+                        ($surfInk -gt 0)
+                    Assert-That "and a control the ENGINE fills (refInk=$refInk over control $($m.Groups['refId'].Value))" `
+                        ($refInk -gt 0)
+                    Assert-That "and the engine DREW the line: boxDiff=$boxDiff bytes differ from the same band without it (ink=$ink, saturated)" `
+                        ($boxDiff -gt 0)
                 } else {
                     # THE CONTROL ARM. With the fan-out off, one click reaches one building,
                     # so there is no group to report and the indicator must say nothing --

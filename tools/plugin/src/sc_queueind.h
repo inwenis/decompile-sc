@@ -60,6 +60,17 @@
 // 22 pixels wide.
 #define SC_QIND_CHAR_W 7
 
+// THE GROUP LINE'S BAND. In a multi-building selection the pane draws the wireframe row and
+// nothing else, which leaves the strip of surface below the row's lower buttons free -- the
+// only place in that pane where a line of text is not sitting on top of unit icons. The
+// band's top is the row's own lowest edge plus this gap, read from the live buttons; the
+// gap is the only constant, and one pixel is what keeps the text off the button borders.
+#define SC_QIND_BAND_GAP 1
+// The fallback minimum height for that band, used only when the font handle cannot be read
+// (normally the FONT'S OWN height decides -- see SmallFontHeight). One pixel over the nine
+// that were measured too short in task 033.
+#define SC_QIND_BAND_MIN_H 10
+
 // Which thing the indicator is currently saying. Kept as an enum so the log line and the
 // offline test can name the case rather than matching on the rendered string.
 enum ScQueueIndMode {
@@ -116,6 +127,49 @@ void ScQueueIndLogDialog(const char* tag);
 // One STATS line, on the detach paths beside the other subsystems'.
 void ScQueueIndLogStats(void);
 
+// How many rows at the TOP of a queue-slot rect hold the engine's own slot NUMBER, and are
+// therefore excluded from ScQueueIndSlotDiff: two slots legitimately differ there ("1 "
+// against "5 "). Sized from the small font's height plus the label's own inset, and the
+// live font height is reported as `fontH=` on every QIND line so the number is checkable
+// rather than assumed.
+#define SC_QIND_SLOT_LABEL_ROWS 12
+
+// TWO QUEUE SLOTS, COMPARED ON THE SURFACE. When the queue holds five of one unit type,
+// slot 0 and slot 4 are the same picture -- same 38x35 rect, same border graphic, same
+// icon -- so the bytes that differ between them below the label rows are exactly what this
+// plugin added. That is a check that CAN fail, which an ink count inside a box that
+// contains an engine-drawn icon cannot: it reads > 0 whether or not anything of ours was
+// drawn (and did, for a whole task). Returns -1 when it cannot be taken honestly: no
+// surface, a missing or hidden control, or two rects of different sizes.
+int ScQueueIndSlotDiff(DWORD root, int slotA, int slotB);
+
+// HOW MANY BYTES OF THE INDICATOR'S BOX ARE CURRENTLY OURS. The module keeps a copy of
+// those same pixels taken with none of our line in them, and this is the count that differs
+// from it. 0 means nothing of ours is on the screen no matter what the control's fields say;
+// -1 means there is no baseline for this rect yet (it moved, or this dialog is too new),
+// which is an honest "no answer" and never a 0. This exists because INK CANNOT ANSWER THE
+// QUESTION in this dialog: the pane's own art is in the same surface, so every rect reads
+// saturated (measured live: 1330 of 1330 bytes over a queue icon, 448 of 448 inside the
+// indicator's own box) and `ink > 0` is true before anything of ours is drawn.
+//
+// WHAT IT COUNTS DEPENDS ON THE MODE, and the difference matters when you assert on it:
+//   GROUP    the band belongs to no control, so every differing byte is the LINE. This is a
+//            text oracle outright.
+//   STRIP    the "+N" box sits inside queue icon 6 -- the same icon this module fills -- and
+//            the baseline is taken before that fill is painted. So a first reading counts the
+//            icon we wrote AND the text: "bytes this plugin is responsible for", not "the text
+//            drew". The text-specific oracle in that mode is ScQueueIndSlotDiff, where slot 0
+//            and slot 4 hold the same art and the only difference left is the string.
+//
+// The copy is taken on the GAME thread, at two moments, both of which are "the pane as it
+// looks without us":
+//   * on frames the indicator is hidden -- but NOT the frame it hides on, where the repaint
+//     it just asked for has not run yet and the surface still holds our own line;
+//   * immediately before a show that follows a hidden frame -- which is what gives the FIRST
+//     show of a dialog an answer, since the splice the other site needs happens on that very
+//     frame.
+int ScQueueIndBoxDiff(DWORD root);
+
 // INK: how many non-background bytes the dialog's own 8-bit surface holds inside a rect.
 // The dialog surface is BinDlg+0x10 with {u16 w, u16 h} at +0x0C/+0x0E -- read off the
 // allocator 0x004C35F0 itself (research/status-pane-text.md 4). This answers "did anything
@@ -152,7 +206,12 @@ enum ScQueueIndStat {
     SC_QIND_STAT_SPLICES = 3,   // controls spliced into a dialog child list
     SC_QIND_STAT_REFUSED = 4,   // splices refused (no engine handler for the type)
     SC_QIND_STAT_ICONS = 5,     // queue icons filled from the plugin's own overflow
-    SC_QIND_STAT__COUNT = 6
+    // Frames on which the fill was REFUSED because the engine's icon-GRP global was null.
+    // Filling a slot without the GRP that says what its frame index means is what drew
+    // garbage in task 039, so "no GRP" now means "draw nothing", and it is counted rather
+    // than passed over in silence.
+    SC_QIND_STAT_NOGRP = 6,
+    SC_QIND_STAT__COUNT = 7
 };
 int ScQueueIndStat(int which);
 

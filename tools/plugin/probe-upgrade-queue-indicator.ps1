@@ -91,19 +91,28 @@ function Get-Card { param([string]$Tag, [int]$TimeoutSec = 20)
 $script:qindSeq = 0
 function ConvertFrom-QIndLine {
     param($Hit)
+    # BY NAME. This parser was written against the line as it stood before task 039 added
+    # refId/slotDiff, then surfInk/boxDiff -- four insertions, each of which shifts every
+    # positional group after it. It did not degrade gracefully: it threw "unparseable" and
+    # took the whole probe down with it. Named groups survive the next field too.
     $m = [regex]::Match($Hit.Line,
-                'QIND \[[^\]]+\] mode=(\d+) linked=(\d+) visible=(\d+) text="([^"]*)" ' +
-                'bounds=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\) ink=(-?\d+) refInk=(-?\d+) ' +
-                'icons=\[([^\]]*)\] ' +
-                'sel=(\d+) engineLen=(\d+) overflow=(\d+) upg=(\d+) bldgs=(\d+) queued=(\d+)')
+                'QIND \[[^\]]+\] mode=(?<mode>\d+) linked=(?<linked>\d+) visible=(?<visible>\d+) ' +
+                'text="(?<text>[^"]*)" ' +
+                'bounds=\((?<left>-?\d+),(?<top>-?\d+),(?<right>-?\d+),(?<bottom>-?\d+)\) ' +
+                'ink=(?<ink>-?\d+) refInk=(?<refInk>-?\d+) refId=(?<refId>-?\d+) ' +
+                'surfInk=(?<surfInk>-?\d+) slotDiff=(?<slotDiff>-?\d+) boxDiff=(?<boxDiff>-?\d+) ' +
+                'fontH=(?<fontH>\d+) icons=\[(?<icons>[^\]]*)\] ' +
+                'sel=(?<sel>\d+) engineLen=(?<engineLen>\d+) overflow=(?<overflow>\d+) ' +
+                'upg=(?<upg>\d+) bldgs=(?<bldgs>\d+) queued=(?<queued>\d+)')
     if (-not $m.Success) { throw "probe: unparseable QIND line: $($Hit.Line)" }
     return [pscustomobject]@{
-        Mode = [int]$m.Groups[1].Value; Linked = $m.Groups[2].Value -eq '1'
-        Visible = $m.Groups[3].Value -eq '1'; Text = $m.Groups[4].Value
-        Left = [int]$m.Groups[5].Value; Top = [int]$m.Groups[6].Value
-        Right = [int]$m.Groups[7].Value; Bottom = [int]$m.Groups[8].Value
-        Ink = [int]$m.Groups[9].Value; RefInk = [int]$m.Groups[10].Value
-        Upg = [int]$m.Groups[15].Value
+        Mode = [int]$m.Groups['mode'].Value; Linked = $m.Groups['linked'].Value -eq '1'
+        Visible = $m.Groups['visible'].Value -eq '1'; Text = $m.Groups['text'].Value
+        Left = [int]$m.Groups['left'].Value; Top = [int]$m.Groups['top'].Value
+        Right = [int]$m.Groups['right'].Value; Bottom = [int]$m.Groups['bottom'].Value
+        Ink = [int]$m.Groups['ink'].Value; RefInk = [int]$m.Groups['refInk'].Value
+        SurfInk = [int]$m.Groups['surfInk'].Value; BoxDiff = [int]$m.Groups['boxDiff'].Value
+        Upg = [int]$m.Groups['upg'].Value
         Line = $Hit.Line
     }
 }
@@ -254,8 +263,15 @@ try {
         Assert-That 'it is linked into the dialog' ($q.Linked)
         Assert-That 'the engine''s own visible bit is set' ($q.Visible)
         Assert-That "text says +N upg (got `"$($q.Text)`")" ($q.Text -match '^\+\d+ upg$')
-        Assert-That "ink was actually drawn in its box (ink=$($q.Ink))" ($q.Ink -gt 0)
-        Assert-That "the positive control also has ink (refInk=$($q.RefInk), proves the probe can see this surface)" ($q.RefInk -gt 0)
+        # NOT `ink > 0` any more, and this is the assertion task 039 came back to correct.
+        # The pane draws its own art into the surface this probe counts, so every rect in it
+        # is already saturated: `ink=608` here is a number about the pane, not about us, and
+        # it is true before one pixel of ours exists. boxDiff is the same box against a copy
+        # of itself taken while the indicator was hidden -- the bytes we are responsible for.
+        Assert-That "the box holds bytes this plugin put there (boxDiff=$($q.BoxDiff), ink=$($q.Ink) is saturated by the pane's own art)" `
+            ($q.BoxDiff -gt 0)
+        Assert-That "and the probe can read this surface at all (surfInk=$($q.SurfInk))" `
+            ($q.SurfInk -gt 0)
     }
 
     Step 'one more frame, a couple seconds later, for a human to open' {

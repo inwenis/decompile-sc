@@ -89,6 +89,29 @@ bytes (`ink`) in the dialog's own 8-bit surface inside the control's bounds, wit
 over a known-drawn control as the positive control, so `ink=0` cannot be confused with a blind
 probe. That is a read-back; asking your own buffer what you put in it is not.
 
+**And the third time, 2026-08-12, task 039: `ink` OVER A CONTROL'S BOUNDS COUNTS THE PANE'S OWN
+ART, so it cannot fail either.** The status pane draws itself into the same 8-bit surface the
+probe counts, so every rect in it is already saturated: measured in one live run, `refInk=1330`
+of 1330 bytes over a queue icon and `ink=448` of 448 inside the indicator's own box — before one
+pixel of ours had been drawn, on a build whose fifth icon was drawing the wrong art entirely.
+Task 033's fix replaced one un-failable check with another, and it read green for a whole task.
+
+The oracle for "did OUR pixels land" has to be a DIFFERENCE against the same rect without them:
+`ScQueueIndBoxDiff` keeps a copy of the box taken on the GAME thread while the indicator is not
+showing, and counts the bytes that differ from it. Two things make that copy honest, and both
+were bugs first: it must NOT be taken on the frame the control hides on (the repaint it just
+asked for has not run — the surface still holds our own line, so the next diff reads 0 with the
+text plainly on the screen), and it MUST also be taken just before a show that follows a hidden
+frame, or the first show of every dialog reports "no baseline" forever. A rect that has moved has
+no baseline: report -1, never 0, so "the probe never ran" cannot be mistaken for "nothing was
+drawn".
+
+The positive control has the same disease. `refInk` over "the first queue icon, or the wireframe
+row" has NO answer when a single building sits with an empty queue — neither is up — and the fix
+is not to fall back to a hidden control, which measures ink nobody can see. It reports -1 and that
+stays a FAILURE wherever a visible reference is required; a separate whole-surface count
+(`surfInk`) is what answers "is this probe blind" in every state.
+
 **And a check that fails at RANDOM is worth as little as one that cannot fail** (same task): the
 fifth-icon assertion passed one run and failed the next because the observer thread sampled
 between the plugin filling a slot and the engine's layout re-greying it, microseconds later,
@@ -542,6 +565,25 @@ still up**. A tip dialog left open eats every later click in the run.
 Never turn tips off through `HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft` — that is
 live user state (hard rule 5) and the dialog's own "Show Tips at Startup" checkbox writes
 it. Dismiss for this run; leave the user's setting alone.
+
+## A CARD SLOT CHANGES MEANING UNDER YOU — re-read it before every click (2026-08-12, task 039)
+
+Slot 9 of a Terran producer carries **Cancel while the building is training and Lift Off
+while it is idle**: one control, two buttons, complementary conditions
+(research/production-queue.md 8.3). So a drain loop that reads the card once and then clicks
+a fixed number of times is pressing Lift Off the moment the queue runs out. Task 039 did
+exactly that — drained eight items, clicked four more, and **put the Command Center in the
+air**. Every later step then read a flying building's card (`cardId=230`, one button) and
+reported "no Train button enabled", which looks nothing like its cause and cost a whole run.
+
+So, for any loop that clicks a card button more than once: ask the state before each click,
+stop the moment the condition that put that button there is gone, and never press a control
+whose meaning may have changed since it was read. Taking the button by ACTION rather than by
+slot number is necessary and not sufficient — the action is what changed.
+
+And end such a sequence by asserting **the pane still holds the unit you were measuring**
+(`portrait type`). A lift-off, a lost selection and a click that landed on terrain all produce
+readings that are internally consistent and about the wrong unit.
 
 ## Screenshots vs hard rule 1 (settled)
 
