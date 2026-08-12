@@ -108,6 +108,16 @@ being a trap for the next feature that fans out.
    shows (task 037's "+N upg") — name the frame path for the conductor.
 4. If you find any OTHER site reading the wrong array, report it to the
    conductor as a message; do not expand this task to cover it.
+5. Answered in a message to the conductor (a question, not a code change):
+   task 037 established that `ScQueueIndCompose` returns UPGRADE before it
+   even evaluates STRIP, so when a building both trains and researches, the
+   production indicator is silently the loser. 037 could not confirm from
+   `research/` which CUnit an addon-gated research lands on — a Terran Factory
+   with a Machine Shop is the suspected case, where the research may be
+   tracked on the MAIN building's own CUnit (`0xC8/0xC9`) while its ring
+   (`0x98`) is also busy. You will already be in a game with upgrades: if
+   confirming it is cheap, confirm it and report which CUnit holds the write.
+   Do NOT change the precedence — that is a UI decision for the user.
 5. Local checks green (`scripts/run-ci-local.ps1`); PR opened with its link in
    Status.pr.
 
