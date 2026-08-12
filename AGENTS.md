@@ -424,6 +424,62 @@ whatever held it *before the pick*, and on an idle desktop that used to be the g
 because the launch had taken it and never given it up. With the launch handing back, the
 pick's hand-back lands on the user's window, which is what it was always meant to do.
 
+## A test run happens on an INVISIBLE DESKTOP (2026-08-12, task 043)
+
+**Default: `run-offscreen.ps1`, not the suite directly.** The user's ask that opened
+this — *"can we setup a vm so you can run tests there so my screen doesn't get messed
+up?"* — is answered without a VM. `CreateDesktop` makes a second desktop object inside
+the existing login session (the primitive Windows itself uses for the UAC prompt); the
+suite is started as a child process BORN on it, `run-with-plugin.ps1` passes that name
+to `scinject.exe --desktop`, and nothing the run draws ever composites to the monitor.
+Nothing is installed and nothing survives the run.
+
+```powershell
+./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/test-selection-circles.ps1
+./tools/plugin/run-offscreen.ps1 -Visible -Suite ./tools/plugin/test-selection-circles.ps1
+```
+
+`-Visible` is the debugging run, and it is the SAME code path — same child script, same
+`CreateProcess`, same suite arguments, only the desktop name differs. Never grow a
+separate watch mode; a path that only runs when a human is looking is how you get a bug
+that only exists when nobody is.
+
+**The suites are unmodified, and must stay that way.** A process gets its desktop at
+creation, every thread inherits it, and `EnumWindows` is desktop-scoped — so
+`Get-ScGameWindow`, `check-game-windows.ps1` and `close-game.ps1` follow the game across
+untouched. There is no list of primitives to make desktop-aware and therefore no list to
+be one item short of. (The other design is not available anyway: `SetThreadDesktop`
+returns `ERROR_BUSY` for a thread that already owns a window, which PowerShell's main
+thread does before your first line runs.)
+
+Measured, same suite, same assertions, one flag apart (`test-selection-circles.ps1`,
+`time-suite.ps1` wall clock): **75.0 s off-screen vs 75.2 s visible**, identical
+assertion-by-assertion including the same one pre-existing failure. `watch-foreground.ps1`
+across the off-screen run: no StarCraft window ever foreground. Isolation costs nothing.
+
+**`sc-launch-lock.ps1` still serialises every launch — do not "improve" that away.**
+StarCraft is single-instance PER MACHINE regardless of desktops. Invisible desktops fix
+VISIBILITY of however many runs happen; they do not buy concurrent games.
+
+### The one input that cannot work off-screen: a dropdown pick
+
+Windows has one foreground window and it belongs to the desktop receiving input, so a
+window on an invisible desktop can never hold it — `GetForegroundWindow()` reads 0 there
+all run. `Send-ScDropdownPick` needs the foreground (the game calls `SetCapture` on
+button-down; see "Foreground" half 2), so it cannot succeed there. Measured, not
+reasoned: `probe-quiet-dropdown.ps1` through `run-offscreen.ps1` failed ALL THREE arms,
+including arm C, the foreground control that passes every time on the visible desktop.
+
+This bites rarely, because `Set-ScGameType` reads the combo out of the engine's dialog
+list and skips the pick whenever the value already matches (issue #29) — `test-stim-fanout`
+runs off-screen with 0 failures on that path. When a pick IS needed the run **throws and
+names the desktop as the cause**; it never silently runs a lesser test. The fix is one
+flag: re-run with `-Visible`.
+
+The launch-time foreground dance (`sc-foreground.ps1`, half 3 above) self-neutralises
+off-screen — there is no foreground to record or hand back, and the launcher says so.
+Leave it in place: it is still what protects a `-Visible` run.
+
 ## The in-game tips dialog is dismissed by ITS OWN button, never by a fixed point (task 027)
 
 `Tips_Dlg` is a normal engine dialog, and every suite used to close it with an

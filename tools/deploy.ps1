@@ -399,6 +399,10 @@ Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-canonical-path.ps1')  -Destinat
 Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-audio-mute.ps1')      -Destination (Join-Path $pluginDeployDir 'sc-audio-mute.ps1')      -Force
 Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-launch-lock.ps1')     -Destination (Join-Path $pluginDeployDir 'sc-launch-lock.ps1')     -Force
 Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-foreground.ps1')      -Destination (Join-Path $pluginDeployDir 'sc-foreground.ps1')      -Force
+# Task 043: run-with-plugin.ps1 asks it "am I on the desktop the monitor is showing?" before
+# every launch, so the deployed launcher needs it even though the answer is always yes for a
+# user who double-clicked their game -- the file has to be THERE for the question to be asked.
+Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-desktop.ps1')         -Destination (Join-Path $pluginDeployDir 'sc-desktop.ps1')         -Force
 Write-Host 'plugin runtime copied: scplugin.dll, scinject.exe, run-with-plugin.ps1, check-game-windows.ps1, sc-canonical-path.ps1, sc-audio-mute.ps1, sc-launch-lock.ps1, sc-foreground.ps1'
 
 # --- 4. write the zero-argument launcher --------------------------------------

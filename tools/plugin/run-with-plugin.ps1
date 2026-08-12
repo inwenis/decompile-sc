@@ -182,6 +182,18 @@ param(
     # worse bug than the focus theft this fixes. $env:SCDRIVE_RAISE=1 (drive-game.ps1's
     # existing "a human is watching this run" knob) also turns it off.
     [switch]$NoForegroundRestore,
+    # Task 043: launch the game onto a named Windows DESKTOP OBJECT rather than the one on
+    # the monitor (scinject.exe --desktop, task 040 / PR #49 -> STARTUPINFO.lpDesktop).
+    #
+    # Normally NOBODY PASSES THIS. run-offscreen.ps1 starts the whole run in a process born
+    # on the invisible desktop, and this script then finds itself already there and follows
+    # suit on its own (see $effectiveDesktop below). That auto-detection is the point: a
+    # launcher that had to be TOLD would be a launcher somebody could forget to tell, and
+    # the failure mode of forgetting is the game appearing on the user's screen -- exactly
+    # what this is for.
+    #
+    # Pass it explicitly only to launch onto a desktop this process is not itself on.
+    [string]$Desktop,
     # Task 020: the emit-side liveness gate. '1' (the default, and the shipped
     # behaviour) refuses to put a dead / removed-from-play unit's tag into a
     # replayed Select. '0' is a KNOWN-BAD configuration that restores the
@@ -303,6 +315,8 @@ $repoRoot  = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 # Record-and-restore of the pre-launch foreground window -- see "Foreground" below and
 # tools/plugin/sc-foreground.ps1.
 . (Join-Path $scriptDir 'sc-foreground.ps1')
+# Which desktop this process is on -- see "-Desktop" below and tools/plugin/sc-desktop.ps1.
+. (Join-Path $scriptDir 'sc-desktop.ps1')
 
 $PRISTINE_ROOT = 'C:\sc-install'
 $givenGameDir  = $GameDir
@@ -415,6 +429,29 @@ try {
     # the lock below is released, not inside scinject.exe holding the lock for the
     # whole play session (see .DESCRIPTION "Launch lock" on -WaitForExit).
     $injArgs = @($exe, $dll, '--wait-ms', "$SettleMs", '--no-wait-exit')
+
+    # --- which desktop the game is born on (task 043) --------------------------
+    # Explicit -Desktop wins. Otherwise: if THIS process is not on the desktop the monitor
+    # is showing, it was started by run-offscreen.ps1 onto an invisible one, and the game
+    # belongs there too.
+    #
+    # Why name it rather than let CreateProcess inherit it: task 040 measured that the
+    # inheritance chain does not reliably hold through PowerShell's own process-launch path
+    # (the game came up on no discoverable desktop at all), which is why scinject.exe grew
+    # --desktop in the first place. Naming it costs nothing and removes the question.
+    $effectiveDesktop = $Desktop
+    if (-not $effectiveDesktop) {
+        $here = Get-ScThreadDesktopName
+        $shown = Get-ScInputDesktopName
+        # $shown is $null on a locked workstation. "I could not find out what is on the
+        # monitor" is not a reason to assume this process is off-screen, so that case
+        # deliberately falls through to the ordinary visible launch.
+        if ($here -and $shown -and ($here -ne $shown)) { $effectiveDesktop = $here }
+    }
+    if ($effectiveDesktop) {
+        $injArgs += @('--desktop', $effectiveDesktop)
+        Write-Host "run-with-plugin: launching onto the desktop '$effectiveDesktop' — nothing from this run reaches the monitor (task 043)."
+    }
 
     # The windowed-mode helpers have no export table, so they cannot be a ddraw proxy;
     # they are injectable hook DLLs and must be in place before DirectDraw initialises.
