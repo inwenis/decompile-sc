@@ -164,7 +164,7 @@ function Get-UpgQueue {
     param([string]$Tag, [int]$TimeoutSec = 25)
     $script:upgqSeq++
     $label = "uq-$Tag-$script:upgqSeq"
-    Set-Content -LiteralPath $markerPath -Value $label -NoNewline
+    Set-ScMarker -MarkerPath $markerPath -Label $label
     $esc = [regex]::Escape($label)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
