@@ -516,6 +516,25 @@ Never turn tips off through `HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft` �
 live user state (hard rule 5) and the dialog's own "Show Tips at Startup" checkbox writes
 it. Dismiss for this run; leave the user's setting alone.
 
+## A CARD SLOT CHANGES MEANING UNDER YOU — re-read it before every click (2026-08-12, task 039)
+
+Slot 9 of a Terran producer carries **Cancel while the building is training and Lift Off
+while it is idle**: one control, two buttons, complementary conditions
+(research/production-queue.md 8.3). So a drain loop that reads the card once and then clicks
+a fixed number of times is pressing Lift Off the moment the queue runs out. Task 039 did
+exactly that — drained eight items, clicked four more, and **put the Command Center in the
+air**. Every later step then read a flying building's card (`cardId=230`, one button) and
+reported "no Train button enabled", which looks nothing like its cause and cost a whole run.
+
+So, for any loop that clicks a card button more than once: ask the state before each click,
+stop the moment the condition that put that button there is gone, and never press a control
+whose meaning may have changed since it was read. Taking the button by ACTION rather than by
+slot number is necessary and not sufficient — the action is what changed.
+
+And end such a sequence by asserting **the pane still holds the unit you were measuring**
+(`portrait type`). A lift-off, a lost selection and a click that landed on terrain all produce
+readings that are internally consistent and about the wrong unit.
+
 ## Screenshots vs hard rule 1 (settled)
 
 The global rule "visual change → screenshot → `pr-image`" does NOT apply to game frames.
