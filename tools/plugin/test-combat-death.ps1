@@ -1248,7 +1248,7 @@ try {
         Assert-That "and every survivor acted on it -- they are back above ground ($($up.Burrowed) of $($up.BurrowedOf) still burrowed)" `
             ($up.Burrowed -eq 0)
         Assert-That 'the selection still ran through our own hooks after the losses' `
-            (@($lines | Select-String -Pattern 'SORT candidates=\d+ -> selected=\d+|SHADOW captured: \d+ units').Count -gt 0)
+            (@($lines | Select-String -Pattern 'SORT candidates=\d+ clicked=0x[0-9A-Fa-f]+ -> engine=\d+ selected=\d+|SHADOW captured: \d+ units').Count -gt 0)
         Shot 'still-running' | Out-Null
     }
 }
