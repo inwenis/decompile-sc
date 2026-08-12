@@ -824,6 +824,59 @@ StarCraft happens to be running — after a launch that in fact succeeded.
 ./tools/plugin/check-game-windows.ps1        # standalone; exit 1 == dialog open
 ```
 
+### Off the user's screen: `run-offscreen.ps1` (task 043)
+
+A test run puts **nothing** on the monitor. The suite is started as a child process
+born on a Windows **desktop object** that is never switched to (`CreateDesktop`,
+built into Windows — no VM, no second user account, nothing installed, nothing left
+behind), and `run-with-plugin.ps1` then hands that desktop's name to
+`scinject.exe --desktop` so the game is born there too.
+
+```powershell
+# the normal way to run a suite: invisible
+./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/test-selection-circles.ps1
+
+# the SAME code path with one flag, for a human who wants to watch it
+./tools/plugin/run-offscreen.ps1 -Visible -Suite ./tools/plugin/test-selection-circles.ps1
+
+# arguments reach the suite unchanged (clixml, not a re-quoted command line)
+./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/test-stim-fanout.ps1 `
+    -SuiteArgs @{ FixtureDir = 'C:\sc-work\1161-base\Maps\BroodWar\00-t043' }
+```
+
+`-Visible` is one flag on the same generated child script, the same `CreateProcess`
+call and the same suite arguments; only the desktop name differs. There is
+deliberately no separate "watch mode" to drift out of sync with how tests really run.
+
+**The suites are unmodified**, and that is the design rather than an accident:
+a process inherits its desktop at creation, every thread it starts is on that desktop,
+and `EnumWindows` is desktop-scoped — so `Get-ScGameWindow`, `check-game-windows.ps1`
+and `close-game.ps1` follow the game across with no per-primitive changes. (The
+opposite design does not exist as an option: `SetThreadDesktop` returns
+`ERROR_BUSY` for a thread that already owns a window, which PowerShell's main thread
+does before a single line of script runs.)
+
+What still holds, unchanged:
+
+* `sc-launch-lock.ps1` still serialises every launch. StarCraft is single-instance
+  **per machine** regardless of desktops, so N invisible desktops still means one
+  game at a time.
+* Frames are still a gitignored diagnostic, off-screen or not — a frame reproduces
+  game artwork (AGENTS.md hard rule 1).
+
+**The one thing that does NOT work off-screen: a dropdown pick.** Windows has one
+foreground window and it belongs to the desktop receiving input, so a window on an
+invisible desktop can never hold it — and `Send-ScDropdownPick` needs the foreground
+because the game calls `SetCapture` on button-down. Measured (task 043,
+`probe-quiet-dropdown.ps1` through `run-offscreen.ps1`): all three arms failed,
+including the foreground arm that passes every time on the visible desktop.
+
+In practice this bites rarely, because `Set-ScGameType` reads the combo's current
+value out of the engine's dialog list and skips the pick — and the raise — whenever
+the value already matches (issue #29). When a pick *is* needed, the run **throws and
+names the desktop as the cause**; it never silently runs a lesser test. The fix in
+that case is one flag: re-run with `-Visible`.
+
 ### Log
 
 `%SCPLUGIN_LOG%`, default `C:\sc-work\logs\sc-plugin.log`. Outside the repo, and
