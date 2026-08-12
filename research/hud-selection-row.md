@@ -35,6 +35,23 @@ answers q7), [`selection-circles.md`](selection-circles.md) (the selectionIndex 
    job: layout `0x00425960`, refresh-condition `0x00424660`, per-button wireframe draw
    `0x00456F50`, button interact `0x004583E0`, click semantics `0x00458220`, dispatcher
    `0x00458120`, per-frame driver `0x004D93F0`. [§4](#4-the-pipeline-per-frame), [§5](#5-the-click-path)
+
+   **The row's own geometry, read off the live dialog** (`QINDDLG` child dump, this install;
+   all dialog-local, the pane's surface is **270 × 92** and its root rect is `(138,388,407,479)`
+   in client pixels). The twelve buttons are **two rows of six, COLUMN-major** — odd ids on the
+   upper row, even ids on the lower — 32 × 33 each:
+
+   | | ids | x | y |
+   |---|---|---|---|
+   | upper row | `0x21 0x23 0x25 0x27 0x29 0x2B` | 30, 66, 102, 138, 174, 210 (+32) | 8 → 41 |
+   | lower row | `0x22 0x24 0x26 0x28 0x2A 0x2C` | same | 45 → **78** |
+
+   Two consequences worth stating, both load-bearing for task 048: the row's lowest edge is **78
+   whether two units are selected or twelve** (column-major means any selection of ≥ 2 lights
+   both rows), and **`y 79..92` — the surface's last 13 rows — is occupied by no control at all.**
+   That band is where `sc_queueind`'s group line goes (task 039) and where the page indicator goes
+   (task 048); a small font of height 11 fits it with two pixels to spare, and both modules refuse
+   to draw rather than fall back onto the buttons if it ever does not.
 3. **The row is driven by exactly one input: `clientSelectionGroup` (`0x00597208`).** The
    layout function walks it to the end sentinel `0x597238` and assigns one unit per button
    into a per-button 8-byte heap record (`statUser`: `{CUnit*, u16 unitId}`). The buttons
@@ -452,6 +469,30 @@ asked for ("show more units") is permanently visible even without flipping.
 > `indInk > 0`. This is AGENTS.md's "assert the ENGINE's own result, not your bookkeeping" meeting
 > a *drawing* claim: reading a control's fields says what it HOLDS; only the surface says
 > anything was DRAWN.
+>
+> **And it STILL did not draw, for three more tasks. (Task 048, 2026-08-12.)** The box was tall
+> enough after 033 and the text was still never on the screen, because the control was spliced at
+> the **head** of the child list: the dialog's redraw walk `0x0041C683` takes the children from
+> `[dlg+0x42]` and steps `[esi]` head to tail, so a control earlier in the list is painted *under*
+> the ones after it, and the twelve wireframes it overlapped painted over it every frame. Task 039
+> found and fixed exactly this in `sc_queueind` on 2026-08-12; the same defect was still here.
+>
+> `indInk` could not report it, and the shape of that failure is now a rule in AGENTS.md. The box
+> `(32,9,180,25)` is 148 × 16 = **2368** bytes and `indInk` read **2368 — the whole area —
+> identically for three different strings** in one run. Ink over a region the engine also paints
+> saturates: it fails by looking healthy, never by reading zero, which is the one case the
+> positive control 033 added cannot catch.
+>
+> What task 048 replaced it with, all on the same line and none of them an ink count:
+>
+> | field | what it answers |
+> |---|---|
+> | `indBoxDiff` | bytes of the band that differ from a copy of the SAME rect taken with none of our line on it — the only number here that says the engine drew |
+> | `indRefInk` / `indSurfInk` | the two blindness checks: a control the engine fills, and the whole surface |
+> | `HUDROW band after stock` | `glyphBytes` / `stranded` — how many bytes our line owned, and how many still hold its value after the row hands back |
+>
+> Measured, fixed build, one run: `indBounds=(30,79,184,92) indBoxDiff=268 indRefInk=1056
+> indSurfInk=24840 indFontH=11`, and `glyphBytes=237 stranded=0` on each of three hand-backs.
 
 ## 8. Recommendation
 
