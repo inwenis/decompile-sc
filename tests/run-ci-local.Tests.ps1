@@ -31,15 +31,12 @@ BeforeAll {
         plumbing (rev-parse, status --porcelain, ls-files) has something real to read.
         #>
         param(
-            [Parameter(Mandatory)][string]$TestBody,   # an Pester It-block body, e.g. '1 | Should -Be 1'
+            [Parameter(Mandatory)][string]$TestBody,   # a Pester It-block body, e.g. '1 | Should -Be 1'
             [switch]$LeaveDirty                        # leave an uncommitted edit after the commit
         )
         $dir = Join-Path $TestDrive ([Guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         New-Item -ItemType Directory -Path (Join-Path $dir 'tests') -Force | Out-Null
-        # A marker line BEFORE the throw-worthy assertion: if hole 1 regresses, this prints and
-        # the process then dies inside Invoke-Pester before the receipt is ever written -- the
-        # console transcript names exactly where execution stopped.
         Set-Content -LiteralPath (Join-Path $dir 'tests/fixture.Tests.ps1') -Encoding utf8 -Value @"
 Describe 'fixture' {
     It 'does the thing' {
