@@ -2932,6 +2932,81 @@ static void ProdQueueTests(void) {
               (long long)(start - *PqMinerals()), 16 * 50);
     }
 
+    // -----------------------------------------------------------------------------
+    // TASK 038. WHICH SELECTION ARRAY THE DETOURS READ, decided here because the two
+    // arrays ABUT (0x006284B8 + 12*4 == 0x006284E8) and agree in every single-building
+    // case -- so the wrong one passes every test that selects one building, which is
+    // every test this part had until now.
+    //
+    // The engine's own gate walks playersSelections[activePlayerId]
+    // (getActivePlayerNextSelection 0x0049A850, quoted in sc_prodqueue.cpp). The client's
+    // activePlayerSelection is a different list, and a fanned-out Select+Train pair makes
+    // them disagree on purpose: the SIMULATION is moved to one building at a time while
+    // the player still has the whole group selected. Reading the client's list there
+    // returned "no single building", the plugin held nothing, and every ring filled to
+    // five -- the bug this task exists to fix.
+    //
+    // So each case below writes the two arrays to DIFFERENT things and says which one the
+    // answer has to come from.
+    // -----------------------------------------------------------------------------
+    printf("\n    the building a receive handler acts on comes from the ENGINE's selection array\n");
+    PqBegin(16, 1000, 500);
+    {
+        DWORD* engineSel = (DWORD*)FakeRt(SC_VA_PLAYERS_SELECTIONS) + PQ_PLAYER * SC_SELECTION_SLOTS;
+        DWORD* clientSel = (DWORD*)FakeRt(SC_VA_ACTIVE_PLAYER_SELECTION);
+        DWORD* activeId  = (DWORD*)FakeRt(SC_VA_ACTIVE_PLAYER_ID);
+        for (int i = 0; i < SC_SELECTION_SLOTS; ++i) { engineSel[i] = 0; clientSel[i] = 0; }
+        *activeId = PQ_PLAYER;
+
+        // THE CASE THAT WAS BROKEN: the fan-out has just replayed Select(building 0), so
+        // the simulation holds ONE building, while the player's own selection still holds
+        // three. The answer is the simulation's building.
+        engineSel[0] = FakeUnit(0);
+        clientSel[0] = FakeUnit(0);
+        clientSel[1] = FakeUnit(1);
+        clientSel[2] = FakeUnit(2);
+        Check("a group selected, the sim holding one -> that one",
+              (long long)ScProdQueueSoleSelectedUnitForTest(), (long long)FakeUnit(0));
+
+        // The next pair of the same fan-out names a different building. Reading the
+        // client's list would have answered the same thing every time.
+        engineSel[0] = FakeUnit(2);
+        Check("the next pair of the same fan-out -> the NEXT building",
+              (long long)ScProdQueueSoleSelectedUnitForTest(), (long long)FakeUnit(2));
+
+        // THE NEGATIVE HALF, and it is the same test the engine makes: two units in the
+        // SIMULATION's list means cmdrecvTrain does nothing at all, so neither may we.
+        engineSel[1] = FakeUnit(3);
+        Check("two in the sim's list -> not ours, the engine's own gate refuses too",
+              (long long)ScProdQueueSoleSelectedUnitForTest(), 0LL);
+        engineSel[1] = 0;
+
+        // A player row is 12 slots and the row is indexed by activePlayerId: pointing the
+        // id at a player with nothing selected must answer nothing, not another player's
+        // building. This is what catches a wrong stride as well as a wrong base.
+        *activeId = PQ_PLAYER + 1;
+        Check("another player's row is empty -> nothing",
+              (long long)ScProdQueueSoleSelectedUnitForTest(), 0LL);
+        engineSel[SC_SELECTION_SLOTS] = FakeUnit(4);       // that neighbour's slot 0
+        Check("and that row's own building is what it answers",
+              (long long)ScProdQueueSoleSelectedUnitForTest(), (long long)FakeUnit(4));
+        engineSel[SC_SELECTION_SLOTS] = 0;
+        *activeId = PQ_PLAYER;
+
+        // An id outside the eight players is fail-closed rather than an out-of-bounds read.
+        *activeId = SC_MAX_PLAYERS;
+        Check("an out-of-range active player -> nothing, and no read past the array",
+              (long long)ScProdQueueSoleSelectedUnitForTest(), 0LL);
+        *activeId = PQ_PLAYER;
+
+        // And the whole point, stated as an assertion: what the CLIENT holds cannot
+        // produce an answer on its own.
+        engineSel[0] = 0;
+        clientSel[0] = FakeUnit(1);
+        Check("the client's list alone answers nothing -- it is not what the engine reads",
+              (long long)ScProdQueueSoleSelectedUnitForTest(), 0LL);
+    }
+
     ScProdQueueTestBegin(NULL, 0);   // leave the core inert for the parts after this
 }
 

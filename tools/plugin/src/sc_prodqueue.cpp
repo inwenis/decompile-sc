@@ -512,12 +512,20 @@ void ScProdQueueLogState(const char* tag) {
     // ALWAYS a summary line, even with zero records -- an absence has to be
     // positively reported or "the oracle did not run" and "there is nothing queued"
     // read identically (AGENTS.md, absence assertions).
+    // The detour exits go on the END of this line, so every existing parser of it keeps
+    // working. They are here because "the plugin is holding nothing" and "the plugin was
+    // never asked" print the same zeros otherwise -- which is how task 038's bug survived
+    // a passing suite: trainSeen counts the calls, trainNoUnit counts the ones that found
+    // no building to act on, and the difference is the feature actually running.
     ScLog("PRODQ [%s] buildings=%d max=%d captured=%d promoted=%d cancelled=%d "
-          "refunded=%d refusedFull=%d refusedCost=%d",
+          "refunded=%d refusedFull=%d refusedCost=%d trainSeen=%d trainNoUnit=%d "
+          "cancelSeen=%d cancelNoUnit=%d",
           tag ? tag : "-", g_recCount, g_maxTotal,
           g_stat[SC_PRODQ_STAT_CAPTURED], g_stat[SC_PRODQ_STAT_PROMOTED],
           g_stat[SC_PRODQ_STAT_CANCELLED], g_stat[SC_PRODQ_STAT_REFUNDED],
-          g_stat[SC_PRODQ_STAT_REFUSED_FULL], g_stat[SC_PRODQ_STAT_REFUSED_COST]);
+          g_stat[SC_PRODQ_STAT_REFUSED_FULL], g_stat[SC_PRODQ_STAT_REFUSED_COST],
+          g_stat[SC_PRODQ_STAT_TRAIN_SEEN], g_stat[SC_PRODQ_STAT_TRAIN_NO_UNIT],
+          g_stat[SC_PRODQ_STAT_CANCEL_SEEN], g_stat[SC_PRODQ_STAT_CANCEL_NO_UNIT]);
     LeaveCriticalSection(&g_lock);
 }
 
@@ -525,12 +533,14 @@ void ScProdQueueLogStats(void) {
     if (!g_enabled) return;
     ScLog("PRODQSTATS captured=%d promoted=%d cancelled=%d refunded=%d refusedFull=%d "
           "refusedCost=%d mineralsSpent=%d mineralsRefunded=%d gasSpent=%d gasRefunded=%d "
-          "tracked=%d",
+          "tracked=%d trainSeen=%d trainNoUnit=%d cancelSeen=%d cancelNoUnit=%d",
           g_stat[SC_PRODQ_STAT_CAPTURED], g_stat[SC_PRODQ_STAT_PROMOTED],
           g_stat[SC_PRODQ_STAT_CANCELLED], g_stat[SC_PRODQ_STAT_REFUNDED],
           g_stat[SC_PRODQ_STAT_REFUSED_FULL], g_stat[SC_PRODQ_STAT_REFUSED_COST],
           g_stat[SC_PRODQ_STAT_MINERALS_SPENT], g_stat[SC_PRODQ_STAT_MINERALS_REFUNDED],
-          g_stat[SC_PRODQ_STAT_GAS_SPENT], g_stat[SC_PRODQ_STAT_GAS_REFUNDED], g_recCount);
+          g_stat[SC_PRODQ_STAT_GAS_SPENT], g_stat[SC_PRODQ_STAT_GAS_REFUNDED], g_recCount,
+          g_stat[SC_PRODQ_STAT_TRAIN_SEEN], g_stat[SC_PRODQ_STAT_TRAIN_NO_UNIT],
+          g_stat[SC_PRODQ_STAT_CANCEL_SEEN], g_stat[SC_PRODQ_STAT_CANCEL_NO_UNIT]);
 }
 
 int ScProdQueueOverflowCount(DWORD unit) {
@@ -554,9 +564,35 @@ int ScProdQueueStat(int which) {
 // The building a production command acts on is the ONE unit selected: both receive
 // handlers reset selectionIterator (0x006284B6) and then require
 // getActivePlayerNextSelection to yield exactly one unit
-// (research/production-queue.md 2.2 quotes both prologues). Reading
-// activePlayerSelection[0] and requiring [1] to be null is the same test without
-// calling into the engine.
+// (research/production-queue.md 2.2 quotes both prologues).
+//
+// WHICH SELECTION ARRAY THAT IS, and it is the whole of task 038's fix. There are two
+// twelve-slot arrays and they ABUT, so reading the wrong one is a mistake that costs
+// nothing until the day the two disagree. Task 025 read `activePlayerSelection`
+// (0x006284B8) and called it "the same test without calling into the engine". It is not:
+// `getActivePlayerNextSelection` (0x0049A850) walks `playersSelections` instead, indexed
+// by the ACTIVE PLAYER, and the index arithmetic is in its own instructions
+// (research/production-queue.md 2.2, dumped from this binary):
+//
+//   0049a851  MOV  BL,byte ptr [0x006284B6]            ; the selection iterator
+//   0049a860  MOV  EAX,dword ptr [0x0051267C]          ; activePlayerId
+//   0049a869  LEA  EAX,[EAX + EAX*2]                   ; player * 3
+//   0049a86d  LEA  ESI,[ECX + EAX*4]                   ; iterator + player * 12
+//   0049a870  MOV  EAX,dword ptr [ESI*4 + 0x006284E8]  ; playersSelections[player][iter]
+//
+// The two agree whenever the player has ONE building selected, which is why task 025
+// worked and why every test of it passed. They disagree exactly when the fan-out replays
+// a Select+Train pair for a GROUP: the simulation's selection is moved to one building at
+// a time (that is what makes cmdrecvTrain's single-unit gate accept at all), while
+// `activePlayerSelection` still holds the client's whole group -- so `sel[1]` was
+// non-null, this function returned 0, the plugin held nothing back, every ring filled to
+// five and the client stopped sending. MEASURED, 2026-08-12: nine presses with three
+// Command Centers boxed put FIVE 0x1F on the wire and left all three rings at 5/5 with
+// zero overflow.
+//
+// So this reads the array the ENGINE'S OWN GATE reads, with the engine's own index
+// arithmetic -- the state the action will actually run in, not the state the player's
+// screen is in (AGENTS.md, "Assert the ENGINE'S OWN RESULT", task 029's second half).
 // ---------------------------------------------------------------------------
 
 static ScHook g_hkTrain;
@@ -566,11 +602,15 @@ static ScHook g_hkTick;
 typedef void (__attribute__((stdcall)) *CancelTrainFn)(DWORD);
 
 static DWORD SoleSelectedUnit(void) {
-    DWORD* sel = (DWORD*)Rt(SC_VA_ACTIVE_PLAYER_SELECTION);
+    DWORD player = *(DWORD*)Rt(SC_VA_ACTIVE_PLAYER_ID);
+    if (player >= SC_MAX_PLAYERS) return 0;
+    DWORD* sel = (DWORD*)Rt(SC_VA_PLAYERS_SELECTIONS) + player * SC_SELECTION_SLOTS;
     DWORD u = sel[0];
     if (!u || sel[1]) return 0;
     return UnitPtrValid(u) ? u : 0;
 }
+
+DWORD ScProdQueueSoleSelectedUnitForTest(void) { return SoleSelectedUnit(); }
 
 // Calls a trampoline whose target takes its only argument in EAX and returns void.
 static void CallEax(void* fn, DWORD eax) {
@@ -587,6 +627,8 @@ extern "C" void SC_GAME_ENTRY ScProdTrainDetour(DWORD cmd) {
     DWORD unit = SoleSelectedUnit();
     unsigned type = 0xFFFFu;
     bool wasFull = false;
+    ++g_stat[SC_PRODQ_STAT_TRAIN_SEEN];
+    if (!unit) ++g_stat[SC_PRODQ_STAT_TRAIN_NO_UNIT];
     if (unit) {
         // Sampled BEFORE the engine runs: afterwards, a queue that was full and a queue
         // the engine has just filled its last slot of look exactly the same.
@@ -632,6 +674,8 @@ asm(".text\n"
 static void __attribute__((stdcall)) SC_GAME_ENTRY HkCmdrecvCancelTrain(DWORD cmd) {
     DWORD unit = SoleSelectedUnit();
     unsigned payload = cmd ? *(WORD*)(cmd + 1) : SC_CANCEL_TRAIN_NONE;
+    ++g_stat[SC_PRODQ_STAT_CANCEL_SEEN];
+    if (!unit) ++g_stat[SC_PRODQ_STAT_CANCEL_NO_UNIT];
     g_deepGc = true;
     if (unit && ScProdQueueOnCancel(unit, payload)) return;
     ((CancelTrainFn)g_hkCancel.trampoline)(cmd);

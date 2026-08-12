@@ -362,6 +362,17 @@ is visible on each building and is asserted here from each building's own `CUnit
 2. **Train (`0x1F`) only.** Unit Morph, Train Fighter and Building Morph are untouched.
 3. **Same-type groups only**, by choice (§5.3).
 4. **Single-player only**, like everything in this repo (AGENTS.md hard rule 3).
+5. ~~**Five per building, whatever the over-cap feature is set to.**~~ **FIXED by task 038**, and
+   the user found it playing the deployed build: *"can't queue more than 5 units per building
+   when multiple buildings are selected"*. Nothing in this file was wrong — the fan-out put one
+   Train on the wire per building exactly as it says — but this suite runs with
+   `%SCPLUGIN_PRODQ%=0` on purpose (§6.2), so the seam with task 025's over-cap queueing was
+   never measured. It did not hold: the over-cap feature read the CLIENT's selection to decide
+   which building a Train was for, and a fanned-out Select+Train pair is precisely the moment the
+   client's selection and the simulation's disagree, so it held nothing back and every ring
+   filled to five. The whole story, with the wire traces on both sides,
+   is [`production-queue.md`](production-queue.md) §10; the suite that covers the two features
+   together is `tools/plugin/test-group-queue-over-five.ps1`.
 
 ---
 
