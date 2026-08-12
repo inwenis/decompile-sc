@@ -52,11 +52,11 @@ function Invoke-QueueEpisode {
     foreach ($u in $Units) { $logicalBefore[$u] = (Get-Logical -Eng $Before -Unit $u).Logical }
 
     # ---- press ------------------------------------------------------------
+    # Through the card's own button (see Invoke-TrainPress for the run that made that a
+    # measurement rather than a preference).
+    $trainPt = Get-TrainPoint -Tag "ep$($Ep.index)"
     $mark = Get-ScLogMark
-    for ($i = 1; $i -le $Presses; $i++) {
-        Send-ScKey -Hwnd $script:hwnd -VirtualKey $TRAIN_KEY -SettleMs $ClickDelayMs
-    }
-    Start-Sleep -Seconds 3
+    Invoke-TrainPress -Times $Presses -Point $trainPt
     $fresh = @(Get-ScLogSince -Mark $mark)
 
     # ---- INV-W: the wire --------------------------------------------------
@@ -70,6 +70,16 @@ function Invoke-QueueEpisode {
     # out through the TRAMPOLINE and deliberately do not pass the logger again.
     $cmds = @($fresh | Select-String -Pattern "CMD id=$TRAIN_CMD ")
     $starts = @($fresh | Select-String -Pattern 'FANOUT start: cmd=0x1F')
+    # ZERO IS A DIFFERENT CLAIM FROM "SOME". A burst in which NOT ONE press produced a command,
+    # while the card was showing an enabled Train button when we aimed at it, is this harness
+    # failing to deliver input -- not the game refusing to accept it. Both used to print the
+    # same INV-W failure, and on 2026-08-12 that turned one lost input path into three episodes
+    # of "the feature is broken". Named separately so the two can never be confused again.
+    if ($cmds.Count -eq 0 -and $Presses -gt 0 -and $trainPt) {
+        Assert-Inv -Id 'INPUT' -What "the $Presses click(s) on the card's Train button reached the game at all (0 commands)" `
+            -Ok $false `
+            -Detail "(the button was enabled at ($($trainPt.X),$($trainPt.Y)) when this episode aimed; a total silence here is an input-delivery failure in the HARNESS, and the invariants below are not evidence about the game)"
+    }
     Assert-Inv -Id 'INV-W' -What "all $Presses presses reached the engine's command funnel ($($cmds.Count))" `
         -Ok ($cmds.Count -eq $Presses) `
         -Detail "(selection of $SelCount; a count that stops at $ENGINE_SLOTS is the client refusing to send)"
@@ -519,11 +529,50 @@ function Get-TextTag {
     if ([string]::IsNullOrEmpty($t)) { 'empty' } else { $t }
 }
 
+# TRAIN IS DRIVEN BY CLICKING THE CARD'S OWN BUTTON, NOT BY THE HOTKEY, and that is a
+# measurement rather than a preference.
+#
+# A run on 2026-08-12 had posted hotkeys stop being processed part-way through, in the middle
+# of an episode, and stay dead for the rest of the game: `trainSeen` froze at 11 while three
+# further episodes pressed 22 more times, minerals never moved, and the plugin's detour was
+# never entered -- so the CLIENT never sent anything. Posted CLICKS kept working the whole
+# time (every selection in those same episodes landed), and the card read `slot=1 enabled
+# act=0x004234B0` throughout, so the button was there and lit. Whatever swallowed the keys,
+# the effect on this harness is worse than a lost run: every later episode fails INV-W and
+# INV-M with "0 presses reached the funnel", which reads exactly like the feature being broken.
+# A generator that manufactures its own failures is worth less than no generator.
+#
+# So the press goes through the control a player would click, located from the card's own
+# rects (Get-ScCardSlotPoint), which is the same path the cancel episodes already use.
+function Get-TrainPoint {
+    [CmdletBinding()]
+    param([string]$Tag = 'train')
+    $card = Get-ScCardState -LogPath $LogPath -Tag "rc-$Tag-card" -MarkerPath $markerPath
+    if (-not $card.Ok) { return $null }
+    # Located by its ACTION, never by slot number: which slot the Train button sits in is the
+    # engine's business and it moves with the unit. Get-ScCardState upper-cases the action, so
+    # the comparison does too rather than hoping about case.
+    $slot = @($card.Slots | Where-Object {
+        $_.HasButton -and $_.Action -eq $TRAIN_ACTION.ToUpperInvariant() -and -not $_.Disabled -and $_.Visible
+    }) | Select-Object -First 1
+    if (-not $slot) { return $null }
+    Get-ScCardSlotPoint -Card $card -Slot $slot.Index
+}
+
 function Invoke-TrainPress {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][int]$Times)
-    for ($i = 1; $i -le $Times; $i++) {
-        Send-ScKey -Hwnd $script:hwnd -VirtualKey $TRAIN_KEY -SettleMs $ClickDelayMs
+    param([Parameter(Mandatory)][int]$Times, $Point)
+    if (-not $Point) { $Point = Get-TrainPoint -Tag 'press' }
+    if (-not $Point) {
+        Note 'the card has no Train button to click; falling back to the hotkey for this burst'
+        for ($i = 1; $i -le $Times; $i++) {
+            Send-ScKey -Hwnd $script:hwnd -VirtualKey $TRAIN_KEY -SettleMs $ClickDelayMs
+        }
+    } else {
+        for ($i = 1; $i -le $Times; $i++) {
+            Send-ScClick -Hwnd $script:hwnd -X $Point.X -Y $Point.Y
+            Start-Sleep -Milliseconds $ClickDelayMs
+        }
     }
     Start-Sleep -Seconds 2
 }
