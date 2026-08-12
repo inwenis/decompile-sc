@@ -212,14 +212,38 @@ try {
     if (-not $gamePid) { throw 'test: could not parse the game pid from scinject output.' }
     $hwnd = Get-ScGameWindow -ProcessId $gamePid
 
-    Step 'the hudrow hook is actually installed (6 hooks in fanout mode)' {
-        # queueCommand + 3 shadow hooks + circles + hudrow-dispatcher = 6.
+    Step 'the hudrow hook is actually installed, by NAME (task 047 / task 050)' {
+        # This used to assert a hardcoded total (`-eq 6`) that task 036 outgrew (it
+        # bumped the shadow-mode base from 4 to 5 for unit_IsStandardAndMovable)
+        # without the literal moving with it -- a count mismatch that names no hook
+        # (AGENTS.md's diagnostics rule), and a check that would stay silent if
+        # statDataUpdate (the ONE hook this suite exists to test) were ever replaced
+        # by some other hook while the total happened to stay put. task 047 already
+        # fixed the identical defect in test-combat-death.ps1 by comparing hook NAMES
+        # instead of a total; this suite now shares that same comparison
+        # (Get-ScFanoutExpectedHooks / Compare-ScHookNames, drive-game.ps1) rather
+        # than growing its own copy of the bug.
         $cfg = @(Wait-ScLogMatch -LogPath $LogPath -Pattern 'FANOUT config: .*hudrow=1' -TimeoutSec 20)
         Assert-That 'the config line says hudrow=1' ($cfg.Count -gt 0)
+        $cm = [regex]::Match($cfg[-1], 'circles=(\d) hudrow=(\d) queueind=(\d)')
+        Assert-That "the config line carries circles/hudrow/queueind flags ($($cfg[-1]))" $cm.Success
+        $expectedNames = Get-ScFanoutExpectedHooks -Circles ($cm.Groups[1].Value -eq '1') `
+            -HudRow ($cm.Groups[2].Value -eq '1') -QueueInd ($cm.Groups[3].Value -eq '1')
+
+        $hookLines = @(Wait-ScLogMatch -LogPath $LogPath -Pattern 'HOOK (\S+): installed at ' -TimeoutSec 20)
+        $actualNames = @($hookLines | ForEach-Object {
+            [regex]::Match($_, 'HOOK (\S+): installed at ').Groups[1].Value
+        })
+        $cmp = Compare-ScHookNames -Expected $expectedNames -Actual $actualNames
+        Assert-That "the installed hooks are exactly this arm's set ([$($cmp.Actual -join ', ')])" $cmp.Ok `
+            ($cmp.Ok ? '' : "(missing: [$($cmp.Missing -join ', ')] extra: [$($cmp.Extra -join ', ')])")
+
+        # Corroborate against the plugin's own summary line -- same install, independent
+        # read -- with the total DERIVED from the named set rather than a second literal.
         $hooks = @(Wait-ScLogMatch -LogPath $LogPath -Pattern 'HOOK: (\d+)/(\d+) installed' -TimeoutSec 20)
         $m = [regex]::Match($hooks[-1], 'HOOK: (\d+)/(\d+) installed')
-        Assert-That "all hooks installed ($($m.Groups[1].Value)/$($m.Groups[2].Value))" `
-            ($m.Groups[1].Value -eq $m.Groups[2].Value -and [int]$m.Groups[1].Value -eq 6)
+        Assert-That "the plugin's own count agrees ($($m.Groups[1].Value)/$($m.Groups[2].Value) vs $($expectedNames.Count) expected by name)" `
+            ($m.Groups[1].Value -eq $m.Groups[2].Value -and [int]$m.Groups[2].Value -eq $expectedNames.Count)
     }
 
     Step "menus: Single Player -> Expansion -> Play Custom -> $mapName" {
@@ -234,7 +258,7 @@ try {
         Start-Sleep -Seconds 2
         Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
         Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
-        Send-ScDropdownPick -Hwnd $hwnd -X 265 -Y 268 -Index 2   # Use Map Settings
+        Set-ScGameType -Hwnd $hwnd -LogPath $LogPath -Index 2      # Use Map Settings, verified
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing
         Start-Sleep -Seconds 6
         Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start

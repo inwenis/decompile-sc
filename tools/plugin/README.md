@@ -871,11 +871,54 @@ because the game calls `SetCapture` on button-down. Measured (task 043,
 `probe-quiet-dropdown.ps1` through `run-offscreen.ps1`): all three arms failed,
 including the foreground arm that passes every time on the visible desktop.
 
-In practice this bites rarely, because `Set-ScGameType` reads the combo's current
-value out of the engine's dialog list and skips the pick — and the raise — whenever
-the value already matches (issue #29). When a pick *is* needed, the run **throws and
-names the desktop as the cause**; it never silently runs a lesser test. The fix in
-that case is one flag: re-run with `-Visible`.
+In practice this bites less than it sounds, because `Set-ScGameType` reads the combo's
+current value out of the engine's dialog list and skips the pick — and the raise —
+whenever the value already matches (issue #29). When a pick *is* needed, the run
+**throws and names the desktop as the cause**; it never silently runs a lesser test.
+
+**Task 049 set out to survey which suites can run off-screen and split them into a
+"Group A" (routes through `Set-ScGameType`, mostly skips) and "Group B" (called the raw
+`Send-ScDropdownPick`, always raised) — died in a reboot before landing that table. Task
+050 finished the survey and the split turned out not to be the interesting fact.**
+`Custom Type` in `HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft` is ONE machine-wide
+value, shared with the user's own real play (its own `Recent Maps` entries prove the key
+is live — see AGENTS.md, "The game's own UI is a live-user-state WRITER too"). Whether
+ANY suite skips the pick on a given run depends on what that value already is, which
+depends on whatever last used the real game — test or human. "Group A usually skips"
+never described those nine suites; it described the fleet's run order holding steady
+for one day.
+
+So as of task 050, every suite that wants a game type routes through `Set-ScGameType`
+the same way, and none is structurally tied to `-Visible` — the old "fix: re-run with
+`-Visible`" line above is the same premature advice AGENTS.md corrects. If a run throws
+the `Custom Type` mismatch, the fix is `./tools/plugin/prime-game-type.ps1` (launch, one
+pick, verify, quit — well under a minute, no fixture), not `-Visible`-ing whichever
+suite happened to hit it; one primer run fixes the value for every suite below, not just
+one.
+
+| suite | wants | converted |
+| --- | --- | --- |
+| `test-ability-in-combat` | Use Map Settings | pre-existing |
+| `test-building-groups` | Use Map Settings | task 050 |
+| `test-building-parity` | Use Map Settings | task 050 |
+| `test-burrow-fanout` | Use Map Settings | task 050 |
+| `test-combat-death` | Use Map Settings | task 050 |
+| `test-control-groups` | Use Map Settings | task 050 (also dropped a redundant double-pick) |
+| `test-group-production` | Use Map Settings | pre-existing |
+| `test-group-queue-over-five` | Use Map Settings | pre-existing |
+| `test-hud-row` | Use Map Settings | task 050 |
+| `test-production-queue` | Use Map Settings | pre-existing |
+| `test-random-conformance` | Use Map Settings | pre-existing |
+| `test-stim-fanout` | Use Map Settings | pre-existing |
+| `test-sunken-acquire` | Use Map Settings | pre-existing |
+| `test-upgrade-queue` | Use Map Settings | pre-existing |
+| `test-widescreen` | Use Map Settings | pre-existing |
+
+All fifteen target the same entry (index 2, "Use Map Settings" — none needs a different
+game type), verified off-screen with 0 failures and the engine's own
+`game type is already 'Use Map Settings' ... -- no pick, no raise` line after one
+`prime-game-type.ps1` run. (A handful of other suites — `test-selection-circles`,
+`test-fanout-orders`, … — never pick a game type at all and are unaffected either way.)
 
 ### Log
 

@@ -221,8 +221,9 @@ try {
         # would make the map play as a melee game -- which is the failure task 015 hit and
         # spent a whole task chasing. Entry 2 of {Melee, Free For All, Use Map Settings};
         # picking the wrong one fails the unit-type assertion below rather than passing
-        # quietly. (SC's dropdowns are press-and-hold: see Send-ScDropdownPick.)
-        Send-ScDropdownPick -Hwnd $hwnd -X 265 -Y 268 -Index 2
+        # quietly. Set-ScGameType reads the combo first and skips the pick (and the
+        # foreground raise) when it already reads 'Use Map Settings' (task 050).
+        Set-ScGameType -Hwnd $hwnd -LogPath $LogPath -Index 2      # Use Map Settings, verified
         Shot 'lobby'
 
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing

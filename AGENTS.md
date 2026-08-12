@@ -543,15 +543,94 @@ button-down; see "Foreground" half 2), so it cannot succeed there. Measured, not
 reasoned: `probe-quiet-dropdown.ps1` through `run-offscreen.ps1` failed ALL THREE arms,
 including arm C, the foreground control that passes every time on the visible desktop.
 
-This bites rarely, because `Set-ScGameType` reads the combo out of the engine's dialog
-list and skips the pick whenever the value already matches (issue #29) — `test-stim-fanout`
-runs off-screen with 0 failures on that path. When a pick IS needed the run **throws and
-names the desktop as the cause**; it never silently runs a lesser test. The fix is one
-flag: re-run with `-Visible`.
+This bites less than a naive read suggests, because `Set-ScGameType` reads the combo out
+of the engine's dialog list and skips the pick whenever the value already matches (issue
+#29) — most runs see 0 failures on that path. When a pick IS needed the run **throws and
+names the desktop as the cause**; it never silently runs a lesser test.
+
+**"Re-run with `-Visible`" used to be the whole answer here. It is not, and saying so
+plainly is task 050's finding, not an embarrassment.** `-Visible` spends a WHOLE suite —
+fixture, map, real game, teardown — to buy about two seconds of foreground, and the value
+the pick needs to change is `Custom Type`, ONE machine-wide scalar shared with the user's
+own real play (see the dated section below). So: `./tools/plugin/prime-game-type.ps1`
+does ONLY the pick — launch, one `Set-ScGameType` call against a stock map, read the
+combo back to confirm, quit without ever pressing Start — well under a minute, re-runnable
+any time a suite's off-screen run throws this, and it fixes the value for every suite at
+once, not just the one that happened to hit the mismatch. Prefer it over `-Visible`-ing
+whichever suite failed. (Whether the combo can be moved by keyboard alone, sidestepping
+the foreground requirement entirely, was probed — see the dated section below for the
+measured result.)
 
 The launch-time foreground dance (`sc-foreground.ps1`, half 3 above) self-neutralises
 off-screen — there is no foreground to record or hand back, and the launcher says so.
 Leave it in place: it is still what protects a `-Visible` run.
+
+## The game's own UI is a live-user-state WRITER too, not just this repo's code (2026-08-12, task 050)
+
+Hard rule 5 is written as a rule about what THIS REPO's code may write. It is not only
+that. The game's own UI writes into the exact same key on every launch, whether the
+launch is a real player's or a test suite's, and that is worth stating as plainly as the
+rule itself.
+
+`HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft\Custom Type` holds ONE machine-wide
+string: whichever Game Type entry (Melee / Free For All / Use Map Settings / …) a lobby
+last landed on, for ANY map, from ANY launch, on this Windows profile. `Set-ScGameType`
+(issue #29) reads it before picking and skips the pick — and the foreground raise — when
+it already matches, which is why most suites run off-screen most of the time. Task 050
+went looking for why that stopped being true for six suites mid-session and found this,
+by READING the key, never writing it:
+
+```
+Custom Type   : Free For All
+Recent Maps   : {..., C:\sc-work\1161-base\maps\campaign\(1)Enslavers02b.scm}
+```
+
+`Recent Maps` in the SAME key held a real path from the user's own play, not a test
+fixture — proof this is not a copy or a sandboxed value, it is the live one, and it is
+shared in both directions:
+
+- **The user's own games change what our suites need.** Whatever Game Type the user last
+  played leaves the value automated suites read next, so "the combo is almost always
+  already correct" (049's Group-A framing) was never a property of those nine suites —
+  it was the whole fleet's run order, real play included, holding steady long enough to
+  look like one.
+- **Our suites change the user's next default.** A run that picks Use Map Settings
+  leaves the user's next OWN custom game defaulting to Use Map Settings too. Nothing is
+  corrupted — the engine's own UI does the writing, the same UI a human uses — but it is
+  this harness reaching into live user state through the front door (a real UI action)
+  instead of the back one hard rule 5 was written to close, and a worker who only reads
+  hard rule 5's numbered form could reasonably not expect it.
+
+There is no fix that removes this, and none is wanted: hard rule 5 forbids writing
+`Custom Type` directly (that is the mechanism the 2026-08-08 incident wiped 22 values
+with), so the game's own UI performing a real pick is the ONLY sanctioned writer. What
+task 050 added is `tools/plugin/prime-game-type.ps1` — ONE foreground pick and nothing
+else (no fixture, no map played, under a minute), so restoring the shared value costs the
+user a few seconds of their screen rather than a whole suite's `-Visible` run, and it
+restores it for every suite at once, Group A and B alike, not just whichever one hit the
+mismatch.
+
+**Probed, not assumed: can the combo be moved by keyboard alone, off-screen, sidestepping
+the foreground requirement (`SetCapture` on the mouse-down that a Down-arrow does not
+trigger)?** `probe-gametype-keyboard.ps1`, off-screen, two arms against the same lobby,
+read back through the engine's own dialog list each time, never through "no exception was
+thrown":
+
+- Down-arrow + Enter with no prior click or Tab: combo UNCHANGED.
+- Tab, then Down-arrow + Enter: the Create dialog was GONE afterwards — Tab moved this
+  custom dialog system's notion of focus onto SOME control, and Enter activated it, but
+  the engine's dialog list no longer showed the lobby at all (most likely OK/Cancel, not
+  the combo).
+
+**Measured negative, stated at the strength the evidence supports: keyboard input did not
+reach this combo on the two paths tried.** That is NOT the same claim as "the combo
+provably ignores the keyboard" — arm C never confirmed the combo can be FOCUSED at all;
+Tab landed on something whose Enter left the screen, most likely OK/Cancel, so it is
+equally possible a longer Tab chain reaches the combo and this run never tried it. Say it
+at the weaker, true strength rather than the stronger one, or a future probe that should
+run gets skipped on an overstated prior result. What IS decisive: the foreground
+requirement for a Game Type pick stands, and prime-game-type.ps1 is the way to clear it,
+not a longer keyboard sequence guessed rather than measured.
 
 ## The in-game tips dialog is dismissed by ITS OWN button, never by a fixed point (task 027)
 
