@@ -449,6 +449,21 @@ frames on the gitignored diagnostic path for the conductor or user to open local
 Workers have correctly declined the screenshot twice (tasks 016, 021); this section exists
 so nobody has to weigh it a third time.
 
+**But the frame is now MANDATORY on disk — user standing rule, 2026-08-12T07:28Z:**
+*"when you tell me about ui elements you show me with screenshots - like `page i/j` - show
+me a screen shot of this. same with all other features you're telling me about - show me
+with screenshots"*. Both halves hold at once, and they do not conflict:
+
+- Every visual claim a worker makes — in a PR body or a message — carries a PNG of that
+  exact state, captured through the suite's `-CaptureFrames` path into
+  `C:\sc-work\logs\<NNN>-frames\`, named for the STATE rather than a counter, before and
+  after for anything claimed fixed, one pair per distinct case.
+- The path is what travels. Never the image: no `pr-image`, no committed frame, ever.
+  The conductor hands the user the paths and they open them locally.
+- The read-back oracle is still the oracle; the frame is for the human. A frame is never
+  asserted on (see § "Read a dialog's CONTENT from memory"). An oracle with no frame is no
+  longer reportable to the user; a frame with no oracle never was evidence.
+
 ## Layout
 
 - `work/` — orchestration DATA.
