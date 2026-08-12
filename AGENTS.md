@@ -149,6 +149,46 @@ ROWS across the full width, while animation differs in isolated blobs spanning n
 the thing that distinguishes damage from noise, and report the noise floor beside it rather than
 asserting against zero.
 
+## A random suite must report the coverage of its SEAM, not only its verdict (2026-08-12, task 041)
+
+A generated test can be green because the feature works, or green because the run never got
+anywhere near the thing it was built to break. Those two results print identically, and the
+second one is worse than no test — it is a passing regression check standing guard over a bug.
+
+Task 041's randomized harness was pointed at `59aa50b`, the commit BEFORE task 038's fix, with a
+seed whose plan contained several multi-building bursts. It reported **`PASS 94 checks, 0
+failures` against the very build whose bug it was written to find.** Nothing had gone wrong
+mechanically: the run's own `indicator` episode filled one building to the plugin's cap, the
+headroom check then clamped every later GROUP burst to two or three presses, and **below the
+engine's five slots a plugin with 038's bug behaves exactly like a correct one** — the rings
+never fill, so the client never greys the Train button, so nothing diverges. The seam was never
+touched, and no line of the output said so.
+
+So: name the seam your suite exists to test, COUNT the episodes that actually reached it, and
+print that count beside the verdict every time. When it is zero, say what that means rather than
+leaving it to be inferred — task 041 prints:
+
+```
+COVERAGE  NO episode pushed a MULTI-BUILDING selection past the engine's 5 slots.
+          A run that never does that CANNOT detect task 038's class of bug, whatever its verdict says.
+```
+
+The same task's other half, and it is the same disease: **it printed `PASS 13 checks, 0 failures`
+for a run that executed NO EPISODES AT ALL.** An exception right after the fixture step unwound
+past the summary block, which duly reported the 13 checks that had run, while `| Tee-Object` — the
+transcript pipe every run of it uses — swallowed the non-zero exit. A verdict that does not depend
+on reaching the end of the work is not a verdict. The fix is structural rather than careful: the
+run records that it finished its episode loop, anything else prints `INCOMPLETE` (its own word,
+never `PASS`) with the episode count on it, and the exception is caught and recorded as a failure
+rather than allowed to unwind. It has since caught three real aborts, including a launch that
+loaded the wrong map off a shifted browser row.
+
+And the corollary for the seed: **choose it for the seam and say that you did.** Task 041's teeth
+test uses seed 47 because its episode 1 is an 11-press burst across two buildings and its episode
+2 a 9-press group recall, both against empty queues — picked from the offline plan generator with
+no game involved. A seed chosen because it produced the desired result is seed-shopping; a seed
+chosen because it reaches the seam, stated in the PR, is a fixture.
+
 ## Take the ADDRESS from the engine's own instructions, not from the global next door (2026-08-12, task 038)
 
 When a plugin re-implements an engine predicate — "which unit is this command about", "may this
