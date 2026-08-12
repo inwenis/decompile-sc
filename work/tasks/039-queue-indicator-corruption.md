@@ -102,9 +102,15 @@ worse than showing nothing.
 
 ## Acceptance criteria
 
-1. Before/after frames for all three reported cases, embedded in the PR
-   (`pr-image <file>`), plus a frame of a multi-building selection where the
-   queue text is legible (or deliberately absent).
+1. Before/after frames for all three reported cases, plus a frame of a
+   multi-building selection where the queue text is legible (or deliberately
+   absent). **Do NOT `pr-image` them** — a game frame reproduces game artwork
+   and hard rule 1 wins (AGENTS.md § "Screenshots vs hard rule 1 (settled)").
+   Keep them on the gitignored diagnostic path, name the exact paths in the
+   PR body, and describe what they show. The conductor opens them during
+   review — that human look IS the gate, because a read-back oracle asking
+   the plugin what the plugin wrote is exactly what let this class of bug
+   ship twice already.
 2. The indicator's content is correct for a queue longer than 5 — it tracks
    the queue, it does not freeze at "2".
 3. A test that fails on current main and passes with the fix, asserting what

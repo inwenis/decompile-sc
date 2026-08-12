@@ -100,8 +100,14 @@ screen is not.
 ## Acceptance criteria
 
 1. A captured frame from a real game shows the upgrade queue on a Terran
-   Engineering Bay with 2+ upgrades queued. Embed it in the PR
-   (`pr-image <file>`, per the global rules).
+   Engineering Bay with 2+ upgrades queued. **Do NOT `pr-image` it** — a game
+   frame reproduces game artwork and hard rule 1 wins (AGENTS.md
+   § "Screenshots vs hard rule 1 (settled)"). Keep the frame on the
+   gitignored diagnostic path, name that exact path in the PR body, and
+   describe the appearance in words. The conductor opens the frame during
+   review — that human look IS the gate, because the read-back oracle alone
+   is what let this bug ship (the oracle asks the plugin what the plugin
+   wrote; that is the 034 nine-pixel-box trap).
 2. The same evidence for at least two other upgrade-producing buildings,
    or a documented statement of which buildings are covered and which are
    deliberately not.

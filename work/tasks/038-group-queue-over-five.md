@@ -99,10 +99,13 @@ building. Today the queue stops at 5 in the multi-building case.
 
 ## Acceptance criteria
 
-1. Real-game evidence (frame or wire trace embedded in the PR) of 12 units
-   queued across a multi-building selection, with the engine's own counts
-   asserted — not the plugin's bookkeeping (AGENTS.md § "Assert the ENGINE'S
-   OWN RESULT").
+1. Real-game evidence of 12 units queued across a multi-building selection,
+   with the engine's own counts asserted — not the plugin's bookkeeping
+   (AGENTS.md § "Assert the ENGINE'S OWN RESULT"). A wire trace is text and
+   goes in the PR body; a game **frame must NOT be `pr-image`d** — it
+   reproduces game artwork and hard rule 1 wins (AGENTS.md § "Screenshots vs
+   hard rule 1 (settled)"). Keep frames on the gitignored diagnostic path and
+   name the exact paths in the PR body for the conductor to open at review.
 2. Resources spent match the units queued; cancel still refunds.
 3. Single-building over-cap queueing (task 025) still passes.
 4. A test that fails on current main and passes with the fix.
