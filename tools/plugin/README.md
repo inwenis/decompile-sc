@@ -945,6 +945,7 @@ The one exception is the deprecated `-Windowed` switch, which *does* write
 | `test-production-queue.ps1` | **unattended** end-to-end test of task 025: generates a one-Command-Center map with starting resources, presses Train more times than the queue can hold, and asserts the queue length out of `CUnit+0x98`, the per-item promotions, and that minerals move exactly once per item |
 | `probe-upgrade-wire.ps1` | the task-029 measurement that came BEFORE its design: with an upgrade already running, does the client send a second one? Reads the card out of memory before and after, presses where the button was, and cancels to prove the zeros were a refusal and not a missed click |
 | `test-upgrade-queue.ps1` | **unattended** end-to-end test of task 029: one Engineering Bay, three upgrades queued at it (including the next level of the running one), asserted out of `CUnit+0xC9`/`0xC8`, completed in order out of the engine's own level array, and paid exactly once each out of the resource globals. Also checks the cap refuses on the wire and that cancel is free while the item is the plugin's and an exact refund once it is not |
+| `test-group-queue-over-five.ps1` | **unattended** end-to-end test of task 038, and the FIRST suite to run task 025's over-cap queueing and task 030's group fan-out in one game: three Command Centers boxed, nine Train presses, and the wire counted at `queueCommand` — nine commands, not five. Asserts each building's logical queue (its own `CUnit+0x98` plus the plugin's overflow), the engine's own spend, a cancel refund, and the single-building path in the same run |
 | `check-game-windows.ps1` | out-of-process launch health check |
 | `close-game.ps1` | WM_CLOSE the game and verify it exited (hard rule: never leave one running) |
 
@@ -962,6 +963,7 @@ The one exception is the deprecated `-Windowed` switch, which *does* write
 ./tools/plugin/test-control-groups.ps1               # Ctrl+1 stores 36, pressing 1 brings 36 back
 ./tools/plugin/test-combat-death.ps1                 # the liveness gate, and a >12 group across deaths
 ./tools/plugin/test-production-queue.ps1             # more than 5 queued at one building, paid once
+./tools/plugin/test-group-queue-over-five.ps1        # ... and more than 5 at EVERY building of a group
 ```
 
 `test-burrow-fanout.ps1` is the one that needs no stock map: no `.scm`/`.scx` Blizzard shipped can

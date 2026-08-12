@@ -149,6 +149,38 @@ ROWS across the full width, while animation differs in isolated blobs spanning n
 the thing that distinguishes damage from noise, and report the noise floor beside it rather than
 asserting against zero.
 
+## Take the ADDRESS from the engine's own instructions, not from the global next door (2026-08-12, task 038)
+
+When a plugin re-implements an engine predicate — "which unit is this command about", "may this
+be built here" — the arithmetic has to come from the engine's own code, operand by operand. A
+global of the right shape and the right name, sitting next to the right one, will agree with it
+for as long as your tests are simple.
+
+Task 025 re-implemented `cmdrecvTrain`'s "exactly one unit selected" gate as
+`activePlayerSelection[0] != 0 && [1] == 0` and called it "the same test without calling into the
+engine". The test was right; the ARRAY was wrong. `getActivePlayerNextSelection` (`0x0049A850`)
+walks `playersSelections` (`0x006284E8`), row `activePlayerId` — and the two arrays **abut**
+(`0x006284B8 + 12*4 == 0x006284E8`), are both `CUnit*[12]`, and hold the same thing whenever the
+player has one building selected. Which is every case either suite had, so it passed everywhere
+for two tasks.
+
+It broke the moment a second feature made the two disagree on purpose: task 030's fan-out replays
+one Select+Train per building, so the SIMULATION holds one building while the CLIENT still holds
+the group. Reading the client's list, the plugin answered "not a single building" for every
+replayed Train, held nothing back, and every ring filled to five — the user's report, *"can't
+queue more than 5 units per building when multiple buildings are selected"*.
+
+So: dump the engine function and read its operands. `MOV EAX,[0x0051267C]` / `LEA EAX,[EAX+EAX*2]`
+/ `MOV EAX,[ESI*4 + 0x006284E8]` names the base, the row and the stride, and none of the three is
+a judgement call. Where the plugin then evaluates that predicate, evaluate it in the state the
+action will ACTUALLY run in — the same rule task 029 wrote about per-level requirements, one
+layer down.
+
+And the counterpart on the diagnostics side: this cost a whole in-game run to see, because "the
+plugin is holding nothing" and "the plugin was never handed a building" print the same zeros.
+Count the detour's exits, not just its successes (`trainSeen` / `trainNoUnit` in `PRODQSTATS`) —
+the task-030 rule about naming the term that refused applies to the entry as well as the verdict.
+
 ## Absence assertions must first be proved positive (2026-08-09)
 
 An assertion that something is ABSENT is worth nothing until the same pattern has been shown to
