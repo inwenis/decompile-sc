@@ -1,4 +1,4 @@
-﻿#Requires -Version 7
+#Requires -Version 7
 <#
 .SYNOPSIS
 End-to-end, UNATTENDED proof that the bottom-HUD wireframe row pages through a >12
@@ -114,8 +114,7 @@ function Get-HudShow {
         # defect, it is a broken run. Missing reads as -1, "no answer", and every assertion
         # that depends on one fails saying so.
         '(?: indBoxDiff=(?<boxDiff>-?\d+) indRefInk=(?<refInk>-?\d+) indRefId=(?<refId>-?\d+)' +
-        ' indSurfInk=(?<surfInk>-?\d+) indFontH=(?<fontH>-?\d+) indShowing=(?<showing>\d+)' +
-        ' pagedFrames=(?<pagedFrames>\d+))?')
+        ' indSurfInk=(?<surfInk>-?\d+) indFontH=(?<fontH>-?\d+) indShowing=(?<showing>\d+))?')
     if (-not $m.Success) { throw "test: unparseable HUDROW show line: $($hits[-1])" }
     function Num($g) { if ($m.Groups[$g].Success) { [int]$m.Groups[$g].Value } else { -1 } }
     @{
@@ -136,7 +135,6 @@ function Get-HudShow {
         SurfInk   = (Num 'surfInk')
         FontH     = (Num 'fontH')
         Showing   = $m.Groups['showing'].Value -eq '1'
-        PagedFrames = (Num 'pagedFrames')
         Line      = $hits[-1]
     }
 }
@@ -159,7 +157,7 @@ function Get-HudBand {
     $m = [regex]::Match($hits[-1],
         'HUDROW band after stock: rect=\((?<l>-?\d+),(?<t>-?\d+),(?<r>-?\d+),(?<b>-?\d+)\) ' +
         'glyphBytes=(?<glyph>-?\d+) stranded=(?<stranded>-?\d+) surfInk=(?<surfInk>-?\d+) ' +
-        'pagedFrames=(?<pagedFrames>\d+)')
+        'episodes=(?<episodes>\d+)')
     if (-not $m.Success) { throw "test: unparseable HUDROW band line: $($hits[-1])" }
     @{
         Rect     = @([int]$m.Groups['l'].Value, [int]$m.Groups['t'].Value,
@@ -722,16 +720,16 @@ Write-Host '[coverage] the seam this suite exists to reach'
 $logLines = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue)
 $showLines = @($logLines | Select-String -Pattern 'HUDROW show n=\d+ page=').Count
 $statsLine = @($logLines | Select-String -Pattern 'HUDROW stats: ') | Select-Object -Last 1
-$pagedFrames = -1
+$episodes = -1
 if ($statsLine) {
     Write-Host "  $($statsLine.Line)"
-    $sm = [regex]::Match($statsLine.Line, 'pagedFrames=(\d+)')
-    if ($sm.Success) { $pagedFrames = [int]$sm.Groups[1].Value }
+    $sm = [regex]::Match($statsLine.Line, 'pagedEpisodes=(\d+)')
+    if ($sm.Success) { $episodes = [int]$sm.Groups[1].Value }
 }
 Write-Host "  paged layouts logged: $showLines"
-if ($pagedFrames -ge 0) { Write-Host "  frames on the paged path: $pagedFrames" }
-else { Write-Host '  frames on the paged path: NOT REPORTED by this build (pre-task-048 plugin)' }
-if ($showLines -eq 0 -and $pagedFrames -le 0) {
+if ($episodes -ge 0) { Write-Host "  paged episodes (entries into the >12 state): $episodes" }
+else { Write-Host '  paged episodes (entries into the >12 state): NOT REPORTED by this build (pre-task-048 plugin)' }
+if ($showLines -eq 0 -and $episodes -le 0) {
     Write-Host 'COVERAGE  NO frame reached the >12 PAGED state. A run that never pages CANNOT'
     Write-Host '          detect anything about the page indicator, whatever its verdict says.'
     $failures++

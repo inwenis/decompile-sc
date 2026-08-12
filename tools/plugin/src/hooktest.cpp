@@ -1805,6 +1805,10 @@ static void HudRowTests(void) {
     BuildFakeDialog();
     ScHudRowTestBegin(g_fake, &FakeShowCtl, &FakeHideCtl, &FakeUpdateCtl,
                       &FakeEngineInteract, &FakeOrigDispatch);
+    // No engine, no real clock between these frames, and a paint model that runs
+    // synchronously inside HudFrame -- so the module's wall-clock settle windows would be
+    // measuring this harness. Zero them; the ORDER they enforce still runs (see the header).
+    ScHudRowTestSetBandTiming(0, 0);
 
     const DWORD engineFn = (DWORD)FakeRt(SC_VA_WIREFRAME_BTN_INTERACT);
     const DWORD root     = FakeRoot();
@@ -2174,11 +2178,19 @@ static void HudRowTests(void) {
         Drive36Sync();
         // The frames are driven ONE AT A TIME here rather than "until it is showing", because
         // WHICH frame each thing happens on is the whole point of this block.
-        HudFrame();                                     // paged frame 1: splice + place, nothing shown
-        Check("  one paged frame is deliberately NOT enough to show it",
+        HudFrame();                                     // paged call 1: splice + place, nothing shown
+        Check("  one paged call is deliberately NOT enough to show it",
               ScHudRowIndicatorShowing() ? 1 : 0, 0);
-        ScHudRowOnDispatch();                           // paged frame 2: clean copy, then show
-        Check("the line is up on the second paged frame", ScHudRowIndicatorShowing() ? 1 : 0, 1);
+        // Then poll, WITHOUT painting in between, until the band has been read unchanged and
+        // the clean copy is taken. Nothing repaints here, so this settles immediately -- in a
+        // game it is a wall-clock window, because the walk can be tens of thousands of calls
+        // away and a call count cannot stand in for it.
+        int settleCalls = 0;
+        while (!ScHudRowIndicatorShowing() && settleCalls < 8) {
+            ScHudRowOnDispatch(); ++settleCalls;
+        }
+        Check("the line goes up once the band has been read unchanged",
+              ScHudRowIndicatorShowing() ? 1 : 0, 1);
 
         // The show has only asked for a dirty region: the redraw walk has not run, so NOTHING
         // of ours is on the surface yet. That is the reading task 033's `ink` could never
@@ -2194,9 +2206,9 @@ static void HudRowTests(void) {
         Check("  and it was painted OVER, not under (the tail splice)",
               HudIndicatorIsLast(), 1);
 
-        HudFrame();                                     // the module takes its inked copy
+        ScHudRowOnDispatch();                           // the module takes its inked copy
         int glyph = -1;
-        Check("  the inked copy is taken a frame after the show, never on it",
+        Check("  the inked copy is taken once the band actually differs, never on the show",
               ScHudRowBandStranded(&glyph) >= 0 ? 1 : 0, 1);
         Check("  and the glyph mask is not empty", glyph > 0 ? 1 : 0, 1);
 

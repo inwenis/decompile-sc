@@ -130,4 +130,10 @@ void ScHudRowIndicatorBox(short* out);   // out[4] = {left, top, right, bottom}
 int ScHudRowBandDiff(void);
 int ScHudRowBandStranded(int* glyphOut);
 
+// TEST SEAM ONLY. The band copies are gated on a wall clock in the game (the redraw walk can
+// be tens of thousands of dispatcher calls away, so a call count cannot stand in for it); the
+// offline test has no engine and paints synchronously, so it sets both windows to zero. The
+// ORDER the windows enforce -- read, see it unchanged, only then trust it -- is unaffected.
+void ScHudRowTestSetBandTiming(int settleMs, int pollMs);
+
 #endif // SC_HUDROW_H

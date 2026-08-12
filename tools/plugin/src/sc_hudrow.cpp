@@ -99,19 +99,55 @@ static bool  g_rectsLogged = false;
 // Neither is an ink count, and that is the point. See LogReadback.
 static BYTE  g_bandClean[SC_HUD_BAND_MAX];
 static BYTE  g_bandInked[SC_HUD_BAND_MAX];
+static BYTE  g_bandCand[SC_HUD_BAND_MAX];      // "has it stopped changing yet" candidate
 static BYTE  g_bandNow[SC_HUD_BAND_MAX];       // scratch for a live read; game thread only
 static int   g_bandCleanN = 0;                 // bytes held, 0 = no copy for this rect
 static int   g_bandInkedN = 0;
+static int   g_bandCandN  = 0;
+static DWORD g_bandCandAt = 0;                 // tick the candidate was last seen to CHANGE
+static DWORD g_bandPollAt = 0;                 // next tick a poll is allowed (see BandStable)
 static short g_bandRect[4] = { 0, 0, 0, 0 };   // the rect BOTH copies are of
 static bool  g_indShowing  = false;            // our line is on (or bound for) the surface
-static bool  g_wasPaged    = false;            // the previous frame took the paged path
+static bool  g_wasPaged    = false;            // the previous call took the paged path
 static bool  g_bandTooSmall = false;           // "it does not fit" said once per dialog
 static bool  g_bandPending  = false;           // a hand-back is waiting to be measured
-static int   g_bandSettle   = 0;
-static unsigned g_pagedFrames   = 0;           // frames the paged path ran -- the COVERAGE number
-static unsigned g_indShowFrame  = 0;           // g_pagedFrames at the last show
-static unsigned g_bandCleanAfter = 0;          // the first frame a clean copy may be taken on
-static unsigned g_statSuppressed = 0;          // frames the band refused to hold the line
+static unsigned g_statSuppressed = 0;          // calls the band refused to hold the line
+static unsigned g_statEpisodes   = 0;          // times the row ENTERED paged mode -- COVERAGE
+
+// THE PAINT-LATENCY DIAGNOSTIC, and it is deliberately a pair rather than a bare count.
+// A raw "dispatcher calls" total is a number nobody can check: this detour runs tens of
+// thousands of times a second, so a seven-digit figure is indistinguishable from a global
+// tick read by mistake or from uninitialised memory -- and AGENTS.md (task 030) is explicit
+// that a wrong number in a log is worse than no number, because you will reason from it. So
+// the only place a call count is reported is DIVIDED BY ITS OWN ELAPSED MILLISECONDS, once,
+// at the moment the inked copy lands: `after N calls / M ms` is self-checking arithmetic, and
+// it is also the exact evidence for why the band copies are gated on a clock instead of on
+// call counts.
+static unsigned g_showCalls  = 0;              // paged calls since the last show
+static DWORD    g_showTick   = 0;
+static bool     g_inkedLogged = false;         // that pair is worth one line per run
+
+// HOW LONG THE SURFACE IS GIVEN TO SETTLE, in milliseconds, and why this is a CLOCK and not a
+// count of dispatcher calls. The first version of this counted calls -- "take the copy one
+// call after the one that asked for the fill" -- on the assumption that the detour runs once
+// per rendered frame. IT DOES NOT: measured in one 40-second run of test-hud-row, this module
+// took 1,659,828 paged calls and 20,681,359 stock ones, tens of thousands per second, so "the
+// next call" is almost always THE SAME painted frame. The copy came out identical to the one
+// before it and the glyph mask was empty -- and because an empty mask makes `stranded=0`
+// meaningless, the suite said so instead of passing. 100 ms is about six frames at 60 Hz.
+#define SC_HUD_BAND_SETTLE_MS 100
+// And the poll is throttled, because the alternative is copying two kilobytes tens of
+// thousands of times a second on the GAME thread. ~16 ms is GetTickCount's own resolution.
+#define SC_HUD_BAND_POLL_MS   16
+
+// Both are overridable through the test seam ONLY, and the offline test sets them to zero.
+// It has no engine and no real clock between its frames: its paint model runs synchronously
+// inside the test's own frame function, so a wall-clock window there would measure the test
+// harness rather than anything about this module. The SEQUENCE the windows exist to enforce
+// -- copy, see it unchanged, only then trust it -- still runs at zero, because it takes two
+// polls either way.
+static int g_bandSettleMs = SC_HUD_BAND_SETTLE_MS;
+static int g_bandPollMs   = SC_HUD_BAND_POLL_MS;
 
 static unsigned g_statActs    = 0;   // act runs that displayed a page
 static unsigned g_statStock   = 0;   // act runs deferred to the engine
@@ -679,12 +715,35 @@ static bool PlaceIndicator(short* box, DWORD root, DWORD firstBtn, int textLen) 
     return true;
 }
 
-// Invalidate both copies: whatever rect they were of, they are not of THIS one, and the next
-// clean copy may only be taken on a LATER paged frame (see IndicatorFrame step 2).
+// Invalidate every copy: whatever rect they were of, they are not of THIS one.
 static void BandForget(void) {
     g_bandCleanN = 0;
     g_bandInkedN = 0;
-    g_bandCleanAfter = g_pagedFrames + 1;
+    g_bandCandN  = 0;
+    g_bandPollAt = 0;
+}
+
+// HAS THE BAND STOPPED CHANGING? Polled at most every SC_HUD_BAND_POLL_MS, and true only once
+// the rect has read byte-identical for SC_HUD_BAND_SETTLE_MS. That is the honest way to ask
+// "has the redraw walk run": updateControl only marks a region dirty, the paint happens later,
+// and this detour cannot see the walk -- but it can see the walk's RESULT stop moving.
+//
+// On success the settled bytes are in g_bandCand / g_bandCandN, so the caller copies from
+// there rather than taking a fresh (and possibly already-changed) read.
+static bool BandStable(DWORD root) {
+    const DWORD now = GetTickCount();
+    if (g_bandPollAt && (int)(now - g_bandPollAt) < 0) return false;
+    g_bandPollAt = now + (DWORD)g_bandPollMs;
+
+    const int n = ScQueueIndCopyRect(root, g_bandRect, g_bandNow, SC_HUD_BAND_MAX);
+    if (n <= 0) { g_bandCandN = 0; return false; }
+    if (n != g_bandCandN || memcmp(g_bandNow, g_bandCand, (size_t)n) != 0) {
+        memcpy(g_bandCand, g_bandNow, (size_t)n);
+        g_bandCandN  = n;
+        g_bandCandAt = now;
+        return false;                                   // still moving
+    }
+    return (int)(now - g_bandCandAt) >= g_bandSettleMs;
 }
 
 // THE INDICATOR, once per paged frame. Split out of FillPage because the band's copies are a
@@ -730,12 +789,14 @@ static bool IndicatorFrame(DWORD root, DWORD firstBtn) {
 
     if (g_bandCleanN <= 0) {
         if (g_indShowing) { HideIndicator(); return true; }
-        if (g_pagedFrames < g_bandCleanAfter) return false;   // one more painted frame first
-        g_bandCleanN = ScQueueIndCopyRect(root, g_bandRect, g_bandClean, SC_HUD_BAND_MAX);
-        if (g_bandCleanN <= 0) return false;
-        // and fall straight through to the show: the copy is taken BEFORE it, and a show only
-        // dirties the region, so nothing our text does can end up inside the copy. Waiting a
-        // further frame would only make the caption later for no gain.
+        // Wait for the pane THIS PAGE draws to have landed and stopped moving. Until then any
+        // copy would hold the PREVIOUS layout and every later reading would count the change
+        // of layout as well as our text.
+        if (!BandStable(root)) return false;
+        memcpy(g_bandClean, g_bandCand, (size_t)g_bandCandN);
+        g_bandCleanN = g_bandCandN;
+        // and fall straight through to the show: the copy is already taken, and a show only
+        // dirties the region, so nothing our text does can end up inside it.
     }
 
     const int start = g_page * SC_HUD_BUTTON_COUNT;
@@ -754,15 +815,39 @@ static bool IndicatorFrame(DWORD root, DWORD firstBtn) {
         CallShow(ind);
         *(DWORD*)(ind + SC_BINDLG_OFF_FLAGS) |= SC_CTRL_FLAG_DRAWN;
         CallUpdate(ind);
-        g_indShowing   = true;
-        g_indShowFrame = g_pagedFrames;
-        g_bandInkedN   = 0;      // that copy belongs to the line that was there before
+        g_indShowing = true;
+        g_bandInkedN = 0;        // that copy belongs to the line that was there before
+        g_bandPollAt = 0;        // poll again straight away, waiting for the paint
+        g_showCalls  = 0;
+        g_showTick   = GetTickCount();
         return true;
     }
 
-    if (g_bandInkedN <= 0 && g_pagedFrames > g_indShowFrame) {
-        g_bandInkedN = ScQueueIndCopyRect(root, g_bandRect, g_bandInked, SC_HUD_BAND_MAX);
-        return g_bandInkedN > 0;
+    // THE INKED COPY: the band the first time it is seen to DIFFER from the clean copy, which
+    // is the moment the redraw walk has actually put our line on the surface. Triggering on
+    // the difference rather than on elapsed calls is the whole correction here -- the paint
+    // can be tens of thousands of calls away, and clean is by construction the settled pane
+    // with none of our line in it, so nothing else in this rect can move it. Polled at the
+    // same throttle and only until it is taken, so a settled page costs nothing.
+    if (g_bandInkedN <= 0 && g_bandCleanN > 0) {
+        const DWORD now = GetTickCount();
+        if (g_bandPollAt && (int)(now - g_bandPollAt) < 0) return false;
+        g_bandPollAt = now + (DWORD)g_bandPollMs;
+        const int n = ScQueueIndCopyRect(root, g_bandRect, g_bandNow, SC_HUD_BAND_MAX);
+        if (n != g_bandCleanN) return false;
+        if (memcmp(g_bandNow, g_bandClean, (size_t)n) == 0) return false;   // not painted yet
+        memcpy(g_bandInked, g_bandNow, (size_t)n);
+        g_bandInkedN = n;
+        if (!g_inkedLogged) {
+            // The one call count this module prints, and it prints the milliseconds beside it
+            // so the rate is the reader's own division rather than a figure to be trusted.
+            // This is also the measurement that justifies the clock: the redraw walk landed
+            // this many dispatcher calls after the show asked for it.
+            ScLog("HUDROW band inked: the line landed %u dispatcher call(s) / %u ms after the "
+                  "show asked for it", g_showCalls, (unsigned)(now - g_showTick));
+            g_inkedLogged = true;
+        }
+        return true;
     }
     return false;
 }
@@ -885,13 +970,13 @@ static void LogReadback(DWORD firstBtn) {
 
     ScLog("HUDROW show n=%d page=%d/%d slots=%d [%s] indicator=\"%s\" indLinked=%d "
           "indVisible=%d indBounds=(%d,%d,%d,%d) indInk=%d indBoxDiff=%d indRefInk=%d "
-          "indRefId=%d indSurfInk=%d indFontH=%d indShowing=%d pagedFrames=%u",
+          "indRefId=%d indSurfInk=%d indFontH=%d indShowing=%d",
           g_dispN, g_page + 1, g_pageCount, shown, buf, live, linked ? 1 : 0,
           (flags & SC_CTRL_FLAG_VISIBLE) ? 1 : 0,
           linked ? ib[0] : 0, linked ? ib[1] : 0, linked ? ib[2] : 0, linked ? ib[3] : 0, ink,
           linked ? BandDiff(g_dialog) : -1, refInk, refId,
           ScQueueIndSurfaceInk(g_dialog, 0, 0, 0x7FFF, 0x7FFF),
-          ScQueueIndSmallFontHeight(g_base), g_indShowing ? 1 : 0, g_pagedFrames);
+          ScQueueIndSmallFontHeight(g_base), g_indShowing ? 1 : 0);
 }
 
 // Where the buttons are, so an automated test can aim a right-click at one --
@@ -1046,9 +1131,7 @@ void ScHudRowOnDispatch(void) {
         g_indShowing  = false;
         g_bandTooSmall = false;
         g_bandPending  = false;
-        g_bandCleanN = 0;
-        g_bandInkedN = 0;
-        g_bandCleanAfter = g_pagedFrames + 1;
+        BandForget();
     }
 
     DWORD firstBtn = root ? FindChildById(root, SC_HUD_FIRST_SMALL_BUTTON) : 0;
@@ -1076,27 +1159,26 @@ void ScHudRowOnDispatch(void) {
         // the dialog's own redraw walk, which has not run when this returns -- so a reading
         // taken now would find our own line still on the surface and report every byte of it
         // stranded. Every later stock frame is after that redraw. Logged once per hand-back.
-        if (hidNow) { g_bandPending = true; g_bandSettle = 0; }
-        else if (g_bandPending && root) {
-            if (++g_bandSettle >= 1) {
-                int glyph = -1;
-                const int stranded = BandStranded(root, &glyph);
-                ScLog("HUDROW band after stock: rect=(%d,%d,%d,%d) glyphBytes=%d stranded=%d "
-                      "surfInk=%d pagedFrames=%u",
-                      g_bandRect[0], g_bandRect[1], g_bandRect[2], g_bandRect[3],
-                      glyph, stranded,
-                      ScQueueIndSurfaceInk(root, 0, 0, 0x7FFF, 0x7FFF), g_pagedFrames);
-                g_bandPending = false;
-            }
+        if (hidNow) { g_bandPending = true; g_bandCandN = 0; g_bandPollAt = 0; }
+        else if (g_bandPending && root && BandStable(root)) {
+            int glyph = -1;
+            const int stranded = BandStranded(root, &glyph);
+            ScLog("HUDROW band after stock: rect=(%d,%d,%d,%d) glyphBytes=%d stranded=%d "
+                  "surfInk=%d episodes=%u",
+                  g_bandRect[0], g_bandRect[1], g_bandRect[2], g_bandRect[3],
+                  glyph, stranded,
+                  ScQueueIndSurfaceInk(root, 0, 0, 0x7FFF, 0x7FFF), g_statEpisodes);
+            g_bandPending = false;
         }
         return;
     }
 
-    ++g_pagedFrames;
+    ++g_showCalls;
     if (!g_wasPaged) {
-        // Entering paged mode: the surface still holds the STOCK layout this frame, so no copy
-        // of the band taken now is a copy of the pane this page draws. BandForget defers it to
-        // the next paged frame, by which time the redraw walk has painted the row.
+        ++g_statEpisodes;
+        // Entering paged mode: the surface still holds the STOCK layout, so no copy taken now
+        // is a copy of the pane this page draws. BandForget throws the copies away and
+        // BandStable is what decides when the new layout has landed.
         BandForget();
         g_wasPaged = true;
     }
@@ -1167,12 +1249,13 @@ void ScHudRowInit(BYTE* moduleBase, bool enabled) {
     g_wasPaged = false;
     g_bandTooSmall = false;
     g_bandPending = false;
-    g_bandSettle = 0;
-    g_bandCleanN = g_bandInkedN = 0;
+    g_bandCleanN = g_bandInkedN = g_bandCandN = 0;
+    g_bandCandAt = g_bandPollAt = 0;
     g_bandRect[0] = g_bandRect[1] = g_bandRect[2] = g_bandRect[3] = 0;
-    g_pagedFrames = 0;
-    g_indShowFrame = 0;
-    g_bandCleanAfter = 0;
+    g_statEpisodes = 0;
+    g_showCalls = 0;
+    g_showTick = 0;
+    g_inkedLogged = false;
 }
 
 bool ScHudRowEnabled(void) { return g_enabled; }
@@ -1221,14 +1304,23 @@ void ScHudRowRemoveHooks(void) {
 
 void ScHudRowLogStats(void) {
     if (!g_enabled) return;
-    // `pagedFrames` IS THE COVERAGE NUMBER, and it is on this line for the reason AGENTS.md
-    // gives for task 041's: this module's whole seam is the >12 state, and a run that never
-    // reached it proves nothing about the indicator in either direction while looking exactly
-    // like a clean pass. 0 here means no verdict, whatever else the run says.
+    // `pagedEpisodes` IS THE COVERAGE NUMBER -- times the row ENTERED paged mode -- and it is
+    // on this line for the reason AGENTS.md gives for task 041's: this module's whole seam is
+    // the >12 state, and a run that never reached it proves nothing about the indicator in
+    // either direction while looking exactly like a clean pass. 0 here means no verdict,
+    // whatever else the run says.
+    //
+    // It is an EPISODE count and not a call count on purpose. This detour runs tens of
+    // thousands of times a second, so a seven-digit total is a number no reader can check
+    // against anything -- it is indistinguishable from a tick global read by mistake. `acts`
+    // beside it (pages actually displayed) is the same size and the same kind of fact, and
+    // both are cross-checkable against the run's own `HUDROW show` lines. The one call count
+    // this module prints is `HUDROW band inked`, which prints its own elapsed milliseconds
+    // next to it so the rate can be divided out.
     ScLog("HUDROW stats: acts=%u stock=%u flips=%u staleDropped=%u wraps=%u splices=%u "
-          "diverged=%u gated=%u pagedFrames=%u bandSuppressed=%u",
+          "diverged=%u gated=%u pagedEpisodes=%u bandSuppressed=%u",
           g_statActs, g_statStock, g_statFlips, g_statStale, g_statWraps, g_statSplices,
-          g_statDiverged, g_statGated, g_pagedFrames, g_statSuppressed);
+          g_statDiverged, g_statGated, g_statEpisodes, g_statSuppressed);
 }
 
 // ---------------------------------------------------------------------------
@@ -1254,7 +1346,12 @@ int ScHudRowCurrentPage(void)  { return g_page; }
 int ScHudRowPageCount(void)    { return g_pageCount; }
 int ScHudRowGatedCount(void)   { return (int)g_statGated; }
 bool ScHudRowIsDiverged(void)  { return g_diverged; }
-int ScHudRowPagedFrames(void)  { return (int)g_pagedFrames; }
+int ScHudRowPagedFrames(void)  { return (int)g_statEpisodes; }
+void ScHudRowTestSetBandTiming(int settleMs, int pollMs) {
+    g_bandSettleMs = settleMs < 0 ? 0 : settleMs;
+    g_bandPollMs   = pollMs   < 0 ? 0 : pollMs;
+    g_bandPollAt   = 0;
+}
 bool ScHudRowIndicatorShowing(void) { return g_indShowing; }
 int ScHudRowBandDiff(void)     { return BandDiff(g_dialog); }
 int ScHudRowBandStranded(int* glyphOut) { return BandStranded(g_dialog, glyphOut); }
