@@ -136,7 +136,7 @@ namespace ScSpawn {
     private const uint FILE_SHARE_READ = 1, FILE_SHARE_WRITE = 2, FILE_SHARE_DELETE = 4;
     private const uint CREATE_ALWAYS = 2, OPEN_EXISTING = 3;
     private const uint STARTF_USESTDHANDLES = 0x00000100;
-    private const uint CREATE_NEW_CONSOLE = 0x00000010;
+    private const uint CREATE_NO_WINDOW = 0x08000000;
     private const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
 
     public static IntPtr LastProcess = IntPtr.Zero;
@@ -146,11 +146,29 @@ namespace ScSpawn {
     // Starts `cmdLine` on the named desktop with stdout+stderr going to `outPath` and
     // stdin bound to NUL. Returns the pid, or 0 with LastError set.
     //
-    // The console: CREATE_NEW_CONSOLE, not DETACHED_PROCESS. A console app on a desktop
-    // where nothing is displayed still wants one, and inheriting the PARENT's console
-    // would put the child's console I/O on the parent's desktop -- the one thing this is
-    // trying to avoid. The new console is created on the child's desktop, where nobody
-    // ever sees it; its stdout/stderr are redirected to the transcript regardless.
+    // The console: CREATE_NO_WINDOW, not CREATE_NEW_CONSOLE (2026-08-12, task 045). The old
+    // CREATE_NEW_CONSOLE flag was assumed to keep its console on the child's own (invisible)
+    // desktop because STARTUPINFO.lpDesktop names that desktop -- but on Windows 11, with the
+    // per-user console delegation at its default (`HKCU:\Console\%%Startup`
+    // DelegationConsole/DelegationTerminal both the all-zero "let Windows decide" GUID), a
+    // new console is handed off to Windows Terminal, a GUI app running on the user's own
+    // INTERACTIVE desktop that does not honour lpDesktop for where it draws. Measured live: a
+    // tight loop of spawns put a flashing, focus-stealing terminal on the user's screen even
+    // though every child's `GetInputDesktopName()` genuinely differed from its own desktop
+    // the whole time (work/messages/conductor -- "I killed your 50x repro loop").
+    //
+    // DETACHED_PROCESS (no console at all) was tried first and rejected: pwsh's ConsoleHost
+    // queries real console APIs (screen buffer info, window size) during its OWN startup,
+    // before user script code runs at all, and with no console object to answer them the host
+    // never reaches the script -- confirmed with a marker file written by the child's own
+    // first line, which never appeared, while GetExitCodeProcess still reported a clean 0. A
+    // child that never ran and reports success is the exact false-green shape this task
+    // exists to kill, from a second direction. CREATE_NO_WINDOW is what MSDN documents as
+    // "console app, no window" -- proof in this task's PR rests on two measurements, not on
+    // that description: a marker file confirms the script itself ran end to end, and
+    // conhost.exe/WindowsTerminal.exe process counts are unchanged across the spawn (19/19).
+    // (The child's own GetConsoleWindow() reads NULL under this flag, which is a further
+    // observation, not the mechanism the claim rests on -- the process counts are.)
     public static int Start(string cmdLine, string desktop, string outPath, string workDir) {
       LastError = null;
       var sa = new SECURITY_ATTRIBUTES();
@@ -175,7 +193,7 @@ namespace ScSpawn {
       PROCESS_INFORMATION pi;
       var cl = new StringBuilder(cmdLine, cmdLine.Length + 8);   // CreateProcessW may write to it
       bool ok = CreateProcessW(null, cl, IntPtr.Zero, IntPtr.Zero, true,
-                               CREATE_NEW_CONSOLE | CREATE_UNICODE_ENVIRONMENT,
+                               CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
                                IntPtr.Zero, workDir, ref si, out pi);
       int err = Marshal.GetLastWin32Error();
       CloseHandle(hOut); CloseHandle(hNul);   // ours are done; the child holds its own copies
@@ -313,10 +331,34 @@ try {
 
     $code = 0
     [void][ScSpawn.Native]::GetExitCodeProcess($hProc, [ref]$code)
-    $exit = [int]$code
+    # GetExitCodeProcess returns a DWORD. A checked `[int]` cast throws OverflowException
+    # for anything above Int32.MaxValue -- which is exactly what a host FailFast exit code
+    # is (task 039 saw 2148734499 / 0x80131623 from a PowerShell host crash; reproduced
+    # live here, task 045, by forcing `[Environment]::FailFast()` as the child's payload --
+    # same overflow, same throw). That uncaught throw used to escape this script without
+    # ever reaching `exit`, so $LASTEXITCODE was left holding whatever ran before this call
+    # -- often a stale 0 that read as a pass. Reinterpret the bits instead of range-checking
+    # them; this is a no-op for any exit code that fits in Int32 (every ordinary suite exit).
+    $exit = [BitConverter]::ToInt32([BitConverter]::GetBytes($code), 0)
     Write-Host ('-' * 70)
     Write-Host "run-offscreen: child pid $childPid exited $exit (desktop '$desktopName')"
     Write-Host "run-offscreen: transcript $TranscriptPath"
+
+    # The child's very first act (before any suite/command payload runs) is to print its
+    # own "run-offscreen(child):" header line. If that line is missing, the child process
+    # died at HOST STARTUP -- before one line of the suite ran -- and NOTHING it was asked
+    # to test was ever exercised. Task 039 hit this when the child raced a desktop still
+    # being torn down by the previous step of a chain (the New-ScTestDesktopName race,
+    # fixed above): PowerShell FailFasts at console-buffer setup with Win32 error 0xE9
+    # ("No process is on the other end of the pipe."). That is a FAILURE, never a silent
+    # zero -- whatever kills the child before its first line runs.
+    $transcriptText = if (Test-Path -LiteralPath $TranscriptPath) { Get-Content -LiteralPath $TranscriptPath -Raw -ErrorAction SilentlyContinue } else { $null }
+    $childStarted = $transcriptText -and ($transcriptText -match 'run-offscreen\(child\):')
+    if (-not $childStarted) {
+        Write-Error "run-offscreen: child pid $childPid exited $exit WITHOUT running any suite code -- no 'run-offscreen(child):' line in the transcript. This is the host-startup-crash signature (e.g. Win32 0xE9, 'No process is on the other end of the pipe.'), not a test result. Transcript: $TranscriptPath"
+        exit $(if ($exit -ne 0) { $exit } else { 1 })
+    }
+
     exit $exit
 }
 finally {
