@@ -4,7 +4,7 @@
 
 agent: 046
 model: sonnet
-pr: -
+pr: https://github.com/inwenis/decompile-sc/pull/53
 
 ## Workspace
 
