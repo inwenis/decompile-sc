@@ -23,11 +23,17 @@ BeforeAll {
             [string[]]$Failed = @(),
             [string[]]$Skipped = @(),
             [string[]]$RequiredSkipped = @(),
-            [switch]$Legacy      # a receipt written before skip tracking existed
+            [switch]$Legacy,     # a receipt written before skip tracking existed
+            [bool]$Dirty = $false,
+            [string[]]$DirtyFiles = @(),
+            [switch]$LegacyDirty # a receipt written after skip tracking but before dirty tracking
         )
         $o = [ordered]@{ branch = 'b'; sha = $Sha; ranAt = '2026-08-09T18:00:00Z'
                          verdict = $Verdict; failed = $Failed }
-        if (-not $Legacy) { $o.skipped = $Skipped; $o.requiredSkipped = $RequiredSkipped }
+        if (-not $Legacy) {
+            $o.skipped = $Skipped; $o.requiredSkipped = $RequiredSkipped
+            if (-not $LegacyDirty) { $o.dirty = $Dirty; $o.dirtyFiles = $DirtyFiles }
+        }
         [pscustomobject]$o
     }
 }
@@ -103,5 +109,88 @@ Describe 'ci receipt substitution for the cloud verdict' {
 
     It 'says nothing when nothing was skipped -- a receipt with a skip line differs from one without' {
         Format-CiReceiptSkips -Receipt (New-Receipt) | Should -Be ''
+    }
+
+    It 'refuses a receipt taken against a dirty worktree even though it says pass' {
+        $r = New-Receipt -Dirty $true -DirtyFiles @(' M scripts/run-ci-local.ps1')
+        Get-CiReceiptRefusalReason -Receipt $r -HeadSha 'abc1234def567' |
+            Should -BeLike '*DIRTY worktree*'
+    }
+
+    It 'accepts a clean receipt that explicitly records dirty=false' {
+        $r = New-Receipt -Dirty $false
+        Get-CiReceiptRefusalReason -Receipt $r -HeadSha 'abc1234def567' | Should -BeNullOrEmpty
+    }
+
+    It 'refuses a receipt that predates dirty-worktree tracking rather than assuming it was clean' {
+        # Same "we cannot tell" reasoning task 023 applied to skip tracking, one field over.
+        Get-CiReceiptRefusalReason -Receipt (New-Receipt -LegacyDirty) -HeadSha 'abc1234def567' |
+            Should -BeLike '*predates dirty-worktree tracking*'
+    }
+
+    It 'refuses a sha prefix shorter than the minimum length' {
+        Get-CiReceiptRefusalReason -Receipt (New-Receipt -Sha 'abc12') -HeadSha 'abc1234def567' |
+            Should -BeLike '*shorter than the minimum*'
+    }
+
+    It 'accepts a sha prefix at exactly the minimum length' {
+        Get-CiReceiptRefusalReason -Receipt (New-Receipt -Sha 'abc1234') -HeadSha 'abc1234def567' |
+            Should -BeNullOrEmpty
+    }
+
+    It 'honours a caller-supplied minimum length' {
+        Get-CiReceiptRefusalReason -Receipt (New-Receipt -Sha 'abc1234') -HeadSha 'abc1234def567' -MinShaLength 10 |
+            Should -BeLike '*shorter than the minimum 10-character prefix*'
+    }
+}
+
+Describe 'ci step skip classification (Get-CiStepSkip)' {
+    # ISSUE #72 HOLE 3b. run-ci-local.ps1's Step function used to check `$out -is [psobject]`
+    # directly against a step body's raw output. That is correct for the ordinary case -- a step
+    # that returns ONLY `Skip-Step '...'` -- and silently wrong the moment the body emits any
+    # other pipeline output first, because PowerShell then hands back an ARRAY, and
+    # `[object[]] -is [psobject]` is $false. A skipped step was recorded as an ordinary pass with
+    # its Reason unread. Get-CiStepSkip is the extracted, testable classifier.
+
+    BeforeAll {
+        function New-SkipMarker { param([string]$Why = 'because') [pscustomobject]@{ ScStepSkipped = $true; Reason = $Why } }
+    }
+
+    It 'recognises a bare Skip-Step marker' {
+        $r = Get-CiStepSkip -Out (New-SkipMarker -Why 'no tests/ directory')
+        $r.IsSkip | Should -BeTrue
+        $r.Reason | Should -Be 'no tests/ directory'
+    }
+
+    It 'recognises a Skip-Step marker that arrives as the LAST element of an array -- THE BUG' {
+        # Reproduces a step body that writes output before returning Skip-Step, e.g.
+        # `"some diagnostic line"; return Skip-Step 'no python'`. PowerShell collects both
+        # into one System.Object[], which the old inline check could not see into.
+        $out = @('some diagnostic line', (New-SkipMarker -Why 'no python'))
+        $out.GetType().IsArray | Should -BeTrue   # sanity: this really is the array shape
+        $r = Get-CiStepSkip -Out $out
+        $r.IsSkip | Should -BeTrue
+        $r.Reason | Should -Be 'no python'
+    }
+
+    It 'does not classify an ordinary scalar result as a skip' {
+        $r = Get-CiStepSkip -Out '42 passed'
+        $r.IsSkip | Should -BeFalse
+        $r.Reason | Should -BeNullOrEmpty
+    }
+
+    It 'does not classify an ordinary array result (no marker anywhere) as a skip' {
+        $r = Get-CiStepSkip -Out @('line one', 'line two')
+        $r.IsSkip | Should -BeFalse
+    }
+
+    It 'does not classify a plain object that merely resembles one as a skip' {
+        $r = Get-CiStepSkip -Out ([pscustomobject]@{ Name = 'not a skip marker' })
+        $r.IsSkip | Should -BeFalse
+    }
+
+    It 'treats $null and an empty array as not-a-skip rather than throwing' {
+        Get-CiStepSkip -Out $null | ForEach-Object { $_.IsSkip } | Should -BeFalse
+        Get-CiStepSkip -Out @() | ForEach-Object { $_.IsSkip } | Should -BeFalse
     }
 }
