@@ -832,6 +832,58 @@
 #define SC_STATUSER_OFF_TYPE 0x08u   // s16 -- the unit type again, occupied slots only
 
 // ---------------------------------------------------------------------------
+// THE FOURTH FIELD, and the fifth (task 039).
+//
+// The summary above -- "queueLayout writes icon, mode and type" -- is THREE of the
+// FIVE things it writes per slot, and the two it leaves out are what decide which
+// ART the slot draws. Disassembled here from this binary
+// (work/scratch/039/disasm.py, `python disasm.py 0x004268D0 0x1D0`):
+//
+//   OCCUPIED (queue slot holds a unit type)
+//     00426A33  MOV  EDX,[0x0068C1E0]     ; the ICON grp
+//     00426A39  MOV  [EAX],EDX            ; statUser->grp   <-- field 1
+//     00426A3B  MOV  [EAX+4],CX           ; icon = unit type
+//     00426A3F  MOV  [EAX+6],3            ; mode
+//     00426A45  MOV  [EAX+8],CX           ; type
+//     00426A49  CALL 0x00418E00           ; ENABLE
+//     00426A4E  MOV  EAX,[EDI*4+0x00519F40]
+//     00426A55  MOV  [EBX+0x14],EAX       ; ctrl->pszText = slot label  <-- field 5
+//
+//   EMPTY (0xE4)
+//     00426A5A  MOV  ECX,[0x0068C1C0]     ; the BUTTON-BORDER grp
+//     00426A63  MOV  [EAX],ECX            ; statUser->grp
+//     00426A65  MOV  [EAX+4],DI           ; icon = k + 6
+//     00426A69  MOV  [EAX+6],6            ; mode
+//     00426A6F  CALL 0x00418640           ; DISABLE
+//     00426A74  MOV  [EBX+0x14],0         ; ctrl->pszText = NULL
+//
+// The two GRP handles are DIFFERENT ART, and the draw takes the frame index and the
+// GRP from the SAME record -- 0x00456C30, the status control's icon blit:
+//     00456C80  MOV  CX,[EAX+4]           ; frame = statUser->icon
+//     00456C84  MOV  EAX,[EAX]            ; grp   = statUser->grp
+//     00456C88  MOV  DX,[EAX]             ; grp->frameCount
+//     00456C91  CMP  CX,DX / JB / XOR ECX,ECX   ; out of range -> frame 0
+// so a record carrying an occupied slot's frame index and an EMPTY slot's GRP draws
+// frame #unitType out of the button-border art: different garbage per queued unit
+// type, constant for as long as that type is queued. That was task 039's bug, and it
+// is why filling a slot the engine laid out for another purpose means writing EVERY
+// field that layout wrote, not the ones that look like the payload.
+//
+// Resolved to files at their load sites (`python disasm.py 0x00459BA0 0xA4`):
+//   0x0068C1E0 <- 0x00459C2A, name at 0x00504A24 = "unit\cmdbtns\cmdicons.grp"
+//   0x0068C1C0 <- 0x00459C0C, name built from 0x00504A40 "%s%ccmdbtns.grp" +
+//                 0x00504A50 "unit\cmdbtns\" + the race letter from 0x00512700 "ztp",
+//                 i.e. <race>cmdbtns.grp -- the command BUTTON BORDER art.
+#define SC_VA_GRP_CMDICONS 0x0068C1E0u   // unit\cmdbtns\cmdicons.grp -- occupied slots
+#define SC_VA_GRP_CMDBTNS  0x0068C1C0u   // <race>cmdbtns.grp -- empty-slot placeholders
+
+// The five slot LABELS, `char*[5]`. queueLayout formats "%d " (k+1) into buffer k
+// before it branches (0x004269EE-0x00426A02, with the k==0 variant taking the
+// colour-coded "\x03%d\x01 " at 0x00505708), and then points the control's pszText
+// at buffer k for an occupied slot. They are the little numbers on the strip's icons.
+#define SC_VA_STATQ_SLOT_LABELS 0x00519F40u
+
+// ---------------------------------------------------------------------------
 // PER-PLAYER TECH STATE -- the memory an ability button is gated on, and therefore
 // the memory that decides whether a fixture really granted a tech.
 //
@@ -1323,6 +1375,16 @@
 #define SC_VA_DRAW_STRING          0x004202B0u  // clips, then runs the glyph loop 0x004200D0
 #define SC_VA_TEXT_JUSTIFY         0x006CE110u  // u8, set by the update handler per type
 #define SC_VA_TEXT_FONT_HEIGHT     0x006CE111u  // u8, set by SC_VA_SET_FONT
+
+// THE FONT'S OWN HEIGHT, readable before anything is drawn. SC_VA_SET_FONT is four
+// instructions of copying out of the font header (0x0041FB4F `MOV AL,[ECX+6]`,
+// 0x0041FB52 `MOV CL,[ECX+7]`, 0x0041FB66 `MOV [0x006CE111],CL`), so the byte the
+// clip rule is measured against is font+7 -- and 0x006CE0F4 is the handle the
+// SC_CTRL_FONT_SMALLEST bit selects (the flags & 0x4C00 switch above). Reading it
+// directly is how a box can be sized against the ENGINE's number instead of a
+// constant that was right on the install someone measured. Task 039.
+#define SC_VA_FONT_SMALLEST     0x006CE0F4u
+#define SC_FONT_OFF_HEIGHT      0x07u
 
 // THE RULE A BOX HAS TO SATISFY, off SC_VA_DRAW_STRING's own clip test: the string is
 // drawn only when

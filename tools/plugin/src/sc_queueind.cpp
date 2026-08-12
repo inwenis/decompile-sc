@@ -66,7 +66,7 @@ static unsigned g_stat[SC_QIND_STAT__COUNT];
 // the intermediate state, but an asynchronous reader lands in it often enough to make a
 // suite flaky (measured: the same assertion passed one run and failed the next). A snapshot
 // taken by the thread that does the writing is coherent by construction.
-struct QIconSnap { short icon; WORD mode; DWORD flags; };
+struct QIconSnap { short icon; WORD mode; DWORD flags; DWORD grp; DWORD text; };
 static QIconSnap g_icons[SC_STATQ_SLOTS];
 static int       g_iconsN = 0;
 
@@ -131,6 +131,16 @@ static bool Readable(DWORD addr, DWORD len) {
 // Forward: the box sizing needs the surface width, and the surface reader lives with the
 // ink probe further down.
 static DWORD SurfaceOf(DWORD root);
+
+// The height of the font the SC_CTRL_FONT_SMALLEST bit selects, out of the font's own
+// header -- the byte SC_VA_SET_FONT copies into the global the string draw's clip rule is
+// measured against (sc_addresses.h). 0 when the handle is not up yet, which callers treat
+// as "no answer" rather than as zero.
+static int SmallFontHeight(void) {
+    DWORD f = *(DWORD*)Rt(SC_VA_FONT_SMALLEST);
+    if (!Readable(f, SC_FONT_OFF_HEIGHT + 1)) return 0;
+    return (int)*(BYTE*)(f + SC_FONT_OFF_HEIGHT);
+}
 
 static DWORD ChildOf(DWORD dlg)  { return *(DWORD*)(dlg + SC_BINDLG_OFF_FIRST_CHILD); }
 static DWORD NextOf(DWORD ctrl)  { return *(DWORD*)(ctrl + SC_BINDLG_OFF_NEXT); }
@@ -399,10 +409,24 @@ static DWORD AnchorFor(DWORD root, int mode) {
 // FEATURE is right and the ring must stay at four; the DISPLAY is what is wrong.
 //
 // So: after the engine has laid the strip out, fill the icons it left empty from the
-// plugin's own overflow, writing the same three statUser fields queueLayout writes for an
-// occupied slot (research/production-queue.md 8.1):
+// plugin's own overflow, writing the same FIVE things queueLayout writes for an occupied
+// slot (sc_addresses.h "THE FOURTH FIELD, and the fifth"; research/production-queue.md 8.1):
+//     statUser->grp  = *SC_VA_GRP_CMDICONS;   // which ART the frame index means
 //     statUser->icon = type;  statUser->mode = 3;  statUser->type = type;
+//     ctrl->pszText  = the engine's own label for this slot
 // and clearing the DISABLED bit so the icon draws lit like any other queued item.
+//
+// THE GRP IS NOT DECORATION, AND LEAVING IT WAS TASK 039'S BUG. queueLayout had just laid
+// this slot out EMPTY, which points its grp at the button-BORDER art and its icon at the
+// placeholder frame k+6. Writing the icon index without the GRP leaves the draw
+// (0x00456C30, which reads both out of the same record) blitting frame #unitType out of
+// the border art -- a different wrong picture for every queued unit type, and a CONSTANT
+// one for as long as that type is queued. The user, on the deployed build, saw exactly
+// that shape and named it three times: a stuck glyph on a Command Center (SCV, type 7), a
+// blacked-out Barracks (Marine, type 0) and a flashing one. One missing field, one bug.
+//
+// The label matters for the same reason in miniature: the other four icons draw their slot
+// number and a filled fifth drew none, because the engine had set its pszText to NULL.
 //
 // Clearing DISABLED also makes it CLICKABLE, and that is deliberate and paid for on the
 // other side: a click on icon k emits {0x20, k}, and sc_prodqueue's cancel handler now
@@ -412,6 +436,18 @@ static DWORD AnchorFor(DWORD root, int mode) {
 // Only writes when something actually differs, so a settled strip costs five compares.
 static void FillOverflowIcons(DWORD root, const ScQueueIndView* v, DWORD unit) {
     const int drawable = ScQueueIndDrawableSlots(v);
+
+    // The engine's own icon GRP, read from the engine's own global every frame rather than
+    // cached: it is a handle the loader writes at map start and frees on the way out, so a
+    // stale copy would outlive the art it names. A null here means the status module has
+    // not loaded its GRPs yet -- refuse to fill rather than aim the draw at nothing.
+    const DWORD grpIcons = *(DWORD*)Rt(SC_VA_GRP_CMDICONS);
+    if (!grpIcons) {
+        ++g_stat[SC_QIND_STAT_NOGRP];
+        return;
+    }
+    const DWORD* labels = (const DWORD*)Rt(SC_VA_STATQ_SLOT_LABELS);
+
     DWORD c = FindChildById(root, SC_STATQ_FIRST_CONTROL);
     for (int k = 0; k < SC_STATQ_SLOTS && c; ++k, c = NextOf(c)) {
         if (k < v->engineLen) continue;              // the engine's own item: leave it
@@ -421,14 +457,23 @@ static void FillOverflowIcons(DWORD root, const ScQueueIndView* v, DWORD unit) {
         DWORD su = *(DWORD*)(c + SC_BINDLG_OFF_USER);
         if (!su) continue;
         DWORD* flags = (DWORD*)(c + SC_BINDLG_OFF_FLAGS);
-        const bool sameIcon = *(short*)(su + SC_STATUSER_OFF_ICON) == (short)type &&
+        // `grp` is part of "is this slot already ours": the engine re-lays the strip out
+        // every frame it redraws the pane, and the field it changes FIRST when it takes
+        // this slot back is the one that decides the art.
+        const bool sameIcon = *(DWORD*)(su + SC_STATUSER_OFF_GRP)  == grpIcons &&
+                              *(short*)(su + SC_STATUSER_OFF_ICON) == (short)type &&
                               *(WORD*) (su + SC_STATUSER_OFF_MODE) == 3 &&
                               *(short*)(su + SC_STATUSER_OFF_TYPE) == (short)type;
         const bool lit = (*flags & SC_CTRL_FLAG_DISABLED) == 0;
         if (sameIcon && lit && (*flags & SC_CTRL_FLAG_VISIBLE)) continue;
+        *(DWORD*)(su + SC_STATUSER_OFF_GRP)  = grpIcons;
         *(short*)(su + SC_STATUSER_OFF_ICON) = (short)type;
         *(WORD*) (su + SC_STATUSER_OFF_MODE) = 3;
         *(short*)(su + SC_STATUSER_OFF_TYPE) = (short)type;
+        // The slot's number, from the engine's own five-buffer table -- the same pointer
+        // queueLayout hands an occupied slot, so the fifth icon is labelled by the engine's
+        // string in the engine's font, and nothing new is written into that buffer.
+        *(DWORD*)(c + SC_BINDLG_OFF_TEXT) = labels[k];
         *flags &= ~(DWORD)SC_CTRL_FLAG_DISABLED;
         CallShow(c);
         *flags |= SC_CTRL_FLAG_DRAWN;
@@ -445,6 +490,8 @@ static void FillOverflowIcons(DWORD root, const ScQueueIndView* v, DWORD unit) {
         q->flags = *(DWORD*)(sc + SC_BINDLG_OFF_FLAGS);
         q->icon  = su ? *(short*)(su + SC_STATUSER_OFF_ICON) : -1;
         q->mode  = su ? *(WORD*) (su + SC_STATUSER_OFF_MODE) : 0;
+        q->grp   = su ? *(DWORD*)(su + SC_STATUSER_OFF_GRP)  : 0;
+        q->text  = *(DWORD*)(sc + SC_BINDLG_OFF_TEXT);
     }
 }
 
@@ -489,6 +536,45 @@ int ScQueueIndSurfaceInk(DWORD root, int left, int top, int right, int bottom) {
     return ink;
 }
 
+// Two queue-slot rects, compared byte for byte on the dialog's own 8-bit surface. See the
+// block above the call site for why this is the honest oracle for the fifth icon and a
+// plain ink count is not. Rows 0..SC_QIND_SLOT_LABEL_ROWS are skipped because the engine
+// draws each slot's NUMBER there and the numbers legitimately differ ("1 " against "5 ").
+// Returns the count of differing bytes, or -1 when the surface is unreadable, either
+// control is missing or hidden, or the two rects are not the same size (which is the
+// engine's layout saying these two slots are not comparable, not a defect here).
+int ScQueueIndSlotDiff(DWORD root, int slotA, int slotB) {
+    if (!root || slotA < 0 || slotB < 0 ||
+        slotA >= SC_STATQ_SLOTS || slotB >= SC_STATQ_SLOTS) return -1;
+    DWORD d = SurfaceOf(root);
+    if (!d) return -1;
+    const int   w    = (int)*(WORD*)(d + SC_SURFACE_OFF_W);
+    const int   h    = (int)*(WORD*)(d + SC_SURFACE_OFF_H);
+    const DWORD bits = *(DWORD*)(d + SC_SURFACE_OFF_BITS);
+
+    short* r[2];
+    for (int i = 0; i < 2; ++i) {
+        DWORD c = FindChildById(root, (short)(SC_STATQ_FIRST_CONTROL + (i ? slotB : slotA)));
+        if (!c) return -1;
+        if ((*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) == 0) return -1;
+        r[i] = (short*)(c + SC_BINDLG_OFF_BOUNDS);
+    }
+    const int bw = r[0][2] - r[0][0], bh = r[0][3] - r[0][1];
+    if (bw <= 0 || bh <= SC_QIND_SLOT_LABEL_ROWS) return -1;
+    if (r[1][2] - r[1][0] != bw || r[1][3] - r[1][1] != bh) return -1;
+    for (int i = 0; i < 2; ++i) {
+        if (r[i][0] < 0 || r[i][1] < 0 || r[i][0] + bw > w || r[i][1] + bh > h) return -1;
+    }
+
+    int diff = 0;
+    for (int y = SC_QIND_SLOT_LABEL_ROWS; y < bh; ++y) {
+        const BYTE* ra = (const BYTE*)(bits + (DWORD)((r[0][1] + y) * w + r[0][0]));
+        const BYTE* rb = (const BYTE*)(bits + (DWORD)((r[1][1] + y) * w + r[1][0]));
+        for (int x = 0; x < bw; ++x) if (ra[x] != rb[x]) ++diff;
+    }
+    return diff;
+}
+
 // ---------------------------------------------------------------------------
 // Read-back oracles
 // ---------------------------------------------------------------------------
@@ -529,35 +615,74 @@ void ScQueueIndLogState(const char* tag) {
     // unit portrait whenever anything is queued. A run where refInk is 0 as well says the
     // probe is blind and its verdict on the indicator means nothing (AGENTS.md: prove the
     // pattern positive somewhere it should match, before trusting it where it should not).
-    int refInk = -1;
+    //
+    // AND IT HAS TO BE A CONTROL THAT IS ACTUALLY UP. The first queue icon is hidden in a
+    // multi-building selection -- the engine draws the wireframe row instead -- so using it
+    // there would report refInk=0 and read as "the probe is blind" on every group frame.
+    // The reference is therefore the first VISIBLE of (queue icon 2, wireframe button
+    // 0x21), and the line says which one it used.
+    int refInk = -1, refId = 0;
     {
-        DWORD ref = FindChildById(root, SC_STATQ_FIRST_CONTROL);
-        if (ref) {
+        const short cand[2] = { SC_STATQ_FIRST_CONTROL, SC_HUD_FIRST_SMALL_BUTTON };
+        for (int i = 0; i < 2; ++i) {
+            DWORD ref = FindChildById(root, cand[i]);
+            if (!ref) continue;
+            if ((*(DWORD*)(ref + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) == 0) continue;
             short* rb2 = (short*)(ref + SC_BINDLG_OFF_BOUNDS);
             refInk = ScQueueIndSurfaceInk(root, rb2[0], rb2[1], rb2[2], rb2[3]);
+            refId  = cand[i];
+            break;
         }
     }
 
-    // The strip as the game thread last left it (see g_icons): `icon:mode:state` per slot.
-    char icons[96];
+    // THE SCREEN-LEVEL CHECK ON THE FIFTH ICON, and the reason it is a DIFFERENCE rather
+    // than a count. Ink inside the "+N" box cannot say whether the indicator drew: the box
+    // sits inside an icon the engine fills, so the icon's own pixels are inside it and the
+    // number can never be 0 (task 033 asserted exactly that, and it passed while this
+    // module was drawing the wrong art). Slots 0 and 4 are the same size (38x35) and the
+    // engine gives BOTH the same border graphic 2 (queueLayout 0x00426A0D: graphic 4 only
+    // for k in 1..3), so when the queue holds five of one type the two rects are the same
+    // picture -- and every byte that differs below the label row is something this plugin
+    // put there. Three states, three readings, one number:
+    //   a wrong GRP  -> hundreds of bytes differ (different art entirely);
+    //   text drawn UNDER the icon -> 0 (the icon painted over it);
+    //   text drawn ON TOP -> the glyph, tens of bytes.
+    int slotDiff = ScQueueIndSlotDiff(root, 0, SC_STATQ_SLOTS - 1);
+
+    // The two GRPs the engine picks between, so every `art` letter below is decidable
+    // against the engine's own globals rather than against a number this file remembers.
+    const DWORD grpIcons = *(DWORD*)Rt(SC_VA_GRP_CMDICONS);
+    const DWORD grpBtns  = *(DWORD*)Rt(SC_VA_GRP_CMDBTNS);
+
+    // The strip as the game thread last left it (see g_icons), per slot:
+    // `icon:mode:state:art:label`. `art` is I when the slot draws from the ICON grp (what
+    // an occupied slot must draw from), B when it still points at the button-BORDER grp
+    // the engine leaves behind on an EMPTY slot -- task 039's bug, and the field the old
+    // line could not show -- and ? for neither. `label` is 1 when the slot carries the
+    // number the engine draws on every occupied icon. A frame index alone cannot say
+    // which PICTURE is on the screen; the frame index and the GRP together can.
+    char icons[224];
     int used = 0;
-    icons[0] = ' ';
-    for (int i = 0; i < g_iconsN && used + 16 < (int)sizeof(icons); ++i) {
-        used += _snprintf(icons + used, sizeof(icons) - (size_t)used, "%s0x%03X:%u:%s",
+    icons[0] = '\0';
+    for (int i = 0; i < g_iconsN && used + 26 < (int)sizeof(icons); ++i) {
+        DWORD g = g_icons[i].grp;
+        used += _snprintf(icons + used, sizeof(icons) - (size_t)used, "%s0x%03X:%u:%s:%c:%d",
                           i ? "," : "", (unsigned)(WORD)g_icons[i].icon,
                           (unsigned)g_icons[i].mode,
                           (g_icons[i].flags & SC_CTRL_FLAG_DISABLED) ? "grey" :
-                          ((g_icons[i].flags & SC_CTRL_FLAG_VISIBLE) ? "lit" : "hidden"));
+                          ((g_icons[i].flags & SC_CTRL_FLAG_VISIBLE) ? "lit" : "hidden"),
+                          (g && g == grpIcons) ? 'I' : ((g && g == grpBtns) ? 'B' : '?'),
+                          g_icons[i].text ? 1 : 0);
     }
 
     ScLog("QIND [%s] mode=%d linked=%d visible=%d text=\"%s\" bounds=(%d,%d,%d,%d) ink=%d "
-          "refInk=%d icons=[%s] "
+          "refInk=%d refId=%d slotDiff=%d fontH=%d icons=[%s] "
           "sel=%d engineLen=%d overflow=%d upg=%d bldgs=%d queued=%d hudPages=%d "
           "anchor=0x%08X",
           t, g_mode, linked ? 1 : 0,
           (flags & SC_CTRL_FLAG_VISIBLE) ? 1 : 0, live,
           linked ? b[0] : 0, linked ? b[1] : 0, linked ? b[2] : 0, linked ? b[3] : 0, ink,
-          refInk, icons,
+          refInk, refId, slotDiff, SmallFontHeight(), icons,
           v.selection, v.engineLen, v.overflow, v.upgrades, v.buildings, v.queued,
           v.hudPages, (unsigned)g_anchor);
 }
@@ -780,10 +905,12 @@ void ScQueueIndRemoveHooks(void) {
 
 void ScQueueIndLogStats(void) {
     if (!g_enabled) return;
-    ScLog("QINDSTATS frames=%u shows=%u hides=%u splices=%u refused=%u iconsFilled=%u",
+    ScLog("QINDSTATS frames=%u shows=%u hides=%u splices=%u refused=%u iconsFilled=%u "
+          "noGrp=%u",
           g_stat[SC_QIND_STAT_FRAMES], g_stat[SC_QIND_STAT_SHOWS],
           g_stat[SC_QIND_STAT_HIDES], g_stat[SC_QIND_STAT_SPLICES],
-          g_stat[SC_QIND_STAT_REFUSED], g_stat[SC_QIND_STAT_ICONS]);
+          g_stat[SC_QIND_STAT_REFUSED], g_stat[SC_QIND_STAT_ICONS],
+          g_stat[SC_QIND_STAT_NOGRP]);
 }
 
 // ---------------------------------------------------------------------------

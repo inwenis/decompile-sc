@@ -116,6 +116,22 @@ void ScQueueIndLogDialog(const char* tag);
 // One STATS line, on the detach paths beside the other subsystems'.
 void ScQueueIndLogStats(void);
 
+// How many rows at the TOP of a queue-slot rect hold the engine's own slot NUMBER, and are
+// therefore excluded from ScQueueIndSlotDiff: two slots legitimately differ there ("1 "
+// against "5 "). Sized from the small font's height plus the label's own inset, and the
+// live font height is reported as `fontH=` on every QIND line so the number is checkable
+// rather than assumed.
+#define SC_QIND_SLOT_LABEL_ROWS 12
+
+// TWO QUEUE SLOTS, COMPARED ON THE SURFACE. When the queue holds five of one unit type,
+// slot 0 and slot 4 are the same picture -- same 38x35 rect, same border graphic, same
+// icon -- so the bytes that differ between them below the label rows are exactly what this
+// plugin added. That is a check that CAN fail, which an ink count inside a box that
+// contains an engine-drawn icon cannot: it reads > 0 whether or not anything of ours was
+// drawn (and did, for a whole task). Returns -1 when it cannot be taken honestly: no
+// surface, a missing or hidden control, or two rects of different sizes.
+int ScQueueIndSlotDiff(DWORD root, int slotA, int slotB);
+
 // INK: how many non-background bytes the dialog's own 8-bit surface holds inside a rect.
 // The dialog surface is BinDlg+0x10 with {u16 w, u16 h} at +0x0C/+0x0E -- read off the
 // allocator 0x004C35F0 itself (research/status-pane-text.md 4). This answers "did anything
@@ -152,7 +168,12 @@ enum ScQueueIndStat {
     SC_QIND_STAT_SPLICES = 3,   // controls spliced into a dialog child list
     SC_QIND_STAT_REFUSED = 4,   // splices refused (no engine handler for the type)
     SC_QIND_STAT_ICONS = 5,     // queue icons filled from the plugin's own overflow
-    SC_QIND_STAT__COUNT = 6
+    // Frames on which the fill was REFUSED because the engine's icon-GRP global was null.
+    // Filling a slot without the GRP that says what its frame index means is what drew
+    // garbage in task 039, so "no GRP" now means "draw nothing", and it is counted rather
+    // than passed over in silence.
+    SC_QIND_STAT_NOGRP = 6,
+    SC_QIND_STAT__COUNT = 7
 };
 int ScQueueIndStat(int which);
 
