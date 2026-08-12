@@ -91,10 +91,14 @@ needing `-Visible` at all.
 - `Send-ScDropdownPick` remains the ONE primitive allowed to raise, and this task
   does not change that (AGENTS.md § Foreground, half 2). It changes WHO calls it
   and whether they call it when it is unnecessary.
-- Task 049 is producing, per Group-B suite, whether it needs a game type OTHER
-  than Use Map Settings. That answer decides whether `Set-ScGameType` is a
-  drop-in or whether the wrapper needs a parameter. Ask 049 (or read its merged
-  table) before designing.
+- **ANSWERED (049, 2026-08-12): all six target Use Map Settings, index 2 —
+  none needs a different game type.** Four pass a literal `-Index 2` with a
+  "# Use Map Settings" comment; `test-control-groups` uses `$UMS_INDEX`, defined
+  at its line 95 as `2` (named rather than a second bare literal, per task 021's
+  postmortem). So `Set-ScGameType` is a drop-in for all six on that axis, and
+  the wrapper needs no new parameter to serve them. If something still blocks a
+  swap, it is not "needs a different index" — find out what it actually is
+  before adding surface to the wrapper.
 
 ## Acceptance criteria
 
