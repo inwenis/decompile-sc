@@ -4161,6 +4161,85 @@ static void QueueIndTests(void) {
     g_fake = NULL;
 }
 
+// ---------------------------------------------------------------------------
+// [21] task 037: SC_QIND_UPGRADE through the FRAME PATH, not just the composer.
+//
+// QueueIndTests above drives ScQueueIndCompose directly for the upgrade case ("queued
+// upgrades -> \"+3 upg\"") and stops there -- it never calls ScQueueIndOnFrame for that
+// mode the way it does for STRIP and GROUP. That gap is exactly what let this ship: the
+// composer is pure and cannot see AnchorFor(), which is the function that decides whether
+// the frame path gets a control to splice the text onto at all. AnchorFor had a case for
+// SC_QIND_STRIP and one for SC_QIND_GROUP and none for SC_QIND_UPGRADE, so it fell through
+// to `return 0`, and ScQueueIndOnFrame reads a null anchor as "nothing to show" and resets
+// the mode to SC_QIND_NONE before a splice is even attempted -- on every building, not just
+// an Engineering Bay, because neither AnchorFor nor the mode it is given ever look at the
+// unit's type. The user: "i do not see upgrade queue - tested on terran engineering bay".
+// ---------------------------------------------------------------------------
+static void UpgQueueIndTests(void) {
+    Part("the queue indicator shows QUEUED UPGRADES through the real frame path (task 037)");
+
+    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
+                                 PAGE_READWRITE);
+    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+
+    // The same fake status pane QueueIndTests drives, with an EMPTY ring: a building that
+    // is researching is not training anything, so every one of the five queue icons starts
+    // in the engine's own greyed placeholder state, same as a real Engineering Bay's.
+    BuildFakeQIndPane(0, 0);
+    ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiOrigDriver);
+
+    // One running (the engine's own slot) plus two held -- "2+ upgrades queued", the
+    // user's own words, and a mixed upgrade/tech pair so this cannot be mistaken for a
+    // fixture that only ever holds one kind.
+    UqBegin(8, 5000, 5000);
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);   // starts -- the engine's own slot
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_B);   // held
+    UqPress(SC_UPGQ_KIND_TECH,    UQ_TECH_A);  // held
+    Check("the plugin is holding two", UqQueued(), 2);
+
+    Check("nothing spliced before the first frame", QiChildren(), SC_STATQ_SLOTS + 1);
+    ScQueueIndOnFrame();
+
+    // THE ASSERTIONS QueueIndTests NEVER MADE for this mode -- the ones that actually ask
+    // whether the player would see anything, rather than what the composer intended.
+    Check("the frame path settles on UPGRADE mode", ScQueueIndCurrentMode(), SC_QIND_UPGRADE);
+    Check("the indicator is linked into the dialog's child chain",
+          ScQueueIndIsSpliced() ? 1 : 0, 1);
+    Check("and the engine's own visible bit is set on it", ScQueueIndIsShown() ? 1 : 0, 1);
+    {
+        DWORD ind = QiIndicator();
+        Check("the walk finds it", ind ? 1 : 0, 1);
+        if (ind) {
+            const char* text = (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
+            Check("its pszText says \"+2 upg\"",
+                  (long long)(text && strcmp(text, "+2 upg") == 0), 1);
+            short* b = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
+            Check("the box is at least SC_QIND_BOX_H tall", b[3] - b[1] >= SC_QIND_BOX_H, 1);
+            Check("and wide enough for the string it holds",
+                  (b[2] - b[0]) >= (int)strlen(ScQueueIndCurrentText()) * SC_QIND_CHAR_W ? 1 : 0, 1);
+        }
+    }
+
+    // The queue drains back to nothing running or held: the indicator must go away, the
+    // same as the STRIP case above -- this mode is not a one-way splice.
+    UqFinishRunning();
+    ScUpgQueueOnTick(UqBuilding());     // promotes UQ_UPG_B into the engine's own slot
+    UqFinishRunning();
+    ScUpgQueueOnTick(UqBuilding());     // promotes UQ_TECH_A
+    UqFinishRunning();
+    ScUpgQueueOnTick(UqBuilding());     // nothing left to promote -- building goes idle
+    Check("the plugin holds nothing now", UqQueued(), 0);
+    ScQueueIndOnFrame();
+    Check("the indicator says NONE again", ScQueueIndCurrentMode(), SC_QIND_NONE);
+    Check("and the engine's visible bit is clear",
+          ScQueueIndIsShown() ? 1 : 0, 0);
+
+    ScQueueIndTestBegin(NULL, NULL, NULL, NULL, NULL);
+    ScUpgQueueTestBegin(NULL, SC_UPGQ_DEFAULT_MAX, NULL);
+    VirtualFree(g_fake, 0, MEM_RELEASE);
+    g_fake = NULL;
+}
+
 static void StatusStripTests(void) {
     Part("the status pane's production-queue strip, against a fake dialog");
 
@@ -4393,6 +4472,7 @@ int main(void) {
     ProdFanTests();          // [18]
     QueueIndTests();         // [19]  task 033
     BuildingParityTests();   // [20]  task 036
+    UpgQueueIndTests();      // [21]  task 037
 
     printf("\nhooktest: %d failure(s)\n", g_failures);
     ScLogClose();
