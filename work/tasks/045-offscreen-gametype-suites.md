@@ -58,8 +58,33 @@ pr: -
 
 ## Goal
 
-Every suite that can run off-screen does, and the ones that cannot are named
-with the reason, in one place, so nobody has to rediscover it. Task 043 built
+**PART 0 FIRST, AND SHIP IT AS ITS OWN PR BEFORE ANYTHING ELSE — a merged bug
+is handing live workers FALSE GREENS right now.** Task 039 hit it at
+2026-08-12T08:34Z:
+
+- `New-ScTestDesktopName` is `sc-<task>-<pid>` and its own comment claims
+  "unique per run by construction". It is unique per parallel WORKER but NOT
+  per step of a chain run from one shell — every step shares the pid. Step N+1
+  therefore asks for the desktop step N is still tearing down and races its
+  destruction. Fix: append a per-call counter or a GUID. One line, kills the
+  class.
+- When that race is lost the child pwsh FailFasts at HOST STARTUP, before one
+  line of the suite runs: *The Win32 internal error "No process is on the other
+  end of the pipe." 0xE9 occurred while retrieving the handle for the active
+  console output buffer.* `run-offscreen.ps1` then throws converting the child's
+  exit code (`2148734499` = `0x800703E3`) to an Int32, and `$LASTEXITCODE` is
+  left holding somebody else's zero. 039's `test-production-queue` reported
+  **exit=0 having never started** and was nearly taken as a pass. Fix: a child
+  that died before running is a FAILURE, loudly — an exit code that cannot be
+  read must never become a zero.
+
+Both are exactly the "a check that cannot fail is worth nothing" family
+(AGENTS.md), one layer below the suites. 039 and 041 are running off-screen
+chains today, so this lands first and separately.
+
+**Then part 1, the original scope:** every suite that can run off-screen does,
+and the ones that cannot are named with the reason, in one place, so nobody has
+to rediscover it. Task 043 built
 the mechanism and proved two suites of different shapes on it; this finishes the
 sweep. The user's ask behind all of it: *"i want to proceed - can we setup a vm
 so you can run tests there so my screen doesn't get messed up?"* — a normal run
@@ -106,6 +131,12 @@ should put nothing on their monitor.
 
 ## Acceptance criteria
 
+0. **PART 0, shipped as its own PR before part 1 starts:** desktop names are
+   unique per CALL, not per pid; and a child process that dies before running
+   its suite is reported as a failure with the host-crash signature named, never
+   as exit 0. Prove the second one by making a child die on purpose and showing
+   the run reports it. Needs no game — it is a unit-level change and can land
+   while the machine is held for another worker.
 1. A table in `tools/plugin/README.md`: every suite, its verdict, and for
    anything needing `-Visible`, the measured reason.
 2. Each "passes off-screen" row is backed by an actual run, with the log path
