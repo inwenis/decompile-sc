@@ -1393,7 +1393,27 @@ function Set-ScGameType {
     for ($try = 1; $try -le $Tries; $try++) {
         Write-Host ("       game type is '{0}', want '{1}' -- picking index {2} at the combo's own centre ({3},{4}), attempt {5}" -f `
             $c.Value, $want, $Index, $px, $py, $try)
-        Send-ScDropdownPick -Hwnd $Hwnd -X $px -Y $py -Index $Index
+        try {
+            Send-ScDropdownPick -Hwnd $Hwnd -X $px -Y $py -Index $Index
+        }
+        catch {
+            # Off-screen, the underlying throw (Assert-ScWindowActive) names the desktop and
+            # points at -Visible -- true, but not the useful fact. The useful fact is WHY a pick
+            # is needed at all: 'Custom Type' is ONE machine-wide value in the real
+            # HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft key (its own 'Recent Maps' entries
+            # prove that key is live, shared with the user's real play -- task 050), not per-suite
+            # and not per-map. It only changes through a real foreground pick -- writing it
+            # directly is exactly the class of thing hard rule 5 forbids -- so a mismatch here
+            # cannot be cleared off-screen no matter how the caller is invoked. One foreground
+            # pick fixes it for every suite, until the user's own next game changes it again.
+            # The original throw is appended, not replaced -- it still names the desktop/window
+            # detail this one does not.
+            throw ("Set-ScGameType: Game Type reads '{0}', want '{1}' -- 'Custom Type' is one " +
+                   "machine-wide value shared with real play, changeable only by a real foreground " +
+                   "pick (hard rule 5 forbids writing it directly). One foreground pick fixes it for " +
+                   "every suite until the user's own next game changes it again. Underlying: {2}" -f `
+                   $c.Value, $want, $_.Exception.Message)
+        }
         $now = Wait-ScGameTypeControl -LogPath $LogPath -Want $want -TimeoutSec 6
         if ($now) {
             Write-Host ("       game type set to '{0}' (engine dialog read; panel shows {1})" -f `

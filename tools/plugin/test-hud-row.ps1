@@ -212,14 +212,21 @@ try {
     if (-not $gamePid) { throw 'test: could not parse the game pid from scinject output.' }
     $hwnd = Get-ScGameWindow -ProcessId $gamePid
 
-    Step 'the hudrow hook is actually installed (6 hooks in fanout mode)' {
-        # queueCommand + 3 shadow hooks + circles + hudrow-dispatcher = 6.
+    Step 'the hudrow hook is actually installed (7 hooks in fanout mode)' {
+        # 5 shadow-mode hooks (queueCommand, CMDACT_Select, sortOverflowHandler,
+        # SortAllUnits, unit_IsStandardAndMovable) + circles + hudrow-dispatcher = 7.
+        # NOT 6 -- task 036 bumped the shadow-mode base from 4 to 5 for
+        # unit_IsStandardAndMovable without this literal being bumped alongside it, the
+        # same staleness task 047 already found and fixed the same way in
+        # test-combat-death.ps1 (task 050: unrelated to game-type routing, fixed in
+        # passing because it was the one thing standing between this suite and a clean
+        # off-screen run).
         $cfg = @(Wait-ScLogMatch -LogPath $LogPath -Pattern 'FANOUT config: .*hudrow=1' -TimeoutSec 20)
         Assert-That 'the config line says hudrow=1' ($cfg.Count -gt 0)
         $hooks = @(Wait-ScLogMatch -LogPath $LogPath -Pattern 'HOOK: (\d+)/(\d+) installed' -TimeoutSec 20)
         $m = [regex]::Match($hooks[-1], 'HOOK: (\d+)/(\d+) installed')
         Assert-That "all hooks installed ($($m.Groups[1].Value)/$($m.Groups[2].Value))" `
-            ($m.Groups[1].Value -eq $m.Groups[2].Value -and [int]$m.Groups[1].Value -eq 6)
+            ($m.Groups[1].Value -eq $m.Groups[2].Value -and [int]$m.Groups[1].Value -eq 7)
     }
 
     Step "menus: Single Player -> Expansion -> Play Custom -> $mapName" {
@@ -234,7 +241,7 @@ try {
         Start-Sleep -Seconds 2
         Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
         Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
-        Send-ScDropdownPick -Hwnd $hwnd -X 265 -Y 268 -Index 2   # Use Map Settings
+        Set-ScGameType -Hwnd $hwnd -LogPath $LogPath -Index 2      # Use Map Settings, verified
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing
         Start-Sleep -Seconds 6
         Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
