@@ -780,16 +780,31 @@ static ScHook g_hkCancelTech;
 
 typedef void (__attribute__((stdcall)) *CmdFn)(DWORD);
 
+// WHICH SELECTION ARRAY THIS READS, and it is task 038's fix (sc_prodqueue.cpp), same
+// shape here: both receive handlers reset selectionIterator (0x006284B6) and then require
+// getActivePlayerNextSelection to yield exactly one unit. That function (0x0049A850) walks
+// playersSelections (0x006284E8), indexed by the ACTIVE PLAYER -- not activePlayerSelection
+// (0x006284B8), which is the CLIENT's own list. The two arrays ABUT
+// (0x006284B8 + 12*4 == 0x006284E8) and hold the same thing whenever exactly one building
+// is selected, which is every case this module's own suite exercised until now -- latent,
+// per task 042, because no upgrade command is fanned out today and the client will not
+// offer an upgrade button for a multi-building selection. The index arithmetic, quoted
+// rather than guessed (research/production-queue.md 2.2):
+//
+//   0049a860  MOV  EAX,dword ptr [0x0051267C]          ; activePlayerId
+//   0049a869  LEA  EAX,[EAX + EAX*2]                   ; player * 3
+//   0049a86d  LEA  ESI,[ECX + EAX*4]                   ; iterator + player * 12
+//   0049a870  MOV  EAX,dword ptr [ESI*4 + 0x006284E8]  ; playersSelections[player][iter]
 static DWORD SoleSelectedUnit(void) {
-    // The same test both handlers make: reset selectionIterator, then require
-    // getActivePlayerNextSelection to yield exactly one unit. Reading
-    // activePlayerSelection[0] and requiring [1] to be null is that test without calling
-    // into the engine -- the shape sc_prodqueue already uses on the production side.
-    DWORD* sel = (DWORD*)Rt(SC_VA_ACTIVE_PLAYER_SELECTION);
+    DWORD player = *(DWORD*)Rt(SC_VA_ACTIVE_PLAYER_ID);
+    if (player >= SC_MAX_PLAYERS) return 0;
+    DWORD* sel = (DWORD*)Rt(SC_VA_PLAYERS_SELECTIONS) + player * SC_SELECTION_SLOTS;
     DWORD u = sel[0];
     if (!u || sel[1]) return 0;
     return UnitPtrValid(u) ? u : 0;
 }
+
+DWORD ScUpgQueueSoleSelectedUnitForTest(void) { return SoleSelectedUnit(); }
 
 // --- the card conditions -----------------------------------------------------
 //

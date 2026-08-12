@@ -159,6 +159,14 @@ typedef int (*ScUpgStartFn)(DWORD unit, int kind, unsigned id);
 // state. NULL restores normal operation.
 void ScUpgQueueTestBegin(BYTE* fakeModuleBase, int maxTotal, ScUpgStartFn starter);
 
+// Test-only: the building a research RECEIVE handler will act on, resolved the way
+// getActivePlayerNextSelection (0x0049A850) resolves it -- playersSelections indexed by
+// activePlayerId, NOT the client's own activePlayerSelection. Exposed so the offline suite
+// can prove the plugin follows the ENGINE's array with the two arrays disagreeing (task 042,
+// same shape as sc_prodqueue's ScProdQueueSoleSelectedUnitForTest, task 038). 0 = "not a
+// single selected building", i.e. the plugin has no business in this command.
+DWORD ScUpgQueueSoleSelectedUnitForTest(void);
+
 // Test-only read-back.
 int  ScUpgQueueCount(DWORD unit);          // -1 when the building is not tracked
 int  ScUpgQueueKindAt(DWORD unit, int i);  // -1 out of range

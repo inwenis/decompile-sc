@@ -3348,6 +3348,51 @@ static void UpgradeQueueTests(void) {
               ScUpgQueueStat(SC_UPGQ_STAT_MINERALS_SPENT), 0);
     }
 
+    // -----------------------------------------------------------------------------
+    // TASK 042. WHICH SELECTION ARRAY THE RECEIVE HANDLERS READ, same shape as task 038's
+    // sc_prodqueue.cpp coverage: the two arrays ABUT (0x006284B8 + 12*4 == 0x006284E8) and
+    // agree whenever exactly one building is selected, which is every case this part had
+    // until now. Latent here (no upgrade command fans out today), but the trap is the same
+    // one 038 found, and this proves the fix reads the SIMULATION's array, not the CLIENT's.
+    // -----------------------------------------------------------------------------
+    printf("\n    the building a research receive handler acts on comes from the ENGINE's selection array\n");
+    UqBegin(8, 1000, 1000);
+    {
+        DWORD* engineSel = (DWORD*)FakeRt(SC_VA_PLAYERS_SELECTIONS) + UQ_PLAYER * SC_SELECTION_SLOTS;
+        DWORD* clientSel = (DWORD*)FakeRt(SC_VA_ACTIVE_PLAYER_SELECTION);
+        DWORD* activeId  = (DWORD*)FakeRt(SC_VA_ACTIVE_PLAYER_ID);
+        for (int i = 0; i < SC_SELECTION_SLOTS; ++i) { engineSel[i] = 0; clientSel[i] = 0; }
+        *activeId = UQ_PLAYER;
+
+        // The simulation holds one building while the client still holds a group -- the
+        // shape a fanned-out Select+Upgrade pair would create. The answer is the
+        // simulation's building.
+        engineSel[0] = FakeUnit(0);
+        clientSel[0] = FakeUnit(0);
+        clientSel[1] = FakeUnit(1);
+        clientSel[2] = FakeUnit(2);
+        Check("a group selected, the sim holding one -> that one",
+              (long long)ScUpgQueueSoleSelectedUnitForTest(), (long long)FakeUnit(0));
+
+        engineSel[0] = FakeUnit(2);
+        Check("a different building in the sim's slot -> that building, not the client's",
+              (long long)ScUpgQueueSoleSelectedUnitForTest(), (long long)FakeUnit(2));
+
+        // THE NEGATIVE HALF, and it is the same test the engine makes: two units in the
+        // SIMULATION's list means cmdrecvUpgrade/cmdrecvTech do nothing at all.
+        engineSel[1] = FakeUnit(3);
+        Check("two in the sim's list -> not ours, the engine's own gate refuses too",
+              (long long)ScUpgQueueSoleSelectedUnitForTest(), 0LL);
+        engineSel[1] = 0;
+
+        // The whole point, stated as an assertion: what the CLIENT holds cannot produce an
+        // answer on its own.
+        engineSel[0] = 0;
+        clientSel[0] = FakeUnit(1);
+        Check("the client's list alone answers nothing -- it is not what the engine reads",
+              (long long)ScUpgQueueSoleSelectedUnitForTest(), 0LL);
+    }
+
     printf("\n    the feature's OFF switch really is off\n");
     ScUpgQueueTestBegin(NULL, 0, NULL);
     Check("no command is consumed",
