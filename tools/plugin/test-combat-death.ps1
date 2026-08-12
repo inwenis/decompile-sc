@@ -189,6 +189,38 @@ function Get-ScState {
     Get-ScUnitState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -TimeoutSec $TimeoutSec
 }
 
+# --- task 047: hook-set composition, by NAME rather than a hardcoded total -----
+
+# The five hooks sc_fanout.cpp installs unconditionally at mode >= shadow
+# (queueCommand, CMDACT_Select, sortOverflowHandler, SortAllUnits and, since task
+# 036, unit_IsStandardAndMovable) plus the three optional single-hook features,
+# named exactly as ScHookInstall logs them (sc_circles.cpp:340, sc_hudrow.cpp:828,
+# sc_queueind.cpp:788). This suite always launches in fanout mode, so the base five
+# are never conditional here; circles/hudrow/queueind are, which is why the caller
+# passes what the RUN'S OWN config line reported rather than a source-level default.
+function Get-ScFanoutExpectedHooks {
+    param([bool]$Circles, [bool]$HudRow, [bool]$QueueInd)
+    $names = @('queueCommand', 'CMDACT_Select', 'sortOverflowHandler', 'SortAllUnits',
+               'unit_IsStandardAndMovable')
+    if ($Circles) { $names += 'CreateNewUnitSelectionsFromList' }
+    if ($HudRow) { $names += 'statDataUpdate' }
+    if ($QueueInd) { $names += 'statDisplayDriver' }
+    $names
+}
+
+# A count mismatch names no hook; this returns which names are missing and which
+# are unexpected, so a hook added or removed tomorrow shows up by name in the
+# failure -- see part [5] below.
+function Compare-ScHookNames {
+    param([string[]]$Expected, [string[]]$Actual)
+    $expSet = @($Expected | Sort-Object -Unique)
+    $actSet = @($Actual | Sort-Object -Unique)
+    $missing = @($expSet | Where-Object { $actSet -notcontains $_ })
+    $extra = @($actSet | Where-Object { $expSet -notcontains $_ })
+    @{ Ok = ($missing.Count -eq 0 -and $extra.Count -eq 0); Missing = $missing; Extra = $extra
+       Expected = $expSet; Actual = $actSet }
+}
+
 # --- the fixture ---------------------------------------------------------------
 
 # THE TWO FIXTURES THIS SUITE CREATES, declared to drive-game.ps1 UP FRONT.
@@ -676,13 +708,52 @@ try {
 
     Start-Mission -MapPath $combatFx.Path
 
-    Step 'PHASE B: the hudrow hook is installed (6 hooks in fanout mode)' {
+    Step 'PHASE B: the installed hook SET matches this run''s own composition' {
+        <#
+        Task 047. The old assertion here was `-eq 6` -- a total that task 036 outgrew
+        (it bumped the shadow-mode base from 4 to 5 for `unit_IsStandardAndMovable`)
+        without anyone bumping this literal too. A total also fails in the least
+        useful way: "expected 6, got 7" names no hook (AGENTS.md's diagnostics rule).
+
+        So this reads WHICH hooks sc_fanout.cpp actually spliced, by name, off the
+        per-hook `HOOK <name>: installed at ...` lines every ScHookInstall call
+        writes (sc_hook.cpp), and compares that set against the composition the SAME
+        run's own `FANOUT config: ... circles=%d hudrow=%d queueind=%d` line reports
+        -- not against source-level defaults, so the check stays right even if a
+        default changes.
+
+        The five-name base (queueCommand, CMDACT_Select, sortOverflowHandler,
+        SortAllUnits, unit_IsStandardAndMovable) is this arm's mode-invariant kernel
+        -- always fanout here -- and is the one part of the expected set that is
+        still a literal. That is by design, not a gap: it is the fact about the
+        plugin AGENTS.md says a hardcoded count silently rots on, so when it moves
+        again this assertion is meant to FAIL, naming exactly which name is missing
+        or extra, rather than pass on a stale total or die vaguely on "expected N".
+        #>
         $cfg = @(Wait-ScLogMatch -LogPath $LogPath -Pattern 'FANOUT config: .*hudrow=1' -TimeoutSec 20)
         Assert-That 'the config line says hudrow=1' ($cfg.Count -gt 0)
+        $cm = [regex]::Match($cfg[-1], 'circles=(\d) hudrow=(\d) queueind=(\d)')
+        Assert-That "the config line carries circles/hudrow/queueind flags ($($cfg[-1]))" $cm.Success
+        $circlesOn = $cm.Groups[1].Value -eq '1'
+        $hudrowOn = $cm.Groups[2].Value -eq '1'
+        $queueindOn = $cm.Groups[3].Value -eq '1'
+
+        $expectedNames = Get-ScFanoutExpectedHooks -Circles $circlesOn -HudRow $hudrowOn -QueueInd $queueindOn
+
+        $hookLines = @(Wait-ScLogMatch -LogPath $LogPath -Pattern 'HOOK (\S+): installed at ' -TimeoutSec 20)
+        $actualNames = @($hookLines | ForEach-Object {
+            [regex]::Match($_, 'HOOK (\S+): installed at ').Groups[1].Value
+        })
+        $cmp = Compare-ScHookNames -Expected $expectedNames -Actual $actualNames
+        Assert-That "the installed hooks are exactly this arm's set ([$($cmp.Actual -join ', ')])" $cmp.Ok `
+            ($cmp.Ok ? '' : "(missing: [$($cmp.Missing -join ', ')] extra: [$($cmp.Extra -join ', ')])")
+
+        # Corroborate against the plugin's own summary line -- same install, independent
+        # read -- with the total DERIVED from the named set rather than a second literal.
         $hooks = @(Wait-ScLogMatch -LogPath $LogPath -Pattern 'HOOK: (\d+)/(\d+) installed' -TimeoutSec 20)
         $m = [regex]::Match($hooks[-1], 'HOOK: (\d+)/(\d+) installed')
-        Assert-That "all hooks installed ($($m.Groups[1].Value)/$($m.Groups[2].Value))" `
-            ($m.Groups[1].Value -eq $m.Groups[2].Value -and [int]$m.Groups[1].Value -eq 6)
+        Assert-That "the plugin's own count agrees ($($m.Groups[1].Value)/$($m.Groups[2].Value) vs $($expectedNames.Count) expected by name)" `
+            ($m.Groups[1].Value -eq $m.Groups[2].Value -and [int]$m.Groups[2].Value -eq $expectedNames.Count)
     }
 
     $script:rects = $null
