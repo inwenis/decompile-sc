@@ -5,6 +5,7 @@
 agent: 042
 model: sonnet
 pr: https://github.com/inwenis/decompile-sc/pull/50
+merged: 2026-08-12
 
 ## Workspace
 
