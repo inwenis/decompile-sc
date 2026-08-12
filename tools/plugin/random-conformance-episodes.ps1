@@ -160,11 +160,24 @@ function Invoke-QueueEpisode {
         Assert-Inv -Id 'INV-R' -What "the selected buildings gained no more than the $queued item(s) queued ($sumBefore -> $sumAfter)" `
             -Ok ($sumAfter -le $sumBefore + $queued) `
             -Detail "(promoted=$promoted; a promotion moves an item between the ring and the plugin and must not change this total)"
-        Assert-Inv -Id 'INV-R' -What "and lost no more than the $completed unit(s) the player finished during the burst ($sumAfter >= $($sumBefore + $queued - $completed))" `
-            -Ok ($sumAfter -ge $sumBefore + $queued - $completed) `
-            -Detail '(items can only leave a queue by being built)'
+        # AN ITEM IN PRODUCTION HAS ALREADY LEFT THE QUEUE. Between "queued" and "built" there
+        # is a third state this bound first ignored: the engine pulls the item out of the ring
+        # the moment the building STARTS it, and it does not become a completed unit until the
+        # build time is up. So a single press onto an empty queue reads back as ring 0 with
+        # nothing built -- and the first version of this check called that a lost item and
+        # failed a correct build for it.
+        #
+        # It is not a guess: PRODFAN prints `buildUnit` per selected building, which is the
+        # engine's own pointer to the thing that building is making right now, so the number of
+        # items in flight is read rather than assumed. At most one per building, by construction.
+        $producing = @($after.Rows | Where-Object { $_.BuildUnit -and $_.BuildUnit -ne '00000000' }).Count
+        $floor = $sumBefore + $queued - $completed - $producing
+        Assert-Inv -Id 'INV-R' -What "and lost no more than the $completed built + $producing in production ($sumAfter >= $floor)" `
+            -Ok ($sumAfter -ge $floor) `
+            -Detail '(an item leaves a queue only by being started or finished, and both are read from the engine)'
     }
-    if ($completed -eq 0 -and $refusals -eq 0) {
+    if ($completed -eq 0 -and $refusals -eq 0 -and
+        @($after.Rows | Where-Object { $_.BuildUnit -and $_.BuildUnit -ne '00000000' }).Count -eq 0) {
         # Nothing left any queue in this window, so the per-building numbers are exactly
         # predictable and are worth asserting one building at a time.
         foreach ($u in $Units) {
@@ -174,7 +187,7 @@ function Invoke-QueueEpisode {
                 -Ok ($l.Logical -eq $want)
         }
     } else {
-        Note "$completed unit(s) completed and $refusals command(s) were refused during the burst; the per-building split is not predictable (the engine's unit list does not say WHICH building finished one), so the total above is asserted instead"
+        Note "$completed unit(s) completed, $(@($after.Rows | Where-Object { $_.BuildUnit -and $_.BuildUnit -ne '00000000' }).Count) in production and $refusals command(s) refused during the burst; the per-building split is not predictable (the engine's unit list does not say WHICH building finished one), so the bounds above are asserted instead"
     }
     # This one holds either way: it is about where the ring is HELD, not about how many items
     # are in the queue, and that is the whole mechanism of task 025 (keep the engine's ring
@@ -324,8 +337,12 @@ function Invoke-Drain {
     )
     $budget = [math]::Max(30, ($Expect * $BuildTimeSec) + 25)
     Note "waiting up to ${budget}s for $Expect unit(s) to be built"
-    if (-not (Wait-QueuesEmpty -Units $Units -TimeoutSec $budget)) {
-        Write-Skip -Id 'INV-B' -Why "the queues had not emptied inside ${budget}s"
+    # -AlsoWaitProduction, because "the queue is empty" is TRUE while the last item is still
+    # being built -- the engine takes it out of the ring when production starts. Counting
+    # completed units at that instant would read one short, and the fixed sleep that used to
+    # cover it is the kind of timing that passes until the machine is busy.
+    if (-not (Wait-QueuesEmpty -Units $Units -TimeoutSec $budget -AlsoWaitProduction)) {
+        Write-Skip -Id 'INV-B' -Why "the queues had not emptied (and finished producing) inside ${budget}s"
         return
     }
     Start-Sleep -Seconds 2
@@ -347,13 +364,23 @@ function Invoke-Drain {
 
 function Wait-QueuesEmpty {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string[]]$Units, [int]$TimeoutSec = 45)
+    param(
+        [Parameter(Mandatory)][string[]]$Units,
+        [int]$TimeoutSec = 45,
+        # Also wait for what each building is CURRENTLY BUILDING to finish. An item in
+        # production has left the ring already, so an empty queue is not an idle building.
+        [switch]$AlsoWaitProduction
+    )
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         $e = Read-Engine -Tag 'drainwait' -Need @('prodq', 'prodfan')
         $left = 0
         foreach ($u in $Units) { $left += [math]::Max(0, (Get-Logical -Eng $e -Unit $u).Logical) }
-        if ($left -le 0) { return $true }
+        $busy = 0
+        if ($AlsoWaitProduction) {
+            $busy = @($e.Rows | Where-Object { $Units -contains $_.Unit -and $_.BuildUnit -and $_.BuildUnit -ne '00000000' }).Count
+        }
+        if ($left -le 0 -and $busy -eq 0) { return $true }
         Start-Sleep -Seconds 2
     }
     $false
