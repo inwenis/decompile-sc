@@ -973,6 +973,11 @@ void ScQueueIndOnFrame(void) {
         g_text[0]      = '\0';
         g_dialogLogged = false;
         g_bandLogged   = false;
+        // THE BASELINE BELONGS TO THE OLD DIALOG'S SURFACE. Its rect can match the new one
+        // exactly -- the pane is laid out the same way every time -- so without this the
+        // first read in a new dialog would diff live pixels against a copy taken from a
+        // buffer that no longer exists. -1 ("no answer") is the only honest state here.
+        g_baseValid    = false;
     }
     if (!root) return;
 
