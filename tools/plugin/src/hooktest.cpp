@@ -4137,6 +4137,14 @@ static void QueueIndTests(void) {
             Check("  and sits inside the anchor icon (id 6)",
                   (long long)(b[0] >= *(short*)(QiCtl(4) + SC_BINDLG_OFF_BOUNDS) &&
                               b[2] <= *(short*)(QiCtl(4) + SC_BINDLG_OFF_BOUNDS + 4)), 1);
+            // AND THE VERY FIRST SHOW ALREADY HAS A BASELINE. The copy taken on hidden frames
+            // needs a splice to exist, and the splice happens on this frame -- so without the
+            // second capture site (just before the show) a pane that goes straight from an
+            // empty queue to "+4" reports boxDiff=-1 for as long as it stays up, and every
+            // suite asserting on it skips instead of measuring. -1 is "no answer"; this must
+            // be a number, and offline that number is 0 because nothing paints here.
+            Check("  and the first show already has a baseline, so boxDiff answers",
+                  (long long)(ScQueueIndBoxDiff(QiRoot()) >= 0), 1);
         }
     }
     Check("the original driver ran first, every frame", (long long)g_qiDriverCalls, 0);
@@ -4282,6 +4290,67 @@ static void QueueIndTests(void) {
               ind && (*(DWORD*)(ind + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) ? 1 : 0, 0);
         Check("  and the module says it is showing nothing", ScQueueIndCurrentMode(),
               SC_QIND_NONE);
+    }
+
+    printf("\n    boxDiff: the box measured against a copy of itself with none of ours in it\n");
+    // THE ORACLE EVERY PIXEL CLAIM IN THIS MODULE NOW RESTS ON, and the reason it is a
+    // DIFFERENCE and not a count. `ink` inside the indicator's box counts THE PANE'S OWN ART:
+    // this task's first live run read 448 of 448 bytes set inside that box, and 1330 of 1330
+    // over a queue icon, before anything of ours had been drawn. So `ink > 0` is true whatever
+    // the plugin does, and the suites that asserted it could not fail. What CAN fail is the
+    // same rect compared against a copy of it taken while the indicator was hidden.
+    {
+        DWORD  ind = QiIndicator();
+        short* ib  = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
+        short  was[4] = { ib[0], ib[1], ib[2], ib[3] };
+        BYTE*  px  = (BYTE*)QiBits();
+
+        // The drain above hid the control ON THE LAST FRAME, and no copy is taken on that
+        // frame (see below), so this is the frame that takes one.
+        ScQueueIndOnFrame();
+        Check("with nothing of ours on the surface, the box differs from its copy by nothing",
+              ScQueueIndBoxDiff(QiRoot()), 0);
+
+        // Seven bytes inside the box -- what a drawn glyph looks like to this probe.
+        for (int i = 0; i < 7; ++i) px[(was[1] + 1) * QI_SURF_W + was[0] + i] = (BYTE)(0x50 + i);
+        Check("  bytes written inside the box are counted, one for one",
+              ScQueueIndBoxDiff(QiRoot()), 7);
+
+        // A copy of a DIFFERENT rect is not a copy of this one. -1 says so; a count would be
+        // a number about the wrong pixels, which is worse than no number (AGENTS.md, task 030).
+        ib[0] = (short)(was[0] + 1); ib[2] = (short)(was[2] + 1);
+        Check("  a box that has MOVED reports -1 rather than a count against the wrong rect",
+              ScQueueIndBoxDiff(QiRoot()), -1);
+        ib[0] = was[0]; ib[2] = was[2];
+        for (int i = 0; i < 7; ++i) px[(was[1] + 1) * QI_SURF_W + was[0] + i] = 0;
+
+        // THE FRAME THE COPY MUST NOT BE TAKEN ON. Hiding only marks the region dirty -- the
+        // paint is the dialog's own redraw walk, which has not run when ScQueueIndOnFrame
+        // returns -- so on that one frame the surface still holds OUR OWN line. A copy taken
+        // then would make the next boxDiff read 0 with the text plainly on the screen: a
+        // check that fails at random, which AGENTS.md rates no better than one that cannot
+        // fail. The show below takes its own copy first (the surface is clean here), and the
+        // seven bytes are written AFTER it, standing in for the line the engine draws.
+        for (int i = 0; i < 5; ++i) PqTrain(PQ_TYPE_B);
+        ScQueueIndOnFrame();
+        Check("the indicator comes back for the same queue", ScQueueIndCurrentMode(),
+              SC_QIND_STRIP);
+        Check("  in the same box, so the same copy still applies",
+              (long long)(ib[0] == was[0] && ib[1] == was[1] &&
+                          ib[2] == was[2] && ib[3] == was[3]), 1);
+        for (int i = 0; i < 7; ++i) px[(was[1] + 1) * QI_SURF_W + was[0] + i] = (BYTE)(0x50 + i);
+        Check("  and what is drawn into the box while it is up is ours",
+              ScQueueIndBoxDiff(QiRoot()), 7);
+
+        for (int i = 0; i < 5; ++i) ScProdQueueOnCancel(PqBuilding(), SC_CANCEL_TRAIN_LAST);
+        ScQueueIndOnFrame();                       // the frame it hides on
+        Check("the frame it HIDES on takes no copy, so our bytes are still counted as ours",
+              ScQueueIndBoxDiff(QiRoot()), 7);
+        ScQueueIndOnFrame();                       // the next one does
+        Check("  and the frame after it does take one, so the box reads clean again",
+              ScQueueIndBoxDiff(QiRoot()), 0);
+
+        for (int i = 0; i < 7; ++i) px[(was[1] + 1) * QI_SURF_W + was[0] + i] = 0;
     }
 
     printf("\n    with the feature OFF nothing is spliced and nothing is written\n");

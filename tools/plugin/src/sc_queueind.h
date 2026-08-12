@@ -143,6 +143,24 @@ void ScQueueIndLogStats(void);
 // surface, a missing or hidden control, or two rects of different sizes.
 int ScQueueIndSlotDiff(DWORD root, int slotA, int slotB);
 
+// HOW MANY BYTES OF THE INDICATOR'S BOX ARE CURRENTLY OURS. The module keeps a copy of
+// those same pixels taken with none of our line in them, and this is the count that differs
+// from it. 0 means nothing of ours is on the screen no matter what the control's fields say;
+// -1 means there is no baseline for this rect yet (it moved, or this dialog is too new),
+// which is an honest "no answer" and never a 0. This exists because INK CANNOT ANSWER THE
+// QUESTION in this dialog: the pane's own art is in the same surface, so every rect reads
+// saturated (measured live: 1330 of 1330 bytes over a queue icon, 448 of 448 inside the
+// indicator's own box) and `ink > 0` is true before anything of ours is drawn.
+//
+// The copy is taken on the GAME thread, at two moments, both of which are "the pane as it
+// looks without us":
+//   * on frames the indicator is hidden -- but NOT the frame it hides on, where the repaint
+//     it just asked for has not run yet and the surface still holds our own line;
+//   * immediately before a show that follows a hidden frame -- which is what gives the FIRST
+//     show of a dialog an answer, since the splice the other site needs happens on that very
+//     frame.
+int ScQueueIndBoxDiff(DWORD root);
+
 // INK: how many non-background bytes the dialog's own 8-bit surface holds inside a rect.
 // The dialog surface is BinDlg+0x10 with {u16 w, u16 h} at +0x0C/+0x0E -- read off the
 // allocator 0x004C35F0 itself (research/status-pane-text.md 4). This answers "did anything

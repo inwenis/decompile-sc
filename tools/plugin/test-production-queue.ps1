@@ -310,7 +310,21 @@ function Get-StatusQueue { param([string]$Tag, [int]$TimeoutSec = 20)
 #            whole task while the icon underneath was drawing the wrong art.
 #   refInk   the same count over a control the ENGINE fills, so `ink=0` cannot be confused
 #            with a blind probe. refId says which control it used -- the first queue icon
-#            normally, the first wireframe button when the strip is hidden by a group.
+#            normally, the first wireframe button when the strip is hidden by a group. It is
+#            -1 when NEITHER is visible, which is a real state (a single building with an
+#            empty queue has no queue icons up and no wireframe row), and it stays -1 rather
+#            than falling back to a hidden control: ink over something nobody can see answers
+#            neither question this number is for.
+#   surfInk  the same count over the WHOLE dialog surface. This is the blindness check that
+#            has an answer in every state, drained pane included -- the pane's own art covers
+#            that surface, so a live one is never 0.
+#   boxDiff  bytes inside the indicator's own box that differ from a copy of that same box
+#            taken by the game thread while the indicator was HIDDEN. THIS is the oracle for
+#            "did our line land", and `ink` is not: measured in this task's first live run,
+#            ink read 448 of 448 bytes inside the box and refInk 1330 of 1330 over a queue
+#            icon, before anything of ours had been drawn. -1 means there is no baseline for
+#            this rect yet (it moved, or the indicator has not been hidden in this dialog),
+#            which is an honest "no answer" and never a 0.
 #   slotDiff bytes that differ between queue slot 0 and slot 4 on the dialog's own surface,
 #            below the rows their labels occupy. Same rect size, same border graphic, same
 #            queued type, so this is the honest screen-level check on the fifth icon: a
@@ -323,29 +337,38 @@ function Get-StatusQueue { param([string]$Tag, [int]$TimeoutSec = 20)
 $script:qindSeq = 0
 function ConvertFrom-QIndLine {
     param($Hit)
+    # PARSED BY NAME, NOT BY POSITION. This line gained two fields in one task (boxDiff, then
+    # surfInk) and a positional parse shifts EVERY group after the insertion point without
+    # failing: `bldgs` then reads out of `queued`, and an assertion passes or fails on a number
+    # nobody wrote. Named groups cannot shift, and an added field costs one line here.
     $m = [regex]::Match($Hit.Line,
-                'QIND \[[^\]]+\] mode=(\d+) linked=(\d+) visible=(\d+) text="([^"]*)" ' +
-                'bounds=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\) ink=(-?\d+) refInk=(-?\d+) ' +
-                'refId=(-?\d+) slotDiff=(-?\d+) fontH=(\d+) ' +
-                'icons=\[([^\]]*)\] ' +
-                'sel=(\d+) engineLen=(\d+) overflow=(\d+) upg=(\d+) bldgs=(\d+) queued=(\d+)')
+                'QIND \[[^\]]+\] mode=(?<mode>\d+) linked=(?<linked>\d+) visible=(?<visible>\d+) ' +
+                'text="(?<text>[^"]*)" ' +
+                'bounds=\((?<left>-?\d+),(?<top>-?\d+),(?<right>-?\d+),(?<bottom>-?\d+)\) ' +
+                'ink=(?<ink>-?\d+) refInk=(?<refInk>-?\d+) refId=(?<refId>-?\d+) ' +
+                'surfInk=(?<surfInk>-?\d+) slotDiff=(?<slotDiff>-?\d+) boxDiff=(?<boxDiff>-?\d+) ' +
+                'fontH=(?<fontH>\d+) ' +
+                'icons=\[(?<icons>[^\]]*)\] ' +
+                'sel=(?<sel>\d+) engineLen=(?<engineLen>\d+) overflow=(?<overflow>\d+) ' +
+                'upg=(?<upg>\d+) bldgs=(?<bldgs>\d+) queued=(?<queued>\d+)')
     if (-not $m.Success) { throw "test: unparseable QIND line: $($Hit.Line)" }
     return [pscustomobject]@{
-        Mode = [int]$m.Groups[1].Value; Linked = $m.Groups[2].Value -eq '1'
-        Visible = $m.Groups[3].Value -eq '1'; Text = $m.Groups[4].Value
-        Left = [int]$m.Groups[5].Value; Top = [int]$m.Groups[6].Value
-        Right = [int]$m.Groups[7].Value; Bottom = [int]$m.Groups[8].Value
-        Ink = [int]$m.Groups[9].Value; RefInk = [int]$m.Groups[10].Value
-        RefId = [int]$m.Groups[11].Value; SlotDiff = [int]$m.Groups[12].Value
-        FontH = [int]$m.Groups[13].Value
-        Icons = @($m.Groups[14].Value -split ',' | Where-Object { $_ } | ForEach-Object {
+        Mode = [int]$m.Groups['mode'].Value; Linked = $m.Groups['linked'].Value -eq '1'
+        Visible = $m.Groups['visible'].Value -eq '1'; Text = $m.Groups['text'].Value
+        Left = [int]$m.Groups['left'].Value; Top = [int]$m.Groups['top'].Value
+        Right = [int]$m.Groups['right'].Value; Bottom = [int]$m.Groups['bottom'].Value
+        Ink = [int]$m.Groups['ink'].Value; RefInk = [int]$m.Groups['refInk'].Value
+        RefId = [int]$m.Groups['refId'].Value; SurfInk = [int]$m.Groups['surfInk'].Value
+        SlotDiff = [int]$m.Groups['slotDiff'].Value; BoxDiff = [int]$m.Groups['boxDiff'].Value
+        FontH = [int]$m.Groups['fontH'].Value
+        Icons = @($m.Groups['icons'].Value -split ',' | Where-Object { $_ } | ForEach-Object {
             $p = $_ -split ':'
             [pscustomobject]@{ Icon = [Convert]::ToInt32(($p[0] -replace '^0x'), 16)
                                Mode = [int]$p[1]; State = $p[2]
                                Art = $p[3]; Label = ($p[4] -eq '1') } })
-        Sel = [int]$m.Groups[15].Value; EngineLen = [int]$m.Groups[16].Value
-        Overflow = [int]$m.Groups[17].Value; Upg = [int]$m.Groups[18].Value
-        Buildings = [int]$m.Groups[19].Value; Queued = [int]$m.Groups[20].Value
+        Sel = [int]$m.Groups['sel'].Value; EngineLen = [int]$m.Groups['engineLen'].Value
+        Overflow = [int]$m.Groups['overflow'].Value; Upg = [int]$m.Groups['upg'].Value
+        Buildings = [int]$m.Groups['bldgs'].Value; Queued = [int]$m.Groups['queued'].Value
         Line = $Hit.Line
     }
 }
@@ -987,8 +1010,12 @@ try {
         # the difference between slot 0 and slot 4: same rect size, same border graphic, same
         # queued Probe, so with the ring full and the strip settled the only bytes that differ
         # are the ones this plugin put there.
-        Assert-That "ink says something is in the box (ink=$($qi.Ink)) -- corroboration, not the oracle" `
-            ($qi.Ink -gt 0)
+        # `ink` is reported for continuity and is NOT an oracle here: this pane's own art
+        # lives in the same surface, so every rect in it reads saturated (this run: 1330 of
+        # 1330 bytes over a queue icon). What can fail is boxDiff -- the same box compared
+        # against a copy of itself taken while the indicator was hidden.
+        Assert-That "the box holds bytes this plugin put there: boxDiff=$($qi.BoxDiff) (ink=$($qi.Ink), saturated by the pane art)" `
+            ($qi.BoxDiff -gt 0)
         Assert-That ("the fifth icon draws the SAME picture as the first: slotDiff=$($qi.SlotDiff) bytes, " +
                      'i.e. our "+N" and nothing else') `
             ($qi.SlotDiff -gt 0 -and $qi.SlotDiff -lt 200) `
@@ -1241,8 +1268,15 @@ try {
             ($qi.EngineLen + $qi.Overflow -eq 0)
         Assert-That 'the indicator reports itself showing nothing (mode 0)' ($qi.Mode -eq 0)
         Assert-That "and the engine's visible bit is CLEAR on the control" (-not $qi.Visible)
-        Assert-That "the ink probe still works, so 'hidden' is a reading and not a blind spot (refInk=$($qi.RefInk))" `
-            ($qi.RefInk -ge 0)
+        # 'HIDDEN' HAS TO BE A READING RATHER THAN A BLIND SPOT, and the number that says so
+        # here is surfInk, not refInk. This is precisely the state in which refInk has no
+        # answer: the queue is empty, so the strip's icons are down, and one building is
+        # selected, so the wireframe row is down too -- neither candidate is visible and
+        # refInk is -1 ON PURPOSE. The old assertion demanded a number the pane cannot
+        # produce, and the fix for that is NOT to let refInk fall back to a control nobody
+        # can see. surfInk counts the whole surface, which the pane's own art always covers.
+        Assert-That "the probe can still read the surface, so 'hidden' is a reading and not a blind spot (surfInk=$($qi.SurfInk))" `
+            ($qi.SurfInk -gt 0)
     }
 
     Step "queue $EngineArmQueue more, so the plugin holds NOTHING and the ring is the whole queue" {

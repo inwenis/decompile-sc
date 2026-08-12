@@ -71,6 +71,25 @@ struct QIconSnap { short icon; WORD mode; DWORD flags; DWORD grp; DWORD text; };
 static QIconSnap g_icons[SC_STATQ_SLOTS];
 static int       g_iconsN = 0;
 
+// THE BOX AS IT LOOKS WITH NOTHING OF OURS IN IT, and why a copy of it is kept at all.
+//
+// `ink` -- non-background bytes in a rect -- cannot answer "did our text draw" in THIS
+// dialog, and the first live run of task 039 is what proved it: the probe reported
+// refInk=1330 over a 38x35 queue icon, i.e. 1330 of 1330 bytes non-zero, and ink=448 of
+// 448 inside the indicator's own box. The pane's own art is IN this surface, so every rect
+// in it is saturated and `ink > 0` is true before anyone draws anything. Task 033's
+// indicator assertion rested on that number for weeks.
+//
+// What CAN fail is a comparison against the same pixels without our text on them: the game
+// thread copies the box out of the surface on the frames the indicator is HIDDEN (by which
+// time the engine has repainted whatever was under it), and the diff against that copy is
+// how many bytes our line is currently responsible for. Zero means nothing of ours is on
+// the screen, whatever the control's fields say.
+#define SC_QIND_BASELINE_MAX 4096
+static BYTE  g_baseline[SC_QIND_BASELINE_MAX];
+static short g_baseRect[4] = { 0, 0, 0, 0 };
+static bool  g_baseValid = false;
+
 static void* Rt(DWORD staticVa) {
     return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE));
 }
@@ -694,6 +713,56 @@ int ScQueueIndSlotDiff(DWORD root, int slotA, int slotB) {
     return diff;
 }
 
+// Walk a rect of the dialog surface. `fn` is inlined by hand twice below rather than
+// abstracted: the two callers want different things out of the same bounds check.
+static bool BoxOnSurface(DWORD root, const short* r, DWORD* bits, int* w, int* stride) {
+    DWORD d = root ? SurfaceOf(root) : 0;
+    if (!d) return false;
+    const int sw = (int)*(WORD*)(d + SC_SURFACE_OFF_W);
+    const int sh = (int)*(WORD*)(d + SC_SURFACE_OFF_H);
+    if (r[0] < 0 || r[1] < 0 || r[2] > sw || r[3] > sh) return false;
+    if (r[2] <= r[0] || r[3] <= r[1]) return false;
+    if ((r[2] - r[0]) * (r[3] - r[1]) > SC_QIND_BASELINE_MAX) return false;
+    *bits   = *(DWORD*)(d + SC_SURFACE_OFF_BITS);
+    *w      = sw;
+    *stride = sw;
+    return *bits != 0;
+}
+
+// Copy the box out of the surface. Called on the GAME thread, on frames the indicator is
+// not showing -- so what it captures is the pane with our line already repainted away.
+static void CaptureBaseline(DWORD root, const short* r) {
+    DWORD bits; int w, stride;
+    g_baseValid = false;
+    if (!BoxOnSurface(root, r, &bits, &w, &stride)) return;
+    const int bw = r[2] - r[0], bh = r[3] - r[1];
+    for (int y = 0; y < bh; ++y) {
+        memcpy(g_baseline + (size_t)y * bw,
+               (const void*)(bits + (DWORD)((r[1] + y) * stride + r[0])), (size_t)bw);
+    }
+    g_baseRect[0] = r[0]; g_baseRect[1] = r[1]; g_baseRect[2] = r[2]; g_baseRect[3] = r[3];
+    g_baseValid = true;
+}
+
+// How many bytes of the box differ from that copy. -1 when there is no copy for THIS rect
+// (the box moved, or the indicator has not been hidden yet in this dialog), which is an
+// honest "no answer" rather than a zero.
+int ScQueueIndBoxDiff(DWORD root) {
+    if (!g_baseValid) return -1;
+    const short* r = (const short*)&g_ctrl[SC_BINDLG_OFF_BOUNDS];
+    for (int i = 0; i < 4; ++i) if (r[i] != g_baseRect[i]) return -1;
+    DWORD bits; int w, stride;
+    if (!BoxOnSurface(root, r, &bits, &w, &stride)) return -1;
+    const int bw = r[2] - r[0], bh = r[3] - r[1];
+    int diff = 0;
+    for (int y = 0; y < bh; ++y) {
+        const BYTE* row = (const BYTE*)(bits + (DWORD)((r[1] + y) * stride + r[0]));
+        const BYTE* base = g_baseline + (size_t)y * bw;
+        for (int x = 0; x < bw; ++x) if (row[x] != base[x]) ++diff;
+    }
+    return diff;
+}
+
 // ---------------------------------------------------------------------------
 // Read-back oracles
 // ---------------------------------------------------------------------------
@@ -740,6 +809,11 @@ void ScQueueIndLogState(const char* tag) {
     // there would report refInk=0 and read as "the probe is blind" on every group frame.
     // The reference is therefore the first VISIBLE of (queue icon 2, wireframe button
     // 0x21), and the line says which one it used.
+    //
+    // AND IT DOES NOT FALL BACK TO A HIDDEN ONE. Ink over a control nobody can see answers
+    // neither question this number is for, so a pane where no candidate is up reports -1 and
+    // that stays a failure wherever a visible reference is required. `surfInk` below is the
+    // number that answers "is the probe blind" in EVERY state, including that one.
     int refInk = -1, refId = 0;
     {
         const short cand[2] = { SC_STATQ_FIRST_CONTROL, SC_HUD_FIRST_SMALL_BUTTON };
@@ -753,6 +827,13 @@ void ScQueueIndLogState(const char* tag) {
             break;
         }
     }
+
+    // CAN THE PROBE READ THIS SURFACE AT ALL -- the only liveness question that has an answer
+    // in every state, the drained pane included. Whole surface, deliberately: the pane's own
+    // art covers it, which is the same fact that makes `ink` useless as an oracle and makes
+    // this number a good blindness check. A live surface is never 0 here, so 0 or -1 says the
+    // read failed and every other number on this line is worthless.
+    const int surfInk = ScQueueIndSurfaceInk(root, 0, 0, 0x7FFF, 0x7FFF);
 
     // THE SCREEN-LEVEL CHECK ON THE FIFTH ICON, and the reason it is a DIFFERENCE rather
     // than a count. Ink inside the "+N" box cannot say whether the indicator drew: the box
@@ -795,13 +876,13 @@ void ScQueueIndLogState(const char* tag) {
     }
 
     ScLog("QIND [%s] mode=%d linked=%d visible=%d text=\"%s\" bounds=(%d,%d,%d,%d) ink=%d "
-          "refInk=%d refId=%d slotDiff=%d fontH=%d icons=[%s] "
+          "refInk=%d refId=%d surfInk=%d slotDiff=%d boxDiff=%d fontH=%d icons=[%s] "
           "sel=%d engineLen=%d overflow=%d upg=%d bldgs=%d queued=%d hudPages=%d "
           "anchor=0x%08X",
           t, g_mode, linked ? 1 : 0,
           (flags & SC_CTRL_FLAG_VISIBLE) ? 1 : 0, live,
           linked ? b[0] : 0, linked ? b[1] : 0, linked ? b[2] : 0, linked ? b[3] : 0, ink,
-          refInk, refId, slotDiff, SmallFontHeight(), icons,
+          refInk, refId, surfInk, slotDiff, ScQueueIndBoxDiff(root), SmallFontHeight(), icons,
           v.selection, v.engineLen, v.overflow, v.upgrades, v.buildings, v.queued,
           v.hudPages, (unsigned)g_anchor);
 }
@@ -916,15 +997,29 @@ void ScQueueIndOnFrame(void) {
     if (mode != SC_QIND_NONE && !anchor) mode = SC_QIND_NONE;
 
     if (mode == SC_QIND_NONE) {
+        bool hidNow = false;
         if (g_shown) {
             CallHide((DWORD)&g_ctrl[0]);
             g_shown = false;
             RepaintUnder(root);
             ++g_stat[SC_QIND_STAT_HIDES];
+            hidNow = true;
             ScLog("QIND hide (nothing to show: sel=%d overflow=%d bldgs=%d hudPages=%d)",
                   v.selection, v.overflow, v.buildings, v.hudPages);
         }
         g_mode = SC_QIND_NONE;
+        // THE BASELINE: the pixels our line will be measured against, taken here on the game
+        // thread for the same reason the icon snapshot is.
+        //
+        // NOT ON THE FRAME WE HID ON. RepaintUnder only marks the region dirty -- the paint
+        // is the dialog's own redraw walk, which has not run yet when this returns -- so a
+        // copy taken now would still hold OUR OWN LINE, and the next boxDiff would read 0
+        // with the text plainly on the screen. That is a check failing at random, which
+        // AGENTS.md rates no better than one that cannot fail. Every later NONE frame is
+        // after the redraw, and the copy is retaken on each of them.
+        if (g_spliced && !hidNow) {
+            CaptureBaseline(root, (const short*)&g_ctrl[SC_BINDLG_OFF_BOUNDS]);
+        }
         return;
     }
 
@@ -967,6 +1062,15 @@ void ScQueueIndOnFrame(void) {
     // Redraw when the text or the position changed, and re-show whenever the engine's own
     // hide-all sweep has taken the visible bit off us (which it does on every re-layout).
     const bool visible = (*(DWORD*)(ind + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) != 0;
+    // THE OTHER PLACE THE BASELINE IS TAKEN, and without it the FIRST show of every dialog
+    // reads -1. The copy in the hidden branch above needs a splice to have happened, and the
+    // splice happens on the frame we first show -- so a pane that goes straight from "nothing
+    // queued" to "+4" would never have had one taken. Here we are about to draw into a box we
+    // were NOT in last frame, so what is on the surface right now is the pane WITHOUT our
+    // line, which is exactly the copy we want. `!g_shown` is the whole condition: if we were
+    // shown last frame the surface already holds our text, and a copy of that would make the
+    // next boxDiff read 0.
+    if (!g_shown) CaptureBaseline(root, b);
     if (changed || moved || !visible || !g_shown) {
         CallShow(ind);
         *(DWORD*)(ind + SC_BINDLG_OFF_FLAGS) |= SC_CTRL_FLAG_DRAWN;
