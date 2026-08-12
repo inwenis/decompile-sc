@@ -189,37 +189,12 @@ function Get-ScState {
     Get-ScUnitState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -TimeoutSec $TimeoutSec
 }
 
-# --- task 047: hook-set composition, by NAME rather than a hardcoded total -----
-
-# The five hooks sc_fanout.cpp installs unconditionally at mode >= shadow
-# (queueCommand, CMDACT_Select, sortOverflowHandler, SortAllUnits and, since task
-# 036, unit_IsStandardAndMovable) plus the three optional single-hook features,
-# named exactly as ScHookInstall logs them (sc_circles.cpp:340, sc_hudrow.cpp:828,
-# sc_queueind.cpp:788). This suite always launches in fanout mode, so the base five
-# are never conditional here; circles/hudrow/queueind are, which is why the caller
-# passes what the RUN'S OWN config line reported rather than a source-level default.
-function Get-ScFanoutExpectedHooks {
-    param([bool]$Circles, [bool]$HudRow, [bool]$QueueInd)
-    $names = @('queueCommand', 'CMDACT_Select', 'sortOverflowHandler', 'SortAllUnits',
-               'unit_IsStandardAndMovable')
-    if ($Circles) { $names += 'CreateNewUnitSelectionsFromList' }
-    if ($HudRow) { $names += 'statDataUpdate' }
-    if ($QueueInd) { $names += 'statDisplayDriver' }
-    $names
-}
-
-# A count mismatch names no hook; this returns which names are missing and which
-# are unexpected, so a hook added or removed tomorrow shows up by name in the
-# failure -- see part [5] below.
-function Compare-ScHookNames {
-    param([string[]]$Expected, [string[]]$Actual)
-    $expSet = @($Expected | Sort-Object -Unique)
-    $actSet = @($Actual | Sort-Object -Unique)
-    $missing = @($expSet | Where-Object { $actSet -notcontains $_ })
-    $extra = @($actSet | Where-Object { $expSet -notcontains $_ })
-    @{ Ok = ($missing.Count -eq 0 -and $extra.Count -eq 0); Missing = $missing; Extra = $extra
-       Expected = $expSet; Actual = $actSet }
-}
+# Get-ScFanoutExpectedHooks / Compare-ScHookNames (task 047) now live in
+# drive-game.ps1 (task 050) so test-hud-row.ps1 can share them instead of growing
+# its own hardcoded total -- the exact defect 047 removed here. This suite always
+# launches in fanout mode, so the base five names are never conditional here;
+# circles/hudrow/queueind are, which is why the caller passes what the RUN'S OWN
+# config line reported rather than a source-level default -- see part [5] below.
 
 # --- the fixture ---------------------------------------------------------------
 
