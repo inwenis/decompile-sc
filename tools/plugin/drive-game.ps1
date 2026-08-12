@@ -1393,7 +1393,27 @@ function Set-ScGameType {
     for ($try = 1; $try -le $Tries; $try++) {
         Write-Host ("       game type is '{0}', want '{1}' -- picking index {2} at the combo's own centre ({3},{4}), attempt {5}" -f `
             $c.Value, $want, $Index, $px, $py, $try)
-        Send-ScDropdownPick -Hwnd $Hwnd -X $px -Y $py -Index $Index
+        try {
+            Send-ScDropdownPick -Hwnd $Hwnd -X $px -Y $py -Index $Index
+        }
+        catch {
+            # Off-screen, the underlying throw (Assert-ScWindowActive) names the desktop and
+            # points at -Visible -- true, but not the useful fact. The useful fact is WHY a pick
+            # is needed at all: 'Custom Type' is ONE machine-wide value in the real
+            # HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft key (its own 'Recent Maps' entries
+            # prove that key is live, shared with the user's real play -- task 050), not per-suite
+            # and not per-map. It only changes through a real foreground pick -- writing it
+            # directly is exactly the class of thing hard rule 5 forbids -- so a mismatch here
+            # cannot be cleared off-screen no matter how the caller is invoked. One foreground
+            # pick fixes it for every suite, until the user's own next game changes it again.
+            # The original throw is appended, not replaced -- it still names the desktop/window
+            # detail this one does not.
+            throw ("Set-ScGameType: Game Type reads '{0}', want '{1}' -- 'Custom Type' is one " +
+                   "machine-wide value shared with real play, changeable only by a real foreground " +
+                   "pick (hard rule 5 forbids writing it directly). One foreground pick fixes it for " +
+                   "every suite until the user's own next game changes it again. Underlying: {2}" -f `
+                   $c.Value, $want, $_.Exception.Message)
+        }
         $now = Wait-ScGameTypeControl -LogPath $LogPath -Want $want -TimeoutSec 6
         if ($now) {
             Write-Host ("       game type set to '{0}' (engine dialog read; panel shows {1})" -f `
@@ -2801,4 +2821,39 @@ function Send-ScText {
         [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_CHAR, [IntPtr][int][char]$ch, [IntPtr]1)
         Start-Sleep -Milliseconds $PerCharMs
     }
+}
+
+# --- task 047: hook-set composition, by NAME rather than a hardcoded total -----
+# Lifted from test-combat-death.ps1 into this shared file (task 050) so
+# test-hud-row.ps1 could use the same by-name comparison instead of growing its own
+# copy of a hardcoded total -- which is the exact defect 047 removed here.
+
+# The five hooks sc_fanout.cpp installs unconditionally at mode >= shadow
+# (queueCommand, CMDACT_Select, sortOverflowHandler, SortAllUnits and, since task
+# 036, unit_IsStandardAndMovable) plus the three optional single-hook features,
+# named exactly as ScHookInstall logs them (sc_circles.cpp:340, sc_hudrow.cpp:828,
+# sc_queueind.cpp:788). Callers pass what the RUN'S OWN `FANOUT config:` line
+# reported, never a source-level default, so this stays right even if a default
+# changes.
+function Get-ScFanoutExpectedHooks {
+    param([bool]$Circles, [bool]$HudRow, [bool]$QueueInd)
+    $names = @('queueCommand', 'CMDACT_Select', 'sortOverflowHandler', 'SortAllUnits',
+               'unit_IsStandardAndMovable')
+    if ($Circles) { $names += 'CreateNewUnitSelectionsFromList' }
+    if ($HudRow) { $names += 'statDataUpdate' }
+    if ($QueueInd) { $names += 'statDisplayDriver' }
+    $names
+}
+
+# A count mismatch names no hook; this returns which names are missing and which
+# are unexpected, so a hook added or removed tomorrow shows up by name in the
+# failure, in whichever suite calls it.
+function Compare-ScHookNames {
+    param([string[]]$Expected, [string[]]$Actual)
+    $expSet = @($Expected | Sort-Object -Unique)
+    $actSet = @($Actual | Sort-Object -Unique)
+    $missing = @($expSet | Where-Object { $actSet -notcontains $_ })
+    $extra = @($actSet | Where-Object { $expSet -notcontains $_ })
+    @{ Ok = ($missing.Count -eq 0 -and $extra.Count -eq 0); Missing = $missing; Extra = $extra
+       Expected = $expSet; Actual = $actSet }
 }

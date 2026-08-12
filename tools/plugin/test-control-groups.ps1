@@ -230,12 +230,12 @@ try {
         # (work/scratch/probe-gametype.ps1); $UMS_INDEX below is that measurement, and
         # the box step names a melee start explicitly if it ever slips again.
         #
-        # Picked twice because these are press-and-hold controls driven by posted
-        # messages, and choosing an entry that is already selected is a no-op -- so a
-        # second attempt costs a second and removes a whole failure mode.
-        Send-ScDropdownPick -Hwnd $hwnd -X 265 -Y 268 -Index $UMS_INDEX
-        Start-Sleep -Milliseconds 400
-        Send-ScDropdownPick -Hwnd $hwnd -X 265 -Y 268 -Index $UMS_INDEX
+        # Set-ScGameType reads the engine's own dialog list back after the pick and
+        # retries up to 3 times until it reads $UMS_INDEX's name -- the old belt-and-
+        # suspenders double `Send-ScDropdownPick` was papering over exactly the failure
+        # this verifies for real (task 050). It also skips the pick and the foreground
+        # raise entirely when the combo already reads the wanted value.
+        Set-ScGameType -Hwnd $hwnd -LogPath $LogPath -Index $UMS_INDEX
         Shot 'lobby'
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing
         Start-Sleep -Seconds 6
