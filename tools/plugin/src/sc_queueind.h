@@ -170,6 +170,28 @@ int ScQueueIndSlotDiff(DWORD root, int slotA, int slotB);
 //     frame.
 int ScQueueIndBoxDiff(DWORD root);
 
+// ---------------------------------------------------------------------------
+// SHARED SURFACE PRIMITIVES. sc_hudrow's own indicator has the same three questions this
+// module answered for the group line -- where is this dialog's surface, how tall is the
+// small font, and what did the pane look like before our text went on it -- and the answer
+// is these functions rather than a second copy of them (task 048).
+// ---------------------------------------------------------------------------
+
+// Copy `rect` of the dialog's 8-bit surface into `out`. Returns the number of bytes copied
+// (w*h), or 0 when the rect is not wholly on a readable surface or does not fit `outMax`.
+// The caller owns the buffer, so two modules can hold copies of two different rects.
+int ScQueueIndCopyRect(DWORD root, const short* rect, BYTE* out, int outMax);
+
+// The dialog surface's own {w,h}. Returns 1 when it could be read, 0 when neither candidate
+// offset holds a plausible surface -- which callers treat as "do not place a box", never as
+// a zero-sized pane.
+int ScQueueIndSurfaceSize(DWORD root, int* w, int* h);
+
+// The height of the font the SC_CTRL_FONT_SMALLEST bit selects, out of the font's own
+// header. `base` is the CALLER's module base, so a test seam driving a fake image gets its
+// own answer. 0 means "no answer" (the handle is not up yet), never "zero pixels tall".
+int ScQueueIndSmallFontHeight(BYTE* base);
+
 // INK: how many non-background bytes the dialog's own 8-bit surface holds inside a rect.
 // The dialog surface is BinDlg+0x10 with {u16 w, u16 h} at +0x0C/+0x0E -- read off the
 // allocator 0x004C35F0 itself (research/status-pane-text.md 4). This answers "did anything

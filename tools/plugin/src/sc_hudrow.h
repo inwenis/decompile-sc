@@ -29,7 +29,11 @@
 //      1-12 (1/3)") whose draw/interact handlers come from the engine's own
 //      per-type default tables, so it renders exactly like a loaded control. Its
 //      control id is negative, which the CREATE-time handler binder skips by
-//      construction (FUN_00418100 requires 0 < index).
+//      construction (FUN_00418100 requires 0 < index). It is spliced at the TAIL of
+//      the child list and drawn in the BAND BELOW the row, not on the buttons --
+//      task 048; the head splice meant the wireframes painted over it every frame,
+//      and the on-the-buttons box put it across the unit icons the way task 039's
+//      group line was. See sc_hudrow.cpp's EnsureSpliced and PlaceIndicator.
 //
 // THE RULES, inherited from the conductor's stage-B pick:
 //   * ANY selection change -- map click, row click, hotkey recall, unit death --
@@ -100,5 +104,30 @@ int  ScHudRowCurrentPage(void);   // 0-based
 int  ScHudRowPageCount(void);
 int  ScHudRowGatedCount(void);    // clicks the gate has swallowed
 bool ScHudRowIsDiverged(void);    // latched off-to-stock on engine divergence
+
+// Frames the PAGED path actually ran. This module's whole seam is the >12 state, so this is
+// the coverage number a run has to print beside its verdict: 0 means the run never reached
+// the thing under test, whatever else it says (AGENTS.md, task 041).
+int  ScHudRowPagedFrames(void);
+
+// The page indicator: is our line currently on the surface, and in which rect. The rect is
+// the LIVE control's own bounds, not a remembered constant -- it is recomputed from the row
+// every paged frame (task 048: the line moved out of the icon row into the band below it).
+bool ScHudRowIndicatorShowing(void);
+void ScHudRowIndicatorBox(short* out);   // out[4] = {left, top, right, bottom}
+
+// THE TWO SCREEN-LEVEL READINGS, exposed so the offline test can drive them. Both are
+// DIFFERENCES against copies of the same rect, never ink counts: the pane's own art is in
+// this surface, so an ink count over any rect in it saturates and can no longer detect our
+// text at all (task 048: indInk read 2368 of 2368 bytes, identically, for three different
+// strings). -1 from either is an honest "no answer", never a 0.
+//
+//   BandDiff      how many of the band's bytes differ from the copy taken with none of our
+//                 line on it -- the only number that says the engine DREW it.
+//   BandStranded  how many of the bytes our line owns still hold its value after the row has
+//                 handed back to stock. 0 is the pass. `*glyphOut` returns the size of that
+//                 mask, because a 0 over an empty mask is a blind probe, not a clean band.
+int ScHudRowBandDiff(void);
+int ScHudRowBandStranded(int* glyphOut);
 
 #endif // SC_HUDROW_H

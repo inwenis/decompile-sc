@@ -1106,7 +1106,45 @@ static unsigned g_origDispatchCalls = 0;
 
 static void FakeShowCtl(DWORD ctrl)   { ++g_ctlShows;   *(DWORD*)(ctrl + SC_BINDLG_OFF_FLAGS) |= SC_CTRL_FLAG_VISIBLE; }
 static void FakeHideCtl(DWORD ctrl)   { ++g_ctlHides;   *(DWORD*)(ctrl + SC_BINDLG_OFF_FLAGS) &= ~(DWORD)SC_CTRL_FLAG_VISIBLE; }
-static void FakeUpdateCtl(DWORD ctrl) { ++g_ctlUpdates; (void)ctrl; }
+
+// A MODEL OF WHEN PIXELS LAND -- and it is a model; the engine is not in this process. It is
+// here because the two facts task 048's fix rests on are both about TIMING and ORDER, and a
+// primitive that only counts calls cannot exercise either:
+//
+//   * updateControl (0x0041C400) does NOT paint. It intersects the control's rect with the
+//     dialog's and merges the result into the screen's dirty region. The paint is the dialog's
+//     own redraw walk (0x0041C683), later -- which is why a copy of the band taken on the
+//     frame that asks for a fill is a copy of the PREVIOUS layout;
+//   * that walk takes the children from [dlg+0x42] and steps [esi], HEAD TO TAIL, so a control
+//     earlier in the list is painted UNDER everything after it. At the head, this indicator
+//     was painted first and the twelve wireframes painted over it, every frame.
+//
+// So FakeUpdateCtl accumulates a dirty box and FakePaint runs the walk, each visible control
+// writing a byte derived from its own address so "who ended up on top" is decidable from the
+// surface. WHAT THIS PROVES is the module's own bookkeeping: which frame each copy is taken
+// on, and that the stranded count can fail. What the ENGINE draws is test-hud-row.ps1's job
+// and nothing here substitutes for it.
+static short g_dirty[4];
+static bool  g_dirtyAny   = false;
+static bool  g_paintOff   = false;     // the negative control below turns the repaint off
+
+static void FakeUpdateCtl(DWORD ctrl) {
+    ++g_ctlUpdates;
+    const short* r = (const short*)(ctrl + SC_BINDLG_OFF_BOUNDS);
+    if (r[2] <= r[0] || r[3] <= r[1]) return;
+    if (!g_dirtyAny) {
+        g_dirty[0] = r[0]; g_dirty[1] = r[1]; g_dirty[2] = r[2]; g_dirty[3] = r[3];
+        g_dirtyAny = true;
+        return;
+    }
+    if (r[0] < g_dirty[0]) g_dirty[0] = r[0];
+    if (r[1] < g_dirty[1]) g_dirty[1] = r[1];
+    if (r[2] > g_dirty[2]) g_dirty[2] = r[2];
+    if (r[3] > g_dirty[3]) g_dirty[3] = r[3];
+}
+
+static BYTE HudBackgroundAt(int off) { return (BYTE)(0x20 + (off % 7)); }
+static BYTE HudPaintByte(DWORD ctrl) { return (BYTE)(0x80 | ((ctrl >> 4) & 0x3F)); }
 
 static int __attribute__((fastcall)) FakeEngineInteract(DWORD ctrl, DWORD evt) {
     (void)ctrl; (void)evt;
@@ -1120,6 +1158,55 @@ static DWORD FakeCtl(int i)      { return (DWORD)FakeRt(FAKE_DLG_VA) + 0x100u + 
 static DWORD FakeStatUser(int i) { return (DWORD)FakeRt(FAKE_STATUSER_VA) + (DWORD)i * 8u; }
 static DWORD FakeRoot(void)      { return (DWORD)FakeRt(FAKE_DLG_VA); }
 
+// THE ROW'S REAL GEOMETRY, and the pane's, off the live dialog on this install -- the
+// QINDDLG child dump in C:\sc-work\logs\039\group-fixed-production.log. It is here rather
+// than in the module (where a constant would be a layout read off one install, AGENTS.md
+// task 034) because the FAKE has to be a plausible pane or the placement it exercises is
+// not the one the game gets. The twelve buttons are two rows of six, COLUMN-major -- ids
+// 0x21/0x23/0x25/... on the upper row and 0x22/0x24/... on the lower -- which is why the
+// row's lowest edge is 78 whether two units are selected or twelve.
+#define HUD_SURF_W    270
+#define HUD_SURF_H    92
+#define HUD_BTN_LEFT  30
+#define HUD_BTN_TOP   8
+#define HUD_BTN_W     32
+#define HUD_BTN_H     33
+#define HUD_BTN_COL   36     // 30 -> 66 -> 102 ...
+#define HUD_BTN_ROW   37     // upper 8..41, lower 45..78
+#define HUD_ROW_BOTTOM (HUD_BTN_TOP + HUD_BTN_ROW + HUD_BTN_H)   // 78
+
+static BYTE  g_hudSurf[HUD_SURF_W * HUD_SURF_H];
+static BYTE  g_hudFont[16];
+static short g_hudBox[4];      // the indicator's box on page 1, to compare across flips
+
+// The redraw walk (see FakeUpdateCtl): repaint the dirty box with the background, then every
+// VISIBLE child in list order, so the LAST one in the chain is the one left on the surface.
+static void FakePaint(void) {
+    if (!g_dirtyAny || g_paintOff) { g_dirtyAny = false; return; }
+    int l = g_dirty[0] < 0 ? 0 : g_dirty[0];
+    int t = g_dirty[1] < 0 ? 0 : g_dirty[1];
+    int r = g_dirty[2] > HUD_SURF_W ? HUD_SURF_W : g_dirty[2];
+    int b = g_dirty[3] > HUD_SURF_H ? HUD_SURF_H : g_dirty[3];
+    for (int y = t; y < b; ++y) {
+        for (int x = l; x < r; ++x) g_hudSurf[y * HUD_SURF_W + x] = HudBackgroundAt(y * HUD_SURF_W + x);
+    }
+    for (DWORD c = *(DWORD*)(FakeRoot() + SC_BINDLG_OFF_FIRST_CHILD); c;
+         c = *(DWORD*)(c + SC_BINDLG_OFF_NEXT)) {
+        if ((*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) == 0) continue;
+        const short* rc = (const short*)(c + SC_BINDLG_OFF_BOUNDS);
+        const BYTE v = HudPaintByte(c);
+        const int y0 = rc[1] > t ? rc[1] : t, y1 = rc[3] < b ? rc[3] : b;
+        const int x0 = rc[0] > l ? rc[0] : l, x1 = rc[2] < r ? rc[2] : r;
+        for (int y = y0; y < y1; ++y) {
+            for (int x = x0; x < x1; ++x) g_hudSurf[y * HUD_SURF_W + x] = v;
+        }
+    }
+    g_dirtyAny = false;
+}
+
+// One whole frame the way the game runs one: the detour, then the redraw.
+static void HudFrame(void) { ScHudRowOnDispatch(); FakePaint(); }
+
 // Root dialog + one non-button control (id 1) + the 12 wireframe buttons
 // (ids 0x21..0x2C), statUser records poisoned so "nobody wrote it" is
 // distinguishable from "somebody wrote 0".
@@ -1129,6 +1216,27 @@ static void BuildFakeDialog(void) {
     memset((void*)root, 0, SC_BINDLG_SIZE);
     *(WORD*)(root + SC_BINDLG_OFF_TYPE) = 0;                    // a dialog
 
+    // The dialog's own 8-bit surface, at the offset the draw walk installs. Without one the
+    // indicator has nowhere to be measured against and PlaceIndicator refuses outright --
+    // which is the correct production behaviour and would make this whole part vacuous, so
+    // the fake carries a real surface (the same thing part [19]'s pane does). It is filled
+    // with a non-zero pattern on purpose: a zeroed surface would make an ink count and a
+    // difference count agree, and the entire point of task 048 is that they do not.
+    for (int i = 0; i < (int)sizeof(g_hudSurf); ++i) g_hudSurf[i] = HudBackgroundAt(i);
+    g_dirtyAny = false;
+    g_paintOff = false;
+    *(WORD*) (root + SC_BINDLG_OFF_SURFACE + SC_SURFACE_OFF_W)    = HUD_SURF_W;
+    *(WORD*) (root + SC_BINDLG_OFF_SURFACE + SC_SURFACE_OFF_H)    = HUD_SURF_H;
+    *(DWORD*)(root + SC_BINDLG_OFF_SURFACE + SC_SURFACE_OFF_BITS) = (DWORD)&g_hudSurf[0];
+
+    // The small font's header. 11 is what the live pane reports (`fontH=11` on every QIND
+    // line), and the band this module places into is 13 rows tall -- so the margin the
+    // engine's own draw rule needs (`top + fontHeight <= clip.bottom`) is two pixels, and a
+    // regression that shrinks either number fails here rather than in front of a player.
+    memset((void*)&g_hudFont[0], 0, sizeof(g_hudFont));
+    g_hudFont[SC_FONT_OFF_HEIGHT] = 11;
+    *(DWORD*)FakeRt(SC_VA_FONT_SMALLEST) = (DWORD)&g_hudFont[0];
+
     for (int i = 0; i < 13; ++i) {
         DWORD c = FakeCtl(i);
         memset((void*)c, 0, SC_BINDLG_SIZE);
@@ -1137,8 +1245,11 @@ static void BuildFakeDialog(void) {
         *(DWORD*)(c + SC_BINDLG_OFF_PARENT) = root;
         *(DWORD*)(c + SC_BINDLG_OFF_NEXT)   = (i < 12) ? FakeCtl(i + 1) : 0;
         short* b = (short*)(c + SC_BINDLG_OFF_BOUNDS);
-        b[0] = (short)(166 + (i % 6) * 36); b[1] = (short)(398 + (i / 6) * 34);
-        b[2] = (short)(b[0] + 34);          b[3] = (short)(b[1] + 32);
+        const int slot = (i == 0) ? 0 : i - 1;                  // ctl 0 is the image
+        b[0] = (short)(HUD_BTN_LEFT + (slot / 2) * HUD_BTN_COL);
+        b[1] = (short)(HUD_BTN_TOP  + (slot % 2) * HUD_BTN_ROW);
+        b[2] = (short)(b[0] + HUD_BTN_W);
+        b[3] = (short)(b[1] + HUD_BTN_H);
         if (i > 0) {
             *(DWORD*)(c + SC_BINDLG_OFF_INTERACT) = engineFn;
             *(DWORD*)(c + SC_BINDLG_OFF_USER)     = FakeStatUser(i - 1);
@@ -1165,6 +1276,41 @@ static int CountChildren(void) {
 
 static DWORD ShownStatUserUnit(int btn) {   // 0-based button index
     return *(DWORD*)(FakeStatUser(btn) + SC_STATUSER_OFF_UNIT);
+}
+
+// The indicator, found by walking the LIVE child chain for its own negative id -- never by
+// assuming which END of the list it sits on. That assumption is exactly what task 048 had to
+// change (head -> tail), and a test that hardcodes it reports the assumption rather than the
+// truth.
+static DWORD HudIndicator(void) {
+    for (DWORD c = *(DWORD*)(FakeRoot() + SC_BINDLG_OFF_FIRST_CHILD); c;
+         c = *(DWORD*)(c + SC_BINDLG_OFF_NEXT)) {
+        if (*(short*)(c + SC_BINDLG_OFF_INDEX) == (short)0xFFE0) return c;
+    }
+    return 0;
+}
+
+// Is it the LAST child? Not decoration: the dialog's redraw walk (0x0041C683) takes the
+// children head to tail, so a control EARLIER in the list is painted UNDER everything after
+// it. At the head, this indicator was painted first and the twelve wireframes painted over
+// it -- which is why it was never seen in a game.
+static int HudIndicatorIsLast(void) {
+    DWORD ind = HudIndicator();
+    return (ind && *(DWORD*)(ind + SC_BINDLG_OFF_NEXT) == 0) ? 1 : 0;
+}
+
+static const char* HudIndicatorText(void) {
+    DWORD ind = HudIndicator();
+    return ind ? (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT) : NULL;
+}
+
+// Entering paged mode, the band's clean copy has to be taken on a frame that FOLLOWS the one
+// asking for the fill -- it must be a copy of the pane THIS page draws, and updateControl only
+// dirties (IndicatorFrame). So a test that wants to read the TEXT drives frames until the line
+// is up rather than assuming one dispatch is enough. Bounded: a module that never shows it
+// fails the next assertion instead of hanging here.
+static void HudDispatchUntilShown(int maxFrames) {
+    for (int i = 0; i < maxFrames && !ScHudRowIndicatorShowing(); ++i) ScHudRowOnDispatch();
 }
 
 static void SmallSelection(int n) {
@@ -1698,18 +1844,52 @@ static void HudRowTests(void) {
         Check("  with one uniform shim", wrapUniform ? 1 : 0, 1);
     }
     Check("the indicator is spliced (14 children)", CountChildren(), 14);
+    HudDispatchUntilShown(4);
     {
-        DWORD ind = *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD);
-        Check("  at the head, with a negative id",
-              (long long)*(short*)(ind + SC_BINDLG_OFF_INDEX), (long long)(short)0xFFE0);
+        DWORD ind = HudIndicator();
+        Check("  found in the chain by its own negative id", ind ? 1 : 0, 1);
+        Check("  at the TAIL, so the redraw walk paints it LAST -- over the wireframes, not "
+              "under them (task 048)", HudIndicatorIsLast(), 1);
         Check("  interact from the type-9 default table",
               (long long)*(DWORD*)(ind + SC_BINDLG_OFF_INTERACT), 0x11111111);
         Check("  update from the type-9 default table",
               (long long)*(DWORD*)(ind + SC_BINDLG_OFF_UPDATE), 0x22222222);
-        const char* text = (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
+        const char* text = HudIndicatorText();
         Check("  text says 36 units, 1-12, page 1/3",
               (text && strstr(text, "36 units") && strstr(text, "1-12") &&
                strstr(text, "(1/3)")) ? 1 : 0, 1);
+
+        // TASK 048: WHERE IT IS. The box used to start one pixel below the first button's own
+        // top -- inside the icon row, across the wireframes -- which is the placement the user
+        // reported for task 039's group line and which this indicator still carried. It now
+        // goes in the band below the row, and "outside the row" is asserted as a NUMBER
+        // against the row's own lowest edge rather than against a remembered constant.
+        short box[4];
+        ScHudRowIndicatorBox(box);
+        int rowBottom = 0, rowLeft = 0x7FFF;
+        for (int i = 1; i <= 12; ++i) {
+            short* b = (short*)(FakeCtl(i) + SC_BINDLG_OFF_BOUNDS);
+            if (b[3] > rowBottom) rowBottom = b[3];
+            if (b[0] < rowLeft)   rowLeft   = b[0];
+        }
+        Check("  the row's lowest button edge is where the dump says (78)",
+              (long long)rowBottom, (long long)HUD_ROW_BOTTOM);
+        Check("  and the line starts BELOW all twelve of them", box[1] >= rowBottom ? 1 : 0, 1);
+        Check("  flush with the row's left edge", (long long)box[0], (long long)rowLeft);
+        Check("  it stays inside the dialog's own surface",
+              (box[2] <= HUD_SURF_W && box[3] <= HUD_SURF_H) ? 1 : 0, 1);
+        // The engine's string draw refuses OUTRIGHT when top + fontHeight > clip.bottom, and
+        // the clip box is these bounds -- the defect that made task 033's indicator invisible.
+        Check("  and is at least as tall as the font says it must be (fontH=11)",
+              (box[3] - box[1]) >= 11 ? 1 : 0, 1);
+        // A box too NARROW does not fail loudly, it draws a TRUNCATION, which reads as a
+        // working feature. The width is reserved for the LONGEST line this selection can
+        // produce ("36 units  25-36  (3/3)"), not the one showing, so a page flip cannot move
+        // the right edge -- and a box that moved would throw its baseline away every flip.
+        Check("  wide enough for the longest line this selection can produce",
+              (box[2] - box[0]) >= (int)strlen("36 units  25-36  (3/3)") * 5 ? 1 : 0, 1);
+        g_hudBox[0] = box[0]; g_hudBox[1] = box[1];
+        g_hudBox[2] = box[2]; g_hudBox[3] = box[3];
     }
     // A quiet frame: dispatcher runs, but nothing changed -> no re-fill and the
     // engine's dispatcher stays untouched (the page persists on its own).
@@ -1734,10 +1914,19 @@ static void HudRowTests(void) {
         }
         Check("  page 2 shows overflow units 13-24", slotsOk ? 1 : 0, 1);
         {
-            DWORD ind = *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD);
-            const char* text = (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
+            const char* text = HudIndicatorText();
             Check("  indicator says 13-24 (2/3)",
                   (text && strstr(text, "13-24") && strstr(text, "(2/3)")) ? 1 : 0, 1);
+            // AND THE BOX DID NOT MOVE. "1-12" and "13-24" are different lengths, so a box
+            // sized to the CURRENT string would grow here -- and a box that has moved has no
+            // baseline, so the screen-level oracle would answer "no answer" on exactly the
+            // flip it exists to measure. It is sized for the longest line the selection can
+            // produce instead.
+            short box[4];
+            ScHudRowIndicatorBox(box);
+            Check("  and the box is byte-identical across the flip",
+                  (box[0] == g_hudBox[0] && box[1] == g_hudBox[1] &&
+                   box[2] == g_hudBox[2] && box[3] == g_hudBox[3]) ? 1 : 0, 1);
         }
         ResetHudCounters();
         *(WORD*)(evt + SC_EVT_OFF_TYPE) = 4;   // LBUTTONDOWN
@@ -1783,8 +1972,7 @@ static void HudRowTests(void) {
         Check("HP==0 death snapped back to page 1", ScHudRowCurrentPage() + 1, 1);
         Check("  35 live units, still 3 pages", ScHudRowPageCount(), 3);
         {
-            DWORD ind = *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD);
-            const char* text = (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
+            const char* text = HudIndicatorText();
             Check("  indicator says 35 units", (text && strstr(text, "35 units")) ? 1 : 0, 1);
         }
         *(DWORD*)(FakeUnit(15) + SC_CUNIT_OFF_HITPOINTS) = 40 * 256;   // revive for later cases
@@ -1802,8 +1990,7 @@ static void HudRowTests(void) {
         ScHudRowOnDispatch();
         Check("reuse snapped back to page 1", ScHudRowCurrentPage() + 1, 1);
         {
-            DWORD ind = *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD);
-            const char* text = (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
+            const char* text = HudIndicatorText();
             Check("  indicator says 35 units (only unit 16 dropped)",
                   (text && strstr(text, "35 units")) ? 1 : 0, 1);
         }
@@ -1959,8 +2146,13 @@ static void HudRowTests(void) {
         Check("all 12 interact pointers restored to the engine fn", restored ? 1 : 0, 1);
     }
     Check("the indicator is unspliced (13 children)", CountChildren(), 13);
-    Check("buttons force-repainted over the indicator's pixels",
-          g_ctlUpdates > 0 ? 1 : 0, 1);
+    // The hand-back asks the engine to repaint what the indicator was covering. That used to
+    // be the twelve buttons alone and it was enough, because the box sat ON them. Now the box
+    // is in a band NO control occupies, so UnspliceIndicator asks for OUR OWN rect too --
+    // updateControl on the hidden control -- and without that ask nothing would ever repaint
+    // there. The count below is the weak form of that; the stranded measurement further down
+    // is the strong one.
+    Check("the hand-back asked for a repaint (band + row)", g_ctlUpdates > 0 ? 1 : 0, 1);
     ResetHudCounters();
     ScHudRowOnDispatch();
     Check("and it stays stock (engine dispatcher keeps running)",
@@ -1971,6 +2163,76 @@ static void HudRowTests(void) {
     ScHudRowOnDispatch();
     ScHudRowOnDispatch();                     // idempotence: a second frame changes nothing
     Check("still 14 children after two frames", CountChildren(), 14);
+
+    printf("\n    task 048: our line goes ON the band, and comes OFF it again\n");
+    // Everything from here on runs the frames through HudFrame -- detour, then redraw walk --
+    // so the surface actually changes and the module's two screen-level readings have
+    // something to read. See FakeUpdateCtl for what is being modelled and what is not.
+    {
+        SmallSync(1);
+        HudFrame();                                     // stock, and a painted surface
+        Drive36Sync();
+        // The frames are driven ONE AT A TIME here rather than "until it is showing", because
+        // WHICH frame each thing happens on is the whole point of this block.
+        HudFrame();                                     // paged frame 1: splice + place, nothing shown
+        Check("  one paged frame is deliberately NOT enough to show it",
+              ScHudRowIndicatorShowing() ? 1 : 0, 0);
+        ScHudRowOnDispatch();                           // paged frame 2: clean copy, then show
+        Check("the line is up on the second paged frame", ScHudRowIndicatorShowing() ? 1 : 0, 1);
+
+        // The show has only asked for a dirty region: the redraw walk has not run, so NOTHING
+        // of ours is on the surface yet. That is the reading task 033's `ink` could never
+        // give -- it read 2368 of 2368 here whatever the truth was.
+        Check("  before the redraw walk, the band still matches its clean copy",
+              (long long)ScHudRowBandDiff(), 0);
+        FakePaint();                                    // the walk
+        Check("  after it, the band differs from that copy -- the line IS on the surface",
+              ScHudRowBandDiff() > 0 ? 1 : 0, 1);
+        // ... and the paint that put it there is the LAST one in the walk. At the head of the
+        // child list the buttons would have overwritten it, which is what a diff of 0 here
+        // would mean and what the game was actually doing.
+        Check("  and it was painted OVER, not under (the tail splice)",
+              HudIndicatorIsLast(), 1);
+
+        HudFrame();                                     // the module takes its inked copy
+        int glyph = -1;
+        Check("  the inked copy is taken a frame after the show, never on it",
+              ScHudRowBandStranded(&glyph) >= 0 ? 1 : 0, 1);
+        Check("  and the glyph mask is not empty", glyph > 0 ? 1 : 0, 1);
+
+        // THE HAND-BACK. This is what the old placement bought for free and what moving into
+        // an unowned band puts at risk, so it is measured rather than argued.
+        SmallSync(1);
+        HudFrame();                                     // RestoreStock: hide + ask; then paint
+        ScHudRowOnDispatch();                           // the reading, on a LATER stock frame
+        glyph = -1;
+        int stranded = ScHudRowBandStranded(&glyph);
+        Check("after the hand-back the probe still has a mask to check", glyph > 0 ? 1 : 0, 1);
+        Check("  and NOTHING of our line survived it", (long long)stranded, 0);
+
+        // THE NEGATIVE CONTROL, so that 0 is a result and not a property of the instrument.
+        // Same sequence, with the model's redraw suppressed across the hand-back: nothing
+        // repaints the band, every byte our line owns is still sitting there, and the count
+        // has to say so. Without this, "stranded=0" and "the probe cannot see anything" are
+        // the same reading (AGENTS.md: prove the pattern positive where it should match).
+        Drive36Sync();
+        for (int i = 0; i < 4 && !ScHudRowIndicatorShowing(); ++i) HudFrame();
+        HudFrame();                                     // paint the line
+        HudFrame();                                     // inked copy
+        Check("the line is up again for the negative control",
+              ScHudRowIndicatorShowing() ? 1 : 0, 1);
+        g_paintOff = true;
+        SmallSync(1);
+        HudFrame();                                     // hand back, but NOTHING repaints
+        ScHudRowOnDispatch();
+        int glyph2 = -1;
+        int stranded2 = ScHudRowBandStranded(&glyph2);
+        g_paintOff = false;
+        Check("with no repaint, every byte of the line is left stranded",
+              (stranded2 > 0 && stranded2 == glyph2) ? 1 : 0, 1);
+        Check("  so the check above can fail, and 0 was a result",
+              (glyph2 > 0 && stranded2 != 0) ? 1 : 0, 1);
+    }
 
     printf("\n    THE INVARIANT: this module never touches a sprite\n");
     Check("flag 0x08 was never set on any sprite", NoSpriteWasMarkedSelected(64) ? 1 : 0, 1);

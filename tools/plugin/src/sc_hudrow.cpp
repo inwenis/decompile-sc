@@ -82,6 +82,37 @@ static BYTE  g_indCtrl[SC_BINDLG_SIZE];
 static char  g_indText[64];
 static bool  g_rectsLogged = false;
 
+// ---------------------------------------------------------------------------
+// THE BAND BELOW THE ROW, and the two copies that say whether our line is on it
+// ---------------------------------------------------------------------------
+// Ceiling for a copy of the band: the pane is 270 wide on this install (measured, QINDDLG)
+// and the box is SC_QIND_BOX_H tall, so 270*16 is the most this can ever need.
+#define SC_HUD_BAND_MAX 4352
+
+// `clean` is that rect with none of our line on it; `inked` is the same rect a frame AFTER
+// the text was shown -- i.e. once the redraw walk that paints it has run. The bytes where the
+// two differ are the ones our text owns, and that mask is what makes both of this module's
+// screen-level readings honest:
+//   * how many of the band's bytes differ from `clean` right now  -> did the engine draw it;
+//   * how many of the masked bytes still hold the `inked` value after the row has handed back
+//     to stock                                                    -> did anything strand.
+// Neither is an ink count, and that is the point. See LogReadback.
+static BYTE  g_bandClean[SC_HUD_BAND_MAX];
+static BYTE  g_bandInked[SC_HUD_BAND_MAX];
+static BYTE  g_bandNow[SC_HUD_BAND_MAX];       // scratch for a live read; game thread only
+static int   g_bandCleanN = 0;                 // bytes held, 0 = no copy for this rect
+static int   g_bandInkedN = 0;
+static short g_bandRect[4] = { 0, 0, 0, 0 };   // the rect BOTH copies are of
+static bool  g_indShowing  = false;            // our line is on (or bound for) the surface
+static bool  g_wasPaged    = false;            // the previous frame took the paged path
+static bool  g_bandTooSmall = false;           // "it does not fit" said once per dialog
+static bool  g_bandPending  = false;           // a hand-back is waiting to be measured
+static int   g_bandSettle   = 0;
+static unsigned g_pagedFrames   = 0;           // frames the paged path ran -- the COVERAGE number
+static unsigned g_indShowFrame  = 0;           // g_pagedFrames at the last show
+static unsigned g_bandCleanAfter = 0;          // the first frame a clean copy may be taken on
+static unsigned g_statSuppressed = 0;          // frames the band refused to hold the line
+
 static unsigned g_statActs    = 0;   // act runs that displayed a page
 static unsigned g_statStock   = 0;   // act runs deferred to the engine
 static unsigned g_statFlips   = 0;
@@ -484,77 +515,303 @@ static bool IndicatorInChain(DWORD root) {
     return false;
 }
 
-// Spliced at the HEAD of the child list: the CREATE-time handler binder skips it
-// (index <= 0), the hide-all sweeps hide it like any child, and drawing last in
-// our act keeps its text on top of the button strip it overlays. It overlays the
-// TOP EDGE of the first buttons on purpose: those rects repaint whenever the
-// buttons redraw, so leaving paged mode cannot strand indicator pixels on the
-// dialog surface.
-static void EnsureIndicator(DWORD root, DWORD firstBtn) {
+// Spliced at the TAIL of the child list. The CREATE-time handler binder skips it either way
+// (index <= 0) and the engine's hide-all sweep hides it wherever it sits -- but the END of the
+// list is what decides whether the text lands ON TOP of what it overlaps.
+//
+// THIS USED TO BE THE HEAD, under a comment claiming "drawing last in our act keeps its text
+// on top". That is the wrong model of when pixels land, and it is why nobody has ever seen
+// this indicator. CallUpdate reaches updateControl 0x0041C400, which does not paint: it
+// intersects the control's rect with the dialog's and merges the result into the screen's
+// dirty region. The PAINT is the dialog's own redraw walk at 0x0041C683, which takes the
+// children from [dlg+0x42] and steps [esi] -- head to tail -- so a control drawn EARLIER is a
+// control drawn UNDER. At the head of the list our text was painted first and the twelve
+// wireframes painted over it, in the same frame, every frame. Task 039 found and fixed exactly
+// this in sc_queueind after the user reported it; the same defect was still here.
+//
+// THE EVIDENCE THAT IT WAS INVISIBLE RATHER THAN MERELY HARD TO READ, off the last run of
+// test-hud-row.ps1 on merged main: the box was (32,9,180,25), which is 148 x 16 = 2368 bytes,
+// and `indInk` read 2368 -- the whole box, saturated by the buttons' own art -- IDENTICALLY
+// for "36 units  1-12  (1/3)", for "36 units  13-24  (2/3)" and for the wrap back to page 1.
+// Three different strings cannot leave one identical count if any of them is on the surface.
+static bool EnsureSpliced(DWORD root) {
     DWORD ind = (DWORD)&g_indCtrl[0];
     // Re-splice if we think we are spliced but are not actually in the chain
     // (same-address dialog realloc).
     if (g_indSpliced && !IndicatorInChain(root)) g_indSpliced = false;
+    if (g_indSpliced) return true;
 
-    if (!g_indSpliced) {
-        // Runtime evidence guard for the type: the engine must have a real
-        // interact AND update handler for SC_CTRL_TYPE_LSTATIC in the default
-        // tables. If either is null this build does not dispatch that type the way
-        // BWAPI's enum says, so refuse to splice rather than hand the dialog a
-        // control it cannot draw. The row still pages; it just shows no indicator.
-        DWORD tInteract = *(DWORD*)((DWORD)Rt(SC_VA_DEFAULT_INTERACT_TABLE) +
-                                    SC_CTRL_TYPE_LSTATIC * 4);
-        DWORD tUpdate   = *(DWORD*)((DWORD)Rt(SC_VA_DEFAULT_UPDATE_TABLE) +
-                                    SC_CTRL_TYPE_LSTATIC * 4);
-        if (!tInteract || !tUpdate) {
-            ScLog("HUDROW: no engine handler for control type %d (interact=0x%08X "
-                  "update=0x%08X) -- indicator suppressed", SC_CTRL_TYPE_LSTATIC,
-                  (unsigned)tInteract, (unsigned)tUpdate);
-            return;
-        }
-        memset(g_indCtrl, 0, sizeof(g_indCtrl));
-        short* b   = (short*)(firstBtn + SC_BINDLG_OFF_BOUNDS);
-        short* ib  = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
-        ib[0] = (short)(b[0] + 2);        // left
-        ib[1] = (short)(b[1] + 1);        // top
-        ib[2] = (short)(b[0] + 150);      // right
-        // Bottom, and this number is load-bearing rather than cosmetic. The engine's
-        // string draw (SC_VA_DRAW_STRING) refuses to draw AT ALL when
-        // `top + fontHeight > clip.bottom`, and the clip box is the control's own bounds
-        // (research/status-pane-text.md 3). This box used to be nine pixels tall, which is
-        // under the height of the font the SC_CTRL_FONT_SMALLEST bit selects -- so the
-        // indicator was spliced, its text was written, the module logged it, the suite
-        // asserted it out of the module's OWN BUFFER, and the player saw nothing. Task 033.
-        ib[3] = (short)(b[1] + 1 + SC_QIND_BOX_H);
-        *(DWORD*)(ind + SC_BINDLG_OFF_FLAGS)    = SC_CTRL_FLAG_VISIBLE | SC_CTRL_FONT_SMALLEST;
-        *(short*)(ind + SC_BINDLG_OFF_INDEX)    = (short)0xFFE0;   // negative: binder-proof
-        *(WORD*) (ind + SC_BINDLG_OFF_TYPE)     = (WORD)SC_CTRL_TYPE_LSTATIC;
-        *(DWORD*)(ind + SC_BINDLG_OFF_TEXT)     = (DWORD)g_indText;
-        *(DWORD*)(ind + SC_BINDLG_OFF_PARENT)   = root;
-        *(DWORD*)(ind + SC_BINDLG_OFF_INTERACT) = tInteract;
-        *(DWORD*)(ind + SC_BINDLG_OFF_UPDATE)   = tUpdate;
-        *(DWORD*)(ind + SC_BINDLG_OFF_NEXT)     = ChildOf(root);
-        *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD) = ind;
-        g_indSpliced = true;
-        ++g_statSplices;
+    // Runtime evidence guard for the type: the engine must have a real interact AND update
+    // handler for SC_CTRL_TYPE_LSTATIC in the default tables. If either is null this build
+    // does not dispatch that type the way BWAPI's enum says, so refuse to splice rather than
+    // hand the dialog a control it cannot draw. The row still pages; it just shows no
+    // indicator.
+    DWORD tInteract = *(DWORD*)((DWORD)Rt(SC_VA_DEFAULT_INTERACT_TABLE) +
+                                SC_CTRL_TYPE_LSTATIC * 4);
+    DWORD tUpdate   = *(DWORD*)((DWORD)Rt(SC_VA_DEFAULT_UPDATE_TABLE) +
+                                SC_CTRL_TYPE_LSTATIC * 4);
+    if (!tInteract || !tUpdate) {
+        ScLog("HUDROW: no engine handler for control type %d (interact=0x%08X "
+              "update=0x%08X) -- indicator suppressed", SC_CTRL_TYPE_LSTATIC,
+              (unsigned)tInteract, (unsigned)tUpdate);
+        return false;
     }
-    const int start = g_page * SC_HUD_BUTTON_COUNT;
-    _snprintf(g_indText, sizeof(g_indText) - 1, "%d units  %d-%d  (%d/%d)",
-              g_dispN, start + 1, start + g_cacheN, g_page + 1, g_pageCount);
-    g_indText[sizeof(g_indText) - 1] = '\0';
-    CallShow(ind);
-    *(DWORD*)(ind + SC_BINDLG_OFF_FLAGS) |= SC_CTRL_FLAG_DRAWN;
+    memset(g_indCtrl, 0, sizeof(g_indCtrl));
+    // NOT visible at splice time: the box is positioned and the band copied before anything
+    // is shown (see IndicatorFrame), and a control that arrives already visible would be
+    // painted by the very next redraw walk with an empty rect nobody has measured.
+    *(DWORD*)(ind + SC_BINDLG_OFF_FLAGS)    = SC_CTRL_FONT_SMALLEST;
+    *(short*)(ind + SC_BINDLG_OFF_INDEX)    = (short)0xFFE0;   // negative: binder-proof
+    *(WORD*) (ind + SC_BINDLG_OFF_TYPE)     = (WORD)SC_CTRL_TYPE_LSTATIC;
+    *(DWORD*)(ind + SC_BINDLG_OFF_TEXT)     = (DWORD)g_indText;
+    *(DWORD*)(ind + SC_BINDLG_OFF_PARENT)   = root;
+    *(DWORD*)(ind + SC_BINDLG_OFF_INTERACT) = tInteract;
+    *(DWORD*)(ind + SC_BINDLG_OFF_UPDATE)   = tUpdate;
+    *(DWORD*)(ind + SC_BINDLG_OFF_NEXT)     = 0;
+    // Append. Bounded like every other walk here: a torn `next` costs one refused splice
+    // rather than a spin on the game thread.
+    DWORD tail = ChildOf(root);
+    if (!tail) {
+        *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD) = ind;
+    } else {
+        int guard = 0;
+        while (NextOf(tail) && guard < SC_MAX_CTRLS_WALK) { tail = NextOf(tail); ++guard; }
+        if (NextOf(tail)) {
+            ScLog("HUDROW: child list longer than %d -- indicator splice refused",
+                  SC_MAX_CTRLS_WALK);
+            return false;
+        }
+        *(DWORD*)(tail + SC_BINDLG_OFF_NEXT) = ind;
+    }
+    g_indSpliced = true;
+    ++g_statSplices;
+    return true;
+}
+
+// Take the line off the surface: hide it, then ask the engine to repaint the rect it was
+// using. That ask is the half the OLD placement got for free -- the box sat on the buttons,
+// and the buttons repaint themselves, which is exactly what the old comment was defending.
+// A box in a band that belongs to NO control has to ask for its own repaint, and
+// updateControl on our own (now hidden) control is the ask: a hidden control draws nothing,
+// so what lands in that rect is whatever the dialog paints under it. Same fix, same reason,
+// as sc_queueind's RepaintUnder.
+static void HideIndicator(void) {
+    if (!g_indSpliced) { g_indShowing = false; return; }
+    DWORD ind = (DWORD)&g_indCtrl[0];
+    CallHide(ind);
     CallUpdate(ind);
+    g_indShowing = false;
+}
+
+// THE LONGEST LINE THIS SELECTION CAN PRODUCE -- which is what the box is sized for, not the
+// line currently on it. Sizing to the current string would move the right edge on a page flip
+// whose digits grow ("1-12" -> "13-24"), and a box that has MOVED has no baseline: the copies
+// above are copies of a RECT, so the oracle would answer "no answer" on exactly the flip it
+// exists to measure. The LAST page carries the biggest numbers, so it decides the width.
+static int IndicatorWidestLen(void) {
+    char buf[sizeof(g_indText)];
+    const int lastStart = (g_pageCount - 1) * SC_HUD_BUTTON_COUNT + 1;
+    _snprintf(buf, sizeof(buf) - 1, "%d units  %d-%d  (%d/%d)",
+              g_dispN, lastStart, g_dispN, g_pageCount, g_pageCount);
+    buf[sizeof(buf) - 1] = '\0';
+    return (int)strlen(buf);
+}
+
+// WHERE THE LINE GOES, and why it is not on the buttons any more.
+//
+// It used to start at the first button's own top-left plus one pixel -- (32,9,180,25) on this
+// install, measured -- which is INSIDE the icon row, across the wireframes. That is the same
+// placement task 039 fixed for the group production line after the user reported it ("there
+// was some text printed in the spot where the 12 icons are ... but it was behind the buildings
+// icons so couldn't rly tell"); this indicator carried the identical mistake and only appears
+// once a selection passes twelve, which is why nobody complained about it.
+//
+// The pane has exactly one band no control occupies: below the row's lower buttons. It is
+// measured off the LIVE row every frame rather than taken from a constant -- a constant read
+// off one install is not a layout (AGENTS.md, task 034) -- and off ALL TWELVE button rects
+// rather than the visible ones. That last part is where this differs from sc_queueind's
+// PlaceOn, deliberately: the row is a fixed 12-slot grid whose rects come from statdata.bin,
+// a last page can light as few as ONE button, and a box that moved between pages would throw
+// its baseline away on every flip.
+static bool PlaceIndicator(short* box, DWORD root, DWORD firstBtn, int textLen) {
+    int surfW = 0, surfH = 0;
+    if (!ScQueueIndSurfaceSize(root, &surfW, &surfH) || surfW <= 0 || surfH <= 0) return false;
+
+    short* fb = (short*)(firstBtn + SC_BINDLG_OFF_BOUNDS);
+    int rowLeft = fb[0], rowBottom = fb[3];
+    DWORD c = firstBtn;
+    for (int i = 0; i < SC_HUD_BUTTON_COUNT && c; ++i, c = NextOf(c)) {
+        short* b = (short*)(c + SC_BINDLG_OFF_BOUNDS);
+        if (b[0] < rowLeft)   rowLeft   = b[0];
+        if (b[3] > rowBottom) rowBottom = b[3];
+    }
+
+    int want = textLen * SC_QIND_CHAR_W;
+    if (want < SC_QIND_BOX_W) want = SC_QIND_BOX_W;
+    const int left = rowLeft;
+    const int top  = rowBottom + SC_QIND_BAND_GAP;
+    int right  = left + want;
+    if (right > surfW - 1) right = surfW - 1;
+    int bottom = top + SC_QIND_BOX_H;
+    if (bottom > surfH) bottom = surfH;
+
+    // The rule the engine's own draw applies (SC_VA_DRAW_STRING refuses OUTRIGHT when
+    // `top + fontHeight > clip.bottom`, and the clip box is these bounds -- research/
+    // status-pane-text.md 3), checked against the FONT'S own height rather than a constant.
+    // A band shorter than the font draws nothing while every field read-back says the
+    // indicator is fine: that is precisely task 033's nine-pixel box, green for weeks. And a
+    // box narrower than the string draws a TRUNCATION, which is worse than nothing because it
+    // reads as a working feature. Either one is refused here, loudly and once, rather than
+    // being met by a player -- the task's own "draw nothing rather than overlap" outcome.
+    const int fontH = ScQueueIndSmallFontHeight(g_base);
+    if (bottom - top < (fontH > 0 ? fontH : SC_QIND_BAND_MIN_H) || right - left < want) {
+        if (!g_bandTooSmall) {
+            ScLog("HUDROW: the band below the row is (%d,%d,%d,%d) on a %dx%d surface -- too "
+                  "small for %d chars at fontH=%d, so the page indicator is SUPPRESSED "
+                  "(never drawn back onto the buttons)",
+                  left, top, right, bottom, surfW, surfH, textLen, fontH);
+            g_bandTooSmall = true;
+        }
+        return false;
+    }
+    box[0] = (short)left;  box[1] = (short)top;
+    box[2] = (short)right; box[3] = (short)bottom;
+    return true;
+}
+
+// Invalidate both copies: whatever rect they were of, they are not of THIS one, and the next
+// clean copy may only be taken on a LATER paged frame (see IndicatorFrame step 2).
+static void BandForget(void) {
+    g_bandCleanN = 0;
+    g_bandInkedN = 0;
+    g_bandCleanAfter = g_pagedFrames + 1;
+}
+
+// THE INDICATOR, once per paged frame. Split out of FillPage because the band's copies are a
+// three-frame sequence and FillPage runs only when the PAGE changes -- on a quiet frame the
+// old code did nothing at all, so a copy that must be taken "the frame after" would never have
+// been taken at all.
+//
+// THE SEQUENCE, every step of which is one of task 039's dearly-bought rules:
+//   1. position the box off the live row; a refusal HIDES and draws nothing;
+//   2. with no clean copy for this rect, take one -- but only on a paged frame that FOLLOWS a
+//      paged frame, and show nothing until it is taken. It has to be a copy of the pane THIS
+//      PAGE DRAWS: updateControl only dirties, so on the frame the fill runs the surface still
+//      holds the previous layout, and a copy taken there would make every later reading count
+//      the layout change as well as our text. Two paged frames (~80 ms) of the row without its
+//      caption is invisible to a player and is what makes the number exact;
+//   3. write the text and show it, remembering which frame that was;
+//   4. on a LATER frame -- never the show frame, whose paint has not run yet -- take the inked
+//      copy, which is the pane WITH our line on it.
+// Returns true when it changed something worth logging.
+static bool IndicatorFrame(DWORD root, DWORD firstBtn) {
+    short box[4];
+    if (!PlaceIndicator(box, root, firstBtn, IndicatorWidestLen())) {
+        ++g_statSuppressed;
+        if (g_indShowing) { HideIndicator(); BandForget(); return true; }
+        return false;
+    }
+    if (!EnsureSpliced(root)) return false;
+
+    DWORD  ind = (DWORD)&g_indCtrl[0];
+    short* ib  = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
+    const bool moved = (ib[0] != box[0] || ib[1] != box[1] ||
+                        ib[2] != box[2] || ib[3] != box[3]);
+    if (moved) {
+        // Hide FIRST, at the old rect, so the repaint request covers the pixels that are
+        // actually on the surface; then move.
+        if (g_indShowing) HideIndicator();
+        ib[0] = box[0]; ib[1] = box[1]; ib[2] = box[2]; ib[3] = box[3];
+        g_bandRect[0] = box[0]; g_bandRect[1] = box[1];
+        g_bandRect[2] = box[2]; g_bandRect[3] = box[3];
+        BandForget();
+        return true;
+    }
+
+    if (g_bandCleanN <= 0) {
+        if (g_indShowing) { HideIndicator(); return true; }
+        if (g_pagedFrames < g_bandCleanAfter) return false;   // one more painted frame first
+        g_bandCleanN = ScQueueIndCopyRect(root, g_bandRect, g_bandClean, SC_HUD_BAND_MAX);
+        if (g_bandCleanN <= 0) return false;
+        // and fall straight through to the show: the copy is taken BEFORE it, and a show only
+        // dirties the region, so nothing our text does can end up inside the copy. Waiting a
+        // further frame would only make the caption later for no gain.
+    }
+
+    const int start = g_page * SC_HUD_BUTTON_COUNT;
+    char want[sizeof(g_indText)];
+    _snprintf(want, sizeof(want) - 1, "%d units  %d-%d  (%d/%d)",
+              g_dispN, start + 1, start + g_cacheN, g_page + 1, g_pageCount);
+    want[sizeof(want) - 1] = '\0';
+
+    const bool changed = (strcmp(want, g_indText) != 0);
+    const bool visible = (*(DWORD*)(ind + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) != 0;
+    // Re-show whenever the engine's own hide-all sweep has taken the visible bit off us, the
+    // same way sc_queueind does -- that sweep runs on every re-layout and does not know this
+    // control is ours.
+    if (changed || !visible || !g_indShowing) {
+        memcpy(g_indText, want, sizeof(g_indText));
+        CallShow(ind);
+        *(DWORD*)(ind + SC_BINDLG_OFF_FLAGS) |= SC_CTRL_FLAG_DRAWN;
+        CallUpdate(ind);
+        g_indShowing   = true;
+        g_indShowFrame = g_pagedFrames;
+        g_bandInkedN   = 0;      // that copy belongs to the line that was there before
+        return true;
+    }
+
+    if (g_bandInkedN <= 0 && g_pagedFrames > g_indShowFrame) {
+        g_bandInkedN = ScQueueIndCopyRect(root, g_bandRect, g_bandInked, SC_HUD_BAND_MAX);
+        return g_bandInkedN > 0;
+    }
+    return false;
 }
 
 static void UnspliceIndicator(DWORD root) {
     if (!g_indSpliced) return;
     DWORD ind = (DWORD)&g_indCtrl[0];
-    CallHide(ind);
+    HideIndicator();                 // hide AND ask for the band's repaint, while still linked
     DWORD* link = (DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD);
     while (*link && *link != ind) link = (DWORD*)(*link + SC_BINDLG_OFF_NEXT);
     if (*link == ind) *link = NextOf(ind);
     g_indSpliced = false;
+}
+
+// HOW MANY OF THE BAND'S BYTES ARE OURS RIGHT NOW: the same rect compared against the copy
+// taken with none of our line on it. This is the only number here that can say the engine drew
+// the text, and the reason it is a DIFFERENCE and not an ink count is in LogReadback.
+// -1 is an honest "no answer" (no copy for this rect yet, or the surface moved); never a 0.
+static int BandDiff(DWORD root) {
+    if (g_bandCleanN <= 0) return -1;
+    const int n = ScQueueIndCopyRect(root, g_bandRect, g_bandNow, SC_HUD_BAND_MAX);
+    if (n != g_bandCleanN) return -1;
+    int d = 0;
+    for (int i = 0; i < n; ++i) if (g_bandNow[i] != g_bandClean[i]) ++d;
+    return d;
+}
+
+// HOW MANY OF OUR OWN BYTES SURVIVED THE HAND-BACK. The bytes where `inked` differs from
+// `clean` are the ones our text put on the surface -- the glyph mask -- and this counts the
+// masked positions that STILL hold the inked value. 0 means the band was repainted and nothing
+// of ours is left, which is exactly what the old on-the-buttons placement was buying and what
+// moving into a band that belongs to no control puts at risk.
+//
+// `*glyphOut` is the size of that mask, and it travels with the answer on purpose: a
+// `stranded=0` over an EMPTY mask is not a clean band, it is a probe that never saw our line,
+// and the two must not print the same.
+static int BandStranded(DWORD root, int* glyphOut) {
+    if (glyphOut) *glyphOut = -1;
+    if (g_bandCleanN <= 0 || g_bandInkedN != g_bandCleanN) return -1;
+    const int n = ScQueueIndCopyRect(root, g_bandRect, g_bandNow, SC_HUD_BAND_MAX);
+    if (n != g_bandCleanN) return -1;
+    int glyph = 0, stranded = 0;
+    for (int i = 0; i < n; ++i) {
+        if (g_bandInked[i] == g_bandClean[i]) continue;      // never ours
+        ++glyph;
+        if (g_bandNow[i] == g_bandInked[i]) ++stranded;
+    }
+    if (glyphOut) *glyphOut = glyph;
+    return stranded;
 }
 
 // ---------------------------------------------------------------------------
@@ -583,9 +840,21 @@ static void LogReadback(DWORD firstBtn) {
     // The difference matters: printing our own buffer says what the module INTENDED, which
     // is exactly the self-echo AGENTS.md's "assert the engine's own result" rule is about,
     // and it is what let a nine-pixel-tall (i.e. never drawn) indicator pass for weeks.
-    // `ink` counts non-background bytes the engine left in the dialog's own surface inside
-    // that control's rect: it cannot say WHAT was drawn -- the text field above does that
-    // -- but it is the only thing here that can say anything was drawn at all.
+    //
+    // `indInk` STAYS ON THIS LINE AND IS NO LONGER THE ORACLE, and the reason is the finding
+    // this task opened with. Ink counts non-background bytes inside a rect, which can only
+    // detect text over a region the ENGINE leaves as background. Over a region the engine also
+    // paints, it SATURATES: every byte is already non-zero before one pixel of ours exists, so
+    // the count is the rect's area whatever we did. Measured, on merged main, box (32,9,180,25)
+    // = 148 x 16 = 2368 bytes: `indInk=2368` for "36 units  1-12  (1/3)", 2368 for
+    // "13-24  (2/3)", 2368 for the wrap back. One number, three strings, the full area -- and
+    // the suite asserted `indInk > 0` on it for weeks. That failure mode does not look like
+    // zero; it looks healthy, which is why the positive control task 033 added (guarding
+    // against ink=0 meaning "blind probe") could not catch it.
+    //
+    // `indBoxDiff` is what replaces it: the same rect compared against a copy of itself taken
+    // with none of our line on it (BandDiff). `indRefInk`/`indSurfInk` stay as the two
+    // blindness checks -- a control the engine fills, and the whole surface.
     DWORD ind = (DWORD)&g_indCtrl[0];
     bool linked = false;
     for (DWORD c = ChildOf(g_dialog); c && !linked; c = NextOf(c)) if (c == ind) linked = true;
@@ -600,11 +869,29 @@ static void LogReadback(DWORD firstBtn) {
         ink = ScQueueIndSurfaceInk(g_dialog, ib[0], ib[1], ib[2], ib[3]);
     }
 
+    // THE POSITIVE CONTROL for the numbers above: ink over a rect the ENGINE fills. The first
+    // wireframe button is up precisely because we are paging, so unlike sc_queueind's version
+    // this one always has a visible candidate here -- and it still reports -1 rather than
+    // falling back to a hidden control, because ink over something nobody can see answers
+    // neither question. `surfInk` (whole surface) is the check that has an answer in EVERY
+    // state, including the one where the row has just handed back.
+    int refInk = -1, refId = 0;
+    DWORD ref = FindChildById(g_dialog, SC_HUD_FIRST_SMALL_BUTTON);
+    if (ref && (*(DWORD*)(ref + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE)) {
+        short* rb = (short*)(ref + SC_BINDLG_OFF_BOUNDS);
+        refInk = ScQueueIndSurfaceInk(g_dialog, rb[0], rb[1], rb[2], rb[3]);
+        refId  = SC_HUD_FIRST_SMALL_BUTTON;
+    }
+
     ScLog("HUDROW show n=%d page=%d/%d slots=%d [%s] indicator=\"%s\" indLinked=%d "
-          "indVisible=%d indBounds=(%d,%d,%d,%d) indInk=%d",
+          "indVisible=%d indBounds=(%d,%d,%d,%d) indInk=%d indBoxDiff=%d indRefInk=%d "
+          "indRefId=%d indSurfInk=%d indFontH=%d indShowing=%d pagedFrames=%u",
           g_dispN, g_page + 1, g_pageCount, shown, buf, live, linked ? 1 : 0,
           (flags & SC_CTRL_FLAG_VISIBLE) ? 1 : 0,
-          linked ? ib[0] : 0, linked ? ib[1] : 0, linked ? ib[2] : 0, linked ? ib[3] : 0, ink);
+          linked ? ib[0] : 0, linked ? ib[1] : 0, linked ? ib[2] : 0, linked ? ib[3] : 0, ink,
+          linked ? BandDiff(g_dialog) : -1, refInk, refId,
+          ScQueueIndSurfaceInk(g_dialog, 0, 0, 0x7FFF, 0x7FFF),
+          ScQueueIndSmallFontHeight(g_base), g_indShowing ? 1 : 0, g_pagedFrames);
 }
 
 // Where the buttons are, so an automated test can aim a right-click at one --
@@ -666,11 +953,13 @@ static void FillPage(DWORD root, DWORD firstBtn) {
         }
     }
 
-    EnsureIndicator(root, firstBtn);
+    // The indicator is NOT touched here any more. It runs once per paged frame from
+    // ScHudRowOnDispatch instead, because its band copies are a three-frame sequence and this
+    // function runs only when the page CHANGES -- on a quiet frame a copy that has to be taken
+    // "the frame after" would never be taken at all. Same reason the read-back line moved out.
     g_cacheValid  = true;
     g_flipPending = false;
     ++g_statActs;
-    LogReadback(firstBtn);
 }
 
 // A positive read-back that the dialog is genuinely back to stock: all 12 wireframe
@@ -693,15 +982,21 @@ static void LogVerifyStock(DWORD root) {
           engineOwned, walked, IndicatorInChain(root) ? 1 : 0, chainLen);
 }
 
-// Leave paged mode: restore the stock pointers, remove the indicator, force-repaint
-// the buttons so any pixels our indicator left on the dialog surface are painted
-// over, then hand the frame to the engine's own dispatcher (which lays out the
-// single-portrait or <=12 multi view normally). `root == 0` means the dialog went
-// away and the cached button pointers are into freed heap: drop the bookkeeping
-// without dereferencing (the next paged frame re-wraps fresh).
+// Leave paged mode: restore the stock pointers, remove the indicator, force-repaint the
+// buttons, then hand the frame to the engine's own dispatcher (which lays out the
+// single-portrait or <=12 multi view normally). `root == 0` means the dialog went away and the
+// cached button pointers are into freed heap: drop the bookkeeping without dereferencing (the
+// next paged frame re-wraps fresh).
+//
+// THE REPAINT NOW HAS TWO HALVES, and the first one is new. While the indicator sat ON the
+// buttons, updating the buttons was the whole answer -- their own repaint covered our pixels,
+// which is what the old placement was defending. In the band below the row there is no control
+// to repaint, so UnspliceIndicator asks for OUR OWN rect first (updateControl on the hidden
+// control), and the button sweep below stays because the row is what is next to the band.
+// `HUDROW band after stock` in the dispatcher is the measurement that this works.
 static void RestoreStock(DWORD root) {
     Unwrap(root);
-    if (root) UnspliceIndicator(root); else g_indSpliced = false;
+    if (root) UnspliceIndicator(root); else { g_indSpliced = false; g_indShowing = false; }
     g_cacheValid = false;
     if (root) {
         DWORD c = FindChildById(root, SC_HUD_FIRST_SMALL_BUTTON);
@@ -744,6 +1039,16 @@ void ScHudRowOnDispatch(void) {
         g_page        = 0;
         g_cacheValid  = false;
         g_rectsLogged = false;
+        // AND THE BAND COPIES BELONG TO THE OLD DIALOG'S SURFACE. Its rect can match the new
+        // one exactly -- the pane is laid out the same way every time -- so without this the
+        // first reading in a new dialog would diff live pixels against a buffer that no
+        // longer exists. "No answer" is the only honest state here (sc_queueind, task 039).
+        g_indShowing  = false;
+        g_bandTooSmall = false;
+        g_bandPending  = false;
+        g_bandCleanN = 0;
+        g_bandInkedN = 0;
+        g_bandCleanAfter = g_pagedFrames + 1;
     }
 
     DWORD firstBtn = root ? FindChildById(root, SC_HUD_FIRST_SMALL_BUTTON) : 0;
@@ -756,12 +1061,45 @@ void ScHudRowOnDispatch(void) {
     // then shows its own truth, with no per-frame churn and no stale tail.
     if (g_diverged && (g_wrapCount > 0 || g_indSpliced)) ++g_statDiverged;
     if (!overflow || g_diverged || !root || !firstBtn || !PortraitUnit()) {
-        if (g_wrapCount > 0 || g_indSpliced) RestoreStock(root);   // hands back inside
+        bool hidNow = false;
+        if (g_wrapCount > 0 || g_indSpliced) { RestoreStock(root); hidNow = true; }
         else CallOrigDispatch();
+        g_wasPaged = false;
         ++g_statStock;
+
+        // CRITERION 4, measured rather than argued: does leaving paged mode leave any of our
+        // pixels behind? The old placement bought that for free by sitting on controls that
+        // repaint themselves; a band that belongs to no control has to ask for its repaint
+        // (HideIndicator), and this is the reading that says whether the ask worked.
+        //
+        // NOT ON THE FRAME WE HID ON. RestoreStock only marks the region dirty -- the paint is
+        // the dialog's own redraw walk, which has not run when this returns -- so a reading
+        // taken now would find our own line still on the surface and report every byte of it
+        // stranded. Every later stock frame is after that redraw. Logged once per hand-back.
+        if (hidNow) { g_bandPending = true; g_bandSettle = 0; }
+        else if (g_bandPending && root) {
+            if (++g_bandSettle >= 1) {
+                int glyph = -1;
+                const int stranded = BandStranded(root, &glyph);
+                ScLog("HUDROW band after stock: rect=(%d,%d,%d,%d) glyphBytes=%d stranded=%d "
+                      "surfInk=%d pagedFrames=%u",
+                      g_bandRect[0], g_bandRect[1], g_bandRect[2], g_bandRect[3],
+                      glyph, stranded,
+                      ScQueueIndSurfaceInk(root, 0, 0, 0x7FFF, 0x7FFF), g_pagedFrames);
+                g_bandPending = false;
+            }
+        }
         return;
     }
 
+    ++g_pagedFrames;
+    if (!g_wasPaged) {
+        // Entering paged mode: the surface still holds the STOCK layout this frame, so no copy
+        // of the band taken now is a copy of the pane this page draws. BandForget defers it to
+        // the next paged frame, by which time the redraw walk has painted the row.
+        BandForget();
+        g_wasPaged = true;
+    }
     EnsureWrapped(firstBtn);
     LogButtonRects(root, firstBtn);
 
@@ -769,9 +1107,16 @@ void ScHudRowOnDispatch(void) {
     // when something the page depends on changed. On a quiet frame the page just
     // persists -- nothing else writes the status buttons once we skip the engine's
     // dispatcher.
+    bool filled = false;
     if (selChanged || death || g_flipPending || !g_cacheValid || PageDrifted()) {
         FillPage(root, firstBtn);
+        filled = true;
     }
+    // The indicator runs EVERY paged frame, quiet ones included: its band copies are a
+    // three-frame sequence and the fill above is not.
+    const bool indChanged = IndicatorFrame(root, firstBtn);
+    if (filled || indChanged) LogReadback(firstBtn);
+
     // Consume the redraw-needed flag the way the engine's dispatcher does at its
     // tail, since we are standing in for it this frame.
     *(BYTE*)Rt(SC_VA_STAT_DIRTY) = 0;
@@ -818,6 +1163,16 @@ void ScHudRowInit(BYTE* moduleBase, bool enabled) {
     g_indText[0] = '\0';
     g_rectsLogged = false;
     g_diverged = false;
+    g_indShowing = false;
+    g_wasPaged = false;
+    g_bandTooSmall = false;
+    g_bandPending = false;
+    g_bandSettle = 0;
+    g_bandCleanN = g_bandInkedN = 0;
+    g_bandRect[0] = g_bandRect[1] = g_bandRect[2] = g_bandRect[3] = 0;
+    g_pagedFrames = 0;
+    g_indShowFrame = 0;
+    g_bandCleanAfter = 0;
 }
 
 bool ScHudRowEnabled(void) { return g_enabled; }
@@ -866,10 +1221,14 @@ void ScHudRowRemoveHooks(void) {
 
 void ScHudRowLogStats(void) {
     if (!g_enabled) return;
+    // `pagedFrames` IS THE COVERAGE NUMBER, and it is on this line for the reason AGENTS.md
+    // gives for task 041's: this module's whole seam is the >12 state, and a run that never
+    // reached it proves nothing about the indicator in either direction while looking exactly
+    // like a clean pass. 0 here means no verdict, whatever else the run says.
     ScLog("HUDROW stats: acts=%u stock=%u flips=%u staleDropped=%u wraps=%u splices=%u "
-          "diverged=%u gated=%u",
+          "diverged=%u gated=%u pagedFrames=%u bandSuppressed=%u",
           g_statActs, g_statStock, g_statFlips, g_statStale, g_statWraps, g_statSplices,
-          g_statDiverged, g_statGated);
+          g_statDiverged, g_statGated, g_pagedFrames, g_statSuppressed);
 }
 
 // ---------------------------------------------------------------------------
@@ -895,3 +1254,11 @@ int ScHudRowCurrentPage(void)  { return g_page; }
 int ScHudRowPageCount(void)    { return g_pageCount; }
 int ScHudRowGatedCount(void)   { return (int)g_statGated; }
 bool ScHudRowIsDiverged(void)  { return g_diverged; }
+int ScHudRowPagedFrames(void)  { return (int)g_pagedFrames; }
+bool ScHudRowIndicatorShowing(void) { return g_indShowing; }
+int ScHudRowBandDiff(void)     { return BandDiff(g_dialog); }
+int ScHudRowBandStranded(int* glyphOut) { return BandStranded(g_dialog, glyphOut); }
+void ScHudRowIndicatorBox(short* out) {
+    const short* b = (const short*)&g_indCtrl[SC_BINDLG_OFF_BOUNDS];
+    if (out) for (int i = 0; i < 4; ++i) out[i] = b[i];
+}
