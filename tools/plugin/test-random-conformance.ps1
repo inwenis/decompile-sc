@@ -247,6 +247,14 @@ $script:frames = @()
 # past the summary.
 $script:episodesRun = 0
 $script:finished = $false
+# DID THIS RUN ACTUALLY REACH THE SEAM IT EXISTS FOR? A burst only tests task 038's bug if it
+# pushes a MULTI-BUILDING selection past the engine's five slots; below that the rings never
+# fill, the client never greys the button, and a buggy plugin behaves exactly like a correct
+# one. Seed 20260812 did that to itself -- its indicator episode filled a building to the cap,
+# every later group burst was clamped to two or three presses by the headroom check, and the
+# whole run came out GREEN against the very build whose bug it was written to find. Nothing in
+# the output said so. This counter is what says so.
+$script:groupOverflowEpisodes = 0
 
 function Assert-Inv {
     param(
@@ -919,6 +927,11 @@ try {
             continue
         }
 
+        # Counted BEFORE the episode acts, from the numbers the episode will actually use:
+        # more than one building selected, and enough presses to carry a ring past the
+        # engine's own five.
+        if ($selCount -gt 1 -and $capped -gt $ENGINE_SLOTS) { $script:groupOverflowEpisodes++ }
+
         # --- ACT + ASSERT ---------------------------------------------------
         switch ($ep.kind) {
             'indicator' { Invoke-IndicatorEpisode -Ep $ep -Unit $units[0] -Before $before }
@@ -1005,6 +1018,15 @@ finally {
     Write-Host ''
     Write-Host "COVERAGE  asserted: $(@($allInv | Where-Object { $script:covered.ContainsKey($_) }) -join ' ')"
     if ($missing.Count -gt 0) { Write-Host "          NOT asserted by this run: $($missing -join ' ')" }
+    # The seam, named. A green run that never got here has not tested the thing this harness
+    # was built for, and saying "0 episodes" is the difference between evidence and a rumour.
+    if ($script:groupOverflowEpisodes -gt 0) {
+        Write-Host "          episodes that pushed a MULTI-BUILDING selection past the engine's $ENGINE_SLOTS slots: $($script:groupOverflowEpisodes) (this is task 038's seam)"
+    } else {
+        Write-Host "          NO episode pushed a MULTI-BUILDING selection past the engine's $ENGINE_SLOTS slots."
+        Write-Host "          A run that never does that CANNOT detect task 038's class of bug, whatever its verdict says."
+        Write-Host '          Usually the queues were already full: pick a seed whose early episodes are group bursts, or raise -QueueMax.'
+    }
     switch ($Profile) {
         'production' { Write-Host '          features NOT reached by this profile: sc_upgrades (-Profile upgrades), sc_hudrow paging (-Profile hudrow)' }
         'upgrades'   { Write-Host '          features NOT reached by this profile: sc_prodqueue, sc_prodfan, sc_hudrow paging' }
