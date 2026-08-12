@@ -76,6 +76,11 @@ $script:ScHaveDrawing = $true
 try { Add-Type -AssemblyName System.Drawing -ErrorAction Stop | Out-Null }
 catch { $script:ScHaveDrawing = $false }
 
+# Which desktop this thread is on. Needed by exactly one thing here: the foreground gate,
+# which must be able to say WHY it cannot have the foreground when a run is off-screen
+# (task 043 -- see Assert-ScWindowActive). Nothing in that file runs on import either.
+. (Join-Path $PSScriptRoot 'sc-desktop.ps1')
+
 function Assert-ScDrawing {
     if (-not $script:ScHaveDrawing) {
         throw 'drive-game: System.Drawing is not available in this PowerShell, so no frame can be captured. Frame capture needs a Windows host with GDI+.'
@@ -1536,6 +1541,12 @@ function Assert-ScWindowActive {
     never set by the suites; if you find yourself reaching for it to make a test pass,
     the test is telling you something else is wrong.
 
+    OFF-SCREEN RUNS (task 043) cannot grant it at all, and the throw below names that case
+    specifically. Windows has one foreground window and it belongs to the desktop currently
+    receiving input, so a run on an invisible desktop has none to take -- which matters for
+    exactly one primitive, Send-ScDropdownPick. The rest of this file is unaffected: posted
+    moves, clicks, drags, keys and PrintWindow all work off-screen, measured.
+
     -Because is glued into the message so the failure names the operation that refused,
     not just the fact that a window cannot take input.
     #>
@@ -1551,6 +1562,28 @@ function Assert-ScWindowActive {
     Assert-ScDrivable -Hwnd $Hwnd
     if (-not ($RaiseWindow -or $env:SCDRIVE_RAISE -eq '1')) { return }
     if (Set-ScWindowActive -Hwnd $Hwnd -Tries $Tries) { return }
+
+    # An OFF-SCREEN run can never satisfy this, and it must say so in those words. The
+    # foreground window is a property of the desktop that is receiving input; a window on any
+    # other desktop cannot hold it, and GetForegroundWindow() reads 0 there all run.
+    # Measured, task 043: probe-quiet-dropdown.ps1 run through run-offscreen.ps1 failed all
+    # THREE arms -- including arm C, the foreground control that passes every time on the
+    # visible desktop, which could not raise at all.
+    #
+    # Without this branch the message below sends the reader hunting for a modal dialog that
+    # does not exist (AGENTS.md, task 030: a diagnostic must name the term that refused).
+    $myDesktop = Get-ScThreadDesktopName
+    $onScreen = Get-ScInputDesktopName
+    if ($myDesktop -and $onScreen -and $myDesktop -ne $onScreen) {
+        throw ("drive-game: this input needs the game window in the FOREGROUND, and this run is " +
+               "on the invisible desktop '$myDesktop' while the monitor is showing '$onScreen'. " +
+               'No window on a desktop that is not receiving input can be the foreground window, ' +
+               'so this is structural rather than a race -- retrying will not help. Only a ' +
+               'DROPDOWN PICK needs the foreground (Send-ScDropdownPick); every other input in ' +
+               'this harness drives fine off-screen. Re-run visibly -- same code path, one flag: ' +
+               "./tools/plugin/run-offscreen.ps1 -Visible -Suite <suite>. (The input: $Because)")
+    }
+
     throw ("drive-game: -RaiseWindow was asked for and the game window could not be " +
            "brought to the foreground before $Because. Close whatever is holding the " +
            'foreground (a modal dialog, an installer, a lock screen) and re-run, or drop ' +
