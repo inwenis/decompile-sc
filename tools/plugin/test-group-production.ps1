@@ -176,7 +176,7 @@ function Get-ProdFan {
                     $out.Rows += [pscustomobject]@{
                         Index = [int]$m.Groups[1].Value
                         Unit = $m.Groups[3].Value
-                        Type = [Convert]::ToInt32($m.Groups['text'].Value, 16)
+                        Type = [Convert]::ToInt32($m.Groups[4].Value, 16)
                         Player = [int]$m.Groups[5].Value
                         Head = [int]$m.Groups[6].Value
                         EngineLen = [int]$m.Groups[7].Value
@@ -538,8 +538,8 @@ try {
                 if ($m.Success) {
                     Assert-That "the plan covers all $Buildings buildings ($($m.Groups[1].Value))" `
                         ([int]$m.Groups[1].Value -eq $Buildings)
-                    Assert-That "at ONE building per chunk, which is what cmdrecvTrain's single-unit gate wants (slots=$($m.Groups['text'].Value))" `
-                        ([int]$m.Groups['text'].Value -eq 1)
+                    Assert-That "at ONE building per chunk, which is what cmdrecvTrain's single-unit gate wants (slots=$($m.Groups[4].Value))" `
+                        ([int]$m.Groups[4].Value -eq 1)
                     Assert-That "so $Buildings Select+order pairs go out ($($m.Groups[5].Value))" `
                         ([int]$m.Groups[5].Value -eq $Buildings)
                 }
