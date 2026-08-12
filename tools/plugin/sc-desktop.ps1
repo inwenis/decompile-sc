@@ -124,18 +124,23 @@ $script:SC_DESKTOP_ACCESS = 0x00FF
 function New-ScTestDesktopName {
     <#
     .SYNOPSIS
-    A desktop name unique to this run, so N parallel workers never collide.
+    A desktop name unique to this CALL, so N parallel workers never collide and neither do
+    two steps of one chain run from a single shell.
     .DESCRIPTION
     Desktop names live in one flat namespace per window station, so a single fixed name
     would recreate exactly the contention the shared fixture folder used to have
-    (AGENTS.md § "Test fixtures: one folder per task"). Task id + pid is unique per run by
-    construction, and it names the owner if anyone ever has to look at the desktop list.
+    (AGENTS.md § "Test fixtures: one folder per task"). Task id + pid was unique per
+    parallel WORKER but not per step of a chain run from one shell -- every step shares the
+    pid, so step N+1 asked for the desktop step N was still tearing down and raced its
+    destruction (2026-08-12, task 039/045). A GUID suffix makes every call unique regardless
+    of how many share a pid; the pid stays in the name so the owner is still visible to
+    anyone listing desktops.
     #>
     param([string]$Tag = $(if ($env:AGENT_TASK) { $env:AGENT_TASK } else { 'sc' }))
     # Letters and digits only -- a backslash in a desktop name would name a window station.
     $safe = ($Tag -replace '[^A-Za-z0-9]', '')
     if (-not $safe) { $safe = 'sc' }
-    "sc-$safe-$PID"
+    "sc-$safe-$PID-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
 }
 
 function Get-ScThreadDesktopName {
