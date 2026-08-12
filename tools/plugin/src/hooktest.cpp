@@ -3929,6 +3929,15 @@ static void BuildFakeQIndPane(int engineLen, WORD type) {
     *(BYTE*) FakeRt(SC_VA_CLIENT_SELECTION_COUNT) = 1;
 }
 
+// The LAST child of the fake pane, which is where a control has to be to be drawn on top
+// of the ones before it (the redraw walk 0x0041C683 takes them head to tail).
+static DWORD QiLastChild(void) {
+    DWORD last = 0;
+    for (DWORD c = *(DWORD*)(QiRoot() + SC_BINDLG_OFF_FIRST_CHILD); c;
+         c = *(DWORD*)(c + SC_BINDLG_OFF_NEXT)) last = c;
+    return last;
+}
+
 static int QiChildren(void) {
     int n = 0;
     for (DWORD c = *(DWORD*)(QiRoot() + SC_BINDLG_OFF_FIRST_CHILD); c && n < 32;
@@ -4021,6 +4030,12 @@ static void QueueIndTests(void) {
     {
         DWORD ind = QiIndicator();
         Check("  and the walk finds it", ind ? 1 : 0, 1);
+        // Z-ORDER, and it is a position in a list rather than a preference. The dialog's
+        // redraw walk takes the children head to tail, so the LAST one is the one drawn
+        // over the others; at the head -- where this control used to be spliced -- the
+        // engine's own controls painted over it in the same frame, every frame.
+        Check("  and it is the LAST child, so it is painted over the others, not under",
+              (long long)(ind == QiLastChild()), 1);
         if (ind) {
             const char* text = (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
             // Read out of the CONTROL, not out of the module: this is the assertion

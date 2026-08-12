@@ -287,9 +287,22 @@ static bool InChain(DWORD root) {
     return false;
 }
 
-// Spliced at the HEAD of the child list: the CREATE-time binder skips it (index <= 0), the
-// engine's hide-all sweeps hide it like any child, and being drawn from our own frame tail
-// keeps its text on top of whatever it overlays.
+// Spliced at the TAIL of the child list. The CREATE-time binder skips it either way (index
+// <= 0) and the engine's hide-all sweeps hide it like any child wherever it sits, so the
+// end of the list costs nothing -- and it is the end that decides whether the text is on
+// top of what it overlays.
+//
+// THIS USED TO BE THE HEAD, with a comment claiming "being drawn from our own frame tail
+// keeps its text on top". That is the wrong model of when pixels land, and it is task
+// 039's second defect -- the user's "some text ... but it was behind the buildings icons".
+// What CallUpdate reaches (updateControl 0x0041C400) does not paint: it intersects the
+// control's rect with the dialog's and merges the result into the screen's dirty region
+// (its tail is 0x0041C200, which snaps the rect to a 16px grid and clamps it into the
+// globals at 0x0051A16C..). The paint is the dialog's own redraw walk at 0x0041C683,
+// which takes the children from `[dlg+0x42]` and steps `[esi]` -- head to tail, clearing
+// each control's DRAWN bit as it queues it (0x0041C754) -- so a control drawn EARLIER is
+// a control drawn UNDER. At the head of the list, our text was painted first and every
+// engine control that overlapped it painted over it, in the same frame, every frame.
 static bool EnsureSpliced(DWORD root) {
     DWORD ind = (DWORD)&g_ctrl[0];
     if (g_spliced && !InChain(root)) g_spliced = false;   // same-address dialog realloc
@@ -319,8 +332,22 @@ static bool EnsureSpliced(DWORD root) {
     *(DWORD*)(ind + SC_BINDLG_OFF_PARENT)   = root;
     *(DWORD*)(ind + SC_BINDLG_OFF_INTERACT) = tInteract;
     *(DWORD*)(ind + SC_BINDLG_OFF_UPDATE)   = tUpdate;
-    *(DWORD*)(ind + SC_BINDLG_OFF_NEXT)     = ChildOf(root);
-    *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD) = ind;
+    *(DWORD*)(ind + SC_BINDLG_OFF_NEXT)     = 0;
+    // Append. The walk is bounded like every other walk in this file: a torn `next` ends
+    // it, and an unterminated list costs one refused splice rather than a spin.
+    DWORD tail = ChildOf(root);
+    if (!tail) {
+        *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD) = ind;
+    } else {
+        int guard = 0;
+        while (NextOf(tail) && guard < SC_MAX_CTRLS_WALK) { tail = NextOf(tail); ++guard; }
+        if (NextOf(tail)) {
+            ScLog("QIND: child list longer than %d -- splice refused", SC_MAX_CTRLS_WALK);
+            ++g_stat[SC_QIND_STAT_REFUSED];
+            return false;
+        }
+        *(DWORD*)(tail + SC_BINDLG_OFF_NEXT) = ind;
+    }
     g_spliced = true;
     ++g_stat[SC_QIND_STAT_SPLICES];
     return true;
