@@ -61,6 +61,17 @@ param(
     [int]$Clicks = 8,
     [int]$StartingMinerals = 3000,
     [int]$StartingGas = 1000,
+    # THE GROUP PHASE IS OFF BY DEFAULT AND HERE IS WHY, because a switch with no reason on it
+    # is how dead code survives. This probe can queue at both buildings, but it cannot reliably
+    # SELECT both: a shift-click does not add (the engine reads the real key state, not the
+    # modifier in a posted message) and a world drag box computed from the buildings' own
+    # positions left the selection untouched -- `sel=1`, `engineLen=3`, the Barracks still
+    # selected from the step before, twice. test-group-production.ps1 boxes four Command
+    # Centers reliably (Select-ScUnitsByMap: minimap-centre the camera, then drag with
+    # -Steps 20), and THAT suite is where this task's group evidence comes from. This phase
+    # stays because the six-sample instrument in it is worth keeping, and it is opt-in because
+    # a step that cannot pass must not sit in the default path pretending to be a gate.
+    [switch]$WithGroup,
     [switch]$KeepOpen
 )
 
@@ -153,6 +164,8 @@ function ConvertFrom-QIndLine {
                                Art = $p[3]; Label = ($p[4] -eq '1') } })
         EngineLen = [int]$m.Groups['engineLen'].Value
         Overflow = [int]$m.Groups['overflow'].Value
+        Sel = [int]$m.Groups['sel'].Value; Bldgs = [int]$m.Groups['bldgs'].Value
+        Queued = [int]$m.Groups['queued'].Value
         Line = $Hit.Line
     }
 }
@@ -256,6 +269,42 @@ try {
         Start-Sleep -Seconds 10
         Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
         Start-Sleep -Seconds 2
+    }
+
+    # Where the twelve wireframe buttons END, read off the LIVE dialog dump the plugin writes
+    # at attach (ids 33..44, two rows of six). The GROUP line has to sit below all of them, and
+    # a constant read off one install is not a layout -- which is the whole point of task 034's
+    # rule. Returns 0 when the dump is not there yet, and the caller treats that as unknown.
+    function Get-RowBottom {
+        $bottom = 0
+        foreach ($d in @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
+                         Select-String -Pattern 'QINDDLG \[.*\] id=(3[3-9]|4[0-4]) ')) {
+            $r = [regex]::Match($d.Line, 'rect=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\)')
+            if ($r.Success -and [int]$r.Groups[4].Value -gt $bottom) { $bottom = [int]$r.Groups[4].Value }
+        }
+        return $bottom
+    }
+
+    # Select a building by TYPE and put $Count items in its queue. Used by the group phase,
+    # which needs two buildings producing at once -- the composer says nothing for a group in
+    # which only one building is busy, because vanilla already shows that one.
+    function Add-QueueAt {
+        param([int]$Type, [string]$Name, [int]$Count)
+        $w = Get-World "aim-group-$Name"
+        $b = @($w.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $Type }) | Select-Object -First 1
+        if (-not $b) { Assert-That "the $Name is still on the map" $false; return $null }
+        $pt = @{ X = $b.X - $w.Screen.Left; Y = $b.Y - $w.Screen.Top }
+        Send-ScClick -Hwnd $hwnd -X $pt.X -Y $pt.Y
+        Start-Sleep -Seconds 2
+        $card = Get-Card "group-idle-$Name"
+        $t = @($card.Slots | Where-Object {
+            $_.HasButton -and $_.Action -eq $TRAIN_ACT -and $_.Visible -and -not $_.Disabled }) |
+            Select-Object -First 1
+        if (-not $t) { Assert-That "the $Name still offers a Train button" $false; return $null }
+        $sp = Get-ScCardSlotPoint -Card $card -Slot $t.Index
+        for ($i = 1; $i -le $Count; $i++) { Send-ScClick -Hwnd $hwnd -X $sp.X -Y $sp.Y -SettleMs 150 }
+        Start-Sleep -Seconds 2
+        return $pt
     }
 
     foreach ($building in $BUILDINGS) {
@@ -426,6 +475,103 @@ try {
             }
         }
     }
+
+    # ------------------------------------------------------------------------------
+    # THE GROUP LINE -- the user's other case, and the one they watched flicker live.
+    #
+    # Their words, 2026-08-12T08:33Z, on a running test: "there is some flashing text ... but
+    # it's behind the units icons in the bottom bar so it's not really visible ... And why is it
+    # flashing I mean when I say flashing it's appearing in front and behind units."
+    #
+    # "In front AND behind" is the measurement that matters. A control spliced at the HEAD of
+    # the child list loses the z-order fight in every frame the engine repaints what is over it
+    # -- and WINS in the frames it does not, because the pane only repaints what is dirty. That
+    # is an alternation, not a constant loss, and it is exactly what a player calls flashing.
+    # So one sample cannot answer it: this phase reads the SAME state N times and reports every
+    # boxDiff, because "it drew once" and "it draws on every frame" are different claims and
+    # only the second one is the fix.
+    # ------------------------------------------------------------------------------
+    if ($WithGroup) { Step 'GROUP: two producing buildings selected together' {
+        Add-QueueAt -Type 106 -Name 'command-center' -Count 3 | Out-Null
+        $bpt = Add-QueueAt -Type 111 -Name 'barracks' -Count 3
+
+        # A DRAG BOX, NOT A SHIFT-CLICK. The first run of this phase clicked one building and
+        # shift-clicked the other and got `sel=1` -- the engine reads the real keyboard for
+        # additive selection, and a posted click carries its modifier in the message rather
+        # than in the key state, so the shift is simply not there. A world drag box needs no
+        # modifier and no foreground (AGENTS.md § "Foreground: only ONE primitive may raise"),
+        # and it is how every other suite here selects more than one thing.
+        $w = Get-World 'aim-group-both'
+        $mine = @($w.Units | Where-Object {
+            $_.Player -eq 0 -and ($_.Type -eq 106 -or $_.Type -eq 111) })
+        Assert-That "both buildings are on the map ($($mine.Count))" ($mine.Count -eq 2)
+        if ($mine.Count -eq 2) {
+            $margin = 24
+            $x1 = ($mine | Measure-Object X -Minimum).Minimum - $w.Screen.Left - $margin
+            $x2 = ($mine | Measure-Object X -Maximum).Maximum - $w.Screen.Left + $margin
+            $y1 = ($mine | Measure-Object Y -Minimum).Minimum - $w.Screen.Top  - $margin
+            $y2 = ($mine | Measure-Object Y -Maximum).Maximum - $w.Screen.Top  + $margin
+            Assert-That "the box [$x1,$y1]-[$x2,$y2] is on the battlefield" `
+                ($x1 -ge 4 -and $y1 -ge 4 -and $x2 -le 636 -and $y2 -le 340)
+            # NAME ANYTHING ELSE THE BOX WOULD TAKE. Task 025's first run boxed a neutral
+            # mineral field along with its building and counted it as a selection.
+            $intruders = @($w.Units | Where-Object {
+                $_.Player -ne 0 -and
+                ($_.X - $w.Screen.Left) -ge $x1 -and ($_.X - $w.Screen.Left) -le $x2 -and
+                ($_.Y - $w.Screen.Top)  -ge $y1 -and ($_.Y - $w.Screen.Top)  -le $y2 })
+            Assert-That "nothing but my two buildings falls inside that rect ($($intruders.Count) intruder(s))" `
+                ($intruders.Count -eq 0)
+            Send-ScDrag -Hwnd $hwnd -X1 $x1 -Y1 $y1 -X2 $x2 -Y2 $y2
+            Start-Sleep -Seconds 2
+        }
+
+        $rowBottom = Get-RowBottom
+        Assert-That "the row's twelve buttons were found in the dialog dump (lowest edge y=$rowBottom)" `
+            ($rowBottom -gt 0)
+
+        # N samples of the same state. Each is its own marker, so each is a fresh read taken by
+        # the game thread on a different frame.
+        $samples = @()
+        for ($i = 1; $i -le 6; $i++) {
+            $q = Get-QInd "group-$i"
+            $samples += $q
+            Write-Host "       sample $i : mode=$($q.Mode) visible=$($q.Visible) text=`"$($q.Text)`" bounds=($($q.Left),$($q.Top),$($q.Right),$($q.Bottom)) boxDiff=$($q.BoxDiff) ink=$($q.Ink)"
+            if ($i -eq 2) { $script:framesWritten += (Shot 'group-line') }
+            if ($i -eq 5) { $script:framesWritten += (Shot 'group-line-settled') }
+            Start-Sleep -Milliseconds 700
+        }
+
+        # THE SELECTION FIRST, THEN THE LINE. If the box took one building rather than two,
+        # "mode=0" is the composer being RIGHT and the probe being wrong -- vanilla already
+        # shows a single building's queue, so the group line has nothing to say. Separating the
+        # two makes a failed selection say so instead of reading as a broken feature.
+        $q0 = $samples[0]
+        Assert-That "the engine is holding both buildings (sel=$($q0.Sel))" ($q0.Sel -eq 2) `
+            '(a drag box that took one building makes every reading below meaningless)'
+        Assert-That "and both of them are producing (bldgs=$($q0.Bldgs), queued=$($q0.Queued))" `
+            ($q0.Bldgs -eq 2)
+        Assert-That "the pane really holds a group (mode=$($q0.Mode))" `
+            ($q0.Mode -eq 2) '(mode 2 is the GROUP line; 0 means the composer said nothing)'
+
+        $drew = @($samples | Where-Object { $_.BoxDiff -gt 0 }).Count
+        $onRow = @($samples | Where-Object { $_.Top -lt $rowBottom }).Count
+
+        if ($Arm -eq 'fixed') {
+            # PLACE, then PERSISTENCE. The band below the row is the answer to "find another
+            # place for the text"; drawing on every sampled frame is the answer to "why is it
+            # flashing".
+            Assert-That "the line sits BELOW the icon row on every sample (top=$($q0.Top) vs row bottom $rowBottom)" `
+                ($onRow -eq 0)
+            Assert-That "and it is on the screen in ALL $($samples.Count) samples, not some of them ($drew)" `
+                ($drew -eq $samples.Count) `
+                '(a line that draws in only some frames is what the user calls flashing)'
+        } else {
+            Assert-That "the line is drawn ON the icon row (top=$($q0.Top) vs row bottom $rowBottom, $onRow of $($samples.Count) samples)" `
+                ($onRow -eq $samples.Count) `
+                '(this is the "behind the units icons in the bottom bar" the user reported)'
+            Write-Host "       DEFECT ARM: the line put bytes on the screen in $drew of $($samples.Count) samples -- an alternation of this kind is what a player sees as flashing"
+        }
+    } }
 }
 catch {
     Write-Host "  FAIL a probe step threw: $($_.Exception.Message)"
