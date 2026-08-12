@@ -151,6 +151,11 @@ asserting against zero.
 
 ## A random suite must report the coverage of its SEAM, not only its verdict (2026-08-12, task 041)
 
+**This is a rule about any suite that GENERATES its own cases** — random, fuzzed, property-based,
+combinatorial — not about the harness that happened to teach it. If what a run exercises is
+decided at run time rather than written down, then what it exercised is a fact you have to
+MEASURE and print, exactly like any other reading.
+
 A generated test can be green because the feature works, or green because the run never got
 anywhere near the thing it was built to break. Those two results print identically, and the
 second one is worse than no test — it is a passing regression check standing guard over a bug.
@@ -182,6 +187,11 @@ run records that it finished its episode loop, anything else prints `INCOMPLETE`
 never `PASS`) with the episode count on it, and the exception is caught and recorded as a failure
 rather than allowed to unwind. It has since caught three real aborts, including a launch that
 loaded the wrong map off a shifted browser row.
+
+The general form, for whatever you generate next: write down the ONE state the suite exists to
+reach, make reaching it a countable event, and print that count next to the verdict every run.
+"How many cases did it generate" is not that number and never was — a thousand cases that all
+stop short of the seam are a thousand cases that cannot fail.
 
 And the corollary for the seed: **choose it for the seam and say that you did.** Task 041's teeth
 test uses seed 47 because its episode 1 is an 11-press burst across two buildings and its episode
