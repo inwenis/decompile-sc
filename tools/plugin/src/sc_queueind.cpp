@@ -156,11 +156,19 @@ static DWORD SurfaceOf(DWORD root);
 // header -- the byte SC_VA_SET_FONT copies into the global the string draw's clip rule is
 // measured against (sc_addresses.h). 0 when the handle is not up yet, which callers treat
 // as "no answer" rather than as zero.
-static int SmallFontHeight(void) {
-    DWORD f = *(DWORD*)Rt(SC_VA_FONT_SMALLEST);
+//
+// The base is a PARAMETER rather than this module's own g_base because sc_hudrow needs the
+// same number for the same reason (its box has to be taller than the font or the engine
+// refuses to draw it) and its test seam drives it with a FAKE module base. Reading g_base
+// here would answer a question about the wrong process image in that test.
+int ScQueueIndSmallFontHeight(BYTE* base) {
+    if (!base) return 0;
+    DWORD f = *(DWORD*)(base + (SC_VA_FONT_SMALLEST - SC_PREFERRED_IMAGE_BASE));
     if (!Readable(f, SC_FONT_OFF_HEIGHT + 1)) return 0;
     return (int)*(BYTE*)(f + SC_FONT_OFF_HEIGHT);
 }
+
+static int SmallFontHeight(void) { return ScQueueIndSmallFontHeight(g_base); }
 
 static DWORD ChildOf(DWORD dlg)  { return *(DWORD*)(dlg + SC_BINDLG_OFF_FIRST_CHILD); }
 static DWORD NextOf(DWORD ctrl)  { return *(DWORD*)(ctrl + SC_BINDLG_OFF_NEXT); }
@@ -715,31 +723,56 @@ int ScQueueIndSlotDiff(DWORD root, int slotA, int slotB) {
 
 // Walk a rect of the dialog surface. `fn` is inlined by hand twice below rather than
 // abstracted: the two callers want different things out of the same bounds check.
-static bool BoxOnSurface(DWORD root, const short* r, DWORD* bits, int* w, int* stride) {
+//
+// `maxBytes <= 0` means "no size limit". The cap used to be SC_QIND_BASELINE_MAX
+// unconditionally, which silently made this module's own buffer the size limit for every
+// caller -- including sc_hudrow, whose band is wider. Each caller now states its own.
+static bool BoxOnSurface(DWORD root, const short* r, DWORD* bits, int* w, int* stride,
+                         int maxBytes) {
     DWORD d = root ? SurfaceOf(root) : 0;
     if (!d) return false;
     const int sw = (int)*(WORD*)(d + SC_SURFACE_OFF_W);
     const int sh = (int)*(WORD*)(d + SC_SURFACE_OFF_H);
     if (r[0] < 0 || r[1] < 0 || r[2] > sw || r[3] > sh) return false;
     if (r[2] <= r[0] || r[3] <= r[1]) return false;
-    if ((r[2] - r[0]) * (r[3] - r[1]) > SC_QIND_BASELINE_MAX) return false;
+    if (maxBytes > 0 && (r[2] - r[0]) * (r[3] - r[1]) > maxBytes) return false;
     *bits   = *(DWORD*)(d + SC_SURFACE_OFF_BITS);
     *w      = sw;
     *stride = sw;
     return *bits != 0;
 }
 
+// THE ONE READER. Copy a rect of the dialog's own 8-bit surface into a caller-owned buffer.
+// Both modules' "the pane without our text on it" copies go through here, so there is one
+// place that knows where this dialog's pixels live and one bounds check guarding them.
+int ScQueueIndCopyRect(DWORD root, const short* rect, BYTE* out, int outMax) {
+    if (!rect || !out || outMax <= 0) return 0;
+    DWORD bits; int w, stride;
+    if (!BoxOnSurface(root, rect, &bits, &w, &stride, outMax)) return 0;
+    const int bw = rect[2] - rect[0], bh = rect[3] - rect[1];
+    for (int y = 0; y < bh; ++y) {
+        memcpy(out + (size_t)y * bw,
+               (const void*)(bits + (DWORD)((rect[1] + y) * stride + rect[0])), (size_t)bw);
+    }
+    return bw * bh;
+}
+
+// The surface's own dimensions, for callers sizing a box against it. 0 when neither
+// candidate offset reads as a plausible surface -- an honest "no answer", and the callers
+// treat it as a refusal to place rather than as a zero-sized pane.
+int ScQueueIndSurfaceSize(DWORD root, int* w, int* h) {
+    DWORD d = root ? SurfaceOf(root) : 0;
+    if (!d) return 0;
+    if (w) *w = (int)*(WORD*)(d + SC_SURFACE_OFF_W);
+    if (h) *h = (int)*(WORD*)(d + SC_SURFACE_OFF_H);
+    return 1;
+}
+
 // Copy the box out of the surface. Called on the GAME thread, on frames the indicator is
 // not showing -- so what it captures is the pane with our line already repainted away.
 static void CaptureBaseline(DWORD root, const short* r) {
-    DWORD bits; int w, stride;
     g_baseValid = false;
-    if (!BoxOnSurface(root, r, &bits, &w, &stride)) return;
-    const int bw = r[2] - r[0], bh = r[3] - r[1];
-    for (int y = 0; y < bh; ++y) {
-        memcpy(g_baseline + (size_t)y * bw,
-               (const void*)(bits + (DWORD)((r[1] + y) * stride + r[0])), (size_t)bw);
-    }
+    if (ScQueueIndCopyRect(root, r, g_baseline, SC_QIND_BASELINE_MAX) <= 0) return;
     g_baseRect[0] = r[0]; g_baseRect[1] = r[1]; g_baseRect[2] = r[2]; g_baseRect[3] = r[3];
     g_baseValid = true;
 }
@@ -752,7 +785,7 @@ int ScQueueIndBoxDiff(DWORD root) {
     const short* r = (const short*)&g_ctrl[SC_BINDLG_OFF_BOUNDS];
     for (int i = 0; i < 4; ++i) if (r[i] != g_baseRect[i]) return -1;
     DWORD bits; int w, stride;
-    if (!BoxOnSurface(root, r, &bits, &w, &stride)) return -1;
+    if (!BoxOnSurface(root, r, &bits, &w, &stride, SC_QIND_BASELINE_MAX)) return -1;
     const int bw = r[2] - r[0], bh = r[3] - r[1];
     int diff = 0;
     for (int y = 0; y < bh; ++y) {

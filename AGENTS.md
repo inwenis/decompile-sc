@@ -112,7 +112,51 @@ is not to fall back to a hidden control, which measures ink nobody can see. It r
 stays a FAILURE wherever a visible reference is required; a separate whole-surface count
 (`surfInk`) is what answers "is this probe blind" in every state.
 
-**And a check that fails at RANDOM is worth as little as one that cannot fail** (same task): the
+**And the fourth time, 2026-08-12, task 048 — the general rule, and the check that finds it in
+any log: AN INSTRUMENT WHOSE READING DOES NOT MOVE WHEN ITS INPUT MOVES IS NOT MEASURING ITS
+INPUT.** Task 039 fixed `ink` where it found it. It did not go looking for the other places the
+same instrument was still load-bearing, and there was one: `sc_hudrow`'s page indicator, asserted
+on `indInk > 0` from task 033 until task 048. Merged main, one run, three consecutive readings —
+
+    indBounds=(32,9,180,25)  indInk=2368   indicator="36 units  1-12  (1/3)"
+    indBounds=(32,9,180,25)  indInk=2368   indicator="36 units  13-24  (2/3)"
+    indBounds=(32,9,180,25)  indInk=2368   indicator="36 units  1-12  (1/3)"
+
+— where 148 × 16 = **2368**. The count is the box's ENTIRE AREA, every byte of it the wireframe
+buttons' own art, and nothing of ours had ever been on that surface: the control was spliced at
+the HEAD of the dialog's child list, and the redraw walk (`0x0041C683`) paints head to tail, so
+the twelve buttons painted over it every frame of every game. Three tasks green.
+
+State the property generally, because it is not about ink: **a count over a region the engine
+also paints saturates, and it fails by looking HEALTHY rather than by reading zero.** That is
+precisely the failure mode task 033's positive control cannot catch — that control exists to stop
+`ink = 0` being mistaken for a blind probe, and here the number was never zero.
+
+The check costs nothing and needs no source, only the log: **vary the input and watch the number.
+Two different strings that produce one identical count are a broken instrument, whatever the
+count is.** Do that before trusting any reading you are about to assert on.
+
+The remedy is 039's and it generalises with the rule — measure a DIFFERENCE against the same
+region without the thing you are looking for (`ScQueueIndBoxDiff` for the group line,
+`indBoxDiff` for the row's). Two riders from this task:
+
+- **Asked in the other direction, the difference must carry the SIZE of what it is looking for.**
+  "Did leaving paged mode strand any of our pixels" is answered by counting the bytes our text
+  owns that still hold its value — and `stranded = 0` over an EMPTY mask is a probe that never saw
+  the line, not a clean surface. Task 048 prints `glyphBytes=237 stranded=0`; when the mask was 0
+  the suite failed rather than passing, which is how the real defect below was found.
+- **A wall clock, not a call count, decides when the surface has settled.** The status dispatcher
+  runs *tens of thousands of times a second* — measured on the line itself, `the line landed 1425
+  dispatcher call(s) / 31 ms after the show asked for it` — so "the next call" is almost always the
+  same painted frame, and copies taken that way come out identical. Print such a count only beside
+  its own elapsed milliseconds so the rate is the reader's division; a bare seven-digit "frames"
+  figure is indistinguishable from a tick global read by mistake (task 030).
+
+And the standing instruction that follows: **when an instrument turns out to be blind, audit every
+other place it is load-bearing in the same sitting.** One fixed call site is not a fixed
+instrument, and the next one will read green.
+
+**And a check that fails at RANDOM is worth as little as one that cannot fail** (task 039): the
 fifth-icon assertion passed one run and failed the next because the observer thread sampled
 between the plugin filling a slot and the engine's layout re-greying it, microseconds later,
 inside one driver call — invisible to the player, who only ever sees the frame. Both times the

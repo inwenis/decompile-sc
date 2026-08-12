@@ -211,6 +211,33 @@ clean-up path has to repaint everything it covered rather than just the anchor.
 happened *completely*. `ink > 0` answers "did the engine draw"; only comparing the box against
 what it has to hold answers "could all of it fit".
 
+### 5.2 And `ink > 0` does NOT answer "did the engine draw" in this pane either (task 048)
+
+The sentence above overstates what an ink count is worth here, and the correction is worth having
+in the same section rather than a task report. **Ink can only detect our text over a region the
+engine leaves as background. This pane is not such a region: it draws its own art into the same
+8-bit surface the probe counts, so every rect inside it is already saturated before a plugin does
+anything at all.**
+
+Two measurements, both live, both from builds that were drawing nothing of the kind:
+
+| where | reading | the box |
+|---|---|---|
+| `sc_queueind`, task 039 | `refInk=1330`, `ink=448` | 1330 of 1330 bytes over a queue icon, 448 of 448 inside the indicator's own box |
+| `sc_hudrow`, task 048 | `indInk=2368` | (32,9,180,25) = 148 × 16 = **2368**, the entire box |
+
+The second one carries the check that needs no source code and no arithmetic: that same `2368`
+came back for `"36 units  1-12  (1/3)"`, for `"36 units  13-24  (2/3)"` and for the wrap back to
+page 1, **in one run**. An instrument whose reading does not move when its input moves is not
+measuring its input — and note the failure looks *healthy*, so the positive control that guards
+against `ink = 0` being a blind probe never fires.
+
+What answers the question in this pane is a **difference against the same rect without the text**,
+taken on the game thread while the control is not showing (`ScQueueIndBoxDiff`, `indBoxDiff`), and
+for the reverse question — "is any of it still there after we stop drawing" — the count of our own
+bytes that survive, printed beside the size of what it was looking for (`glyphBytes` / `stranded`).
+Keep `ink` on the line; it is corroboration and it is free. Do not assert on it.
+
 ## 6. What a plugin has to do
 
 `tools/plugin/src/sc_queueind.cpp`, and it is nine fields:

@@ -1,4 +1,4 @@
-﻿#Requires -Version 7
+#Requires -Version 7
 <#
 .SYNOPSIS
 End-to-end, UNATTENDED proof that the bottom-HUD wireframe row pages through a >12
@@ -35,6 +35,11 @@ param(
     [string]$GameDir = 'C:\sc-work\1161-base',
     [string]$LogPath = 'C:\sc-work\logs\017-hud-row.log',
     [string]$ShotDir = 'C:\sc-work\logs\017-hud-row-frames',
+    # Which plugin build to run. Defaulted through to run-with-plugin.ps1, and the reason it
+    # is a parameter at all is task 048's before/after pair: the DEFECT arm is merged main's
+    # plugin built into its own directory, so the before-numbers and before-frames come from
+    # the build that is actually shipping rather than from a description of it.
+    [string]$BuildDir,
     # Which folder under Maps\ the fixture is generated into; see test-burrow-fanout.ps1.
     # Default is what this suite has always used.
     [string]$FixtureDir,
@@ -95,23 +100,72 @@ function Get-HudShow {
     # after it are what say the player can actually SEE it: linked into the dialog's child
     # chain, the engine's own visible bit, the box, and the ink the engine's text routine
     # left in the dialog surface inside that box.
+    # BY NAME, NOT BY POSITION. Task 048 appended six fields to this line, and a positional
+    # parse shifts every group after the insertion WITHOUT failing -- it just starts reading
+    # one number out of another (task 039 hit exactly that on the QIND line).
     $m = [regex]::Match($hits[-1],
-        'HUDROW show n=(\d+) page=(\d+)/(\d+) slots=(\d+) \[([0-9A-F ]*)\] indicator="([^"]*)" ' +
-        'indLinked=(\d+) indVisible=(\d+) indBounds=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\) indInk=(-?\d+)')
+        'HUDROW show n=(?<n>\d+) page=(?<page>\d+)/(?<pages>\d+) slots=(?<slots>\d+) ' +
+        '\[(?<tags>[0-9A-F ]*)\] indicator="(?<text>[^"]*)" ' +
+        'indLinked=(?<linked>\d+) indVisible=(?<visible>\d+) ' +
+        'indBounds=\((?<l>-?\d+),(?<t>-?\d+),(?<r>-?\d+),(?<b>-?\d+)\) indInk=(?<ink>-?\d+)' +
+        # THE TAIL IS OPTIONAL, and that is what lets this ONE suite run both of task 048's
+        # arms. The DEFECT arm is merged main's plugin, which does not log these six fields at
+        # all -- and a run that cannot even parse its own log is not a measurement of the
+        # defect, it is a broken run. Missing reads as -1, "no answer", and every assertion
+        # that depends on one fails saying so.
+        '(?: indBoxDiff=(?<boxDiff>-?\d+) indRefInk=(?<refInk>-?\d+) indRefId=(?<refId>-?\d+)' +
+        ' indSurfInk=(?<surfInk>-?\d+) indFontH=(?<fontH>-?\d+) indShowing=(?<showing>\d+))?')
     if (-not $m.Success) { throw "test: unparseable HUDROW show line: $($hits[-1])" }
+    function Num($g) { if ($m.Groups[$g].Success) { [int]$m.Groups[$g].Value } else { -1 } }
     @{
-        N         = [int]$m.Groups[1].Value
-        Page      = [int]$m.Groups[2].Value
-        Pages     = [int]$m.Groups[3].Value
-        Slots     = [int]$m.Groups[4].Value
-        Tags      = @($m.Groups[5].Value -split ' ' | Where-Object { $_ })
-        Indicator = $m.Groups[6].Value
-        IndLinked = $m.Groups[7].Value -eq '1'
-        IndVisible= $m.Groups[8].Value -eq '1'
-        IndBox    = @([int]$m.Groups[9].Value, [int]$m.Groups[10].Value,
-                      [int]$m.Groups[11].Value, [int]$m.Groups[12].Value)
-        IndInk    = [int]$m.Groups[13].Value
+        N         = [int]$m.Groups['n'].Value
+        Page      = [int]$m.Groups['page'].Value
+        Pages     = [int]$m.Groups['pages'].Value
+        Slots     = [int]$m.Groups['slots'].Value
+        Tags      = @($m.Groups['tags'].Value -split ' ' | Where-Object { $_ })
+        Indicator = $m.Groups['text'].Value
+        IndLinked = $m.Groups['linked'].Value -eq '1'
+        IndVisible= $m.Groups['visible'].Value -eq '1'
+        IndBox    = @([int]$m.Groups['l'].Value, [int]$m.Groups['t'].Value,
+                      [int]$m.Groups['r'].Value, [int]$m.Groups['b'].Value)
+        IndInk    = [int]$m.Groups['ink'].Value
+        BoxDiff   = (Num 'boxDiff')
+        RefInk    = (Num 'refInk')
+        RefId     = (Num 'refId')
+        SurfInk   = (Num 'surfInk')
+        FontH     = (Num 'fontH')
+        Showing   = $m.Groups['showing'].Value -eq '1'
         Line      = $hits[-1]
+    }
+}
+
+# `HUDROW band after stock`, the reading that answers "did leaving paged mode strand any of
+# our pixels". Written once per hand-back, on a stock frame AFTER the one that hid the line
+# (the repaint it asked for had not run on that one).
+#
+# Returns $null when the running plugin never wrote one -- which is the DEFECT arm, whose
+# build has no such reading. A null is reported as a failed assertion by the caller, not as
+# an exception: "this build cannot answer the question" is the measurement there.
+function Get-HudBand {
+    param([int]$FromLine, [int]$TimeoutSec = 15)
+    $hits = @()
+    try {
+        $hits = @(Wait-ScLogMatch -LogPath $LogPath -FromLine $FromLine -TimeoutSec $TimeoutSec `
+            -Pattern 'HUDROW band after stock: ')
+    } catch { return $null }
+    if ($hits.Count -eq 0) { return $null }
+    $m = [regex]::Match($hits[-1],
+        'HUDROW band after stock: rect=\((?<l>-?\d+),(?<t>-?\d+),(?<r>-?\d+),(?<b>-?\d+)\) ' +
+        'glyphBytes=(?<glyph>-?\d+) stranded=(?<stranded>-?\d+) surfInk=(?<surfInk>-?\d+) ' +
+        'episodes=(?<episodes>\d+)')
+    if (-not $m.Success) { throw "test: unparseable HUDROW band line: $($hits[-1])" }
+    @{
+        Rect     = @([int]$m.Groups['l'].Value, [int]$m.Groups['t'].Value,
+                     [int]$m.Groups['r'].Value, [int]$m.Groups['b'].Value)
+        Glyph    = [int]$m.Groups['glyph'].Value
+        Stranded = [int]$m.Groups['stranded'].Value
+        SurfInk  = [int]$m.Groups['surfInk'].Value
+        Line     = $hits[-1]
     }
 }
 
@@ -134,7 +188,25 @@ function Get-HudRects {
                       ($rootL + [int]$m.Groups[4].Value), ($rootT + [int]$m.Groups[5].Value))
     }
     if ($rects.Count -lt 12) { throw "test: HUDROW rects line carries $($rects.Count) rects: $line" }
-    @{ Rects = $rects; Root = @($rootL, $rootT); Line = $line }
+    # AND THE SAME RECTS UNCOMPOSED. The indicator's own bounds are logged RAW -- dialog-local,
+    # like every control's -- so "the line is below the row" has to be compared in that space
+    # or it compares a client-pixel number against a dialog-local one and passes for free.
+    $local = @()
+    foreach ($m in [regex]::Matches($line, 'b(\d+)=\[(-?\d+),(-?\d+),(-?\d+),(-?\d+)\]')) {
+        $local += , @([int]$m.Groups[2].Value, [int]$m.Groups[3].Value,
+                      [int]$m.Groups[4].Value, [int]$m.Groups[5].Value)
+    }
+    @{
+        Rects = $rects
+        Local = $local
+        Root  = @($rootL, $rootT)
+        # The row's own extent in dialog-local coordinates: the lowest edge of ALL TWELVE
+        # buttons (they are two rows of six) and their leftmost edge.
+        RowBottom = (($local | ForEach-Object { $_[3] } | Measure-Object -Maximum).Maximum)
+        RowLeft   = (($local | ForEach-Object { $_[0] } | Measure-Object -Minimum).Minimum)
+        RowTop    = (($local | ForEach-Object { $_[1] } | Measure-Object -Minimum).Minimum)
+        Line  = $line
+    }
 }
 
 function Get-BtnCenter {
@@ -203,9 +275,20 @@ try {
             (@($gen | Select-String -Pattern '^OK: ').Count -gt 0)
     }
 
-    & (Join-Path $scriptDir 'run-with-plugin.ps1') `
-        -Mode fanout -InjectWindowedHelper WMode `
-        -GameDir $GameDir -LogPath $LogPath 6>&1 | ForEach-Object {
+    $runArgs = @{ Mode = 'fanout'; InjectWindowedHelper = 'WMode'; GameDir = $GameDir; LogPath = $LogPath }
+    if ($BuildDir) { $runArgs.BuildDir = $BuildDir }
+    # WHICH PLUGIN THIS RUN IS ABOUT TO LOAD, hashed before it loads it. Task 048 runs this
+    # suite twice against two different builds, and "which tree did that DLL come from" is not
+    # a question a reviewer should have to answer by hand afterwards.
+    $dllDir  = if ($BuildDir) { $BuildDir } else { Join-Path $repoRoot 'work/scratch/plugin-build' }
+    $dllPath = Join-Path $dllDir 'scplugin.dll'
+    if (Test-Path -LiteralPath $dllPath) {
+        Write-Host ("[0] scplugin.dll SHA-256: {0}  ({1})" -f `
+            (Get-FileHash -LiteralPath $dllPath -Algorithm SHA256).Hash, $dllPath)
+    } else {
+        Write-Host "[0] scplugin.dll not found at $dllPath -- run-with-plugin will say so"
+    }
+    & (Join-Path $scriptDir 'run-with-plugin.ps1') @runArgs 6>&1 | ForEach-Object {
             Write-Host $_
             if ("$_" -match 'scinject:\s*PID=(\d+)') { $script:gamePid = [int]$Matches[1] }
         }
@@ -322,15 +405,58 @@ try {
             ($p2.Indicator -ne $page1.Indicator -and $p2.Indicator -match '13-24' -and $p2.Indicator -match '\(2/3\)') `
             "(page1='$($page1.Indicator)' page2='$($p2.Indicator)')"
         # TASK 033. Everything above reads a STRING; none of it says the player can see it.
-        # This suite asserted that string out of the module's own buffer until now, and the
+        # This suite asserted that string out of the module's own buffer until then, and the
         # indicator has been nine pixels tall since task 017 -- shorter than the font, which
         # makes the engine's text routine return without drawing anything at all. So: the
-        # string is now read back through the CONTROL's pszText, and the three assertions
-        # below are the ones that would have caught it.
+        # string is read back through the CONTROL's pszText, and the two assertions below are
+        # the ones that would have caught it.
         Assert-That 'the indicator control is linked into the status dialog' ($p2.IndLinked)
         Assert-That "and the ENGINE's own visible bit is set on it" ($p2.IndVisible)
-        Assert-That "and the engine DREW it: ink=$($p2.IndInk) inside ($($p2.IndBox -join ','))" `
-            ($p2.IndInk -gt 0)
+
+        # ------------------------------------------------------------------------------
+        # TASK 048. `IndInk > 0` used to be the third assertion here, and it could not fail.
+        #
+        # Ink counts non-background bytes in a rect, so it can only detect our text over a
+        # region the ENGINE leaves as background. Over a region the engine also paints it
+        # SATURATES -- every byte is already non-zero before one pixel of ours exists -- and
+        # it does not fail by reading zero, it reads the rect's whole area and looks healthy.
+        # Measured on merged main, box (32,9,180,25) = 148 x 16 = 2368 bytes: indInk=2368 for
+        # "1-12 (1/3)", 2368 for "13-24 (2/3)", 2368 for the wrap back. Three strings, one
+        # number, the full area. It is still logged, as corroboration; it is not asserted on.
+        #
+        # What replaces it is a DIFFERENCE, the same remedy task 039 arrived at: the band
+        # compared against a copy of the SAME RECT taken with none of our line on it. Its two
+        # blindness checks come first, because boxDiff=0 and "the probe cannot read anything"
+        # must not be the same reading.
+        Assert-That "the probe can read the dialog surface at all (surfInk=$($p2.SurfInk))" `
+            ($p2.SurfInk -gt 0)
+        Assert-That "and a control the ENGINE fills (refInk=$($p2.RefInk) over control $($p2.RefId))" `
+            ($p2.RefInk -gt 0)
+        Assert-That ("the engine DREW the line: boxDiff=$($p2.BoxDiff) bytes of the band " +
+                     "differ from the same band without it (ink=$($p2.IndInk), saturated)") `
+            ($p2.BoxDiff -gt 0)
+
+        # AND IT IS NOT ON TOP OF THE ICON ROW. Both numbers are dialog-local: the button
+        # rects come from the plugin's own `HUDROW rects` line, read off the LIVE controls,
+        # never a constant -- so "outside the row" is a number rather than an opinion.
+        $rowBottom = $rects.RowBottom
+        Assert-That "the row's twelve buttons were measured (lowest edge y=$rowBottom, left x=$($rects.RowLeft))" `
+            ($rowBottom -gt 0)
+        Assert-That "and the line starts BELOW all of them (top=$($p2.IndBox[1]) vs $rowBottom)" `
+            ($p2.IndBox[1] -ge $rowBottom)
+        Assert-That "it is flush with the row's left edge (left=$($p2.IndBox[0]) vs $($rects.RowLeft))" `
+            ($p2.IndBox[0] -eq $rects.RowLeft)
+        # The engine's string draw refuses OUTRIGHT when the box is shorter than the font --
+        # the defect that made task 033's indicator invisible for weeks -- so the band's
+        # height is checked against the font's own, read live.
+        $boxH = $p2.IndBox[3] - $p2.IndBox[1]
+        $boxW = $p2.IndBox[2] - $p2.IndBox[0]
+        Assert-That "the band is at least as tall as the font ($boxH >= $($p2.FontH))" `
+            ($boxH -ge $p2.FontH -and $p2.FontH -gt 0)
+        # A box too NARROW does not fail loudly, it draws a TRUNCATION -- which reads as a
+        # working feature and is worse than nothing. 5 px/char is a conservative floor.
+        $need = $p2.Indicator.Length * 5
+        Assert-That "and wide enough to draw the whole line ($boxW px for $need)" ($boxW -ge $need)
         Write-Host "       $($p2.Line)"
         $script:page2 = $p2
 
@@ -502,6 +628,33 @@ try {
         Assert-That 'and after it, no HUDROW show/flip lines at all' `
             (@($lines2 | Select-String -Pattern 'HUDROW (show|flip)').Count -eq 0)
         Shot 'stock-small-selection' | Out-Null
+
+        # ------------------------------------------------------------------------------
+        # TASK 048, and this is the one the MOVE puts at risk rather than fixes.
+        #
+        # The old box sat on the first buttons ON PURPOSE: those rects repaint whenever the
+        # buttons redraw, so leaving paged mode could not strand indicator pixels on the
+        # dialog surface. A box in the band below the row has no control under it, so the
+        # module asks for its own rect to be repainted (updateControl on the hidden control)
+        # -- and this is where that ask is measured instead of argued.
+        #
+        # `stranded` counts the bytes our line owns that STILL hold its value now the row is
+        # back to stock; 0 is the pass. `glyphBytes` is how many bytes it owned in the first
+        # place, and it travels with the answer because stranded=0 over an EMPTY mask is a
+        # probe that never saw the line, not a clean band.
+        $band = Get-HudBand -FromLine $mark
+        if ($null -eq $band) {
+            Assert-That ('the plugin reported the band after the hand-back ' +
+                         '(a build without this reading cannot answer criterion 4)') $false
+        } else {
+            Write-Host "       $($band.Line)"
+            Assert-That "the probe could still read the surface (surfInk=$($band.SurfInk))" `
+                ($band.SurfInk -gt 0)
+            Assert-That ("the line had actually been on the band, so there is something to " +
+                         "check ($($band.Glyph) bytes)") ($band.Glyph -gt 0)
+            Assert-That ("and leaving paged mode stranded NONE of them " +
+                         "(stranded=$($band.Stranded) of $($band.Glyph))") ($band.Stranded -eq 0)
+        }
     }
 
     # NOTE on the death / removal legs: in-game unit death and removal (transport
@@ -555,6 +708,35 @@ $hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
 Write-Host "  StarCraft.exe SHA-256 after:  $hashAfter"
 Assert-That 'StarCraft.exe on disk is byte-identical to before the run' ($hashAfter -eq $hashBefore)
 Assert-That 'and still byte-identical to pristine 1.16.1' ($hashAfter -eq $PRISTINE_SHA256)
+
+# ------------------------------------------------------------------------------------
+# COVERAGE, printed beside the verdict on every run (AGENTS.md, task 041). The ONE state
+# this suite exists to reach is the row PAGING a >12 selection: nothing above can say
+# anything about the page indicator unless the run got there, and a run that never did
+# looks exactly like a clean pass. So it is counted and printed, not inferred.
+# ------------------------------------------------------------------------------------
+Write-Host ''
+Write-Host '[coverage] the seam this suite exists to reach'
+$logLines = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue)
+$showLines = @($logLines | Select-String -Pattern 'HUDROW show n=\d+ page=').Count
+$statsLine = @($logLines | Select-String -Pattern 'HUDROW stats: ') | Select-Object -Last 1
+$episodes = -1
+if ($statsLine) {
+    Write-Host "  $($statsLine.Line)"
+    $sm = [regex]::Match($statsLine.Line, 'pagedEpisodes=(\d+)')
+    if ($sm.Success) { $episodes = [int]$sm.Groups[1].Value }
+}
+Write-Host "  paged layouts logged: $showLines"
+if ($episodes -ge 0) { Write-Host "  paged episodes (entries into the >12 state): $episodes" }
+else { Write-Host '  paged episodes (entries into the >12 state): NOT REPORTED by this build (pre-task-048 plugin)' }
+if ($showLines -eq 0 -and $episodes -le 0) {
+    Write-Host 'COVERAGE  NO frame reached the >12 PAGED state. A run that never pages CANNOT'
+    Write-Host '          detect anything about the page indicator, whatever its verdict says.'
+    $failures++
+} else {
+    Write-Host "COVERAGE  the row paged a >12 selection ($showLines layouts logged), so the"
+    Write-Host '          indicator assertions above were actually exercised.'
+}
 
 Write-Host ''
 Write-Host "test-hud-row: $failures failure(s)"
