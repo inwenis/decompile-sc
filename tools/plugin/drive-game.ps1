@@ -2652,6 +2652,177 @@ function Dismiss-ScTipsDialog {
     return $true
 }
 
+# =============================================================================
+# ANY DIALOG, BY ITS OWN CONTROLS (task 051)
+# =============================================================================
+#
+# Dismiss-ScTipsDialog is one dialog's worth of a general move: find the control by what
+# the ENGINE says it says, compute the click point from that control's OWN bounds, and
+# print the whole inventory when it is not there rather than clicking a guessed point.
+# Task 051 needs the same move for the in-game menu and the Save/Load dialogs, which no
+# suite had ever driven, so it lives here instead of in one suite.
+#
+# Control text is what the plugin's DIALOGS line carries, and the plugin renders the
+# engine's hotkey markers as '.' -- so every match here is made on the LETTERS of the
+# text ('o.O.K' -> 'OK'), never on the raw string.
+
+function Show-ScDialogInventory {
+    <#
+    .SYNOPSIS
+    Print every active dialog and every control that carries text. The thing to look at
+    when a click cannot find its target.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$LogPath, [string]$What = '')
+    Write-Host "       dialog inventory$(if ($What) { " ($What)" }):"
+    $any = $false
+    foreach ($d in (Get-ScDialogs -LogPath $LogPath)) {
+        $any = $true
+        Write-Host ("         dlg '{0}' rect={1},{2},{3},{4}" -f $d.Name, $d.Left, $d.Top, $d.Right, $d.Bottom)
+        foreach ($c in $d.Controls) {
+            Write-Host ("           ctrl '{0}' rect={1},{2},{3},{4} type={5} flags=0x{6:X}" -f `
+                $c.Text, $c.Left, $c.Top, $c.Right, $c.Bottom, $c.Type, $c.Flags)
+        }
+    }
+    if (-not $any) { Write-Host '         (the engine reports no active dialog)' }
+}
+
+function Find-ScDialogControl {
+    <#
+    .SYNOPSIS
+    Every (dialog, control) pair whose control text's LETTERS match -Pattern, each with
+    the client-coordinate centre of that control computed from its own bounds.
+    .DESCRIPTION
+    client = dialog.left + ctrl.left, which is the addition the engine itself does at
+    0x00458850 -- the same arithmetic Get-ScCardSlotPoint uses for a card slot.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$LogPath, [Parameter(Mandatory)][string]$Pattern)
+    $out = @()
+    foreach ($d in (Get-ScDialogs -LogPath $LogPath)) {
+        foreach ($c in $d.Controls) {
+            $letters = ($c.Text -replace '[^A-Za-z]', '')
+            if ($letters -match $Pattern) {
+                $out += [pscustomobject]@{
+                    Dialog = $d; Control = $c; Letters = $letters
+                    X = $d.Left + [int](($c.Left + $c.Right) / 2)
+                    Y = $d.Top + [int](($c.Top + $c.Bottom) / 2)
+                }
+            }
+        }
+    }
+    $out
+}
+
+function Wait-ScDialogControl {
+    <#
+    .SYNOPSIS
+    Wait for a control whose letters match -Pattern. $null on timeout -- the caller
+    decides whether that is a failure.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$LogPath, [Parameter(Mandatory)][string]$Pattern,
+          [int]$TimeoutSec = 15)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ($true) {
+        $hit = @(Find-ScDialogControl -LogPath $LogPath -Pattern $Pattern)
+        if ($hit.Count -gt 0) { return $hit[0] }
+        if ((Get-Date) -ge $deadline) { return $null }
+        Start-Sleep -Milliseconds 300
+    }
+}
+
+function Invoke-ScDialogControl {
+    <#
+    .SYNOPSIS
+    Click the control whose letters match -Pattern, at its own centre. THROWS with the
+    full dialog inventory if it is not there -- never a guessed point.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][IntPtr]$Hwnd, [Parameter(Mandatory)][string]$LogPath,
+        [Parameter(Mandatory)][string]$Pattern, [string]$What, [int]$TimeoutSec = 15,
+        [int]$SettleMs = 700
+    )
+    if (-not $What) { $What = $Pattern }
+    $hit = Wait-ScDialogControl -LogPath $LogPath -Pattern $Pattern -TimeoutSec $TimeoutSec
+    if (-not $hit) {
+        Show-ScDialogInventory -LogPath $LogPath -What "looking for $What"
+        throw ("drive-game: no control whose letters match '$Pattern' ($What) is in the engine's " +
+               'own dialog list. Refusing to click a guessed point.')
+    }
+    Write-Host ("       {0}: control '{1}' of dlg '{2}' -> click ({3},{4})" -f `
+        $What, $hit.Control.Text, $hit.Dialog.Name, $hit.X, $hit.Y)
+    Send-ScClick -Hwnd $Hwnd -X $hit.X -Y $hit.Y
+    if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
+    $hit
+}
+
+function Open-ScGameMenu {
+    <#
+    .SYNOPSIS
+    Open the in-game menu with the engine's own key (F10) and prove it is up by ITS OWN
+    CONTENT -- a control whose letters contain 'Save' -- rather than by a dialog name.
+    .DESCRIPTION
+    Retries the key: the menu is a posted-input dialog like every other, and one lost
+    keypress must not read as "this build has no menu". Throws with the inventory after
+    three tries.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][IntPtr]$Hwnd, [Parameter(Mandatory)][string]$LogPath,
+          [int]$Tries = 3)
+    for ($try = 1; $try -le $Tries; $try++) {
+        Send-ScKey -Hwnd $Hwnd -VirtualKey 0x79      # VK_F10
+        Start-Sleep -Milliseconds 800
+        $hit = Wait-ScDialogControl -LogPath $LogPath -Pattern 'Save' -TimeoutSec 5
+        if ($hit) {
+            Write-Host "       game menu is up (dlg '$($hit.Dialog.Name)') after $try F10 press(es)"
+            return $hit.Dialog
+        }
+    }
+    Show-ScDialogInventory -LogPath $LogPath -What "after $Tries F10 presses"
+    throw "drive-game: the in-game menu never appeared after $Tries F10 presses."
+}
+
+function Send-ScText {
+    <#
+    .SYNOPSIS
+    Type a string into whatever edit control has the engine's focus: ONE WM_CHAR per
+    character, and nothing else.
+    .DESCRIPTION
+    ONE MESSAGE PER CHARACTER, AND THAT IS THE WHOLE POINT. `Send-ScKey -Char` posts
+    WM_KEYDOWN, then WM_CHAR, then WM_KEYUP -- and this engine's dialog edit control
+    takes BOTH the key-down and the char as an insertion. Measured, task 051, first run
+    that ever typed into the Save dialog: the string 'slprobe' arrived in the box as
+
+        ctrl 'ssllpprroobbee' rect=32,44,351,61 type=8
+
+    read straight out of the engine's own control text. A suite that had trusted its own
+    variable for the filename would have saved to a name it never chose and then looked
+    for the wrong file -- the read-back rule (AGENTS.md § task 033) catching a bug in the
+    thing it was written to check.
+
+    So the character path posts WM_CHAR alone. -ClearCount sends that many VK_BACK
+    presses first (a key with no char, which the box takes exactly once), because a box
+    that opens pre-filled -- and this one does, with the last save's name -- would
+    otherwise produce a string the caller cannot predict.
+
+    Nothing here proves the text landed. The CALLER must check the engine's own result:
+    the control's text on the next dialog read, or the file that appeared on disk.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][IntPtr]$Hwnd, [Parameter(Mandatory)][string]$Text,
+          [int]$ClearCount = 0, [int]$PerCharMs = 40)
+    Assert-ScDrivable -Hwnd $Hwnd
+    for ($i = 0; $i -lt $ClearCount; $i++) {
+        Send-ScKey -Hwnd $Hwnd -VirtualKey 0x08 -HoldMs 15 -SettleMs 25
+    }
+    foreach ($ch in $Text.ToCharArray()) {
+        [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_CHAR, [IntPtr][int][char]$ch, [IntPtr]1)
+        Start-Sleep -Milliseconds $PerCharMs
+    }
+}
+
 # --- task 047: hook-set composition, by NAME rather than a hardcoded total -----
 # Lifted from test-combat-death.ps1 into this shared file (task 050) so
 # test-hud-row.ps1 could use the same by-name comparison instead of growing its own
