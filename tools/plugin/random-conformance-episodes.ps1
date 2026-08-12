@@ -423,7 +423,16 @@ function Invoke-IndicatorEpisode {
         $pressed += $step
         $high = Read-Engine -Tag "ep$($Ep.index)-qind-high$attempt" -Need @('prodq', 'prodfan', 'qind')
         if ($high.Qind -and $low.Qind -and $high.Qind.Text.Length -gt $low.Qind.Text.Length) { break }
-        if ($pressed -ge $QueueMax - 1) { break }
+        # THE CAP IS A FACT ABOUT THE QUEUE, NOT ABOUT HOW MANY TIMES WE PRESSED. Guarding on
+        # the press count stopped this loop on its first pass -- the plan's target IS the cap,
+        # so `pressed >= QueueMax-1` was true immediately and the top-up never ran, leaving the
+        # episode skipping on a "+9" it could have pressed one item past. The queue is shorter
+        # than the presses by however many units completed, and only the engine knows that.
+        $curLogical = (Get-Logical -Eng $high -Unit $Unit).Logical
+        if ($curLogical -ge $QueueMax) {
+            Note "the building is at the plugin's cap of $QueueMax with `"$($high.Qind.Text)`" showing; no room to lengthen the string"
+            break
+        }
         # Top up by what the queue has drained since, rather than by the original step: the
         # count we are chasing is the plugin's "+N", and completions eat it while we press.
         $step = 2
@@ -452,19 +461,26 @@ function Invoke-IndicatorEpisode {
     # WHAT IT SAYS -- the content oracle, read out of the live control's own pszText.
     Assert-Inv -Id 'INV-Q' -What "the two states really do carry different strings (`"$($low.Qind.Text)`" vs `"$($high.Qind.Text)`")" `
         -Ok ($low.Qind.Text -ne $high.Qind.Text)
-    if ($high.Qind.Text.Length -le $low.Qind.Text.Length) {
-        # The whole point of the +9 gap is that the second string is LONGER. If it is not, the
-        # strip is showing a different number of icons than this episode assumed, and the
-        # width claim below would be measuring nothing. Say so rather than assert into it.
-        Write-Skip -Id 'INV-Q' -Why "the second string (`"$($high.Qind.Text)`") is not longer than the first (`"$($low.Qind.Text)`"), so the box was never expected to grow -- the strip is not showing the icon count this episode assumed"
-    } else {
-        # AND WHERE IT PUT IT, guaranteed by construction rather than by a font: the box's
-        # width is a function of strlen in the indicator's own PlaceOn, so a longer string
-        # MUST widen the box. This is the half that survives two digits happening to set the
-        # same number of pixels (039's correction, 2026-08-12).
-        Assert-Inv -Id 'INV-Q' -What "the longer string widened the box ($lowW -> $highW px for `"$($low.Qind.Text)`" -> `"$($high.Qind.Text)`")" `
-            -Ok ($highW -gt $lowW) `
-            -Detail '(the box is sized from strlen, so a longer string that did not widen it means the box is not being sized from OUR text)'
+    # AND THAT THE BOX CAN HOLD IT. Note what this does NOT assert: that a longer string made
+    # the box wider. It does not, by design, and asserting it raised a false alarm against a
+    # perfectly correct build -- `"+1"` and `"+10"` both measured 28 px. In STRIP mode PlaceOn
+    # CLAMPS the box to its anchor icon (`b[2] = min(left + want, a[2])`) precisely so our
+    # pixels sit inside a control the engine repaints, which is what guarantees they are
+    # painted over when the indicator goes away. The width is the icon's, not the string's.
+    #
+    # What must hold, and what actually breaks when it does not, is the other direction: the
+    # box has to be wide enough for the string it is showing, or the engine draws it
+    # TRUNCATED (the failure the GROUP branch's comment says was paid for once already). That
+    # is the same invariant hooktest asserts offline, checked here against the live control.
+    foreach ($state in @(
+        [pscustomobject]@{ Name = 'short'; Q = $low.Qind },
+        [pscustomobject]@{ Name = 'long';  Q = $high.Qind }
+    )) {
+        $w = $state.Q.Bounds[2] - $state.Q.Bounds[0]
+        $need = $state.Q.Text.Length * $QIND_CHAR_W
+        Assert-Inv -Id 'INV-Q' -What "the $($state.Name) state's box is wide enough for `"$($state.Q.Text)`" ($w px, needs $need)" `
+            -Ok ($w -ge $need) `
+            -Detail "(SC_QIND_CHAR_W = $QIND_CHAR_W px per character; a box narrower than its string is drawn truncated)"
     }
 
     # THAT IT LANDED -- the pixel oracle, and it refuses to run rather than guess. $null means

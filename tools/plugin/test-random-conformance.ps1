@@ -219,6 +219,9 @@ $QUEUE_EMPTY   = 0xE4     # research/production-queue.md 2.4
 # CUnit+0x4C bit 0: SET once the unit is FINISHED. A unit under construction is already in its
 # player's list without it (sc_addresses.h 175).
 $UNIT_FLAG_COMPLETED = 0x01
+# SC_QIND_CHAR_W (sc_queueind.h 61): the indicator's font advance. A box narrower than
+# strlen * this is drawn with the string truncated.
+$QIND_CHAR_W = 7
 $ENGINE_SLOTS  = 5        # the engine's own ring
 $ENGINE_HOLD   = 4        # SC_PRODQ_ENGINE_HOLD: what the plugin holds the ring at
 $TRAIN_ACTION  = '004234b0'   # the 0x1F emitter
