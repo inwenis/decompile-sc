@@ -505,12 +505,38 @@ Two of the three take their only argument in `EAX` and no C calling convention s
 a two-instruction thunk (`pushl %eax; call <C fn>; addl $4,%esp; ret`) — the same technique
 `sc_fanout`'s `ScOverflowThunk` uses for `sortOverflowHandler`.
 
-### 6.2 Which building
+### 6.2 Which building — and WHICH SELECTION ARRAY, which is not the obvious one
+
+> **CORRECTION, task 038.** This section used to say the plugin reads `activePlayerSelection[0]`
+> and requires `[1]` null, "the same test without calling into the engine". The test is right and
+> **the array was wrong**. It cost the group case outright (§10), and it was invisible for two
+> tasks because the two arrays agree whenever one building is selected — which is every case
+> either suite had.
 
 Both receive handlers reset `selectionIterator` (`0x006284B6`) and then require
-`getActivePlayerNextSelection` to yield exactly one unit (§4.1). The plugin applies the same test
-without calling into the engine: `activePlayerSelection[0]` non-null and `[1]` null, then the
-pointer bounds/stride-validated against the unit array.
+`getActivePlayerNextSelection` (`0x0049A850`) to yield exactly one unit (§4.1). That function
+names its own array and its own index, in five instructions, dumped from this binary:
+
+```
+0049a851  MOV  BL,byte ptr [0x006284B6]            ; the selection iterator
+0049a857  CMP  BL,0xC                              ; 12 slots, then stop
+0049a860  MOV  EAX,dword ptr [0x0051267C]          ; activePlayerId
+0049a865  MOVZX ECX,BL
+0049a869  LEA  EAX,[EAX + EAX*2]                   ; player * 3
+0049a86d  LEA  ESI,[ECX + EAX*4]                   ; iterator + player * 12
+0049a870  MOV  EAX,dword ptr [ESI*4 + 0x006284E8]  ; playersSelections[player][iterator]
+```
+
+So the building a production command acts on comes from **`playersSelections`
+(`0x006284E8`), row `activePlayerId`, twelve slots per row** — the *simulation's* selection for
+the player whose command is being dispatched. Not `activePlayerSelection` (`0x006284B8`), which
+is the client's own list and which **abuts it exactly** (`0x006284B8 + 12×4 == 0x006284E8`,
+[`binary-selection-map.md`](binary-selection-map.md) §3.3) — the two are adjacent, both are
+`CUnit*[12]`, and they hold the same thing whenever the player has one building selected.
+
+The plugin therefore reads that row, with that arithmetic, and applies the engine's own test to
+it: slot 0 non-null, slot 1 null, then the pointer bounds/stride-validated against the unit
+array. An `activePlayerId` outside `0..7` answers "not ours" rather than reading past the array.
 
 ### 6.3 Both directions are one store
 
@@ -946,3 +972,107 @@ under `work/scratch/` (gitignored) and only the findings above are committed (ha
 
 The button-table dump in §4.1 came from `work/scratch/025/peek.py`, a nine-line PE-offset reader
 over the working copy; the same bytes are visible in Ghidra at `0x005172C0`.
+
+---
+
+## 10. Queueing past five with SEVERAL buildings selected (task 038)
+
+The user, playing the deployed build, 2026-08-11: *"can't queue more than 5 units per building
+when multiple buildings are selected"* — and, in the same message, that selecting several
+buildings "works nicely", so the selection half was fine.
+
+Two shipped features meet here and neither was wrong on its own: this one (over-cap queueing at
+ONE building, §5–§6) and the group fan-out ([`group-production.md`](group-production.md), one
+Train press → one Select+Train pair per selected building). The seam between them was §6.2's
+selection array, and the failure is a textbook case of a predicate evaluated in the wrong state.
+
+### 10.1 What the wire said, before
+
+`tools/plugin/test-group-queue-over-five.ps1`, three Command Centers boxed, nine presses,
+`%SCPLUGIN_PRODQ%=1` and `%SCPLUGIN_PRODFAN%=1` (the deployed configuration), 2026-08-12:
+
+```
+5 of 9 presses reached the funnel; 5 were fanned out
+  [02:06:15.993] CMD id=0x1F len=3 bytes=[1F 07 00]
+  [02:06:16.312] CMD id=0x1F len=3 bytes=[1F 07 00]
+  [02:06:16.628] CMD id=0x1F len=3 bytes=[1F 07 00]
+  [02:06:16.930] CMD id=0x1F len=3 bytes=[1F 07 00]
+  [02:06:17.211] CMD id=0x1F len=3 bytes=[1F 07 00]
+                       ... and nothing, for the remaining four presses
+
+unit=0x00623D08 ring=5 overflow=0 logical=5 engine=[0x7,0x7,0x7,0x7,0x7]
+unit=0x00623BB8 ring=5 overflow=0 logical=5 engine=[0x7,0x7,0x7,0x7,0x7]
+unit=0x00623E58 ring=5 overflow=0 logical=5 engine=[0x7,0x7,0x7,0x7,0x7]
+minerals down 750 (15 units), plugin tracking 0 buildings, captured=0
+```
+
+That is §4.1's measurement again, exactly: five commands at the press cadence and then silence,
+because every ring reached five and the client greys its own button out there. The plugin, whose
+entire job is to stop that happening, had held nothing back.
+
+### 10.2 Why — the two selection arrays
+
+The fan-out replays one `Select` + one `Train` per building, which is what lets `cmdrecvTrain`'s
+single-unit gate accept at all. So while a fan-out is in flight the **simulation's** selection
+holds ONE building at a time, and the **client's** still holds the whole group. The plugin read
+the client's list (`activePlayerSelection`, `0x006284B8`), found `[1]` non-null, and concluded
+"not a single selected building" for every replayed Train — so `ScProdQueueOnTrain` ran with no
+unit, nothing was taken back out of any ring, and all three filled to five.
+
+The two arrays are `CUnit*[12]`, they hold the same thing whenever the player has one building
+selected, and **they abut** (`0x006284B8 + 12×4 == 0x006284E8`). The engine's own gate reads the
+other one, row `activePlayerId` — its five instructions are quoted in §6.2. That is the whole
+defect and the whole fix: one read, moved to the array the engine reads.
+
+### 10.3 What the wire says after
+
+Same suite, same fixture, same nine presses, after the one-line change:
+
+```
+9 of 9 presses reached the funnel; 9 were fanned out
+  [02:17:40.618] CMD id=0x1F ... through ... [02:17:43.165] CMD id=0x1F     (nine, at the cadence)
+  FANOUT start: cmd=0x1F len=3 units=3 (visible 3 + overflow 0) slots=1 -> 3 Select+order pairs   x9
+
+unit=0x00623D08 ring=4 overflow=5 logical=9 engine=[0x7,0x7,0x7,0x7,0xe4]
+unit=0x00623BB8 ring=4 overflow=5 logical=9 engine=[0x7,0x7,0x7,0x7,0xe4]
+unit=0x00623E58 ring=4 overflow=5 logical=9 engine=[0x7,0x7,0x7,0x7,0xe4]
+
+minerals 3000 -> 1650: 27 units x 50, charged by the ENGINE, once each
+PRODQSTATS captured=18 promoted=3 cancelled=1 refunded=0 refusedFull=0 refusedCost=0
+           mineralsSpent=0 mineralsRefunded=50 ... trainSeen=30 trainNoUnit=0
+```
+
+Nine per building, four of them in the engine's own ring and five with the plugin, three
+buildings, 27 units, 1350 minerals — and the plugin still spent nothing of its own (§5.3). The
+card's Cancel button was pressed once afterwards with one building selected: logical 9 → 8 and
+exactly 50 minerals back, refunded by the plugin because the tail of that queue was its item.
+
+### 10.4 The diagnostic that would have named it
+
+Nothing in the log distinguished "the plugin is holding nothing" from "the plugin was never
+asked" — both print zeros — which is why a passing single-building suite and a silent log could
+coexist with a feature that did nothing at all for a group. `PRODQ`/`PRODQSTATS` now carry
+`trainSeen` / `trainNoUnit` (and the same pair for cancel): the number of times each detour ran,
+and how many of those found no single selected building. The counters did not exist during the
+broken run above, so the only number measured for them is the fixed one — `trainSeen=30
+trainNoUnit=0`, i.e. 27 fanned-out Trains plus the 3 of the single-building step, every one of
+which found its building. Under the old reading `trainNoUnit` would have equalled `trainSeen` for
+the group burst, and *that* is the line worth having: it separates "the plugin had nothing to
+hold" from "the plugin was never handed a building", which AGENTS.md's rule about diagnostics
+("no log line appeared" and "the function refused" must not look alike) is exactly about.
+
+### 10.5 One more place with the same reading
+
+`sc_upgrades.cpp`'s own `SoleSelectedUnit` (task 029's upgrade queue) still reads
+`activePlayerSelection`. It is not reachable today — no upgrade command is fanned out, and the
+client will not offer an upgrade button for a multi-building selection — so it is **latent**, not
+a live bug, and it is left alone here rather than changed under a task that cannot re-run that
+feature's own suite. It is the same defect the moment anything fans an upgrade command out.
+
+### 10.6 Reproducing
+
+```powershell
+./tools/plugin/build.ps1 -Test          # the offline half: the selection read, both arrays disagreeing
+./tools/plugin/test-group-queue-over-five.ps1
+./tools/plugin/test-production-queue.ps1   # task 025's own suite: the single-building case
+```

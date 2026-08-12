@@ -300,16 +300,33 @@ function Get-StatusQueue { param([string]$Tag, [int]$TimeoutSec = 20)
 
 # Task 033's indicator, read back OUT OF THE LIVE DIALOG on the same marker channel: is
 # its control linked into the status pane's child chain, has the engine's own visible bit
-# been set on it, and what string does its pszText pointer actually hold. `ink` counts
-# non-background bytes the engine left in the dialog's surface inside the control's rect --
-# the only field here that can say anything was DRAWN -- and `refInk` is the same count over
-# a queue icon, i.e. the positive control that says the probe can see this surface at all.
+# been set on it, and what string does its pszText pointer actually hold.
+#
+# THE PIXEL FIELDS, and what each can and cannot say (task 039):
+#   ink      non-background bytes inside the indicator's own rect. For the GROUP line, whose
+#            band belongs to no control, this is a real "was anything drawn". For the STRIP
+#            "+N", whose box sits INSIDE a queue icon, it is not: the icon's own pixels are
+#            in that box, so it reads > 0 whether or not our text landed. It passed for a
+#            whole task while the icon underneath was drawing the wrong art.
+#   refInk   the same count over a control the ENGINE fills, so `ink=0` cannot be confused
+#            with a blind probe. refId says which control it used -- the first queue icon
+#            normally, the first wireframe button when the strip is hidden by a group.
+#   slotDiff bytes that differ between queue slot 0 and slot 4 on the dialog's own surface,
+#            below the rows their labels occupy. Same rect size, same border graphic, same
+#            queued type, so this is the honest screen-level check on the fifth icon: a
+#            wrong GRP shows up as hundreds, our "+N" on top as tens, our text painted
+#            under the icon as zero.
+#   fontH    the height of the small font, from the font's own header -- the number the
+#            engine's string draw refuses a box shorter than.
+# Each icon entry is `icon:mode:state:art:label`, where art is I (the icon GRP an occupied
+# slot must draw from), B (the empty-slot placeholder art) or ?.
 $script:qindSeq = 0
 function ConvertFrom-QIndLine {
     param($Hit)
     $m = [regex]::Match($Hit.Line,
                 'QIND \[[^\]]+\] mode=(\d+) linked=(\d+) visible=(\d+) text="([^"]*)" ' +
                 'bounds=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\) ink=(-?\d+) refInk=(-?\d+) ' +
+                'refId=(-?\d+) slotDiff=(-?\d+) fontH=(\d+) ' +
                 'icons=\[([^\]]*)\] ' +
                 'sel=(\d+) engineLen=(\d+) overflow=(\d+) upg=(\d+) bldgs=(\d+) queued=(\d+)')
     if (-not $m.Success) { throw "test: unparseable QIND line: $($Hit.Line)" }
@@ -319,13 +336,16 @@ function ConvertFrom-QIndLine {
         Left = [int]$m.Groups[5].Value; Top = [int]$m.Groups[6].Value
         Right = [int]$m.Groups[7].Value; Bottom = [int]$m.Groups[8].Value
         Ink = [int]$m.Groups[9].Value; RefInk = [int]$m.Groups[10].Value
-        Icons = @($m.Groups[11].Value -split ',' | Where-Object { $_ } | ForEach-Object {
+        RefId = [int]$m.Groups[11].Value; SlotDiff = [int]$m.Groups[12].Value
+        FontH = [int]$m.Groups[13].Value
+        Icons = @($m.Groups[14].Value -split ',' | Where-Object { $_ } | ForEach-Object {
             $p = $_ -split ':'
             [pscustomobject]@{ Icon = [Convert]::ToInt32(($p[0] -replace '^0x'), 16)
-                               Mode = [int]$p[1]; State = $p[2] } })
-        Sel = [int]$m.Groups[12].Value; EngineLen = [int]$m.Groups[13].Value
-        Overflow = [int]$m.Groups[14].Value; Upg = [int]$m.Groups[15].Value
-        Buildings = [int]$m.Groups[16].Value; Queued = [int]$m.Groups[17].Value
+                               Mode = [int]$p[1]; State = $p[2]
+                               Art = $p[3]; Label = ($p[4] -eq '1') } })
+        Sel = [int]$m.Groups[15].Value; EngineLen = [int]$m.Groups[16].Value
+        Overflow = [int]$m.Groups[17].Value; Upg = [int]$m.Groups[18].Value
+        Buildings = [int]$m.Groups[19].Value; Queued = [int]$m.Groups[20].Value
         Line = $Hit.Line
     }
 }
@@ -956,10 +976,26 @@ try {
         # all when the box is shorter than the font. refInk is the positive control: if the
         # probe cannot see the surface, BOTH numbers are 0 and the ink assertion means
         # nothing, so it is asserted first.
-        Assert-That "the ink probe can see the dialog's surface (refInk=$($qi.RefInk) over a queue icon)" `
+        Assert-That "the ink probe can see the dialog's surface (refInk=$($qi.RefInk) over control $($qi.RefId))" `
             ($qi.RefInk -gt 0)
-        Assert-That "and the engine DREW the indicator: ink=$($qi.Ink) inside ($($qi.Left),$($qi.Top),$($qi.Right),$($qi.Bottom))" `
+        Assert-That "the box is taller than the font, or the engine would refuse it outright ($($qi.Bottom - $qi.Top) >= $($qi.FontH))" `
+            (($qi.Bottom - $qi.Top) -ge $qi.FontH)
+        # ... and THAT is as far as ink can take this case. The "+N" box sits inside queue
+        # icon 6, so the icon's own pixels are inside it: ink > 0 is true here whether or not
+        # one pixel of ours was drawn, and it stayed true through the whole of task 039's
+        # defect, when the icon under it was drawing the wrong art entirely. What CAN fail is
+        # the difference between slot 0 and slot 4: same rect size, same border graphic, same
+        # queued Probe, so with the ring full and the strip settled the only bytes that differ
+        # are the ones this plugin put there.
+        Assert-That "ink says something is in the box (ink=$($qi.Ink)) -- corroboration, not the oracle" `
             ($qi.Ink -gt 0)
+        Assert-That ("the fifth icon draws the SAME picture as the first: slotDiff=$($qi.SlotDiff) bytes, " +
+                     'i.e. our "+N" and nothing else') `
+            ($qi.SlotDiff -gt 0 -and $qi.SlotDiff -lt 200) `
+            '(hundreds of differing bytes means the two slots are not the same art at all)'
+        Assert-That 'every lit icon draws from the ICON grp, not the empty-slot placeholder art' `
+            (@($qi.Icons | Where-Object { $_.State -eq 'lit' -and $_.Art -ne 'I' }).Count -eq 0) `
+            "(art letters: $(($qi.Icons | ForEach-Object { $_.Art }) -join ''))"
         $script:qindDrawn = $qi
     }
 
@@ -1059,6 +1095,24 @@ try {
                 Assert-That "with the OCCUPIED mode the engine writes for a real item ($($fifth.Mode))" `
                     ($fifth.Mode -eq 3)
                 Assert-That 'and it is NOT greyed' ($fifth.State -eq 'lit')
+                # THE FIELD THIS SUITE USED TO MISS, and the one task 039 exists for. An
+                # icon INDEX is meaningless without the GRP it indexes, and the plugin was
+                # inheriting the GRP the engine leaves on a slot it drew EMPTY -- the command
+                # button borders -- so this slot was blitting frame #unitType out of the
+                # wrong art. Every assertion above passed while that was true. `art` is read
+                # back from the live statUser record and compared against the engine's own
+                # two globals, so B here is precisely the defect the user reported.
+                Assert-That "and it draws from the ICON grp, not the empty-slot art (art=$($fifth.Art))" `
+                    ($fifth.Art -eq 'I') `
+                    '(B = <race>cmdbtns.grp, the placeholder art -- the frame index then means nothing)'
+                Assert-That 'and carries a slot label, like the four the engine filled' `
+                    ($fifth.Label)
+                # The screen itself: slot 4 and slot 0 hold the same Probe, are the same
+                # size and take the same border graphic, so what differs between them below
+                # their labels is our "+N" and nothing else. With the wrong GRP the two are
+                # not the same picture at all and this runs to hundreds.
+                Assert-That "the two slots are the same picture: slotDiff=$($qi.SlotDiff) bytes" `
+                    ($qi.SlotDiff -ge 0 -and $qi.SlotDiff -lt 200)
             }
             # ... and the engine's own ring slot behind it is still EMPTY. That is the point
             # of the whole exercise: the item is real and paid for, but it lives in the

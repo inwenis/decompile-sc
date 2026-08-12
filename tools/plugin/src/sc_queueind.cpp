@@ -453,6 +453,35 @@ static bool PlaceOn(short* b, DWORD anchor, DWORD root, int mode, int textLen) {
         b[0] = left; b[1] = top;
         b[2] = (short)right;
         b[3] = (short)bottom;
+    } else if (mode == SC_QIND_UPGRADE) {
+        // "+N upg" runs longer than STRIP's "+N" (up to "+16 upg", 7 chars), and the icon
+        // it starts on (id 6) is only ~38px wide -- clamping to it the way STRIP does would
+        // TRUNCATE the string, which the warning above this function already paid for once
+        // in the GROUP case. A researching building's five queue icons are all idle
+        // placeholders (nothing is in its production ring), so running the box past icon
+        // 6's own bounds does not clip anything the engine actually drew there; RepaintUnder
+        // repaints the whole strip for this mode for the same reason it repaints the whole
+        // row for GROUP.
+        int right = left + want;
+        int surfW = 0;
+        DWORD d = SurfaceOf(root);
+        if (d) surfW = (int)*(WORD*)(d + SC_SURFACE_OFF_W);
+        // SLIDE IT LEFT rather than clamp the right edge. Icon 6 starts at x=231 on the
+        // live 270-wide pane, so "+2 upg" (42px at SC_QIND_CHAR_W) already runs 4px past
+        // the surface and a clamp would have TRUNCATED it -- the failure this file warns
+        // about twice above, because a cut string reads as a working feature. Found by
+        // this task's fixture once the fake pane grew the real surface (task 037 shipped
+        // with the clamp; nothing else about that mode changes here).
+        if (surfW > 0 && right > surfW - 1) {
+            int shift = right - (surfW - 1);
+            if (left - shift < 0) shift = left;
+            left  -= (short)shift;
+            right -= shift;
+        }
+        if (right - left < want) return false;
+        b[0] = left; b[1] = top;
+        b[2] = (short)right;
+        b[3] = (short)(top + SC_QIND_BOX_H);
     } else {
         // A "+N" is short and belongs inside the icon it annotates: staying within a
         // control the engine repaints is what guarantees our pixels are painted over when
@@ -465,13 +494,25 @@ static bool PlaceOn(short* b, DWORD anchor, DWORD root, int mode, int textLen) {
 }
 
 // Which control the indicator hangs off, per mode:
-//   STRIP -- the LAST queue icon (id 6). While the plugin holds overflow it keeps the
-//            engine's ring at four, so that icon is precisely the one drawn empty.
-//   GROUP -- the first wireframe button (id 0x21). The line no longer sits ON that button
-//            (see PlaceOn) -- the button is where the row's geometry is read from, and it
-//            is what RepaintUnder asks the engine to redraw.
+//   STRIP   -- the LAST queue icon (id 6). While the plugin holds overflow it keeps the
+//              engine's ring at four, so that icon is precisely the one drawn empty.
+//   UPGRADE -- the SAME icon (id 6). A researching building's ring is not producing units
+//              at all, so every one of the five queue icons sits idle and greyed -- the
+//              last one is free for exactly the reason it is free in the STRIP case, and
+//              reusing it needs no second anchor point.
+//   GROUP   -- the first wireframe button (id 0x21). The line no longer sits ON that button
+//              (see PlaceOn) -- the button is where the ROW's geometry is read from, and it
+//              is what RepaintUnder asks the engine to redraw.
+//
+// task 037: SC_QIND_UPGRADE had no case here. ScQueueIndCompose could return it all day --
+// and hooktest's own composer test did exactly that -- but with no anchor, ScQueueIndOnFrame
+// read the null return as "nothing to show" and reset the mode to SC_QIND_NONE before ever
+// attempting a splice, on every building, in every real game. Nothing in this function or
+// its caller looks at the unit's type, so the fix could not be Engineering-Bay-specific.
 static DWORD AnchorFor(DWORD root, int mode) {
-    if (mode == SC_QIND_STRIP) return FindChildById(root, SC_STATQ_LAST_CONTROL);
+    if (mode == SC_QIND_STRIP || mode == SC_QIND_UPGRADE) {
+        return FindChildById(root, SC_STATQ_LAST_CONTROL);
+    }
     if (mode == SC_QIND_GROUP) return FindChildById(root, SC_HUD_FIRST_SMALL_BUTTON);
     return 0;
 }
@@ -822,6 +863,13 @@ static void RepaintUnder(DWORD root) {
     if (g_mode == SC_QIND_GROUP && root) {
         DWORD c = FindChildById(root, SC_HUD_FIRST_SMALL_BUTTON);
         for (int i = 0; i < SC_HUD_BUTTON_COUNT && c; ++i, c = NextOf(c)) {
+            if (*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) CallUpdate(c);
+        }
+    // "+N upg" can run past icon 6 into the space above icons 2..5 too (see PlaceOn), so
+    // the same reasoning applies: repaint the whole strip, not just the icon it started on.
+    } else if (g_mode == SC_QIND_UPGRADE && root) {
+        DWORD c = FindChildById(root, SC_STATQ_FIRST_CONTROL);
+        for (int i = 0; i < SC_STATQ_SLOTS && c; ++i, c = NextOf(c)) {
             if (*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) CallUpdate(c);
         }
     }

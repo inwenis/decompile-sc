@@ -617,14 +617,20 @@ try {
             Write-Host "       $($qi.Line)"
             $m = [regex]::Match($qi.Line,
                 'mode=(\d+) linked=(\d+) visible=(\d+) text="([^"]*)" ' +
-                'bounds=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\) ink=(-?\d+).* bldgs=(\d+) queued=(\d+)')
+                'bounds=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\) ink=(-?\d+) refInk=(-?\d+) ' +
+                'refId=(-?\d+) slotDiff=(-?\d+) fontH=(\d+).* bldgs=(\d+) queued=(\d+)')
             Assert-That 'the indicator read-back line parsed' ($m.Success) "($($qi.Line))"
             if ($m.Success) {
                 $mode = [int]$m.Groups[1].Value
-                $boxW = [int]$m.Groups[7].Value - [int]$m.Groups[5].Value
+                $boxL = [int]$m.Groups[5].Value
+                $boxT = [int]$m.Groups[6].Value
+                $boxW = [int]$m.Groups[7].Value - $boxL
+                $boxH = [int]$m.Groups[8].Value - $boxT
                 $ink = [int]$m.Groups[9].Value
-                $bldgs = [int]$m.Groups[10].Value
-                $queued = [int]$m.Groups[11].Value
+                $refInk = [int]$m.Groups[10].Value
+                $fontH = [int]$m.Groups[12].Value
+                $bldgs = [int]$m.Groups[13].Value
+                $queued = [int]$m.Groups[14].Value
                 if ($Arm -eq 'feature') {
                     Assert-That "it is in GROUP mode (2), not the single-building one ($mode)" `
                         ($mode -eq 2)
@@ -644,7 +650,38 @@ try {
                     $need = $m.Groups[4].Value.Length * 5
                     Assert-That "and its box is wide enough to draw all of it ($boxW px for $need)" `
                         ($boxW -ge $need)
-                    Assert-That "and the engine put ink in it (ink=$ink)" ($ink -gt 0)
+                    # AND IT IS NOT ON TOP OF THE ICON ROW. The user, on the deployed build:
+                    # "there was some text printed in the spot where the 12 icons are ... but
+                    # it was behind the buildings icons so couldn't rly tell". The line now
+                    # goes in the band BELOW the row, so the check is against the row's own
+                    # rects, read out of the same dialog dump the plugin logs at attach --
+                    # never against a constant, because which buttons are up depends on how
+                    # many buildings are selected.
+                    $rowBottom = 0
+                    foreach ($d in @(Get-Content -LiteralPath $LogPath |
+                                     Select-String -Pattern 'QINDDLG \[.*\] id=(3[3-9]|4[0-4]) ')) {
+                        $r = [regex]::Match($d.Line, 'rect=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\)')
+                        if ($r.Success -and [int]$r.Groups[4].Value -gt $rowBottom) {
+                            $rowBottom = [int]$r.Groups[4].Value
+                        }
+                    }
+                    Assert-That "the row's twelve buttons were found in the dialog dump (lowest edge y=$rowBottom)" `
+                        ($rowBottom -gt 0)
+                    Assert-That "and the line starts BELOW all of them (top=$boxT vs $rowBottom)" `
+                        ($boxT -ge $rowBottom)
+                    # The engine's string draw refuses outright when the box is shorter than
+                    # the font -- the defect that made task 033's first indicator invisible
+                    # for weeks -- so the band's height is checked against the font's own.
+                    Assert-That "the band is at least as tall as the font ($boxH >= $fontH)" `
+                        ($boxH -ge $fontH -and $fontH -gt 0)
+                    # THE DRAW. Here ink IS the oracle rather than corroboration: this band
+                    # belongs to no control, so the only thing that can put a byte in it is
+                    # this line. refInk over a control the ENGINE fills is the positive
+                    # half -- without it, ink=0 and a blind probe read the same.
+                    Assert-That "the ink probe can see the surface (refInk=$refInk over control $([int]$m.Groups[11].Value))" `
+                        ($refInk -gt 0)
+                    Assert-That "and the engine DREW the line in a band nothing else owns (ink=$ink)" `
+                        ($ink -gt 0)
                 } else {
                     # THE CONTROL ARM. With the fan-out off, one click reaches one building,
                     # so there is no group to report and the indicator must say nothing --

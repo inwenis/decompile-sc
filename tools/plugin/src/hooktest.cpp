@@ -2932,6 +2932,81 @@ static void ProdQueueTests(void) {
               (long long)(start - *PqMinerals()), 16 * 50);
     }
 
+    // -----------------------------------------------------------------------------
+    // TASK 038. WHICH SELECTION ARRAY THE DETOURS READ, decided here because the two
+    // arrays ABUT (0x006284B8 + 12*4 == 0x006284E8) and agree in every single-building
+    // case -- so the wrong one passes every test that selects one building, which is
+    // every test this part had until now.
+    //
+    // The engine's own gate walks playersSelections[activePlayerId]
+    // (getActivePlayerNextSelection 0x0049A850, quoted in sc_prodqueue.cpp). The client's
+    // activePlayerSelection is a different list, and a fanned-out Select+Train pair makes
+    // them disagree on purpose: the SIMULATION is moved to one building at a time while
+    // the player still has the whole group selected. Reading the client's list there
+    // returned "no single building", the plugin held nothing, and every ring filled to
+    // five -- the bug this task exists to fix.
+    //
+    // So each case below writes the two arrays to DIFFERENT things and says which one the
+    // answer has to come from.
+    // -----------------------------------------------------------------------------
+    printf("\n    the building a receive handler acts on comes from the ENGINE's selection array\n");
+    PqBegin(16, 1000, 500);
+    {
+        DWORD* engineSel = (DWORD*)FakeRt(SC_VA_PLAYERS_SELECTIONS) + PQ_PLAYER * SC_SELECTION_SLOTS;
+        DWORD* clientSel = (DWORD*)FakeRt(SC_VA_ACTIVE_PLAYER_SELECTION);
+        DWORD* activeId  = (DWORD*)FakeRt(SC_VA_ACTIVE_PLAYER_ID);
+        for (int i = 0; i < SC_SELECTION_SLOTS; ++i) { engineSel[i] = 0; clientSel[i] = 0; }
+        *activeId = PQ_PLAYER;
+
+        // THE CASE THAT WAS BROKEN: the fan-out has just replayed Select(building 0), so
+        // the simulation holds ONE building, while the player's own selection still holds
+        // three. The answer is the simulation's building.
+        engineSel[0] = FakeUnit(0);
+        clientSel[0] = FakeUnit(0);
+        clientSel[1] = FakeUnit(1);
+        clientSel[2] = FakeUnit(2);
+        Check("a group selected, the sim holding one -> that one",
+              (long long)ScProdQueueSoleSelectedUnitForTest(), (long long)FakeUnit(0));
+
+        // The next pair of the same fan-out names a different building. Reading the
+        // client's list would have answered the same thing every time.
+        engineSel[0] = FakeUnit(2);
+        Check("the next pair of the same fan-out -> the NEXT building",
+              (long long)ScProdQueueSoleSelectedUnitForTest(), (long long)FakeUnit(2));
+
+        // THE NEGATIVE HALF, and it is the same test the engine makes: two units in the
+        // SIMULATION's list means cmdrecvTrain does nothing at all, so neither may we.
+        engineSel[1] = FakeUnit(3);
+        Check("two in the sim's list -> not ours, the engine's own gate refuses too",
+              (long long)ScProdQueueSoleSelectedUnitForTest(), 0LL);
+        engineSel[1] = 0;
+
+        // A player row is 12 slots and the row is indexed by activePlayerId: pointing the
+        // id at a player with nothing selected must answer nothing, not another player's
+        // building. This is what catches a wrong stride as well as a wrong base.
+        *activeId = PQ_PLAYER + 1;
+        Check("another player's row is empty -> nothing",
+              (long long)ScProdQueueSoleSelectedUnitForTest(), 0LL);
+        engineSel[SC_SELECTION_SLOTS] = FakeUnit(4);       // that neighbour's slot 0
+        Check("and that row's own building is what it answers",
+              (long long)ScProdQueueSoleSelectedUnitForTest(), (long long)FakeUnit(4));
+        engineSel[SC_SELECTION_SLOTS] = 0;
+        *activeId = PQ_PLAYER;
+
+        // An id outside the eight players is fail-closed rather than an out-of-bounds read.
+        *activeId = SC_MAX_PLAYERS;
+        Check("an out-of-range active player -> nothing, and no read past the array",
+              (long long)ScProdQueueSoleSelectedUnitForTest(), 0LL);
+        *activeId = PQ_PLAYER;
+
+        // And the whole point, stated as an assertion: what the CLIENT holds cannot
+        // produce an answer on its own.
+        engineSel[0] = 0;
+        clientSel[0] = FakeUnit(1);
+        Check("the client's list alone answers nothing -- it is not what the engine reads",
+              (long long)ScProdQueueSoleSelectedUnitForTest(), 0LL);
+    }
+
     ScProdQueueTestBegin(NULL, 0);   // leave the core inert for the parts after this
 }
 
@@ -4234,6 +4309,91 @@ static void QueueIndTests(void) {
     g_fake = NULL;
 }
 
+// ---------------------------------------------------------------------------
+// [21] task 037: SC_QIND_UPGRADE through the FRAME PATH, not just the composer.
+//
+// QueueIndTests above drives ScQueueIndCompose directly for the upgrade case ("queued
+// upgrades -> \"+3 upg\"") and stops there -- it never calls ScQueueIndOnFrame for that
+// mode the way it does for STRIP and GROUP. That gap is exactly what let this ship: the
+// composer is pure and cannot see AnchorFor(), which is the function that decides whether
+// the frame path gets a control to splice the text onto at all. AnchorFor had a case for
+// SC_QIND_STRIP and one for SC_QIND_GROUP and none for SC_QIND_UPGRADE, so it fell through
+// to `return 0`, and ScQueueIndOnFrame reads a null anchor as "nothing to show" and resets
+// the mode to SC_QIND_NONE before a splice is even attempted -- on every building, not just
+// an Engineering Bay, because neither AnchorFor nor the mode it is given ever look at the
+// unit's type. The user: "i do not see upgrade queue - tested on terran engineering bay".
+// ---------------------------------------------------------------------------
+static void UpgQueueIndTests(void) {
+    Part("the queue indicator shows QUEUED UPGRADES through the real frame path (task 037)");
+
+    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
+                                 PAGE_READWRITE);
+    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+
+    // The same fake status pane QueueIndTests drives, with an EMPTY ring: a building that
+    // is researching is not training anything, so every one of the five queue icons starts
+    // in the engine's own greyed placeholder state, same as a real Engineering Bay's.
+    BuildFakeQIndPane(0, 0);
+    ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiOrigDriver);
+
+    // One running (the engine's own slot) plus two held -- "2+ upgrades queued", the
+    // user's own words, and a mixed upgrade/tech pair so this cannot be mistaken for a
+    // fixture that only ever holds one kind.
+    UqBegin(8, 5000, 5000);
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);   // starts -- the engine's own slot
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_B);   // held
+    UqPress(SC_UPGQ_KIND_TECH,    UQ_TECH_A);  // held
+    Check("the plugin is holding two", UqQueued(), 2);
+
+    Check("nothing spliced before the first frame", QiChildren(), QI_CTL_COUNT);
+    ScQueueIndOnFrame();
+
+    // THE ASSERTIONS QueueIndTests NEVER MADE for this mode -- the ones that actually ask
+    // whether the player would see anything, rather than what the composer intended.
+    Check("the frame path settles on UPGRADE mode", ScQueueIndCurrentMode(), SC_QIND_UPGRADE);
+    Check("the indicator is linked into the dialog's child chain",
+          ScQueueIndIsSpliced() ? 1 : 0, 1);
+    Check("and the engine's own visible bit is set on it", ScQueueIndIsShown() ? 1 : 0, 1);
+    {
+        DWORD ind = QiIndicator();
+        Check("the walk finds it", ind ? 1 : 0, 1);
+        if (ind) {
+            const char* text = (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
+            Check("its pszText says \"+2 upg\"",
+                  (long long)(text && strcmp(text, "+2 upg") == 0), 1);
+            short* b = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
+            Check("the box is at least SC_QIND_BOX_H tall", b[3] - b[1] >= SC_QIND_BOX_H, 1);
+            Check("and wide enough for the string it holds",
+                  (b[2] - b[0]) >= (int)strlen(ScQueueIndCurrentText()) * SC_QIND_CHAR_W ? 1 : 0, 1);
+            // ... which on the LIVE pane means sliding left off icon 6's own start: the
+            // icon begins at x=231 of a 270-wide surface and "+2 upg" needs 42px, so a box
+            // clamped to the surface edge would have held 38 and cut the string. The fake
+            // only started saying so once it carried the real surface (task 039).
+            Check("and it stays inside the dialog's surface",
+                  (b[2] <= QI_SURF_W) ? 1 : 0, 1);
+        }
+    }
+
+    // The queue drains back to nothing running or held: the indicator must go away, the
+    // same as the STRIP case above -- this mode is not a one-way splice.
+    UqFinishRunning();
+    ScUpgQueueOnTick(UqBuilding());     // promotes UQ_UPG_B into the engine's own slot
+    UqFinishRunning();
+    ScUpgQueueOnTick(UqBuilding());     // promotes UQ_TECH_A
+    UqFinishRunning();
+    ScUpgQueueOnTick(UqBuilding());     // nothing left to promote -- building goes idle
+    Check("the plugin holds nothing now", UqQueued(), 0);
+    ScQueueIndOnFrame();
+    Check("the indicator says NONE again", ScQueueIndCurrentMode(), SC_QIND_NONE);
+    Check("and the engine's visible bit is clear",
+          ScQueueIndIsShown() ? 1 : 0, 0);
+
+    ScQueueIndTestBegin(NULL, NULL, NULL, NULL, NULL);
+    ScUpgQueueTestBegin(NULL, SC_UPGQ_DEFAULT_MAX, NULL);
+    VirtualFree(g_fake, 0, MEM_RELEASE);
+    g_fake = NULL;
+}
+
 static void StatusStripTests(void) {
     Part("the status pane's production-queue strip, against a fake dialog");
 
@@ -4466,6 +4626,7 @@ int main(void) {
     ProdFanTests();          // [18]
     QueueIndTests();         // [19]  task 033
     BuildingParityTests();   // [20]  task 036
+    UpgQueueIndTests();      // [21]  task 037
 
     printf("\nhooktest: %d failure(s)\n", g_failures);
     ScLogClose();

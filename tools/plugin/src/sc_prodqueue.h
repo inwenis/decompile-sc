@@ -15,6 +15,15 @@
 //   back out of it after every accept. The button stays live, the client keeps sending,
 //   and everything past the hold waits in the plugin's list, in order.
 //
+//   WHICH BUILDING a Train command is for is the OTHER half of that, and task 038 had to
+//   correct it: it comes from the SIMULATION's selection for the active player
+//   (playersSelections 0x006284E8, row activePlayerId), which is what the engine's own gate
+//   reads -- not from the client's activePlayerSelection, which sits immediately in front of
+//   it and holds the same thing only while ONE building is selected. With several selected
+//   the fan-out (sc_prodfan) replays one Select+Train pair per building, the two lists
+//   disagree by design, and reading the client's one made this feature do nothing at all for
+//   a group. The five instructions that settle it are quoted at SoleSelectedUnit().
+//
 // THE RESOURCE RULE
 //   THE ENGINE PAYS FOR EVERY ITEM, EXACTLY ONCE, AND THE PLUGIN NEVER SPENDS A MINERAL.
 //   Every item is accepted by the engine's own addToBuildQueue (0x00467250), which is
@@ -110,6 +119,14 @@ bool ScProdQueueOnCancel(DWORD unit, unsigned payload);
 // and clear all state. NULL restores normal operation.
 void ScProdQueueTestBegin(BYTE* fakeModuleBase, int maxTotal);
 
+// Test-only: the building a production RECEIVE handler will act on, resolved the way
+// getActivePlayerNextSelection (0x0049A850) resolves it -- playersSelections indexed by
+// activePlayerId, NOT the client's own activePlayerSelection. Exposed so the offline suite
+// can prove the plugin follows the ENGINE's array with the two arrays disagreeing, which
+// is exactly the state a fanned-out Select+Train pair creates (task 038). 0 = "not a
+// single selected building", i.e. the plugin has no business in this command.
+DWORD ScProdQueueSoleSelectedUnitForTest(void);
+
 // Test-only read-back.
 int  ScProdQueueOverflowCount(DWORD unit);   // -1 when the building is not tracked
 int  ScProdQueueOverflowAt(DWORD unit, int i);
@@ -131,7 +148,16 @@ enum ScProdQueueStat {
     SC_PRODQ_STAT_MINERALS_REFUNDED = 7,
     SC_PRODQ_STAT_GAS_SPENT = 8,
     SC_PRODQ_STAT_GAS_REFUNDED = 9,
-    SC_PRODQ_STAT__COUNT = 10
+    // WHERE THE DETOURS WENT, counted per exit. Task 038's bug was invisible for exactly
+    // the reason AGENTS.md gives ("No log line appeared" and "the function returned false"
+    // look identical in a quiet log): the Train detour ran three times per click and found
+    // no building to act on every time, and the only observable was a queue that stopped
+    // at five. A counter per exit makes the next such run say WHICH term refused.
+    SC_PRODQ_STAT_TRAIN_SEEN = 10,      // cmdrecvTrain detours entered
+    SC_PRODQ_STAT_TRAIN_NO_UNIT = 11,   // ...that found no single selected building
+    SC_PRODQ_STAT_CANCEL_SEEN = 12,     // cmdrecvCancelTrain detours entered
+    SC_PRODQ_STAT_CANCEL_NO_UNIT = 13,  // ...that found no single selected building
+    SC_PRODQ_STAT__COUNT = 14
 };
 int ScProdQueueStat(int which);
 
