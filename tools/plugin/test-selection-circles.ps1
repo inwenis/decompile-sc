@@ -200,7 +200,12 @@ try {
         Start-Sleep -Seconds 2
         $lines = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
 
-        $sort = @($lines | Select-String -Pattern 'SORT candidates=(\d+) -> selected=(\d+)')
+        # task 042 (#42, building groups) inserted `clicked=0x%08X -> engine=%u ` between
+        # `candidates=` and `selected=` in the plugin's format string; this suite's regex
+        # was never updated to match and so stopped matching ANY line, not just the wrong
+        # one (task 046). test-building-parity.ps1's Get-ScSortLines already carries the
+        # post-042 shape -- mirrored here rather than re-derived.
+        $sort = @($lines | Select-String -Pattern 'SORT candidates=(\d+) clicked=0x([0-9A-Fa-f]+) -> engine=(\d+) selected=(\d+)')
         Assert-That 'the box contained more than 12 units' ($sort.Count -gt 0 -and
             [int]([regex]::Match($sort[-1].Line, 'candidates=(\d+)').Groups[1].Value) -gt 12)
 
