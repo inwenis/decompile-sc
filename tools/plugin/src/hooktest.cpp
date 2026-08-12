@@ -4148,11 +4148,48 @@ static void QueueIndTests(void) {
             int need = (int)strlen(text) * SC_QIND_CHAR_W;
             printf("      box=(%d,%d,%d,%d) for \"%s\" (needs %d px)\n",
                    b[0], b[1], b[2], b[3], text, need);
-            Check("  its box is wider than the 34px button it anchors to",
-                  (b[2] - b[0]) > 34 ? 1 : 0, 1);
+            Check("  its box is wider than the 32px button the row starts with",
+                  (b[2] - b[0]) > 32 ? 1 : 0, 1);
             Check("  and wide enough for the whole string", (b[2] - b[0]) >= need ? 1 : 0, 1);
-            Check("  still SC_QIND_BOX_H tall", b[3] - b[1] >= SC_QIND_BOX_H, 1);
+            // BELOW THE ROW, not on it. The user could not read this line because it was
+            // drawn in the icons' own rectangles; the fix is a place of its own, computed
+            // from the buttons' live bounds -- so what this asserts is that the box clears
+            // EVERY one of the twelve, not merely the one it is anchored to.
+            short lowest = 0;
+            int overlaps = 0;
+            for (int i = 0; i < QI_BTN_COUNT; ++i) {
+                short r[4];
+                QiBtnRect(i, r);
+                if (r[3] > lowest) lowest = r[3];
+                if (b[0] < r[2] && b[2] > r[0] && b[1] < r[3] && b[3] > r[1]) ++overlaps;
+            }
+            Check("  it starts below the LOWEST button of the row, all twelve considered",
+                  b[1] >= lowest ? 1 : 0, 1);
+            Check("  and overlaps none of them", (long long)overlaps, 0);
+            Check("  and stays inside the dialog's own surface",
+                  (b[2] <= QI_SURF_W && b[3] <= QI_SURF_H) ? 1 : 0, 1);
+            // The height rule the engine's string draw applies, checked against the font
+            // header the fixture set (10): a box shorter than the font draws NOTHING.
+            Check("  and is at least as tall as the font", (b[3] - b[1]) >= 10, 1);
         }
+
+        // ... and when the band cannot hold the font, the line is REFUSED rather than
+        // written into a box the engine will silently decline to draw. A 30-pixel font is
+        // not a real one; it is the smallest change that makes the space too small, and it
+        // proves the refusal exists rather than assuming the band is always big enough.
+        {
+            *(BYTE*)(QiFont() + SC_FONT_OFF_HEIGHT) = 30;
+            ScQueueIndOnFrame();
+            Check("a font too tall for the band suppresses the group line",
+                  ScQueueIndCurrentMode(), SC_QIND_NONE);
+            Check("  and the control is not left showing",
+                  (long long)(ScQueueIndIsShown() ? 1 : 0), 0);
+            *(BYTE*)(QiFont() + SC_FONT_OFF_HEIGHT) = 10;
+            ScQueueIndOnFrame();
+            Check("  and it comes back when the font fits again",
+                  ScQueueIndCurrentMode(), SC_QIND_GROUP);
+        }
+
         *(BYTE*)FakeRt(SC_VA_CLIENT_SELECTION_COUNT) = 1;
         for (int i = 0; i < 12; ++i) g[i] = 0;
         ScQueueIndOnFrame();

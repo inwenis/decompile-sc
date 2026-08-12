@@ -60,6 +60,17 @@
 // 22 pixels wide.
 #define SC_QIND_CHAR_W 7
 
+// THE GROUP LINE'S BAND. In a multi-building selection the pane draws the wireframe row and
+// nothing else, which leaves the strip of surface below the row's lower buttons free -- the
+// only place in that pane where a line of text is not sitting on top of unit icons. The
+// band's top is the row's own lowest edge plus this gap, read from the live buttons; the
+// gap is the only constant, and one pixel is what keeps the text off the button borders.
+#define SC_QIND_BAND_GAP 1
+// The fallback minimum height for that band, used only when the font handle cannot be read
+// (normally the FONT'S OWN height decides -- see SmallFontHeight). One pixel over the nine
+// that were measured too short in task 033.
+#define SC_QIND_BAND_MIN_H 10
+
 // Which thing the indicator is currently saying. Kept as an enum so the log line and the
 // offline test can name the case rather than matching on the rendered string.
 enum ScQueueIndMode {

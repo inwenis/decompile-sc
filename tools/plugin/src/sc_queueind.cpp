@@ -55,6 +55,7 @@ static bool  g_shown    = false;
 static int   g_mode     = SC_QIND_NONE;
 static DWORD g_anchor   = 0;          // the control the box is positioned against
 static bool  g_dialogLogged = false;
+static bool  g_bandLogged   = false;  // "the band is too small" said once per dialog
 
 static unsigned g_stat[SC_QIND_STAT__COUNT];
 
@@ -381,28 +382,77 @@ static void Unsplice(DWORD root) {
 // So the width is computed from the string rather than from the anchor. SC_QIND_CHAR_W is
 // a deliberate over-estimate of the small font's advance -- over-reserving costs nothing
 // (the box is a clip rect, not a fill), under-reserving costs the tail of the string.
-static void PlaceOn(DWORD anchor, DWORD root, int mode, int textLen) {
-    DWORD ind = (DWORD)&g_ctrl[0];
+//
+// Writes into the CALLER'S four shorts rather than straight into the control, because the
+// answer is recomputed every frame: the group band is a function of which buttons are
+// VISIBLE, and that changes with the size of the selection without the line's text
+// necessarily changing (a seventh building that is not producing adds a row of buttons and
+// not a word). The caller compares, and only then moves the control and redraws.
+static bool PlaceOn(short* b, DWORD anchor, DWORD root, int mode, int textLen) {
     short* a = (short*)(anchor + SC_BINDLG_OFF_BOUNDS);
-    short* b = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
     short left = (short)(a[0] + SC_QIND_INSET_X);
     short top  = (short)(a[1] + SC_QIND_INSET_Y);
     int   want = textLen * SC_QIND_CHAR_W;
     if (want < SC_QIND_BOX_W) want = SC_QIND_BOX_W;
 
     if (mode == SC_QIND_GROUP) {
-        // The row's twelve buttons are one strip, so the text may run across them; the
-        // anchor is only where it STARTS. The clean-up path repaints the whole row for
-        // exactly this reason (RepaintUnder).
-        top = (short)(a[1] + 1);
-        int right = left + want;
-        int surfW = 0;
+        // BELOW THE ROW, NOT ON IT. This line used to start at the first wireframe
+        // button's own top-left, which put ~120 pixels of text straight across the top row
+        // of unit icons -- the user, on the deployed build: "there was some text printed in
+        // the spot where the 12 icons are saying sth about a queue but it was behind the
+        // buildings icons so couldn't rly tell". Painting it on top instead of under it
+        // (the tail splice, above) makes it visible; it does not make it READABLE, because
+        // the pixels underneath are unit wireframes. The pane has a band the multi-select
+        // branch leaves empty -- everything else in it belongs to the single-select layout
+        // and is hidden here -- and that band is where a line of text belongs.
+        //
+        // Measured off the LIVE row every time, never from the numbers a dump once showed:
+        // the twelve buttons are two rows of six and only their own rects say where the
+        // lower one ends. (AGENTS.md, task 034: an enumeration that scanned for a NAME is
+        // not exhaustive -- here, a constant that was read off one install is not a layout.)
+        int rowLeft = a[0], rowBottom = a[3];
+        DWORD c = FindChildById(root, SC_HUD_FIRST_SMALL_BUTTON);
+        for (int i = 0; i < SC_HUD_BUTTON_COUNT && c; ++i, c = NextOf(c)) {
+            if ((*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) == 0) continue;
+            short* rb = (short*)(c + SC_BINDLG_OFF_BOUNDS);
+            if (rb[0] < rowLeft)   rowLeft = rb[0];
+            if (rb[3] > rowBottom) rowBottom = rb[3];
+        }
+
+        int surfW = 0, surfH = 0;
         DWORD d = SurfaceOf(root);
-        if (d) surfW = (int)*(WORD*)(d + SC_SURFACE_OFF_W);
-        if (surfW > 0 && right > surfW - 1) right = surfW - 1;
+        if (d) {
+            surfW = (int)*(WORD*)(d + SC_SURFACE_OFF_W);
+            surfH = (int)*(WORD*)(d + SC_SURFACE_OFF_H);
+        }
+        if (surfW <= 0 || surfH <= 0) return false;
+
+        top  = (short)(rowBottom + SC_QIND_BAND_GAP);
+        left = (short)rowLeft;
+        int right  = left + want;
+        if (right > surfW - 1) right = surfW - 1;
+        int bottom = top + SC_QIND_BOX_H;
+        if (bottom > surfH) bottom = surfH;
+
+        // The rule the engine's own draw applies (SC_VA_DRAW_STRING: it refuses outright
+        // when `top + fontHeight > clip.bottom`, and the clip box is these bounds), checked
+        // against the FONT'S OWN height rather than against a constant. A band too short is
+        // the failure that draws nothing while every other read-back says the indicator is
+        // fine -- so it is refused here, loudly, instead of being discovered by a player.
+        const int fontH = SmallFontHeight();
+        if (bottom - top < (fontH > 0 ? fontH : SC_QIND_BAND_MIN_H) ||
+            right - left < want) {
+            if (!g_bandLogged) {
+                ScLog("QIND: the band below the row is (%d,%d,%d,%d) on a %dx%d surface -- "
+                      "too small for \"%d chars\" at fontH=%d; the group line is suppressed",
+                      left, top, right, bottom, surfW, surfH, textLen, fontH);
+                g_bandLogged = true;
+            }
+            return false;
+        }
         b[0] = left; b[1] = top;
         b[2] = (short)right;
-        b[3] = (short)(top + SC_QIND_BOX_H);
+        b[3] = (short)bottom;
     } else {
         // A "+N" is short and belongs inside the icon it annotates: staying within a
         // control the engine repaints is what guarantees our pixels are painted over when
@@ -411,14 +461,15 @@ static void PlaceOn(DWORD anchor, DWORD root, int mode, int textLen) {
         b[2] = (short)(left + want > a[2] ? a[2] : left + want);
         b[3] = (short)(top + SC_QIND_BOX_H > a[3] ? a[3] : top + SC_QIND_BOX_H);
     }
-    g_anchor = anchor;
+    return true;
 }
 
 // Which control the indicator hangs off, per mode:
 //   STRIP -- the LAST queue icon (id 6). While the plugin holds overflow it keeps the
 //            engine's ring at four, so that icon is precisely the one drawn empty.
-//   GROUP -- the first wireframe button (id 0x21), the left end of the row that IS the
-//            multi-select display.
+//   GROUP -- the first wireframe button (id 0x21). The line no longer sits ON that button
+//            (see PlaceOn) -- the button is where the row's geometry is read from, and it
+//            is what RepaintUnder asks the engine to redraw.
 static DWORD AnchorFor(DWORD root, int mode) {
     if (mode == SC_QIND_STRIP) return FindChildById(root, SC_STATQ_LAST_CONTROL);
     if (mode == SC_QIND_GROUP) return FindChildById(root, SC_HUD_FIRST_SMALL_BUTTON);
@@ -756,10 +807,18 @@ void ScQueueIndLogDialog(const char* tag) {
 // asking the engine to update it is exactly how its own pixels come back -- which is why
 // the box is kept inside the anchor's bounds in the first place.
 static void RepaintUnder(DWORD root) {
+    // OUR OWN BOX FIRST, and it is the half that matters now the group line has left the
+    // buttons. updateControl takes the rect from the control it is given, so calling it on
+    // the (now hidden) indicator is what puts the band it was using back into the dirty
+    // region -- and a hidden control draws nothing, so what lands there is whatever the
+    // dialog paints under it. Repainting only the anchor would strand the line on the
+    // surface the moment it was not sitting on an engine control any more.
+    if (g_spliced) CallUpdate((DWORD)&g_ctrl[0]);
     if (!g_anchor) return;
     if (*(DWORD*)(g_anchor + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) CallUpdate(g_anchor);
-    // The group line can run across several wireframe buttons, so repainting the anchor
-    // alone would strand its tail on the dialog surface.
+    // ... and the whole row after it: the band is one gap below those buttons, so their
+    // redraw is what is next to the line's pixels, and the group case is the one where the
+    // engine has the most to put back.
     if (g_mode == SC_QIND_GROUP && root) {
         DWORD c = FindChildById(root, SC_HUD_FIRST_SMALL_BUTTON);
         for (int i = 0; i < SC_HUD_BUTTON_COUNT && c; ++i, c = NextOf(c)) {
@@ -784,6 +843,7 @@ void ScQueueIndOnFrame(void) {
         g_mode         = SC_QIND_NONE;
         g_text[0]      = '\0';
         g_dialogLogged = false;
+        g_bandLogged   = false;
     }
     if (!root) return;
 
@@ -823,11 +883,33 @@ void ScQueueIndOnFrame(void) {
     if (!EnsureSpliced(root)) return;
     if (!g_dialogLogged) { ScQueueIndLogDialog("attach"); g_dialogLogged = true; }
 
-    const bool moved   = (anchor != g_anchor) || (mode != g_mode);
+    // The box, worked out fresh every frame: it is a function of the anchor, the string AND
+    // the layout around it, and only the first two are cheap to notice changing.
+    //
+    // A REFUSED box is a real answer. The space this line needs may not be there -- and the
+    // task that fixed this module said so in as many words: the indicator draws correctly or
+    // it does not draw at all, because a line the player cannot read is worse than none.
+    DWORD ind = (DWORD)&g_ctrl[0];
+    short* b = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
+    short box[4];
+    if (!PlaceOn(box, anchor, root, mode, (int)strlen(want))) {
+        if (g_shown) {
+            CallHide(ind);
+            g_shown = false;
+            RepaintUnder(root);
+            ++g_stat[SC_QIND_STAT_HIDES];
+        }
+        g_mode = SC_QIND_NONE;
+        g_text[0] = '\0';
+        return;
+    }
+    const bool boxMoved = (b[0] != box[0] || b[1] != box[1] ||
+                           b[2] != box[2] || b[3] != box[3]);
+    if (boxMoved) { b[0] = box[0]; b[1] = box[1]; b[2] = box[2]; b[3] = box[3]; }
+    g_anchor = anchor;
+
+    const bool moved   = boxMoved || (mode != g_mode);
     const bool changed = (strcmp(want, g_text) != 0);
-    // The box is a function of the STRING as well as the anchor, so it is recomputed
-    // whenever either moves.
-    if (moved || changed) PlaceOn(anchor, root, mode, (int)strlen(want));
     if (changed) {
         memcpy(g_text, want, sizeof(g_text) < sizeof(want) ? sizeof(g_text) : sizeof(want));
         g_text[sizeof(g_text) - 1] = '\0';
@@ -836,7 +918,6 @@ void ScQueueIndOnFrame(void) {
 
     // Redraw when the text or the position changed, and re-show whenever the engine's own
     // hide-all sweep has taken the visible bit off us (which it does on every re-layout).
-    DWORD ind = (DWORD)&g_ctrl[0];
     const bool visible = (*(DWORD*)(ind + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) != 0;
     if (changed || moved || !visible || !g_shown) {
         CallShow(ind);
@@ -891,6 +972,7 @@ void ScQueueIndInit(BYTE* moduleBase, bool enabled) {
     g_anchor   = 0;
     g_text[0]  = '\0';
     g_dialogLogged = false;
+    g_bandLogged   = false;
     g_iconsN = 0;
     memset(g_ctrl, 0, sizeof(g_ctrl));
     ScLog("QIND: %s (%%SCPLUGIN_QUEUEIND%%). Draws a \"+N\" over the last queue icon when "
