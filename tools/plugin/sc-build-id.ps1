@@ -111,7 +111,13 @@ function Get-ScBuildIdentity {
     #>
     param([Parameter(Mandatory)][string]$RepoRoot)
 
-    $sha = (& git -C $RepoRoot rev-parse --short HEAD 2>$null)
+    # try/catch as well as the exit-code check: with the caller's
+    # $ErrorActionPreference = 'Stop' (build.ps1's, and every other script here), a
+    # machine with no git at all throws CommandNotFoundException before the exit
+    # code is ever looked at. "No git" must degrade to an honest 'nogit+dirty',
+    # not kill the build with an unrelated-looking error.
+    $sha = $null
+    try { $sha = (& git -C $RepoRoot rev-parse --short HEAD 2>$null) } catch { $sha = $null }
     if ($LASTEXITCODE -ne 0 -or -not $sha) {
         return [pscustomobject]@{ Sha = 'nogit'; Dirty = $true; BuildId = 'nogit+dirty' }
     }
