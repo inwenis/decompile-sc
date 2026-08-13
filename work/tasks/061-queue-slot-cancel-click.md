@@ -4,7 +4,7 @@
 
 agent: 061
 model: opus
-pr: -
+pr: https://github.com/inwenis/decompile-sc/pull/95
 
 ## Workspace
 
