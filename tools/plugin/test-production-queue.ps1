@@ -1425,7 +1425,12 @@ try {
                 Send-ScClick -Hwnd $hwnd -X $p.X -Y $p.Y -HoldMs $hold -SettleMs 400
                 Start-Sleep -Milliseconds 900
                 $lines = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
-                $qa = Get-QIndAfter -FromLine $mark
+                # Get-QInd, NOT Get-QIndAfter. The `-After` form takes a line some OTHER
+                # marker caused the observer to write, and nothing in this loop asks for
+                # one -- so it waited 20s for a line that was never going to appear and
+                # threw the whole step away. Asking for our own marker costs a round trip
+                # per click and always has an answer.
+                $qa = Get-QInd "sweep-$hold-$i-a"
                 $tried++
                 if (@($lines | Select-String -Pattern "CMD id=$CANCEL_CMD ").Count -gt 0) {
                     $ok++
