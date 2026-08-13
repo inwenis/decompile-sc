@@ -60,7 +60,12 @@ function ConvertFrom-PrStatusCache {
 
 function Get-Class2Finding {
     # Class 2: no PR, no stamp, but a report exists at work/reports/<nnn>-*.md
-    # -- a report-only task delivered without ever getting stamped.
+    # -- a report-only task delivered without ever getting stamped. The named
+    # remedy EXISTS since task 069 (issue #96): close-task.ps1 accepts a no-PR
+    # task with a report and stamps `merged: <date> (report-only; no PR)`,
+    # which clears this finding. (Before that, close-task refused report-only
+    # tasks by design, so this class demanded an action the tooling forbade
+    # and 044/049/052 sat lint-red forever.)
     param(
         [Parameter(Mandatory)][string]$Task,
         [Parameter(Mandatory)][AllowEmptyString()][string]$Content,
@@ -72,7 +77,7 @@ function Get-Class2Finding {
     return [PSCustomObject]@{
         Task     = $Task
         Class    = 2
-        Evidence = 'no PR, no merged: stamp, but a report exists at work/reports/ -- probably done, unstamped'
+        Evidence = "no PR, no merged: stamp, but a report exists at work/reports/ -- run ./scripts/close-task.ps1 -Task $Task to stamp the report-only close"
     }
 }
 

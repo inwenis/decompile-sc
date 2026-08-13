@@ -196,9 +196,25 @@ try {
         "checked $($tracked.Count) tracked files"
     }
 
+    # Task 069, issue #97: worktrees have no .venv, so the old `.venv else PATH` chain
+    # ran these steps against an unpinned interpreter there (ruff silently skipped,
+    # richchk-dependent Pester cases went red). Resolve-ScPython also finds the MAIN
+    # checkout's .venv from a worktree; fall back to the old chain only when the tree
+    # under test predates tools/sc-python.ps1.
+    function Resolve-CiPython {
+        $scPython = Join-Path $WorkDir 'tools/sc-python.ps1'
+        if (Test-Path -LiteralPath $scPython) {
+            . $scPython
+            $r = Resolve-ScPython -RepoRoot $WorkDir
+            if ($r.Path) { return $r.Path }
+        }
+        if (Test-Path '.venv/Scripts/python.exe') { return '.venv/Scripts/python.exe' }
+        return 'python'
+    }
+
     Step 'compile-python' -Required {
         if (-not (Test-Path 'tools')) { return Skip-Step 'no tools/ directory' }
-        $py = if (Test-Path '.venv/Scripts/python.exe') { '.venv/Scripts/python.exe' } else { 'python' }
+        $py = Resolve-CiPython
         & $py -m compileall -q tools
         if ($LASTEXITCODE -ne 0) { throw "compileall exit $LASTEXITCODE" }
         'tools/ byte-compiled'
@@ -248,7 +264,7 @@ try {
     }
 
     Step 'ruff' {
-        $py = if (Test-Path '.venv/Scripts/python.exe') { '.venv/Scripts/python.exe' } else { 'python' }
+        $py = Resolve-CiPython
         & $py -m ruff --version *> $null
         if ($LASTEXITCODE -ne 0) { $global:LASTEXITCODE = 0; return Skip-Step 'ruff not installed' }
         & $py -m ruff check tools

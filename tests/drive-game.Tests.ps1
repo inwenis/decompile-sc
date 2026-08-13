@@ -216,7 +216,25 @@ Describe 'fixture ownership registry' {
     It 'names the missing-own-fixture case separately from the collision case' {
         $run = New-ScFixtureRun -Dir $script:dir -Names @('a.scx')
         { Assert-ScFixtureStillMine -Run $run -MapPath (Join-Path $script:dir 'a.scx') } |
-            Should -Throw -ExpectedMessage "*another worker's cleanup took it*"
+            Should -Throw -ExpectedMessage '*cannot know why*'
+    }
+
+    It 'never asserts a culprit for a missing fixture (task 069, issue #97)' {
+        # The old message concluded "another worker's cleanup took it" from nothing but
+        # the file's absence; the day it mattered, the file had never been generated
+        # (worktree without .venv) and the accusation pointed every reader at a
+        # fleet-coordination race that did not exist. The message must state what was
+        # observed -- absent file, cause unknowable from here -- and both known ways
+        # this happens, never a named culprit.
+        $run = New-ScFixtureRun -Dir $script:dir -Names @('a.scx')
+        $thrown = $null
+        try { Assert-ScFixtureStillMine -Run $run -MapPath (Join-Path $script:dir 'a.scx') }
+        catch { $thrown = $_.Exception.Message }
+        $thrown | Should -Not -BeNullOrEmpty
+        $thrown | Should -Not -Match "another worker's cleanup"
+        $thrown | Should -Match 'never generated'
+        $thrown | Should -Match 'removed it after generation'
+        $thrown | Should -Match 'do not interpret this run'
     }
 
     It 'rejects a duplicate declaration' {

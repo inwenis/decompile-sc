@@ -20,10 +20,19 @@ therefore the reason nobody noticed.
 
 BeforeAll {
     $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-    $venv = Join-Path $script:RepoRoot '.venv/Scripts/python.exe'
-    $script:Python = if (Test-Path -LiteralPath $venv) { $venv }
-                     elseif (Get-Command python -ErrorAction SilentlyContinue) { 'python' }
-                     else { $null }
+    # Task 069, issue #97: the old chain here took `python` on PATH whenever no LOCAL
+    # .venv existed -- in a fresh worktree that interpreter has no richchk, so all of
+    # these cases FAILED (rather than skipped) for a reason unrelated to the code under
+    # test, and every fresh worktree started with a red local CI gate. Resolve-ScPython
+    # finds the main checkout's .venv from a worktree, and rejects any interpreter that
+    # cannot import richchk -- so a machine with no usable python SKIPS with the real
+    # reason on the skip.
+    . (Join-Path $script:RepoRoot 'tools/sc-python.ps1')
+    $resolved = Resolve-ScPython -RepoRoot $script:RepoRoot -RequireModule 'richchk'
+    $script:Python = $resolved.Path
+    $script:PythonSkipReason = if (-not $resolved.Path) {
+        "no python that can import richchk (issue #97 environment gap): $($resolved.Probed -join '; ')"
+    }
 
     # Runs a snippet against the real module -- no reimplementation of the arithmetic
     # here, or the test would only prove the test.
@@ -49,7 +58,7 @@ BeforeAll {
 
 Describe 'make_test_map PTEx indexing' {
     BeforeEach {
-        if (-not $script:Python) { Set-ItResult -Skipped -Because 'no python available' }
+        if (-not $script:Python) { Set-ItResult -Skipped -Because $script:PythonSkipReason }
     }
 
     It 'is player-major: index = player * 44 + tech' {
@@ -92,7 +101,7 @@ print(len(seen))
 
 Describe 'make_test_map PTEx write/read round trip' {
     BeforeEach {
-        if (-not $script:Python) { Set-ItResult -Skipped -Because 'no python available' }
+        if (-not $script:Python) { Set-ItResult -Skipped -Because $script:PythonSkipReason }
     }
 
     It 'sets available, researched and clears usesDefault at the engine offsets' {
@@ -144,7 +153,7 @@ in for it.
 #>
 Describe 'make_test_map UNIx layout' {
     BeforeEach {
-        if (-not $script:Python) { Set-ItResult -Skipped -Because 'no python available' }
+        if (-not $script:Python) { Set-ItResult -Skipped -Because $script:PythonSkipReason }
     }
 
     It 'is the Brood War 228-unit, 130-weapon layout: 4168 bytes' {
@@ -194,7 +203,7 @@ for name in ('marine', 'scv', 'command-center', 'supply-depot', 'barracks'):
 
 Describe 'make_test_map UNIx write/read round trip' {
     BeforeEach {
-        if (-not $script:Python) { Set-ItResult -Skipped -Because 'no python available' }
+        if (-not $script:Python) { Set-ItResult -Skipped -Because $script:PythonSkipReason }
     }
 
     It 'writes the build time at the engine offset, scaled, for the right unit only' {
@@ -285,5 +294,58 @@ for bad in ("scv", "nosuchunit=1", "scv=fast"):
     except ValueError:
         print(bad, "raised")
 '@ | Should -Be "(7, 1) (7, 20)`nscv raised`nnosuchunit=1 raised`nscv=fast raised"
+    }
+}
+
+<#
+make-test-map.ps1's OWN failure behaviour (task 069, issue #97).
+
+The wrapper used to propagate the generator's exit code and nothing else; every suite
+captures its output and checks a file later, so a failed generation scrolled past as a
+warning and the first LOUD message was drive-game blaming another worker for the file
+that was never written. These cases pin the fix: a failed or empty generation THROWS at
+the generation step, naming what happened. They drive the wrapper through -Python (a
+stub interpreter), so they need no venv, no richchk and no template map.
+#>
+Describe 'make-test-map.ps1 refuses at generation instead of failing downstream' {
+    BeforeAll {
+        $script:tmp = Join-Path ([IO.Path]::GetTempPath()) "mtm-tests-$([guid]::NewGuid().ToString('N'))"
+        New-Item -ItemType Directory -Path $script:tmp | Out-Null
+        $script:wrapper = Join-Path $script:RepoRoot 'tools/make-test-map.ps1'
+        # A python that dies: prints a traceback shape to stderr, exits 3, writes nothing.
+        $script:failPy = Join-Path $script:tmp 'fail-python.cmd'
+        Set-Content -LiteralPath $script:failPy -Value "@echo off`r`necho Traceback (most recent call last): fake richchk import error 1>&2`r`nexit /b 3"
+        # A python that lies: exits 0 without writing the output file.
+        $script:silentPy = Join-Path $script:tmp 'silent-python.cmd'
+        Set-Content -LiteralPath $script:silentPy -Value "@echo off`r`nexit /b 0"
+    }
+    AfterAll {
+        if ($script:tmp -and (Test-Path -LiteralPath $script:tmp)) {
+            Remove-Item -LiteralPath $script:tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'throws when the generator exits non-zero, carrying its output in the message' {
+        $out = Join-Path $script:tmp 'never-written.scx'
+        $thrown = $null
+        try { & $script:wrapper -Python $script:failPy -OutputPath $out *> $null }
+        catch { $thrown = $_.Exception.Message }
+        $thrown | Should -Not -BeNullOrEmpty
+        $thrown | Should -Match 'generation FAILED'
+        $thrown | Should -Match 'python exit 3'
+        # The traceback must survive INSIDE the throw: a caller assigning
+        # `$gen = & ... 2>&1` loses its capture when the statement aborts.
+        $thrown | Should -Match 'Traceback'
+        Test-Path -LiteralPath $out | Should -BeFalse
+    }
+
+    It 'throws when the generator exits 0 but delivered no map (a green exit is not a map)' {
+        $out = Join-Path $script:tmp 'also-never-written.scx'
+        $thrown = $null
+        try { & $script:wrapper -Python $script:silentPy -OutputPath $out *> $null }
+        catch { $thrown = $_.Exception.Message }
+        $thrown | Should -Not -BeNullOrEmpty
+        $thrown | Should -Match 'no map exists'
+        $thrown | Should -Match 'do not launch'
     }
 }

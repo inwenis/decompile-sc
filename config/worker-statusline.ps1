@@ -11,6 +11,17 @@
 # uses; the console does not care which of the three call sites refreshed
 # the mtime -- existence + mtime is the whole protocol (task 032).
 try {
+    # Never hold a cwd inside the worktree (task 069, issue #96). This process
+    # inherits the worker's cwd, and when the stdin pipe never closes (a killed
+    # tab) it outlives everything, wedged in ReadToEnd below -- eleven of these
+    # were found holding six stranded worktree dirs, one cwd handle each, which
+    # is why four "empty" 0 MB dirs could not be deleted. The WIN32 cwd is what
+    # holds the handle, and Set-Location alone does not move it --
+    # [Environment]::CurrentDirectory is the one that calls SetCurrentDirectory.
+    # Nothing below depends on the cwd: every path derives from $PSScriptRoot or
+    # the hook JSON.
+    [Environment]::CurrentDirectory = [IO.Path]::GetTempPath()
+
     $raw = [Console]::In.ReadToEnd()
 
     . (Join-Path $PSScriptRoot 'lib/worker-id.ps1')
