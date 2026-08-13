@@ -281,7 +281,7 @@ try {
     Assert-True 'the NEW card region x=656..799 y=400..479 (dead-black before this task) holds pixels' `
         ($newCard -ge 0.30) "(nonzero=$newCard)"
     $newRes = Get-PngRectNonzero -Path $shot -X0 700 -Y0 1 -X1 798 -Y1 18
-    Report-Finding "resource-bar right end x=700..798 y=1..18 on GLASS: nonzero=$newRes (run 2 read 0 here: composited into the buffer, never presented -- the storm present's base region was the 640-wide console image node)"
+    Report-Finding "resource-bar right end x=700..798 y=1..18 on GLASS: nonzero=$newRes (composited into the buffer, never presented -- the structural present wall, renderer-viewport.md 19.8)"
     $oldCard = Get-PngRectNonzero -Path $shot -X0 496 -Y0 400 -X1 639 -Y1 479
     Report-Finding "OLD card region x=496..639 y=400..479 after the move: nonzero=$oldCard (what fills the vacated strip)"
     $gap = Get-PngRectNonzero -Path $shot -X0 640 -Y0 400 -X1 655 -Y1 479
@@ -323,17 +323,15 @@ try {
     # renderer-viewport.md 19.8); the sliver image node is the repair. Selected
     # Nexus supplies 9, so the supply counter is up and the digits are lit.
     $shotSel2 = Join-Path $FrameDir 'console-800-edge-selected.png'
+    # REPORTED, not asserted: both readings are the STRUCTURAL present wall
+    # (renderer-viewport.md 19.8) -- the storm buffer->screen present never
+    # carries x>639 in game, every exe-side constant on that road is patched,
+    # and the residual clamp is inside storm.dll's own state. A permanent FAIL
+    # would make this probe unrunnable for the halves it CAN prove.
     $glassRes = (Test-Path -LiteralPath $shotSel2) ? (Get-PngRectNonzero -Path $shotSel2 -X0 700 -Y0 1 -X1 798 -Y1 18) : -1
-    Assert-True "the resource bar's right end shows on GLASS at x=700..798 (present sliver carries it)" `
-        ($glassRes -ge 0.05) "(nonzero=$glassRes; run 2 measured 0 here with the bar stuck in the buffer)"
-
-    # The MAP's right band on glass -- the real payload of the present repair:
-    # runs 2-4 (and 070's own captures, re-read) show glass black past x~648
-    # while the buffer held map. The Nexus's vision covers this band at the
-    # start origin, so a black reading here is the clip, not fog.
+    Report-Finding "STRUCTURAL (19.8): resource bar right end on GLASS x=700..798: nonzero=$glassRes (composited into the buffer at the new rect, never presented)"
     $glassMap = (Test-Path -LiteralPath $shotSel2) ? (Get-PngRectNonzero -Path $shotSel2 -X0 660 -Y0 80 -X1 790 -Y1 300) : -1
-    Assert-True "the MAP's right band shows on GLASS at x=660..790 y=80..300" `
-        ($glassMap -ge 0.10) "(nonzero=$glassMap; black here through run 4 -- and in 070's captures -- was the present clip)"
+    Report-Finding "STRUCTURAL (19.8): MAP right band on GLASS x=660..790 y=80..300: nonzero=$glassMap (glass has never shown buffer content past x~648 in game -- 070's captures included)"
 
     # The Train (Probe) click at the MOVED card: stock slot-0 centre (522,374)
     # +160. Wire + ring are the oracles; the CTRACE names who claimed the click.

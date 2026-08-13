@@ -1823,12 +1823,12 @@ hard rule 1 forbids shipping.
 > is that **no repaint of the affected rects could ever be MARKED**: the one
 > function that adds a dialog rect to the layer-2 dirty region clamps it
 > against a `.data` clip box `{0,0,640,480}` with no writer anywhere in the
-> binary (§19.3). One dword widened plus the same bounds move puts the resource
-> bar and the command card at the right edge — measured, with the art travelling
-> in each dialog's own surface (§19.2), so no art ships and the black gap
-> lands in the unowned strip exactly as ruled. The observation above (the
-> bounds moved, the picture did not) was correct; the mechanism inferred from
-> it was not.
+> binary (§19.3). One dword widened plus the same bounds move puts the COMMAND
+> CARD at the right edge — measured, with the art travelling in the dialog's
+> own surface (§19.2), so no art ships. The resource bar composites at its new
+> position too but rides the buffer PRESENT, which has a second, storm-side
+> 640 (§19.8) — so the observation above (the bounds moved, the picture did
+> not) was correct twice over; only the mechanism inferred from it was not.
 
 **The oracle lesson, stated generally because it cost a merge-ready result:**
 the engine dialog list is the right oracle for *hit-test* position, and it was
@@ -1893,12 +1893,18 @@ The NO-GO capture (§18.2) is 070's vector at stage 3 with the move prototype
 
 ## 19. Task 073 — the console moves after all: the composite follows live bounds, and one .data clip box was the wall
 
-§18 briefed this task with two blockers. Both dissolve into single, named causes:
-the pixels were stopped by a four-dword `.data` clip box nobody had found
-(§19.3), and the click drop was never in the engine (§19.4). The console-edge
-move ships as `%SCPLUGIN_CONSOLE_EDGE%` (sc_console.cpp): StatRes and StatBtn
-translated +160 at runtime once their surfaces exist, plus one dword widened —
-no art shipped, byte-identical binary, off by default.
+§18 briefed this task with two blockers. Both dissolve into named causes — and a
+third wall, older and structural, comes out from under them. The COMMAND CARD
+half is proven end to end: its pixels were stopped by a four-dword `.data` clip
+box nobody had found (§19.3), the click drop was never in the engine (§19.4),
+and with the box widened the card draws at (656,354)-(799,479) and takes its
+own Train click on the wire. The RESOURCE BAR half composites at its new
+position and can never be PRESENTED — the buffer→glass copy has a storm-side
+640 that five instrumented runs could not reach from the exe (§19.8) — so by
+this task's own both-or-neither rule the move ships NOWHERE:
+`%SCPLUGIN_CONSOLE_EDGE%` (sc_console.cpp) remains an off-by-default experiment
+flag carrying the instruments, wired into nothing. No art shipped,
+byte-identical binary throughout.
 
 Captures (gitignored diagnostic path; paths travel, images never):
 `C:\sc-work\logs\073-frames\console-800-edge-selected.png` (the card with its
@@ -1995,8 +2001,8 @@ stock, the moved StatBtn's new region read `nonzero=0`; with `0x0051A174`
 widened `640 -> 800` — one dword, and stable, because nothing re-asserts a
 value nothing writes — the same region read `nonzero=0.7295` and the capture
 shows the card, buttons and all, at the window's right edge. (The RESOURCE BAR
-did not follow in the same run — its buffer-path composite is a separate
-question, §19.8.) The sibling box `{0,0,639,479}` at
+did not follow in the same run — its buffer-path PRESENT is the separate,
+structural wall of §19.8.) The sibling box `{0,0,639,479}` at
 `0x0051A15C..0x0051A168` is the DRAW-time clip inside `0x0041C080`, applied in
 ROOT-RELATIVE coordinates after the draw rect is rebased — a 144- or 420-wide
 console dialog never reaches it, so it is recorded and left alone (it DOES have
@@ -2080,33 +2086,59 @@ python work/scratch/073/findrefs.py C:\sc-work\1161-base\StarCraft.exe 0x0051A17
 python work/scratch/073/readdata.py C:\sc-work\1161-base\StarCraft.exe 0x0051A16C 0x0051A170 0x0051A174 0x0051A178
 ```
 
-### 19.8 Finding two: the storm present is clipped by the console IMAGE NODE — in game, glass has never shown x>639 through the buffer path
+### 19.8 Finding two, STRUCTURAL: in game, GLASS has never shown x>639 through the buffer path — the last clamp is inside storm.dll
 
-The repaired StatRes exposed a second, older wall. With the dirty-mark clip
-widened (§19.3), the moved bar COMPOSITED — the 800-wide buffer dump shows its
-supply counter at the new x~748..782 (rendered and read by eye as well as by
-band count) — and the GLASS stayed black there. The composite and the present
-are different machines, and the present has its own 640:
+The repaired StatBtn exposed a second, older wall. With the dirty-mark clip
+widened (§19.3), the moved resource bar COMPOSITED — the 800-wide buffer dump
+shows its supply counter at the new x~748..782 (rendered and read by eye as
+well as by band count) — and the GLASS stayed black there. Wider still: **no
+buffer pixel past x~648 has ever reached the glass in game.** 070's own window
+capture (`C:\sc-work\logs\070-frames\drive-ingame-after.png`) shows the right
+band BLACK ON GLASS, top to bottom, while its 800-wide FRAMEDUMPS held map —
+every right-band assertion 064/068/070 made was measured from the DUMP (the
+buffer), and the window PNGs were "for the human", whom nobody asked about the
+band. The 800-wide MENUS present fine because glue screens are dialogs, and
+normal dialogs blit DIRECT to the locked surface (§19.1) — which is also why
+the moved command card shows on glass while the bar does not. Each content
+class rides a different presenter, and each had been proven on a different
+instrument.
 
-- The buffer reaches the screen through `0x0041D420`:
-  `lock; Ordinal_432(locked, buffer@0x006CEFF4, pitch, 0x280->0x320 patched,
-  REGION@0x006D5E18); unlock` — a storm-REGION-driven copy.
-- That region is rebuilt per frame from the dirty grid at `0x0041E000`:
-  `SRgn*(BASE@0x006D5E14, grid, 3, &out@0x006D5E18)` — the grid (800-wide,
-  stage 2) COMBINED AGAINST A BASE REGION.
-- The base `0x006D5E14` is rebuilt by `0x0041D470` from the screen-image list
-  `0x0051A338`/count `0x0051A33C` — and `imgCreate 0x0041D640` has EXACTLY ONE
-  caller in the whole binary (byte-scan): the console.pcx loader `0x004C3A03`,
-  whose node covers `(0,0,640,480)`.
+The present path, and what five instrumented runs ruled out (all patched or
+measured; `probe-console-edge.ps1` runs 2–5):
 
-So the present's base region is the 640-wide console art rect, and **no
-buffer pixel past x=639 has ever been presented in game** — not this task's
-moved bar, and not the terrain either: 070's own window capture
-(`C:\sc-work\logs\070-frames\drive-ingame-after.png`) shows the right band
-BLACK ON GLASS while its 800-wide FRAMEDUMPS held map, because every
-right-band assertion 064/068/070 made was measured from the DUMP (the buffer),
-and the window PNGs were "for the human" — whom nobody asked about the band.
-The 800-wide MENUS present fine because glue screens are dialogs, and normal
-dialogs blit DIRECT to the locked surface (§19.1) — which is also why the
-moved command card shows. The presenters differ per content class, and each
-class had been proven on a different instrument.
+- The buffer reaches the screen only through `0x0041D420`:
+  `lock; Ordinal_432(locked, buffer@0x006CEFF4, srcPitch, REGION@0x006D5E18);
+  unlock` — a storm-REGION-driven copy. The srcPitch immediate is patched
+  (`blit.sourcepitch`), and the region is rebuilt per frame at the composer
+  tail and at `0x0041E000`: `SRgn*([0x006D5E14], grid, 3, &out@0x006D5E18)`.
+- Every instruction NAMING the grid is in the relocation table (both `SRgn*`
+  call sites included: `grid.base@0041E025`, `grid.base@0041E3DF`), the grid
+  itself is 800-wide, its markers' 639-clamps are patched, and storm's
+  region geometry is re-registered at `Ordinal_440(0x320, 0x1E0, 0x10, 0x10)`
+  (`storm.region.width`).
+- `[0x006D5E14]` — the first argument of the region rebuild — was suspected of
+  being a 640-wide base clip built from the screen-image list (`imgCreate
+  0x0041D640` has exactly one caller, the console.pcx loader, node
+  `(0,0,640,480)`). MEASURED WRONG twice over: the region enumerates EMPTY
+  (Ordinal_529: `n=0` rects, before and after intervention), and adding a
+  second image node `(640,0)-(800,480)` through the engine's own `imgCreate` —
+  accepted, storm handle non-null, node fields read back correct — changed
+  nothing on glass.
+
+So every 640-era constant on the exe side of the present is accounted for, and
+the residual clamp lives in storm.dll's OWN state — seeded by some
+initialisation this project has not yet mapped (the `Ordinal_432`/`SRgn`
+family's internal screen bound is the open question, stated as such). That is
+where the next task starts, and it starts with an instrument this task leaves
+behind: the buffer-vs-glass pair (`Get-BufferDump` band + the caption-corrected
+window capture) that turns "is it presented" into two numbers.
+
+**Consequence for what ships: nothing of the console move.** The task's own
+rule — a console drawn at the edge that cannot be clicked, or clicked but not
+drawn, is half a feature — cuts the other way here: the CARD half is fully
+proven (drawn, claimed its own click, wire + ring verified) and the BAR half
+cannot present, so `%SCPLUGIN_CONSOLE_EDGE%` stays an experiment flag, wired
+into nothing. And the standing (Wide) experience has a defect nobody had seen:
+the right 160 columns of the PLAYFIELD are black on glass in game (the input
+widening still works — clicks there act on the world the player cannot see).
+That defect exists on main today, independent of this task's changes.
