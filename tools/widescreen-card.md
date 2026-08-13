@@ -12,30 +12,28 @@ you pick the (Wide) shortcut, and nothing needs turning back off.
 2. **The menus look the same as always**, with a black band filling the extra
    width on the right. That is normal -- menu screens are fixed-size art; only
    the game itself is wider.
-3. In a game, the map fills the full width: **25% more map on screen** than the
-   normal launcher shows, with fog of war correct everywhere, including the new
-   right quarter. Scrolling (keyboard, minimap, screen edge) covers the whole
-   width.
+3. **CORRECTED (2026-08-13): in a game, the right quarter of the window is
+   currently BLACK.** The engine really does compute the wider map -- more
+   world, correct fog, the whole width scrollable -- but the step that copies
+   the finished picture into the window still stops at the old 640 boundary
+   while a game is running. So in play you see the normal-width map with a
+   black band on the right, not 25% more map. An earlier version of this card
+   said the map fills the full width; that was measured wrong on 2026-08-13
+   (the wider picture exists internally, the window just never shows it), and
+   fixing the copy step is being worked on as its own task. The menus are not
+   affected.
 4. All the usual mod features are on and unchanged: select-past-12, selection
    circles, the paging bottom row, the over-cap production queue with its `+N`
    badge, group production.
 
-## The ONE thing to test first, because we could not
+## One thing to know about clicks on the black band
 
-**Click a unit standing in the new right quarter of the screen** (right of
-where the old screen used to end). Does it select that exact unit? Then drag a
-box across that area, and right-click ground there to move someone.
-
-The game's input for the right quarter is now switched on: the two places that
-used to cut every click off at the old 640 boundary (the mouse-position clamp
-and the "what did I click on" search box) have both been widened to the full
-800. **But we could not watch it actually work.** Our test rig drives the game
-with synthetic input on a hidden screen, and that kind of input cannot reach
-past the old boundary in the wide window, on either display path -- so **your
-first real click in the right quarter is the test**, and it is the only one
-there is. A real mouse may be entirely fine. If clicks there select the wrong
-unit or nothing, that is a finding, not a surprise -- say so and play on:
-everything left of the old boundary behaves exactly as it always did.
+The game's input for the right quarter IS switched on: clicks past the old
+boundary reach the engine and act on the world there. Until the display fix
+lands, that means a click on the black band can select or order units you
+cannot currently see. Nothing breaks -- but if you notice "empty" clicks doing
+things, that is what it is. Everything left of the old boundary behaves
+exactly as it always did.
 
 ## Known imperfections (real, not dangerous)
 
@@ -51,7 +49,8 @@ everything left of the old boundary behaves exactly as it always did.
 3. **Scrolling all the way to the RIGHT edge of a map** shows a thin band of
    stale pixels at the far right while you sit at the very edge (about 2% of
    that band). Scroll one screen left and it is gone. A known, bounded
-   follow-up.
+   follow-up. (Until the display fix above lands, this one is academic -- the
+   affected band sits inside the region the window does not show in game.)
 4. **On space-platform maps** the starfield backdrop has a star-free band on
    the far right (the stars' positions come from a file that only covers the
    old width). Cosmetic, off-map only.
