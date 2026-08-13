@@ -10,22 +10,27 @@ missing anyway, open a terminal in the repo and run:
 Wait two seconds, then refresh the map list (back out and back in). No game needs to
 be running for this.
 
-The file is `zz-feature-test.scx` -- named `zz-` on purpose, so it sorts to the
-bottom of the list and is easy to spot among the stock maps.
+The file is `!feature-test.scx` -- named with a leading `!` on purpose, so it sorts
+to the very TOP of the file list (right after the folders) instead of getting lost
+among 90-odd stock maps. You should see it within the first screen of the browser,
+no scrolling.
 
 ## Load it
 
 1. Main menu -> **Single Player** -> **Expansion** -> **Play Custom**.
 2. Set **Game Type** to **Use Map Settings**.
-3. Pick **zz-feature-test.scx** (it should be right there when the browser opens) -> **OK**.
+3. Pick **!feature-test.scx** (it should be right there when the browser opens) -> **OK**.
 
 You start facing 13 Command Centers in a 4-wide block, nothing else on the map, no
 enemy anywhere.
 
 ## Walk through, fastest first
 
-1. **Drag a box around all 13 buildings.** The bottom of the screen shows a count and
-   a page indicator: `13 units 1-12 (1/2)`. **Right-click on that bottom row itself**
+1. **Scroll up a little (tap the Up arrow key a few times), then drag a box around
+   all 13 buildings.** If you grab all of them on the first try, great; if the box
+   only picks up 12, nudge the view up or down slightly and drag again -- the block
+   is a little taller than one screen. The bottom of the screen shows a count and a
+   page indicator: `13 units 1-12 (1/2)`. **Right-click on that bottom row itself**
    (not on a building, not on the ground -- the row of little portraits at the very
    bottom of the screen) -> it flips to `13-13 (2/2)` and shows the last one. **This
    is the first time this project has ever proven a group of BUILDINGS pages past
@@ -35,13 +40,14 @@ enemy anywhere.
    five icons fill, then a `+N` badge appears on the last one for everything past
    five. That `+N` badge and the fifth slot are both the feature.
 3. **With that same building still holding a queue, click the last icon in its row**
-   (the one next to the `+N` badge). It should cancel that item and refund its cost
-   -- watch the mineral count go up. *(This exact click is the subject of a separate
-   open bug, issue #061 -- if it looks wrong, that is expected until that issue is
-   fixed, not a problem with this map.)*
-4. **Drag a box around just two or three of the buildings, then click Train once.**
-   Every building in the box queues one SCV from that single click -- that is the
-   group queue indicator working across a multi-building selection.
+   (the one carrying the `+N` badge). **This is a known, currently-open bug
+   (issue #061, reported by you): the click does nothing at all** -- no cancel, no
+   refund, the queue count does not change. That is not this map misbehaving; it is
+   this map catching the bug on demand. Once #061 is fixed, this exact click should
+   remove the item and refund its cost -- come back and re-try this step then.
+4. **Drag a box around several of the buildings, then click Train once.** Every
+   building in the box queues one SCV from that single click -- that is the group
+   queue indicator working across a multi-building selection.
 5. **Save and reload.** Press **F10** -> **Save Game** -> type any name -> Save.
    Then **F10** -> **Load Game** -> pick that save. Everything -- the buildings,
    their queues, your minerals -- should come back exactly as you left it.

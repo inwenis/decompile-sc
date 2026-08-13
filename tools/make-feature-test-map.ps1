@@ -44,6 +44,20 @@ out"), the ability/tech and combat-death variants are NOT folded into this map -
 would need a second unit type and hostile units, which is a different fixture, not a
 bigger version of this one.
 
+WHY --grid-spacing 128, NOT the generator's usual 160. A Command Center's footprint is
+128x96 px (4x3 build tiles); 128 is the tightest uniform spacing (this generator uses
+one spacing value for both axes) that keeps every building clear of its neighbours, so
+it packs the 4x4 block into the smallest footprint the placement can support without
+risking a silently-dropped unit. 160 (what task 038's fixture uses for 3 buildings)
+left the 13-building block taller than the playable viewport, so a single drag could
+only ever reach 12 of the 13 -- measured in game, not assumed: at 160, buildings=12
+every time, from any single camera position. At 128 the block is short enough that ONE
+drag, from a camera scrolled up slightly from the default spawn view, reads back
+`buildings=13 selected=13` and the HUD row shows `13 units 1-12 (1/2)` -- confirmed
+with the plugin's own read-back oracles, not inferred from geometry. Placement was
+re-checked after tightening the spacing too: Get-ScWorldState reads back exactly 13
+engine-side units with this spacing, so nothing silently failed to place.
+
 REGENERATING. This needs no running game and takes under a second. It is also the fix
 for "the map is not in the list any more": tools/deploy.ps1's /MIR wipes everything
 under Maps\ (outside Maps\Replays\, which is off-limits to this task) on every
@@ -55,6 +69,14 @@ Where the .scx is written. Defaults to the user's own deployed play copy's
 Maps\BroodWar\ folder -- not Maps\ itself -- because that is where Single Player >
 Expansion > Play Custom's map browser OPENS (research/tools/plugin/drive-game.ps1,
 Select-ScBrowserMap), so the map is on screen with no extra "Up One Level" click.
+
+Filename starts with `!` on purpose. The deployed Maps\BroodWar\ folder holds every
+stock ladder map (measured: 90 of them), sorted alphabetically after directories; a
+name that sorts LAST (an earlier draft used `zz-`) landed at row 95 of a 6-row-visible
+list, invisible without scrolling this repo's own automation cannot do. `!` (0x21)
+sorts before every stock map's leading `(` (0x28), so the file is the first entry
+after the folders -- row 6 in a fresh install, confirmed by driving the real browser.
+
 Never committed to the repo (a .scm/.scx is game content -- AGENTS.md hard rule 1);
 .gitignore blocks the default output path's extension regardless.
 
@@ -66,11 +88,11 @@ this repo uses.
 ./tools/make-feature-test-map.ps1
 
 .EXAMPLE
-./tools/make-feature-test-map.ps1 -OutputPath C:\sc-work\1161-base\Maps\BroodWar\zz-feature-test.scx
+./tools/make-feature-test-map.ps1 -OutputPath C:\sc-work\1161-base\Maps\BroodWar\!feature-test.scx
 #>
 [CmdletBinding()]
 param(
-    [string]$OutputPath = 'C:\sc-deploy\starcraft-modded\game\Maps\BroodWar\zz-feature-test.scx',
+    [string]$OutputPath = 'C:\sc-deploy\starcraft-modded\game\Maps\BroodWar\!feature-test.scx',
     [string]$TemplatePath = 'C:\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx'
 )
 
@@ -79,7 +101,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 
 & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
     -UnitCount 13 -UnitType command-center -Player 0 -ClearPlayerUnits `
-    -GridSpacing 160 -Race terran `
+    -GridSpacing 128 -Race terran `
     -UnitBuildTime @('scv=240') `
     -StartingMinerals 8000 `
     -TemplatePath $TemplatePath -OutputPath $OutputPath
