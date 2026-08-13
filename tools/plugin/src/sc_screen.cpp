@@ -35,7 +35,10 @@
 // THE ONE RELOCATION. The dirty-block grid at 0x006CEFF8 is a fixed u8[30][40]
 // with a live global 0x4B0 bytes later (the render-target pointer, named by 126
 // instructions), so it cannot grow in place. It moves to plugin-owned memory and
-// the 11 instructions that name it absolutely are re-pointed. The row addressing
+// all 21 instructions that name it absolutely are re-pointed (12 rebase records
+// plus 9 code rewrites whose fixup dword names the grid; the 21st -- 0x0048CBC7,
+// found by 034's scan and lost between scan and table -- was restored by task
+// 064, which is what closes the named-ref accounting). The row addressing
 // that turns a row index into a byte offset is a `lea r,[c+c*4]` feeding a SIB
 // scale of 8 -- x5 then x8 == the stock stride of 40 -- and the stride is
 // reachable only because x25 fits `imul r32,r/m32,imm8` in the same three bytes

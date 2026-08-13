@@ -58,11 +58,12 @@ with the plugin's own read-back oracles, not inferred from geometry. Placement w
 re-checked after tightening the spacing too: Get-ScWorldState reads back exactly 13
 engine-side units with this spacing, so nothing silently failed to place.
 
-REGENERATING. This needs no running game and takes under a second. It is also the fix
-for "the map is not in the list any more": tools/deploy.ps1's /MIR wipes everything
-under Maps\ (outside Maps\Replays\, which is off-limits to this task) on every
-redeploy, so nothing under the deploy tree survives a redeploy on its own. Re-run this
-script, wait a couple of seconds, refresh the in-game map browser.
+REGENERATING. This needs no running game and takes under a second. Since task 067,
+tools/deploy.ps1 runs it automatically as its last assembly step on every deploy:
+the /MIR mirror correctly purges the previous copy (a destination-only file), and
+the deploy immediately writes a fresh one that matches the build it just deployed --
+so "the map is not in the list any more" should no longer happen. Running this
+script by hand is still fine any time; same output, byte-for-byte.
 
 .PARAMETER OutputPath
 Where the .scx is written. Defaults to the user's own deployed play copy's
