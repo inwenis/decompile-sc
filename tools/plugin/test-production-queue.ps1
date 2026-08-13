@@ -319,10 +319,23 @@ function Assert-EverySlot {
 }
 
 function Step {
-    param([string]$Name, [scriptblock]$Body)
+    param([string]$Name, [scriptblock]$Body, [switch]$SweepPerturbed)
     $script:step++
     Write-Host ''
     Write-Host ("[{0}] {1}" -f $script:step, $Name)
+    # A MEASUREMENT RUN ENDS AT THE MEASUREMENT (task 066). The hold sweep clicks the
+    # last slot ~30 times and tops the queue back up between clicks, which consumes the
+    # preconditions of every drain-and-after step: measured on the first post-fix sweep
+    # run, 11 tail assertions failed on counts the sweep had legitimately moved while
+    # every fix arm and the table itself were green. Steps that depend on the unperturbed
+    # click/cancel ledger are tagged and SKIPPED -- loudly, with their own word, never a
+    # silent pass (AGENTS.md task 041) -- and the full-suite verdict on them comes from
+    # runs without -HoldSweepClicks, which is every regression run.
+    if ($SweepPerturbed -and $HoldSweepClicks -gt 0) {
+        Write-Host '       SKIPPED (measurement run): the hold sweep consumed this step''s preconditions.'
+        Write-Host '       Its verdict comes from runs without -HoldSweepClicks.'
+        return
+    }
     & $Body
 }
 
@@ -1385,6 +1398,37 @@ try {
         Shot 'last-slot-cancelled'
     }
 
+    Step 'ONE GAME THREAD: the claim the phantom bracket rests on, measured in this run' {
+        # The bracket's safety argument is "every engine reader of the ring runs on the
+        # game thread" (research/production-queue.md 8.8). Each hooked site logs its
+        # thread id once (THREADCHECK), and a CHANGED suffix if it ever moves -- so the
+        # claim is a reading here, not an assumption. By this point in the run all six
+        # game-side sites have fired (the cancel arm above was the last), and the
+        # observer -- the thread the seqlock exists FOR -- must be a DIFFERENT id.
+        $tc = @(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'THREADCHECK (\S+) tid=(\d+)')
+        foreach ($l in $tc) { Write-Host "       $($l.Line.Trim())" }
+        $sites = @{}
+        foreach ($l in $tc) {
+            $m = [regex]::Match($l.Line, 'THREADCHECK (\S+) tid=(\d+)')
+            if ($m.Success) { $sites[$m.Groups[1].Value] = [int]$m.Groups[2].Value }
+        }
+        $gameSites = @('qind-driver', 'qind-layout', 'qind-interact',
+                       'prodq-train', 'prodq-tick', 'prodq-cancel')
+        $present = @($gameSites | Where-Object { $sites.ContainsKey($_) })
+        Assert-That "all six game-side sites reported a thread id ($($present.Count))" `
+            ($present.Count -eq $gameSites.Count)
+        $gameTids = @($present | ForEach-Object { $sites[$_] } | Select-Object -Unique)
+        Assert-That "and they are ONE thread ($($gameTids -join ','))" ($gameTids.Count -eq 1)
+        Assert-That 'the observer reported its own id' ($sites.ContainsKey('prodq-observer'))
+        if ($sites.ContainsKey('prodq-observer') -and $gameTids.Count -eq 1) {
+            Assert-That "and it is a DIFFERENT thread ($($sites['prodq-observer']) vs $($gameTids[0])) -- the one the seqlock exists for" `
+                ($sites['prodq-observer'] -ne $gameTids[0])
+        }
+        Assert-That 'no site ever changed thread mid-run' `
+            (@(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'THREADCHECK .* CHANGED').Count -eq 0) `
+            '(a CHANGED line is the single-thread claim breaking underneath the fix)'
+    }
+
     if ($HoldSweepClicks -gt 0) {
       Step "RATE ARM: how often does the last slot cancel, by how long the button is held" {
         Write-Host '       *** MEASUREMENT RUN. Every step after this one has its counts perturbed by'
@@ -1483,7 +1527,7 @@ try {
       }
     }
 
-    Step "watch it drain: every over-cap item is promoted into a freed slot, in order" {
+    Step "watch it drain: every over-cap item is promoted into a freed slot, in order" -SweepPerturbed {
         $deadline = (Get-Date).AddSeconds($DrainTimeoutSec)
         $seen = @()
         while ((Get-Date) -lt $deadline) {
@@ -1594,7 +1638,7 @@ try {
         Assert-That "and the last one left it empty ($running)" ($running -eq 0)
     }
 
-    Step 'every surviving item became a unit, and not one was paid for twice' {
+    Step 'every surviving item became a unit, and not one was paid for twice' -SweepPerturbed {
         $expectBuilt = $QueueMax - $script:cancels
         $w = Get-World 'built'
         $probes = @($w.Units | Where-Object { $_.Type -eq $PROBE_TYPE -and $_.Player -eq 0 })
@@ -1628,7 +1672,7 @@ try {
     # TASK 028: the OTHER cancel -- an item inside the ENGINE's own ring, cancelled
     # through the control vanilla actually gives the player for it
     # ---------------------------------------------------------------------------
-    Step 'AND IT GOES AWAY: an empty queue puts the indicator back out of sight' {
+    Step 'AND IT GOES AWAY: an empty queue puts the indicator back out of sight' -SweepPerturbed {
         # The other half of criterion 3, and the half a "does it appear" test cannot give
         # you: with the logical queue drained there is nothing the strip cannot show, so the
         # engine's visible bit must be OFF our control again and the module must say it is
@@ -1651,7 +1695,7 @@ try {
             ($qi.SurfInk -gt 0)
     }
 
-    Step "queue $EngineArmQueue more, so the plugin holds NOTHING and the ring is the whole queue" {
+    Step "queue $EngineArmQueue more, so the plugin holds NOTHING and the ring is the whole queue" -SweepPerturbed {
         $mark = Get-ScLogLineCount -LogPath $LogPath
         for ($i = 1; $i -le $EngineArmQueue; $i++) {
             Send-ScClick -Hwnd $hwnd -X $script:trainPoint.X -Y $script:trainPoint.Y -SettleMs 120
@@ -1673,7 +1717,7 @@ try {
         $script:cancelledBeforeEngineArm = $q.Cancelled
     }
 
-    Step 'READ the status pane again: only the queued icons can be clicked' {
+    Step 'READ the status pane again: only the queued icons can be clicked' -SweepPerturbed {
         $st = Get-StatusQueue 'strip-partial'
         Assert-That 'the status-strip read-back answered' ($st.Ok)
         Assert-That "it still holds $STATQ_SLOTS icon controls ($($st.Slots.Count))" `
@@ -1700,7 +1744,7 @@ try {
         Write-Host "       queue icon $EngineArmDisplay -> client ($($script:iconPoint.X),$($script:iconPoint.Y))"
     }
 
-    Step "CANCEL AN ITEM IN THE ENGINE'S RING -- the vanilla control, the engine's refund" {
+    Step "CANCEL AN ITEM IN THE ENGINE'S RING -- the vanilla control, the engine's refund" -SweepPerturbed {
         # The payload here is the DISPLAY INDEX of the icon clicked, not 0xFE -- that one
         # byte is the whole difference between the two cases, and the helper asserts it on
         # the wire before any refund number is read.
@@ -1730,7 +1774,7 @@ try {
         Shot 'engine-cancelled'
     }
 
-    Step 'and the strip agrees afterwards: one fewer icon can be clicked' {
+    Step 'and the strip agrees afterwards: one fewer icon can be clicked' -SweepPerturbed {
         $st = Get-StatusQueue 'strip-after-cancel'
         $q = Get-ProdQueue 'after-engine-cancel'
         Assert-That "the clickable icons now match the ring exactly ($($st.Clickable) vs engineLen $($q.Selected.EngineLen))" `
