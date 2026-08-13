@@ -607,7 +607,7 @@ The exact compile is:
 ```
 g++ -m32 -Wall -Wextra -static -static-libgcc -static-libstdc++ -fno-exceptions -fno-rtti -O2 -s \
     -DSC_BUILD_ID="<short sha>[+dirty]" -DSC_BUILD_SRC="<12 hex>" \
-    -Wl,--no-insert-timestamp -Wl,--image-base=0x10000000 \
+    -Wl,--no-insert-timestamp -Wl,--image-base=0x71000000 \
     -shared src/scplugin.cpp src/sc_log.cpp src/sc_hook.cpp src/sc_fanout.cpp \
     -o scplugin.dll -I src
 g++ ...same flags, no --image-base...  src/scinject.cpp  -o scinject.exe
@@ -662,10 +662,26 @@ header is.
 
 **Reproducible output.** Two builds of one tree used to differ in 6705 bytes,
 from the PE `TimeDateStamp` *and* the image base, which binutils picked afresh
-per link (`0x6A980000` then `0x711C0000`, moving every relocated address).
-`-Wl,--no-insert-timestamp` and `-Wl,--image-base=0x10000000` pin both, and two
+per link (`0x6A980000` then `0x711C0000`, moving every relocated address and
+accounting for nearly all of those bytes — the timestamp is 4 of them).
+`-Wl,--no-insert-timestamp` and `-Wl,--image-base=0x71000000` pin both, and two
 builds of one tree are now byte-identical — so a DLL hash finally means
 something, as a corroboration of the stamp rather than a replacement for it.
+
+**Why `0x71000000` and not the conventional `0x10000000`:** `WMode.dll` is
+early-injected before the plugin on every windowed launch and it lives at
+`0x10000000` (`scinject: early-injected …WMode.dll -> HMODULE 0x10000000`, every
+transcript on this machine). Basing the plugin there would collide, the loader
+would relocate it every run, and the file's fixed base would be a fiction the
+moment it loaded — two builds hashing identically while claiming a determinism
+the running image does not have. `0x71xxxxxx` is free by demonstration: every
+base binutils picked landed in `0x71000000`–`0x73FFFFFF` and the loader honoured
+all of them. The ATTACH banner prints where the DLL actually landed against the
+base in its own PE header, so this is checkable per run rather than assumed:
+
+```
+  plugin base   : 0x71000000  (PE header asks for 0x71000000 -- loaded where it asked; the pinned base took)
+```
 
 ### `-Test`: prove the detour engine before it touches the game
 

@@ -130,11 +130,24 @@ $common = @(
 )
 if ($DebugBuild) { $common += @('-O0', '-g') } else { $common += @('-O2', '-s') }
 
-# DLL only. 0x10000000 is the conventional base for a Windows DLL and the plugin
-# is fully relocatable regardless (it always was -- the base binutils picked was
-# never one it could rely on), so this changes where it prefers to land, not
-# whether it can land there. scinject.exe keeps the standard EXE base.
-$dllLink = @('-Wl,--image-base=0x10000000')
+# DLL only; scinject.exe keeps the standard EXE base.
+#
+# 0x71000000, NOT the conventional 0x10000000: WMode.dll is early-injected into
+# this game before the plugin on every windowed launch and it IS at 0x10000000 --
+#     scinject: early-injected C:\sc-work\1161-base\WMode.dll -> HMODULE 0x10000000
+# -- so a plugin based there would be relocated by the loader every run, and the
+# file's fixed base would be a fiction the moment it was loaded. Worse than the
+# old state, not better: two builds would hash identically while claiming a
+# determinism the running image does not have, which is the exact class of lie
+# this task exists to remove.
+#
+# 0x71xxxxxx is free by demonstration, not by assumption: every plugin base
+# binutils has picked on this machine landed in 0x71000000-0x73FFFFFF and the
+# loader honoured all of them (0x71E50000, 0x724A0000, 0x73360000 in tonight's
+# scinject lines, each stable across every run of its own build). The ATTACH
+# banner now prints where the DLL actually landed against the base in its own PE
+# header, so "the pinned base took" is a read-back rather than a hope.
+$dllLink = @('-Wl,--image-base=0x71000000')
 
 $dllOut  = Join-Path $OutDir 'scplugin.dll'
 $exeOut  = Join-Path $OutDir 'scinject.exe'

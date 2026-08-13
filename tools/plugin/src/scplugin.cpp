@@ -836,6 +836,30 @@ static void LogAttachBanner(void) {
     ScLog("  build         : %s", ScBuildStampShort());
     ScLog("  host exe      : %s", exePath);
     ScLog("  plugin dll    : %s", dllPath);
+    // Task 056. Where WE landed, against the base our own PE header asks for.
+    // build.ps1 pins that base (to make the build byte-reproducible), and
+    // 0x10000000 -- the conventional choice -- is taken by WMode.dll in this
+    // process, so "the pinned base took" is a claim that has to be READ from the
+    // loader's result rather than assumed from the linker flag.
+    if (self) {
+        BYTE* selfImg = (BYTE*)self;
+        LONG  e_lfanew = 0;
+        DWORD preferred = 0;
+        bool  gotHeader = SafeRead(selfImg + 0x3C, &e_lfanew, sizeof(e_lfanew)) &&
+                          e_lfanew > 0 && e_lfanew < 0x1000 &&
+                          // PE32 optional header starts at e_lfanew+24; ImageBase is +28 into it.
+                          SafeRead(selfImg + e_lfanew + 24 + 28, &preferred, sizeof(preferred));
+        if (gotHeader) {
+            ScLog("  plugin base   : 0x%08X  (PE header asks for 0x%08X -- %s)",
+                  (unsigned)(DWORD_PTR)selfImg, (unsigned)preferred,
+                  (DWORD)(DWORD_PTR)selfImg == preferred
+                      ? "loaded where it asked; the pinned base took"
+                      : "RELOCATED -- something else holds that range in this process");
+        } else {
+            ScLog("  plugin base   : 0x%08X  (own PE header UNREADABLE -- cannot say whether it was relocated)",
+                  (unsigned)(DWORD_PTR)selfImg);
+        }
+    }
     ScLog("  module base   : 0x%08X", (unsigned)(DWORD_PTR)g_base);
     ScLog("  preferred base: 0x%08X", (unsigned)SC_PREFERRED_IMAGE_BASE);
     ScLog("  reloc delta   : %s0x%08X  => static addresses are %s",
