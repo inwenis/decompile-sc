@@ -5,6 +5,7 @@
 agent: 049
 model: sonnet
 pr: -
+merged: 2026-08-13 (report-only; no PR)
 
 ## Workspace
 
