@@ -106,6 +106,41 @@ function Get-RemoteRefusalReason {
     return $null
 }
 
+function Get-HotfixRefusalReason {
+    # The -Pr gate (issue #107): merge a hotfix PR raised by a LIVE task
+    # without closing that task. Everything the normal gate checks about the
+    # PR itself (OPEN, position against main, CI verdict, receipt
+    # substitution) still runs through Get-RemoteRefusalReason and the receipt
+    # path; this covers only what is DIFFERENT about the hotfix case: who may
+    # run it, that the named PR is not the task's own deliverable (that path
+    # must go through the close), and that the PR's head branch actually
+    # belongs to the named task (branch convention taskNNN-<slug>).
+    param(
+        [Parameter(Mandatory)][string]$TaskId,
+        # $env:AGENT_TASK -- same rule as Get-LocalRefusalReason: workers
+        # never merge, hotfix or not.
+        [AllowNull()][AllowEmptyString()][string]$AgentTask,
+        [Parameter(Mandatory)][string]$Pr,
+        # the task file's own pr: number, $null when it has none yet
+        [AllowNull()][AllowEmptyString()][string]$TaskPrNumber,
+        [AllowNull()][AllowEmptyString()][string]$HeadRefName
+    )
+
+    if (-not [string]::IsNullOrEmpty($AgentTask)) {
+        return "a worker (AGENT_TASK=$AgentTask) may never merge a PR -- ask the conductor to run merge-task"
+    }
+    if (-not [string]::IsNullOrEmpty($TaskPrNumber) -and $Pr -eq $TaskPrNumber) {
+        return "PR #$Pr is task $TaskId's own deliverable (its pr: line) -- run merge-task.ps1 -Task $TaskId WITHOUT -Pr so the task is closed with it"
+    }
+    if ([string]::IsNullOrEmpty($HeadRefName)) {
+        return "PR #$Pr's head branch could not be read -- cannot verify it belongs to task $TaskId"
+    }
+    if ($HeadRefName -notlike "task$TaskId-*") {
+        return "PR #$Pr's head branch '$HeadRefName' does not belong to task $TaskId (expected task$TaskId-*) -- run with the task that owns that branch"
+    }
+    return $null
+}
+
 function Get-MergeRefusalReason {
     # The whole gate, in the order a human wants to read it: role, then task
     # hygiene, then the PR, then CI, then policy. $null means "merge it".
