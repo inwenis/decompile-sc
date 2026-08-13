@@ -1033,9 +1033,16 @@ function Assert-ScFixtureStillMine {
     The late check: this run's own fixture is still there, and nobody else's is.
     .DESCRIPTION
     Run immediately before the browser walk. Two different failures, named separately,
-    because they need different reactions: a MISSING own fixture means another worker's
-    cleanup took it (regenerate, do not interpret the run), a foreign one means a
+    because they need different reactions: a MISSING own fixture means this run has no
+    map to play (regenerate, do not interpret the run), a foreign one means a
     collision (wait for them).
+
+    Task 069, issue #97: the missing-fixture message used to assert "another worker's
+    cleanup took it" -- a named culprit derived from nothing but the file's absence.
+    The real cause that day was a worktree without .venv: generation had failed and no
+    file was ever written, and the accusation sent readers hunting a fleet-coordination
+    race that did not exist. This check cannot know WHY the file is absent, so its
+    message now says only what it observed and which prior step's output to read.
     #>
     [CmdletBinding()]
     param(
@@ -1047,7 +1054,10 @@ function Assert-ScFixtureStillMine {
         throw "drive-game: '$mine' was never declared by this fixture run ($($Run.Names -join ', ')) -- declare it in New-ScFixtureRun so it is also cleaned up."
     }
     if (-not (Test-Path -LiteralPath $MapPath)) {
-        throw "drive-game: $mine is gone from $($Run.Dir) between generation and launch -- another worker's cleanup took it. Regenerate; do not interpret this run."
+        throw ("drive-game: $mine is not in $($Run.Dir) immediately before the browser walk. " +
+               'This check cannot know why from here: either it was never generated (check the generator step''s own output -- ' +
+               'a worktree without .venv fails exactly this way, issue #97) or something removed it after generation. ' +
+               'No evidence points at any other worker. Regenerate; do not interpret this run.')
     }
     Assert-ScFixtureFolderMine -Run $Run
 }

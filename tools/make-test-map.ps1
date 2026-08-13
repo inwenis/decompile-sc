@@ -115,23 +115,35 @@ param(
     [string[]]$UnitShields = @(),
     [string[]]$UnitArmor = @(),
     [string[]]$UnitMineralCost = @(),
-    [string[]]$UnitGasCost = @()
+    [string[]]$UnitGasCost = @(),
+    # Explicit interpreter override (tests use it to exercise the failure paths).
+    # Skips resolution AND the import preflight -- the caller vouches for it.
+    [string]$Python
 )
 
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$venvPython = Join-Path $repoRoot '.venv/Scripts/python.exe'
-if (Test-Path -LiteralPath $venvPython) {
-    $python = $venvPython
-}
-elseif (Get-Command python -ErrorAction SilentlyContinue) {
-    Write-Warning "No .venv found at $venvPython -- falling back to 'python' on PATH. Run ./setup.ps1 to pin dependencies."
-    $python = 'python'
+
+# Task 069, issue #97: the old chain here fell back to `python` on PATH with only a
+# Write-Warning, and a PATH interpreter without richchk then failed AFTER the warning
+# had scrolled past -- no map, exit code ignored by callers, and the first LOUD message
+# was drive-game inventing a culprit for the missing file. Resolve-ScPython probes this
+# checkout's .venv, the MAIN checkout's .venv (worktrees are cut without one), then PATH
+# python -- and accepts nothing that cannot actually import richchk.
+. (Join-Path $PSScriptRoot 'sc-python.ps1')
+if ($Python) {
+    $resolved = [pscustomobject]@{ Path = $Python; Source = '-Python parameter'; Probed = @() }
 }
 else {
-    throw "No .venv found at $venvPython and no 'python' on PATH. Run ./setup.ps1 first."
+    $resolved = Resolve-ScPython -RepoRoot $repoRoot -RequireModule 'richchk'
+    if (-not $resolved.Path) {
+        throw ("make-test-map: no python that can import richchk was found -- map generation CANNOT run. " +
+               "Probed: $($resolved.Probed -join '; '). " +
+               'This is the worktree-without-.venv gap (issue #97): run ./setup.ps1 in the main checkout, or pass -Python <exe>.')
+    }
 }
+$python = $resolved.Path
 
 $pyArgs = @(
     (Join-Path $PSScriptRoot 'make_test_map.py')
@@ -175,5 +187,18 @@ foreach ($s in $UnitArmor)        { $pyArgs += @('--unit-armor', $s) }
 foreach ($s in $UnitMineralCost)  { $pyArgs += @('--unit-mineral-cost', $s) }
 foreach ($s in $UnitGasCost)      { $pyArgs += @('--unit-gas-cost', $s) }
 
-& $python @pyArgs
-exit $LASTEXITCODE
+# Tee, not capture: 15+ suites parse this stream for the generator's validation lines
+# (`^OK: `, `TRIG holds ...`), so it must keep flowing to the caller -- while a copy
+# stays here so a failure can carry the traceback INSIDE the throw (a caller assigning
+# `$gen = & ... 2>&1` loses its capture when the statement aborts).
+& $python @pyArgs 2>&1 | Tee-Object -Variable genOut
+if ($LASTEXITCODE -ne 0) {
+    $tail = (@($genOut) | ForEach-Object { "$_" } |
+        Where-Object { $_ -notmatch 'WARNING:StormLibFinder' } |
+        Select-Object -Last 12) -join "`n"
+    throw ("make-test-map: map generation FAILED (python exit $LASTEXITCODE; interpreter: $($resolved.Source), $python). " +
+           "No map was written to $OutputPath -- do not launch. Generator output (tail):`n$tail")
+}
+if (-not (Test-Path -LiteralPath $OutputPath)) {
+    throw "make-test-map: the generator exited 0 but no map exists at $OutputPath -- nothing was delivered; do not launch."
+}
