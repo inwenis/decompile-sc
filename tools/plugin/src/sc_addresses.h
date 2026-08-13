@@ -1524,5 +1524,48 @@
 #define SC_SURFACE_OFF_H           0x02u   // u16
 #define SC_SURFACE_OFF_BITS        0x04u   // u8*
 
+// ---------------------------------------------------------------------------
+// THE DIALOG DIRTY-MARK CLIP BOX -- derived by task 073 from StarCraft.exe 1.16.1.
+//
+// updateControlInner (0x0041C200) -- the ONE function that adds a dialog rect to
+// the layer-2 dirty region (storm region 0x006D5E2C, consumed by 0x0041CB50) --
+// aligns the rect to 16px and then clamps it against four globals:
+//
+//     0041C21B  CMP ...,[0x0051A16C]   ; min x
+//     0041C24D  CMP ...,[0x0051A170]   ; min y
+//     0041C240  CMP ...,[0x0051A174]   ; max x
+//     0041C25C  CMP ...,[0x0051A178]   ; max y
+//
+// Each of the four is referenced by EXACTLY that one instruction in all of
+// .text (byte-scan, work/scratch/073/findrefs.py) -- NO WRITER EXISTS. They are
+// link-time .data constants: {0, 0, 640, 480} read straight out of the file
+// image (work/scratch/073/readdata.py). So no dialog repaint can ever be MARKED
+// past x=639: this single box is why 071's bounds-move never changed the
+// picture, measured live in task 073 (StatBtn moved to 656..799 drew NOTHING
+// while StatRes -- whose overlap with the ever-repainting playfield rides a
+// different dirty path -- showed its resource number at x~760).
+//
+// Because no writer exists, widening the max-x once is a stable, one-shot data
+// patch (no engine re-assertion to fight, task 061's rule) -- sc_console does
+// it while the console-edge move is armed, and restores it on remove.
+//
+// The sibling box at 0x0051A15C..0x0051A168 = {0, 0, 639, 479} is the DRAW-time
+// clip in 0x0041C080, applied in ROOT-RELATIVE coordinates -- a 144- or
+// 420-wide console dialog never reaches it, so it is recorded, not patched.
+#define SC_VA_DLG_DIRTY_CLIP_X0    0x0051A16Cu  // 0
+#define SC_VA_DLG_DIRTY_CLIP_Y0    0x0051A170u  // 0
+#define SC_VA_DLG_DIRTY_CLIP_X1    0x0051A174u  // 640 stock
+#define SC_VA_DLG_DIRTY_CLIP_Y1    0x0051A178u  // 480 stock
+
+// u8 -- client_selection_changed (binary-selection-map.md 7 window table). The
+// stat display driver's FIRST instruction reads it (0x004D93F0 MOV AL,[0x0059723C])
+// and, when set, calls updateSelectedUnitData (0x004C38B0, caller 0x004D93F9) --
+// which copies activePlayerSelection into clientSelectionGroup, recounts
+// clientSelectionCount, elects activePortraitUnit and refreshes the status area.
+// Task 073's select aid sets it after the CMDACT_Select funnel: the engine's own
+// writer then completes the client half exactly as a real click does (measured:
+// without it, active=1 sim=1 but client=0 and the card stays empty).
+#define SC_VA_CLIENT_SEL_CHANGED   0x0059723Cu
+
 
 #endif // SC_ADDRESSES_H

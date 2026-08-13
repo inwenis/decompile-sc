@@ -342,7 +342,21 @@ param(
     # (task 071: the window-proc mouse clamps widen so clicks can reach x=640..799;
     # moving the console there is a separate unshipped problem, renderer-viewport.md
     # 18). Meaningless unless -Widescreen 1.
-    [ValidateSet('0', '1', '2', '3')][string]$WidescreenStage = '1'
+    [ValidateSet('0', '1', '2', '3')][string]$WidescreenStage = '1',
+
+    # Task 073: move the console's StatRes (resource bar) and StatBtn (command
+    # card) root dialogs +160 to the window's right edge, once their surfaces
+    # exist, with the vacated and claimed rects both marked dirty so the layer-2
+    # composite repaints them. Only meaningful with -Widescreen 1 (the plugin
+    # disarms it otherwise) and ignored in -Mode observe like every writer.
+    [ValidateSet('0', '1')][string]$ConsoleEdge = '0',
+
+    # Task 073: wrap every root dialog's interact with a logging shim (CTRACE
+    # lines: dialog name, event type, dwUser, x/y, return value). The dispatcher
+    # stops at the first non-zero return, so the trace names the dialog that
+    # claims any click. Read-only in effect but it writes dialog records, so it
+    # is ignored in -Mode observe too.
+    [ValidateSet('0', '1')][string]$ConsoleTrace = '0'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -570,6 +584,8 @@ try {
     } else { $env:SCPLUGIN_FRAMEDUMP = '' }
     $env:SCPLUGIN_WIDESCREEN     = $Widescreen
     $env:SCPLUGIN_WS_STAGE       = $WidescreenStage
+    $env:SCPLUGIN_CONSOLE_EDGE   = $ConsoleEdge
+    $env:SCPLUGIN_CONSOLE_TRACE  = $ConsoleTrace
     if ($Liveness -eq '0') {
         Write-Warning 'run-with-plugin: -Liveness 0 — the fan-out emit gate is back to the pre-task-020 uniqueness test ALONE. A unit killed by damage will be replayed into a Select. This is a deliberate defect-reproduction run.'
     }

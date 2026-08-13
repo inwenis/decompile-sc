@@ -38,6 +38,7 @@
 #include "sc_addresses.h"
 #include "sc_buildid.h"
 #include "sc_card.h"
+#include "sc_console.h"
 #include "sc_fanout.h"
 #include "sc_hook.h"
 #include "sc_log.h"
@@ -697,6 +698,11 @@ static void PollMarker(void) {
     // under is directly above it.
     ScSessionLogState(g_lastMarker);
 
+    // Task 073: the console module's marker-driven test aid (a 'conedge-select'
+    // label asks the GAME thread to select the first completed own unit on its
+    // next frame). A no-op unless the module is installed, which observe never does.
+    ScConsoleOnMarker(g_lastMarker);
+
     // Task 032: the renderer's own view of itself. Same trigger, same read-only shape.
     ScanScreen(g_lastMarker);
 
@@ -1091,6 +1097,20 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         // observe the epoch stays 1, which is correct because no module holds
         // cross-frame state there.
         ScSessionInstall(g_base, g_mode != SC_MODE_OBSERVE);
+        // Task 073: the console move + click-route trace. Both write to dialog
+        // records on the game thread, so observe -- the whole plugin's off
+        // switch -- ignores them like every other writer.
+        {
+            bool consoleEdge  = ScConsoleEdgeWanted();
+            bool consoleTrace = ScConsoleTraceWanted();
+            if (g_mode == SC_MODE_OBSERVE && (consoleEdge || consoleTrace)) {
+                ScLog("CONSOLE: %%SCPLUGIN_CONSOLE_EDGE%%/%%SCPLUGIN_CONSOLE_TRACE%% "
+                      "set but the mode is observe -- IGNORED. Observe writes nothing "
+                      "to game memory.");
+                consoleEdge = consoleTrace = false;
+            }
+            ScConsoleInstall(g_base, consoleEdge, consoleTrace);
+        }
         ScFanoutInstall(g_base, g_mode);
         // Task 030. The oracle needs the module base in EVERY mode, because the stock
         // arm of this feature's comparison runs in observe and is measured with it. The
@@ -1163,6 +1183,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         ScProdFanLogStats();
         ScUpgQueueLogStats();
         ScScreenLogStats();
+        ScConsoleLogStats();
         ScSessionLogState("detach");
         if (lpReserved == NULL) {
             if (g_observer) joined = (WaitForSingleObject(g_observer, 5000) == WAIT_OBJECT_0);
@@ -1184,6 +1205,10 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             // still goes before the fan-out's, so the whole splice comes out newest-first.
             ScUpgQueueRemove();
             ScFanoutRemove();
+            // Task 073: bounds restored and interacts unwrapped before the
+            // widescreen geometry (which the move's +160 only makes sense on)
+            // comes out below.
+            ScConsoleRemove();
             // Task 034 last, mirroring its install-first position: the geometry
             // patches are the outermost change, so they come out after every
             // detour that might still be running against them.
