@@ -47,6 +47,12 @@ param(
     [string]$LogDir = 'C:\sc-work\logs',
     [string]$FrameDir = 'C:\sc-work\logs\034-frames',
     [ValidateSet('inject', 'ddraw', 'both')][string]$Vector = 'both',
+    # Task 065: which DLL the ddraw vector installs. Empty = WMode.dll (the 034
+    # measurement, unchanged). Point it at cnc-ddraw's ddraw.dll
+    # (fetch-cnc-ddraw.ps1) and -Vector both becomes exactly the 065 experiment:
+    # inject arm = WMode CROP control, ddraw arm = the candidate replacement,
+    # one run, same instrument, verdicts printed control-first.
+    [string]$WindowedHelperDll = '',
     # Which 9.3 stage to run under. Stage 0 is the interesting one for THIS
     # question: it changes the display mode and nothing else, so a failure is
     # unambiguously the presentation half rather than anything the engine draws.
@@ -127,7 +133,10 @@ function Invoke-PresentArm {
         GameDir = $GameDir; LogPath = $log
     }
     if ($Vec -eq 'inject') { $launchArgs['InjectWindowedHelper'] = 'WMode' }
-    else { $launchArgs['Windowed'] = $true }
+    else {
+        $launchArgs['Windowed'] = $true
+        if ($WindowedHelperDll) { $launchArgs['WindowedHelperDll'] = $WindowedHelperDll }
+    }
 
     Write-Host ''
     Write-Host "probe-present: vector=$Vec widescreen=$Widescreen stage=$Stage"
