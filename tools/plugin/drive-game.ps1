@@ -879,7 +879,7 @@ function Resolve-ScFixtureDir {
     <#
     .SYNOPSIS
     Where this run's fixtures go: the caller's `-FixtureDir` if given, otherwise this
-    AGENT'S OWN folder, otherwise the suite's historical by-hand default.
+    AGENT'S OWN folder for THIS SUITE, otherwise the suite's historical by-hand default.
 
     .DESCRIPTION
     THE HOLE THIS CLOSES (task 023 review, 2026-08-09). Ownership is keyed on the declared
@@ -896,26 +896,43 @@ function Resolve-ScFixtureDir {
     the folders of the tasks that WROTE them, so any later worker running them by default
     wrote into a finished task's folder.
 
+    THE SECOND HOLE (task 059 / issue #80, 2026-08-13). One task running TWO suites used to
+    land both in `00-t<NNN>` -- the same folder, keyed on task alone. `test-save-load`
+    deliberately leaves its fixture in place between phases (only its last phase deletes
+    it), so a second suite started under the same task saw that leftover, applied the
+    foreign-file rule correctly, and waited forever on a file its own task had written and
+    nothing was contending for. So the agent leaf now carries the SUITE too:
+    `00-t<NNN>-<suite>`. A multi-phase suite keeps the SAME folder across its own phases
+    (same task, same `-Suite`), two suites of one task can never see each other's files, and
+    the foreign-file rule stays exactly as strict as it was.
+
     A worker always has `$env:AGENT_TASK`, so the fix needs no new discipline: with it set,
-    the default is that agent's own folder and two agents can never collide. Without it --
-    a human at a prompt, one run at a time -- the suite's historical default is preserved
-    exactly, which is what `-FixtureDir` defaulting "to current behaviour" promised.
+    the default is that agent's own per-suite folder and two agents (or two suites of one
+    agent) can never collide. Without it -- a human at a prompt, one run at a time -- the
+    suite's historical default is preserved exactly, which is what `-FixtureDir` defaulting
+    "to current behaviour" promised; `-Suite` is unused on that path.
 
     The task id is taken as leading digits, so `023` and `023-ghost-cloak` both give
-    `00-t023` (Enter-ScLaunchLock's -TaskId convention appends a suffix to the same id).
+    `00-t023-<suite>` (Enter-ScLaunchLock's -TaskId convention appends a suffix to the same
+    id).
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$GameDir,
         # What this suite used before agents existed. Kept for by-hand runs.
         [Parameter(Mandatory)][string]$Fallback,
+        # This suite's own short name (e.g. 'save-load', 'hud-row') -- what separates it
+        # from every other suite this same task might run. Mandatory: a caller that cannot
+        # name its own suite cannot be given a folder that is safe from every OTHER suite.
+        [Parameter(Mandatory)][string]$Suite,
         # Injectable so Pester can exercise every branch without touching the environment.
         [AllowNull()][AllowEmptyString()][string]$AgentTask = $env:AGENT_TASK
     )
     $leaf = $Fallback
     if (-not [string]::IsNullOrWhiteSpace($AgentTask)) {
-        $leaf = if ($AgentTask -match '^\s*(\d{1,4})') { "00-t$($Matches[1])" }
-                else { '00-t' + ($AgentTask -replace '[^A-Za-z0-9]', '') }
+        $taskLeaf = if ($AgentTask -match '^\s*(\d{1,4})') { "t$($Matches[1])" }
+                    else { 't' + ($AgentTask -replace '[^A-Za-z0-9]', '') }
+        $leaf = "00-$taskLeaf-$Suite"
     }
     Join-Path $GameDir (Join-Path 'Maps\BroodWar' $leaf)
 }
@@ -942,6 +959,33 @@ function New-ScFixtureRun {
         Names = [string[]]$Names
         Paths = [string[]]@($Names | ForEach-Object { Join-Path $Dir $_ })
     }
+}
+
+function Get-ScFixtureFolderOwnerNote {
+    <#
+    .SYNOPSIS
+    What the fixture-folder PATH ITSELF proves about who else could own a foreign file
+    found in it -- for the refusal/wait messages, so they stop asserting "another run"
+    as fact (task 059 / issue #80).
+    .DESCRIPTION
+    Since the fix above, an agent's fixture folder is `00-t<task>-<suite>` -- unique to
+    ONE task AND ONE suite, so a same-task-different-suite file can no longer land there.
+    A foreign file found in a folder shaped that way is therefore a genuine cross-task
+    file, or a leftover from an earlier run of this exact task+suite that declared a
+    different name. Folders that do NOT match that shape (the by-hand shared defaults,
+    e.g. `00-testmap`) carry no such guarantee -- ownership there is genuinely unknown,
+    and the note says so rather than guessing.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Dir)
+    $leaf = Split-Path $Dir -Leaf
+    if ($leaf -match '^00-t(\d+)-(.+)$') {
+        return ("$leaf is scoped to task $($Matches[1])'s '$($Matches[2])' runs only " +
+                "(task+suite folder, issue #80) -- a same-task-different-suite file is " +
+                'impossible here, so this is a genuine foreign file: another task''s run, ' +
+                "or a leftover this task's own earlier attempt did not declare.")
+    }
+    return "$leaf is not a task+suite-scoped folder (by-hand/shared default) -- its owner cannot be determined from the path."
 }
 
 function Get-ScForeignFixture {
@@ -973,11 +1017,13 @@ function Assert-ScFixtureFolderMine {
     param([Parameter(Mandatory)][psobject]$Run)
     $foreign = @(Get-ScForeignFixture -Run $Run)
     if ($foreign.Count -gt 0) {
+        $ownerNote = Get-ScFixtureFolderOwnerNote -Dir $Run.Dir
         throw ("drive-game: $($Run.Dir) holds $($foreign -join ', '), which this run did not " +
-               "create (it declared: $($Run.Names -join ', ')). The map browser opens a ROW, so a " +
-               'foreign file moves which map loads -- and playing somebody else''s map produces ' +
-               'internally consistent nonsense. Refusing to start, and not deleting theirs: a ' +
-               'running game may have it open.')
+               "declare (it declared: $($Run.Names -join ', ')). $ownerNote No liveness check " +
+               'was performed -- it may belong to a finished run or a running one. The map ' +
+               'browser opens a ROW, so a foreign file moves which map loads -- and playing ' +
+               'somebody else''s map produces internally consistent nonsense. Refusing to start, ' +
+               'and not deleting theirs.')
     }
 }
 
@@ -1077,17 +1123,19 @@ function Wait-ScFixtureFolderFree {
         [int]$TimeoutMinutes = 20
     )
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    $ownerNote = Get-ScFixtureFolderOwnerNote -Dir $Run.Dir
     while ($true) {
         New-Item -ItemType Directory -Path $Run.Dir -Force | Out-Null
         $foreign = @(Get-ScForeignFixture -Run $Run)
         if ($foreign.Count -eq 0) { break }
         if ((Get-Date) -ge $deadline) {
-            throw ("drive-game: $($Run.Dir) still holds another worker's fixture ($($foreign -join ', ')) " +
-                   "after $TimeoutMinutes minute(s). Two runs cannot share that folder: the map is chosen " +
-                   'by clicking a row, so a second file silently changes which map loads. Not deleting ' +
-                   'it -- it may belong to a running game.')
+            throw ("drive-game: $($Run.Dir) still holds $($foreign -join ', '), undeclared by this run " +
+                   "(it declared: $($Run.Names -join ', ')), after $TimeoutMinutes minute(s) of waiting. " +
+                   "$ownerNote No liveness check was performed. Two runs cannot share this folder: the map " +
+                   'is chosen by clicking a row, so an extra file silently changes which map loads. Not ' +
+                   'deleting it -- it may belong to a running game.')
         }
-        Write-Host "       waiting for $($Run.Dir) to be free (another run's fixture is in it: $($foreign -join ', '))"
+        Write-Host "       waiting for $($Run.Dir) to be free ($($foreign -join ', ') present, undeclared by this run; $ownerNote)"
         Start-Sleep -Seconds 20
     }
 

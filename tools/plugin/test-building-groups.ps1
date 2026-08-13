@@ -129,7 +129,7 @@ $VICTIM_COUNT = if ($Combat) { $BARRACKS_COUNT } else { $TURRET_COUNT }
 # the turrets' 64 px they would overlap and the engine would refuse to place them.
 $VICTIM_SPACING = if ($Combat) { 128 } else { 64 }
 
-if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-testmap' }
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-testmap' -Suite 'building-groups' }
 $mapDir = $FixtureDir
 # One name per fixture SHAPE, named for this SUITE (not for the task), so "mine" is
 # decidable from the filename alone. Only the one this arm creates is declared: the

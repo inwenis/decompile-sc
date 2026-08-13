@@ -167,7 +167,7 @@ $BURROW_KEY = 0x55
 # Not a bare default any more: with $env:AGENT_TASK set this resolves to THIS
 # agent's own folder, so two concurrent runs of this same suite cannot land in one
 # folder and overwrite each other's identically-named fixture (task 023 review).
-if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-testmap' }
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-testmap' -Suite 'combat-death' }
 $mapDir = $FixtureDir
 $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
 

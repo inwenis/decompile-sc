@@ -277,7 +277,7 @@ $PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C
 # Not a bare default any more: with $env:AGENT_TASK set this resolves to THIS
 # agent's own folder, so two concurrent runs of this same suite cannot land in one
 # folder and overwrite each other's identically-named fixture (task 023 review).
-if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t022' }
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t022' -Suite 'ability-in-combat' }
 $mapDir = $FixtureDir
 # One NAME per fixture, and the two abilities need different units, so they are two
 # different fixtures of the same suite. The stim name is left exactly as it was so a

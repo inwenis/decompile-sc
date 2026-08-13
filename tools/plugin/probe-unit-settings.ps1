@@ -93,7 +93,7 @@ function Assert-That {
 function Step { param([string]$Name, [scriptblock]$Body)
     $script:step++; Write-Host ''; Write-Host ("[{0}] {1}" -f $script:step, $Name); & $Body }
 
-if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t031' }
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t031' -Suite 'unit-settings' }
 $mapName = 'unit-settings-probe.scx'
 $mapPath = Join-Path $FixtureDir $mapName
 $fixtures = New-ScFixtureRun -Dir $FixtureDir -Names @($mapName)

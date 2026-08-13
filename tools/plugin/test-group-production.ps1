@@ -117,7 +117,7 @@ $TRAIN_COND   = '00428e60'
 
 if ($Buildings -lt 2) { throw 'test: -Buildings must be at least 2, or there is no group.' }
 
-if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t030' }
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t030' -Suite 'group-production' }
 $mapDir = $FixtureDir
 $mapName = 'group-production.scx'
 $mapPath = Join-Path $mapDir $mapName

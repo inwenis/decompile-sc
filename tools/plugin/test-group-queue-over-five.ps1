@@ -126,7 +126,7 @@ if ($Clicks -ge $QueueMax) {
 
 # ONE FOLDER PER TASK, ONE NAME PER SUITE (AGENTS.md, hard rule): the fixture is named
 # after this suite, declared up front, and deleted only by this run.
-if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t038' }
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t038' -Suite 'group-queue-over-five' }
 $mapDir = $FixtureDir
 $mapName = 'group-queue-over-five.scx'
 $mapPath = Join-Path $mapDir $mapName

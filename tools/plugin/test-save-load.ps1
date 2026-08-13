@@ -108,7 +108,7 @@ $repoRoot = Split-Path (Split-Path $scriptDir -Parent) -Parent
 if (-not $LogPath) { $LogPath = "C:\sc-work\logs\051\save-load-$Phase.log" }
 
 # --- fixture ------------------------------------------------------------------
-if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t051' }
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t051' -Suite 'save-load' }
 $mapDir = $FixtureDir
 $mapName = 'save-load.scx'                    # named for the SUITE (hard rule, task 021/022)
 $mapPath = Join-Path $mapDir $mapName

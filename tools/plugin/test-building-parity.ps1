@@ -210,7 +210,7 @@ $PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C
 Assert-That 'the working copy starts out byte-identical to pristine 1.16.1' `
     ($hashBefore -eq $PRISTINE_SHA256) "(got $hashBefore)"
 
-if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-testmap' }
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-testmap' -Suite 'building-parity' }
 $mapDir = $FixtureDir
 $mapName = 'building-parity.scx'
 $mapPath = Join-Path $mapDir $mapName
