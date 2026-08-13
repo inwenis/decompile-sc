@@ -21,8 +21,26 @@ static volatile LONG g_epochAtLastLoad = 0;
 
 static void* Rt(DWORD staticVa) { return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE)); }
 
+// A PLAIN ALIGNED LOAD, deliberately, and this is the one function in the plugin where
+// that choice is worth measuring rather than assuming: it is on the fast path of every
+// adopting module's SessionSync, and those sit inside the status dispatcher, which runs
+// hundreds of thousands of times a second.
+//
+// The first version used `InterlockedCompareExchange(&g_epoch, 0, 0)` as a "safe read".
+// It is not safer here and it is not free: measured over 200,000,000 calls against an
+// empty control loop (work/scratch/054/bench-session.cpp), the interlocked form costs
+// 7.67 ns/call, because a LOCK CMPXCHG is a locked read-modify-write of a line the game
+// thread is also writing.
+//
+// The plain load is correct on this target for two reasons that are properties of the
+// platform, not of this code. This is a 32-bit x86 process, so an aligned 4-byte load
+// cannot tear -- there is no interleaving in which a reader sees half of an epoch. And
+// the only writer is InterlockedIncrement, which is a full barrier, so a reader either
+// sees the old value or the new one and never anything else. `volatile` stops the
+// compiler from hoisting the load out of a caller's loop, which is the only reordering
+// that would matter.
 unsigned ScSessionEpoch(void) {
-    LONG e = InterlockedCompareExchange(&g_epoch, 0, 0);
+    const LONG e = g_epoch;
     return (unsigned)(e > 0 ? e : 1);
 }
 

@@ -2835,10 +2835,20 @@ function Send-ScText {
 # sc_queueind.cpp:788). Callers pass what the RUN'S OWN `FANOUT config:` line
 # reported, never a source-level default, so this stays right even if a default
 # changes.
+#
+# TASK 054 adds two more to the unconditional set, and this list is where a reader
+# finds out that it did: the GAME-SESSION EPOCH (sc_session.cpp) splices
+# `gameStartClear+7` and `loadSavedGame` for every mode except observe, exactly like
+# the five above. They are NOT optional and have no config flag -- the epoch is what
+# stops every other module's records following the player into a game they do not
+# belong to (issues #63 and #67), so a run missing either one is a run whose whole
+# cross-game defence is off. This assertion is how that gets noticed: it failed by
+# NAME on 054's own first run of this suite ("extra: [gameStartClear+7,
+# loadSavedGame]"), which is the by-name comparison doing precisely its job.
 function Get-ScFanoutExpectedHooks {
     param([bool]$Circles, [bool]$HudRow, [bool]$QueueInd)
     $names = @('queueCommand', 'CMDACT_Select', 'sortOverflowHandler', 'SortAllUnits',
-               'unit_IsStandardAndMovable')
+               'unit_IsStandardAndMovable', 'gameStartClear+7', 'loadSavedGame')
     if ($Circles) { $names += 'CreateNewUnitSelectionsFromList' }
     if ($HudRow) { $names += 'statDataUpdate' }
     if ($QueueInd) { $names += 'statDisplayDriver' }
