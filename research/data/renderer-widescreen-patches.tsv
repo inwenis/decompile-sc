@@ -69,6 +69,8 @@ stage	va	len	changed	name	before	after	expect	patch	note
 2	0x004B2314	5	1	grid.row18	mov edi, 0x6cf2c8	mov [grid+0x384]	BFC8F26C00	BF00000000	0x004B1FA0 names grid[row 18][col 0]; recomputed for the new stride
 2	0x004B2303	7	1	grid.row18.count	lea ecx, [eax + eax*4 - 0x55] ; shl ecx, 3	lea ecx, [eax - 0x11] ; imul ecx, ecx, 0x32 ; nop 	8D4C80ABC1E103	8D48EF6BC93290	0x004B1FA0: ecx = (row - 17) * 50, was (row - 17) * 40
 2	0x0048CC1F	3	1	grid.rowstep.48CB80	add ecx, 0x28	add ecx, 0x32	83C128	83C132	0x0048CB80: next row of the grid is +40 bytes
+2	0x0048CBC7	5	1	grid.row18.b	mov edi, 0x6cf2c8	mov [grid+0x384]	BFC8F26C00	BF00000000	0x0048CB80 branch 1 names grid[row 18][col 0]; recomputed for the new stride
+2	0x0048CBB5	7	1	grid.row18.count.b	lea ecx, [eax + eax*4 - 0x55] ; shl ecx, 3	lea ecx, [eax - 0x11] ; imul ecx, ecx, 0x32 ; nop 	8D4C80ABC1E103	8D48EF6BC93290	0x0048CB80: ecx = (row - 17) * 50, was (row - 17) * 40 -- the twin of grid.row18.count
 2	0x0042D305	3	1	grid.rowstep.42D280	add edx, 0x28	add edx, 0x32	83C228	83C232	0x0042D280: next row of the grid is +40 bytes
 2	0x0041E15B	14	1	grid.rowaddr.marker	cmp ecx, esi ; lea eax, [ecx + ecx*4] ; lea ebx, [edi + eax*8 + 0x6ceff8] ; jg 0x41e193	imul eax, ecx, 0x19 ; lea ebx, [edi + eax*2] ; cmp ecx, esi ; jg 0x41e193	3BCE8D04898D9CC7F8EF6C007F2A	6BC1198D9C47000000003BCE7F2A	dirty marker: eax = row * 25, ebx = grid + row*50 + col; cmp/jg moved after the multiply so the branch still reads the compare
 2	0x0041E18A	3	1	grid.rowstep.marker	add ebx, 0x28	add ebx, 0x32	83C328	83C332	dirty marker: next row is +40 bytes
@@ -141,6 +143,60 @@ stage	va	len	changed	name	before	after	expect	patch	note
 2	0x004BCE66	3	1	terrain.cols@004BCE66	cmp ebx, 0x28	cmp ebx, 0x32	83FB28	83FB32	terrain blitter: columns per row
 2	0x004BCE6E	6	1	terrain.rowstep	add edi, 0x2780	add edi, 0x30e0	81C780270000	81C7E0300000	terrain blitter: advance to the next 16 scanlines
 2	0x0040C25A	10	1	terrain.fullblit.runwidth	mov dword ptr [0x50cef0], 0x280	mov dword ptr [0x50cef0], 0x320	C705F0CE500080020000	C705F0CE500020030000	0x0040C253: the run width of the whole-playfield blit
+2	0x0049BC65	6	1	terrain.modchain@0049BC65	lea ecx, [eax - 0x498000]	lea ecx, [eax - 0x5b0000]	8D880080B6FF	8D880000A5FF	0x49BC20: mod-reduce a scratch offset by 16*size (negative lea displacement)
+2	0x0049BC74	6	1	terrain.modchain@0049BC74	lea ecx, [eax - 0x24c000]	lea ecx, [eax - 0x2d8000]	8D880040DBFF	8D880080D2FF	0x49BC20: mod-reduce a scratch offset by 8*size (negative lea displacement)
+2	0x0049BC80	6	1	terrain.modchain@0049BC80	lea ecx, [eax - 0x126000]	lea ecx, [eax - 0x16c000]	8D8800A0EDFF	8D880040E9FF	0x49BC20: mod-reduce a scratch offset by 4*size (negative lea displacement)
+2	0x0049BC8C	6	1	terrain.modchain@0049BC8C	lea ecx, [eax - 0x93000]	lea ecx, [eax - 0xb6000]	8D8800D0F6FF	8D8800A0F4FF	0x49BC20: mod-reduce a scratch offset by 2*size (negative lea displacement)
+2	0x0049BC98	6	1	terrain.modchain@0049BC98	lea ecx, [eax - 0x49800]	lea ecx, [eax - 0x5b000]	8D880068FBFF	8D880050FAFF	0x49BC20: mod-reduce a scratch offset by 1*size (negative lea displacement)
+2	0x0049BD7B	6	1	terrain.modchain@0049BD7B	lea edx, [eax - 0x498000]	lea edx, [eax - 0x5b0000]	8D900080B6FF	8D900000A5FF	0x49BD40: mod-reduce a scratch offset by 16*size (negative lea displacement)
+2	0x0049BD87	6	1	terrain.modchain@0049BD87	lea edx, [eax - 0x24c000]	lea edx, [eax - 0x2d8000]	8D900040DBFF	8D900080D2FF	0x49BD40: mod-reduce a scratch offset by 8*size (negative lea displacement)
+2	0x0049BD93	6	1	terrain.modchain@0049BD93	lea edx, [eax - 0x126000]	lea edx, [eax - 0x16c000]	8D9000A0EDFF	8D900040E9FF	0x49BD40: mod-reduce a scratch offset by 4*size (negative lea displacement)
+2	0x0049BD9F	6	1	terrain.modchain@0049BD9F	lea edx, [eax - 0x93000]	lea edx, [eax - 0xb6000]	8D9000D0F6FF	8D9000A0F4FF	0x49BD40: mod-reduce a scratch offset by 2*size (negative lea displacement)
+2	0x0049BDAB	6	1	terrain.modchain@0049BDAB	lea edx, [eax - 0x49800]	lea edx, [eax - 0x5b000]	8D900068FBFF	8D900050FAFF	0x49BD40: mod-reduce a scratch offset by 1*size (negative lea displacement)
+2	0x0049BE39	6	1	terrain.modchain@0049BE39	lea eax, [edi - 0x498000]	lea eax, [edi - 0x5b0000]	8D870080B6FF	8D870000A5FF	0x49BE20: mod-reduce a scratch offset by 16*size (negative lea displacement)
+2	0x0049BE45	6	1	terrain.modchain@0049BE45	lea eax, [edi - 0x24c000]	lea eax, [edi - 0x2d8000]	8D870040DBFF	8D870080D2FF	0x49BE20: mod-reduce a scratch offset by 8*size (negative lea displacement)
+2	0x0049BE51	6	1	terrain.modchain@0049BE51	lea eax, [edi - 0x126000]	lea eax, [edi - 0x16c000]	8D8700A0EDFF	8D870040E9FF	0x49BE20: mod-reduce a scratch offset by 4*size (negative lea displacement)
+2	0x0049BE5D	6	1	terrain.modchain@0049BE5D	lea eax, [edi - 0x93000]	lea eax, [edi - 0xb6000]	8D8700D0F6FF	8D8700A0F4FF	0x49BE20: mod-reduce a scratch offset by 2*size (negative lea displacement)
+2	0x0049BE69	6	1	terrain.modchain@0049BE69	lea eax, [edi - 0x49800]	lea eax, [edi - 0x5b000]	8D870068FBFF	8D870050FAFF	0x49BE20: mod-reduce a scratch offset by 1*size (negative lea displacement)
+2	0x0049C7D1	6	1	terrain.modchain@0049C7D1	lea ecx, [eax - 0x498000]	lea ecx, [eax - 0x5b0000]	8D880080B6FF	8D880000A5FF	0x49C780: mod-reduce a scratch offset by 16*size (negative lea displacement)
+2	0x0049C7DD	6	1	terrain.modchain@0049C7DD	lea ecx, [eax - 0x24c000]	lea ecx, [eax - 0x2d8000]	8D880040DBFF	8D880080D2FF	0x49C780: mod-reduce a scratch offset by 8*size (negative lea displacement)
+2	0x0049C7E9	6	1	terrain.modchain@0049C7E9	lea ecx, [eax - 0x126000]	lea ecx, [eax - 0x16c000]	8D8800A0EDFF	8D880040E9FF	0x49C780: mod-reduce a scratch offset by 4*size (negative lea displacement)
+2	0x0049C7F5	6	1	terrain.modchain@0049C7F5	lea ecx, [eax - 0x93000]	lea ecx, [eax - 0xb6000]	8D8800D0F6FF	8D8800A0F4FF	0x49C780: mod-reduce a scratch offset by 2*size (negative lea displacement)
+2	0x0049C801	6	1	terrain.modchain@0049C801	lea ecx, [eax - 0x49800]	lea ecx, [eax - 0x5b000]	8D880068FBFF	8D880050FAFF	0x49C780: mod-reduce a scratch offset by 1*size (negative lea displacement)
+2	0x0049BCD7	6	1	terrain.colwrap@0049BCD7	lea eax, [edi - 0x49800]	lea eax, [edi - 0x5b000]	8D870068FBFF	8D870050FAFF	0x49BC20: wrap after a 32-byte column step
+2	0x0049BE9C	6	1	terrain.colwrap@0049BE9C	lea eax, [edi - 0x49800]	lea eax, [edi - 0x5b000]	8D870068FBFF	8D870050FAFF	0x49BE20: wrap after a 32-byte column step
+2	0x0049BCFC	6	1	terrain.tilerow@0049BCFC	add ecx, 0x5400	add ecx, 0x6800	81C100540000	81C100680000	0x49BC20: advance one 32px tile row of the scratch surface
+2	0x0049BE04	5	1	terrain.tilerow@0049BE04	add eax, 0x5400	add eax, 0x6800	0500540000	0500680000	0x49BD40: advance one 32px tile row of the scratch surface
+2	0x0049C839	5	1	terrain.tilerow@0049C839	add eax, 0x5400	add eax, 0x6800	0500540000	0500680000	0x49C780: advance one 32px tile row of the scratch surface
+2	0x0049BD05	6	1	terrain.rowwrap.49BC20	add ecx, 0xfffb6800	add ecx, 0xfffa5000	81C10068FBFF	81C10050FAFF	0x49BC20: wrap after the tile-row step (add of -size)
+2	0x0049BDF2	6	1	terrain.lastrow@0049BDF2	cmp edi, 0x44400	cmp edi, 0x54800	81FF00440400	81FF00480500	0x49BD40: is this the last tile row (start of row 13)
+2	0x0049C82A	6	1	terrain.lastrow@0049C82A	cmp esi, 0x44400	cmp esi, 0x54800	81FE00440400	81FE00480500	0x49C780: is this the last tile row (start of row 13)
+2	0x0049BDFF	5	1	terrain.wrapmask@0049BDFF	and eax, 0xfffb6800	and eax, 0xfffa5000	250068FBFF	250050FAFF	0x49BD40: -size as an AND mask (branchless conditional wrap)
+2	0x0049C74B	6	1	terrain.wrapmask@0049C74B	and edx, 0xfffb6800	and edx, 0xfffa5000	81E20068FBFF	81E20050FAFF	0x49C620: -size as an AND mask (branchless conditional wrap)
+2	0x0049C834	5	1	terrain.wrapmask@0049C834	and eax, 0xfffb6800	and eax, 0xfffa5000	250068FBFF	250050FAFF	0x49C780: -size as an AND mask (branchless conditional wrap)
+2	0x0049C73F	5	1	terrain.endcol.49C620	cmp eax, 0x497e0	cmp eax, 0x5afe0	3DE0970400	3DE0AF0500	0x49C620: size minus one 32-byte tile column (column-step wrap test)
+2	0x0049BA45	6	1	terrain.mt.r1c0	lea edx, [edi + 0x1500]	lea edx, [edi + 0x1a00]	8D9700150000	8D97001A0000	0x49B9F0 (per-megatile writer): minitile row 1 col 0 of the unrolled 4x4
+2	0x0049BA57	6	1	terrain.mt.r1c1	lea edx, [edi + 0x1508]	lea edx, [edi + 0x1a08]	8D9708150000	8D97081A0000	0x49B9F0 (per-megatile writer): minitile row 1 col 1 of the unrolled 4x4
+2	0x0049BA69	6	1	terrain.mt.r1c2	lea edx, [edi + 0x1510]	lea edx, [edi + 0x1a10]	8D9710150000	8D97101A0000	0x49B9F0 (per-megatile writer): minitile row 1 col 2 of the unrolled 4x4
+2	0x0049BA7B	6	1	terrain.mt.r1c3	lea edx, [edi + 0x1518]	lea edx, [edi + 0x1a18]	8D9718150000	8D97181A0000	0x49B9F0 (per-megatile writer): minitile row 1 col 3 of the unrolled 4x4
+2	0x0049BA8D	6	1	terrain.mt.r2c0	lea edx, [edi + 0x2a00]	lea edx, [edi + 0x3400]	8D97002A0000	8D9700340000	0x49B9F0 (per-megatile writer): minitile row 2 col 0 of the unrolled 4x4
+2	0x0049BA9F	6	1	terrain.mt.r2c1	lea edx, [edi + 0x2a08]	lea edx, [edi + 0x3408]	8D97082A0000	8D9708340000	0x49B9F0 (per-megatile writer): minitile row 2 col 1 of the unrolled 4x4
+2	0x0049BAB1	6	1	terrain.mt.r2c2	lea edx, [edi + 0x2a10]	lea edx, [edi + 0x3410]	8D97102A0000	8D9710340000	0x49B9F0 (per-megatile writer): minitile row 2 col 2 of the unrolled 4x4
+2	0x0049BAC3	6	1	terrain.mt.r2c3	lea edx, [edi + 0x2a18]	lea edx, [edi + 0x3418]	8D97182A0000	8D9718340000	0x49B9F0 (per-megatile writer): minitile row 2 col 3 of the unrolled 4x4
+2	0x0049BAD5	6	1	terrain.mt.r3c0	lea edx, [edi + 0x3f00]	lea edx, [edi + 0x4e00]	8D97003F0000	8D97004E0000	0x49B9F0 (per-megatile writer): minitile row 3 col 0 of the unrolled 4x4
+2	0x0049BAE7	6	1	terrain.mt.r3c1	lea edx, [edi + 0x3f08]	lea edx, [edi + 0x4e08]	8D97083F0000	8D97084E0000	0x49B9F0 (per-megatile writer): minitile row 3 col 1 of the unrolled 4x4
+2	0x0049BAF9	6	1	terrain.mt.r3c2	lea edx, [edi + 0x3f10]	lea edx, [edi + 0x4e10]	8D97103F0000	8D97104E0000	0x49B9F0 (per-megatile writer): minitile row 3 col 2 of the unrolled 4x4
+2	0x0049BB08	6	1	terrain.mt.r3c3	lea edx, [edi + 0x3f18]	lea edx, [edi + 0x4e18]	8D97183F0000	8D97184E0000	0x49B9F0 (per-megatile writer): minitile row 3 col 3 of the unrolled 4x4
+2	0x0049B958	3	1	terrain.tilecols@0049B958	cmp esi, 0x15	cmp esi, 0x1a	83FE15	83FE1A	0x49B8D0 (clamp helper): clamp request width to the cache
+2	0x0049B95D	5	1	terrain.tilecols@0049B95D	mov esi, 0x15	mov esi, 0x1a	BE15000000	BE1A000000	0x49B8D0: clamped request width
+2	0x0049B99D	3	1	terrain.tilecols@0049B99D	cmp edx, 0x15	cmp edx, 0x1a	83FA15	83FA1A	0x49B8D0: reject a request starting right of the cache
+2	0x0049BE80	7	1	terrain.tilecols@0049BE80	mov dword ptr [ebp + 8], 0x15	mov dword ptr [ebp + 8], 0x1a	C7450815000000	C745081A000000	0x49BE20 (row refresh): columns of an off-map row
+2	0x0049BEC4	3	1	terrain.tilecols@0049BEC4	cmp eax, 0x15	cmp eax, 0x1a	83F815	83F81A	0x49BE20: clamp an in-map row's columns (compare)
+2	0x0049BEC9	5	1	terrain.tilecols@0049BEC9	mov eax, 0x15	mov eax, 0x1a	B815000000	B81A000000	0x49BE20: clamp an in-map row's columns (value)
+2	0x0049C15C	3	1	terrain.tilecols@0049C15C	add eax, 0x15	add eax, 0x1a	83C015	83C01A	0x49C0C0 (x stepper): the incoming column on a right scroll is leftmost + cache width
+2	0x0049C545	3	1	terrain.tilecols@0049C545	cmp ebx, 0x15	cmp ebx, 0x1a	83FB15	83FB1A	0x49C4C0 (whole-map tile updater): is this tile inside the cached window
+2	0x0049C64E	3	1	terrain.tilecols@0049C64E	cmp eax, 0x15	cmp eax, 0x1a	83F815	83F81A	0x49C620 (per-frame row updater): clamp columns (compare)
+2	0x0049C656	5	1	terrain.tilecols@0049C656	mov eax, 0x15	mov eax, 0x1a	B815000000	B81A000000	0x49C620: clamp columns (value)
 2	0x004BD638	5	1	playfield.setrect.right	push 0x27f	push 0x31f	687F020000	681F030000	SetRect(&0x005993B0, 0, 0, 639, 399) -- the playfield's clip rect
 2	0x004BD675	9	1	playfield.layer.width	mov word ptr [0x6cefba], 0x280	mov word ptr [0x6cefba], 0x320	66C705BAEF6C008002	66C705BAEF6C002003	layer 5's width -- the number the read-back proves
 2	0x004D5856	5	1	image.clip.right	mov esi, 0x280	mov esi, 0x320	BE80020000	BE20030000	0x004D57B0: every sprite on screen goes through this

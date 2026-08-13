@@ -1054,3 +1054,134 @@ python tools/plugin/frame-capture.py --help                     # dump decode/ch
 Dumps and rendered PNGs land in `C:\sc-work\logs\063-frames\` (gitignored); the suite prints
 their paths for a human to open. Nothing in any of it changes what the user sees when they
 play, and `StarCraft.exe` on disk stays byte-identical.
+
+## 14. Task 064 — stage 2 decomposed: the refresh band the sweeps could not see
+
+§12.9 left stage 2 as "one atomic change of ~121 sites, and it is not currently correct",
+with the damage attributed to the grid/terrain core and the stage declared structural. Task
+064 re-opened it with 063's instrument and closed it the other way: **the stage was not
+structurally broken, it was 56 sites short, all in the six functions that FILL the terrain
+scratch surface** — a band none of the sweeps could see and no window capture could
+attribute. With those declared, stage 2 composes a correct 800-wide playfield (§14.5).
+
+### 14.1 The dead-end audit: which of 034's dead ends died of the instrument
+
+The task's own first question, asked before any theory. 034's stage-2 record contains three
+verdicts, and they fail for two different reasons that its instrument could not separate:
+
+| 034's verdict | what it actually was |
+| ------------- | -------------------- |
+| "the scratch sweep found two real row steps, they applied, **the damage did not move**" (§12.9) | true, and correctly read as "a real defect that is not the defect" — the two sites were 2 of a 56-site deficit, so the frame stayed wrecked. Nothing here died of the instrument; it died of the enumeration. |
+| "**stage 2 does not decompose**" (§12.9's bisect) | an enumeration gap wearing a structural costume. The missing sites sit inside the terrain group's own FEEDING path, so every coherent subset — including the whole stage — carried the defect, and no subset's damage could name it. The bisect was correct about everything it could observe; what it could not observe was that the terrain group itself was half-patched. |
+| "every frame shows only the left 640 columns" (§12.10) | died of the instrument, and 063 already killed it: the window crop was WMode's, not the engine's. |
+
+The transferable rule: **a bisect over a set can only indict members of the set.** When every
+subset of a stage misbehaves, "the stage is atomic" and "the defect is outside the set" are
+indistinguishable from inside the bisect — and the second one was true here.
+
+### 14.2 The refresh band, and why every sweep missed it
+
+The scratch surface (§6) has two sides. Its READERS — the blitter `FUN_004BCDC0`, the copy
+loop, the full-playfield blit `FUN_0040C253` — and its low-level run-writers
+(0x0040C3B0–0x0040C4C4) were in 034's table. Its FILLING side was not, except for the four
+`imul ..., 0x2A0` multiplies the shape sweep happened to match. That side is six functions,
+0x49B8D0..0x49C8xx, plus the per-megatile writer they all call:
+
+| function | role (read from the code, this task) |
+| -------- | ------------------------------------ |
+| 0x0049B8D0 | clamp a refresh request to the cached window |
+| 0x0049B9F0 | write ONE 32x32 megatile into scratch: 4x4 minitiles via 0x0040C3B0 |
+| 0x0049BC20 | refresh an arbitrary tile rectangle (map-area invalidate, e.g. 0x0047D972) |
+| 0x0049BD40 / 0x0049BE20 | refresh one tile COLUMN / one tile ROW |
+| 0x0049BF20 | full-cache refresh: 14 rows x one row-refresh — the game-start fill, via the origin-change handler 0x0049C030 |
+| 0x0049C0C0 / 0x0049C280 | the §7 steppers: scroll one tile, refresh the incoming column/row |
+| 0x0049C780 → 0x0049C620 | per-frame tile updater, called from layer 5's own draw 0x004BD580 |
+| 0x0049C4C0 | whole-map tile updater (creep): skips tiles inside the cached window |
+
+The 56 sites it holds, by the encoding that hid each family:
+
+| family | sites | what hides it |
+| ------ | ----- | ------------- |
+| mod-reduction chains: `lea r,[r − k·0x49800]`, k = 16,8,4,2,1 | 20 (4 functions × 5) | the constants are ×16/×8/×4/×2/×1 MULTIPLES of the wrap, encoded as NEGATIVE displacements — a sweep for `0x49800` matches neither the value nor the bytes |
+| column wraps, same negative-lea shape | 2 | ditto |
+| row steps in tile-row bytes: `+0x5400` (= 672·32) | 3 | carries neither 672 nor 0x49800 |
+| last-row bound `0x44400` (= 672·416) and end-minus-a-column `0x497E0` (= 0x49800 − 32) | 3 | derived values |
+| `−0x49800` as an AND mask or an ADD immediate (branchless conditional wrap) | 4 | two's-complement bytes `00 68 FB FF` |
+| the per-megatile writer's UNROLLED displacements `[edi + 672k + d]`, k = 8,16,24, d = 0,8,16,24 | 12 | §12.8's fog-writer shape, in the producer: only k=1 would spell the pitch, and no k=1 exists |
+| the cache extent in TILE units: `0x15` = 21 = 672/32 columns | 10 | a stride divided by the tile size; same class as §12.11's un-sweepable 40 |
+| grid row 18, named absolutely + its `40·(row−17)` byte count in 0x0048CB80 | 2 | **found by 034's own scan and lost in transcription** — scan_refs counted 21 named grid references and "three name a row"; the table carried two. A different defect class from every row above: the information existed. |
+
+(The matching 14-row constants — `0xE` = 448/32 — are untouched because the height does not
+change at this geometry; the margin convention is pitch = playfield width + one 32px tile,
+832 = 800 + 32 exactly as 672 = 640 + 32.)
+
+- **How found**: `work/scratch/064/scan_064.py` — a value-FAMILY sweep of `.text` for the
+  wrap's multiples in both signs, tile-row multiples, the unrolled `k·pitch + d` family and
+  band-restricted tile-unit immediates, PLUS a `call rel32` scan that put a caller graph
+  over the band; then every function in that graph read end to end. The two 0x0048CB80
+  sites came from the byte-pattern check that there are exactly two copies of the
+  `lea ecx,[eax+eax*4-0x55]; shl ecx,3` count shape in the binary.
+- **How verified**: the generator relocates each declared value inside its instruction's own
+  bytes and refuses the site on any mismatch (222 sites verified against the exe); the
+  plugin re-verifies all of them in the live process before writing; and the outcome oracle
+  is §14.5's frame, which no read-back touches.
+- **What the sweep's "100.0% coverage" means, stated at its true strength**: the linear
+  decoder resumed past every undecodable byte, so no BYTE of `.text` went unexamined — but
+  padding and jump tables decode as junk instructions, so coverage does not mean every
+  decoded instruction is real. Every hit was therefore read in its function before it was
+  declared (one discarded: a `jne` whose branch TARGET spelled 0x498000). The residual
+  failure class this method cannot see is a constant computed at runtime or split across
+  instructions.
+
+### 14.3 The mechanism of §12.9's wreck, arithmetic and all
+
+The scratch cell of a tile is a linear hash of its absolute map position:
+`off = (tileY·pitch + tileX)·32 mod size` — computed independently by every reader and
+every writer. 034's table widened the multiplies (×672→×832) in four writers and the
+modulus in none of them, so from the first fill of the first frame:
+
+```
+fixture camera origin (544,416) → tile (17,13)
+patched multiply:   (13·832 + 17)·32 = 0x54A20
+unpatched chain:    0x54A20 ≥ 0x49800 → reduces to 0xB220     (WRONG: 0x54A20 < 0x5B000)
+patched blitter:    reads 0x54A20
+```
+
+Producer and consumer disagree on every cell whose pre-wrap offset exceeds the OLD size —
+which at ×832 is most of the surface — so the blitter reads bytes nothing wrote this game:
+§12.9's "large areas never drawn, 332 of 380 rows, 16–21 points blacker than the control",
+mechanism attached. The megatile writer's stale unrolled displacements and the 21-vs-26
+column extents scatter what IS written, which is the rest of the wreck. None of it is
+observable through a window that crops to 640, and none of it is attributable from a bisect
+whose every subset contains the half-patched feeding path.
+
+### 14.4 Measured results
+
+TBD-064 (run ledger, wide_rows, band histograms, consistency figures, paths)
+
+### 14.5 What stage 2 still does not cover, stated so nobody over-reads
+
+1. **The scroll clamp is still stock** (§9.1 item 12, stage 3): the camera's maximum is
+   `(mapTileW − 20)·32`, so at the RIGHT map edge the playfield's last 5 tile columns read
+   scratch cells the refresh never fills (the cache clamps to the map, 0x0049BEBB). The
+   fixture keeps the camera interior; a player scrolling to the right edge will see stale
+   right-band columns until stage 3 moves the clamp (20 → 25 tiles, plus the ±equivalents
+   for mouse→world 0x0046FB40, the window-procedure clamps, and the minimap 20/13).
+2. **The minimap knows nothing of any of this** (items 17, 18 — stage 5; the viewport
+   rectangle is still not even located, §10 item 1).
+3. **The console-right dead strip** (160×80 at the bottom right) is blank by design — no
+   art exists for it and hard rule 1 forbids shipping any (§9.1 item 19, user's call).
+
+### 14.6 How to reproduce
+
+```powershell
+python tools/renderer_patch_sites.py --check      # 222 sites verify against the exe
+./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-framebuffer-capture.ps1
+#   unchanged: stock positive control + stage 1 (063's numbers, re-owned)
+./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-framebuffer-capture.ps1 `
+    -SuiteArgs @{ Stage2 = $true }
+#   stock + stage 2, the stage-2 arm captured twice; asserts the WIDESCREEN
+#   ACTIVE line (a refused table would run stock and pass vacuously), the
+#   window-vouched pitch-800 consistency, the right band holding map, the
+#   cross-arm left-640 identity, and no drift between the two captures
+```

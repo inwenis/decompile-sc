@@ -144,18 +144,29 @@ def cmd_check(a):
     # about exactly this). Search a small offset range on a sampled grid and
     # keep the offset that maximises mapping consistency; (0,0) is in range,
     # so a capture that needs no offset costs nothing.
-    best = (0, 0)
-    best_score = -1.0
-    for dy in range(0, a.search_dy + 1):
-        m, _, _ = build_mapping(d, before, after, 0, dy, map_w, step=4)
-        s, n = score_mapping(m)
-        if n and s > best_score:
-            best_score, best = s, (0, dy)
-    for dx in range(0, a.search_dx + 1):
-        m, _, _ = build_mapping(d, before, after, dx, best[1], map_w, step=4)
-        s, n = score_mapping(m)
-        if n and s > best_score:
-            best_score, best = s, (dx, best[1])
+    if a.align_dx is not None and a.align_dy is not None:
+        # Task 064: a pinned offset for callers who KNOW their capture path's
+        # geometry. The search below mislocked once -- (8,36) on a 36-marine
+        # scene whose sprite noise rewarded a wrong offset at step=4, while
+        # every other check in the same run locked the true (5,32) -- and a
+        # 3,4-px mislock reads as consistency 0.34 over a perfect dump. The
+        # search stays the default; the pin makes the asserted checks
+        # deterministic, and a WRONG pin shows up as a consistency collapse,
+        # never as a silent pass.
+        best = (a.align_dx, a.align_dy)
+    else:
+        best = (0, 0)
+        best_score = -1.0
+        for dy in range(0, a.search_dy + 1):
+            m, _, _ = build_mapping(d, before, after, 0, dy, map_w, step=4)
+            s, n = score_mapping(m)
+            if n and s > best_score:
+                best_score, best = s, (0, dy)
+        for dx in range(0, a.search_dx + 1):
+            m, _, _ = build_mapping(d, before, after, dx, best[1], map_w, step=4)
+            s, n = score_mapping(m)
+            if n and s > best_score:
+                best_score, best = s, (dx, best[1])
     dx, dy = best
     print("align_dx=%d" % dx)
     print("align_dy=%d" % dy)
@@ -257,6 +268,35 @@ def cmd_band(a):
     return 0
 
 
+def cmd_zeroruns(a):
+    """Task 064: where are the all-zero COLUMNS? The seam tracker.
+
+    Reports maximal runs of x-columns that are index 0 over every row of
+    y0..y1, inside x0..x1. Run it on each capture of a moving-camera pair:
+    a screen-space defect keeps its run at the same x; a map-space defect's
+    run moves with the scroll.
+    """
+    d = load_dump(a.dump)
+    x1 = a.x1 if a.x1 else d["w"]
+    y1 = a.y1 if a.y1 else d["h"]
+    px, w = d["px"], d["w"]
+    runs = []
+    start = None
+    for x in range(a.x0, x1):
+        allzero = all(px[y * w + x] == 0 for y in range(a.y0, y1))
+        if allzero and start is None:
+            start = x
+        elif not allzero and start is not None:
+            runs.append((start, x - 1))
+            start = None
+    if start is not None:
+        runs.append((start, x1 - 1))
+    print("zeroruns_region=%d,%d-%d,%d" % (a.x0, a.y0, x1, y1))
+    print("zeroruns_n=%d" % len(runs))
+    print("zeroruns=%s" % ";".join("%d-%d" % r for r in runs))
+    return 0
+
+
 def cmd_diff(a):
     """frame-diff.py's full-resolution SHAPE metrics, on raw indices.
 
@@ -280,29 +320,44 @@ def cmd_diff(a):
     diff_px = 0
     blocks = set()
     wide_rows = []
+    dense_rows = []
     span_max = 0
+    row_max = 0
     for y in range(y0, y1):
         ra, rb = y * wa, y * wb
         first = last = -1
+        row_n = 0
         for x in range(x0, x1):
             if pa[ra + x] != pb[rb + x]:
                 diff_px += 1
+                row_n += 1
                 if first < 0:
                     first = x
                 last = x
                 blocks.add((x // 32, y // 32))
+        row_max = max(row_max, row_n)
         if first >= 0:
             span = last - first + 1
             span_max = max(span_max, span)
             if span > width // 2:
                 wide_rows.append(y)
+            # Task 064. Span conflates "a row OF sprites" with "a damaged row":
+            # six idle marines in a fixture row span 337px of diffs at 3-8% row
+            # coverage and read as wide. A pitch/stride error FILLS rows (12.9's
+            # damage ran ~70% of the row), so the COUNT separates cleanly where
+            # the span cannot. dense is the assertable one; wide stays reported.
+            if row_n > width // 2:
+                dense_rows.append(y)
 
     print("diff_px=%d" % diff_px)
     print("diff_px_frac=%.5f" % (diff_px / float(width * (y1 - y0)) if width and y1 > y0 else 0))
     print("diff_blocks=%d" % len(blocks))
     print("diff_span_max=%d" % span_max)
+    print("diff_row_max=%d" % row_max)
     print("wide_rows=%d" % len(wide_rows))
     print("wide_row_ys=%s" % ",".join(str(y) for y in wide_rows[:40]))
+    print("dense_rows=%d" % len(dense_rows))
+    print("dense_row_ys=%s" % ",".join(str(y) for y in dense_rows[:40]))
     return 0
 
 
@@ -330,6 +385,9 @@ def main():
     p.add_argument("--save-palette", default=None)
     p.add_argument("--search-dy", type=int, default=48)
     p.add_argument("--search-dx", type=int, default=8)
+    # Pin the alignment instead of searching (task 064; both required together).
+    p.add_argument("--align-dx", type=int, default=None)
+    p.add_argument("--align-dy", type=int, default=None)
 
     p = sub.add_parser("render")
     p.add_argument("--dump", required=True)
@@ -351,9 +409,16 @@ def main():
     p.add_argument("--y0", type=int, default=0)
     p.add_argument("--y1", type=int, default=0)
 
+    p = sub.add_parser("zeroruns")
+    p.add_argument("--dump", required=True)
+    p.add_argument("--x0", type=int, default=0)
+    p.add_argument("--x1", type=int, default=0)
+    p.add_argument("--y0", type=int, default=0)
+    p.add_argument("--y1", type=int, default=0)
+
     a = ap.parse_args()
     return {"info": cmd_info, "check": cmd_check, "render": cmd_render,
-            "band": cmd_band, "diff": cmd_diff}[a.cmd](a)
+            "band": cmd_band, "diff": cmd_diff, "zeroruns": cmd_zeroruns}[a.cmd](a)
 
 
 if __name__ == "__main__":

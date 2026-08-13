@@ -274,6 +274,48 @@ class Builder:
                                   before=fmt(ins),
                                   after=fmt(after) if after else "??"))
 
+    def simm(self, va, old, new, width, name, stage, note):
+        """Rewrite one SIGNED immediate/displacement field of `width` bytes.
+
+        Task 064. The terrain refresh band holds its wrap arithmetic as
+        NEGATIVE encodings -- `lea ecx,[eax - 0x498000]`, `and eax,0xfffb6800`
+        -- which imm() cannot declare: the encoded bytes are the two's
+        complement and the operand text prints the magnitude. Same location
+        discipline as imm(): the field is FOUND inside the instruction's own
+        bytes and refused unless exactly one candidate exists, and the operand
+        text must carry the value (as magnitude or as unsigned hex).
+        """
+        blob = self.img.read(va, 16)
+        ins = disasm_one(va, blob)
+        if ins is None:
+            self.errors.append("%s @0x%08X: does not disassemble" % (name, va))
+            return
+        raw = bytes(ins.bytes)
+        mask = (1 << (8 * width)) - 1
+        enc_old = (old & mask).to_bytes(width, "little")
+        hits = [i for i in range(len(raw) - width + 1) if raw[i:i + width] == enc_old]
+        ops = ins.op_str.lower()
+        if ("0x%x" % abs(old)) not in ops and ("0x%x" % (old & mask)) not in ops:
+            self.errors.append("%s @0x%08X: `%s` does not carry 0x%X"
+                               % (name, va, fmt(ins), abs(old)))
+            return
+        if len(hits) != 1:
+            self.errors.append("%s @0x%08X: %d candidate fields of width %d for %d in %s"
+                               % (name, va, len(hits), width, old, raw.hex()))
+            return
+        lo, hi = -(1 << (8 * width - 1)), (1 << (8 * width - 1)) - 1
+        if not (lo <= new <= hi):
+            self.errors.append("%s @0x%08X: new value %d does not fit signed %d byte(s)"
+                               % (name, va, new, width))
+            return
+        off = hits[0]
+        patched = bytearray(raw)
+        patched[off:off + width] = (new & mask).to_bytes(width, "little")
+        after = disasm_one(va, bytes(patched))
+        self.patches.append(Patch(va, raw, bytes(patched), name, stage, note,
+                                  before=fmt(ins),
+                                  after=fmt(after) if after else "??"))
+
     # -- raw code rewrite ----------------------------------------------------
     def code(self, va, expect_hex, patch_hex, name, stage, note,
              fixup_off=None, fixup_addend=0):
@@ -574,6 +616,22 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     # The same function's sibling at 0x0048CB80 walks rows with an explicit step.
     b.imm(0x0048CC1F, STOCK_COLS, COLS, 1, "grid.rowstep.48CB80", 2,
           "0x0048CB80: next row of the grid is +40 bytes")
+    # 0x0048CB80's OTHER branch (task 064): the 21st named grid reference, found
+    # by 034's scan_refs (which counted "three name a row") and lost between the
+    # scan and the table -- the table carried only two row rebases. It fills grid
+    # rows 18..N with 1s via rep stos, naming grid[row 18][0] absolutely and
+    # holding the byte count as the same `lea ecx,[eax+eax*4-0x55]; shl ecx,3`
+    # == 40*(row-17) shape 034 already patched at 0x004B2303. Left stock, these
+    # dirty marks land in the DEAD relocated-away array: missed console-band
+    # redraws that render rather than crash. Two copies of the shape exist in
+    # .text (byte-pattern scan, task 064); both are now declared.
+    b.rebase(0x0048CBC7, 0x006CF2C8, 18 * COLS, "grid.row18.b", 2,
+             "0x0048CB80 branch 1 names grid[row 18][col 0]; recomputed for the new stride")
+    b.code(0x0048CBB5, "8d4c80ab" "c1e103",
+           "8d48ef" + "6bc9" + bytes([COLS]).hex() + "90",
+           "grid.row18.count.b", 2,
+           "0x0048CB80: ecx = (row - 17) * %d, was (row - 17) * %d -- the twin of "
+           "grid.row18.count" % (COLS, STOCK_COLS))
     # 0x0042D280 fills a row and then steps to the next one the same way. Found by
     # sweeping every grid-touching function for stride-shaped operands rather than
     # for the grid's address -- a stride names no address, so the relocation pass
@@ -793,6 +851,125 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
           "terrain blitter: advance to the next 16 scanlines")
     b.imm(0x0040C25A, STOCK_W, PF_W, 4, "terrain.fullblit.runwidth", 2,
           "0x0040C253: the run width of the whole-playfield blit")
+
+    # -- the terrain REFRESH band, 0x49B8D0..0x49C8xx (task 064) -----------
+    #
+    # The functions that FILL the scratch surface: the per-megatile writer
+    # 0x49B9F0, the jump-scroll refresh 0x49BC20, the column/row refreshes
+    # 0x49BD40 / 0x49BE20 (called by the steppers 0x49C0C0 / 0x49C280 and the
+    # full refresh 0x49BF20), the per-frame tile updater 0x49C780 -> 0x49C620
+    # (called from layer 5's own draw 0x4BD580), and the clamp helper 0x49B8D0.
+    # 034's sweeps patched their four `x672` multiplies and one wrap pair --
+    # and missed 54 sites in the SAME functions, because every one of them is
+    # an encoding no immediate sweep for 672/0x49800 can match:
+    #
+    #   * the wrap arithmetic is mod-reduction CHAINS: successive
+    #     `lea r,[r - k*0x49800]` for k=16,8,4,2,1, the constants encoded as
+    #     NEGATIVE displacements (0xFFB68000..0xFFFB6800);
+    #   * row steps are held in TILE-ROW bytes: +0x5400 (672*32), with the
+    #     conditional wrap as `cmp 0x44400` (672*416, the last row's start) /
+    #     `and 0xFFFB6800` (-0x49800 as a mask) or `cmp 0x497E0` (size minus
+    #     one 32-byte tile column);
+    #   * the megatile writer is UNROLLED exactly like 12.8's fog writer:
+    #     twelve `[edi + 672*k + d]` displacements, k=8/16/24, d=0/8/16/24;
+    #   * and the cache extent lives in TILE units: 0x15 == 21 == 672/32
+    #     columns, ten sites (the 0xE == 14 == 448/32 row constants stay,
+    #     because the height does not change at this geometry).
+    #
+    # THE CONSEQUENCE OF MISSING THESE is 12.9's wreck, mechanism and all: at
+    # the fixture origin (544,416) the patched x832 multiply produces offset
+    # 0x54A20, the unpatched chain reduces it mod 0x49800 to 0xB220, and the
+    # (patched) blitter reads 0x54A20 -- producer and consumer disagree over
+    # the whole surface from frame one. "Stage 2 does not decompose" was an
+    # enumeration gap wearing a structural costume: the bisect was correct
+    # about what it could observe, and what it could not observe was that the
+    # terrain group's own feeding path was half-patched in every subset.
+    #
+    # How found (task 064): a value-FAMILY sweep of .text -- multiples of the
+    # wrap in both signs, tile-row multiples, the unrolled k*pitch+d family,
+    # band-restricted tile-unit immediates -- touching 100.0% of .text BYTES
+    # (linear decode, resuming past undecodable bytes). Coverage means "no
+    # byte unexamined", not "every decoded instruction is real": padding and
+    # jump tables decode as junk, so every hit was then read in its function
+    # (one discarded: a `jne` whose branch TARGET spelled 0x498000). The
+    # residual failure class is a constant computed at runtime or split
+    # across instructions. work/scratch/064/scan_064.py is the sweep.
+    TILE = 32
+    assert TERRAIN_PITCH % TILE == 0
+    TILE_COLS = TERRAIN_PITCH // TILE            # 26 (stock 21)
+    STOCK_TILE_COLS = STOCK_TERRAIN_PITCH // TILE
+    TILEROW = TERRAIN_PITCH * TILE               # 0x6800 (stock 0x5400)
+    STOCK_TILEROW = STOCK_TERRAIN_PITCH * TILE
+    STOCK_SIZE = STOCK_TERRAIN_PITCH * STOCK_TERRAIN_ROWS
+
+    # The mod-reduction chains: k*size as a negative lea displacement.
+    for fn, vas in [
+        ("0x49BC20", (0x0049BC65, 0x0049BC74, 0x0049BC80, 0x0049BC8C, 0x0049BC98)),
+        ("0x49BD40", (0x0049BD7B, 0x0049BD87, 0x0049BD93, 0x0049BD9F, 0x0049BDAB)),
+        ("0x49BE20", (0x0049BE39, 0x0049BE45, 0x0049BE51, 0x0049BE5D, 0x0049BE69)),
+        ("0x49C780", (0x0049C7D1, 0x0049C7DD, 0x0049C7E9, 0x0049C7F5, 0x0049C801)),
+    ]:
+        for va, k in zip(vas, (16, 8, 4, 2, 1)):
+            b.simm(va, -(STOCK_SIZE * k), -(TERRAIN_SIZE * k), 4,
+                   "terrain.modchain@%08X" % va, 2,
+                   "%s: mod-reduce a scratch offset by %d*size (negative lea "
+                   "displacement)" % (fn, k))
+
+    # Column wraps inside the refresh loops, same negative-lea encoding.
+    for va, fn in [(0x0049BCD7, "0x49BC20"), (0x0049BE9C, "0x49BE20")]:
+        b.simm(va, -STOCK_SIZE, -TERRAIN_SIZE, 4, "terrain.colwrap@%08X" % va, 2,
+               "%s: wrap after a 32-byte column step" % fn)
+
+    # Row steps in tile-row bytes, with their conditional-wrap partners.
+    for va, fn in [(0x0049BCFC, "0x49BC20"), (0x0049BE04, "0x49BD40"),
+                   (0x0049C839, "0x49C780")]:
+        b.imm(va, STOCK_TILEROW, TILEROW, 4, "terrain.tilerow@%08X" % va, 2,
+              "%s: advance one 32px tile row of the scratch surface" % fn)
+    b.simm(0x0049BD05, -STOCK_SIZE, -TERRAIN_SIZE, 4, "terrain.rowwrap.49BC20", 2,
+           "0x49BC20: wrap after the tile-row step (add of -size)")
+    for va, fn in [(0x0049BDF2, "0x49BD40"), (0x0049C82A, "0x49C780")]:
+        b.imm(va, STOCK_SIZE - STOCK_TILEROW, TERRAIN_SIZE - TILEROW, 4,
+              "terrain.lastrow@%08X" % va, 2,
+              "%s: is this the last tile row (start of row %d)" % (fn, STOCK_TERRAIN_ROWS // TILE - 1))
+    for va, fn in [(0x0049BDFF, "0x49BD40"), (0x0049C74B, "0x49C620"),
+                   (0x0049C834, "0x49C780")]:
+        b.simm(va, -STOCK_SIZE, -TERRAIN_SIZE, 4, "terrain.wrapmask@%08X" % va, 2,
+               "%s: -size as an AND mask (branchless conditional wrap)" % fn)
+    b.imm(0x0049C73F, STOCK_SIZE - TILE, TERRAIN_SIZE - TILE, 4,
+          "terrain.endcol.49C620", 2,
+          "0x49C620: size minus one 32-byte tile column (column-step wrap test)")
+
+    # The unrolled per-megatile writer 0x49B9F0: [edi + 672*k + d] for its
+    # 4x4 grid of 8x8 minitiles -- 12.8's fog-writer shape, in the producer.
+    MT = [(0x0049BA45, 8, 0), (0x0049BA57, 8, 8), (0x0049BA69, 8, 16),
+          (0x0049BA7B, 8, 24), (0x0049BA8D, 16, 0), (0x0049BA9F, 16, 8),
+          (0x0049BAB1, 16, 16), (0x0049BAC3, 16, 24), (0x0049BAD5, 24, 0),
+          (0x0049BAE7, 24, 8), (0x0049BAF9, 24, 16), (0x0049BB08, 24, 24)]
+    for va, k, d in MT:
+        b.imm(va, STOCK_TERRAIN_PITCH * k + d, TERRAIN_PITCH * k + d, 4,
+              "terrain.mt.r%dc%d" % (k // 8, d // 8), 2,
+              "0x49B9F0 (per-megatile writer): minitile row %d col %d of the "
+              "unrolled 4x4" % (k // 8, d // 8))
+
+    # The cache extent in TILE units: 21 == 672/32 columns. The matching
+    # 14 == 448/32 row constants are untouched because the height is.
+    assert TILE_COLS <= 127, "tile-unit rewrites use imm8 fields"
+    for va, width, what in [
+        (0x0049B958, 1, "0x49B8D0 (clamp helper): clamp request width to the cache"),
+        (0x0049B95D, 4, "0x49B8D0: clamped request width"),
+        (0x0049B99D, 1, "0x49B8D0: reject a request starting right of the cache"),
+        (0x0049BE80, 4, "0x49BE20 (row refresh): columns of an off-map row"),
+        (0x0049BEC4, 1, "0x49BE20: clamp an in-map row's columns (compare)"),
+        (0x0049BEC9, 4, "0x49BE20: clamp an in-map row's columns (value)"),
+        (0x0049C15C, 1, "0x49C0C0 (x stepper): the incoming column on a right "
+                        "scroll is leftmost + cache width"),
+        (0x0049C545, 1, "0x49C4C0 (whole-map tile updater): is this tile inside "
+                        "the cached window"),
+        (0x0049C64E, 1, "0x49C620 (per-frame row updater): clamp columns (compare)"),
+        (0x0049C656, 4, "0x49C620: clamp columns (value)"),
+    ]:
+        b.imm(va, STOCK_TILE_COLS, TILE_COLS, width,
+              "terrain.tilecols@%08X" % va, 2, what)
 
     # -- the playfield layer's own rectangle -------------------------------
     # What the read-back reads. Layer 5 IS the playfield (research/renderer-
