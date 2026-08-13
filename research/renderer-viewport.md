@@ -75,6 +75,19 @@ Everything — terrain, sprites, fog, the console, dialogs, the cursor — is co
 single buffer. There is no separate playfield surface. **That is the central structural fact
 of this document.**
 
+> **Corrected by task 063, which read the buffer's CONTENT rather than its descriptor
+> (§13.2): the buffer holds less than "everything".** Measured at a marker instant in a
+> running game, in two arms: the playfield composition and the top-strip counters are in it;
+> the console/HUD dialogs are NOT (their pixels live in the dialogs' own surfaces — the ones
+> `ScQueueIndCopyRect` reads), the cursor is NOT, and at the main menu the buffer is ALL
+> INDEX 0 — the glue screens do not compose into it at all. How the presented frame is
+> assembled from the pieces (per-layer render-target switching through `0x006CF4A8`, the
+> present blit, or inside Storm) is NOT resolved; what is established is what a reader of
+> this buffer sees. The two-writers argument above stands — the descriptor layout is
+> correct — but "everything composes into this buffer" was an over-reading of the layer
+> walk, and §12.2's row-diff results are unaffected (both its arms read the same regions of
+> the same buffer).
+
 ## 3. DirectDraw, and what WMode.dll does and does not change
 
 `FUN_0041D930` (`gds\vidinimo_PC.cpp`) is the entire display setup. Decompiled, with the
@@ -887,6 +900,13 @@ present one"**. The only route that could is true fullscreen with no helper, whi
 user's 3840x2160 desktop to a small mode and rearranges their desktop icons (hard rule 5), so
 it is a decision for the user rather than a step to take unattended.
 
+> **Split in two by task 063 (§13): presentation gates SHIPPING the feature, not DEVELOPING
+> it.** "Every frame this task has ever captured shows only the left 640 columns" was a
+> property of the instrument — every capture went through the presented window. Reading the
+> engine's own framebuffer shows all 800 columns with no window involved (§13.3), so stage 2
+> is developable today with zero user impact; and the presentation routes themselves are
+> costed in §13.4, where "true fullscreen is the only route" also stops being true.
+
 ### 12.11 A negative result that is not over-read
 
 The same shape sweep was pointed at the dirty grid's row stride (40, anchored on 0x006CEFF8)
@@ -911,3 +931,126 @@ $env:SCPLUGIN_WS_ONLY = 'grid,dirty,terrain'          # bisect stage 2 by group 
 
 The suite reads the target geometry out of the generated header, so regenerating at another
 size cannot leave it asserting the old numbers.
+
+## 13. Task 063 — reading the composed frame without presenting it, and the presentation bill
+
+§12.10 ends on "the extra 160 columns have never been seen by anything, in any run". Task 063
+tested the one sentence in that verdict that was about the INSTRUMENT rather than the engine —
+every frame 034 captured went through the presented window — and it falls: **the engine's own
+framebuffer, read out of process memory, shows all 800 columns.** Stage 2 is developable today
+with zero user impact.
+
+### 13.1 The instrument
+
+The plugin's `FRAMEDUMP` (scplugin.cpp, task 063) copies the screen Bitmap's buffer — the
+descriptor at `0x006CEFF0`, §2 — to `fd-<marker>.bin` on each marker. Same family as the
+`SCREEN` scan: no hook, nothing called in the game, works in `-Mode observe`, off by default
+(`%SCPLUGIN_FRAMEDUMP%` / launcher `-FrameDump <dir>`, gitignored paths only — a dump
+reproduces game artwork, hard rule 1). Tearing is handled by construction, not hope: the copy
+repeats until two CONSECUTIVE copies are byte-equal, and `reads=` / `stable=` go on the log
+line and into the 16-byte file header (`SCFD`, u16 w, u16 h, u32 bytes, u16 reads, u16
+stable), so an unsettled copy cannot pass silently.
+
+**How a pile of palette indices is validated** (`tools/plugin/frame-capture.py check`): the
+presented window shows the RGB those indices were painted as, at 1:1 for columns 0..639
+(§12.6). Over window pixels that are IDENTICAL in two captures bracketing the dump, every
+occurrence of index *i* must land on one RGB. A torn, misaligned or wrong-pitch dump collapses
+that mapping — proved offline before any live run, against synthetic dumps: a correct dump
+scores `consist_frac=1.000`, the same dump with rows shifted 160 bytes (the wrong-pitch
+signature) scores `0.583`. The check also refuses a dead window capture (a black window maps
+every index to black, each one perfectly "consistently" — `window_distinct_rgb >= 32` guards
+the vacuous pass), and auto-finds the capture's caption offset (measured live: the game's
+(0,0) sits at (5,32) inside the client capture — drive-game.ps1's PW_CLIENTONLY warning,
+quantified).
+
+### 13.2 The positive control, and what it taught about the buffer
+
+`probe-framebuffer-capture.ps1`, stock arm, `-Mode observe`, off-screen, 2026-08-13. The
+first run's whole-frame consistency read 0.75 with the dump entirely correct, and diagnosing
+that number produced the section-2 correction — the buffer holds LESS than "everything":
+
+| where | measured | meaning |
+| ----- | -------- | ------- |
+| main menu, both arms | buffer is ALL index 0 (307200/307200, 384000/384000) | glue screens do not compose into `0x006CEFF0` |
+| in game, console band y=320..447 | consistency 0.49; dump renders black where the window shows console art | the HUD dialogs' pixels are NOT in this buffer — they live in the dialogs' own surfaces, the ones `ScQueueIndCopyRect` reads |
+| in game, cursor | absent from the dump, present in the window | layer 0's result is not in the buffer at the marker instant |
+| in game, pure playfield (128,20)-(512,320) | **consistency 0.98902 (stock) / 0.98912 (stage 1)**, 115k mapped px, 121 indices | the buffer IS the playfield picture, index for index |
+| the ~1.1% residue | 1265 px in isolated 32x32 blobs (mineral fields, the marine), no row spanned; per-index spread = two near RGBs | sprites animating A→B→A across the capture bracket — the same animation family as §12.2's 586-pixel noise floor |
+
+So the suite's trust check asserts the pure-playfield region at threshold 0.97 — far above
+the 0.58 a wrong-pitch dump scores, below the animation ceiling — and reports the menu
+buffer's content instead of asserting a picture that is not there.
+
+### 13.3 The 800-wide frame — §12.10's blocker was the instrument
+
+Stage-1 arm (`-Widescreen 1 -WidescreenStage 1`), same run:
+
+- the dump reads **800x480, 384000 bytes, stable** — at the menu and in game;
+- the playfield consistency (0.989) holds **only if rows are extracted at the true pitch of
+  800** — a 640-pitch misread shifts row *y* by 160·*y* bytes and scores 0.58 on the
+  synthetic control — so the full-width geometry is read correctly, not merely more bytes;
+- **the right 160 columns read end to end**: 76800/76800 px, all index 0 in both scenes —
+  exactly what stage 1 predicts (the 800-aware screen clear writes them, nothing else does);
+- cross-arm, in game, same fixture, same origin (544,416 both arms): stage-1's left 640
+  columns agree with the stock arm's INDEX FOR INDEX over the playfield interior —
+  `wide_rows=0`, 1252 differing px in 6 blocks (animation), widest row span 75 px;
+- the dump renders to a recognizable 800x480 PNG through the palette the check derives
+  (gitignored diagnostic path; the path travels, never the image).
+
+**Consequence, stated plainly: stage 2 is now developable without presenting a single frame
+and without touching the user's display.** The row-diff oracle §12.2 built on window captures
+ports directly to dumps (`frame-capture.py diff` implements the same `wide_rows`
+discriminator on raw indices, no palette involved), and it sees all 800 columns instead of
+the left 640. §12.10's fact still stands for SHIPPING: a user playing wider still needs a
+presentation route — that bill is §13.4.
+
+### 13.4 The presentation bill (task 063's costing of §12.10's routes)
+
+Facts measured or established this task, then the routes they price:
+
+1. **This adapter has no 800x480 mode.** `EnumDisplaySettingsA` walk, 2026-08-13: 132 mode
+   entries, 21 distinct resolutions; 640x480 and 800x600 present, 800x480 absent. True
+   fullscreen at the feature's own geometry is impossible on this machine — the only
+   fullscreen-viable widescreen shape is the parametric 800x600 regeneration (§12.1, the
+   L-shaped dead space).
+2. **storm.dll imports nothing from ddraw.dll** (research/pe-anatomy.md import table: six
+   DLLs, no ddraw) — every DirectDraw call below the exe flows through the three interface
+   pointers `0x0041D930` creates and hands to SDraw's Ordinal_351. A replacement `ddraw.dll`
+   therefore has one client worth of surface area: the exe's calls (§3, enumerated) plus
+   whatever methods Storm invokes on those objects (bounded, readable out of storm.dll's
+   export RVAs).
+3. **A source-available non-cropping helper already exists**: cnc-ddraw
+   (github.com/FunkyFr3sh/cnc-ddraw, MIT) — a GDI/OpenGL/D3D9 re-implementation of
+   DirectDraw, windowed/borderless, upscaling, StarCraft on its supported-games list. Its
+   documented architecture presents the full surface the game asks for — the opposite of
+   WMode's measured crop — but that is documentation, not measurement.
+
+| route | cost to a decision | cost to done | user impact while testing |
+| ----- | ------------------ | ------------ | ------------------------- |
+| WMode.dll (current) | decided: presents 640 whatever it is asked (§12.6) | — | — |
+| true fullscreen, user's desktop | decided for 800x480: impossible (no mode). 800x600: user-attended decision | regenerate at 800x600 + user accepts mode switch + icon shuffle | switches their desktop; never unattended |
+| true fullscreen, invisible desktop (test vehicle) | one probe run (`probe-fullscreen-desktop.ps1`, **built and deliberately NOT run**: parent samples the REAL desktop mode 4x/s while the child launches fullscreen off-screen; restore-on-leak; CONTAINED/LEAKED/REFUSED verdict). Withheld because §13.3's YES removed what it blocked, and its LEAKED outcome spends the user's icon layout — the conductor holds it for a user-attended GO | n/a — it is a measurement, not a shipping route | none if CONTAINED/REFUSED; seconds of mode flip if LEAKED |
+| **cnc-ddraw** | **one task**: build/obtain, drop in via the existing `-Windowed` mechanism, run `probe-widescreen-present.ps1` and read CROP/SCALE/FOLLOW | config + the same stage-2 work the engine side always needed | none (windowed, off-screen testable) |
+| own ddraw shim | bounded by facts 2–3 but strictly dominated by cnc-ddraw unless it fails its probe | est. 4–8 tasks | none |
+| plugin-side presenter (hook the ONE present blit `FUN_0041D420`, StretchDIBits the engine's buffer at its true pitch) | design known; palette capture is the open question (Storm's GDI palette imports / the §12.6-adjacent palette registers) | est. 2–4 tasks | none |
+
+**Recommendation:** cnc-ddraw measurement task first; fullscreen only ever as a user-attended
+800x600 choice; own code only if cnc-ddraw's probe comes back CROP. And note what the
+cnc-ddraw probe also answers for free: WMode-as-`ddraw.dll` throws a DirectDraw Error in both
+arms on this machine (§12.6) — a helper that IMPLEMENTS DirectDraw instead of forwarding to
+it separates "the proxy loading path is broken" from "WMode is".
+
+### 13.5 How to reproduce
+
+```powershell
+python tools/plugin/frame-capture.py --help                     # dump decode/check/diff/band
+./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-framebuffer-capture.ps1
+#   two launches: stock-observe positive control, then stage 1; asserts the
+#   playfield consistency, the 800x480 read, the right band, the cross-arm diff
+./tools/plugin/probe-fullscreen-desktop.ps1   # the §13.4 desktop measurement -- ONLY with a
+#   user-attended GO: its LEAKED outcome flips the real desktop's mode for seconds
+```
+
+Dumps and rendered PNGs land in `C:\sc-work\logs\063-frames\` (gitignored); the suite prints
+their paths for a human to open. Nothing in any of it changes what the user sees when they
+play, and `StarCraft.exe` on disk stays byte-identical.
