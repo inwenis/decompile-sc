@@ -183,22 +183,33 @@ enum ScUpgQueueStat {
     SC_UPGQ_STAT_REFUSED_GATE = 5,  // the engine's own gate refused an item at promotion
     SC_UPGQ_STAT_WAITING_COST = 6,  // promotions deferred because the player cannot pay yet
     SC_UPGQ_STAT_UNBLOCKED = 7,     // card conditions answered as if the building were idle
-    // Both always 0, and kept in the line so that stays visible: the ENGINE pays for every
-    // item, at start, and this module never moves a resource. Both suites assert them.
-    SC_UPGQ_STAT_MINERALS_SPENT = 8,
-    SC_UPGQ_STAT_GAS_SPENT = 9,
+    // MINERALS_SPENT and GAS_SPENT USED TO SIT HERE (issue #66, task 055). Nothing ever
+    // incremented them -- and in this module nothing could have: MineralsOf/GasOf return
+    // VALUES, not pointers, so it cannot write a resource global at all. The counters were
+    // asserting the initialiser.
+    //
+    // The claim -- the engine pays for every item, at start, and this module never moves a
+    // resource -- is unchanged, and is asserted where it can actually fail: against the
+    // engine's own resource globals, which hooktest and test-upgrade-queue.ps1 both read.
+    // Measured before deleting (work/scratch/055-defect): with a real spend added to the
+    // queue path and these counters left alone, the balance checks failed and every
+    // `spent nothing` check still passed.
     // The narrower, level-stacking lie: how often the per-player in-progress BIT was
     // suppressed as well, which only ever happens for the building already running that
     // exact upgrade. Counted separately from UNBLOCKED so a run can say which of the two
     // lies it needed.
-    SC_UPGQ_STAT_UNBLOCKED_LEVEL = 10,
+    SC_UPGQ_STAT_UNBLOCKED_LEVEL = 8,
     // Task 054 / issue #67 item 1. Items dropped because their record was made in a
     // DIFFERENT game (sc_session.h). Kept apart from DROPPED for the same reason
     // sc_prodqueue keeps its own apart: "the building died" and "this record belongs
     // to a game that ended" are different events with different correct responses, and
     // a single counter for both would hide whichever is rarer.
-    SC_UPGQ_STAT_STALE_SESSION = 11,
-    SC_UPGQ_STAT__COUNT = 12
+    //
+    // Unlike the counters issue #66 just deleted from this enum, one path increments it
+    // and hooktest part [22] asserts its value non-zero -- an assertion watched failing
+    // with the epoch pinned, not one reading its answer out of the zero-initialiser.
+    SC_UPGQ_STAT_STALE_SESSION = 9,
+    SC_UPGQ_STAT__COUNT = 10
 };
 int ScUpgQueueStat(int which);
 

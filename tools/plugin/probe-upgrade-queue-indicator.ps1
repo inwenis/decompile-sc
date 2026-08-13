@@ -120,7 +120,7 @@ function Get-QInd {
     param([string]$Tag, [int]$TimeoutSec = 20)
     $script:qindSeq++
     $label = "qi-$Tag-$script:qindSeq"
-    Set-Content -LiteralPath $markerPath -Value $label -NoNewline
+    Set-ScMarker -MarkerPath $markerPath -Label $label
     $esc = [regex]::Escape($label)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {

@@ -1,4 +1,4 @@
-﻿#Requires -Version 7
+#Requires -Version 7
 <#
 .SYNOPSIS
 PLUGIN-vs-STOCK: does a Sunken Colony attack a Medic that walks into its range? Same map,
@@ -58,6 +58,7 @@ $scriptDir = $PSScriptRoot
 $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'drive-game.ps1')
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
+. (Join-Path $scriptDir 'sc-oracle-guard.ps1')
 
 $failures = 0
 $step = 0
@@ -212,14 +213,33 @@ function Invoke-Arm {
         # two arms comparable.
         $minHp = Get-TotalHp (Get-Mine $result.Arrived $TYPE_ID[$UnitType])
         $samples = [math]::Max(1, [int]($WatchSeconds / 5))
+        # THE SUNKEN'S ORDER IS SAMPLED THE SAME WAY THE HIT POINTS ARE (issue #70). It used
+        # to be read once, off the LAST scan, while the HP reading correctly took the minimum
+        # over every scan -- and the comment at the top of this loop already explains why one
+        # sample is unsafe for HP. It is unsafe here for the same reason and worse: a Sunken
+        # that acquired mid-window and returned to idle before the last scan reads "never
+        # acquired", and it reads that way in BOTH arms, so the two agree on a non-event.
+        # AcquiredAny is "at any point in the window", which is what "did it acquire" means.
+        $acquiredAny = $false
+        $ordersSeen = @()
+        $scans = 0
         for ($i = 0; $i -lt $samples; $i++) {
             Start-Sleep -Seconds 5
             $w = Get-ScWorldState -LogPath $logPath -Tag "watch$i" -MarkerPath $markerPath
             $hp = Get-TotalHp (Get-Mine $w $TYPE_ID[$UnitType])
             if ($hp -lt $minHp) { $minHp = $hp }
+            $sunkNow = Get-Sunken $w
+            foreach ($s in $sunkNow) {
+                $ordersSeen += ('0x{0:x2}' -f $s.Order)
+                if ($s.Order -eq $SUNKEN_ATTACK_ORDER) { $acquiredAny = $true }
+            }
+            $scans++
             $result.Watched = $w
         }
         $result.MinHp = $minHp
+        $result.AcquiredAny = $acquiredAny
+        $result.WatchSamples = $scans
+        $result.OrdersSeen = (($ordersSeen | Sort-Object -Unique) -join ',')
         ArmShot 'watched'
     }
     finally {
@@ -297,10 +317,14 @@ try {
 
                 # The fixture is only meaningful if the units actually got within range.
                 # -1 means the block is gone, which is itself proof it got in range.
+                # Recorded on the arm as well as asserted, because the plugin-vs-stock
+                # comparison downstream needs it as its witness: two arms whose blocks never
+                # arrived agree that nothing happened (issue #70).
+                $arm.InRange = (($arm.DistWatched -ge 0 -and $arm.DistWatched -le $SUNKEN_RANGE_PX) -or
+                                ($arm.DistArrived -ge 0 -and $arm.DistArrived -le $SUNKEN_RANGE_PX) -or
+                                $arm.Survivors -lt $UnitCount)
                 Assert-That "[$($arm.Tag)] the block really did walk inside the Sunken's weapon range (closest $($arm.DistWatched)px, arrival $($arm.DistArrived)px, range ${SUNKEN_RANGE_PX}px)" `
-                    (($arm.DistWatched -ge 0 -and $arm.DistWatched -le $SUNKEN_RANGE_PX) -or
-                     ($arm.DistArrived -ge 0 -and $arm.DistArrived -le $SUNKEN_RANGE_PX) -or
-                     $arm.Survivors -lt $UnitCount)
+                    $arm.InRange
                 # The plugin arm must actually be exercising the feature, or it is not a
                 # test of the feature. Only meaningful in the fanout arm; the stock arm is
                 # supposed to hold twelve and cap.
@@ -324,19 +348,39 @@ try {
     }
 
     Step 'THE COMPARISON: is the Sunken behaving differently with our plugin in the process?' {
+        # HOW MANY PAIRS ACTUALLY REACHED THIS COMPARISON (issue #70). The `continue` below
+        # is legitimate -- `-Modes fanout` alone leaves no stock arm to compare against --
+        # but nothing counted it, so a run that compared NOTHING printed no assertions here
+        # and exited 0, indistinguishable from a run in which everything agreed.
+        $pairsCompared = 0
         foreach ($ut in $UnitTypes) {
             $f = $arms["$ut-fanout"]; $o = $arms["$ut-observe"]
             if (-not $f -or -not $o) { continue }
-            Write-Host ("       {0}: fanout attacked={1} (hp {2}, lowest {3}), observe attacked={4} (hp {5}, lowest {6})" -f `
-                $ut, $f.Attacked, $f.MyHpStart, $f.MyHpMin, $o.Attacked, $o.MyHpStart, $o.MyHpMin)
+            $pairsCompared++
+            Write-Host ("       {0}: fanout attacked={1} (hp {2}, lowest {3}, {4} samples, orders {5}), observe attacked={6} (hp {7}, lowest {8}, {9} samples, orders {10})" -f `
+                $ut, $f.Attacked, $f.MyHpStart, $f.MyHpMin, $f.WatchSamples, $f.OrdersSeen,
+                $o.Attacked, $o.MyHpStart, $o.MyHpMin, $o.WatchSamples, $o.OrdersSeen)
+            # THE WITNESS both of the assertions below need: each arm's block has to have
+            # got within the Sunken's reach. Without it, two arms that never arrived are
+            # both "not attacked", the comparison passes, and the run reports parity between
+            # two no-ops (issue #70). It is asserted per arm above; here it GATES.
+            $bothProvoked = ($f.InRange -eq $true -and $o.InRange -eq $true)
             # THE QUESTION. Whatever the Sunken does, stock and plugin must do the same
             # thing -- that is what makes the answer "ours" or "vanilla".
             Assert-That "$ut`: the plugin arm and the stock arm agree on whether the Sunken attacked (both $($f.Attacked))" `
-                ($f.Attacked -eq $o.Attacked) `
-                "(fanout=$($f.Attacked) observe=$($o.Attacked) -- a DIFFERENCE HERE IS OURS AND MUST BE REPORTED BEFORE ANYTHING ELSE)"
-            Assert-That "$ut`: and on whether it ACQUIRED at all (Sunken order 0x$('{0:x2}' -f $f.SunkenOrderAfter) vs 0x$('{0:x2}' -f $o.SunkenOrderAfter))" `
-                ($f.SunkenAcquired -eq $o.SunkenAcquired)
+                (Test-ScWitnessed -Claim ($f.Attacked -eq $o.Attacked) -Witness $bothProvoked) `
+                "(fanout=$($f.Attacked) inRange=$($f.InRange); observe=$($o.Attacked) inRange=$($o.InRange) -- a DIFFERENCE HERE IS OURS AND MUST BE REPORTED BEFORE ANYTHING ELSE; two arms that never reached the Sunken agree about nothing)"
+            # ACQUIRED AT ANY POINT IN THE WINDOW, not in the last scan (issue #70).
+            # SunkenAcquired was one sample from the final watch, so a Sunken that acquired
+            # mid-window and went idle again read "never acquired" -- in both arms, agreeing.
+            Assert-That "$ut`: and on whether it ACQUIRED at any point in the window (fanout orders [$($f.OrdersSeen)] vs observe [$($o.OrdersSeen)])" `
+                (Test-ScWitnessed -Claim ($f.AcquiredAny -eq $o.AcquiredAny) -Witness $bothProvoked) `
+                "(fanout=$($f.AcquiredAny) over $($f.WatchSamples) sample(s); observe=$($o.AcquiredAny) over $($o.WatchSamples) sample(s))"
         }
+        # AND THE COUNT GATES THE STEP. Zero pairs is not agreement.
+        Assert-That "arms compared: $pairsCompared plugin/stock pair(s) of the $($UnitTypes.Count) unit type(s) asked for" `
+            (Test-ScReached -Count $pairsCompared) `
+            "(-Modes was '$($Modes -join ',')' -- this suite's whole question is a COMPARISON, so a run with only one mode has not asked it)"
         $med = $arms['medic-observe']; $mar = $arms['marine-observe']
         if ($med -and $mar) {
             Write-Host ("       stock, side by side: Medics attacked={0}, Marines attacked={1}" -f $med.Attacked, $mar.Attacked)

@@ -2965,8 +2965,11 @@ static void ProdQueueTests(void) {
     Check("the ring is held one below the engine's five", PqEngineLen(), SC_PRODQ_ENGINE_HOLD);
     Check("and the fifth item is with the plugin", ScProdQueueOverflowCount(PqBuilding()), 1);
     Check("so the logical queue is five",  PqEngineLen() + PqOverflow(), 5);
+    // "and the plugin spent NOTHING" used to be asserted here from the plugin's own
+    // MINERALS_SPENT counter. Deleted with the counter (issue #66): the line above is the
+    // same claim read out of the engine's resource global, and it is the one that fails
+    // when a spend is actually added -- measured, work/scratch/055-defect.
     Check("the ENGINE paid for all five",  (long long)*PqMinerals(), 1000 - 5 * 50);
-    Check("and the plugin spent NOTHING",  ScProdQueueStat(SC_PRODQ_STAT_MINERALS_SPENT), 0);
     Check("held counter",                  ScProdQueueStat(SC_PRODQ_STAT_CAPTURED), 1);
 
     printf("\n    a queue under the hold is left ENTIRELY to the engine\n");
@@ -3102,8 +3105,6 @@ static void ProdQueueTests(void) {
     Check("two are in the ring",         PqEngineLen(), 2);
     Check("nothing was held",            ScProdQueueTrackedBuildings(), 0);
     Check("balance never goes negative", (long long)*PqMinerals(), 20);
-    Check("the plugin still spent nothing",
-          ScProdQueueStat(SC_PRODQ_STAT_MINERALS_SPENT), 0);
 
     printf("\n    a type units.dat says moves no resources moves none, either way\n");
     PqBegin(16, 1000, 500);
@@ -3201,8 +3202,6 @@ static void ProdQueueTests(void) {
         // the moment it accepted it; holding an item back and handing it over again are
         // bare stores. So the balance is down by sixteen costs -- not seventeen (the
         // refused one), and not twenty-seven (a second payment on each promotion).
-        Check("the plugin never spent a mineral of its own",
-              ScProdQueueStat(SC_PRODQ_STAT_MINERALS_SPENT), 0);
         Check("total spend is sixteen costs, not seventeen and not twenty-seven",
               (long long)(start - *PqMinerals()), 16 * 50);
     }
@@ -3432,8 +3431,6 @@ static void UpgradeQueueTests(void) {
     Check("its id", ScUpgQueueIdAt(UqBuilding(), 0), UQ_UPG_B);
     // THE HEADLINE OF THIS PART. A held item is unpaid, so the balance has not moved.
     Check("NOTHING was paid for the held item", (long long)*UqMinerals(), 1000 - 100);
-    Check("the plugin spent nothing of its own",
-          ScUpgQueueStat(SC_UPGQ_STAT_MINERALS_SPENT), 0);
 
     printf("\n    it is promoted when the building frees, and THEN the engine pays\n");
     UqFinishRunning();
@@ -3442,8 +3439,6 @@ static void UpgradeQueueTests(void) {
     Check("it is now the running upgrade", (long long)*UqUpgField(), UQ_UPG_B);
     Check("the plugin holds nothing", UqQueued(), 0);
     Check("paid EXACTLY twice, once each", (long long)*UqMinerals(), 1000 - 2 * 100);
-    Check("and the plugin still spent nothing",
-          ScUpgQueueStat(SC_UPGQ_STAT_MINERALS_SPENT), 0);
 
     printf("\n    FIFO across BOTH opcodes: upgrade, tech, upgrade -- in that order\n");
     UqBegin(8, 1000, 1000);
@@ -3546,6 +3541,7 @@ static void UpgradeQueueTests(void) {
     Check("one held", UqQueued(), 1);
     {
         DWORD before = *UqMinerals();
+        DWORD gasBefore = *UqGas();
         *(DWORD*)(UqBuilding() + SC_CUNIT_OFF_HITPOINTS) = 0;   // dead
         ScUpgQueueOnTick(FakeUnit(1));   // any tick collects garbage
         Check("the record is gone", ScUpgQueueTrackedBuildings(), 0);
@@ -3555,9 +3551,11 @@ static void UpgradeQueueTests(void) {
         // nothing, because the plugin never took anything.
         Check("and NOT ONE MINERAL came back or went away",
               (long long)*UqMinerals(), (long long)before);
-        Check("the plugin's spend counter is still flat zero",
-              ScUpgQueueStat(SC_UPGQ_STAT_MINERALS_SPENT), 0);
-        Check("and so is its gas counter", ScUpgQueueStat(SC_UPGQ_STAT_GAS_SPENT), 0);
+        // This used to read the plugin's own MINERALS_SPENT/GAS_SPENT counters, which no
+        // code path could move (issue #66). The gas half is now the same read-back as the
+        // mineral half -- the engine's own global, before and after -- so the claim keeps
+        // an oracle instead of losing one.
+        Check("nor a single unit of gas", (long long)*UqGas(), (long long)gasBefore);
     }
 
     // -----------------------------------------------------------------------
@@ -3619,8 +3617,6 @@ static void UpgradeQueueTests(void) {
         Check("level 3 started", g_uqStarted, 3);
         Check("and it cost 100 + 75*2", (long long)(before - *UqMinerals()), 250);
         Check("the queue is empty", UqQueued(), 0);
-        Check("and the plugin still spent nothing of its own",
-              ScUpgQueueStat(SC_UPGQ_STAT_MINERALS_SPENT), 0);
     }
 
     // -----------------------------------------------------------------------------

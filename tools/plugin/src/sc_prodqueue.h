@@ -139,31 +139,49 @@ enum ScProdQueueStat {
     SC_PRODQ_STAT_CANCELLED = 2,  // items cancelled out of overflow by the player
     SC_PRODQ_STAT_REFUNDED = 3,   // items refunded because their building went away
     SC_PRODQ_STAT_REFUSED_FULL = 4,   // a Train command arrived with the ring already full
-    // Always 0, and kept in the line so that stays visible: affordability is the ENGINE's
-    // check now, made before the plugin sees anything, so an item the player cannot afford
-    // is never offered to it. Same for the two SPENT counters below -- the plugin's own
-    // spend is expected to be flat zero for the life of a run, and both suites assert it.
-    SC_PRODQ_STAT_REFUSED_COST = 5,
-    SC_PRODQ_STAT_MINERALS_SPENT = 6,
-    SC_PRODQ_STAT_MINERALS_REFUNDED = 7,
-    SC_PRODQ_STAT_GAS_SPENT = 8,
-    SC_PRODQ_STAT_GAS_REFUNDED = 9,
+    // REFUSED_COST, MINERALS_SPENT and GAS_SPENT USED TO SIT HERE (issue #66, task 055).
+    //
+    // They were declared, printed, and asserted `== 0` in eleven places -- and nothing in
+    // the plugin ever incremented any of them, because there is no spend path and no cost
+    // refusal to count. `g_stat` is zero-initialised, so the assertions read their answer
+    // out of the initialiser.
+    //
+    // Deleted rather than wired, because MEASURED: work/scratch/055-defect built this same
+    // hooktest from a tree with a real spend added at the capture site and the counters
+    // deliberately left alone -- the mistake the assertions exist to catch. Result: 28
+    // balance checks FAILED and every `spent NOTHING` check still read 0 and PASSED. The
+    // engine's own resource globals, already asserted on the adjacent line at every one of
+    // those sites, are the oracle; the counters added nothing but a passing line.
+    //
+    // The claim they carried -- the plugin never pays, spend and refund cancel exactly --
+    // is unchanged and still asserted. See THE RESOURCE RULE in sc_prodqueue.cpp: the ONLY
+    // write to a resource global in this module is Refund(), and it only ever adds. That
+    // is what REFUNDED below counts, and it counts for real.
+    SC_PRODQ_STAT_MINERALS_REFUNDED = 5,
+    SC_PRODQ_STAT_GAS_REFUNDED = 6,
     // WHERE THE DETOURS WENT, counted per exit. Task 038's bug was invisible for exactly
     // the reason AGENTS.md gives ("No log line appeared" and "the function returned false"
     // look identical in a quiet log): the Train detour ran three times per click and found
     // no building to act on every time, and the only observable was a queue that stopped
     // at five. A counter per exit makes the next such run say WHICH term refused.
-    SC_PRODQ_STAT_TRAIN_SEEN = 10,      // cmdrecvTrain detours entered
-    SC_PRODQ_STAT_TRAIN_NO_UNIT = 11,   // ...that found no single selected building
-    SC_PRODQ_STAT_CANCEL_SEEN = 12,     // cmdrecvCancelTrain detours entered
-    SC_PRODQ_STAT_CANCEL_NO_UNIT = 13,  // ...that found no single selected building
+    SC_PRODQ_STAT_TRAIN_SEEN = 7,      // cmdrecvTrain detours entered
+    SC_PRODQ_STAT_TRAIN_NO_UNIT = 8,   // ...that found no single selected building
+    SC_PRODQ_STAT_CANCEL_SEEN = 9,     // cmdrecvCancelTrain detours entered
+    SC_PRODQ_STAT_CANCEL_NO_UNIT = 10, // ...that found no single selected building
     // Task 054 / issue #63. Items dropped because their record was made in a DIFFERENT
     // game (sc_session.h). Deliberately its own counter and NOT folded into REFUNDED,
     // because the two are opposites: a building that dies gives its minerals back, and
     // a record from another game must not -- those minerals were spent in a game that
     // no longer exists, and crediting them here would pay the player for it.
-    SC_PRODQ_STAT_STALE_SESSION = 14,
-    SC_PRODQ_STAT__COUNT = 15
+    //
+    // AND IT IS NOT ONE OF THE COUNTERS ISSUE #66 DELETED, which is worth saying next to
+    // them: those three were declared, printed and asserted `== 0` while nothing ever
+    // incremented them, so the assertion read its answer out of the zero-initialiser.
+    // This one is incremented on the only path that can produce it, its value is
+    // asserted NON-zero in hooktest part [22] (`four items counted against the epoch, by
+    // name`), and that assertion was watched failing with the epoch pinned.
+    SC_PRODQ_STAT_STALE_SESSION = 11,
+    SC_PRODQ_STAT__COUNT = 12
 };
 int ScProdQueueStat(int which);
 

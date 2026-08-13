@@ -137,7 +137,11 @@ function Read-ScreenLayout {
     param([Parameter(Mandatory)][string]$Tag, [Parameter(Mandatory)][string]$LogPath)
 
     $from = Get-ScLogLineCount -LogPath $LogPath
-    Set-Content -LiteralPath $markerPath -Value $Tag -Encoding ascii
+    # Set-ScMarker, not Set-Content (issue #37/#71): the latter opens the marker
+    # FileShare.None and throws whenever the observer holds it. This site also used to
+    # write a TRAILING NEWLINE (-Encoding ascii with no -NoNewline), which PollMarker
+    # compares against the whole line -- tests/marker-write.Tests.ps1 pins the shape.
+    Set-ScMarker -MarkerPath $markerPath -Label $Tag
     Wait-ScLogMatch -LogPath $LogPath -Pattern "SCREEN \[$Tag\] origin=" -TimeoutSec 30 -FromLine $from | Out-Null
     $lines = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $from |
                Where-Object { $_ -match "SCREEN \[$Tag\]" -or $_ -match 'DIALOGS ' })
