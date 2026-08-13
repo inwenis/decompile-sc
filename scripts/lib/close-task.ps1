@@ -26,15 +26,25 @@ function Test-PrIsMerged {
 }
 
 function Get-CloseRefusalReason {
-    # The gate. Returns $null when the task may be closed (its PR is merged),
-    # otherwise a human-readable reason to refuse. This is the pure heart of
-    # close-task.ps1's "refuse to stamp an unmerged PR" guarantee.
+    # The gate. Returns $null when the task may be closed, otherwise a
+    # human-readable reason to refuse. This is the pure heart of close-task.ps1's
+    # "refuse to stamp an unmerged PR" guarantee.
+    #
+    # Task 069, issue #96: a task with no PR used to be refused with "already
+    # completed -- nothing to verify or stamp", which was FALSE twice over: the
+    # status derivation completes only on a merged: stamp, so an unstamped
+    # report-only task reads queued/running forever, and board-lint class 2 kept
+    # (rightly) flagging it while this gate forbade the only remedy. A no-PR task
+    # WITH a report is now closeable -- the report is the deliverable to verify;
+    # a no-PR task with NO report still refuses, because nothing was delivered.
     param(
         [AllowNull()][AllowEmptyString()][string]$PrNumber,
-        [AllowNull()][AllowEmptyString()][string]$PrState
+        [AllowNull()][AllowEmptyString()][string]$PrState,
+        [bool]$ReportExists = $false
     )
     if ([string]::IsNullOrEmpty($PrNumber)) {
-        return 'task has no PR (pr: -); a done task with no PR is already completed -- nothing to verify or stamp'
+        if ($ReportExists) { return $null }
+        return 'task has no PR (pr: -) and no report at work/reports/ -- nothing was delivered, nothing to stamp'
     }
     if (-not (Test-PrIsMerged -State $PrState)) {
         return "PR #$PrNumber is '$PrState', not MERGED -- refusing to stamp merged:"
@@ -76,12 +86,16 @@ function Add-MergedStamp {
 
 function New-CloseCommitMessage {
     # The standard close-commit subject (matches the repo's existing history:
-    # "chore(tasks): close task NNN (PR #M merged)").
+    # "chore(tasks): close task NNN (PR #M merged)"). No PR number = the
+    # report-only close (task 069, issue #96).
     param(
         [Parameter(Mandatory)][string]$Task,
-        [Parameter(Mandatory)][string]$PrNumber
+        [AllowNull()][AllowEmptyString()][string]$PrNumber
     )
     $id = '{0:D3}' -f [int]$Task
+    if ([string]::IsNullOrEmpty($PrNumber)) {
+        return "chore(tasks): close task $id (report-only; no PR)"
+    }
     return "chore(tasks): close task $id (PR #$PrNumber merged)"
 }
 
