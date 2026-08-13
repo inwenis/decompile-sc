@@ -83,6 +83,7 @@ $scriptDir = $PSScriptRoot
 $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'drive-game.ps1')
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
+. (Join-Path $scriptDir 'sc-oracle-guard.ps1')
 
 $failures = 0
 $step = 0
@@ -164,7 +165,7 @@ function Get-UpgQueue {
     param([string]$Tag, [int]$TimeoutSec = 25)
     $script:upgqSeq++
     $label = "uq-$Tag-$script:upgqSeq"
-    Set-Content -LiteralPath $markerPath -Value $label -NoNewline
+    Set-ScMarker -MarkerPath $markerPath -Label $label
     $esc = [regex]::Escape($label)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
@@ -380,8 +381,12 @@ try {
             Assert-That "it starts with the $StartingMinerals minerals the trigger granted" `
                 ($q.Selected.Minerals -eq $StartingMinerals) "(got $($q.Selected.Minerals))"
         }
+        # $q.Selected is dereferenced here, and it is NOT inside the `if ($q.Selected)` guard
+        # above -- so a run whose oracle line was missing read $null.Queued as 0 and PASSED
+        # this (issue #69). The null check is now part of the assertion.
         Assert-That 'the plugin holds nothing yet' `
-            ($q.Buildings -eq 0 -and $q.Selected.Queued -eq 0 -and $q.Promoted -eq 0)
+            ($null -ne $q.Selected -and $q.Buildings -eq 0 -and $q.Selected.Queued -eq 0 -and $q.Promoted -eq 0) `
+            "(selected=$(if ($q.Selected) { 'yes' } else { 'NO ORACLE LINE' }) buildings=$($q.Buildings) promoted=$($q.Promoted))"
         # The SAME two counters that later have to read three finished items. An oracle
         # that could not print an empty answer could not be trusted with a full one.
         Assert-That 'and player 0 has researched NOTHING at all' `
@@ -477,6 +482,10 @@ try {
         $q = Get-UpgQueue 'full'
         Assert-That "the queue is still exactly $expectQueued -- nothing was swallowed" `
             ($q.Selected.Queued -eq $expectQueued)
+        # THE END OF THE HOLDING WINDOW. Captured here, from a read of the engine's own
+        # balance, so the pay-once assertion after the drain has a second INDEPENDENT sample
+        # to compare against rather than comparing a variable with itself (issue #69).
+        $script:mineralsAtCap = $q.Selected.Minerals
         Assert-That 'and the plugin refused nothing itself -- the client never sent' `
             ($q.RefusedFull -eq 0)
     }
@@ -505,7 +514,14 @@ try {
             Write-Host "       $($seen -join ' -> ')"
             # One assertion, not one per sample: a per-sample check drowns the transcript
             # and says nothing a count does not.
-            Assert-That "the engine never ran two at once (0 of $($seen.Count) samples)" ($bothAtOnce -eq 0)
+            #
+            # WITH THE SAMPLE COUNT IN THE ASSERTION, not only in its message (issue #69).
+            # "0 of 0 samples" is trivially true, and it is the reading a drain loop produces
+            # when the oracle timed out or the building went away on the first poll -- which
+            # is the case where this claim most needs an answer.
+            Assert-That "the engine never ran two at once (0 of $($seen.Count) samples)" `
+                ((Test-ScReached -Count $seen -AtLeast 2) -and $bothAtOnce -eq 0) `
+                "(a drain watched fewer than 2 samples has not watched a drain)"
 
             $q = Get-UpgQueue 'drained'
             Assert-That "every queued item was promoted ($($q.Promoted) of $expectQueued)" `
@@ -550,8 +566,18 @@ try {
                 ($starts.Count -eq $expectQueued)
             Assert-That "minerals fell overall ($($script:mineralsStart) -> $($q.Selected.Minerals))" `
                 ($q.Selected.Minerals -lt $script:mineralsStart)
-            Assert-That "and they NEVER fell while the queue was merely holding items" `
-                ($script:mineralsAfterFirst -eq $script:mineralsAfterFirst)
+            # THE PAY-ONCE CLAIM, and it used to be written `$script:mineralsAfterFirst -eq
+            # $script:mineralsAfterFirst` -- a literal x -eq x (issue #69). It could not fail
+            # for any build, any fixture, any amount of money moving.
+            #
+            # The window it is about runs from the first item STARTING (paid) to the drain
+            # BEGINNING. Both ends are now separate reads of the engine's own balance:
+            # mineralsAfterFirst was taken right after the first press, mineralsAtCap at the
+            # end of the AT-THE-CAP step, with all $QueueMax items queued. A plugin that paid
+            # for a queued item moves the second and not the first.
+            Assert-That ("and they NEVER fell while the queue was merely holding items " +
+                         "(after the first start: $($script:mineralsAfterFirst); at the cap, $expectQueued items held: $($script:mineralsAtCap))") `
+                ($null -ne $script:mineralsAtCap -and $script:mineralsAtCap -eq $script:mineralsAfterFirst)
             $script:mineralsAfterDrain = $q.Selected.Minerals
             Shot 'done'
         }
@@ -574,14 +600,27 @@ try {
             $runTech = $q.Selected.Tech
 
             # FIRST cancel: the tail is the plugin's, so it goes and NO money moves.
+            #
+            # WITH WIRE EVIDENCE (issue #69). This arm used to assert Queued -eq 0 and
+            # Cancelled -eq 1 -- both read off the plugin's own PRODQ/UPGQ lines -- and
+            # nothing else. A cancel click that never left the client and a plugin that
+            # dropped its tail for some other reason produce identical readings there. The
+            # second arm below already marked the log and asserted the command reached the
+            # funnel; this one now does the same, so the two arms are evidenced alike.
             $card3 = Get-Card 'cancel'
             $cancelSlot = Get-CancelSlot -Card $card3
             Assert-That 'the busy card offers a Cancel button' ($null -ne $cancelSlot)
+            $mark1 = Get-ScLogLineCount -LogPath $LogPath
             if ($cancelSlot) {
                 $pt = Get-ScCardSlotPoint -Card $card3 -Slot $cancelSlot.Index
                 Send-ScClick -Hwnd $hwnd -X $pt.X -Y $pt.Y
                 Start-Sleep -Seconds 2
             }
+            $c1 = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark1 |
+                    Select-String -Pattern "CMD id=($CANCEL_UPG|$CANCEL_TECH) ")
+            Assert-That "the cancel click reached the command funnel ($($c1.Count))" `
+                ($c1.Count -ge 1) `
+                '(without this, "the plugin holds nothing" cannot be told apart from "the click never left the client")'
             $q2 = Get-UpgQueue 'cancelled1'
             Assert-That 'the queued item is gone' ($q2.Selected.Queued -eq 0) "(queued=$($q2.Selected.Queued))"
             Assert-That 'the plugin counted the cancel' ($q2.Cancelled -eq 1)
@@ -610,9 +649,20 @@ try {
                 "(upg=$($q3.Selected.Upgrade) tech=$($q3.Selected.Tech))"
             # Vanilla's refund is out of the same tables it paid from, so the money comes
             # back EXACTLY -- and the plugin, which refunded nothing, is not involved.
+            #
+            # EXACTLY, asserted (issue #69). This was `$back -gt 0`, which passes for a
+            # refund of one mineral against a cost of a hundred and fifty, while the
+            # .DESCRIPTION claims "refunds EXACTLY". The charge is known from this suite's
+            # own readings: mineralsAfterDrain was the balance before this step's restart,
+            # $before the balance after it, and nothing else moved between them because the
+            # second press only QUEUED (asserted above, "NOT ONE MINERAL moved").
+            # Test-ScExactRefund also refuses paid == 0: a step in which the restart was
+            # never charged would make `back -eq paid` read 0 -eq 0 and pass.
+            $paid = $script:mineralsAfterDrain - $before
             $back = $q3.Selected.Minerals - $q2.Selected.Minerals
-            Write-Host "       vanilla refunded $back minerals"
-            Assert-That "and the money came back ($back)" ($back -gt 0)
+            Write-Host "       the restart cost $paid minerals; vanilla refunded $back"
+            Assert-That "and EXACTLY what the engine charged came back (paid $paid, back $back)" `
+                (Test-ScExactRefund -Paid $paid -Refunded $back)
             Assert-That 'the plugin cancelled nothing this time -- the press was vanilla-s' `
                 ($q3.Cancelled -eq 1)
         }
@@ -667,17 +717,27 @@ if ($gamePid -gt 0 -and -not $KeepOpen) {
 Assert-That 'the game process this test started is gone' ($KeepOpen -or $null -eq $left)
 Assert-That 'the generated map was cleaned up' ($KeepOpen -or -not (Test-Path -LiteralPath $mapPath))
 
-# THE PAY-ONCE CLAIM, from the plugin's own side of it: the engine paid for every item and
-# the plugin paid for none, so both of its spend counters must be flat ZERO. A design in
-# which the plugin also paid would read three costs here.
+# THE PAY-ONCE CLAIM used to be asserted here from mineralsSpent/gasSpent. Both were flat
+# zero by construction -- sc_upgrades.cpp reads resources through value-returning
+# accessors and cannot write them at all -- so the assertions read the initialiser
+# (issue #66, deleted in task 055).
+#
+# The claim is asserted where it can fail, off the ENGINE's own balance, three times in
+# this suite: NOT ONE MINERAL was paid for queueing (step 'THE HEADLINE'), the balance was
+# unchanged across the whole holding window (step 'THEY TOOK EFFECT'), and the cancel
+# refunded exactly what the start charged (step 'CANCEL').
+#
+# The stats line is still read, because a run in which the plugin never wrote one at all
+# is a different failure and has to stay distinguishable from a quiet one.
 $statLine = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
               Select-String -Pattern 'UPGQSTATS ')
 if ($statLine.Count -gt 0) {
     Write-Host "  $($statLine[-1].Line.Trim())"
-    $m = [regex]::Match($statLine[-1].Line, 'mineralsSpent=(\d+) gasSpent=(\d+)')
+    $m = [regex]::Match($statLine[-1].Line, 'queued=(\d+) promoted=(\d+) cancelled=(\d+) dropped=(\d+)')
     if ($m.Success) {
-        Assert-That "the plugin spent NO MINERALS of its own ($($m.Groups[1].Value))" ([int]$m.Groups[1].Value -eq 0)
-        Assert-That "and NO GAS ($($m.Groups[2].Value))" ([int]$m.Groups[2].Value -eq 0)
+        Assert-That "the plugin promoted every item it queued (queued=$($m.Groups[1].Value) promoted=$($m.Groups[2].Value) cancelled=$($m.Groups[3].Value))" `
+            ([int]$m.Groups[1].Value -eq [int]$m.Groups[2].Value + [int]$m.Groups[3].Value)
+        Assert-That "and dropped none of them ($($m.Groups[4].Value))" ([int]$m.Groups[4].Value -eq 0)
     }
     else { Assert-That 'the detach stats line is parseable' $false "($($statLine[-1].Line))" }
 }

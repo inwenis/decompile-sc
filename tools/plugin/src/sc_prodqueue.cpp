@@ -517,13 +517,16 @@ void ScProdQueueLogState(const char* tag) {
     // never asked" print the same zeros otherwise -- which is how task 038's bug survived
     // a passing suite: trainSeen counts the calls, trainNoUnit counts the ones that found
     // no building to act on, and the difference is the feature actually running.
+    // refusedCost= was dropped from this line by task 055 (issue #66): it was a printed
+    // constant zero, which AGENTS.md's task-030 rule forbids -- a count you print must be
+    // a count something incremented.
     ScLog("PRODQ [%s] buildings=%d max=%d captured=%d promoted=%d cancelled=%d "
-          "refunded=%d refusedFull=%d refusedCost=%d trainSeen=%d trainNoUnit=%d "
+          "refunded=%d refusedFull=%d trainSeen=%d trainNoUnit=%d "
           "cancelSeen=%d cancelNoUnit=%d",
           tag ? tag : "-", g_recCount, g_maxTotal,
           g_stat[SC_PRODQ_STAT_CAPTURED], g_stat[SC_PRODQ_STAT_PROMOTED],
           g_stat[SC_PRODQ_STAT_CANCELLED], g_stat[SC_PRODQ_STAT_REFUNDED],
-          g_stat[SC_PRODQ_STAT_REFUSED_FULL], g_stat[SC_PRODQ_STAT_REFUSED_COST],
+          g_stat[SC_PRODQ_STAT_REFUSED_FULL],
           g_stat[SC_PRODQ_STAT_TRAIN_SEEN], g_stat[SC_PRODQ_STAT_TRAIN_NO_UNIT],
           g_stat[SC_PRODQ_STAT_CANCEL_SEEN], g_stat[SC_PRODQ_STAT_CANCEL_NO_UNIT]);
     LeaveCriticalSection(&g_lock);
@@ -531,14 +534,18 @@ void ScProdQueueLogState(const char* tag) {
 
 void ScProdQueueLogStats(void) {
     if (!g_enabled) return;
+    // refusedCost=, mineralsSpent= and gasSpent= were dropped from this line by task 055
+    // (issue #66) -- three printed zeros no code path could move. The refund fields stay:
+    // Refund() increments them, and they are how a double refund or a swallowed item is
+    // told apart from a balance that merely looks plausible.
     ScLog("PRODQSTATS captured=%d promoted=%d cancelled=%d refunded=%d refusedFull=%d "
-          "refusedCost=%d mineralsSpent=%d mineralsRefunded=%d gasSpent=%d gasRefunded=%d "
+          "mineralsRefunded=%d gasRefunded=%d "
           "tracked=%d trainSeen=%d trainNoUnit=%d cancelSeen=%d cancelNoUnit=%d",
           g_stat[SC_PRODQ_STAT_CAPTURED], g_stat[SC_PRODQ_STAT_PROMOTED],
           g_stat[SC_PRODQ_STAT_CANCELLED], g_stat[SC_PRODQ_STAT_REFUNDED],
-          g_stat[SC_PRODQ_STAT_REFUSED_FULL], g_stat[SC_PRODQ_STAT_REFUSED_COST],
-          g_stat[SC_PRODQ_STAT_MINERALS_SPENT], g_stat[SC_PRODQ_STAT_MINERALS_REFUNDED],
-          g_stat[SC_PRODQ_STAT_GAS_SPENT], g_stat[SC_PRODQ_STAT_GAS_REFUNDED], g_recCount,
+          g_stat[SC_PRODQ_STAT_REFUSED_FULL],
+          g_stat[SC_PRODQ_STAT_MINERALS_REFUNDED],
+          g_stat[SC_PRODQ_STAT_GAS_REFUNDED], g_recCount,
           g_stat[SC_PRODQ_STAT_TRAIN_SEEN], g_stat[SC_PRODQ_STAT_TRAIN_NO_UNIT],
           g_stat[SC_PRODQ_STAT_CANCEL_SEEN], g_stat[SC_PRODQ_STAT_CANCEL_NO_UNIT]);
 }

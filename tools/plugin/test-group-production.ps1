@@ -154,7 +154,7 @@ function Get-ProdFan {
     param([string]$Tag, [int]$TimeoutSec = 20)
     $script:fanSeq++
     $label = "pf-$Tag-$script:fanSeq"
-    Set-Content -LiteralPath $markerPath -Value $label -NoNewline
+    Set-ScMarker -MarkerPath $markerPath -Label $label
     $esc = [regex]::Escape($label)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {

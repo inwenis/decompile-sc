@@ -550,15 +550,15 @@ void ScUpgQueueLogState(const char* tag) {
 
 void ScUpgQueueLogStats(void) {
     if (!g_enabled) return;
+    // mineralsSpent= and gasSpent= were dropped from this line by task 055 (issue #66) --
+    // two printed zeros this module has no way to move.
     ScLog("UPGQSTATS queued=%d promoted=%d cancelled=%d dropped=%d refusedFull=%d "
-          "refusedGate=%d waitingCost=%d unblocked=%d unblockedLevel=%d mineralsSpent=%d "
-          "gasSpent=%d tracked=%d",
+          "refusedGate=%d waitingCost=%d unblocked=%d unblockedLevel=%d tracked=%d",
           g_stat[SC_UPGQ_STAT_QUEUED], g_stat[SC_UPGQ_STAT_PROMOTED],
           g_stat[SC_UPGQ_STAT_CANCELLED], g_stat[SC_UPGQ_STAT_DROPPED],
           g_stat[SC_UPGQ_STAT_REFUSED_FULL], g_stat[SC_UPGQ_STAT_REFUSED_GATE],
           g_stat[SC_UPGQ_STAT_WAITING_COST], g_stat[SC_UPGQ_STAT_UNBLOCKED],
-          g_stat[SC_UPGQ_STAT_UNBLOCKED_LEVEL],
-          g_stat[SC_UPGQ_STAT_MINERALS_SPENT], g_stat[SC_UPGQ_STAT_GAS_SPENT], g_recCount);
+          g_stat[SC_UPGQ_STAT_UNBLOCKED_LEVEL], g_recCount);
 }
 
 int ScUpgQueueCount(DWORD unit) {
