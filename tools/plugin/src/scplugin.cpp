@@ -836,28 +836,48 @@ static void LogAttachBanner(void) {
     ScLog("  build         : %s", ScBuildStampShort());
     ScLog("  host exe      : %s", exePath);
     ScLog("  plugin dll    : %s", dllPath);
-    // Task 056. Where WE landed, against the base our own PE header asks for.
-    // build.ps1 pins that base (to make the build byte-reproducible), and
-    // 0x10000000 -- the conventional choice -- is taken by WMode.dll in this
-    // process, so "the pinned base took" is a claim that has to be READ from the
-    // loader's result rather than assumed from the linker flag.
-    if (self) {
-        BYTE* selfImg = (BYTE*)self;
-        LONG  e_lfanew = 0;
+    // Task 056. Where WE landed, against the base the FILE asks for. build.ps1
+    // pins that base to make the build byte-reproducible, and whether the loader
+    // honours it is a fact about this process, not about the flag.
+    //
+    // READ FROM THE FILE, NOT FROM THE MAPPED IMAGE, and this cost a run to find:
+    // the Windows loader REWRITES OptionalHeader.ImageBase in the mapped header
+    // to the address it actually used. Measured here -- the file on disk holds
+    // 0x71000000, the mapped header read 0x717D0000, and the module was loaded at
+    // 0x717D0000 -- so the first version of this check compared the load address
+    // against itself and printed "the pinned base took" for a module the loader
+    // had just relocated. An instrument whose reading moves with its own input
+    // cannot fail (AGENTS.md, task 048); this one had to be read out of the bytes
+    // the linker wrote instead.
+    if (self && dllPath[0]) {
+        DWORD loadedAt = (DWORD)(DWORD_PTR)self;
         DWORD preferred = 0;
-        bool  gotHeader = SafeRead(selfImg + 0x3C, &e_lfanew, sizeof(e_lfanew)) &&
-                          e_lfanew > 0 && e_lfanew < 0x1000 &&
-                          // PE32 optional header starts at e_lfanew+24; ImageBase is +28 into it.
-                          SafeRead(selfImg + e_lfanew + 24 + 28, &preferred, sizeof(preferred));
-        if (gotHeader) {
-            ScLog("  plugin base   : 0x%08X  (PE header asks for 0x%08X -- %s)",
-                  (unsigned)(DWORD_PTR)selfImg, (unsigned)preferred,
-                  (DWORD)(DWORD_PTR)selfImg == preferred
-                      ? "loaded where it asked; the pinned base took"
-                      : "RELOCATED -- something else holds that range in this process");
+        HANDLE fh = CreateFileA(dllPath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (fh != INVALID_HANDLE_VALUE) {
+            DWORD got = 0;
+            LONG e_lfanew = 0;
+            if (SetFilePointer(fh, 0x3C, NULL, FILE_BEGIN) != INVALID_SET_FILE_POINTER &&
+                ReadFile(fh, &e_lfanew, sizeof(e_lfanew), &got, NULL) && got == sizeof(e_lfanew) &&
+                e_lfanew > 0 && e_lfanew < 0x1000 &&
+                // PE32: optional header at e_lfanew+24, ImageBase +28 into it.
+                SetFilePointer(fh, e_lfanew + 24 + 28, NULL, FILE_BEGIN) != INVALID_SET_FILE_POINTER &&
+                ReadFile(fh, &preferred, sizeof(preferred), &got, NULL) && got == sizeof(preferred)) {
+                /* preferred is set */
+            } else {
+                preferred = 0;
+            }
+            CloseHandle(fh);
+        }
+        if (preferred) {
+            ScLog("  plugin base   : 0x%08X  (the FILE asks for 0x%08X -- %s)",
+                  (unsigned)loadedAt, (unsigned)preferred,
+                  loadedAt == preferred
+                      ? "loaded where it asked"
+                      : "RELOCATED by the loader; that range was taken in this process");
         } else {
-            ScLog("  plugin base   : 0x%08X  (own PE header UNREADABLE -- cannot say whether it was relocated)",
-                  (unsigned)(DWORD_PTR)selfImg);
+            ScLog("  plugin base   : 0x%08X  (could not read the file's own PE header -- "
+                  "cannot say whether it was relocated)", (unsigned)loadedAt);
         }
     }
     ScLog("  module base   : 0x%08X", (unsigned)(DWORD_PTR)g_base);
