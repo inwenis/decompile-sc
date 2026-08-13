@@ -294,6 +294,24 @@ So, for any diagnostic you are about to trust:
 - "No log line appeared" and "the function returned false" look identical in a quiet log.
   Log entry as well as outcome, at least once, so absence is distinguishable from refusal.
 
+## A log line can be TRUE about the mechanism and FALSE about the state (2026-08-13, task 069)
+
+`Exit-ScLaunchLock: released` printed on every run for weeks and was never a lie: the handle
+WAS released. What survived was the FILE the handle lived in, which every reader treated as
+the lock -- so 100% of runs since task 018 left a "lock" naming a dead pid, three workers in
+one day read it as a held machine, and the line survived review the whole time because it was
+true about the half nobody was asking about. There was no act to catch, only a file that
+outlived every run and a log line that was true about the handle and misleading about the
+file.
+
+So when a resource has two halves -- a handle and a file, a process and its log, a
+registration and a directory -- a success line must name the half it proves. The release now
+prints `released, removed <path>`, or says exactly why the file stayed. The prune-worktrees
+strand (issue #96) was the same disease one tool over: `git worktree remove` deregistered
+(reported) and failed to delete (unreported), and the next run said `nothing prunable` over
+six directories still on disk. This is the cousin of the diagnostics rule above: a line that
+cannot distinguish the two halves of what it claims is a line that cannot fail.
+
 ## An enumeration that scanned for a NAME is not exhaustive (2026-08-11, task 034)
 
 Two failure modes of "I searched the binary and found them all", both met in one task.

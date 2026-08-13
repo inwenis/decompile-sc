@@ -161,7 +161,28 @@ if (-not $Force) {
     return
 }
 
+function Test-AgentAlive {
+    # A merged: stamp does not mean the WORKER is done -- a task can merge one PR
+    # and keep working (068 was live, merged and clean the day this was written;
+    # -Force would have deleted the ground under a running agent). The agent
+    # registry (work/scratch/agents/<id>.json, pwshPid) is the board's own
+    # liveness observable; a live pid vetoes the removal.
+    param([Parameter(Mandatory)][string]$TaskId)
+    $regFile = Join-Path $dataRoot "scratch/agents/$TaskId.json"
+    if (-not (Test-Path -LiteralPath $regFile)) { return $false }
+    try {
+        $entry = Get-Content -LiteralPath $regFile -Raw | ConvertFrom-Json
+        return [bool](Get-Process -Id $entry.pwshPid -ErrorAction SilentlyContinue)
+    }
+    catch { return $false }
+}
+
 foreach ($r in $results) {
+    if (Test-AgentAlive -TaskId $r.TaskId) {
+        Write-Warning ("skipping $($r.Path): the agent registry names a LIVE pid for task $($r.TaskId) -- " +
+            'a merged: stamp does not mean the worker is done; not removing a running worker''s worktree.')
+        continue
+    }
     # A registered path already gone from disk: an interrupted earlier removal.
     # Nothing to delete -- just clean the registration and branch.
     if (-not (Test-Path -LiteralPath $r.Path)) {
@@ -194,6 +215,10 @@ foreach ($r in $results) {
 }
 
 foreach ($r in $strandResults) {
+    if (Test-AgentAlive -TaskId $r.TaskId) {
+        Write-Warning ("skipping stranded $($r.Path): the agent registry names a LIVE pid for task $($r.TaskId) -- not removing under a running worker.")
+        continue
+    }
     # No git status possible here: the registration is gone, so the .git link
     # inside the dir points at pruned metadata. The merged: stamp is the
     # authorization, same gate as every other removal in this script.

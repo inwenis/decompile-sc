@@ -107,6 +107,31 @@ merged: 2026-08-13
         Test-Path -LiteralPath $strand | Should -BeTrue
     }
 
+    It 'refuses to remove a merged-and-clean worktree while the agent registry names a LIVE pid' {
+        # A merged: stamp does not mean the worker is done -- task 068 was live,
+        # merged and clean the day this was written, and a -Force would have
+        # deleted the ground under a running agent. The registry pid is the
+        # board's own liveness observable; alive vetoes.
+        $wt = Join-Path $script:root 'repo-task059'
+        git -C $script:repo worktree add -q $wt 2>&1 | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:repo 'work/tasks/059-live-thing.md') -Value @'
+# Task 059 - live thing
+
+agent: 059
+pr: https://github.com/x/y/pull/9
+merged: 2026-08-13
+'@
+        New-Item -ItemType Directory -Path (Join-Path $script:repo 'work/scratch/agents') -Force | Out-Null
+        # This very Pester process is the "live agent": a pid that is alive by construction.
+        Set-Content -LiteralPath (Join-Path $script:repo 'work/scratch/agents/059.json') -Value ('{"pwshPid": ' + $PID + '}')
+
+        $out = & $script:pruneScript -Repo $script:repo -Force 6>&1 3>&1 2>&1 | ForEach-Object { "$_" }
+        ($out -join "`n") | Should -Match 'LIVE pid'
+        Test-Path -LiteralPath $wt | Should -BeTrue
+        $list = (git -C $script:repo worktree list --porcelain) -join "`n"
+        $list | Should -Match ([regex]::Escape('repo-task059'))
+    }
+
     It 'keeps a REGISTERED worktree registered when its directory cannot be removed, and says who to blame is unknown-but-local' {
         # Registered worktree of a merged task, with an open handle inside it so the
         # removal fails: the fix's ordering guarantee is that the worktree must STAY
