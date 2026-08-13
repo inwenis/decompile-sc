@@ -356,7 +356,15 @@ param(
     # stops at the first non-zero return, so the trace names the dialog that
     # claims any click. Read-only in effect but it writes dialog records, so it
     # is ignored in -Mode observe too.
-    [ValidateSet('0', '1')][string]$ConsoleTrace = '0'
+    [ValidateSet('0', '1')][string]$ConsoleTrace = '0',
+
+    # Task 074: the storm-side buffer->glass present (renderer-viewport.md 19.8).
+    # 'probe' = READ-ONLY: log storm's virtual-screen geometry, the flip clip, the
+    # fallback lock pointer and the present region on the marker channel (works in
+    # any mode, writes nothing). 'widen' = coerce storm's virtual screen to the
+    # widescreen width so the present carries all 800 columns (writes game memory,
+    # ignored in -Mode observe like every writer). '0' = off.
+    [ValidateSet('0', 'probe', 'widen')][string]$StormPresent = '0'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -586,6 +594,7 @@ try {
     $env:SCPLUGIN_WS_STAGE       = $WidescreenStage
     $env:SCPLUGIN_CONSOLE_EDGE   = $ConsoleEdge
     $env:SCPLUGIN_CONSOLE_TRACE  = $ConsoleTrace
+    $env:SCPLUGIN_STORM_PRESENT  = $StormPresent
     if ($Liveness -eq '0') {
         Write-Warning 'run-with-plugin: -Liveness 0 — the fan-out emit gate is back to the pre-task-020 uniqueness test ALONE. A unit killed by damage will be replayed into a Select. This is a deliberate defect-reproduction run.'
     }

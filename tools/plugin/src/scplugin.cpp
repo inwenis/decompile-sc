@@ -47,6 +47,7 @@
 #include "sc_queueind.h"
 #include "sc_screen.h"
 #include "sc_session.h"
+#include "sc_stormpresent.h"
 #include "sc_upgrades.h"
 
 static volatile LONG g_stop = 0;
@@ -712,6 +713,12 @@ static void PollMarker(void) {
     // directory.
     DumpFrame(g_lastMarker);
 
+    // Task 074: storm's own present state -- geometry, the flip clip, the fallback
+    // lock pointer and the present region -- read straight out of storm.dll. This is
+    // the instrument that says which buffer->glass present path is live. Read-only;
+    // off unless %SCPLUGIN_STORM_PRESENT% is set.
+    ScStormPresentLog(g_lastMarker);
+
     // Task 015: a marker is the driver saying "look now", so it is also the trigger for
     // the per-unit state dump. Driving it off the marker rather than off a timer is what
     // makes an unattended assertion possible at all -- the test writes a marker, waits for
@@ -1111,6 +1118,10 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             }
             ScConsoleInstall(g_base, consoleEdge, consoleTrace);
         }
+        // Task 074: the storm-side buffer->glass present. PROBE is read-only and
+        // runs in any mode; WIDEN writes storm's geometry and is gated out of
+        // observe like every other writer (the module enforces this itself).
+        ScStormPresentInstall(g_base, g_mode != SC_MODE_OBSERVE);
         ScFanoutInstall(g_base, g_mode);
         // Task 030. The oracle needs the module base in EVERY mode, because the stock
         // arm of this feature's comparison runs in observe and is measured with it. The
@@ -1184,6 +1195,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         ScUpgQueueLogStats();
         ScScreenLogStats();
         ScConsoleLogStats();
+        ScStormPresentLogStats();
         ScSessionLogState("detach");
         if (lpReserved == NULL) {
             if (g_observer) joined = (WaitForSingleObject(g_observer, 5000) == WAIT_OBJECT_0);
@@ -1209,6 +1221,9 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             // widescreen geometry (which the move's +160 only makes sense on)
             // comes out below.
             ScConsoleRemove();
+            // Task 074: storm present. PROBE has nothing to restore; WIDEN restores
+            // storm's geometry. Comes out before the exe geometry below.
+            ScStormPresentRemove();
             // Task 034 last, mirroring its install-first position: the geometry
             // patches are the outermost change, so they come out after every
             // detour that might still be running against them.
