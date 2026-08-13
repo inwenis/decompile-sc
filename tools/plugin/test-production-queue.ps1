@@ -186,6 +186,23 @@ param(
     # trip. 300s leaves room, and the drain loop exits as soon as the LOGICAL queue is
     # empty.
     [int]$DrainTimeoutSec = 300,
+    # THE RATE ARM for the open defect in research/production-queue.md 8.6, off by default
+    # because it is a MEASUREMENT and it perturbs every count after it (task 061).
+    #
+    # The click that cannot cancel the last queue slot is a RACE, and nothing in this
+    # project has ever measured its rate -- four runs across two builds flipped the outcome
+    # in both directions, so every "it works" and "it does not" on record, including this
+    # suite's own, is a single coin flip. This clicks the same slot N times at each of
+    # several BUTTON HOLD DURATIONS and reports the cancel rate for each.
+    #
+    # Duration is the variable because it is the one that separates the user from the
+    # harness. Every automated click this project makes is 60ms; a human pressing a slot
+    # they mean to cancel holds it longer, and the longer the hold the more of the engine's
+    # disable events land inside it. If the rate falls off a cliff above 60ms, that is the
+    # difference between "the user says it never works" and "our runs say it sometimes
+    # does" -- and it is a real target for the fix instead of a coin.
+    [int]$HoldSweepClicks = 0,
+    [string]$HoldSweepMs = '40,60,80,120,200',
     [switch]$KeepOpen
 )
 
@@ -1369,6 +1386,76 @@ try {
         Write-Host "       (pressKept is a reading, not a verdict -- see sc_queueind.cpp: restoring the press is measured NOT sufficient)"
         Assert-Reconciles 'after-last-slot-cancel' $r.After -Accepted $script:accepted -Cancelled $script:cancels
         Shot 'last-slot-cancelled'
+    }
+
+    if ($HoldSweepClicks -gt 0) {
+      Step "RATE ARM: how often does the last slot cancel, by how long the button is held" {
+        Write-Host '       *** MEASUREMENT RUN. Every step after this one has its counts perturbed by'
+        Write-Host '       *** these extra clicks and its verdict does NOT apply. Read the table, not the tail.'
+        $durations = @($HoldSweepMs -split ',' | ForEach-Object { [int]$_.Trim() } | Where-Object { $_ -gt 0 })
+        $rows = @()
+        foreach ($hold in $durations) {
+            $ok = 0; $tried = 0; $collided = 0
+            for ($i = 0; $i -lt $HoldSweepClicks; $i++) {
+                # TOP THE QUEUE BACK UP FIRST. Every cancel that lands removes the item
+                # behind the slot, and a click at a slot with nothing behind it measures
+                # nothing -- the plugin swallows it and no command goes out for a reason
+                # that has nothing to do with the race.
+                $q = Get-ProdQueue "sweep-$hold-$i-pre"
+                $guard = 0
+                while ($q.Selected -and $q.Selected.Overflow -lt 2 -and $guard -lt 6) {
+                    Send-ScClick -Hwnd $hwnd -X $script:trainPoint.X -Y $script:trainPoint.Y -SettleMs 150
+                    $script:accepted++
+                    $q = Get-ProdQueue "sweep-$hold-$i-top"
+                    $guard++
+                }
+                if (-not $q.Selected -or $q.Selected.Overflow -lt 1) {
+                    Write-Host "       hold $($hold)ms click $($i): SKIPPED, could not get an item behind the slot (overflow $($q.Selected.Overflow))"
+                    continue
+                }
+                $st = Get-StatusQueue "sweep-$hold-$i"
+                $slot = @($st.Slots | Where-Object { $_.Display -eq $STATQ_LAST_DISPLAY })[0]
+                if (-not $slot -or $slot.QueueType -ne 0xE4) {
+                    Write-Host "       hold $($hold)ms click $($i): SKIPPED, the ring holds that slot (qtype=0x$('{0:x}' -f $slot.QueueType))"
+                    continue
+                }
+                $p  = Get-ScStatusSlotPoint -Status $st -Display $STATQ_LAST_DISPLAY
+                $qb = Get-QInd "sweep-$hold-$i-b"
+                $mark = Get-ScLogLineCount -LogPath $LogPath
+                Send-ScClick -Hwnd $hwnd -X $p.X -Y $p.Y -HoldMs $hold -SettleMs 400
+                Start-Sleep -Milliseconds 900
+                $lines = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
+                $qa = Get-QIndAfter -FromLine $mark
+                $tried++
+                if (@($lines | Select-String -Pattern "CMD id=$CANCEL_CMD ").Count -gt 0) {
+                    $ok++
+                    $script:cancels++; $script:pluginCancels++
+                }
+                if ($qa.DisableWithPress -gt $qb.DisableWithPress) { $collided++ }
+            }
+            $rate = if ($tried -gt 0) { [math]::Round(100.0 * $ok / $tried) } else { -1 }
+            $rows += [pscustomobject]@{ HoldMs = $hold; Clicks = $tried; Cancelled = $ok; Pct = $rate; Collided = $collided }
+            Write-Host ("       hold {0,4}ms : {1}/{2} cancelled ({3}%), collision seen in {4}" -f $hold, $ok, $tried, $rate, $collided)
+        }
+        Write-Host '       --- RATE TABLE (the number a future run compares against) ---'
+        foreach ($r in $rows) {
+            Write-Host ("       RATE holdMs={0} clicks={1} cancelled={2} pct={3} collided={4}" -f
+                        $r.HoldMs, $r.Clicks, $r.Cancelled, $r.Pct, $r.Collided)
+        }
+        # NO ASSERTION ON THE RATE ITSELF, in either direction. Pinning "it cancels" flakes
+        # red and pinning "it does not" flakes green the first time the race is won -- the
+        # same single-sample defect with the sign flipped. What IS asserted is that the
+        # measurement happened at all and that the seam was reached, because a table of
+        # zeroes from a run that never got an item behind the slot looks identical to a
+        # table of zeroes from a defect.
+        $measured = @($rows | Where-Object { $_.Clicks -gt 0 })
+        Assert-That "the sweep actually clicked: $($measured.Count) of $($durations.Count) durations got real clicks" `
+            ($measured.Count -eq $durations.Count) `
+            '(a duration with 0 clicks measured nothing -- its row is not a rate)'
+        Assert-That "and the collision the defect needs was reached at least once ($(($rows | Measure-Object Collided -Sum).Sum))" `
+            ((($rows | Measure-Object Collided -Sum).Sum) -gt 0) `
+            '(0 = no disable landed inside any press, so this whole table is about something else)'
+      }
     }
 
     Step "watch it drain: every over-cap item is promoted into a freed slot, in order" {
