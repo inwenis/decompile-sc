@@ -250,6 +250,22 @@ try {
     Write-Host 'probe-framecap: assertions'
 
     # ---- ARM 1: the positive control --------------------------------------
+    # What the screen Bitmap holds, measured by this suite's first run
+    # (2026-08-13) and asserted to stay that way:
+    #   * at the MAIN MENU the buffer is ALL INDEX 0 in both arms -- the glue
+    #     screens do not compose into 0x006CEFF0 at all. A menu consistency
+    #     check is aimed at a scene that is not there, so the menu point only
+    #     proves the dump machinery and reports the content.
+    #   * IN GAME the buffer holds the playfield composition and the top-strip
+    #     counters, but NOT the console/HUD dialogs (they draw into their own
+    #     surfaces -- the ones sc_queueind reads) and NOT the cursor. So the
+    #     trust check runs over the PURE PLAYFIELD region (128,20)-(512,320),
+    #     where the measured consistency is 0.989 in both arms; the ~1%
+    #     residue is animated sprites caught A->B->A across the bracket, in
+    #     isolated blobs with no row structure. Threshold 0.97: far above the
+    #     0.58 a wrong-pitch dump scores, comfortably below the animation
+    #     ceiling.
+    $PF = @('--x0', '128', '--y0', '20', '--map-w', '512', '--y1', '320')
     if ($arms['stock']) {
         $st = $arms['stock']
         foreach ($pt in @($st.Menu, $st.InGame)) {
@@ -261,27 +277,35 @@ try {
                 ($pt.W -eq 640 -and $pt.H -eq 480) "(got $($pt.W)x$($pt.H))"
             Assert-True "[stock/$($pt.Tag)] the copy settled (two consecutive reads byte-equal)" `
                 ($pt.Stable -eq 1) "(reads=$($pt.Reads))"
+        }
 
-            Write-Host "       [stock/$($pt.Tag)] index->RGB consistency against the presented window:"
-            $m = Invoke-FrameTool -ToolArgs @('check', '--dump', $pt.Dump,
-                    '--before', $pt.Before, '--after', $pt.After,
-                    '--render', (Join-Path $FrameDir "$($pt.Tag)-render.png"),
-                    '--save-palette', (Join-Path $FrameDir "$($pt.Tag)-palette.json"))
+        if ($st.Menu -and $st.Menu.Dump) {
+            Write-Host '       [stock/menu] buffer content (glue screens do not compose into the screen Bitmap):'
+            $mb = Invoke-FrameTool -ToolArgs @('band', '--dump', $st.Menu.Dump, '--x0', '0')
+            Report-Finding "menu-time screen Bitmap: $($mb['band_distinct']) distinct index value(s), top $($mb['band_top'])"
+        }
+
+        if ($st.InGame -and $st.InGame.Dump) {
+            $pt = $st.InGame
+            Write-Host "       [stock/$($pt.Tag)] index->RGB consistency vs the window, pure playfield:"
+            $m = Invoke-FrameTool -ToolArgs (@('check', '--dump', $pt.Dump,
+                    '--before', $pt.Before, '--after', $pt.After) + $PF)
             # The window must hold a PICTURE before its vote counts: a dead
             # capture maps every index to black, each one perfectly
             # consistently, and the consistency figure goes vacuous (this
-            # repo's house defect). 32 distinct colours is far below any real
-            # menu or game frame and far above a blank or dead capture.
+            # repo's house defect).
             Assert-True "[stock/$($pt.Tag)] the window capture holds a picture (>= 32 distinct colours)" `
                 ([int]($m['window_distinct_rgb'] ?? 0) -ge 32) "(got $($m['window_distinct_rgb']))"
-            # 0.995, not 1.0: the stable-pixel bracket removes animation, but a
-            # window pixel CAN flip A->B->A across the interval and be caught
-            # mid-flip by the dump. That residue is tiny; instrument failures
-            # are not (the synthetic wrong-pitch dump scores 0.58).
-            Assert-True "[stock/$($pt.Tag)] the dump reproduces the presented frame (consistency >= 0.995)" `
-                ([double]($m['consist_frac'] ?? 0) -ge 0.995) "(got $($m['consist_frac']))"
+            Assert-True "[stock/$($pt.Tag)] the dump reproduces the presented playfield (consistency >= 0.97)" `
+                ([double]($m['consist_frac'] ?? 0) -ge 0.97) "(got $($m['consist_frac']))"
             Assert-True "[stock/$($pt.Tag)] the mapping had pixels to stand on (stable fraction >= 0.5)" `
                 ([double]($m['stable_frac'] ?? 0) -ge 0.5) "(got $($m['stable_frac']))"
+            # Second pass, full frame, unasserted: its mapping covers every
+            # index on screen, which is what makes the rendered PNG whole.
+            Invoke-FrameTool -ToolArgs @('check', '--dump', $pt.Dump,
+                    '--before', $pt.Before, '--after', $pt.After,
+                    '--render', (Join-Path $FrameDir "$($pt.Tag)-render.png"),
+                    '--save-palette', (Join-Path $FrameDir "$($pt.Tag)-palette.json")) | Out-Null
         }
     }
 
@@ -297,21 +321,6 @@ try {
                 ($pt.W -eq 800 -and $pt.H -eq 480) "(got $($pt.W)x$($pt.H))"
             Assert-True "[s1/$($pt.Tag)] the copy settled" ($pt.Stable -eq 1) "(reads=$($pt.Reads))"
 
-            # The consistency check over the 640 columns the window vouches for
-            # can only hold if rows were extracted at the TRUE pitch of 800 --
-            # a 640-pitch misread shifts row y by 160*y bytes and lands on 0.58
-            # against the synthetic control. So this line is the proof that the
-            # instrument reads the full-width geometry, not just more bytes.
-            Write-Host "       [s1/$($pt.Tag)] consistency over the window-vouched 640 columns:"
-            $m = Invoke-FrameTool -ToolArgs @('check', '--dump', $pt.Dump,
-                    '--before', $pt.Before, '--after', $pt.After, '--map-w', '640',
-                    '--render', (Join-Path $FrameDir "$($pt.Tag)-render.png"),
-                    '--save-palette', (Join-Path $FrameDir "$($pt.Tag)-palette.json"))
-            Assert-True "[s1/$($pt.Tag)] the window capture holds a picture (>= 32 distinct colours)" `
-                ([int]($m['window_distinct_rgb'] ?? 0) -ge 32) "(got $($m['window_distinct_rgb']))"
-            Assert-True "[s1/$($pt.Tag)] the dump reproduces the presented 640 columns at pitch 800 (>= 0.995)" `
-                ([double]($m['consist_frac'] ?? 0) -ge 0.995) "(got $($m['consist_frac']))"
-
             # The columns nothing has ever presented. At stage 1 the engine
             # still COMPOSES 640 wide, so the extra 160 columns hold whatever
             # the (patched, 800-aware) screen clear left there -- the point is
@@ -321,6 +330,27 @@ try {
             $b = Invoke-FrameTool -ToolArgs @('band', '--dump', $pt.Dump, '--x0', '640')
             Assert-True "[s1/$($pt.Tag)] the band was readable end to end" `
                 ([int]($b['band_px'] ?? 0) -eq 160 * 480) "(got $($b['band_px']) px)"
+        }
+
+        if ($s1.InGame -and $s1.InGame.Dump) {
+            $pt = $s1.InGame
+            # The consistency check over the window-vouched playfield can only
+            # hold if rows were extracted at the TRUE pitch of 800 -- a
+            # 640-pitch misread shifts row y by 160*y bytes and lands on 0.58
+            # against the synthetic control. So this line is the proof that
+            # the instrument reads the full-width geometry, not just more
+            # bytes. Same region and threshold as the stock arm, same reasons.
+            Write-Host "       [s1/$($pt.Tag)] consistency vs the window, pure playfield, at pitch 800:"
+            $m = Invoke-FrameTool -ToolArgs (@('check', '--dump', $pt.Dump,
+                    '--before', $pt.Before, '--after', $pt.After) + $PF)
+            Assert-True "[s1/$($pt.Tag)] the window capture holds a picture (>= 32 distinct colours)" `
+                ([int]($m['window_distinct_rgb'] ?? 0) -ge 32) "(got $($m['window_distinct_rgb']))"
+            Assert-True "[s1/$($pt.Tag)] the dump reproduces the presented playfield at pitch 800 (>= 0.97)" `
+                ([double]($m['consist_frac'] ?? 0) -ge 0.97) "(got $($m['consist_frac']))"
+            Invoke-FrameTool -ToolArgs @('check', '--dump', $pt.Dump,
+                    '--before', $pt.Before, '--after', $pt.After, '--map-w', '640',
+                    '--render', (Join-Path $FrameDir "$($pt.Tag)-render.png"),
+                    '--save-palette', (Join-Path $FrameDir "$($pt.Tag)-palette.json")) | Out-Null
         }
 
         # ---- the cross-check: stage 1's left 640 vs stock, index for index --

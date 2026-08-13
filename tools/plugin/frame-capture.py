@@ -82,23 +82,25 @@ def cmd_info(a):
     return 0
 
 
-def build_mapping(d, before, after, dx, dy, map_w, step=1):
+def build_mapping(d, before, after, dx, dy, map_w, step=1, x0=0, y0=0, map_h=0):
     """index -> Counter(rgb) over pixels stable across both window captures.
 
     Window pixel (x, y) is compared against dump pixel (x - dx, y - dy):
-    dx/dy is where the frame's (0,0) sits inside the capture.
+    dx/dy is where the frame's (0,0) sits inside the capture. (x0,y0) and
+    (map_w,map_h) bound the mapped region in DUMP coordinates.
     """
     pb, pa = before.load(), after.load()
     w = min(map_w, d["w"], before.size[0] - dx, after.size[0] - dx)
-    h = min(d["h"], before.size[1] - dy, after.size[1] - dy)
+    h = min(map_h if map_h else d["h"], d["h"],
+            before.size[1] - dy, after.size[1] - dy)
     px, dw = d["px"], d["w"]
     mapping = {}
     stable_px = 0
     total = 0
-    for y in range(0, h, step):
+    for y in range(y0, h, step):
         row = (y) * dw
         wy = y + dy
-        for x in range(0, w, step):
+        for x in range(x0, w, step):
             total += 1
             rgb = pb[x + dx, wy]
             if rgb != pa[x + dx, wy]:
@@ -134,6 +136,7 @@ def cmd_check(a):
     print("before_size=%dx%d" % before.size)
     print("after_size=%dx%d" % after.size)
     print("map_w=%d" % map_w)
+    print("check_region=%d,%d-%d,%d" % (a.x0, a.y0, map_w, a.y1 if a.y1 else d["h"]))
 
     # Alignment: where does the frame's (0,0) sit inside the capture? The
     # windowed helper is measured to present 1:1 (12.6), but the capture may
@@ -157,8 +160,14 @@ def cmd_check(a):
     print("align_dx=%d" % dx)
     print("align_dy=%d" % dy)
 
-    # The real pass, full resolution, at the chosen offset.
-    mapping, stable_px, total = build_mapping(d, before, after, dx, dy, map_w, step=1)
+    # The real pass, full resolution, at the chosen offset, restricted to the
+    # caller's region. The region matters because the screen Bitmap does NOT
+    # hold the whole presented frame (task 063, measured): the console/HUD
+    # dialogs live in their own surfaces and the cursor is absent, so a
+    # whole-frame comparison fails structurally, not because the dump is wrong.
+    # Callers pass the pure-playfield region for the trust check.
+    mapping, stable_px, total = build_mapping(d, before, after, dx, dy, map_w,
+                                              step=1, x0=a.x0, y0=a.y0, map_h=a.y1)
     consist, mapped = score_mapping(mapping)
     clean = sum(1 for c in mapping.values() if len(c) == 1)
 
@@ -311,6 +320,12 @@ def main():
     # Only map over this many columns of the dump -- for a wide dump against a
     # 640-wide presentation, the columns the window can vouch for.
     p.add_argument("--map-w", type=int, default=0)
+    # Region top-left / bottom (dump coordinates). The alignment search always
+    # runs over the full window-vouched area; only the consistency pass is
+    # restricted, so a region cannot hide a misalignment.
+    p.add_argument("--x0", type=int, default=0)
+    p.add_argument("--y0", type=int, default=0)
+    p.add_argument("--y1", type=int, default=0)
     p.add_argument("--render", default=None)
     p.add_argument("--save-palette", default=None)
     p.add_argument("--search-dy", type=int, default=48)
