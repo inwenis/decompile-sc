@@ -22,7 +22,23 @@ you pick the (Wide) shortcut, and nothing needs turning back off.
 
 ## Known imperfections (real, not dangerous)
 
-1. TODO(session verdicts land here)
+1. **The bottom console (minimap, unit panel, command card) stays in its old
+   place** -- it hugs the left 640 pixels, so the game reads as a normal
+   console sitting in the left of a wider window. The command card is NOT at
+   the window's bottom-right corner, and the resource counters are NOT at the
+   top-right; both end where the old screen used to. Everything works -- the
+   minimap, every button, every readout -- it just does not stretch. Moving it
+   right is its own future piece of work.
+2. **The little rectangle right of the console** (bottom-right corner, below
+   the map, about 160x80) has no artwork of its own -- no art exists for a
+   wider console, and drawing new art is out of bounds for this project.
+3. **Scrolling all the way to the RIGHT edge of a map** shows a band of
+   stale/garbled columns at the far right for as long as you sit at the very
+   edge. The camera's right-edge stop is still the old one. Scroll one screen
+   left and it is gone. Fix is a known, bounded follow-up.
+4. **On space-platform maps** the starfield backdrop has a star-free band on
+   the far right (the stars' positions come from a file that only covers the
+   old width). Cosmetic, off-map only.
 
 ## If something goes wrong
 

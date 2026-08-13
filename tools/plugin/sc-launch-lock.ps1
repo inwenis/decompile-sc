@@ -61,7 +61,12 @@ function Enter-ScLaunchLock {
     # holds -- so track it, and fail fast with the actual reason instead of
     # timing out with a wrong one. Callers nesting into lock-taking helpers
     # pass those helpers -NoLaunchLock.
-    if (-not $global:ScLaunchLockHeld) { $global:ScLaunchLockHeld = @{} }
+    # Get-Variable, not a bare $global: read: every suite dot-sources
+    # drive-game.ps1, which sets StrictMode Latest, and a bare read of an
+    # unset global THROWS there (task 070 hit it on this line's first day out).
+    if ($null -eq (Get-Variable -Name ScLaunchLockHeld -Scope Global -ValueOnly -ErrorAction SilentlyContinue)) {
+        $global:ScLaunchLockHeld = @{}
+    }
     $norm = [IO.Path]::GetFullPath($LockPath)
     if ($global:ScLaunchLockHeld.ContainsKey($norm)) {
         $held = $global:ScLaunchLockHeld[$norm]
@@ -141,7 +146,8 @@ function Exit-ScLaunchLock {
     if (-not $Lock) { return }
     $path = $Lock.Name
     $Lock.Close()
-    if ($global:ScLaunchLockHeld) { $global:ScLaunchLockHeld.Remove([IO.Path]::GetFullPath($path)) }
+    $heldMap = Get-Variable -Name ScLaunchLockHeld -Scope Global -ValueOnly -ErrorAction SilentlyContinue
+    if ($heldMap) { $heldMap.Remove([IO.Path]::GetFullPath($path)) }
     # The handle was the lock; the file is only diagnostic content. Leaving it behind
     # is issue #103: every later reader sees this run's (by then dead) pid and
     # concludes the machine is held. Remove it, and never claim more than happened.

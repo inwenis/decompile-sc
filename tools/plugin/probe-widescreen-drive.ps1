@@ -94,6 +94,7 @@ $script:failures = 0
 $script:step = 0
 $script:findings = @()
 $script:completedPhases = @()
+$script:stripSamples = @()
 $launchLock = $null
 $fixtures = $null
 $gamePid = 0
@@ -236,6 +237,14 @@ try {
     # The launch: the USER's feature set (deploy.ps1's launcher flags) plus the
     # assembled widescreen -- stage 2 + fog in-process, cnc-ddraw presenting.
     # This exact flag combination is what the wide launcher ships.
+    # Task 070: the engine's glue-screen input is ACTIVATION-GATED, and on the
+    # invisible desktop a cnc-ddraw window is never told it is active -- a
+    # posted click at a fully interactive menu registers 0/4 runs without this,
+    # and in 0.4s with it (probe-cnc-clickdelay, arm B). The flag makes every
+    # drive-game input primitive post the activation triple first; real
+    # foreground/focus are untouched. Cleared in finally.
+    $env:SCDRIVE_POST_ACTIVATE = '1'
+
     Write-Host 'probe-wsdrive: launching (fanout features + stage 2 + cnc-ddraw)'
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
         -Mode fanout -Circles 1 -HudRow 1 -ProdQueue 1 -ProdFan 1 `
@@ -332,6 +341,7 @@ try {
         $strip = Invoke-FrameTool -ToolArgs @('band', '--dump', $ptIngame.Dump,
                 '--x0', '640', '--x1', '800', '--y0', '400', '--y1', '480')
         Report-Finding "console-right strip x=640..799 y=400..479: nonzero_frac=$($strip['band_nonzero_frac']) distinct=$($strip['band_distinct']) (blank-by-design region; this is what fills it)"
+        $script:stripSamples += "ingame: nonzero=$($strip['band_nonzero_frac']) distinct=$($strip['band_distinct'])"
     }
 
     # ---- the HUD/minimap placement verdict, from the engine's dialog list -
@@ -511,6 +521,16 @@ try {
         if ($iter % 4 -eq 0) {
             $pt = Get-CapturePoint -Hwnd $h -Tag "drive-stab$iter"
             Assert-WideCapture -Pt $pt
+            if ($pt.Dump) {
+                # The dead strip, WATCHED, not sampled once (conductor,
+                # 2026-08-13): 640..799 x 400..479 -- beside the console,
+                # below the map. Screen-anchored, so it is comparable across
+                # camera moves. A clean black strip is a footnote; flickering
+                # garbage there is what would make the feature feel broken.
+                $ss = Invoke-FrameTool -ToolArgs @('band', '--dump', $pt.Dump,
+                        '--x0', '640', '--x1', '800', '--y0', '400', '--y1', '480')
+                $script:stripSamples += "iter${iter}: nonzero=$($ss['band_nonzero_frac']) distinct=$($ss['band_distinct'])"
+            }
         }
         Start-Sleep -Seconds 8
     }
@@ -527,6 +547,17 @@ try {
         "($(if ($fin) { "aimed=$($fin.Aimed) at x=$($fin.ScreenX), selected=[$($fin.Selected -join ',')]" } else { 'no target found' }))"
     $ptFinal = Get-CapturePoint -Hwnd $h -Tag 'drive-final'
     Assert-WideCapture -Pt $ptFinal
+    if ($ptIngame.Dump -and $ptFinal.Dump) {
+        # The strip across the WHOLE session, first in-game dump vs last:
+        # screen-anchored region, so any difference is content changing in
+        # the strip itself, not the camera moving under it.
+        $sf = Invoke-FrameTool -ToolArgs @('band', '--dump', $ptFinal.Dump,
+                '--x0', '640', '--x1', '800', '--y0', '400', '--y1', '480')
+        $script:stripSamples += "final: nonzero=$($sf['band_nonzero_frac']) distinct=$($sf['band_distinct'])"
+        $sd = Invoke-FrameTool -ToolArgs @('diff', '--a', $ptIngame.Dump, '--b', $ptFinal.Dump,
+                '--x0', '640', '--x1', '800', '--y0', '400', '--y1', '480')
+        Report-Finding "DEAD STRIP watched over the session (640..799 x 400..479): samples [$($script:stripSamples -join ' | ')]; first-vs-last diff_px=$($sd['diff_px']) of 12800 -- $(if ([int]($sd['diff_px'] ?? 12800) -eq 0) { 'STABLE: whatever is there at load never changes' } else { 'the strip CHANGES during play; describe what the PNGs show' })"
+    }
     [void](Get-ScWorldState -LogPath $log -Tag 'dlgpump2' -MarkerPath $markerPath)
     $dialogsEnd = @(Get-ScDialogs -LogPath $log)
     Assert-True 'the dialog list still answers after the session' ($dialogsEnd.Count -gt 0) "(n=$($dialogsEnd.Count))"
@@ -538,6 +569,7 @@ catch {
     Write-Host $_.ScriptStackTrace
 }
 finally {
+    Remove-Item Env:SCDRIVE_POST_ACTIVATE -ErrorAction SilentlyContinue
     if (-not $KeepOpen -and $gamePid -gt 0) {
         try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | Write-Host }
         catch { Write-Host "  warn close-game: $($_.Exception.Message)" }

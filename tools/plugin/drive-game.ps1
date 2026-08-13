@@ -268,6 +268,39 @@ function Assert-ScDrivable {
     if ([ScDrive.Native]::IsIconic($Hwnd)) { throw 'drive-game: the game window is MINIMISED; posted mouse messages are ignored in that state. Restore it and retry.' }
 }
 
+function Send-ScActivationNudge {
+    <#
+    .SYNOPSIS
+    Post WM_ACTIVATEAPP(1) + WM_ACTIVATE(WA_ACTIVE) + WM_SETFOCUS -- open the
+    engine's activation-gated input path without touching the real foreground.
+    .DESCRIPTION
+    TASK 070, measured under cnc-ddraw on the invisible desktop: a posted click
+    at a fully interactive main menu NEVER registers (0/4 runs, one with a 60s
+    watch), while the identical click under WMode registers every time. Posting
+    this activation triple first, the same click registered in 0.4s -- and the
+    gate RE-CLOSES later (the next screen's clicks died again), so callers nudge
+    before EVERY posted input, not once per run.
+
+    Mechanism, consistent with the decompiled wndproc (research "Foreground"
+    section): the engine gates GLUE-SCREEN input on its activation state
+    (DAT_0051bfa8 family, written by the WM_ACTIVATEAPP case). WMode's injected
+    windowed mode leaves the game believing it is active; cnc-ddraw's subclassed
+    window on a desktop that can never hold the foreground does not. These are
+    POSTED messages: the real foreground, the user's focus and the visible
+    desktop's cursor are untouched (the ClipCursor the handler runs applies to
+    the window's own invisible desktop).
+
+    Gated on %SCDRIVE_POST_ACTIVATE%=1 at the call sites in the input
+    primitives, so nothing changes for any existing suite unless a run opts in.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][IntPtr]$Hwnd)
+    [void][ScDrive.Native]::PostMessage($Hwnd, 0x001C, [IntPtr]1, [IntPtr]0)  # WM_ACTIVATEAPP, active
+    [void][ScDrive.Native]::PostMessage($Hwnd, 0x0006, [IntPtr]1, [IntPtr]0)  # WM_ACTIVATE, WA_ACTIVE
+    [void][ScDrive.Native]::PostMessage($Hwnd, 0x0007, [IntPtr]0, [IntPtr]0)  # WM_SETFOCUS
+    Start-Sleep -Milliseconds 60
+}
+
 function Send-ScMouseMove {
     <#
     .SYNOPSIS
@@ -283,6 +316,7 @@ function Send-ScMouseMove {
     )
     Assert-ScDrivable -Hwnd $Hwnd
     if (-not $NoActivate) { Assert-ScWindowActive -Hwnd $Hwnd -Because 'a posted mouse MOVE' }
+    if ($env:SCDRIVE_POST_ACTIVATE -eq '1') { Send-ScActivationNudge -Hwnd $Hwnd }
     [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]$Buttons, (ConvertTo-ScLParam $X $Y))
     if ($DelayMs -gt 0) { Start-Sleep -Milliseconds $DelayMs }
 }
@@ -315,6 +349,8 @@ function Send-ScClick {
     )
     Assert-ScDrivable -Hwnd $Hwnd
     if (-not $NoActivate) { Assert-ScWindowActive -Hwnd $Hwnd -Because 'a click, whose leading mouse MOVE' }
+
+    if ($env:SCDRIVE_POST_ACTIVATE -eq '1') { Send-ScActivationNudge -Hwnd $Hwnd }
 
     $mods = 0
     if ($Shift) { $mods = $mods -bor $script:MK_SHIFT }
@@ -370,6 +406,7 @@ function Send-ScDrag {
         Assert-ScWindowActive -Hwnd $Hwnd -Because 'a drag, which is made of mouse MOVES and'
     }
     if ($Steps -lt 2) { $Steps = 2 }
+    if ($env:SCDRIVE_POST_ACTIVATE -eq '1') { Send-ScActivationNudge -Hwnd $Hwnd }
 
     [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]0, (ConvertTo-ScLParam $X1 $Y1))
     Start-Sleep -Milliseconds 60
