@@ -2190,7 +2190,9 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     // returns 0 or 1.
     if (hudrow) installed += ScHudRowInstallHooks();
 
-    // Task 033's one HUD-driver detour, same suspension, same 0-or-1 contract.
+    // Task 033's HUD-driver detour plus task 066's queueLayout bracket -- TWO patches
+    // inside sc_queueind, same suspension, still the 0-or-1 contract here: the module
+    // installs both or rolls its own half back and reports 0.
     if (queueind) installed += ScQueueIndInstallHooks();
 
     ScHookResumeThreads();

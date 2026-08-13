@@ -15,9 +15,22 @@
 #include "sc_hook.h"
 #include "sc_log.h"
 #include "sc_prodqueue.h"
+#include "sc_queueind.h"   // ScQueueIndRingGen -- the phantom window's seqlock (task 066)
 #include "sc_session.h"
 
 #define SC_GAME_ENTRY __attribute__((force_align_arg_pointer))
+
+// One line per SITE, first call and any CHANGE. The phantom bracket's whole safety
+// argument is "every engine reader of the ring runs on the game thread" (sc_queueind.h);
+// these lines are how a run MEASURES that instead of trusting it. The observer's own
+// site is expected to print a DIFFERENT id -- that is the thread the seqlock exists for.
+static void ThreadCheck(const char* site, DWORD* seen) {
+    DWORD tid = GetCurrentThreadId();
+    if (*seen == tid) return;
+    ScLog("THREADCHECK %s tid=%u%s", site, (unsigned)tid,
+          *seen ? " CHANGED -- the single-thread claim this fix rests on is broken" : "");
+    *seen = tid;
+}
 
 // ---------------------------------------------------------------------------
 // State
@@ -364,6 +377,7 @@ static void Rebalance(DWORD unit, BYTE player, ProdRecord** rp) {
 
 void ScProdQueueOnTrain(DWORD unit, unsigned type, bool wasFull) {
     if (!g_enabled || !unit) return;
+    { static DWORD tid = 0; ThreadCheck("prodq-train", &tid); }
     EnterCriticalSection(&g_lock);
     ProdQSessionSync();
     CollectGarbage(true);
@@ -403,6 +417,7 @@ void ScProdQueueOnTick(DWORD unit) {
     // has something to look at, or on the next Train/Cancel/read-back, all of which
     // take it unconditionally.
     if (!g_enabled || !unit || g_recCount == 0) return;
+    { static DWORD tid = 0; ThreadCheck("prodq-tick", &tid); }
     EnterCriticalSection(&g_lock);
     ProdQSessionSync();
 
@@ -417,6 +432,7 @@ void ScProdQueueOnTick(DWORD unit) {
 
 bool ScProdQueueOnCancel(DWORD unit, unsigned payload) {
     if (!g_enabled || !unit) return false;
+    { static DWORD tid = 0; ThreadCheck("prodq-cancel", &tid); }
     bool consumed = false;
     EnterCriticalSection(&g_lock);
     ProdQSessionSync();
@@ -502,8 +518,46 @@ static int FormatEngineQueue(DWORD unit, char* out, int outLen) {
     return EngineQueueLength(unit);
 }
 
+// The same read made COHERENT for the observer thread (task 066): the phantom bracket
+// makes owned ring slots non-empty for the length of each queueLayout call on the game
+// thread, and a log line must never carry that state -- a phantom item in a PRODQSEL
+// line is precisely the harm task 061 named. The guarded section is the SIX RAW READS
+// and nothing else; the first version formatted five strings inside it, and at the
+// layout's real call rate (~40k brackets/s measured) that section straddled a window on
+// every one of its retries in run 2. Formatting happens on the local copy, outside.
+// Returns 0 when 32 straddles in a row left the value suspect, which the caller PRINTS
+// (ringStable=0) rather than swallows.
+static int CoherentEngineQueue(DWORD unit, char* out, int outLen, BYTE* head, int* len) {
+    WORD ring[SC_BUILD_QUEUE_SLOTS];
+    int stable = 0;
+    for (int attempt = 0; attempt < 32 && !stable; ++attempt) {
+        unsigned g1 = ScQueueIndRingGen();
+        if (g1 & 1) continue;
+        *head = *(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
+        for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) ring[i] = QueueSlot(unit, i);
+        if (ScQueueIndRingGen() == g1) stable = 1;
+    }
+    if (!stable) {
+        *head = *(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
+        for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) ring[i] = QueueSlot(unit, i);
+    }
+    int used = 0;
+    int n = 0;
+    out[0] = '\0';
+    for (int s = 0; s < SC_BUILD_QUEUE_SLOTS && used + 8 < outLen; ++s) {
+        used += _snprintf(out + used, outLen - used, "%s0x%03X", s ? "," : "",
+                          (unsigned)ring[s]);
+        if (ring[s] != SC_BUILD_QUEUE_EMPTY) ++n;
+    }
+    *len = n;
+    return stable;
+}
+
 void ScProdQueueLogState(const char* tag) {
     if (!g_enabled || !g_lockReady) return;
+    // The observer's own site: this one is EXPECTED to print a different id from the
+    // prodq-train/tick/cancel sites -- it is the thread the seqlock above exists for.
+    { static DWORD tid = 0; ThreadCheck("prodq-observer", &tid); }
     EnterCriticalSection(&g_lock);
     // The oracle syncs too, and that is the half of issue #63 a test can actually see:
     // arm 6 asserts on THIS line's `buildings=` in a game the plugin never queued in,
@@ -521,17 +575,19 @@ void ScProdQueueLogState(const char* tag) {
         DWORD u = sel[0];
         if (u && !sel[1] && UnitPtrValid(u)) {
             char eng[96];
-            int engineLen = FormatEngineQueue(u, eng, (int)sizeof(eng));
+            BYTE head = 0;
+            int engineLen = 0;
+            int stable = CoherentEngineQueue(u, eng, (int)sizeof(eng), &head, &engineLen);
             ProdRecord* r = FindRecord(u);
             BYTE player = *(BYTE*)(u + SC_CUNIT_OFF_PLAYER);
             ScLog("PRODQSEL [%s] unit=0x%08X type=0x%03X player=%u head=%u engineLen=%d "
-                  "engine=[%s] overflow=%d logical=%d minerals=%u gas=%u",
+                  "engine=[%s] overflow=%d logical=%d minerals=%u gas=%u ringStable=%d",
                   tag ? tag : "-", (unsigned)u,
                   (unsigned)*(WORD*)(u + SC_CUNIT_OFF_UNIT_ID), (unsigned)player,
-                  (unsigned)*(BYTE*)(u + SC_CUNIT_OFF_BUILD_QUEUE_SLOT), engineLen, eng,
+                  (unsigned)head, engineLen, eng,
                   r ? r->count : 0, engineLen + (r ? r->count : 0),
                   player < SC_MAX_PLAYERS ? (unsigned)*MineralsOf(player) : 0u,
-                  player < SC_MAX_PLAYERS ? (unsigned)*GasOf(player) : 0u);
+                  player < SC_MAX_PLAYERS ? (unsigned)*GasOf(player) : 0u, stable);
         } else {
             ScLog("PRODQSEL [%s] (no single building selected)", tag ? tag : "-");
         }
@@ -540,9 +596,12 @@ void ScProdQueueLogState(const char* tag) {
     for (int i = 0; i < g_recCount; ++i) {
         ProdRecord* r = &g_rec[i];
         char eng[96];
+        BYTE head = 0xFFu;
         int engineLen = 0;
-        if (UnitPtrValid(r->unit)) engineLen = FormatEngineQueue(r->unit, eng, (int)sizeof(eng));
-        else lstrcpynA(eng, "(gone)", (int)sizeof(eng));
+        int stable = 1;
+        if (UnitPtrValid(r->unit)) {
+            stable = CoherentEngineQueue(r->unit, eng, (int)sizeof(eng), &head, &engineLen);
+        } else lstrcpynA(eng, "(gone)", (int)sizeof(eng));
         char ovf[128];
         int used = 0;
         ovf[0] = '\0';
@@ -553,12 +612,11 @@ void ScProdQueueLogState(const char* tag) {
         if (r->count == 0) lstrcpynA(ovf, "(none)", (int)sizeof(ovf));
 
         ScLog("PRODQ [%s] unit=0x%08X player=%u head=%u engineLen=%d engine=[%s] "
-              "overflow=%d overflowTypes=[%s] logical=%d minerals=%u gas=%u",
+              "overflow=%d overflowTypes=[%s] logical=%d minerals=%u gas=%u ringStable=%d",
               tag ? tag : "-", (unsigned)r->unit, (unsigned)r->player,
-              UnitPtrValid(r->unit) ? *(BYTE*)(r->unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT) : 0xFFu,
-              engineLen, eng, r->count, ovf, engineLen + r->count,
+              (unsigned)head, engineLen, eng, r->count, ovf, engineLen + r->count,
               r->player < SC_MAX_PLAYERS ? (unsigned)*MineralsOf(r->player) : 0u,
-              r->player < SC_MAX_PLAYERS ? (unsigned)*GasOf(r->player) : 0u);
+              r->player < SC_MAX_PLAYERS ? (unsigned)*GasOf(r->player) : 0u, stable);
     }
     // ALWAYS a summary line, even with zero records -- an absence has to be
     // positively reported or "the oracle did not run" and "there is nothing queued"

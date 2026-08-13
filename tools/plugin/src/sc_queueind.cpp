@@ -38,6 +38,7 @@ static BYTE* g_base    = NULL;
 static bool  g_enabled = false;
 
 static ScHook g_hkDriver;
+static ScHook g_hkLayout;   // queueLayout 0x004268D0 -- the phantom bracket (task 066)
 
 // Test seam -- NULL means "call the real engine".
 static ScQIndCtlFn    g_show          = NULL;
@@ -62,12 +63,14 @@ static unsigned g_stat[SC_QIND_STAT__COUNT];
 
 // WHAT THE STRIP HELD when the GAME THREAD last left it, snapshotted at the end of the
 // frame path. It exists because the observer thread cannot answer this question honestly:
-// the engine's own layout re-greys the slots the plugin fills, and it runs INSIDE the same
-// driver call, a few microseconds before FillOverflowIcons puts them back. Nothing is drawn
-// in between -- the dialog is rendered later, by graphic layer 2 -- so the player never sees
-// the intermediate state, but an asynchronous reader lands in it often enough to make a
-// suite flaky (measured: the same assertion passed one run and failed the next). A snapshot
-// taken by the thread that does the writing is coherent by construction.
+// the strip's fields change INSIDE the driver call (under task 039 the layout re-greyed
+// the filled slots and the plugin's hand-fill put them back microseconds later; under
+// task 066 the engine's own layout writes them, mid-walk, with the phantom in the ring).
+// Nothing is drawn in between -- the dialog is rendered later, by graphic layer 2 -- so
+// the player never sees the intermediate state, but an asynchronous reader lands in it
+// often enough to make a suite flaky (measured: the same assertion passed one run and
+// failed the next). A snapshot taken by the thread that does the writing is coherent by
+// construction.
 struct QIconSnap { short icon; WORD mode; DWORD flags; DWORD grp; DWORD text; };
 static QIconSnap g_icons[SC_STATQ_SLOTS];
 static int       g_iconsN = 0;
@@ -283,6 +286,110 @@ static int OverflowOf(DWORD unit) {
 }
 
 // ---------------------------------------------------------------------------
+// THE PHANTOM BRACKET (task 066) -- make queueLayout see the slots the plugin holds
+// items behind as OCCUPIED, for exactly the length of its own call.
+//
+// Task 061 proved the last-slot click dies because the plugin and the engine FIGHT over
+// the DISABLED bit: queueLayout greys every slot whose ring entry is 0xE4, the plugin's
+// re-lighting made the engine's next disableControl a live call instead of a no-op, and
+// that call's dwUser=6 event clears a player's PRESSED bit mid-click (every fill provoked
+// exactly one disable -- 1153974 = 1153974, measured). Task 066 then killed the two
+// bit-level fixes: restoring PRESSED was measured rescuing 110,381 presses in one click
+// and still cancelling nothing (PR #95), and never clearing DISABLED draws the slot
+// through ticon.pcx remap row 4 -- the disabled colours, 14 of 16 entries away from the
+// lit row (the icon blit 0x00456C30 tests exactly flag 0x2 at 0x00456C42).
+//
+// So the fight is not fought at all. The pre-hook writes the held item's type into the
+// empty ring slot; queueLayout then takes its OCCUPIED branch -- grp/icon/mode/type from
+// its own globals, the slot label, enableControl -- and the post-hook puts 0xE4 back the
+// instant it returns. No disable is ever provoked (enableControl early-outs once the slot
+// is lit), no dwUser=6 exists to clear a press, and the slot the player clicks is
+// byte-for-byte a vanilla occupied slot at input time: the hit test reads VISIBLE, the
+// press/activate cycle reads PRESSED, and FUN_004573A0 emits {0x20, k} through the
+// engine's own code. sc_prodqueue's cancel-icon branch (task 039, never reachable until
+// now) serves the command, because at command-processing time the ring slot is empty.
+//
+// WHY THE WINDOW CANNOT BE OBSERVED, rather than merely was not (the conductor's binding
+// constraint on this design):
+//   * It opens and closes inside ONE call frame on the thread that runs queueLayout, so
+//     no same-thread reader -- the Train-button gate, the tick, the cancel handlers, the
+//     AI, every drawer -- can interleave with it. That every engine reader of the ring IS
+//     on that thread is classified reader-by-reader in research/production-queue.md 8.8,
+//     and holds structurally: the engine's own ring mutations (productionTick's and
+//     cancelBuildQueueSlot's multi-store compactions) are unsynchronised, so a reader on
+//     another thread would have observed torn rings in VANILLA.
+//   * The two readers that genuinely are on other threads -- this plugin's observer
+//     (PRODQ/PRODQSEL, STATQ) and the test harness -- read g_ringGen around the ring
+//     (seqlock: odd = open, changed = straddled) and retry, so a phantom can never reach
+//     a log line either. THREADCHECK lines measure the whole claim live: every hooked
+//     game-side site logs its thread id once, and the suite asserts they are one id.
+//
+// The writes themselves are the two bare stores the plugin already makes elsewhere
+// (capture/promote, sc_prodqueue 6.3): no resource global, no AI mirror, no event. The
+// saved value is restored VERBATIM rather than assumed 0xE4, and a slot that turns out
+// non-empty is REFUSED and counted (PHANTOM_DIRTY) rather than overwritten.
+static WORD          g_phantomSaved[SC_BUILD_QUEUE_SLOTS];
+static BYTE          g_phantomSlot[SC_BUILD_QUEUE_SLOTS];
+static int           g_phantomN    = 0;
+static DWORD         g_phantomUnit = 0;
+static volatile LONG g_ringGen     = 0;
+
+unsigned ScQueueIndRingGen(void) { return (unsigned)g_ringGen; }
+
+int ScQueueIndPhantomApply(void) {
+    g_phantomN    = 0;
+    g_phantomUnit = 0;
+    if (!g_enabled) return 0;
+    DWORD unit = PortraitUnit();   // the global queueLayout itself reads, per slot
+    if (!UnitValid(unit)) return 0;
+    if (ScProdQueueOverflowCount(unit) <= 0) return 0;
+
+    const BYTE head      = *(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
+    const int  engineLen = EngineQueueLength(unit);
+    int wrote = 0;
+    for (int k = engineLen; k < SC_BUILD_QUEUE_SLOTS; ++k) {
+        int type = ScProdQueueOverflowAt(unit, k - engineLen);
+        if (type < 0) break;
+        const int slot = ((int)head + k) % SC_BUILD_QUEUE_SLOTS;   // the engine's arithmetic
+        WORD* p = (WORD*)(unit + SC_CUNIT_OFF_BUILD_QUEUE + (DWORD)slot * 2);
+        if (*p != SC_BUILD_QUEUE_EMPTY) { ++g_stat[SC_QIND_STAT_PHANTOM_DIRTY]; break; }
+        // The window opens BEFORE the first store and closes AFTER the last restore --
+        // InterlockedIncrement is a full fence on x86, so a seqlock reader that saw an
+        // even, unchanged generation saw no phantom byte.
+        if (wrote == 0) InterlockedIncrement(&g_ringGen);
+        g_phantomSaved[wrote] = *p;
+        g_phantomSlot[wrote]  = (BYTE)slot;
+        *p = (WORD)type;
+        ++wrote;
+        ++g_stat[SC_QIND_STAT_PHANTOM];
+    }
+    if (wrote) { g_phantomUnit = unit; g_phantomN = wrote; }
+    return wrote;
+}
+
+void ScQueueIndPhantomRestore(void) {
+    if (g_phantomN == 0) return;
+    for (int i = g_phantomN - 1; i >= 0; --i) {
+        WORD* p = (WORD*)(g_phantomUnit + SC_CUNIT_OFF_BUILD_QUEUE +
+                          (DWORD)g_phantomSlot[i] * 2);
+        *p = g_phantomSaved[i];
+    }
+    g_phantomN    = 0;
+    g_phantomUnit = 0;
+    InterlockedIncrement(&g_ringGen);
+}
+
+// One line per SITE, on the first call and on any CHANGE -- a changed id is the
+// single-thread claim breaking and must be loud, not deduplicated away.
+static void ThreadCheck(const char* site, DWORD* seen) {
+    DWORD tid = GetCurrentThreadId();
+    if (*seen == tid) return;
+    ScLog("THREADCHECK %s tid=%u%s", site, (unsigned)tid,
+          *seen ? " CHANGED -- the single-thread claim this fix rests on is broken" : "");
+    *seen = tid;
+}
+
+// ---------------------------------------------------------------------------
 // The composer -- pure, so hooktest drives exactly this
 // ---------------------------------------------------------------------------
 
@@ -314,9 +421,9 @@ int ScQueueIndCompose(char* out, int outLen, const ScQueueIndView* v) {
             out[outLen - 1] = '\0';
             return SC_QIND_UPGRADE;
         }
-        // The strip has five icons. The plugin fills the ones past the engine's ring from
-        // its own overflow (FillOverflowIcons), so what is left UNDRAWN is whatever the
-        // logical queue holds past those five.
+        // The strip has five icons. The ones past the engine's ring are drawn from the
+        // plugin's overflow (by the engine itself, via the phantom bracket -- task 066),
+        // so what is left UNDRAWN is whatever the logical queue holds past those five.
         const int hidden = v->engineLen + v->overflow - SC_STATQ_SLOTS;
         if (hidden <= 0) return SC_QIND_NONE;
         _snprintf(out, (size_t)outLen - 1, "+%d", hidden);
@@ -337,19 +444,40 @@ int ScQueueIndCompose(char* out, int outLen, const ScQueueIndView* v) {
 // The view, read out of game memory
 // ---------------------------------------------------------------------------
 
-static void ReadView(ScQueueIndView* v) {
+// A ring length the OBSERVER can trust. The guarded section is EXACTLY the five word
+// reads and nothing else -- the first version guarded a whole ReadView (selection walk,
+// overflow scan, upgrade scan included), and at the layout's real call rate (~40k/s,
+// measured phantom=21M over 9.5min) eight retries of a section that long straddled a
+// window EVERY time: run 2's [14] arm consumed an engineLen of 5 from a line whose own
+// ringStable said 0. Narrow section + 32 tries makes a settle failure a real anomaly.
+// On the game thread the generation is even and unmoving, so this is one extra load.
+static int CoherentEngineLen(DWORD unit, int* stable) {
+    for (int attempt = 0; attempt < 32; ++attempt) {
+        unsigned g1 = ScQueueIndRingGen();
+        if (g1 & 1) continue;
+        int n = EngineQueueLength(unit);
+        if (ScQueueIndRingGen() == g1) { if (stable) *stable = 1; return n; }
+    }
+    if (stable) *stable = 0;
+    return EngineQueueLength(unit);
+}
+
+// Returns 1 when every ring read settled against the phantom window's seqlock, 0 when
+// one never did (the caller prints that rather than trusting the numbers).
+static int ReadView(ScQueueIndView* v) {
+    int stable = 1;
     memset(v, 0, sizeof(*v));
     v->selection = SelectionCount();
     v->hudPages  = ScHudRowPageCount();
 
     if (v->selection <= 1) {
         DWORD unit = PortraitUnit();
-        if (!UnitValid(unit)) return;
-        v->engineLen = EngineQueueLength(unit);
+        if (!UnitValid(unit)) return stable;
+        v->engineLen = CoherentEngineLen(unit, &stable);
         v->overflow  = OverflowOf(unit);
         int upg = ScUpgQueueCount(unit);          // -1 when the building is not tracked
         v->upgrades = upg > 0 ? upg : 0;
-        return;
+        return stable;
     }
 
     // The engine's own client selection is the truth about what the player has selected
@@ -360,9 +488,12 @@ static void ReadView(ScQueueIndView* v) {
     for (int i = 0; i < SC_HUD_BUTTON_COUNT; ++i) {
         DWORD unit = slot[i];
         if (!UnitValid(unit)) continue;
-        int len = EngineQueueLength(unit) + OverflowOf(unit);
+        int s = 1;
+        int len = CoherentEngineLen(unit, &s) + OverflowOf(unit);
+        if (!s) stable = 0;
         if (len > 0) { ++v->buildings; v->queued += len; }
     }
+    return stable;
 }
 
 // ---------------------------------------------------------------------------
@@ -638,83 +769,23 @@ static DWORD AnchorFor(DWORD root, int mode) {
 // layout queueLayout (0x004268D0) has only four items to draw and greys the fifth. The
 // FEATURE is right and the ring must stay at four; the DISPLAY is what is wrong.
 //
-// So: after the engine has laid the strip out, fill the icons it left empty from the
-// plugin's own overflow, writing the same FIVE things queueLayout writes for an occupied
-// slot (sc_addresses.h "THE FOURTH FIELD, and the fifth"; research/production-queue.md 8.1):
-//     statUser->grp  = *SC_VA_GRP_CMDICONS;   // which ART the frame index means
-//     statUser->icon = type;  statUser->mode = 3;  statUser->type = type;
-//     ctrl->pszText  = the engine's own label for this slot
-// and clearing the DISABLED bit so the icon draws lit like any other queued item.
+// HOW THE SLOT GETS FILLED MOVED, twice, and both former mechanisms are dead:
+//   * task 033/039 wrote the five fields queueLayout writes for an occupied slot BY HAND
+//     here (grp/icon/mode/type/label) and cleared DISABLED to light the slot. The missing
+//     grp was 039's user-visible bug, and the bit-clearing was 061's: every fill made the
+//     engine's next disableControl a live call whose dwUser=6 event destroyed the player's
+//     own click (research/production-queue.md 8.6).
+//   * task 066 deleted all of it. The PHANTOM BRACKET around queueLayout itself (see
+//     ScQueueIndPhantomApply above) makes the engine see the slot as occupied and write
+//     every field with its own code -- so there is nothing left here to hand-write, no
+//     flag to clear, and no fight for the engine to win.
 //
-// THE GRP IS NOT DECORATION, AND LEAVING IT WAS TASK 039'S BUG. queueLayout had just laid
-// this slot out EMPTY, which points its grp at the button-BORDER art and its icon at the
-// placeholder frame k+6. Writing the icon index without the GRP leaves the draw
-// (0x00456C30, which reads both out of the same record) blitting frame #unitType out of
-// the border art -- a different wrong picture for every queued unit type, and a CONSTANT
-// one for as long as that type is queued. The user, on the deployed build, saw exactly
-// that shape and named it three times: a stuck glyph on a Command Center (SCV, type 7), a
-// blacked-out Barracks (Marine, type 0) and a flashing one. One missing field, one bug.
-//
-// The label matters for the same reason in miniature: the other four icons draw their slot
-// number and a filled fifth drew none, because the engine had set its pszText to NULL.
-//
-// Clearing DISABLED also makes it CLICKABLE, and that is deliberate and paid for on the
-// other side: a click on icon k emits {0x20, k}, and sc_prodqueue's cancel handler now
-// consumes any display index at or above the ring's own length and cancels its OWN item
-// instead of letting cancelBuildQueueSlot refund an empty ring slot.
-//
-// Only writes when something actually differs, so a settled strip costs five compares.
-static void FillOverflowIcons(DWORD root, const ScQueueIndView* v, DWORD unit) {
+// What remains on the frame path is PUBLICATION, not painting: which icons are the
+// plugin's (for the interact shim's counters and the suite's `owned=`), and the
+// game-thread snapshot of what the strip holds (for the observer, which must never read
+// the engine's mid-layout state).
+static void PublishOwnedIcons(DWORD root, const ScQueueIndView* v, DWORD unit) {
     const int drawable = ScQueueIndDrawableSlots(v);
-
-    // The engine's own icon GRP, read from the engine's own global every frame rather than
-    // cached: it is a handle the loader writes at map start and frees on the way out, so a
-    // stale copy would outlive the art it names. A null here means the status module has
-    // not loaded its GRPs yet -- refuse to fill rather than aim the draw at nothing.
-    const DWORD grpIcons = *(DWORD*)Rt(SC_VA_GRP_CMDICONS);
-    if (!grpIcons) {
-        ++g_stat[SC_QIND_STAT_NOGRP];
-        // Nothing was filled, so nothing is ours. Cleared HERE and not on the way in: the
-        // list is published in one write at the end of a successful fill (see below), and
-        // a clear at the top would re-open the empty window that publication exists to
-        // close.
-        g_ownedIconN = 0;
-        return;
-    }
-    const DWORD* labels = (const DWORD*)Rt(SC_VA_STATQ_SLOT_LABELS);
-
-    DWORD c = FindChildById(root, SC_STATQ_FIRST_CONTROL);
-    for (int k = 0; k < SC_STATQ_SLOTS && c; ++k, c = NextOf(c)) {
-        if (k < v->engineLen) continue;              // the engine's own item: leave it
-        if (k >= drawable) continue;                 // nothing to put here
-        int type = ScProdQueueOverflowAt(unit, k - v->engineLen);
-        if (type < 0) continue;
-        DWORD su = *(DWORD*)(c + SC_BINDLG_OFF_USER);
-        if (!su) continue;
-        DWORD* flags = (DWORD*)(c + SC_BINDLG_OFF_FLAGS);
-        // `grp` is part of "is this slot already ours": the engine re-lays the strip out
-        // every frame it redraws the pane, and the field it changes FIRST when it takes
-        // this slot back is the one that decides the art.
-        const bool sameIcon = *(DWORD*)(su + SC_STATUSER_OFF_GRP)  == grpIcons &&
-                              *(short*)(su + SC_STATUSER_OFF_ICON) == (short)type &&
-                              *(WORD*) (su + SC_STATUSER_OFF_MODE) == 3 &&
-                              *(short*)(su + SC_STATUSER_OFF_TYPE) == (short)type;
-        const bool lit = (*flags & SC_CTRL_FLAG_DISABLED) == 0;
-        if (sameIcon && lit && (*flags & SC_CTRL_FLAG_VISIBLE)) continue;
-        *(DWORD*)(su + SC_STATUSER_OFF_GRP)  = grpIcons;
-        *(short*)(su + SC_STATUSER_OFF_ICON) = (short)type;
-        *(WORD*) (su + SC_STATUSER_OFF_MODE) = 3;
-        *(short*)(su + SC_STATUSER_OFF_TYPE) = (short)type;
-        // The slot's number, from the engine's own five-buffer table -- the same pointer
-        // queueLayout hands an occupied slot, so the fifth icon is labelled by the engine's
-        // string in the engine's font, and nothing new is written into that buffer.
-        *(DWORD*)(c + SC_BINDLG_OFF_TEXT) = labels[k];
-        *flags &= ~(DWORD)SC_CTRL_FLAG_DISABLED;
-        CallShow(c);
-        *flags |= SC_CTRL_FLAG_DRAWN;
-        CallUpdate(c);
-        ++g_stat[SC_QIND_STAT_ICONS];
-    }
 
     // WHICH SLOTS ARE OURS, rebuilt every fill by the thread that does the filling. The
     // shim reads it to decide whose press to protect, and it has to be re-derived rather
@@ -791,29 +862,31 @@ static void FillOverflowIcons(DWORD root, const ScQueueIndView* v, DWORD unit) {
 //   1. queueLayout greys every slot whose ring entry is 0xE4. Display 4's ring entry is
 //      empty BY DESIGN -- task 025 holds the engine's ring at four so the client keeps
 //      sending Train -- so it is greyed on every layout pass.
-//   2. FillOverflowIcons clears that bit directly to light the slot.
+//   2. The task-039 hand-fill (deleted by task 066) cleared that bit directly to light
+//      the slot.
 //   3. Which means the engine's NEXT disableControl is no longer the no-op it is in
 //      vanilla: it disables again AND SENDS dwUser=6.
-//   4. Round and round, hundreds of times a second (`iconsFilled` counts our side of the
-//      same fight: 371834 in one run).
+//   4. Round and round, hundreds of times a second (the fill counter measured our side
+//      of the same fight: 371834 in one run).
 //   5. A player's mouse-down arms PRESSED. Two milliseconds later a dwUser=6 clears it.
 //      The mouse-up 60ms later finds nothing armed, so no ACTIVATE, no statusCtrlActivate,
 //      no command. The other four icons hold occupied ring slots, are never disabled, and
 //      cancel normally -- which is exactly the shape the user reported.
 //
-// THE FIX IS THIS AND NOTHING ELSE: for a slot the plugin is holding an item behind, carry
-// the PRESSED bit across the engine's own disable event. The engine's press/activate cycle
-// then completes by itself and emits its own `{0x20, k}` through its own code; nothing is
-// synthesised, no command is forged, and sc_prodqueue's icon-cancel branch -- which task
-// 039 already wrote and which had never once been reached -- serves it.
+// THE FIX IS NOT HERE. Task 066's phantom bracket around queueLayout (ScQueueIndPhantomApply,
+// far above) removes the disable AT ITS SOURCE: the engine lays the owned slot out as
+// occupied and calls enableControl, so no dwUser=6 is ever sent and there is no press to
+// rescue. Two bit-level fixes died before it and are recorded so nobody rebuilds them:
+// restoring PRESSED across the disable event was measured rescuing 110,381 presses in one
+// click and still cancelling nothing, with the press latched forever (PR #95 4); leaving
+// DISABLED set draws the slot through ticon.pcx remap row 4, the disabled colours (task
+// 066's static read of 0x00456C30 -- the row differs from the lit one in 14 of 16 entries).
 //
-// It is deliberately NOT "stop the engine disabling it" and NOT "swallow dwUser=6": the
-// event still runs, the DISABLED bit still ends up set, the next frame still re-lights it.
-// Only the bit that says "a human is holding the mouse down on this control" is preserved,
-// and only on slots the plugin owns, and only when a press was actually in flight -- which
-// is also what makes the counter below worth asserting on: `pressKept` counts presses
-// RESCUED, so a green regression arm with pressKept=0 would mean the arm passed for some
-// other reason.
+// What stays below is the MEASUREMENT: `disableOnOwned` is now the fix's tripwire. Pre-fix
+// it moved EXACTLY once per click, deterministically (PR #95's paired rows); with the
+// bracket holding it must not move at all. A suite asserts the pair -- the phantom counter
+// moving, this one still -- which is what separates "the fix is active" from "the race was
+// won" on a green arm.
 //
 // ---------------------------------------------------------------------------
 // CLICK TRACE (task 061) -- what the ENGINE hands each queue icon, at the instant it
@@ -862,6 +935,10 @@ static unsigned g_clickTraceCapped  = 0;   // ... dropped: over the line cap
 typedef int (__attribute__((fastcall)) *ScIconInteractFn)(DWORD, DWORD);
 
 static int __attribute__((fastcall)) SC_GAME_ENTRY QIndIconInteractShim(DWORD ctrl, DWORD evt) {
+    {
+        static DWORD tid = 0;
+        ThreadCheck("qind-interact", &tid);
+    }
     // MEASURES ONLY. There WAS a fix here -- restore the PRESSED bit the engine's disable
     // event clears on a slot the plugin owns -- and it is reverted, because the run that
     // could finally attribute it showed it does not work AND does active harm:
@@ -1162,8 +1239,14 @@ void ScQueueIndLogState(const char* tag) {
         if (Readable(p, 1)) live = (const char*)p;
     }
 
+    // THIS RUNS ON THE OBSERVER THREAD, and ReadView reads the ring -- which the phantom
+    // bracket (task 066) makes non-empty for the length of each queueLayout call on the
+    // game thread. ReadView retries its ring reads against the seqlock (CoherentEngineLen,
+    // tight section) and reports whether they settled; `ringStable=0` on the printed line
+    // means every retry straddled a window -- the ring-derived numbers on the line are
+    // then suspect, which the reader is told rather than left to discover.
     ScQueueIndView v;
-    ReadView(&v);
+    int ringStable = ReadView(&v);
 
     int ink = linked ? ScQueueIndSurfaceInk(root, b[0], b[1], b[2], b[3]) : -1;
 
@@ -1248,21 +1331,25 @@ void ScQueueIndLogState(const char* tag) {
     ScLog("QIND [%s] mode=%d linked=%d visible=%d text=\"%s\" bounds=(%d,%d,%d,%d) ink=%d "
           "refInk=%d refId=%d surfInk=%d slotDiff=%d boxDiff=%d fontH=%d icons=[%s] "
           "sel=%d engineLen=%d overflow=%d upg=%d bldgs=%d queued=%d hudPages=%d "
-          "anchor=0x%08X owned=%d disableOnOwned=%u disableWithPress=%u pressKept=%u",
+          "anchor=0x%08X owned=%d disableOnOwned=%u disableWithPress=%u pressKept=%u "
+          "phantom=%u phantomDirty=%u ringGen=%u ringStable=%d",
           t, g_mode, linked ? 1 : 0,
           (flags & SC_CTRL_FLAG_VISIBLE) ? 1 : 0, live,
           linked ? b[0] : 0, linked ? b[1] : 0, linked ? b[2] : 0, linked ? b[3] : 0, ink,
           refInk, refId, surfInk, slotDiff, ScQueueIndBoxDiff(root), SmallFontHeight(), icons,
           v.selection, v.engineLen, v.overflow, v.upgrades, v.buildings, v.queued,
           v.hudPages, (unsigned)g_anchor,
-          // `owned` is how many queue icons the plugin is holding an item behind right now,
-          // and `pressKept` is the running count of presses carried across the engine's own
-          // disable event on one of them (task 061). A suite can read the second either side
-          // of a click and require it to MOVE -- which is what stops the regression arm
-          // passing for some reason other than the fix.
+          // `owned` is how many queue icons the plugin is holding an item behind right now.
+          // `disableOnOwned` is the fix's TRIPWIRE (task 066): pre-fix the engine's disable
+          // landed on an owned slot exactly once per click; with the phantom bracket it must
+          // not move at all while `phantom` climbs. A suite reads both either side of a
+          // click -- which is what stops the regression arm passing for some reason other
+          // than the fix.
           g_ownedIconN,
           g_stat[SC_QIND_STAT_DISABLE_OWNED], g_stat[SC_QIND_STAT_DISABLE_PRESSED],
-          g_stat[SC_QIND_STAT_PRESSKEPT]);
+          g_stat[SC_QIND_STAT_PRESSKEPT],
+          g_stat[SC_QIND_STAT_PHANTOM], g_stat[SC_QIND_STAT_PHANTOM_DIRTY],
+          ScQueueIndRingGen(), ringStable);
 }
 
 // One line per child of the statdata dialog. This is the answer to "which controls in this
@@ -1377,16 +1464,18 @@ void ScQueueIndOnFrame(void) {
     ScQueueIndView v;
     ReadView(&v);
 
-    // The fifth icon comes first and is independent of the text: a queue of exactly five
-    // has nothing to say in words and still has an icon the engine did not draw.
+    // The fifth icon is the ENGINE's to draw now (the phantom bracket around queueLayout
+    // ran inside CallOrigDriver, before this line). What the frame path still owns is the
+    // owned-icon list and the game-thread snapshot, published from the settled post-layout
+    // state.
     if (v.selection <= 1 && v.overflow > 0 && v.hudPages <= 1) {
         DWORD unit = PortraitUnit();
-        if (UnitValid(unit)) FillOverflowIcons(root, &v, unit);
+        if (UnitValid(unit)) PublishOwnedIcons(root, &v, unit);
         else g_ownedIconN = 0;
     } else {
-        // Not filling this frame -- so the plugin owns no slot this frame either. Same
-        // reason as the clear inside FillOverflowIcons: the owned list must expire with
-        // the state that created it, not outlive it.
+        // No overflow behind the strip this frame -- so the plugin owns no slot either.
+        // Same reason as the clear inside PublishOwnedIcons: the owned list must expire
+        // with the state that created it, not outlive it.
         g_ownedIconN = 0;
     }
 
@@ -1493,8 +1582,48 @@ void ScQueueIndOnFrame(void) {
 // the whole design: the status pane has to be laid out (and its hide-all sweep done)
 // before the indicator decides what to say and re-shows itself.
 static void SC_GAME_ENTRY HkStatDisplayDriver(void) {
+    static DWORD tid = 0;
+    ThreadCheck("qind-driver", &tid);
     CallOrigDriver();
     ScQueueIndOnFrame();
+}
+
+// queueLayout's detour: the phantom bracket and NOTHING else. __stdcall(BinDlg* ctrl),
+// RET 4, argument on the stack (read off the listing at 0x004268D8, sc_addresses.h) --
+// so a plain stdcall C function preserves what the engine's callers expect, and pushing
+// the argument again for the trampoline costs one dword.
+typedef void (__attribute__((stdcall)) *ScQueueLayoutFn)(DWORD ctrl);
+
+// Reentrancy guard for the bracket's save buffer. The save is a STATIC (g_phantomSaved),
+// so a nested queueLayout entry while a bracket is open would clobber the outer save and
+// the restore would write the wrong bytes back. No such nesting is known -- the layout is
+// straight-line (its callees mark dirty regions, they do not re-dispatch layouts) and the
+// bracket runs on one thread -- but "no known path" is an assumption, and this makes the
+// static safe under it being wrong: only the OUTERMOST entry applies and restores, an
+// inner entry runs the original bare, and the event is logged loudly because it means the
+// model of this function is wrong and someone should look.
+static int g_layoutDepth = 0;
+
+static void __attribute__((stdcall)) SC_GAME_ENTRY HkQueueLayout(DWORD ctrl) {
+    static DWORD tid = 0;
+    ThreadCheck("qind-layout", &tid);
+    ++g_layoutDepth;
+    if (g_layoutDepth > 1) {
+        static bool said = false;
+        if (!said) {
+            ScLog("QIND: queueLayout re-entered with a phantom bracket open (depth=%d) -- "
+                  "the inner call runs UNBRACKETED and this model of the function is "
+                  "wrong; investigate", g_layoutDepth);
+            said = true;
+        }
+        if (g_hkLayout.installed) ((ScQueueLayoutFn)g_hkLayout.trampoline)(ctrl);
+        --g_layoutDepth;
+        return;
+    }
+    ScQueueIndPhantomApply();
+    if (g_hkLayout.installed) ((ScQueueLayoutFn)g_hkLayout.trampoline)(ctrl);
+    ScQueueIndPhantomRestore();
+    --g_layoutDepth;
 }
 
 // Verified prologue -- ScHookInstall refuses to patch if memory disagrees. Bytes and window
@@ -1503,6 +1632,10 @@ static void SC_GAME_ENTRY HkStatDisplayDriver(void) {
 //   0x004D93F0  A0 3C 72 59 00   MOV AL,[0x0059723C]   = 5 bytes / 1 instruction, absolute
 //   (not PC-relative), so it relocates into the trampoline unchanged.
 static const BYTE kPrologueDriver[] = { 0xA0, 0x3C, 0x72, 0x59, 0x00 };
+
+// queueLayout 0x004268D0: PUSH EBP / MOV EBP,ESP / SUB ESP,0x20 = 6 bytes, 3 whole
+// instructions, none PC-relative (dumped in sc_addresses.h beside SC_VA_QUEUE_LAYOUT).
+static const BYTE kPrologueLayout[] = { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x20 };
 
 // ---------------------------------------------------------------------------
 // Lifecycle
@@ -1533,6 +1666,9 @@ void ScQueueIndInit(BYTE* moduleBase, bool enabled) {
     g_iconWrapN = 0;
     g_ownedIconN = 0;
     g_iconOrigFn = 0;
+    g_phantomN = 0;
+    g_phantomUnit = 0;
+    g_ringGen = 0;
     g_clickTraceLines = 0;
     {
         char buf[16];
@@ -1553,18 +1689,36 @@ void ScQueueIndInit(BYTE* moduleBase, bool enabled) {
 
 int ScQueueIndInstallHooks(void) {
     if (!g_enabled) return 0;
-    if (ScHookInstall(&g_hkDriver, "statDisplayDriver", Rt(SC_VA_STAT_DISPLAY_DRIVER),
-                      (void*)&HkStatDisplayDriver, 5,
-                      kPrologueDriver, (int)sizeof(kPrologueDriver))) {
-        return 1;
+    // BOTH or NEITHER. The driver hook without the layout bracket is task 061's fight all
+    // over again (nothing lights the slot any more, but nothing owns the click either);
+    // the bracket without the driver hook is a lit slot with no "+N" and no snapshot. A
+    // partial install rolls itself back and disables the feature.
+    if (!ScHookInstall(&g_hkDriver, "statDisplayDriver", Rt(SC_VA_STAT_DISPLAY_DRIVER),
+                       (void*)&HkStatDisplayDriver, 5,
+                       kPrologueDriver, (int)sizeof(kPrologueDriver))) {
+        ScLog("QIND: driver hook failed to install -- feature disabled");
+        g_enabled = false;
+        return 0;
     }
-    ScLog("QIND: driver hook failed to install -- feature disabled");
-    g_enabled = false;
-    return 0;
+    if (!ScHookInstall(&g_hkLayout, "queueLayout", Rt(SC_VA_QUEUE_LAYOUT),
+                       (void*)&HkQueueLayout, (int)sizeof(kPrologueLayout),
+                       kPrologueLayout, (int)sizeof(kPrologueLayout))) {
+        ScLog("QIND: queueLayout hook failed to install -- rolling the driver hook back, "
+              "feature disabled");
+        ScHookRemove(&g_hkDriver);
+        g_enabled = false;
+        return 0;
+    }
+    return 1;
 }
 
 void ScQueueIndRemoveHooks(void) {
     ScHookRemove(&g_hkDriver);
+    ScHookRemove(&g_hkLayout);
+    // A phantom left in the ring survives its window only if the game thread died inside
+    // queueLayout -- but restore is idempotent and cheap, so make unload leave the ring
+    // clean unconditionally rather than reason about that.
+    ScQueueIndPhantomRestore();
     UnwrapIconInteracts();
 
     // Take the control back out of the dialog. Single dword writes, guarded reads because
@@ -1585,12 +1739,16 @@ void ScQueueIndRemoveHooks(void) {
 
 void ScQueueIndLogStats(void) {
     if (!g_enabled) return;
-    ScLog("QINDSTATS frames=%u shows=%u hides=%u splices=%u refused=%u iconsFilled=%u "
-          "noGrp=%u disableOnOwned=%u disableWithPress=%u pressKept=%u",
+    // iconsFilled= and noGrp= left this line with task 066: the hand-fill they counted is
+    // deleted (the phantom bracket makes the ENGINE draw the slot), so nothing increments
+    // them any more, and a printed count no code path can move is the task-030 defect.
+    ScLog("QINDSTATS frames=%u shows=%u hides=%u splices=%u refused=%u "
+          "phantom=%u phantomDirty=%u "
+          "disableOnOwned=%u disableWithPress=%u pressKept=%u",
           g_stat[SC_QIND_STAT_FRAMES], g_stat[SC_QIND_STAT_SHOWS],
           g_stat[SC_QIND_STAT_HIDES], g_stat[SC_QIND_STAT_SPLICES],
-          g_stat[SC_QIND_STAT_REFUSED], g_stat[SC_QIND_STAT_ICONS],
-          g_stat[SC_QIND_STAT_NOGRP],
+          g_stat[SC_QIND_STAT_REFUSED],
+          g_stat[SC_QIND_STAT_PHANTOM], g_stat[SC_QIND_STAT_PHANTOM_DIRTY],
           g_stat[SC_QIND_STAT_DISABLE_OWNED], g_stat[SC_QIND_STAT_DISABLE_PRESSED],
           g_stat[SC_QIND_STAT_PRESSKEPT]);
     // The trace's own denominator: what it saw and what it dropped, so "no click event was

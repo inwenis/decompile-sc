@@ -4465,51 +4465,85 @@ static void QueueIndTests(void) {
     }
     Check("the original driver ran first, every frame", (long long)g_qiDriverCalls, 0);
 
-    printf("\n    ... and the FIFTH icon is drawn from the plugin's own overflow\n");
-    // The user: "when i queue more then 5 units the 5'th slot is emtpy". Display 4 is the
-    // slot task 025's ENGINE_HOLD=4 leaves empty; the engine greyed it in the fake, and
-    // the module must have filled it with the first held item and lit it.
+    printf("\n    ... and the FIFTH icon is the ENGINE's to draw now: the phantom bracket\n");
+    // Task 066. The hand-fill of the fifth icon is DELETED: the detour on queueLayout
+    // (0x004268D0) writes the held item's type into the empty ring slot before the
+    // engine's own layout runs and restores 0xE4 the instant it returns, so the engine
+    // lays the slot out as occupied with its own code and no disableControl ever fires
+    // on it (task 061's defect). Offline there is no engine layout to observe, so what
+    // is provable here is the bracket itself -- the writes, the byte-exact restore, the
+    // seqlock generation around them -- and that the frame path no longer hand-writes.
     {
+        DWORD unit = PqBuilding();
+        const BYTE head = *(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
+        const int  tail = ((int)head + SC_PRODQ_ENGINE_HOLD) % SC_BUILD_QUEUE_SLOTS;
+        WORD* slot = (WORD*)(unit + SC_CUNIT_OFF_BUILD_QUEUE + (DWORD)tail * 2);
+        Check("the slot behind display 4 is EMPTY before the bracket",
+              (long long)*slot, (long long)SC_BUILD_QUEUE_EMPTY);
+        const unsigned gen0 = ScQueueIndRingGen();
+        Check("  and the generation starts even", (long long)(gen0 & 1), 0);
+
+        Check("apply writes exactly ONE slot (one hole, five held)",
+              ScQueueIndPhantomApply(), 1);
+        Check("  the engine would now see the OLDEST held item there",
+              (long long)*slot, (long long)PQ_TYPE_B);
+        Check("  the four real items are untouched",
+              (long long)(*(WORD*)(unit + SC_CUNIT_OFF_BUILD_QUEUE + (DWORD)(((int)head + 0) % 5) * 2) == PQ_TYPE_B &&
+                          *(WORD*)(unit + SC_CUNIT_OFF_BUILD_QUEUE + (DWORD)(((int)head + 3) % 5) * 2) == PQ_TYPE_B), 1);
+        // The seqlock: an observer reading NOW sees an odd generation and retries, which
+        // is what keeps a phantom out of every PRODQ/PRODQSEL/STATQ line.
+        Check("  the window is OPEN: generation is odd", (long long)(ScQueueIndRingGen() & 1), 1);
+        Check("  and the phantom counter moved", (long long)(ScQueueIndStat(SC_QIND_STAT_PHANTOM) > 0), 1);
+
+        ScQueueIndPhantomRestore();
+        Check("restore puts the empty sentinel back, byte-exact",
+              (long long)*slot, (long long)SC_BUILD_QUEUE_EMPTY);
+        Check("  the window is CLOSED: generation even and moved",
+              (long long)((ScQueueIndRingGen() & 1) == 0 && ScQueueIndRingGen() != gen0), 1);
+        Check("  a second restore is a no-op", (ScQueueIndPhantomRestore(),
+              (long long)*slot), (long long)SC_BUILD_QUEUE_EMPTY);
+
+        // A slot the overflow map says is ours but which holds a REAL type is REFUSED and
+        // counted, never overwritten. Reachable only with a gap in the ring (occupied
+        // slots stopped being contiguous from the head), which the rebalance invariant
+        // forbids -- so the counter doubles as that invariant's tripwire.
+        WORD* gap = (WORD*)(unit + SC_CUNIT_OFF_BUILD_QUEUE + (DWORD)(((int)head + 3) % 5) * 2);
+        const WORD saved = *gap;
+        *gap = SC_BUILD_QUEUE_EMPTY;            // ring: B,B,B,_,_ then a foreign item at the tail
+        *slot = (WORD)(PQ_TYPE_B + 1);
+        const int dirtyBefore = ScQueueIndStat(SC_QIND_STAT_PHANTOM_DIRTY);
+        // EngineQueueLength counts occupied slots ANYWHERE in the ring, so it reads 4
+        // (three real + the foreign tail item) and apply's k=4 names slot head+4 -- the
+        // foreign item, exactly the collision the refusal exists for.
+        Check("a non-empty slot where the map expects a hole is REFUSED",
+              ScQueueIndPhantomApply(), 0);
+        Check("  the foreign item survives untouched", (long long)*slot, (long long)(PQ_TYPE_B + 1));
+        Check("  and the refusal is counted, not silent",
+              (long long)(ScQueueIndStat(SC_QIND_STAT_PHANTOM_DIRTY) - dirtyBefore), 1);
+        *gap = saved;                            // put the fixture's ring back
+        *slot = SC_BUILD_QUEUE_EMPTY;
+    }
+    {
+        // AND THE DELETED WRITES STAY DELETED. The frame path used to write five fields
+        // and clear DISABLED on the fifth icon; every one of those writes is now the
+        // engine's, so a frame over the fake pane -- where no engine exists -- must leave
+        // the empty-slot layout EXACTLY as the engine's own empty branch left it. This is
+        // the regression guard for the hand-fill quietly coming back.
+        BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
+        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiOrigDriver);
+        ScQueueIndOnFrame();
         DWORD c = QiCtl(4), u = QiUser(4);
-        Check("display 4 draws the held unit type",
-              (long long)*(WORD*)(u + SC_STATUSER_OFF_ICON), (long long)PQ_TYPE_B);
-        Check("  with the OCCUPIED mode the engine writes", (long long)*(WORD*)(u + SC_STATUSER_OFF_MODE), 3);
-        Check("  and its type field set too", (long long)*(WORD*)(u + SC_STATUSER_OFF_TYPE),
-              (long long)PQ_TYPE_B);
-        // THE FIELD THAT DECIDES WHICH PICTURE. An icon index means nothing without the GRP
-        // it indexes: with the placeholder art still in this field the engine's own draw
-        // (0x00456C30 reads both out of this record) blits frame #unitType out of the
-        // command-button borders -- which is what the user saw as a stuck glyph on a
-        // Command Center, a black slot on one Barracks and a flashing one on another.
-        Check("  and it draws from the ICON grp, not the placeholder art it replaced",
-              (long long)(*(DWORD*)(u + SC_STATUSER_OFF_GRP) == QiGrpIcons()), 1);
-        Check("  and carries the engine's own label for slot 5, like the other four",
-              (long long)(*(DWORD*)(c + SC_BINDLG_OFF_TEXT) == QiLabel(4)), 1);
-        Check("  the greyed bit is gone, so it draws lit",
-              (*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_DISABLED) ? 1 : 0, 0);
-        Check("  the four ENGINE icons were not touched",
+        Check("the frame path no longer writes the fifth icon's mode",
+              (long long)*(WORD*)(u + SC_STATUSER_OFF_MODE), 6);
+        Check("  nor its grp", (long long)(*(DWORD*)(u + SC_STATUSER_OFF_GRP) == QiGrpBtns()), 1);
+        Check("  nor its label", (long long)*(DWORD*)(c + SC_BINDLG_OFF_TEXT), 0);
+        Check("  nor its DISABLED bit",
+              (*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_DISABLED) ? 1 : 0, 1);
+        Check("  and the four ENGINE icons were not touched either",
               (long long)(*(WORD*)(QiUser(0) + SC_STATUSER_OFF_MODE) == 3 &&
                           *(WORD*)(QiUser(3) + SC_STATUSER_OFF_MODE) == 3 &&
                           *(DWORD*)(QiUser(0) + SC_STATUSER_OFF_GRP) == QiGrpIcons() &&
                           *(DWORD*)(QiCtl(0) + SC_BINDLG_OFF_TEXT) == QiLabel(0)), 1);
-    }
-    {
-        // ... and with no GRP loaded (the status module's globals are null before a map is
-        // up) nothing is filled at all. Drawing a frame index into art that is not there is
-        // the failure this whole task is about, so "no answer" has to mean "draw nothing".
-        BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
-        *(DWORD*)FakeRt(SC_VA_GRP_CMDICONS) = 0;
-        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiOrigDriver);
-        ScQueueIndOnFrame();
-        Check("with no icon GRP loaded the fifth slot is left alone",
-              (long long)*(WORD*)(QiUser(4) + SC_STATUSER_OFF_MODE), 6);
-        Check("  and the refusal is counted, not silent",
-              (long long)(ScQueueIndStat(SC_QIND_STAT_NOGRP) > 0), 1);
-        Check("  and no icon was filled", ScQueueIndStat(SC_QIND_STAT_ICONS), 0);
-        // Put the pane and the module back the way the rest of this test expects them.
-        BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
-        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiOrigDriver);
-        ScQueueIndOnFrame();
     }
     {
         // A settled strip costs nothing: a second frame with the same state re-writes
