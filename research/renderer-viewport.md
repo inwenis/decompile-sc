@@ -1522,25 +1522,89 @@ renderer's −0x58/−0x57 become −0x6C/−0x6B); no EFLAGS hazards (no lea→
 class anywhere). Row-side counts (14/15/17 rows, the 480-px vertical span,
 60 cell rows) are declared as parametric sites that are no-ops at height 480.
 
-### 16.4 Measured results
+### 16.4 Measured results (runs of 2026-08-13, off-screen, 36-marine fixture)
 
-(filled after the run; predictions registered first, 065's rule)
+Predictions were registered before the first patched run (065's rule); each
+is scored below, misses included.
 
-Predictions, registered before the first patched run:
+**Run 1** (`C:\sc-work\logs\068-framecap-run1.txt`) — stock + defect + s2
+with scroll captures, 46/47, the one FAIL being the most informative reading
+of the run:
 
-1. ingame (544,416): the 671..695 zero-column runs GONE; the right band's
-   nonzero fraction DROPS from run 2's 0.8438 (that number included raw
-   terrain leaking over unexplored map — a correct fog hides it).
-2. scrolled2 (704,416): x=696..799 over y=20..320 flips from 100.0000%
-   nonzero to ~100% zero — the region is provably unexplored (mapunits.py
-   against the CHK) and correct fog paints it black.
-3. cross-arm left 640 vs stock: dense_rows stays 0 — cells 0..79 and the
-   whole tile-map interior behave identically at both geometries.
-4. scrollmid (held arrow key, expected non-tile-aligned origin): seam
-   continuous at every x; zero-runs only at shroud boundaries that MOVE with
-   the origin (map-anchored), none screen-anchored.
-5. stock arm: byte-identical behavior, 21/21 — every fogcell site is behind
-   the same flag and table as the rest of stage 2.
+1. *Predicted:* ingame (544,416) loses the 671..695 zero-column runs, and
+   the right band's nonzero fraction drops from §15.4-run-2's 0.8438.
+   *Measured:* **seam GONE** — zeroruns `788; 792-799`, nothing
+   screen-anchored — and the fraction **ROSE to 0.9251** (52 indices). The
+   direction call was WRONG: the pre-fix number had the 24-px black seam
+   subtracting more than the leak added, and the fixture's explored region
+   reaches further right than the sight estimate behind the prediction
+   (measured explored edge: map x 1332). The substantive half (seam gone,
+   screen-anchored structure gone) holds; the fraction guess is recorded as
+   the miss it was.
+2. *Predicted:* scrolled2 (704,416) flips x=696..799 from 100.0000% nonzero
+   to ~100% zero. *Measured:* **the whole band x=640..799 reads 100.0000%
+   index 0** (48000/48000) over map the fixture provably never explored —
+   the same origin, fixture and region §15.4 measured at 100.0000% NONZERO
+   pre-fix. As clean as a before/after gets. This is also the run's one
+   FAIL: 064's "band holds MAP (>= 0.30)" assertion — written while the
+   leak was live — could only ever be satisfied AT THIS ORIGIN by the leak
+   itself. The oracle encoded the defect as its expectation (AGENTS.md,
+   2026-08-13); it is now origin-dependent (`>= 0.30` at the start origin,
+   `<= 0.02` at the scrolled one), with these readings cited beside it.
+3. *Predicted:* cross-arm left 640 vs stock keeps dense_rows=0.
+   *Measured:* dense_rows=0 (wide_rows=120, all sprite rows, diff 6.5%).
+   Same-origin pair dense_rows=0, wide_rows=0. Defect arm
+   (`SCPLUGIN_WS_ONLY=terrain`): **dense_rows=42 RED** — the oracle still
+   fails on real damage in the same run it passes the fix.
+4. *Predicted:* zero-runs move with the origin, none screen-anchored.
+   *Measured:* at origins 544/576/704 the runs sit at screen x 788/756/628
+   — **all three are map x 1332**, the exploration boundary, with the same
+   stray-column + 3-px-gap edge shape at each. **This resolves 064's
+   residue-5 mystery**: the "628 stray, 4 px left of the band at origin
+   704" was the map-anchored explored edge all along, not fog structure —
+   it moved with the camera the moment more origins existed to compare.
+5. *Predicted:* stock arm unchanged. *Measured:* all stock checks green,
+   consistency 0.98952 (the §15.4 family of values), s2 window-vouched
+   pitch-800 consistency 0.98727/0.99733.
+
+The scrollmid capture moved the camera (posted VK reaches the engine's
+scroll — measured rate >= 850 px/s, 420 ms ran 704 px into the left clamp)
+but landed tile-aligned at origin (0,416), so the sub-tile alignment terms
+were not exercised by run 1; the probe now holds VK_RIGHT for 100 ms. The
+overshoot bought one thing free: map-LEFT-edge fog at 800 is correct
+(zeroruns `0-15; 32-358`, both map-anchored).
+
+**Run 2** (`C:\sc-work\logs\068-framecap-run2.txt`) — same probe, oracles
+repaired per the above, scrollmid at 100 ms: **48/48 PASS**, stock positive
+control and the defect arm's RED (`dense_rows=59`) in the same run as the
+fix's green (`dense_rows=0` cross-arm, `0/0` same-origin).
+
+- The scrollmid capture stopped at **origin (848,416) — x%32 = 16, sub-tile**
+  (the 100 ms hold moved 144 px; the scroll runs ~1440 px/s here). The
+  alignment terms `((originX>>3)&3)` / `&0x1F` are exercised at 800 for the
+  first time, and the reading is clean: zeroruns `484-484; 488-799`, i.e.
+  **848+484 = map x 1332 again** — the same map-anchored exploration
+  boundary as at every tile-aligned origin, stray-plus-3-px-gap edge shape
+  included. Fog is continuous to x=799 off the tile grid.
+- Both new oracles green on the fix and proved able to fail: the seam tooth
+  (`no zero run intersects 660..700` — fails 671-695 on the pre-fix build,
+  §15.4 run 3) and the origin-dependent band (`0.9251 >= 0.30` explored /
+  `0.0000 <= 0.02` unexplored — the latter fails at 1.0000 on the pre-fix
+  build, §15.4's leak measurement).
+- Window-vouched consistency at pitch 800: 0.99277 (ingame) / 0.99679
+  (scrolled2); stock arm 0.99196.
+
+Artifacts (gitignored diagnostic path; paths travel, images never):
+dumps + renders `C:\sc-work\logs\063-frames\fd-s2-*.bin`,
+`s2-ingame-render.png` (800-wide, fog boundary continuous, no seam),
+`s2-scrolled2-render.png` (unexplored right band correctly black);
+transcripts `C:\sc-work\logs\068-framecap-run{1,2}.txt`,
+`C:\sc-work\logs\offscreen\20260813-{153254,154014}-probe-framebuffer-capture.txt`.
+
+One operational residue, not this task's to fix: `sc-launch.lock` leaked
+after BOTH runs (exit 1 and exit 0) with `Exit-ScLaunchLock: released`
+printed — cleared each time against a verified-dead owner pid; three data
+points in one day with 066's — issue #103.
 
 ### 16.5 How to reproduce
 

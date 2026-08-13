@@ -441,6 +441,39 @@ plugin is holding nothing" and "the plugin was never handed a building" print th
 Count the detour's exits, not just its successes (`trainSeen` / `trainNoUnit` in `PRODQSTATS`) —
 the task-030 rule about naming the term that refused applies to the entry as well as the verdict.
 
+## An oracle written during a defect era can encode the defect as its expectation (2026-08-13, task 068)
+
+A sibling of the vacuous-assertion rule, not a restatement: a vacuous assertion cannot
+fail; this one CAN fail — it fails on CORRECT behaviour, which is worse, because the red
+shows up exactly when somebody has just fixed the bug and is deciding whether to trust
+their fix.
+
+Task 064 asserted "the right band x=640..799 holds MAP, not black (nonzero >= 0.30)" on
+every stage-2 capture, in good faith, to prove terrain was reaching the new columns. At
+the scrolled origin (704,416) the band is map the fixture never explored — so **the only
+thing that could ever satisfy the assertion there was the fog leak painting raw terrain
+over unexplored map**. The check was calibrated on a defective build, and the defect's
+signature became the expectation. Task 068 fixed the leak; the band correctly went
+100.0000% black; the assertion failed with `0.0000` against its `>= 0.30`; and a worker
+who trusted the oracle over the mechanism would have "fixed" the fix. (The reading that
+said otherwise: the same number had been 100.0000% NONZERO pre-fix, at the same origin,
+over the same provably-unexplored map — a prediction registered before the run, which is
+what made the red legible as confirmation rather than regression.)
+
+So, two duties, one on each side of a defect era:
+
+- **Writing an oracle while a known defect is live**: ask what the assertion reads on a
+  CORRECT build, not only what it reads today. If the honest answer is "I don't know what
+  correct looks like here", assert the part that is defect-independent and REPORT the
+  rest — 064's own seam tracker did exactly this (report-only zeroruns) and survived the
+  fix untouched.
+- **Seeing a red after fixing a bug**: before touching either the fix or the check, date
+  the check. If it was calibrated while the bug was live, work out from the MECHANISM
+  what a correct build should read, and re-derive the assertion from that — with the
+  pre-fix and post-fix readings cited beside it, so the next reader knows what calibrated
+  it (task 068's repair: origin-dependent, `>= 0.30 map` where the fixture explored,
+  `<= 0.02 hidden` where it provably did not).
+
 ## Absence assertions must first be proved positive (2026-08-09)
 
 An assertion that something is ABSENT is worth nothing until the same pattern has been shown to
