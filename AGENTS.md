@@ -902,13 +902,32 @@ within seconds of starting — a process-tree check returns "parent is DEAD" for
 perfectly healthy run in its first minute, and it reads exactly like an orphan
 signature. The conductor ran that check on a live game and nearly acted on it.
 
-The test that actually distinguishes them is **is anything still writing that
-run's logs**: a live worker writes, an orphan does not. Check the log's
-last-write time against the clock, not the process tree.
+**AND THE OBVIOUS REPLACEMENT FOR IT IS ALSO WRONG — measured the same hour, on
+this task's own orphan.** "Is anything still writing that run's logs" reads
+*alive* for an abandoned game, because **the PLUGIN writes the log, not the
+driver**. Task 061's verification run was killed at its launch step, leaving a
+game nobody would ever click again; its log was still growing 51 seconds later
+(`11:26:54 → 11:27:45`) with the driver process long dead. A worker that had
+taken "the log is growing" as proof of life would have waited on that game for
+as long as it was willing to wait.
 
-This is the same shape as item 3 above — a stale heartbeat is not deafness,
-and a missing parent is not death. Both are what a HEALTHY run looks like from
-outside, and both have now cost someone a wrong conclusion.
+The test that actually separates them is **the DRIVER**: the PowerShell process
+that sends the input and holds the launch lock. A game with no live driver will
+sit on whatever screen it is on forever, however busy its log looks. So:
+
+1. the pid the launch printed is still running, AND
+2. **the process that launched it is gone** (the suite/driver, not the game's
+   parent — see above), AND
+3. its own transcript has stopped advancing STEPS (`[7] click Train x12`), which
+   is a different file and a different signal from the plugin's log.
+
+Only the second and third are evidence. The plugin's log is a liveness signal
+for the PLUGIN, and the plugin is alive in an orphan by definition.
+
+This is the same shape as item 3 above — a stale heartbeat is not deafness, and
+a missing parent is not death — and now a third: **a growing log is not a live
+run.** Every one of them is what a HEALTHY run looks like from outside, and the
+first instinct in each case reads the wrong way round.
 
 ## Spawning workers
 
