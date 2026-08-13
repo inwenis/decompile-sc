@@ -1276,11 +1276,28 @@ try {
             "(dialog-relative ($dx,$dy))"
         Shot 'last-slot-before-cancel'
 
+        # THIS ARM IS EXPECTED TO FAIL UNTIL THE DEFECT IS FIXED, and it is red because the
+        # bug is real, not because it is flaky. Read its verdict with that in mind:
+        #
+        #   * FAIL on the wire assertion = the defect reproducing. That is the normal
+        #     result today.
+        #   * PASS = the click won the race. **It does NOT mean the defect is gone.**
+        #     Measured across four runs on two builds, the outcome flipped in both
+        #     directions with no code change that explains it (sc_queueind.cpp records the
+        #     table), so a single green click is one flip of a coin.
+        #
+        # WHAT THIS ARM SHOULD BECOME once someone has a real fix: click N times and assert
+        # the RATE, because a single click against a race is the check-that-fails-at-random
+        # AGENTS.md rates no better than one that cannot fail. It is left as one click
+        # deliberately -- a rate arm whose baseline nobody has measured would be a made-up
+        # threshold, and inventing one is how the assertions task 055 spent a day deleting
+        # got written.
+        #
         # THE WIRE FIRST, and it is the whole diagnosis in one reading (AGENTS.md, task
         # 025): if no Cancel Train command leaves queueCommand, the click never became a
-        # cancel at all -- our control has the pixels. If one leaves and nothing is
-        # refunded, it became the WRONG cancel. The helper asserts the command and its
-        # payload before it looks at a single mineral.
+        # cancel at all. If one leaves and nothing is refunded, it became the WRONG cancel.
+        # The helper asserts the command and its payload before it looks at a single
+        # mineral.
         $r = Invoke-CancelAndMeasure -Tag 'last-slot-cancel' -ExpectPayload $STATQ_LAST_DISPLAY -Do {
             Send-ScClick -Hwnd $hwnd -X $script:lastSlotPoint.X -Y $script:lastSlotPoint.Y
         }
@@ -1335,16 +1352,21 @@ try {
         Assert-That 'the plugin reported the press-rescue counters at all' `
             ($qi.PressKept -ge 0 -and $qi.DisableOnOwned -ge 0 -and $qi.DisableWithPress -ge 0) `
             '(-1 = the field was not on the QIND line, which is a different fact from 0 and must not pass as one)'
-        # THE SEAM FOR THIS ARM, and it is not "the cancel happened". The engine must have
-        # disabled a slot we own while the button was down -- that is the collision the fix
-        # exists for. If it did not happen, this run did not exercise the fix, whatever the
-        # cancel did, and saying so is the whole point of counting it.
+        # THE SEAM THIS ARM EXISTS TO REACH, counted rather than assumed (AGENTS.md, task
+        # 041): the engine must have disabled a slot the plugin owns WHILE THE BUTTON WAS
+        # DOWN. That collision is the defect. A run in which it did not happen cannot
+        # detect this class of bug whatever its verdict says, so it is a failure here and
+        # not a quiet pass.
         Assert-That "the engine disabled a slot we own while the button was down ($dPress time(s) in this click)" `
             ($dPress -gt 0) `
-            "(0 with disableOnOwned +$dOwned means the collision never occurred in this click's window -- the click won the race on its own and this arm did NOT exercise the fix)"
-        Assert-That "and the fix carried the press across every one of them: pressKept +$dKept" `
-            ($dKept -ge $dPress -and $dKept -gt 0) `
-            '(fewer rescues than collisions means the restore itself did not hold)'
+            "(0 with disableOnOwned +$dOwned means the collision never occurred in this click's window, so this run did not exercise the defect at all)"
+        # NO ASSERTION THAT ANY REPAIR HAPPENED, because there is not one. `pressKept` is
+        # left as a READING, printed above and not judged: the restore-the-press fix this
+        # counter was built to attribute was measured DOING ITS JOB 110,381 times in one
+        # click while the cancel still did not happen, and holding the button down forever
+        # as a side effect. It is reverted. An assertion here would be asserting on a
+        # mechanism this suite has shown is not the whole story.
+        Write-Host "       (pressKept is a reading, not a verdict -- see sc_queueind.cpp: restoring the press is measured NOT sufficient)"
         Assert-Reconciles 'after-last-slot-cancel' $r.After -Accepted $script:accepted -Cancelled $script:cancels
         Shot 'last-slot-cancelled'
     }

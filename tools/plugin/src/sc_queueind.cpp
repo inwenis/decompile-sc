@@ -862,13 +862,43 @@ static unsigned g_clickTraceCapped  = 0;   // ... dropped: over the line cap
 typedef int (__attribute__((fastcall)) *ScIconInteractFn)(DWORD, DWORD);
 
 static int __attribute__((fastcall)) SC_GAME_ENTRY QIndIconInteractShim(DWORD ctrl, DWORD evt) {
-    // THE FIX. Everything else in this function is the instrument.
+    // MEASURES ONLY. There WAS a fix here -- restore the PRESSED bit the engine's disable
+    // event clears on a slot the plugin owns -- and it is reverted, because the run that
+    // could finally attribute it showed it does not work AND does active harm:
     //
-    // Read the bit BEFORE the engine's handler runs and put it back after, rather than
-    // suppressing the event: the disable still happens, the tooltip cleanup in
-    // 0x00457F90 still runs, and the only difference is that a press in flight survives a
-    // grey-out this plugin caused. `pressed` is almost always 0, which is why the counter
-    // means something when it is not.
+    //     across the click: disableOnOwned +136382, disableWithPress +110381,
+    //                       pressKept +110381
+    //     FAIL exactly one 0x20 reached queueCommand (0)
+    //     FAIL minerals go up by exactly one Probe's 50 (2600 -> 2600)
+    //
+    // The collision is real and the restore worked on every one of 110,381 of them, and no
+    // command was emitted. Restoring the press is NOT sufficient. Worse, `pressKept` kept
+    // climbing for the six seconds between the two readings of a SIXTY MILLISECOND click
+    // (end of run: 807134 of 1153974 disable events arrived with a press in flight) --
+    // i.e. the press never came back down. The mouse-up never clears it, which is the same
+    // fact as "the up never reaches 0x004E19F0", the handler that both clears the press and
+    // emits the ACTIVATE. Putting the bit back just holds the button down forever.
+    //
+    // WHERE THE NEXT ATTEMPT STARTS, and it is one function: `0x00418830`, called on
+    // button-down with the hit control, sends it a `dwUser=5` "can you take focus" query
+    // and records `[dlg+0x3e] = ctrl` ONLY if the control returns non-zero. The dialog's
+    // focused control is what the button-up is routed to. The trace shows that query
+    // reaching our icon (`idx=6 type=14 dwUser=5 flags=0x00000418` at 12:39:05.008), so
+    // what it ANSWERS is the open question, not whether it is asked.
+    //
+    // AND THE THING THAT INVALIDATES SINGLE-RUN CONCLUSIONS ABOUT ANY OF THIS: the click is
+    // a RACE, and both builds have only ever been sampled one run at a time --
+    //
+    //     pre-fix,  trace off : no cancel (3 clicks)      pre-fix,  trace ON : CANCELLED
+    //     post-fix, trace off : CANCELLED                 post-fix, trace ON : no cancel
+    //
+    // The instrument flips the outcome in BOTH directions, which is incoherent as a cause,
+    // so the variable is timing. Anything that claims this is fixed has to click N times
+    // and assert the RATE; a single click is the check-that-fails-at-random AGENTS.md rates
+    // no better than one that cannot fail.
+    //
+    // The counters below stay because they are what established all of the above, and they
+    // cost one compare on an event the engine sends anyway.
     if (g_iconOrigFn && evt &&
         *(WORD*)(evt + SC_EVT_OFF_TYPE) == SC_EVT_TYPE_USER &&
         *(DWORD*)evt == SC_USER_DISABLED &&
@@ -877,15 +907,9 @@ static int __attribute__((fastcall)) SC_GAME_ENTRY QIndIconInteractShim(DWORD ct
         // busiest event on the busiest control missing from it.
         ++g_clickTraceSeen;
         ++g_stat[SC_QIND_STAT_DISABLE_OWNED];
-        DWORD* flags = (DWORD*)(ctrl + SC_BINDLG_OFF_FLAGS);
-        const DWORD pressed = *flags & SC_CTRL_FLAG_PRESSED;
-        if (pressed) ++g_stat[SC_QIND_STAT_DISABLE_PRESSED];
-        const int   r = ((ScIconInteractFn)g_iconOrigFn)(ctrl, evt);
-        if (pressed && (*flags & SC_CTRL_FLAG_PRESSED) == 0) {
-            *flags |= SC_CTRL_FLAG_PRESSED;
-            ++g_stat[SC_QIND_STAT_PRESSKEPT];
-        }
-        return r;
+        const DWORD flags = *(DWORD*)(ctrl + SC_BINDLG_OFF_FLAGS);
+        if (flags & SC_CTRL_FLAG_PRESSED) ++g_stat[SC_QIND_STAT_DISABLE_PRESSED];
+        return ((ScIconInteractFn)g_iconOrigFn)(ctrl, evt);
     }
     if (g_iconOrigFn && evt) {
         ++g_clickTraceSeen;
