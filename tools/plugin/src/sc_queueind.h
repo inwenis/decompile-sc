@@ -233,7 +233,12 @@ enum ScQueueIndStat {
     // garbage in task 039, so "no GRP" now means "draw nothing", and it is counted rather
     // than passed over in silence.
     SC_QIND_STAT_NOGRP = 6,
-    SC_QIND_STAT__COUNT = 7
+    // Presses RESCUED from the engine's own disable event on a slot the plugin fills
+    // (task 061). Not "disable events seen" -- only the ones that arrived while a human
+    // was holding the mouse down on that icon, which is what makes a green regression arm
+    // with this at 0 a suspicious green rather than a passing one.
+    SC_QIND_STAT_PRESSKEPT = 7,
+    SC_QIND_STAT__COUNT = 8
 };
 int ScQueueIndStat(int which);
 

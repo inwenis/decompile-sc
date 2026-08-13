@@ -163,6 +163,62 @@ inside one driver call — invisible to the player, who only ever sees the frame
 fix was to ask the thread that OWNS the data: snapshot on the game thread at end of frame for
 frame state, keep the async walk for the building's own memory, which the frame path never writes.
 
+## A FLAG YOU REWRITE EVERY FRAME IS A FLAG THE ENGINE RE-ASSERTS EVERY FRAME — and re-assertion is an EVENT (2026-08-13, task 061)
+
+Writing an engine-owned flag is not a state change. It is one move in a loop, because the engine's
+own layout will write it back on its next pass, and **the engine's write goes through a FUNCTION
+with side effects that your write does not have**.
+
+Task 039 lit the fifth queue icon by clearing its DISABLED bit directly, so the player could click
+the item the plugin was holding. Every read-back agreed: five icons, all lit, right art, right
+label, the ring slot behind the fifth correctly empty. It shipped, and the user came back with
+*"i can cancel a queue unit by clicking it, but it doesn't work if i click the last slock when it
+has our extra +x text"*.
+
+Nothing was wrong with the pixels, the slot index, or the receive-side handler 039 wrote for exactly
+that click. What was wrong is that `disableControl` (`0x00418640`) **is a no-op when the control is
+already disabled** — and the plugin's clearing of the bit is what made the engine's next call NOT a
+no-op. So every frame it disabled the control again *and sent it a `dwUser=6` USER event*, whose
+type-2 handler is `AND [ctrl+0x18],0xBFFFFFFF`: **clear the PRESSED bit**. A mouse-down armed the
+press; two milliseconds later the plugin's own re-lighting had provoked an event that disarmed it;
+the mouse-up sixty milliseconds later found nothing to activate, so no command was ever emitted.
+
+The plugin was destroying its own click, hundreds of times a second, and **the count was in every
+log we had already written**: `iconsFilled=371834` in a single run. That number was being read as
+"the feature is working hard". It is one half of a fight, and nobody had asked what the other half
+was doing.
+
+So, before writing any engine-owned flag on a repeating path:
+
+- **Find the engine's own writer for that flag and read it as a function, not as a store.** Ask what
+  it does BESIDES setting the bit — events sent, handlers called, redraws queued. `0x00418640` sends
+  an event; `0x004186A0` (show) sends another; both early-out when the bit already has the value
+  they want, which is precisely why a plugin that keeps flipping it turns two no-ops into two live
+  calls per frame.
+- **A per-frame write counter is a FIGHT counter.** If your "times I wrote this field" number is in
+  the hundreds of thousands, you are not maintaining a value, you are contending for one — and
+  whatever the engine's writer does on the way is now happening at that rate too.
+- **Input state is the fragile kind.** Anything that lives BETWEEN two user events — a press, a
+  capture, a hover, a drag origin — is destroyed by a mid-gesture re-layout, and it is invisible to
+  every read-back taken at frame boundaries. Both this task's oracles (the game-thread icon
+  snapshot, the async strip walk) reported the icon lit and clickable the entire time it could not
+  be clicked.
+
+And the method that found it, which is the one this rulebook keeps arriving at from different
+directions: **instrument the WORKING control beside the failing one, in the same run, same frame,
+same dialog.** Wrapping all five queue icons' interact pointers rather than just the broken one is
+what produced the whole answer in two lines — one control showing `PRESSED` armed and surviving to
+its ACTIVATE, the other showing a torrent of disable events and no press at all. A trace of only the
+failing control would have shown a torrent and no baseline to call it abnormal.
+
+**A caveat that belongs with the finding: this was a RACE, and it was measured as one.** With the
+tracing shim installed, all three of the failing clicks in one run succeeded — the instrument's own
+file writes perturbed the game thread enough for the press to survive. The pre-fix behaviour is a
+race the click almost always loses, not one it cannot win. Which is why the regression arm for it
+does NOT rest on "the cancel happened": the plugin counts presses it RESCUED (`pressKept`) and the
+suite requires that count to move across the click. **When the bug you are fixing sometimes works by
+accident, a green test proves nothing unless it also proves your fix is what made it green.**
+
 ## Your DIAGNOSTICS are under the same rule as your assertions (2026-08-10, task 030)
 
 The "a check that cannot fail is worth nothing" rule applies to the lines you print while

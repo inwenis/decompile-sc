@@ -722,8 +722,18 @@ Three facts fall out, and the test suite asserts all three from memory:
    same arithmetic `cancelBuildQueueSlot` does with the payload — so the icon and the slot it
    cancels are the same item by construction.
 2. **An empty queue slot's icon is DISABLED**, by the same `0x00418640` that greys a command-card
-   button. Both of the engine's input paths refuse that bit ([`command-card.md`](command-card.md)
-   §5), so *how many items the player can click* is a read of five flag words.
+   button, so *how many items the player can click* is a read of five flag words.
+
+   **CORRECTED, 2026-08-13, task 061.** This bullet used to add "*both of the engine's input paths
+   refuse that bit ([`command-card.md`](command-card.md) §5)*". That citation is about the CARD's
+   input paths — the card button interact's LBUTTONDOWN case `0x00459947` and the hotkey predicate
+   `0x004588C0` — and **it does not carry over to the status strip**, which is a different control
+   type dispatched by different code. Measured, in a real game (§8.6): a queue icon's own hit-test
+   answer `0x00457F82` tests `flags & 8` (VISIBLE) and *nothing else*, and neither the type-2
+   button's LBUTTONDOWN path nor its LBUTTONUP path reads `0x2` at any point. What actually stops a
+   click on a greyed queue slot is not a refusal at all — see §8.6 — and the difference matters,
+   because a plugin that clears `0x2` to make a slot clickable is relying on a mechanism that was
+   never the mechanism.
 3. **The engine takes the display index from the walk POSITION and the payload from
    `index - 2`** — two numbers it never checks against each other. The read-back reports both, and
    the suite asserts `index == display + 2` rather than assuming it.
@@ -890,7 +900,87 @@ in the ring at the same time and adding the two double-counts it. The first run 
 "1 built + 9 queued + 1 cancelled" for nine accepted items and failed its own identity by exactly
 that one.
 
-### 8.6 Reproducing §8
+### 8.6 The filled slot's click was armed and then destroyed — by the plugin (task 061)
+
+The user, playing the deployed build `2c239e6`: *"i can cancel a queue unit by clicking it, but it
+doesn't work if i click the last slock when it has our extra +x text"*. §8.1 says clicking icon k
+sends `{0x20, k}`; §6.4 says the plugin's own handler serves that click when the ring slot behind
+the icon is empty. Both were true, and the click still did nothing, because **no command was ever
+emitted**.
+
+**The wire said so first, and it split the problem in one run** (AGENTS.md, task 025). A click on
+display 4 with the plugin holding the item behind it produced **`0` × `CMD id=0x20`** at
+`queueCommand`, while the card's Cancel and a middle icon emitted normally in the same run —
+`PRODQSTATS ... cancelSeen=2` for the whole run. Not a wrong cancel; no cancel. A second run then
+clicked a point **inside the icon rect `(221,53,259,88)` but outside the indicator's box
+`(231,65,259,81)`** and got the same nothing, which retired the `+N` text as a suspect entirely:
+that control is spliced at the TAIL of the child list, the hit test `0x00418340` returns the FIRST
+child that accepts a `dwUser=4` probe, and `LSTATIC`'s handler `0x00419190` refuses that code
+outright (`0x004191C4[4] = 1` → `0x004191B3`, `XOR EAX,EAX`).
+
+**What the icons are actually handed is the answer.** Wrapping all five icons' interact pointers
+(`control+0x2A`, dialog heap, no code patched) with a logging shim that tail-calls the engine's own
+handler gives one working control and one failing control in the same dialog, same frame:
+
+```
+idx=3  type=14 dwUser=4  flags=0x00000419      the hit test accepts
+idx=3  type=4            flags=0x00000419      LBUTTONDOWN
+idx=3  type=14 dwUser=4  flags=0x40000419      PRESSED armed -- and it STAYS armed
+idx=3  type=5            flags=0x40000419      LBUTTONUP, still armed
+idx=3  type=14 dwUser=2  flags=0x00000499      ACTIVATE -> {0x20,1} on the wire
+
+idx=6  type=14 dwUser=6  flags=0x0000041B disabled=1    x1474 in 13 seconds, ~180k more
+```
+
+`QINDCLICKSTATS ... wrapped=5 engineFn=0x00457F30` — one interact pointer, all five icons, so there
+is no dispatch difference to explain anything.
+
+Five links, each read out of the binary:
+
+1. `disableControl` (`0x00418640`) is a **no-op when the control is already disabled**
+   (`TEST AL,2 / JNE ret`). When it does disable, it sends the control a USER event with
+   **`dwUser = 6`**:
+   ```
+   00418685  MOV  dword ptr [EBP-0x14],6     ; dwUser
+   0041867f  MOV  word  ptr [EBP-0x8],0xE    ; type = USER
+   00418697  CALL dword ptr [ESI+0x2a]
+   ```
+2. The queue icons are control **type 2** (read off the live dialog). Type 2's handler for
+   `dwUser = 6` is `AND dword ptr [EDI+0x18],0xBFFFFFFF` (`0x004E1A9E`) — **clear PRESSED
+   (`0x40000000`)**.
+3. The mouse-UP handler `0x004E19F0` emits the ACTIVATE **only if PRESSED is still set**
+   (`TEST EAX,0x40000000 / JE 0x4e1a5e`). No press, no ACTIVATE, no `FUN_004573A0`, no command.
+4. `queueLayout` greys every slot whose ring entry is `0xE4` (§8.1). Display 4's ring entry is empty
+   **by design** — §5.2 holds the engine's ring at four so the client keeps sending Train.
+5. `FillOverflowIcons` clears that bit directly to light the slot — **which means the engine's next
+   `disableControl` is no longer a no-op**. It disables again *and sends `dwUser = 6`*. The two
+   sides fight hundreds of times a second; the plugin's half was already in every log as
+   `iconsFilled=371834`.
+
+So a mouse-down arms PRESSED and a `dwUser=6` clears it about two milliseconds later; the mouse-up
+sixty milliseconds after that finds nothing armed. The other four icons hold occupied ring slots,
+are never disabled, and cancel normally — which is the user's report exactly.
+
+**It is a race, not an absolute, and that is measured rather than hedged.** With the logging shim
+installed, all three display-4 clicks of one run *did* cancel: the instrument's own file writes
+perturbed the game thread enough for the press to survive. Without it, none of three across two
+runs. So the pre-fix behaviour is a race the click almost always loses, not one it cannot win, and
+a future reader who sees this work once should not conclude the fix has failed.
+
+**The fix is one bit, on one class of control, for one moment.** For a slot the plugin is holding an
+item behind, `sc_queueind`'s interact shim reads PRESSED before delegating the disable event and
+puts it back after. The engine's own press/activate cycle then completes and emits its own
+`{0x20, k}` through its own code — nothing is synthesised — and §6.4's handler, written by task 039
+and never once reached until now, serves it. It deliberately does not suppress `dwUser=6` and does
+not stop the disable: the event still runs, the bit still ends up set, the next frame still
+re-lights the slot.
+
+Because the pre-fix behaviour is a race, the regression arm cannot rest on "the cancel happened":
+the plugin counts presses **rescued** (`pressKept`, on the `QIND` line and in `QINDSTATS`) and
+`test-production-queue.ps1` requires that count to MOVE across the click. A green arm with
+`pressKept` unchanged would mean the click was served for some other reason, and it fails instead.
+
+### 8.7 Reproducing §8
 
 `peek.py`, `cmdsites.py` and `cancelbtn.py` are throwaway PE-offset readers under
 `work/scratch/028/` (gitignored, like `work/scratch/025/peek.py` in §9): each parses the PE section

@@ -244,6 +244,12 @@ $CANCEL_APARAM = 254
 # click on display k emits {0x20, k} (research/production-queue.md 8.1).
 $STATQ_FIRST_CONTROL = 2
 $STATQ_SLOTS         = 5
+# The last icon of that strip -- display 4, control id 6. It is the one the plugin fills
+# from its own overflow AND the one it anchors the "+N" text to, so it is the only slot
+# where a click has to pass through pixels this repo drew (task 061).
+$STATQ_LAST_DISPLAY  = $STATQ_SLOTS - 1
+# ScQueueIndMode: 1 = SC_QIND_STRIP, the one-building "+N" (sc_queueind.h).
+$QIND_MODE_STRIP     = 1
 
 $ENGINE_HOLD = 4          # SC_PRODQ_ENGINE_HOLD -- what the plugin leaves the ring at
 # At the cap the plugin stops taking items back, so the ring is left FULL and the client
@@ -364,6 +370,14 @@ function ConvertFrom-QIndLine {
                 'icons=\[(?<icons>[^\]]*)\] ' +
                 'sel=(?<sel>\d+) engineLen=(?<engineLen>\d+) overflow=(?<overflow>\d+) ' +
                 'upg=(?<upg>\d+) bldgs=(?<bldgs>\d+) queued=(?<queued>\d+)')
+    # Parsed SEPARATELY, and deliberately not folded into the big pattern above: these two
+    # were added after it and a field a caller does not read must never be able to make the
+    # whole line unparseable. `owned` is how many icons the plugin is holding an item behind
+    # right now; `pressKept` is the running count of presses carried across the engine's own
+    # disable event on one of them (task 061). -1 means the field was not on the line, which
+    # is a different fact from 0 and has to stay different -- an arm that requires the count
+    # to MOVE would otherwise read a missing field as "the fix did nothing".
+    $extra = [regex]::Match($Hit.Line, 'owned=(?<owned>-?\d+) pressKept=(?<pressKept>\d+)')
     if (-not $m.Success) { throw "test: unparseable QIND line: $($Hit.Line)" }
     return [pscustomobject]@{
         Mode = [int]$m.Groups['mode'].Value; Linked = $m.Groups['linked'].Value -eq '1'
@@ -382,6 +396,8 @@ function ConvertFrom-QIndLine {
         Sel = [int]$m.Groups['sel'].Value; EngineLen = [int]$m.Groups['engineLen'].Value
         Overflow = [int]$m.Groups['overflow'].Value; Upg = [int]$m.Groups['upg'].Value
         Buildings = [int]$m.Groups['bldgs'].Value; Queued = [int]$m.Groups['queued'].Value
+        Owned = ($extra.Success ? [int]$extra.Groups['owned'].Value : -1)
+        PressKept = ($extra.Success ? [int]$extra.Groups['pressKept'].Value : -1)
         Line = $Hit.Line
     }
 }
@@ -1175,6 +1191,128 @@ try {
                     ($ring.QueueType -eq 0xE4)
             }
         }
+    }
+
+    # ---------------------------------------------------------------------------
+    # TASK 061. The user, playing the deployed build 2c239e6: "i can cancel a queue
+    # unit by clicking it, but it doesn't work if i click the last slock when it has
+    # our extra +x text".
+    #
+    # Every arm above this one cancels a slot our own drawing is NOT on: the card's
+    # Cancel button (0xFE) and, later, a middle icon on a below-cap queue. The LAST
+    # icon is the only one where a click has to pass through pixels this repo put on
+    # the screen -- it is both the slot the plugin fills from its own overflow and the
+    # control the "+N" indicator anchors to -- and that is the slot the user cannot
+    # cancel. It had never been clicked by anything.
+    #
+    # THE SEAM THIS ARM EXISTS TO REACH, named and measured rather than assumed
+    # (AGENTS.md, task 041 -- a generated or state-dependent case that never reaches
+    # its seam is a passing check standing guard over a bug):
+    #
+    #   1. the strip's last icon is LIT and its RING SLOT IS EMPTY, so the item behind
+    #      it is the plugin's and the click is the plugin's to serve;
+    #   2. the indicator is in STRIP mode with a "+N" on that icon;
+    #   3. OUR PIXELS ARE ACTUALLY ON IT -- boxDiff, never ink: the icon's own art is
+    #      inside that box, so ink reads saturated before anything of ours is drawn
+    #      (measured in task 039: 448 of 448 bytes);
+    #   4. and the point this arm clicks is INSIDE that box, so it is the user's click
+    #      and not some corner of the slot their report is not about.
+    #
+    # All four are assertions. A run that does not reach that state FAILS here rather
+    # than skipping, because below it this arm cannot detect the bug at all.
+    Step 'THE LAST SLOT, WITH "+N" DRAWN ON IT: clicking it must cancel like any other' {
+        $qi = Get-QInd 'last-slot-before'
+        Write-Host "       $($qi.Line)"
+        Assert-That "the indicator is in STRIP mode with a `"+N`" (mode=$($qi.Mode) text=`"$($qi.Text)`")" `
+            ($qi.Mode -eq $QIND_MODE_STRIP -and $qi.Text -match '^\+\d+$')
+        Assert-That "and the engine has our control linked and visible (linked=$($qi.Linked) visible=$($qi.Visible))" `
+            ($qi.Linked -and $qi.Visible)
+        # THE ORACLE FOR "OUR TEXT IS ON THAT SLOT", and the reason it is not `ink`:
+        # boxDiff counts the bytes inside the box that differ from a copy of the SAME
+        # rect taken while the indicator was hidden. 0 means nothing of ours is on the
+        # screen; -1 means the probe has no baseline and therefore never answered.
+        Assert-That "and OUR pixels are on that box: boxDiff=$($qi.BoxDiff) bytes differ from the same rect without them" `
+            ($qi.BoxDiff -gt 0) `
+            '(0 = nothing of ours is drawn there; -1 = no baseline, so the probe never answered)'
+        Assert-That "the ring is at the hold, so display $STATQ_LAST_DISPLAY is not the engine's ($($qi.EngineLen))" `
+            ($qi.EngineLen -eq $ENGINE_HOLD)
+        Assert-That "and the plugin is holding the item behind it ($($qi.Overflow))" ($qi.Overflow -gt 0)
+
+        $st = Get-StatusQueue 'strip-before-last-cancel'
+        Assert-That 'the status-strip read-back answered' ($st.Ok)
+        $last = @($st.Slots | Where-Object { $_.Display -eq $STATQ_LAST_DISPLAY })[0]
+        Assert-That "display $STATQ_LAST_DISPLAY is an icon the player can click ($($last.State))" `
+            ($null -ne $last -and $last.Visible -and -not $last.Disabled)
+        if ($last) {
+            Assert-That "and its control id is $($STATQ_LAST_DISPLAY + $STATQ_FIRST_CONTROL), the id whose click sends payload $STATQ_LAST_DISPLAY" `
+                ($last.Index -eq $STATQ_LAST_DISPLAY + $STATQ_FIRST_CONTROL)
+            Assert-That "while the ring slot behind it is EMPTY (0x$('{0:x}' -f $last.QueueType)) -- the item is the plugin's" `
+                ($last.QueueType -eq 0xE4)
+        }
+
+        $script:lastSlotPoint = Get-ScStatusSlotPoint -Status $st -Display $STATQ_LAST_DISPLAY
+        # A control's rect and the indicator's bounds are read in the SAME (dialog-
+        # relative) space -- PlaceOn derives the box from the anchor control's own
+        # bounds -- so the click point converts back by subtracting the root origin and
+        # can be compared directly. Without this the arm could pass by clicking a part
+        # of the slot the "+N" is not on, which is not the case being reported.
+        $dx = $script:lastSlotPoint.X - $st.RootRect[0]
+        $dy = $script:lastSlotPoint.Y - $st.RootRect[1]
+        Assert-That ("the click point ($($script:lastSlotPoint.X),$($script:lastSlotPoint.Y)) is INSIDE the `"$($qi.Text)`" box " +
+                     "($($qi.Left),$($qi.Top),$($qi.Right),$($qi.Bottom)) -- this is the user's click") `
+            ($dx -ge $qi.Left -and $dx -le $qi.Right -and $dy -ge $qi.Top -and $dy -le $qi.Bottom) `
+            "(dialog-relative ($dx,$dy))"
+        Shot 'last-slot-before-cancel'
+
+        # THE WIRE FIRST, and it is the whole diagnosis in one reading (AGENTS.md, task
+        # 025): if no Cancel Train command leaves queueCommand, the click never became a
+        # cancel at all -- our control has the pixels. If one leaves and nothing is
+        # refunded, it became the WRONG cancel. The helper asserts the command and its
+        # payload before it looks at a single mineral.
+        $r = Invoke-CancelAndMeasure -Tag 'last-slot-cancel' -ExpectPayload $STATQ_LAST_DISPLAY -Do {
+            Send-ScClick -Hwnd $hwnd -X $script:lastSlotPoint.X -Y $script:lastSlotPoint.Y
+        }
+        # THE PLUGIN SERVED IT. The ring slot behind that icon is empty, so the engine's
+        # own cancelBuildQueueSlot must never see this command -- it would refund by the
+        # empty-slot sentinel 0xE4 (sc_prodqueue.cpp).
+        $ev = @($r.Lines | Select-String -Pattern 'PRODQEV cancel-icon ')
+        Assert-That "the plugin served it itself, exactly once ($($ev.Count))" ($ev.Count -eq 1)
+        if ($ev.Count -eq 1) {
+            Write-Host "       $($ev[0].Line.Trim())"
+            Assert-That "naming display $STATQ_LAST_DISPLAY, one of its OWN overflow items, refunded at $PROBE_COST" `
+                ($ev[0].Line -match "display=$STATQ_LAST_DISPLAY " -and
+                 $ev[0].Line -match '-> overflow\[\d+\]' -and
+                 $ev[0].Line -match "back=$PROBE_COST/0")
+            Assert-That 'and it is not the "names an empty ring slot -- swallowed" branch' `
+                ($ev[0].Line -notmatch 'swallowed')
+        }
+        $script:cancels++
+        $script:pluginCancels++
+        Assert-That "the plugin's cancelled counter is now $script:pluginCancels ($($r.After.Cancelled))" `
+            ($r.After.Cancelled -eq $script:pluginCancels)
+        Assert-That "and its building-gone refund counter is still 0 ($($r.After.Refunded))" `
+            ($r.After.Refunded -eq 0)
+        Assert-That ("the OVERFLOW is what absorbed it ($($r.Before.Selected.Overflow) -> $($r.After.Selected.Overflow), " +
+                     "ring $($r.Before.Selected.EngineLen) -> $($r.After.Selected.EngineLen))") `
+            ($r.After.Selected.EngineLen + $r.After.Selected.Overflow -eq
+             $r.Before.Selected.Logical - 1 - $r.Completed)
+        # The later "minerals are UNCHANGED across the whole drain" assertion is written
+        # against this, so it has to move with every cancel that spends or refunds.
+        $script:mineralsAfterBurst = $r.After.Selected.Minerals
+        # AND IT PASSED FOR THE RIGHT REASON. This click only reaches the engine's own
+        # ACTIVATE because the plugin carries the PRESSED bit across the disable event its
+        # own re-lighting provokes -- so if that never happened, the arm went green for some
+        # other reason and is not guarding what it claims to guard. `pressKept` is the count
+        # of presses actually rescued; requiring it to MOVE across this click is the
+        # difference between a regression test and a coincidence.
+        $qiAfter = Get-QInd 'last-slot-after'
+        Write-Host "       $($qiAfter.Line)"
+        Assert-That ("the fix is what carried this click: pressKept $($qi.PressKept) -> $($qiAfter.PressKept) " +
+                     "(presses carried across the engine's disable of a slot we light)") `
+            ($qiAfter.PressKept -gt $qi.PressKept) `
+            '(unchanged = the click was served without the fix doing anything, so this arm proves nothing)'
+        Assert-Reconciles 'after-last-slot-cancel' $r.After -Accepted $script:accepted -Cancelled $script:cancels
+        Shot 'last-slot-cancelled'
     }
 
     Step "watch it drain: every over-cap item is promoted into a freed slot, in order" {

@@ -72,6 +72,19 @@ struct QIconSnap { short icon; WORD mode; DWORD flags; DWORD grp; DWORD text; };
 static QIconSnap g_icons[SC_STATQ_SLOTS];
 static int       g_iconsN = 0;
 
+// WHICH QUEUE ICONS THE PLUGIN IS HOLDING AN ITEM BEHIND, recorded by the GAME THREAD as it
+// fills them and read by the interact shim (task 061 -- see the block above the shim) on
+// that same thread, so it needs no locking. It is a list of CONTROL POINTERS rather than of
+// display indices because the shim is handed a control and has to answer "is this one mine"
+// without walking anything, on an event that arrives hundreds of times a second.
+static DWORD g_ownedIcon[SC_STATQ_SLOTS];
+static int   g_ownedIconN = 0;
+
+static bool IsPluginOwnedIcon(DWORD ctrl) {
+    for (int i = 0; i < g_ownedIconN; ++i) if (g_ownedIcon[i] == ctrl) return true;
+    return false;
+}
+
 // THE BOX AS IT LOOKS WITH NOTHING OF OURS IN IT, and why a copy of it is kept at all.
 //
 // `ink` -- non-background bytes in a rect -- cannot answer "did our text draw" in THIS
@@ -652,6 +665,10 @@ static DWORD AnchorFor(DWORD root, int mode) {
 //
 // Only writes when something actually differs, so a settled strip costs five compares.
 static void FillOverflowIcons(DWORD root, const ScQueueIndView* v, DWORD unit) {
+    // Cleared FIRST, so every early return below leaves "the plugin owns no slot" rather
+    // than last frame's answer. A stale entry here would protect a press on a control the
+    // engine has taken back.
+    g_ownedIconN = 0;
     const int drawable = ScQueueIndDrawableSlots(v);
 
     // The engine's own icon GRP, read from the engine's own global every frame rather than
@@ -698,6 +715,23 @@ static void FillOverflowIcons(DWORD root, const ScQueueIndView* v, DWORD unit) {
         ++g_stat[SC_QIND_STAT_ICONS];
     }
 
+    // WHICH SLOTS ARE OURS, rebuilt every fill by the thread that does the filling. The
+    // shim reads it to decide whose press to protect, and it has to be re-derived rather
+    // than accumulated: an item promoted into the ring hands its icon back to the engine,
+    // and protecting a press on a slot the engine now owns would be changing vanilla
+    // behaviour for no reason.
+    g_ownedIconN = 0;
+    {
+        DWORD oc = FindChildById(root, SC_STATQ_FIRST_CONTROL);
+        for (int k = 0; k < SC_STATQ_SLOTS && oc; ++k, oc = NextOf(oc)) {
+            if (k >= v->engineLen && k < drawable &&
+                ScProdQueueOverflowAt(unit, k - v->engineLen) >= 0 &&
+                g_ownedIconN < SC_STATQ_SLOTS) {
+                g_ownedIcon[g_ownedIconN++] = oc;
+            }
+        }
+    }
+
     // The snapshot, taken after the fill, by the thread that did it.
     g_iconsN = 0;
     DWORD sc = FindChildById(root, SC_STATQ_FIRST_CONTROL);
@@ -710,6 +744,196 @@ static void FillOverflowIcons(DWORD root, const ScQueueIndView* v, DWORD unit) {
         q->grp   = su ? *(DWORD*)(su + SC_STATUSER_OFF_GRP)  : 0;
         q->text  = *(DWORD*)(sc + SC_BINDLG_OFF_TEXT);
     }
+}
+
+// ---------------------------------------------------------------------------
+// WHY A CLICK ON THE FILLED SLOT DID NOTHING, AND THE ONE THING THIS SHIM PUTS BACK
+// (task 061 -- the user, on the deployed build: "i can cancel a queue unit by clicking it,
+// but it doesn't work if i click the last slock when it has our extra +x text")
+//
+// It was never the "+N". Measured, in a real game, before any of this was written:
+//
+//   * NO Cancel Train command reaches queueCommand at all -- 0 x `CMD id=0x20` for a click
+//     on that slot, while the card's Cancel and a middle icon both emit normally;
+//   * a click INSIDE the icon but OUTSIDE our text box does not emit either, so the text
+//     control does not own those pixels (and could not: the hit test 0x00418340 takes the
+//     FIRST child that accepts dwUser=4, our LSTATIC type refuses that code outright, and
+//     the icons come before it in the chain anyway).
+//
+// What the icons are actually handed says the rest. Same run, same dialog, one working
+// control and one failing control, from the trace below:
+//
+//   idx=3  type=14 dwUser=4  flags=0x00000419   <- hit test accepts
+//   idx=3  type=4            flags=0x00000419   <- LBUTTONDOWN
+//   idx=3  type=14 dwUser=4  flags=0x40000419   <- PRESSED armed, and it STAYS armed
+//   idx=3  type=5            flags=0x40000419   <- LBUTTONUP, still armed
+//   idx=3  type=14 dwUser=2  flags=0x00000499   <- ACTIVATE -> {0x20,1} on the wire
+//
+//   idx=6  type=14 dwUser=6  flags=0x0000041B disabled=1     x1474 in 13 seconds,
+//   idx=6  type=14 dwUser=6  flags=0x0000041B disabled=1     ~180k more over the cap
+//
+// dwUser=6 is what `disableControl` (0x00418640) sends after it sets the DISABLED bit, and
+// type 2's handler for it is `AND [ctrl+0x18],0xBFFFFFFF` -- CLEAR PRESSED. So:
+//
+//   1. queueLayout greys every slot whose ring entry is 0xE4. Display 4's ring entry is
+//      empty BY DESIGN -- task 025 holds the engine's ring at four so the client keeps
+//      sending Train -- so it is greyed on every layout pass.
+//   2. FillOverflowIcons clears that bit directly to light the slot.
+//   3. Which means the engine's NEXT disableControl is no longer the no-op it is in
+//      vanilla: it disables again AND SENDS dwUser=6.
+//   4. Round and round, hundreds of times a second (`iconsFilled` counts our side of the
+//      same fight: 371834 in one run).
+//   5. A player's mouse-down arms PRESSED. Two milliseconds later a dwUser=6 clears it.
+//      The mouse-up 60ms later finds nothing armed, so no ACTIVATE, no statusCtrlActivate,
+//      no command. The other four icons hold occupied ring slots, are never disabled, and
+//      cancel normally -- which is exactly the shape the user reported.
+//
+// THE FIX IS THIS AND NOTHING ELSE: for a slot the plugin is holding an item behind, carry
+// the PRESSED bit across the engine's own disable event. The engine's press/activate cycle
+// then completes by itself and emits its own `{0x20, k}` through its own code; nothing is
+// synthesised, no command is forged, and sc_prodqueue's icon-cancel branch -- which task
+// 039 already wrote and which had never once been reached -- serves it.
+//
+// It is deliberately NOT "stop the engine disabling it" and NOT "swallow dwUser=6": the
+// event still runs, the DISABLED bit still ends up set, the next frame still re-lights it.
+// Only the bit that says "a human is holding the mouse down on this control" is preserved,
+// and only on slots the plugin owns, and only when a press was actually in flight -- which
+// is also what makes the counter below worth asserting on: `pressKept` counts presses
+// RESCUED, so a green regression arm with pressKept=0 would mean the arm passed for some
+// other reason.
+//
+// ---------------------------------------------------------------------------
+// CLICK TRACE (task 061) -- what the ENGINE hands each queue icon, at the instant it
+// hands it over.
+//
+// The user cannot cancel the last queue slot while our "+N" is on it, and one in-game run
+// established which half of the problem it is: NO Cancel Train command reaches
+// queueCommand at all (0 x `CMD id=0x20`), and a second run showed the same for a click
+// INSIDE the icon but OUTSIDE our text box -- so the "+N" control does not own those
+// pixels and the icon itself is refusing.
+//
+// "Refusing" is still two things -- the hit test never returns this control, or it does
+// and the press/activate sequence stops somewhere after -- and the only honest way to tell
+// them apart is to watch what the control is actually sent. So each icon's interact
+// POINTER (control+0x2A, plain dialog-heap data, no code patched -- the same mechanism
+// sc_hudrow's page gesture uses on the twelve wireframe buttons) is wrapped with a shim
+// that logs the event and tail-calls the engine's own handler. It changes no behaviour:
+// every event goes on to exactly the function it would have reached.
+//
+// WHAT IT DROPS, AND WHY EACH ONE. The first version of this trace logged every
+// non-MOUSEMOVE event and hit its 400-line cap 35 seconds into the run, in the MENUS,
+// before a single click -- so the run cost a game and answered nothing:
+//
+//   QINDCLICK ctrl=0x090C8D78 idx=2 type=14 dwUser=8 flags=0x00000410 visible=0 ...   x5
+//   ... the same five lines again 100ms later, and again, 400 lines deep
+//
+// MOUSEMOVE (type 3) arrives thousands of times a second. `dwUser=8` is a periodic sweep
+// the engine sends all five icons about ten times a second whether anything happened or
+// not. And an INVISIBLE control cannot be under anybody's cursor. None of the three can
+// carry the answer, and together they are the entire flood -- so all three are dropped and
+// each drop is COUNTED, because a filtered trace that does not say what it filtered is a
+// count over an unknown denominator.
+#define SC_QIND_CLICKTRACE_MAX 2000
+#define SC_QIND_SWEEP_USER     8
+static bool  g_clickTrace  = false;
+static DWORD g_iconOrigFn  = 0;                     // the engine's own status-control interact
+static DWORD g_iconWrapped[SC_STATQ_SLOTS];
+static int   g_iconWrapN   = 0;
+static unsigned g_clickTraceLines   = 0;
+static unsigned g_clickTraceSeen    = 0;   // events the shim was handed, all kinds
+static unsigned g_clickTraceMoves   = 0;   // ... dropped: MOUSEMOVE
+static unsigned g_clickTraceSweeps  = 0;   // ... dropped: the dwUser=8 sweep
+static unsigned g_clickTraceHidden  = 0;   // ... dropped: control not visible
+static unsigned g_clickTraceCapped  = 0;   // ... dropped: over the line cap
+
+typedef int (__attribute__((fastcall)) *ScIconInteractFn)(DWORD, DWORD);
+
+static int __attribute__((fastcall)) SC_GAME_ENTRY QIndIconInteractShim(DWORD ctrl, DWORD evt) {
+    // THE FIX. Everything else in this function is the instrument.
+    //
+    // Read the bit BEFORE the engine's handler runs and put it back after, rather than
+    // suppressing the event: the disable still happens, the tooltip cleanup in
+    // 0x00457F90 still runs, and the only difference is that a press in flight survives a
+    // grey-out this plugin caused. `pressed` is almost always 0, which is why the counter
+    // means something when it is not.
+    if (g_iconOrigFn && evt &&
+        *(WORD*)(evt + SC_EVT_OFF_TYPE) == SC_EVT_TYPE_USER &&
+        *(DWORD*)evt == SC_USER_DISABLED &&
+        IsPluginOwnedIcon(ctrl)) {
+        // Counted here as well, or QINDCLICKSTATS's `seen` would be a denominator with the
+        // busiest event on the busiest control missing from it.
+        ++g_clickTraceSeen;
+        DWORD* flags = (DWORD*)(ctrl + SC_BINDLG_OFF_FLAGS);
+        const DWORD pressed = *flags & SC_CTRL_FLAG_PRESSED;
+        const int   r = ((ScIconInteractFn)g_iconOrigFn)(ctrl, evt);
+        if (pressed && (*flags & SC_CTRL_FLAG_PRESSED) == 0) {
+            *flags |= SC_CTRL_FLAG_PRESSED;
+            ++g_stat[SC_QIND_STAT_PRESSKEPT];
+        }
+        return r;
+    }
+    if (g_iconOrigFn && evt) {
+        ++g_clickTraceSeen;
+        const WORD  type   = *(WORD*)(evt + SC_EVT_OFF_TYPE);
+        const DWORD dwUser = *(DWORD*)evt;
+        const DWORD flags  = *(DWORD*)(ctrl + SC_BINDLG_OFF_FLAGS);
+        if (type == SC_EVT_MOUSEMOVE)                                ++g_clickTraceMoves;
+        else if (type == SC_EVT_TYPE_USER && dwUser == SC_QIND_SWEEP_USER)
+                                                                     ++g_clickTraceSweeps;
+        else if ((flags & SC_CTRL_FLAG_VISIBLE) == 0)                ++g_clickTraceHidden;
+        else if (g_clickTraceLines >= SC_QIND_CLICKTRACE_MAX)         ++g_clickTraceCapped;
+        else {
+            ++g_clickTraceLines;
+            ScLog("QINDCLICK ctrl=0x%08X idx=%d type=%u dwUser=%u flags=0x%08X "
+                  "disabled=%d visible=%d x=%d y=%d",
+                  (unsigned)ctrl, (int)*(short*)(ctrl + SC_BINDLG_OFF_INDEX),
+                  (unsigned)type, (unsigned)dwUser, (unsigned)flags,
+                  (flags & SC_CTRL_FLAG_DISABLED) ? 1 : 0,
+                  (flags & SC_CTRL_FLAG_VISIBLE) ? 1 : 0,
+                  (int)*(short*)(evt + SC_EVT_OFF_X),
+                  (int)*(short*)(evt + SC_EVT_OFF_Y));
+        }
+    }
+    if (!g_iconOrigFn) return 0;
+    return ((ScIconInteractFn)g_iconOrigFn)(ctrl, evt);
+}
+
+// Wrap/unwrap the five queue icons. Idempotent, and it takes the ENGINE'S OWN pointer from
+// the first icon rather than from a constant -- if this build dispatches these controls
+// through something else, the trace records that and wraps nothing.
+static void WrapIconInteracts(DWORD root) {
+    const DWORD shim = (DWORD)&QIndIconInteractShim;
+    g_iconWrapN = 0;
+    DWORD c = FindChildById(root, SC_STATQ_FIRST_CONTROL);
+    for (int k = 0; k < SC_STATQ_SLOTS && c; ++k, c = NextOf(c)) {
+        DWORD* fn = (DWORD*)(c + SC_BINDLG_OFF_INTERACT);
+        if (*fn != shim) {
+            if (!g_iconOrigFn) {
+                g_iconOrigFn = *fn;
+                ScLog("QINDCLICK: tracing the five queue icons; the engine's own interact for "
+                      "them is 0x%08X", (unsigned)g_iconOrigFn);
+            }
+            if (*fn != g_iconOrigFn) {
+                ScLog("QINDCLICK: icon idx=%d dispatches through 0x%08X, not 0x%08X -- not "
+                      "wrapped", (int)*(short*)(c + SC_BINDLG_OFF_INDEX),
+                      (unsigned)*fn, (unsigned)g_iconOrigFn);
+                continue;
+            }
+            *fn = shim;
+        }
+        if (g_iconWrapN < SC_STATQ_SLOTS) g_iconWrapped[g_iconWrapN++] = c;
+    }
+}
+
+static void UnwrapIconInteracts(void) {
+    const DWORD shim = (DWORD)&QIndIconInteractShim;
+    for (int i = 0; i < g_iconWrapN; ++i) {
+        DWORD c = g_iconWrapped[i];
+        if (!Readable(c + SC_BINDLG_OFF_INTERACT, 4)) continue;
+        DWORD* fn = (DWORD*)(c + SC_BINDLG_OFF_INTERACT);
+        if (*fn == shim && g_iconOrigFn) *fn = g_iconOrigFn;
+    }
+    g_iconWrapN = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -985,13 +1209,19 @@ void ScQueueIndLogState(const char* tag) {
     ScLog("QIND [%s] mode=%d linked=%d visible=%d text=\"%s\" bounds=(%d,%d,%d,%d) ink=%d "
           "refInk=%d refId=%d surfInk=%d slotDiff=%d boxDiff=%d fontH=%d icons=[%s] "
           "sel=%d engineLen=%d overflow=%d upg=%d bldgs=%d queued=%d hudPages=%d "
-          "anchor=0x%08X",
+          "anchor=0x%08X owned=%d pressKept=%u",
           t, g_mode, linked ? 1 : 0,
           (flags & SC_CTRL_FLAG_VISIBLE) ? 1 : 0, live,
           linked ? b[0] : 0, linked ? b[1] : 0, linked ? b[2] : 0, linked ? b[3] : 0, ink,
           refInk, refId, surfInk, slotDiff, ScQueueIndBoxDiff(root), SmallFontHeight(), icons,
           v.selection, v.engineLen, v.overflow, v.upgrades, v.buildings, v.queued,
-          v.hudPages, (unsigned)g_anchor);
+          v.hudPages, (unsigned)g_anchor,
+          // `owned` is how many queue icons the plugin is holding an item behind right now,
+          // and `pressKept` is the running count of presses carried across the engine's own
+          // disable event on one of them (task 061). A suite can read the second either side
+          // of a click and require it to MOVE -- which is what stops the regression arm
+          // passing for some reason other than the fix.
+          g_ownedIconN, g_stat[SC_QIND_STAT_PRESSKEPT]);
 }
 
 // One line per child of the statdata dialog. This is the answer to "which controls in this
@@ -1018,11 +1248,16 @@ void ScQueueIndLogDialog(const char* tag) {
         DWORD  f = *(DWORD*)(c + SC_BINDLG_OFF_FLAGS);
         DWORD  p = *(DWORD*)(c + SC_BINDLG_OFF_TEXT);
         const char* s = (p && Readable(p, 1)) ? (const char*)p : "";
+        // INTERACT as well as UPDATE. Two controls that look identical in flags and bounds
+        // can still be dispatched by different code, and when one of them takes a click and
+        // the other does not, that pointer is the first thing worth ruling out -- one line
+        // instead of an argument about dispatch (task 061).
         ScLog("QINDDLG [%s] id=%d type=%u flags=0x%08X vis=%d rect=(%d,%d,%d,%d) "
-              "update=0x%08X text=\"%.24s\"",
+              "interact=0x%08X update=0x%08X text=\"%.24s\"",
               t, (int)IndexOf(c), (unsigned)*(WORD*)(c + SC_BINDLG_OFF_TYPE),
               (unsigned)f, (f & SC_CTRL_FLAG_VISIBLE) ? 1 : 0,
               b[0], b[1], b[2], b[3],
+              (unsigned)*(DWORD*)(c + SC_BINDLG_OFF_INTERACT),
               (unsigned)*(DWORD*)(c + SC_BINDLG_OFF_UPDATE), s);
     }
     ScLog("QINDDLG [%s] children=%d", t, n);
@@ -1072,7 +1307,11 @@ void ScQueueIndOnFrame(void) {
     DWORD root = dlg ? RootOf(dlg) : 0;
     if (root != g_dialog) {
         // A new dialog instance: every cached pointer belongs to the old one. Forget them
-        // rather than dereference them.
+        // rather than dereference them. The wrapped interact pointers are among them --
+        // dropping the list without restoring is correct here (the records are gone), and
+        // WrapIconInteracts rebuilds it against the new dialog on this same frame.
+        g_iconWrapN    = 0;
+        g_ownedIconN   = 0;
         g_dialog       = root;
         g_spliced      = false;
         g_shown        = false;
@@ -1089,6 +1328,11 @@ void ScQueueIndOnFrame(void) {
     }
     if (!root) return;
 
+    // The trace wraps ALL FIVE icons, not only the one the plugin fills: the working case
+    // (an icon whose ring slot is occupied) is the control against which the failing one
+    // means anything. Off unless %SCPLUGIN_QIND_CLICKTRACE% is set.
+    WrapIconInteracts(root);
+
     ScQueueIndView v;
     ReadView(&v);
 
@@ -1097,6 +1341,12 @@ void ScQueueIndOnFrame(void) {
     if (v.selection <= 1 && v.overflow > 0 && v.hudPages <= 1) {
         DWORD unit = PortraitUnit();
         if (UnitValid(unit)) FillOverflowIcons(root, &v, unit);
+        else g_ownedIconN = 0;
+    } else {
+        // Not filling this frame -- so the plugin owns no slot this frame either. Same
+        // reason as the clear inside FillOverflowIcons: the owned list must expire with
+        // the state that created it, not outlive it.
+        g_ownedIconN = 0;
     }
 
     char want[sizeof(g_text)];
@@ -1239,6 +1489,20 @@ void ScQueueIndInit(BYTE* moduleBase, bool enabled) {
     g_dialogLogged = false;
     g_bandLogged   = false;
     g_iconsN = 0;
+    g_iconWrapN = 0;
+    g_ownedIconN = 0;
+    g_iconOrigFn = 0;
+    g_clickTraceLines = 0;
+    {
+        char buf[16];
+        DWORD n = GetEnvironmentVariableA("SCPLUGIN_QIND_CLICKTRACE", buf, sizeof(buf));
+        g_clickTrace = (n > 0 && n < sizeof(buf) && buf[0] != '0');
+    }
+    if (g_clickTrace) {
+        ScLog("QINDCLICK: click trace ON (%%SCPLUGIN_QIND_CLICKTRACE%%) -- every non-MOUSEMOVE "
+              "event the engine hands a queue icon is logged, up to %d lines, and passed "
+              "straight on to the engine's own handler", SC_QIND_CLICKTRACE_MAX);
+    }
     memset(g_ctrl, 0, sizeof(g_ctrl));
     ScLog("QIND: %s (%%SCPLUGIN_QUEUEIND%%). Draws a \"+N\" over the last queue icon when "
           "the logical queue is longer than the strip can show, and a \"N bldgs M queued\" "
@@ -1260,6 +1524,7 @@ int ScQueueIndInstallHooks(void) {
 
 void ScQueueIndRemoveHooks(void) {
     ScHookRemove(&g_hkDriver);
+    UnwrapIconInteracts();
 
     // Take the control back out of the dialog. Single dword writes, guarded reads because
     // the dialog may already be gone. Mid-game unload stays unsupported (the game thread
@@ -1280,11 +1545,19 @@ void ScQueueIndRemoveHooks(void) {
 void ScQueueIndLogStats(void) {
     if (!g_enabled) return;
     ScLog("QINDSTATS frames=%u shows=%u hides=%u splices=%u refused=%u iconsFilled=%u "
-          "noGrp=%u",
+          "noGrp=%u pressKept=%u",
           g_stat[SC_QIND_STAT_FRAMES], g_stat[SC_QIND_STAT_SHOWS],
           g_stat[SC_QIND_STAT_HIDES], g_stat[SC_QIND_STAT_SPLICES],
           g_stat[SC_QIND_STAT_REFUSED], g_stat[SC_QIND_STAT_ICONS],
-          g_stat[SC_QIND_STAT_NOGRP]);
+          g_stat[SC_QIND_STAT_NOGRP], g_stat[SC_QIND_STAT_PRESSKEPT]);
+    // The trace's own denominator: what it saw and what it dropped, so "no click event was
+    // ever logged" and "the filter ate it" are different readings rather than one silence.
+    if (g_clickTrace) {
+        ScLog("QINDCLICKSTATS seen=%u logged=%u droppedMoves=%u droppedSweeps=%u "
+              "droppedHidden=%u droppedOverCap=%u wrapped=%d engineFn=0x%08X",
+              g_clickTraceSeen, g_clickTraceLines, g_clickTraceMoves, g_clickTraceSweeps,
+              g_clickTraceHidden, g_clickTraceCapped, g_iconWrapN, (unsigned)g_iconOrigFn);
+    }
 }
 
 // ---------------------------------------------------------------------------
