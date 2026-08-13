@@ -42,7 +42,12 @@ param(
     [string]$FixtureDir,
     [string]$FrameDir = 'C:\sc-work\logs\073-frames',
     [string]$WindowedHelperDll = 'C:\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll',
-    [switch]$KeepOpen
+    [switch]$KeepOpen,
+    # Task 074: the storm-side present. '0' = off (073's behaviour), 'probe' =
+    # read-only storm geometry/clip/region log, 'widen' = coerce storm's virtual
+    # screen wide so the buffer->glass present carries x>648. The moved resource
+    # bar (ConsoleEdge) is the bright oracle at x>648 this reads on GLASS.
+    [ValidateSet('0', 'probe', 'widen')][string]$StormPresent = '0'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -184,6 +189,7 @@ try {
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
         -Mode hooktest -LogCommands 1 -CardScan 1 -WorldScan 1 -NoLaunchLock `
         -Widescreen 1 -WidescreenStage 3 -ConsoleEdge 1 -ConsoleTrace 1 `
+        -StormPresent $StormPresent `
         -FrameDump $FrameDir `
         -Windowed -WindowedHelperDll $WindowedHelperDll `
         -GameDir $GameDir -LogPath $log 6>&1 | ForEach-Object {
@@ -383,6 +389,39 @@ try {
     $shot2 = Join-Path $FrameDir 'console-800-edge-after-click.png'
     Save-ScWindowImage -Hwnd $h -Path $shot2 | Out-Null
     Write-Host "       capture: $shot2 (after the Train click + minimap steer)"
+
+    # ---- TASK 074: the storm-side present, buffer vs glass ------------------
+    # Fire a dedicated marker so ScStormPresentLog dumps storm's live geometry,
+    # the flip clip, the fallback lock pointer and the present region -- the
+    # instrument that says which buffer->glass path is live (renderer-viewport.md
+    # 19.8). Then read the two numbers over the MOVED resource bar's right end:
+    # the buffer band (composited, from the FRAMEDUMP) beside the glass band (the
+    # window). 073: buffer>0 & glass=0 -- the structural present wall.
+    if ($StormPresent -ne '0') {
+        $sfrom = Get-ScLogLineCount -LogPath $log
+        Set-ScMarker -MarkerPath $markerPath -Label 'storm-probe'
+        [void](Wait-ScLogMatch -LogPath $log -Pattern 'STORM \[storm-probe\] geometry' -TimeoutSec 15 -FromLine $sfrom)
+        $stormLines = @(Get-Content -LiteralPath $log | Select-Object -Skip $sfrom |
+                        Where-Object { $_ -match 'STORM (\[storm-probe\]|region)' })
+        Write-Host '       STORM present diagnostic:'
+        $stormLines | ForEach-Object { Write-Host "         $_" }
+        foreach ($sl in $stormLines) { Report-Finding "storm-present: $($sl.Trim())" }
+
+        $dump2 = Get-BufferDump -Tag 'storm-postsel'
+        $bBar = ($dump2) ? (Get-DumpBand -Dump $dump2 -X0 700 -X1 796 -Y0 2 -Y1 17) : -1
+        $shotStorm = Join-Path $FrameDir "storm-present-$StormPresent.png"
+        Save-ScWindowImage -Hwnd $h -Path $shotStorm | Out-Null
+        $gBar = Get-PngRectNonzero -Path $shotStorm -X0 700 -Y0 1 -X1 798 -Y1 18
+        $gMap = Get-PngRectNonzero -Path $shotStorm -X0 660 -Y0 80 -X1 790 -Y1 300
+        Write-Host "       capture: $shotStorm (storm arm=$StormPresent)"
+        Report-Finding ("TWO-NUMBER READING (arm=$StormPresent) -- resource-bar right end x=700..796: " +
+                        "BUFFER=$bBar  GLASS=$gBar ; MAP right band x=660..790 y=80..300 GLASS=$gMap " +
+                        '(072/073 baseline: BUFFER>0, GLASS~0 -- the present wall; a fix makes GLASS follow BUFFER)')
+        if ($StormPresent -eq 'widen') {
+            Assert-True 'storm WIDEN: the resource bar right end is now PRESENTED on glass (x>648)' `
+                ($gBar -ge 0.15) "(buffer=$bBar glass=$gBar)"
+        }
+    }
     $completed = $true
 }
 catch {

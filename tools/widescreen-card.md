@@ -12,28 +12,23 @@ you pick the (Wide) shortcut, and nothing needs turning back off.
 2. **The menus look the same as always**, with a black band filling the extra
    width on the right. That is normal -- menu screens are fixed-size art; only
    the game itself is wider.
-3. **CORRECTED (2026-08-13): in a game, the right quarter of the window is
-   currently BLACK.** The engine really does compute the wider map -- more
-   world, correct fog, the whole width scrollable -- but the step that copies
-   the finished picture into the window still stops at the old 640 boundary
-   while a game is running. So in play you see the normal-width map with a
-   black band on the right, not 25% more map. An earlier version of this card
-   said the map fills the full width; that was measured wrong on 2026-08-13
-   (the wider picture exists internally, the window just never shows it), and
-   fixing the copy step is being worked on as its own task. The menus are not
-   affected.
+3. **In a game, the right quarter now shows MORE MAP.** The playfield fills the
+   full 800-wide window -- about 25% more world across, with correct fog, from
+   the first frame (you do not have to scroll to make it appear). This is the
+   fix that landed 2026-08-13: an earlier version of this card said the right
+   quarter was black in game, which was true then -- the engine computed the
+   wider map but the step that copies the finished picture into the window
+   stopped at the old 640 boundary. That copy now carries the whole width.
 4. All the usual mod features are on and unchanged: select-past-12, selection
    circles, the paging bottom row, the over-cap production queue with its `+N`
    badge, group production.
 
-## One thing to know about clicks on the black band
+## Clicks on the right quarter
 
-The game's input for the right quarter IS switched on: clicks past the old
-boundary reach the engine and act on the world there. Until the display fix
-lands, that means a click on the black band can select or order units you
-cannot currently see. Nothing breaks -- but if you notice "empty" clicks doing
-things, that is what it is. Everything left of the old boundary behaves
-exactly as it always did.
+The game's input for the right quarter is switched on AND the map there is now
+visible, so it behaves like the rest of the playfield: what you click is what
+you see. (Before the display fix, clicks landed on a black band on units you
+could not see; that mismatch is gone.)
 
 ## Known imperfections (real, not dangerous)
 
@@ -43,14 +38,13 @@ exactly as it always did.
    the window's bottom-right corner and the resource counters are NOT at the
    top-right; both end where the old screen used to. Everything on it works;
    it just does not stretch. Moving it right is being worked on separately.
-2. **The small rectangle right of the console** (bottom-right, under the map)
-   is plain black -- no artwork exists for a wider console. Measured across a
-   whole session: it stays perfectly black and never flickers.
+2. **The small rectangle at the bottom-right** (right of the console, below the
+   extended map) is plain black -- no artwork exists for a wider console. It
+   stays perfectly black and never flickers.
 3. **Scrolling all the way to the RIGHT edge of a map** shows a thin band of
    stale pixels at the far right while you sit at the very edge (about 2% of
    that band). Scroll one screen left and it is gone. A known, bounded
-   follow-up. (Until the display fix above lands, this one is academic -- the
-   affected band sits inside the region the window does not show in game.)
+   follow-up -- now visible in game, since the right quarter is shown.
 4. **On space-platform maps** the starfield backdrop has a star-free band on
    the far right (the stars' positions come from a file that only covers the
    old width). Cosmetic, off-map only.

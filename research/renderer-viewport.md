@@ -2142,3 +2142,138 @@ into nothing. And the standing (Wide) experience has a defect nobody had seen:
 the right 160 columns of the PLAYFIELD are black on glass in game (the input
 widening still works — clicks there act on the world the player cannot see).
 That defect exists on main today, independent of this task's changes.
+
+## 20. Task 074 — the storm present clip found, and CLOSED: the window shows all 800 columns
+
+§19.8 handed this task an open question ("the Ordinal_432/SRgn family's internal
+screen bound") and one dead theory (add an image node). Both are now settled by
+measurement, and the wall is down: in the shipped config the playfield presents
+all 800 columns on glass, buffer and glass agreeing for the first time. Read out
+of `StarCraft.exe`/`storm.dll` 1.16.1 this task (`work/scratch/074/*.py`; capstone
+listings + pefile), then confirmed in driven cnc-ddraw runs
+(`probe-storm-present.ps1`, `probe-console-edge.ps1 -StormPresent`, off-screen).
+
+### 20.1 The present pipeline, named
+
+The exe's per-frame present `0x0041D420` is three storm calls (exe IAT →
+`work/scratch/074/iat.py`): `ord350` (lock, IAT 0x4FE5A0) → `ord432` (copy the
+framebuffer `0x6CEFF4` → the locked surface, IAT 0x4FE5A4) → `ord356` (unlock /
+flip, IAT 0x4FE59C). It locks surface index 0 (the primary) with a **NULL rect**.
+
+### 20.2 §19.8's suspected clamp is NOT the live one — measured
+
+`ord350` with a NULL rect either locks the primary DIRECTLY (returns its pointer,
+never reads storm's geometry) or FALLS BACK to a system-memory surface, building a
+clip `(0,0,[storm+0x5A7C4]=640,[storm+0x5A7C8]=480)` that `ord356` then Blts. §19.8
+suspected that fallback clip. **It is not live under cnc-ddraw**: across 11 in-game
+samples (menu→load→select→click→minimap), the fallback pointer `[storm+0x5EA70]`
+read `0` every time — the primary is locked directly, `ord356`'s clip Blt never
+runs, and `[storm+0x5A7C4]` (storm's virtual-screen width) is never read for the
+present. So the storm-side geometry global is a **red herring for the present**.
+(Caveat at the strength of an 11-sample result: the fallback could fire transiently
+on surface-loss/alt-tab; the steady-state present — what shows 640 — is direct-lock.)
+And the surfaces are not the cap either: `GetSurfaceDesc` on the primary reads
+`dwWidth=800 lPitch=800`, and storm's region grid (`Ordinal_440` outputs at
+`[storm+0x5AC10]`) is 50×30 cells of 16×16 = 800×480. Both 800.
+
+### 20.3 The real cap: the presentable region is 640 wide, and ord432 obeys it
+
+`ord432` copies only the per-frame REGION `[0x6D5E18]`. Read out of the SRgn struct
+directly (allocator `storm 0x1A7E0`, size 0x30; `+0x18` = row-width, `+0x1C` = row
+count, `+0x20..0x2C` = bounding rect), that region is **`+0x18 = 640`, bounds
+`(…,640,…)`**. In `ord432` the destination step is `dstPitch(800) − [region+0x18](640)
+= 160`: it copies a 640-wide run per row and skips 160, so the 800-pitch primary is
+written only in columns 0..639 and stays black on the right. The frame region
+inherits `+0x18` from the BASE region `[0x6D5E14]`, which is the union of the
+screen-image-list nodes — and the only node is `console.pcx`, created by `imgCreate`
+`0x0041D640` at `(0,0,640,480)`. **The presentable region is 640 wide because its
+sole image node is 640 wide.** That is §19.8's "SRgn internal screen bound" turned
+from a name into a mechanism.
+
+### 20.4 CORRECTION to §19.8: adding an image node cannot widen the present
+
+§19.8 (and task 073) tried widening the base by adding a `(640,0)-(800,480)` image
+node, and it "changed nothing." §19.8 left it ambiguous whether 073's node failed
+because its mask was the framebuffer bytes (a garbage shape) or for a deeper reason.
+**Measured (this task, a GENUINELY solid opaque-mask node): the base region's
+`+0x18` stays 640 → 640 after the node is combined in.** The SRgn combine (`ord443`)
+preserves the FIRST node's `+0x18`; unioning a node extends the shape but never
+raises the region's row-width, which is the field `ord432` uses. So **073's
+add-a-node theory is DEAD at the mechanism level**, mask quality irrelevant. The
+lever is the base region's primary width itself, not the node list.
+
+### 20.5 QUALIFICATION to §19.8: Ordinal_529's rect count is a broken instrument here
+
+Both §19.8 and this task's first probes read the present region through
+`Ordinal_529` and got `n=0` rects — while the copy demonstrably happens (the game
+renders). **`Ordinal_529` enumeration is not a reliable readout of what `ord432`
+copies**; read the SRgn struct's `+0x18`/`+0x20` bounding rect instead (§20.3). Any
+§19.8 reasoning that leaned on that `n=0` should be read with this caveat.
+
+### 20.6 TWO caps, not one — the second is the dirty-rect present
+
+Widening the base region to 800 (built fresh via the engine's own `ord445`,
+installed at `[0x6D5E14]`) makes the frame region inherit `+0x18 = 800` — measured,
+`(0,0,800,480)`. But that alone does NOT fill the glass: **the present is
+dirty-rect**, so with an 800 base the primary's x>639 is copied only on frames that
+re-mark those cells dirty. On a STATIC load frame nothing does, and the far quarter
+stays black even with `+0x18 = 800` (run 7: base 800, glass map = 0). Task 073's
+console-edge run only ever showed the wide map because its probe SCROLLED first —
+a scroll marks all cells dirty and forces a full copy. A fix validated only in runs
+that happen to scroll early would appear to work and ship black for the very common
+case of a player who loads a map and does not immediately scroll. So name the two
+caps separately: **(1)** the presentable region width (§20.3); **(2)** the dirty-rect
+present never re-copying x>639 on a static frame. Fixing (1) without (2) still shows
+black.
+
+### 20.7 The fix: copy the far quarter every present
+
+`sc_stormpresent.cpp` hooks `ord432` (resolved from the loaded `storm.dll`, RVA
+0x1A520) and, after the engine's own dirty-region copy runs, copies the x=640..799
+strip straight from the 800-wide framebuffer to the primary, **every present**, using
+`ord432`'s own dst/src/pitch arguments. It touches ONLY x≥640 — where in the shipped
+config there is no console/HUD (the console is 640 wide) — so it overwrites nothing
+the engine draws and is not a full-frame copy (which WOULD overwrite the direct-blit
+console at x<640, §19.1). It holds no engine state, so a save/load or a menu return
+needs no re-assertion — there is nothing to revert; it simply copies the next frame.
+
+Measured, shipped config (`ConsoleEdge` off, cnc-ddraw off-screen, `probe-storm-present.ps1`):
+
+| | MAP right band x=660..790 y=80..300 |
+|---|---|
+| static load frame (no scroll) | BUFFER=0.73  **GLASS=0.63** |
+| after a scroll | BUFFER=1  **GLASS=1** |
+
+`stripFrames=1082 stripSkipped=0` — the strip copied every present. Buffer and glass
+agree for the first time in this project. On disk `storm.dll` and `StarCraft.exe`
+are byte-identical (the copy is a runtime hook; every address resolved from the
+loaded module).
+
+### 20.8 The one interaction: mutually exclusive with the console-edge move
+
+Task 073's `%SCPLUGIN_CONSOLE_EDGE%` (merged, unshipped) direct-blits the moved
+resource bar and command card at x>640 (§19.1). The strip copy would overwrite them
+with terrain every frame, so the two are **mutually exclusive for now**: when
+`CONSOLE_EDGE` is on the storm present widen DISARMS to read-only and logs it. The
+present widen ships on its own (it needs no part of the console work): the MAP band
+at GLASS=0.63 on the static frame with `ConsoleEdge` OFF is the playfield widening,
+not any console dialog.
+
+### 20.9 Shipping and reproduce
+
+The widen is PART of the widescreen feature: `sc_stormpresent.cpp` auto-arms it when
+widescreen is active at stage ≥ 2 (an 800-wide playfield buffer), off otherwise, so
+at 640 / widescreen-off the game is byte-for-byte stock. `%SCPLUGIN_STORM_PRESENT%`
+overrides: `0` off, `probe` read-only diagnostics, `widen` force on.
+
+```powershell
+# shipped config, the two-number proof + the window capture:
+./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-storm-present.ps1
+# read-only diagnostics only (the instrument that settled §20.2–20.5):
+./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-console-edge.ps1 `
+    -SuiteArgs @{ StormPresent = 'probe' }
+```
+
+Captures (gitignored diagnostic path; paths travel, images never — hard rule 1):
+`C:\sc-work\logs\074-frames\storm-present-shipped-static.png` (map past x=648 on the
+static load frame) and `…-shipped-scrolled.png`.
