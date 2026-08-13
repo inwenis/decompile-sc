@@ -27,6 +27,7 @@
 #include "sc_hudrow.h"
 #include "sc_log.h"
 #include "sc_queueind.h"
+#include "sc_session.h"
 
 #define HUD_MAX 256
 
@@ -383,11 +384,58 @@ static bool EngineSelectionMatchesVisible(void) {
     return true;
 }
 
+// THE EPOCH TEST (sc_session.h) -- issue #67 item 4's OTHER half, and the reason the
+// version counter alone was never going to be enough.
+//
+// This module's whole page state is derived: the display list, the page number, the
+// slot cache, the divergence latch and the dialog pointers all describe ONE selection
+// in ONE game. Every one of them was invalidated by a single signal -- sc_fanout's
+// `version`, a counter that moves on a selection COMMIT. A load commits nothing, so
+// across it that counter does not move, which this module reads as "same selection"
+// and keeps the previous game's page and list until the player's first click.
+//
+// sc_fanout now bumps that version when the epoch moves, which is sufficient on its
+// own. This is here anyway, and not as belt-and-braces for its own sake: the dialog
+// pointers below belong to a console the new game RE-CREATES, so they have to be
+// dropped on a game change whatever the selection did, and making that depend on
+// another module's counter would be the same mistake one level up.
+static unsigned g_session = 0;
+static unsigned g_statSessionDrop = 0;
+
+static void HudRowSessionSync(void) {
+    const unsigned now = ScSessionEpoch();
+    if (g_session == now) return;
+    if (g_n > 0 || g_dispN > 0 || g_page > 0 || g_dialog != 0) {
+        ScLog("HUDROW session %u -> %u: dropping the page state (%d listed, %d shown, "
+              "page %d, dialog 0x%08X) -- it describes a game that has ended",
+              g_session, now, g_n, g_dispN, g_page + 1, (unsigned)g_dialog);
+        ++g_statSessionDrop;
+    }
+    g_verValid   = false;
+    g_n = g_vis = g_dispN = 0;
+    g_page       = 0;
+    g_pageCount  = 1;
+    g_cacheValid = false;
+    g_cacheN     = 0;
+    g_diverged   = false;
+    g_flipPending = false;
+    // The dialog bookkeeping: a new game re-creates the console, so every pointer here
+    // names a control that no longer exists. Re-splicing is what ScHudRowOnDispatch
+    // does when it next sees a dialog it does not recognise.
+    g_dialog     = 0;
+    g_wrapCount  = 0;
+    g_indSpliced = false;
+    g_indText[0] = '\0';
+    g_rectsLogged = false;
+    g_session = now;
+}
+
 // Returns true when the display list holds more than 12 live units. Sets
 // *selChanged when the shadow version moved OR the engine's own selection diverged
 // from our visible tail, *death when a listed unit died since the last refresh --
 // all three snap back to page 1.
 static bool RefreshShadow(bool* selChanged, bool* death) {
+    HudRowSessionSync();
     unsigned ver = 0;
     int vis = 0;
     int n = ScFanoutCopyShadow(g_list, HUD_MAX, &vis, &ver);
@@ -456,6 +504,10 @@ int ScHudRowOnButtonEvent(DWORD ctrl, DWORD evt) {
     // event->type == 7, and the stock button interact ignores it, which is what
     // makes the gesture free to claim.
     if (g_enabled && evt) {
+        // The click gate below reads g_cache to decide whether the unit under the
+        // cursor is one WE are displaying, so it must not be answering out of the
+        // previous game's cache.
+        HudRowSessionSync();
         WORD type = *(WORD*)(evt + SC_EVT_OFF_TYPE);
 
         // Right-click flips the page.
@@ -1256,6 +1308,8 @@ void ScHudRowInit(BYTE* moduleBase, bool enabled) {
     g_showCalls = 0;
     g_showTick = 0;
     g_inkedLogged = false;
+    g_session = ScSessionEpoch();
+    g_statSessionDrop = 0;
 }
 
 bool ScHudRowEnabled(void) { return g_enabled; }
@@ -1318,9 +1372,11 @@ void ScHudRowLogStats(void) {
     // this module prints is `HUDROW band inked`, which prints its own elapsed milliseconds
     // next to it so the rate can be divided out.
     ScLog("HUDROW stats: acts=%u stock=%u flips=%u staleDropped=%u wraps=%u splices=%u "
-          "diverged=%u gated=%u pagedEpisodes=%u bandSuppressed=%u",
+          "diverged=%u gated=%u pagedEpisodes=%u bandSuppressed=%u session=%u "
+          "sessionDrops=%u",
           g_statActs, g_statStock, g_statFlips, g_statStale, g_statWraps, g_statSplices,
-          g_statDiverged, g_statGated, g_statEpisodes, g_statSuppressed);
+          g_statDiverged, g_statGated, g_statEpisodes, g_statSuppressed,
+          g_session, g_statSessionDrop);
 }
 
 // ---------------------------------------------------------------------------
@@ -1342,10 +1398,13 @@ void ScHudRowTestBegin(BYTE* fakeModuleBase,
     g_statDiverged = g_statGated = 0;
 }
 
-int ScHudRowCurrentPage(void)  { return g_page; }
-int ScHudRowPageCount(void)    { return g_pageCount; }
+// The read-backs sync as well: "which page is the row on" has no answer that spans a
+// game change, and a test that could read the previous game's page here could not see
+// #67 item 4 at all.
+int ScHudRowCurrentPage(void)  { HudRowSessionSync(); return g_page; }
+int ScHudRowPageCount(void)    { HudRowSessionSync(); return g_pageCount; }
 int ScHudRowGatedCount(void)   { return (int)g_statGated; }
-bool ScHudRowIsDiverged(void)  { return g_diverged; }
+bool ScHudRowIsDiverged(void)  { HudRowSessionSync(); return g_diverged; }
 int ScHudRowPagedFrames(void)  { return (int)g_statEpisodes; }
 void ScHudRowTestSetBandTiming(int settleMs, int pollMs) {
     g_bandSettleMs = settleMs < 0 ? 0 : settleMs;

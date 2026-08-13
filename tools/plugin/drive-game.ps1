@@ -2835,6 +2835,14 @@ function Send-ScText {
 # sc_queueind.cpp:788). Callers pass what the RUN'S OWN `FANOUT config:` line
 # reported, never a source-level default, so this stays right even if a default
 # changes.
+#
+# THIS FUNCTION RETURNS SC_FANOUT'S OWN INSTALLS AND NOTHING ELSE, and that scope is
+# load-bearing rather than tidy: sc_fanout logs its own `HOOK: n/n installed` summary
+# counting only the hooks IT installed, and the suites corroborate the named set
+# against that number. A hook some other module splices must therefore not be in here,
+# or the corroboration compares two things that were never meant to be equal.
+# Get-ScPluginExpectedHooks below is the union, for the by-NAME comparison against the
+# log, which sees every module's lines.
 function Get-ScFanoutExpectedHooks {
     param([bool]$Circles, [bool]$HudRow, [bool]$QueueInd)
     $names = @('queueCommand', 'CMDACT_Select', 'sortOverflowHandler', 'SortAllUnits',
@@ -2843,6 +2851,28 @@ function Get-ScFanoutExpectedHooks {
     if ($HudRow) { $names += 'statDataUpdate' }
     if ($QueueInd) { $names += 'statDisplayDriver' }
     $names
+}
+
+# Hooks that are NOT sc_fanout's, so they never appear in its `HOOK: n/n installed`
+# summary, but which every non-observe run does splice and which therefore DO appear in
+# the log the by-name comparison reads.
+#
+# Task 054's GAME-SESSION EPOCH (sc_session.cpp): `gameStartClear+7` is the epoch bump
+# and `loadSavedGame` is the load witness. Neither is optional and neither has a config
+# flag -- the epoch is what stops every module's records following the player into a
+# game they do not belong to (issues #63 and #67), so a run missing either one is a run
+# whose whole cross-game defence is off, and naming them here is what makes that
+# visible rather than silent.
+function Get-ScSessionExpectedHooks {
+    @('gameStartClear+7', 'loadSavedGame')
+}
+
+# Everything a non-observe run installs, for comparing against the log's own
+# `HOOK <name>: installed at` lines -- which carry every module's, not just sc_fanout's.
+function Get-ScPluginExpectedHooks {
+    param([bool]$Circles, [bool]$HudRow, [bool]$QueueInd)
+    @(Get-ScFanoutExpectedHooks -Circles $Circles -HudRow $HudRow -QueueInd $QueueInd) +
+    @(Get-ScSessionExpectedHooks)
 }
 
 # A count mismatch names no hook; this returns which names are missing and which

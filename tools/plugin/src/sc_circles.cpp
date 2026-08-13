@@ -26,6 +26,7 @@
 #include "sc_circles.h"
 #include "sc_hook.h"
 #include "sc_log.h"
+#include "sc_session.h"
 
 #define SC_CIRCLES_MAX 256
 
@@ -42,6 +43,39 @@ static unsigned g_statHidden   = 0;   // circles detached
 static unsigned g_statSkipped  = 0;   // units skipped (engine owns it, or stale)
 static unsigned g_statNoImage  = 0;   // the engine's image free list said no
 static unsigned g_statLost     = 0;   // recorded unit no longer matched at detach
+static unsigned g_statSession  = 0;   // circles abandoned because the game changed
+
+// ---------------------------------------------------------------------------
+// THE EPOCH TEST (sc_session.h) -- issue #67 item 6, and THE ONE WHERE THE ORDER OF
+// THE CHECKS IS THE FIX RATHER THAN A DETAIL
+//
+// g_circled[] holds CSprite* HEAP addresses. Every other module in this plugin holds
+// CUnit*s, which are seats in a fixed global array: a stale one is always readable and
+// only ever wrong. A stale CSprite* is neither -- the sprite was freed when its game
+// ended, and the allocator hands the same address out again. So ScCirclesHide's
+// `sprite != c->sprite` comparison, which is what stops us freeing an image that is
+// not ours, can be satisfied by an unrelated sprite that merely landed on the same
+// bytes, and RemoveCircle would then unlink an image out of a live sprite belonging to
+// the game the player is actually in.
+//
+// Hence: this runs BEFORE anything dereferences c->unit or c->sprite, and it drops the
+// records rather than detaching them. There is nothing to detach -- the circles went
+// with the sprites when the game ended.
+static unsigned g_session = 0;
+
+static void CirclesSessionSync(void) {
+    const unsigned now = ScSessionEpoch();
+    if (g_session == now) return;
+    if (g_circledCount > 0) {
+        ScLog("CIRCLES session %u -> %u: ABANDONING %d recorded circle(s) without "
+              "touching their sprites -- those CSprite* are heap addresses from a game "
+              "that has ended, and the memory behind them may already belong to this one",
+              g_session, now, g_circledCount);
+        g_statSession += (unsigned)g_circledCount;
+    }
+    g_circledCount = 0;
+    g_session = now;
+}
 
 static void* Rt(DWORD staticVa) {
     return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE));
@@ -154,6 +188,10 @@ static BYTE* SpriteFlags(DWORD sprite) {
 // ---------------------------------------------------------------------------
 
 void ScCirclesHide(void) {
+    // FIRST -- before the count check and before any pointer in g_circled is looked at.
+    // See CirclesSessionSync: a record from a previous game must be abandoned, never
+    // detached, because detaching means writing through a freed CSprite*.
+    CirclesSessionSync();
     if (g_circledCount == 0) return;
 
     int removed = 0;
@@ -200,6 +238,7 @@ void ScCirclesHide(void) {
 
 void ScCirclesShow(const ScCircleUnit* units, int n) {
     if (!g_enabled) return;
+    CirclesSessionSync();
     ScCirclesHide();
     if (!units || n <= 0) return;
 
@@ -286,7 +325,8 @@ static void LogCirclePositions(void) {
     ScLog("CIRCLES pos: %d on screen of %d: %s", listed, g_circledCount, buf);
 }
 
-int ScCirclesCount(void) { return g_circledCount; }
+int ScCirclesCount(void) { CirclesSessionSync(); return g_circledCount; }
+unsigned ScCirclesStaleSessionCount(void) { CirclesSessionSync(); return g_statSession; }
 
 // ---------------------------------------------------------------------------
 // The hook: CreateNewUnitSelectionsFromList (0x0049AE40)
@@ -361,6 +401,7 @@ void ScCirclesInit(BYTE* moduleBase, bool enabled) {
     g_add     = NULL;
     g_remove  = NULL;
     g_circledCount = 0;
+    g_session = ScSessionEpoch();
 }
 
 bool ScCirclesEnabled(void) { return g_enabled; }
@@ -371,12 +412,15 @@ void ScCirclesTestBegin(BYTE* fakeModuleBase, ScAddCircleFn add, ScRemoveCircleF
     g_add     = add;
     g_remove  = remove;
     g_circledCount = 0;
+    g_session = ScSessionEpoch();
     g_statShown = g_statHidden = g_statSkipped = g_statNoImage = g_statLost = 0;
+    g_statSession = 0;
 }
 
 void ScCirclesLogStats(void) {
     if (!g_enabled) return;
-    ScLog("CIRCLES stats: shown=%u hidden=%u held=%d skipped=%u noImage=%u lost=%u",
-          g_statShown, g_statHidden, g_circledCount, g_statSkipped, g_statNoImage,
-          g_statLost);
+    ScLog("CIRCLES stats: session=%u shown=%u hidden=%u held=%d skipped=%u noImage=%u "
+          "lost=%u staleSession=%u",
+          g_session, g_statShown, g_statHidden, g_circledCount, g_statSkipped,
+          g_statNoImage, g_statLost, g_statSession);
 }

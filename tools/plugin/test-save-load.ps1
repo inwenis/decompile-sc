@@ -718,7 +718,13 @@ try {
         # AGENTS.md § "Absence assertions must first be proved positive": the pattern
         # asserted absent in the observe arms is the plugin's REAL wording, and the fanout
         # arm asserts the same pattern PRESENT in the same run of the same suite.
-        $hooks = @(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'HOOK [A-Za-z]+: installed at')
+        #
+        # `\S+` rather than `[A-Za-z]+` (task 054). A hook name is whatever ScHookInstall
+        # was handed, and the epoch's is `gameStartClear+7` -- a `+` and a digit, so the
+        # letters-only class could not match it. That is a hole in an ABSENCE assertion
+        # specifically: a hook this pattern cannot spell would have been reported as
+        # "NOT ONE hook is installed" in the observe control while being spliced.
+        $hooks = @(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'HOOK \S+: installed at')
         if ($Phase -eq 'fanout') {
             Assert-That "fanout: the plugin's detours are spliced ($($hooks.Count) HOOK line(s))" ($hooks.Count -gt 0)
             $cfg = @(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'PRODQ config: enabled max=')
