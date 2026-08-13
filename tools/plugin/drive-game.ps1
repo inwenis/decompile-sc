@@ -1456,10 +1456,18 @@ function Set-ScGameType {
             # pick fixes it for every suite, until the user's own next game changes it again.
             # The original throw is appended, not replaced -- it still names the desktop/window
             # detail this one does not.
-            throw ("Set-ScGameType: Game Type reads '{0}', want '{1}' -- 'Custom Type' is one " +
-                   "machine-wide value shared with real play, changeable only by a real foreground " +
-                   "pick (hard rule 5 forbids writing it directly). One foreground pick fixes it for " +
-                   "every suite until the user's own next game changes it again. Underlying: {2}" -f `
+            # PARENTHESISED BEFORE -f, and that is not style. `-f` binds TIGHTER than `+`, so
+            # the un-parenthesised version formatted only the LAST literal and concatenated the
+            # first three unformatted: this exact throw reached task 061 reading
+            # `Game Type reads '{0}', want '{1}' ... Underlying: drive-game: this input needs the
+            # game window in the FOREGROUND` -- {2} substituted, {0} and {1} printed as braces,
+            # so the two facts a reader needs first (what it reads, what it wants) were the two
+            # this message lost, while still looking complete. AGENTS.md's task-030 rule is about
+            # exactly this: a diagnostic that cannot say the thing it claims to say.
+            throw (("Set-ScGameType: Game Type reads '{0}', want '{1}' -- 'Custom Type' is one " +
+                    "machine-wide value shared with real play, changeable only by a real foreground " +
+                    "pick (hard rule 5 forbids writing it directly). One foreground pick fixes it for " +
+                    "every suite until the user's own next game changes it again. Underlying: {2}") -f `
                    $c.Value, $want, $_.Exception.Message)
         }
         $now = Wait-ScGameTypeControl -LogPath $LogPath -Want $want -TimeoutSec 6

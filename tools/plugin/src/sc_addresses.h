@@ -539,6 +539,46 @@
 // BW/Dialog.h names it BW_USER_ACTIVATE = 2.
 #define SC_USER_ACTIVATE 2
 
+// The event's CURSOR POSITION, and the two type codes a click trace has to tell apart.
+// Both offsets come from the dialog hit test 0x00418340, which reads the incoming event
+// with `MOV AX,word ptr [ECX + 0xe]` / `MOV CX,word ptr [ECX + 0x10]` and compares them
+// against a control's bounds (+0x04..+0x0A) -- so +0x0E is x and +0x10 is y, in the
+// dialog's parent space. MOUSEMOVE is 3: the status control interact 0x00457F30 opens
+// `CMP EAX,3 / JE 0x457fa9` on the type it just loaded from +0x0C, and 0x457fa9 is the
+// hover path. It arrives thousands of times a second, which is why a trace drops it.
+#define SC_EVT_OFF_X       0x0Eu
+#define SC_EVT_OFF_Y       0x10u
+#define SC_EVT_MOUSEMOVE   3
+#define SC_EVT_LBUTTONDOWN 4
+// The dwUser the hit test itself sends while asking each child "are you under the
+// cursor": 0x00418340 builds a local event with `MOV dword [EBP-0x18],4` (dwUser) and
+// `MOV word [EBP-0xC],0xE` (USER) before calling each child's interact, and takes the
+// FIRST child that returns non-zero. Two answers to that question are load-bearing here:
+// the queue icons' 0x00457F30 accepts it on VISIBLE alone (case 4 -> 0x00457F82,
+// `TEST byte [ESI+0x18],8`), while the LSTATIC type the plugin's own text control uses
+// REFUSES it (0x00419190's byte table 0x004191C4[4] = 1 -> 0x004191B3, `XOR EAX,EAX`).
+// That is why a plugin text control spliced over an icon cannot swallow a click.
+#define SC_USER_HITTEST 4
+
+// THE PRESSED BIT, and the event that clears it. Both are what task 061's bug is made of.
+//
+// A control of type 2 (the queue icons are type 2 -- read off the live dialog) arms
+// `0x40000000` on its own bounds test when the mouse goes down (0x004E1970: cursor inside
+// and not yet pressed -> `XOR [ctrl+0x18],0x40000000`), and the mouse-UP handler
+// 0x004E19F0 emits the ACTIVATE **only if that bit is still set**:
+//     004e1a00  TEST EAX,0x40000000
+//     004e1a05  JE   0x4e1a5e            ; not pressed -> no activate, no command
+//     ...       MOV dword [EBP-0x14],2   ; dwUser = ACTIVATE
+//     004e1a4e  CALL dword ptr [ESI+0x2a]
+// So the press has to SURVIVE from button-down to button-up or the click emits nothing.
+//
+// And `disableControl` (0x00418640) is what destroys it. It is a NO-OP when the control is
+// already disabled (`TEST AL,2 / JNE ret`), but when it actually disables it sends the
+// control a USER event with dwUser = 6 -- and type 2's handler for that code is
+// `AND dword ptr [EDI+0x18],0xBFFFFFFF` (0x004E1A9E), i.e. clear PRESSED.
+#define SC_CTRL_FLAG_PRESSED 0x40000000u
+#define SC_USER_DISABLED     6
+
 // CUnit fields the row reads. hitpoints at +0x08 is read for the DEATH signal;
 // it is the field the engine's DAMAGE primitive 0x004797B0 zeroes on a kill
 // (research/command-opcodes.md 6), so a damage-death reads 0 here. id at +0x64.

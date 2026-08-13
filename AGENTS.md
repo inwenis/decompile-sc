@@ -163,6 +163,115 @@ inside one driver call — invisible to the player, who only ever sees the frame
 fix was to ask the thread that OWNS the data: snapshot on the game thread at end of frame for
 frame state, keep the async walk for the building's own memory, which the frame path never writes.
 
+## A FLAG YOU REWRITE EVERY FRAME IS A FLAG THE ENGINE RE-ASSERTS EVERY FRAME — and re-assertion is an EVENT (2026-08-13, task 061)
+
+Writing an engine-owned flag is not a state change. It is one move in a loop, because the engine's
+own layout will write it back on its next pass, and **the engine's write goes through a FUNCTION
+with side effects that your write does not have**.
+
+Task 039 lit the fifth queue icon by clearing its DISABLED bit directly, so the player could click
+the item the plugin was holding. Every read-back agreed: five icons, all lit, right art, right
+label, the ring slot behind the fifth correctly empty. It shipped, and the user came back with
+*"i can cancel a queue unit by clicking it, but it doesn't work if i click the last slock when it
+has our extra +x text"*.
+
+Nothing was wrong with the pixels, the slot index, or the receive-side handler 039 wrote for exactly
+that click. What was wrong is that `disableControl` (`0x00418640`) **is a no-op when the control is
+already disabled** — and the plugin's clearing of the bit is what made the engine's next call NOT a
+no-op. So every frame it disabled the control again *and sent it a `dwUser=6` USER event*, whose
+type-2 handler is `AND [ctrl+0x18],0xBFFFFFFF`: **clear the PRESSED bit**. A mouse-down armed the
+press; two milliseconds later the plugin's own re-lighting had provoked an event that disarmed it;
+the mouse-up sixty milliseconds later found nothing to activate, so no command was ever emitted.
+
+The plugin was destroying its own click, hundreds of times a second, and **the count was in every
+log we had already written**: `iconsFilled=371834` in a single run. That number was being read as
+"the feature is working hard". It is one half of a fight, and nobody had asked what the other half
+was doing.
+
+So, before writing any engine-owned flag on a repeating path:
+
+- **Find the engine's own writer for that flag and read it as a function, not as a store.** Ask what
+  it does BESIDES setting the bit — events sent, handlers called, redraws queued. `0x00418640` sends
+  an event; `0x004186A0` (show) sends another; both early-out when the bit already has the value
+  they want, which is precisely why a plugin that keeps flipping it turns two no-ops into two live
+  calls per frame.
+- **A per-frame write counter is a FIGHT counter.** If your "times I wrote this field" number is in
+  the hundreds of thousands, you are not maintaining a value, you are contending for one — and
+  whatever the engine's writer does on the way is now happening at that rate too.
+- **Input state is the fragile kind.** Anything that lives BETWEEN two user events — a press, a
+  capture, a hover, a drag origin — is destroyed by a mid-gesture re-layout, and it is invisible to
+  every read-back taken at frame boundaries. Both this task's oracles (the game-thread icon
+  snapshot, the async strip walk) reported the icon lit and clickable the entire time it could not
+  be clicked.
+
+And the method that found it, which is the one this rulebook keeps arriving at from different
+directions: **instrument the WORKING control beside the failing one, in the same run, same frame,
+same dialog.** Wrapping all five queue icons' interact pointers rather than just the broken one is
+what produced the whole answer in two lines — one control showing `PRESSED` armed and surviving to
+its ACTIVATE, the other showing a torrent of disable events and no press at all. A trace of only the
+failing control would have shown a torrent and no baseline to call it abnormal.
+
+**A caveat that belongs with the finding: this was a RACE, and it was measured as one.** With the
+tracing shim installed, all three of the failing clicks in one run succeeded — the instrument's own
+file writes perturbed the game thread enough for the press to survive. The pre-fix behaviour is a
+race the click almost always loses, not one it cannot win. Which is why the regression arm for it
+does NOT rest on "the cancel happened": the plugin counts presses it RESCUED (`pressKept`) and the
+suite requires that count to move across the click. **When the bug you are fixing sometimes works by
+accident, a green test proves nothing unless it also proves your fix is what made it green.**
+
+## A SINGLE SAMPLE OF A RACE IS NOT A RESULT — and neither is a rate whose denominator you did not pair (2026-08-13, task 061)
+
+Both halves of that cost this task most of a day, and **both look like diligence from the outside**,
+which is why they need writing down rather than remembering.
+
+**The first half.** Task 061's click on a queue slot either cancels or does not, and which one is
+decided by a collision measured in milliseconds. Four runs were made across two builds, one click
+each, and every one was reported — by the worker AND relayed by the conductor to the board and to
+the user — as a reproduction or a repair:
+
+| build | instrument | cancelled? |
+|---|---|---|
+| pre-fix | off | no |
+| pre-fix | **on** | **yes** |
+| candidate fix | off | **yes** |
+| candidate fix | **on** | no |
+
+Read as experiments, those four say the instrument causes the bug in one direction and cures it in
+the other, which is incoherent. Read as what they are — four flips of a coin whose bias nobody had
+measured — they say nothing at all. A whole fix was designed, built, shipped to review and reverted
+on the strength of them. When the rate was finally measured it was **0 of 18 above a 60ms hold**,
+and the harness had been clicking at 60ms the entire time while the human who reported the bug was
+holding the button longer. *"It never works"* and *"our runs see it flip"* were the same defect
+sampled at two different hold times.
+
+So: **if the thing you are testing can go either way on identical input, one run is an anecdote.**
+Click it N times, print the rate, and say what N was. And choose the axis you sweep for a reason —
+here it was hold duration, because that is the one variable that differs between the harness and the
+human, and it turned out to be the whole story.
+
+**The second half, and it is subtler.** Once a rate exists it is easy to over-read. This task's
+sweep printed two per-duration totals — six clicks, one cancel, five collisions — and the obvious
+conclusion, *"the one click that cancelled is the one click the collision missed"*, is **two
+aggregates that happen to be consistent, not a pairing**. It was one line to fix (print a row per
+click carrying its own verdict and its own collision count) and the paired run then measured the
+real thing: **30 of 30 collided clicks failed, no exceptions.** The converse still has no pairing
+and is still not claimed.
+
+**A count and a count are not a correlation.** If you are about to say "the X that did A is the X
+that did B", the row has to carry A and B together, or you are reading a coincidence of totals.
+
+Two riders, both measured here:
+
+- **A rate does not have to survive its own re-run.** The same sweep twenty minutes later moved from
+  `collided=5 of 6` to `collided=6 of 6` at the same hold times, i.e. the environment shifted
+  underneath it. The necessary claim (30/30) is unaffected, but the "17% at 60ms" from the first
+  table did NOT reproduce — so quote a rate with its run, and never as a property of the system.
+- **Deleting the thing you were measuring can sharpen the instrument.** With the candidate fix in,
+  the collision counter read 110,381 per click, because the fix kept re-arming the press for the
+  next disable to clear. With it reverted, the same counter reads **exactly 1 per click, every
+  time**: the first disable clears the press and every later one finds nothing to clear. The
+  measurement became deterministic by removing the code that was supposed to help it.
+
 ## Your DIAGNOSTICS are under the same rule as your assertions (2026-08-10, task 030)
 
 The "a check that cannot fail is worth nothing" rule applies to the lines you print while
@@ -806,6 +915,17 @@ yourself, do not trust the worker's word) → merge → close.
 
 ### Never stop an agent without checking for an in-flight game (2026-08-09 incident)
 
+**Read this line before any of the tests below, because all three of them were
+in this section as advice and all three read the wrong way round:**
+
+> **A stale heartbeat is not deafness, a missing parent is not death, and a
+> growing log is not a live run.**
+
+Three instruments, one shape, all three found inside about twelve hours
+(2026-08-11 and 2026-08-13). Each is what a HEALTHY run looks like from
+outside, and each was at some point written down here as evidence that a run
+was dead. The details are at items 3 and 4 and in the block after them.
+
 `stop-agent.ps1` kills the agent's process tree. It does NOT kill a
 StarCraft the agent launched — the game outlives its driver, keeps the
 launch lock, and blocks EVERY other worker until someone notices.
@@ -834,10 +954,57 @@ Before `stop-agent.ps1`, ALWAYS:
    `C:\sc-work\logs\sc-launch.lock` naming a dead pid.
 
 Killing an orphan is allowed ONLY with positive proof it is orphaned — a
-dead parent, a test output file that has stopped growing, and a lock file
-naming a dead pid. Otherwise the standing rule holds: another worker's
-game is another worker's run, and workers must never kill one themselves
-(ask the conductor).
+test output file that has stopped growing, and a lock file naming a dead
+pid. Otherwise the standing rule holds: another worker's game is another
+worker's run, and workers must never kill one themselves (ask the
+conductor).
+
+**"A DEAD PARENT" USED TO BE ON THAT LIST AND HAS BEEN STRUCK OFF (2026-08-13,
+task 061/062).** It is not evidence of anything here. The launcher exits once
+`scinject` has handed off, so **every** game this harness starts is parentless
+within seconds of starting — a process-tree check returns "parent is DEAD" for a
+perfectly healthy run in its first minute, and it reads exactly like an orphan
+signature. The conductor ran that check on a live game and nearly acted on it.
+
+**AND THE OBVIOUS REPLACEMENT FOR IT IS ALSO WRONG — measured the same hour, on
+this task's own orphan.** "Is anything still writing that run's logs" reads
+*alive* for an abandoned game, because **the PLUGIN writes the log, not the
+driver**. Task 061's verification run was killed at its launch step, leaving a
+game nobody would ever click again; its log was still growing 51 seconds later
+(`11:26:54 → 11:27:45`) with the driver process long dead. A worker that had
+taken "the log is growing" as proof of life would have waited on that game for
+as long as it was willing to wait.
+
+The test that actually separates them is **the DRIVER**: the PowerShell process
+that sends the input and holds the launch lock. A game with no live driver will
+sit on whatever screen it is on forever, however busy its log looks. So:
+
+1. the pid the launch printed is still running, AND
+2. **the process that launched it is gone** (the suite/driver, not the game's
+   parent — see above), AND
+3. its own transcript has stopped advancing STEPS (`[7] click Train x12`), which
+   is a different file and a different signal from the plugin's log.
+
+Only the second and third are evidence. The plugin's log is a liveness signal
+for the PLUGIN, and the plugin is alive in an orphan by definition.
+
+This is the third of the three at the top of this section, and the way it got
+here is worth as much as the rule. The broken test was written INTO this
+section by task 061 and repeated as sound by the conductor in the same hour —
+who had by then used it twice to conclude a running game was healthy. Both
+conclusions were right and **both were reached with an instrument that cannot
+report the failure it exists to report**. That is the defect class this
+rulebook spends its longest sections on, committed by two readers of those
+sections, while writing about it.
+
+**A DRIVER CAN DIE MID-LAUNCH, WHICH IS HOW THIS ORPHAN EXISTED AT ALL.** Task
+061's verification run was killed by the harness at its launch step — not by
+its worker and not by the conductor — after `scinject` had already handed the
+game off. So the orphan case is not only "someone ran `stop-agent.ps1`": a
+driver can vanish unattended, at the one moment when the game exists and
+nothing has driven it yet, and the game then sits on the menu holding the
+machine. Check for a surviving game after ANY driver death, not only after a
+deliberate stop.
 
 ## Spawning workers
 
