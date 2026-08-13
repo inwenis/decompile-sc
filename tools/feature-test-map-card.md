@@ -1,19 +1,13 @@
 # Feature test map -- quick card
 
-**Not in the map list?** A redeploy deletes it -- that is being fixed separately.
-Until then, open a terminal in the repo and run:
-
-```
-./tools/make-feature-test-map.ps1
-```
-
-Wait two seconds, then refresh the map list (back out and back in). No game needs to
-be running for this.
-
-The file is `!feature-test.scx` -- named with a leading `!` on purpose, so it sorts
+The map is `!feature-test.scx` -- named with a leading `!` on purpose, so it sorts
 to the very TOP of the file list (right after the folders) instead of getting lost
 among 90-odd stock maps. You should see it within the first screen of the browser,
 no scrolling.
+
+Every deploy puts a fresh copy of it in place, so it is always in the list and
+always matches the build you are playing. There is nothing to run by hand. If it is
+ever missing, that is a bug -- say so.
 
 ## Load it
 

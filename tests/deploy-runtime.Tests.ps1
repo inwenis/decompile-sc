@@ -1,7 +1,8 @@
 #Requires -Version 7
 <#
-Pester coverage for the ONE contract between run-with-plugin.ps1 and tools/deploy.ps1:
-every helper run-with-plugin.ps1 dot-sources must also be copied into the deploy tree.
+Pester coverage for the contracts between tools/deploy.ps1 and the rest of the repo:
+(1) every helper run-with-plugin.ps1 dot-sources must also be copied into the deploy
+tree, and (2) a redeploy must leave the feature-test map in place (task 067).
 
 WHY THIS EXISTS (issue #30, 2026-08-11). The deployed install is deliberately
 self-contained -- deploy.ps1 copies run-with-plugin.ps1 and each of its helpers into
@@ -57,5 +58,55 @@ Describe 'the deployed plugin runtime carries every dependency it dot-sources' {
             Test-Path -LiteralPath (Join-Path $script:pluginDir $h) |
                 Should -BeTrue -Because "run-with-plugin.ps1 dot-sources $h"
         }
+    }
+}
+
+Describe 'a redeploy leaves the feature-test map in place (task 067)' {
+    # tools/deploy.ps1 mirrors -SourceGameDir with /MIR, and !feature-test.scx is a
+    # destination-only file -- so every redeploy purges it, and until task 067 the
+    # user had to know to re-run the generator from a terminal. The fix regenerates
+    # the map as deploy.ps1's last assembly step. These are static checks on the
+    # script text (offline, no game, no toolchain -- same shape as the block above);
+    # the live proof is an actual deploy run. Every one of them fails on the pre-067
+    # deploy.ps1, so the coverage is not vacuous.
+
+    BeforeAll {
+        $script:deployText = Get-Content -Raw -LiteralPath $script:deploy
+        # The literal invocation form in deploy.ps1's code -- NOT a bare
+        # 'make-feature-test-map.ps1' match, which the header comment would satisfy
+        # on its own (the absence-assertion rule: match the thing that does the work).
+        $script:genInvocation = "& (Join-Path `$scriptDir 'make-feature-test-map.ps1')"
+    }
+
+    It 'deploy.ps1 actually invokes the feature-test map generator' {
+        $script:deployText.Contains($script:genInvocation) |
+            Should -BeTrue -Because 'without the regeneration step, /MIR deletes the map on every redeploy'
+    }
+
+    It 'pins the output into the deployed game tree, not the generator''s default' {
+        # make-feature-test-map.ps1 DEFAULTS to the user's live install at
+        # C:\sc-deploy\starcraft-modded; deploy.ps1 must pin -OutputPath under its own
+        # $gameDeployDir or a -DeployRoot override would write the map into the wrong tree.
+        $script:deployText.Contains("Join-Path `$gameDeployDir 'Maps\BroodWar\!feature-test.scx'") |
+            Should -BeTrue -Because 'the map must land in THIS deploy''s game tree for any -DeployRoot'
+    }
+
+    It 'regenerates AFTER the mirror -- /MIR would purge a map generated before it' {
+        $mirrorAt = $script:deployText.IndexOf('& robocopy @robocopyArgs')
+        $genAt    = $script:deployText.IndexOf($script:genInvocation)
+        $mirrorAt | Should -BeGreaterThan -1 -Because 'the mirror invocation itself must be findable for this ordering check to mean anything'
+        $genAt    | Should -BeGreaterThan $mirrorAt -Because 'a map generated before /MIR runs is deleted by it'
+    }
+
+    It 'the verify step requires the map to exist AND to be from this run' {
+        # Presence alone would pass on a stale leftover; deploy.ps1 checks freshness
+        # the same way it does for the plugin binaries.
+        $script:deployText.Contains('feature-test map missing after deploy') | Should -BeTrue
+        $script:deployText.Contains('predates this deploy run -- the regeneration step did not actually write it') | Should -BeTrue
+    }
+
+    It 'the generator deploy.ps1 calls exists on disk' {
+        Test-Path -LiteralPath (Join-Path (Split-Path $script:deploy -Parent) 'make-feature-test-map.ps1') |
+            Should -BeTrue -Because 'deploy.ps1 invokes it by path at deploy time'
     }
 }
