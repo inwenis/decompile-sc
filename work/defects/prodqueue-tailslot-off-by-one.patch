@@ -1,0 +1,9 @@
+--- a/tools/plugin/src/sc_prodqueue.cpp
++++ b/tools/plugin/src/sc_prodqueue.cpp
+@@ -225,5 +225,5 @@ static int TailSlot(DWORD unit, int len) {
+     if (len <= 0) return -1;
+     unsigned head = *(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
+     if (head >= SC_BUILD_QUEUE_SLOTS) head = 0;
+-    return (int)((head + (unsigned)(len - 1)) % SC_BUILD_QUEUE_SLOTS);
++    return (int)((head + (unsigned)len) % SC_BUILD_QUEUE_SLOTS);
+ }
