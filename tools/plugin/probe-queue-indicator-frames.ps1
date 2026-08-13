@@ -107,7 +107,7 @@ $CANCEL_ACT = '00423490'
 # the fifth ICON is always the one this plugin fills.
 $STRIP_SLOTS = 5
 
-if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t039' }
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t039' -Suite 'queue-indicator-frames' }
 $mapDir = $FixtureDir
 $mapName = 'qind-frames.scx'
 $mapPath = Join-Path $mapDir $mapName

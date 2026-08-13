@@ -254,7 +254,7 @@ $expectNotSent   = $Clicks - $QueueMax
 if ($expectOverflow -lt 1) { throw "test: -QueueMax must exceed the engine's $ENGINE_SLOTS slots." }
 if ($expectNotSent -lt 1) { throw 'test: -Clicks must exceed -QueueMax, or the cap is never exercised.' }
 
-if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t028' }
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t028' -Suite 'production-queue' }
 $mapDir = $FixtureDir
 $mapName = 'production-queue.scx'
 $mapPath = Join-Path $mapDir $mapName

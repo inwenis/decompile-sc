@@ -60,7 +60,7 @@ $TECH_CMD = '0x30'
 $UPGRADE_ACTION = '00423310'
 $TECH_ACTION = '00423350'
 
-if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t037' }
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t037' -Suite 'upgrade-queue-indicator' }
 $mapDir = $FixtureDir
 $mapName = "qind-$UnitType.scx"
 $mapPath = Join-Path $mapDir $mapName

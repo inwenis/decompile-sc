@@ -85,7 +85,7 @@ $TECH_CMD = '0x30'          # ditto
 $UPGRADE_ACTION = '00423310'
 $TECH_ACTION = '00423350'
 
-if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t029' }
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t029' -Suite 'upgrade-wire' }
 $mapDir = $FixtureDir
 $mapName = 'upgrade-wire.scx'
 $mapPath = Join-Path $mapDir $mapName

@@ -383,6 +383,27 @@ Remove the folder at the end of the run, and only if it is empty — an empty fo
 still pushes every entry below it down a row for everyone else, and only six rows are
 visible at once.
 
+**And the folder is per task AND per suite, not per task alone (2026-08-13, task 059,
+issue #80).** `00-t<NNN>` keyed on the task only, so a task running TWO suites put both
+their fixtures in one folder — the second suite saw the first's leftover, applied the
+foreign-file rule correctly, and waited forever on a file its own task had written, with
+nothing actually contending for it. `test-save-load` deliberately leaves its fixture
+between phases (only its last phase deletes it), which is exactly the shape that tripped
+this: task 054 ran it, then ran `test-hud-row` under the same task id, and the second
+suite deadlocked on the first's `save-load.scx`. Twice in one hour, and the worker inside
+the wait loop cannot be reached by message (issue #59) — someone has to reach in and
+delete the file by hand.
+
+So `Resolve-ScFixtureDir` now takes `-Suite` and the agent leaf is `00-t<NNN>-<suite>`.
+A multi-phase suite still keeps the SAME folder across its own phases (same task, same
+`-Suite`); two suites of one task can never see each other's fixtures again, because they
+are never in the same folder to begin with. The refusal/wait messages were also rewritten:
+they used to assert *"another run's fixture is in it"* as fact, which is exactly what sent
+two readers hunting for a colliding worker that did not exist. They now say what the path
+actually proves — which task and suite the folder belongs to, that a same-task-different-
+suite file is impossible under the new naming, and that no liveness check was performed —
+rather than naming a culprit with no evidence behind it.
+
 The rules below still apply INSIDE your own folder (they are what caught the incidents):
 
 ## Shared test-fixture folder (hard rule, 2026-08-09 incident)

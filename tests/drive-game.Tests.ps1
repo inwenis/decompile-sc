@@ -233,36 +233,86 @@ Describe 'fixture folder default' {
     # folder, so neither sees the other as foreign and one overwrites the other's fixture.
 
     It 'keeps the suite historical folder when no agent is running (the by-hand case)' {
-        Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-testmap' -AgentTask '' |
+        Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-testmap' -Suite 'hud-row' -AgentTask '' |
             Should -Be 'C:\g\Maps\BroodWar\00-testmap'
-        Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-testmap' -AgentTask $null |
+        Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-testmap' -Suite 'hud-row' -AgentTask $null |
             Should -Be 'C:\g\Maps\BroodWar\00-testmap'
     }
 
     It 'gives a worker its OWN folder, so two runs of one suite cannot collide' {
-        $a = Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-testmap' -AgentTask '023'
-        $b = Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-testmap' -AgentTask '024'
-        $a | Should -Be 'C:\g\Maps\BroodWar\00-t023'
+        $a = Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-testmap' -Suite 'hud-row' -AgentTask '023'
+        $b = Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-testmap' -Suite 'hud-row' -AgentTask '024'
+        $a | Should -Be 'C:\g\Maps\BroodWar\00-t023-hud-row'
         $a | Should -Not -Be $b
     }
 
     It 'takes the task id from a suffixed AGENT_TASK (Enter-ScLaunchLock names them that way)' {
-        Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-testmap' -AgentTask '023-ghost-cloak' |
-            Should -Be 'C:\g\Maps\BroodWar\00-t023'
+        Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-testmap' -Suite 'hud-row' -AgentTask '023-ghost-cloak' |
+            Should -Be 'C:\g\Maps\BroodWar\00-t023-hud-row'
     }
 
     It 'never leaves a worker in ANOTHER task finished folder' {
         # test-control-groups defaulted to 00-t021 and three suites to 00-t022 -- the
         # folders of the tasks that wrote them, not of the task running them.
         foreach ($stale in @('00-t021', '00-t022')) {
-            Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback $stale -AgentTask '023' |
-                Should -Be 'C:\g\Maps\BroodWar\00-t023'
+            Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback $stale -Suite 'hud-row' -AgentTask '023' |
+                Should -Be 'C:\g\Maps\BroodWar\00-t023-hud-row'
         }
     }
 
     It 'falls back to a sanitised leaf for a non-numeric agent id' {
-        Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-testmap' -AgentTask 'probe/../x' |
-            Should -Be 'C:\g\Maps\BroodWar\00-tprobex'
+        Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-testmap' -Suite 'hud-row' -AgentTask 'probe/../x' |
+            Should -Be 'C:\g\Maps\BroodWar\00-tprobex-hud-row'
+    }
+
+    # THE SECOND HOLE (task 059 / issue #80): two DIFFERENT suites of one task used to
+    # collide, because the folder was keyed on task alone.
+    It 'gives two suites of the SAME task two DIFFERENT folders, so they cannot collide' {
+        $saveLoad = Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-t051' -Suite 'save-load' -AgentTask '054'
+        $hudRow   = Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-testmap' -Suite 'hud-row' -AgentTask '054'
+        $saveLoad | Should -Be 'C:\g\Maps\BroodWar\00-t054-save-load'
+        $hudRow   | Should -Be 'C:\g\Maps\BroodWar\00-t054-hud-row'
+        $saveLoad | Should -Not -Be $hudRow
+    }
+
+    It 'gives two PHASES of the SAME suite the SAME folder, so a multi-phase suite keeps its fixture' {
+        $control = Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-t051' -Suite 'save-load' -AgentTask '054'
+        $fanout  = Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-t051' -Suite 'save-load' -AgentTask '054'
+        $control | Should -Be $fanout
+    }
+}
+
+Describe 'fixture folder owner note (task 059 / issue #80)' {
+
+    # The refusal/wait messages used to assert "another run" as fact, which sent two
+    # readers hunting for a colliding worker that did not exist -- the file belonged to
+    # the same task's OTHER suite. Now the folder is exclusive to one task+suite, so the
+    # note can say precisely what the path proves and nothing it does not know.
+
+    It 'names the owning task and suite for a task+suite-scoped folder' {
+        $note = Get-ScFixtureFolderOwnerNote -Dir 'C:\g\Maps\BroodWar\00-t054-save-load'
+        $note | Should -Match 'task 054'
+        $note | Should -Match 'save-load'
+        $note | Should -Match 'impossible'
+    }
+
+    It 'admits it cannot name an owner for a non-task+suite (shared/by-hand) folder' {
+        $note = Get-ScFixtureFolderOwnerNote -Dir 'C:\g\Maps\BroodWar\00-testmap'
+        $note | Should -Match 'cannot be determined'
+    }
+
+    It 'never asserts "another run" without evidence in the refusal message' {
+        $dir = Join-Path $TestDrive 'Maps\BroodWar\00-t054-hud-row'
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        New-Item -ItemType File -Path (Join-Path $dir 'save-load.scx') -Force | Out-Null
+        $run = New-ScFixtureRun -Dir $dir -Names @('hud-row.scx')
+        { Assert-ScFixtureFolderMine -Run $run } | Should -Throw -ExpectedMessage '*save-load.scx*'
+        try { Assert-ScFixtureFolderMine -Run $run }
+        catch {
+            $_.Exception.Message | Should -Not -Match "another run's fixture"
+            $_.Exception.Message | Should -Match "task 054's 'hud-row' runs only"
+            $_.Exception.Message | Should -Match 'No liveness check'
+        }
     }
 }
 

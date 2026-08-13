@@ -646,7 +646,7 @@ function Get-Logical {
 # ---------------------------------------------------------------------------
 # Fixture. ONE FOLDER PER TASK, ONE NAME PER SUITE (AGENTS.md hard rule).
 # ---------------------------------------------------------------------------
-if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t041' }
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t041' -Suite 'random-conformance' }
 $mapName = 'random-conformance.scx'
 $mapPath = Join-Path $FixtureDir $mapName
 $fixtures = New-ScFixtureRun -Dir $FixtureDir -Names @($mapName)

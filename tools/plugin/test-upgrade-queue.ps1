@@ -109,7 +109,7 @@ $HOOK_COUNT = 8
 $expectQueued = $QueueMax - $ENGINE_SLOTS
 if ($expectQueued -lt 2) { throw 'test: -QueueMax must leave at least two items with the plugin, or "more than one" is not shown.' }
 
-if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t029' }
+if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t029' -Suite 'upgrade-queue' }
 $mapDir = $FixtureDir
 $mapName = 'upgrade-queue.scx'
 $mapPath = Join-Path $mapDir $mapName
