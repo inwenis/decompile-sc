@@ -172,6 +172,12 @@ param(
     # a specific old DLL, which then has to be an explicit choice rather than an oversight).
     [switch]$NoAutoBuild,
     [switch]$Windowed,
+    # Task 065: which DLL -Windowed copies in as $GameDir\ddraw.dll. Empty (default)
+    # keeps the WMode.dll recipe unchanged. Point it at a cnc-ddraw ddraw.dll
+    # (fetch-cnc-ddraw.ps1) to run the SAME vector through the non-cropping helper;
+    # the repo's tools/plugin/cnc-ddraw.ini then travels with it as $GameDir\ddraw.ini,
+    # because cnc-ddraw reads its config from the directory the game runs in.
+    [string]$WindowedHelperDll = '',
     [ValidateSet('none', 'WMode', 'WMode_Fix', 'both')]
     [string]$InjectWindowedHelper = 'none',
     [switch]$RemoveWindowed,
@@ -419,6 +425,13 @@ try {
             Write-Host "run-with-plugin: removed $ddraw (windowed-mode shim)"
         }
         else { Write-Host "run-with-plugin: no $ddraw present, nothing to remove" }
+        # The cnc-ddraw config a -WindowedHelperDll install placed next to the DLL.
+        # Inert without a ddraw.dll, but the shared game dir stays as found.
+        $ddrawIni = Join-Path $GameDir 'ddraw.ini'
+        if (Test-Path -LiteralPath $ddrawIni) {
+            Remove-Item -LiteralPath $ddrawIni -Force
+            Write-Host "run-with-plugin: removed $ddrawIni (windowed-helper config)"
+        }
     }
 
     if ($Build) { & (Join-Path $scriptDir 'build.ps1') | Write-Host }
@@ -498,10 +511,19 @@ try {
     }
 
     if ($Windowed) {
-        $wmode = Join-Path $GameDir 'WMode.dll'
-        if (-not (Test-Path -LiteralPath $wmode)) { throw "run-with-plugin: $wmode not found; cannot enable windowed mode." }
-        Copy-Item -LiteralPath $wmode -Destination $ddraw -Force
-        Write-Host "run-with-plugin: windowed shim installed ($ddraw <- WMode.dll)"
+        if ($WindowedHelperDll) {
+            if (-not (Test-Path -LiteralPath $WindowedHelperDll)) { throw "run-with-plugin: $WindowedHelperDll not found; run fetch-cnc-ddraw.ps1 first." }
+            Copy-Item -LiteralPath $WindowedHelperDll -Destination $ddraw -Force
+            $iniSrc = Join-Path $scriptDir 'cnc-ddraw.ini'
+            Copy-Item -LiteralPath $iniSrc -Destination (Join-Path $GameDir 'ddraw.ini') -Force
+            Write-Host "run-with-plugin: windowed shim installed ($ddraw <- $WindowedHelperDll, ddraw.ini <- $iniSrc)"
+        }
+        else {
+            $wmode = Join-Path $GameDir 'WMode.dll'
+            if (-not (Test-Path -LiteralPath $wmode)) { throw "run-with-plugin: $wmode not found; cannot enable windowed mode." }
+            Copy-Item -LiteralPath $wmode -Destination $ddraw -Force
+            Write-Host "run-with-plugin: windowed shim installed ($ddraw <- WMode.dll)"
+        }
     }
 
     if ($NoLaunch) { Write-Host 'run-with-plugin: -NoLaunch given, done.'; return }
