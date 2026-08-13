@@ -43,6 +43,15 @@ And after the game is up, the ATTACH banner in the log is checked against the sa
 identity, because "the right DLL was on disk" and "the right DLL was loaded into the
 game" are two claims -- the injector takes a path, and a path is not a promise.
 
+A NAMED -BuildDir is never rebuilt into, only reported on. Pointing this script at a
+specific build is a real workflow -- test-random-conformance.ps1 runs against
+C:\sc-work\builds\<sha> to reproduce a bug against the commit before its fix,
+probe-queue-indicator-frames.ps1 keeps a deliberate 'defect' arm, and README-deploy.md
+points it at the user's DEPLOYED plugin dir -- and a gate that "helpfully" rebuilt would
+destroy the build the caller asked for, or overwrite the user's installed binary from a
+test run. The mismatch is still announced, loudly, because a deliberate old build and a
+forgotten one are indistinguishable in a transcript unless one of them says so.
+
 The deployed runtime copy (deploy.ps1 copies this script next to the game) has no src/
 beside it. There the comparison cannot run at all, so it does not: the script prints what
 the DLL says it is and says plainly that nothing was compared, rather than printing a
@@ -406,6 +415,9 @@ try {
 
     if ($Build) { & (Join-Path $scriptDir 'build.ps1') | Write-Host }
 
+    # Whether the caller NAMED a build directory, decided before the default is filled in.
+    # It changes what the gate below is allowed to do: see "Stale DLL" in .DESCRIPTION.
+    $explicitBuildDir = $PSBoundParameters.ContainsKey('BuildDir') -and $BuildDir
     if (-not $BuildDir) { $BuildDir = Join-Path $repoRoot 'work/scratch/plugin-build' }
     $dll = Join-Path $BuildDir 'scplugin.dll'
     $inj = Join-Path $BuildDir 'scinject.exe'
@@ -423,6 +435,22 @@ try {
                                         -BuildScript (Join-Path $scriptDir 'build.ps1')
         if ($verdict.Current) {
             Write-Host "run-with-plugin: plugin $($verdict.Reason)"
+        }
+        elseif ($explicitBuildDir) {
+            # A NAMED -BuildDir is a deliberate choice of build, and several real callers
+            # depend on it being honoured: test-random-conformance.ps1 points at
+            # C:\sc-work\builds\<sha> to reproduce a bug against the commit BEFORE its fix,
+            # probe-queue-indicator-frames.ps1 keeps a 'defect' arm, and README-deploy.md
+            # points this script at the user's DEPLOYED plugin dir. Rebuilding into any of
+            # those would destroy the thing the caller asked for -- and in the deploy case
+            # would write over the user's installed binary from a test run.
+            #
+            # So: never rebuild here. Say loudly what is being injected instead, because
+            # "deliberate" and "forgotten" look identical in a transcript unless one of
+            # them says so.
+            Write-Warning ("run-with-plugin: the plugin in the -BuildDir you named is NOT this worktree's source -- " +
+                           "$($verdict.Reason) Nothing was rebuilt: that directory is yours, and a named build dir is " +
+                           'treated as a deliberate choice of build. If this run was meant to test your edits, drop -BuildDir.')
         }
         elseif ($NoAutoBuild) {
             throw ("run-with-plugin: STALE PLUGIN -- $($verdict.Reason)`n" +

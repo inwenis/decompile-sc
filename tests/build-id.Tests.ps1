@@ -202,6 +202,46 @@ Describe 'Test-ScPluginCurrent' {
     }
 }
 
+Describe 'run-with-plugin.ps1 -BuildDir is honoured, not "helpfully" rebuilt' {
+    # A NAMED build dir is a deliberate choice: test-random-conformance.ps1 points at
+    # C:\sc-work\builds\<sha> to reproduce a bug against the commit before its fix, and
+    # README-deploy.md points this script at the user's DEPLOYED plugin dir. A gate that
+    # rebuilt into either would destroy the build the caller asked for -- and in the
+    # deploy case would overwrite the user's installed binary from a test run.
+    #
+    # Driven for real, not grepped: -NoLaunch returns after the DLL is resolved, which is
+    # where the gate lives, so this exercises the actual code path with no game and no
+    # compiler. The DLL is a fake carrying a stamp that does NOT match this worktree,
+    # which is exactly the state that triggers a rebuild in the default dir.
+
+    BeforeAll {
+        $script:runner  = Join-Path $script:pluginDir 'run-with-plugin.ps1'
+        $script:gameDir = 'C:\sc-work\1161-base'
+    }
+
+    It 'leaves a stale DLL in a named -BuildDir untouched, and says so' -Skip:(-not (Test-Path 'C:\sc-work\1161-base')) {
+        $bd = Join-Path ([IO.Path]::GetTempPath()) ("scbuilddir-" + [Guid]::NewGuid().ToString('n'))
+        New-Item -ItemType Directory -Path $bd -Force | Out-Null
+        try {
+            $fake = New-FakeDll 'SCPLUGIN_BUILD_ID=0000000 SRC=000000000000'
+            Copy-Item -LiteralPath $fake -Destination (Join-Path $bd 'scplugin.dll')
+            Copy-Item -LiteralPath $fake -Destination (Join-Path $bd 'scinject.exe')
+            Remove-Item -LiteralPath $fake -Force
+            $beforeHash = (Get-FileHash -LiteralPath (Join-Path $bd 'scplugin.dll') -Algorithm SHA256).Hash
+
+            $out = & $script:runner -NoLaunch -NoLaunchLock -BuildDir $bd -GameDir $script:gameDir 3>&1 2>&1 | Out-String
+
+            # The bytes are the assertion. A rebuild would replace them with a real DLL.
+            (Get-FileHash -LiteralPath (Join-Path $bd 'scplugin.dll') -Algorithm SHA256).Hash |
+                Should -Be $beforeHash -Because 'a named -BuildDir must never be rebuilt into'
+            # And it must not go quietly: silence here is the defect this whole task is about.
+            $out | Should -BeLike '*NOT this worktree*'
+            $out | Should -BeLike '*Nothing was rebuilt*'
+        }
+        finally { Remove-Item -LiteralPath $bd -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 Describe 'the pieces are actually wired together' {
 
     It 'build.ps1 passes both defines and verifies the stamp it got back' {
