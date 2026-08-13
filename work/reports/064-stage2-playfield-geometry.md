@@ -22,9 +22,9 @@ right band holds map the player is entitled to see" are different claims — run
 own instruction the working playfield ships behind the off-by-default flag with
 the fog defects stated; the conductor is cutting the fog follow-up.
 
-Full write-up with evidence: `research/renderer-viewport.md` §14.
+Full write-up with evidence: `research/renderer-viewport.md` §15.
 
-## 1. The 56 sites, by hiding shape (§14.2)
+## 1. The 56 sites, by hiding shape (§15.2)
 
 | family | sites | example |
 | ------ | ----- | ------- |
@@ -110,7 +110,7 @@ consumer disagree over the whole surface from frame one.
    unpatched CELL-unit constants 81=648/8, 80=640/8 at 0x0047E4B0, 0x0047E4C0,
    0x0047E8D9, 0x0047F820, 0x0047F829, plus an unread sibling branch clamping
    0x68/0x67 (104/103) on mode flag 0x58F440. research/renderer-viewport.md
-   §14.4 carries the full dossier for a reader starting cold.
+   §15.4 carries the full dossier for a reader starting cold.
 2. Scroll clamp stock (stage 3): at the right map edge the last 5 tile columns
    read unfilled scratch; mouse→world, window-proc clamps, minimap untouched
    (stages 3/5).

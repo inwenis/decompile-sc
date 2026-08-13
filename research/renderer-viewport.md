@@ -1055,16 +1055,141 @@ Dumps and rendered PNGs land in `C:\sc-work\logs\063-frames\` (gitignored); the 
 their paths for a human to open. Nothing in any of it changes what the user sees when they
 play, and `StarCraft.exe` on disk stays byte-identical.
 
-## 14. Task 064 — stage 2 decomposed: the refresh band the sweeps could not see
+## 14. Task 065 — cnc-ddraw measured: the ddraw vector presents all 800 columns
+
+§13.4's recommendation executed: cnc-ddraw dropped in through the EXISTING `-Windowed`
+vector and measured with the §12.6 instrument, WMode control in the same run. **Verdict:
+FOLLOW — the client area is itself 800 wide, the menu draws 1:1 in columns 0..639, and the
+right 160 columns are presented as the stage-1 blank band.** The crop is gone from the
+presentation path; what fills those columns is task 064's half (stage 2).
+
+### 14.1 Provenance and mechanism
+
+- **Binary:** cnc-ddraw v7.1.0.0 (github.com/FunkyFr3sh/cnc-ddraw, MIT, published
+  2024-12-28), release asset `cnc-ddraw.zip`,
+  zip sha256 `0b13ab89a64c9918189b1dadd449ef6ed3cb3b7b19cabd96d8adbd95505bb908`,
+  ddraw.dll sha256 `85e0f7d530dfda134793a57cb3e76b0287dcc96892ee57162dd68f47283b03a9`,
+  x86 PE confirmed (machine 0x14C). Fetched and pinned by
+  `tools/plugin/fetch-cnc-ddraw.ps1` to `C:\sc-work\cnc-ddraw\v7.1.0.0\` — a
+  game-adjacent binary, never committed (hard rule 1); a hash mismatch on re-fetch is a
+  hard stop, not a re-pin.
+- **Install:** `run-with-plugin.ps1 -Windowed -WindowedHelperDll <path>` copies it in as
+  `$GameDir\ddraw.dll` exactly where the WMode recipe copies WMode.dll, plus the repo's
+  `tools/plugin/cnc-ddraw.ini` as `$GameDir\ddraw.ini` (windowed=true, width/height=0 so
+  the window IS the requested surface, renderer=gdi for the invisible desktop,
+  savesettings=0 so nothing rewrites the shared game dir). `-RemoveWindowed` removes both.
+  Empty `-WindowedHelperDll` is the WMode recipe, unchanged.
+- **The probe is §12.6's, parameterised, not replaced:** `-WindowedHelperDll` passes
+  through, and `-Vector both` is the whole experiment in one run — inject arm = WMode
+  (control), ddraw arm = cnc-ddraw (candidate).
+
+### 14.2 Run 1 (2026-08-13 ~13:24, off-screen, stage 1, four launches under one lock)
+
+| arm | client (API) | capture | probe verdict line |
+| --- | ------------ | ------- | ------------------ |
+| inject ws1 / ws0 (WMode) | 640x480 both | 640x480 both | "SCALE (or something else)" at 93.5% band match |
+| ddraw ws1 / ws0 (cnc-ddraw) | **800x480** / 640x480 | 800x480 / 640x480 | **FOLLOW** |
+
+Both cnc-ddraw arms launched healthy — no DirectDraw Error box. §12.6's error was
+therefore WMode's own, not the proxy loading path's: a helper that IMPLEMENTS DirectDraw
+loads fine where the forwarding one died, which is the separation §13.4 predicted the
+probe would answer for free.
+
+**The control's verdict string missed its threshold and the structural analysis is what
+anchors it** (`tools/plugin/analyze_present_frames.py`, readings from the run-1 PNGs):
+
+- inject ws1 vs ws0: 19,949 px differ (6.5%) — and **0 of 640 columns have >50% of rows
+  differing** (a 0.8x rescale moves every pixel and damages every column), max column
+  fraction 0.32, all differences in **5 clusters** (16px cells, 8-connected). The 6.5% is
+  spatially local — animation's shape, not a rescale's. WMode still presents columns
+  0..639 at 1:1 and discards the rest; the 95% line simply sits inside the menu's
+  animation noise (the same animated menu §"Foreground" measured changing in background,
+  two fingerprints 3 s apart).
+- ddraw ws1: green menu text occupies the same rows (138) as in every other arm — no
+  vertical shift or scale — and the right band x≥640 below row 31 is **99.86% visually
+  black** (100 of 71,840 px above channel-sum 12, all dim seam pixels x≤645). The band's
+  "black" is palette-mapped game output, not the window's background brush: it carries a
+  sparse speckle of (0,4,0) and (16,0,0) — GDI's rendering of near-black palette entries —
+  where a brush fill would be literal (0,0,0).
+
+### 14.3 Two capture artifacts, found and bounded (they contaminate one probe metric)
+
+1. **cnc-ddraw window captures carry a caption-colored strip in rows 0..30** — in ws0 AND
+   ws1, so it is not a widescreen effect. It is the §13.1 chrome-in-capture problem in a
+   new skin: `Save-ScWindowImage` grabs window pixels (the game's (0,0) measured at (5,32)
+   for the WMode window), and cnc-ddraw's window has a standard Windows caption where
+   WMode draws its own dark StarCraft-styled one — so the same inclusion is cream and
+   obvious in one helper and dark and invisible in the other. First seen as "right band
+   11.14% non-black"; excluded (rows 0..30), the band is black.
+2. **The probe's "content right edge" metric reads chrome, not content**, for the same
+   reason: the caption strip runs to the last column, so `edge=799/800 (100%)` is true of
+   the caption in the cnc-ddraw arms and of WMode's skinned caption art in the inject
+   arms. The FOLLOW branch keys on capture WIDTH and is unaffected; the right-edge
+   percentages should not be quoted as scale evidence. The per-column locality analysis
+   replaces them: window chrome is identical between the arms of a vector, so it
+   contributes zero to the cross-arm diff.
+
+### 14.4 Run 2 — same-arm brackets (the animation theory measured, not assumed)
+
+Four predictions were filed with the conductor BEFORE the run, each with its
+falsification reading (message
+`20260813-123723-from-065-prediction-on-record-for-the-bracketed-re-run.md`). Run 2
+(2026-08-13 ~12:58, same four launches plus `-BracketSeconds 4`): **all four confirmed,
+none falsified.**
+
+1. **Same-arm delta (same window, nothing changed but time, 4 s):** inject ws1 94.3%,
+   ws0 93.7% identical — the same order as the 93.5% cross-arm number, inside the
+   predicted 90–98%, nowhere near the ≥99.5% that would have meant the menu is static
+   and the control's 6.5% real signal. **The cross-arm difference is fully accounted for
+   by time alone; the WMode control is anchored as CROP.** Stated precisely: the
+   cross-arm figure (93.5%) sits a hair BELOW both same-arm figures (93.7%, 94.3%) —
+   two windows differing by slightly more than one window differs from itself, inside
+   the same noise band, which is what "the arms differ by animation phase and nothing
+   else" looks like. The same-arm diffs have animation's shape too: 0 damaged columns,
+   6–7 clusters.
+2. **Fresh cross-arm inject pair:** 93.5% again (6.5% differ), verdict string again
+   "SCALE (or something else)" — the 95% line sits inside animation noise, as predicted —
+   and the locality analysis reproduces on the new pair: 0 of 640 columns damaged, max
+   column fraction 0.30, 5 clusters.
+3. **cnc-ddraw ws1:** FOLLOW again at client 800x480, and the right band below row 31 is
+   **99.86% black in BOTH bracket captures** — the same 100 dim seam pixels — while the
+   left 640 columns changed 10.9% between the same two captures. A repainting window
+   whose band stays black is a PRESENTED black surface; unpainted leftover garbage was
+   the alternative and it is excluded.
+4. **Caption strip rows 0..30:** present in every cnc-ddraw capture (ws0 and ws1),
+   absent from every WMode capture. The artifact is the helper's window style, §14.3.
+
+One residual worth recording: cnc-ddraw's same-arm delta (10.9–11.8%) runs higher than
+WMode's (5.7–6.4%) over the same menu. Not load-bearing for any claim above — both are
+animation-shaped and column-undamaged — but a future probe that compares ACROSS helpers
+should not expect their noise floors to match.
+
+### 14.5 How to reproduce
+
+```powershell
+./tools/plugin/fetch-cnc-ddraw.ps1     # pinned v7.1.0.0 -> C:\sc-work\cnc-ddraw\ + hashes
+./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-widescreen-present.ps1 `
+  -SuiteArgs @{ Vector='both'; Stage='1'; BracketSeconds=4;
+                WindowedHelperDll='C:\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll';
+                FrameDir='C:\sc-work\logs\065-frames' }
+.\.venv\Scripts\python.exe tools/plugin/analyze_present_frames.py   # the structural readings
+```
+
+Frames land in `C:\sc-work\logs\065-frames\` (gitignored, paths travel, never
+`pr-image`d — hard rule 1). `StarCraft.exe` byte-identical throughout; the user's display
+mode, desktop and registry untouched; everything behind `-WindowedHelperDll`, which no
+suite passes by default.
+
+## 15. Task 064 — stage 2 decomposed: the refresh band the sweeps could not see
 
 §12.9 left stage 2 as "one atomic change of ~121 sites, and it is not currently correct",
 with the damage attributed to the grid/terrain core and the stage declared structural. Task
 064 re-opened it with 063's instrument and closed it the other way: **the stage was not
 structurally broken, it was 56 sites short, all in the six functions that FILL the terrain
 scratch surface** — a band none of the sweeps could see and no window capture could
-attribute. With those declared, stage 2 composes a correct 800-wide playfield (§14.5).
+attribute. With those declared, stage 2 composes a correct 800-wide playfield (§15.5).
 
-### 14.1 The dead-end audit: which of 034's dead ends died of the instrument
+### 15.1 The dead-end audit: which of 034's dead ends died of the instrument
 
 The task's own first question, asked before any theory. 034's stage-2 record contains three
 verdicts, and they fail for two different reasons that its instrument could not separate:
@@ -1079,7 +1204,7 @@ The transferable rule: **a bisect over a set can only indict members of the set.
 subset of a stage misbehaves, "the stage is atomic" and "the defect is outside the set" are
 indistinguishable from inside the bisect — and the second one was true here.
 
-### 14.2 The refresh band, and why every sweep missed it
+### 15.2 The refresh band, and why every sweep missed it
 
 The scratch surface (§6) has two sides. Its READERS — the blitter `FUN_004BCDC0`, the copy
 loop, the full-playfield blit `FUN_0040C253` — and its low-level run-writers
@@ -1124,7 +1249,7 @@ change at this geometry; the margin convention is pitch = playfield width + one 
 - **How verified**: the generator relocates each declared value inside its instruction's own
   bytes and refuses the site on any mismatch (222 sites verified against the exe); the
   plugin re-verifies all of them in the live process before writing; and the outcome oracle
-  is §14.5's frame, which no read-back touches.
+  is §15.5's frame, which no read-back touches.
 - **What the sweep's "100.0% coverage" means, stated at its true strength**: the linear
   decoder resumed past every undecodable byte, so no BYTE of `.text` went unexamined — but
   padding and jump tables decode as junk instructions, so coverage does not mean every
@@ -1133,7 +1258,7 @@ change at this geometry; the margin convention is pitch = playfield width + one 
   failure class this method cannot see is a constant computed at runtime or split across
   instructions.
 
-### 14.3 The mechanism of §12.9's wreck, arithmetic and all
+### 15.3 The mechanism of §12.9's wreck, arithmetic and all
 
 The scratch cell of a tile is a linear hash of its absolute map position:
 `off = (tileY·pitch + tileX)·32 mod size` — computed independently by every reader and
@@ -1155,7 +1280,7 @@ column extents scatter what IS written, which is the rest of the wreck. None of 
 observable through a window that crops to 640, and none of it is attributable from a bisect
 whose every subset contains the half-patched feeding path.
 
-### 14.4 Measured results (runs of 2026-08-13, off-screen, 36-marine fixture)
+### 15.4 Measured results (runs of 2026-08-13, off-screen, 36-marine fixture)
 
 **Run 1b — the positive control, unchanged probe (stock + stage 1): PASS 21/21.**
 Stock playfield consistency 0.98909 — identical to 063's run 3 on a different
@@ -1202,7 +1327,7 @@ the pin on the same bracket captures** — after which the pin went into the
 stock arm's check too.
 
 **The seam, discriminated by the moving camera** (zeroruns per capture, origin
-beside it, predictions §14.2 registered before the run):
+beside it, predictions §15.2 registered before the run):
 
 | capture | origin | all-zero column runs (y=20..320) |
 | ------- | ------ | -------------------------------- |
@@ -1243,7 +1368,7 @@ Artifacts (gitignored diagnostic path; paths travel, images never):
 `C:\sc-work\logs\064-framecap-run{1b,2,3}.txt` and
 `C:\sc-work\logs\offscreen\20260813-*-probe-framebuffer-capture.txt`.
 
-### 14.5 What stage 2 still does not cover, stated so nobody over-reads
+### 15.5 What stage 2 still does not cover, stated so nobody over-reads
 
 1. **The scroll clamp is still stock** (§9.1 item 12, stage 3): the camera's maximum is
    `(mapTileW − 20)·32`, so at the RIGHT map edge the playfield's last 5 tile columns read
@@ -1256,7 +1381,7 @@ Artifacts (gitignored diagnostic path; paths travel, images never):
 3. **The console-right dead strip** (160×80 at the bottom right) is blank by design — no
    art exists for it and hard rule 1 forbids shipping any (§9.1 item 19, user's call).
 
-### 14.6 How to reproduce
+### 15.6 How to reproduce
 
 ```powershell
 python tools/renderer_patch_sites.py --check      # 222 sites verify against the exe
