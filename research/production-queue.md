@@ -967,18 +967,56 @@ perturbed the game thread enough for the press to survive. Without it, none of t
 runs. So the pre-fix behaviour is a race the click almost always loses, not one it cannot win, and
 a future reader who sees this work once should not conclude the fix has failed.
 
-**The fix is one bit, on one class of control, for one moment.** For a slot the plugin is holding an
-item behind, `sc_queueind`'s interact shim reads PRESSED before delegating the disable event and
-puts it back after. The engine's own press/activate cycle then completes and emits its own
-`{0x20, k}` through its own code — nothing is synthesised — and §6.4's handler, written by task 039
-and never once reached until now, serves it. It deliberately does not suppress `dwUser=6` and does
-not stop the disable: the event still runs, the bit still ends up set, the next frame still
-re-lights the slot.
+**THE OBVIOUS FIX WAS TRIED AND IT DOES NOT WORK. THE DEFECT IS OPEN.** For a slot the plugin holds
+an item behind, restore the PRESSED bit the disable event clears — read it before delegating, put it
+back after — and let the engine's own press/activate cycle complete. Measured, one click, with the
+collision happening throughout:
 
-Because the pre-fix behaviour is a race, the regression arm cannot rest on "the cancel happened":
-the plugin counts presses **rescued** (`pressKept`, on the `QIND` line and in `QINDSTATS`) and
-`test-production-queue.ps1` requires that count to MOVE across the click. A green arm with
-`pressKept` unchanged would mean the click was served for some other reason, and it fails instead.
+```
+across the click: disableOnOwned +136382, disableWithPress +110381, pressKept +110381
+  FAIL exactly one 0x20 reached queueCommand (0)
+  FAIL minerals go up by exactly one Probe's 50 (2600 -> 2600)
+```
+
+**110,381 collisions, 110,381 successful restores, no command.** Restoring the press is necessary
+by the argument above and demonstrably not sufficient. It also does harm: `pressKept` went on
+climbing for the six seconds between the two readings of a *sixty-millisecond* click (end of run,
+807134 of 1153974 disable events arrived with a press in flight), i.e. **the press never comes back
+down** — the mouse-up never clears it, which is the same fact as the up never reaching
+`0x004E19F0`, the handler that both clears the press and emits the ACTIVATE. It is reverted; the
+counters that measured it stay.
+
+What that run did settle: ownership fires on every fill (`iconsFilled=1153974` and
+`disableOnOwned=1153974`, one for one — the fight measured exactly), so the blocker is downstream of
+the press, in the delivery of the button-UP.
+
+**Where the next attempt starts, and it is one function.** `0x00418830` runs on button-down with the
+hit control, sends it a **`dwUser = 5`** "can you take focus" query, and records
+`[dlg+0x3e] = ctrl` **only if the control answers non-zero** (`TEST EAX,EAX / JE` past the store).
+The dialog's focused control is what the button-up is routed to. The trace shows that query reaching
+our icon — `idx=6 type=14 dwUser=5 flags=0x00000418` — so what it *answers* is the open question,
+not whether it is asked.
+
+**AND THE RESULT THAT INVALIDATES SINGLE-RUN CONCLUSIONS ABOUT ANY OF THIS, including the ones
+above.** The click is a race and each build has only been sampled one run at a time:
+
+| build | click trace | cancelled? |
+|---|---|---|
+| pre-fix | off | no (3 clicks) |
+| pre-fix | **on** | **yes** |
+| with the press-restore | off | **yes** |
+| with the press-restore | **on** | no |
+
+An instrument that flips the outcome in *both* directions is not the cause; timing is. So "0 of 3
+before the fix" is an anecdote with a denominator of three, not a rate. **Anything claiming this
+fixed has to click N times and assert the RATE** — a single click against a race is the
+check-that-fails-at-random AGENTS.md rates no better than one that cannot fail.
+
+The regression arm in `test-production-queue.ps1` is therefore expected to FAIL until the defect is
+fixed, and it says so in its own output: red is the defect reproducing, and green is one flip of a
+coin rather than proof the bug is gone. What it *does* assert unconditionally is the seam — that the
+engine disabled a slot the plugin owns while the button was down — because a run in which that never
+happened cannot detect this class of bug whatever its verdict says.
 
 ### 8.7 Reproducing §8
 
