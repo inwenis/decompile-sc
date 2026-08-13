@@ -21,6 +21,33 @@ canonicalised (device prefix, slash direction, 8.3 names, links) before the
 guard runs and everything downstream uses that canonical form; and the log goes
 to a path outside the repo (C:/sc-work/ is gitignored).
 
+Stale DLL (issue #73 item 2, task 056). This script used to resolve
+work/scratch/plugin-build/scplugin.dll with Test-Path and nothing else, and -Build was
+opt-in. Edit src/, forget -Build, and every suite in the worktree tested the PREVIOUS
+DLL -- green, and attributed to code that never ran. That is this repo's dominant defect
+shape (a result that cannot fail to look right), and it is silent: nothing in the run,
+the log or the transcript said which build had been injected.
+
+So the DLL now carries its own identity (tools/plugin/build.ps1 stamps it in;
+tools/plugin/sc-build-id.ps1 reads it back), and this script compares the SRC digest in
+the DLL against a digest of tools/plugin/src/* plus build.ps1 before it launches
+anything. Mismatch, or a DLL with no stamp at all, means a rebuild -- or, with
+-NoAutoBuild, a refusal. Neither is silent.
+
+The comparison is over CONTENT, not mtimes: a `git checkout` of identical source is not
+stale, and a file saved back to its original bytes is not stale either, while an edit
+that changes one byte of one header is. build.ps1 is in the digest because it owns the
+compile and link flags, so the same sources under different flags are a different binary.
+
+And after the game is up, the ATTACH banner in the log is checked against the same
+identity, because "the right DLL was on disk" and "the right DLL was loaded into the
+game" are two claims -- the injector takes a path, and a path is not a promise.
+
+The deployed runtime copy (deploy.ps1 copies this script next to the game) has no src/
+beside it. There the comparison cannot run at all, so it does not: the script prints what
+the DLL says it is and says plainly that nothing was compared, rather than printing a
+check mark for a check that did not happen.
+
 Foreground (issue #30). The game activates its own window when it creates it, and on an
 idle desktop nothing ever takes it back -- task 029 measured 72 seconds of stolen
 foreground on a 72-second run. Task 027 fixed the per-CLICK raise; this is the LAUNCH,
@@ -129,6 +156,12 @@ param(
     [int]$PollMs      = 250,
     [int]$SettleMs    = 4000,
     [switch]$Build,
+    # Task 056 / issue #73 item 2. The stale-DLL gate below REBUILDS by default when the
+    # DLL in $BuildDir was not built from the source next to this script. -NoAutoBuild
+    # makes it refuse instead: same detection, no compile. For a caller who wants the
+    # check to be a pure check (a machine with no toolchain, or a deliberate run against
+    # a specific old DLL, which then has to be an explicit choice rather than an oversight).
+    [switch]$NoAutoBuild,
     [switch]$Windowed,
     [ValidateSet('none', 'WMode', 'WMode_Fix', 'both')]
     [string]$InjectWindowedHelper = 'none',
@@ -317,6 +350,10 @@ $repoRoot  = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'sc-foreground.ps1')
 # Which desktop this process is on -- see "-Desktop" below and tools/plugin/sc-desktop.ps1.
 . (Join-Path $scriptDir 'sc-desktop.ps1')
+# What build the DLL about to be injected IS -- see "Stale DLL" below and
+# tools/plugin/sc-build-id.ps1. Copied into the deployed plugin dir by deploy.ps1
+# for the same reason every other helper here is: this script runs from there too.
+. (Join-Path $scriptDir 'sc-build-id.ps1')
 
 $PRISTINE_ROOT = 'C:\sc-install'
 $givenGameDir  = $GameDir
@@ -374,6 +411,54 @@ try {
     $inj = Join-Path $BuildDir 'scinject.exe'
     foreach ($f in @($dll, $inj)) {
         if (-not (Test-Path -LiteralPath $f)) { throw "run-with-plugin: missing $f -- run ./tools/plugin/build.ps1 first (or pass -Build)." }
+    }
+
+    # --- stale-DLL gate (issue #73 item 2, task 056) ---------------------------
+    # See .DESCRIPTION "Stale DLL". Test-Path above answers "is there a file",
+    # which was the whole check until now, and a file left over from an earlier
+    # build passes it exactly as well as a current one.
+    $gateSrcDir = Join-Path $scriptDir 'src'
+    if (Test-Path -LiteralPath $gateSrcDir) {
+        $verdict = Test-ScPluginCurrent -DllPath $dll -SrcDir $gateSrcDir `
+                                        -BuildScript (Join-Path $scriptDir 'build.ps1')
+        if ($verdict.Current) {
+            Write-Host "run-with-plugin: plugin $($verdict.Reason)"
+        }
+        elseif ($NoAutoBuild) {
+            throw ("run-with-plugin: STALE PLUGIN -- $($verdict.Reason)`n" +
+                   "Every assertion in this run would have been made against code that is not in this worktree. " +
+                   'Re-run without -NoAutoBuild to rebuild, or run ./tools/plugin/build.ps1 yourself.')
+        }
+        else {
+            Write-Host "run-with-plugin: STALE PLUGIN -- $($verdict.Reason)"
+            Write-Host 'run-with-plugin: rebuilding before launch (this used to run the old DLL and say nothing).'
+            & (Join-Path $scriptDir 'build.ps1') -OutDir $BuildDir | Write-Host
+            # Re-check rather than assume the rebuild fixed it. A build that
+            # wrote somewhere else, or produced an unstamped DLL, must not be
+            # able to satisfy this gate by having exited 0.
+            $verdict = Test-ScPluginCurrent -DllPath $dll -SrcDir $gateSrcDir `
+                                            -BuildScript (Join-Path $scriptDir 'build.ps1')
+            if (-not $verdict.Current) {
+                throw "run-with-plugin: rebuilt and the DLL is STILL not this tree -- $($verdict.Reason)"
+            }
+            Write-Host "run-with-plugin: rebuilt -- $($verdict.Reason)"
+        }
+        $expectedStamp = $verdict.Stamp
+    }
+    else {
+        # The deployed runtime copy: plugin\ next to the game, no src/, no
+        # toolchain, nothing to be stale against. Say what the DLL is and say
+        # WHY the comparison did not run -- a gate that quietly no-ops in one
+        # deployment is how "green" stops meaning anything (AGENTS.md: a skipped
+        # gate is not a passed gate).
+        $deployedStamp = Get-ScDllBuildStamp -Path $dll
+        $expectedStamp = $deployedStamp
+        if ($deployedStamp) {
+            Write-Host "run-with-plugin: plugin build $($deployedStamp.BuildId) src=$($deployedStamp.SrcDigest) (read from the DLL itself)"
+        } else {
+            Write-Warning "run-with-plugin: $dll carries NO build stamp -- it cannot say what source it came from (pre-task-056 build, or not built by build.ps1)."
+        }
+        Write-Host "run-with-plugin: no src/ beside this script (deployed runtime copy) -- the staleness comparison did NOT run here; there is nothing on this machine to compare against."
     }
 
     if ($Windowed) {
@@ -513,6 +598,15 @@ try {
         }
     }
 
+    # Where THIS run's log output starts. The plugin opens its log with
+    # FILE_APPEND_DATA (sc_log.cpp), so every run appends to whatever is already
+    # there -- and the banner check below must not be able to pass on the banner
+    # of a PREVIOUS run. That is not hypothetical: a plugin that fails to load
+    # leaves the log untouched, and in this worktree the previous run's banner
+    # carries the identity this run is looking for.
+    $logStartOffset = 0L
+    if (Test-Path -LiteralPath $LogPath) { $logStartOffset = (Get-Item -LiteralPath $LogPath).Length }
+
     $injOut = [System.Collections.Generic.List[string]]::new()
     & $inj @injArgs 2>&1 | ForEach-Object { Write-Host $_; $injOut.Add("$_") }
     $rc = $LASTEXITCODE
@@ -598,6 +692,53 @@ try {
     # non-zero closes that regardless of which check-game-windows.ps1 exit code it is.
     if ($LASTEXITCODE -ne 0) {
         throw "run-with-plugin: the game is NOT healthy after launch (check-game-windows.ps1 exit=$LASTEXITCODE -- 1=error dialog open, 3=process not running/died immediately)."
+    }
+
+    # --- did the DLL we vetted actually LOAD? (issue #73, task 056) ------------
+    # The gate above checked a FILE. scinject was then handed a PATH, and a path
+    # is not a promise: the injection can fail, the plugin can decline to
+    # initialise, or the game can be a leftover process from another launch.
+    # This reads the identity out of the ATTACH banner the running plugin wrote
+    # -- the only evidence that says what is inside the process -- and requires
+    # it to be the build this script vetted.
+    if (-not $NoPlugin -and $expectedStamp) {
+        $wantLine = "$($expectedStamp.BuildId) SRC=$($expectedStamp.SrcDigest)"
+        $seen = $null
+        $deadline = (Get-Date).AddSeconds(10)
+        do {
+            if (Test-Path -LiteralPath $LogPath) {
+                # Opened share-read/write: the game holds this file open for
+                # append the whole run, so an exclusive open would fail here.
+                $fs = [IO.File]::Open($LogPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+                try {
+                    if ($fs.Length -gt $logStartOffset) {
+                        $fs.Position = $logStartOffset
+                        $sr = [IO.StreamReader]::new($fs)
+                        try { $tail = $sr.ReadToEnd() } finally { $sr.Dispose() }
+                        # Anchored on the log's own "[timestamp] " prefix so only a real
+                        # banner line can match -- not the word "build" inside some other
+                        # message. Last match wins: one launch writes one banner, but a
+                        # log this run appended to may hold more than one.
+                        foreach ($m in [regex]::Matches($tail, '(?m)^\[[^\]]+\]\s+build\s+:\s+(\S+ SRC=\S+)')) { $seen = $m.Groups[1].Value }
+                    }
+                } finally { $fs.Dispose() }
+            }
+            if (-not $seen) { Start-Sleep -Milliseconds 500 }
+        } while (-not $seen -and (Get-Date) -lt $deadline)
+
+        if (-not $seen) {
+            throw ("run-with-plugin: the plugin logged NO ATTACH banner into $LogPath after the launch. " +
+                   'The game is up but our DLL is not reporting itself -- it did not load, or it is writing somewhere else. ' +
+                   'Nothing this run observes can be attributed to the plugin.')
+        }
+        if ($seen -ne $wantLine) {
+            throw ("run-with-plugin: WRONG PLUGIN IS RUNNING. The DLL on disk is '$wantLine'; " +
+                   "the plugin inside the game reports '$seen'. Every assertion this run makes would be about a different build.")
+        }
+        Write-Host "run-with-plugin: ATTACH banner confirms the running plugin is $seen"
+    }
+    elseif (-not $NoPlugin) {
+        Write-Warning 'run-with-plugin: the DLL carries no build stamp, so the ATTACH banner cannot be checked against it -- what is running in the game is not established.'
     }
 }
 finally {

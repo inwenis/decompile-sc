@@ -21,6 +21,23 @@ The build FAILS if either artifact is not Machine=0x014C / PE32. That check is
 the point of the step, not a formality: -m32 silently producing an x64 binary
 would only show up as a mystifying "the DLL will not load" much later.
 
+Build identity (issue #73, task 056). Every scplugin.dll this script produces
+carries the commit and the source digest it was built from, as a plain string in
+the image:
+
+    SCPLUGIN_BUILD_ID=<short sha>[+dirty] SRC=<12 hex>
+
+The plugin logs it in its ATTACH banner, run-with-plugin.ps1 refuses to launch a
+DLL whose SRC does not match the source next to it, and deploy.ps1 reads it back
+out of the deployed file -- so "which build is this" is answerable from a log,
+from a running game, or from a DLL sitting on disk, without hashing anything or
+comparing mtimes against commit timestamps. The stamp is READ BACK OUT of the
+built file before this script exits (Assert-BuildStamp): what it prints is the
+file's own bytes, never the value it passed to the compiler.
+
+The output is also byte-reproducible as of task 056 -- see the linker flags
+below for the two things that were not, and what that measurement was.
+
 .EXAMPLE
 ./tools/plugin/build.ps1
 #>
@@ -42,6 +59,8 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot
 $repoRoot  = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 $srcDir    = Join-Path $scriptDir 'src'
+
+. (Join-Path $scriptDir 'sc-build-id.ps1')
 
 $DEFAULT_TOOLCHAIN = 'C:\re-tools\mingw32-gcc-16.1.0-i686-msvcrt\mingw32\bin'
 
@@ -68,6 +87,18 @@ Write-Host "build: $((& $gpp --version | Select-Object -First 1))"
 Write-Host "build: target triple $((& $gpp -dumpmachine))"
 Write-Host "build: outdir    $OutDir"
 
+# --- build identity (issue #73, task 056) ------------------------------------
+# Stamped INTO the binary, not written beside it: a sidecar file describes
+# whatever it was last written for, and the DLL it claims to describe can be
+# replaced under it without a word. See tools/plugin/sc-build-id.ps1 for what
+# each of the two values answers and why +dirty is not cosmetic.
+$identity  = Get-ScBuildIdentity -RepoRoot $repoRoot
+$srcDigest = Get-ScSourceDigest -SrcDir $srcDir -BuildScript $PSCommandPath
+Write-Host "build: build id  $($identity.BuildId)  src=$srcDigest"
+if ($identity.Dirty) {
+    Write-Host "build: the tree has uncommitted changes -- this DLL is NOT $($identity.Sha), it is $($identity.Sha) plus whatever is on disk. That is what +dirty says, and it is why the src digest exists."
+}
+
 # -m32                  : 32-bit x86, the whole point (game is a 32-bit process)
 # -static*              : no libgcc/libstdc++ runtime DLL next to the plugin
 # -fno-exceptions/-rtti : nothing here needs them; keeps the DLL free of the
@@ -78,8 +109,32 @@ $common = @(
     '-Wall', '-Wextra'
     '-static', '-static-libgcc', '-static-libstdc++'
     '-fno-exceptions', '-fno-rtti'
+    # Task 056. The two values sc_buildid.cpp turns into the embedded stamp.
+    # Passed as quoted -D args: PowerShell 7.3+ passes an embedded quote through
+    # to a native command correctly (measured on this machine, pwsh 7.6.4), and
+    # if a shell ever stops doing so the Assert-BuildStamp check below FAILS THE
+    # BUILD rather than shipping a DLL that says UNSTAMPED.
+    "-DSC_BUILD_ID=`"$($identity.BuildId)`""
+    "-DSC_BUILD_SRC=`"$srcDigest`""
+    # --- reproducible output (task 056; task 048 measured the old build was not) --
+    # Two builds of one tree used to differ in 6705 bytes, from two causes:
+    #   * the PE TimeDateStamp, which the linker fills with the wall clock;
+    #   * the IMAGE BASE, which binutils picks per link for a DLL -- 0x6A980000
+    #     and 0x711C0000 on two consecutive builds here -- moving every relocated
+    #     address in the file and accounting for nearly all 6705 bytes.
+    # Pinning both makes the build byte-reproducible (measured: two builds of the
+    # same tree, identical SHA256), which is what lets a DLL hash mean anything at
+    # all. It does NOT replace the stamp -- a hash still needs a table to map it
+    # back to a tree, and the stamp needs nothing.
+    '-Wl,--no-insert-timestamp'
 )
 if ($DebugBuild) { $common += @('-O0', '-g') } else { $common += @('-O2', '-s') }
+
+# DLL only. 0x10000000 is the conventional base for a Windows DLL and the plugin
+# is fully relocatable regardless (it always was -- the base binutils picked was
+# never one it could rely on), so this changes where it prefers to land, not
+# whether it can land there. scinject.exe keeps the standard EXE base.
+$dllLink = @('-Wl,--image-base=0x10000000')
 
 $dllOut  = Join-Path $OutDir 'scplugin.dll'
 $exeOut  = Join-Path $OutDir 'scinject.exe'
@@ -91,13 +146,13 @@ $testOut = Join-Path $OutDir 'hooktest.exe'
 # (task 026) the command-card read-back, (task 029) the upgrade queue,
 # (task 030) the group production fan-out, (task 033) the queue-overflow indicator
 # and (task 034) the widescreen patch set.
-$pluginSrc = @('scplugin.cpp', 'sc_log.cpp', 'sc_hook.cpp', 'sc_fanout.cpp', 'sc_circles.cpp', 'sc_hudrow.cpp', 'sc_prodqueue.cpp', 'sc_card.cpp', 'sc_upgrades.cpp', 'sc_prodfan.cpp', 'sc_queueind.cpp', 'sc_screen.cpp') |
+$pluginSrc = @('scplugin.cpp', 'sc_log.cpp', 'sc_hook.cpp', 'sc_fanout.cpp', 'sc_circles.cpp', 'sc_hudrow.cpp', 'sc_prodqueue.cpp', 'sc_card.cpp', 'sc_upgrades.cpp', 'sc_prodfan.cpp', 'sc_queueind.cpp', 'sc_screen.cpp', 'sc_buildid.cpp') |
              ForEach-Object { Join-Path $srcDir $_ }
 $testSrc   = @('hooktest.cpp', 'sc_log.cpp', 'sc_hook.cpp', 'sc_fanout.cpp', 'sc_circles.cpp', 'sc_hudrow.cpp', 'sc_prodqueue.cpp', 'sc_card.cpp', 'sc_upgrades.cpp', 'sc_prodfan.cpp', 'sc_queueind.cpp', 'sc_screen.cpp') |
              ForEach-Object { Join-Path $srcDir $_ }
 
 Write-Host 'build: compiling scplugin.dll ...'
-& $gpp @common -shared @pluginSrc -o $dllOut -I $srcDir
+& $gpp @common @dllLink -shared @pluginSrc -o $dllOut -I $srcDir
 if ($LASTEXITCODE -ne 0) { throw "build: g++ failed for scplugin.dll (exit $LASTEXITCODE)" }
 
 Write-Host 'build: compiling scinject.exe ...'
@@ -131,9 +186,34 @@ function Assert-Pe32 {
     }
 }
 
+function Assert-BuildStamp {
+    # READ THE STAMP BACK OUT OF THE FILE, do not report what we passed in.
+    # The whole mechanism rests on a define surviving a shell, a compiler and a
+    # linker into a string in .rdata, and every one of those is a place it can
+    # be dropped or mangled -- an earlier spelling of the -D argument reached g++
+    # as a stray backslash and produced no stamp at all. Printing $identity here
+    # instead of the file's own bytes would have reported that build as stamped.
+    # See AGENTS.md: an absence check is worth nothing until the pattern has been
+    # shown to match where it should.
+    param([string]$Path, [string]$ExpectId, [string]$ExpectSrc)
+    $stamp = Get-ScDllBuildStamp -Path $Path
+    if (-not $stamp) {
+        throw ("verify: $(Split-Path $Path -Leaf) carries NO build stamp. The -D defines did not reach " +
+               'sc_buildid.cpp (shell quoting, or the file was dropped from the source list). ' +
+               'A DLL that cannot say what it is must not leave this script.')
+    }
+    if ($stamp.BuildId -ne $ExpectId -or $stamp.SrcDigest -ne $ExpectSrc) {
+        throw ("verify: $(Split-Path $Path -Leaf) is stamped '$($stamp.Stamp)' but this build asked for " +
+               "'SCPLUGIN_BUILD_ID=$ExpectId SRC=$ExpectSrc'.")
+    }
+    Write-Host ("verify: {0,-14} stamp {1}" -f (Split-Path $Path -Leaf), $stamp.Stamp)
+}
+
 Assert-Pe32 $dllOut
 Assert-Pe32 $exeOut
 if ($Test) { Assert-Pe32 $testOut }
+
+Assert-BuildStamp -Path $dllOut -ExpectId $identity.BuildId -ExpectSrc $srcDigest
 
 if (Test-Path -LiteralPath $objdump) {
     Write-Host 'verify: objdump cross-check'
@@ -151,7 +231,7 @@ if ($Test) {
 }
 
 Write-Host ''
-Write-Host "build: OK"
-Write-Host "  $dllOut"
+Write-Host "build: OK  build id $($identity.BuildId)  src=$srcDigest"
+Write-Host "  $dllOut  sha256=$((Get-FileHash -LiteralPath $dllOut -Algorithm SHA256).Hash)"
 Write-Host "  $exeOut"
 if ($Test) { Write-Host "  $testOut" }

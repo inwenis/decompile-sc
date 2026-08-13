@@ -30,6 +30,13 @@
   cite something durable. The receipt is scratch (gitignored) by design -- it
   records that a check ran, it is not a claim to be committed.
 
+  The receipt also carries `pluginBuild` (issue #73, task 056): the build id,
+  source digest and sha256 of the scplugin.dll the hooktest step built, read back
+  out of the DLL itself. A sha alone says which SOURCE was checked; this says
+  which BINARY the one gate that can fail on a logic error actually ran against.
+  It is $null when hooktest skipped, because "no binary was built" and "a binary
+  was built and not identified" are different facts.
+
 .EXAMPLE
   ./scripts/run-ci-local.ps1 -WorkDir C:/git/decompile-sc-task021
 #>
@@ -72,6 +79,10 @@ try {
     $failed = @()
     $skipped = @()
     $requiredSkipped = @()
+    # ISSUE #73 item 4, task 056. Filled in by the hooktest step when it actually builds;
+    # stays $null when that step skips, so the receipt says "this run built nothing"
+    # rather than carrying a build identity nothing in the run produced.
+    $pluginBuild = $null
 
     # A SKIP IS NOT A PASS (task 023). A step that could not run returns
     # Skip-Step instead of a detail string, and the receipt records it by name.
@@ -269,7 +280,24 @@ try {
         $tail = @($out -split "`r?`n" | Where-Object { $_ -match 'hooktest: (\d+) failure' })
         if ($tail.Count -eq 0) { throw 'build.ps1 -Test printed no hooktest verdict' }
         if ($tail[-1] -notmatch 'hooktest: 0 failure') { throw "hooktest reported failures: $($tail[-1].Trim())" }
-        'hooktest 0 failures'
+        # ISSUE #73 item 4, task 056. This step is the only one that produces a BINARY, so it
+        # is the only one that can say which binary the receipt's verdict covers. Recorded on
+        # the receipt below (buildId/pluginSrcDigest/pluginDllSha256) -- read out of the DLL
+        # that was just built, never recomputed from git here, so a receipt cannot claim a
+        # build identity that no artifact ever had.
+        $builtDll = Join-Path $WorkDir 'work/scratch/plugin-build/scplugin.dll'
+        if (Test-Path -LiteralPath $builtDll) {
+            . (Join-Path $WorkDir 'tools/plugin/sc-build-id.ps1')
+            $stamp = Get-ScDllBuildStamp -Path $builtDll
+            if ($stamp) {
+                $script:pluginBuild = [ordered]@{
+                    buildId       = $stamp.BuildId
+                    srcDigest     = $stamp.SrcDigest
+                    dllSha256     = (Get-FileHash -LiteralPath $builtDll -Algorithm SHA256).Hash
+                }
+            }
+        }
+        "hooktest 0 failures$(if ($script:pluginBuild) { " (built $($script:pluginBuild.buildId) src=$($script:pluginBuild.srcDigest))" })"
     }
 
     $verdict = Get-CiReceiptVerdict -Failed $failed -RequiredSkipped $requiredSkipped
@@ -289,6 +317,11 @@ try {
         # rather than assume a pre-tracking receipt was clean.
         dirty           = $dirty
         dirtyFiles      = $dirtyFiles
+        # ISSUE #73 item 4. Which BINARY this receipt's verdict covers -- the identity
+        # stamped into the DLL the hooktest step built, read back out of it. $null when
+        # no build happened in this run (hooktest skipped), which is a different fact
+        # from "it built something unidentified" and must not read as one.
+        pluginBuild     = $pluginBuild
         steps           = $results
         note            = 'local reproduction of .github/workflows/ci.yml, plus hooktest when a 32-bit toolchain is present; does NOT include the in-game suites'
     }
@@ -301,6 +334,11 @@ try {
     if ($skipped.Count -gt 0) { Write-Host "ci-local: NOT RUN -- $($skipped -join ', ')" }
     if ($dirty) {
         Write-Host "ci-local: DIRTY WORKTREE ($($dirtyFiles.Count) change(s)) -- this receipt cannot substitute for CI at sha $sha; commit or stash and re-run"
+    }
+    if ($pluginBuild) {
+        Write-Host "ci-local: plugin built in this run -- $($pluginBuild.buildId) src=$($pluginBuild.srcDigest) sha256=$($pluginBuild.dllSha256)"
+    } else {
+        Write-Host 'ci-local: no plugin binary was built in this run (hooktest skipped) -- this receipt covers source checks only.'
     }
     switch ($verdict) {
         'pass' { Write-Host "ci-local: PASS  $branch@$sha  -> $path" }

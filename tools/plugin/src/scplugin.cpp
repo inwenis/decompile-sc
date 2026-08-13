@@ -35,6 +35,7 @@
 #include <string.h>
 
 #include "sc_addresses.h"
+#include "sc_buildid.h"
 #include "sc_card.h"
 #include "sc_fanout.h"
 #include "sc_hook.h"
@@ -825,6 +826,14 @@ static void LogAttachBanner(void) {
     ScLog("========================================================");
     ScLog("ATTACH pid=%u tid=%u", (unsigned)GetCurrentProcessId(),
           (unsigned)GetCurrentThreadId());
+    // FIRST line of the banner, and the point of task 056 (issue #73): every log,
+    // transcript and frame this run produces can now name the build that produced
+    // it. "<short sha>[+dirty] SRC=<12 hex over tools/plugin/src + build.ps1>" --
+    // the sha answers "which commit", the digest answers "which source bytes",
+    // and the second one is the one that still means something when +dirty says
+    // the first one is a lie. UNSTAMPED means this DLL did not come from
+    // build.ps1 and nothing about it can be trusted to be current.
+    ScLog("  build         : %s", ScBuildStampShort());
     ScLog("  host exe      : %s", exePath);
     ScLog("  plugin dll    : %s", dllPath);
     ScLog("  module base   : 0x%08X", (unsigned)(DWORD_PTR)g_base);

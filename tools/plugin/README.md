@@ -606,11 +606,66 @@ The exact compile is:
 
 ```
 g++ -m32 -Wall -Wextra -static -static-libgcc -static-libstdc++ -fno-exceptions -fno-rtti -O2 -s \
+    -DSC_BUILD_ID="<short sha>[+dirty]" -DSC_BUILD_SRC="<12 hex>" \
+    -Wl,--no-insert-timestamp -Wl,--image-base=0x10000000 \
     -shared src/scplugin.cpp src/sc_log.cpp src/sc_hook.cpp src/sc_fanout.cpp \
     -o scplugin.dll -I src
-g++ ...same flags...    src/scinject.cpp  -o scinject.exe
+g++ ...same flags, no --image-base...  src/scinject.cpp  -o scinject.exe
 g++ ...same flags...    src/hooktest.cpp src/sc_log.cpp src/sc_hook.cpp -o hooktest.exe   # -Test only
 ```
+
+The two `-D` defines and the two `-Wl` flags are task 056 — see "Build identity"
+below for what they are for and what was measured.
+
+### Build identity: which commit is this DLL, and did it actually run? (issue #73, task 056)
+
+Every `scplugin.dll` build.ps1 produces carries its own identity as a plain
+string in the image:
+
+```
+SCPLUGIN_BUILD_ID=<short sha>[+dirty] SRC=<12 hex>
+```
+
+`<short sha>` is `git rev-parse --short HEAD` — the same string `deploy.ps1`
+prints as `version=`. `+dirty` means the tree had uncommitted changes, which is
+the state where the sha **alone is a lie**, and `SRC=` is what still answers the
+question then: 12 hex over the content of `src/*` plus `build.ps1` (the build
+script is in there because it owns the compile and link flags, so identical
+sources under different flags are a different binary).
+
+Why not just hash the DLL: a hash names the binary and needs a lookup table you
+do not have to name the tree. The stamp needs nothing. Four places read it:
+
+| where | what it gives you |
+|---|---|
+| the ATTACH banner (`  build         : …`) | every log, transcript and frame names its build |
+| `run-with-plugin.ps1`, before launch | refuses/rebuilds a DLL that is not this source (below) |
+| `run-with-plugin.ps1`, after launch | the banner in the log must be the build it vetted |
+| `deploy.ps1` + `<DeployRoot>\BUILD-ID.txt` | the user's install says what it is, with nothing to hash |
+
+Reading it off any file, no game and no repo needed:
+
+```powershell
+. ./tools/plugin/sc-build-id.ps1
+Get-ScDllBuildStamp -Path work/scratch/plugin-build/scplugin.dll
+```
+
+**The stale-DLL gate.** `run-with-plugin.ps1` used to resolve the DLL with
+`Test-Path` and nothing else, and `-Build` was opt-in — so editing `src/` and
+forgetting `-Build` meant every suite in that worktree tested the PREVIOUS DLL,
+green, attributed to code that never ran. Now the SRC digest in the DLL is
+compared against the source beside the script: mismatch (or no stamp at all)
+rebuilds by default, or refuses under `-NoAutoBuild`. Neither is silent. The
+comparison is over content, not mtimes, so a `git checkout` of identical source
+is not stale and an edit-then-revert is not stale, while one changed byte in one
+header is.
+
+**Reproducible output.** Two builds of one tree used to differ in 6705 bytes,
+from the PE `TimeDateStamp` *and* the image base, which binutils picked afresh
+per link (`0x6A980000` then `0x711C0000`, moving every relocated address).
+`-Wl,--no-insert-timestamp` and `-Wl,--image-base=0x10000000` pin both, and two
+builds of one tree are now byte-identical — so a DLL hash finally means
+something, as a corroboration of the stamp rather than a replacement for it.
 
 ### `-Test`: prove the detour engine before it touches the game
 
@@ -1026,10 +1081,12 @@ The one exception is the deprecated `-Windowed` switch, which *does* write
 | `src/sc_circles.h/.cpp` | task 014's selection circles: one hook, two engine calls, and the reasoning for never touching `selectionIndex` |
 | `src/sc_prodqueue.h/.cpp` | task 025's production queue: three detours, a per-building overflow list, the ring kept one below five so the client keeps sending, and the engine left as the only payer |
 | `src/sc_upgrades.h/.cpp` | task 029's upgrade queue: eight detours, a per-building queue of unpaid ids, the card's own button conditions unblocked so the client keeps sending, and the engine left as the only payer |
+| `src/sc_buildid.h/.cpp` | task 056's build stamp: the one string literal that says which commit and which source bytes this DLL is, logged in the ATTACH banner and readable straight out of the file |
 | `src/hooktest.cpp` | offline unit tests for the detour engine, the fan-out core, the circles, the production queue and the upgrade queue (`build.ps1 -Test`) |
 | `src/scinject.cpp` | the 32-bit launcher/injector |
-| `build.ps1` | build + PE machine-type gate (+ `-Test`) |
-| `run-with-plugin.ps1` | launch wrapper (+ windowed shim helper, + dialog check, + `-Mode`) |
+| `build.ps1` | build + PE machine-type gate + build stamp (+ `-Test`) |
+| `sc-build-id.ps1` | write/read/compare that stamp: source digest, git identity, and the staleness verdict `run-with-plugin.ps1` and `deploy.ps1` both gate on |
+| `run-with-plugin.ps1` | launch wrapper (+ windowed shim helper, + dialog check, + `-Mode`, + the stale-DLL gate) |
 | `drive-game.ps1` | posted-window-message driver: find the HWND, click, drag, type, capture a frame. No synthetic OS input, no screen coordinates |
 | `test-selection-circles.ps1` | **unattended** end-to-end test: launches, walks the menus, loads a stock map, drives a drag box and an order, asserts on the plugin log |
 | `test-fanout-orders.ps1` | **unattended** end-to-end test of the per-opcode policy: Stop and Hold Position reach all 24 units of a >12 selection, asserted from every unit's own order byte, not from the picture |
