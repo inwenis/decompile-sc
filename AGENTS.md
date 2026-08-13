@@ -862,6 +862,17 @@ yourself, do not trust the worker's word) → merge → close.
 
 ### Never stop an agent without checking for an in-flight game (2026-08-09 incident)
 
+**Read this line before any of the tests below, because all three of them were
+in this section as advice and all three read the wrong way round:**
+
+> **A stale heartbeat is not deafness, a missing parent is not death, and a
+> growing log is not a live run.**
+
+Three instruments, one shape, all three found inside about twelve hours
+(2026-08-11 and 2026-08-13). Each is what a HEALTHY run looks like from
+outside, and each was at some point written down here as evidence that a run
+was dead. The details are at items 3 and 4 and in the block after them.
+
 `stop-agent.ps1` kills the agent's process tree. It does NOT kill a
 StarCraft the agent launched — the game outlives its driver, keeps the
 launch lock, and blocks EVERY other worker until someone notices.
@@ -924,10 +935,23 @@ sit on whatever screen it is on forever, however busy its log looks. So:
 Only the second and third are evidence. The plugin's log is a liveness signal
 for the PLUGIN, and the plugin is alive in an orphan by definition.
 
-This is the same shape as item 3 above — a stale heartbeat is not deafness, and
-a missing parent is not death — and now a third: **a growing log is not a live
-run.** Every one of them is what a HEALTHY run looks like from outside, and the
-first instinct in each case reads the wrong way round.
+This is the third of the three at the top of this section, and the way it got
+here is worth as much as the rule. The broken test was written INTO this
+section by task 061 and repeated as sound by the conductor in the same hour —
+who had by then used it twice to conclude a running game was healthy. Both
+conclusions were right and **both were reached with an instrument that cannot
+report the failure it exists to report**. That is the defect class this
+rulebook spends its longest sections on, committed by two readers of those
+sections, while writing about it.
+
+**A DRIVER CAN DIE MID-LAUNCH, WHICH IS HOW THIS ORPHAN EXISTED AT ALL.** Task
+061's verification run was killed by the harness at its launch step — not by
+its worker and not by the conductor — after `scinject` had already handed the
+game off. So the orphan case is not only "someone ran `stop-agent.ps1`": a
+driver can vanish unattended, at the one moment when the game exists and
+nothing has driven it yet, and the game then sits on the menu holding the
+machine. Check for a surviving game after ANY driver death, not only after a
+deliberate stop.
 
 ## Spawning workers
 
