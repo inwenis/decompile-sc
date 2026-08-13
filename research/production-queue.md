@@ -615,9 +615,11 @@ mid-game cannot strand paid-for items.
    `SC_PRODQ_ENGINE_HOLD` = 4 — raising it is the very thing that makes the client stop sending,
    §4.1):
 
-   * the icons the engine leaves empty are filled from the plugin's own overflow, writing the same
-     three `statUser` fields `queueLayout` writes for an occupied slot (§8.1), so the strip shows
-     five again;
+   * the icons the engine leaves empty are drawn from the plugin's own overflow, so the strip
+     shows five again. HOW moved twice: task 033/039 hand-wrote the occupied-slot `statUser`
+     fields and cleared DISABLED (which is what destroyed the click, §8.6); task 066 replaced
+     the hand-fill with the phantom bracket (§8.8), under which the ENGINE's own layout writes
+     every field;
    * a `"+N"` is drawn over the last icon for whatever is queued past those five, as ENGINE-DRAWN
      TEXT through a spliced static-text control ([`status-pane-text.md`](status-pane-text.md)) —
      no art added;
@@ -1012,11 +1014,15 @@ before the fix" is an anecdote with a denominator of three, not a rate. **Anythi
 fixed has to click N times and assert the RATE** — a single click against a race is the
 check-that-fails-at-random AGENTS.md rates no better than one that cannot fail.
 
-The regression arm in `test-production-queue.ps1` is therefore expected to FAIL until the defect is
-fixed, and it says so in its own output: red is the defect reproducing, and green is one flip of a
-coin rather than proof the bug is gone. What it *does* assert unconditionally is the seam — that the
+The regression arm in `test-production-queue.ps1` was therefore expected to FAIL until the defect
+was fixed, and said so in its own output: red was the defect reproducing, and green one flip of a
+coin rather than proof the bug was gone. What it asserted unconditionally was the seam — that the
 engine disabled a slot the plugin owns while the button was down — because a run in which that never
 happened cannot detect this class of bug whatever its verdict says.
+
+**THE DEFECT IS CLOSED BY §8.8 (task 066).** Everything above stands as the diagnosis and as the
+record of the two fixes that do not work; the arm now asserts the fix's own signature instead of
+the collision (§8.8 explains why that flip is sound).
 
 ### 8.7 Reproducing §8
 
@@ -1046,6 +1052,129 @@ foreach ($s in 'cancel-controls','cancel-controls-2') {
       -Script DecompileMany.java -ScriptArgs "work/scratch/028/decomp/index-$s.tsv", "tools/ghidra/specs/$s.spec", 180
 }
 ```
+
+---
+
+### 8.8 The fix (task 066): a phantom ring item for the length of queueLayout, and why the two bit-level fixes were never going to work
+
+§8.6 ends with a defect diagnosed to one mechanism and two candidate designs. Task 066 killed the
+first at the price of a disassembly, shipped the second, and this section records both with the
+evidence.
+
+#### Option C — "never clear DISABLED" — refuted statically, no run spent
+
+The hope: `disableControl` (`0x00418640`) early-outs when the bit is already set, so a plugin that
+writes the icon fields and leaves the flag alone provokes no `dwUser=6` and there is no collision.
+061 half-refuted it — the icon's own draw reads the flag byte — but nobody had measured WHICH bit.
+Now it is read, not measured, because every link is in the file image:
+
+1. **The draw's TEST masks exactly the DISABLED bit.** `0x00456C30` — the strip-icon blit, called
+   only from `0x0045748B`/`0x004574E6` in the strip module (E8 scan over 100% of `.text`):
+
+   ```
+   00456C3A  MOV  BL,byte ptr [ESI+0x18]   ; the flag byte
+   00456C3D  MOV  EDX,2                    ; the mask -- SC_CTRL_FLAG_DISABLED
+   00456C42  TEST DL,BL
+   00456C45  MOV  CL,3                     ; colour-remap row 3
+   00456C47  JNE  0x456c4f                 ; DISABLED -> row 4
+   00456C49  CMP  word ptr [ESI+0x22],DX   ; +0x22 = control TYPE; type 2 keeps row 3
+   00456C4D  JZ   0x456c51
+   00456C4F  MOV  CL,4
+   00456C51  ...  SHL ECX,4 / ADD ECX,0x68C150   ; a 16-byte row -> the blit's colour
+   00456C5D  ...                                 ;   buffer at 0x0050CDC1
+   ```
+
+   The queue icons are type 2 (read off the live dialog, §8.6), so for them the row is 3 iff
+   DISABLED is clear, else 4.
+
+2. **Rows 3 and 4 are different colours — 14 of 16 entries.** The table at `0x0068C150` is loaded
+   from `unit\cmdbtns\ticon.pcx` (`0x00459C1E` reads 0x60 bytes of its decoded pixels = six
+   16-byte rows; extracted from StarDat.mpq with a DCL-implode decoder,
+   `work/scratch/066/`, gitignored — hard rule 1). row3 vs row4: **14/16 differ**. And the CARD's
+   icon draw (`0x004589A1`: `TEST AL,2` → row 1, `TEST EAX,0x40000000` → row 2, else row 0)
+   selects rows 0/1 of the SAME table through the SAME buffer — also 14/16 apart — which is the
+   grey-out every disabled command-card button visibly shows. Same table, same mechanism, same
+   distance.
+
+So leaving the flag set draws the right art through the disabled palette: the user's *"the 5th
+slot is emtpy"* again, in different colours. C is dead. (§8.1's correction matters here twice
+over: the bit never gated the CLICK — the strip's hit test reads only VISIBLE — it gates the
+COLOURS. 039's clearing of it was never load-bearing for input; it was load-bearing for pixels.)
+
+#### Option A — the phantom bracket — shipped
+
+`queueLayout` (`0x004268D0`, `__stdcall(BinDlg*)`, `RET 4`) re-reads the portrait-unit global
+`0x00597248` for every slot and greys exactly the slots whose ring entry is `0xE4` (§8.1). So the
+detour on it (prologue `55 8B EC 83 EC 20`, 6 bytes, nothing PC-relative):
+
+1. **pre**: for each display k the plugin holds an item behind, write that item's type into ring
+   slot `(head + k) % 5` — saving the previous value, refusing (and counting `phantomDirty`) if
+   the slot is unexpectedly non-empty;
+2. run the original — which now takes its OCCUPIED branch for those slots: `grp = cmdicons`,
+   icon/mode/type, the slot label, and **`enableControl` instead of `disableControl`**;
+3. **post**: restore the saved sentinels, before the call returns to the engine.
+
+Everything 039 hand-wrote is deleted — the engine writes all five fields with its own code, so
+039's bug class (a hand-written subset of the layout's fields) is structurally gone. No disable
+is ever provoked (`enableControl` early-outs once the slot is lit), so no `dwUser=6` exists to
+clear a player's PRESSED bit: at input time the slot is byte-for-byte a vanilla occupied slot,
+and the engine's own press/activate cycle emits `{0x20, k}`, which sc_prodqueue's §6.4 icon
+branch — written by 039, reachable for the first time — serves and refunds.
+
+#### Why the window cannot be observed (the binding constraint on this design)
+
+The ring reads five items for the length of one `queueLayout` call. Two things were named as
+readers that must never see it: the client's Train-button gate (task 025 holds the ring at four
+precisely so that button stays lit) and the observer thread.
+
+**Engine readers: excluded by construction, on two legs.**
+
+*The structural leg.* The window opens and closes inside one call frame on the thread that runs
+`queueLayout`; a reader on that thread cannot interleave with it. A reader on ANY OTHER thread
+would race not just this window but the engine's own ring mutations — `productionTick`'s and
+`cancelBuildQueueSlot`'s compactions are multi-store and unsynchronised (§2, §4) — and would have
+observed torn rings in vanilla. Vanilla is not torn; therefore no such reader exists.
+
+*The per-reader leg*, every toucher of `+0x98`/`+0xA4` from
+[`data/production-queue-fields.tsv`](data/production-queue-fields.tsv) (140 rows) classified to
+its dispatch root, callers found by exhaustive E8 scan (`work/scratch/066/xrefs.py`, 100% .text):
+
+| reader | functions | what makes it game-thread |
+|---|---|---|
+| status-pane drawers & helpers | `0x00425600`, `0x004268D0`, `0x00426FF0`, `0x004568F0`, `0x0047B270`, `0x0047B5A0` (callers all in `0x00425xxx`–`0x00427xxx`), the blit `0x00456C30`, the overlay `0x004E9C59` | dispatched from statDisplayDriver `0x004D93F0` / the dialog redraw walk — the exact function this plugin detours; `THREADCHECK qind-driver` prints its tid |
+| card button conditions (the Train gate's world) | `0x00428530` (cancel), `0x004283F0`/`0x004287D0` (land/lift-off via `busy` `0x00401500`), `0x00428E60` (train), `0x00401E70` | evaluated by the card layout and click paths under the same UI dispatch (§8.2, §8.3); the click path is the interact chain `THREADCHECK qind-interact` measures |
+| command receive | `cmdrecvTrain` `0x004C1C20`, `cmdrecvCancelTrain` `0x004C0100`, client emitters behind `0x0047C9F0` (callers `0x004C7CE3`, `0x004C80D4..53`) | the plugin detours the first two — `THREADCHECK prodq-train` / `prodq-cancel` — and §8.5's traces show ACTIVATE→queueCommand→receive strictly ordered in one stream |
+| secondary-order handlers | `productionTick` `0x00468420` (caller `0x004EC1F9`), `0x0045D0D0` (`0x004ECAD2`), `0x0045D500` (`0x004EC5C2`), `0x0045DEA0` (`0x004EC613`), `0x0045E090` (`0x004EC5E5`), `0x00467FD0` (`0x004EC59E`), `0x004E4D00` (`0x004EC5AA`), plus their helpers `0x0045D2E0`, `0x0045D410`, `0x0045DA40`, `0x00467030`, `0x00468280` | every caller is the ONE jump-table dispatcher `FUN_004EC170` — the same dispatcher that calls the detoured `productionTick`; `THREADCHECK prodq-tick` prints its tid |
+| queue core | `0x004669B0`, `0x004669E0`, `0x00466A70`, `0x00466B70`, `0x00466E40`, `0x00466E80`, `0x00467250`, `0x00466790` | called only from the rows above (receive, tick family, AI) — `data/production-xrefs.tsv` |
+| building AI | `0x00434480` (caller `0x004488D8`), `0x00435DB0`, `0x00438050` (callers `0x0043E6A6`, `0x0043EFA9`) | AI turn processing in the main loop — the same loop whose command processing task 038 measured interleaving with it deterministically |
+| unit lifecycle | `0x0049F170` (callers `0x0049F6E3`, `0x0049F93E`), `0x0049FD00`, `0x004A0320` (caller `0x004A070A`), `0x004F6180`, `0x00488BF0` | sim mutators on the unit array — the state every one of the rows above reads unsynchronised |
+| replay/command infra | `0x004C4A80` (caller `0x004C4FCA`) | command-apply path, same dispatch as receive |
+| **not the CUnit ring at all** | CRT `_qsort`/`___free_lc_time` (ESP-based), `0x004D100A`/`0x004D1071` (winproc-area DWORD struct), `0x004D6930` (DWORD store at `+0xA4` — would smash head+uniqueness+order at once) | the displacement sweep's false positives, listed so nobody re-classifies them |
+
+Stated at its honest strength: the sweep is displacement-shaped and task 034 showed that shape can
+miss a handed-pointer access — which is what the structural leg and the live measurement below are
+for; the table is corroboration, not the proof.
+
+*The measured leg.* Every hooked game-side site logs `THREADCHECK <site> tid=` once (driver,
+layout bracket, interact shim, the three prodqueue detours), the observer logs its own, and the
+suite asserts the game-side ids are ONE id with the observer's differing.
+
+**The two genuinely cross-thread readers — this plugin's own observer (`PRODQ`/`PRODQSEL`,
+`STATQ`, the `QIND` view) and the test harness — are closed with a seqlock**, because *"a phantom
+item in a `PRODQSEL` line"* was named as a harm in its own right: `ScQueueIndRingGen()` is
+incremented before the first phantom store and after the last restore (full fence both sides), so
+odd = window open and moved = straddled; every observer ring read retries against it and prints
+`ringStable=` so a read that never settled is a reported fact, not a silent one.
+
+#### What green means now, and the numbers to compare against PR #95
+
+Pre-fix, PR #95 measured the collision DETERMINISTIC: `disableOnOwned` moved exactly once per
+click, every click, and 30 of 30 collided clicks failed; the hold sweep read **0 of 18 cancelled
+above a 60 ms hold**. That determinism is what makes the flipped regression arm sound: the arm
+asserts `phantom` MOVED across the click (the fix was active) and `disableOnOwned` moved by
+ZERO (the collision is gone) — a green with the race merely won cannot produce that pair. The
+sweep asserts every click cancels at every hold with zero collisions, per duration, against PR
+#95's table; the run's own numbers are in task 066's PR.
 
 ---
 

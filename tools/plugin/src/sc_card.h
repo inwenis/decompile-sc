@@ -140,6 +140,12 @@ struct ScStatusHeader {
     WORD  portraitType;  // CUnit+0x64
     BYTE  portraitOwner; // CUnit+0x4C
     bool  queueOk;       // the portrait unit's ring was readable
+    // The ring read below is made on the OBSERVER thread, and task 066's phantom bracket
+    // makes owned slots non-empty for the length of each queueLayout call on the game
+    // thread -- so the read retries around ScQueueIndRingGen and this says whether it
+    // ever settled. 0 = the head/queue values may be mid-window and qtype per slot is
+    // suspect; the STATQ header line prints it so a parser can refuse rather than trust.
+    bool  ringStable;
     BYTE  head;          // CUnit+0xA4
     WORD  queue[SC_BUILD_QUEUE_SLOTS];   // CUnit+0x98, in SLOT order (not display order)
     int   slots;         // how many icon controls the walk found (5 when the strip is up)

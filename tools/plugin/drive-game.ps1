@@ -2392,13 +2392,13 @@ function Get-ScStatusQueue {
                 Label = $label; Ok = ($done.Count -gt 0); Slots = @()
                 Dialog = ''; Root = ''; RootRect = @(0,0,0,0)
                 Portrait = ''; PortraitType = -1; PortraitOwner = -1
-                Head = -1; QueueOk = $false; Engine = @()
+                Head = -1; QueueOk = $false; RingStable = $true; Engine = @()
                 Shown = -1; Clickable = -1
                 Lines = @($lines | ForEach-Object { $_.Line })
             }
             foreach ($l in $lines) {
                 $h = [regex]::Match($l.Line,
-                    'dialog=0x([0-9A-Fa-f]+) root=0x([0-9A-Fa-f]+) rootrect=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\) portrait=0x([0-9A-Fa-f]+) ptype=0x([0-9A-Fa-f]+) powner=(\d+) head=(\d+) queueOk=(\d+) engine=\[([^\]]*)\]')
+                    'dialog=0x([0-9A-Fa-f]+) root=0x([0-9A-Fa-f]+) rootrect=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\) portrait=0x([0-9A-Fa-f]+) ptype=0x([0-9A-Fa-f]+) powner=(\d+) head=(\d+) queueOk=(\d+) ringStable=(\d+) engine=\[([^\]]*)\]')
                 if ($h.Success) {
                     $st.Dialog = $h.Groups[1].Value
                     $st.Root = $h.Groups[2].Value
@@ -2409,7 +2409,11 @@ function Get-ScStatusQueue {
                     $st.PortraitOwner = [int]$h.Groups[9].Value
                     $st.Head = [int]$h.Groups[10].Value
                     $st.QueueOk = ($h.Groups[11].Value -eq '1')
-                    $st.Engine = @($h.Groups[12].Value -split ',' |
+                    # ringStable=0 means the walk's ring read never settled against the
+                    # phantom bracket's seqlock (task 066) -- head/engine/qtype on this
+                    # walk may be mid-window and a caller should re-read, not trust.
+                    $st.RingStable = ($h.Groups[12].Value -eq '1')
+                    $st.Engine = @($h.Groups[13].Value -split ',' |
                                    Where-Object { $_ -match '^0x' } |
                                    ForEach-Object { [Convert]::ToInt32(($_ -replace '^0x'), 16) })
                     continue
