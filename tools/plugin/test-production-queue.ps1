@@ -266,6 +266,17 @@ function Assert-That {
     else { Write-Host "  FAIL $What $Detail"; $script:failures++ }
 }
 
+# A SKIPPED CHECK IS NOT A PASSED CHECK, and this suite had no way to say so, so an arm
+# that could not be measured recorded itself as `Assert-That '...' $true` -- a check that
+# cannot fail, padding the ok count with a non-event (task 052 section 6.5, task 055).
+# `ci-local`'s own step accounting has said this since task 023; the suites had not caught up.
+$script:skipped = @()
+function Skip-That {
+    param([Parameter(Mandatory)][string]$What, [string]$Detail = '')
+    Write-Host "  skip $What $Detail"
+    $script:skipped += "$What $Detail"
+}
+
 # PER ITEM, on the engine's side. `engineLen=5` is a count and a count can be produced by
 # the wrong five things; this names every slot and says which one is wrong.
 function Assert-EverySlot {
@@ -1389,8 +1400,8 @@ try {
             # A definite outcome either way: this arm never silently disappears. The
             # static half stands on its own (buttonset 106 is in the binary), and the
             # acceptance criteria do not rest on it.
-            Assert-That 'the Command Center is off the opening viewport, so this arm is not measured' `
-                $true "(client $cx,$cy -- the claim about Terran cards stays static-only for this run)"
+            Skip-That 'the Command Center is off the opening viewport, so this arm is not measured' `
+                "(client $cx,$cy -- the claim about Terran cards stays static-only for this run)"
             return
         }
         Send-ScClick -Hwnd $hwnd -X $cx -Y $cy
@@ -1532,6 +1543,10 @@ Assert-That 'StarCraft.exe on disk is byte-identical to before the run' ($hashAf
 Assert-That 'and still byte-identical to pristine 1.16.1' ($hashAfter -eq $PRISTINE_SHA256)
 
 Write-Host ''
-Write-Host "test-production-queue: $failures failure(s)"
+if ($script:skipped.Count -gt 0) {
+    Write-Host "SKIPPED ($($script:skipped.Count)) -- a skipped check is NOT a passed check:"
+    $script:skipped | ForEach-Object { Write-Host "  $_" }
+}
+Write-Host "test-production-queue: $failures failure(s), $($script:skipped.Count) skipped"
 Write-Host "frames (diagnostic, NOT committable): $ShotDir"
 exit ($failures -eq 0 ? 0 : 1)
