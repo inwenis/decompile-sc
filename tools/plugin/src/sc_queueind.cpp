@@ -1578,12 +1578,36 @@ static void SC_GAME_ENTRY HkStatDisplayDriver(void) {
 // the argument again for the trampoline costs one dword.
 typedef void (__attribute__((stdcall)) *ScQueueLayoutFn)(DWORD ctrl);
 
+// Reentrancy guard for the bracket's save buffer. The save is a STATIC (g_phantomSaved),
+// so a nested queueLayout entry while a bracket is open would clobber the outer save and
+// the restore would write the wrong bytes back. No such nesting is known -- the layout is
+// straight-line (its callees mark dirty regions, they do not re-dispatch layouts) and the
+// bracket runs on one thread -- but "no known path" is an assumption, and this makes the
+// static safe under it being wrong: only the OUTERMOST entry applies and restores, an
+// inner entry runs the original bare, and the event is logged loudly because it means the
+// model of this function is wrong and someone should look.
+static int g_layoutDepth = 0;
+
 static void __attribute__((stdcall)) SC_GAME_ENTRY HkQueueLayout(DWORD ctrl) {
     static DWORD tid = 0;
     ThreadCheck("qind-layout", &tid);
+    ++g_layoutDepth;
+    if (g_layoutDepth > 1) {
+        static bool said = false;
+        if (!said) {
+            ScLog("QIND: queueLayout re-entered with a phantom bracket open (depth=%d) -- "
+                  "the inner call runs UNBRACKETED and this model of the function is "
+                  "wrong; investigate", g_layoutDepth);
+            said = true;
+        }
+        if (g_hkLayout.installed) ((ScQueueLayoutFn)g_hkLayout.trampoline)(ctrl);
+        --g_layoutDepth;
+        return;
+    }
     ScQueueIndPhantomApply();
     if (g_hkLayout.installed) ((ScQueueLayoutFn)g_hkLayout.trampoline)(ctrl);
     ScQueueIndPhantomRestore();
+    --g_layoutDepth;
 }
 
 // Verified prologue -- ScHookInstall refuses to patch if memory disagrees. Bytes and window
