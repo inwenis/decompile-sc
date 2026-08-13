@@ -174,7 +174,7 @@ int ScStatusSnapshot(ScStatusHeader* hdr, ScStatusSlot* out, int max) {
         // against ("the ring slot behind it is EMPTY -- the item is the plugin's").
         bool ok = false;
         hdr->ringStable = false;
-        for (int attempt = 0; attempt < 8 && !hdr->ringStable; ++attempt) {
+        for (int attempt = 0; attempt < 32 && !hdr->ringStable; ++attempt) {
             unsigned g1 = ScQueueIndRingGen();
             if (g1 & 1) continue;
             ok = RdU8(hdr->portrait + SC_CUNIT_OFF_BUILD_QUEUE_SLOT, &hdr->head);

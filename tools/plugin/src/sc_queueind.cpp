@@ -444,19 +444,40 @@ int ScQueueIndCompose(char* out, int outLen, const ScQueueIndView* v) {
 // The view, read out of game memory
 // ---------------------------------------------------------------------------
 
-static void ReadView(ScQueueIndView* v) {
+// A ring length the OBSERVER can trust. The guarded section is EXACTLY the five word
+// reads and nothing else -- the first version guarded a whole ReadView (selection walk,
+// overflow scan, upgrade scan included), and at the layout's real call rate (~40k/s,
+// measured phantom=21M over 9.5min) eight retries of a section that long straddled a
+// window EVERY time: run 2's [14] arm consumed an engineLen of 5 from a line whose own
+// ringStable said 0. Narrow section + 32 tries makes a settle failure a real anomaly.
+// On the game thread the generation is even and unmoving, so this is one extra load.
+static int CoherentEngineLen(DWORD unit, int* stable) {
+    for (int attempt = 0; attempt < 32; ++attempt) {
+        unsigned g1 = ScQueueIndRingGen();
+        if (g1 & 1) continue;
+        int n = EngineQueueLength(unit);
+        if (ScQueueIndRingGen() == g1) { if (stable) *stable = 1; return n; }
+    }
+    if (stable) *stable = 0;
+    return EngineQueueLength(unit);
+}
+
+// Returns 1 when every ring read settled against the phantom window's seqlock, 0 when
+// one never did (the caller prints that rather than trusting the numbers).
+static int ReadView(ScQueueIndView* v) {
+    int stable = 1;
     memset(v, 0, sizeof(*v));
     v->selection = SelectionCount();
     v->hudPages  = ScHudRowPageCount();
 
     if (v->selection <= 1) {
         DWORD unit = PortraitUnit();
-        if (!UnitValid(unit)) return;
-        v->engineLen = EngineQueueLength(unit);
+        if (!UnitValid(unit)) return stable;
+        v->engineLen = CoherentEngineLen(unit, &stable);
         v->overflow  = OverflowOf(unit);
         int upg = ScUpgQueueCount(unit);          // -1 when the building is not tracked
         v->upgrades = upg > 0 ? upg : 0;
-        return;
+        return stable;
     }
 
     // The engine's own client selection is the truth about what the player has selected
@@ -467,9 +488,12 @@ static void ReadView(ScQueueIndView* v) {
     for (int i = 0; i < SC_HUD_BUTTON_COUNT; ++i) {
         DWORD unit = slot[i];
         if (!UnitValid(unit)) continue;
-        int len = EngineQueueLength(unit) + OverflowOf(unit);
+        int s = 1;
+        int len = CoherentEngineLen(unit, &s) + OverflowOf(unit);
+        if (!s) stable = 0;
         if (len > 0) { ++v->buildings; v->queued += len; }
     }
+    return stable;
 }
 
 // ---------------------------------------------------------------------------
@@ -1217,20 +1241,12 @@ void ScQueueIndLogState(const char* tag) {
 
     // THIS RUNS ON THE OBSERVER THREAD, and ReadView reads the ring -- which the phantom
     // bracket (task 066) makes non-empty for the length of each queueLayout call on the
-    // game thread. The seqlock is what keeps a phantom out of this line: an odd or moved
-    // generation means the read straddled a window, so it is retried. `ringStable=0` on
-    // the printed line means eight straddles in a row -- the value may then be mid-window
-    // and every ring-derived number on the line is suspect, which the reader is told
-    // rather than left to discover.
+    // game thread. ReadView retries its ring reads against the seqlock (CoherentEngineLen,
+    // tight section) and reports whether they settled; `ringStable=0` on the printed line
+    // means every retry straddled a window -- the ring-derived numbers on the line are
+    // then suspect, which the reader is told rather than left to discover.
     ScQueueIndView v;
-    int ringStable = 0;
-    for (int attempt = 0; attempt < 8 && !ringStable; ++attempt) {
-        unsigned g1 = ScQueueIndRingGen();
-        if (g1 & 1) continue;
-        ReadView(&v);
-        if (ScQueueIndRingGen() == g1) ringStable = 1;
-    }
-    if (!ringStable) ReadView(&v);
+    int ringStable = ReadView(&v);
 
     int ink = linked ? ScQueueIndSurfaceInk(root, b[0], b[1], b[2], b[3]) : -1;
 

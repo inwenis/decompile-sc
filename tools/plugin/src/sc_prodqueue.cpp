@@ -521,20 +521,36 @@ static int FormatEngineQueue(DWORD unit, char* out, int outLen) {
 // The same read made COHERENT for the observer thread (task 066): the phantom bracket
 // makes owned ring slots non-empty for the length of each queueLayout call on the game
 // thread, and a log line must never carry that state -- a phantom item in a PRODQSEL
-// line is precisely the harm task 061 named. Retries around the generation; returns 0
-// when eight straddles in a row left the value suspect, which the caller PRINTS
+// line is precisely the harm task 061 named. The guarded section is the SIX RAW READS
+// and nothing else; the first version formatted five strings inside it, and at the
+// layout's real call rate (~40k brackets/s measured) that section straddled a window on
+// every one of its retries in run 2. Formatting happens on the local copy, outside.
+// Returns 0 when 32 straddles in a row left the value suspect, which the caller PRINTS
 // (ringStable=0) rather than swallows.
 static int CoherentEngineQueue(DWORD unit, char* out, int outLen, BYTE* head, int* len) {
-    for (int attempt = 0; attempt < 8; ++attempt) {
+    WORD ring[SC_BUILD_QUEUE_SLOTS];
+    int stable = 0;
+    for (int attempt = 0; attempt < 32 && !stable; ++attempt) {
         unsigned g1 = ScQueueIndRingGen();
         if (g1 & 1) continue;
         *head = *(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
-        *len = FormatEngineQueue(unit, out, outLen);
-        if (ScQueueIndRingGen() == g1) return 1;
+        for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) ring[i] = QueueSlot(unit, i);
+        if (ScQueueIndRingGen() == g1) stable = 1;
     }
-    *head = *(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
-    *len = FormatEngineQueue(unit, out, outLen);
-    return 0;
+    if (!stable) {
+        *head = *(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
+        for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) ring[i] = QueueSlot(unit, i);
+    }
+    int used = 0;
+    int n = 0;
+    out[0] = '\0';
+    for (int s = 0; s < SC_BUILD_QUEUE_SLOTS && used + 8 < outLen; ++s) {
+        used += _snprintf(out + used, outLen - used, "%s0x%03X", s ? "," : "",
+                          (unsigned)ring[s]);
+        if (ring[s] != SC_BUILD_QUEUE_EMPTY) ++n;
+    }
+    *len = n;
+    return stable;
 }
 
 void ScProdQueueLogState(const char* tag) {
