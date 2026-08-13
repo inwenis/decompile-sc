@@ -890,10 +890,25 @@ Before `stop-agent.ps1`, ALWAYS:
    `C:\sc-work\logs\sc-launch.lock` naming a dead pid.
 
 Killing an orphan is allowed ONLY with positive proof it is orphaned — a
-dead parent, a test output file that has stopped growing, and a lock file
-naming a dead pid. Otherwise the standing rule holds: another worker's
-game is another worker's run, and workers must never kill one themselves
-(ask the conductor).
+test output file that has stopped growing, and a lock file naming a dead
+pid. Otherwise the standing rule holds: another worker's game is another
+worker's run, and workers must never kill one themselves (ask the
+conductor).
+
+**"A DEAD PARENT" USED TO BE ON THAT LIST AND HAS BEEN STRUCK OFF (2026-08-13,
+task 061/062).** It is not evidence of anything here. The launcher exits once
+`scinject` has handed off, so **every** game this harness starts is parentless
+within seconds of starting — a process-tree check returns "parent is DEAD" for a
+perfectly healthy run in its first minute, and it reads exactly like an orphan
+signature. The conductor ran that check on a live game and nearly acted on it.
+
+The test that actually distinguishes them is **is anything still writing that
+run's logs**: a live worker writes, an orphan does not. Check the log's
+last-write time against the clock, not the process tree.
+
+This is the same shape as item 3 above — a stale heartbeat is not deafness,
+and a missing parent is not death. Both are what a HEALTHY run looks like from
+outside, and both have now cost someone a wrong conclusion.
 
 ## Spawning workers
 
