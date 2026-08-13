@@ -111,7 +111,10 @@ try {
             }
         if (-not $gamePid) { throw 'probe: could not parse the game pid from scinject output.' }
         $script:hwnd = Get-ScGameWindow -ProcessId $gamePid
-        $hooks = @(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'HOOK [A-Za-z]+: installed at')
+        # `\S+`, not `[A-Za-z]+` -- see the same change in test-save-load.ps1 (task 054).
+        # A hook name may hold a `+` and a digit (`gameStartClear+7`), and a letters-only
+        # class would report an installed hook it cannot spell as an absence.
+        $hooks = @(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'HOOK \S+: installed at')
         Assert-That 'observe installed NOT ONE hook' ($hooks.Count -eq 0) "(got $($hooks.Count))"
     }
 

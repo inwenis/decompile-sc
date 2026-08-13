@@ -310,14 +310,23 @@ try {
         Assert-That 'the config line says hudrow=1' ($cfg.Count -gt 0)
         $cm = [regex]::Match($cfg[-1], 'circles=(\d) hudrow=(\d) queueind=(\d)')
         Assert-That "the config line carries circles/hudrow/queueind flags ($($cfg[-1]))" $cm.Success
-        $expectedNames = Get-ScFanoutExpectedHooks -Circles ($cm.Groups[1].Value -eq '1') `
+        # TWO SETS, and they are different on purpose (task 054). The log's own
+        # `HOOK <name>: installed at` lines carry EVERY module's hooks, so the by-name
+        # comparison is against the whole plugin's set. The `HOOK: n/n installed`
+        # summary a few lines below is sc_fanout's own, counting only what sc_fanout
+        # installed, so the count corroboration is against the fan-out set alone.
+        # Comparing either one against the other set is comparing two things that were
+        # never meant to be equal.
+        $expectedFanout = Get-ScFanoutExpectedHooks -Circles ($cm.Groups[1].Value -eq '1') `
+            -HudRow ($cm.Groups[2].Value -eq '1') -QueueInd ($cm.Groups[3].Value -eq '1')
+        $expectedAll = Get-ScPluginExpectedHooks -Circles ($cm.Groups[1].Value -eq '1') `
             -HudRow ($cm.Groups[2].Value -eq '1') -QueueInd ($cm.Groups[3].Value -eq '1')
 
         $hookLines = @(Wait-ScLogMatch -LogPath $LogPath -Pattern 'HOOK (\S+): installed at ' -TimeoutSec 20)
         $actualNames = @($hookLines | ForEach-Object {
             [regex]::Match($_, 'HOOK (\S+): installed at ').Groups[1].Value
         })
-        $cmp = Compare-ScHookNames -Expected $expectedNames -Actual $actualNames
+        $cmp = Compare-ScHookNames -Expected $expectedAll -Actual $actualNames
         Assert-That "the installed hooks are exactly this arm's set ([$($cmp.Actual -join ', ')])" $cmp.Ok `
             ($cmp.Ok ? '' : "(missing: [$($cmp.Missing -join ', ')] extra: [$($cmp.Extra -join ', ')])")
 
@@ -325,8 +334,16 @@ try {
         # read -- with the total DERIVED from the named set rather than a second literal.
         $hooks = @(Wait-ScLogMatch -LogPath $LogPath -Pattern 'HOOK: (\d+)/(\d+) installed' -TimeoutSec 20)
         $m = [regex]::Match($hooks[-1], 'HOOK: (\d+)/(\d+) installed')
-        Assert-That "the plugin's own count agrees ($($m.Groups[1].Value)/$($m.Groups[2].Value) vs $($expectedNames.Count) expected by name)" `
-            ($m.Groups[1].Value -eq $m.Groups[2].Value -and [int]$m.Groups[2].Value -eq $expectedNames.Count)
+        Assert-That "sc_fanout's own count agrees ($($m.Groups[1].Value)/$($m.Groups[2].Value) vs $($expectedFanout.Count) fan-out hooks expected by name)" `
+            ($m.Groups[1].Value -eq $m.Groups[2].Value -and [int]$m.Groups[2].Value -eq $expectedFanout.Count)
+        # And the epoch's two, by name, in the same run. They are counted nowhere else,
+        # so without this the union above could be satisfied by the fan-out set alone if
+        # Get-ScSessionExpectedHooks were ever emptied.
+        $sessionHooks = @(Get-ScSessionExpectedHooks)
+        $sessionSeen = @($sessionHooks | Where-Object { $actualNames -contains $_ })
+        Assert-That "the game-session epoch's hooks are spliced ($($sessionSeen -join ', '))" `
+            ($sessionSeen.Count -eq $sessionHooks.Count) `
+            "(expected $($sessionHooks -join ', '); saw $($sessionSeen.Count) of $($sessionHooks.Count))"
     }
 
     Step "menus: Single Player -> Expansion -> Play Custom -> $mapName" {

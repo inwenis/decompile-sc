@@ -44,6 +44,7 @@
 #include "sc_prodqueue.h"
 #include "sc_queueind.h"
 #include "sc_screen.h"
+#include "sc_session.h"
 #include "sc_upgrades.h"
 
 static volatile LONG g_stop = 0;
@@ -539,6 +540,12 @@ static void PollMarker(void) {
     // icons address a SPECIFIC one -- so a run that reads one wants the other beside it.
     ScStatusScan(g_lastMarker);
 
+    // Task 054: which GAME this marker was taken in. It goes FIRST of the per-marker
+    // lines, before anything that prints a record, so a reader never has to work out
+    // which side of a game start a record's line fell on -- the epoch it was read
+    // under is directly above it.
+    ScSessionLogState(g_lastMarker);
+
     // Task 032: the renderer's own view of itself. Same trigger, same read-only shape.
     ScanScreen(g_lastMarker);
 
@@ -913,6 +920,14 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         // refuses (and changes nothing) if it finds the framebuffer already
         // allocated, which is what happens on the default late injection.
         ScScreenInstall(g_base, g_mode);
+        // Task 054, issue #67, and it goes in BEFORE every module that keeps records:
+        // the game-session epoch. Each of those modules asks it "which game is this?"
+        // at the top of every entry point, so it has to exist -- and be at its
+        // starting value -- before any of them can hold anything. It is spliced only
+        // outside observe mode, like everything else that writes game memory; in
+        // observe the epoch stays 1, which is correct because no module holds
+        // cross-frame state there.
+        ScSessionInstall(g_base, g_mode != SC_MODE_OBSERVE);
         ScFanoutInstall(g_base, g_mode);
         // Task 030. The oracle needs the module base in EVERY mode, because the stock
         // arm of this feature's comparison runs in observe and is measured with it. The
@@ -985,6 +1000,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         ScProdFanLogStats();
         ScUpgQueueLogStats();
         ScScreenLogStats();
+        ScSessionLogState("detach");
         if (lpReserved == NULL) {
             if (g_observer) joined = (WaitForSingleObject(g_observer, 5000) == WAIT_OBJECT_0);
             // Un-splice only on the FreeLibrary path. On process exit the address
@@ -1009,6 +1025,10 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             // patches are the outermost change, so they come out after every
             // detour that might still be running against them.
             ScScreenRemove();
+            // The epoch's own splice comes out LAST, after every module that reads it:
+            // a module still running its SessionSync while the counter's writer was
+            // already gone would be asking a question nothing can answer any more.
+            ScSessionRemove();
         }
 
         ScLog("DETACH pid=%u", (unsigned)GetCurrentProcessId());

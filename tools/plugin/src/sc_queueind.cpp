@@ -22,6 +22,7 @@
 #include "sc_hudrow.h"
 #include "sc_log.h"
 #include "sc_prodqueue.h"
+#include "sc_session.h"
 #include "sc_upgrades.h"
 #include "sc_queueind.h"
 
@@ -89,6 +90,55 @@ static int       g_iconsN = 0;
 static BYTE  g_baseline[SC_QIND_BASELINE_MAX];
 static short g_baseRect[4] = { 0, 0, 0, 0 };
 static bool  g_baseValid = false;
+
+// ---------------------------------------------------------------------------
+// THE EPOCH TEST (sc_session.h) -- THE SEVENTH SURVIVOR, found by task 054's sweep and
+// not in issue #67's inventory of six.
+//
+// Everything above belongs to ONE dialog in ONE game, and the ONLY thing that
+// invalidates it is `root != g_dialog` in ScQueueIndOnFrame -- a comparison of two HEAP
+// ADDRESSES. The engine builds the same dialogs in the same order every game, so the
+// new game's status pane can land on the byte for byte same address as the old one's,
+// and that test then says "same dialog" about a dialog this module has never seen.
+//
+// For the SPLICE that is already handled, and honestly: EnsureSpliced re-checks
+// `InChain(root)` and drops g_spliced when our control is not actually in the new
+// chain. For THE BASELINE it is not. `g_baseline` is a copy of the screen bytes under
+// the indicator's box taken while the indicator was hidden, and `ScQueueIndBoxDiff` --
+// the oracle that answers "did OUR pixels land", the one task 039 built precisely
+// because an ink count cannot -- diffs live pixels against it. Carried across a game it
+// diffs this game's surface against another game's, and it fails by producing a
+// PLAUSIBLE NUMBER rather than by reading zero, which is the failure mode AGENTS.md
+// says costs three tasks to notice.
+//
+// Nothing the player sees is wrong here; this is an ORACLE that can lie. That is a
+// weaker consequence than the other six and it is adopted anyway, for the reason the
+// same rulebook gives: when an instrument turns out to be blind, every place it is
+// load-bearing gets audited in the same sitting.
+static unsigned g_session = 0;
+
+static void QIndSessionSync(void) {
+    const unsigned now = ScSessionEpoch();
+    if (g_session == now) return;
+    if (g_dialog || g_baseValid || g_spliced) {
+        ScLog("QIND session %u -> %u: forgetting dialog 0x%08X, the splice (%d) and the "
+              "box baseline (%d) -- they belong to a game that has ended, and the status "
+              "pane of the next one can be allocated at the same address",
+              g_session, now, (unsigned)g_dialog, g_spliced ? 1 : 0, g_baseValid ? 1 : 0);
+    }
+    g_dialog       = 0;
+    g_spliced      = false;
+    g_shown        = false;
+    g_anchor       = 0;
+    g_mode         = SC_QIND_NONE;
+    g_text[0]      = '\0';
+    g_dialogLogged = false;
+    g_bandLogged   = false;
+    g_iconsN       = 0;
+    g_baseValid    = false;
+    g_baseRect[0] = g_baseRect[1] = g_baseRect[2] = g_baseRect[3] = 0;
+    g_session = now;
+}
 
 static void* Rt(DWORD staticVa) {
     return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE));
@@ -335,6 +385,27 @@ static bool EnsureSpliced(DWORD root) {
     DWORD ind = (DWORD)&g_ctrl[0];
     if (g_spliced && !InChain(root)) g_spliced = false;   // same-address dialog realloc
     if (g_spliced) return true;
+
+    // AND THE OTHER DIRECTION, which the line above does not cover: we think we are NOT
+    // spliced but our control is already in this chain. Appending it again is not a
+    // duplicate, it is a CYCLE -- the memset below zeroes g_ctrl's `next`, the tail walk
+    // then ends ON g_ctrl, and the append writes g_ctrl->next = g_ctrl. The engine's
+    // redraw walk (0x0041C683) follows `next` to the end of the list, so a self-link is
+    // an infinite loop inside the game's own paint, not a cosmetic bug.
+    //
+    // It was unreachable while the ONLY thing that cleared g_spliced was a dialog whose
+    // address had changed -- a different chain by definition. Task 054 added a second
+    // clearer (the game-session epoch), so "cleared but still linked" stopped being
+    // impossible by construction, and this makes it impossible by test instead. Adopting
+    // an existing link is also the correct answer on its own terms: the control IS in the
+    // chain, so the invariant the flag records is already true.
+    if (InChain(root)) {
+        ScLog("QIND: our indicator control is already in this dialog's chain while the "
+              "module thought it was not -- adopting the existing link rather than "
+              "appending a second one (dialog 0x%08X)", (unsigned)root);
+        g_spliced = true;
+        return true;
+    }
 
     // Runtime evidence guard, same shape as sc_hudrow's: the engine must have a real
     // interact AND update handler for this control type in its own default tables. If
@@ -781,6 +852,9 @@ static void CaptureBaseline(DWORD root, const short* r) {
 // (the box moved, or the indicator has not been hidden yet in this dialog), which is an
 // honest "no answer" rather than a zero.
 int ScQueueIndBoxDiff(DWORD root) {
+    // The epoch first, so a baseline carried across a game start reports -1 ("no
+    // answer") rather than a plausible byte count diffed against another game's pixels.
+    QIndSessionSync();
     if (!g_baseValid) return -1;
     const short* r = (const short*)&g_ctrl[SC_BINDLG_OFF_BOUNDS];
     for (int i = 0; i < 4; ++i) if (r[i] != g_baseRect[i]) return -1;
@@ -991,6 +1065,7 @@ static void RepaintUnder(DWORD root) {
 
 void ScQueueIndOnFrame(void) {
     if (!g_enabled) return;
+    QIndSessionSync();
     ++g_stat[SC_QIND_STAT_FRAMES];
 
     DWORD dlg  = StatDialog();
@@ -1229,10 +1304,10 @@ void ScQueueIndTestBegin(BYTE* fakeModuleBase,
     for (int i = 0; i < SC_QIND_STAT__COUNT; ++i) g_stat[i] = 0;
 }
 
-int         ScQueueIndCurrentMode(void) { return g_mode; }
-const char* ScQueueIndCurrentText(void) { return g_text; }
-bool        ScQueueIndIsSpliced(void)   { return g_spliced; }
-bool        ScQueueIndIsShown(void)     { return g_shown; }
+int         ScQueueIndCurrentMode(void) { QIndSessionSync(); return g_mode; }
+const char* ScQueueIndCurrentText(void) { QIndSessionSync(); return g_text; }
+bool        ScQueueIndIsSpliced(void)   { QIndSessionSync(); return g_spliced; }
+bool        ScQueueIndIsShown(void)     { QIndSessionSync(); return g_shown; }
 int         ScQueueIndStat(int which) {
     if (which < 0 || which >= SC_QIND_STAT__COUNT) return 0;
     return (int)g_stat[which];

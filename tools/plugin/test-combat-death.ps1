@@ -714,13 +714,17 @@ try {
         $hudrowOn = $cm.Groups[2].Value -eq '1'
         $queueindOn = $cm.Groups[3].Value -eq '1'
 
+        # TWO SETS, different on purpose (task 054): the log carries EVERY module's
+        # `HOOK <name>: installed at` lines, while `HOOK: n/n installed` is sc_fanout's
+        # own summary of its own installs. See Get-ScPluginExpectedHooks in drive-game.ps1.
         $expectedNames = Get-ScFanoutExpectedHooks -Circles $circlesOn -HudRow $hudrowOn -QueueInd $queueindOn
+        $expectedAll = Get-ScPluginExpectedHooks -Circles $circlesOn -HudRow $hudrowOn -QueueInd $queueindOn
 
         $hookLines = @(Wait-ScLogMatch -LogPath $LogPath -Pattern 'HOOK (\S+): installed at ' -TimeoutSec 20)
         $actualNames = @($hookLines | ForEach-Object {
             [regex]::Match($_, 'HOOK (\S+): installed at ').Groups[1].Value
         })
-        $cmp = Compare-ScHookNames -Expected $expectedNames -Actual $actualNames
+        $cmp = Compare-ScHookNames -Expected $expectedAll -Actual $actualNames
         Assert-That "the installed hooks are exactly this arm's set ([$($cmp.Actual -join ', ')])" $cmp.Ok `
             ($cmp.Ok ? '' : "(missing: [$($cmp.Missing -join ', ')] extra: [$($cmp.Extra -join ', ')])")
 
@@ -728,7 +732,7 @@ try {
         # read -- with the total DERIVED from the named set rather than a second literal.
         $hooks = @(Wait-ScLogMatch -LogPath $LogPath -Pattern 'HOOK: (\d+)/(\d+) installed' -TimeoutSec 20)
         $m = [regex]::Match($hooks[-1], 'HOOK: (\d+)/(\d+) installed')
-        Assert-That "the plugin's own count agrees ($($m.Groups[1].Value)/$($m.Groups[2].Value) vs $($expectedNames.Count) expected by name)" `
+        Assert-That "sc_fanout's own count agrees ($($m.Groups[1].Value)/$($m.Groups[2].Value) vs $($expectedNames.Count) fan-out hooks expected by name)" `
             ($m.Groups[1].Value -eq $m.Groups[2].Value -and [int]$m.Groups[2].Value -eq $expectedNames.Count)
     }
 
