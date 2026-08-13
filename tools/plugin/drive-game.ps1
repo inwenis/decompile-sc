@@ -2374,6 +2374,13 @@ function Get-ScStatusQueue {
         [int]$TimeoutSec = 15
     )
     if (-not $MarkerPath) { $MarkerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt' }
+  # A walk whose header carries ringStable=0 is NOT consumable (task 066): the plugin
+  # itself flagged that its ring read never settled against the phantom bracket's
+  # seqlock (an OS preemption inside the guarded section can straddle every retry), so
+  # head/engine/qtype on that walk may be mid-window. Re-ask with a fresh marker, up to
+  # three times; only then return the flagged walk so a caller's assertion fails with
+  # `.RingStable = $false` in view rather than passing or failing on a disclaimed value.
+  for ($scAsk = 0; $scAsk -lt 3; $scAsk++) {
     $script:ScMarkerSeq++
     $label = "$Tag-$script:ScMarkerSeq"
     Set-ScMarker -MarkerPath $MarkerPath -Label $label
@@ -2387,6 +2394,11 @@ function Get-ScStatusQueue {
         # nothing is clickable" an answer rather than a timeout.
         $done = @($lines | Select-String -Pattern 'slots=\d+ shown=')
         $absent = @($lines | Select-String -Pattern 'dialog=0 ')
+        if ($done.Count -gt 0 -and $scAsk -lt 2 -and
+            @($lines | Where-Object { $_.Line -match ' ringStable=0 ' }).Count -gt 0) {
+            Write-Verbose "Get-ScStatusQueue: walk '$label' carries ringStable=0 -- re-asking"
+            break
+        }
         if ($done.Count -gt 0 -or $absent.Count -gt 0) {
             $st = [pscustomobject]@{
                 Label = $label; Ok = ($done.Count -gt 0); Slots = @()
@@ -2450,7 +2462,11 @@ function Get-ScStatusQueue {
         }
         Start-Sleep -Milliseconds 250
     }
-    throw "drive-game: no complete STATQ walk for marker '$label' within ${TimeoutSec}s (log: $LogPath). Was the game launched with -CardScan 1?"
+    if ((Get-Date) -ge $deadline) {
+        throw "drive-game: no complete STATQ walk for marker '$label' within ${TimeoutSec}s (log: $LogPath). Was the game launched with -CardScan 1?"
+    }
+  }
+  throw "drive-game: Get-ScStatusQueue fell out of its re-ask loop -- unreachable"
 }
 
 function Get-ScStatusSlotPoint {

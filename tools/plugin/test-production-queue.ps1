@@ -628,6 +628,15 @@ function Assert-Reconciles {
 $script:prodqSeq = 0
 function Get-ProdQueue {
     param([string]$Tag, [int]$TimeoutSec = 20)
+  # A LINE THE PLUGIN FLAGGED IS NOT CONSUMABLE (task 066, and it took two consumers to
+  # learn it once): PRODQSEL/PRODQ carry ringStable=0 when the observer's ring read never
+  # settled against the phantom bracket's seqlock -- an OS preemption inside the guarded
+  # section can straddle every retry, so the flag can appear even with a tight guard. The
+  # first sweep re-run consumed `engineLen=5 ringStable=0` here and failed two assertions
+  # on a phantom the plugin had already disclaimed. Same rule as Get-QInd: re-ask, up to
+  # three times; only then return the flagged answer so the assertion fails with the flag
+  # in view.
+  for ($ask = 0; $ask -lt 3; $ask++) {
     $script:prodqSeq++
     $label = "pq-$Tag-$script:prodqSeq"
     Set-ScMarker -MarkerPath $markerPath -Label $label
@@ -638,6 +647,11 @@ function Get-ProdQueue {
                    Select-String -Pattern "PRODQ(SEL)? \[$esc\]")
         $summary = @($lines | Select-String -Pattern 'buildings=')
         if ($summary.Count -gt 0) {
+            if ($ask -lt 2 -and
+                @($lines | Where-Object { $_.Line -match ' ringStable=0' }).Count -gt 0) {
+                Write-Host "       (PRODQ '$label' carries ringStable=0 -- re-asking rather than trusting a flagged read)"
+                break
+            }
             $out = [pscustomobject]@{
                 Label = $label; Selected = $null
                 Buildings = 0; Max = 0; Captured = 0; Promoted = 0
@@ -695,7 +709,11 @@ function Get-ProdQueue {
         }
         Start-Sleep -Milliseconds 250
     }
-    throw "test: no PRODQ answer for marker '$label' within ${TimeoutSec}s (log: $LogPath). Was the game launched with -ProdQueue 1?"
+    if ((Get-Date) -ge $deadline) {
+        throw "test: no PRODQ answer for marker '$label' within ${TimeoutSec}s (log: $LogPath). Was the game launched with -ProdQueue 1?"
+    }
+  }
+  throw "test: Get-ProdQueue fell out of its re-ask loop -- unreachable"
 }
 
 # --- on-disk binary, BEFORE anything runs --------------------------------------

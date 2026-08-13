@@ -1166,6 +1166,17 @@ incremented before the first phantom store and after the last restore (full fenc
 odd = window open and moved = straddled; every observer ring read retries against it and prints
 `ringStable=` so a read that never settled is a reported fact, not a silent one.
 
+**And the rule that took two consumers to learn once: a line carrying `ringStable=0` is NOT
+CONSUMABLE.** Retries cannot make the flag impossible — an OS preemption inside even a
+guarded section of six raw loads straddles every attempt — so the flag is the contract, not a
+curiosity. Task 066's first two measurement runs each had one assertion consume a value its own
+line had disclaimed (`engineLen=5 ringStable=0`, the phantom read mid-window), once through the
+`QIND` reader and once through `PRODQSEL`, which is the house defect class — the instrument said
+its reading was untrustworthy and the consumer used it anyway. Every reader (`Get-QInd`,
+`Get-ProdQueue`, `Get-ScStatusQueue`) now RE-ASKS a flagged answer with a fresh marker, up to
+three times, and only then returns it so the assertion fails with the flag in view. Anyone
+adding a reader of these lines inherits that rule, not just the seqlock.
+
 #### What green means now, and the numbers to compare against PR #95
 
 Pre-fix, PR #95 measured the collision DETERMINISTIC: `disableOnOwned` moved exactly once per
