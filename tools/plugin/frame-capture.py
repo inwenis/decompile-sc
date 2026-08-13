@@ -1,0 +1,345 @@
+#!/usr/bin/env python3
+"""Decode, validate and compare FRAMEDUMP files -- the engine's own composed frame.
+
+Task 063. The plugin's FRAMEDUMP (scplugin.cpp) copies the screen Bitmap's own
+8-bit buffer (0x006CEFF0: u16 w, u16 h, u8* data, pitch == width) to a file on
+each marker. That is the one instrument that sees the columns the presented
+window discards (research/renderer-viewport.md 12.6/12.10) -- but an instrument
+is worthless until it has been shown to reproduce a KNOWN-GOOD picture, and a
+raw dump of palette indices is not a picture anyone can look at.
+
+Both problems have the same solution, and it is this file's `check` command:
+
+  The dump holds palette INDICES. The presented window holds the RGB those
+  indices were painted as, at 1:1 for columns 0..639 (12.6, measured). So over
+  the region both instruments see, every occurrence of index i must correspond
+  to ONE RGB value. `check` builds that index->RGB mapping from a window
+  capture and reports how consistent it is:
+
+    - if the dump were torn, misaligned, or read with the wrong pitch, one
+      index would land on many RGBs and consistency collapses -- rows shifting
+      by (pitch - width) per row destroys the correspondence in the first
+      handful of rows;
+    - if it holds at ~100%, the dump IS the picture the window presented, and
+      the mapping doubles as the scene's palette, which `render` then uses to
+      turn any dump from the same scene into a viewable PNG -- including the
+      columns no window has ever shown.
+
+  Animation between the window grab and the dump would poison the mapping, so
+  `check` takes TWO window captures, one before the dump and one after, and
+  builds the mapping only over pixels identical in both -- a pixel the window
+  shows unchanged across the whole interval was, with overwhelming likelihood,
+  unchanged when the dump was read between them.
+
+Commands (all output is `key=value` lines, one per metric, like frame-diff.py):
+
+  info    --dump FD.bin
+  check   --dump FD.bin --before B.png --after A.png [--map-w N] [--render OUT.png]
+          [--save-palette PAL.json] [--search-dy N] [--search-dx N]
+  render  --dump FD.bin --palette PAL.json --out OUT.png
+  band    --dump FD.bin --x0 N [--x1 N] [--y0 N] [--y1 N]
+  diff    --a FD.bin --b FD.bin [--x0 N] [--x1 N] [--y0 N] [--y1 N]
+
+Hard rule 1: dumps and rendered PNGs reproduce game artwork. They live on the
+gitignored diagnostic path and are never committed; what this tool PRINTS is
+counts, fractions and indices, which reproduce nothing.
+"""
+import argparse
+import json
+import struct
+import sys
+from collections import Counter
+
+try:
+    from PIL import Image
+except ImportError:
+    sys.exit("frame-capture: Pillow is required (pip install pillow)")
+
+MAGIC = b"SCFD"
+HDR_LEN = 16
+
+
+def load_dump(path):
+    with open(path, "rb") as f:
+        hdr = f.read(HDR_LEN)
+        if len(hdr) != HDR_LEN or hdr[:4] != MAGIC:
+            sys.exit("frame-capture: %s is not a FRAMEDUMP file (bad magic)" % path)
+        w, h, nbytes, reads, stable = struct.unpack("<HHIHH", hdr[4:])
+        px = f.read(nbytes)
+    if len(px) != nbytes or nbytes != w * h:
+        sys.exit("frame-capture: %s truncated (header says %d bytes, file holds %d)"
+                 % (path, nbytes, len(px)))
+    return {"w": w, "h": h, "reads": reads, "stable": stable, "px": px}
+
+
+def cmd_info(a):
+    d = load_dump(a.dump)
+    print("dump_w=%d" % d["w"])
+    print("dump_h=%d" % d["h"])
+    print("dump_bytes=%d" % (d["w"] * d["h"]))
+    print("dump_reads=%d" % d["reads"])
+    print("dump_stable=%d" % d["stable"])
+    return 0
+
+
+def build_mapping(d, before, after, dx, dy, map_w, step=1):
+    """index -> Counter(rgb) over pixels stable across both window captures.
+
+    Window pixel (x, y) is compared against dump pixel (x - dx, y - dy):
+    dx/dy is where the frame's (0,0) sits inside the capture.
+    """
+    pb, pa = before.load(), after.load()
+    w = min(map_w, d["w"], before.size[0] - dx, after.size[0] - dx)
+    h = min(d["h"], before.size[1] - dy, after.size[1] - dy)
+    px, dw = d["px"], d["w"]
+    mapping = {}
+    stable_px = 0
+    total = 0
+    for y in range(0, h, step):
+        row = (y) * dw
+        wy = y + dy
+        for x in range(0, w, step):
+            total += 1
+            rgb = pb[x + dx, wy]
+            if rgb != pa[x + dx, wy]:
+                continue
+            stable_px += 1
+            idx = px[row + x]
+            c = mapping.get(idx)
+            if c is None:
+                mapping[idx] = c = Counter()
+            c[rgb] += 1
+    return mapping, stable_px, total
+
+
+def score_mapping(mapping):
+    total = dominant = 0
+    for c in mapping.values():
+        s = sum(c.values())
+        total += s
+        dominant += c.most_common(1)[0][1]
+    return (dominant / total if total else 0.0), total
+
+
+def cmd_check(a):
+    d = load_dump(a.dump)
+    before = Image.open(a.before).convert("RGB")
+    after = Image.open(a.after).convert("RGB")
+    map_w = a.map_w if a.map_w else d["w"]
+
+    print("dump_w=%d" % d["w"])
+    print("dump_h=%d" % d["h"])
+    print("dump_reads=%d" % d["reads"])
+    print("dump_stable=%d" % d["stable"])
+    print("before_size=%dx%d" % before.size)
+    print("after_size=%dx%d" % after.size)
+    print("map_w=%d" % map_w)
+
+    # Alignment: where does the frame's (0,0) sit inside the capture? The
+    # windowed helper is measured to present 1:1 (12.6), but the capture may
+    # include a caption strip above the client pixels (drive-game.ps1 warns
+    # about exactly this). Search a small offset range on a sampled grid and
+    # keep the offset that maximises mapping consistency; (0,0) is in range,
+    # so a capture that needs no offset costs nothing.
+    best = (0, 0)
+    best_score = -1.0
+    for dy in range(0, a.search_dy + 1):
+        m, _, _ = build_mapping(d, before, after, 0, dy, map_w, step=4)
+        s, n = score_mapping(m)
+        if n and s > best_score:
+            best_score, best = s, (0, dy)
+    for dx in range(0, a.search_dx + 1):
+        m, _, _ = build_mapping(d, before, after, dx, best[1], map_w, step=4)
+        s, n = score_mapping(m)
+        if n and s > best_score:
+            best_score, best = s, (dx, best[1])
+    dx, dy = best
+    print("align_dx=%d" % dx)
+    print("align_dy=%d" % dy)
+
+    # The real pass, full resolution, at the chosen offset.
+    mapping, stable_px, total = build_mapping(d, before, after, dx, dy, map_w, step=1)
+    consist, mapped = score_mapping(mapping)
+    clean = sum(1 for c in mapping.values() if len(c) == 1)
+
+    # The consistency figure is VACUOUS over a dead capture: a black window maps
+    # every index to (0,0,0), each one perfectly consistently. So the window has
+    # to prove it holds a picture at all before its vote counts -- the caller
+    # asserts on these two beside consist_frac, never on consist_frac alone.
+    pb = before.load()
+    rgbs = set()
+    nonblack = win_n = 0
+    for y in range(0, before.size[1], 2):
+        for x in range(0, before.size[0], 2):
+            v = pb[x, y]
+            rgbs.add(v)
+            win_n += 1
+            if v != (0, 0, 0):
+                nonblack += 1
+    print("window_distinct_rgb=%d" % len(rgbs))
+    print("window_nonblack_frac=%.4f" % (nonblack / win_n if win_n else 0))
+
+    print("window_px=%d" % total)
+    print("stable_px=%d" % stable_px)
+    print("stable_frac=%.4f" % (stable_px / total if total else 0))
+    print("consist_frac=%.5f" % consist)
+    print("indices_seen=%d" % len(mapping))
+    print("indices_clean=%d" % clean)
+
+    palette = {str(i): list(c.most_common(1)[0][0]) for i, c in mapping.items()}
+    if a.save_palette:
+        with open(a.save_palette, "w") as f:
+            json.dump(palette, f)
+        print("palette_saved=%s" % a.save_palette)
+
+    if a.render:
+        render_dump(d, palette, a.render)
+        print("render=%s" % a.render)
+        known = sum(1 for i in d["px"] if str(i) in palette)
+        print("render_mapped_frac=%.4f" % (known / len(d["px"]) if d["px"] else 0))
+    return 0
+
+
+def render_dump(d, palette, out):
+    w, h, px = d["w"], d["h"], d["px"]
+    img = Image.new("RGB", (w, h))
+    p = img.load()
+    lut = {}
+    for k, v in palette.items():
+        lut[int(k)] = tuple(v)
+    magenta = (255, 0, 255)
+    for y in range(h):
+        row = y * w
+        for x in range(w):
+            p[x, y] = lut.get(px[row + x], magenta)
+    img.save(out)
+
+
+def cmd_render(a):
+    d = load_dump(a.dump)
+    with open(a.palette) as f:
+        palette = json.load(f)
+    render_dump(d, palette, a.out)
+    known = sum(1 for i in d["px"] if str(i) in palette)
+    print("dump_w=%d" % d["w"])
+    print("dump_h=%d" % d["h"])
+    print("render=%s" % a.out)
+    print("render_mapped_frac=%.4f" % (known / len(d["px"]) if d["px"] else 0))
+    return 0
+
+
+def cmd_band(a):
+    d = load_dump(a.dump)
+    x1 = a.x1 if a.x1 else d["w"]
+    y1 = a.y1 if a.y1 else d["h"]
+    px, w = d["px"], d["w"]
+    hist = Counter()
+    for y in range(a.y0, y1):
+        row = y * w
+        hist.update(px[row + a.x0:row + x1])
+    total = sum(hist.values())
+    nonzero = total - hist.get(0, 0)
+    print("band_region=%d,%d-%d,%d" % (a.x0, a.y0, x1, y1))
+    print("band_px=%d" % total)
+    print("band_nonzero=%d" % nonzero)
+    print("band_nonzero_frac=%.4f" % (nonzero / total if total else 0))
+    print("band_distinct=%d" % len(hist))
+    print("band_top=%s" % ",".join("%d:%d" % (i, n) for i, n in hist.most_common(8)))
+    return 0
+
+
+def cmd_diff(a):
+    """frame-diff.py's full-resolution SHAPE metrics, on raw indices.
+
+    Same discriminator, one layer down: a pitch/stride error shifts whole rows,
+    so its damage SPANS the region (wide_rows large); animation is local blobs
+    (wide_rows 0). Comparing indices needs no palette and no rendering, so two
+    dumps from two arms compare directly.
+    """
+    da, db = load_dump(a.a), load_dump(a.b)
+    x1 = min(a.x1 if a.x1 else min(da["w"], db["w"]), da["w"], db["w"])
+    y1 = min(a.y1 if a.y1 else min(da["h"], db["h"]), da["h"], db["h"])
+    x0, y0 = a.x0, a.y0
+    width = x1 - x0
+    pa, pb = da["px"], db["px"]
+    wa, wb = da["w"], db["w"]
+
+    print("a_size=%dx%d" % (da["w"], da["h"]))
+    print("b_size=%dx%d" % (db["w"], db["h"]))
+    print("region=%d,%d-%d,%d" % (x0, y0, x1, y1))
+
+    diff_px = 0
+    blocks = set()
+    wide_rows = []
+    span_max = 0
+    for y in range(y0, y1):
+        ra, rb = y * wa, y * wb
+        first = last = -1
+        for x in range(x0, x1):
+            if pa[ra + x] != pb[rb + x]:
+                diff_px += 1
+                if first < 0:
+                    first = x
+                last = x
+                blocks.add((x // 32, y // 32))
+        if first >= 0:
+            span = last - first + 1
+            span_max = max(span_max, span)
+            if span > width // 2:
+                wide_rows.append(y)
+
+    print("diff_px=%d" % diff_px)
+    print("diff_px_frac=%.5f" % (diff_px / float(width * (y1 - y0)) if width and y1 > y0 else 0))
+    print("diff_blocks=%d" % len(blocks))
+    print("diff_span_max=%d" % span_max)
+    print("wide_rows=%d" % len(wide_rows))
+    print("wide_row_ys=%s" % ",".join(str(y) for y in wide_rows[:40]))
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("info")
+    p.add_argument("--dump", required=True)
+
+    p = sub.add_parser("check")
+    p.add_argument("--dump", required=True)
+    p.add_argument("--before", required=True)
+    p.add_argument("--after", required=True)
+    # Only map over this many columns of the dump -- for a wide dump against a
+    # 640-wide presentation, the columns the window can vouch for.
+    p.add_argument("--map-w", type=int, default=0)
+    p.add_argument("--render", default=None)
+    p.add_argument("--save-palette", default=None)
+    p.add_argument("--search-dy", type=int, default=48)
+    p.add_argument("--search-dx", type=int, default=8)
+
+    p = sub.add_parser("render")
+    p.add_argument("--dump", required=True)
+    p.add_argument("--palette", required=True)
+    p.add_argument("--out", required=True)
+
+    p = sub.add_parser("band")
+    p.add_argument("--dump", required=True)
+    p.add_argument("--x0", type=int, required=True)
+    p.add_argument("--x1", type=int, default=0)
+    p.add_argument("--y0", type=int, default=0)
+    p.add_argument("--y1", type=int, default=0)
+
+    p = sub.add_parser("diff")
+    p.add_argument("--a", required=True)
+    p.add_argument("--b", required=True)
+    p.add_argument("--x0", type=int, default=0)
+    p.add_argument("--x1", type=int, default=0)
+    p.add_argument("--y0", type=int, default=0)
+    p.add_argument("--y1", type=int, default=0)
+
+    a = ap.parse_args()
+    return {"info": cmd_info, "check": cmd_check, "render": cmd_render,
+            "band": cmd_band, "diff": cmd_diff}[a.cmd](a)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -308,6 +308,14 @@ param(
     # scroll maxima. Installs no hook and writes nothing, so it exists in -Mode observe too.
     # Off by default: ten lines per marker, and the existing suites parse this log.
     [ValidateSet('0', '1')][string]$ScreenScan = '0',
+    # Task 063: the read-only FRAMEBUFFER DUMP. On each marker the observer copies the
+    # engine's own composed frame out of the screen Bitmap's buffer (0x006CEFF0) into
+    # fd-<marker>.bin under this directory -- the one oracle that sees the columns the
+    # presented window discards (research/renderer-viewport.md 12.6/12.10). Installs no
+    # hook and writes nothing to game memory, so it exists in -Mode observe too. Off by
+    # default (empty = off). THE DUMP REPRODUCES GAME ARTWORK (hard rule 1): point this
+    # at the gitignored diagnostic path (C:\sc-work\...), never inside the repo.
+    [string]$FrameDump = '',
     # Task 034: the WIDER PLAYFIELD. Rewrites the operands that carry the screen's
     # geometry so the engine composes a bigger frame (research/renderer-viewport.md 9.3).
     # Off by default and ignored outright in -Mode observe, like every other feature that
@@ -523,6 +531,17 @@ try {
     $env:SCPLUGIN_UPGQ           = $UpgradeQueue
     $env:SCPLUGIN_UPGQ_MAX       = "$UpgradeQueueMax"
     $env:SCPLUGIN_SCREENSCAN     = $ScreenScan
+    # Task 063: a frame dump reproduces game artwork, so it must never land inside the
+    # repo -- the same guard Save-ScWindowImage enforces for PNGs, applied to the raw
+    # container before the path crosses into the plugin.
+    if ($FrameDump) {
+        $fdFull = [IO.Path]::GetFullPath($FrameDump)
+        if ($fdFull.StartsWith($repoRoot, [StringComparison]::OrdinalIgnoreCase) -and
+            $fdFull -notmatch '\\work\\scratch\\') {
+            throw "run-with-plugin: refusing -FrameDump '$FrameDump' -- frame dumps reproduce game artwork and must not land in the repo (AGENTS.md hard rule 1). Use a path under C:\sc-work\, or work/scratch/."
+        }
+        $env:SCPLUGIN_FRAMEDUMP = $fdFull
+    } else { $env:SCPLUGIN_FRAMEDUMP = '' }
     $env:SCPLUGIN_WIDESCREEN     = $Widescreen
     $env:SCPLUGIN_WS_STAGE       = $WidescreenStage
     if ($Liveness -eq '0') {

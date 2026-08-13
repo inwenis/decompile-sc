@@ -32,6 +32,7 @@
 
 #include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "sc_addresses.h"
@@ -369,6 +370,156 @@ static void ScanScreen(const char* tag) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Framebuffer dump (task 063) -- READ-ONLY
+//
+// Why it exists: every frame this project had ever captured went through the
+// PRESENTED window, and the presented window is WMode.dll's columns 0..639 of
+// whatever the engine composed (research/renderer-viewport.md 12.6, 12.10).
+// Task 034 judged itself blocked because its instrument could not see the
+// right 160 columns of an 800-wide frame. This reads the engine's OWN
+// composed frame -- the screen Bitmap 0x006CEFF0 (u16 w, u16 h, u8* data;
+// pitch == width, research/renderer-viewport.md 2) -- straight out of process
+// memory and writes it to a file, so the full composition is visible without
+// presenting it and without touching the user's display.
+//
+// Same family as the SCREEN scan above: installs no hook, calls nothing in
+// the game, writes nothing to game memory, so it exists in -Mode observe.
+// Off by default: %SCPLUGIN_FRAMEDUMP% names the directory the dumps go to
+// (launcher flag -FrameDump). THE DUMP REPRODUCES GAME ARTWORK: the
+// directory must be on the gitignored diagnostic path (C:\sc-work\...) and
+// no dump is ever committed (AGENTS.md hard rule 1, "Screenshots vs hard
+// rule 1" -- the same rules as for a PNG, in a different container).
+//
+// TEARING. The observer reads while the game thread composes, so a single
+// copy can be half of one frame and half of the next. The dump therefore
+// copies the buffer repeatedly until two CONSECUTIVE copies are byte-equal
+// -- equality means no compose landed between the first copy's start and the
+// second copy's end, i.e. the pair straddles a settled frame -- and reports
+// how many reads that took (reads=) plus whether it ever settled (stable=).
+// A dump that never settled is still written (it is evidence), with stable=0
+// on its line and in its header, so a consumer can refuse it rather than
+// trust it silently.
+// ---------------------------------------------------------------------------
+
+static bool g_frameDump = false;
+static char g_frameDumpDir[MAX_PATH];
+
+static bool GetFrameDump(void) {
+    DWORD n = GetEnvironmentVariableA("SCPLUGIN_FRAMEDUMP", g_frameDumpDir,
+                                      sizeof(g_frameDumpDir));
+    if (n == 0 || n >= sizeof(g_frameDumpDir)) { g_frameDumpDir[0] = '\0'; return false; }
+    // Last component only; the parent (C:\sc-work\logs) exists on every machine
+    // this runs on, and a caller pointing somewhere deeper owns that path.
+    CreateDirectoryA(g_frameDumpDir, NULL);
+    return true;
+}
+
+// One copy of the whole frame, row by row through SafeRead: the buffer is a
+// heap allocation and SafeRead refuses ranges that cross a region boundary,
+// which a 307200/384000-byte block legitimately can.
+static bool CopyFrameRows(DWORD bits, unsigned w, unsigned h, BYTE* dst) {
+    for (unsigned y = 0; y < h; ++y) {
+        if (!SafeRead((const void*)(DWORD_PTR)(bits + y * w), dst + (size_t)y * w, w))
+            return false;
+    }
+    return true;
+}
+
+static void DumpFrame(const char* tag) {
+    if (!g_frameDump) return;
+    const char* t = tag ? tag : "-";
+
+    DWORD b = (DWORD)(DWORD_PTR)Rt(SC_VA_SCREEN_BITMAP);
+    unsigned w = 0, h = 0;
+    DWORD data = 0;
+    if (!ReadU16(b + SC_BITMAP_OFF_WIDTH, &w) || !ReadU16(b + SC_BITMAP_OFF_HEIGHT, &h) ||
+        !ReadU32(b + SC_BITMAP_OFF_DATA, &data)) {
+        ScLog("FRAMEDUMP [%s] refused: descriptor at 0x%08X unreadable", t,
+              (unsigned)SC_VA_SCREEN_BITMAP);
+        return;
+    }
+    // The dump trusts the descriptor for its geometry, so an insane descriptor is
+    // a refusal rather than a gigantic read. 64..4096 brackets every size this
+    // project will ever patch in and excludes the zeroed pre-video-init state.
+    if (data == 0 || w < 64 || w > 4096 || h < 64 || h > 4096) {
+        ScLog("FRAMEDUMP [%s] refused: descriptor implausible w=%u h=%u data=0x%08X",
+              t, w, h, (unsigned)data);
+        return;
+    }
+
+    const size_t n = (size_t)w * h;
+    BYTE* cur  = (BYTE*)malloc(n);
+    BYTE* next = (BYTE*)malloc(n);
+    if (!cur || !next) {
+        free(cur); free(next);
+        ScLog("FRAMEDUMP [%s] refused: alloc of %u bytes failed", t, (unsigned)n);
+        return;
+    }
+
+    int  reads = 0;
+    bool stable = false;
+    bool readOk = CopyFrameRows(data, w, h, cur);
+    if (readOk) {
+        ++reads;
+        for (int i = 0; i < 7 && !stable; ++i) {
+            if (!CopyFrameRows(data, w, h, next)) { readOk = false; break; }
+            ++reads;
+            if (memcmp(cur, next, n) == 0) stable = true;
+            else { BYTE* s = cur; cur = next; next = s; }   // keep the LATEST in cur
+        }
+    }
+    if (!readOk) {
+        ScLog("FRAMEDUMP [%s] refused: buffer read failed after %d read(s) "
+              "(w=%u h=%u data=0x%08X)", t, reads, w, h, (unsigned)data);
+        free(cur); free(next);
+        return;
+    }
+
+    // fd-<tag>.bin, tag sanitised to filename-safe characters.
+    char name[96];
+    unsigned ni = 0;
+    for (const char* p = t; *p && ni < sizeof(name) - 1; ++p) {
+        char c = *p;
+        name[ni++] = ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                      (c >= '0' && c <= '9') || c == '-' || c == '_') ? c : '-';
+    }
+    name[ni] = '\0';
+    char path[MAX_PATH];
+    _snprintf(path, sizeof(path) - 1, "%s\\fd-%s.bin", g_frameDumpDir, name);
+    path[sizeof(path) - 1] = '\0';
+
+    // 16-byte header, then the pixels row-major with pitch == width:
+    //   'SCFD'  u16 w  u16 h  u32 pixelBytes  u16 reads  u16 stable
+    BYTE hdr[16];
+    hdr[0] = 'S'; hdr[1] = 'C'; hdr[2] = 'F'; hdr[3] = 'D';
+    *(WORD*)(hdr + 4)  = (WORD)w;
+    *(WORD*)(hdr + 6)  = (WORD)h;
+    *(DWORD*)(hdr + 8) = (DWORD)n;
+    *(WORD*)(hdr + 12) = (WORD)reads;
+    *(WORD*)(hdr + 14) = (WORD)(stable ? 1 : 0);
+
+    HANDLE f = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    bool wrote = false;
+    if (f != INVALID_HANDLE_VALUE) {
+        DWORD out = 0;
+        wrote = WriteFile(f, hdr, sizeof(hdr), &out, NULL) && out == sizeof(hdr);
+        if (wrote) {
+            wrote = WriteFile(f, cur, (DWORD)n, &out, NULL) && out == (DWORD)n;
+        }
+        CloseHandle(f);
+    }
+    if (!wrote) {
+        ScLog("FRAMEDUMP [%s] refused: could not write %s (gle=%u)", t, path,
+              (unsigned)GetLastError());
+    } else {
+        ScLog("FRAMEDUMP [%s] w=%u h=%u bytes=%u reads=%d stable=%d path=%s",
+              t, w, h, (unsigned)n, reads, stable ? 1 : 0, path);
+    }
+    free(cur); free(next);
+}
+
 static void ScanWorld(const char* tag) {
     if (!g_worldScan) return;
 
@@ -548,6 +699,12 @@ static void PollMarker(void) {
 
     // Task 032: the renderer's own view of itself. Same trigger, same read-only shape.
     ScanScreen(g_lastMarker);
+
+    // Task 063: the composed frame itself, straight out of the screen Bitmap --
+    // the one oracle that sees the columns the presented window discards. Same
+    // trigger, same read-only shape; off unless %SCPLUGIN_FRAMEDUMP% names a
+    // directory.
+    DumpFrame(g_lastMarker);
 
     // Task 015: a marker is the driver saying "look now", so it is also the trigger for
     // the per-unit state dump. Driving it off the marker rather than off a timer is what
@@ -752,6 +909,7 @@ static DWORD WINAPI ObserverThread(LPVOID) {
     const DWORD pollMs = GetPollMs();
     g_worldScan = GetWorldScan();
     g_screenScan = GetScreenScan();
+    g_frameDump = GetFrameDump();
     g_dialogScan = GetDialogScan();
     // Task 026: the read-only command-card scan. Same shape and same off switch as
     // the world scan, and for the same reason -- it must exist in observe mode too,
@@ -772,6 +930,11 @@ static DWORD WINAPI ObserverThread(LPVOID) {
           "Bitmap 0x006CEFF0, the 8 graphic layers 0x006CEF50 and the scroll clamp, installs "
           "no hook and works in observe mode)",
           g_screenScan ? 1 : 0);
+    ScLog("OBSERVER frameDump=%d (%%SCPLUGIN_FRAMEDUMP%%; read-only per-marker copy of the "
+          "composed frame out of the screen Bitmap's own buffer, installs no hook and works "
+          "in observe mode)%s%s",
+          g_frameDump ? 1 : 0,
+          g_frameDump ? " dir=" : "", g_frameDump ? g_frameDumpDir : "");
     // Task 034: which ARM this run is. Printed next to the read-back's own switch
     // because every SCREEN line below is only interpretable against it -- 800x480
     // is the result in one arm and a defect in the other.
