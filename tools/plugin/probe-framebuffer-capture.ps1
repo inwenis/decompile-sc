@@ -376,9 +376,14 @@ try {
 
         if ($st.InGame -and $st.InGame.Dump) {
             $pt = $st.InGame
-            Write-Host "       [stock/$($pt.Tag)] index->RGB consistency vs the window, pure playfield:"
+            # Align pinned here too (task 064): the auto-search mislocked on the
+            # 36-marine fixture twice -- run 2 on the s2 arm, run 3 on THIS arm
+            # (0.33867 auto vs 0.98477 pinned, same brackets). The render pass
+            # below keeps auto-search as the disagreement detector.
+            Write-Host "       [stock/$($pt.Tag)] index->RGB consistency vs the window, pure playfield, align pinned (5,32):"
             $m = Invoke-FrameTool -ToolArgs (@('check', '--dump', $pt.Dump,
-                    '--before', $pt.Before, '--after', $pt.After) + $PF)
+                    '--before', $pt.Before, '--after', $pt.After,
+                    '--align-dx', '5', '--align-dy', '32') + $PF)
             # The window must hold a PICTURE before its vote counts: a dead
             # capture maps every index to black, each one perfectly
             # consistently, and the consistency figure goes vacuous (this

@@ -1155,9 +1155,93 @@ column extents scatter what IS written, which is the rest of the wreck. None of 
 observable through a window that crops to 640, and none of it is attributable from a bisect
 whose every subset contains the half-patched feeding path.
 
-### 14.4 Measured results
+### 14.4 Measured results (runs of 2026-08-13, off-screen, 36-marine fixture)
 
-TBD-064 (run ledger, wide_rows, band histograms, consistency figures, paths)
+**Run 1b — the positive control, unchanged probe (stock + stage 1): PASS 21/21.**
+Stock playfield consistency 0.98909 — identical to 063's run 3 on a different
+build — s1 800x480 stable both scenes, right band 76800/76800 index 0, cross-arm
+`wide_rows=0`. The instrument reads the same on a different day before it is
+asked a new question.
+
+**Run 2 — stock + stage 2, captured twice 4s apart. The headline: THERE IS MAP
+PAST COLUMN 640.** The right band x=640..799 over playfield rows: **nonzero
+fraction 0.8438, 52 distinct indices, byte-identical across the two captures (a
+right-band-only diff between them: 0 differing pixels)**; window-vouched
+consistency at pitch 800: **0.99296**. The fixture matters and is itself a
+finding: with 063's single marine the right band is legitimately shroud-black,
+so a correct and a broken stage 2 read identically — the 36-marine grid at 64px
+spacing explores the terrain under the band, closing the vacuous-fail direction
+before it could bite. Three FAILs in the run, every one decomposed offline to
+the instrument or the fixture (each measured, none waved):
+
+1. consistency 0.34164 on capture 1 — the checker's auto-alignment mislocked at
+   (8,36); every other check locked the true (5,32), and capture 1's dump
+   differs from the 0.99296 capture 2 by only 12172 px, all in sprite rows.
+2. `wide_rows`=56 vs stock / 15 between captures — every flagged row differs in
+   **17–101 px of its 640/800** (3–8%), far-apart blobs: idle-pose diffs on a
+   337-px ROW of marines plus doodad phase. §12.9's real damage ran ~70% of the
+   row. The span heuristic cannot separate a row OF sprites from a damaged row;
+   the per-row COUNT can — hence `dense_rows`.
+3. the same regions read `dense_rows=0`.
+
+**`dense_rows` was seen RED before its green was trusted** (the 055 condition,
+set by the conductor): offline, the real s2 dump re-sliced at stride 640 —
+§12.9's exact damage class, judged through frame-capture.py itself — reads
+**dense_rows=380 of 380** (diff_px=245816); and live, run 3's defect arm
+(`SCPLUGIN_WS_ONLY=terrain`, incoherent by §12.5's coupling, writes bounded
+because terrain.alloc is in the subset) reads **dense_rows=16, wide_rows=235**
+against stock. Red on the synthetic, red on the pipeline, green on the fix.
+
+**Run 3 — stock + defect arm + stage 2 with the camera moved between captures:
+42/43.** Same-origin pair (two identical minimap clicks → origin (704,416)
+twice): `dense_rows=0, wide_rows=0`, diff_px=9564. Cross-arm left 640 vs stock:
+`dense_rows=0` (wide_rows=130, all sprite rows, widest row 122 px of 640).
+Consistency pinned: 0.98900 / 0.99877. The one FAIL is the stock arm's UNPINNED
+alignment check mislocking again — 0.33867 auto, **0.98477 re-run offline with
+the pin on the same bracket captures** — after which the pin went into the
+stock arm's check too.
+
+**The seam, discriminated by the moving camera** (zeroruns per capture, origin
+beside it, predictions §14.2 registered before the run):
+
+| capture | origin | all-zero column runs (y=20..320) |
+| ------- | ------ | -------------------------------- |
+| ingame | (544,416) | 671–695 |
+| mid | (576,416) | 671–695 |
+| scrolled / scrolled2 | (704,416) | 628; 632–695 — identical twice |
+
+**Verdict: P1, screen-anchored — in two parts, the LEAK first because it is the
+gameplay defect and the bigger one:**
+
+1. **screen px 696..799 (fog cells 87–99) never receive fog at all**: at origin
+   (704,416) that region reads **100.0000% non-zero terrain over map the
+   fixture provably never explored** (band 696..800 × 20..320: 31200/31200
+   nonzero). The player sees terrain they have not explored — a quarter of the
+   extra width. And it re-reads run 2: *"the right band holds MAP"* and *"the
+   right band holds map the player is entitled to see"* are different claims —
+   run 2 measured only the first, and part of its healthy-looking band was the
+   fixture's explored area happening to cover that screen region.
+2. **screen px 672..695 (fog cells 84–86) + the last px of cell 83 paint BLACK
+   at every origin**, including over map that is certainly explored — the
+   25-px seam.
+
+(The extra black at origin (704,416), x=632..671, is consistent with legitimate
+shroud at the fixture's sight boundary and is not claimed as defect.)
+
+The suspect list the verdict selects: the fog band's CELL-unit constants — the
+terrain cache's 0x15 pattern one subsystem over — `cmp/mov 0x51/0x50`
+(81 = 648/8 ring cells, 80 = 640/8 visible cells) at 0x0047E4B0/0x0047E4C0/
+0x0047E8D9/0x0047F820/0x0047F829, plus an unread sibling branch clamping to
+0x68/0x67 (104/103) on the mode flag 0x58F440. Reading that subsystem properly
+is bounded follow-up work of exactly this task's refresh-band kind; per the
+task's own instruction the working playfield ships behind the flag with the
+fog defect stated rather than withheld.
+
+Artifacts (gitignored diagnostic path; paths travel, images never):
+`C:\sc-work\logs\063-frames\fd-{stock,s2}-*.bin`, `*-render.png`,
+`fd-synthetic-stride640.bin`; transcripts
+`C:\sc-work\logs\064-framecap-run{1b,2,3}.txt` and
+`C:\sc-work\logs\offscreen\20260813-*-probe-framebuffer-capture.txt`.
 
 ### 14.5 What stage 2 still does not cover, stated so nobody over-reads
 
