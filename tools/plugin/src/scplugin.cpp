@@ -35,6 +35,7 @@
 #include <string.h>
 
 #include "sc_addresses.h"
+#include "sc_buildid.h"
 #include "sc_card.h"
 #include "sc_fanout.h"
 #include "sc_hook.h"
@@ -825,8 +826,60 @@ static void LogAttachBanner(void) {
     ScLog("========================================================");
     ScLog("ATTACH pid=%u tid=%u", (unsigned)GetCurrentProcessId(),
           (unsigned)GetCurrentThreadId());
+    // FIRST line of the banner, and the point of task 056 (issue #73): every log,
+    // transcript and frame this run produces can now name the build that produced
+    // it. "<short sha>[+dirty] SRC=<12 hex over tools/plugin/src + build.ps1>" --
+    // the sha answers "which commit", the digest answers "which source bytes",
+    // and the second one is the one that still means something when +dirty says
+    // the first one is a lie. UNSTAMPED means this DLL did not come from
+    // build.ps1 and nothing about it can be trusted to be current.
+    ScLog("  build         : %s", ScBuildStampShort());
     ScLog("  host exe      : %s", exePath);
     ScLog("  plugin dll    : %s", dllPath);
+    // Task 056. Where WE landed, against the base the FILE asks for. build.ps1
+    // pins that base to make the build byte-reproducible, and whether the loader
+    // honours it is a fact about this process, not about the flag.
+    //
+    // READ FROM THE FILE, NOT FROM THE MAPPED IMAGE, and this cost a run to find:
+    // the Windows loader REWRITES OptionalHeader.ImageBase in the mapped header
+    // to the address it actually used. Measured here -- the file on disk holds
+    // 0x71000000, the mapped header read 0x717D0000, and the module was loaded at
+    // 0x717D0000 -- so the first version of this check compared the load address
+    // against itself and printed "the pinned base took" for a module the loader
+    // had just relocated. An instrument whose reading moves with its own input
+    // cannot fail (AGENTS.md, task 048); this one had to be read out of the bytes
+    // the linker wrote instead.
+    if (self && dllPath[0]) {
+        DWORD loadedAt = (DWORD)(DWORD_PTR)self;
+        DWORD preferred = 0;
+        HANDLE fh = CreateFileA(dllPath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (fh != INVALID_HANDLE_VALUE) {
+            DWORD got = 0;
+            LONG e_lfanew = 0;
+            if (SetFilePointer(fh, 0x3C, NULL, FILE_BEGIN) != INVALID_SET_FILE_POINTER &&
+                ReadFile(fh, &e_lfanew, sizeof(e_lfanew), &got, NULL) && got == sizeof(e_lfanew) &&
+                e_lfanew > 0 && e_lfanew < 0x1000 &&
+                // PE32: optional header at e_lfanew+24, ImageBase +28 into it.
+                SetFilePointer(fh, e_lfanew + 24 + 28, NULL, FILE_BEGIN) != INVALID_SET_FILE_POINTER &&
+                ReadFile(fh, &preferred, sizeof(preferred), &got, NULL) && got == sizeof(preferred)) {
+                /* preferred is set */
+            } else {
+                preferred = 0;
+            }
+            CloseHandle(fh);
+        }
+        if (preferred) {
+            ScLog("  plugin base   : 0x%08X  (the FILE asks for 0x%08X -- %s)",
+                  (unsigned)loadedAt, (unsigned)preferred,
+                  loadedAt == preferred
+                      ? "loaded where it asked"
+                      : "RELOCATED by the loader; that range was taken in this process");
+        } else {
+            ScLog("  plugin base   : 0x%08X  (could not read the file's own PE header -- "
+                  "cannot say whether it was relocated)", (unsigned)loadedAt);
+        }
+    }
     ScLog("  module base   : 0x%08X", (unsigned)(DWORD_PTR)g_base);
     ScLog("  preferred base: 0x%08X", (unsigned)SC_PREFERRED_IMAGE_BASE);
     ScLog("  reloc delta   : %s0x%08X  => static addresses are %s",
