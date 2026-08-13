@@ -74,6 +74,18 @@ What it does, in order:
   10. Verifies: deployed StarCraft.exe sha256 == source's, plugin DLL/EXE are newer than
       this run's start (proof they were actually rebuilt, not stale leftovers), the
       shortcut resolves to an existing target and launcher. Prints a one-line receipt.
+  11. Verifies the deployed plugin's IDENTITY and writes <DeployRoot>\BUILD-ID.txt
+      (issue #73, task 056). Step 10's freshness check is a timestamp, and a redeploy of
+      an old checkout passes it -- which is exactly the gap that made a deployed build
+      untraceable to a commit twice (2026-08-11, 2026-08-12). The DLL now carries its own
+      "<short sha>[+dirty] SRC=<digest>" stamp; this step reads it back OUT of the
+      deployed file and refuses if it is not the version this run says it deployed.
+
+      So the user's install answers "what am I running" three ways, none of them
+      involving hashing a file or comparing mtimes: BUILD-ID.txt beside the game, the
+      stamp inside plugin\scplugin.dll (Get-ScDllBuildStamp in
+      plugin\sc-build-id.ps1), and the ATTACH banner every launch writes into
+      C:\sc-work\logs\sc-plugin.log.
 
 What survives a redeploy, and what does not.
 Early versions of this script mirrored -SourceGameDir into <DeployRoot>\game with a plain
@@ -179,6 +191,9 @@ $pluginDir = Join-Path $scriptDir 'plugin'
 # found: without it, StarCraft could start between the running-game preflight check below
 # and the mirror actually running. See tools/plugin/sc-launch-lock.ps1.
 . (Join-Path $pluginDir 'sc-launch-lock.ps1')
+# Build identity (issue #73, task 056) -- the version string this script prints is now
+# also stamped inside the DLL, so the deployed build can say what it is on its own.
+. (Join-Path $pluginDir 'sc-build-id.ps1')
 
 # --- guard: refuse a dangerous -DeployRoot ----------------------------------
 $deployRootFull = Get-CanonicalPath $DeployRoot
@@ -403,7 +418,11 @@ Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-foreground.ps1')      -Destinat
 # every launch, so the deployed launcher needs it even though the answer is always yes for a
 # user who double-clicked their game -- the file has to be THERE for the question to be asked.
 Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-desktop.ps1')         -Destination (Join-Path $pluginDeployDir 'sc-desktop.ps1')         -Force
-Write-Host 'plugin runtime copied: scplugin.dll, scinject.exe, run-with-plugin.ps1, check-game-windows.ps1, sc-canonical-path.ps1, sc-audio-mute.ps1, sc-launch-lock.ps1, sc-foreground.ps1'
+# Task 056: run-with-plugin.ps1 dot-sources it on EVERY launch, the user's included, to
+# read the build identity out of the DLL it is about to inject. Missing here would break
+# the deployed launcher outright, not degrade it.
+Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-build-id.ps1')        -Destination (Join-Path $pluginDeployDir 'sc-build-id.ps1')        -Force
+Write-Host 'plugin runtime copied: scplugin.dll, scinject.exe, run-with-plugin.ps1, check-game-windows.ps1, sc-canonical-path.ps1, sc-audio-mute.ps1, sc-launch-lock.ps1, sc-foreground.ps1, sc-desktop.ps1, sc-build-id.ps1'
 
 # --- 4. write the zero-argument launcher --------------------------------------
 $launcherPath = Join-Path $deployRootFull 'Launch-StarCraft-Modded.ps1'
@@ -524,6 +543,46 @@ foreach ($f in @((Join-Path $pluginDeployDir 'scplugin.dll'), (Join-Path $plugin
 }
 Write-Host 'verify: plugin binaries are freshly built from this run'
 
+# --- 6b. the deployed plugin's IDENTITY, not its freshness (issue #73, task 056) ---
+# The check above is a TIMESTAMP: it says a file was written during this run, which is
+# what a redeploy of an old checkout also looks like. It was the only thing standing
+# between "merged" and "deployed", and on 2026-08-12 that gap cost twenty minutes of
+# hashing three scplugin.dll files and comparing their mtimes against commit timestamps
+# to work out that the user's build came from main four minutes AFTER the fix landed on
+# a branch. So read the identity out of the deployed file and require it to be the
+# version this run says it deployed.
+$deployedDll = Join-Path $pluginDeployDir 'scplugin.dll'
+$deployedStamp = Get-ScDllBuildStamp -Path $deployedDll
+if (-not $deployedStamp) {
+    throw ("deploy: the deployed scplugin.dll carries NO build stamp. It cannot say what commit it came " +
+           'from, which is the whole problem issue #73 exists for. Rebuild with tools/plugin/build.ps1.')
+}
+if ($deployedStamp.BuildId -ne $version) {
+    throw ("deploy: the deployed scplugin.dll says it is build '$($deployedStamp.BuildId)' but this run " +
+           "reports version=$version. The copy did not take, or it copied a different build.")
+}
+$deployedDllHash = (Get-FileHash -LiteralPath $deployedDll -Algorithm SHA256).Hash
+Write-Host "verify: deployed scplugin.dll is build $($deployedStamp.BuildId) src=$($deployedStamp.SrcDigest) (read from the file, not from this script's own variables)"
+
+# And a receipt beside the game, for a human who has a running install and a question.
+# The DLL is the authority -- this file is the convenience -- so it records the DLL's own
+# stamp and hash rather than a separately-computed version string.
+$buildIdPath = Join-Path $deployRootFull 'BUILD-ID.txt'
+@(
+    "version      : $version"
+    "commit       : $gitSha$(if ($dirty) { '   (DIRTY: built from a tree with uncommitted changes -- the commit id alone does not describe this build)' })"
+    "deployed     : $($deployStart.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+    "plugin stamp : $($deployedStamp.Stamp)"
+    "plugin sha256: $deployedDllHash"
+    ''
+    'The DLL is the authority, not this file. To ask the binary itself:'
+    '    . <thisdir>\plugin\sc-build-id.ps1'
+    '    Get-ScDllBuildStamp -Path <thisdir>\plugin\scplugin.dll'
+    'Every game launched through the shortcut also logs this in its ATTACH banner'
+    '(C:\sc-work\logs\sc-plugin.log, line "  build         : ...").'
+) | Set-Content -LiteralPath $buildIdPath -Encoding utf8
+Write-Host "verify: build receipt written -> $buildIdPath"
+
 if (-not (Test-Path -LiteralPath $shortcutPath)) { throw "deploy: shortcut was not written: $shortcutPath" }
 $resolved = $shell.CreateShortcut($shortcutPath)
 if ($resolved.TargetPath -ne $pwshExe) { throw "deploy: shortcut target mismatch: $($resolved.TargetPath)" }
@@ -537,5 +596,6 @@ Write-Host "verify: shortcut resolves ($shortcutPath -> $pwshExe $($resolved.Arg
 
 Write-Host ''
 Write-Host "deploy: OK  version=$version  date=$dateStamp  -> $deployRootFull"
+Write-Host "deploy: the deployed plugin reports itself as $($deployedStamp.Stamp) -- see $deployRootFull\BUILD-ID.txt"
 Write-Host "deploy: shortcut -> $shortcutPath"
 exit 0
