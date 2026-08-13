@@ -33,7 +33,9 @@ memory reads:
   3. EACH IS PAID FOR ONCE, BY THE ENGINE. Minerals are asserted to an exact figure after
      the burst and asserted UNCHANGED thereafter -- neither holding an item back nor
      handing it over moves money, so a second payment would show up as a drop while the
-     queue drains. The plugin's own `mineralsSpent` counter is asserted to be ZERO.
+     queue drains. (The plugin's own `mineralsSpent` counter used to be asserted zero
+     beside that; it was deleted in task 055 -- issue #66 -- because nothing incremented
+     it. The engine's own balance, above, is the oracle and always was.)
 
 TASK 028 ADDS THE OTHER DIRECTION: CANCELLING, IN A REAL GAME, BOTH WAYS
 
@@ -553,7 +555,7 @@ function Get-ProdQueue {
             $out = [pscustomobject]@{
                 Label = $label; Selected = $null
                 Buildings = 0; Max = 0; Captured = 0; Promoted = 0
-                Cancelled = 0; Refunded = 0; RefusedFull = 0; RefusedCost = 0
+                Cancelled = 0; Refunded = 0; RefusedFull = 0
                 Tracked = @(); Lines = @($lines | ForEach-Object { $_.Line })
             }
             foreach ($l in $lines) {
@@ -590,7 +592,7 @@ function Get-ProdQueue {
                     continue
                 }
                 $s = [regex]::Match($l.Line,
-                    'buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+) refusedFull=(\d+) refusedCost=(\d+)')
+                    'buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+) refusedFull=(\d+)')
                 if ($s.Success) {
                     $out.Buildings = [int]$s.Groups[1].Value
                     $out.Max = [int]$s.Groups[2].Value
@@ -599,7 +601,6 @@ function Get-ProdQueue {
                     $out.Cancelled = [int]$s.Groups[5].Value
                     $out.Refunded = [int]$s.Groups[6].Value
                     $out.RefusedFull = [int]$s.Groups[7].Value
-                    $out.RefusedCost = [int]$s.Groups[8].Value
                 }
             }
             return $out
@@ -892,8 +893,8 @@ try {
             "(-ProbeBuildSeconds $ProbeBuildSeconds is too short for a $Clicks-click burst)"
 
         # THE LEDGER. Every command that reached the funnel was accepted and paid for
-        # there (refusedFull/refusedCost are asserted zero below), so this is what the
-        # money has to reconcile against for the rest of the run.
+        # there (refusedFull is asserted zero below), so this is what the money has to
+        # reconcile against for the rest of the run.
         $script:accepted += $cmds.Count
         Shot 'queued'
     }
@@ -925,8 +926,9 @@ try {
         # would mean an over-cap command reached the handler, which the client should
         # never have sent.
         Assert-That "and refused nothing itself ($($q.RefusedFull))" ($q.RefusedFull -eq 0)
-        Assert-That 'nothing was refused for cost -- the fixture is not resource-starved' `
-            ($q.RefusedCost -eq 0)
+        # "nothing was refused for cost" was asserted here from refusedCost, a counter no
+        # code path could move (issue #66). The fixture's resource state is asserted for
+        # real by the exact-minerals check above, which is what a starved fixture breaks.
         # The engine's cap, stated as a subtraction over this run's own counters: 9
         # commands went out and 4 of them are with the plugin, so the engine is holding 5
         # -- its five slots, full, which is what stopped the tenth press.
@@ -1499,16 +1501,15 @@ $statLine = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
               Select-String -Pattern 'PRODQSTATS ')
 if ($statLine.Count -gt 0) {
     $m = [regex]::Match($statLine[-1].Line,
-        'captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+) refusedFull=(\d+) refusedCost=(\d+) mineralsSpent=(\d+) mineralsRefunded=(\d+)')
+        'captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+) refusedFull=(\d+) mineralsRefunded=(\d+)')
     if ($m.Success) {
         $cancelled = [int]$m.Groups[3].Value
         $refunded  = [int]$m.Groups[4].Value
-        $spent = [int]$m.Groups[7].Value
-        $back = [int]$m.Groups[8].Value
-        # THE PAY-ONCE CLAIM, from the plugin's side of it: the engine paid for all nine
-        # and the plugin paid for none, so its own spend counter must be flat ZERO. A
-        # design in which the plugin also paid would read 4 x 50 here.
-        Assert-That "the plugin spent NOTHING of its own ($spent)" ($spent -eq 0)
+        $back = [int]$m.Groups[6].Value
+        # "the plugin spent NOTHING of its own" was asserted here from mineralsSpent.
+        # Deleted with the counter (issue #66, task 055). The pay-once claim is carried by
+        # the engine's own balance -- asserted exactly at the burst and asserted UNCHANGED
+        # across the drain -- which is where a plugin that also paid would show up.
         # THE REFUND, ONCE. The plugin served exactly the cancels that were its own, and
         # gave back exactly one unit's cost for each. This is the counter that would read
         # 2 x 50 on a double refund and 0 on a swallowed item, and neither would show up

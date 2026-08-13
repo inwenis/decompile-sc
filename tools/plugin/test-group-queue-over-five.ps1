@@ -184,7 +184,7 @@ function Get-Prod {
                 # PRODQ: the plugin's tracked buildings (ring + overflow), keyed by unit.
                 Tracked = @{}
                 TrackedCount = 0; Max = 0; Captured = 0; Promoted = 0
-                Cancelled = 0; Refunded = 0; RefusedFull = 0; RefusedCost = 0
+                Cancelled = 0; Refunded = 0; RefusedFull = 0
                 # PRODFAN: every selected building's own ring.
                 Rows = @(); Buildings = 0; SimSlots = 0; ClientCount = 0
                 TotalQueued = 0; Minerals = 0; Gas = 0; Fanned = 0; Reached = 0
@@ -211,7 +211,7 @@ function Get-Prod {
                     continue
                 }
                 $s = [regex]::Match($l.Line,
-                    'buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+) refusedFull=(\d+) refusedCost=(\d+)')
+                    'buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+) refusedFull=(\d+)')
                 if ($s.Success) {
                     $out.TrackedCount = [int]$s.Groups[1].Value
                     $out.Max = [int]$s.Groups[2].Value
@@ -220,7 +220,6 @@ function Get-Prod {
                     $out.Cancelled = [int]$s.Groups[5].Value
                     $out.Refunded = [int]$s.Groups[6].Value
                     $out.RefusedFull = [int]$s.Groups[7].Value
-                    $out.RefusedCost = [int]$s.Groups[8].Value
                 }
             }
             foreach ($l in $fLines) {
@@ -598,8 +597,11 @@ try {
             ($paid -eq $expectUnits * $SCV_COST)
         Assert-That 'and nothing was paid for that did not queue' `
             ($paid -le $expectUnits * $SCV_COST)
-        Assert-That "no Train command was refused for a full ring or for cost (full=$($p.RefusedFull) cost=$($p.RefusedCost))" `
-            ($p.RefusedFull -eq 0 -and $p.RefusedCost -eq 0)
+        # The `cost=` half of this was read from refusedCost, which nothing incremented
+        # (issue #66); the ring half is live and stays. What the cost half claimed is
+        # asserted for real by the exact-charge assertion above.
+        Assert-That "no Train command was refused for a full ring (full=$($p.RefusedFull))" `
+            ($p.RefusedFull -eq 0)
         $script:mineralsAfterBurst = $p.Minerals
         $script:unitsQueued = $expectUnits
         $script:capturedAfterBurst = $p.Captured
@@ -757,19 +759,22 @@ Assert-That 'the generated map was cleaned up' ($KeepOpen -or -not (Test-Path -L
 # THE PLUGIN SPENT NOTHING OF ITS OWN. Every item that queued was accepted and paid for by
 # the engine's addToBuildQueue; the plugin's only resource write is the refund. That is an
 # assertion, not a coincidence (sc_prodqueue.h, THE RESOURCE RULE).
+#
+# It used to be asserted HERE, off mineralsSpent/gasSpent -- two counters nothing ever
+# incremented (issue #66). Measured before deleting them: a build that really did spend
+# left both reading 0 while the balance assertions failed. So the claim is asserted where
+# it can fail, against the engine's own globals: the exact-charge assertion during the
+# burst, and the unchanged-balance assertion after it. What is left on this line is the
+# REFUND counter, which Refund() increments for real.
 $stats = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
            Select-String -Pattern 'PRODQSTATS ')
 if ($stats.Count -gt 0) {
     Write-Host "  $($stats[-1].Line)"
     $m = [regex]::Match($stats[-1].Line,
-        'captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+) refusedFull=(\d+) refusedCost=(\d+) mineralsSpent=(\d+) mineralsRefunded=(\d+) gasSpent=(\d+) gasRefunded=(\d+)')
+        'captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+) refusedFull=(\d+) mineralsRefunded=(\d+) gasRefunded=(\d+)')
     if ($m.Success) {
-        Assert-That "the plugin spent none of the player's minerals of its own (mineralsSpent=$($m.Groups[7].Value))" `
-            ([int]$m.Groups[7].Value -eq 0)
-        Assert-That "and none of their gas (gasSpent=$($m.Groups[9].Value))" `
-            ([int]$m.Groups[9].Value -eq 0)
-        Assert-That "it refunded exactly the one cancelled item ($($m.Groups[8].Value) minerals)" `
-            ([int]$m.Groups[8].Value -eq $SCV_COST)
+        Assert-That "it refunded exactly the one cancelled item ($($m.Groups[6].Value) minerals)" `
+            ([int]$m.Groups[6].Value -eq $SCV_COST)
     } else { Assert-That 'the stats line parsed' $false "($($stats[-1].Line))" }
 } else { Assert-That 'the plugin wrote its production-queue stats line' $false }
 

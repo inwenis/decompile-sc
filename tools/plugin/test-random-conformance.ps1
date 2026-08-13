@@ -76,10 +76,12 @@ WHAT IT ASSERTS, AND WHERE EACH INVARIANT'S GROUND TRUTH COMES FROM
          which is why both states are also captured as frames, named for the state, under
          -ShotDir for the user to open.
 
-  INV-P  the plugin spent none of its own money (`mineralsSpent=0`).
-         SELF-CHECK, NOT AN ORACLE -- it is the plugin's own counter and it is labelled
-         as such wherever it is printed. It is here because task 025's design claim is
-         exactly this, not because a counter can evidence anything.
+  INV-P  the plugin spent none of its own money.
+         Asserted against the ENGINE's per-player mineral global across the whole run,
+         not against the plugin's own counter. It used to be the latter (`mineralsSpent=0`),
+         labelled a self-check -- correctly, because nothing ever incremented it; task 055
+         deleted the counter (issue #66) after measuring that a build which really did
+         spend left it reading 0. The engine's balance is the only thing that moves.
 
 REPRODUCIBILITY. The plan is a pure function of (seed, params) and is generated BEFORE the
 game launches -- see random-conformance-plan.ps1, which has its own PRNG for the reason
@@ -390,7 +392,7 @@ function ConvertFrom-EngineLines {
         TotalQueued = 0; Minerals = -1; Gas = -1; Fanned = 0; Reached = 0
         # PRODQ: one row per building the plugin is HOLDING items for.
         Tracked = @{}; TrackedCount = 0; Captured = 0; Promoted = 0
-        Cancelled = 0; Refunded = 0; RefusedFull = 0; RefusedCost = 0
+        Cancelled = 0; Refunded = 0; RefusedFull = 0
         TrainSeen = -1; TrainNoUnit = -1
         # WORLD: the engine's per-player unit lists.
         Units = @(); Screen = $null; Counts = @{}
@@ -445,7 +447,7 @@ function ConvertFrom-EngineLines {
             }
             continue
         }
-        $m = [regex]::Match($t, 'PRODQ \[[^\]]+\] buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+) refusedFull=(\d+) refusedCost=(\d+)')
+        $m = [regex]::Match($t, 'PRODQ \[[^\]]+\] buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+) refusedFull=(\d+)')
         if ($m.Success) {
             $o.TrackedCount = [int]$m.Groups[1].Value
             $o.Captured = [int]$m.Groups[3].Value
@@ -453,7 +455,6 @@ function ConvertFrom-EngineLines {
             $o.Cancelled = [int]$m.Groups[5].Value
             $o.Refunded = [int]$m.Groups[6].Value
             $o.RefusedFull = [int]$m.Groups[7].Value
-            $o.RefusedCost = [int]$m.Groups[8].Value
             $x = [regex]::Match($t, 'trainSeen=(\d+) trainNoUnit=(\d+)')
             if ($x.Success) { $o.TrainSeen = [int]$x.Groups[1].Value; $o.TrainNoUnit = [int]$x.Groups[2].Value }
             continue

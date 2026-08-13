@@ -49,7 +49,6 @@ function Invoke-QueueEpisode {
     # what an item leaving a queue looks like from the engine's side.
     $scvRawBefore = Get-OwnedCount -Eng $Before -Type $SCV_TYPE
     $refusedFullBefore = $Before.RefusedFull
-    $refusedCostBefore = $Before.RefusedCost
     $promotedBefore = $Before.Promoted
     $logicalBefore = @{}
     foreach ($u in $Units) { $logicalBefore[$u] = (Get-Logical -Eng $Before -Unit $u).Logical }
@@ -114,7 +113,9 @@ function Invoke-QueueEpisode {
     # GROUND TRUTH: the engine's per-player mineral global. This is drain-proof -- a unit
     # completing shortens a queue but never un-spends a mineral -- so it holds whether or
     # not anything finished while the burst was going out.
-    $refusals = ($after.RefusedFull - $refusedFullBefore) + ($after.RefusedCost - $refusedCostBefore)
+    # refusedCost was dropped in task 055 (issue #66): nothing ever incremented it, so it
+    # contributed a constant 0 to this sum.
+    $refusals = $after.RefusedFull - $refusedFullBefore
     $expectItems = $Presses * $SelCount
     $paid = $mineralsBefore - $after.Minerals
     if ($refusals -eq 0) {
@@ -125,7 +126,7 @@ function Invoke-QueueEpisode {
         # A refusal is a legitimate engine answer, so it changes the expectation instead of
         # failing -- but it is REPORTED, because a silent one would turn every later number
         # into a mystery.
-        Note "$refusals command(s) were refused (full=$($after.RefusedFull - $refusedFullBefore) cost=$($after.RefusedCost - $refusedCostBefore)); the charge is asserted as a bound, not an equality"
+        Note "$refusals command(s) were refused for a full ring (full=$($after.RefusedFull - $refusedFullBefore)); the charge is asserted as a bound, not an equality"
         Assert-Inv -Id 'INV-M' -What "the engine charged for no more than the $expectItems items asked for ($paid)" `
             -Ok ($paid -le $expectItems * $SCV_COST -and $paid -ge 0)
     }

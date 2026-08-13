@@ -667,17 +667,27 @@ if ($gamePid -gt 0 -and -not $KeepOpen) {
 Assert-That 'the game process this test started is gone' ($KeepOpen -or $null -eq $left)
 Assert-That 'the generated map was cleaned up' ($KeepOpen -or -not (Test-Path -LiteralPath $mapPath))
 
-# THE PAY-ONCE CLAIM, from the plugin's own side of it: the engine paid for every item and
-# the plugin paid for none, so both of its spend counters must be flat ZERO. A design in
-# which the plugin also paid would read three costs here.
+# THE PAY-ONCE CLAIM used to be asserted here from mineralsSpent/gasSpent. Both were flat
+# zero by construction -- sc_upgrades.cpp reads resources through value-returning
+# accessors and cannot write them at all -- so the assertions read the initialiser
+# (issue #66, deleted in task 055).
+#
+# The claim is asserted where it can fail, off the ENGINE's own balance, three times in
+# this suite: NOT ONE MINERAL was paid for queueing (step 'THE HEADLINE'), the balance was
+# unchanged across the whole holding window (step 'THEY TOOK EFFECT'), and the cancel
+# refunded exactly what the start charged (step 'CANCEL').
+#
+# The stats line is still read, because a run in which the plugin never wrote one at all
+# is a different failure and has to stay distinguishable from a quiet one.
 $statLine = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
               Select-String -Pattern 'UPGQSTATS ')
 if ($statLine.Count -gt 0) {
     Write-Host "  $($statLine[-1].Line.Trim())"
-    $m = [regex]::Match($statLine[-1].Line, 'mineralsSpent=(\d+) gasSpent=(\d+)')
+    $m = [regex]::Match($statLine[-1].Line, 'queued=(\d+) promoted=(\d+) cancelled=(\d+) dropped=(\d+)')
     if ($m.Success) {
-        Assert-That "the plugin spent NO MINERALS of its own ($($m.Groups[1].Value))" ([int]$m.Groups[1].Value -eq 0)
-        Assert-That "and NO GAS ($($m.Groups[2].Value))" ([int]$m.Groups[2].Value -eq 0)
+        Assert-That "the plugin promoted every item it queued (queued=$($m.Groups[1].Value) promoted=$($m.Groups[2].Value) cancelled=$($m.Groups[3].Value))" `
+            ([int]$m.Groups[1].Value -eq [int]$m.Groups[2].Value + [int]$m.Groups[3].Value)
+        Assert-That "and dropped none of them ($($m.Groups[4].Value))" ([int]$m.Groups[4].Value -eq 0)
     }
     else { Assert-That 'the detach stats line is parseable' $false "($($statLine[-1].Line))" }
 }
