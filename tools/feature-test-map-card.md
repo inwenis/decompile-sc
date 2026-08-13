@@ -1,7 +1,7 @@
 # Feature test map -- quick card
 
-**Not in the map list?** A redeploy is meant to put it back on its own. If it is ever
-missing anyway, open a terminal in the repo and run:
+**Not in the map list?** A redeploy deletes it -- that is being fixed separately.
+Until then, open a terminal in the repo and run:
 
 ```
 ./tools/make-feature-test-map.ps1
