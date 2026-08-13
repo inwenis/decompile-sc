@@ -2374,6 +2374,13 @@ function Get-ScStatusQueue {
         [int]$TimeoutSec = 15
     )
     if (-not $MarkerPath) { $MarkerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt' }
+  # A walk whose header carries ringStable=0 is NOT consumable (task 066): the plugin
+  # itself flagged that its ring read never settled against the phantom bracket's
+  # seqlock (an OS preemption inside the guarded section can straddle every retry), so
+  # head/engine/qtype on that walk may be mid-window. Re-ask with a fresh marker, up to
+  # three times; only then return the flagged walk so a caller's assertion fails with
+  # `.RingStable = $false` in view rather than passing or failing on a disclaimed value.
+  for ($scAsk = 0; $scAsk -lt 3; $scAsk++) {
     $script:ScMarkerSeq++
     $label = "$Tag-$script:ScMarkerSeq"
     Set-ScMarker -MarkerPath $MarkerPath -Label $label
@@ -2387,18 +2394,23 @@ function Get-ScStatusQueue {
         # nothing is clickable" an answer rather than a timeout.
         $done = @($lines | Select-String -Pattern 'slots=\d+ shown=')
         $absent = @($lines | Select-String -Pattern 'dialog=0 ')
+        if ($done.Count -gt 0 -and $scAsk -lt 2 -and
+            @($lines | Where-Object { $_.Line -match ' ringStable=0 ' }).Count -gt 0) {
+            Write-Verbose "Get-ScStatusQueue: walk '$label' carries ringStable=0 -- re-asking"
+            break
+        }
         if ($done.Count -gt 0 -or $absent.Count -gt 0) {
             $st = [pscustomobject]@{
                 Label = $label; Ok = ($done.Count -gt 0); Slots = @()
                 Dialog = ''; Root = ''; RootRect = @(0,0,0,0)
                 Portrait = ''; PortraitType = -1; PortraitOwner = -1
-                Head = -1; QueueOk = $false; Engine = @()
+                Head = -1; QueueOk = $false; RingStable = $true; Engine = @()
                 Shown = -1; Clickable = -1
                 Lines = @($lines | ForEach-Object { $_.Line })
             }
             foreach ($l in $lines) {
                 $h = [regex]::Match($l.Line,
-                    'dialog=0x([0-9A-Fa-f]+) root=0x([0-9A-Fa-f]+) rootrect=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\) portrait=0x([0-9A-Fa-f]+) ptype=0x([0-9A-Fa-f]+) powner=(\d+) head=(\d+) queueOk=(\d+) engine=\[([^\]]*)\]')
+                    'dialog=0x([0-9A-Fa-f]+) root=0x([0-9A-Fa-f]+) rootrect=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\) portrait=0x([0-9A-Fa-f]+) ptype=0x([0-9A-Fa-f]+) powner=(\d+) head=(\d+) queueOk=(\d+) ringStable=(\d+) engine=\[([^\]]*)\]')
                 if ($h.Success) {
                     $st.Dialog = $h.Groups[1].Value
                     $st.Root = $h.Groups[2].Value
@@ -2409,7 +2421,11 @@ function Get-ScStatusQueue {
                     $st.PortraitOwner = [int]$h.Groups[9].Value
                     $st.Head = [int]$h.Groups[10].Value
                     $st.QueueOk = ($h.Groups[11].Value -eq '1')
-                    $st.Engine = @($h.Groups[12].Value -split ',' |
+                    # ringStable=0 means the walk's ring read never settled against the
+                    # phantom bracket's seqlock (task 066) -- head/engine/qtype on this
+                    # walk may be mid-window and a caller should re-read, not trust.
+                    $st.RingStable = ($h.Groups[12].Value -eq '1')
+                    $st.Engine = @($h.Groups[13].Value -split ',' |
                                    Where-Object { $_ -match '^0x' } |
                                    ForEach-Object { [Convert]::ToInt32(($_ -replace '^0x'), 16) })
                     continue
@@ -2446,7 +2462,11 @@ function Get-ScStatusQueue {
         }
         Start-Sleep -Milliseconds 250
     }
-    throw "drive-game: no complete STATQ walk for marker '$label' within ${TimeoutSec}s (log: $LogPath). Was the game launched with -CardScan 1?"
+    if ((Get-Date) -ge $deadline) {
+        throw "drive-game: no complete STATQ walk for marker '$label' within ${TimeoutSec}s (log: $LogPath). Was the game launched with -CardScan 1?"
+    }
+  }
+  throw "drive-game: Get-ScStatusQueue fell out of its re-ask loop -- unreachable"
 }
 
 function Get-ScStatusSlotPoint {

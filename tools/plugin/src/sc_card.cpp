@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "sc_log.h"
+#include "sc_queueind.h"   // ScQueueIndRingGen -- the phantom window's seqlock (task 066)
 
 static BYTE*        g_base    = NULL;
 static bool         g_enabled = false;
@@ -166,10 +167,22 @@ int ScStatusSnapshot(ScStatusHeader* hdr, ScStatusSlot* out, int max) {
     if (RdU32(Rt(SC_VA_ACTIVE_PORTRAIT_UNIT), &hdr->portrait) && hdr->portrait) {
         RdU16(hdr->portrait + SC_CUNIT_OFF_UNIT_ID, &hdr->portraitType);
         RdU8(hdr->portrait + SC_CUNIT_OFF_PLAYER, &hdr->portraitOwner);
-        bool ok = RdU8(hdr->portrait + SC_CUNIT_OFF_BUILD_QUEUE_SLOT, &hdr->head);
-        for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) {
-            ok = RdU16(hdr->portrait + SC_CUNIT_OFF_BUILD_QUEUE + (DWORD)i * 2,
-                       &hdr->queue[i]) && ok;
+        // COHERENT against the phantom bracket (task 066, sc_queueind.h): this walk runs
+        // on the observer thread, and the game thread makes owned ring slots non-empty
+        // for the length of each queueLayout call. A qtype read mid-window would report
+        // a phantom item as the engine's, which is exactly what the suites assert
+        // against ("the ring slot behind it is EMPTY -- the item is the plugin's").
+        bool ok = false;
+        hdr->ringStable = false;
+        for (int attempt = 0; attempt < 32 && !hdr->ringStable; ++attempt) {
+            unsigned g1 = ScQueueIndRingGen();
+            if (g1 & 1) continue;
+            ok = RdU8(hdr->portrait + SC_CUNIT_OFF_BUILD_QUEUE_SLOT, &hdr->head);
+            for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) {
+                ok = RdU16(hdr->portrait + SC_CUNIT_OFF_BUILD_QUEUE + (DWORD)i * 2,
+                           &hdr->queue[i]) && ok;
+            }
+            if (ScQueueIndRingGen() == g1) hdr->ringStable = true;
         }
         hdr->queueOk = ok;
     }
@@ -262,11 +275,11 @@ void ScStatusScan(const char* tag) {
     }
 
     ScLog("STATQ [%s] dialog=0x%08X root=0x%08X rootrect=(%d,%d,%d,%d) portrait=0x%08X "
-          "ptype=0x%03X powner=%u head=%u queueOk=%d engine=[%s]",
+          "ptype=0x%03X powner=%u head=%u queueOk=%d ringStable=%d engine=[%s]",
           t, (unsigned)hdr.dialog, (unsigned)hdr.root,
           hdr.rootRect[0], hdr.rootRect[1], hdr.rootRect[2], hdr.rootRect[3],
           (unsigned)hdr.portrait, (unsigned)hdr.portraitType, (unsigned)hdr.portraitOwner,
-          (unsigned)hdr.head, hdr.queueOk ? 1 : 0, eng);
+          (unsigned)hdr.head, hdr.queueOk ? 1 : 0, hdr.ringStable ? 1 : 0, eng);
 
     for (int i = 0; i < n; ++i) {
         const ScStatusSlot* s = &slots[i];

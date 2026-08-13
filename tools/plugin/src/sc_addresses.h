@@ -887,11 +887,31 @@
 //     i.e. clicking icon k emits {0x20, k} and the receiver's non-0xFE branch calls
 //     cancelBuildQueueSlot(EAX = k), which refunds and compacts.
 //
-// The disabled bit is SC_CTRL_FLAG_DISABLED, the same one the card's two input paths
-// refuse -- so "which queue icons can the player actually click" is a read.
+// The disabled bit is SC_CTRL_FLAG_DISABLED. CORRECTED by task 061 (issue #91), in
+// research/production-queue.md 8.1 first and here now: the STRIP's input paths do NOT
+// refuse that bit -- the icon's own hit-test answer 0x00457F82 tests `flags & 8`
+// (VISIBLE) and nothing else, and neither the type-2 LBUTTONDOWN nor LBUTTONUP path
+// reads 0x2. What the bit DOES decide is the DRAWN COLOURS: the icon blit 0x00456C30
+// tests exactly it (task 066, `MOV EDX,2 / TEST DL,BL` at 0x00456C3D) and picks
+// ticon.pcx remap row 4 (disabled) over row 3 (enabled) -- 14 of 16 entries differ,
+// the same pair relationship as the card's row0/row1 grey-out. So the bit greys the
+// PIXELS while refusing nothing, which is why "clear it to make the slot clickable"
+// (task 039) was never the mechanism and "leave it set to avoid the disable event"
+// (task 066 option C) draws the slot grey.
 #define SC_STATQ_FIRST_CONTROL 2
 #define SC_STATQ_LAST_CONTROL  6
 #define SC_STATQ_SLOTS         5
+
+// queueLayout itself (quoted above), hooked by task 066: __stdcall(BinDlg* ctrl),
+// RET 4, and it re-reads the portrait unit global 0x00597248 for every slot rather
+// than caching it. Prologue for the detour, dumped from this binary
+// (work/scratch/066/disasm.py, `python disasm.py <exe> 0x004268D0 0x00426A40`):
+//   004268D0  55              PUSH EBP
+//   004268D1  8B EC           MOV  EBP,ESP
+//   004268D3  83 EC 20        SUB  ESP,0x20
+// = 6 bytes / 3 whole instructions, none PC-relative, so they relocate into the
+// trampoline unchanged and the 5-byte JMP + 1 spare byte fits exactly.
+#define SC_VA_QUEUE_LAYOUT 0x004268D0u
 
 // The queue icon's statUser record: 12 bytes, allocated by the status control's
 // CREATE case (0x00457CA0: `SMemAlloc(0xC, "statdata.cpp", 0x273)` -> control+0x26)

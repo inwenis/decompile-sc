@@ -23,13 +23,24 @@
 //   bounds are read out of that control at runtime and never hardcoded; the live values on
 //   this install are logged by ScQueueIndLogDialog.
 //
-// THE ONE HOOK
+// THE TWO HOOKS
 //   statDisplayDriver 0x004D93F0, the per-frame HUD driver (hud-selection-row.md 4.1). The
 //   module runs AFTER the original -- i.e. after the status dispatcher 0x00458120 has laid
 //   the pane out and hidden whatever it hides -- which is what lets one control serve both
 //   the single-building branch and the multi-select branch, and what lets it re-show itself
 //   after the engine's own hide-all sweep. It is deliberately NOT the dispatcher: sc_hudrow
 //   already owns that function's 5-byte window.
+//
+//   queueLayout 0x004268D0 (task 066). For the length of that one call, the ring slots the
+//   plugin holds items behind are made NON-EMPTY -- the held item's type is written into the
+//   slot before the original runs and the empty sentinel is restored the instant it returns
+//   -- so the ENGINE lays the slot out as occupied with its own code: grp/icon/mode/type,
+//   the slot label, and enableControl instead of disableControl. That kills task 061's
+//   defect at its root: no disableControl ever fires on a slot the plugin owns, so no
+//   dwUser=6 event exists to clear a player's PRESSED bit mid-click, and the click's
+//   press/activate cycle is byte-for-byte a vanilla occupied slot's. It also deletes this
+//   module's own five field writes (task 039's bug class -- hand-writing what the engine
+//   writes correctly). See PhantomApply for why the window is unobservable by construction.
 //
 // WHAT IT NEVER DOES
 //   It writes no unit, no resource global and no engine control except the one it created:
@@ -227,11 +238,13 @@ enum ScQueueIndStat {
     SC_QIND_STAT_HIDES = 2,     // times it went away because there was nothing to say
     SC_QIND_STAT_SPLICES = 3,   // controls spliced into a dialog child list
     SC_QIND_STAT_REFUSED = 4,   // splices refused (no engine handler for the type)
-    SC_QIND_STAT_ICONS = 5,     // queue icons filled from the plugin's own overflow
-    // Frames on which the fill was REFUSED because the engine's icon-GRP global was null.
-    // Filling a slot without the GRP that says what its frame index means is what drew
-    // garbage in task 039, so "no GRP" now means "draw nothing", and it is counted rather
-    // than passed over in silence.
+    // RESERVED (task 066). These two counted the hand-fill of the overflow icons -- slots
+    // written and fills refused for a null GRP global. The phantom bracket deleted that
+    // fill (the ENGINE writes the slot now), so nothing can increment either; they keep
+    // their numbers so no other value silently changes meaning, and they left the
+    // QINDSTATS line under the task-030 rule (a printed count must be a count something
+    // increments).
+    SC_QIND_STAT_ICONS = 5,
     SC_QIND_STAT_NOGRP = 6,
     // Presses RESCUED from the engine's own disable event on a slot the plugin fills
     // (task 061). Not "disable events seen" -- only the ones that arrived while a human
@@ -248,8 +261,45 @@ enum ScQueueIndStat {
     // "it never ran" and "it ran and did nothing" are one silence.)
     SC_QIND_STAT_DISABLE_OWNED = 8,    // disable events that reached a slot we own
     SC_QIND_STAT_DISABLE_PRESSED = 9,  // ... of those, ones arriving with a press in flight
-    SC_QIND_STAT__COUNT = 10
+    // Task 066. Ring slots phantom-written for the length of one queueLayout call. This is
+    // the fix's OWN activity counter, and DISABLE_OWNED above is its tripwire: pre-fix the
+    // engine's disable landed on an owned slot EXACTLY once per click (PR #95 measured it
+    // deterministic); with the phantom in place queueLayout takes the occupied branch and
+    // DISABLE_OWNED must not move at all. A suite asserts the pair -- phantom moving,
+    // disableOnOwned still -- which is what stops a green arm meaning "the race was won".
+    SC_QIND_STAT_PHANTOM = 10,
+    // A slot the overflow map said was the plugin's held a REAL type when the phantom went
+    // to write it. That is the rebalance invariant broken (occupied slots contiguous from
+    // the head, ring at the hold while overflow exists), so the phantom REFUSES the slot
+    // rather than overwrite an engine item, and counts the refusal here. Expected 0.
+    SC_QIND_STAT_PHANTOM_DIRTY = 11,
+    SC_QIND_STAT__COUNT = 12
 };
 int ScQueueIndStat(int which);
+
+// ---------------------------------------------------------------------------
+// THE PHANTOM WINDOW's cross-thread guard (task 066).
+//
+// The window itself cannot be seen from the game thread: it opens and closes inside one
+// queueLayout call frame, and every ENGINE reader of the ring runs on that same thread
+// (the classification is in research/production-queue.md 8.8 -- and structurally, the
+// engine's own ring mutations were ALREADY multi-store and unsynchronised, so a reader on
+// another thread would have observed torn rings in vanilla). The readers that CAN land
+// inside it are this plugin's own observer thread (PRODQ/PRODQSEL, STATQ) and the test
+// harness reading process memory. Both read this generation instead of hoping:
+// odd = the window is open; changed across a read = the read straddled one. Sequence:
+//   g1 = ScQueueIndRingGen(); if (g1 & 1) retry;
+//   <read the ring>
+//   if (ScQueueIndRingGen() != g1) retry;
+// The counter only moves when a phantom was actually written, so with the feature off (or
+// nothing held) it sits at its last even value and readers pay two loads.
+unsigned ScQueueIndRingGen(void);
+
+// Test seam for the bracket itself: apply writes the held types into the portrait
+// building's empty ring slots (returns how many), restore puts back what was saved.
+// The detour calls exactly these around the trampoline; hooktest calls them around a
+// fake layout to prove the write/restore is byte-exact and the generation brackets it.
+int  ScQueueIndPhantomApply(void);
+void ScQueueIndPhantomRestore(void);
 
 #endif // SC_QUEUEIND_H
