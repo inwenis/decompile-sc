@@ -47,6 +47,27 @@ Push-Location -LiteralPath $WorkDir
 try {
     $branch = (git rev-parse --abbrev-ref HEAD).Trim()
     $sha = (git rev-parse --short HEAD).Trim()
+
+    # ISSUE #72 HOLE 2. A dirty worktree means the bytes the steps below actually exercise are
+    # NOT the committed tree named by $sha -- uncommitted edits (tracked or new/untracked; git
+    # status --porcelain reports both, and Pester globs the filesystem so an untracked test file
+    # is exercised same as a committed one) get tested and the receipt attributes the result to
+    # the clean sha anyway. Recorded on the receipt, not refused here: run-ci-local.ps1 stays
+    # usable for a quick local check against in-progress edits. The merge gate is what refuses it
+    # (Get-CiReceiptRefusalReason in lib/ci-local.ps1), because that is the actual gate.
+    $dirtyFiles = @(git status --porcelain | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $dirty = $dirtyFiles.Count -gt 0
+
+    # ISSUE #72 HOLE 1 (part 1/2). Delete any receipt already on disk for THIS sha before any
+    # step runs. Without this, a run that crashes partway (the exact failure mode part 2 below
+    # fixes for Pester, but nothing guarantees it is the only way to crash) leaves an earlier
+    # PASS receipt for the same sha sitting untouched, and merge-task.ps1 has no way to tell that
+    # receipt apart from one this run actually produced.
+    $receiptDir = Join-Path $repoRoot 'work/scratch/ci-local'
+    New-Item -ItemType Directory -Force -Path $receiptDir | Out-Null
+    $receiptPath = Join-Path $receiptDir "$branch-$sha.json"
+    if (Test-Path -LiteralPath $receiptPath) { Remove-Item -LiteralPath $receiptPath -Force }
+
     $results = [ordered]@{}
     $failed = @()
     $skipped = @()
@@ -70,14 +91,17 @@ try {
         if (-not $Quiet) { Write-Host "== $Name" }
         try {
             $out = & $Body
-            $isSkip = ($out -is [psobject]) -and
-                      (@($out.PSObject.Properties.Name) -contains 'ScStepSkipped')
-            if ($isSkip) {
+            # ISSUE #72 HOLE 3b: classify from lib/ci-local.ps1, which looks at the LAST
+            # element when a step's body emitted output before returning Skip-Step -- $out is
+            # then an array, and the old inline check here (`$out -is [psobject]`) is false for
+            # an array, so the skip silently read as a pass. See Get-CiStepSkip.
+            $skip = Get-CiStepSkip -Out $out
+            if ($skip.IsSkip) {
                 $script:results[$Name] = @{ ok = $true; skipped = $true
-                                            required = [bool]$Required; detail = "$($out.Reason)" }
+                                            required = [bool]$Required; detail = $skip.Reason }
                 $script:skipped += $Name
                 if ($Required) { $script:requiredSkipped += $Name }
-                Write-Host ("   SKIP $Name -- $($out.Reason)" + $(if ($Required) { '  (REQUIRED)' } else { '' }))
+                Write-Host ("   SKIP $Name -- $($skip.Reason)" + $(if ($Required) { '  (REQUIRED)' } else { '' }))
             } else {
                 $script:results[$Name] = @{ ok = $true; skipped = $false
                                             required = [bool]$Required; detail = "$out" }
@@ -124,9 +148,27 @@ try {
         # not a repo that never had any -- and that must not read as green.
         if (-not (Test-Path 'tests')) { return Skip-Step 'no tests/ directory' }
         Import-Module Pester -MinimumVersion 5.0.0 -ErrorAction Stop
-        $r = Invoke-Pester -Path tests -CI -PassThru
+        # ISSUE #72 HOLE 1 (part 2/2). -CI sets Pester's Run.Exit = $true regardless of
+        # -PassThru, which calls `exit` the instant a run goes red -- killing THIS PROCESS at
+        # this line, before the throw below, the receipt write at the bottom of the script, and
+        # the FAIL summary ever run. Measured on this machine with a deliberately-red fixture:
+        # the child process exits 1 here and nothing after this line executes. Dropping -CI
+        # keeps -PassThru's result object flowing to the throw on the next line instead, which
+        # the Step wrapper above catches like any other step failure.
+        $r = Invoke-Pester -Path tests -PassThru
         if ($r.FailedCount -gt 0) { throw "$($r.FailedCount) Pester test(s) failed" }
-        "$($r.PassedCount) passed"
+        # ISSUE #72 HOLE 3a. PassedCount alone is what a stale receipt used to be judged by --
+        # a smaller number with nothing to compare it against. SkippedCount/NotRunCount go into
+        # the same detail string that lands in receipt.steps.pester.detail AND in the printed
+        # "OK" line below, so an individual `It` (or whole container) that skipped is visible
+        # next to the pass rather than silently shrinking the count. Not gated on: an
+        # environment gap (no python -- see tests/make-test-map.Tests.ps1) is a fact about the
+        # machine, the same reasoning run-ci-local.ps1 already applies to the optional ruff/
+        # hooktest STEPS, one level down at the individual-test level.
+        $subSkip = if ($r.SkippedCount -gt 0 -or $r.NotRunCount -gt 0) {
+            ", $($r.SkippedCount) SKIPPED, $($r.NotRunCount) not-run (not compared against anything -- see AGENTS.md 'a skipped gate is not a passed gate')"
+        } else { '' }
+        "$($r.PassedCount) passed$subSkip"
     }
 
     Step 'game-content-guard' -Required {
@@ -230,8 +272,6 @@ try {
         'hooktest 0 failures'
     }
 
-    $receiptDir = Join-Path $repoRoot 'work/scratch/ci-local'
-    New-Item -ItemType Directory -Force -Path $receiptDir | Out-Null
     $verdict = Get-CiReceiptVerdict -Failed $failed -RequiredSkipped $requiredSkipped
     $receipt = [ordered]@{
         branch          = $branch
@@ -244,16 +284,24 @@ try {
         # these fields rather than assume an old one skipped nothing.
         skipped         = $skipped
         requiredSkipped = $requiredSkipped
+        # ISSUE #72 HOLE 2. Present even when empty/false, same belt-and-braces reasoning as
+        # skipped/requiredSkipped above -- merge-task.ps1 refuses a receipt missing this field
+        # rather than assume a pre-tracking receipt was clean.
+        dirty           = $dirty
+        dirtyFiles      = $dirtyFiles
         steps           = $results
         note            = 'local reproduction of .github/workflows/ci.yml, plus hooktest when a 32-bit toolchain is present; does NOT include the in-game suites'
     }
-    $path = Join-Path $receiptDir "$branch-$sha.json"
+    $path = $receiptPath
     ($receipt | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $path -Encoding utf8
 
     Write-Host ''
-    # Printed on every path, including the pass: what did NOT run is part of
-    # the result, not a footnote to it.
+    # Printed on every path, including the pass: what did NOT run -- or what
+    # this run cannot vouch for -- is part of the result, not a footnote to it.
     if ($skipped.Count -gt 0) { Write-Host "ci-local: NOT RUN -- $($skipped -join ', ')" }
+    if ($dirty) {
+        Write-Host "ci-local: DIRTY WORKTREE ($($dirtyFiles.Count) change(s)) -- this receipt cannot substitute for CI at sha $sha; commit or stash and re-run"
+    }
     switch ($verdict) {
         'pass' { Write-Host "ci-local: PASS  $branch@$sha  -> $path" }
         'incomplete' {

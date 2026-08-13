@@ -16,6 +16,34 @@
 # pass, and the merge path refuses a receipt that predates this tracking
 # instead of assuming the best about it.
 
+function Get-CiStepSkip {
+    <#
+    .SYNOPSIS
+    Classifies a step body's raw pipeline output as a Skip-Step marker or a normal result.
+    .DESCRIPTION
+    ISSUE #72 HOLE 3b. PowerShell collects every unconsumed pipeline value a script block
+    produces into ONE ARRAY the moment the block emits more than a single object -- so a step
+    that writes output (an accidental bare expression, an uncaptured cmdlet result) before
+    `return Skip-Step '...'` hands the caller an array with the marker as its LAST element, not
+    the marker itself. The classifier this replaces checked `$out -is [psobject]` against the
+    whole array: System.Object[] is NOT [psobject], so the check was false, the skip's Reason
+    was never read, and the step was recorded as an ordinary pass with `detail` set to the
+    array's stringified junk. Measured: a step that runs `"stray"; return (Skip-Step 'x')`
+    produces `$out -is [array]` = $true, `$out -is [psobject]` = $false, `$out[-1] -is [psobject]`
+    = $true with `ScStepSkipped`/`Reason` intact. So classify from the LAST element, not the
+    whole value.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()]$Out)
+    $candidate = if ($Out -is [array]) { if ($Out.Count -gt 0) { $Out[-1] } else { $null } } else { $Out }
+    $isSkip = ($null -ne $candidate) -and ($candidate -is [psobject]) -and
+              (@($candidate.PSObject.Properties.Name) -contains 'ScStepSkipped')
+    [pscustomobject]@{
+        IsSkip = $isSkip
+        Reason = if ($isSkip) { "$($candidate.Reason)" } else { $null }
+    }
+}
+
 function Get-CiReceiptVerdict {
     <#
     .SYNOPSIS
@@ -53,7 +81,12 @@ function Get-CiReceiptRefusalReason {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][AllowNull()]$Receipt,
-        [Parameter(Mandatory)][AllowEmptyString()][string]$HeadSha
+        [Parameter(Mandatory)][AllowEmptyString()][string]$HeadSha,
+        # ISSUE #72 HOLE 2. `$HeadSha.StartsWith($sha)` alone accepts any prefix, including a
+        # one-character one that matches thousands of commits. run-ci-local.ps1 always writes a
+        # `git rev-parse --short HEAD` sha (7+ chars), so a shorter one can only come from a
+        # hand-edited or truncated file -- refuse it rather than trust a coincidence.
+        [int]$MinShaLength = 7
     )
     if ($null -eq $Receipt) { return 'the receipt file held no JSON object' }
 
@@ -61,12 +94,25 @@ function Get-CiReceiptRefusalReason {
     if ($fields -notcontains 'skipped') {
         return 'the receipt predates skip tracking (no `skipped` field), so it cannot say whether a gate was skipped -- re-run scripts/run-ci-local.ps1 on the current head'
     }
+    # ISSUE #72 HOLE 2. Same belt-and-braces reasoning as skip tracking above: a receipt
+    # written before dirty-worktree tracking existed cannot say whether the sha it names is
+    # what actually got tested, so "we cannot tell" is refused rather than assumed clean.
+    if ($fields -notcontains 'dirty') {
+        return 'the receipt predates dirty-worktree tracking (no `dirty` field), so it cannot say whether uncommitted changes were tested -- re-run scripts/run-ci-local.ps1 on the current head'
+    }
+    if ($Receipt.dirty) {
+        $files = @($Receipt.dirtyFiles | Where-Object { $_ }) -join ', '
+        return "the receipt was taken against a DIRTY worktree ($files) -- it may not reflect sha $($Receipt.sha) -- commit or stash, then re-run scripts/run-ci-local.ps1"
+    }
 
     $verdict = "$($Receipt.verdict)"
     if ($verdict -ne 'pass') { return "the receipt verdict is '$verdict', not pass" }
 
     $sha = "$($Receipt.sha)"
     if (-not $sha) { return 'the receipt names no sha' }
+    if ($sha.Length -lt $MinShaLength) {
+        return "the receipt's sha '$sha' is shorter than the minimum $MinShaLength-character prefix -- too short to safely match against the PR head"
+    }
     if (-not $HeadSha) { return 'the PR head sha could not be read, so the receipt cannot be matched to it' }
     if (-not $HeadSha.StartsWith($sha)) {
         return "the receipt is for sha $sha but the PR head is $HeadSha -- re-run scripts/run-ci-local.ps1 on the current head"
