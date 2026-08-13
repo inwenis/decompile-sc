@@ -110,3 +110,73 @@ Describe 'a redeploy leaves the feature-test map in place (task 067)' {
             Should -BeTrue -Because 'deploy.ps1 invokes it by path at deploy time'
     }
 }
+
+Describe 'the widescreen switch ships assembled and OFF by default (task 070)' {
+    # Static checks on deploy.ps1's text, same offline shape as the blocks above.
+    # Each fails on the pre-070 deploy.ps1 (no wide launcher, no cnc-ddraw staging,
+    # no -NoShortcut), so none is vacuous.
+
+    BeforeAll {
+        $script:deployText = Get-Content -Raw -LiteralPath $script:deploy
+        $lb = [regex]::Match($script:deployText, "(?s)\`$launcherBody = @'(.*?)'@")
+        $wb = [regex]::Match($script:deployText, "(?s)\`$wideLauncherBody = @'(.*?)'@")
+        $script:normalLauncher = $lb.Success ? $lb.Groups[1].Value : ''
+        $script:wideLauncher   = $wb.Success ? $wb.Groups[1].Value : ''
+    }
+
+    It 'both launcher bodies are findable (the parse itself is proved positive)' {
+        $script:normalLauncher.Length | Should -BeGreaterThan 100
+        $script:wideLauncher.Length | Should -BeGreaterThan 100
+    }
+
+    It 'the wide launcher turns the assembled widescreen on: stage 2 + cnc-ddraw' {
+        $script:wideLauncher | Should -Match '-Widescreen 1'
+        $script:wideLauncher | Should -Match '-WidescreenStage 2'
+        $script:wideLauncher | Should -Match 'cnc-ddraw\\ddraw\.dll'
+        $script:wideLauncher | Should -Not -Match 'InjectWindowedHelper' -Because 'WMode presents 640 columns whatever it is asked; the wide path must use the cnc-ddraw proxy'
+    }
+
+    It 'the wide launcher keeps the normal feature set (it is the same game, wider)' {
+        foreach ($flag in '-Mode fanout', '-Sound', '-NoLaunchLock', '-NoForegroundRestore',
+                          '-Circles 1', '-HudRow 1', '-ProdQueue 1', '-ProdFan 1',
+                          '-UpgradeQueue 1', '-QueueIndicator 1') {
+            $script:wideLauncher.Contains($flag) | Should -BeTrue -Because "the wide launcher must not silently drop $flag"
+        }
+    }
+
+    It 'the NORMAL launcher does not carry widescreen -- off by default means untouched' {
+        $script:normalLauncher | Should -Not -Match '-Widescreen'
+        $script:normalLauncher | Should -Match 'InjectWindowedHelper WMode'
+    }
+
+    It 'deploy stages cnc-ddraw only through its own sha256 pin' {
+        $script:deployText | Should -Match '\$CNC_DDRAW_DLL_SHA256\s*=\s*''[0-9a-f]{64}'''
+        $script:deployText.Contains('cnc-ddraw ddraw.dll SHA256 MISMATCH') |
+            Should -BeTrue -Because 'an unvouched helper DLL must be a hard stop, not a warning'
+        $script:deployText.Contains('staged cnc-ddraw hash mismatch after copy') |
+            Should -BeTrue -Because 'the verify step must re-check the copy that actually shipped'
+    }
+
+    It 'deploy copies cnc-ddraw.ini beside the deployed run-with-plugin.ps1' {
+        # run-with-plugin.ps1 reads cnc-ddraw.ini from ITS OWN directory; in the
+        # deploy tree that is plugin\, or the helper runs unconfigured.
+        $script:deployText.Contains("Join-Path `$pluginDeployDir 'cnc-ddraw.ini'") | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $script:pluginDir 'cnc-ddraw.ini') |
+            Should -BeTrue -Because 'deploy copies it from tools/plugin at deploy time'
+    }
+
+    It 'the card deploy copies exists on disk and mentions the one action' {
+        $card = Join-Path (Split-Path $script:deploy -Parent) 'widescreen-card.md'
+        Test-Path -LiteralPath $card | Should -BeTrue
+        (Get-Content -Raw -LiteralPath $card) | Should -Match 'StarCraft Modded \(Wide\)'
+    }
+
+    It '-NoShortcut skips the desktop entirely (scratch deploys must not touch it)' {
+        $script:deployText.Contains('shortcuts SKIPPED (-NoShortcut)') | Should -BeTrue
+        # The gate must cover the WIDE shortcut too, not only the original.
+        $gateAt = $script:deployText.IndexOf('if ($NoShortcut) {')
+        $wideLnkAt = $script:deployText.IndexOf('$wlnk.Save()')
+        $gateAt | Should -BeGreaterThan -1
+        $wideLnkAt | Should -BeGreaterThan $gateAt -Because 'the wide shortcut write must sit behind the same -NoShortcut gate'
+    }
+}

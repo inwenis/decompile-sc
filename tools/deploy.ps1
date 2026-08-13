@@ -71,6 +71,14 @@ What it does, in order:
   9. Creates/updates the desktop shortcut "StarCraft Modded.lnk", target
      "pwsh -WindowStyle Hidden -File <launcher>" so double-clicking shows the game and
      nothing else -- no console window.
+  9b. Task 070, the widescreen switch: stages the pinned cnc-ddraw (sha256-verified
+      against this script's own pin) into <DeployRoot>\plugin\cnc-ddraw\, writes a
+      SECOND launcher Launch-StarCraft-Modded-Wide.ps1 (same feature set, plus
+      -Widescreen 1 -WidescreenStage 2 and cnc-ddraw as the windowed helper), copies
+      widescreen-card.md beside it, and creates the second shortcut
+      "StarCraft Modded (Wide).lnk". Widescreen is OFF BY DEFAULT: the normal
+      launcher and shortcut are byte-for-byte what they were, and the wide path is
+      opt-in per double-click. -NoShortcut skips both shortcuts for scratch deploys.
   10. Regenerates the feature-test map (tools/make-feature-test-map.ps1, task 062) into
       <DeployRoot>\game\Maps\BroodWar\!feature-test.scx (task 067). It has to run AFTER
       the mirror: the map is a destination-only file (never in -SourceGameDir, never in
@@ -181,6 +189,21 @@ The pristine-verified working copy to deploy from. Never C:\sc-install (hard rul
 .PARAMETER ShortcutName
 File name of the desktop shortcut.
 
+.PARAMETER WideShortcutName
+File name of the WIDESCREEN desktop shortcut (task 070). The wide launcher is a
+second, separate shortcut -- the normal one is untouched, so widescreen stays
+off by default and opting in is one double-click.
+
+.PARAMETER CncDdrawDir
+Where the pinned cnc-ddraw release lives (fetch-cnc-ddraw.ps1's output). The
+ddraw.dll found there is sha256-verified against the pin recorded in this
+script before it is staged into the deploy tree.
+
+.PARAMETER NoShortcut
+Skip writing (and verifying) the desktop shortcuts. For scratch/test deploys:
+a deploy to a throwaway root must not touch the user's desktop (task 070; the
+2026-08 live-user-state rules).
+
 .EXAMPLE
 ./tools/deploy.ps1
 #>
@@ -188,8 +211,16 @@ File name of the desktop shortcut.
 param(
     [string]$DeployRoot = 'C:\sc-deploy\starcraft-modded',
     [string]$SourceGameDir = 'C:\sc-work\1161-base',
-    [string]$ShortcutName = 'StarCraft Modded.lnk'
+    [string]$ShortcutName = 'StarCraft Modded.lnk',
+    [string]$WideShortcutName = 'StarCraft Modded (Wide).lnk',
+    [string]$CncDdrawDir = 'C:\sc-work\cnc-ddraw\v7.1.0.0',
+    [switch]$NoShortcut
 )
+
+# Pinned sha256 of cnc-ddraw v7.1.0.0's ddraw.dll -- provenance in
+# tools/plugin/fetch-cnc-ddraw.ps1 (zip pin) and research/renderer-viewport.md
+# 14.1 (dll pin, task 065). A mismatch is a hard stop, never a re-pin.
+$CNC_DDRAW_DLL_SHA256 = '85e0f7d530dfda134793a57cb3e76b0287dcc96892ee57162dd68f47283b03a9'
 
 $ErrorActionPreference = 'Stop'
 $deployStart = Get-Date
@@ -441,6 +472,29 @@ Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-desktop.ps1')         -Destinat
 Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-build-id.ps1')        -Destination (Join-Path $pluginDeployDir 'sc-build-id.ps1')        -Force
 Write-Host 'plugin runtime copied: scplugin.dll, scinject.exe, run-with-plugin.ps1, check-game-windows.ps1, sc-canonical-path.ps1, sc-audio-mute.ps1, sc-launch-lock.ps1, sc-foreground.ps1, sc-desktop.ps1, sc-build-id.ps1'
 
+# --- 3b. stage cnc-ddraw for the wide launcher (task 070) ---------------------
+# The wide launcher presents through cnc-ddraw (research/renderer-viewport.md 14:
+# FOLLOW -- all 800 columns; WMode crops to 640 whatever it is asked, 12.6). The
+# DLL is a game-adjacent third-party binary: staged from the pinned fetch, never
+# committed (hard rule 1), sha256-verified HERE so a deploy cannot ship a DLL the
+# pin does not vouch for. run-with-plugin.ps1 -WindowedHelperDll copies it into
+# the game dir per launch and reads cnc-ddraw.ini from ITS OWN script directory,
+# which in the deployed tree is plugin\ -- hence the two destinations below.
+$cncSrcDll = Join-Path $CncDdrawDir 'ddraw.dll'
+if (-not (Test-Path -LiteralPath $cncSrcDll)) {
+    throw ("deploy: cnc-ddraw not found at $cncSrcDll. Run tools/plugin/fetch-cnc-ddraw.ps1 " +
+           'first (downloads + pin-verifies v7.1.0.0), then re-run the deploy.')
+}
+$cncHash = (Get-FileHash -LiteralPath $cncSrcDll -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($cncHash -ne $CNC_DDRAW_DLL_SHA256) {
+    throw "deploy: cnc-ddraw ddraw.dll SHA256 MISMATCH at $cncSrcDll`n  expected $CNC_DDRAW_DLL_SHA256`n  got      $cncHash`nDo not deploy an unvouched helper; re-run fetch-cnc-ddraw.ps1 and re-review."
+}
+$cncDeployDir = Join-Path $pluginDeployDir 'cnc-ddraw'
+New-Item -ItemType Directory -Path $cncDeployDir -Force | Out-Null
+Copy-Item -LiteralPath $cncSrcDll -Destination (Join-Path $cncDeployDir 'ddraw.dll') -Force
+Copy-Item -LiteralPath (Join-Path $pluginDir 'cnc-ddraw.ini') -Destination (Join-Path $pluginDeployDir 'cnc-ddraw.ini') -Force
+Write-Host "cnc-ddraw staged: $cncDeployDir\ddraw.dll (sha256 verified) + plugin\cnc-ddraw.ini"
+
 # --- 4. write the zero-argument launcher --------------------------------------
 $launcherPath = Join-Path $deployRootFull 'Launch-StarCraft-Modded.ps1'
 $launcherBody = @'
@@ -507,6 +561,76 @@ Set-Content -LiteralPath $launcherPath -Value $launcherBody -Encoding utf8NoBOM
 Write-Host ''
 Write-Host "launcher written: $launcherPath"
 
+# --- 4b. the WIDESCREEN launcher (task 070) -----------------------------------
+# Identical feature set, two swaps: the presentation helper is cnc-ddraw instead
+# of WMode (WMode presents 640 columns whatever it is asked --
+# research/renderer-viewport.md 12.6; cnc-ddraw measured FOLLOW at 800, 14.2),
+# and the engine geometry is -Widescreen 1 -WidescreenStage 2 (stage 2 playfield
+# + fog cell pipeline, tasks 064/068, applied in-process at launch --
+# StarCraft.exe on disk stays byte-identical). A SEPARATE launcher + shortcut,
+# deliberately: widescreen stays off by default, the normal shortcut is
+# untouched, and trying wide is one double-click with no way to half-enable it.
+# Known imperfections are on the card (widescreen-card.md beside this file).
+$wideLauncherPath = Join-Path $deployRootFull 'Launch-StarCraft-Modded-Wide.ps1'
+$wideLauncherBody = @'
+#Requires -Version 7
+<#
+Deployed WIDESCREEN launcher -- no arguments. Generated by tools/deploy.ps1; re-run that
+to refresh this file rather than editing it by hand. Same feature set as
+Launch-StarCraft-Modded.ps1 (fan-out + circles + HUD row paging + production queue +
+group fan-out, windowed, sound on), plus the widescreen assembly (task 070):
+
+  -Widescreen 1 -WidescreenStage 2   800x480 engine geometry: stage 2 playfield
+                                     (task 064) + the fog cell pipeline (task 068),
+                                     patched in-process at launch -- the exe on disk
+                                     is byte-identical to the stock deploy.
+  -Windowed -WindowedHelperDll ...   cnc-ddraw (pinned v7.1.0.0, MIT) presents all
+                                     800 columns; WMode crops to 640 (research/
+                                     renderer-viewport.md 12.6 vs 14.2).
+
+What to expect, and what is known-imperfect: widescreen-card.md next to this file.
+The -NoLaunchLock / -NoForegroundRestore / try-catch reasoning is the same as the
+normal launcher's -- read the comment block there.
+#>
+$ErrorActionPreference = 'Stop'
+$here = $PSScriptRoot
+try {
+    & (Join-Path $here 'plugin\run-with-plugin.ps1') `
+        -GameDir  (Join-Path $here 'game') `
+        -BuildDir (Join-Path $here 'plugin') `
+        -LogPath  (Join-Path $here 'logs\sc-plugin.log') `
+        -Mode fanout `
+        -Windowed `
+        -WindowedHelperDll (Join-Path $here 'plugin\cnc-ddraw\ddraw.dll') `
+        -Widescreen 1 `
+        -WidescreenStage 2 `
+        -Sound `
+        -NoLaunchLock `
+        -NoForegroundRestore `
+        -Circles 1 `
+        -HudRow 1 `
+        -ProdQueue 1 `
+        -ProdFan 1 `
+        -UpgradeQueue 1 `
+        -QueueIndicator 1
+}
+catch {
+    $errLog = Join-Path $here 'logs\launch-error.log'
+    New-Item -ItemType Directory -Path (Split-Path $errLog -Parent) -Force | Out-Null
+    "$([DateTime]::Now.ToString('o'))`r`n$($_ | Out-String)" | Out-File -LiteralPath $errLog -Append -Encoding utf8
+    Add-Type -AssemblyName System.Windows.Forms
+    [System.Windows.Forms.MessageBox]::Show(
+        "StarCraft Modded (Wide) failed to launch:`r`n`r`n$($_.Exception.Message)`r`n`r`nDetails logged to:`r`n$errLog",
+        'StarCraft Modded (Wide)', 'OK', 'Error') | Out-Null
+}
+'@
+Set-Content -LiteralPath $wideLauncherPath -Value $wideLauncherBody -Encoding utf8NoBOM
+Write-Host "wide launcher written: $wideLauncherPath"
+
+# The one-page card travels with the install, next to the launcher it describes.
+Copy-Item -LiteralPath (Join-Path $scriptDir 'widescreen-card.md') -Destination (Join-Path $deployRootFull 'widescreen-card.md') -Force
+Write-Host "widescreen card copied: $deployRootFull\widescreen-card.md"
+
 # --- 5. desktop shortcut -------------------------------------------------------
 $desktop = [Environment]::GetFolderPath('Desktop')
 $shortcutPath = Join-Path $desktop $ShortcutName
@@ -532,15 +656,32 @@ if (-not $pwshExe) {
 }
 
 $deployedExe = Join-Path $gameDeployDir 'StarCraft.exe'
-$shell = New-Object -ComObject WScript.Shell
-$lnk = $shell.CreateShortcut($shortcutPath)
-$lnk.TargetPath = $pwshExe
-$lnk.Arguments = "-WindowStyle Hidden -File `"$launcherPath`""
-$lnk.WorkingDirectory = $deployRootFull
-$lnk.IconLocation = "$deployedExe,0"
-$lnk.Description = 'StarCraft 1.16.1, modded (fan-out select-past-12 + circles + HUD row), windowed'
-$lnk.Save()
-Write-Host "shortcut written: $shortcutPath"
+$wideShortcutPath = Join-Path $desktop $WideShortcutName
+if ($NoShortcut) {
+    Write-Host 'shortcuts SKIPPED (-NoShortcut): a scratch/test deploy must not touch the desktop'
+}
+else {
+    $shell = New-Object -ComObject WScript.Shell
+    $lnk = $shell.CreateShortcut($shortcutPath)
+    $lnk.TargetPath = $pwshExe
+    $lnk.Arguments = "-WindowStyle Hidden -File `"$launcherPath`""
+    $lnk.WorkingDirectory = $deployRootFull
+    $lnk.IconLocation = "$deployedExe,0"
+    $lnk.Description = 'StarCraft 1.16.1, modded (fan-out select-past-12 + circles + HUD row), windowed'
+    $lnk.Save()
+    Write-Host "shortcut written: $shortcutPath"
+
+    # Task 070: the widescreen entry point. A second shortcut, not a mode on the
+    # first -- off by default means the normal shortcut never changes behaviour.
+    $wlnk = $shell.CreateShortcut($wideShortcutPath)
+    $wlnk.TargetPath = $pwshExe
+    $wlnk.Arguments = "-WindowStyle Hidden -File `"$wideLauncherPath`""
+    $wlnk.WorkingDirectory = $deployRootFull
+    $wlnk.IconLocation = "$deployedExe,0"
+    $wlnk.Description = 'StarCraft 1.16.1, modded, WIDESCREEN 800x480 (stage 2 + fog + cnc-ddraw) -- see widescreen-card.md'
+    $wlnk.Save()
+    Write-Host "wide shortcut written: $wideShortcutPath"
+}
 
 # --- 6. regenerate the feature-test map (task 067) ----------------------------
 # The mirror in step 2 correctly purged Maps\BroodWar\!feature-test.scx: it is a
@@ -634,12 +775,34 @@ $buildIdPath = Join-Path $deployRootFull 'BUILD-ID.txt'
 ) | Set-Content -LiteralPath $buildIdPath -Encoding utf8
 Write-Host "verify: build receipt written -> $buildIdPath"
 
-if (-not (Test-Path -LiteralPath $shortcutPath)) { throw "deploy: shortcut was not written: $shortcutPath" }
-$resolved = $shell.CreateShortcut($shortcutPath)
-if ($resolved.TargetPath -ne $pwshExe) { throw "deploy: shortcut target mismatch: $($resolved.TargetPath)" }
-if ($resolved.Arguments -notmatch [Regex]::Escape($launcherPath)) { throw "deploy: shortcut arguments do not reference the launcher: $($resolved.Arguments)" }
-if (-not (Test-Path -LiteralPath $launcherPath)) { throw "deploy: shortcut points at a launcher that does not exist: $launcherPath" }
-Write-Host "verify: shortcut resolves ($shortcutPath -> $pwshExe $($resolved.Arguments))"
+# The wide assembly, shortcut or not: launcher + staged helper + card must exist
+# and the staged DLL must still match the pin (a copy that half-took would
+# otherwise surface as a user-facing DirectDraw error, not a deploy error).
+if (-not (Test-Path -LiteralPath $wideLauncherPath)) { throw "deploy: wide launcher was not written: $wideLauncherPath" }
+$stagedCnc = Join-Path $cncDeployDir 'ddraw.dll'
+$stagedHash = (Get-FileHash -LiteralPath $stagedCnc -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($stagedHash -ne $CNC_DDRAW_DLL_SHA256) { throw "deploy: staged cnc-ddraw hash mismatch after copy: $stagedCnc" }
+if (-not (Test-Path -LiteralPath (Join-Path $pluginDeployDir 'cnc-ddraw.ini'))) { throw 'deploy: plugin\cnc-ddraw.ini missing -- the wide launcher would run cnc-ddraw unconfigured (fullscreen-shaped).' }
+if (-not (Test-Path -LiteralPath (Join-Path $deployRootFull 'widescreen-card.md'))) { throw 'deploy: widescreen-card.md missing from the deploy root.' }
+Write-Host 'verify: wide launcher + pinned cnc-ddraw + ini + card all present'
+
+if ($NoShortcut) {
+    Write-Host 'verify: shortcuts skipped (-NoShortcut)'
+}
+else {
+    if (-not (Test-Path -LiteralPath $shortcutPath)) { throw "deploy: shortcut was not written: $shortcutPath" }
+    $resolved = $shell.CreateShortcut($shortcutPath)
+    if ($resolved.TargetPath -ne $pwshExe) { throw "deploy: shortcut target mismatch: $($resolved.TargetPath)" }
+    if ($resolved.Arguments -notmatch [Regex]::Escape($launcherPath)) { throw "deploy: shortcut arguments do not reference the launcher: $($resolved.Arguments)" }
+    if (-not (Test-Path -LiteralPath $launcherPath)) { throw "deploy: shortcut points at a launcher that does not exist: $launcherPath" }
+    Write-Host "verify: shortcut resolves ($shortcutPath -> $pwshExe $($resolved.Arguments))"
+
+    if (-not (Test-Path -LiteralPath $wideShortcutPath)) { throw "deploy: wide shortcut was not written: $wideShortcutPath" }
+    $wresolved = $shell.CreateShortcut($wideShortcutPath)
+    if ($wresolved.TargetPath -ne $pwshExe) { throw "deploy: wide shortcut target mismatch: $($wresolved.TargetPath)" }
+    if ($wresolved.Arguments -notmatch [Regex]::Escape($wideLauncherPath)) { throw "deploy: wide shortcut arguments do not reference the wide launcher: $($wresolved.Arguments)" }
+    Write-Host "verify: wide shortcut resolves ($wideShortcutPath -> $pwshExe $($wresolved.Arguments))"
+}
 
 } finally {
     Exit-ScLaunchLock -Lock $deployLock
@@ -648,5 +811,11 @@ Write-Host "verify: shortcut resolves ($shortcutPath -> $pwshExe $($resolved.Arg
 Write-Host ''
 Write-Host "deploy: OK  version=$version  date=$dateStamp  -> $deployRootFull"
 Write-Host "deploy: the deployed plugin reports itself as $($deployedStamp.Stamp) -- see $deployRootFull\BUILD-ID.txt"
-Write-Host "deploy: shortcut -> $shortcutPath"
+if ($NoShortcut) {
+    Write-Host 'deploy: shortcuts skipped (-NoShortcut)'
+}
+else {
+    Write-Host "deploy: shortcut -> $shortcutPath"
+    Write-Host "deploy: wide shortcut -> $wideShortcutPath (widescreen, off by default -- widescreen-card.md)"
+}
 exit 0
