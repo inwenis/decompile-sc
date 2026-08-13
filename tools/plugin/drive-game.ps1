@@ -640,6 +640,18 @@ function Sync-ScBrowserToTop {
     fingerprints. Termination is therefore observed, not counted: a listing 95 entries long
     can need far more clicks than any constant a caller would guess, and running out of
     them silently would leave the list somewhere arbitrary. Running out THROWS instead.
+
+    SELF-ANIMATING ROWS ARE MEASURED OUT, PER BATCH (task 070). Under cnc-ddraw the
+    selected row's art changes BY ITSELF -- measured: five samples 300ms apart with no
+    clicks at all changed rows 4-5 every time, while under WMode the same screen is
+    static. "Did any row change" therefore never settles there and the pre-070 version
+    of this function threw after 160 clicks with the list already at the top. So each
+    batch now takes TWO post-batch samples: rows that differ between them are animating
+    on their own RIGHT NOW and say nothing about scrolling, and "the top" is when no
+    OTHER row changed across the batch. The animating row is re-measured every batch
+    rather than baselined once, because the selection (and its animation) sits at a
+    different visible row index as the list scrolls under it. Under a helper where no
+    row self-animates, both samples agree and this is exactly the old comparison.
     #>
     [CmdletBinding()]
     param(
@@ -652,6 +664,7 @@ function Sync-ScBrowserToTop {
     # the foreground check per click would dominate a 160-click scroll.
     Assert-ScWindowActive -Hwnd $Hwnd -Because 'scrolling the map browser, which'
     $prev = @(Get-ScBrowserRowOccupancy -Hwnd $Hwnd)
+    $announcedSelfRows = $false
     for ($batch = 1; $batch -le $MaxBatches; $batch++) {
         for ($i = 0; $i -lt $ClicksPerBatch; $i++) {
             Send-ScClick -Hwnd $Hwnd -X $script:ScBrowserUpArrowX -Y $script:ScBrowserUpArrowY `
@@ -659,10 +672,27 @@ function Sync-ScBrowserToTop {
         }
         Start-Sleep -Milliseconds 250
         $now = @(Get-ScBrowserRowOccupancy -Hwnd $Hwnd)
+        Start-Sleep -Milliseconds 300
+        $again = @(Get-ScBrowserRowOccupancy -Hwnd $Hwnd)
+        $selfRows = @()
+        for ($r = 0; $r -lt $now.Count; $r++) { if ($now[$r] -ne $again[$r]) { $selfRows += $r } }
+        if ($selfRows.Count -gt 0 -and -not $announcedSelfRows) {
+            Write-Host ("       browser: row(s) [$($selfRows -join ',')] change with NO clicks " +
+                        '(self-animating art; measured under cnc-ddraw, task 070) -- top-detection ignores them')
+            $announcedSelfRows = $true
+        }
+        if ($selfRows.Count -ge $now.Count - 1) {
+            throw ("drive-game: $($selfRows.Count) of $($now.Count) browser rows change with no clicks " +
+                   'at all, so no row fingerprint can distinguish scrolling from animation. ' +
+                   'Refusing to click a row with no working top-detection oracle.')
+        }
         $moved = $false
-        for ($r = 0; $r -lt $now.Count; $r++) { if ($now[$r] -ne $prev[$r]) { $moved = $true } }
+        for ($r = 0; $r -lt $now.Count; $r++) {
+            if ($selfRows -contains $r) { continue }
+            if ($now[$r] -ne $prev[$r]) { $moved = $true }
+        }
         if (-not $moved) { return }
-        $prev = $now
+        $prev = $again
     }
     throw ("drive-game: the map browser list was still moving after $($MaxBatches * $ClicksPerBatch) " +
            'scroll-up clicks, so its top is not established and no row can be computed from ' +
