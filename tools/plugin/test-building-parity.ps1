@@ -92,6 +92,7 @@ if (-not $LogPath) { $LogPath = "C:\sc-work\logs\036-building-parity-$arm.log" }
 $scriptDir = $PSScriptRoot
 $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'drive-game.ps1')
+. (Join-Path $scriptDir 'sc-oracle-guard.ps1')
 
 $failures = 0
 $step = 0
@@ -611,8 +612,29 @@ try {
             Send-ScClick -Hwnd $hwnd -X $p.X -Y $p.Y -Shift -SettleMs 1200
             $after = Read-ScBoth 'mixed-after'
             Show-Both $after 'after shift-clicking a Barracks onto them'
+            # THE CLICK HAS TO BE PROVED TO HAVE LANDED (issue #70). `after.N -eq before.N`
+            # is EXACTLY what a click on empty ground produces, so the shipped assertion
+            # passed whether the engine refused the mix or the aim simply missed -- and the
+            # aim is computed from a world position through a screen transform, which is the
+            # likeliest thing here to go wrong.
+            #
+            # The refusal itself leaves nothing to read: the engine declines the mix
+            # client-side, so the selection does not change and no command goes out. The
+            # witness therefore has to be a POSITIVE CONTROL on the same point -- click it
+            # again WITHOUT shift and see whether a Barracks comes up. That runs after the
+            # reading above is taken, so it cannot disturb what it is corroborating, and the
+            # step ends here. (AGENTS.md: prove the pattern positive where it should match,
+            # then require it absent where it should not.)
+            Send-ScClick -Hwnd $hwnd -X $p.X -Y $p.Y -SettleMs 1200
+            $probe = Read-ScBoth 'mixed-aimcheck'
+            Show-Both $probe 'the same point clicked WITHOUT shift -- the aim control'
+            $probeTypes = @($probe.Unit.Types.Keys)
+            $hitBarracks = ($probeTypes -contains $BARRACKS_TYPE)
+            Assert-That "that point really is a Barracks -- clicked plain, it selects one ($($probe.Unit.TypesText))" `
+                $hitBarracks `
+                '(without this, a refused mix and a click on empty terrain read identically)'
             Assert-That "the Barracks did NOT join the unit selection ($($before.Unit.N) -> $($after.Unit.N))" `
-                ($after.Unit.N -eq $before.Unit.N)
+                (Test-ScWitnessed -Claim ($after.Unit.N -eq $before.Unit.N) -Witness $hitBarracks)
             $types = @($after.Unit.Types.Keys)
             Assert-That '  and the selection is still marines only' `
                 ($types.Count -eq 1 -and $types[0] -eq $MARINE_TYPE) "(got $($after.Unit.TypesText))"
@@ -720,6 +742,14 @@ try {
 
         # AND THE ORDER: a recalled building group must still take one. The rally point is
         # the oracle -- one histogram bucket over all of them, and it must have MOVED.
+        #
+        # "AND IT MUST HAVE MOVED" is what the comment always said, and what the assertion
+        # never checked (issue #70). One bucket + bucket == live is also true of buildings
+        # that were NEVER RALLIED: an unrallied building carries the same default packed
+        # rally value as every other, so they land in one bucket of their own accord. The
+        # before-reading is captured here so the assertion can require a change --
+        # test-building-groups.ps1:613 has this guard; this suite dropped it.
+        $rallyBefore = $back.Unit.RallyText
         $mark = Get-ScLogLineCount -LogPath $LogPath
         Send-ScClick -Hwnd $hwnd -X 60 -Y 40 -Right
         Start-Sleep -Seconds 3
@@ -731,8 +761,16 @@ try {
         if (-not $Stock) {
             Assert-Feature 'the right-click on the recalled group was fanned out' ($start.Count -gt 0)
             $nowKeys = @($rallied.Unit.Rally.Keys)
+            # THE MOVE, asserted separately from the agreement, because they fail for
+            # different reasons and a reader needs to know which one happened: no move at
+            # all means the right-click never became an order, while a move into more than
+            # one bucket means the fan-out reached some of them and not others.
+            Assert-Feature "the right-click MOVED the rally point ($rallyBefore -> $($rallied.Unit.RallyText))" `
+                (Test-ScChanged -Before $rallyBefore -After $rallied.Unit.RallyText) `
+                '(an unrallied group is also one bucket -- without this the agreement below passes for a click that did nothing)'
             Assert-Feature "every recalled building is rallied to the SAME point (buckets: $($nowKeys.Count))" `
-                ($nowKeys.Count -eq 1 -and $rallied.Unit.Rally[$nowKeys[0]] -eq $rallied.Unit.Live) `
+                (Test-ScWitnessed -Claim ($nowKeys.Count -eq 1 -and $rallied.Unit.Rally[$nowKeys[0]] -eq $rallied.Unit.Live) `
+                                  -Witness (Test-ScChanged -Before $rallyBefore -After $rallied.Unit.RallyText)) `
                 "(got $($rallied.Unit.RallyText) over $($rallied.Unit.Live) live)"
         }
         Shot 'group-rallied'

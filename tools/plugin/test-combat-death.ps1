@@ -1,4 +1,4 @@
-﻿#Requires -Version 7
+#Requires -Version 7
 <#
 .SYNOPSIS
 End-to-end, UNATTENDED proof that a generated map can kill the player's units on
@@ -143,6 +143,7 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot
 $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'drive-game.ps1')
+. (Join-Path $scriptDir 'sc-oracle-guard.ps1')
 
 $failures = 0
 $step = 0
@@ -970,10 +971,33 @@ try {
             ($deadVerdicts.Count -ge 1) "(reasons seen: $($reasons -join ','))"
         Assert-That 'every hp0 verdict really did read zero hit points' `
             (@($deadVerdicts | Where-Object { $_.Hp -ne 0 }).Count -eq 0)
+        $script:deadTags = $deadTags
         # THE REGRESSION ASSERTION, and the one this whole task turns on: not one of
         # those tags is in any emitted Select. It FAILS under -Liveness 0, where the
         # very same units are judged the very same way and their tags go out anyway.
-        $replayedTags = @($deadTags | Where-Object { $emitted -contains $_ })
+        #
+        # IN THE SHIPPED ARM IT CANNOT FAIL, AND THAT NEEDED SAYING (issue #70). A unit the
+        # gate DROPS never reaches the FANOUT select: tag list at all -- sc_fanout.cpp:759
+        # continues before the tag append -- and a unit the gate WRONGLY PASSES produces no
+        # drop verdict, so it is never in $deadTags either. The two lists are populated from
+        # disjoint branches of the same `if`, so their intersection is empty whatever the
+        # gate does. The -Liveness 0 defect arm is where this assertion earns its keep; here
+        # its green is structural, and a green that means nothing must not look like one
+        # that does.
+        #
+        # So it is now paired with the POSITIVE CONTROL its absence-claim needs: the LIVE
+        # tags, judged by the same gate in the same run, MUST appear in $emitted. If they do
+        # not, the comparison is not measuring membership -- the two lists are drawn from
+        # vocabularies that never meet (a tag-format change on either side would do it) --
+        # and its zero is worth nothing. AGENTS.md: prove the pattern positive where it
+        # should match, then require it absent where it should not.
+        $liveTags = @($verdicts | Where-Object { $_.Why -ne 'hp0' } | ForEach-Object { $_.Tag } | Sort-Object -Unique)
+        $liveEmitted = Get-ScOverlap -Set $liveTags -Against $emitted
+        Assert-That ("the SAME comparison matches for units the gate passed " +
+                     "($($liveEmitted.Count) of $($liveTags.Count) live tags are in the emitted Selects)") `
+            ((Test-ScReached -Count $liveEmitted)) `
+            "(live: $($liveTags -join ' '); emitted: $($emitted -join ' ') -- with no match here, the absence assertion below is comparing two vocabularies that never meet)"
+        $replayedTags = Get-ScOverlap -Set $deadTags -Against $emitted
         Assert-That "no dead unit's tag reached the wire (dead tags: $($deadTags -join ' '))" `
             ($replayedTags.Count -eq 0) "(replayed anyway: $($replayedTags -join ' '))"
         # ...and the gate did the withholding, rather than the tag being absent for some
@@ -1095,8 +1119,18 @@ try {
         # count identity that used to sit here -- missing == before.N - after.N --
         # was dropped: with `extra` empty and both tag counts equal to their own n, it
         # follows by set algebra and could not fail while its neighbours passed.
-        Assert-That "units the row showed before the fight are gone from it now, by tag: $($missing -join ' ')" `
-            ($missing.Count -ge 1)
+        # ...AND IT IS INTERSECTED WITH THE DEAD LIST (issue #70, issue #45's shape). The
+        # paragraph above already names the hole: $missing comes from a fresh drag box, so a
+        # SURVIVOR shoved outside the box rectangle is "missing" too, and `$missing.Count -ge
+        # 1` passed on it. "Burrowing makes that unlikely" is a reason to expect the right
+        # answer, not an oracle for it. The gate's own hp0 verdicts say which tags actually
+        # died; the claim is about those.
+        $confirmedGone = Get-ScOverlap -Set $missing -Against $script:deadTags
+        $vanishedButAlive = @($missing | Where-Object { $script:deadTags -notcontains $_ })
+        Assert-That ("units the row showed before the fight are gone from it now AND the gate called them dead: " +
+                     "$($confirmedGone -join ' ') ($($confirmedGone.Count) of $($missing.Count) missing)") `
+            (Test-ScReached -Count $confirmedGone) `
+            "(missing but never judged dead -- these may merely have left the box: $($vanishedButAlive -join ' '))"
         Assert-That "its pages together still name every unit it counts ($($after.Tags.Count) distinct vs n=$($after.N))" `
             ($after.Tags.Count -eq $after.N)
         Assert-That "the page count matches the population ($($after.Pages) = ceil($($after.N)/$HUD_SLOTS))" `
