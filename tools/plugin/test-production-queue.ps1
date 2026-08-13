@@ -1432,11 +1432,20 @@ try {
                 # per click and always has an answer.
                 $qa = Get-QInd "sweep-$hold-$i-a"
                 $tried++
-                if (@($lines | Select-String -Pattern "CMD id=$CANCEL_CMD ").Count -gt 0) {
-                    $ok++
-                    $script:cancels++; $script:pluginCancels++
-                }
-                if ($qa.DisableWithPress -gt $qb.DisableWithPress) { $collided++ }
+                # PAIRED PER CLICK, not summed per duration. The first version of this
+                # printed only the two totals, and "the one click that cancelled is the one
+                # click with no collision" was then inference from two aggregates agreeing
+                # -- the same shape as the single-sample conclusions this task spent a
+                # morning retracting. One row per click makes the anti-correlation a
+                # measurement instead: the CLICK line carries its own verdict and its own
+                # collision count, so a reader can pair them without trusting a summary.
+                $didCancel = @($lines | Select-String -Pattern "CMD id=$CANCEL_CMD ").Count -gt 0
+                $dCollide  = $qa.DisableWithPress - $qb.DisableWithPress
+                if ($didCancel) { $ok++; $script:cancels++; $script:pluginCancels++ }
+                if ($dCollide -gt 0) { $collided++ }
+                Write-Host ("       CLICK holdMs={0} n={1} cancelled={2} collided={3} disableWithPress+={4} pressKept+={5}" -f
+                            $hold, $i, ($didCancel ? 1 : 0), (($dCollide -gt 0) ? 1 : 0), $dCollide,
+                            ($qa.PressKept - $qb.PressKept))
             }
             $rate = if ($tried -gt 0) { [math]::Round(100.0 * $ok / $tried) } else { -1 }
             $rows += [pscustomobject]@{ HoldMs = $hold; Clicks = $tried; Cancelled = $ok; Pct = $rate; Collided = $collided }
