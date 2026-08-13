@@ -2626,7 +2626,59 @@ function Save-ScWindowImage {
             finally { $g.ReleaseHdc($hdc) }
         } finally { $g.Dispose() }
         if (-not $ok) { throw "drive-game: PrintWindow failed for hwnd 0x$('{0:X}' -f [int64]$Hwnd)." }
-        $bmp.Save($full, [System.Drawing.Imaging.ImageFormat]::Png)
+
+        # THE SHIM-CAPTION TRAP, fixed HERE because it has now produced a wrong
+        # number TWICE IN ONE DAY from two independent readers: task 065 ("a
+        # caption-colored strip in rows 0..30 ... sat inside my first right-band
+        # non-black 11%") and task 073 (a y=1..18 'resource bar' band that read
+        # the gray caption, nonzero=1.0 forever -- a probe that could not fail).
+        # cnc-ddraw leaves its caption INSIDE the reported client rectangle and
+        # presents the game's H rows scaled into the (H - caption) rows below
+        # it, so a raw client grab is a picture of the TITLE BAR plus a
+        # vertically squeezed game, and "row y" means nothing. Detect the
+        # near-uniform light strip anchored at row 0, crop it, and resample the
+        # remainder back to the client height (NearestNeighbor -- this inverts
+        # the shim's own downscale, it does not invent pixels). WMode skins its
+        # caption outside the client area and dark game rows never match the
+        # detector, so those captures pass through untouched (h=0).
+        if (-not $FullWindow) {
+            $capH = 0
+            for ($y = 0; $y -lt [Math]::Min(40, $bmp.Height); $y++) {
+                $light = 0; $n = 0
+                for ($x = 0; $x -lt $bmp.Width; $x += 4) {
+                    $c = $bmp.GetPixel($x, $y); $n++
+                    $r = [int]$c.R; $gg = [int]$c.G; $b = [int]$c.B
+                    if (([Math]::Abs($r - $gg) -lt 16) -and ([Math]::Abs($gg - $b) -lt 16) -and
+                        (($r + $gg + $b) -gt 330)) { $light++ }
+                }
+                if ($n -eq 0 -or ($light / $n) -lt 0.70) { break }
+                $capH = $y + 1
+            }
+            if ($capH -ge 10) {
+                $rect = [System.Drawing.Rectangle]::new(0, $capH, $bmp.Width, $bmp.Height - $capH)
+                $crop = $bmp.Clone($rect, $bmp.PixelFormat)
+                try {
+                    $out = New-Object System.Drawing.Bitmap($bmp.Width, $bmp.Height,
+                                     [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+                    try {
+                        $g2 = [System.Drawing.Graphics]::FromImage($out)
+                        try {
+                            $g2.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+                            $g2.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
+                            $g2.DrawImage($crop, [System.Drawing.Rectangle]::new(0, 0, $out.Width, $out.Height))
+                        } finally { $g2.Dispose() }
+                        $out.Save($full, [System.Drawing.Imaging.ImageFormat]::Png)
+                    } finally { $out.Dispose() }
+                } finally { $crop.Dispose() }
+                Write-Verbose "drive-game: shim caption strip of $capH rows cropped and the game rescaled to client height (065/073 trap)"
+            }
+            else {
+                $bmp.Save($full, [System.Drawing.Imaging.ImageFormat]::Png)
+            }
+        }
+        else {
+            $bmp.Save($full, [System.Drawing.Imaging.ImageFormat]::Png)
+        }
     } finally { $bmp.Dispose() }
 
     Write-Verbose "drive-game: frame -> $full"

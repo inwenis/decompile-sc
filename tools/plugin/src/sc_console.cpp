@@ -46,7 +46,7 @@
 #define SC_CONSOLE_SHIFT_X 160
 
 #define SC_CONSOLE_MAX_ROOTS   16
-#define SC_CONSOLE_TRACE_MAX   600
+#define SC_CONSOLE_TRACE_MAX   2000
 #define SC_CONSOLE_NAME_LEN    20
 
 static BYTE* g_base    = NULL;
@@ -79,6 +79,30 @@ static unsigned g_frames       = 0;
 static unsigned g_moves        = 0;
 static unsigned g_selects      = 0;
 static volatile LONG g_selectReq = 0;   // set by the observer's marker poll
+
+// The dialog dirty-mark clip (sc_addresses.h SC_VA_DLG_DIRTY_CLIP_*): stock
+// {0,0,640,480}, no writer in the binary, so one widen is stable. Original max-x
+// kept for restore.
+static bool  g_clipPatched = false;
+static DWORD g_clipOrigX1  = 0;
+
+// The PRESENT sliver (task 073, finding two). The buffer->screen present is a
+// storm region clipped against a BASE region (0x006D5E14) that 0x0041D470
+// rebuilds from the screen-image list (0x0051A338/0x0051A33C) -- and imgCreate
+// (0x0041D640) has exactly ONE caller in the whole binary: the console.pcx
+// loader, whose node is (0,0,640,480). So in game NOTHING past x=639 has ever
+// been presented through the buffer path (070's own window captures show the
+// right band black on glass while its 800-wide dumps held map). One extra node
+// covering (640,0)-(800,480), created through the engine's own imgCreate --
+// which itself triggers the 0x0041D470 rebuild -- widens the base region for
+// the whole game. Engine-owned node; the engine's console teardown frees it
+// with the list, so there is nothing to remove.
+#pragma pack(push, 1)
+struct ScImgDesc { WORD w; WORD h; DWORD bits; };
+#pragma pack(pop)
+static ScImgDesc g_sliverDesc;
+static unsigned  g_sliverSession = 0;
+static unsigned  g_slivers       = 0;
 
 static void* Rt(DWORD staticVa) {
     return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE));
@@ -144,7 +168,13 @@ static int __attribute__((fastcall)) SC_GAME_ENTRY ConsoleInteractShim(DWORD ctr
     int ret = ((ScInteractFn)w->orig)(ctrl, evt);
     if (evt) {
         const WORD type = *(WORD*)(evt + SC_EVT_OFF_TYPE);
-        if (type != SC_EVT_MOUSEMOVE) {
+        // The floods that ate the first run's 600-line cap before the game even
+        // loaded (TitleDlg every ~100ms): type 13 (a timer tick carrying a raw
+        // pointer in dwUser) and the type-14 dwUser=8 sweep. Both dropped;
+        // mouse buttons (4..8) and the rest of the USER codes stay.
+        const bool flood = (type == 13) ||
+                           (type == SC_EVT_TYPE_USER && *(DWORD*)evt == 8);
+        if (type != SC_EVT_MOUSEMOVE && !flood) {
             if (g_traceLines < SC_CONSOLE_TRACE_MAX) {
                 ++g_traceLines;
                 ScLog("CTRACE dlg='%s' 0x%08X type=%u user=%u x=%d y=%d -> ret=%d",
@@ -236,9 +266,10 @@ static void TryMove(DWORD dlg, const char* name) {
     ++g_movedN;
     ++g_moves;
     ScLog("CONSOLE moved '%s' 0x%08X (%d,%d)-(%d,%d) -> (%d,%d)-(%d,%d) "
-          "surf36bits=0x%08X surf0Cbits=0x%08X",
+          "flags=0x%08X surf36bits=0x%08X surf0Cbits=0x%08X",
           name, (unsigned)dlg, m->l, m->t, m->r, m->b,
           (int)bl[0], (int)bl[1], (int)bl[2], (int)bl[3],
+          (unsigned)*(DWORD*)(dlg + SC_BINDLG_OFF_FLAGS),
           (unsigned)bits36, (unsigned)bits0C);
 }
 
@@ -259,6 +290,76 @@ static void UnmoveAll(void) {
     }
     g_movedN = 0;
     memset(g_moved, 0, sizeof(g_moved));
+}
+
+// ---------------------------------------------------------------------------
+// The present sliver (see the struct above for the mechanism)
+// ---------------------------------------------------------------------------
+
+// Dump a storm region's rect list through the exe's own Ordinal_529 thunk
+// (0x00411E60: stdcall(region, &count, rects); count in = capacity, out =
+// rects written -- the exact call layer2Draw makes at 0x0041CC20).
+static void LogRegionRects(const char* what, DWORD regionVaOfPtr) {
+    DWORD region = Readable((DWORD)(DWORD_PTR)Rt(regionVaOfPtr), 4)
+                       ? *(DWORD*)Rt(regionVaOfPtr) : 0;
+    if (!region) { ScLog("CONSOLE region %s: handle NULL", what); return; }
+    DWORD cnt = 8;
+    int rects[8][4];
+    memset(rects, 0, sizeof(rects));
+    typedef void (__attribute__((stdcall)) *RgnRectsFn)(DWORD, DWORD*, void*);
+    ((RgnRectsFn)Rt(0x00411E60u))(region, &cnt, rects);
+    char line[320];
+    size_t used = 0;
+    line[0] = '\0';
+    for (DWORD i = 0; i < cnt && i < 8 && used + 48 < sizeof(line); ++i) {
+        used += (size_t)_snprintf(line + used, sizeof(line) - used, "%s(%d,%d,%d,%d)",
+                                  i ? " " : "", rects[i][0], rects[i][1],
+                                  rects[i][2], rects[i][3]);
+    }
+    ScLog("CONSOLE region %s: handle=0x%08X rects(n=%u, first 8): %s",
+          what, (unsigned)region, (unsigned)cnt, line);
+}
+
+// imgCreate 0x0041D640: EDI = &{u16 w, u16 h, u8* bits}, stack (x, y), stdcall
+// RET 8, returns the node. Convention read off its one caller (0x004C3A03:
+// push 0 / push 0 / mov edi,0x597240 / call).
+static void AddPresentSliver(void) {
+    if (g_sliverSession == g_session) return;
+    // The console node must exist first (its loader is what put the list head
+    // up), and the buffer must be allocated -- both true once the console
+    // dialogs are being drawn, which is when this is called.
+    DWORD bits = Readable((DWORD)(DWORD_PTR)Rt(0x006CEFF4u), 4)
+                     ? *(DWORD*)Rt(0x006CEFF4u) : 0;
+    if (!bits) return;
+    LogRegionRects("base 0x6D5E14 BEFORE sliver", 0x006D5E14u);
+    g_sliverDesc.w = 160;
+    g_sliverDesc.h = 480;
+    g_sliverDesc.bits = bits;   // region SHAPE is what matters; content is the buffer
+    void* fn = Rt(0x0041D640u);
+    ScImgDesc* d = &g_sliverDesc;
+    DWORD node = 0;
+    __asm__ __volatile__("pushl $0\n\t"
+                         "pushl $640\n\t"
+                         "calll *%[fn]"
+                         : "=a"(node)
+                         : "D"(d), [fn] "r"(fn)
+                         : "ecx", "edx", "cc", "memory");
+    g_sliverSession = g_session;
+    ++g_slivers;
+    if (node && Readable(node, 0x20)) {
+        // The node the engine built from our descriptor, read back field by
+        // field (imgCreate stores: +8 storm handle, +0xC x, +0x10 y, +0x14
+        // x+w, +0x18 y+h). A NULL handle means Ordinal_445 rejected the
+        // descriptor and the region combine has nothing to add.
+        ScLog("CONSOLE present sliver: node=0x%08X handle=0x%08X rect=(%d,%d)-(%d,%d)",
+              (unsigned)node, (unsigned)*(DWORD*)(node + 8),
+              *(int*)(node + 0xC), *(int*)(node + 0x10),
+              *(int*)(node + 0x14), *(int*)(node + 0x18));
+    } else {
+        ScLog("CONSOLE present sliver: imgCreate returned 0x%08X (unreadable)",
+              (unsigned)node);
+    }
+    LogRegionRects("base 0x6D5E14 AFTER sliver", 0x006D5E14u);
 }
 
 // ---------------------------------------------------------------------------
@@ -308,9 +409,15 @@ static void DoRequestedSelect(void) {
     DWORD list[2] = { unit, 0 };
     CallCreateSelections(list, 1);
     ((ScCmdactSelectFn)Rt(SC_VA_CMDACT_SELECT))(1, list);
+    // The client half: the funnel pair fills activePlayerSelection and the wire,
+    // and the status driver's own updateSelectedUnitData (0x004C38B0) copies it
+    // into clientSelectionGroup + portrait -- but only when this flag asks it to
+    // (0x004D93F0's first instruction reads it). Measured without it: active=1
+    // sim=1, client=0, card empty.
+    *(BYTE*)Rt(SC_VA_CLIENT_SEL_CHANGED) = 1;
     ++g_selects;
     ScLog("CONSOLE selected unit=0x%08X type=%d player=%u (engine funnel: 0x0049AE40 "
-          "then CMDACT_Select)",
+          "then CMDACT_Select; client_selection_changed set)",
           (unsigned)unit, (int)*(WORD*)(unit + SC_CUNIT_OFF_UNIT_ID), player);
 }
 
@@ -343,6 +450,7 @@ static void OnFrame(void) {
         if (g_trace) WrapRoot(dlg, name);
         if (g_edge && ScScreenActive() &&
             (strcmp(name, "StatRes") == 0 || strcmp(name, "StatBtn") == 0)) {
+            AddPresentSliver();
             TryMove(dlg, name);
         }
         dlg = *(DWORD*)(dlg + SC_BINDLG_OFF_NEXT);
@@ -409,6 +517,27 @@ void ScConsoleInstall(BYTE* moduleBase, bool edge, bool trace) {
         g_edge = g_trace = false;
         return;
     }
+    if (g_edge) {
+        // The dialog dirty-mark clip's max-x (sc_addresses.h): stock 640, no
+        // writer in the binary, so this one dword is the whole of why a dialog
+        // moved past x=639 never repaints. Refuse the move if it does not read
+        // stock -- a different value means a different build or another patch.
+        DWORD* x1 = (DWORD*)Rt(SC_VA_DLG_DIRTY_CLIP_X1);
+        if (*x1 == 640) {
+            g_clipOrigX1 = *x1;
+            *x1 = 640 + SC_CONSOLE_SHIFT_X;
+            g_clipPatched = true;
+            ScLog("CONSOLE: dialog dirty-mark clip max-x 640 -> %u (0x0051A174; the "
+                  ".data constant updateControlInner clamps every dialog dirty rect "
+                  "against -- stock, it makes a repaint past x=639 unmarkable)",
+                  (unsigned)*x1);
+        } else {
+            ScLog("CONSOLE: dirty-clip max-x at 0x0051A174 reads %u, not the stock 640 "
+                  "-- the move is DISARMED (wrong build or a competing patch)",
+                  (unsigned)*x1);
+            g_edge = false;
+        }
+    }
     ScLog("CONSOLE: ON edge=%d trace=%d (frame hook at 0x0041E280; StatRes/StatBtn "
           "+%d once their surfaces exist, old+new rects marked dirty)",
           g_edge ? 1 : 0, g_trace ? 1 : 0, SC_CONSOLE_SHIFT_X);
@@ -417,12 +546,17 @@ void ScConsoleInstall(BYTE* moduleBase, bool edge, bool trace) {
 void ScConsoleRemove(void) {
     UnmoveAll();
     UnwrapAll();
+    if (g_clipPatched) {
+        *(DWORD*)Rt(SC_VA_DLG_DIRTY_CLIP_X1) = g_clipOrigX1;
+        g_clipPatched = false;
+    }
     ScHookRemove(&g_hkCompose);
 }
 
 void ScConsoleLogStats(void) {
     if (!g_edge && !g_trace && g_frames == 0) return;
     ScLog("CONSOLESTATS frames=%u moves=%u wrapped=%d traceLines=%u traceDropped=%u "
-          "selects=%u",
-          g_frames, g_moves, g_wrapN, g_traceLines, g_traceDropped, g_selects);
+          "selects=%u slivers=%u",
+          g_frames, g_moves, g_wrapN, g_traceLines, g_traceDropped, g_selects,
+          g_slivers);
 }

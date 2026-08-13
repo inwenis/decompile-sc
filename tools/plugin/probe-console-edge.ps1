@@ -116,6 +116,30 @@ function Count-CmdLines {
       Where-Object { $_ -match "CMD id=$Id " }).Count
 }
 
+# A marker-driven copy of the 800-wide screen BUFFER (0x6CEFF0 bits). The one
+# oracle that can say whether a buffer-path (flag 0x10000000) dialog's pixels
+# were ever COMPOSITED, independent of whether they were ever PRESENTED.
+function Get-BufferDump {
+    param([string]$Tag)
+    $from = Get-ScLogLineCount -LogPath $log
+    Set-ScMarker -MarkerPath $markerPath -Label $Tag
+    $lines = Wait-ScLogMatch -LogPath $log -Pattern "FRAMEDUMP \[$([regex]::Escape($Tag))\] " -TimeoutSec 20 -FromLine $from
+    foreach ($l in $lines) {
+        if ($l -match 'FRAMEDUMP \[[^\]]+\] w=(\d+) h=(\d+) bytes=\d+ reads=\d+ stable=\d path=(.+)$') {
+            return $Matches[3].Trim()
+        }
+    }
+    $null
+}
+
+function Get-DumpBand {
+    param([string]$Dump, [int]$X0, [int]$X1, [int]$Y0, [int]$Y1)
+    $out = & python (Join-Path $scriptDir 'frame-capture.py') band --dump $Dump `
+        --x0 $X0 --x1 $X1 --y0 $Y0 --y1 $Y1 2>&1
+    foreach ($l in $out) { if ("$l" -match '^band_nonzero_frac=(.+)$') { return [double]$Matches[1] } }
+    -1.0
+}
+
 function Get-SelectionNow {
     param([string]$Tag)
     $from = Get-ScLogLineCount -LogPath $log
@@ -160,6 +184,7 @@ try {
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
         -Mode hooktest -LogCommands 1 -CardScan 1 -WorldScan 1 -NoLaunchLock `
         -Widescreen 1 -WidescreenStage 3 -ConsoleEdge 1 -ConsoleTrace 1 `
+        -FrameDump $FrameDir `
         -Windowed -WindowedHelperDll $WindowedHelperDll `
         -GameDir $GameDir -LogPath $log 6>&1 | ForEach-Object {
             Write-Host "       $_"
@@ -256,7 +281,7 @@ try {
     Assert-True 'the NEW card region x=656..799 y=400..479 (dead-black before this task) holds pixels' `
         ($newCard -ge 0.30) "(nonzero=$newCard)"
     $newRes = Get-PngRectNonzero -Path $shot -X0 700 -Y0 1 -X1 798 -Y1 18
-    Report-Finding "resource-bar right end x=700..798 y=1..18: nonzero=$newRes (content there = the bar reaches the edge)"
+    Report-Finding "resource-bar right end x=700..798 y=1..18 on GLASS: nonzero=$newRes (run 2 read 0 here: composited into the buffer, never presented -- the storm present's base region was the 640-wide console image node)"
     $oldCard = Get-PngRectNonzero -Path $shot -X0 496 -Y0 400 -X1 639 -Y1 479
     Report-Finding "OLD card region x=496..639 y=400..479 after the move: nonzero=$oldCard (what fills the vacated strip)"
     $gap = Get-PngRectNonzero -Path $shot -X0 640 -Y0 400 -X1 655 -Y1 479
@@ -275,6 +300,40 @@ try {
     $stat = Get-ScStatusQueue -LogPath $log -Tag 'postsel-statq' -MarkerPath $markerPath
     Assert-True 'the portrait shows the Nexus (the card is up)' `
         ($stat.PortraitType -eq $NEXUS_TYPE) "(ptype $($stat.PortraitType))"
+    $shotSel = Join-Path $FrameDir 'console-800-edge-selected.png'
+    Save-ScWindowImage -Hwnd $h -Path $shotSel | Out-Null
+    Write-Host "       capture: $shotSel (Nexus selected -- the card with its buttons)"
+
+    # The StatRes question, measured from the BUFFER (run 2's lesson: the window
+    # PNG includes the shim's caption INSIDE the client rect, and a band probe
+    # over it reads the gray caption -- see Save-ScWindowImage's own warning).
+    # StatRes is the one flag-0x10000000 dialog: its composite target is the
+    # 800-wide buffer, so the buffer says whether its digits were ever
+    # composited at the new position, independent of presentation.
+    $dump = Get-BufferDump -Tag 'edge-postsel'
+    if ($dump) {
+        $bNew = Get-DumpBand -Dump $dump -X0 700 -X1 796 -Y0 2 -Y1 17
+        $bOld = Get-DumpBand -Dump $dump -X0 560 -X1 648 -Y0 2 -Y1 17
+        Report-Finding "BUFFER band, StatRes digits: NEW rect x=700..795 nonzero=$bNew | OLD rect x=560..647 nonzero=$bOld (new>0 & window blank = present gap; both 0 = composite never ran for the moved StatRes; old>0 = a second position source)"
+    }
+    else { Report-Finding 'BUFFER band: no FRAMEDUMP arrived -- the StatRes diagnosis is missing from this run' }
+
+    # The moved bar ON GLASS -- run 3 proved it composited into the buffer at
+    # the new rect while the window stayed black there (the present clip,
+    # renderer-viewport.md 19.8); the sliver image node is the repair. Selected
+    # Nexus supplies 9, so the supply counter is up and the digits are lit.
+    $shotSel2 = Join-Path $FrameDir 'console-800-edge-selected.png'
+    $glassRes = (Test-Path -LiteralPath $shotSel2) ? (Get-PngRectNonzero -Path $shotSel2 -X0 700 -Y0 1 -X1 798 -Y1 18) : -1
+    Assert-True "the resource bar's right end shows on GLASS at x=700..798 (present sliver carries it)" `
+        ($glassRes -ge 0.05) "(nonzero=$glassRes; run 2 measured 0 here with the bar stuck in the buffer)"
+
+    # The MAP's right band on glass -- the real payload of the present repair:
+    # runs 2-4 (and 070's own captures, re-read) show glass black past x~648
+    # while the buffer held map. The Nexus's vision covers this band at the
+    # start origin, so a black reading here is the clip, not fog.
+    $glassMap = (Test-Path -LiteralPath $shotSel2) ? (Get-PngRectNonzero -Path $shotSel2 -X0 660 -Y0 80 -X1 790 -Y1 300) : -1
+    Assert-True "the MAP's right band shows on GLASS at x=660..790 y=80..300" `
+        ($glassMap -ge 0.10) "(nonzero=$glassMap; black here through run 4 -- and in 070's captures -- was the present clip)"
 
     # The Train (Probe) click at the MOVED card: stock slot-0 centre (522,374)
     # +160. Wire + ring are the oracles; the CTRACE names who claimed the click.
@@ -293,9 +352,15 @@ try {
     Assert-True "a Train click at ($trainX,$trainY) put 0x1F on the wire" `
         ($cmd1 -gt $cmd0) "(0x1F count $cmd0 -> $cmd1)"
     $stat2 = Get-ScStatusQueue -LogPath $log -Tag 'postclick-statq' -MarkerPath $markerPath
-    $engineQ = @($stat2.Engine | Where-Object { $_ -ne 228 -and $_ -ne 0xE4 })
-    Assert-True "the ENGINE's own ring holds the queued item" `
-        ($engineQ.Count -ge 1) "(engine=[$($stat2.Engine -join ',')] head=$($stat2.Head))"
+    # A ring value is only a queued item if it is a REAL unit-type id (< 228, the
+    # engine's empty sentinel). The first run of this probe passed this assert on
+    # a walk full of 4095s taken with no portrait at all -- a vacuous green
+    # (AGENTS.md, task 041's class) -- so the portrait precondition is part of
+    # the assert now.
+    $engineQ = @($stat2.Engine | Where-Object { $_ -ge 0 -and $_ -lt 228 })
+    Assert-True "the ENGINE's own ring holds the queued item (portrait still the Nexus)" `
+        ($stat2.PortraitType -eq $NEXUS_TYPE -and $engineQ.Count -ge 1) `
+        "(ptype=$($stat2.PortraitType) engine=[$($stat2.Engine -join ',')] head=$($stat2.Head))"
 
     # The trace's answer, whatever it was: every non-MOUSEMOVE root-interact
     # event since just before the click.

@@ -1816,6 +1816,20 @@ already ruled on (black, §15.5.3). Moving a fixed-width console to the edge jus
 RELOCATES the black gap (right → left); it cannot be done without new art, which
 hard rule 1 forbids shipping.
 
+> **CORRECTED by task 073 (§19), with a capture on each side.** The
+> "fixed draw positions" mechanism above is wrong: the layer-2 composite blits
+> every dialog surface to the screen at its LIVE `+0x04` bounds, per dirty rect
+> (§19.1, read instruction by instruction). What 071's picture actually showed
+> is that **no repaint of the affected rects could ever be MARKED**: the one
+> function that adds a dialog rect to the layer-2 dirty region clamps it
+> against a `.data` clip box `{0,0,640,480}` with no writer anywhere in the
+> binary (§19.3). One dword widened plus the same bounds move puts the resource
+> bar and the command card at the right edge — measured, with the art travelling
+> in each dialog's own surface (§19.2), so no art ships and the black gap
+> lands in the unowned strip exactly as ruled. The observation above (the
+> bounds moved, the picture did not) was correct; the mechanism inferred from
+> it was not.
+
 **The oracle lesson, stated generally because it cost a merge-ready result:**
 the engine dialog list is the right oracle for *hit-test* position, and it was
 used — in good faith, with the geometry confirmed — to support a *visual*
@@ -1848,6 +1862,18 @@ and why the console move was dropped from what shipped. The trace instrument and
 the click probe that produced §18.3 live in git history (task071 branch,
 pre-split commits) as that task's starting tools.
 
+> **RESOLVED by task 073 (§19.4): no stock router refuses x>=640 — the moved
+> card claims its own clicks.** Under cnc-ddraw, whose window really is 800
+> wide, the moved card's interact claims a Train click at (682,374) and
+> returns 1, the wire carries 0x1F, and the building's ring fills — clean
+> slate first (§19.4, one run, rebuilt trace). What §18.3's runs measured is
+> therefore not an engine router. The likeliest cause — stated as hypothesis,
+> not measurement — is the same WMode posted-input contract §18.1 names for
+> the playfield (a posted x>639 under a 640-wide shim window), which produces
+> exactly this trace: no interact invoked, hotkey fine. Nobody has re-run
+> §18.3's arm to confirm that attribution, and with the engine measured clean
+> under an honest presenter, nothing depends on it.
+
 ### 18.4 How to reproduce
 
 ```powershell
@@ -1864,3 +1890,223 @@ python tools/renderer_patch_sites.py --check      # 269 sites verify against the
 The NO-GO capture (§18.2) is 070's vector at stage 3 with the move prototype
 (git history); the picture is `C:\sc-work\logs\071-frames\console-800-*.png`
 (gitignored; paths travel, images never).
+
+## 19. Task 073 — the console moves after all: the composite follows live bounds, and one .data clip box was the wall
+
+§18 briefed this task with two blockers. Both dissolve into single, named causes:
+the pixels were stopped by a four-dword `.data` clip box nobody had found
+(§19.3), and the click drop was never in the engine (§19.4). The console-edge
+move ships as `%SCPLUGIN_CONSOLE_EDGE%` (sc_console.cpp): StatRes and StatBtn
+translated +160 at runtime once their surfaces exist, plus one dword widened —
+no art shipped, byte-identical binary, off by default.
+
+Captures (gitignored diagnostic path; paths travel, images never):
+`C:\sc-work\logs\073-frames\console-800-edge-selected.png` (the card with its
+buttons at the right edge, Nexus selected) against 071's
+`console-800-ingame.png` as the before. Everything below was read out of
+`StarCraft.exe` 1.16.1 by this task (Ghidra decompiles + capstone listings,
+`work/scratch/073/`) and then confirmed in the driven run
+(`probe-console-edge.ps1`, off-screen cnc-ddraw).
+
+### 19.1 The dialog composite, instruction level — pixels follow `+0x04`
+
+Layer 2's draw `0x0041CB50` per frame:
+
+1. Builds the visible-dialog list (`flags & 8`) from `0x006D5E34`.
+2. Converts the layer-2 dirty REGION — a storm region handle at `0x006D5E2C` —
+   into a rect list: `Ordinal_529(region, &count@0x006CF4B4, rects@0x006CF4C0)`,
+   each rect `{int l,t,r,b}`, right/bottom made inclusive in place.
+3. Per (visible dialog, rect): `0x0041C5D0` tests intersection against the
+   dialog's LIVE bounds (`+0x04..+0x0A`) and queues the dialog and its
+   intersecting children; `0x0041C080` then draws each queued control with the
+   render target switched to the ROOT'S OWN SURFACE (`0x006CF4A8 = root+0x36`,
+   §"status-pane-text" already had this half) and the clip converted to
+   root-relative coordinates — so a dialog's CONTENT is position-independent.
+4. Per (dialog, rect) the surface is COMPOSITED: `0x0041C810` clips the rect to
+   the dialog bounds (`0x0041BF60`), then `0x004EF440` builds
+   `dest = {rect.l, rect.t, min(rect.l+surfW, rect.r+1), ...}` and
+   `src = {rect.l - bounds.l, rect.t - bounds.t, ...}` and `0x004172F0` blits
+   `surface(src) -> target(dest)`. **Surface pixel (0,0) lands at
+   `(bounds.left, bounds.top)` — the live bounds are the position source, every
+   frame a dirty rect covers them.**
+
+Two target selections inside `0x0041C810`, both measured live this task:
+
+- `flags & 0x10000000` → target = the screen BUFFER `[0x006D5E20]`. StatRes is
+  such a dialog (`flags=0x7000200D` read live); layer2Prep (`0x0041C7B0`)
+  re-marks exactly these dialogs into the region whenever the dirty GRID under
+  them is touched — it sits on the playfield, which is why it needs that
+  bridge (terrain repaints under its transparent glyphs).
+- default (StatBtn, `flags=0x4000000D`) → target = whatever the frame composer
+  set, and `DAT_006D05A0=1` makes `0x004172F0` lock the DirectDraw surface
+  (`Ordinal_350`) and blit STRAIGHT INTO THE PRESENTED FRAME. This is why §12.10
+  measured the console band BLACK in the 800-wide buffer while the window showed
+  art: normal console dialogs never pass through the buffer at all.
+
+### 19.2 The art travels with the dialog — copied into its surface at creation
+
+`game\<race>console.pcx` is loaded ONCE into a bare descriptor
+`{u16 w, u16 h, u8* bits}` at `0x00597240` (loader `0x004C3950`; the race char
+comes from `0x00512700[raceId]`). Its only `.text` consumers by address are the
+loader and the freer (`0x004C35C0`) — no draw path names it. It reaches the
+screen through the DIALOGS: when a console dialog's surface is allocated
+(`0x004C35F0`, `status.cpp:0xB5`), the allocator copies the art rectangle UNDER
+THE DIALOG'S BOUNDS AT THAT MOMENT into the fresh surface
+(`MOV ECX,0x597240 / LEA EAX,[bounds] / CALL 0x0041D260` with the target
+switched to the new surface — listing in `work/scratch/073/listing-c35f0.tsv`).
+
+So each console dialog OWNS its slice of the art, at surface-relative (0,0) —
+which is what makes the runtime move shippable: translated bounds carry the
+bronze panel along, nothing is extracted, and the 160 columns nobody owns stay
+black exactly as §15.5.3 ruled. (It is also the ordering constraint:
+sc_console moves a dialog only once its surface EXISTS — bounds moved first
+would make this copy read the 640-wide art out of range.)
+
+The `+0x36` / `+0x0C` descriptor question §"status-pane-text" left open is now
+measured: BOTH exist. StatBtn carries two distinct live surfaces
+(`+0x36 bits=0x0B2C619C`, `+0x0C bits=0x0B29008C`, both 144x126); StatRes has
+only `+0x36` (420x20, `+0x0C` bits NULL). The draw walk and the composite use
+`+0x36`; `0x004C35F0`'s art copy fills the `+0x0C` one where it exists.
+
+### 19.3 Finding one: the dirty-mark clip box `{0,0,640,480}` — no writer exists
+
+`0x0041C200` is the ONE function that adds a dialog rect to the layer-2 region
+(every `updateControl 0x0041C400` and hide/show sweep funnels through it). It
+16-aligns the rect and clamps it against four globals before
+`Ordinal_523(region, &rect, 0, 2)`:
+
+| global | read at | stock value (file image) |
+|---|---|---|
+| `0x0051A16C` | 0x0041C21B | 0 |
+| `0x0051A170` | 0x0041C24D | 0 |
+| `0x0051A174` | 0x0041C240 | **640** |
+| `0x0051A178` | 0x0041C25C | 480 |
+
+Each is referenced by EXACTLY that one instruction in all of `.text`
+(byte-scan, `work/scratch/073/findrefs.py`) — **no instruction writes them**;
+they are link-time constants read out of `.data`
+(`work/scratch/073/readdata.py`). So no dialog repaint could ever be MARKED
+past x=639: 071's moved bounds, and this task's first run, both drew nothing
+in the new region for exactly this reason, while the hit-test (which never
+consults the region) moved perfectly — the whole of §18.2's mystery.
+
+Live proof, one variable, two runs of `probe-console-edge.ps1`: with the box
+stock, the moved StatBtn's new region read `nonzero=0`; with `0x0051A174`
+widened `640 -> 800` — one dword, and stable, because nothing re-asserts a
+value nothing writes — the same region read `nonzero=0.7295` and the capture
+shows the card, buttons and all, at the window's right edge. (The RESOURCE BAR
+did not follow in the same run — its buffer-path composite is a separate
+question, §19.8.) The sibling box `{0,0,639,479}` at
+`0x0051A15C..0x0051A168` is the DRAW-time clip inside `0x0041C080`, applied in
+ROOT-RELATIVE coordinates after the draw rect is rebased — a 144- or 420-wide
+console dialog never reaches it, so it is recorded and left alone (it DOES have
+a writer, `0x0041C325..34C`).
+
+### 19.4 Blocker 2 dissolved: the card claims its own clicks at x>639
+
+Rebuilt 071's interact trace (every root's `+0x2A` wrapped and named,
+`%SCPLUGIN_CONSOLE_TRACE%`) and ran the Train click under cnc-ddraw — the
+presenter whose window really is 800 wide, where console-DIALOG clicks
+demonstrably register off-screen (probe-widescreen-drive's minimap clicks).
+With the slate verified EMPTY first, the Nexus selected through the engine's
+own funnel (§19.5), and the card drawn at (656,354)-(799,479):
+
+    CTRACE dlg='StatBtn' type=4 x=682 y=374 -> ret=1
+    CMD id=0x1F (0 -> 1 across the click); ring [64,228,228,228,228]
+
+The dispatcher walk (`0x00419FD0`: per-type override table `0x006D5E40`, else
+every root's interact in list order until one returns non-zero) reaches the
+moved card and the card takes the click. Nothing upstream filters by x.
+§18.3's contrary measurement is annotated in place with the surviving
+hypothesis (the WMode posted-input contract), at the strength the evidence
+supports.
+
+Instrument note, for the next reader of a quiet trace: this task's FIRST trace
+produced "no interact ever invoked" for every in-game click — because its
+600-line cap had been eaten in the MENUS by two flood event types (type 13, a
+timer tick, and the type-14 `dwUser=8` sweep, both arriving ~10/s per dialog).
+A capped trace reads exactly like a dead route (task 048's blind-instrument
+class). The shipped trace drops both floods and carries `traceDropped` in
+CONSOLESTATS so a saturated run names itself.
+
+### 19.5 The select aid — the client half of a selection is a FLAG away
+
+Off-screen cnc-ddraw cannot feed a posted playfield click (070: 0/8), so the
+probe selects through the engine's own pair — `0x0049AE40` then
+`CMDACT_Select 0x004C0860` (the click handler's own order). Measured: that
+pair alone yields `active=1 sim=1 client=0` — wire `0x09` sent, sim selection
+filled, and the status area still empty, because `CMDACT_Select` writes only
+`clientSelectionGroup2` and the wire. The client half is
+`updateSelectedUnitData 0x004C38B0` — copies `activePlayerSelection` into
+`clientSelectionGroup`, recounts, elects `activePortraitUnit`, refreshes the
+pane — and its per-frame caller is the stat display driver `0x004D93F0`, GATED
+on its first instruction's read of `client_selection_changed 0x0059723C`.
+Setting that one byte after the funnel completes the selection exactly as a
+real click does. (`sc_addresses.h SC_VA_CLIENT_SEL_CHANGED` carries the
+evidence chain.)
+
+### 19.6 The in-game root-dialog inventory at 800, measured
+
+From the DIALOGS oracle in the passing run — the first complete inventory with
+rects; dispatch order is list order:
+
+| root | rect | interact |
+|---|---|---|
+| Minimap | (0,315)-(137,479) | 0x004A5900 |
+| TextBox | (190,338)-(447,355) | 0x004F36C0 |
+| Stat_F10 | (408,388)-(495,407) | 0x004F5240 |
+| StatBtn | (656,354)-(799,479) MOVED | 0x00459B00 |
+| StatData | (138,388)-(407,479) | 0x004584F0 |
+| StatRes | (380,0)-(799,19) MOVED | 0x004E5910 |
+| StatLB | (0,0)-(199,111) | 0x004BECF0 |
+| StatPort | (408,408)-(495,479) | 0x0045F290 |
+| StatFluf x4 | (453,330)-(639,353) / (138,354)-(495,387) / (138,315)-(184,353) / (0,302)-(147,314) | 0x004F4D60 |
+
+The four StatFluf dialogs are the bronze RAIL segments — none underlies the
+card, which is how "the card's art is in its own surface" (§19.2) was
+corroborated from the outside.
+
+### 19.7 Reproduce
+
+```powershell
+./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-console-edge.ps1
+#   stage 3 + %SCPLUGIN_CONSOLE_EDGE% + %SCPLUGIN_CONSOLE_TRACE% through
+#   cnc-ddraw: the move logged with flags and both surface descriptors, the
+#   dialog-list rects asserted at (380,0,799,19)/(656,354,799,479), the window
+#   captured and pixel-counted (positive control: the unmoved minimap), the
+#   clean-slate select through the engine funnel, the Train click on the wire,
+#   the ring read back, minimap steering
+python work/scratch/073/findrefs.py C:\sc-work\1161-base\StarCraft.exe 0x0051A174
+python work/scratch/073/readdata.py C:\sc-work\1161-base\StarCraft.exe 0x0051A16C 0x0051A170 0x0051A174 0x0051A178
+```
+
+### 19.8 Finding two: the storm present is clipped by the console IMAGE NODE — in game, glass has never shown x>639 through the buffer path
+
+The repaired StatRes exposed a second, older wall. With the dirty-mark clip
+widened (§19.3), the moved bar COMPOSITED — the 800-wide buffer dump shows its
+supply counter at the new x~748..782 (rendered and read by eye as well as by
+band count) — and the GLASS stayed black there. The composite and the present
+are different machines, and the present has its own 640:
+
+- The buffer reaches the screen through `0x0041D420`:
+  `lock; Ordinal_432(locked, buffer@0x006CEFF4, pitch, 0x280->0x320 patched,
+  REGION@0x006D5E18); unlock` — a storm-REGION-driven copy.
+- That region is rebuilt per frame from the dirty grid at `0x0041E000`:
+  `SRgn*(BASE@0x006D5E14, grid, 3, &out@0x006D5E18)` — the grid (800-wide,
+  stage 2) COMBINED AGAINST A BASE REGION.
+- The base `0x006D5E14` is rebuilt by `0x0041D470` from the screen-image list
+  `0x0051A338`/count `0x0051A33C` — and `imgCreate 0x0041D640` has EXACTLY ONE
+  caller in the whole binary (byte-scan): the console.pcx loader `0x004C3A03`,
+  whose node covers `(0,0,640,480)`.
+
+So the present's base region is the 640-wide console art rect, and **no
+buffer pixel past x=639 has ever been presented in game** — not this task's
+moved bar, and not the terrain either: 070's own window capture
+(`C:\sc-work\logs\070-frames\drive-ingame-after.png`) shows the right band
+BLACK ON GLASS while its 800-wide FRAMEDUMPS held map, because every
+right-band assertion 064/068/070 made was measured from the DUMP (the buffer),
+and the window PNGs were "for the human" — whom nobody asked about the band.
+The 800-wide MENUS present fine because glue screens are dialogs, and normal
+dialogs blit DIRECT to the locked surface (§19.1) — which is also why the
+moved command card shows. The presenters differ per content class, and each
+class had been proven on a different instrument.
