@@ -20,9 +20,15 @@ Steps:
      close, task 129; falls back to stop-agent.ps1's hard tree-kill only if
      the worker doesn't respond).
 
-A done task with no PR (research/mockups/cancelled) is already completed by the
-status mapping -- close-task refuses it (nothing to verify or stamp); just commit
-the task file directly.
+A done task with no PR but WITH a report at work/reports/<NNN>-*.md is a
+report-only task (research/mockups) -- the report is its deliverable. It is
+closed the same way, minus the gh check: verify the report exists, stamp
+`merged: <today> (report-only; no PR)`, commit. (Task 069, issue #96: the old
+refusal claimed such a task was "already completed by the status mapping",
+which was false -- completion derives ONLY from the merged: stamp, so unstamped
+report-only tasks read queued forever and board-lint class 2 flagged them with
+no remedy this script would allow.) A task with no PR and no report still
+refuses: nothing was delivered.
 
 .EXAMPLE
 ./scripts/close-task.ps1 -Task 034
@@ -65,6 +71,11 @@ if (-not $taskFile) { throw "No task file work/tasks/$taskId-*.md under $repo." 
 $content = Get-Content -LiteralPath $taskFile.FullName -Raw
 $prNumber = Get-TaskPrNumber -Content $content
 
+# The report is the deliverable of a no-PR task, so its existence is part of the
+# close gate (task 069, issue #96) -- looked up here, reused for staging below.
+$report = Get-ChildItem -Path (Join-Path $dataRoot "reports/$taskId-*.md") -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+
 # Query gh for the PR's real state (the only source of truth for "merged").
 # Pull the fields via --jq as RAW strings: ConvertFrom-Json otherwise coerces
 # mergedAt into a local-culture DateTime, mangling the ISO date we stamp.
@@ -81,7 +92,7 @@ if ($prNumber) {
     if ($parts.Count -gt 1 -and $parts[1]) { $mergedAt = $parts[1] }
 }
 
-$refusal = Get-CloseRefusalReason -PrNumber $prNumber -PrState $prState
+$refusal = Get-CloseRefusalReason -PrNumber $prNumber -PrState $prState -ReportExists ([bool]$report)
 if ($refusal) { throw "Refusing to close task ${taskId}: $refusal" }
 
 # USER RULE (2026-07-15): keep the main checkout current with remote main.
@@ -90,7 +101,12 @@ if ($refusal) { throw "Refusing to close task ${taskId}: $refusal" }
 git -C $repo pull --ff-only 2>&1 | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "git pull --ff-only failed -- main checkout diverged; resolve before closing." }
 
-$date = Get-MergedDate -MergedAt $mergedAt
+# For a PR close the stamp is gh's mergedAt date; for a report-only close (no PR,
+# report verified above) it is today's date with the close kind spelled out, so
+# the stamp never claims a merge that did not happen. Both satisfy
+# Test-HasMergedStamp, which is what completion derives from.
+$date = if ($prNumber) { Get-MergedDate -MergedAt $mergedAt }
+        else { [DateTime]::UtcNow.ToString('yyyy-MM-dd') + ' (report-only; no PR)' }
 $stamped = Add-MergedStamp -Content $content -Date $date
 [IO.File]::WriteAllText($taskFile.FullName, $stamped, [Text.UTF8Encoding]::new($false))
 Write-Host "stamped merged: $date into $($taskFile.Name)"
@@ -98,8 +114,6 @@ Write-Host "stamped merged: $date into $($taskFile.Name)"
 # Stage the task file (and its report, if any). Specific paths only -- never
 # `git add -A` while other workers may have unstaged edits (AGENTS.md close step).
 $paths = @($taskFile.FullName)
-$report = Get-ChildItem -Path (Join-Path $dataRoot "reports/$taskId-*.md") -ErrorAction SilentlyContinue |
-    Select-Object -First 1
 if ($report) { $paths += $report.FullName }
 
 git -C $repo add -- $paths

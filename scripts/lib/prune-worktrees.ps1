@@ -51,6 +51,32 @@ function Get-TaskIdFromWorktreePath {
     return $m.Groups[1].Value
 }
 
+function Get-StrandedWorktreeTaskIds {
+    # Task-worktree directories that exist ON DISK but that git no longer
+    # registers (issue #96, task 069). The old removal order -- deregister,
+    # then delete -- could fail the delete AFTER the deregistration, leaving a
+    # directory no later `git worktree list` walk would ever surface; the
+    # script then printed `nothing prunable` over six directories still on
+    # disk. Pure set logic on directory LEAF names so Pester can drive it
+    # without a filesystem: the caller lists the repo's parent directory and
+    # passes the leaf names in.
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$DiskDirNames,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$RegisteredTaskIds,
+        [Parameter(Mandatory)][string]$RepoPath
+    )
+    $repoLeaf = Split-Path (($RepoPath -replace '\\', '/').TrimEnd('/')) -Leaf
+    $registered = [Collections.Generic.HashSet[string]]::new()
+    foreach ($id in $RegisteredTaskIds) { [void]$registered.Add($id) }
+    $ids = foreach ($name in $DiskDirNames) {
+        $m = [regex]::Match($name, '^' + [regex]::Escape("$repoLeaf-task") + '(\d{3})$')
+        if (-not $m.Success) { continue }
+        if ($registered.Contains($m.Groups[1].Value)) { continue }
+        $m.Groups[1].Value
+    }
+    return @($ids | Sort-Object)
+}
+
 function Get-PrunableWorktreeIds {
     # Given every registered worktree's task id and a lookup of which task
     # ids have a merged: stamp (Test-HasMergedStamp per task, computed by the
