@@ -184,7 +184,7 @@ function Invoke-Arm {
 
     $gamePid = 0
     $result = @{ Name = $Name; Log = $log; Menu = $null; InGame = $null
-                 Scrolled = $null; Mid = $null; Scrolled2 = $null
+                 Scrolled = $null; Mid = $null; Scrolled2 = $null; ScrollMid = $null
                  WsVerdict = $null; WsFilter = $null
                  Walked = $false; WalkError = $null }
 
@@ -262,6 +262,24 @@ function Invoke-Arm {
                 Send-ScClick -Hwnd $h -X $right.X -Y $right.Y
                 Start-Sleep -Seconds 3
                 $result.Scrolled2 = Get-CapturePoint -Hwnd $h -Tag "$Name-scrolled2" -LogPath $log
+
+                # Task 068 (064's residue 4): every capture above rests at a
+                # TILE-ALIGNED origin -- minimap click-to-centre lands on
+                # multiples of 32 -- so the fog cell pipeline's sub-tile
+                # alignment terms ((origin>>3)&3 in the renderer, &0x1F in the
+                # change detector) have never been exercised at 800. A held
+                # arrow key drives the smooth stepper scroll and can stop
+                # between tile boundaries. Posted WM_KEYDOWN reaching the
+                # engine's scroll is an empirical question (drive-game.ps1's
+                # KNOWN LIMIT note); the origin assertion downstream decides,
+                # and a failure means "scroll it another way", not "done".
+                # VK_RIGHT, short hold: measured 2026-08-13 run 1, a 420ms held
+                # arrow moved the camera >= 704 px (into the left clamp, which
+                # is tile-aligned and defeats the capture's purpose) -- the
+                # scroll runs >= 850 px/s. 100ms from origin (704,416) stops
+                # mid-map ~80-90 px right, almost never on a multiple of 32.
+                Send-ScKey -Hwnd $h -VirtualKey 0x27 -HoldMs 100 -SettleMs 500
+                $result.ScrollMid = Get-CapturePoint -Hwnd $h -Tag "$Name-scrollmid" -LogPath $log
             }
             # The WIDESCREEN install verdict, read from the plugin's own log --
             # an arm whose table was REFUSED runs a stock geometry and every
@@ -508,7 +526,7 @@ try {
         Assert-True '[s2] the whole stage applied (no leftover %SCPLUGIN_WS_ONLY%)' `
             ($null -ne $s2.WsFilter -and $s2.WsFilter -match 'unset, whole stage applied') `
             "($($s2.WsFilter))"
-        foreach ($pt in @($s2.Menu, $s2.InGame, $s2.Scrolled, $s2.Mid, $s2.Scrolled2)) {
+        foreach ($pt in @($s2.Menu, $s2.InGame, $s2.Scrolled, $s2.Mid, $s2.Scrolled2, $s2.ScrollMid)) {
             if ($null -eq $pt) { continue }
             Assert-True "[s2/$($pt.Tag)] a dump was written" ($null -ne $pt.Dump) `
                 ($pt.Refused ? "(refused: $($pt.Refused))" : '')
@@ -522,8 +540,24 @@ try {
             # ARE the experiment's reading.
             if ($pt.Tag -ne "$($s2.Name)-menu") {
                 Write-Host "       [s2/$($pt.Tag)] zero-column runs (seam tracker), origin=$($pt.Origin):"
-                Invoke-FrameTool -ToolArgs @('zeroruns', '--dump', $pt.Dump,
-                        '--x0', '0', '--x1', '800', '--y0', '20', '--y1', '320') | Out-Null
+                $zr = Invoke-FrameTool -ToolArgs @('zeroruns', '--dump', $pt.Dump,
+                        '--x0', '0', '--x1', '800', '--y0', '20', '--y1', '320')
+                # Task 068 regression tooth: the 25-px seam lived at 672..695
+                # at EVERY origin (screen-anchored). At the start origin the
+                # fixture's explored edge is map x 1332 = screen x 788, so any
+                # zero run touching 660..700 there is the seam class coming
+                # back, never legitimate shroud. (Proved able to fail: the
+                # pre-fix build reads 671-695 here, run 3 of 15.4.)
+                if ($pt.Tag -eq "$($s2.Name)-ingame") {
+                    $seam = @()
+                    foreach ($run in ("$($zr['zeroruns'])" -split ';')) {
+                        if ($run -match '^(\d+)-(\d+)$' -and [int]$Matches[1] -le 700 -and [int]$Matches[2] -ge 660) {
+                            $seam += $run
+                        }
+                    }
+                    Assert-True "[s2/$($pt.Tag)] no zero-column run intersects the old seam band x=660..700" `
+                        ($seam.Count -eq 0) "(intersecting: $($seam -join ','); all runs: $($zr['zeroruns']))"
+                }
             }
         }
         foreach ($pt in @($s2.InGame, $s2.Scrolled2)) {
@@ -552,9 +586,26 @@ try {
                     '--x0', '640', '--x1', '800', '--y0', '20', '--y1', '320')
             Assert-True "[s2/$($pt.Tag)] the right band was readable end to end" `
                 ([int]($b['band_px'] ?? 0) -eq 160 * 300) "(got $($b['band_px']) px)"
-            Assert-True "[s2/$($pt.Tag)] the right band holds MAP, not black (nonzero frac >= 0.30)" `
-                ([double]($b['band_nonzero_frac'] ?? 0) -ge 0.30) `
-                "(got $($b['band_nonzero_frac']), distinct=$($b['band_distinct']), top=$($b['band_top']))"
+            # Task 068: the band assertion is ORIGIN-DEPENDENT now that fog is
+            # correct. At the start origin (544,416) the marines' sight has
+            # explored most of the band, so it must hold MAP. At the scrolled
+            # origin (704,416) the band is map x 1400..1503 -- provably beyond
+            # the fixture's exploration (explored edge measured at map x 1332,
+            # runs 15.4 and 16.4; 064 checked the CHK's unit records) -- so a
+            # CORRECT fog paints it black. 064's original ">= 0.30 everywhere"
+            # form was calibrated ON the leak: at (704,416) it asserted the
+            # defect's own signature, and the first fixed run failed it with
+            # 0.0000 -- the reading that confirmed prediction 2.
+            if ($pt.Tag -eq "$($s2.Name)-scrolled2") {
+                Assert-True "[s2/$($pt.Tag)] fog HIDES the unexplored right band (nonzero frac <= 0.02)" `
+                    ([double]($b['band_nonzero_frac'] ?? 1) -le 0.02) `
+                    "(got $($b['band_nonzero_frac']), distinct=$($b['band_distinct']), top=$($b['band_top']))"
+            }
+            else {
+                Assert-True "[s2/$($pt.Tag)] the right band holds MAP, not black (nonzero frac >= 0.30)" `
+                    ([double]($b['band_nonzero_frac'] ?? 0) -ge 0.30) `
+                    "(got $($b['band_nonzero_frac']), distinct=$($b['band_distinct']), top=$($b['band_top']))"
+            }
             # Render pass: auto-search alignment. If it disagrees with the pin,
             # that is a finding a reader must see.
             $r = Invoke-FrameTool -ToolArgs @('check', '--dump', $pt.Dump,
@@ -612,6 +663,23 @@ try {
                 ($null -ne $s2.Scrolled.Origin -and $s2.Scrolled.Origin -ne $s2.InGame.Origin) `
                 "(ingame=$($s2.InGame.Origin) scrolled=$($s2.Scrolled.Origin))"
         }
+        # Task 068: the held-arrow-key capture exists to reach a NON-tile-
+        # aligned origin (the fog pipeline's (origin>>3)&3 / &0x1F alignment
+        # terms; every minimap origin is a multiple of 32). Whether a posted
+        # key drives the scroll at all is empirical -- so the event the
+        # capture exists for is counted (coverage rule), and the alignment
+        # is printed beside it either way.
+        if ($s2.Scrolled2 -and $s2.ScrollMid) {
+            $moved = ($null -ne $s2.ScrollMid.Origin -and
+                      $s2.ScrollMid.Origin -ne $s2.Scrolled2.Origin)
+            $alignNote = ''
+            if ($null -ne $s2.ScrollMid.Origin -and $s2.ScrollMid.Origin -match '^(\d+),(\d+)$') {
+                $ax = [int]$Matches[1] % 32
+                $alignNote = " originX%32=$ax" + ($ax -ne 0 ? ' (sub-tile: alignment terms exercised)' : ' (tile-aligned: alignment terms NOT exercised this run)')
+            }
+            Assert-True '[s2] the held arrow key moved the camera (keyboard scroll reached the engine)' `
+                $moved "(scrolled2=$($s2.Scrolled2.Origin) scrollmid=$($s2.ScrollMid.Origin)$alignNote)"
+        }
     }
 
     foreach ($a in $arms.Values) {
@@ -635,7 +703,7 @@ finally {
 Write-Host ''
 Write-Host 'probe-framecap: dumps + renders (gitignored diagnostic path, never committed):'
 foreach ($a in $arms.Values) {
-    foreach ($pt in @($a.Menu, $a.InGame, $a.Scrolled, $a.Mid, $a.Scrolled2)) {
+    foreach ($pt in @($a.Menu, $a.InGame, $a.Scrolled, $a.Mid, $a.Scrolled2, $a.ScrollMid)) {
         if ($pt -and $pt.Dump) {
             Write-Host "       $($pt.Tag) : $($pt.Dump)"
             $render = Join-Path $FrameDir "$($pt.Tag)-render.png"

@@ -325,6 +325,40 @@ ROWS across the full width, while animation differs in isolated blobs spanning n
 the thing that distinguishes damage from noise, and report the noise floor beside it rather than
 asserting against zero.
 
+## A verified enumeration of what TOUCHES an address says nothing about what the address IS (2026-08-13, task 068)
+
+The sibling of the section above, from the other direction. Task 064 handed its fog
+follow-up a residue stating *"the fog update cursor [0x6CDFE8] is touched by exactly TWO
+functions (byte-scan verified)"* — and the scan was right: exactly two functions name it.
+The identification was wrong anyway. Disassembled, those two functions walk a dialog child
+list, index a count-prefixed string table, and measure text against the font height:
+`[0x6CDFE8]` is the TIPS DIALOG's string cursor, its `[1..0x50]`/`[1..0x67]` wrap is 80
+tips original vs 103 Brood War on the EXPANSION flag, and the whole "fog cursor" briefing —
+carried by the conductor into the next task file as the working hypothesis — pointed at a
+UI widget. The real fog pipeline (research/renderer-viewport.md §16) shares not one
+function with it.
+
+The claim shapes to keep apart:
+
+- **"N functions reference this address"** — a byte scan settles it, and 064's scan did.
+- **"this address is the fog cursor"** — only READING those functions settles it, and
+  nobody had. The scan's rigor bled onto the identification: "byte-scan verified" read as
+  if the NAME had been verified, when only the COUNT had.
+
+Same task, same hour, the same shape twice more: constants `0x51/0x50` at three verified
+addresses were briefed as fog cell counts (648/8, 640/8) and are tip-string counts; two
+"fog draw arms" were the space-tileset parallax starfield. All three misreadings came from
+a VALUE sweep whose hits were real arithmetic on the searched values — in three unrelated
+subsystems that happen to count to 80. A value family names candidates; only the function
+around the hit names the subsystem.
+
+So: when a finding names WHAT something is, ask what evidence bears on the identification
+specifically — a verified reference count, a verified byte pattern, a verified value match
+all bear on existence, not identity. And when writing a residue or briefing, label the two
+strengths apart: "verified: two referencers; hypothesis: fog cursor" would have cost the
+next reader nothing and saved them a morning. (It also went right, for once, because the
+task file said to read the dossier BEFORE trusting the briefing — a form worth keeping.)
+
 ## A random suite must report the coverage of its SEAM, not only its verdict (2026-08-12, task 041)
 
 **This is a rule about any suite that GENERATES its own cases** — random, fuzzed, property-based,
@@ -406,6 +440,39 @@ And the counterpart on the diagnostics side: this cost a whole in-game run to se
 plugin is holding nothing" and "the plugin was never handed a building" print the same zeros.
 Count the detour's exits, not just its successes (`trainSeen` / `trainNoUnit` in `PRODQSTATS`) —
 the task-030 rule about naming the term that refused applies to the entry as well as the verdict.
+
+## An oracle written during a defect era can encode the defect as its expectation (2026-08-13, task 068)
+
+A sibling of the vacuous-assertion rule, not a restatement: a vacuous assertion cannot
+fail; this one CAN fail — it fails on CORRECT behaviour, which is worse, because the red
+shows up exactly when somebody has just fixed the bug and is deciding whether to trust
+their fix.
+
+Task 064 asserted "the right band x=640..799 holds MAP, not black (nonzero >= 0.30)" on
+every stage-2 capture, in good faith, to prove terrain was reaching the new columns. At
+the scrolled origin (704,416) the band is map the fixture never explored — so **the only
+thing that could ever satisfy the assertion there was the fog leak painting raw terrain
+over unexplored map**. The check was calibrated on a defective build, and the defect's
+signature became the expectation. Task 068 fixed the leak; the band correctly went
+100.0000% black; the assertion failed with `0.0000` against its `>= 0.30`; and a worker
+who trusted the oracle over the mechanism would have "fixed" the fix. (The reading that
+said otherwise: the same number had been 100.0000% NONZERO pre-fix, at the same origin,
+over the same provably-unexplored map — a prediction registered before the run, which is
+what made the red legible as confirmation rather than regression.)
+
+So, two duties, one on each side of a defect era:
+
+- **Writing an oracle while a known defect is live**: ask what the assertion reads on a
+  CORRECT build, not only what it reads today. If the honest answer is "I don't know what
+  correct looks like here", assert the part that is defect-independent and REPORT the
+  rest — 064's own seam tracker did exactly this (report-only zeroruns) and survived the
+  fix untouched.
+- **Seeing a red after fixing a bug**: before touching either the fix or the check, date
+  the check. If it was calibrated while the bug was live, work out from the MECHANISM
+  what a correct build should read, and re-derive the assertion from that — with the
+  pre-fix and post-fix readings cited beside it, so the next reader knows what calibrated
+  it (task 068's repair: origin-dependent, `>= 0.30 map` where the fixture explored,
+  `<= 0.02 hidden` where it provably did not).
 
 ## Absence assertions must first be proved positive (2026-08-09)
 
