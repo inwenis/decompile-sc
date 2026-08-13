@@ -793,6 +793,40 @@ across the off-screen run: no StarCraft window ever foreground. Isolation costs 
 StarCraft is single-instance PER MACHINE regardless of desktops. Invisible desktops fix
 VISIBILITY of however many runs happen; they do not buy concurrent games.
 
+### Glue-screen input is ACTIVATION-GATED, and a shim decides whether the gate is open (2026-08-13, task 070)
+
+A posted click at a fully interactive main menu registers every time under WMode and
+**0 of 4 runs under cnc-ddraw on the invisible desktop** — one run watched a single
+clean, dialog-gated click for 60 seconds and the menu never responded. The click path
+was fine (the same click had once landed when queued during a screen transition); what
+differed was the ACTIVATION STATE: the engine gates its glue-screen input on being told
+it is active (the `WM_ACTIVATEAPP` case, the same one the "Foreground" section
+decompiled), WMode's injected windowed mode leaves the game believing it is active, and
+a cnc-ddraw window on a desktop that can never hold the foreground is never told.
+
+Measured fix, same run shape: post `WM_ACTIVATEAPP(1)` + `WM_ACTIVATE(WA_ACTIVE)` +
+`WM_SETFOCUS` first and the identical click registered in **0.4 s**. Two riders, both
+measured:
+
+- **The gate RE-CLOSES across screens** — the next screen's clicks died again after a
+  one-shot nudge — so the nudge goes before EVERY posted input, not once per run.
+  `drive-game.ps1` does this in the input primitives behind `%SCDRIVE_POST_ACTIVATE%=1`
+  (opt-in; no existing suite changes behaviour). A retry loop that re-nudges and
+  re-clicks when the expected dialog does not appear is the resilient form: the settle
+  between nudge and click matters (500 ms measured working; 60 ms measured not).
+- **This is a HARNESS limit, not a defect in the shim or the game.** A real player on a
+  real desktop clicks a focused window that Windows activates normally. Do not "fix"
+  it in cnc-ddraw config (task 070 tried `hook=1` and `noactivateapp=true`; neither
+  moved anything, both reverted) and do not report it as the feature being broken.
+
+The sibling lesson from the same runs, for anyone writing two-sample comparisons:
+**WMode was hiding MOTION, not just columns.** The browser's selected row animates
+under cnc-ddraw and is static under WMode, so "did this region change" oracles
+calibrated under WMode can fail to settle under an honest presenter —
+`Sync-ScBrowserToTop` now measures self-animating rows per batch and detects movement
+on the others. Any oracle that assumed a still frame between samples is suspect under
+a shim that presents everything the engine draws.
+
 ### The one input that cannot work off-screen: a dropdown pick
 
 Windows has one foreground window and it belongs to the desktop receiving input, so a

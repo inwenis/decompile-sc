@@ -298,7 +298,9 @@ function Send-ScActivationNudge {
     [void][ScDrive.Native]::PostMessage($Hwnd, 0x001C, [IntPtr]1, [IntPtr]0)  # WM_ACTIVATEAPP, active
     [void][ScDrive.Native]::PostMessage($Hwnd, 0x0006, [IntPtr]1, [IntPtr]0)  # WM_ACTIVATE, WA_ACTIVE
     [void][ScDrive.Native]::PostMessage($Hwnd, 0x0007, [IntPtr]0, [IntPtr]0)  # WM_SETFOCUS
-    Start-Sleep -Milliseconds 60
+    # 500ms is the measured-working settle (probe arm B); a 60ms variant of the
+    # same triple failed to open the gate in the very next run.
+    Start-Sleep -Milliseconds 500
 }
 
 function Send-ScMouseMove {

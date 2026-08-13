@@ -64,6 +64,14 @@ param(
     [string]$FrameDir = 'C:\sc-work\logs\070-frames',
     # The pinned cnc-ddraw (fetch-cnc-ddraw.ps1, sha256-verified at fetch).
     [string]$WindowedHelperDll = 'C:\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll',
+    # Which helper PRESENTS. The engine build is identical either way (stage 2 +
+    # fog, in-process); what differs is the window. 'cnc' is the user's wide
+    # presentation (window 800, and the harness's posted playfield mouse does
+    # NOT register there -- measured, attempts 8-10, see the PR); 'wmode' crops
+    # the window to 640 but posts reach every engine path, so it is the arm
+    # that PROVES the engine's input mapping past x=640 (hit-testing is engine
+    # arithmetic on its own stored coordinates; the presenter never sees it).
+    [ValidateSet('cnc', 'wmode')][string]$Presenter = 'cnc',
     # The stability floor: in-game driving keeps going until this much wall
     # clock has passed since the game loaded. The click/scroll/command tests
     # above run inside it, so a passing run IS a driven session of this length.
@@ -119,6 +127,18 @@ function Report-Finding {
     param([string]$What)
     $script:findings += $What
     Write-Host "  ---- FINDING: $What"
+}
+
+# Playfield-input steps assert only where posted input REACHES the playfield.
+# Under cnc-ddraw on the invisible desktop it does not (measured 0/8 across
+# three mechanisms -- a harness limit, AGENTS.md "Glue-screen input is
+# ACTIVATION-GATED"), so there the same steps run and REPORT; under WMode
+# posted coordinates reach every engine path and the steps assert. The
+# readings themselves are identical either way.
+function Assert-Input {
+    param([string]$What, [bool]$Ok, [string]$Detail = '')
+    if ($Ok -or $Presenter -eq 'wmode') { Assert-True $What $Ok $Detail }
+    else { Report-Finding "input step, NOT asserted under cnc-ddraw (posted playfield input is a measured harness limit there): $What $Detail" }
 }
 
 function Invoke-FrameTool {
@@ -242,16 +262,21 @@ try {
     # posted click at a fully interactive menu registers 0/4 runs without this,
     # and in 0.4s with it (probe-cnc-clickdelay, arm B). The flag makes every
     # drive-game input primitive post the activation triple first; real
-    # foreground/focus are untouched. Cleared in finally.
-    $env:SCDRIVE_POST_ACTIVATE = '1'
+    # foreground/focus are untouched. Cleared in finally. WMode needs none of
+    # this (its runs never gate).
+    if ($Presenter -eq 'cnc') { $env:SCDRIVE_POST_ACTIVATE = '1' }
 
-    Write-Host 'probe-wsdrive: launching (fanout features + stage 2 + cnc-ddraw)'
-    & (Join-Path $scriptDir 'run-with-plugin.ps1') `
-        -Mode fanout -Circles 1 -HudRow 1 -ProdQueue 1 -ProdFan 1 `
-        -UpgradeQueue 1 -QueueIndicator 1 -WorldScan 1 -ScreenScan 1 `
-        -FrameDump $FrameDir -Windowed -WindowedHelperDll $WindowedHelperDll `
-        -NoLaunchLock -Widescreen 1 -WidescreenStage 2 `
-        -GameDir $GameDir -LogPath $log 6>&1 | ForEach-Object {
+    Write-Host "probe-wsdrive: launching (fanout features + stage 2, presenter=$Presenter)"
+    $launchArgs = @{
+        Mode = 'fanout'; Circles = '1'; HudRow = '1'; ProdQueue = '1'; ProdFan = '1'
+        UpgradeQueue = '1'; QueueIndicator = '1'; WorldScan = '1'; ScreenScan = '1'
+        FrameDump = $FrameDir; NoLaunchLock = $true
+        Widescreen = '1'; WidescreenStage = '2'
+        GameDir = $GameDir; LogPath = $log
+    }
+    if ($Presenter -eq 'cnc') { $launchArgs.Windowed = $true; $launchArgs.WindowedHelperDll = $WindowedHelperDll }
+    else { $launchArgs.InjectWindowedHelper = 'WMode' }
+    & (Join-Path $scriptDir 'run-with-plugin.ps1') @launchArgs 6>&1 | ForEach-Object {
             Write-Host "       $_"
             if ("$_" -match 'scinject:\s*PID=(\d+)') { $gamePid = [int]$Matches[1] }
         }
@@ -269,8 +294,14 @@ try {
         ($fLines.Count -gt 0 -and $fLines[0] -match 'unset, whole stage applied') "($($fLines | Select-Object -First 1))"
 
     $client = Get-ScClientSize -Hwnd $h
-    Assert-True 'cnc-ddraw presents an 800x480 client area (FOLLOW, in the launched window)' `
-        ($client.Width -eq 800 -and $client.Height -eq 480) "(got $($client.Width)x$($client.Height))"
+    if ($Presenter -eq 'cnc') {
+        Assert-True 'cnc-ddraw presents an 800x480 client area (FOLLOW, in the launched window)' `
+            ($client.Width -eq 800 -and $client.Height -eq 480) "(got $($client.Width)x$($client.Height))"
+    }
+    else {
+        Assert-True 'WMode presents its 640x480 window (the crop arm; the engine is still 800 wide underneath)' `
+            ($client.Width -eq 640 -and $client.Height -eq 480) "(got $($client.Width)x$($client.Height))"
+    }
 
     # A marker round-trip proving the plugin's observer is ALIVE. The cnc-ddraw
     # attempts before this gate existed produced a DETACH mid-menu and every
@@ -293,25 +324,46 @@ try {
     # into a menu that was not up yet and every later click landed on the wrong
     # screen; the fingerprints then "confirmed" a browser walk that never
     # happened (this run's own lesson).
+    # A menu click that must produce a dialog, retried: the activation gate can
+    # swallow the first click even nudged (measured -- the probe's arm B was
+    # itself a retry after a dead click), so "click, wait for the ENGINE to show
+    # the dialog, click again if it did not" is the resilient form.
+    function Click-UntilDialog {
+        param([int]$X, [int]$Y, [string]$Name, [int]$Tries = 3, [int]$WaitSec = 10)
+        for ($i = 1; $i -le $Tries; $i++) {
+            Send-ScClick -Hwnd $h -X $X -Y $Y
+            $d = Wait-ScDialog -LogPath $log -Name $Name -TimeoutSec $WaitSec
+            if ($d) { return $d }
+            Write-Host "       walk: '$Name' not up after click $i/$Tries at ($X,$Y); retrying with a fresh nudge"
+        }
+        $null
+    }
+
     Write-Host 'probe-wsdrive: walking to a loaded game (dialog-gated)'
     if (-not (Wait-ScDialog -LogPath $log -Name 'MainMenu' -TimeoutSec 30)) {
         throw 'probe-wsdrive: the main menu never appeared in the DIALOGS oracle.'
     }
     Assert-PluginAlive -Stage 'mainmenu'
-    Send-ScClick -Hwnd $h -X 215 -Y 119                       # Single Player
-    if (-not (Wait-ScDialog -LogPath $log -Name 'Delete' -TimeoutSec 12)) {
-        throw 'probe-wsdrive: the Original/Expansion chooser never appeared.'
+    Start-Sleep -Seconds 3
+    if (-not (Click-UntilDialog -X 215 -Y 119 -Name 'Delete')) {              # Single Player
+        throw 'probe-wsdrive: the Original/Expansion chooser never appeared (3 nudged clicks).'
     }
     Send-ScClick -Hwnd $h -X 373 -Y 300                       # Expansion
     Start-Sleep -Seconds 1
-    Send-ScClick -Hwnd $h -X 75  -Y 111
-    Send-ScClick -Hwnd $h -X 516 -Y 392                       # OK
-    if (-not (Wait-ScDialog -LogPath $log -Name 'Create' -TimeoutSec 25)) {
-        Assert-PluginAlive -Stage 'post-chooser'   # names WHICH failed: plugin or walk
+    Send-ScClick -Hwnd $h -X 75  -Y 111                       # login-profile row
+    # (516,392) OK leaves the Login screen for the campaign RaceSelection
+    # screen; Create (the map browser) only appears after Play Custom
+    # (327,415) THERE. Attempt 7 waited for Create one screen early and
+    # concluded "walk lost" with a perfectly healthy walk.
+    if (-not (Click-UntilDialog -X 516 -Y 392 -Name 'RaceSelection' -WaitSec 15)) {
+        Assert-PluginAlive -Stage 'post-login'     # names WHICH failed: plugin or walk
+        throw 'probe-wsdrive: the campaign (RaceSelection) screen never appeared, with the plugin alive -- the walk is lost.'
+    }
+    if (-not (Click-UntilDialog -X 327 -Y 415 -Name 'Create' -WaitSec 15)) {
+        Assert-PluginAlive -Stage 'post-race'
         throw 'probe-wsdrive: the map-browser (Create) screen never appeared, with the plugin alive -- the walk is lost.'
     }
     Assert-PluginAlive -Stage 'create-screen'
-    Send-ScClick -Hwnd $h -X 327 -Y 415
     Start-Sleep -Seconds 2
     Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
     Select-ScBrowserMap -Hwnd $h -GameDir $GameDir -MapPath $mapPath | Out-Null
@@ -324,6 +376,36 @@ try {
     Dismiss-ScTipsDialog -Hwnd $h -LogPath $log | Out-Null
     Start-Sleep -Seconds 3
     Assert-PluginAlive -Stage 'in-game'
+
+    # In game, the activation nudge comes OFF for playfield input: attempt 8 ran
+    # the whole session with it on and every playfield click-select returned an
+    # EMPTY selection -- including the x<640 control -- while the minimap
+    # (console dialog) and the scroll keys worked. The activation handler
+    # re-syncs the engine's cursor (the "Foreground" section's measured
+    # raise-destroys-the-posted-position effect), which is a fine price before
+    # a GLUE click and fatal immediately before a playfield button-down. The
+    # glue gate does not exist in-game for WMode and the hypothesis under test
+    # here is that it does not exist for cnc-ddraw either; minimap clicks keep
+    # a nudged RETRY (Click-MinimapVerified) in case the console dialog path
+    # still wants it.
+    $env:SCDRIVE_POST_ACTIVATE = '0'
+
+    # A minimap click whose effect is VERIFIED against the engine's own origin,
+    # with one nudged retry: attempt 8 saw one minimap click take and another
+    # (same run, same shape) not take.
+    function Click-MinimapVerified {
+        param([Parameter(Mandatory)]$Point, [Parameter(Mandatory)][int]$ExpectedOriginX, [Parameter(Mandatory)][string]$Tag)
+        Send-ScClick -Hwnd $h -X $Point.X -Y $Point.Y
+        Start-Sleep -Seconds 2
+        $w = Get-ScWorldState -LogPath $log -Tag "$Tag-a" -MarkerPath $markerPath
+        if ($null -ne $w.Screen -and [Math]::Abs($w.Screen.Left - $ExpectedOriginX) -le 32) { return $w }
+        Write-Host "       [$Tag] minimap click did not take (origin $($w.Screen.Left) vs expected ~$ExpectedOriginX); retrying with an activation nudge"
+        $env:SCDRIVE_POST_ACTIVATE = '1'
+        try { Send-ScClick -Hwnd $h -X $Point.X -Y $Point.Y }
+        finally { $env:SCDRIVE_POST_ACTIVATE = '0' }
+        Start-Sleep -Seconds 2
+        Get-ScWorldState -LogPath $log -Tag "$Tag-b" -MarkerPath $markerPath
+    }
 
     $sessionStart = Get-Date
 
@@ -371,16 +453,16 @@ try {
     if (-not $marines.Count) { $marines = @($w0.Units | Where-Object { $_.Owner -eq 0 }) }
     $maxX = ($marines | Measure-Object -Property X -Maximum).Maximum
     $meanY = [int](($marines | Measure-Object -Property Y -Average).Average)
-    # Aim the camera so the rightmost marines land near screen x ~720. The
-    # minimap centres a click's tile: origin = (tile - 10) * 32 horizontally.
-    $targetOriginX = [Math]::Max(0, $maxX - 720)
+    # Aim the camera so the rightmost marine columns land near screen x ~736
+    # and ~672 -- the 64px fixture grid then puts one column in each of the
+    # first two >640 click bands. The minimap centres a click's tile:
+    # origin = (tile - 10) * 32 horizontally.
+    $targetOriginX = [Math]::Max(0, $maxX - 736)
     $tileX = [int][Math]::Round($targetOriginX / 32) + 10
     $tileY = [Math]::Min(($MAP_TILES_H - 7), [Math]::Max(6, [int]($meanY / 32)))
     $mm = Get-ScMinimapPoint -MapTilesW $MAP_TILES_W -MapTilesH $MAP_TILES_H -TileX $tileX -TileY $tileY
-    Send-ScClick -Hwnd $h -X $mm.X -Y $mm.Y
-    Start-Sleep -Seconds 2
-    $w1 = Get-ScWorldState -LogPath $log -Tag 'aim1' -MarkerPath $markerPath
     $expectedOriginX = ($tileX - 10) * 32
+    $w1 = Click-MinimapVerified -Point $mm -ExpectedOriginX $expectedOriginX -Tag 'aim1'
     Assert-True 'the minimap click moved the camera to the commanded origin (stock minimap geometry works at 800)' `
         ($null -ne $w1.Screen -and [Math]::Abs($w1.Screen.Left - $expectedOriginX) -le 32) `
         "(commanded x=$expectedOriginX, got $($w1.Screen.Left),$($w1.Screen.Top))"
@@ -411,7 +493,7 @@ try {
     }
 
     $ctl = Select-MarineAt -MinSx 60 -MaxSx 600 -Tag 'click-ctl'
-    Assert-True 'CONTROL: a click at x<640 selects exactly the aimed unit (instrument positive)' `
+    Assert-Input 'CONTROL: a click at x<640 selects exactly the aimed unit (instrument positive)' `
         ($null -ne $ctl -and $ctl.Selected.Count -eq 1 -and $ctl.Selected[0] -eq $ctl.Aimed) `
         "(aimed=$($ctl.Aimed) at x=$($ctl.ScreenX), selected=[$($ctl.Selected -join ',')])"
 
@@ -425,11 +507,11 @@ try {
         }
         $wideTried++
         $ok = ($r.Selected.Count -eq 1 -and $r.Selected[0] -eq $r.Aimed)
-        Assert-True "a click at screen x=$($r.ScreenX) (>640) selects exactly the aimed unit" $ok `
+        Assert-Input "a click at screen x=$($r.ScreenX) (>640) selects exactly the aimed unit" $ok `
             "(aimed=$($r.Aimed), selected=[$($r.Selected -join ',')])"
         if ($ok) { $wideHits++ }
     }
-    Assert-True 'clicks past x=640 were actually exercised (>= 2 bands reached)' ($wideTried -ge 2) "(tried=$wideTried, hit=$wideHits)"
+    Assert-Input 'clicks past x=640 were actually exercised (>= 2 bands reached)' ($wideTried -ge 2) "(tried=$wideTried, hit=$wideHits)"
 
     # ---- drag-select across the 640 seam ----------------------------------
     $w2 = Get-ScWorldState -LogPath $log -Tag 'box-scan' -MarkerPath $markerPath
@@ -445,7 +527,7 @@ try {
     $boxSel = @(Get-ScSelectionTagged -Tag 'box-sel')
     $boxExpected = @($inBox | ForEach-Object { $_.Unit.ToUpperInvariant() })
     $missing = @($boxExpected | Where-Object { $boxSel -notcontains $_ })
-    Assert-True 'the drag box spans the seam and selects units on BOTH sides of x=640' `
+    Assert-Input 'the drag box spans the seam and selects units on BOTH sides of x=640' `
         ($leftOfSeam.Count -ge 1 -and $rightOfSeam.Count -ge 1 -and $missing.Count -eq 0 -and $boxSel.Count -ge $boxExpected.Count) `
         "(expected n=$($boxExpected.Count) [left $($leftOfSeam.Count) / right $($rightOfSeam.Count)], selected n=$($boxSel.Count), missing=[$($missing -join ',')])"
 
@@ -464,7 +546,7 @@ try {
         $meanXAfter = ($selAfter | Measure-Object -Property X -Average).Average
         $targetMapX = $before.Screen.Left + 760
         $movedRight = ($meanXAfter - $meanXBefore)
-        Assert-True 'a right-click at screen x=760 moved the selected units toward that map point (engine positions moved)' `
+        Assert-Input 'a right-click at screen x=760 moved the selected units toward that map point (engine positions moved)' `
             ($selAfter.Count -ge 1 -and (($movedRight -gt 16) -or ([Math]::Abs($meanXAfter - $targetMapX) -lt [Math]::Abs($meanXBefore - $targetMapX) - 16))) `
             "(meanX $([int]$meanXBefore) -> $([int]$meanXAfter), target map x=$targetMapX)"
     }
@@ -482,15 +564,19 @@ try {
     Send-ScKey -Hwnd $h -VirtualKey 0x28 -HoldMs 70 -SettleMs 600          # VK_DOWN: vertical too
     $ptv = Get-CapturePoint -Hwnd $h -Tag 'drive-scroll-v'
     Assert-WideCapture -Pt $ptv
-    Assert-True 'the held-key scrolls stopped at >= 2 distinct sub-tile phases (x%32)' `
-        (@($phases.Keys | Where-Object { $_ -ne 0 }).Count -ge 2) `
+    # The keyboard stepper lands on 16px multiples -- every held-arrow stop
+    # measured at 800 sits at x%32 in {0,16} (068's scrollmid and this suite's
+    # runs, 5 of 5), so ">= 2 distinct nonzero phases" is unsatisfiable and a
+    # single sub-tile (x%32=16) stop is what exercises the fog alignment terms.
+    Assert-True 'the held-key scrolls stopped at a sub-tile origin (x%32 != 0)' `
+        (@($phases.Keys | Where-Object { $_ -ne 0 }).Count -ge 1) `
         "(phases=[$(($phases.Keys | Sort-Object) -join ',')] stops=[$($stops -join ' | ')])"
     $script:completedPhases += 'scroll'
 
     # ---- the right MAP EDGE: the stock clamp, reported for the card -------
     $mmEdge = Get-ScMinimapPoint -MapTilesW $MAP_TILES_W -MapTilesH $MAP_TILES_H -TileX ($MAP_TILES_W - 1) -TileY $tileY
-    Send-ScClick -Hwnd $h -X $mmEdge.X -Y $mmEdge.Y
-    Start-Sleep -Seconds 2
+    $stockClampOriginX = ($MAP_TILES_W - 20) * 32
+    [void](Click-MinimapVerified -Point $mmEdge -ExpectedOriginX $stockClampOriginX -Tag 'mapedge')
     $ptEdge = Get-CapturePoint -Hwnd $h -Tag 'drive-mapedge'
     Assert-WideCapture -Pt $ptEdge -SkipSeam
     if ($ptEdge.Dump -and $ptEdge.OriginX -ge 0) {
@@ -502,8 +588,7 @@ try {
     }
     # back toward the fixture
     $mmBack = Get-ScMinimapPoint -MapTilesW $MAP_TILES_W -MapTilesH $MAP_TILES_H -TileX $tileX -TileY $tileY
-    Send-ScClick -Hwnd $h -X $mmBack.X -Y $mmBack.Y
-    Start-Sleep -Seconds 2
+    [void](Click-MinimapVerified -Point $mmBack -ExpectedOriginX $expectedOriginX -Tag 'mapback')
     $script:completedPhases += 'mapedge'
 
     # ---- stability: keep driving until the session floor is met -----------
@@ -542,7 +627,7 @@ try {
     # ---- final: input still maps, frame still wide ------------------------
     $fin = Select-MarineAt -MinSx 645 -MaxSx 795 -Tag 'click-final'
     if ($null -eq $fin) { $fin = Select-MarineAt -MinSx 60 -MaxSx 600 -Tag 'click-final-left' }
-    Assert-True 'after the session a click still selects exactly the aimed unit' `
+    Assert-Input 'after the session a click still selects exactly the aimed unit' `
         ($null -ne $fin -and $fin.Selected.Count -eq 1 -and $fin.Selected[0] -eq $fin.Aimed) `
         "($(if ($fin) { "aimed=$($fin.Aimed) at x=$($fin.ScreenX), selected=[$($fin.Selected -join ',')]" } else { 'no target found' }))"
     $ptFinal = Get-CapturePoint -Hwnd $h -Tag 'drive-final'

@@ -1617,3 +1617,87 @@ python tools/renderer_patch_sites.py --check      # 261 sites verify against the
 #   no minimap origin, they are all multiples of 32), asserted moved, its
 #   x%32 printed beside the seam tracker
 ```
+
+## 17. Task 070 — the assembly driven, not captured: what a wide GAME does, and the one path that failed honestly
+
+Tasks 032-068 each proved one piece frozen. Task 070 assembled them — stage 2 +
+fog (in-process, `renderer_patch_sites.py`) presented through cnc-ddraw — and
+drove a real game for minutes (`tools/plugin/probe-widescreen-drive.ps1`, both
+presenters, 36-marine fixture, off-screen). Positive control first: the
+unchanged 16.5 probe on the assembled HEAD reproduced 068's run-2 numbers
+EXACTLY (band 0.9251 explored / 0.0000 unexplored, seam zeroruns `788;792-799`,
+scrollmid (848,416) x%32=16, defect arm RED dense_rows=24, WIDESCREEN ACTIVE
+244/0 refused).
+
+### 17.1 What the driven session proved (51 green steps, wmode arm; 50, cnc arm)
+
+1. **The presentation joint holds in game**: through cnc-ddraw the in-game
+   client is 800x480 (FOLLOW, `GetClientRect`), dumps read 800x480 stable at
+   every camera stop, and the window PNGs beside them show the composed wide
+   frame the user would see.
+2. **Fog stays correct while DRIVEN**: the seam tooth held at every origin the
+   session visited (minimap jumps, held-key scrolls, the map edge and back);
+   the sub-tile alignment terms were exercised at x%32=16 again. A rider,
+   measured 5/5 stops across two runs plus 16.4's: **the keyboard stepper
+   lands only on 16px multiples**, so x%32∈{0,16} is all a held arrow can
+   reach — an oracle demanding two distinct nonzero phases is unsatisfiable.
+3. **The minimap works at 800 and sits where it always sat**: engine dialog
+   rects in game — `Minimap` (0,315)-(137,479), command card `StatBtn`
+   (496,354)-(639,479), resource bar `StatRes` (220,0)-(639,19). The WHOLE
+   console is anchored to the 640 frame; nothing extends past x=639, and
+   nothing overlaps the new map columns. Minimap click-to-centre steers the
+   camera at 800 (re-proven driven, both presenters).
+4. **The console-right dead strip (640..799 x 400..479) is pure black and
+   BYTE-STABLE**: nonzero_frac 0.0000, distinct=1 at every sample across the
+   session, first-vs-last diff_px=0 of 12800. A footnote, not a flicker.
+5. **The right MAP edge, measured**: the camera clamps at the stock 20-tile
+   stop; the off-map right band there read 2.28% nonzero (stale cells, 15.5
+   item 1) — visible only while parked at the very edge.
+6. **Stability**: 3+ minutes of continuous driving per arm, WORLD scans
+   complete throughout, the frame still 800x480 with the seam tooth green at
+   the end.
+
+### 17.2 The honest failure: playfield MOUSE input past x=640 is not proven on any path
+
+- **Under cnc-ddraw (the shipping presenter), posted playfield clicks never
+  reach a selection** — 0/8 across three mechanisms tried (activation nudge
+  on, off, cnc-ddraw `devmode=true`) — while the menus (nudged), the minimap
+  and the keyboard all work. Posted input into an invisible-desktop cnc-ddraw
+  window is a HARNESS limit (see AGENTS.md "Glue-screen input is
+  ACTIVATION-GATED"): a real player's real mouse takes the normal foreground
+  path this harness cannot exercise off-screen.
+- **Under WMode, clicks below 640 select exactly the aimed unit; clicks past
+  640 select the WRONG one**: at origin (320,448), static through the whole
+  exchange, a click posted at screen (704,272) selected the marine at screen
+  (576,272) — map positions from the WORLD scan, cross-referenced by CUnit
+  pointer — and a click at 768 landed ~640 (a repeat selected 12, the
+  double-click-same-spot artifact). Effective x ≈ posted x − 128±16, only
+  past 640; a seam-spanning drag box collapsed to 1 of 12 units. BUT a real
+  mouse cannot reach x>640 in WMode's 640 window, so posted coordinates there
+  are out of the shim's contract: this measurement proves NOT-PROVEN, it does
+  not name the owner (engine window-proc clamp / mouse→world 0x0046FB40 —
+  9.1 item 12's untouched sites — vs WMode's own transform).
+- **Consequence**: the wide build is VIEW-complete and INPUT-unverified past
+  column 640. Reading the engine's wndproc mouse path and 0x0046FB40 at 800
+  is its own bounded task, the 9.1-item-12 shape; the first real play (real
+  mouse, real desktop, cnc-ddraw) is the cheapest decisive measurement and
+  is the user's to trigger.
+
+### 17.3 How to reproduce
+
+```powershell
+./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-widescreen-drive.ps1
+#   the assembled cnc-ddraw arm: menu walk (activation-nudged), HUD read-back,
+#   minimap steering, sub-tile scrolls, dead-strip watch, 3-min stability
+./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-widescreen-drive.ps1 `
+    -SuiteArgs @{ Presenter = 'wmode' }
+#   the engine-input arm: same session; the click/box/command steps carry the
+#   17.2 readings (posted coords reach the engine there)
+./tools/deploy.ps1 -DeployRoot C:\sc-deploy\scratch-task070 -NoShortcut
+#   the one-action switch, proven against a scratch root: stages pinned
+#   cnc-ddraw, writes Launch-StarCraft-Modded-Wide.ps1 + widescreen-card.md
+```
+
+Artifacts (gitignored diagnostic path; paths travel, images never):
+`C:\sc-work\logs\070-frames\drive-*.png` / `fd-drive-*.bin`, transcripts
+`C:\sc-work\logs\offscreen\20260813-*-probe-widescreen-drive.txt`.
