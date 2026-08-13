@@ -5,6 +5,7 @@
 agent: 054
 model: opus
 pr: https://github.com/inwenis/decompile-sc/pull/82
+merged: 2026-08-13
 
 ## Workspace
 
