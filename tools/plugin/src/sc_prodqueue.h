@@ -157,7 +157,13 @@ enum ScProdQueueStat {
     SC_PRODQ_STAT_TRAIN_NO_UNIT = 11,   // ...that found no single selected building
     SC_PRODQ_STAT_CANCEL_SEEN = 12,     // cmdrecvCancelTrain detours entered
     SC_PRODQ_STAT_CANCEL_NO_UNIT = 13,  // ...that found no single selected building
-    SC_PRODQ_STAT__COUNT = 14
+    // Task 054 / issue #63. Items dropped because their record was made in a DIFFERENT
+    // game (sc_session.h). Deliberately its own counter and NOT folded into REFUNDED,
+    // because the two are opposites: a building that dies gives its minerals back, and
+    // a record from another game must not -- those minerals were spent in a game that
+    // no longer exists, and crediting them here would pay the player for it.
+    SC_PRODQ_STAT_STALE_SESSION = 14,
+    SC_PRODQ_STAT__COUNT = 15
 };
 int ScProdQueueStat(int which);
 

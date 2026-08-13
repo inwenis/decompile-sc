@@ -184,7 +184,13 @@ enum ScGroupStat {
     SC_GROUPSTAT_RECALL  = 2,   // N recalls
     SC_GROUPSTAT_WIDE    = 3,   // recalls that put back MORE than the engine's 12
     SC_GROUPSTAT_DISCARD = 4,   // recalls whose group failed the containment check
-    SC_GROUPSTAT_RESET   = 5    // groups dropped because the engine restarted a game
+    SC_GROUPSTAT_RESET   = 5,   // groups dropped because the engine restarted a game
+    // Task 054: times the GAME-SESSION EPOCH (sc_session.h) threw this module's
+    // cross-frame state away. Separate from RESET because RESET is an INFERENCE from
+    // the engine's own hotkey row being empty, and a save/load restores that row
+    // NON-empty with the same pointers in it -- so RESET cannot fire on the one case
+    // this counter exists for.
+    SC_GROUPSTAT_SESSION = 6
 };
 
 // Test-only: units the plugin holds for control group `group` (0..9), or -1 if that
@@ -196,6 +202,12 @@ int ScFanoutGroupStat(int which);
 // entries the engine itself holds.
 int ScFanoutShadowCount(void);
 int ScFanoutVisibleCount(void);
+
+// Test-only: is a fan-out still part-emitted, waiting for the next command to finish it
+// (issue #67 item 2)? 1 = yes. Exposed for task 054, because "the deferred plan does not
+// cross into another game" is a claim about a state the emitted bytes cannot show:
+// a plan that never drains and a plan that was dropped both emit nothing.
+int ScFanoutPlanActiveForTest(void);
 
 // ---------------------------------------------------------------------------
 // Shadow-list snapshot (task 017: the HUD row pages through this list)

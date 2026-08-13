@@ -15,6 +15,7 @@
 #include "sc_hook.h"
 #include "sc_log.h"
 #include "sc_prodqueue.h"
+#include "sc_session.h"
 
 #define SC_GAME_ENTRY __attribute__((force_align_arg_pointer))
 
@@ -50,6 +51,10 @@ static int g_stat[SC_PRODQ_STAT__COUNT] = { 0 };
 // therefore refunded on their next click rather than on the next frame; that latency is
 // deliberate and is the one thing this split costs.
 static bool g_deepGc = false;
+
+// Which GAME the records in g_rec[] belong to (sc_session.h). 0 = nothing has been
+// synced yet, which is distinguishable from every real epoch because those start at 1.
+static unsigned g_session = 0;
 
 static void* Rt(DWORD staticVa) { return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE)); }
 static DWORD RtA(DWORD staticVa) { return (DWORD)(DWORD_PTR)Rt(staticVa); }
@@ -199,6 +204,39 @@ static void RefundRecord(ProdRecord* r, const char* why) {
     r->count = 0;
 }
 
+// THE EPOCH TEST, and it runs at the top of every entry point this file has --
+// including the read-backs, so that no caller can observe a record from a game it does
+// not belong to (sc_session.h, "how a module adopts it").
+//
+// It is FIRST in every one of them, before CollectGarbage and before anything reads
+// r->unit. That ordering is the whole difference between this and the checks it sits
+// in front of: RecordStillLive asks the UNIT whether it is still the same unit, and a
+// save restores the uniqueness byte, the player and the hitpoints verbatim into the
+// same seat of the same static array -- so it answers "yes" for a record belonging to
+// a game that ended (issue #63, measured).
+//
+// NO REFUND on this path, and it is not an oversight. RefundRecord exists for a
+// building that died in THIS game, where the engine has taken the minerals and the
+// player must get them back. Here the minerals were taken in a different game whose
+// player state is gone; paying them into the loaded game would hand out three free
+// Probes' worth of minerals on every cross-load, which is a bigger bug than the one
+// being fixed.
+static void ProdQSessionSync(void) {
+    const unsigned now = ScSessionEpoch();
+    if (g_session == now) return;
+    int items = 0;
+    for (int i = 0; i < g_recCount; ++i) items += g_rec[i].count;
+    if (g_recCount > 0) {
+        ScLog("PRODQEV session %u -> %u: dropping %d building record(s) holding %d "
+              "item(s) queued in a game that has ended -- NOT refunded (those minerals "
+              "were spent in that game, not this one)",
+              g_session, now, g_recCount, items);
+        g_stat[SC_PRODQ_STAT_STALE_SESSION] += items;
+    }
+    g_recCount = 0;
+    g_session  = now;
+}
+
 static void CollectGarbage(bool deep) {
     for (int i = g_recCount - 1; i >= 0; --i) {
         if (RecordStillLive(&g_rec[i], deep) && g_rec[i].count > 0) continue;
@@ -327,6 +365,7 @@ static void Rebalance(DWORD unit, BYTE player, ProdRecord** rp) {
 void ScProdQueueOnTrain(DWORD unit, unsigned type, bool wasFull) {
     if (!g_enabled || !unit) return;
     EnterCriticalSection(&g_lock);
+    ProdQSessionSync();
     CollectGarbage(true);
 
     do {
@@ -358,8 +397,14 @@ void ScProdQueueOnTrain(DWORD unit, unsigned type, bool wasFull) {
 }
 
 void ScProdQueueOnTick(DWORD unit) {
+    // g_recCount == 0 short-circuits BEFORE the epoch test on purpose: with no records
+    // there is nothing a stale epoch could be holding, and this detour runs for every
+    // producing building on every frame. The sync then happens on the next tick that
+    // has something to look at, or on the next Train/Cancel/read-back, all of which
+    // take it unconditionally.
     if (!g_enabled || !unit || g_recCount == 0) return;
     EnterCriticalSection(&g_lock);
+    ProdQSessionSync();
 
     if (g_deepGc) { CollectGarbage(true); g_deepGc = false; }
     else CollectGarbage(false);
@@ -374,6 +419,7 @@ bool ScProdQueueOnCancel(DWORD unit, unsigned payload) {
     if (!g_enabled || !unit) return false;
     bool consumed = false;
     EnterCriticalSection(&g_lock);
+    ProdQSessionSync();
     CollectGarbage(true);
 
     // Only the "cancel the last queued item" form (payload 0xFE, the engine's own
@@ -459,6 +505,11 @@ static int FormatEngineQueue(DWORD unit, char* out, int outLen) {
 void ScProdQueueLogState(const char* tag) {
     if (!g_enabled || !g_lockReady) return;
     EnterCriticalSection(&g_lock);
+    // The oracle syncs too, and that is the half of issue #63 a test can actually see:
+    // arm 6 asserts on THIS line's `buildings=` in a game the plugin never queued in,
+    // so a mechanism that only dropped stale records on the next Train would read as
+    // "still holding three" here and be indistinguishable from no fix at all.
+    ProdQSessionSync();
 
     // The SOLE SELECTED building, tracked or not. Without this the oracle is silent
     // exactly when the plugin is holding nothing -- and "the plugin is holding nothing"
@@ -517,12 +568,13 @@ void ScProdQueueLogState(const char* tag) {
     // never asked" print the same zeros otherwise -- which is how task 038's bug survived
     // a passing suite: trainSeen counts the calls, trainNoUnit counts the ones that found
     // no building to act on, and the difference is the feature actually running.
-    ScLog("PRODQ [%s] buildings=%d max=%d captured=%d promoted=%d cancelled=%d "
-          "refunded=%d refusedFull=%d refusedCost=%d trainSeen=%d trainNoUnit=%d "
+    ScLog("PRODQ [%s] session=%u buildings=%d max=%d captured=%d promoted=%d cancelled=%d "
+          "refunded=%d staleSession=%d refusedFull=%d refusedCost=%d trainSeen=%d trainNoUnit=%d "
           "cancelSeen=%d cancelNoUnit=%d",
-          tag ? tag : "-", g_recCount, g_maxTotal,
+          tag ? tag : "-", g_session, g_recCount, g_maxTotal,
           g_stat[SC_PRODQ_STAT_CAPTURED], g_stat[SC_PRODQ_STAT_PROMOTED],
           g_stat[SC_PRODQ_STAT_CANCELLED], g_stat[SC_PRODQ_STAT_REFUNDED],
+          g_stat[SC_PRODQ_STAT_STALE_SESSION],
           g_stat[SC_PRODQ_STAT_REFUSED_FULL], g_stat[SC_PRODQ_STAT_REFUSED_COST],
           g_stat[SC_PRODQ_STAT_TRAIN_SEEN], g_stat[SC_PRODQ_STAT_TRAIN_NO_UNIT],
           g_stat[SC_PRODQ_STAT_CANCEL_SEEN], g_stat[SC_PRODQ_STAT_CANCEL_NO_UNIT]);
@@ -531,28 +583,35 @@ void ScProdQueueLogState(const char* tag) {
 
 void ScProdQueueLogStats(void) {
     if (!g_enabled) return;
-    ScLog("PRODQSTATS captured=%d promoted=%d cancelled=%d refunded=%d refusedFull=%d "
+    ScLog("PRODQSTATS captured=%d promoted=%d cancelled=%d refunded=%d staleSession=%d "
+          "refusedFull=%d "
           "refusedCost=%d mineralsSpent=%d mineralsRefunded=%d gasSpent=%d gasRefunded=%d "
-          "tracked=%d trainSeen=%d trainNoUnit=%d cancelSeen=%d cancelNoUnit=%d",
+          "tracked=%d trainSeen=%d trainNoUnit=%d cancelSeen=%d cancelNoUnit=%d session=%u",
           g_stat[SC_PRODQ_STAT_CAPTURED], g_stat[SC_PRODQ_STAT_PROMOTED],
           g_stat[SC_PRODQ_STAT_CANCELLED], g_stat[SC_PRODQ_STAT_REFUNDED],
+          g_stat[SC_PRODQ_STAT_STALE_SESSION],
           g_stat[SC_PRODQ_STAT_REFUSED_FULL], g_stat[SC_PRODQ_STAT_REFUSED_COST],
           g_stat[SC_PRODQ_STAT_MINERALS_SPENT], g_stat[SC_PRODQ_STAT_MINERALS_REFUNDED],
           g_stat[SC_PRODQ_STAT_GAS_SPENT], g_stat[SC_PRODQ_STAT_GAS_REFUNDED], g_recCount,
           g_stat[SC_PRODQ_STAT_TRAIN_SEEN], g_stat[SC_PRODQ_STAT_TRAIN_NO_UNIT],
-          g_stat[SC_PRODQ_STAT_CANCEL_SEEN], g_stat[SC_PRODQ_STAT_CANCEL_NO_UNIT]);
+          g_stat[SC_PRODQ_STAT_CANCEL_SEEN], g_stat[SC_PRODQ_STAT_CANCEL_NO_UNIT],
+          g_session);
 }
 
+// The read-backs sync as well. A read-back that answered from the previous game would
+// be a test oracle that cannot see the bug it exists to detect.
 int ScProdQueueOverflowCount(DWORD unit) {
+    ProdQSessionSync();
     ProdRecord* r = FindRecord(unit);
     return r ? r->count : -1;
 }
 int ScProdQueueOverflowAt(DWORD unit, int i) {
+    ProdQSessionSync();
     ProdRecord* r = FindRecord(unit);
     if (!r || i < 0 || i >= r->count) return -1;
     return (int)r->types[i];
 }
-int ScProdQueueTrackedBuildings(void) { return g_recCount; }
+int ScProdQueueTrackedBuildings(void) { ProdQSessionSync(); return g_recCount; }
 int ScProdQueueStat(int which) {
     if (which < 0 || which >= SC_PRODQ_STAT__COUNT) return 0;
     return g_stat[which];
@@ -732,6 +791,7 @@ static void EnsureLock(void) {
 int ScProdQueueInstall(BYTE* moduleBase) {
     g_base = moduleBase;
     g_recCount = 0;
+    g_session  = ScSessionEpoch();
     memset(g_stat, 0, sizeof(g_stat));
     EnsureLock();
 
@@ -784,6 +844,10 @@ void ScProdQueueRemove(void) {
     // refund happens before the hooks come out.
     if (g_lockReady) {
         EnterCriticalSection(&g_lock);
+        // The epoch test goes in front of the refund here for the same reason it goes
+        // in front of every other one: a record left over from a game that has ended
+        // must be dropped, not paid back into the game the process is in now.
+        ProdQSessionSync();
         for (int i = g_recCount - 1; i >= 0; --i) {
             if (UnitPtrValid(g_rec[i].unit)) RefundRecord(&g_rec[i], "plugin-unload");
             DropRecordAt(i);
@@ -803,6 +867,7 @@ void ScProdQueueTestBegin(BYTE* fakeModuleBase, int maxTotal) {
     g_testing  = fakeModuleBase != NULL;
     g_recCount = 0;
     g_deepGc   = false;
+    g_session  = ScSessionEpoch();
     g_maxTotal = maxTotal > 0 ? maxTotal : SC_PRODQ_DEFAULT_MAX;
     memset(g_stat, 0, sizeof(g_stat));
 }

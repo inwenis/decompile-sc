@@ -109,6 +109,12 @@ void ScCirclesHide(void);
 int  ScCirclesCount(void);
 void ScCirclesLogStats(void);
 
+// Test-only: how many recorded circles were ABANDONED because the game-session epoch
+// moved (sc_session.h). Counted apart from `lost`, which is a circle whose unit failed
+// one of the per-unit checks -- the whole point of the epoch is that those checks
+// cannot answer this question, so folding the two together would hide which one fired.
+unsigned ScCirclesStaleSessionCount(void);
+
 // ---------------------------------------------------------------------------
 // Test seam
 //

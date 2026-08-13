@@ -130,6 +130,36 @@
 #define SC_VA_GAME_START_HOTKEY_CLEAR 0x004EEC30u  // the game-start reset
 
 // ---------------------------------------------------------------------------
+// Game start / save load -- the GAME-SESSION EPOCH's clock (task 054, issue #67).
+//
+// The call graph these three sit in, with the caller COUNT beside each, taken by
+// scanning every E8/E9 rel32 in .text rather than from a decompiler's xref list:
+//
+//   0x004EF100  startGame                     1 caller  (0x004E071B)
+//     0x004EF27A  call gameStartClear         1 caller  <- the epoch bumps here
+//     0x004EF32B  call startOrLoadGame        1 caller
+//                   0x004EED48  call loadSavedGame   1 caller  <- the save is read here
+//
+// One caller each is what makes the ordering a PROOF rather than an observation: a
+// save cannot be deserialised except through a chain that has already run the bump.
+// sc_session.h states it in full, with the early returns that do not affect it.
+#define SC_VA_START_GAME              0x004EF100u  // the whole game, entered once per game
+#define SC_VA_START_OR_LOAD_GAME      0x004EED10u  // clears playersSelections, then loads
+#define SC_VA_LOAD_SAVED_GAME         0x004CFEF0u  // reads the save file; the LOAD WITNESS
+
+// Where the epoch's detour is actually spliced: gameStartClear + 7, `MOV EAX,0xFFFF`,
+// one whole instruction of exactly five bytes with no PC-relative operand. The
+// function's own first five bytes span `CALL 0x0049BB90`, which sc_hook.cpp copies
+// verbatim and therefore cannot relocate.
+#define SC_VA_GAME_START_EPOCH_SITE   0x004EEC37u
+
+// The Load Game path's heap buffer for the save it is about to read. Non-zero exactly
+// while a load is pending: gameStartClear itself branches on it (0x004EEC62, skipping
+// the hotkey clear), and startGame's caller frees and zeroes it on the way out
+// (0x004E07D5). READ ONLY, and only so a log line can say which kind of start this was.
+#define SC_VA_PENDING_SAVE_NAME       0x006D1218u
+
+// ---------------------------------------------------------------------------
 // CUnit layout (offsets inherited from GPTP; each one is USED by an instruction
 // this task decompiled, which is corroboration rather than independent derivation
 // -- binary-selection-map.md 8 "Inherited and used as-is" makes the same caveat).

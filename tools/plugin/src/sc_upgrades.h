@@ -192,7 +192,13 @@ enum ScUpgQueueStat {
     // exact upgrade. Counted separately from UNBLOCKED so a run can say which of the two
     // lies it needed.
     SC_UPGQ_STAT_UNBLOCKED_LEVEL = 10,
-    SC_UPGQ_STAT__COUNT = 11
+    // Task 054 / issue #67 item 1. Items dropped because their record was made in a
+    // DIFFERENT game (sc_session.h). Kept apart from DROPPED for the same reason
+    // sc_prodqueue keeps its own apart: "the building died" and "this record belongs
+    // to a game that ended" are different events with different correct responses, and
+    // a single counter for both would hide whichever is rarer.
+    SC_UPGQ_STAT_STALE_SESSION = 11,
+    SC_UPGQ_STAT__COUNT = 12
 };
 int ScUpgQueueStat(int which);
 

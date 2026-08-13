@@ -29,6 +29,7 @@
 #include "sc_log.h"
 #include "sc_prodfan.h"
 #include "sc_prodqueue.h"
+#include "sc_session.h"
 #include "sc_upgrades.h"
 
 static int g_failures = 0;
@@ -4885,6 +4886,325 @@ static void StatusStripTests(void) {
     g_fake = NULL;
 }
 
+// ---------------------------------------------------------------------------
+// THE GAME-SESSION EPOCH (task 054; issue #63 and its five siblings in #67)
+//
+// WHAT MAKES THIS PART DIFFERENT FROM EVERY OTHER ONE HERE, and it is worth stating
+// because it is the reason the tests below look strange at first reading: THE FAKE
+// MEMORY IS NOT TOUCHED BETWEEN THE TWO GAMES. Not one byte.
+//
+// That is not a shortcut, it is the fixture. The engine restores a save into its own
+// static 1700-slot CUnit table IN PLACE, index by index, 336 bytes each -- so the
+// building sits at the same address with the same uniqueness byte, the same owner and
+// the same hitpoints it had in the game the record was made in (issue #63, measured in
+// game by task 051). "Nothing changed" IS what a load looks like to every per-unit
+// check this plugin has. The only thing that moves is the epoch.
+//
+// So each scenario below runs twice where it can: once with no game start, which is
+// the state before this task and must still show the old behaviour, and once with the
+// game start, which must show the state gone. Without that pairing these would be
+// assertions that cannot fail -- the exact defect AGENTS.md opens with.
+// ---------------------------------------------------------------------------
+static void SessionEpochTests(void) {
+    Part("the game-session epoch: six kinds of cross-game state, one counter");
+
+    if (!g_fake) {
+        g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
+                                     PAGE_READWRITE);
+        if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+    }
+
+    printf("\n    the counter itself\n");
+    ScSessionTestBegin();
+    Check("a fresh process is in epoch 1", (long long)ScSessionEpoch(), 1);
+    Check("  no game start seen yet", (long long)ScSessionStat(SC_SESSION_STAT_STARTS), 0);
+    ScSessionTestNewGame();
+    Check("a game start bumps it", (long long)ScSessionEpoch(), 2);
+    Check("  and is counted", (long long)ScSessionStat(SC_SESSION_STAT_STARTS), 1);
+    ScSessionTestLoad();
+    Check("a save load is witnessed", (long long)ScSessionStat(SC_SESSION_STAT_LOADS), 1);
+    // The ordering claim the whole design rests on, made checkable: the engine's call
+    // graph puts the bump strictly before the deserialiser (sc_session.h), so a load can
+    // never be seen in an epoch older than the current one.
+    Check("  in the CURRENT epoch, i.e. after the bump, never before it",
+          (long long)ScSessionEpochAtLastLoad(), (long long)ScSessionEpoch());
+
+    // -----------------------------------------------------------------------
+    // #63 itself: production overflow. This is the offline twin of
+    // test-save-load.ps1's arm 6.
+    // -----------------------------------------------------------------------
+    printf("\n    #63 sc_prodqueue: held items do NOT follow the player into another game\n");
+    {
+        PqBegin(16, 1000, 500);
+        for (int i = 0; i < 8; ++i) PqTrain(PQ_TYPE_A);
+        Check("game A: the ring is at the hold", PqEngineLen(), SC_PRODQ_ENGINE_HOLD);
+        Check("  and the plugin holds the rest", PqOverflow(), 4);
+        const long long spentInGameA = (long long)*PqMinerals();
+        const BYTE uniqA   = *(BYTE*)(PqBuilding() + SC_CUNIT_OFF_UNIQUENESS);
+        const BYTE playerA = *(BYTE*)(PqBuilding() + SC_CUNIT_OFF_PLAYER);
+        const DWORD hpA    = *(DWORD*)(PqBuilding() + SC_CUNIT_OFF_HITPOINTS);
+
+        // THE LOAD. Nothing about the building changes, because nothing about it changes
+        // in the real thing either.
+        ScSessionTestNewGame();
+
+        Check("the building is at the SAME address", (long long)PqBuilding(),
+              (long long)FakeUnit(PQ_BUILDING));
+        Check("  same uniqueness byte (CUnit+0xA5)",
+              (long long)*(BYTE*)(PqBuilding() + SC_CUNIT_OFF_UNIQUENESS), (long long)uniqA);
+        Check("  same owner (CUnit+0x4C)",
+              (long long)*(BYTE*)(PqBuilding() + SC_CUNIT_OFF_PLAYER), (long long)playerA);
+        Check("  same hitpoints -- so EVERY term of RecordStillLive still passes",
+              (long long)*(DWORD*)(PqBuilding() + SC_CUNIT_OFF_HITPOINTS), (long long)hpA);
+
+        Check("THE PLUGIN HOLDS NOTHING FOR A GAME IT NEVER QUEUED IN",
+              ScProdQueueTrackedBuildings(), 0);
+        Check("  and nothing at that building in particular",
+              ScProdQueueOverflowCount(PqBuilding()), -1);
+        Check("  four items counted against the epoch, by name",
+              ScProdQueueStat(SC_PRODQ_STAT_STALE_SESSION), 4);
+        // THE RESOURCE RULE FOR THIS PATH, and it is the opposite of the building-died
+        // one: the minerals were spent in a game that no longer exists.
+        Check("NOT ONE MINERAL WAS REFUNDED INTO THE NEW GAME",
+              (long long)*PqMinerals(), spentInGameA);
+        Check("  and the refund counter did not move",
+              ScProdQueueStat(SC_PRODQ_STAT_REFUNDED), 0);
+    }
+
+    printf("\n    ...and the same eight presses with NO game start still hold four\n");
+    {
+        // The positive control. Same fixture, same eight presses, no bump -- so an
+        // assertion above that passed because the harness never queued anything is
+        // distinguishable from one that passed because the epoch worked.
+        PqBegin(16, 1000, 500);
+        for (int i = 0; i < 8; ++i) PqTrain(PQ_TYPE_A);
+        Check("still holding four", PqOverflow(), 4);
+        Check("  one building tracked", ScProdQueueTrackedBuildings(), 1);
+        Check("  and nothing was blamed on the epoch",
+              ScProdQueueStat(SC_PRODQ_STAT_STALE_SESSION), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // #67 item 1: sc_upgrades, whose RecordStillLive is byte-identical to #63's.
+    // -----------------------------------------------------------------------
+    printf("\n    #67(1) sc_upgrades: a queued research does not promote into another game\n");
+    {
+        UqBegin(8, 1000, 1000);
+        UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);   // the engine starts this one
+        UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_B);   // the plugin holds this one
+        Check("game A: one held", UqQueued(), 1);
+        const long long startsInGameA = g_uqStarted;
+
+        ScSessionTestNewGame();
+
+        Check("the plugin holds nothing in the new game", UqQueued(), 0);
+        Check("  no building tracked", ScUpgQueueTrackedBuildings(), 0);
+        Check("  one item counted against the epoch",
+              ScUpgQueueStat(SC_UPGQ_STAT_STALE_SESSION), 1);
+        // The consequence, not the bookkeeping: with the record gone there is nothing
+        // for a tick in the new game to promote. Without the epoch this tick starts an
+        // upgrade the loaded game never asked for.
+        UqFinishRunning();
+        ScUpgQueueOnTick(UqBuilding());
+        Check("A TICK IN THE NEW GAME PROMOTES NOTHING", g_uqStarted, startsInGameA);
+    }
+
+    // -----------------------------------------------------------------------
+    // #67 item 5: control groups. THE ONE THAT CANNOT BE FIXED BY A PER-UNIT CHECK,
+    // and the reason is visible in the fixture: the containment check compares the
+    // engine's restored row against the group's records, and a load restores the row
+    // NON-EMPTY holding the SAME (pointer, uniqueness) pairs. It passes.
+    // -----------------------------------------------------------------------
+    printf("\n    #67(5) sc_fanout control groups: BOTH existing defences pass a load\n");
+    {
+        MakeUnits(64, 1);
+        *(BYTE*)FakeRt(SC_VA_ACTIVE_PLAYER_ID) = 1;
+        *(BYTE*)FakeRt(SC_VA_PLAYER_ID_512688) = 1;
+        *(BYTE*)FakeRt(SC_VA_PLAYER_ID_512678) = 1;
+
+        // --- the control arm: no game start, which is main's behaviour today --------
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        ZeroEngineHotkeys();
+        DriveSelection(36);
+        Hotkey(SC_HOTKEY_ASSIGN, 5);
+        Check("game A: group 5 holds 36", ScFanoutGroupCount(5), 36);
+        FakeEngineHotkeyRow(5, kFirstTwelve, 12);
+        { DWORD one[1] = { FakeUnit(40) }; ScFanoutOnSelect(1, one); }
+        FakeEngineVisible(kFirstTwelve, 12);
+        Hotkey(SC_HOTKEY_RECALL, 5);
+        Check("WITHOUT a game start the recall restores all 36 -- the defect, reproduced",
+              ScFanoutShadowCount(), 36);
+        Check("  ResetGroupIfEngineRowEmpty did NOT fire (the row is not empty)",
+              ScFanoutGroupStat(SC_GROUPSTAT_RESET), 0);
+        Check("  and containment did NOT discard it (the pointers all match)",
+              ScFanoutGroupStat(SC_GROUPSTAT_DISCARD), 0);
+
+        // --- the treatment arm: identical, plus one game start ----------------------
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        ZeroEngineHotkeys();
+        DriveSelection(36);
+        Hotkey(SC_HOTKEY_ASSIGN, 5);
+        Check("game A again: group 5 holds 36", ScFanoutGroupCount(5), 36);
+        FakeEngineHotkeyRow(5, kFirstTwelve, 12);
+
+        // THE LOAD. The hotkey row stays exactly as the store left it, because that is
+        // what the save file puts back.
+        ScSessionTestNewGame();
+
+        {
+            const BYTE p = *(BYTE*)FakeRt(SC_VA_ACTIVE_PLAYER_ID);
+            const DWORD* row = (DWORD*)FakeRt(SC_VA_SELECTION_HOTKEYS)
+                             + (size_t)(p * SC_HOTKEY_GROUPS_PER_PLAYER + 5)
+                               * SC_HOTKEY_SLOTS_PER_GROUP;
+            Check("the engine's own row for group 5 is STILL non-empty after the load "
+                  "-- which is exactly why the empty-row inference cannot see this",
+                  row[0] != 0 ? 1 : 0, 1);
+        }
+        Check("the plugin no longer holds group 5", ScFanoutGroupCount(5), -1);
+        Check("  counted against the epoch, not against the empty-row inference",
+              ScFanoutGroupStat(SC_GROUPSTAT_SESSION) > 0 ? 1 : 0, 1);
+        Check("  and the empty-row inference is still at zero, as it must be",
+              ScFanoutGroupStat(SC_GROUPSTAT_RESET), 0);
+
+        FakeEngineVisible(kFirstTwelve, 12);
+        Hotkey(SC_HOTKEY_RECALL, 5);
+        Check("THE RECALL GIVES BACK THE ENGINE'S TWELVE, NOT THE OTHER GAME'S 36",
+              ScFanoutShadowCount(), 12);
+    }
+
+    // -----------------------------------------------------------------------
+    // #67 items 2, 3 and 4: the deferred plan, the shadow/accumulator, the version.
+    // -----------------------------------------------------------------------
+    printf("\n    #67(2,3) sc_fanout: the shadow list and a deferred plan do not cross\n");
+    {
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        ResetQueueCounters();
+        ZeroEngineHotkeys();
+        DriveSelection(36);
+        Check("game A: 36 in the shadow list", ScFanoutShadowCount(), 36);
+        Check("  12 of them the engine's", ScFanoutVisibleCount(), 12);
+
+        ScSessionTestNewGame();
+        Check("the shadow list is empty in the new game", ScFanoutShadowCount(), 0);
+        Check("  and so is its visible tail", ScFanoutVisibleCount(), 0);
+        Check("  one session drop counted", ScFanoutGroupStat(SC_GROUPSTAT_SESSION), 1);
+
+        // The plan. A budget small enough that a 36-unit fan-out cannot finish in one
+        // turn is what leaves chunks pending -- the state #67 item 2 is about.
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 60);
+        ResetQueueCounters();
+        DriveSelection(36);
+        g_captureLen = 0; g_captureCount = 0;
+        Check("game A: the order is fanned out",
+              ScFanoutOnCommand(kRightClick, sizeof(kRightClick)) ? 1 : 0, 1);
+        Check("  and the budget left chunks pending", ScFanoutPlanActiveForTest(), 1);
+
+        ScSessionTestNewGame();
+        Check("THE PLAN IS GONE, so the next command cannot replay the old order",
+              ScFanoutPlanActiveForTest(), 0);
+        g_captureLen = 0; g_captureCount = 0;
+        Check("  and a command in the new game fans nothing out",
+              ScFanoutOnCommand(kRightClick, sizeof(kRightClick)) ? 1 : 0, 0);
+        Check("  emitting nothing at all", g_captureCount, 0);
+    }
+
+    printf("\n    #67(4) the shadow VERSION moves across a game, which a commit counter cannot\n");
+    {
+        ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
+        DriveSelection(36);
+        ScShadowInfo snap[64];
+        int vis = 0; unsigned verA = 0, verB = 0;
+        ScFanoutCopyShadow(snap, 64, &vis, &verA);
+
+        // No commit, no selection change, no click -- only a game start. This is the
+        // exact input the counter could not express before, and the reason sc_hudrow
+        // kept the previous game's page.
+        ScSessionTestNewGame();
+        int n = ScFanoutCopyShadow(snap, 64, &vis, &verB);
+        Check("the list handed to the HUD row is empty", n, 0);
+        Check("AND THE VERSION MOVED, with no selection commit anywhere",
+              verB != verA ? 1 : 0, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // #67 item 6: circles. The ordering case -- the epoch must be tested BEFORE the
+    // CSprite* is dereferenced, because that pointer is a HEAP address.
+    // -----------------------------------------------------------------------
+    printf("\n    #67(6) sc_circles: a circle from another game is ABANDONED, never detached\n");
+    {
+        MakeUnits(64, 1);
+        MakeSprites(64);
+        *(BYTE*)((DWORD)FakeRt(SC_VA_SELECTION_COLOR_TABLE) + 1) = 0x5A;
+        ScCirclesTestBegin(g_fake, &FakeAddCircle, &FakeRemoveCircle);
+        ResetCircleCounters();
+
+        ScCircleUnit set[3] = { CircleFor(20), CircleFor(21), CircleFor(22) };
+        ScCirclesShow(set, 3);
+        Check("game A: three circles attached", (long long)g_addCalls, 3);
+        Check("  and the module is holding them", ScCirclesCount(), 3);
+
+        ResetCircleCounters();
+        ScSessionTestNewGame();
+
+        // THE HEADLINE. RemoveCircle writes through the recorded CSprite*, and after a
+        // game end that address is freed heap the allocator may already have handed to
+        // this game. So the correct number of detach calls is ZERO, not three.
+        ScCirclesHide();
+        Check("NOT ONE detach call was made through a stale CSprite*",
+              (long long)g_removeCalls, 0);
+        Check("  the records were dropped instead", ScCirclesCount(), 0);
+        Check("  and counted as abandoned, not as lost",
+              (long long)ScCirclesStaleSessionCount(), 3);
+        // The positive control for that zero: with no game start the same three DO get
+        // detached, so "0 detach calls" is a result and not a harness that never ran.
+        ScCirclesTestBegin(g_fake, &FakeAddCircle, &FakeRemoveCircle);
+        ResetCircleCounters();
+        ScCircleUnit set2[3] = { CircleFor(30), CircleFor(31), CircleFor(32) };
+        ScCirclesShow(set2, 3);
+        ScCirclesHide();
+        Check("without a game start the same three ARE detached",
+              (long long)g_removeCalls, 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // #67 item 4's consumer: the HUD row's page state.
+    // -----------------------------------------------------------------------
+    printf("\n    #67(4) sc_hudrow: the page and the slot cache do not survive a game\n");
+    {
+        MakeUnits(64, 1);
+        MakeSprites(64);
+        for (int i = 0; i < 64; ++i) {
+            *(WORD*) (FakeUnit(i) + SC_CUNIT_OFF_UNIT_ID)   = (WORD)(100 + i);
+            *(DWORD*)(FakeUnit(i) + SC_CUNIT_OFF_HITPOINTS) = 40 * 256;
+        }
+        BuildFakePlayerList(64, 1);
+        ScFanoutTestBegin(g_fake, NULL, 200);
+        BuildFakeDialog();
+        ScHudRowTestBegin(g_fake, &FakeShowCtl, &FakeHideCtl, &FakeUpdateCtl,
+                          &FakeEngineInteract, &FakeOrigDispatch);
+        ScHudRowTestSetBandTiming(0, 0);
+        SetHudGlobals(FakeRoot(), FakeUnit(0));
+
+        Drive36Sync();
+        ScHudRowOnDispatch();
+        Check("game A: 3 pages", ScHudRowPageCount(), 3);
+        {
+            BYTE rbtn[0x14];
+            MakeRButtonEvt(rbtn);
+            ScHudRowOnButtonEvent(FakeCtl(3), (DWORD)&rbtn[0]);
+            ScHudRowOnDispatch();
+        }
+        Check("  and the player has flipped to page 2", ScHudRowCurrentPage() + 1, 2);
+
+        ScSessionTestNewGame();
+        Check("the new game does not start on the previous game's page",
+              ScHudRowCurrentPage() + 1, 1);
+        Check("  and there is nothing to page through", ScHudRowPageCount(), 1);
+    }
+}
+
 int main(void) {
     // Unbuffered: this binary writes executable memory and drives a fake image, so the
     // interesting failure is a fault, and a faulting run must still say WHICH case it
@@ -5015,6 +5335,7 @@ int main(void) {
     QueueIndTests();         // [19]  task 033
     BuildingParityTests();   // [20]  task 036
     UpgQueueIndTests();      // [21]  task 037
+    SessionEpochTests();     // [22]  task 054
 
     printf("\nhooktest: %d failure(s)\n", g_failures);
     ScLogClose();

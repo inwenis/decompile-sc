@@ -15,6 +15,7 @@
 #include "sc_addresses.h"
 #include "sc_hook.h"
 #include "sc_log.h"
+#include "sc_session.h"
 #include "sc_upgrades.h"
 
 #define SC_GAME_ENTRY __attribute__((force_align_arg_pointer))
@@ -46,6 +47,9 @@ static bool g_lockReady = false;
 
 static UpgRecord g_rec[SC_UPGQ_MAX_BUILDINGS];
 static int       g_recCount = 0;
+
+// Which GAME the records in g_rec[] belong to (sc_session.h). 0 = never synced.
+static unsigned g_session = 0;
 
 static int g_stat[SC_UPGQ_STAT__COUNT] = { 0 };
 
@@ -200,6 +204,30 @@ static void DropRecordAt(int i) {
 // here and no counterpart to sc_prodqueue's RefundRecord: a held item was never paid for,
 // so there is nothing to give back. Vanilla still refunds the item that was actually
 // RUNNING, on its own death path (0x0049FD00), which this module does not touch.
+// THE EPOCH TEST (sc_session.h), at the top of every entry point in this file --
+// issue #67 item 1, and the file's RecordStillLive is BYTE-IDENTICAL to the one #63
+// was measured against: unit pointer, uniqueness, player, hitpoints, list walk. Every
+// one of those five is restored verbatim by a load, so a record from another game
+// passes all five and the stale upgrade it holds gets promoted into a game that never
+// queued it. This test is the only one of the six that a save cannot satisfy.
+//
+// Unlike sc_prodqueue there is nothing to refund here either way -- a held upgrade was
+// never paid for (see CollectGarbage) -- so the only thing the epoch changes is which
+// counter says why the record went.
+static void UpgSessionSync(void) {
+    const unsigned now = ScSessionEpoch();
+    if (g_session == now) return;
+    int items = 0;
+    for (int i = 0; i < g_recCount; ++i) items += g_rec[i].count;
+    if (g_recCount > 0) {
+        ScLog("UPGQEV session %u -> %u: dropping %d building record(s) holding %d "
+              "item(s) queued in a game that has ended", g_session, now, g_recCount, items);
+        g_stat[SC_UPGQ_STAT_STALE_SESSION] += items;
+    }
+    g_recCount = 0;
+    g_session  = now;
+}
+
 static void CollectGarbage(bool deep) {
     for (int i = g_recCount - 1; i >= 0; --i) {
         if (RecordStillLive(&g_rec[i], deep) && g_rec[i].count > 0) continue;
@@ -255,6 +283,7 @@ static int PromoteOldest(UpgRecord* r);
 
 bool ScUpgQueueShouldUnblock(DWORD unit) {
     if (!g_enabled || !unit) return false;
+    UpgSessionSync();
     if (!IsResearchableBuilding(unit)) return false;
     // Only lie when the engine's one slot is actually taken. An idle building needs no
     // help, and lying about it would make the card offer buttons vanilla also offers --
@@ -335,6 +364,7 @@ static BYTE* UpgradeLevelByte(BYTE player, unsigned id) {
 // promotion, which is safe (no money moves) but reads as the feature losing them.
 bool ScUpgQueueMaySuppressBusyBit(DWORD unit, int kind, unsigned id) {
     if (!g_enabled || !unit || !IsResearchableBuilding(unit)) return false;
+    UpgSessionSync();
     if (kind != SC_UPGQ_KIND_UPGRADE) return false;   // a tech has no levels to stack
     if (id >= SC_UPGRADE_COUNT) return false;
     if (UpgradeInProgress(unit) != (BYTE)id) return false;   // <- the two-buildings guard
@@ -347,6 +377,7 @@ bool ScUpgQueueOnCommand(DWORD unit, int kind, unsigned id) {
     if (!g_enabled || !unit) return false;
     bool consumed = false;
     EnterCriticalSection(&g_lock);
+    UpgSessionSync();
     CollectGarbage(true);
 
     do {
@@ -398,8 +429,11 @@ bool ScUpgQueueOnCommand(DWORD unit, int kind, unsigned id) {
 }
 
 void ScUpgQueueOnTick(DWORD unit) {
+    // Same short-circuit-before-sync note as sc_prodqueue's tick: no records means
+    // nothing a stale epoch could be holding, and this runs every frame per building.
     if (!g_enabled || !unit || g_recCount == 0) return;
     EnterCriticalSection(&g_lock);
+    UpgSessionSync();
 
     if (g_deepGc) { CollectGarbage(true); g_deepGc = false; }
     else CollectGarbage(false);
@@ -417,6 +451,7 @@ bool ScUpgQueueOnCancel(DWORD unit) {
     if (!g_enabled || !unit) return false;
     bool consumed = false;
     EnterCriticalSection(&g_lock);
+    UpgSessionSync();
     CollectGarbage(true);
 
     // TAIL FIRST, matching task 025's 0xFE rule: the last item of the logical queue really
@@ -515,6 +550,9 @@ static void LogPlayerProgress(const char* tag, BYTE player) {
 void ScUpgQueueLogState(const char* tag) {
     if (!g_enabled || !g_lockReady) return;
     EnterCriticalSection(&g_lock);
+    // The oracle syncs too -- a read-back that answered out of the previous game would
+    // be the reason a suite could not see this bug (sc_prodqueue has the same note).
+    UpgSessionSync();
 
     // The SOLE SELECTED building, tracked or not. Without this the oracle is silent
     // exactly when the plugin is holding nothing -- and "holding nothing" and "the oracle
@@ -537,11 +575,12 @@ void ScUpgQueueLogState(const char* tag) {
                    tag ? tag : "-", (unsigned)g_rec[i].unit, g_rec[i].count);
     }
     // ALWAYS a summary line, even with zero records.
-    ScLog("UPGQ [%s] buildings=%d max=%d queued=%d promoted=%d cancelled=%d dropped=%d "
-          "refusedFull=%d refusedGate=%d waitingCost=%d unblocked=%d unblockedLevel=%d",
-          tag ? tag : "-", g_recCount, g_maxTotal,
+    ScLog("UPGQ [%s] session=%u buildings=%d max=%d queued=%d promoted=%d cancelled=%d dropped=%d "
+          "staleSession=%d refusedFull=%d refusedGate=%d waitingCost=%d unblocked=%d unblockedLevel=%d",
+          tag ? tag : "-", g_session, g_recCount, g_maxTotal,
           g_stat[SC_UPGQ_STAT_QUEUED], g_stat[SC_UPGQ_STAT_PROMOTED],
           g_stat[SC_UPGQ_STAT_CANCELLED], g_stat[SC_UPGQ_STAT_DROPPED],
+          g_stat[SC_UPGQ_STAT_STALE_SESSION],
           g_stat[SC_UPGQ_STAT_REFUSED_FULL], g_stat[SC_UPGQ_STAT_REFUSED_GATE],
           g_stat[SC_UPGQ_STAT_WAITING_COST], g_stat[SC_UPGQ_STAT_UNBLOCKED],
           g_stat[SC_UPGQ_STAT_UNBLOCKED_LEVEL]);
@@ -550,32 +589,39 @@ void ScUpgQueueLogState(const char* tag) {
 
 void ScUpgQueueLogStats(void) {
     if (!g_enabled) return;
-    ScLog("UPGQSTATS queued=%d promoted=%d cancelled=%d dropped=%d refusedFull=%d "
+    ScLog("UPGQSTATS queued=%d promoted=%d cancelled=%d dropped=%d staleSession=%d "
+          "refusedFull=%d "
           "refusedGate=%d waitingCost=%d unblocked=%d unblockedLevel=%d mineralsSpent=%d "
-          "gasSpent=%d tracked=%d",
+          "gasSpent=%d tracked=%d session=%u",
           g_stat[SC_UPGQ_STAT_QUEUED], g_stat[SC_UPGQ_STAT_PROMOTED],
           g_stat[SC_UPGQ_STAT_CANCELLED], g_stat[SC_UPGQ_STAT_DROPPED],
+          g_stat[SC_UPGQ_STAT_STALE_SESSION],
           g_stat[SC_UPGQ_STAT_REFUSED_FULL], g_stat[SC_UPGQ_STAT_REFUSED_GATE],
           g_stat[SC_UPGQ_STAT_WAITING_COST], g_stat[SC_UPGQ_STAT_UNBLOCKED],
           g_stat[SC_UPGQ_STAT_UNBLOCKED_LEVEL],
-          g_stat[SC_UPGQ_STAT_MINERALS_SPENT], g_stat[SC_UPGQ_STAT_GAS_SPENT], g_recCount);
+          g_stat[SC_UPGQ_STAT_MINERALS_SPENT], g_stat[SC_UPGQ_STAT_GAS_SPENT], g_recCount,
+          g_session);
 }
 
+// The read-backs sync as well, for the reason ScUpgQueueLogState does.
 int ScUpgQueueCount(DWORD unit) {
+    UpgSessionSync();
     UpgRecord* r = FindRecord(unit);
     return r ? r->count : -1;
 }
 int ScUpgQueueKindAt(DWORD unit, int i) {
+    UpgSessionSync();
     UpgRecord* r = FindRecord(unit);
     if (!r || i < 0 || i >= r->count) return -1;
     return (int)r->items[i].kind;
 }
 int ScUpgQueueIdAt(DWORD unit, int i) {
+    UpgSessionSync();
     UpgRecord* r = FindRecord(unit);
     if (!r || i < 0 || i >= r->count) return -1;
     return (int)r->items[i].id;
 }
-int ScUpgQueueTrackedBuildings(void) { return g_recCount; }
+int ScUpgQueueTrackedBuildings(void) { UpgSessionSync(); return g_recCount; }
 int ScUpgQueueStat(int which) {
     if (which < 0 || which >= SC_UPGQ_STAT__COUNT) return 0;
     return g_stat[which];
@@ -1064,6 +1110,7 @@ int ScUpgQueueInstall(BYTE* moduleBase) {
     g_base = moduleBase;
     g_recCount = 0;
     g_deepGc = false;
+    g_session = ScSessionEpoch();
     g_start = &EngineStartItem;
     memset(g_stat, 0, sizeof(g_stat));
     EnsureLock();
@@ -1148,6 +1195,7 @@ void ScUpgQueueTestBegin(BYTE* fakeModuleBase, int maxTotal, ScUpgStartFn starte
     g_testing  = fakeModuleBase != NULL;
     g_recCount = 0;
     g_deepGc   = false;
+    g_session  = ScSessionEpoch();
     g_maxTotal = maxTotal > 0 ? maxTotal : SC_UPGQ_DEFAULT_MAX;
     g_start    = starter ? starter : &EngineStartItem;
     memset(g_stat, 0, sizeof(g_stat));

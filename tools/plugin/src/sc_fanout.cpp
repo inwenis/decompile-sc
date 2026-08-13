@@ -46,6 +46,7 @@
 #include "sc_queueind.h"
 #include "sc_log.h"
 #include "sc_prodfan.h"
+#include "sc_session.h"
 
 // ---------------------------------------------------------------------------
 // Tunables (all overridable by environment variable, all logged at attach)
@@ -955,6 +956,72 @@ static unsigned g_statGroupRecall  = 0;
 static unsigned g_statGroupWide    = 0;   // recalls that put MORE than 12 back
 static unsigned g_statGroupDiscard = 0;   // recalls that failed the containment check
 static unsigned g_statGroupReset   = 0;   // groups dropped because the engine restarted
+// Task 054: how many times the epoch test below actually threw something away. Counted
+// apart from RESET, which is the pre-existing INFERENCE ("the engine's row for this
+// group is empty, so a new game must have cleared it") -- an inference that a save/load
+// defeats outright, because the load restores a NON-EMPTY row holding the same pointers.
+static unsigned g_statSessionDrop  = 0;
+
+// ---------------------------------------------------------------------------
+// THE EPOCH TEST (sc_session.h) -- issue #67 items 2, 3, 4 and 5 in one place
+//
+// Which GAME everything in this file's cross-frame state belongs to: the shadow list,
+// the overflow accumulator, the deferred plan and the ten control groups. 0 = never
+// synced; real epochs start at 1.
+//
+// Why each of the four needs it, and why none of the existing defences reaches them:
+//
+//  * g_plan -- a fan-out deferred for the turn-buffer budget keeps RAW ORDER BYTES and
+//    captured unit records, and nothing bounded the drain to the same game. The first
+//    command after a load would replay the previous game's order.
+//  * g_shadow / g_accum -- cleared only on the next selection COMMIT, so between a load
+//    and the player's first click they are the previous game's units.
+//  * g_shadowVersion -- see the bump at the end of this function.
+//  * g_group[10] -- ResetGroupIfEngineRowEmpty and the containment check are inferences
+//    from the ENGINE's state, and a save/load restores a non-empty hotkey row holding
+//    the same CUnit*s. Containment therefore PASSES on exactly the input it exists to
+//    catch, and a pre-save group of >12 is re-injected into the loaded game.
+// ---------------------------------------------------------------------------
+static unsigned g_session = 0;
+
+static void FanoutSessionSync(void) {
+    const unsigned now = ScSessionEpoch();
+    if (g_session == now) return;
+
+    int groups = 0;
+    for (int i = 0; i < SC_HOTKEY_GROUPS; ++i) if (g_group[i].stored) ++groups;
+    const int  shadow = g_shadowCount;
+    const int  accum  = g_accumCount;
+    const bool plan   = g_plan.active;
+    if (groups || shadow || accum || plan) {
+        ScLog("SHADOW session %u -> %u: dropping %d shadow unit(s), %d accumulated, "
+              "%d stored control group(s)%s -- every one of them describes a game that "
+              "has ended",
+              g_session, now, shadow, accum, groups,
+              plan ? " and a deferred fan-out plan (its raw order bytes with it)" : "");
+        ++g_statSessionDrop;
+    }
+
+    g_shadowCount  = 0;
+    g_visibleCount = 0;
+    g_accumCount   = 0;
+    memset(&g_plan, 0, sizeof(g_plan));
+    memset(g_group, 0, sizeof(g_group));
+
+    // ISSUE #67 ITEM 4, and it is the subtle one. sc_hudrow's ONLY signal that the
+    // selection changed is this counter, and a counter cannot express "a different
+    // game": across a load it simply does not move, which the HUD row reads as "same
+    // selection" and keeps the previous game's page and list until the first commit.
+    //
+    // A version number and an epoch are DIFFERENT THINGS and this line does not
+    // conflate them -- the epoch is what decided a change happened, and the bump is
+    // only how that decision is published to a consumer whose contract is "watch this
+    // number". sc_hudrow separately runs its own epoch test, so the row is correct even
+    // if it stops reading this counter altogether.
+    ++g_shadowVersion;
+
+    g_session = now;
+}
 
 // Is the engine's OWN row for this group holding anything? A direct read of
 // selectionHotkeys[activePlayerId][group], 12 dwords.
@@ -1400,6 +1467,10 @@ bool ScFanoutOnCommand(const BYTE* buf, unsigned len) {
 
     InterlockedExchange(&g_inFanout, 1);
     EnterCriticalSection(&g_lock);
+    // FIRST, ahead of the control-group handling below: the recall path's containment
+    // check is exactly the defence a save/load defeats (#67 item 5), so the epoch has
+    // to have thrown the group away before that check is asked anything.
+    FanoutSessionSync();
 
     // Control groups (task 021). A recall rebuilds the selection without ever going
     // through CMDACT_Select, so before this task the shadow list was DROPPED here --
@@ -1507,6 +1578,7 @@ HkQueueCommand(const void* buf, unsigned len) {
 
 void ScFanoutOnSelect(unsigned count, DWORD* units) {
     EnterCriticalSection(&g_lock);
+    FanoutSessionSync();
     ++g_statSelects;
 
     ShadowUnit visible[SC_SELECTION_SLOTS];
@@ -1644,6 +1716,7 @@ ScOverflowObserve(unsigned count, DWORD* outList, DWORD unit, DWORD clicked) {
 
 void ScFanoutOnOverflow(unsigned count, DWORD* outList, DWORD unit) {
     EnterCriticalSection(&g_lock);
+    FanoutSessionSync();
     ++g_statOverflow;
 
     // Snapshot the 12 slots BEFORE the original runs: this handler can replace an
@@ -1733,6 +1806,7 @@ unsigned ScFanoutGrowBuildingGroup(DWORD* candidates, DWORD* out, DWORD clicked,
     const BYTE leadOwner = *(BYTE*)(lead + SC_CUNIT_OFF_PLAYER);
 
     EnterCriticalSection(&g_lock);
+    FanoutSessionSync();
 
     int n = 1;              // out[0] is the lead the engine already chose
     int beyond = 0, refused = 0;
@@ -1999,6 +2073,7 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
 
     if (!g_lockInit) { InitializeCriticalSection(&g_lock); g_lockInit = true; }
 
+    g_session = ScSessionEpoch();
     g_budget      = EnvInt("SCPLUGIN_FANOUT_BUDGET", SC_DEFAULT_BUDGET, 40, 480);
     g_maxUnits    = EnvInt("SCPLUGIN_MAX_UNITS", SC_SHADOW_MAX - 1, 12, SC_SHADOW_MAX - 1);
     g_verboseCmds = EnvInt("SCPLUGIN_LOG_COMMANDS", 1, 0, 1) != 0;
@@ -2186,6 +2261,11 @@ void ScFanoutTestBegin(BYTE* fakeModuleBase, ScQueueFn emit, int budget) {
     memset(g_group, 0, sizeof(g_group));
     g_statGroupAssign = g_statGroupAdd = g_statGroupRecall = 0;
     g_statGroupWide = g_statGroupDiscard = g_statGroupReset = 0;
+    // Task 054: adopt whatever epoch the test harness is currently at, so a part that
+    // begins a fresh scenario does not immediately log a drop of the state it just
+    // cleared -- and so a part that WANTS a game change asks for one explicitly.
+    g_session = ScSessionEpoch();
+    g_statSessionDrop = 0;
     // Task 036: the extend override's counters and its engine-call seam. The seam is
     // cleared rather than kept, so a part that forgets to set it faults loudly on the
     // fake image instead of silently reusing the previous part's recorder.
@@ -2198,6 +2278,7 @@ void ScFanoutTestBegin(BYTE* fakeModuleBase, ScQueueFn emit, int budget) {
 // "the recall put 36 back" are separate claims.
 int ScFanoutGroupCount(int group) {
     if (group < 0 || group >= SC_HOTKEY_GROUPS) return -1;
+    FanoutSessionSync();
     return g_group[group].stored ? g_group[group].count : -1;
 }
 
@@ -2209,14 +2290,16 @@ int ScFanoutGroupStat(int which) {
         case SC_GROUPSTAT_WIDE:    return (int)g_statGroupWide;
         case SC_GROUPSTAT_DISCARD: return (int)g_statGroupDiscard;
         case SC_GROUPSTAT_RESET:   return (int)g_statGroupReset;
+        case SC_GROUPSTAT_SESSION: FanoutSessionSync(); return (int)g_statSessionDrop;
     }
     return -1;
 }
 
 // Test-only: the shadow list's shape, so a test can assert "the recall put N back and
 // the engine still holds only 12" without going through the log.
-int ScFanoutShadowCount(void)  { return g_shadowCount; }
-int ScFanoutVisibleCount(void) { return g_visibleCount; }
+int ScFanoutShadowCount(void)  { FanoutSessionSync(); return g_shadowCount; }
+int ScFanoutVisibleCount(void) { FanoutSessionSync(); return g_visibleCount; }
+int ScFanoutPlanActiveForTest(void) { FanoutSessionSync(); return g_plan.active ? 1 : 0; }
 
 // Test-only: drive the %SCPLUGIN_FANOUT_LIVENESS% switch without an environment.
 // hooktest part [7] uses it to prove that the pre-task-020 gate really does replay a
@@ -2266,6 +2349,10 @@ int ScFanoutCopyShadow(ScShadowInfo* out, int maxOut, int* visibleCount,
                        unsigned* version) {
     if (!g_lockInit) { InitializeCriticalSection(&g_lock); g_lockInit = true; }
     EnterCriticalSection(&g_lock);
+    // The HUD row's snapshot syncs too, so the row can never be handed a list from a
+    // game that has ended -- and the `version` it reads back below is the one the sync
+    // bumps, which is what makes the change visible to a consumer that only watches it.
+    FanoutSessionSync();
     int n = g_shadowCount < maxOut ? g_shadowCount : maxOut;
     for (int i = 0; i < n; ++i) {
         out[i].unit       = g_shadow[i].ptr;
@@ -2354,6 +2441,10 @@ void ScFanoutLogUnitStates(const char* tag) {
     if (!g_lockInit) return;
 
     EnterCriticalSection(&g_lock);
+    // The oracle syncs too. It walks the shadow list and dereferences every entry, so
+    // a stale list here would be a read through pointers belonging to another game --
+    // and it is also the line a suite reads to decide what the plugin is holding.
+    FanoutSessionSync();
 
     WORD     orderKey[32], order2Key[32], typeKey[32];
     unsigned orderCnt[32], order2Cnt[32], typeCnt[32];
@@ -2510,8 +2601,9 @@ void ScFanoutLogUnitStates(const char* tag) {
 
 void ScFanoutLogState(void) {
     if (g_mode == SC_MODE_OBSERVE) return;
-    ScLog("SHADOW state: %d units (%d visible) accum=%d planActive=%d | "
-          "commands=%u selects=%u overflowCalls=%u fanouts=%u pairs=%u",
-          g_shadowCount, g_visibleCount, g_accumCount, g_plan.active ? 1 : 0,
-          g_statCommands, g_statSelects, g_statOverflow, g_statFanouts, g_statPairs);
+    ScLog("SHADOW state: session=%u %d units (%d visible) accum=%d planActive=%d | "
+          "commands=%u selects=%u overflowCalls=%u fanouts=%u pairs=%u sessionDrops=%u",
+          g_session, g_shadowCount, g_visibleCount, g_accumCount, g_plan.active ? 1 : 0,
+          g_statCommands, g_statSelects, g_statOverflow, g_statFanouts, g_statPairs,
+          g_statSessionDrop);
 }
