@@ -204,6 +204,11 @@ $script:cancels = 0
 # ... and how many of those the PLUGIN served (as opposed to the engine). Only the
 # plugin's own refund shows up in its stats line.
 $script:pluginCancels = 0
+# ... and how many of them were made while the engine's ring was still ABOVE the plugin's
+# hold, which is the only condition under which a cancel makes the plugin capture one more
+# item. Counted from each cancel's own before-reading rather than assumed, because it is
+# NOT a property of cancelling -- see the drain step's `captured` assertion (task 061).
+$script:capturesFromCancel = 0
 # How many Train commands the ENGINE has accepted so far, counted on its own command
 # funnel. Every one of them was paid for there, so this is the run's ledger: see
 # Assert-Reconciles for why it is counted here and not derived from the unit list.
@@ -377,7 +382,8 @@ function ConvertFrom-QIndLine {
     # disable event on one of them (task 061). -1 means the field was not on the line, which
     # is a different fact from 0 and has to stay different -- an arm that requires the count
     # to MOVE would otherwise read a missing field as "the fix did nothing".
-    $extra = [regex]::Match($Hit.Line, 'owned=(?<owned>-?\d+) pressKept=(?<pressKept>\d+)')
+    $extra = [regex]::Match($Hit.Line,
+        'owned=(?<owned>-?\d+) disableOnOwned=(?<disOwned>\d+) disableWithPress=(?<disPressed>\d+) pressKept=(?<pressKept>\d+)')
     if (-not $m.Success) { throw "test: unparseable QIND line: $($Hit.Line)" }
     return [pscustomobject]@{
         Mode = [int]$m.Groups['mode'].Value; Linked = $m.Groups['linked'].Value -eq '1'
@@ -397,6 +403,8 @@ function ConvertFrom-QIndLine {
         Overflow = [int]$m.Groups['overflow'].Value; Upg = [int]$m.Groups['upg'].Value
         Buildings = [int]$m.Groups['bldgs'].Value; Queued = [int]$m.Groups['queued'].Value
         Owned = ($extra.Success ? [int]$extra.Groups['owned'].Value : -1)
+        DisableOnOwned = ($extra.Success ? [int]$extra.Groups['disOwned'].Value : -1)
+        DisableWithPress = ($extra.Success ? [int]$extra.Groups['disPressed'].Value : -1)
         PressKept = ($extra.Success ? [int]$extra.Groups['pressKept'].Value : -1)
         Line = $Hit.Line
     }
@@ -1115,6 +1123,10 @@ try {
             ($r.After.Selected.EngineLen + $r.After.Selected.Overflow -eq $QueueMax - 1 - $r.Completed)
         $script:cancels++
         $script:pluginCancels++
+        # Whether THIS cancel makes the plugin take one more item out of the ring is a
+        # property of the ring at the moment it was made, not of cancelling -- see the
+        # drain step. Recorded from this arm's own before-reading.
+        if ($r.Before.Selected.EngineLen -gt $ENGINE_HOLD) { $script:capturesFromCancel++ }
         $script:mineralsAfterBurst = $r.After.Selected.Minerals
         Assert-Reconciles 'after-plugin-cancel' $r.After -Accepted $script:accepted -Cancelled $script:cancels
         Shot 'plugin-cancelled'
@@ -1288,6 +1300,7 @@ try {
         }
         $script:cancels++
         $script:pluginCancels++
+        if ($r.Before.Selected.EngineLen -gt $ENGINE_HOLD) { $script:capturesFromCancel++ }
         Assert-That "the plugin's cancelled counter is now $script:pluginCancels ($($r.After.Cancelled))" `
             ($r.After.Cancelled -eq $script:pluginCancels)
         Assert-That "and its building-gone refund counter is still 0 ($($r.After.Refunded))" `
@@ -1307,13 +1320,31 @@ try {
         # difference between a regression test and a coincidence.
         $qiAfter = Get-QInd 'last-slot-after'
         Write-Host "       $($qiAfter.Line)"
-        # Both readings are required to be >= 0 as well as increasing: -1 is this parser's
-        # "the field was not on the line", and a missing field must not be able to satisfy
-        # a "the number went up" test by being smaller than a real one.
-        Assert-That ("the fix is what carried this click: pressKept $($qi.PressKept) -> $($qiAfter.PressKept) " +
-                     "(presses carried across the engine's disable of a slot we light)") `
-            ($qi.PressKept -ge 0 -and $qiAfter.PressKept -gt $qi.PressKept) `
-            '(unchanged = the click was served without the fix doing anything, so this arm proves nothing; -1 = the plugin did not report the field at all)'
+        # THREE NUMBERS, NOT ONE, and the reason is a run that read `pressKept 0 -> 0`
+        # after a click that cancelled perfectly. That single number cannot separate "the
+        # fix never fired because the ownership test is broken" from "no disable arrived
+        # while the button was held, so the click won the race on its own" -- and those
+        # have completely different consequences for whether this arm guards anything.
+        # So the plugin now counts the whole path (AGENTS.md, task 030: count the ENTRY as
+        # well as the outcome) and the arm prints all three before judging.
+        $dOwned  = $qiAfter.DisableOnOwned   - $qi.DisableOnOwned
+        $dPress  = $qiAfter.DisableWithPress - $qi.DisableWithPress
+        $dKept   = $qiAfter.PressKept        - $qi.PressKept
+        Write-Host ("       across the click: disableOnOwned +$dOwned, disableWithPress +$dPress, pressKept +$dKept " +
+                    "(owned $($qi.Owned) -> $($qiAfter.Owned))")
+        Assert-That 'the plugin reported the press-rescue counters at all' `
+            ($qi.PressKept -ge 0 -and $qi.DisableOnOwned -ge 0 -and $qi.DisableWithPress -ge 0) `
+            '(-1 = the field was not on the QIND line, which is a different fact from 0 and must not pass as one)'
+        # THE SEAM FOR THIS ARM, and it is not "the cancel happened". The engine must have
+        # disabled a slot we own while the button was down -- that is the collision the fix
+        # exists for. If it did not happen, this run did not exercise the fix, whatever the
+        # cancel did, and saying so is the whole point of counting it.
+        Assert-That "the engine disabled a slot we own while the button was down ($dPress time(s) in this click)" `
+            ($dPress -gt 0) `
+            "(0 with disableOnOwned +$dOwned means the collision never occurred in this click's window -- the click won the race on its own and this arm did NOT exercise the fix)"
+        Assert-That "and the fix carried the press across every one of them: pressKept +$dKept" `
+            ($dKept -ge $dPress -and $dKept -gt 0) `
+            '(fewer rescues than collisions means the restore itself did not hold)'
         Assert-Reconciles 'after-last-slot-cancel' $r.After -Accepted $script:accepted -Cancelled $script:cancels
         Shot 'last-slot-cancelled'
     }
@@ -1361,27 +1392,72 @@ try {
         $expectPromoted = $q.Captured - $q.Cancelled
         Assert-That "everything the plugin captured was promoted or cancelled: $($q.Captured) - $($q.Cancelled) = $($q.Promoted)" `
             ($q.Promoted -eq $expectPromoted)
-        Assert-That "and it captured one more than the burst left it, because the cancel made room ($($q.Captured))" `
-            ($q.Captured -eq $expectOverflow + $script:cancels)
+        # A CANCEL DOES NOT ALWAYS MAKE ROOM, and writing that it does was a coincidence of
+        # having exactly one cancel in this phase (task 061). This used to read
+        # `captured == expectOverflow + cancels`, which held for the plugin-cancel arm and
+        # failed the moment a second plugin-served cancel was added: measured, captured 5
+        # with 2 cancels where that formula wanted 6.
+        #
+        # The reason is the RING, not the cancel. The plugin takes an item back only when
+        # the ring is ABOVE its hold; the first cancel happened while the ring was full at
+        # five, so the next rebalance pulled one out and `captured` went up. The second
+        # happened with the ring already at four, so there was nothing to pull. So the
+        # expectation is counted from the state each cancel was actually made in --
+        # `$script:capturesFromCancel`, incremented by the arms themselves -- rather than
+        # from how many cancels there were.
+        Assert-That ("and it captured one more for each cancel made while the ring was still above the hold: " +
+                     "$expectOverflow + $script:capturesFromCancel = $($q.Captured)") `
+            ($q.Captured -eq $expectOverflow + $script:capturesFromCancel)
         Assert-That 'the plugin is holding nothing any more' ($q.Buildings -eq 0)
         Assert-That 'and nothing was refunded for a lost building -- no item vanished' ($q.Refunded -eq 0)
         Assert-That "the cancel counter is still exactly $script:cancels -- nothing cancelled itself" `
             ($q.Cancelled -eq $script:cancels)
 
-        # PER ITEM. One promote line each, naming the type and the slot it went into, with
-        # the remaining count walking down to zero. A single line saying "3 promoted"
-        # would not distinguish three promotions from one promotion counted three times.
+        # PER ITEM. One promote line each, naming the type and the slot it went into. A
+        # single line saying "3 promoted" would not distinguish three promotions from one
+        # promotion counted three times.
         $ev = @(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'PRODQEV promote ')
         Assert-That "exactly $expectPromoted promote events ($($ev.Count))" ($ev.Count -eq $expectPromoted)
         for ($i = 0; $i -lt $ev.Count; $i++) {
             $m = [regex]::Match($ev[$i].Line, 'type=0x([0-9A-Fa-f]+) -> slot=(\d+) overflowLeft=(\d+)')
-            $wantLeft = $expectPromoted - 1 - $i
             $okType = $m.Success -and [Convert]::ToInt32($m.Groups[1].Value, 16) -eq $PROBE_TYPE
             $okSlot = $m.Success -and [int]$m.Groups[2].Value -ge 0 -and [int]$m.Groups[2].Value -lt $ENGINE_SLOTS
-            $okLeft = $m.Success -and [int]$m.Groups[3].Value -eq $wantLeft
-            Assert-That ("promotion {0}: a Probe into a real slot, {1} left after it" -f ($i + 1), $wantLeft) `
-                ($okType -and $okSlot -and $okLeft) "($($ev[$i].Line.Trim()))"
+            Assert-That ("promotion {0}: a Probe into a real slot" -f ($i + 1)) `
+                ($okType -and $okSlot) "($($ev[$i].Line.Trim()))"
         }
+
+        # THE COUNT ITSELF, asserted across EVERY event that moves it rather than against a
+        # per-promotion literal. The old form expected promotion i to leave
+        # `expectPromoted - 1 - i` behind, which silently assumed promotions are the only
+        # thing that changes the plugin's list. They are not: a CANCEL removes an item and a
+        # HOLD adds one, and with two cancels in this phase the sequence stopped matching --
+        # a real ordering the run does not guarantee, encoded as arithmetic (task 061).
+        #
+        # So walk all four event kinds in the order the plugin logged them and require each
+        # to move its own reported count by exactly one, in the right direction. That is
+        # strictly stronger than the old check -- it covers the cancels and the captures too
+        # -- and it cannot be broken by adding an arm.
+        $moves = @(Get-Content -LiteralPath $LogPath |
+                   Select-String -Pattern 'PRODQEV (promote|hold|cancel-last|cancel-icon) ')
+        $running = $null
+        $bad = @()
+        foreach ($line in $moves) {
+            $kind = [regex]::Match($line.Line, 'PRODQEV (\w[\w-]*) ').Groups[1].Value
+            $n = if ($kind -eq 'hold') {
+                     [regex]::Match($line.Line, ' overflow=(\d+)').Groups[1].Value
+                 } else {
+                     [regex]::Match($line.Line, ' overflowLeft=(\d+)').Groups[1].Value
+                 }
+            if ($n -eq '') { $bad += "unparsed: $($line.Line.Trim())"; continue }
+            $n = [int]$n
+            $want = if ($null -eq $running) { $n } elseif ($kind -eq 'hold') { $running + 1 } else { $running - 1 }
+            if ($n -ne $want) { $bad += "$kind left $n, expected $want ($($line.Line.Trim()))" }
+            $running = $n
+        }
+        Assert-That "every one of the $($moves.Count) events that moves the plugin's list moved it by exactly one" `
+            ($moves.Count -gt 0 -and $bad.Count -eq 0) `
+            ($bad.Count -gt 0 ? "(first: $($bad[0]))" : '(no PRODQEV move events found at all -- the walk was blind)')
+        Assert-That "and the last one left it empty ($running)" ($running -eq 0)
     }
 
     Step 'every surviving item became a unit, and not one was paid for twice' {

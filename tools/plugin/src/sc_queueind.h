@@ -238,7 +238,17 @@ enum ScQueueIndStat {
     // was holding the mouse down on that icon, which is what makes a green regression arm
     // with this at 0 a suspicious green rather than a passing one.
     SC_QIND_STAT_PRESSKEPT = 7,
-    SC_QIND_STAT__COUNT = 8
+    // THE DENOMINATOR pressKept was published without, and the run that needed it read
+    // `pressKept=0` with no way to tell an INERT fix from a race the click happened to
+    // win. Both of these are counted on the same path, so the three numbers together say
+    // which it was: no disable events on our slots at all means the ownership test never
+    // fired; disables but never one during a press means the press was never in flight
+    // when it mattered; disables during a press with pressKept still 0 would mean the
+    // restore itself is broken. (AGENTS.md, task 030: log ENTRY as well as outcome, or
+    // "it never ran" and "it ran and did nothing" are one silence.)
+    SC_QIND_STAT_DISABLE_OWNED = 8,    // disable events that reached a slot we own
+    SC_QIND_STAT_DISABLE_PRESSED = 9,  // ... of those, ones arriving with a press in flight
+    SC_QIND_STAT__COUNT = 10
 };
 int ScQueueIndStat(int which);
 

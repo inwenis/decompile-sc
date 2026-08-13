@@ -665,10 +665,6 @@ static DWORD AnchorFor(DWORD root, int mode) {
 //
 // Only writes when something actually differs, so a settled strip costs five compares.
 static void FillOverflowIcons(DWORD root, const ScQueueIndView* v, DWORD unit) {
-    // Cleared FIRST, so every early return below leaves "the plugin owns no slot" rather
-    // than last frame's answer. A stale entry here would protect a press on a control the
-    // engine has taken back.
-    g_ownedIconN = 0;
     const int drawable = ScQueueIndDrawableSlots(v);
 
     // The engine's own icon GRP, read from the engine's own global every frame rather than
@@ -678,6 +674,11 @@ static void FillOverflowIcons(DWORD root, const ScQueueIndView* v, DWORD unit) {
     const DWORD grpIcons = *(DWORD*)Rt(SC_VA_GRP_CMDICONS);
     if (!grpIcons) {
         ++g_stat[SC_QIND_STAT_NOGRP];
+        // Nothing was filled, so nothing is ours. Cleared HERE and not on the way in: the
+        // list is published in one write at the end of a successful fill (see below), and
+        // a clear at the top would re-open the empty window that publication exists to
+        // close.
+        g_ownedIconN = 0;
         return;
     }
     const DWORD* labels = (const DWORD*)Rt(SC_VA_STATQ_SLOT_LABELS);
@@ -720,17 +721,29 @@ static void FillOverflowIcons(DWORD root, const ScQueueIndView* v, DWORD unit) {
     // than accumulated: an item promoted into the ring hands its icon back to the engine,
     // and protecting a press on a slot the engine now owns would be changing vanilla
     // behaviour for no reason.
-    g_ownedIconN = 0;
+    //
+    // BUILT INTO A LOCAL AND PUBLISHED IN ONE WRITE, count LAST. The first version cleared
+    // `g_ownedIconN` and refilled it in place, which put a window -- hundreds of times a
+    // second -- where the list read EMPTY while this function was running. The observer
+    // duly sampled it: `owned=` read 0 in 48 of 68 QIND lines of one run. Nothing was
+    // provably wrong on the game thread, and that is exactly the complaint: a torn value
+    // cannot tell you whether the thing it measures was true, which is the disease task 039
+    // wrote three paragraphs about and this is the same file doing it again. Count last
+    // because a reader that sees the count sees entries that were written before it.
+    DWORD owned[SC_STATQ_SLOTS];
+    int   ownedN = 0;
     {
         DWORD oc = FindChildById(root, SC_STATQ_FIRST_CONTROL);
         for (int k = 0; k < SC_STATQ_SLOTS && oc; ++k, oc = NextOf(oc)) {
             if (k >= v->engineLen && k < drawable &&
                 ScProdQueueOverflowAt(unit, k - v->engineLen) >= 0 &&
-                g_ownedIconN < SC_STATQ_SLOTS) {
-                g_ownedIcon[g_ownedIconN++] = oc;
+                ownedN < SC_STATQ_SLOTS) {
+                owned[ownedN++] = oc;
             }
         }
     }
+    for (int i = 0; i < ownedN; ++i) g_ownedIcon[i] = owned[i];
+    g_ownedIconN = ownedN;
 
     // The snapshot, taken after the fill, by the thread that did it.
     g_iconsN = 0;
@@ -863,8 +876,10 @@ static int __attribute__((fastcall)) SC_GAME_ENTRY QIndIconInteractShim(DWORD ct
         // Counted here as well, or QINDCLICKSTATS's `seen` would be a denominator with the
         // busiest event on the busiest control missing from it.
         ++g_clickTraceSeen;
+        ++g_stat[SC_QIND_STAT_DISABLE_OWNED];
         DWORD* flags = (DWORD*)(ctrl + SC_BINDLG_OFF_FLAGS);
         const DWORD pressed = *flags & SC_CTRL_FLAG_PRESSED;
+        if (pressed) ++g_stat[SC_QIND_STAT_DISABLE_PRESSED];
         const int   r = ((ScIconInteractFn)g_iconOrigFn)(ctrl, evt);
         if (pressed && (*flags & SC_CTRL_FLAG_PRESSED) == 0) {
             *flags |= SC_CTRL_FLAG_PRESSED;
@@ -1209,7 +1224,7 @@ void ScQueueIndLogState(const char* tag) {
     ScLog("QIND [%s] mode=%d linked=%d visible=%d text=\"%s\" bounds=(%d,%d,%d,%d) ink=%d "
           "refInk=%d refId=%d surfInk=%d slotDiff=%d boxDiff=%d fontH=%d icons=[%s] "
           "sel=%d engineLen=%d overflow=%d upg=%d bldgs=%d queued=%d hudPages=%d "
-          "anchor=0x%08X owned=%d pressKept=%u",
+          "anchor=0x%08X owned=%d disableOnOwned=%u disableWithPress=%u pressKept=%u",
           t, g_mode, linked ? 1 : 0,
           (flags & SC_CTRL_FLAG_VISIBLE) ? 1 : 0, live,
           linked ? b[0] : 0, linked ? b[1] : 0, linked ? b[2] : 0, linked ? b[3] : 0, ink,
@@ -1221,7 +1236,9 @@ void ScQueueIndLogState(const char* tag) {
           // disable event on one of them (task 061). A suite can read the second either side
           // of a click and require it to MOVE -- which is what stops the regression arm
           // passing for some reason other than the fix.
-          g_ownedIconN, g_stat[SC_QIND_STAT_PRESSKEPT]);
+          g_ownedIconN,
+          g_stat[SC_QIND_STAT_DISABLE_OWNED], g_stat[SC_QIND_STAT_DISABLE_PRESSED],
+          g_stat[SC_QIND_STAT_PRESSKEPT]);
 }
 
 // One line per child of the statdata dialog. This is the answer to "which controls in this
@@ -1545,11 +1562,13 @@ void ScQueueIndRemoveHooks(void) {
 void ScQueueIndLogStats(void) {
     if (!g_enabled) return;
     ScLog("QINDSTATS frames=%u shows=%u hides=%u splices=%u refused=%u iconsFilled=%u "
-          "noGrp=%u pressKept=%u",
+          "noGrp=%u disableOnOwned=%u disableWithPress=%u pressKept=%u",
           g_stat[SC_QIND_STAT_FRAMES], g_stat[SC_QIND_STAT_SHOWS],
           g_stat[SC_QIND_STAT_HIDES], g_stat[SC_QIND_STAT_SPLICES],
           g_stat[SC_QIND_STAT_REFUSED], g_stat[SC_QIND_STAT_ICONS],
-          g_stat[SC_QIND_STAT_NOGRP], g_stat[SC_QIND_STAT_PRESSKEPT]);
+          g_stat[SC_QIND_STAT_NOGRP],
+          g_stat[SC_QIND_STAT_DISABLE_OWNED], g_stat[SC_QIND_STAT_DISABLE_PRESSED],
+          g_stat[SC_QIND_STAT_PRESSKEPT]);
     // The trace's own denominator: what it saw and what it dropped, so "no click event was
     // ever logged" and "the filter ate it" are different readings rather than one silence.
     if (g_clickTrace) {
