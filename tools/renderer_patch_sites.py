@@ -1181,6 +1181,54 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     b.imm(0x004814EA, STOCK_W, PF_W, 2, "layer1.park.x", 2,
           "parks the mask layer just off the right edge of the playfield")
 
+    # ------------------------------------------------------------------
+    # STAGE 3 -- input reaches the full width (task 071)
+    # ------------------------------------------------------------------
+    # The window procedure clamps every mouse coordinate to the STOCK screen
+    # before building an input event or writing the cursor globals
+    # (research/renderer-viewport.md 8, last row of the 640x480 table), so at
+    # 800 wide the right 160 columns are unreachable by any click -- a real or
+    # posted x past 639 is clamped to 639. This is what task 070's cnc-ddraw
+    # presentation needed and had no owner for. Each clamp is a PAIR: a
+    # `cmp .., 640` that decides and a `mov .., 639` that replaces (read from
+    # the disassembly, task 071 -- patching the 639 alone would turn "click at
+    # 700" into "click at 799"). X pairs widen to the new screen; the Y clamps
+    # stay, the height is unchanged.
+    #
+    # NOTE: moving the CONSOLE into that widened region is a separate, unshipped
+    # problem -- renderer-viewport.md 18 measured that relocating the console
+    # dialogs' bounds moves their hit-test but NOT their on-screen pixels.
+    #
+    # The one other consumer of the widened coordinate range that a full
+    # cmp-immediate sweep of .text finds (100.0%% coverage, task 071) is the
+    # edge-scroll trigger 0x004D12FF `cmp eax,0x27E / jl` -- a >=638 test, so
+    # its behaviour at 800 is IDENTICAL to today's post-clamp behaviour (any
+    # physical x>=638 already reads as 639 >= 638). Left alone on purpose.
+    for cmp_va, mov_va, mov_w in (
+            (0x004D1960, 0x004D196D, 2),   # 0x004D1940: cmp si,640 / mov ax,639
+            (0x004D19EC, 0x004D19F9, 2),   # 0x004D19C0: same pair
+            (0x004D1A7C, 0x004D1A89, 2),   # 0x004D1A50: same pair
+            (0x004D24E6, 0x004D24EC, 4)):  # 0x004D1D70: cmp ax,640 /
+        #                                    mov [0x6CDDC4],639 (cursor-x global)
+        b.imm(cmp_va, STOCK_W, W, 2, "mouse.clamp.cmp@%08X" % cmp_va, 3,
+              "window-proc mouse x clamp: the 'x >= 640' decision")
+        b.imm(mov_va, STOCK_W - 1, W - 1, mov_w, "mouse.clamp.x@%08X" % mov_va, 3,
+              "window-proc mouse x clamp: the replacement value 639")
+
+    # The wndproc clamp is necessary but NOT sufficient for click-SELECT past
+    # x=639: the mouse->world click search rect (0x0046FB40, 9.1 item 12) is
+    # ALSO 640 wide -- right = screenLeft + 640 -- so a click whose world point
+    # lands past screenLeft+640 falls outside the rect and selects nothing,
+    # even with the cursor global carrying the true x. Widen the two x extents
+    # to screenLeft + 800 (the click arm and the drag-box arm; the +400 height
+    # extents beside them stay). Measured with a deselect-first select: without
+    # these two sites a click at client x=672 selects NOTHING (the wndproc
+    # clamp alone is invisible to selection).
+    b.imm(0x0046FC75, STOCK_W, PF_W, 4, "click.searchrect.right", 3,
+          "0x0046FB40: click search rect right = screenLeft + 640 -> + 800")
+    b.imm(0x0046FE18, STOCK_W, PF_W, 4, "click.searchrect.right.drag", 3,
+          "0x0046FB40 drag-box arm: same rect, same widen")
+
     return b
 
 
@@ -1232,7 +1280,7 @@ def emit_header(b: Builder, path: str):
     out.append("typedef struct {")
     out.append("    DWORD       va;          // static VA, rebased by the plugin")
     out.append("    BYTE        len;")
-    out.append("    BYTE        stage;       // 0, 1 or 2 -- see research/renderer-viewport.md 9.3")
+    out.append("    BYTE        stage;       // 0..3 -- see research/renderer-viewport.md 9.3; 3 = console/input, task 071")
     out.append("    BYTE        fixupOff;    // SC_WS_NO_FIXUP, or the offset of a dword")
     out.append("    DWORD       fixupAddend; // filled with (relocated grid base + this)")
     out.append("    BYTE        expect[SC_WS_MAX_PATCH_LEN];")

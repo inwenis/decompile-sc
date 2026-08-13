@@ -335,10 +335,14 @@ param(
     #   * it changes what DirectDraw is asked for, so it is only sane windowed --
     #     -InjectWindowedHelper WMode (or -Windowed) is what the runs use.
     [ValidateSet('0', '1')][string]$Widescreen = '0',
+
     # Which stage of research/renderer-viewport.md 9.3 to apply. 0 = the display mode
     # alone (expect a small image in the corner of a bigger one); 1 = + the screen
-    # surface; 2 = + the playfield geometry. Meaningless unless -Widescreen 1.
-    [ValidateSet('0', '1', '2')][string]$WidescreenStage = '1'
+    # surface; 2 = + the playfield geometry; 3 = + input reaches the full width
+    # (task 071: the window-proc mouse clamps widen so clicks can reach x=640..799;
+    # moving the console there is a separate unshipped problem, renderer-viewport.md
+    # 18). Meaningless unless -Widescreen 1.
+    [ValidateSet('0', '1', '2', '3')][string]$WidescreenStage = '1'
 )
 
 $ErrorActionPreference = 'Stop'

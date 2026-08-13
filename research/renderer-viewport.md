@@ -1701,3 +1701,166 @@ scrollmid (848,416) x%32=16, defect arm RED dense_rows=24, WIDESCREEN ACTIVE
 Artifacts (gitignored diagnostic path; paths travel, images never):
 `C:\sc-work\logs\070-frames\drive-*.png` / `fd-drive-*.bin`, transcripts
 `C:\sc-work\logs\offscreen\20260813-*-probe-widescreen-drive.txt`.
+
+
+## 18. Task 071 — input reaches the full width; the console move is a measured NO-GO
+
+§15.5.3's dead strip and 070's HUD verdict ("a 640 console sitting in the left
+of a wide window": `StatRes` (220,0)-(639,19), `StatBtn` (496,354)-(639,479),
+both ending at x=639) were the target. Task 071 shipped the HALF that works —
+input can now reach x=640..799 — and MEASURED that the other half, moving the
+console into that region, cannot be done by relocating dialog geometry. Both
+results are below; the console move is a follow-up.
+
+### 18.1 Shipped: the window-proc mouse clamps (stage 3)
+
+The window procedure clamps every mouse x to the stock screen before building
+an input event or writing the cursor globals (§8's last row), so at 800 wide a
+real or posted x past 639 was pinned to 639 and the right 160 columns were
+unclickable. The clamps are four `cmp 640` / `mov 639` PAIRS, read from the
+base exe (task 071):
+
+| function | the decision | the replacement value |
+|---|---|---|
+| 0x004D1940 | 0x004D1960 `cmp si,0x280`  | 0x004D196D `mov ax,0x27F` |
+| 0x004D19C0 | 0x004D19EC `cmp si,0x280`  | 0x004D19F9 `mov ax,0x27F` |
+| 0x004D1A50 | 0x004D1A7C `cmp si,0x280`  | 0x004D1A89 `mov ax,0x27F` |
+| 0x004D1D70 | 0x004D24E6 `cmp ax,0x280`  | 0x004D24EC `mov dword [0x6CDDC4],0x27F` |
+
+The shape is `if (x >= 640) x = 639`. The 032 sweep's distillation
+(`renderer-viewport-sites.tsv` rows 74-81) lists only the `mov` sites, because
+639 was the swept value — **patching those alone turns "click at 700" into
+"click at 799"** (the compare still fires and installs the widened constant).
+Stage 3 moves all eight X sites together (`mouse.clamp.*` in the generated
+table); the four Y clamps stay, the height is unchanged.
+
+The clamps are **necessary but not sufficient**, and a clean test is what
+showed it: the mouse→world click SEARCH RECT (0x0046FB40, §9.1 item 12) is also
+640 wide — `add eax, 0x280` for `right = screenLeft + 640` at 0x0046FC75 (click
+arm) and 0x0046FE18 (drag-box arm) — so even with the cursor global carrying
+x>639, a click whose world point lands past `screenLeft + 640` falls OUTSIDE the
+rect and selects nothing. Stage 3 widens those two extents to `screenLeft + 800`
+as well (`click.searchrect.*`), for 10 stage-3 sites total. The +400 height
+extents beside them stay.
+
+**Verified, and the behavioural half honestly NOT verified
+(`test-widescreen-input-800.ps1`, off-screen WMode, one-Nexus fixture):** all 10
+stage-3 sites are present with the right constants, the console stays at its
+stock 640 rect, and at 640 (flag off) selection at x<640 is unbroken. But
+**whether a click past x=639 SELECTS is not provable in this harness** — and it
+is the same wall 070 hit for its own item 1. A posted playfield click past x=639
+does not reach the engine: under WMode the window is 640 wide and posted
+coordinates past it are out of the shim's contract (070 §17.2, verbatim); under
+cnc-ddraw off-screen no posted playfield click registers at all (070 measured
+0/8). So the suite REPORTS x>639 selection (measured `no-select` off-screen) and
+does not assert it; the behavioural proof is a real mouse on a real desktop, the
+user's first play — **exactly the deferral 070 recorded**, not a closed item.
+
+A caution paid for here, worth its own note: an earlier run reported "click at
+672 selects" and it was a CONTAMINATED oracle — the Nexus was already selected
+from a prior step, so `ptype` stayed 154 whether or not the click did anything
+(the 023/026 shape: the read did not depend on the act). The clean test
+deselects first; then it reads `no-select`. **A select-state read is only an
+oracle for a select if the target was provably deselected before the click.**
+
+070's §17.2 found the same wall from the world side and named these same sites
+(9.1 item 12: the wndproc mouse path, mouse→world 0x0046FB40); this task
+supplied their concrete owners (the 10 byte-patches) and confirmed the harness
+cannot behaviourally test them. 070's "128 px offset" was the
+nearest-unit-in-fixture artefact of clamp-to-639, not a second offset.
+
+#### 18.1.1 What else consumes the widened coordinate range — full-coverage sweep
+
+A resuming `cmp`-immediate sweep of the whole `.text` (100.0% coverage —
+1036039 of 1036288 bytes decoded; the §12.4 Capstone-halt lesson applied) for
+compares against 638/639/640 finds, beyond the four pairs and the geometry
+sites:
+
+- **0x004D12FF `cmp eax,0x27E / jl`** — the edge-scroll trigger (scroll right
+  when `x >= 638`). Its behaviour at 800 is IDENTICAL before and after the
+  clamp patch (today every physical x >= 638 already reads as 639 >= 638), so
+  it is left alone on purpose; moving it would CHANGE behaviour the user has.
+- **0x004F7C94, 0x004F9376, 0x004F942E, 0x004F943F, 0x004F9498** — `cmp ..,0x27F`
+  beside `fnstcw`/`fldcw`: the x87 FPU CONTROL WORD's default value (0x27F). CRT
+  float code, not coordinates (the §16.1 trap: a value match names a candidate,
+  the function around it names the subsystem).
+- **0x004DCDE2 `cmp word [edi+4],0x280`** — the glue-screen dialog SLIDE
+  animation. Glue transitions only; untouched.
+
+### 18.2 NO-GO: moving the console by relocating dialog bounds moves the HIT-TEST, not the PIXELS
+
+The plan was to translate the `StatRes` and `StatBtn` root dialog bounds
+(+0x04) by +160. A prototype did exactly that and the **engine's own dialog
+list confirmed the move**: `StatRes` read (380,0)-(799,19), `StatBtn`
+(656,354)-(799,479). Every memory oracle agreed the console had moved.
+
+**The picture did not.** Captured through cnc-ddraw at 800 (070's presentation
+vector + `%SCDRIVE_POST_ACTIVATE%`; `C:\sc-work\logs\071-frames\console-800-*.png`),
+the console still reads as a 640 console with a black strip on the right: the
+bronze frame, the command-card panel, the MENU button and the minimap all sit
+in the left ~640, x=640..799 at the bottom is black, and the resource number
+sits at its STOCK position (~x600), not the far right a moved (380..799) bar
+would put it. Cross-checked against 070's stage-2 frame
+(`070-frames/drive-ingame-after.png`): both show the console left-anchored, same
+resource band. **The bounds moved; the pixels did not.**
+
+Why: the console dialogs' ON-SCREEN pixels come from fixed draw positions — the
+640-wide console art (`console.pcx`, §9.1 item 19 / §15.5.3) and each status
+dialog's own draw constants — NOT from the `BinDlg` bounds. The bounds govern
+the HIT-TEST region only (0x00418340 subtracts root+0x04). This is what §9.1
+items 19/20 anticipated ("a bottom-anchored stock HUD means moving loaded
+dialog geometry" AND "the console art is a fixed-width image; at 800 there is no
+console art for the extra 160 px") — moving the geometry is necessary and not
+sufficient, and the art half is the fixed-width game-content wall the user
+already ruled on (black, §15.5.3). Moving a fixed-width console to the edge just
+RELOCATES the black gap (right → left); it cannot be done without new art, which
+hard rule 1 forbids shipping.
+
+**The oracle lesson, stated generally because it cost a merge-ready result:**
+the engine dialog list is the right oracle for *hit-test* position, and it was
+used — in good faith, with the geometry confirmed — to support a *visual*
+claim. It was necessary and not sufficient. This is the frame-vs-memory rule of
+tasks 023/033 inverted: there, a pixel hash answered a question memory should
+have; here, a memory read answered a question only pixels could. **An oracle can
+be correct, authoritative, and about a different question than the one you are
+answering.** The picture — the standing "UI ships as a picture" rule — is what
+settled it before merge rather than after.
+
+### 18.3 NO-GO, the second half: even a console that DREW at the edge could not be clicked there
+
+Separately measured on the prototype (before the pixel finding), and it folds
+into the same follow-up: a click on the MOVED card at x>639 produced nothing on
+the wire, while the HOTKEY trained normally and x<640 clicks reached the console
+dialogs. An interact trace (every root dialog's `+0x2A` wrapped and named)
+showed the card's own interact (`StatBtn` root 0x00459B00) **never invoked for
+any x>639 click**; the event-type handler table (0x006D5E40) is all-null so the
+generic dispatcher 0x00419FD0 is not short-circuiting; the card's own handling
+is sound (generic interact 0x00418EB0 → hit test 0x00418340, both reading LIVE
+bounds). So the drop is UPSTREAM of the card, in a stock console-input router
+that offers nothing at x≥640 because it was written when the console was 640
+wide — one layer up from the wndproc clamps §18.1 moved, same shape.
+
+So the console move needs BOTH: the pixels relocated (the composite / art path,
+§18.2) AND the console click-router widened (§18.3). A console that draws at the
+edge but cannot be clicked, or one that can be clicked but does not draw, is
+half a feature either way — which is why they are one follow-up task, not two,
+and why the console move was dropped from what shipped. The trace instrument and
+the click probe that produced §18.3 live in git history (task071 branch,
+pre-split commits) as that task's starting tools.
+
+### 18.4 How to reproduce
+
+```powershell
+python tools/renderer_patch_sites.py --check      # 269 sites verify against the exe
+./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/test-widescreen-input-800.ps1
+#   stock arm (640 unchanged + baseline select) then the stage-3 arm:
+#   table ACTIVE + 8 clamp sites, the console STILL at its stock 640 rect,
+#   a click past x=639 selecting the aimed unit, a seam-crossing drag,
+#   minimap steering
+./tools/plugin/test-production-queue.ps1 -Widescreen 1 -WidescreenStage 3
+#   the production-queue suite on the input-widened build (console at stock 640)
+```
+
+The NO-GO capture (§18.2) is 070's vector at stage 3 with the move prototype
+(git history); the picture is `C:\sc-work\logs\071-frames\console-800-*.png`
+(gitignored; paths travel, images never).

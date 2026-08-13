@@ -260,3 +260,13 @@ stage	va	len	changed	name	before	after	expect	patch	note
 2	0x0048D663	4	1	placement.reject.x	cmp ax, 0x280	cmp ax, 0x320	663D8002	663D2003	0x0048D660: refuse a placement at x >= 640 (a 16-bit compare)
 2	0x0048D5F2	6	1	placement.rect.right	lea edi, [ecx + 0x280]	lea edi, [ecx + 0x320]	8DB980020000	8DB920030000	0x0048D5C0's extent: right = left + 640 (new in task 034)
 2	0x004814EA	9	1	layer1.park.x	mov word ptr [0x6cef66], 0x280	mov word ptr [0x6cef66], 0x320	66C70566EF6C008002	66C70566EF6C002003	parks the mask layer just off the right edge of the playfield
+3	0x004D1960	5	1	mouse.clamp.cmp@004D1960	cmp si, 0x280	cmp si, 0x320	6681FE8002	6681FE2003	window-proc mouse x clamp: the 'x >= 640' decision
+3	0x004D196D	4	1	mouse.clamp.x@004D196D	mov ax, 0x27f	mov ax, 0x31f	66B87F02	66B81F03	window-proc mouse x clamp: the replacement value 639
+3	0x004D19EC	5	1	mouse.clamp.cmp@004D19EC	cmp si, 0x280	cmp si, 0x320	6681FE8002	6681FE2003	window-proc mouse x clamp: the 'x >= 640' decision
+3	0x004D19F9	4	1	mouse.clamp.x@004D19F9	mov ax, 0x27f	mov ax, 0x31f	66B87F02	66B81F03	window-proc mouse x clamp: the replacement value 639
+3	0x004D1A7C	5	1	mouse.clamp.cmp@004D1A7C	cmp si, 0x280	cmp si, 0x320	6681FE8002	6681FE2003	window-proc mouse x clamp: the 'x >= 640' decision
+3	0x004D1A89	4	1	mouse.clamp.x@004D1A89	mov ax, 0x27f	mov ax, 0x31f	66B87F02	66B81F03	window-proc mouse x clamp: the replacement value 639
+3	0x004D24E6	4	1	mouse.clamp.cmp@004D24E6	cmp ax, 0x280	cmp ax, 0x320	663D8002	663D2003	window-proc mouse x clamp: the 'x >= 640' decision
+3	0x004D24EC	10	1	mouse.clamp.x@004D24EC	mov dword ptr [0x6cddc4], 0x27f	mov dword ptr [0x6cddc4], 0x31f	C705C4DD6C007F020000	C705C4DD6C001F030000	window-proc mouse x clamp: the replacement value 639
+3	0x0046FC75	5	1	click.searchrect.right	add eax, 0x280	add eax, 0x320	0580020000	0520030000	0x0046FB40: click search rect right = screenLeft + 640 -> + 800
+3	0x0046FE18	5	1	click.searchrect.right.drag	add eax, 0x280	add eax, 0x320	0580020000	0520030000	0x0046FB40 drag-box arm: same rect, same widen

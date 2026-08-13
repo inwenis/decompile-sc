@@ -203,6 +203,14 @@ param(
     # does" -- and it is a real target for the fix instead of a coin.
     [int]$HoldSweepClicks = 0,
     [string]$HoldSweepMs = '40,60,80,120,200',
+    # Task 071: run the SAME suite on the widescreen build. '1' + stage 3 is the
+    # input-widened build (mouse clicks reach x=640..799). Every click in this
+    # suite is computed from live control rects (Get-ScCardSlotPoint and
+    # friends), so it exercises the console at its stock 640 position through the
+    # widescreen presentation. Defaults unchanged: the stock run this suite has
+    # always been is byte-for-byte the same.
+    [ValidateSet('0', '1')][string]$Widescreen = '0',
+    [ValidateSet('0', '1', '2', '3')][string]$WidescreenStage = '3',
     [switch]$KeepOpen
 )
 
@@ -804,6 +812,7 @@ try {
         -Mode hooktest -LogCommands 1 -Circles 0 -HudRow 0 -WorldScan 1 -CardScan 1 `
         -ProdQueue 1 -ProdQueueMax $QueueMax -QueueIndicator 1 `
         -InjectWindowedHelper WMode -NoLaunchLock `
+        -Widescreen $Widescreen -WidescreenStage $WidescreenStage `
         -GameDir $GameDir -LogPath $LogPath 6>&1 | ForEach-Object {
             Write-Host $_
             if ("$_" -match 'scinject:\s*PID=(\d+)') { $script:gamePid = [int]$Matches[1] }
