@@ -100,13 +100,55 @@ Describe 'Enter-ScLaunchLock reports a leftover file instead of silently absorbi
         finally { Exit-ScLaunchLock -Lock $s 6>$null }
     }
 
-    It 'is still mutually exclusive: a held lock refuses a second acquire, naming a live holder' {
-        $p = Join-Path $script:dir 'exclusive.lock'
-        $s = Enter-ScLaunchLock -LockPath $p -TaskId 't-holder' 6>$null
+    It 'names a SELF-deadlock immediately instead of timing out against its own handle (070, -RemoveWindowed)' {
+        # The lock is not re-entrant, and a holder that Enters again used to wait
+        # on ITSELF for the whole timeout -- a five-minute stall whose eventual
+        # message blamed "another launch/deploy". The process knows what it
+        # holds; the wait must not happen and the message must say who.
+        $p = Join-Path $script:dir 'self.lock'
+        $s = Enter-ScLaunchLock -LockPath $p -TaskId 't-self' 6>$null
         try {
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $thrown = $null
+            try { Enter-ScLaunchLock -LockPath $p -TaskId 't-self-again' -TimeoutMinutes 0 6>$null }
+            catch { $thrown = $_.Exception.Message }
+            $sw.Stop()
+            $thrown | Should -Not -BeNullOrEmpty
+            $thrown | Should -Match 'THIS PROCESS already holds'
+            $thrown | Should -Match 'NoLaunchLock'
+            # Fail-fast, not a timeout: no retry loop was entered.
+            $sw.ElapsedMilliseconds | Should -BeLessThan 2000
+            # And it must not blame a foreign holder -- that was the wrong reason.
+            $thrown | Should -Not -Match 'another launch/deploy'
+        }
+        finally { Exit-ScLaunchLock -Lock $s 6>$null }
+    }
+
+    It 'is released for re-acquire by the same process after Exit (the tracker does not leak)' {
+        $p = Join-Path $script:dir 'reenter.lock'
+        $s1 = Enter-ScLaunchLock -LockPath $p -TaskId 't-first' 6>$null
+        Exit-ScLaunchLock -Lock $s1 6>$null
+        $s2 = Enter-ScLaunchLock -LockPath $p -TaskId 't-second' 6>$null
+        try { $s2 | Should -Not -BeNullOrEmpty }
+        finally { Exit-ScLaunchLock -Lock $s2 6>$null }
+    }
+
+    It 'is still mutually exclusive across processes: a foreign holder refuses the acquire' {
+        $p = Join-Path $script:dir 'exclusive.lock'
+        $marker = Join-Path $script:dir 'exclusive.acquired'
+        $lockLib = (Resolve-Path (Join-Path $PSScriptRoot '../tools/plugin/sc-launch-lock.ps1')).Path
+        $childScript = ". '$lockLib'; `$s = Enter-ScLaunchLock -LockPath '$p' -TaskId 't-foreign'; " +
+                       "Set-Content -LiteralPath '$marker' -Value ok; Start-Sleep -Seconds 12; Exit-ScLaunchLock -Lock `$s"
+        $child = Start-Process pwsh -ArgumentList '-NoProfile', '-Command', $childScript -PassThru -WindowStyle Hidden
+        try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(15)
+            while (-not (Test-Path -LiteralPath $marker) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 200 }
+            Test-Path -LiteralPath $marker | Should -BeTrue -Because 'the child must have acquired before the contention attempt means anything'
             { Enter-ScLaunchLock -LockPath $p -TaskId 't-loser' -TimeoutMinutes 0 6>$null } |
                 Should -Throw -ExpectedMessage '*could not acquire*'
         }
-        finally { Exit-ScLaunchLock -Lock $s 6>$null }
+        finally {
+            try { Stop-Process -Id $child.Id -Force -ErrorAction SilentlyContinue } catch { }
+        }
     }
 }

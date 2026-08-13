@@ -52,6 +52,23 @@ function Enter-ScLaunchLock {
         [string]$TaskId = $(if ($env:AGENT_TASK) { $env:AGENT_TASK } else { "pid$PID" }),
         [int]$TimeoutMinutes = 5
     )
+    # SELF-DEADLOCK GUARD (task 069; found live by 070). This lock is not
+    # re-entrant: a process that holds it and Enters again waits on ITSELF for
+    # the whole timeout -- run-with-plugin holding the lock and then calling
+    # -RemoveWindowed (which takes it too) stalled five minutes with no
+    # diagnosis. The OS handle cannot tell the waiter who holds it (the
+    # holder's share mode blocks even a read), but THIS PROCESS knows what it
+    # holds -- so track it, and fail fast with the actual reason instead of
+    # timing out with a wrong one. Callers nesting into lock-taking helpers
+    # pass those helpers -NoLaunchLock.
+    if (-not $global:ScLaunchLockHeld) { $global:ScLaunchLockHeld = @{} }
+    $norm = [IO.Path]::GetFullPath($LockPath)
+    if ($global:ScLaunchLockHeld.ContainsKey($norm)) {
+        $held = $global:ScLaunchLockHeld[$norm]
+        throw ("Enter-ScLaunchLock: THIS PROCESS already holds $LockPath (acquired as '$($held.Task)' at $($held.AcquiredUtc)). " +
+               'Waiting would deadlock against ourselves for the whole timeout. A caller that already holds the lock must pass ' +
+               '-NoLaunchLock to nested helpers that also take it (the -RemoveWindowed shape), or release before re-entering.')
+    }
     New-Item -ItemType Directory -Path (Split-Path $LockPath -Parent) -Force | Out-Null
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
     $stream = $null
@@ -113,6 +130,7 @@ function Enter-ScLaunchLock {
         # Never let a diagnostic-write failure stop the caller from proceeding with a
         # lock it has already genuinely acquired.
     }
+    $global:ScLaunchLockHeld[$norm] = @{ Task = $TaskId; AcquiredUtc = [DateTime]::UtcNow.ToString('o') }
     Write-Host "Enter-ScLaunchLock: acquired $LockPath ($TaskId, pid $PID)"
     return $stream
 }
@@ -123,6 +141,7 @@ function Exit-ScLaunchLock {
     if (-not $Lock) { return }
     $path = $Lock.Name
     $Lock.Close()
+    if ($global:ScLaunchLockHeld) { $global:ScLaunchLockHeld.Remove([IO.Path]::GetFullPath($path)) }
     # The handle was the lock; the file is only diagnostic content. Leaving it behind
     # is issue #103: every later reader sees this run's (by then dead) pid and
     # concludes the machine is held. Remove it, and never claim more than happened.
