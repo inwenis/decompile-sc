@@ -5,6 +5,7 @@
 agent: 052
 model: fable
 pr: -
+merged: 2026-08-13 (report-only; no PR)
 
 ## Workspace
 
