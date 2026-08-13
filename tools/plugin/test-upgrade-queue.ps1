@@ -217,7 +217,7 @@ function Get-UpgQueue {
                     continue
                 }
                 $s = [regex]::Match($l.Line,
-                    'buildings=(\d+) max=(\d+) queued=(\d+) promoted=(\d+) cancelled=(\d+) dropped=(\d+) refusedFull=(\d+) refusedGate=(\d+) waitingCost=(\d+) unblocked=(\d+) unblockedLevel=(\d+)')
+                    'buildings=(\d+) max=(\d+) queued=(\d+) promoted=(\d+) cancelled=(\d+) dropped=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+) refusedGate=(\d+) waitingCost=(\d+) unblocked=(\d+) unblockedLevel=(\d+)')
                 if ($s.Success) {
                     $out.Buildings = [int]$s.Groups[1].Value
                     $out.Max = [int]$s.Groups[2].Value
@@ -230,6 +230,8 @@ function Get-UpgQueue {
                     $out.WaitingCost = [int]$s.Groups[9].Value
                     $out.Unblocked = [int]$s.Groups[10].Value
                     $out.UnblockedLevel = [int]$s.Groups[11].Value
+                } elseif ($l.Line -match 'buildings=') {
+                    Assert-That 'the UPGQ summary line parsed' $false "($($l.Line))"
                 }
             }
             return $out

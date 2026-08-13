@@ -211,7 +211,7 @@ function Get-Prod {
                     continue
                 }
                 $s = [regex]::Match($l.Line,
-                    'buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+) refusedFull=(\d+)')
+                    'buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+)')
                 if ($s.Success) {
                     $out.TrackedCount = [int]$s.Groups[1].Value
                     $out.Max = [int]$s.Groups[2].Value
@@ -220,6 +220,8 @@ function Get-Prod {
                     $out.Cancelled = [int]$s.Groups[5].Value
                     $out.Refunded = [int]$s.Groups[6].Value
                     $out.RefusedFull = [int]$s.Groups[7].Value
+                } elseif ($l.Line -match 'buildings=') {
+                    Assert-That 'the PRODQ summary line parsed' $false "($($l.Line))"
                 }
             }
             foreach ($l in $fLines) {
@@ -771,7 +773,7 @@ $stats = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
 if ($stats.Count -gt 0) {
     Write-Host "  $($stats[-1].Line)"
     $m = [regex]::Match($stats[-1].Line,
-        'captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+) refusedFull=(\d+) mineralsRefunded=(\d+) gasRefunded=(\d+)')
+        'captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+) mineralsRefunded=(\d+) gasRefunded=(\d+)')
     if ($m.Success) {
         Assert-That "it refunded exactly the one cancelled item ($($m.Groups[6].Value) minerals)" `
             ([int]$m.Groups[6].Value -eq $SCV_COST)

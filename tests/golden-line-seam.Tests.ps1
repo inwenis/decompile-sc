@@ -22,15 +22,17 @@ real (non-diagnostic) consumer:
      copy cannot itself go stale while the shipped one rots -- Contains() on the raw file text,
      not a normalised or re-derived comparison.
 
-A LIVE FINDING, not fixed here (issue #87): six of these parsers, across four suites, no
-longer match the plugin's OWN current output. PR #82 (merged tonight, efa1d8d) inserted
-`staleSession=%d` between `refunded=`/`dropped=` and `refusedFull=` in the PRODQ/UPGQ summary
-lines and in PRODQSTATS. Two of the six suites have an explicit `else { Assert-That ...
-$false }` and would fail loudly. The other four have no `else` -- their fields silently keep
-the zero the object was initialised with, and at least one shipped assertion
-(`$q.RefusedFull -eq 0`, test-upgrade-queue.ps1:490) is now a tautology. AGENTS.md: report a
-finding, do not quietly fix it -- see issue #87 for the repair, and the six `ExpectMatch =
-$false` entries below for exactly which parsers are affected.
+FIXED (issue #87, task 060): six of these parsers, across four suites, stopped matching the
+plugin's OWN current output when PR #82 (efa1d8d) inserted `staleSession=%d` between
+`refunded=`/`dropped=` and `refusedFull=` in the PRODQ/UPGQ summary lines and in PRODQSTATS.
+Task 058 pinned the six as `ExpectMatch = $false` on purpose (AGENTS.md: report a finding, do
+not quietly fix it). Task 060 repaired all six: the gap immediately before `refusedFull=` in
+each regex now tolerates any number of extra `name=value` tokens, not just today's
+`staleSession=`, so the next field a future PR inserts at that same junction cannot silently
+re-break these parsers again. The four sites that had no `else` (their fields would otherwise
+silently keep the zero the result object was initialised with) gained one, matching the
+`else { Assert-That ... $false }` shape the other two (PRODQSTATS) already had. All six are now
+pinned `ExpectMatch = $true` below.
 #>
 
 # The line table below is plain top-level script code, not inside a BeforeAll: -ForEach
@@ -69,16 +71,17 @@ $false` entries below for exactly which parsers are affected.
             Name = 'PRODQ session summary (sc_prodqueue.cpp)'
             SourceFile = 'sc_prodqueue.cpp'; Marker = 'PRODQ [%s] session=%u buildings='; First = $null
             Parsers = @(
-                # BROKEN LIVE (issue #87): staleSession= now sits between
-                # refunded= and refusedFull=, so this unprefixed pattern no longer matches --
-                # and there is no `else`, so $out.{TrackedCount,Captured,Promoted,Cancelled,
-                # Refunded,RefusedFull} silently keep the zero the object was initialised with.
-                @{ Suite = 'test-group-queue-over-five.ps1'; SuiteLine = 214; Groups = 7; ExpectMatch = $false
-                   Fragments = @('buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+) refusedFull=(\d+)') }
-                @{ Suite = 'test-production-queue.ps1'; SuiteLine = 606; Groups = 7; ExpectMatch = $false
-                   Fragments = @('buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+) refusedFull=(\d+)') }
-                @{ Suite = 'test-random-conformance.ps1'; SuiteLine = 511; Groups = 7; ExpectMatch = $false
-                   Fragments = @('PRODQ \[[^\]]+\] buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+) refusedFull=(\d+)') }
+                # FIXED (issue #87, task 060): the gap before refusedFull= now tolerates any
+                # number of extra "name=value" tokens -- not just today's staleSession=, so the
+                # next field PR #82-style inserts at this junction cannot silently re-break it.
+                # Each site also gained an `else` (see the suite source): a summary line that
+                # still fails to parse now fails loudly instead of leaving its fields at zero.
+                @{ Suite = 'test-group-queue-over-five.ps1'; SuiteLine = 214; Groups = 7; ExpectMatch = $true
+                   Fragments = @('buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+)') }
+                @{ Suite = 'test-production-queue.ps1'; SuiteLine = 606; Groups = 7; ExpectMatch = $true
+                   Fragments = @('buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+)') }
+                @{ Suite = 'test-random-conformance.ps1'; SuiteLine = 511; Groups = 7; ExpectMatch = $true
+                   Fragments = @('PRODQ \[[^\]]+\](?:\s+\w+=\S+)*\s+buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+)') }
                 # Unaffected: a separate match against the same rendered line, own field pair.
                 @{ Suite = 'test-random-conformance.ps1'; SuiteLine = 519; Groups = 2; ExpectMatch = $true
                    Fragments = @('trainSeen=(\d+) trainNoUnit=(\d+)') }
@@ -90,14 +93,13 @@ $false` entries below for exactly which parsers are affected.
             Name = 'PRODQSTATS (sc_prodqueue.cpp)'
             SourceFile = 'sc_prodqueue.cpp'; Marker = 'PRODQSTATS captured=%d'; First = $null
             Parsers = @(
-                # Also broken by the same staleSession= insertion -- but both sites below have
-                # an explicit `else { Assert-That ... $false }`, so (unlike the summary line
-                # above) breaking this fails LOUDLY rather than silently reading zero. Pinned
-                # here as ExpectMatch=$false for the same reason: it is still wrong today.
-                @{ Suite = 'test-production-queue.ps1'; SuiteLine = 1515; Groups = 6; ExpectMatch = $false
-                   Fragments = @('captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+) refusedFull=(\d+) mineralsRefunded=(\d+)') }
-                @{ Suite = 'test-group-queue-over-five.ps1'; SuiteLine = 774; Groups = 7; ExpectMatch = $false
-                   Fragments = @('captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+) refusedFull=(\d+) mineralsRefunded=(\d+) gasRefunded=(\d+)') }
+                # FIXED (issue #87, task 060), same tolerant-gap fix as the summary line above.
+                # Both sites already had an explicit `else { Assert-That ... $false }`, so they
+                # were the loud-fail half of #87 rather than the silent-zero half; unchanged here.
+                @{ Suite = 'test-production-queue.ps1'; SuiteLine = 1517; Groups = 6; ExpectMatch = $true
+                   Fragments = @('captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+) mineralsRefunded=(\d+)') }
+                @{ Suite = 'test-group-queue-over-five.ps1'; SuiteLine = 776; Groups = 7; ExpectMatch = $true
+                   Fragments = @('captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+) mineralsRefunded=(\d+) gasRefunded=(\d+)') }
             )
         }
         @{
@@ -126,12 +128,12 @@ $false` entries below for exactly which parsers are affected.
             Name = 'UPGQ session summary (sc_upgrades.cpp)'
             SourceFile = 'sc_upgrades.cpp'; Marker = 'UPGQ [%s] session=%u buildings='; First = $null
             Parsers = @(
-                # BROKEN LIVE, same root cause and same silent-zero shape as the PRODQ summary
-                # above: staleSession= now sits between dropped= and refusedFull=. No `else` --
-                # test-upgrade-queue.ps1:490's `Assert-That ... ($q.RefusedFull -eq 0)` is a
-                # tautology right now, whatever the plugin actually refused.
-                @{ Suite = 'test-upgrade-queue.ps1'; SuiteLine = 220; Groups = 11; ExpectMatch = $false
-                   Fragments = @('buildings=(\d+) max=(\d+) queued=(\d+) promoted=(\d+) cancelled=(\d+) dropped=(\d+) refusedFull=(\d+) refusedGate=(\d+) waitingCost=(\d+) unblocked=(\d+) unblockedLevel=(\d+)') }
+                # FIXED (issue #87, task 060), same tolerant-gap fix and same added `else` as the
+                # PRODQ summary above. test-upgrade-queue.ps1:490's `Assert-That ... ($q.RefusedFull
+                # -eq 0)` was a tautology while this regex silently zeroed the field; now that it
+                # parses again, that assertion reads a real value and is no longer vacuous.
+                @{ Suite = 'test-upgrade-queue.ps1'; SuiteLine = 220; Groups = 11; ExpectMatch = $true
+                   Fragments = @('buildings=(\d+) max=(\d+) queued=(\d+) promoted=(\d+) cancelled=(\d+) dropped=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+) refusedGate=(\d+) waitingCost=(\d+) unblocked=(\d+) unblockedLevel=(\d+)') }
             )
         }
         @{

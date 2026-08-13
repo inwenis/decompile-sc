@@ -603,7 +603,7 @@ function Get-ProdQueue {
                     continue
                 }
                 $s = [regex]::Match($l.Line,
-                    'buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+) refusedFull=(\d+)')
+                    'buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+)')
                 if ($s.Success) {
                     $out.Buildings = [int]$s.Groups[1].Value
                     $out.Max = [int]$s.Groups[2].Value
@@ -612,6 +612,8 @@ function Get-ProdQueue {
                     $out.Cancelled = [int]$s.Groups[5].Value
                     $out.Refunded = [int]$s.Groups[6].Value
                     $out.RefusedFull = [int]$s.Groups[7].Value
+                } elseif ($l.Line -match 'buildings=') {
+                    Assert-That 'the PRODQ summary line parsed' $false "($($l.Line))"
                 }
             }
             return $out
@@ -1512,7 +1514,7 @@ $statLine = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
               Select-String -Pattern 'PRODQSTATS ')
 if ($statLine.Count -gt 0) {
     $m = [regex]::Match($statLine[-1].Line,
-        'captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+) refusedFull=(\d+) mineralsRefunded=(\d+)')
+        'captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+) mineralsRefunded=(\d+)')
     if ($m.Success) {
         $cancelled = [int]$m.Groups[3].Value
         $refunded  = [int]$m.Groups[4].Value
