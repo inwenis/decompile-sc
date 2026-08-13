@@ -1,0 +1,11 @@
+--- a/tools/plugin/src/sc_prodqueue.cpp
++++ b/tools/plugin/src/sc_prodqueue.cpp
+@@ -240,7 +240,7 @@ static int TailSlot(DWORD unit, int len) {
+ // to be un-spent.
+ static int HoldRoom(const ProdRecord* r) {
+     int held = r ? r->count : 0;
+-    int room = g_maxTotal - SC_BUILD_QUEUE_SLOTS - held;
++    int room = g_maxTotal - held;
+     int cap  = SC_PRODQ_HARD_MAX - held;
+     if (room > cap) room = cap;
+     return room > 0 ? room : 0;
