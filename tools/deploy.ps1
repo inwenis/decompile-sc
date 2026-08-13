@@ -71,11 +71,25 @@ What it does, in order:
   9. Creates/updates the desktop shortcut "StarCraft Modded.lnk", target
      "pwsh -WindowStyle Hidden -File <launcher>" so double-clicking shows the game and
      nothing else -- no console window.
-  10. Verifies: deployed StarCraft.exe sha256 == source's, plugin DLL/EXE are newer than
+  10. Regenerates the feature-test map (tools/make-feature-test-map.ps1, task 062) into
+      <DeployRoot>\game\Maps\BroodWar\!feature-test.scx (task 067). It has to run AFTER
+      the mirror: the map is a destination-only file (never in -SourceGameDir, never in
+      the repo -- hard rule 1), so /MIR correctly purges it every redeploy, and this
+      step puts a fresh copy back that matches the build just deployed. Regenerate
+      rather than /XF-preserve, deliberately: an exclusion only protects a file that
+      already exists (a fresh deploy would still have no map), and a preserved stale
+      map silently mismatches the build it rides along with. Cost: the checkout a
+      deploy runs from needs the map toolchain (./setup.ps1 for .venv/richchk; issue
+      #97 for worktrees) -- the same class of dependency as the C++ toolchain step 5
+      already requires. It runs LAST in assembly on purpose: a generator failure
+      throws AFTER game+plugin+launcher+shortcut are fully assembled, so the install
+      still works and only the map is missing, loudly.
+  11. Verifies: deployed StarCraft.exe sha256 == source's, plugin DLL/EXE are newer than
       this run's start (proof they were actually rebuilt, not stale leftovers), the
+      feature-test map exists and was written by this run, the
       shortcut resolves to an existing target and launcher. Prints a one-line receipt.
-  11. Verifies the deployed plugin's IDENTITY and writes <DeployRoot>\BUILD-ID.txt
-      (issue #73, task 056). Step 10's freshness check is a timestamp, and a redeploy of
+  12. Verifies the deployed plugin's IDENTITY and writes <DeployRoot>\BUILD-ID.txt
+      (issue #73, task 056). Step 11's freshness check is a timestamp, and a redeploy of
       an old checkout passes it -- which is exactly the gap that made a deployed build
       untraceable to a commit twice (2026-08-11, 2026-08-12). The DLL now carries its own
       "<short sha>[+dirty] SRC=<digest>" stamp; this step reads it back OUT of the
@@ -111,7 +125,10 @@ PRESERVED (excluded from the mirror entirely, in both directions):
 
 PURGED (still a true mirror of -SourceGameDir, same as everything else):
   - Maps\ itself, outside \Replays\ -- a custom map dropped straight into
-    <DeployRoot>\game\Maps\ does NOT survive a redeploy.
+    <DeployRoot>\game\Maps\ does NOT survive a redeploy. (!feature-test.scx is the
+    one deliberate exception, by RECREATION rather than preservation: step 10
+    regenerates it after every mirror, so it is always present and always matches
+    the deployed build. Nothing else under Maps\ gets that treatment.)
   - Errors\ -- crash logs, same reasoning.
   - anything else not in the preserved set above.
 
@@ -525,7 +542,29 @@ $lnk.Description = 'StarCraft 1.16.1, modded (fan-out select-past-12 + circles +
 $lnk.Save()
 Write-Host "shortcut written: $shortcutPath"
 
-# --- 6. verify -------------------------------------------------------------
+# --- 6. regenerate the feature-test map (task 067) ----------------------------
+# The mirror in step 2 correctly purged Maps\BroodWar\!feature-test.scx: it is a
+# destination-only file (never in -SourceGameDir, never in the repo -- hard rule 1)
+# and /MIR is a true mirror. Task 062's card told the user to re-run the generator by
+# hand after every redeploy; this step is what makes that instruction obsolete.
+# Regenerate rather than /XF-preserve, deliberately: an exclusion only protects a file
+# that already exists (a fresh deploy would still ship without the map), and a
+# preserved stale map silently mismatches the build it rides along with -- there is no
+# staleness signal a player would ever see. Regeneration keeps the map matched to the
+# build this run just deployed, at the cost of needing the map toolchain on the
+# checkout the deploy runs from (.venv/richchk -- ./setup.ps1; issue #97 for
+# worktrees). This step runs LAST in assembly on purpose: if the generator throws,
+# game + plugin + launcher + shortcut are already fully assembled, so the install
+# still works and only the map is missing -- and the failure is loud, never a silent
+# skip. Writes exactly ONE file, ours by name; it never touches anything else under
+# the user's Maps\ tree.
+Write-Host ''
+Write-Host '== Regenerating the feature-test map =='
+$featureMapPath = Join-Path $gameDeployDir 'Maps\BroodWar\!feature-test.scx'
+& (Join-Path $scriptDir 'make-feature-test-map.ps1') -OutputPath $featureMapPath | Write-Host
+if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "deploy: feature-test map generation failed (exit $LASTEXITCODE) -- the deployed game works, but $featureMapPath is missing. Fix the toolchain (./setup.ps1) and re-run the deploy, or run tools/make-feature-test-map.ps1 -OutputPath '$featureMapPath' by hand." }
+
+# --- 7. verify -------------------------------------------------------------
 Write-Host ''
 Write-Host '== Verifying =='
 
@@ -543,7 +582,19 @@ foreach ($f in @((Join-Path $pluginDeployDir 'scplugin.dll'), (Join-Path $plugin
 }
 Write-Host 'verify: plugin binaries are freshly built from this run'
 
-# --- 6b. the deployed plugin's IDENTITY, not its freshness (issue #73, task 056) ---
+# The feature-test map is regenerated by step 6 every run (see that step for why it is
+# recreated, not preserved). Presence alone is not enough -- a leftover from a previous
+# deploy would pass a bare Test-Path -- so this also requires the file to be newer than
+# this run's start, same shape as the plugin-binary freshness check above.
+if (-not (Test-Path -LiteralPath $featureMapPath)) {
+    throw "deploy: feature-test map missing after deploy: $featureMapPath"
+}
+if ((Get-Item -LiteralPath $featureMapPath).LastWriteTime -lt $deployStart) {
+    throw "deploy: $featureMapPath predates this deploy run -- the regeneration step did not actually write it."
+}
+Write-Host "verify: feature-test map regenerated this run ($featureMapPath)"
+
+# --- 7b. the deployed plugin's IDENTITY, not its freshness (issue #73, task 056) ---
 # The check above is a TIMESTAMP: it says a file was written during this run, which is
 # what a redeploy of an old checkout also looks like. It was the only thing standing
 # between "merged" and "deployed", and on 2026-08-12 that gap cost twenty minutes of
