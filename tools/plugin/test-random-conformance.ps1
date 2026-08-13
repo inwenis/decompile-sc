@@ -76,12 +76,16 @@ WHAT IT ASSERTS, AND WHERE EACH INVARIANT'S GROUND TRUTH COMES FROM
          which is why both states are also captured as frames, named for the state, under
          -ShotDir for the user to open.
 
-  INV-P  the plugin spent none of its own money.
-         Asserted against the ENGINE's per-player mineral global across the whole run,
-         not against the plugin's own counter. It used to be the latter (`mineralsSpent=0`),
-         labelled a self-check -- correctly, because nothing ever incremented it; task 055
-         deleted the counter (issue #66) after measuring that a build which really did
-         spend left it reading 0. The engine's balance is the only thing that moves.
+  INV-P  RETIRED by task 055 (issue #66). It asserted "the plugin spent none of its own
+         money" from the plugin's own `mineralsSpent=0` counter, and said so honestly --
+         "SELF-CHECK, NOT AN ORACLE". It was worse than that: NOTHING in the plugin ever
+         incremented that counter, so the check read its answer out of a zero-initialised
+         array. Measured, not inferred: a build with a real spend added left it at 0 while
+         28 balance assertions failed.
+         The claim is INV-M's and always was -- the engine charged for the N items and no
+         more, read off the engine's per-player mineral global, once per episode. That is
+         the assertion a plugin spend breaks. A run-level restatement of the plugin's own
+         bookkeeping is not a second opinion, so there is no replacement id.
 
 REPRODUCIBILITY. The plan is a pure function of (seed, params) and is generated BEFORE the
 game launches -- see random-conformance-plan.ps1, which has its own PRNG for the reason
@@ -199,9 +203,42 @@ if ($DryRun) {
     exit 0
 }
 
+# ---------------------------------------------------------------------------
+# WHAT THIS RUNNER CAN ACTUALLY DRIVE -- one list, used by the refusal below AND by the
+# dispatch in the episode loop, so the two cannot drift apart (issue #68).
+#
+# They HAD drifted. random-conformance-plan.ps1 defines -Profile upgrades (upgrade-burst /
+# -cancel / -drain) and -Profile hudrow (row-select / row-page); the dispatch had cases for
+# `indicator` and a `default` that fell through to Invoke-QueueEpisode. So every upgrade-*
+# episode pressed the TRAIN button and asserted production-queue invariants, and a green
+# `-Profile upgrades` run exercised no line of sc_upgrades. A run that tests something other
+# than what it says is worse than a run that refuses: the refusal costs a launch, the green
+# lie costs whatever is built on it.
+#
+# The plan generator keeps both profiles -- they generate valid plans and -DryRun still
+# prints them, which is where the implementations will start. It is the RUN that refuses.
+$QUEUE_EPISODE_KINDS = @('queue-burst', 'group-recall', 'queue-cancel', 'cancel-slot', 'queue-drain')
+$IMPLEMENTED_KINDS = $QUEUE_EPISODE_KINDS + @('indicator')
+$unimplemented = @($plan.episodes | ForEach-Object { $_.kind } | Sort-Object -Unique |
+                   Where-Object { $IMPLEMENTED_KINDS -notcontains $_ })
+if ($unimplemented.Count -gt 0) {
+    Write-Host ''
+    Write-Host 'REFUSED  this runner has no episode implementation for: ' -NoNewline
+    Write-Host ($unimplemented -join ', ')
+    Write-Host "         -Profile $Profile generates them, but the only episode drivers that exist are"
+    Write-Host "         [$($IMPLEMENTED_KINDS -join ', ')], all of which press the TRAIN button and assert"
+    Write-Host '         production-queue invariants. Running anyway would test sc_prodqueue and report it'
+    Write-Host "         as a green -Profile $Profile run (issue #68)."
+    Write-Host '         -DryRun still prints the plan, which is where an implementation starts.'
+    Write-Host ''
+    Write-Host 'INCOMPLETE  no episode ran; nothing was asserted.'
+    exit 2
+}
+
 . (Join-Path $scriptDir 'drive-game.ps1')
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
 . (Join-Path $scriptDir 'random-conformance-episodes.ps1')
+. (Join-Path $scriptDir 'conformance-verdict.ps1')
 
 # ---------------------------------------------------------------------------
 # Pinned constants, asserted rather than reported.
@@ -247,7 +284,18 @@ $script:frames = @()
 # the failure this task exists to catch, so the verdict now depends on reaching the end of the
 # episode loop, and the exception is caught and reported as a failure rather than unwinding
 # past the summary.
-$script:episodesRun = 0
+#
+# ...AND NEITHER IS A RUN THAT SKIPPED EVERY EPISODE (issue #68). `episodesRun` used to be
+# incremented at the TOP of the loop, before the four `continue` paths below it (SELECT,
+# empty selection, SUPPLY, QUEUE). So a run in which every episode bailed before acting
+# still printed `episodes run: 6 of 6` and `PASS N checks, 0 failures, 6 episode(s)` --
+# the task-041 disease exactly, reached without an exception and therefore invisible to
+# the `finished` flag above. Two counters now, because one cannot tell those apart:
+#   entered = the loop began an episode
+#   acted   = the episode got past every skip and dispatched
+# The verdict depends on `acted`; `entered - acted` is printed as the skip count.
+$script:episodesEntered = 0
+$script:episodesActed = 0
 $script:finished = $false
 # DID THIS RUN ACTUALLY REACH THE SEAM IT EXISTS FOR? A burst only tests task 038's bug if it
 # pushes a MULTI-BUILDING selection past the engine's five slots; below that the rings never
@@ -256,7 +304,20 @@ $script:finished = $false
 # every later group burst was clamped to two or three presses by the headroom check, and the
 # whole run came out GREEN against the very build whose bug it was written to find. Nothing in
 # the output said so. This counter is what says so.
-$script:groupOverflowEpisodes = 0
+#
+# TWO counters, because the original counted the wrong thing (issue #68). It was incremented
+# from the PLANNED numbers before the burst ran -- selCount and the capped press count -- which
+# is an INTENT, not a reach. The presses can still be refused, the ring can still fail to fill,
+# and the counter would say the seam was covered anyway. The fact is measured on the other side
+# of the burst, in random-conformance-episodes.ps1: a building whose LOGICAL queue came out past
+# the engine's five, with more than one building selected. `Reached` is that; `Planned` is kept
+# beside it because the two disagreeing is itself worth seeing.
+$script:groupOverflowPlanned = 0
+$script:groupOverflowReached = 0
+# DEFAULTS TO FAILURE. The verdict block sets this from Get-ScConformanceVerdict; a run that
+# never reaches it -- killed inside the finally, the process torn down -- exits non-zero
+# rather than 0, because "the script stopped before it could judge itself" is not a pass.
+$script:exitCode = 1
 
 function Assert-Inv {
     param(
@@ -841,7 +902,9 @@ try {
     $script:builtBaseline = 0
     foreach ($ep in $plan.episodes) {
         $script:episodeNo = $ep.index
-        $script:episodesRun++
+        # ENTERED, not run. The four `continue` paths below can all fire before this episode
+        # asserts anything; `episodesActed` is incremented at the dispatch (issue #68).
+        $script:episodesEntered++
         Write-Host ''
         Write-Host ("---- episode {0}/{1}: {2}  select={3} members=[{4}] presses={5} ----" -f `
             $ep.index, $plan.episodes.Count, $ep.kind, $ep.selectMode, ($ep.members -join ' '), $ep.presses)
@@ -928,15 +991,28 @@ try {
             continue
         }
 
-        # Counted BEFORE the episode acts, from the numbers the episode will actually use:
-        # more than one building selected, and enough presses to carry a ring past the
-        # engine's own five.
-        if ($selCount -gt 1 -and $capped -gt $ENGINE_SLOTS) { $script:groupOverflowEpisodes++ }
+        # The INTENT: what this episode is about to try. Kept, and printed beside the reach,
+        # because "it meant to and did not" is a different diagnosis from "it never meant to"
+        # -- but it is not the coverage number and no longer pretends to be (issue #68).
+        if ($selCount -gt 1 -and $capped -gt $ENGINE_SLOTS) { $script:groupOverflowPlanned++ }
 
         # --- ACT + ASSERT ---------------------------------------------------
+        # PAST EVERY SKIP. Anything above this line can `continue`; nothing below can, so this
+        # is the first point at which the episode is certain to assert something.
+        $script:episodesActed++
+        # No silent default. A kind with no driver used to land in Invoke-QueueEpisode and be
+        # reported as a pass for whatever profile asked for it (issue #68). The refusal before
+        # the launch catches this for a whole plan; this catches a plan mutated after that
+        # check, and it throws into the RUN catch, which records it as a failure rather than
+        # letting it unwind past the verdict.
+        # (PowerShell's switch has no fall-through, so the queue kinds are one condition
+        # rather than five stacked labels.)
         switch ($ep.kind) {
             'indicator' { Invoke-IndicatorEpisode -Ep $ep -Unit $units[0] -Before $before }
-            default     { Invoke-QueueEpisode -Ep $ep -Units $units -Presses $capped -Before $before -SelCount $selCount }
+            { $QUEUE_EPISODE_KINDS -contains $_ } {
+                Invoke-QueueEpisode -Ep $ep -Units $units -Presses $capped -Before $before -SelCount $selCount
+            }
+            default { throw "no episode driver for kind '$($ep.kind)' (episode $($ep.index)). Implemented: $($IMPLEMENTED_KINDS -join ', ')." }
         }
 
         Start-Sleep -Milliseconds ([int]$ep.settleMs)
@@ -963,28 +1039,33 @@ catch {
 finally {
     # THE GAME CLOSES FIRST, and the results print after -- deliberately in that order.
     # close-game.ps1 sends WM_CLOSE so the plugin's DETACH path runs and writes its stats
-    # line, and INV-P is read out of that line. Printing the verdict before the game had
-    # written its last word would make one invariant permanently unreportable.
+    # line, which the ledger below prints. Printing the verdict before the game had written
+    # its last word would lose it.
     if ($gamePid -and -not $KeepOpen) {
         & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid 6>&1 | ForEach-Object { Write-Host $_ }
         Start-Sleep -Seconds 2
     }
 
+    # INV-P USED TO BE ASSERTED HERE, off the plugin's own mineralsSpent/gasSpent counters,
+    # and it was labelled a self-check because that is what it was. Task 055 deleted those
+    # counters (issue #66) after measuring that a build which really did spend the player's
+    # money left both of them reading 0 while 28 balance assertions failed.
+    #
+    # The claim did not go with them. It is INV-M's, asserted once per episode against the
+    # ENGINE's own per-player mineral global -- `the engine charged for every one of the N
+    # items and no more` -- which is exactly the assertion a plugin spend breaks, and the
+    # only one that can. A run-level duplicate that could only ever restate the plugin's own
+    # bookkeeping is the defect this harness exists to find, so it is not replaced in kind.
+    #
+    # The ledger line is still PRINTED, because its live fields (captured/promoted/refunded/
+    # mineralsRefunded) are how a double refund or a swallowed item is read afterwards.
     $script:episodeNo = 0
     $tail = @(Get-ScLogSince -Mark 0)
     $stats = @($tail | Select-String -Pattern 'PRODQSTATS ') | Select-Object -Last 1
     if ($stats) {
-        $sm = [regex]::Match($stats.Line, 'mineralsSpent=(\d+) mineralsRefunded=(\d+) gasSpent=(\d+) gasRefunded=(\d+)')
-        if ($sm.Success) {
-            Write-Host ''
-            Write-Host "== the plugin's own ledger (SELF-CHECK, not an oracle)"
-            Note $stats.Line.Trim()
-            Assert-Inv -Id 'INV-P' -What 'the plugin spent none of its own minerals or gas [self-check]' `
-                -Ok ([int]$sm.Groups[1].Value -eq 0 -and [int]$sm.Groups[3].Value -eq 0) `
-                -Detail "(mineralsSpent=$($sm.Groups[1].Value) gasSpent=$($sm.Groups[3].Value))"
-        }
-    } elseif ($gamePid) {
-        Write-Skip -Id 'INV-P' -Why 'the game wrote no PRODQSTATS line (was it closed cleanly?)'
+        Write-Host ''
+        Write-Host "== the plugin's own ledger (printed, not asserted -- see INV-M for the money)"
+        Note $stats.Line.Trim()
     }
 
     $elapsed = (Get-Date) - $runStart
@@ -994,8 +1075,16 @@ finally {
     Write-Host ("plan hash   : {0}" -f $planHash)
     Write-Host ("profile     : {0}   episodes: {1}   buildings: {2}" -f $Profile, $Episodes, $Buildings)
     Write-Host ("checks      : {0}" -f $script:checks)
-    Write-Host ("episodes run: {0} of {1}{2}" -f $script:episodesRun, $plan.episodes.Count,
+    # ACTED, then entered. The first number is the one that means anything: an episode that
+    # skipped before acting asserted nothing, and printing only "6 of 6" is how a run with
+    # six skips read as a full one (issue #68).
+    Write-Host ("episodes    : {0} acted, {1} entered, {2} planned{3}" -f `
+                $script:episodesActed, $script:episodesEntered, $plan.episodes.Count,
                 $(if ($script:finished) { '' } else { '   <-- THE RUN DID NOT FINISH' }))
+    if ($script:episodesEntered -gt $script:episodesActed) {
+        Write-Host ("              {0} episode(s) skipped before acting -- see SKIPPED below" -f `
+                    ($script:episodesEntered - $script:episodesActed))
+    }
     Write-Host ("wall clock  : {0:mm\:ss}" -f $elapsed)
     if ($script:skipped.Count -gt 0) {
         Write-Host ''
@@ -1014,46 +1103,78 @@ finally {
 
     # WHAT THIS RUN DID NOT COVER. Printed on every run, pass or fail: a green result that
     # quietly skipped a feature is the exact failure this task exists to prevent.
-    $allInv = @('INV-W', 'INV-R', 'INV-M', 'INV-B', 'INV-S', 'INV-Q', 'INV-P')
+    # INV-P was retired with the counter it read (issue #66); INV-M carries its claim.
+    $allInv = @('INV-W', 'INV-R', 'INV-M', 'INV-B', 'INV-S', 'INV-Q')
     $missing = @($allInv | Where-Object { -not $script:covered.ContainsKey($_) })
     Write-Host ''
     Write-Host "COVERAGE  asserted: $(@($allInv | Where-Object { $script:covered.ContainsKey($_) }) -join ' ')"
     if ($missing.Count -gt 0) { Write-Host "          NOT asserted by this run: $($missing -join ' ')" }
     # The seam, named. A green run that never got here has not tested the thing this harness
     # was built for, and saying "0 episodes" is the difference between evidence and a rumour.
-    if ($script:groupOverflowEpisodes -gt 0) {
-        Write-Host "          episodes that pushed a MULTI-BUILDING selection past the engine's $ENGINE_SLOTS slots: $($script:groupOverflowEpisodes) (this is task 038's seam)"
-    } else {
+    Write-Host ("          seam reaches: {0} episode(s) drove a MULTI-BUILDING selection past the engine's {1} slots (planned: {2}) -- this is task 038's seam" -f `
+                $script:groupOverflowReached, $ENGINE_SLOTS, $script:groupOverflowPlanned)
+    if ($script:groupOverflowReached -eq 0) {
         Write-Host "          NO episode pushed a MULTI-BUILDING selection past the engine's $ENGINE_SLOTS slots."
         Write-Host "          A run that never does that CANNOT detect task 038's class of bug, whatever its verdict says."
         Write-Host '          Usually the queues were already full: pick a seed whose early episodes are group bursts, or raise -QueueMax.'
+    } elseif ($script:groupOverflowPlanned -gt $script:groupOverflowReached) {
+        Write-Host ("          NOTE {0} episode(s) planned to reach the seam and did not -- presses refused, or a ring that never filled." -f `
+                    ($script:groupOverflowPlanned - $script:groupOverflowReached))
     }
-    switch ($Profile) {
-        'production' { Write-Host '          features NOT reached by this profile: sc_upgrades (-Profile upgrades), sc_hudrow paging (-Profile hudrow)' }
-        'upgrades'   { Write-Host '          features NOT reached by this profile: sc_prodqueue, sc_prodfan, sc_hudrow paging' }
-        'hudrow'     { Write-Host '          features NOT reached by this profile: sc_prodqueue, sc_prodfan, sc_upgrades' }
-    }
+    # Only `production` can reach this line: the other two profiles are refused before the
+    # launch, because nothing implements their episode kinds (issue #68).
+    Write-Host '          features NOT reached by this profile: sc_upgrades, sc_hudrow paging -- neither has an episode driver (issue #76)'
 
     Write-Host ''
-    if (-not $script:finished) {
-        # NOT "PASS with a note". A run that stopped early has not tested the thing it was
-        # asked to test, and the one word people read off the bottom of this output has to say
-        # so on its own -- the transcript's last line is what gets pasted into a PR.
-        Write-Host "INCOMPLETE  the run stopped after $($script:episodesRun) of $($plan.episodes.Count) episode(s); $($script:checks) checks ran and $($script:failures.Count) failed."
-        Write-Host '            This is NOT a pass: the episodes that did not run asserted nothing.'
-        Write-Host 'REPRODUCE THIS EXACT RUN:'
-        Write-Host "  $reproCmd"
-    } elseif ($script:failures.Count -eq 0) {
-        Write-Host "PASS  $($script:checks) checks, 0 failures, $($script:episodesRun) episode(s)."
-    } else {
-        Write-Host "FAIL  $($script:failures.Count) of $($script:checks) checks:"
-        foreach ($f in $script:failures) {
-            Write-Host ("  [{0}] episode {1}: {2} {3}" -f $f.Id, $f.Episode, $f.What, $f.Detail)
+    # THE VERDICT IS DECIDED IN ONE PLACE, conformance-verdict.ps1, and this block only
+    # PRINTS what it returned. It used to be these four inline elseifs, which nothing could
+    # exercise without launching StarCraft -- which is how two of its clauses came to be
+    # missing for a whole task (issue #68): a run could skip every episode, or reach its
+    # seam zero times, and still print PASS and exit 0 with the COVERAGE warning directly
+    # above it. A warning nobody has to act on is a comment.
+    $verdict = Get-ScConformanceVerdict -Finished $script:finished `
+        -EpisodesEntered $script:episodesEntered -EpisodesActed $script:episodesActed `
+        -SeamReached $script:groupOverflowReached -FailureCount $script:failures.Count `
+        -EpisodesPlanned $plan.episodes.Count
+    $script:exitCode = $verdict.ExitCode
+    switch ($verdict.Clause) {
+        'did-not-finish' {
+            # NOT "PASS with a note". A run that stopped early has not tested the thing it
+            # was asked to test, and the one word people read off the bottom of this output
+            # has to say so on its own -- the transcript's last line is what gets pasted
+            # into a PR.
+            Write-Host "INCOMPLETE  $($verdict.Why); $($script:checks) checks ran and $($script:failures.Count) failed."
+            Write-Host '            This is NOT a pass: the episodes that did not run asserted nothing.'
         }
-        Write-Host ''
+        'nothing-acted' {
+            Write-Host "INCOMPLETE  $($verdict.Why) -- none of them acted."
+            Write-Host "            $($script:checks) checks ran; they are the fixture's, not the feature's."
+            Write-Host '            This is NOT a pass. See SKIPPED above for which gate stopped each one.'
+        }
+        'failures' {
+            Write-Host "FAIL  $($script:failures.Count) of $($script:checks) checks:"
+            foreach ($f in $script:failures) {
+                Write-Host ("  [{0}] episode {1}: {2} {3}" -f $f.Id, $f.Episode, $f.What, $f.Detail)
+            }
+            Write-Host ''
+        }
+        'seam-not-reached' {
+            Write-Host "INCOMPLETE  $($verdict.Why)."
+            Write-Host "            $($script:checks) checks passed, and not one of them could have failed for"
+            Write-Host "            task 038's bug: below the engine's $ENGINE_SLOTS slots a buggy plugin behaves"
+            Write-Host '            exactly like a correct one. Not a pass, and not a regression gate.'
+            Write-Host '            Pick a seed whose early episodes are multi-building bursts, or raise -QueueMax.'
+        }
+        'pass' {
+            Write-Host "PASS  $($script:checks) checks, 0 failures, $($script:episodesActed) episode(s) acted, $($script:groupOverflowReached) seam reach(es)."
+        }
+    }
+    if ($verdict.ExitCode -ne 0) {
         Write-Host 'REPRODUCE THIS EXACT RUN:'
         Write-Host "  $reproCmd"
-        Write-Host "  (the plan it replays is $PlanOut, hash $planHash)"
+        if ($verdict.Clause -eq 'failures') {
+            Write-Host "  (the plan it replays is $PlanOut, hash $planHash)"
+        }
     }
     Write-Host '========================================'
 
@@ -1070,6 +1191,8 @@ finally {
     }
 }
 
-# Non-zero for a failure AND for a run that never finished. The second half is not
-# belt-and-braces: the incomplete run this harness had reported exit 0 with "PASS" on it.
-exit ($(if ($script:failures.Count -gt 0 -or -not $script:finished) { 1 } else { 0 }))
+# THE SAME DECISION that printed the word above -- not a second copy of the rule. These were
+# two independent expressions before, which is exactly how the exit code and the verdict word
+# come to disagree. `$script:exitCode` defaults to 1 so a run that never reached the verdict
+# block at all (the finally did not run, the process was killed inside it) cannot exit 0.
+exit $script:exitCode

@@ -210,12 +210,27 @@ function Invoke-QueueEpisode {
     # This one holds either way: it is about where the ring is HELD, not about how many items
     # are in the queue, and that is the whole mechanism of task 025 (keep the engine's ring
     # below its cap so the client never greys the button).
+    #
+    # It is also THE SEAM MEASUREMENT (issue #68). The runner used to count "this episode is
+    # about to push past five" from the planned press count, before the burst; this is the
+    # same question asked of the engine AFTERWARDS, off the building's own logical queue. A
+    # press that was refused, a ring that never filled and a headroom clamp all read as a
+    # reach in the planned count and as no reach here -- which is the whole difference
+    # between what a run intended and what it covered.
+    $pastFive = 0
     foreach ($u in $Units) {
         $l = Get-Logical -Eng $after -Unit $u
         if ($l.Logical -gt $ENGINE_SLOTS) {
+            $pastFive++
             Assert-Inv -Id 'INV-R' -What "0x$u went PAST the engine's $ENGINE_SLOTS, and its ring is held at $ENGINE_HOLD so the client keeps sending ($($l.Ring))" `
                 -Ok ($l.Ring -eq $ENGINE_HOLD)
         }
+    }
+    # Task 038's seam is specifically the MULTI-BUILDING one: with one building selected the
+    # two selection arrays agree and a plugin reading the wrong one behaves correctly.
+    if ($SelCount -gt 1 -and $pastFive -gt 0) {
+        $script:groupOverflowReached++
+        Note "SEAM REACHED: $pastFive of $SelCount selected building(s) went past the engine's $ENGINE_SLOTS slots with a multi-building selection (task 038's seam)"
     }
 
     # ---- the card is still live -------------------------------------------
