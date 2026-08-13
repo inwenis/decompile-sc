@@ -1307,10 +1307,13 @@ try {
         # difference between a regression test and a coincidence.
         $qiAfter = Get-QInd 'last-slot-after'
         Write-Host "       $($qiAfter.Line)"
+        # Both readings are required to be >= 0 as well as increasing: -1 is this parser's
+        # "the field was not on the line", and a missing field must not be able to satisfy
+        # a "the number went up" test by being smaller than a real one.
         Assert-That ("the fix is what carried this click: pressKept $($qi.PressKept) -> $($qiAfter.PressKept) " +
                      "(presses carried across the engine's disable of a slot we light)") `
-            ($qiAfter.PressKept -gt $qi.PressKept) `
-            '(unchanged = the click was served without the fix doing anything, so this arm proves nothing)'
+            ($qi.PressKept -ge 0 -and $qiAfter.PressKept -gt $qi.PressKept) `
+            '(unchanged = the click was served without the fix doing anything, so this arm proves nothing; -1 = the plugin did not report the field at all)'
         Assert-Reconciles 'after-last-slot-cancel' $r.After -Accepted $script:accepted -Cancelled $script:cancels
         Shot 'last-slot-cancelled'
     }
