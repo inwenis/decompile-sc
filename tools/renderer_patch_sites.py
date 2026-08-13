@@ -1015,6 +1015,159 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     for va in (0x0047EC53, 0x0047EC66, 0x0047EC72, 0x0047EE83, 0x0047EE8D, 0x0047EE98):
         b.imm(va, STOCK_W + 8, PF_W + 8, 4, "fog.wrap@%08X" % va, 2,
               "fog coordinate wrap at (playfield width + 8), inferred from shape")
+    # CORRECTED by task 068: the six sites above (and the two draw "arms"
+    # 0x0047EBF0/0x0047EE20 they sit in) are the SPACE-TILESET PARALLAX
+    # STARFIELD, not fog -- the arms draw star.spk items from lists at
+    # 0x00658AA8 in a 648x488 ring, gated on tileset [0x0057F1DC] == 1
+    # (space platform), with per-layer parallax factors. The patches are
+    # still correct and still needed (stars must cover the full width on
+    # space maps), but the star POSITIONS come from star.spk, which is
+    # authored for 648 columns -- so x in [648, W+8) holds no stars until
+    # somebody synthesizes items. Cosmetic, space tilesets only, recorded
+    # in research/renderer-viewport.md 16.
+
+    # -- task 068: THE FOG CELL PIPELINE -----------------------------------
+    # The real fog of war. research/renderer-viewport.md 16 has the dossier;
+    # the shape is the terrain refresh band's, one subsystem over, with every
+    # buffer heap-allocated at game start (0x00480960, called from the
+    # layer-5 init 0x004BDA83) -- so unlike the dirty grid there is NOTHING
+    # to relocate: patch the allocation sizes and every stride/count and the
+    # engine builds the wider buffers itself.
+    #
+    # Data flow, per frame (orchestrated by layer 5's draw 0x004BD580):
+    #   [0x006D1260] map-tile visibility dwords (map-sized, geometry-free)
+    #     -> 0x0047FC50 fill:    raw tile map [0x006D5C14], T_FILL cols x
+    #        R_FILL rows of {0,15,31}, from tile origin [0x0057F1D0]-1
+    #     -> same fn smooth:     3x3 kernel -> [0x006D5C0C], interior only
+    #     -> 0x004804D0 change:  smoothed vs prev [0x006D5C10], dirty rects
+    #        (or full-redraw path: memcpy sync at 0x004BD5A8/0x004805E3)
+    #     -> 0x0047FE10 interp:  bilinear 4x4 cells per tile via the LUT at
+    #        [0x00657AA0] -> the 8px CELL buffer [0x006D5C18]
+    #     -> 0x004805F0 render:  per 8x8 block reads a 2x2 cell neighborhood,
+    #        dispatches the 12.8 block writers (black/uniform/gradient)
+    #
+    # WHY THE TWO MEASURED DEFECTS FOLLOW (15.4): the cell buffer holds
+    # T_COVER*4 = 84 used columns at stride 88. The (already patched) dirty
+    # walk asks the renderer for x up to 800, so cell index runs to 99+3:
+    # indices 84..86 read the row's zero PADDING -> the black seam at px
+    # 672..695; indices >= 88 wrap into the NEXT cell row's left columns,
+    # which the fixture had explored (value 31 = fully lit -> nothing drawn)
+    # -> raw terrain at px 696+ over unexplored map. One geometry, both
+    # symptoms.
+    #
+    # Column-side derivation (mirrors the terrain cache; at W=800 each value
+    # in parentheses):
+    T_COVER = (PF_W + 31) // 32 + 1        # tiles covering the playfield at
+    #                                        any sub-tile scroll; 21 (26)
+    T_SMOOTH = T_COVER + 1                 # smoothed interior cols; 22 (27)
+    T_FILL = T_SMOOTH + 2                  # raw cols incl. kernel border;
+    #                                        ALSO the tile-map STRIDE -- the
+    #                                        engine's own invariant, kept, so
+    #                                        the three structural pads
+    #                                        (stride-T_SMOOTH = 2 twice,
+    #                                        stride-T_COVER = 3 once) never
+    #                                        change and are NOT declared;
+    #                                        24 (29)
+    CELL_STRIDE = T_COVER * 4 + 4          # 4 cells per tile + 4 pad; 88 (108).
+    #                                        Renderer max index = 3 + (W-1)/8
+    #                                        + 1 neighbor = T_COVER*4 - 1
+    #                                        exactly, in both geometries.
+    # Row-side (noops at H=480, real if the table is ever regenerated taller):
+    R_INTERP = (PF_H + 31) // 32 + 1       # 14 (14)
+    R_SMOOTH = R_INTERP + 1                # 15 (15)
+    R_FILL = R_SMOOTH + 2                  # 17 (17)
+    CELL_ROWS = R_INTERP * 4 + 4           # 60 (60)
+    TMAP_ALLOC = (T_FILL * R_FILL + 3) & ~3   # dword-rounded; 408 (496)
+    CELL_ALLOC = CELL_STRIDE * CELL_ROWS      # 5280 (6480)
+
+    # allocation sizes + clear counts, 0x00480960 (three tile maps + cells)
+    for va in (0x004809A5, 0x004809D0, 0x004809F6):
+        b.imm(va, 408, TMAP_ALLOC, 4, "fogcell.tmap.alloc@%08X" % va, 2,
+              "SMemAlloc size of one %d-col x %d-row tile visibility map" %
+              (T_FILL, R_FILL))
+    for va in (0x004809CB, 0x004809F1, 0x00480A17):
+        b.imm(va, 102, TMAP_ALLOC // 4, 4, "fogcell.tmap.clear@%08X" % va, 2,
+              "rep stosd count clearing that tile map")
+    b.imm(0x00480A1C, 5280, CELL_ALLOC, 4, "fogcell.cells.alloc", 2,
+          "SMemAlloc size of the 8px cell buffer [0x006D5C18], "
+          "%d stride x %d rows" % (CELL_STRIDE, CELL_ROWS))
+    b.imm(0x00480A30, 1320, CELL_ALLOC // 4, 4, "fogcell.cells.clear", 2,
+          "rep stosd count clearing the cell buffer")
+
+    # fill, 0x0047FC50: T_FILL cols x R_FILL rows of raw per-tile visibility
+    b.imm(0x0047FCA6, 17, R_FILL, 4, "fogcell.fill.rows", 2,
+          "tile rows filled from the map visibility array")
+    b.imm(0x0047FCC3, 24, T_FILL, 4, "fogcell.fill.cols", 2,
+          "tile cols filled per row (writes the whole stride)")
+    b.imm(0x0047FD80, 0x18, T_FILL, 1, "fogcell.fill.rowstep", 2,
+          "advance the raw map's dest pointer one row (= stride)")
+
+    # smooth (same function): 3x3 kernel, raw -> smoothed, interior only
+    b.imm(0x0047FD9B, 0x19, T_FILL + 1, 1, "fogcell.smooth.base.src", 2,
+          "raw map + stride + 1: start at row 1, col 1")
+    b.imm(0x0047FD9E, 0x19, T_FILL + 1, 1, "fogcell.smooth.base.dst", 2,
+          "smoothed map + stride + 1")
+    b.imm(0x0047FDA1, 15, R_SMOOTH, 4, "fogcell.smooth.rows", 2,
+          "interior tile rows smoothed")
+    b.imm(0x0047FDB0, 22, T_SMOOTH, 4, "fogcell.smooth.cols", 2,
+          "interior tile cols smoothed")
+    b.simm(0x0047FDB5, -0x18, -T_FILL, 1, "fogcell.smooth.k.up", 2,
+           "3x3 kernel: one row up")
+    b.imm(0x0047FDBF, 0x18, T_FILL, 1, "fogcell.smooth.k.down", 2,
+          "3x3 kernel: one row down")
+    b.simm(0x0047FDD1, -0x19, -(T_FILL + 1), 1, "fogcell.smooth.k.upleft", 2,
+           "3x3 kernel: up-left")
+    b.imm(0x0047FDD8, 0x19, T_FILL + 1, 1, "fogcell.smooth.k.downright", 2,
+          "3x3 kernel: down-right")
+    b.simm(0x0047FDDE, -0x17, -(T_FILL - 1), 1, "fogcell.smooth.k.upright", 2,
+           "3x3 kernel: up-right")
+    b.imm(0x0047FDE4, 0x17, T_FILL - 1, 1, "fogcell.smooth.k.downleft", 2,
+          "3x3 kernel: down-left")
+
+    # interpolate, 0x0047FE10: smoothed tiles -> 4x4 cells each, via the LUT
+    b.imm(0x0047FE23, 0x19, T_FILL + 1, 1, "fogcell.interp.base", 2,
+          "smoothed map + stride + 1: read from row 1, col 1")
+    b.imm(0x0047FE2D, 14, R_INTERP, 4, "fogcell.interp.rows", 2,
+          "tile rows interpolated into the cell buffer")
+    b.imm(0x0047FE40, 21, T_COVER, 4, "fogcell.interp.cols", 2,
+          "tile cols interpolated (the playfield-covering band)")
+    b.imm(0x0047FE53, 0x18, T_FILL, 1, "fogcell.interp.k.down", 2,
+          "bilinear: the tile one row down")
+    b.imm(0x0047FE6B, 0x19, T_FILL + 1, 1, "fogcell.interp.k.downright", 2,
+          "bilinear: the tile down-right")
+    b.imm(0x0047FEAB, 0x58, CELL_STRIDE, 1, "fogcell.interp.cellrow", 2,
+          "advance the cell dest one 8px row")
+    b.imm(0x0047FEC7, 0x15C, CELL_STRIDE * 4 - 4, 4, "fogcell.interp.colback", 2,
+          "after 4 sub-rows: back up 4 cell rows, advance one dword of cells")
+    b.imm(0x0047FEE4, 0x10C, CELL_STRIDE * 4 - T_COVER * 4, 4,
+          "fogcell.interp.rowadv", 2,
+          "after a tile row: cell dest to the next 4-row band's start")
+
+    # change detector, 0x004804D0: smoothed vs previous frame, dirty rects
+    b.imm(0x004804F8, 0x2C0, T_SMOOTH * 32, 4, "fogcell.change.xspan", 2,
+          "compared screen span in px: T_SMOOTH tiles of 32")
+    b.imm(0x00480502, 0x1E0, R_SMOOTH * 32, 4, "fogcell.change.yspan", 2,
+          "compared screen span in px, vertical")
+    b.simm(0x00480523, -0x2C0, -(T_SMOOTH * 32), 4, "fogcell.change.xspan.neg", 2,
+           "the same span as the loop cursor's negative origin")
+
+    # full-redraw sync copies (smoothed -> previous), two call sites
+    b.imm(0x004805E3, 102, TMAP_ALLOC // 4, 4, "fogcell.sync.copy.a", 2,
+          "rep movsd count, game-start sync in 0x004805D0")
+    b.imm(0x004BD5A8, 102, TMAP_ALLOC // 4, 4, "fogcell.sync.copy.b", 2,
+          "rep movsd count, full-redraw path in layer 5's draw 0x004BD580")
+
+    # renderer, 0x004805F0: 2x2 cell neighborhood per 8x8 block
+    b.imm(0x00480617, 0x58, CELL_STRIDE, 1, "fogcell.render.rowmul", 2,
+          "cell row base = cellRow * stride")
+    b.imm(0x0048064C, 0x58, CELL_STRIDE, 1, "fogcell.render.rowadv.pre", 2,
+          "pre-loop advance so [esi-stride] is the current row")
+    b.simm(0x00480671, -0x58, -CELL_STRIDE, 1, "fogcell.render.k.up", 2,
+           "neighborhood read: this column, current row")
+    b.simm(0x00480675, -0x57, -(CELL_STRIDE - 1), 1, "fogcell.render.k.upright", 2,
+           "neighborhood read: next column, current row")
+    b.imm(0x004806CD, 0x58, CELL_STRIDE, 1, "fogcell.render.rowadv", 2,
+          "advance one cell row per 8px block row")
 
     # -- item 14: build placement ------------------------------------------
     b.imm(0x0048D663, STOCK_W, PF_W, 2, "placement.reject.x", 2,

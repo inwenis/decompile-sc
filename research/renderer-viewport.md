@@ -1362,6 +1362,17 @@ is bounded follow-up work of exactly this task's refresh-band kind; per the
 task's own instruction the working playfield ships behind the flag with the
 fog defect stated rather than withheld.
 
+> **CORRECTED by task 068 — every entry on that suspect list is misidentified,
+> and the defects live elsewhere.** Read §16.1 before following any of it:
+> 0x0047E4B0/0x0047E4C0/0x0047E8D9 count TIPS DIALOG strings (80 original /
+> 103 Brood War on the EXPANSION flag 0x58F440 — the 0x68/0x67 "sibling
+> branch" is 103+1 tips, not the 104-px strip); 0x0047F820/0x0047F829 are
+> string-format code; and the two "fog arms" 0x0047EBF0/0x0047EE20 draw the
+> space-tileset parallax starfield (their fog.wrap patches remain correct —
+> for stars). The real fog is the four-buffer cell pipeline in §16.2, and
+> both defects here fall out of its one stride (§16.3). The values in THIS
+> section's measurements are all still good; only the attribution was wrong.
+
 Artifacts (gitignored diagnostic path; paths travel, images never):
 `C:\sc-work\logs\063-frames\fd-{stock,s2}-*.bin`, `*-render.png`,
 `fd-synthetic-stride640.bin`; transcripts
@@ -1393,4 +1404,152 @@ python tools/renderer_patch_sites.py --check      # 222 sites verify against the
 #   ACTIVE line (a refused table would run stock and pass vacuously), the
 #   window-vouched pitch-800 consistency, the right band holding map, the
 #   cross-arm left-640 identity, and no drift between the two captures
+```
+
+## 16. Task 068 — the fog cell pipeline: both 15.4 defects are one number
+
+§15.4 left two measured fog defects (the 25-px black seam at 672..695, the
+104-px always-lit strip at 696..799) and a suspect list. Task 068 read the
+subsystem instead of patching the suspects, and every entry on that list died
+of the reading — the defects live somewhere none of them pointed.
+
+### 16.1 The suspect list audited: all of it was numerology
+
+Every claim below is from disassembly of the on-disk exe (byte-verified
+addresses; `work/scratch/064/scdis.py`).
+
+1. **The "fog update cursor" `[0x6CDFE8]` is the TIPS DIALOG's string cursor.**
+   `0x47E480` — the function holding the suspect constants `0x51`/`0x50` at
+   `0x47E4B0`/`0x47E4C0` — walks a dialog child list (control id −10), indexes a
+   count-prefixed u16 offset table through `[0x658ADC]`, measures the resulting
+   STRING against the font height `[0x6CE111]`, and sets control flags
+   0x800/0x400 ("text fits / scrolls"). The wrap `[1..0x50]` vs `[1..0x67]` on
+   flag `[0x58F440]` is **80 tips in original StarCraft, 103 in Brood War** —
+   `[0x58F440]` is the expansion flag, which is why it has ~80 references
+   across the whole UI band (residue 2's warning, answered). The `0x47E8A0`
+   band and its u16 table `0x513BA0` are the same dialog's init path.
+2. **The `0x68 = 104` lead (residue 6) dies with it**: 0x68 is 103 Brood War
+   tips + 1, not the 104-px strip. The project's own rule — two numbers
+   agreeing is where a hypothesis starts, not evidence — held for the third
+   time in two days.
+3. **`0x47F820`/`0x47F829` (`cmp esi,0x50` / `push 0x50`) sit in string-format
+   code** (offset-table string lookup + sprintf at `0x41F1B0` around
+   `0x47F84B`), not fog.
+4. **The two "fog arms" `0x47EBF0` (scrolled) / `0x47EE20` (static) draw the
+   SPACE-TILESET PARALLAX STARFIELD, not fog.** They render item lists at
+   `[0x658AA8]` — five layers, per-layer parallax scroll factors from
+   `[0x62846C-4k]`/`[0x628484-4k]` (>>8 fixed point), items of
+   `{x:u16, y:u16, data*}` in a 648×488 ring — and the whole block is gated on
+   `word [0x57F1DC] == 1`, the space-platform tileset id. The item positions
+   are PARSED FROM A FILE (`0x47F390`: count table + pointer fixups into a
+   loaded blob — star.spk). Consequence for 064's six `fog.wrap` patches
+   (648→808): still correct and still needed — stars must cover the wider
+   ring — but the FILE's positions only span x < 648, so **space-tileset maps
+   show a star-free band at x ≥ 648 until somebody synthesizes items**.
+   Cosmetic, off-map backdrop only, deliberately not fixed here.
+
+The transferable rule: §15.4's suspect list was assembled from a VALUE sweep
+(81 = 648/8, 80 = 640/8). Every hit was real arithmetic on those values — in
+three unrelated subsystems that happen to count to 80. A value family names
+candidates; only the function around the hit names the subsystem.
+
+### 16.2 The real fog: a four-buffer pipeline, all heap, terrain-cache geometry
+
+Per frame, orchestrated by layer 5's own draw `0x4BD580` (read end to end,
+as were all functions below):
+
+| step | function | reads → writes |
+| ---- | -------- | -------------- |
+| fill | `0x47FC50` | map-tile visibility dwords `[0x6D1260]` (map-sized), from tile origin `[0x57F1D0/D2]`−1 → raw tile map `[0x6D5C14]`: 24 cols × 17 rows of {0, 15, 31} (hidden / explored / visible), row stride 24 |
+| smooth | same fn, `0x47FD90` | 3×3 kernel over the raw map → smoothed map `[0x6D5C0C]`, interior 22 cols × 15 rows (the fill's border feeds the kernel) |
+| change | `0x4804D0` | smoothed vs previous frame `[0x6D5C10]`, compared in screen space over 22 tiles × 32 px = 704 px (`0x2C0`) × 480 px; per differing run → dirty rects via the marker `0x41E0D0`; the full-redraw path instead memcpys smoothed→prev (`0x66` dwords, two call sites `0x4805E3`/`0x4BD5A8`) |
+| interpolate | `0x47FE10` | 21 cols × 14 tile rows of the smoothed map, bilinear 4×4 sub-cells per tile through the 32×32 LUT `[0x657AA0]` (built by `0x480430`, value-space only) → the 8-px CELL buffer `[0x6D5C18]`, one dword = 4 cells, cell stride `0x58` = 88 |
+| render | `0x4805F0` (from the dirty walk `0x4808F8` / full draw `0x4808E0`) | per 8×8 block reads a 2×2 cell neighborhood (`[esi−0x58]`, `[esi−0x57]`, `[esi]`, `[esi+1]`); all-equal 0 → the §12.8 black writer `0x4800A0`, all-equal 0x1F → nothing, all-equal other → uniform blend `0x480000`, else gradient `0x47FF10` |
+
+All four buffers are allocated at GAME START by `0x480960` (called from the
+layer-5 init `0x4BDA83`): three tile maps of 408 bytes (24 × 17) and the cell
+buffer of 5280 bytes (88 × 60), freed by `0x480380` at game end. **Nothing here
+needs relocation** — unlike the dirty grid, the buffers are heap blocks whose
+sizes are `push` immediates in one init function; patch the immediates before a
+game loads and the engine builds the wider buffers itself.
+
+The geometry is the terrain cache's, one subsystem over, exactly as 064's
+residue 1 predicted (against different globals than it named): covering band
+21 tiles × 14 (= §7's 20+1 / §6's 448/32), tile-map stride 24 = covering + 1
+smoothing border each side + 1, cell stride 88 = 21·4 + 4 pad, cell rows
+60 = 14·4 + 4.
+
+- **How found**: named-ref byte scan for the buffer globals
+  (`work/scratch/068/scan_refs68.py` — every x86-32 absolute ref encodes the
+  address as a plain dword, so the scan is exhaustive for NAMED refs, §5's
+  method) — 5/8/6/5 refs for `0x6D5C18/0C/10/14`, every one read in its
+  function; plus a stride-family sweep (88·k both signs, 100.0% byte
+  coverage) whose in-band hits are all accounted for above.
+- **How verified**: the generator relocates each declared value inside its own
+  instruction bytes and refuses on mismatch (§16.3's 39 sites verify against
+  the exe); the outcome oracle is §16.4's frames.
+
+### 16.3 Why the two defects are one number, and the fix
+
+The cell buffer holds `21·4 = 84` used columns (cells for screen x up to
+671 at a tile-aligned origin). Stage 2's (already correct) dirty walk asks the
+renderer for x up to 799, so the cell index — `((originX>>3)&3) + (x>>3)` —
+runs to 99..102:
+
+- indices 84..86 land in the row's zero PADDING (stride 88) → uniform 0 →
+  the black writer: **the 25-px seam at 672..695, at every origin, screen-
+  anchored** — §15.4 defect 2, including the gradient clipping the last px
+  of cell 83;
+- index 87 straddles pad and the wrap below → gradient, not black — which is
+  why the seam measures 3 cells wide, not 4;
+- indices ≥ 88 wrap into the NEXT cell row's LEFT columns — cells for the
+  left of the screen one 8-px row down, which the fixture had explored
+  (value 0x1F = fully visible = draw nothing) → **raw terrain over
+  unexplored map at 696.., §15.4 defect 1**. "The boundary at 87 cells is
+  derived, not a constant" (residue 3) — it is stride 88 wearing the walk's
+  clip: 84 used cells, 3 all-zero pad cells, one straddling block, then the
+  wrap.
+
+Fix (`tools/renderer_patch_sites.py`, family `fogcell.*`, stage 2, 39 sites):
+widen the covering band 21→26 tiles (the terrain cache's own 26), which
+derives everything else — tile maps 29 cols stride (smoothed interior 27,
+compare span 27·32 = 864 px), cell stride 108 = 26·4+4, allocations
+408→496 / 5280→6480. Keeping the engine's own invariant "stride = fill
+count" keeps the three structural pads (+2, +2, +3) invariant, so they are
+not sites at all. Every site is a same-length immediate or disp8 rewrite
+(the kernel's ±0x17/0x18/0x19 displacements become ±0x1C/0x1D/0x1E, the
+renderer's −0x58/−0x57 become −0x6C/−0x6B); no EFLAGS hazards (no lea→imul
+class anywhere). Row-side counts (14/15/17 rows, the 480-px vertical span,
+60 cell rows) are declared as parametric sites that are no-ops at height 480.
+
+### 16.4 Measured results
+
+(filled after the run; predictions registered first, 065's rule)
+
+Predictions, registered before the first patched run:
+
+1. ingame (544,416): the 671..695 zero-column runs GONE; the right band's
+   nonzero fraction DROPS from run 2's 0.8438 (that number included raw
+   terrain leaking over unexplored map — a correct fog hides it).
+2. scrolled2 (704,416): x=696..799 over y=20..320 flips from 100.0000%
+   nonzero to ~100% zero — the region is provably unexplored (mapunits.py
+   against the CHK) and correct fog paints it black.
+3. cross-arm left 640 vs stock: dense_rows stays 0 — cells 0..79 and the
+   whole tile-map interior behave identically at both geometries.
+4. scrollmid (held arrow key, expected non-tile-aligned origin): seam
+   continuous at every x; zero-runs only at shroud boundaries that MOVE with
+   the origin (map-anchored), none screen-anchored.
+5. stock arm: byte-identical behavior, 21/21 — every fogcell site is behind
+   the same flag and table as the rest of stage 2.
+
+### 16.5 How to reproduce
+
+```powershell
+python tools/renderer_patch_sites.py --check      # 261 sites verify against the exe
+./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-framebuffer-capture.ps1 `
+    -SuiteArgs @{ Stage2 = $true }
+#   as 15.6, plus: a held-arrow-key ScrollMid capture (non-tile-aligned
+#   origin -- the fog alignment terms (origin>>3)&3 / &0x1F are exercised by
+#   no minimap origin, they are all multiples of 32), asserted moved, its
+#   x%32 printed beside the seam tracker
 ```

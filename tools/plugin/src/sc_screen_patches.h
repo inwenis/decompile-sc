@@ -1282,6 +1282,216 @@ static const ScScreenPatch SC_WS_PATCHES[] = {
       { 0x05, 0x88, 0x02, 0x00, 0x00 },
       { 0x05, 0x28, 0x03, 0x00, 0x00 },
       "fog.wrap@0047EE98", "fog coordinate wrap at (playfield width + 8), inferred from shape" },
+    // 0x004809A5  push 0x198
+    //             -> push 0x1f0
+    { 0x004809A5u,  5, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x68, 0x98, 0x01, 0x00, 0x00 },
+      { 0x68, 0xF0, 0x01, 0x00, 0x00 },
+      "fogcell.tmap.alloc@004809A5", "SMemAlloc size of one 29-col x 17-row tile visibility map" },
+    // 0x004809D0  push 0x198
+    //             -> push 0x1f0
+    { 0x004809D0u,  5, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x68, 0x98, 0x01, 0x00, 0x00 },
+      { 0x68, 0xF0, 0x01, 0x00, 0x00 },
+      "fogcell.tmap.alloc@004809D0", "SMemAlloc size of one 29-col x 17-row tile visibility map" },
+    // 0x004809F6  push 0x198
+    //             -> push 0x1f0
+    { 0x004809F6u,  5, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x68, 0x98, 0x01, 0x00, 0x00 },
+      { 0x68, 0xF0, 0x01, 0x00, 0x00 },
+      "fogcell.tmap.alloc@004809F6", "SMemAlloc size of one 29-col x 17-row tile visibility map" },
+    // 0x004809CB  mov ecx, 0x66
+    //             -> mov ecx, 0x7c
+    { 0x004809CBu,  5, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0xB9, 0x66, 0x00, 0x00, 0x00 },
+      { 0xB9, 0x7C, 0x00, 0x00, 0x00 },
+      "fogcell.tmap.clear@004809CB", "rep stosd count clearing that tile map" },
+    // 0x004809F1  mov ecx, 0x66
+    //             -> mov ecx, 0x7c
+    { 0x004809F1u,  5, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0xB9, 0x66, 0x00, 0x00, 0x00 },
+      { 0xB9, 0x7C, 0x00, 0x00, 0x00 },
+      "fogcell.tmap.clear@004809F1", "rep stosd count clearing that tile map" },
+    // 0x00480A17  mov ecx, 0x66
+    //             -> mov ecx, 0x7c
+    { 0x00480A17u,  5, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0xB9, 0x66, 0x00, 0x00, 0x00 },
+      { 0xB9, 0x7C, 0x00, 0x00, 0x00 },
+      "fogcell.tmap.clear@00480A17", "rep stosd count clearing that tile map" },
+    // 0x00480A1C  push 0x14a0
+    //             -> push 0x1950
+    { 0x00480A1Cu,  5, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x68, 0xA0, 0x14, 0x00, 0x00 },
+      { 0x68, 0x50, 0x19, 0x00, 0x00 },
+      "fogcell.cells.alloc", "SMemAlloc size of the 8px cell buffer [0x006D5C18], 108 stride x 60 rows" },
+    // 0x00480A30  mov ecx, 0x528
+    //             -> mov ecx, 0x654
+    { 0x00480A30u,  5, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0xB9, 0x28, 0x05, 0x00, 0x00 },
+      { 0xB9, 0x54, 0x06, 0x00, 0x00 },
+      "fogcell.cells.clear", "rep stosd count clearing the cell buffer" },
+    // 0x0047FCC3  mov dword ptr [ebp - 0x10], 0x18
+    //             -> mov dword ptr [ebp - 0x10], 0x1d
+    { 0x0047FCC3u,  7, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0xC7, 0x45, 0xF0, 0x18, 0x00, 0x00, 0x00 },
+      { 0xC7, 0x45, 0xF0, 0x1D, 0x00, 0x00, 0x00 },
+      "fogcell.fill.cols", "tile cols filled per row (writes the whole stride)" },
+    // 0x0047FD80  add ecx, 0x18
+    //             -> add ecx, 0x1d
+    { 0x0047FD80u,  3, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x83, 0xC1, 0x18 },
+      { 0x83, 0xC1, 0x1D },
+      "fogcell.fill.rowstep", "advance the raw map's dest pointer one row (= stride)" },
+    // 0x0047FD9B  add eax, 0x19
+    //             -> add eax, 0x1e
+    { 0x0047FD9Bu,  3, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x83, 0xC0, 0x19 },
+      { 0x83, 0xC0, 0x1E },
+      "fogcell.smooth.base.src", "raw map + stride + 1: start at row 1, col 1" },
+    // 0x0047FD9E  add ecx, 0x19
+    //             -> add ecx, 0x1e
+    { 0x0047FD9Eu,  3, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x83, 0xC1, 0x19 },
+      { 0x83, 0xC1, 0x1E },
+      "fogcell.smooth.base.dst", "smoothed map + stride + 1" },
+    // 0x0047FDB0  mov esi, 0x16
+    //             -> mov esi, 0x1b
+    { 0x0047FDB0u,  5, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0xBE, 0x16, 0x00, 0x00, 0x00 },
+      { 0xBE, 0x1B, 0x00, 0x00, 0x00 },
+      "fogcell.smooth.cols", "interior tile cols smoothed" },
+    // 0x0047FDB5  movzx ebx, byte ptr [eax - 0x18]
+    //             -> movzx ebx, byte ptr [eax - 0x1d]
+    { 0x0047FDB5u,  4, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x0F, 0xB6, 0x58, 0xE8 },
+      { 0x0F, 0xB6, 0x58, 0xE3 },
+      "fogcell.smooth.k.up", "3x3 kernel: one row up" },
+    // 0x0047FDBF  movzx ebx, byte ptr [eax + 0x18]
+    //             -> movzx ebx, byte ptr [eax + 0x1d]
+    { 0x0047FDBFu,  4, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x0F, 0xB6, 0x58, 0x18 },
+      { 0x0F, 0xB6, 0x58, 0x1D },
+      "fogcell.smooth.k.down", "3x3 kernel: one row down" },
+    // 0x0047FDD1  movzx ebx, byte ptr [eax - 0x19]
+    //             -> movzx ebx, byte ptr [eax - 0x1e]
+    { 0x0047FDD1u,  4, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x0F, 0xB6, 0x58, 0xE7 },
+      { 0x0F, 0xB6, 0x58, 0xE2 },
+      "fogcell.smooth.k.upleft", "3x3 kernel: up-left" },
+    // 0x0047FDD8  movzx ebx, byte ptr [eax + 0x19]
+    //             -> movzx ebx, byte ptr [eax + 0x1e]
+    { 0x0047FDD8u,  4, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x0F, 0xB6, 0x58, 0x19 },
+      { 0x0F, 0xB6, 0x58, 0x1E },
+      "fogcell.smooth.k.downright", "3x3 kernel: down-right" },
+    // 0x0047FDDE  movzx ebx, byte ptr [eax - 0x17]
+    //             -> movzx ebx, byte ptr [eax - 0x1c]
+    { 0x0047FDDEu,  4, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x0F, 0xB6, 0x58, 0xE9 },
+      { 0x0F, 0xB6, 0x58, 0xE4 },
+      "fogcell.smooth.k.upright", "3x3 kernel: up-right" },
+    // 0x0047FDE4  movzx ebx, byte ptr [eax + 0x17]
+    //             -> movzx ebx, byte ptr [eax + 0x1c]
+    { 0x0047FDE4u,  4, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x0F, 0xB6, 0x58, 0x17 },
+      { 0x0F, 0xB6, 0x58, 0x1C },
+      "fogcell.smooth.k.downleft", "3x3 kernel: down-left" },
+    // 0x0047FE23  add ebx, 0x19
+    //             -> add ebx, 0x1e
+    { 0x0047FE23u,  3, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x83, 0xC3, 0x19 },
+      { 0x83, 0xC3, 0x1E },
+      "fogcell.interp.base", "smoothed map + stride + 1: read from row 1, col 1" },
+    // 0x0047FE40  mov dword ptr [ebp - 0x10], 0x15
+    //             -> mov dword ptr [ebp - 0x10], 0x1a
+    { 0x0047FE40u,  7, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0xC7, 0x45, 0xF0, 0x15, 0x00, 0x00, 0x00 },
+      { 0xC7, 0x45, 0xF0, 0x1A, 0x00, 0x00, 0x00 },
+      "fogcell.interp.cols", "tile cols interpolated (the playfield-covering band)" },
+    // 0x0047FE53  movzx eax, byte ptr [ebx + 0x18]
+    //             -> movzx eax, byte ptr [ebx + 0x1d]
+    { 0x0047FE53u,  4, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x0F, 0xB6, 0x43, 0x18 },
+      { 0x0F, 0xB6, 0x43, 0x1D },
+      "fogcell.interp.k.down", "bilinear: the tile one row down" },
+    // 0x0047FE6B  movzx eax, byte ptr [ebx + 0x19]
+    //             -> movzx eax, byte ptr [ebx + 0x1e]
+    { 0x0047FE6Bu,  4, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x0F, 0xB6, 0x43, 0x19 },
+      { 0x0F, 0xB6, 0x43, 0x1E },
+      "fogcell.interp.k.downright", "bilinear: the tile down-right" },
+    // 0x0047FEAB  add edx, 0x58
+    //             -> add edx, 0x6c
+    { 0x0047FEABu,  3, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x83, 0xC2, 0x58 },
+      { 0x83, 0xC2, 0x6C },
+      "fogcell.interp.cellrow", "advance the cell dest one 8px row" },
+    // 0x0047FEC7  sub ecx, 0x15c
+    //             -> sub ecx, 0x1ac
+    { 0x0047FEC7u,  6, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x81, 0xE9, 0x5C, 0x01, 0x00, 0x00 },
+      { 0x81, 0xE9, 0xAC, 0x01, 0x00, 0x00 },
+      "fogcell.interp.colback", "after 4 sub-rows: back up 4 cell rows, advance one dword of cells" },
+    // 0x0047FEE4  add ecx, 0x10c
+    //             -> add ecx, 0x148
+    { 0x0047FEE4u,  6, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x81, 0xC1, 0x0C, 0x01, 0x00, 0x00 },
+      { 0x81, 0xC1, 0x48, 0x01, 0x00, 0x00 },
+      "fogcell.interp.rowadv", "after a tile row: cell dest to the next 4-row band's start" },
+    // 0x004804F8  mov ebx, 0x2c0
+    //             -> mov ebx, 0x360
+    { 0x004804F8u,  5, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0xBB, 0xC0, 0x02, 0x00, 0x00 },
+      { 0xBB, 0x60, 0x03, 0x00, 0x00 },
+      "fogcell.change.xspan", "compared screen span in px: T_SMOOTH tiles of 32" },
+    // 0x00480523  lea ecx, [ebx - 0x2c0]
+    //             -> lea ecx, [ebx - 0x360]
+    { 0x00480523u,  6, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x8D, 0x8B, 0x40, 0xFD, 0xFF, 0xFF },
+      { 0x8D, 0x8B, 0xA0, 0xFC, 0xFF, 0xFF },
+      "fogcell.change.xspan.neg", "the same span as the loop cursor's negative origin" },
+    // 0x004805E3  mov ecx, 0x66
+    //             -> mov ecx, 0x7c
+    { 0x004805E3u,  5, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0xB9, 0x66, 0x00, 0x00, 0x00 },
+      { 0xB9, 0x7C, 0x00, 0x00, 0x00 },
+      "fogcell.sync.copy.a", "rep movsd count, game-start sync in 0x004805D0" },
+    // 0x004BD5A8  mov ecx, 0x66
+    //             -> mov ecx, 0x7c
+    { 0x004BD5A8u,  5, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0xB9, 0x66, 0x00, 0x00, 0x00 },
+      { 0xB9, 0x7C, 0x00, 0x00, 0x00 },
+      "fogcell.sync.copy.b", "rep movsd count, full-redraw path in layer 5's draw 0x004BD580" },
+    // 0x00480617  imul ecx, ecx, 0x58
+    //             -> imul ecx, ecx, 0x6c
+    { 0x00480617u,  3, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x6B, 0xC9, 0x58 },
+      { 0x6B, 0xC9, 0x6C },
+      "fogcell.render.rowmul", "cell row base = cellRow * stride" },
+    // 0x0048064C  add esi, 0x58
+    //             -> add esi, 0x6c
+    { 0x0048064Cu,  3, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x83, 0xC6, 0x58 },
+      { 0x83, 0xC6, 0x6C },
+      "fogcell.render.rowadv.pre", "pre-loop advance so [esi-stride] is the current row" },
+    // 0x00480671  movzx edx, byte ptr [esi - 0x58]
+    //             -> movzx edx, byte ptr [esi - 0x6c]
+    { 0x00480671u,  4, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x0F, 0xB6, 0x56, 0xA8 },
+      { 0x0F, 0xB6, 0x56, 0x94 },
+      "fogcell.render.k.up", "neighborhood read: this column, current row" },
+    // 0x00480675  movzx eax, byte ptr [esi - 0x57]
+    //             -> movzx eax, byte ptr [esi - 0x6b]
+    { 0x00480675u,  4, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x0F, 0xB6, 0x46, 0xA9 },
+      { 0x0F, 0xB6, 0x46, 0x95 },
+      "fogcell.render.k.upright", "neighborhood read: next column, current row" },
+    // 0x004806CD  add esi, 0x58
+    //             -> add esi, 0x6c
+    { 0x004806CDu,  3, 2, SC_WS_NO_FIXUP, 0x0u,
+      { 0x83, 0xC6, 0x58 },
+      { 0x83, 0xC6, 0x6C },
+      "fogcell.render.rowadv", "advance one cell row per 8px block row" },
     // 0x0048D663  cmp ax, 0x280
     //             -> cmp ax, 0x320
     { 0x0048D663u,  4, 2, SC_WS_NO_FIXUP, 0x0u,

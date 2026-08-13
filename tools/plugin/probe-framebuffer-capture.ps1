@@ -184,7 +184,7 @@ function Invoke-Arm {
 
     $gamePid = 0
     $result = @{ Name = $Name; Log = $log; Menu = $null; InGame = $null
-                 Scrolled = $null; Mid = $null; Scrolled2 = $null
+                 Scrolled = $null; Mid = $null; Scrolled2 = $null; ScrollMid = $null
                  WsVerdict = $null; WsFilter = $null
                  Walked = $false; WalkError = $null }
 
@@ -262,6 +262,19 @@ function Invoke-Arm {
                 Send-ScClick -Hwnd $h -X $right.X -Y $right.Y
                 Start-Sleep -Seconds 3
                 $result.Scrolled2 = Get-CapturePoint -Hwnd $h -Tag "$Name-scrolled2" -LogPath $log
+
+                # Task 068 (064's residue 4): every capture above rests at a
+                # TILE-ALIGNED origin -- minimap click-to-centre lands on
+                # multiples of 32 -- so the fog cell pipeline's sub-tile
+                # alignment terms ((origin>>3)&3 in the renderer, &0x1F in the
+                # change detector) have never been exercised at 800. A held
+                # arrow key drives the smooth stepper scroll and can stop
+                # between tile boundaries. Posted WM_KEYDOWN reaching the
+                # engine's scroll is an empirical question (drive-game.ps1's
+                # KNOWN LIMIT note); the origin assertion downstream decides,
+                # and a failure means "scroll it another way", not "done".
+                Send-ScKey -Hwnd $h -VirtualKey 0x25 -HoldMs 420 -SettleMs 400   # VK_LEFT
+                $result.ScrollMid = Get-CapturePoint -Hwnd $h -Tag "$Name-scrollmid" -LogPath $log
             }
             # The WIDESCREEN install verdict, read from the plugin's own log --
             # an arm whose table was REFUSED runs a stock geometry and every
@@ -508,7 +521,7 @@ try {
         Assert-True '[s2] the whole stage applied (no leftover %SCPLUGIN_WS_ONLY%)' `
             ($null -ne $s2.WsFilter -and $s2.WsFilter -match 'unset, whole stage applied') `
             "($($s2.WsFilter))"
-        foreach ($pt in @($s2.Menu, $s2.InGame, $s2.Scrolled, $s2.Mid, $s2.Scrolled2)) {
+        foreach ($pt in @($s2.Menu, $s2.InGame, $s2.Scrolled, $s2.Mid, $s2.Scrolled2, $s2.ScrollMid)) {
             if ($null -eq $pt) { continue }
             Assert-True "[s2/$($pt.Tag)] a dump was written" ($null -ne $pt.Dump) `
                 ($pt.Refused ? "(refused: $($pt.Refused))" : '')
@@ -612,6 +625,23 @@ try {
                 ($null -ne $s2.Scrolled.Origin -and $s2.Scrolled.Origin -ne $s2.InGame.Origin) `
                 "(ingame=$($s2.InGame.Origin) scrolled=$($s2.Scrolled.Origin))"
         }
+        # Task 068: the held-arrow-key capture exists to reach a NON-tile-
+        # aligned origin (the fog pipeline's (origin>>3)&3 / &0x1F alignment
+        # terms; every minimap origin is a multiple of 32). Whether a posted
+        # key drives the scroll at all is empirical -- so the event the
+        # capture exists for is counted (coverage rule), and the alignment
+        # is printed beside it either way.
+        if ($s2.Scrolled2 -and $s2.ScrollMid) {
+            $moved = ($null -ne $s2.ScrollMid.Origin -and
+                      $s2.ScrollMid.Origin -ne $s2.Scrolled2.Origin)
+            $alignNote = ''
+            if ($null -ne $s2.ScrollMid.Origin -and $s2.ScrollMid.Origin -match '^(\d+),(\d+)$') {
+                $ax = [int]$Matches[1] % 32
+                $alignNote = " originX%32=$ax" + ($ax -ne 0 ? ' (sub-tile: alignment terms exercised)' : ' (tile-aligned: alignment terms NOT exercised this run)')
+            }
+            Assert-True '[s2] the held arrow key moved the camera (keyboard scroll reached the engine)' `
+                $moved "(scrolled2=$($s2.Scrolled2.Origin) scrollmid=$($s2.ScrollMid.Origin)$alignNote)"
+        }
     }
 
     foreach ($a in $arms.Values) {
@@ -635,7 +665,7 @@ finally {
 Write-Host ''
 Write-Host 'probe-framecap: dumps + renders (gitignored diagnostic path, never committed):'
 foreach ($a in $arms.Values) {
-    foreach ($pt in @($a.Menu, $a.InGame, $a.Scrolled, $a.Mid, $a.Scrolled2)) {
+    foreach ($pt in @($a.Menu, $a.InGame, $a.Scrolled, $a.Mid, $a.Scrolled2, $a.ScrollMid)) {
         if ($pt -and $pt.Dump) {
             Write-Host "       $($pt.Tag) : $($pt.Dump)"
             $render = Join-Path $FrameDir "$($pt.Tag)-render.png"

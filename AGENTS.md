@@ -325,6 +325,40 @@ ROWS across the full width, while animation differs in isolated blobs spanning n
 the thing that distinguishes damage from noise, and report the noise floor beside it rather than
 asserting against zero.
 
+## A verified enumeration of what TOUCHES an address says nothing about what the address IS (2026-08-13, task 068)
+
+The sibling of the section above, from the other direction. Task 064 handed its fog
+follow-up a residue stating *"the fog update cursor [0x6CDFE8] is touched by exactly TWO
+functions (byte-scan verified)"* — and the scan was right: exactly two functions name it.
+The identification was wrong anyway. Disassembled, those two functions walk a dialog child
+list, index a count-prefixed string table, and measure text against the font height:
+`[0x6CDFE8]` is the TIPS DIALOG's string cursor, its `[1..0x50]`/`[1..0x67]` wrap is 80
+tips original vs 103 Brood War on the EXPANSION flag, and the whole "fog cursor" briefing —
+carried by the conductor into the next task file as the working hypothesis — pointed at a
+UI widget. The real fog pipeline (research/renderer-viewport.md §16) shares not one
+function with it.
+
+The claim shapes to keep apart:
+
+- **"N functions reference this address"** — a byte scan settles it, and 064's scan did.
+- **"this address is the fog cursor"** — only READING those functions settles it, and
+  nobody had. The scan's rigor bled onto the identification: "byte-scan verified" read as
+  if the NAME had been verified, when only the COUNT had.
+
+Same task, same hour, the same shape twice more: constants `0x51/0x50` at three verified
+addresses were briefed as fog cell counts (648/8, 640/8) and are tip-string counts; two
+"fog draw arms" were the space-tileset parallax starfield. All three misreadings came from
+a VALUE sweep whose hits were real arithmetic on the searched values — in three unrelated
+subsystems that happen to count to 80. A value family names candidates; only the function
+around the hit names the subsystem.
+
+So: when a finding names WHAT something is, ask what evidence bears on the identification
+specifically — a verified reference count, a verified byte pattern, a verified value match
+all bear on existence, not identity. And when writing a residue or briefing, label the two
+strengths apart: "verified: two referencers; hypothesis: fog cursor" would have cost the
+next reader nothing and saved them a morning. (It also went right, for once, because the
+task file said to read the dossier BEFORE trusting the briefing — a form worth keeping.)
+
 ## A random suite must report the coverage of its SEAM, not only its verdict (2026-08-12, task 041)
 
 **This is a rule about any suite that GENERATES its own cases** — random, fuzzed, property-based,

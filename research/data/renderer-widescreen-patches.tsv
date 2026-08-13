@@ -218,6 +218,45 @@ stage	va	len	changed	name	before	after	expect	patch	note
 2	0x0047EE83	5	1	fog.wrap@0047EE83	cmp eax, 0x288	cmp eax, 0x328	3D88020000	3D28030000	fog coordinate wrap at (playfield width + 8), inferred from shape
 2	0x0047EE8D	5	1	fog.wrap@0047EE8D	sub eax, 0x288	sub eax, 0x328	2D88020000	2D28030000	fog coordinate wrap at (playfield width + 8), inferred from shape
 2	0x0047EE98	5	1	fog.wrap@0047EE98	add eax, 0x288	add eax, 0x328	0588020000	0528030000	fog coordinate wrap at (playfield width + 8), inferred from shape
+2	0x004809A5	5	1	fogcell.tmap.alloc@004809A5	push 0x198	push 0x1f0	6898010000	68F0010000	SMemAlloc size of one 29-col x 17-row tile visibility map
+2	0x004809D0	5	1	fogcell.tmap.alloc@004809D0	push 0x198	push 0x1f0	6898010000	68F0010000	SMemAlloc size of one 29-col x 17-row tile visibility map
+2	0x004809F6	5	1	fogcell.tmap.alloc@004809F6	push 0x198	push 0x1f0	6898010000	68F0010000	SMemAlloc size of one 29-col x 17-row tile visibility map
+2	0x004809CB	5	1	fogcell.tmap.clear@004809CB	mov ecx, 0x66	mov ecx, 0x7c	B966000000	B97C000000	rep stosd count clearing that tile map
+2	0x004809F1	5	1	fogcell.tmap.clear@004809F1	mov ecx, 0x66	mov ecx, 0x7c	B966000000	B97C000000	rep stosd count clearing that tile map
+2	0x00480A17	5	1	fogcell.tmap.clear@00480A17	mov ecx, 0x66	mov ecx, 0x7c	B966000000	B97C000000	rep stosd count clearing that tile map
+2	0x00480A1C	5	1	fogcell.cells.alloc	push 0x14a0	push 0x1950	68A0140000	6850190000	SMemAlloc size of the 8px cell buffer [0x006D5C18], 108 stride x 60 rows
+2	0x00480A30	5	1	fogcell.cells.clear	mov ecx, 0x528	mov ecx, 0x654	B928050000	B954060000	rep stosd count clearing the cell buffer
+2	0x0047FCA6	7	0	fogcell.fill.rows	mov dword ptr [ebp - 0x18], 0x11	mov dword ptr [ebp - 0x18], 0x11	C745E811000000	C745E811000000	tile rows filled from the map visibility array
+2	0x0047FCC3	7	1	fogcell.fill.cols	mov dword ptr [ebp - 0x10], 0x18	mov dword ptr [ebp - 0x10], 0x1d	C745F018000000	C745F01D000000	tile cols filled per row (writes the whole stride)
+2	0x0047FD80	3	1	fogcell.fill.rowstep	add ecx, 0x18	add ecx, 0x1d	83C118	83C11D	advance the raw map's dest pointer one row (= stride)
+2	0x0047FD9B	3	1	fogcell.smooth.base.src	add eax, 0x19	add eax, 0x1e	83C019	83C01E	raw map + stride + 1: start at row 1, col 1
+2	0x0047FD9E	3	1	fogcell.smooth.base.dst	add ecx, 0x19	add ecx, 0x1e	83C119	83C11E	smoothed map + stride + 1
+2	0x0047FDA1	5	0	fogcell.smooth.rows	mov edi, 0xf	mov edi, 0xf	BF0F000000	BF0F000000	interior tile rows smoothed
+2	0x0047FDB0	5	1	fogcell.smooth.cols	mov esi, 0x16	mov esi, 0x1b	BE16000000	BE1B000000	interior tile cols smoothed
+2	0x0047FDB5	4	1	fogcell.smooth.k.up	movzx ebx, byte ptr [eax - 0x18]	movzx ebx, byte ptr [eax - 0x1d]	0FB658E8	0FB658E3	3x3 kernel: one row up
+2	0x0047FDBF	4	1	fogcell.smooth.k.down	movzx ebx, byte ptr [eax + 0x18]	movzx ebx, byte ptr [eax + 0x1d]	0FB65818	0FB6581D	3x3 kernel: one row down
+2	0x0047FDD1	4	1	fogcell.smooth.k.upleft	movzx ebx, byte ptr [eax - 0x19]	movzx ebx, byte ptr [eax - 0x1e]	0FB658E7	0FB658E2	3x3 kernel: up-left
+2	0x0047FDD8	4	1	fogcell.smooth.k.downright	movzx ebx, byte ptr [eax + 0x19]	movzx ebx, byte ptr [eax + 0x1e]	0FB65819	0FB6581E	3x3 kernel: down-right
+2	0x0047FDDE	4	1	fogcell.smooth.k.upright	movzx ebx, byte ptr [eax - 0x17]	movzx ebx, byte ptr [eax - 0x1c]	0FB658E9	0FB658E4	3x3 kernel: up-right
+2	0x0047FDE4	4	1	fogcell.smooth.k.downleft	movzx ebx, byte ptr [eax + 0x17]	movzx ebx, byte ptr [eax + 0x1c]	0FB65817	0FB6581C	3x3 kernel: down-left
+2	0x0047FE23	3	1	fogcell.interp.base	add ebx, 0x19	add ebx, 0x1e	83C319	83C31E	smoothed map + stride + 1: read from row 1, col 1
+2	0x0047FE2D	7	0	fogcell.interp.rows	mov dword ptr [ebp - 0x14], 0xe	mov dword ptr [ebp - 0x14], 0xe	C745EC0E000000	C745EC0E000000	tile rows interpolated into the cell buffer
+2	0x0047FE40	7	1	fogcell.interp.cols	mov dword ptr [ebp - 0x10], 0x15	mov dword ptr [ebp - 0x10], 0x1a	C745F015000000	C745F01A000000	tile cols interpolated (the playfield-covering band)
+2	0x0047FE53	4	1	fogcell.interp.k.down	movzx eax, byte ptr [ebx + 0x18]	movzx eax, byte ptr [ebx + 0x1d]	0FB64318	0FB6431D	bilinear: the tile one row down
+2	0x0047FE6B	4	1	fogcell.interp.k.downright	movzx eax, byte ptr [ebx + 0x19]	movzx eax, byte ptr [ebx + 0x1e]	0FB64319	0FB6431E	bilinear: the tile down-right
+2	0x0047FEAB	3	1	fogcell.interp.cellrow	add edx, 0x58	add edx, 0x6c	83C258	83C26C	advance the cell dest one 8px row
+2	0x0047FEC7	6	1	fogcell.interp.colback	sub ecx, 0x15c	sub ecx, 0x1ac	81E95C010000	81E9AC010000	after 4 sub-rows: back up 4 cell rows, advance one dword of cells
+2	0x0047FEE4	6	1	fogcell.interp.rowadv	add ecx, 0x10c	add ecx, 0x148	81C10C010000	81C148010000	after a tile row: cell dest to the next 4-row band's start
+2	0x004804F8	5	1	fogcell.change.xspan	mov ebx, 0x2c0	mov ebx, 0x360	BBC0020000	BB60030000	compared screen span in px: T_SMOOTH tiles of 32
+2	0x00480502	5	0	fogcell.change.yspan	mov eax, 0x1e0	mov eax, 0x1e0	B8E0010000	B8E0010000	compared screen span in px, vertical
+2	0x00480523	6	1	fogcell.change.xspan.neg	lea ecx, [ebx - 0x2c0]	lea ecx, [ebx - 0x360]	8D8B40FDFFFF	8D8BA0FCFFFF	the same span as the loop cursor's negative origin
+2	0x004805E3	5	1	fogcell.sync.copy.a	mov ecx, 0x66	mov ecx, 0x7c	B966000000	B97C000000	rep movsd count, game-start sync in 0x004805D0
+2	0x004BD5A8	5	1	fogcell.sync.copy.b	mov ecx, 0x66	mov ecx, 0x7c	B966000000	B97C000000	rep movsd count, full-redraw path in layer 5's draw 0x004BD580
+2	0x00480617	3	1	fogcell.render.rowmul	imul ecx, ecx, 0x58	imul ecx, ecx, 0x6c	6BC958	6BC96C	cell row base = cellRow * stride
+2	0x0048064C	3	1	fogcell.render.rowadv.pre	add esi, 0x58	add esi, 0x6c	83C658	83C66C	pre-loop advance so [esi-stride] is the current row
+2	0x00480671	4	1	fogcell.render.k.up	movzx edx, byte ptr [esi - 0x58]	movzx edx, byte ptr [esi - 0x6c]	0FB656A8	0FB65694	neighborhood read: this column, current row
+2	0x00480675	4	1	fogcell.render.k.upright	movzx eax, byte ptr [esi - 0x57]	movzx eax, byte ptr [esi - 0x6b]	0FB646A9	0FB64695	neighborhood read: next column, current row
+2	0x004806CD	3	1	fogcell.render.rowadv	add esi, 0x58	add esi, 0x6c	83C658	83C66C	advance one cell row per 8px block row
 2	0x0048D663	4	1	placement.reject.x	cmp ax, 0x280	cmp ax, 0x320	663D8002	663D2003	0x0048D660: refuse a placement at x >= 640 (a 16-bit compare)
 2	0x0048D5F2	6	1	placement.rect.right	lea edi, [ecx + 0x280]	lea edi, [ecx + 0x320]	8DB980020000	8DB920030000	0x0048D5C0's extent: right = left + 640 (new in task 034)
 2	0x004814EA	9	1	layer1.park.x	mov word ptr [0x6cef66], 0x280	mov word ptr [0x6cef66], 0x320	66C70566EF6C008002	66C70566EF6C002003	parks the mask layer just off the right edge of the playfield
