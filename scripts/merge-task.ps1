@@ -28,11 +28,23 @@ delegate for merges. The policy switch lives in lib/merge-task.ps1
 On success: `gh pr merge --squash`, then close-task.ps1 -Task NNN, which pulls
 main, stamps `merged: <date>` and commits. Closing is NOT duplicated here.
 
+-Pr MMM (issue #107 -- the hotfix path): merge PR MMM, raised by LIVE task NNN,
+WITHOUT closing the task. Same gate -- OPEN, position, CI verdict, and the same
+-LocalCiReceipt substitution -- plus a refusal unless MMM's head branch is
+taskNNN-* (the branch convention proves the PR belongs to that task) and a
+refusal when MMM is the task's own pr: deliverable (that merge must close the
+task, so it must run without -Pr). No merged: stamp is written, close-task.ps1
+is not called, and the output says so in as many words -- a board reader must
+never wonder why an open task has a merged PR against it.
+
 .EXAMPLE
 ./scripts/merge-task.ps1 -Task 059
 
 .EXAMPLE
 ./scripts/merge-task.ps1 -Task 59 -StopAgent
+
+.EXAMPLE
+./scripts/merge-task.ps1 -Task 070 -Pr 106 -LocalCiReceipt work/scratch/ci-local/task070-lockfix-strictmode-e7a0c2e.json
 #>
 param(
     [Parameter(Mandatory)][string]$Task,
@@ -41,6 +53,9 @@ param(
     # path to a PASSING scripts/run-ci-local.ps1 receipt for this PR's head sha;
     # substitutes for the cloud CI verdict when Actions cannot run (billing/outage)
     [string]$LocalCiReceipt,
+    # HOTFIX PATH (issue #107): merge THIS open PR -- raised by live task NNN off
+    # a taskNNN-* branch -- without stamping or closing the task. Bare PR number.
+    [string]$Pr,
     # forwarded to close-task.ps1: also stop the worker's tab after closing
     [switch]$StopAgent,
     # override for fixture-repo testing (task 074 -- no test may write into
@@ -59,22 +74,35 @@ $ErrorActionPreference = 'Stop'
 $repo = $Repo
 $dataRoot = Get-DataRoot -RepoRoot $repo
 $taskId = '{0:D3}' -f [int]$Task
+$hotfix = -not [string]::IsNullOrEmpty($Pr)
+if ($hotfix -and $Pr -notmatch '^\d+$') {
+    throw "-Pr must be a bare PR number (e.g. 106), got '$Pr'"
+}
+if ($hotfix -and $StopAgent) {
+    throw '-StopAgent stops the worker after closing its task; -Pr merges WITHOUT closing -- the two cannot be combined'
+}
 # Subject rotation (2026-07-18, user caught a day-stale subject): doing a
 # thing IS the subject - never fail the real operation over it.
-try { & (Join-Path $PSScriptRoot 'set-conductor-status.ps1') -State processing -Subject "merging task $taskId" | Out-Null } catch {}
+$subject = if ($hotfix) { "merging hotfix PR #$Pr for task $taskId" } else { "merging task $taskId" }
+try { & (Join-Path $PSScriptRoot 'set-conductor-status.ps1') -State processing -Subject $subject | Out-Null } catch {}
 
 $taskFile = Get-ChildItem -Path (Join-Path $dataRoot "tasks/$taskId-*.md") -ErrorAction SilentlyContinue |
     Select-Object -First 1
 if (-not $taskFile) { throw "No task file work/tasks/$taskId-*.md under $repo." }
 
 $content = Get-Content -LiteralPath $taskFile.FullName -Raw
-$prNumber = Get-TaskPrNumber -Content $content
+$taskPrNumber = Get-TaskPrNumber -Content $content
+$prNumber = if ($hotfix) { $Pr } else { $taskPrNumber }
 
-# Local half of the gate first -- no point spending gh round-trips on a task
-# whose own file already disqualifies it.
-$refusal = Get-LocalRefusalReason -TaskId $taskId -AgentTask $env:AGENT_TASK `
-    -PrNumber $prNumber -MergedStamp (Get-TaskMergedStamp -Content $content)
-if ($refusal) { throw "Refusing to merge task ${taskId}: $refusal" }
+if (-not $hotfix) {
+    # Local half of the gate first -- no point spending gh round-trips on a task
+    # whose own file already disqualifies it. The hotfix path has its own gate
+    # (Get-HotfixRefusalReason) below: it needs the PR's head branch, so it can
+    # only run after the gh view.
+    $refusal = Get-LocalRefusalReason -TaskId $taskId -AgentTask $env:AGENT_TASK `
+        -PrNumber $prNumber -MergedStamp (Get-TaskMergedStamp -Content $content)
+    if ($refusal) { throw "Refusing to merge task ${taskId}: $refusal" }
+}
 
 # The PR's own state + its position against the base branch. ConvertFrom-Json is
 # safe here: all three fields are plain strings/bools, no dates to mangle.
@@ -82,10 +110,19 @@ if ($refusal) { throw "Refusing to merge task ${taskId}: $refusal" }
 # git remote. Without the pin, running this from any other checkout (e.g. the
 # LIVE conductor repo) would evaluate -- and MERGE -- that repo's same-numbered
 # PR. Every gh pr call in this script and close-task.ps1 carries the pin.
+# The hotfix path also needs headRefName: the branch is what proves the PR
+# belongs to the named task.
 $ghRepo = 'inwenis/decompile-sc'
-$viewRaw = gh pr view $prNumber --repo $ghRepo --json state,mergeStateStatus 2>&1
+$viewFields = if ($hotfix) { 'state,mergeStateStatus,headRefName' } else { 'state,mergeStateStatus' }
+$viewRaw = gh pr view $prNumber --repo $ghRepo --json $viewFields 2>&1
 if ($LASTEXITCODE -ne 0) { throw "gh pr view $prNumber failed: $viewRaw" }
 $view = ("$viewRaw" | Out-String) | ConvertFrom-Json
+
+if ($hotfix) {
+    $refusal = Get-HotfixRefusalReason -TaskId $taskId -AgentTask $env:AGENT_TASK `
+        -Pr $Pr -TaskPrNumber $taskPrNumber -HeadRefName $view.headRefName
+    if ($refusal) { throw "Refusing to merge PR #$Pr as a task $taskId hotfix: $refusal" }
+}
 
 # `gh pr checks` exits non-zero when checks are red (1) or absent (8), so its
 # exit code is not an error here -- the verdict comes from the payload. The
@@ -126,10 +163,17 @@ if ($verdict -ne 'pass' -and $LocalCiReceipt) {
 
 # Full gate now that every fact is in hand. -RequireHumanOk is left off: the
 # conductor is the human's delegate for merges (pass it here when that changes).
-$refusal = Get-MergeRefusalReason -TaskId $taskId -AgentTask $env:AGENT_TASK `
-    -PrNumber $prNumber -PrState $view.state `
-    -MergedStamp (Get-TaskMergedStamp -Content $content) `
-    -MergeStateStatus $view.mergeStateStatus -ChecksVerdict $verdict -HumanOk:$HumanOk
+# Hotfix mode already passed Get-HotfixRefusalReason above; the PR-side half of
+# the gate (OPEN, position, CI) is the same for both modes.
+$refusal = if ($hotfix) {
+    Get-RemoteRefusalReason -PrNumber $prNumber -PrState $view.state `
+        -MergeStateStatus $view.mergeStateStatus -ChecksVerdict $verdict
+} else {
+    Get-MergeRefusalReason -TaskId $taskId -AgentTask $env:AGENT_TASK `
+        -PrNumber $prNumber -PrState $view.state `
+        -MergedStamp (Get-TaskMergedStamp -Content $content) `
+        -MergeStateStatus $view.mergeStateStatus -ChecksVerdict $verdict -HumanOk:$HumanOk
+}
 if ($refusal) { throw "Refusing to merge task ${taskId}: $refusal" }
 
 Write-Host "task ${taskId}: PR #$prNumber OPEN, $($view.mergeStateStatus), checks $verdict -- merging (squash)"
@@ -141,7 +185,28 @@ if ($script:localCiNote) {
 gh pr merge $prNumber --repo $ghRepo --squash | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "gh pr merge $prNumber --squash failed -- nothing was closed." }
 
-# Hand off: close-task.ps1 owns pulling main, stamping merged:, and committing.
-$closeArgs = @{ Task = $taskId }
-if ($StopAgent) { $closeArgs.StopAgent = $true }
-& (Join-Path $PSScriptRoot 'close-task.ps1') @closeArgs
+if ($hotfix) {
+    # The whole point of -Pr (issue #107): the task is NOT closed. Say so in
+    # as many words -- a board reader looking at an open task with a merged PR
+    # against it must find this line, not a mystery.
+    Write-Host "task ${taskId}: merged hotfix PR #$prNumber ($($view.headRefName)) WITHOUT closing task $taskId -- no merged: stamp written, task $taskId stays OPEN$(if ($taskPrNumber) { " (its own deliverable PR #$taskPrNumber is untouched)" })"
+
+    # USER RULE (2026-07-15): keep the main checkout current with remote main.
+    # The hotfix just advanced origin/main; unlike the close path there is no
+    # local commit to make, so a diverged checkout is a warning, not a failure.
+    git -C $repo pull --ff-only 2>&1 | Out-Host
+    if ($LASTEXITCODE -ne 0) { Write-Warning 'git pull --ff-only failed -- main checkout diverged; pull by hand.' }
+
+    # Board freshness rides the merge (other open PRs may now be BEHIND) --
+    # never fail the merge over a refresh hiccup.
+    try {
+        $prStatusOut = & (Join-Path $PSScriptRoot 'refresh-pr-status.ps1') -RepoRoot $repo 2>&1 | Select-Object -Last 1
+        Write-Host "pr-status refreshed: $prStatusOut"
+    } catch { Write-Warning "refresh-pr-status failed: $_" }
+}
+else {
+    # Hand off: close-task.ps1 owns pulling main, stamping merged:, and committing.
+    $closeArgs = @{ Task = $taskId }
+    if ($StopAgent) { $closeArgs.StopAgent = $true }
+    & (Join-Path $PSScriptRoot 'close-task.ps1') @closeArgs
+}

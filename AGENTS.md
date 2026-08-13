@@ -1145,6 +1145,13 @@ All commands run from `C:/git/decompile-sc` via the PowerShell tool (see
 #   refuses unless: caller is conductor, task has pr: and no merged:,
 #   PR open, not behind origin/main, checks green. Squash-merges, then closes.
 
+# Merge a hotfix PR raised by a LIVE task WITHOUT closing the task (issue #107):
+./scripts/merge-task.ps1 -Task NNN -Pr MMM
+#   same PR gate (open, position, checks/-LocalCiReceipt); additionally refuses
+#   unless PR MMM's head branch is taskNNN-* and MMM is not the task's own pr:
+#   deliverable. Writes NO merged: stamp, never calls close-task, and prints
+#   that the task stays open.
+
 # Close a hand-merged PR (merge-task.ps1 calls this itself):
 ./scripts/close-task.ps1 -Task NNN [-StopAgent] [-Prune]
 #   verifies PR is MERGED via gh (refuses otherwise), stamps merged:, commits
