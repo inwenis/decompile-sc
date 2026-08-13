@@ -219,6 +219,59 @@ does NOT rest on "the cancel happened": the plugin counts presses it RESCUED (`p
 suite requires that count to move across the click. **When the bug you are fixing sometimes works by
 accident, a green test proves nothing unless it also proves your fix is what made it green.**
 
+## A SINGLE SAMPLE OF A RACE IS NOT A RESULT — and neither is a rate whose denominator you did not pair (2026-08-13, task 061)
+
+Both halves of that cost this task most of a day, and **both look like diligence from the outside**,
+which is why they need writing down rather than remembering.
+
+**The first half.** Task 061's click on a queue slot either cancels or does not, and which one is
+decided by a collision measured in milliseconds. Four runs were made across two builds, one click
+each, and every one was reported — by the worker AND relayed by the conductor to the board and to
+the user — as a reproduction or a repair:
+
+| build | instrument | cancelled? |
+|---|---|---|
+| pre-fix | off | no |
+| pre-fix | **on** | **yes** |
+| candidate fix | off | **yes** |
+| candidate fix | **on** | no |
+
+Read as experiments, those four say the instrument causes the bug in one direction and cures it in
+the other, which is incoherent. Read as what they are — four flips of a coin whose bias nobody had
+measured — they say nothing at all. A whole fix was designed, built, shipped to review and reverted
+on the strength of them. When the rate was finally measured it was **0 of 18 above a 60ms hold**,
+and the harness had been clicking at 60ms the entire time while the human who reported the bug was
+holding the button longer. *"It never works"* and *"our runs see it flip"* were the same defect
+sampled at two different hold times.
+
+So: **if the thing you are testing can go either way on identical input, one run is an anecdote.**
+Click it N times, print the rate, and say what N was. And choose the axis you sweep for a reason —
+here it was hold duration, because that is the one variable that differs between the harness and the
+human, and it turned out to be the whole story.
+
+**The second half, and it is subtler.** Once a rate exists it is easy to over-read. This task's
+sweep printed two per-duration totals — six clicks, one cancel, five collisions — and the obvious
+conclusion, *"the one click that cancelled is the one click the collision missed"*, is **two
+aggregates that happen to be consistent, not a pairing**. It was one line to fix (print a row per
+click carrying its own verdict and its own collision count) and the paired run then measured the
+real thing: **30 of 30 collided clicks failed, no exceptions.** The converse still has no pairing
+and is still not claimed.
+
+**A count and a count are not a correlation.** If you are about to say "the X that did A is the X
+that did B", the row has to carry A and B together, or you are reading a coincidence of totals.
+
+Two riders, both measured here:
+
+- **A rate does not have to survive its own re-run.** The same sweep twenty minutes later moved from
+  `collided=5 of 6` to `collided=6 of 6` at the same hold times, i.e. the environment shifted
+  underneath it. The necessary claim (30/30) is unaffected, but the "17% at 60ms" from the first
+  table did NOT reproduce — so quote a rate with its run, and never as a property of the system.
+- **Deleting the thing you were measuring can sharpen the instrument.** With the candidate fix in,
+  the collision counter read 110,381 per click, because the fix kept re-arming the press for the
+  next disable to clear. With it reverted, the same counter reads **exactly 1 per click, every
+  time**: the first disable clears the press and every later one finds nothing to clear. The
+  measurement became deterministic by removing the code that was supposed to help it.
+
 ## Your DIAGNOSTICS are under the same rule as your assertions (2026-08-10, task 030)
 
 The "a check that cannot fail is worth nothing" rule applies to the lines you print while
