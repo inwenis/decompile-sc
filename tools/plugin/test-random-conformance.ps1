@@ -508,7 +508,7 @@ function ConvertFrom-EngineLines {
             }
             continue
         }
-        $m = [regex]::Match($t, 'PRODQ \[[^\]]+\] buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+) refusedFull=(\d+)')
+        $m = [regex]::Match($t, 'PRODQ \[[^\]]+\](?:\s+\w+=\S+)*\s+buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+)')
         if ($m.Success) {
             $o.TrackedCount = [int]$m.Groups[1].Value
             $o.Captured = [int]$m.Groups[3].Value
@@ -518,6 +518,9 @@ function ConvertFrom-EngineLines {
             $o.RefusedFull = [int]$m.Groups[7].Value
             $x = [regex]::Match($t, 'trainSeen=(\d+) trainNoUnit=(\d+)')
             if ($x.Success) { $o.TrainSeen = [int]$x.Groups[1].Value; $o.TrainNoUnit = [int]$x.Groups[2].Value }
+            continue
+        } elseif ($t -match 'PRODQ \[[^\]]+\](?:\s+\w+=\S+)*\s+buildings=') {
+            Assert-Inv -Id 'PARSE' -What 'the PRODQ summary line parsed' -Ok $false -Detail "($t)"
             continue
         }
         $m = [regex]::Match($t, 'WORLD \[[^\]]+\] p=(\d+) i=(\d+) unit=0x([0-9A-Fa-f]+) owner=(\d+) type=0x([0-9A-Fa-f]+) hp=(-?\d+) order=0x([0-9A-Fa-f]+) order2=0x([0-9A-Fa-f]+) stim=(\d+) energy=(\d+) pos=\((\d+),(\d+)\) flags=0x([0-9A-Fa-f]+)')
