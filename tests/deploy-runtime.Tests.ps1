@@ -129,9 +129,9 @@ Describe 'the widescreen switch ships assembled and OFF by default (task 070)' {
         $script:wideLauncher.Length | Should -BeGreaterThan 100
     }
 
-    It 'the wide launcher turns the assembled widescreen on: stage 2 + cnc-ddraw' {
+    It 'the wide launcher turns the assembled widescreen on: stage 3 + cnc-ddraw' {
         $script:wideLauncher | Should -Match '-Widescreen 1'
-        $script:wideLauncher | Should -Match '-WidescreenStage 2'
+        $script:wideLauncher | Should -Match '-WidescreenStage 3'
         $script:wideLauncher | Should -Match 'cnc-ddraw\\ddraw\.dll'
         $script:wideLauncher | Should -Not -Match 'InjectWindowedHelper' -Because 'WMode presents 640 columns whatever it is asked; the wide path must use the cnc-ddraw proxy'
     }

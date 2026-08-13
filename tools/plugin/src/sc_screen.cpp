@@ -103,7 +103,7 @@ int ScScreenStageWanted(void) {
     if (n == 0 || n >= sizeof(buf)) return 1;
     int v = buf[0] - '0';
     if (v < 0) v = 0;
-    if (v > 2) v = 2;
+    if (v > 3) v = 3;
     return v;
 }
 

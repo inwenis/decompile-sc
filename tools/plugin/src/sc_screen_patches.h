@@ -36,7 +36,7 @@
 typedef struct {
     DWORD       va;          // static VA, rebased by the plugin
     BYTE        len;
-    BYTE        stage;       // 0, 1 or 2 -- see research/renderer-viewport.md 9.3
+    BYTE        stage;       // 0..3 -- see research/renderer-viewport.md 9.3; 3 = console/input, task 071
     BYTE        fixupOff;    // SC_WS_NO_FIXUP, or the offset of a dword
     DWORD       fixupAddend; // filled with (relocated grid base + this)
     BYTE        expect[SC_WS_MAX_PATCH_LEN];
@@ -1510,6 +1510,66 @@ static const ScScreenPatch SC_WS_PATCHES[] = {
       { 0x66, 0xC7, 0x05, 0x66, 0xEF, 0x6C, 0x00, 0x80, 0x02 },
       { 0x66, 0xC7, 0x05, 0x66, 0xEF, 0x6C, 0x00, 0x20, 0x03 },
       "layer1.park.x", "parks the mask layer just off the right edge of the playfield" },
+    // 0x004D1960  cmp si, 0x280
+    //             -> cmp si, 0x320
+    { 0x004D1960u,  5, 3, SC_WS_NO_FIXUP, 0x0u,
+      { 0x66, 0x81, 0xFE, 0x80, 0x02 },
+      { 0x66, 0x81, 0xFE, 0x20, 0x03 },
+      "mouse.clamp.cmp@004D1960", "window-proc mouse x clamp: the 'x >= 640' decision" },
+    // 0x004D196D  mov ax, 0x27f
+    //             -> mov ax, 0x31f
+    { 0x004D196Du,  4, 3, SC_WS_NO_FIXUP, 0x0u,
+      { 0x66, 0xB8, 0x7F, 0x02 },
+      { 0x66, 0xB8, 0x1F, 0x03 },
+      "mouse.clamp.x@004D196D", "window-proc mouse x clamp: the replacement value 639" },
+    // 0x004D19EC  cmp si, 0x280
+    //             -> cmp si, 0x320
+    { 0x004D19ECu,  5, 3, SC_WS_NO_FIXUP, 0x0u,
+      { 0x66, 0x81, 0xFE, 0x80, 0x02 },
+      { 0x66, 0x81, 0xFE, 0x20, 0x03 },
+      "mouse.clamp.cmp@004D19EC", "window-proc mouse x clamp: the 'x >= 640' decision" },
+    // 0x004D19F9  mov ax, 0x27f
+    //             -> mov ax, 0x31f
+    { 0x004D19F9u,  4, 3, SC_WS_NO_FIXUP, 0x0u,
+      { 0x66, 0xB8, 0x7F, 0x02 },
+      { 0x66, 0xB8, 0x1F, 0x03 },
+      "mouse.clamp.x@004D19F9", "window-proc mouse x clamp: the replacement value 639" },
+    // 0x004D1A7C  cmp si, 0x280
+    //             -> cmp si, 0x320
+    { 0x004D1A7Cu,  5, 3, SC_WS_NO_FIXUP, 0x0u,
+      { 0x66, 0x81, 0xFE, 0x80, 0x02 },
+      { 0x66, 0x81, 0xFE, 0x20, 0x03 },
+      "mouse.clamp.cmp@004D1A7C", "window-proc mouse x clamp: the 'x >= 640' decision" },
+    // 0x004D1A89  mov ax, 0x27f
+    //             -> mov ax, 0x31f
+    { 0x004D1A89u,  4, 3, SC_WS_NO_FIXUP, 0x0u,
+      { 0x66, 0xB8, 0x7F, 0x02 },
+      { 0x66, 0xB8, 0x1F, 0x03 },
+      "mouse.clamp.x@004D1A89", "window-proc mouse x clamp: the replacement value 639" },
+    // 0x004D24E6  cmp ax, 0x280
+    //             -> cmp ax, 0x320
+    { 0x004D24E6u,  4, 3, SC_WS_NO_FIXUP, 0x0u,
+      { 0x66, 0x3D, 0x80, 0x02 },
+      { 0x66, 0x3D, 0x20, 0x03 },
+      "mouse.clamp.cmp@004D24E6", "window-proc mouse x clamp: the 'x >= 640' decision" },
+    // 0x004D24EC  mov dword ptr [0x6cddc4], 0x27f
+    //             -> mov dword ptr [0x6cddc4], 0x31f
+    { 0x004D24ECu, 10, 3, SC_WS_NO_FIXUP, 0x0u,
+      { 0xC7, 0x05, 0xC4, 0xDD, 0x6C, 0x00, 0x7F, 0x02, 0x00, 0x00 },
+      { 0xC7, 0x05, 0xC4, 0xDD, 0x6C, 0x00, 0x1F, 0x03, 0x00, 0x00 },
+      "mouse.clamp.x@004D24EC", "window-proc mouse x clamp: the replacement value 639" },
+    // 0x0046FC75  add eax, 0x280
+    //             -> add eax, 0x320
+    { 0x0046FC75u,  5, 3, SC_WS_NO_FIXUP, 0x0u,
+      { 0x05, 0x80, 0x02, 0x00, 0x00 },
+      { 0x05, 0x20, 0x03, 0x00, 0x00 },
+      "click.searchrect.right", "0x0046FB40: click search rect right = screenLeft + 640 -> + 800" },
+    // 0x0046FE18  add eax, 0x280
+    //             -> add eax, 0x320
+    { 0x0046FE18u,  5, 3, SC_WS_NO_FIXUP, 0x0u,
+      { 0x05, 0x80, 0x02, 0x00, 0x00 },
+      { 0x05, 0x20, 0x03, 0x00, 0x00 },
+      "click.searchrect.right.drag", "0x0046FB40 drag-box arm: same rect, same widen" },
 };
 
 #define SC_WS_PATCH_COUNT (sizeof(SC_WS_PATCHES)/sizeof(SC_WS_PATCHES[0]))

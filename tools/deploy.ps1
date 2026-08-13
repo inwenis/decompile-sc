@@ -74,7 +74,7 @@ What it does, in order:
   9b. Task 070, the widescreen switch: stages the pinned cnc-ddraw (sha256-verified
       against this script's own pin) into <DeployRoot>\plugin\cnc-ddraw\, writes a
       SECOND launcher Launch-StarCraft-Modded-Wide.ps1 (same feature set, plus
-      -Widescreen 1 -WidescreenStage 2 and cnc-ddraw as the windowed helper), copies
+      -Widescreen 1 -WidescreenStage 3 and cnc-ddraw as the windowed helper), copies
       widescreen-card.md beside it, and creates the second shortcut
       "StarCraft Modded (Wide).lnk". Widescreen is OFF BY DEFAULT: the normal
       launcher and shortcut are byte-for-byte what they were, and the wide path is
@@ -565,9 +565,11 @@ Write-Host "launcher written: $launcherPath"
 # Identical feature set, two swaps: the presentation helper is cnc-ddraw instead
 # of WMode (WMode presents 640 columns whatever it is asked --
 # research/renderer-viewport.md 12.6; cnc-ddraw measured FOLLOW at 800, 14.2),
-# and the engine geometry is -Widescreen 1 -WidescreenStage 2 (stage 2 playfield
-# + fog cell pipeline, tasks 064/068, applied in-process at launch --
-# StarCraft.exe on disk stays byte-identical). A SEPARATE launcher + shortcut,
+# and the engine geometry is -Widescreen 1 -WidescreenStage 3 (stage 2 playfield
+# + fog cell pipeline, tasks 064/068, + stage 3 input, task 071: the mouse
+# clamps and click search rect widen to 800 so a click can reach the right
+# quarter; applied in-process at launch -- StarCraft.exe on disk stays
+# byte-identical). A SEPARATE launcher + shortcut,
 # deliberately: widescreen stays off by default, the normal shortcut is
 # untouched, and trying wide is one double-click with no way to half-enable it.
 # Known imperfections are on the card (widescreen-card.md beside this file).
@@ -580,10 +582,17 @@ to refresh this file rather than editing it by hand. Same feature set as
 Launch-StarCraft-Modded.ps1 (fan-out + circles + HUD row paging + production queue +
 group fan-out, windowed, sound on), plus the widescreen assembly (task 070):
 
-  -Widescreen 1 -WidescreenStage 2   800x480 engine geometry: stage 2 playfield
-                                     (task 064) + the fog cell pipeline (task 068),
-                                     patched in-process at launch -- the exe on disk
-                                     is byte-identical to the stock deploy.
+  -Widescreen 1 -WidescreenStage 3   800x480 engine geometry: stage 2 playfield
+                                     (task 064) + the fog cell pipeline (task 068)
+                                     + stage 3 input (task 071: the window-proc
+                                     mouse clamps and the mouse->world click search
+                                     rect widen from 640 to 800, so a click can
+                                     reach the new right quarter). Patched in-process
+                                     at launch -- the exe on disk is byte-identical
+                                     to the stock deploy. NOTE: selection past x=640
+                                     has never been watched working off-screen
+                                     (no harness can feed it); your first click in
+                                     the right quarter IS the test -- widescreen-card.md.
   -Windowed -WindowedHelperDll ...   cnc-ddraw (pinned v7.1.0.0, MIT) presents all
                                      800 columns; WMode crops to 640 (research/
                                      renderer-viewport.md 12.6 vs 14.2).
@@ -603,7 +612,7 @@ try {
         -Windowed `
         -WindowedHelperDll (Join-Path $here 'plugin\cnc-ddraw\ddraw.dll') `
         -Widescreen 1 `
-        -WidescreenStage 2 `
+        -WidescreenStage 3 `
         -Sound `
         -NoLaunchLock `
         -NoForegroundRestore `

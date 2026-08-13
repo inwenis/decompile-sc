@@ -26,13 +26,16 @@ you pick the (Wide) shortcut, and nothing needs turning back off.
 where the old screen used to end). Does it select that exact unit? Then drag a
 box across that area, and right-click ground there to move someone.
 
-Our test rig drives the game with synthetic input on a hidden screen, and that
-kind of input cannot reach this one code path in the wide window -- so mouse
-clicks in the right quarter are the one thing nobody has been able to verify.
-A real mouse may be entirely fine. If clicks there select the wrong unit or
-nothing, say so and play on: everything left of the old boundary behaves
-exactly as it always did, and a separate fix for the click mapping is already
-being worked on.
+The game's input for the right quarter is now switched on: the two places that
+used to cut every click off at the old 640 boundary (the mouse-position clamp
+and the "what did I click on" search box) have both been widened to the full
+800. **But we could not watch it actually work.** Our test rig drives the game
+with synthetic input on a hidden screen, and that kind of input cannot reach
+past the old boundary in the wide window, on either display path -- so **your
+first real click in the right quarter is the test**, and it is the only one
+there is. A real mouse may be entirely fine. If clicks there select the wrong
+unit or nothing, that is a finding, not a surprise -- say so and play on:
+everything left of the old boundary behaves exactly as it always did.
 
 ## Known imperfections (real, not dangerous)
 
