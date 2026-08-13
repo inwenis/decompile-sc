@@ -386,6 +386,27 @@ static bool EnsureSpliced(DWORD root) {
     if (g_spliced && !InChain(root)) g_spliced = false;   // same-address dialog realloc
     if (g_spliced) return true;
 
+    // AND THE OTHER DIRECTION, which the line above does not cover: we think we are NOT
+    // spliced but our control is already in this chain. Appending it again is not a
+    // duplicate, it is a CYCLE -- the memset below zeroes g_ctrl's `next`, the tail walk
+    // then ends ON g_ctrl, and the append writes g_ctrl->next = g_ctrl. The engine's
+    // redraw walk (0x0041C683) follows `next` to the end of the list, so a self-link is
+    // an infinite loop inside the game's own paint, not a cosmetic bug.
+    //
+    // It was unreachable while the ONLY thing that cleared g_spliced was a dialog whose
+    // address had changed -- a different chain by definition. Task 054 added a second
+    // clearer (the game-session epoch), so "cleared but still linked" stopped being
+    // impossible by construction, and this makes it impossible by test instead. Adopting
+    // an existing link is also the correct answer on its own terms: the control IS in the
+    // chain, so the invariant the flag records is already true.
+    if (InChain(root)) {
+        ScLog("QIND: our indicator control is already in this dialog's chain while the "
+              "module thought it was not -- adopting the existing link rather than "
+              "appending a second one (dialog 0x%08X)", (unsigned)root);
+        g_spliced = true;
+        return true;
+    }
+
     // Runtime evidence guard, same shape as sc_hudrow's: the engine must have a real
     // interact AND update handler for this control type in its own default tables. If
     // either is null, this build does not dispatch the type the way the table dump says,
