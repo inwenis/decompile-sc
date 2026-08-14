@@ -46,8 +46,9 @@ What it does, in order:
      See "Design: self-contained, not a thin repo pointer" below.
   8. Writes <DeployRoot>\Launch-StarCraft-Modded.ps1, a launcher with zero parameters
      that calls the deployed copy of run-with-plugin.ps1 with the feature set baked in:
-     -Mode fanout -InjectWindowedHelper WMode -Circles 1 -HudRow 1 -ProdQueue 1
-     -ProdFan 1 -UpgradeQueue 1 -QueueIndicator 1 -Sound -NoLaunchLock -NoForegroundRestore
+     -Mode fanout -Windowed -WindowedHelperDll <staged cnc-ddraw> -WindowedHelperIni
+     <staged cnc-ddraw-2x.ini> -Circles 1 -HudRow 1 -ProdQueue 1 -ProdFan 1
+     -UpgradeQueue 1 -QueueIndicator 1 -Sound -NoLaunchLock -NoForegroundRestore
      (fanout + selection circles + HUD row paging + over-cap production queue +
      group production fan-out — -ProdQueue and -ProdFan both default to 0 in
      run-with-plugin.ps1 so suites opt in, but the PLAY build turns them on; building
@@ -59,15 +60,19 @@ What it does, in order:
      ring from the plugin's own queue and puts a "+N" on the rest, so the two flags above
      it stop being invisible. It draws with the engine's own text routine and adds no art.
      Windowed, audible, and structurally
-     unable to take the worker launch lock). This is run-with-plugin.ps1's real working
-     windowed recipe, not its deprecated/broken -Windowed switch -- see
-     tools/plugin/README.md "Windowed mode: injected, not proxied". -Sound and
+     unable to take the worker launch lock). Presenter is cnc-ddraw, not WMode (task
+     075, issue #114): WMode has no export table and no config (tools/plugin/README.md
+     "Windowed mode: injected, not proxied"), so it cannot scale a window or clip the
+     cursor, and both had gone missing from the user's play. cnc-ddraw-2x.ini
+     (tools/plugin/cnc-ddraw-2x.ini) is what sets 1280x960 (2x the 640x480 requested)
+     and locks the cursor to the window on the first click inside it. -Sound and
      -NoLaunchLock both matter here specifically because this is the ONE launcher the
-     user's own play goes through -- see run-with-plugin.ps1's "Launch lock" .DESCRIPTION
-     for the regression that shipped once from getting this wrong. The launcher also
-     wraps the call in try/catch: on failure it logs to <DeployRoot>\logs\launch-error.log
-     and shows a message box, because this runs `pwsh -WindowStyle Hidden` with no
-     console -- without that, any failure here is silently invisible to the user.
+     user's own play goes through -- see
+     run-with-plugin.ps1's "Launch lock" .DESCRIPTION for the regression that shipped
+     once from getting this wrong. The launcher also wraps the call in try/catch: on
+     failure it logs to <DeployRoot>\logs\launch-error.log and shows a message box,
+     because this runs `pwsh -WindowStyle Hidden` with no console -- without that, any
+     failure here is silently invisible to the user.
   9. Creates/updates the desktop shortcut "StarCraft Modded.lnk", target
      "pwsh -WindowStyle Hidden -File <launcher>" so double-clicking shows the game and
      nothing else -- no console window.
@@ -472,14 +477,21 @@ Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-desktop.ps1')         -Destinat
 Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-build-id.ps1')        -Destination (Join-Path $pluginDeployDir 'sc-build-id.ps1')        -Force
 Write-Host 'plugin runtime copied: scplugin.dll, scinject.exe, run-with-plugin.ps1, check-game-windows.ps1, sc-canonical-path.ps1, sc-audio-mute.ps1, sc-launch-lock.ps1, sc-foreground.ps1, sc-desktop.ps1, sc-build-id.ps1'
 
-# --- 3b. stage cnc-ddraw for the wide launcher (task 070) ---------------------
+# --- 3b. stage cnc-ddraw for the wide launcher (task 070) and the normal launcher's
+#         2x scale + mouse lock (task 075, issue #114) ------------------------
 # The wide launcher presents through cnc-ddraw (research/renderer-viewport.md 14:
 # FOLLOW -- all 800 columns; WMode crops to 640 whatever it is asked, 12.6). The
-# DLL is a game-adjacent third-party binary: staged from the pinned fetch, never
-# committed (hard rule 1), sha256-verified HERE so a deploy cannot ship a DLL the
-# pin does not vouch for. run-with-plugin.ps1 -WindowedHelperDll copies it into
-# the game dir per launch and reads cnc-ddraw.ini from ITS OWN script directory,
-# which in the deployed tree is plugin\ -- hence the two destinations below.
+# normal launcher now ALSO presents through cnc-ddraw as of task 075: WMode has no
+# export table and no config (tools/plugin/README.md "Windowed mode: injected, not
+# proxied"), so it structurally cannot scale a window or clip the cursor -- cnc-ddraw
+# is the only one of the two presenters that can. The DLL is a game-adjacent
+# third-party binary: staged from the pinned fetch, never committed (hard rule 1),
+# sha256-verified HERE so a deploy cannot ship a DLL the pin does not vouch for.
+# run-with-plugin.ps1 -WindowedHelperDll copies it into the game dir per launch and
+# -WindowedHelperIni picks which ini travels with it -- the wide launcher keeps
+# 065's cnc-ddraw.ini (width=0/height=0, unscaled), the normal launcher gets
+# cnc-ddraw-2x.ini (task 075: 1280x960 = 2x the 640x480 it requests, cursor locked).
+# Both files are staged unconditionally so either launcher can be run standalone.
 $cncSrcDll = Join-Path $CncDdrawDir 'ddraw.dll'
 if (-not (Test-Path -LiteralPath $cncSrcDll)) {
     throw ("deploy: cnc-ddraw not found at $cncSrcDll. Run tools/plugin/fetch-cnc-ddraw.ps1 " +
@@ -493,7 +505,9 @@ $cncDeployDir = Join-Path $pluginDeployDir 'cnc-ddraw'
 New-Item -ItemType Directory -Path $cncDeployDir -Force | Out-Null
 Copy-Item -LiteralPath $cncSrcDll -Destination (Join-Path $cncDeployDir 'ddraw.dll') -Force
 Copy-Item -LiteralPath (Join-Path $pluginDir 'cnc-ddraw.ini') -Destination (Join-Path $pluginDeployDir 'cnc-ddraw.ini') -Force
-Write-Host "cnc-ddraw staged: $cncDeployDir\ddraw.dll (sha256 verified) + plugin\cnc-ddraw.ini"
+$cnc2xIniDeployPath = Join-Path $pluginDeployDir 'cnc-ddraw-2x.ini'
+Copy-Item -LiteralPath (Join-Path $pluginDir 'cnc-ddraw-2x.ini') -Destination $cnc2xIniDeployPath -Force
+Write-Host "cnc-ddraw staged: $cncDeployDir\ddraw.dll (sha256 verified) + plugin\cnc-ddraw.ini + plugin\cnc-ddraw-2x.ini"
 
 # --- 4. write the zero-argument launcher --------------------------------------
 $launcherPath = Join-Path $deployRootFull 'Launch-StarCraft-Modded.ps1'
@@ -506,6 +520,15 @@ this file rather than editing it by hand. Baked feature set: fan-out + selection
 sound ON (run-with-plugin.ps1 mutes by default for unattended
 test suites -- -Sound here is what keeps the user's own play audible; see
 tools/README-deploy.md "Sound").
+
+Presenter: cnc-ddraw, not WMode (task 075, issue #114 -- window scale + mouse lock had
+disappeared). WMode.dll has no export table and no config (README "Windowed mode:
+injected, not proxied"), so it cannot scale a window or clip the cursor; cnc-ddraw can,
+and is already proven live via the wide launcher (task 070). cnc-ddraw-2x.ini
+(plugin\cnc-ddraw-2x.ini) is what actually sets 1280x960 (2x the 640x480 this game
+requests) and locks the cursor to the window on the first click inside it -- see that
+file for the toggle (persistent: edit the ini and redeploy; per-session: hold Ctrl or
+Right Alt to free the cursor).
 
 -NoForegroundRestore is baked in for the same class of reason (issue #30): a worker
 launch hands the foreground back to whatever window had it before, because an unattended
@@ -536,7 +559,9 @@ try {
         -BuildDir (Join-Path $here 'plugin') `
         -LogPath  (Join-Path $here 'logs\sc-plugin.log') `
         -Mode fanout `
-        -InjectWindowedHelper WMode `
+        -Windowed `
+        -WindowedHelperDll (Join-Path $here 'plugin\cnc-ddraw\ddraw.dll') `
+        -WindowedHelperIni (Join-Path $here 'plugin\cnc-ddraw-2x.ini') `
         -Sound `
         -NoLaunchLock `
         -NoForegroundRestore `
@@ -562,17 +587,20 @@ Write-Host ''
 Write-Host "launcher written: $launcherPath"
 
 # --- 4b. the WIDESCREEN launcher (task 070) -----------------------------------
-# Identical feature set, two swaps: the presentation helper is cnc-ddraw instead
-# of WMode (WMode presents 640 columns whatever it is asked --
-# research/renderer-viewport.md 12.6; cnc-ddraw measured FOLLOW at 800, 14.2),
-# and the engine geometry is -Widescreen 1 -WidescreenStage 3 (stage 2 playfield
-# + fog cell pipeline, tasks 064/068, + stage 3 input, task 071: the mouse
-# clamps and click search rect widen to 800 so a click can reach the right
-# quarter; applied in-process at launch -- StarCraft.exe on disk stays
-# byte-identical). A SEPARATE launcher + shortcut,
-# deliberately: widescreen stays off by default, the normal shortcut is
-# untouched, and trying wide is one double-click with no way to half-enable it.
-# Known imperfections are on the card (widescreen-card.md beside this file).
+# Both launchers now go through cnc-ddraw (task 075 moved the normal one off WMode --
+# see its own comment block above), so the swap left here is the engine geometry:
+# -Widescreen 1 -WidescreenStage 3 (stage 2 playfield + fog cell pipeline, tasks
+# 064/068, + stage 3 input, task 071: the mouse clamps and click search rect widen to
+# 800 so a click can reach the right quarter; applied in-process at launch --
+# StarCraft.exe on disk stays byte-identical) and the ini cnc-ddraw reads:
+# cnc-ddraw.ini here (065's, width=0/height=0 -- unscaled 800x480), cnc-ddraw-2x.ini
+# on the normal launcher (task 075 -- 1280x960). The two were never measured combined
+# (1600x960 stretched from an 800x480 source) and issue #114 asked only for the normal
+# shortcut's scale/lock back, so this launcher stays unscaled rather than shipping an
+# unmeasured combination -- a SEPARATE launcher + shortcut is what makes that possible:
+# widescreen stays off by default, and trying wide is one double-click with no way to
+# half-enable it. Known imperfections are on the card (widescreen-card.md beside this
+# file).
 $wideLauncherPath = Join-Path $deployRootFull 'Launch-StarCraft-Modded-Wide.ps1'
 $wideLauncherBody = @'
 #Requires -Version 7
@@ -594,8 +622,10 @@ group fan-out, windowed, sound on), plus the widescreen assembly (task 070):
                                      (no harness can feed it); your first click in
                                      the right quarter IS the test -- widescreen-card.md.
   -Windowed -WindowedHelperDll ...   cnc-ddraw (pinned v7.1.0.0, MIT) presents all
-                                     800 columns; WMode crops to 640 (research/
-                                     renderer-viewport.md 12.6 vs 14.2).
+                                     800 columns (research/renderer-viewport.md 14.2).
+                                     Reads cnc-ddraw.ini (unscaled) -- the normal
+                                     launcher points the same DLL at cnc-ddraw-2x.ini
+                                     instead (task 075: 2x scale + cursor lock).
 
 What to expect, and what is known-imperfect: widescreen-card.md next to this file.
 The -NoLaunchLock / -NoForegroundRestore / try-catch reasoning is the same as the
@@ -676,7 +706,7 @@ else {
     $lnk.Arguments = "-WindowStyle Hidden -File `"$launcherPath`""
     $lnk.WorkingDirectory = $deployRootFull
     $lnk.IconLocation = "$deployedExe,0"
-    $lnk.Description = 'StarCraft 1.16.1, modded (fan-out select-past-12 + circles + HUD row), windowed'
+    $lnk.Description = 'StarCraft 1.16.1, modded (fan-out select-past-12 + circles + HUD row), windowed 2x scale, mouse locked'
     $lnk.Save()
     Write-Host "shortcut written: $shortcutPath"
 
@@ -792,8 +822,9 @@ $stagedCnc = Join-Path $cncDeployDir 'ddraw.dll'
 $stagedHash = (Get-FileHash -LiteralPath $stagedCnc -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($stagedHash -ne $CNC_DDRAW_DLL_SHA256) { throw "deploy: staged cnc-ddraw hash mismatch after copy: $stagedCnc" }
 if (-not (Test-Path -LiteralPath (Join-Path $pluginDeployDir 'cnc-ddraw.ini'))) { throw 'deploy: plugin\cnc-ddraw.ini missing -- the wide launcher would run cnc-ddraw unconfigured (fullscreen-shaped).' }
+if (-not (Test-Path -LiteralPath $cnc2xIniDeployPath)) { throw 'deploy: plugin\cnc-ddraw-2x.ini missing -- the normal launcher would run cnc-ddraw unconfigured (fullscreen-shaped), losing the 2x scale + mouse lock task 075 added.' }
 if (-not (Test-Path -LiteralPath (Join-Path $deployRootFull 'widescreen-card.md'))) { throw 'deploy: widescreen-card.md missing from the deploy root.' }
-Write-Host 'verify: wide launcher + pinned cnc-ddraw + ini + card all present'
+Write-Host 'verify: normal + wide launchers, pinned cnc-ddraw, both inis + card all present'
 
 if ($NoShortcut) {
     Write-Host 'verify: shortcuts skipped (-NoShortcut)'

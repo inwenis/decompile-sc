@@ -178,6 +178,14 @@ param(
     # the repo's tools/plugin/cnc-ddraw.ini then travels with it as $GameDir\ddraw.ini,
     # because cnc-ddraw reads its config from the directory the game runs in.
     [string]$WindowedHelperDll = '',
+    # Task 075: override which ini travels in as $GameDir\ddraw.ini when
+    # -WindowedHelperDll is a cnc-ddraw build. Empty (default) keeps every EXISTING
+    # caller (probes, suites, the wide launcher) on $scriptDir\cnc-ddraw.ini exactly as
+    # before -- this parameter only exists so deploy.ps1's normal (non-wide) launcher can
+    # point cnc-ddraw at a DIFFERENT ini (2x scale + cursor lock, tools/plugin/cnc-ddraw-2x.ini)
+    # without the offscreen-harness ini (width=0/height=0/adjmouse=false, which
+    # drive-game.ps1's posted client-area clicks depend on 1:1) ever changing.
+    [string]$WindowedHelperIni = '',
     [ValidateSet('none', 'WMode', 'WMode_Fix', 'both')]
     [string]$InjectWindowedHelper = 'none',
     [switch]$RemoveWindowed,
@@ -540,7 +548,8 @@ try {
         if ($WindowedHelperDll) {
             if (-not (Test-Path -LiteralPath $WindowedHelperDll)) { throw "run-with-plugin: $WindowedHelperDll not found; run fetch-cnc-ddraw.ps1 first." }
             Copy-Item -LiteralPath $WindowedHelperDll -Destination $ddraw -Force
-            $iniSrc = Join-Path $scriptDir 'cnc-ddraw.ini'
+            $iniSrc = if ($WindowedHelperIni) { $WindowedHelperIni } else { Join-Path $scriptDir 'cnc-ddraw.ini' }
+            if (-not (Test-Path -LiteralPath $iniSrc)) { throw "run-with-plugin: $iniSrc not found (-WindowedHelperIni)." }
             Copy-Item -LiteralPath $iniSrc -Destination (Join-Path $GameDir 'ddraw.ini') -Force
             Write-Host "run-with-plugin: windowed shim installed ($ddraw <- $WindowedHelperDll, ddraw.ini <- $iniSrc)"
         }
