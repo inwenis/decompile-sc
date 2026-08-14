@@ -146,7 +146,17 @@ Describe 'the widescreen switch ships assembled and OFF by default (task 070)' {
 
     It 'the NORMAL launcher does not carry widescreen -- off by default means untouched' {
         $script:normalLauncher | Should -Not -Match '-Widescreen'
-        $script:normalLauncher | Should -Match 'InjectWindowedHelper WMode'
+    }
+
+    It 'the NORMAL launcher presents through cnc-ddraw with the 2x/lock ini, not WMode (task 075, issue #114)' {
+        # WMode has no export table or config (tools/plugin/README.md "Windowed mode:
+        # injected, not proxied"), so it cannot scale a window or clip the cursor --
+        # that used to be exactly what this suite asserted (InjectWindowedHelper WMode),
+        # which was only ever a proxy for "no widescreen geometry", not a promise about
+        # the presenter. Assert the presenter directly instead.
+        $script:normalLauncher | Should -Match 'cnc-ddraw\\ddraw\.dll'
+        $script:normalLauncher | Should -Match 'cnc-ddraw-2x\.ini'
+        $script:normalLauncher | Should -Not -Match 'InjectWindowedHelper' -Because 'WMode cannot deliver issue #114''s scale/lock; cnc-ddraw replaced it here'
     }
 
     It 'deploy stages cnc-ddraw only through its own sha256 pin' {
