@@ -39,9 +39,35 @@ $refs = @(
     }
 ) | Where-Object { $_ }
 
+$scratchDir = Join-Path $dataRoot 'scratch'
+if (-not (Test-Path -LiteralPath $scratchDir)) {
+    New-Item -ItemType Directory -Path $scratchDir -Force | Out-Null
+}
+$outPath = Join-Path $scratchDir 'pr-status.json'
+
+# Previous snapshot, so merged entries can be reused instead of re-fetched
+# (Test-PrRefreshNeeded): one gh call per LIVE PR, not per task ever finished.
+# -DateKind String keeps createdAt a verbatim string -- default parsing turns
+# it into [datetime] and the re-serialize would rewrite the timestamp format.
+$prev = $null
+if (Test-Path -LiteralPath $outPath) {
+    try { $prev = Get-Content -LiteralPath $outPath -Raw | ConvertFrom-Json -DateKind String } catch { $prev = $null }
+}
+
 $result = [ordered]@{ fetchedAt = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ') }
 
 foreach ($ref in $refs) {
+    $cached = if ($prev) { $prev.($ref.TaskId) } else { $null }
+    if (-not (Test-PrRefreshNeeded -CachedEntry $cached)) {
+        $result[$ref.TaskId] = [ordered]@{
+            number    = $cached.number
+            state     = $cached.state
+            mergeable = $cached.mergeable
+            url       = $cached.url
+            createdAt = $cached.createdAt
+        }
+        continue
+    }
     $ghJson = gh pr view $ref.Url --json number,state,mergeable,url,createdAt 2>$null
     if (-not $ghJson) {
         Write-Warning "gh pr view failed for $($ref.Url) (task $($ref.TaskId)) -- skipping"
@@ -57,11 +83,6 @@ foreach ($ref in $refs) {
     }
 }
 
-$scratchDir = Join-Path $dataRoot 'scratch'
-if (-not (Test-Path -LiteralPath $scratchDir)) {
-    New-Item -ItemType Directory -Path $scratchDir -Force | Out-Null
-}
-$outPath = Join-Path $scratchDir 'pr-status.json'
 ($result | ConvertTo-Json -Depth 10) | Set-Content -LiteralPath $outPath -Encoding utf8NoBOM
 
 Write-Output ($outPath -replace '\\', '/')

@@ -30,6 +30,20 @@ function Get-TaskPrRef {
     }
 }
 
+# Whether a task's PR still needs a live `gh pr view`, given its entry in the
+# previous pr-status.json snapshot (or $null when it has none). Merged is
+# terminal on GitHub -- a re-fetch can never change the answer -- so cached
+# merged entries are reused. Open stays live, closed can reopen, and an entry
+# with no state says nothing, so all of those are fetched. This is what keeps
+# refresh cost proportional to live PRs instead of to every task ever
+# finished (2026-08-16: 32s of the 40s SessionStart hook was re-fetching
+# merged PRs, stalling the first prompt of every fresh session).
+function Test-PrRefreshNeeded {
+    param([AllowNull()]$CachedEntry)
+    if ($null -eq $CachedEntry) { return $true }
+    return $CachedEntry.state -ne 'merged'
+}
+
 # gh's MergeableState enum ("MERGEABLE"/"CONFLICTING"/"UNKNOWN") -> the
 # boolean the console's core expects. UNKNOWN (gh hasn't finished computing
 # it yet) maps to $null/absent -- an unresolved check is not the same as a
