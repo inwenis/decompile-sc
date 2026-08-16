@@ -89,11 +89,13 @@ Describe 'refresh-pr-status.ps1 reuses cached merged entries' {
 
     It 'carries the merged entry forward unchanged and still fetches the rest' {
         & $script:scriptPath -RepoRoot $script:root | Out-Null
-        # -DateKind String: assert the VERBATIM file text, not a [datetime] roundtrip
-        $written = Get-Content (Join-Path $script:root 'work/scratch/pr-status.json') -Raw | ConvertFrom-Json -DateKind String
+        $raw = Get-Content (Join-Path $script:root 'work/scratch/pr-status.json') -Raw
+        $written = $raw | ConvertFrom-Json
         $written.'036'.state | Should -Be 'merged'
         $written.'036'.number | Should -Be 31
-        $written.'036'.createdAt | Should -Be '2026-07-01T00:00:00Z'
+        # Raw-text assert: ConvertFrom-Json would parse the timestamp into
+        # [datetime] and hide a format rewrite; the FILE must stay byte-exact.
+        $raw | Should -Match ([regex]::Escape('"createdAt": "2026-07-01T00:00:00Z"'))
         $written.'041'.number | Should -Be 77   # refreshed from the stub, not the cache
         $written.'050'.state | Should -Be 'open'
     }

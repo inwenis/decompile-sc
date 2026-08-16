@@ -47,11 +47,9 @@ $outPath = Join-Path $scratchDir 'pr-status.json'
 
 # Previous snapshot, so merged entries can be reused instead of re-fetched
 # (Test-PrRefreshNeeded): one gh call per LIVE PR, not per task ever finished.
-# -DateKind String keeps createdAt a verbatim string -- default parsing turns
-# it into [datetime] and the re-serialize would rewrite the timestamp format.
 $prev = $null
 if (Test-Path -LiteralPath $outPath) {
-    try { $prev = Get-Content -LiteralPath $outPath -Raw | ConvertFrom-Json -DateKind String } catch { $prev = $null }
+    try { $prev = Get-Content -LiteralPath $outPath -Raw | ConvertFrom-Json } catch { $prev = $null }
 }
 
 $result = [ordered]@{ fetchedAt = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ') }
@@ -59,12 +57,19 @@ $result = [ordered]@{ fetchedAt = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:
 foreach ($ref in $refs) {
     $cached = if ($prev) { $prev.($ref.TaskId) } else { $null }
     if (-not (Test-PrRefreshNeeded -CachedEntry $cached)) {
+        # ConvertFrom-Json parses ISO strings into [datetime] (on every pwsh 7;
+        # -DateKind String exists only on newer ones) -- write it back in gh's
+        # own format so a carried entry stays byte-identical across runs.
+        $createdAt = $cached.createdAt
+        if ($createdAt -is [datetime]) {
+            $createdAt = $createdAt.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+        }
         $result[$ref.TaskId] = [ordered]@{
             number    = $cached.number
             state     = $cached.state
             mergeable = $cached.mergeable
             url       = $cached.url
-            createdAt = $cached.createdAt
+            createdAt = $createdAt
         }
         continue
     }
