@@ -1201,9 +1201,16 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     #
     # The one other consumer of the widened coordinate range that a full
     # cmp-immediate sweep of .text finds (100.0%% coverage, task 071) is the
-    # edge-scroll trigger 0x004D12FF `cmp eax,0x27E / jl` -- a >=638 test, so
-    # its behaviour at 800 is IDENTICAL to today's post-clamp behaviour (any
-    # physical x>=638 already reads as 639 >= 638). Left alone on purpose.
+    # edge-scroll trigger 0x004D12FF `cmp eax,0x27E / jl` -- scroll the camera
+    # RIGHT when the mouse x >= 638. It ships below, and it MUST move with the
+    # clamp: task 071 left it at 638 reasoning "the clamp already pins x to 639,
+    # so 638 is only ever the last 2px" -- but the clamp and this trigger are
+    # the SAME stage 3, and once the clamp is lifted the whole widened band
+    # (x 638..799) fires the scroll. The camera then slides the instant the
+    # cursor crosses 638, so the right ~160px cannot be rested on or clicked:
+    # the user's "can't move my mouse there, it starts moving the screen as if
+    # the viewport is still smaller" (issue #113 follow-up). renderer-viewport.md
+    # 18.1.1 is corrected to match.
     for cmp_va, mov_va, mov_w in (
             (0x004D1960, 0x004D196D, 2),   # 0x004D1940: cmp si,640 / mov ax,639
             (0x004D19EC, 0x004D19F9, 2),   # 0x004D19C0: same pair
@@ -1214,6 +1221,14 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
               "window-proc mouse x clamp: the 'x >= 640' decision")
         b.imm(mov_va, STOCK_W - 1, W - 1, mov_w, "mouse.clamp.x@%08X" % mov_va, 3,
               "window-proc mouse x clamp: the replacement value 639")
+
+    # The edge-scroll-right trigger, moved with the clamp above (see the note).
+    # `cmp eax,638 / jl no-scroll` -- pan right only in the true right 2px, so
+    # 638 -> W-2 (the stock 640 screen's own margin, carried to the new width).
+    b.imm(0x004D12FF, STOCK_W - 2, W - 2, 4, "scroll.right.trigger", 3,
+          "0x004D12A0 edge-scroll: pan the camera right when mouse x >= "
+          "screenW-2 (was 638; must widen with the mouse clamp or the whole "
+          "right band scrolls)")
 
     # The wndproc clamp is necessary but NOT sufficient for click-SELECT past
     # x=639: the mouse->world click search rect (0x0046FB40, 9.1 item 12) is

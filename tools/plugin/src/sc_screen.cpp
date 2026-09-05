@@ -61,8 +61,26 @@
 static BYTE*  g_base = NULL;
 static bool   g_active = false;
 static int    g_stage = 1;
-static BYTE*  g_grid = NULL;          // the relocated dirty grid
+static BYTE*  g_grid = NULL;          // the relocated dirty grid (data start)
+static BYTE*  g_gridRegion = NULL;    // the guarded allocation base (g_grid - GUARD)
 static int    g_applied = 0;
+
+// Guard padding around the relocated grid. The stock grid at 0x006CEFF8 sits in
+// .data with live globals on both sides (research/renderer-viewport.md 5, "boxed
+// in by the linker's data layout"), so the engine's UNCLAMPED grid consumers --
+// 0x0041DE20 tests a dialog rect's cells with a SIGNED column (x1>>4) and never
+// clamps x1<0 the way the WRITE path 0x0041E0D0 does -- read a neighbouring
+// mapped byte when a control sits a few pixels off an edge, and the stock game
+// never faults. Relocating the grid to a bare VirtualAlloc page removed that
+// padding: a dialog at x=-1..-16 makes 0x0041DE84 `mov dl,[ebx]` read grid-1,
+// which is the unmapped guard page -> the "0x0041DE84 referenced 0x...DFFFF"
+// crash (issue #113 follow-up; the faulting address was exactly the grid base
+// minus one). Re-create the box: commit GUARD bytes on each side so a small
+// out-of-range index reads harmless zeroed scratch, exactly as stock read a
+// harmless neighbour. ponytail: fixed 64KB each side covers any near-screen
+// dialog coordinate (col +/-, row*stride); a wildly out-of-range coord would
+// have faulted stock too. If a real consumer ever needs more, clamp it instead.
+#define SC_WS_GRID_GUARD 0x10000
 static int    g_refused = 0;
 
 // Saved originals, so a FreeLibrary detach can put the process back.
@@ -315,18 +333,23 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
     // --- relocate the dirty grid -------------------------------------------
     // Only stage 1 and above needs it; stage 0 touches the display mode alone.
     if (g_stage >= 1) {
-        g_grid = (BYTE*)VirtualAlloc(NULL, SC_WS_GRID_BYTES, MEM_COMMIT | MEM_RESERVE,
-                                     PAGE_READWRITE);
-        if (!g_grid) {
-            ScLog("WIDESCREEN REFUSED: VirtualAlloc(%d) for the relocated dirty grid "
-                  "failed gle=%u", SC_WS_GRID_BYTES, (unsigned)GetLastError());
+        // GUARD + grid + GUARD, all committed, grid pointer into the middle
+        // (see SC_WS_GRID_GUARD above). VirtualAlloc zeroes it, which is the
+        // state the BSS array it replaces starts in -- stated rather than
+        // assumed: a grid that came up full of 1s would mark the whole screen
+        // dirty on frame one, which looks like a working feature and hides a
+        // real bug. The guard pages are zeroed too, so an out-of-range TEST
+        // reads "not dirty" and is harmless.
+        const SIZE_T total = (SIZE_T)SC_WS_GRID_GUARD + SC_WS_GRID_BYTES + SC_WS_GRID_GUARD;
+        g_gridRegion = (BYTE*)VirtualAlloc(NULL, total, MEM_COMMIT | MEM_RESERVE,
+                                           PAGE_READWRITE);
+        if (!g_gridRegion) {
+            ScLog("WIDESCREEN REFUSED: VirtualAlloc(%Iu) for the guarded dirty grid "
+                  "failed gle=%u", total, (unsigned)GetLastError());
             g_refused = 1;
             return;
         }
-        // VirtualAlloc hands back zeroed pages, which is the state the BSS array
-        // it replaces starts in. Stated rather than assumed: a grid that came up
-        // full of 1s would mark the whole screen dirty on frame one, which looks
-        // like a working feature and hides a real bug.
+        g_grid = g_gridRegion + SC_WS_GRID_GUARD;
         int refs = 0;
         for (size_t i = 0; i < SC_WS_PATCH_COUNT; ++i) {
             if (SC_WS_PATCHES[i].fixupOff != SC_WS_NO_FIXUP &&
@@ -336,6 +359,25 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
               "%d absolute reference(s) re-pointed",
               (unsigned)SC_WS_STOCK_GRID_VA, g_grid, SC_WS_GRID_BYTES,
               SC_WS_GRID_COLS, SC_WS_GRID_ROWS, refs);
+
+        // Oracle: prove the guard actually protects the OUT-OF-RANGE index that
+        // crashed. grid-1 is where 0x0041DE84 faulted; grid+BYTES+GUARD-1 is the
+        // far side. Both must read as committed, or the box is not there. This
+        // line would say MISSING on the pre-fix bare allocation.
+        const bool lo = RangeReadable(g_grid - 1, 1);
+        const bool hi = RangeReadable(g_grid + SC_WS_GRID_BYTES + SC_WS_GRID_GUARD - 1, 1);
+        ScLog("WIDESCREEN: grid guard %s -- region %p..%p, %d bytes each side; "
+              "grid-1 %s, grid+size+guard-1 %s (issue #113 crash: 0x0041DE84 read "
+              "grid_base-1 on the pre-guard allocation)",
+              (lo && hi) ? "OK" : "MISSING", g_gridRegion, g_gridRegion + total,
+              SC_WS_GRID_GUARD, lo ? "committed" : "UNMAPPED",
+              hi ? "committed" : "UNMAPPED");
+        if (!(lo && hi)) {
+            ScLog("WIDESCREEN REFUSED: the grid guard did not commit -- refusing "
+                  "rather than shipping the crash back.");
+            g_refused = 1;
+            return;
+        }
     }
 
     // --- write ---------------------------------------------------------------
@@ -375,8 +417,9 @@ void ScScreenRemove(void) {
     g_active = false;
     // The relocated grid is deliberately LEAKED, exactly like a trampoline: the
     // game thread may be inside a loop holding a pointer into it right now.
-    ScLog("WIDESCREEN removed: %d site(s) restored (the relocated grid is left "
-          "allocated on purpose -- a live loop may still hold a pointer into it)", n);
+    ScLog("WIDESCREEN removed: %d site(s) restored (the relocated grid region %p is "
+          "left allocated on purpose -- a live loop may still hold a pointer into it)",
+          n, g_gridRegion);
 }
 
 void ScScreenLogStats(void) {

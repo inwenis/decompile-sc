@@ -27,10 +27,22 @@ you pick the (Wide) shortcut, and nothing needs turning back off.
 
 ## Clicks on the right quarter
 
-The game's input for the right quarter is switched on AND the map there is now
-visible, so it behaves like the rest of the playfield: what you click is what
-you see. (Before the display fix, clicks landed on a black band on units you
-could not see; that mismatch is gone.)
+The map there is now visible and the mouse behaves normally in it. Two bugs the
+first wide build had here were fixed 2026-09-05:
+
+1. **The camera used to scroll the moment the cursor entered the right band**,
+   as if the screen were still 640 wide, so you could not rest the pointer
+   there. The edge-scroll-right zone now sits at the true right edge (the last
+   couple of pixels), like the stock game.
+2. **A rare crash** (`0x0041DE84 ... memory could not be read`) when a menu or
+   tooltip drew a hair off the screen edge. Harmless in the stock game, it began
+   faulting once the widescreen build moved an internal table; it now has a
+   safety margin on both sides and cannot fault there.
+
+Whether a *click* on a unit in the far-right quarter selects it is the one thing
+no automated test on this machine can check (nothing here can drive a real mouse
+into that band). It is your first thing to try — the map and cursor are both
+correct there now, so a click should act on what you see.
 
 ## Known imperfections (real, not dangerous)
 

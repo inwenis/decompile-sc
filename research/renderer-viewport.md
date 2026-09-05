@@ -1777,15 +1777,61 @@ compares against 638/639/640 finds, beyond the four pairs and the geometry
 sites:
 
 - **0x004D12FF `cmp eax,0x27E / jl`** — the edge-scroll trigger (scroll right
-  when `x >= 638`). Its behaviour at 800 is IDENTICAL before and after the
-  clamp patch (today every physical x >= 638 already reads as 639 >= 638), so
-  it is left alone on purpose; moving it would CHANGE behaviour the user has.
+  when `x >= 638`). **This paragraph was WRONG and is corrected here (2026-09-05,
+  issue #113 follow-up).** It read "IDENTICAL before and after the clamp patch
+  (today every physical x >= 638 already reads as 639 >= 638), so it is left
+  alone." That reasoning holds only if x is still pinned to 639 — but the clamp
+  and this trigger ship in the SAME stage 3, so once the clamp is lifted the
+  cursor reaches x = 638..799 and the ENTIRE widened band fires the scroll: the
+  camera slides the instant the cursor crosses 638, and the right ~160px cannot
+  be rested on or clicked. That is the user's *"I see more on screen, can't move
+  my mouse there, it starts moving screen as if the viewport is still smaller."*
+  It was not detectable in the harness — no test feeds a real-desktop mouse into
+  the right band (the standing 070/071 limit), the same blind spot as the crash
+  below. The trigger now moves with the clamp: `638 -> screenW-2` (the stock 2px
+  right margin, carried to the new width), `scroll.right.trigger` in the
+  generated table, and `test-widescreen-input-800.ps1` asserts the moved bytes.
+  "Moving it would CHANGE behaviour the user has" was true and was the point —
+  the behaviour it had was the bug.
 - **0x004F7C94, 0x004F9376, 0x004F942E, 0x004F943F, 0x004F9498** — `cmp ..,0x27F`
   beside `fnstcw`/`fldcw`: the x87 FPU CONTROL WORD's default value (0x27F). CRT
   float code, not coordinates (the §16.1 trap: a value match names a candidate,
   the function around it names the subsystem).
 - **0x004DCDE2 `cmp word [edi+4],0x280`** — the glue-screen dialog SLIDE
   animation. Glue transitions only; untouched.
+
+#### 18.1.2 The relocated dirty grid faults on an off-edge dialog rect (2026-09-05, issue #113 crash)
+
+The user's wide session died with `The instruction at 0x0041DE84 referenced
+memory at 0x026DFFFF. The memory could not be read.` The session's own log names
+the grid: `dirty grid relocated 0x006CEFF8 -> 026E0000`, so the faulting address
+is exactly **`grid_base − 1`**.
+
+`0x0041DE84 mov dl,[ebx]` is the read loop of `0x0041DE20` (the "is this rect's
+region dirty" test, the `grid.stride.testrect` patch group). Its start pointer is
+`ebx = grid + col + row*stride`, `col = x1>>4` **signed** — and unlike the mark
+path `0x0041E0D0`, which clamps `if (x1 < 0) x1 = 0` (§5), the test path does
+**not** clamp. Its three callers (`0x0041C7EE`, `0x0041E1C1`, `0x0041E37B`) walk
+the dialog list and pass each control's bounds with `movsx`, so a control sitting
+a pixel or two off the left edge yields `col = −1`, and the loop reads `grid − 1`.
+
+Stock never faulted here because the grid was a `.data` array boxed by live
+globals on both sides (§5): `grid − 1` read a neighbouring mapped byte, garbage
+but harmless (it only gates a redraw). Relocating the grid to a bare
+`VirtualAlloc` page (task 034) put an **unmapped guard page** immediately before
+it, turning that harmless neighbour read into an access violation. The bug had
+been latent since the first stage-1 relocation; it needed a dialog composed with
+an off-edge rect to fire, and the widened play surface is where the user finally
+hit one.
+
+Fix (`sc_screen.cpp`, `SC_WS_GRID_GUARD`): commit `0x10000` bytes on each side of
+the grid and point the patches at the middle, re-creating stock's "boxed in"
+padding, so a small out-of-range index reads zeroed scratch (= "not dirty") just
+as stock read a harmless neighbour. It is a one-allocation change with no new
+byte patch, and it covers **every** unclamped grid consumer at once rather than
+clamping them one at a time. Install logs `grid guard OK` with a `VirtualQuery`
+of both guard edges as the oracle (it prints `MISSING` and refuses on the
+pre-fix bare allocation), and `test-widescreen-input-800.ps1` asserts the line.
 
 ### 18.2 NO-GO: moving the console by relocating dialog bounds moves the HIT-TEST, not the PIXELS
 
