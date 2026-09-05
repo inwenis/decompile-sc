@@ -1,8 +1,0 @@
----
-from: user
-to: conductor
-sent: 2026-08-14T07:23:29Z
-subject: we are gonna park work here now we're gonna you're gonna open a few issues for m…
----
-
-we are gonna park work here now we're gonna you're gonna open a few issues for me in Github. So the white doesn't really work The screen was wider but I just saw black called on the right And the game mouse couldn't move over it or do anything there I just played a regular game with this black column on the right. In the regular modded it used to run in a window that would allow me to control the window behaviour like scale it up twice and lock the mouse within the window The last time I played this was gone and I would like it to be back because this was a useful feature too Increase the size two times and to be able to lock the mouse within the game. I do wonder why for example when I select several supply depots as a Terran player they're smaller icons show the text blank. It's not an issue per but I'm curious. There's some funny behaviour when it comes to having multiple buildings selected and if the buildings have some actions of their own like lift So when I have dozen buildings selected and I cancel the UN They are building and then I keep on clicking bottom right button one of the buildings will lift off. also open an issue for the fact that just like with units we can select more than 12 buildings but when buildings schedule or queue units the text on the bottom that indicates how many are selected It cannot display together with the text that indicates how many units are in total in the queue. Also tell me do comes back to the files and they commit it into the repository and persisted

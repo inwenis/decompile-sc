@@ -1,8 +1,0 @@
----
-from: 070
-to: conductor
-sent: 2026-08-13T16:29:44Z
-subject: INPUT VERDICT: clicks past x=640 are NOT proven correct on any path - stop-line reached, reporting instead of absorbing
----
-
-Full driven session ran end to end on the assembled engine build under BOTH presenters (51 OKs wmode arm / 50 cnc arm). Everything except playfield mouse input past 640 is green: fog correct at every stop incl sub-tile x%32=16, minimap steers, keyboard scrolls, HUD verdict confirmed live, dead strip 0.0000 nonzero and diff_px=0 over the whole session (pure black, never changes), 3+ min stability, map-edge stale band measured at 2.28% nonzero. THE INPUT FINDING, engine oracle data: under WMode, a posted click at screen x=704 selected the unit at screen 576 (both positions from WORLD scan, origin static at (320,448)) and a click at 768 hit ~640 (double-click artifact selected 12); effective click lands ~128+/-16 px LEFT of the posted x, only past 640. Control clicks below 640 select exactly the aimed unit. Drag across the seam collapses (1 of 12). BUT: under WMode a real mouse cannot reach x>640 at all (window is 640), so posted coords there are out-of-contract for the shim - this measurement proves NOT-PROVEN, it does not name the owner (engine window-proc clamp vs WMode transform). Under cnc-ddraw posted playfield clicks vanish entirely (0/8 across nudge-on/nudge-off/devmode - my 3 attempts, stop-line honoured). Input mapping past 640 is a subsystem of its own, exactly the shape the task file predicted; it needs its own task (real-mouse-path or engine wndproc/0x0046FB40 reading). First-play checklist item 1. Machine is free; proceeding to scratch deploy proof + card + PR.

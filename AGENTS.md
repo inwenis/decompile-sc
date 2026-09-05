@@ -31,13 +31,6 @@ and TOOLING, not redistributed game content.
    Deployment targets the user chose (the deploy dir, a desktop shortcut) are
    the exception — write those, but never destructively (see `tools/deploy.ps1`
    player-data rules).
-6. `C:/git/conductor` and `C:/git/conductor-task*` are ANOTHER LIVE SYSTEM
-   (a separate orchestrator with ~25 in-flight agents and real user
-   messages). NEVER read, modify, `cd` into, or run git/gh against them from
-   this repo — touching them is a data-loss incident. Everything this repo
-   needs from there is already ported into `scripts/`/`config/`; if
-   something seems missing, ask the user. (Sole exception: `./run.ps1`,
-   which the USER launches to serve the Agent Console UI.)
 
 ## A player-input feature is unproven until the wire has been watched (2026-08-09, task 025)
 
@@ -965,7 +958,7 @@ which hard rule 1 forbids. Hard rule 1 wins — always, without asking.
 
 Instead: prove visual claims with the in-process read-back oracles (`CIRCLES show:`,
 `HUDROW show n=… page=…`, `UNITSTATE`), describe the appearance in the PR body, and keep
-frames on the gitignored diagnostic path for the conductor or user to open locally.
+frames on the gitignored diagnostic path for the user to open locally.
 Workers have correctly declined the screenshot twice (tasks 016, 021); this section exists
 so nobody has to weigh it a third time.
 
@@ -979,60 +972,23 @@ with screenshots"*. Both halves hold at once, and they do not conflict:
   `C:\sc-work\logs\<NNN>-frames\`, named for the STATE rather than a counter, before and
   after for anything claimed fixed, one pair per distinct case.
 - The path is what travels. Never the image: no `pr-image`, no committed frame, ever.
-  The conductor hands the user the paths and they open them locally.
+  Hand the user the paths and they open them locally.
 - The read-back oracle is still the oracle; the frame is for the human. A frame is never
   asserted on (see § "Read a dialog's CONTENT from memory"). An oracle with no frame is no
   longer reportable to the user; a frame with no oracle never was evidence.
 
 ## Layout
 
-- `work/` — orchestration DATA.
-  - `work/tasks/` — task files (`_template.md`, `NNN-<slug>.md`).
-  - `work/reports/` — task reports (`NNN-<slug>.md`).
-  - `work/messages/<agent-id>/{inbox,read}/` — agent messaging. NEVER delete
-    or overwrite anything under `work/messages/` (2026-07-17 data-loss class).
-  - `work/scratch/` — logs, agent registry, throwaway (not committed).
-- `scripts/` — spawn + messaging tooling (ported from the conductor repo).
-  `config/` — worker settings + guard hooks.
 - `research/` — per-subsystem findings (units, sprites, AI, netcode, …).
   The product of this repo. Evidence rule (hard rule 4) applies to every file.
-- `tools/` — Python analysis scripts + Ghidra headless automation.
+- `tools/` — the plugin, Python analysis scripts, Ghidra headless automation,
+  map + deploy tooling.
+- `tests/` — Pester tests for the tooling.
+- `work/scratch/` — logs, build output, analysis dumps, throwaway (gitignored).
+- `work/defects/` — defect patches for `tools/plugin/build-defect-arm.ps1`.
 - `game/` — gitignored local install copy. Read-only (hard rule 2).
 
-## Roles
-
-- Spawned with a prompt naming a task file → you are a **worker**. The task
-  file is your full contract — it starts with ZERO chat history. Follow it
-  plus this rulebook.
-- Otherwise → you are the **conductor**. The conductor DISPATCHES: cuts
-  tasks, spawns workers, monitors, reviews, integrates. It does not write
-  product code, tooling, or research itself — diagnosis it already holds
-  goes INTO the task file, not into an editor. (Exception: maintaining this
-  repo's own orchestration data and docs.)
-
-## Task lifecycle
-
-Status is DERIVED, never written. No `state:` line exists; nothing a worker
-or conductor writes says "running" or "done". Precedence — the
-furthest-along observable wins:
-
-| status    | glyph | derived from                                          |
-| --------- | ----- | ----------------------------------------------------- |
-| completed | ✓     | `merged:` stamp in the task file (close-task.ps1 stamps it) |
-| review    | ◎     | the task's PR is open                                 |
-| blocked   | ⏸     | a worker question with no `re:` answer                |
-| running   | ●     | a `work/scratch/agents/NNN.json` registry entry exists |
-| queued    | ○     | none of the above — nobody has started                |
-
-Workers write exactly three things, none a status: the `pr:` link, a report,
-and questions. An unanswered question IS the blocked signal; answering it
-clears it. Never hand-write `merged:` — close-task.ps1 stamps it.
-
-Flow: cut → spawn → monitor (derived status + conductor inbox) → review
-(MANDATORY GATE: no unreviewed change merges; check acceptance criteria
-yourself, do not trust the worker's word) → merge → close.
-
-### Never stop an agent without checking for an in-flight game (2026-08-09 incident)
+## Never stop an agent without checking for an in-flight game (2026-08-09 incident)
 
 **Read this line before any of the tests below, because all three of them were
 in this section as advice and all three read the wrong way round:**
@@ -1045,7 +1001,7 @@ Three instruments, one shape, all three found inside about twelve hours
 outside, and each was at some point written down here as evidence that a run
 was dead. The details are at items 3 and 4 and in the block after them.
 
-`stop-agent.ps1` kills the agent's process tree. It does NOT kill a
+Killing an agent's process tree does NOT kill a
 StarCraft the agent launched — the game outlives its driver, keeps the
 launch lock, and blocks EVERY other worker until someone notices.
 
@@ -1054,7 +1010,7 @@ regression run six seconds later, and the conductor stopped it mid-run.
 The orphaned game held the machine for ~18 minutes while two workers
 queued behind it, one of them prepared to wait 90.
 
-Before `stop-agent.ps1`, ALWAYS:
+Before killing an agent or a test driver, ALWAYS:
 
 1. `Get-Process StarCraft` **in the same breath as the kill, not minutes
    earlier**. A check from five minutes ago is worthless: the agent may have
@@ -1076,7 +1032,7 @@ Killing an orphan is allowed ONLY with positive proof it is orphaned — a
 test output file that has stopped growing, and a lock file naming a dead
 pid. Otherwise the standing rule holds: another worker's game is another
 worker's run, and workers must never kill one themselves (ask the
-conductor).
+user).
 
 **"A DEAD PARENT" USED TO BE ON THAT LIST AND HAS BEEN STRUCK OFF (2026-08-13,
 task 061/062).** It is not evidence of anything here. The launcher exits once
@@ -1119,111 +1075,14 @@ sections, while writing about it.
 **A DRIVER CAN DIE MID-LAUNCH, WHICH IS HOW THIS ORPHAN EXISTED AT ALL.** Task
 061's verification run was killed by the harness at its launch step — not by
 its worker and not by the conductor — after `scinject` had already handed the
-game off. So the orphan case is not only "someone ran `stop-agent.ps1`": a
+game off. So the orphan case is not only "someone killed the agent": a
 driver can vanish unattended, at the one moment when the game exists and
 nothing has driven it yet, and the game then sits on the menu holding the
 machine. Check for a surviving game after ANY driver death, not only after a
 deliberate stop.
 
-## Spawning workers
-
-All commands run from `C:/git/decompile-sc` via the PowerShell tool (see
-§ Messaging for why never Bash).
-
-```powershell
-# Cut a task + worktree + spawn in one command:
-./scripts/new-task.ps1 -Slug <slug> [-Model sonnet] [-Title '...'] [-NoSpawn] [-Commit]
-#   allocates next free NNN, fills work/tasks/_template.md into
-#   work/tasks/NNN-<slug>.md (Goal/Context left as TODO(conductor) — fill them),
-#   git fetch + worktree add C:/git/decompile-sc-taskNNN off origin/main.
-
-# Spawn separately (after -NoSpawn):
-./scripts/spawn-agent.ps1 -TaskFile work/tasks/NNN-<slug>.md -WorkDir C:/git/decompile-sc-taskNNN -Model <model>
-
-# Merge — the ONE merge command, never `gh pr merge` by hand:
-./scripts/merge-task.ps1 -Task NNN
-#   refuses unless: caller is conductor, task has pr: and no merged:,
-#   PR open, not behind origin/main, checks green. Squash-merges, then closes.
-
-# Merge a hotfix PR raised by a LIVE task WITHOUT closing the task (issue #107):
-./scripts/merge-task.ps1 -Task NNN -Pr MMM
-#   same PR gate (open, position, checks/-LocalCiReceipt); additionally refuses
-#   unless PR MMM's head branch is taskNNN-* and MMM is not the task's own pr:
-#   deliverable. Writes NO merged: stamp, never calls close-task, and prints
-#   that the task stays open.
-
-# Close a hand-merged PR (merge-task.ps1 calls this itself):
-./scripts/close-task.ps1 -Task NNN [-StopAgent] [-Prune]
-#   verifies PR is MERGED via gh (refuses otherwise), stamps merged:, commits
-#   the task file + report. -Prune removes the clean worktree + branch.
-```
-
-- Conductor pre-creates the worktree and spawns the worker inside it
-  (`-WorkDir`) — zero permission prompts. Default permissions: bypass.
-- One task per worker. Parallel work → separate task files, one tab each.
-- A finished no-PR task (research, `pr: -`) has nothing to merge — commit its
-  task file + report directly after review.
-
-## Messaging
-
-Messages are files: `work/messages/<agent-id>/inbox/` (waiting) and
-`read/` (processed). agent-id = task number for a worker (`003`),
-`conductor`, or `user`. One message = one file with `from / to / sent /
-subject` front matter.
-
-- **PowerShell-not-Bash foot-gun**: run every `.ps1` via the PowerShell
-  tool, NEVER the Bash tool. Bash invokes Windows PowerShell 5.1;
-  `#Requires -Version 7` fails SILENTLY — nothing is written and the call
-  looks sent. Always verify the script printed the written file path.
-- NEVER delete or overwrite anything under `work/messages/` — real user
-  messages live there. Reading files anywhere: fine.
-
-```powershell
-# Send:
-./scripts/send-message.ps1 -To <agent-id> -From <agent-id> -Subject <s> (-Body <text> | -BodyFile <path>)
-
-# Read + file in ONE atomic act (never cat + move later):
-./scripts/read-message.ps1 -Agent <agent-id> [-All]
-
-# Ask the human a decision — console renders one button per option:
-./scripts/send-message.ps1 -To user -From NNN `
-  -Subject 'Which Ghidra version?' -Body 'optional markdown context' `
-  -Type question -Options '11.2; 10.4; no preference'
-```
-
-- `-Subject` IS the question; `-Options` is semicolon-separated, two or more.
-- The answer arrives as a normal inbox message carrying `re: <question file>`.
-  That `re:` line is what derives blocked/answered — the question file itself
-  is never rewritten.
-- Workers: arm a Monitor on your inbox at startup, send READY, re-arm after
-  each message. A from-USER file in a worker inbox is informational — the
-  conductor reviews and relays; workers act only on from-CONDUCTOR messages.
-- Conductor: watch `work/messages/conductor/inbox/` while any worker runs;
-  keep `work/messages/conductor/status.json` honest
-  (`{"state","subject","updatedAt"}`).
-
-## Model assignment
-
-| model  | use for                                                        |
-| ------ | -------------------------------------------------------------- |
-| haiku  | trivial/mechanical: renames, file moves, format fixes          |
-| sonnet | standard: well-specified tasks, investigations with clear steps |
-| opus   | complex: multi-step judgement, gnarly debugging                |
-| fable  | hardest: highest-ambiguity investigation, architecture         |
-
-Record the choice in the task file (`model:` in Status).
-
 ## Conventions
 
-- Worker worktrees: `C:/git/decompile-sc-taskNNN`, branch `taskNNN-<slug>`.
-- Task ids: 3 digits, never reused, gaps never refilled. Slugs:
-  lowercase-kebab (letters, digits, hyphens).
-- Task heading: `# Task NNN — <title>` with an EM DASH (—, U+2014), spaces
-  around it. Hard parser gate — a hyphen there makes the task INVISIBLE to
-  the UI and to refresh-pr-status.ps1.
-- Status block fields: `agent:`, `model:`, `pr:` only. No `state:` (status
-  is derived), no hand-written `merged:` (close-task.ps1 stamps it).
-- Reports: `work/reports/NNN-<slug>.md` unless the task reports via PR.
 - PowerShell 7 only (`#Requires -Version 7` on every script); scripts run
   via the PowerShell tool, never Bash.
-- Global rules in `~/.codex/AGENTS.md` apply to workers automatically.
+- Global rules in `~/.codex/AGENTS.md` apply here too.
