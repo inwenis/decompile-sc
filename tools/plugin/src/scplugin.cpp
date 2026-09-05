@@ -362,12 +362,16 @@ static void ScanScreen(const char* tag) {
         // built as (mapTiles - viewportTiles) * 32, with +8 on the vertical axis
         // (0x0049BB90). Printing what it SHOULD be beside what it IS makes a wrong reading
         // of that function visible in the run instead of surviving into research/.
-        long predX = ((long)mapTw - SC_VIEWPORT_TILES_X) * 32;
+        // The viewport width follows the geometry: 20 tiles stock, SC_WS_SCREEN_W/32
+        // once stage 3's scroll.clamp.x.tiles is live (issue #113 follow-up) -- a
+        // prediction pinned at 20 would print match=0 against a correct clamp.
+        const int vpTilesX = ScScreenViewportTilesX();
+        long predX = ((long)mapTw - vpTilesX) * 32;
         long predY = ((long)mapTh - SC_VIEWPORT_TILES_Y) * 32 + 8;
         ScLog("SCREEN [%s] origin=(%u,%u) tile=(%u,%u) map=%ux%u tiles (%ux%u px) "
-              "scrollMax=(%d,%d) predicted=(%ld,%ld) match=%d",
+              "scrollMax=(%d,%d) predicted=(%ld,%ld) vpTilesX=%d match=%d",
               t, left, top, tx, ty, mapTw, mapTh, mapPw, mapPh,
-              (int)maxX, (int)maxY, predX, predY,
+              (int)maxX, (int)maxY, predX, predY, vpTilesX,
               ((long)(int)maxX == predX && (long)(int)maxY == predY) ? 1 : 0);
     }
 }

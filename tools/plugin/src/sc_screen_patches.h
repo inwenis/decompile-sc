@@ -1570,6 +1570,12 @@ static const ScScreenPatch SC_WS_PATCHES[] = {
       { 0xC7, 0x45, 0xF8, 0x80, 0x02, 0x00, 0x00 },
       { 0xC7, 0x45, 0xF8, 0x20, 0x03, 0x00, 0x00 },
       "cursor.clip.right", "0x004215E0 clip-rect reset: ClientToScreen({640,480}) -> ({W,480}); ClipCursor confines the physical mouse to this, so 640 pinned the real cursor out of the right band" },
+    // 0x0049BBE6  sub ecx, 0x14
+    //             -> sub ecx, 0x19
+    { 0x0049BBE6u,  3, 3, SC_WS_NO_FIXUP, 0x0u,
+      { 0x83, 0xE9, 0x14 },
+      { 0x83, 0xE9, 0x19 },
+      "scroll.clamp.x.tiles", "0x0049BB90: maxScreenLeft = (mapTileW - 20) * 32 -> (mapTileW - W/32) * 32, so the playfield never extends past the map's right edge" },
     // 0x0046FC75  add eax, 0x280
     //             -> add eax, 0x320
     { 0x0046FC75u,  5, 3, SC_WS_NO_FIXUP, 0x0u,

@@ -47,4 +47,10 @@ void ScScreenLogStats(void);
 // arm it was taken in.
 bool ScScreenActive(void);
 
+// The viewport width in tiles the camera's scroll clamp is built from: 20 stock,
+// SC_WS_SCREEN_W/32 once stage 3's scroll.clamp.x.tiles is live (0x0049BBE6).
+// Read-only observers that PREDICT the clamp must ask this, or their "match"
+// column lies the moment the geometry moves.
+int ScScreenViewportTilesX(void);
+
 #endif  // SC_SCREEN_MOD_H

@@ -1252,6 +1252,27 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
           "ClipCursor confines the physical mouse to this, so 640 pinned the "
           "real cursor out of the right band")
 
+    # The CAMERA'S scroll clamp (2026-09-05, issue #113 follow-up; research
+    # 15.5 item 1 had deferred it to stage 3). 0x0049BB90 builds the maximum
+    # screenLeft once per game as (mapTileW - 20) * 32 -- 20 tiles = the stock
+    # 640-px viewport. At 800 the viewport is 25 tiles, so parked at the right
+    # map edge the playfield's last 5 tile columns (the whole new band) lie
+    # PAST the map: the terrain cache clamps to the map and the band shows
+    # whatever scratch it last held, and the fog fill reads visibility for
+    # tiles beyond the row end -- explored/unexplored blotches that belong to
+    # the next map row. On a real map a player parks at the right edge all
+    # the time; the fixtures keep the camera interior, which is why 064-070
+    # only ever saw it as "2.28% stale at the edge" (17.1 item 4) and the user
+    # saw it as "fog behaves odd in the added width and the right stripe".
+    # Move the clamp with the viewport: 20 -> W/32 tiles. The vertical clamp
+    # (sub eax,0xC, 12 tiles + 8) stays, the height is unchanged. The minimap
+    # click-to-centre's own 20/13 (0x4A4D20, research 7) is NOT moved: it only
+    # decides where a click lands on screen (80 px left of centre at 800), and
+    # every suite's Get-ScMinimapPoint prediction is built on it.
+    b.imm(0x0049BBE6, STOCK_W // 32, W // 32, 1, "scroll.clamp.x.tiles", 3,
+          "0x0049BB90: maxScreenLeft = (mapTileW - 20) * 32 -> (mapTileW - W/32) * 32, "
+          "so the playfield never extends past the map's right edge")
+
     # The wndproc clamp is necessary but NOT sufficient for click-SELECT past
     # x=639: the mouse->world click search rect (0x0046FB40, 9.1 item 12) is
     # ALSO 640 wide -- right = screenLeft + 640 -- so a click whose world point

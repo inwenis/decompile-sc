@@ -144,9 +144,14 @@ function Invoke-Arm {
             # 0x004215E0) must widen with the clamp, or the real mouse is pinned to
             # x<640 and can never reach the moved scroll trigger.
             $clip = @(Get-Content -LiteralPath $logPath | Select-String -Pattern 'WIDESCREEN patch stage=3 cursor\.clip\.right')
+            # issue #113 follow-up: the camera's scroll clamp moves from 20 to 25 tiles
+            # (0x0049BBE6), or the right map edge shows a stale band past the map.
+            $clampSite = @(Get-Content -LiteralPath $logPath | Select-String -Pattern 'WIDESCREEN patch stage=3 scroll\.clamp\.x\.tiles')
             if ($Widescreen -eq '1') {
                 Assert-That 'the stage-3 physical cursor clip was widened to the new screen' `
                     ($clip.Count -eq 1 -and $clip[0].Line -match 'C745F880020000 -> C745F820030000') "($(($clip|ForEach-Object Line) -join ' | '))"
+                Assert-That 'the stage-3 camera scroll clamp was moved from 20 to 25 tiles' `
+                    ($clampSite.Count -eq 1 -and $clampSite[0].Line -match '83E914 -> 83E919') "($(($clampSite|ForEach-Object Line) -join ' | '))"
                 Assert-That 'the widescreen table is ACTIVE with 0 refused' `
                     ($ws.Count -gt 0 -and $ws[0].Line -match 'ACTIVE' -and $ws[0].Line -match ' 0 refused') "($(($ws|ForEach-Object Line) -join ' | '))"
                 Assert-That 'all 8 stage-3 mouse-clamp sites were written' ($clamps.Count -eq 8) "(got $($clamps.Count))"
