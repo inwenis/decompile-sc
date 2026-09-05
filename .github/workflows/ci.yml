@@ -1,8 +1,5 @@
 name: CI
 
-# name MUST stay exactly "CI" -- scripts/lib/merge-task.ps1's Get-ChecksVerdict
-# defaults to -Workflow 'CI' and matches on this name to gate merges.
-
 on:
   pull_request:
   push:

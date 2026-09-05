@@ -1,12 +1,5 @@
-# conductor data: scratch is throwaway; tasks/, reports/, messages/ stay tracked
+# throwaway build output, logs, analysis dumps
 work/scratch/
-
-# runtime UI/console state under work/messages — churns every render, no history value;
-# the MESSAGES themselves (inbox/read/*.md) stay tracked
-work/messages/.ui-state.json
-work/messages/.ui-state.json.claims/
-work/messages/conductor/status.json
-work/messages/conductor/status.json.tmp.*
 
 node_modules/
 dist/

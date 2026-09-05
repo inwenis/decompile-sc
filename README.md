@@ -1,19 +1,16 @@
 # decompile-sc
 
-Personal StarCraft reverse-engineering research. Private. Orchestrated with the conductor system (multi-agent task board + message inbox).
+Personal StarCraft reverse-engineering research. Private.
 
 Hard rule: no game binaries or assets in this repo. The local game install lives outside git (`game/` is ignored). Research notes, scripts, and findings only.
 
 ## Layout
 
 ```
-work/                 conductor data root
-  tasks/              task board (tracked)
-  reports/            task reports (tracked)
-  messages/           user <-> conductor conversation (tracked)
-  scratch/            throwaway agent workspace (ignored)
+research/   per-subsystem findings -- the product of this repo
+tools/      plugin, Ghidra automation, map + deploy tooling
+tests/      Pester tests for the tooling
+work/       scratch/ (ignored build output + logs), defects/ (patches for build-defect-arm.ps1)
 ```
 
-Worktrees for tasks live next to this checkout as `C:/git/decompile-sc-task<NNN>` on branches `task<NNN>-<slug>`.
-
-See [AGENTS.md](AGENTS.md) for agent workflow rules.
+See [AGENTS.md](AGENTS.md) for the rulebook.
