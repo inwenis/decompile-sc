@@ -132,6 +132,10 @@ Describe 'the widescreen switch ships assembled and OFF by default (task 070)' {
     It 'the wide launcher turns the assembled widescreen on: stage 3 + cnc-ddraw' {
         $script:wideLauncher | Should -Match '-Widescreen 1'
         $script:wideLauncher | Should -Match '-WidescreenStage 3'
+        # The ARGUMENT line, not the launcher's own header comment (which also says
+        # "-StormPresent widen" and made a plain substring match unfalsifiable): the
+        # stage line and the storm line, each a backtick-continued argument.
+        $script:wideLauncher | Should -Match '-WidescreenStage 3 `\s*\r?\n\s*-StormPresent widen `' -Because 'issue #113: run-with-plugin.ps1 exported its old default 0 verbatim, so the DLL auto-arm never fired and the deployed wide game showed a black right band; the wide launcher must pass the buffer->glass copy as an argument'
         $script:wideLauncher | Should -Match 'cnc-ddraw\\ddraw\.dll'
         $script:wideLauncher | Should -Not -Match 'InjectWindowedHelper' -Because 'WMode presents 640 columns whatever it is asked; the wide path must use the cnc-ddraw proxy'
     }

@@ -621,6 +621,13 @@ group fan-out, windowed, sound on), plus the widescreen assembly (task 070):
                                      has never been watched working off-screen
                                      (no harness can feed it); your first click in
                                      the right quarter IS the test -- widescreen-card.md.
+  -StormPresent widen                the buffer->glass copy of columns 640..799 (task
+                                     074, a hook on storm ord432). Named on purpose:
+                                     the DLL would arm it by itself at stage >= 2,
+                                     but until 2026-09-05 run-with-plugin.ps1
+                                     exported its default '0' verbatim, so the
+                                     deployed wide game ran with the copy OFF --
+                                     the black right band of issue #113.
   -Windowed -WindowedHelperDll ...   cnc-ddraw (pinned v7.1.0.0, MIT) presents all
                                      800 columns (research/renderer-viewport.md 14.2).
                                      Reads cnc-ddraw.ini (unscaled) -- the normal
@@ -643,6 +650,7 @@ try {
         -WindowedHelperDll (Join-Path $here 'plugin\cnc-ddraw\ddraw.dll') `
         -Widescreen 1 `
         -WidescreenStage 3 `
+        -StormPresent widen `
         -Sound `
         -NoLaunchLock `
         -NoForegroundRestore `

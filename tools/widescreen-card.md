@@ -14,11 +14,13 @@ you pick the (Wide) shortcut, and nothing needs turning back off.
    the game itself is wider.
 3. **In a game, the right quarter now shows MORE MAP.** The playfield fills the
    full 800-wide window -- about 25% more world across, with correct fog, from
-   the first frame (you do not have to scroll to make it appear). This is the
-   fix that landed 2026-08-13: an earlier version of this card said the right
-   quarter was black in game, which was true then -- the engine computed the
-   wider map but the step that copies the finished picture into the window
-   stopped at the old 640 boundary. That copy now carries the whole width.
+   the first frame (you do not have to scroll to make it appear). History, so
+   the card stays honest: the engine has computed the wider map since
+   2026-08-13, and the step that copies the finished picture into the window
+   used to stop at the old 640 boundary. The wider copy was written the same
+   day -- but the launcher shipped it switched OFF, which is the black right
+   band you saw (issue #113). Since 2026-09-05 the (Wide) launcher turns the
+   copy on by name.
 4. All the usual mod features are on and unchanged: select-past-12, selection
    circles, the paging bottom row, the over-cap production queue with its `+N`
    badge, group production.

@@ -2277,3 +2277,33 @@ overrides: `0` off, `probe` read-only diagnostics, `widen` force on.
 Captures (gitignored diagnostic path; paths travel, images never — hard rule 1):
 `C:\sc-work\logs\074-frames\storm-present-shipped-static.png` (map past x=648 on the
 static load frame) and `…-shipped-scrolled.png`.
+
+### 20.10 CORRECTION (2026-09-05, issue #113): the shipped config never armed the widen
+
+The user's only wide session (deployed log `C:\sc-deploy\starcraft-modded\logs\sc-plugin.log`,
+2026-08-13 23:56, build `8d40c89+dirty`, which contains §20's PR) reads:
+
+```
+WIDESCREEN ACTIVE: 254 patch(es) applied, 0 refused, stage<=3
+STORM present: off (%SCPLUGIN_STORM_PRESENT% unset/0)
+```
+
+The right band was black on glass and the cursor — drawn into the framebuffer past x=640
+and never presented — "could not enter it". Both halves of issue #113 are this one line.
+
+Cause, read in source: `run-with-plugin.ps1` declared
+`[ValidateSet('0','probe','widen')][string]$StormPresent = '0'` and exported it verbatim
+(`$env:SCPLUGIN_STORM_PRESENT = $StormPresent`), so `ScStormPresentModeWanted()`'s "unset ⇒
+widen iff widescreen stage ≥ 2" branch was unreachable on every launch through that script.
+§20.9's "auto-arms" was true of the DLL and false of every launcher. The offscreen proofs
+passed `-StormPresent widen` explicitly (`probe-storm-present.ps1`), and
+`test-widescreen-input-800.ps1` never passed it at all, so its "auto-arm exercised" reading
+in the task-074 PR was vacuous: it asserted input, not glass. The log line itself is of the
+house class — it could not say which half ("unset" or "0") had decided.
+
+Fix: the launcher default is `auto`, exported as UNSET (`''` removes the variable); the
+deployed (Wide) launcher names `-StormPresent widen` explicitly and the deploy Pester test
+asserts it; the DLL's off line now prints which half decided
+(`off -- %SCPLUGIN_STORM_PRESENT%=0 (explicit)` vs `unset and no widescreen playfield
+(widescreen=%d stage=%d)`); `probe-storm-present.ps1 -StormPresent auto` exercises the
+DLL's own decision (pre-fix it reads `off`, post-fix `WIDEN armed`).
