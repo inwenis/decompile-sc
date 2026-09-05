@@ -134,16 +134,28 @@ function Invoke-Arm {
             $ws = @(Get-Content -LiteralPath $logPath | Select-String -Pattern 'WIDESCREEN (ACTIVE|INCOMPLETE|REFUSED)')
             $clamps = @(Get-Content -LiteralPath $logPath | Select-String -Pattern 'WIDESCREEN patch stage=3 mouse\.clamp')
             $rects = @(Get-Content -LiteralPath $logPath | Select-String -Pattern 'WIDESCREEN patch stage=3 click\.searchrect')
+            # issue #113 follow-up: the edge-scroll-right trigger moves with the
+            # clamp (638 -> screenW-2), or the whole widened band scrolls the camera.
+            $scroll = @(Get-Content -LiteralPath $logPath | Select-String -Pattern 'WIDESCREEN patch stage=3 scroll\.right\.trigger')
+            # issue #113 crash: the relocated grid must carry a committed guard on
+            # each side, or an off-edge dialog rect reads grid_base-1 and faults.
+            $guard = @(Get-Content -LiteralPath $logPath | Select-String -Pattern 'WIDESCREEN: grid guard OK')
             if ($Widescreen -eq '1') {
                 Assert-That 'the widescreen table is ACTIVE with 0 refused' `
                     ($ws.Count -gt 0 -and $ws[0].Line -match 'ACTIVE' -and $ws[0].Line -match ' 0 refused') "($(($ws|ForEach-Object Line) -join ' | '))"
                 Assert-That 'all 8 stage-3 mouse-clamp sites were written' ($clamps.Count -eq 8) "(got $($clamps.Count))"
                 Assert-That 'both stage-3 click-search-rect sites were written' ($rects.Count -eq 2) "(got $($rects.Count))"
+                Assert-That 'the stage-3 edge-scroll-right trigger was moved to the widened edge' `
+                    ($scroll.Count -eq 1 -and $scroll[0].Line -match '3D7E020000 -> 3D1E030000') "($(($scroll|ForEach-Object Line) -join ' | '))"
+                Assert-That 'the relocated dirty grid has a committed guard on both sides' `
+                    ($guard.Count -eq 1) "($(($guard|ForEach-Object Line) -join ' | '))"
             }
             else {
                 Assert-That 'no widescreen verdict exists at stock' ($ws.Count -eq 0)
                 Assert-That 'no stage-3 clamp was written at stock' ($clamps.Count -eq 0)
                 Assert-That 'no stage-3 click-rect was written at stock' ($rects.Count -eq 0)
+                Assert-That 'no edge-scroll trigger was moved at stock' ($scroll.Count -eq 0)
+                Assert-That 'no relocated grid guard at stock' ($guard.Count -eq 0)
             }
         }
 
