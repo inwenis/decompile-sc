@@ -76,6 +76,10 @@ param(
     # clock has passed since the game loaded. The click/scroll/command tests
     # above run inside it, so a passing run IS a driven session of this length.
     [int]$MinSessionMinutes = 3,
+    # Stage 3 is the shipped (Wide) config since task 071; 2 is what this probe
+    # was written against (task 070). The right-map-edge phase's expected clamp
+    # follows this: 25 tiles at stage 3 (scroll.clamp.x.tiles), 20 below.
+    [ValidateSet('2', '3')][string]$WidescreenStage = '3',
     [switch]$KeepOpen
 )
 
@@ -266,12 +270,12 @@ try {
     # this (its runs never gate).
     if ($Presenter -eq 'cnc') { $env:SCDRIVE_POST_ACTIVATE = '1' }
 
-    Write-Host "probe-wsdrive: launching (fanout features + stage 2, presenter=$Presenter)"
+    Write-Host "probe-wsdrive: launching (fanout features + stage $WidescreenStage, presenter=$Presenter)"
     $launchArgs = @{
         Mode = 'fanout'; Circles = '1'; HudRow = '1'; ProdQueue = '1'; ProdFan = '1'
         UpgradeQueue = '1'; QueueIndicator = '1'; WorldScan = '1'; ScreenScan = '1'
         FrameDump = $FrameDir; NoLaunchLock = $true
-        Widescreen = '1'; WidescreenStage = '2'
+        Widescreen = '1'; WidescreenStage = $WidescreenStage
         GameDir = $GameDir; LogPath = $log
     }
     if ($Presenter -eq 'cnc') { $launchArgs.Windowed = $true; $launchArgs.WindowedHelperDll = $WindowedHelperDll }
@@ -573,18 +577,32 @@ try {
         "(phases=[$(($phases.Keys | Sort-Object) -join ',')] stops=[$($stops -join ' | ')])"
     $script:completedPhases += 'scroll'
 
-    # ---- the right MAP EDGE: the stock clamp, reported for the card -------
+    # ---- the right MAP EDGE: the clamp must move with the viewport ---------
+    # Stage 3 moves the camera's scroll clamp from 20 to 25 tiles
+    # (scroll.clamp.x.tiles, issue #113 follow-up, renderer-viewport.md 18.1.4);
+    # at stage 2 it is stock. The ORACLE is the engine's own maximum, read from
+    # memory by the screen scan (SCREEN ... scrollMax=(x,y)), not this script's
+    # arithmetic; the minimap click must then land the camera exactly there.
+    # On the stock clamp this assertion reads scrollMax.x=3456 against 3296 and
+    # FAILS -- that is the pre-fix reading (2026-09-05 baseline run).
+    $viewportTiles = if ($WidescreenStage -eq '3') { 25 } else { 20 }
+    $clampOriginX = ($MAP_TILES_W - $viewportTiles) * 32
     $mmEdge = Get-ScMinimapPoint -MapTilesW $MAP_TILES_W -MapTilesH $MAP_TILES_H -TileX ($MAP_TILES_W - 1) -TileY $tileY
-    $stockClampOriginX = ($MAP_TILES_W - 20) * 32
-    [void](Click-MinimapVerified -Point $mmEdge -ExpectedOriginX $stockClampOriginX -Tag 'mapedge')
+    [void](Click-MinimapVerified -Point $mmEdge -ExpectedOriginX $clampOriginX -Tag 'mapedge')
     $ptEdge = Get-CapturePoint -Hwnd $h -Tag 'drive-mapedge'
     Assert-WideCapture -Pt $ptEdge -SkipSeam
+    $sm = @(Get-Content -LiteralPath $log | Select-String -Pattern 'scrollMax=\((\d+),(\d+)\).*match=(\d)' | Select-Object -Last 1)
+    $smX = if ($sm.Count) { [int]$sm[0].Matches[0].Groups[1].Value } else { -1 }
+    $smMatch = if ($sm.Count) { [int]$sm[0].Matches[0].Groups[3].Value } else { -1 }
+    Assert-True "the engine's own scroll clamp is (mapTilesW - $viewportTiles) * 32 at stage $WidescreenStage" `
+        ($smX -eq $clampOriginX) "(scrollMax.x=$smX want $clampOriginX; the stock 20-tile clamp would read $(($MAP_TILES_W - 20) * 32))"
+    Assert-True "the plugin's own clamp prediction agrees with the engine (SCREEN match=1)" ($smMatch -eq 1) "(match=$smMatch)"
     if ($ptEdge.Dump -and $ptEdge.OriginX -ge 0) {
-        $stockClampX = ($MAP_TILES_W - 20) * 32
-        Report-Finding "right map edge: camera clamped at origin x=$($ptEdge.OriginX) (stock 20-tile clamp predicts $stockClampX; stage 3 unbuilt) -- screen x=$([Math]::Max(0, 4096 - $ptEdge.OriginX))..799 lies past the map's own edge there"
+        $mapEdgeScreenX = [Math]::Max(0, $MAP_TILES_W * 32 - $ptEdge.OriginX)
+        Report-Finding "right map edge: camera clamped at origin x=$($ptEdge.OriginX); the map's own edge sits at screen x=$mapEdgeScreenX -- $(if ($mapEdgeScreenX -ge 800) { 'the whole 800-wide playfield is MAP' } else { "screen x=$mapEdgeScreenX..799 lies PAST the map (the stale band the user saw)" })"
         $eb = Invoke-FrameTool -ToolArgs @('band', '--dump', $ptEdge.Dump,
                 '--x0', '640', '--x1', '800', '--y0', '20', '--y1', '320')
-        Report-Finding "right-band content at the clamped edge: nonzero_frac=$($eb['band_nonzero_frac']) distinct=$($eb['band_distinct']) (what the user sees if they scroll all the way right)"
+        Report-Finding "right-band content at the clamped edge: nonzero_frac=$($eb['band_nonzero_frac']) distinct=$($eb['band_distinct']) (this fixture's right map edge is unexplored, so black shroud is the CORRECT post-fix reading; the pre-fix band held stale cells)"
     }
     # back toward the fixture
     $mmBack = Get-ScMinimapPoint -MapTilesW $MAP_TILES_W -MapTilesH $MAP_TILES_H -TileX $tileX -TileY $tileY

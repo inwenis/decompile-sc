@@ -1387,6 +1387,7 @@ Artifacts (gitignored diagnostic path; paths travel, images never):
    fixture keeps the camera interior; a player scrolling to the right edge will see stale
    right-band columns until stage 3 moves the clamp (20 → 25 tiles, plus the ±equivalents
    for mouse→world 0x0046FB40, the window-procedure clamps, and the minimap 20/13).
+   **Moved 2026-09-05 (§18.1.4, `scroll.clamp.x.tiles`)** — it was the user's "odd fog".
 2. **The minimap knows nothing of any of this** (items 17, 18 — stage 5; the viewport
    rectangle is still not even located, §10 item 1).
 3. **The console-right dead strip** (160×80 at the bottom right) is blank by design — no
@@ -1874,6 +1875,39 @@ scroll-right works at the fake edge, band unreachable (report 1); clip 640 + tri
 edge. `cursor.clip.right` (stage 3, `0x00421600` 640→W) ships with the trigger, and
 `test-widescreen-input-800.ps1` asserts both byte patterns. The behaviour — the cursor
 resting in the right band, scroll at 798 — is real-mouse only, the user's play.
+
+#### 18.1.4 The camera's scroll clamp moves with the viewport (2026-09-05, issue #113 follow-up — the "odd fog")
+
+Third real-play report, same evening: *"fog of war behaves odd, both in the added width and in
+the new right side stripe."* The fog pipeline itself is clean: task 068's oracle re-run on the
+deployed build (`probe-framebuffer-capture -Stage2`, 2026-09-05 23:16) passed 48/48, and the
+frames at every origin the harness reaches show a correct shroud gradient — the "168 black
+columns" its seam tracker reports at origin 704 are the fixture's own unexplored right side,
+not a pipeline hole. What the fixtures never do is what a player does constantly on a normal
+map: **park at the right map edge.**
+
+§7's clamp is still stock: `0x0049BBE6 sub ecx,0x14` → `maxScreenLeft = (mapTileW − 20)·32`,
+a 20-tile (640-px) viewport. At 800 the playfield is 25 tiles, so at the clamp the last 5 tile
+columns — the entire new band — lie past the map: the terrain cache clamps to the map
+(`0x0049BEBB`, §15.5 item 1) and the band keeps whatever scratch it last held, and the fog
+FILL (§16.2) reads visibility for tiles beyond the row end, i.e. the NEXT map row's
+explored/unexplored pattern — blotchy fog that changes as you scroll. §15.5 item 1 had deferred
+exactly this to stage 3; §17.1 item 4 measured it as "2.28% stale" because the drive fixture's
+right edge is unexplored (mostly shroud either way). On the user's map it is the band.
+
+Fix: `scroll.clamp.x.tiles`, stage 3, `0x0049BBE6` 20 → W/32 = 25 (`83E914 → 83E919`), so the
+camera stops where the playfield's right edge meets the map's. The vertical clamp stays (height
+unchanged). The minimap click-to-centre's own 20/13 (`0x4A4D20`) is deliberately NOT moved: it
+only decides where a click lands on screen (80 px left of centre at 800), and every suite's
+`Get-ScMinimapPoint` prediction is built on it. The plugin's SCREEN-scan prediction now follows
+the geometry (`ScScreenViewportTilesX()`, `vpTilesX=` in the log) so `match=` stays honest.
+
+Oracle (`probe-widescreen-drive.ps1`, now stage 3 by default, `mapedge` phase): the engine's
+OWN maximum read from memory, `scrollMax.x == (mapTilesW − 25)·32`, and the minimap click
+landing the camera there. On the stock clamp it reads 3456 against 3296 and fails — the
+2026-09-05 baseline run — and passes post-fix. The band at the edge is reported, not asserted:
+this fixture's right edge is unexplored, so black shroud is the correct post-fix reading; the
+user's explored map is where the difference is visible.
 
 ### 18.2 NO-GO: moving the console by relocating dialog bounds moves the HIT-TEST, not the PIXELS
 

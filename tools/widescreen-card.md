@@ -60,10 +60,13 @@ correct there now, so a click should act on what you see.
 2. **The small rectangle at the bottom-right** (right of the console, below the
    extended map) is plain black -- no artwork exists for a wider console. It
    stays perfectly black and never flickers.
-3. **Scrolling all the way to the RIGHT edge of a map** shows a thin band of
-   stale pixels at the far right while you sit at the very edge (about 2% of
-   that band). Scroll one screen left and it is gone. A known, bounded
-   follow-up -- now visible in game, since the right quarter is shown.
+3. ~~Scrolling all the way to the RIGHT edge of a map shows a stale band.~~
+   **Fixed 2026-09-05.** The camera used to stop where a 640-wide screen would
+   end, so at the right edge of the map the new right quarter showed whatever
+   was left over past the map -- stale ground and fog blotches that shifted as
+   you moved. That is the "fog behaves odd on the right" you saw. The camera
+   now stops where the 800-wide screen meets the map's edge, like the stock
+   game does at 640.
 4. **On space-platform maps** the starfield backdrop has a star-free band on
    the far right (the stars' positions come from a file that only covers the
    old width). Cosmetic, off-map only.

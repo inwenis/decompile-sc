@@ -166,6 +166,12 @@ static bool NameSelected(const char* name) {
 
 bool ScScreenActive(void) { return g_active; }
 
+int ScScreenViewportTilesX(void) {
+    // scroll.clamp.x.tiles is a stage-3 site; below that, or with the table
+    // refused, the engine still clamps the camera at the stock 20 tiles.
+    return (g_active && g_stage >= 3) ? (SC_WS_SCREEN_W / 32) : SC_VIEWPORT_TILES_X;
+}
+
 // ---------------------------------------------------------------------------
 // Safe reads -- a wrong static address must produce a refusal, never a fault
 // inside the game.
