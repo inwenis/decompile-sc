@@ -1230,6 +1230,28 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
           "screenW-2 (was 638; must widen with the mouse clamp or the whole "
           "right band scrolls)")
 
+    # The PHYSICAL cursor clip (2026-09-05, issue #113 follow-up, found only by
+    # real play). 0x004215E0 is the clip-rect reset every one of the seven
+    # ClipCursor call sites runs first: it maps client {0,0} and client
+    # {640,480} through ClientToScreen and SetRects the result into 0x006CDDB0,
+    # which ClipCursor then confines the OS cursor to. The 640 is a hardcoded
+    # client width, so under cnc-ddraw's 800-wide window the real mouse is
+    # pinned to the left 640 columns -- it cannot ENTER the right band at all,
+    # and no WM_MOUSEMOVE past x=639 is ever generated for the (already
+    # widened) wndproc clamp to read. Posted harness input is never subject to
+    # ClipCursor and the game only calls it with the foreground, which the
+    # off-screen desktop never has, so 070/071 could not see this wall. It is
+    # the coupled other half of scroll.right.trigger: with the clip at 640 and
+    # the trigger at W-2 the cursor can never reach the trigger and mouse
+    # scroll-right is dead (the user's "can't move my mouse over the new right
+    # stripe thus can't move right on the map"). The two ship together.
+    # Height stays 480. The 0x421690 explicit-rect setter is separate (4
+    # callers pass their own rect) and is not touched here.
+    b.imm(0x00421600, STOCK_W, W, 4, "cursor.clip.right", 3,
+          "0x004215E0 clip-rect reset: ClientToScreen({640,480}) -> ({W,480}); "
+          "ClipCursor confines the physical mouse to this, so 640 pinned the "
+          "real cursor out of the right band")
+
     # The wndproc clamp is necessary but NOT sufficient for click-SELECT past
     # x=639: the mouse->world click search rect (0x0046FB40, 9.1 item 12) is
     # ALSO 640 wide -- right = screenLeft + 640 -- so a click whose world point

@@ -269,5 +269,6 @@ stage	va	len	changed	name	before	after	expect	patch	note
 3	0x004D24E6	4	1	mouse.clamp.cmp@004D24E6	cmp ax, 0x280	cmp ax, 0x320	663D8002	663D2003	window-proc mouse x clamp: the 'x >= 640' decision
 3	0x004D24EC	10	1	mouse.clamp.x@004D24EC	mov dword ptr [0x6cddc4], 0x27f	mov dword ptr [0x6cddc4], 0x31f	C705C4DD6C007F020000	C705C4DD6C001F030000	window-proc mouse x clamp: the replacement value 639
 3	0x004D12FF	5	1	scroll.right.trigger	cmp eax, 0x27e	cmp eax, 0x31e	3D7E020000	3D1E030000	0x004D12A0 edge-scroll: pan the camera right when mouse x >= screenW-2 (was 638; must widen with the mouse clamp or the whole right band scrolls)
+3	0x00421600	7	1	cursor.clip.right	mov dword ptr [ebp - 8], 0x280	mov dword ptr [ebp - 8], 0x320	C745F880020000	C745F820030000	0x004215E0 clip-rect reset: ClientToScreen({640,480}) -> ({W,480}); ClipCursor confines the physical mouse to this, so 640 pinned the real cursor out of the right band
 3	0x0046FC75	5	1	click.searchrect.right	add eax, 0x280	add eax, 0x320	0580020000	0520030000	0x0046FB40: click search rect right = screenLeft + 640 -> + 800
 3	0x0046FE18	5	1	click.searchrect.right.drag	add eax, 0x280	add eax, 0x320	0580020000	0520030000	0x0046FB40 drag-box arm: same rect, same widen

@@ -30,10 +30,15 @@ you pick the (Wide) shortcut, and nothing needs turning back off.
 The map there is now visible and the mouse behaves normally in it. Two bugs the
 first wide build had here were fixed 2026-09-05:
 
-1. **The camera used to scroll the moment the cursor entered the right band**,
-   as if the screen were still 640 wide, so you could not rest the pointer
-   there. The edge-scroll-right zone now sits at the true right edge (the last
-   couple of pixels), like the stock game.
+1. **The mouse could not enter the right band at all** -- Windows itself was
+   confining the pointer to the old 640 columns (the game asks the OS to clip
+   the cursor to its play area, and that area was hardcoded at 640), and the
+   camera scrolled the moment the pointer hit that invisible wall, as if the
+   screen were still 640 wide. Both halves are fixed together: the clip is now
+   800 wide, and the edge-scroll-right zone sits at the true right edge (the
+   last couple of pixels), like the stock game. An intermediate build
+   (2026-09-05, first pass) moved the scroll zone before the clip and left
+   mouse scroll-right dead; that is the build you reported on.
 2. **A rare crash** (`0x0041DE84 ... memory could not be read`) when a menu or
    tooltip drew a hair off the screen edge. Harmless in the stock game, it began
    faulting once the widescreen build moved an internal table; it now has a

@@ -1564,6 +1564,12 @@ static const ScScreenPatch SC_WS_PATCHES[] = {
       { 0x3D, 0x7E, 0x02, 0x00, 0x00 },
       { 0x3D, 0x1E, 0x03, 0x00, 0x00 },
       "scroll.right.trigger", "0x004D12A0 edge-scroll: pan the camera right when mouse x >= screenW-2 (was 638; must widen with the mouse clamp or the whole right band scrolls)" },
+    // 0x00421600  mov dword ptr [ebp - 8], 0x280
+    //             -> mov dword ptr [ebp - 8], 0x320
+    { 0x00421600u,  7, 3, SC_WS_NO_FIXUP, 0x0u,
+      { 0xC7, 0x45, 0xF8, 0x80, 0x02, 0x00, 0x00 },
+      { 0xC7, 0x45, 0xF8, 0x20, 0x03, 0x00, 0x00 },
+      "cursor.clip.right", "0x004215E0 clip-rect reset: ClientToScreen({640,480}) -> ({W,480}); ClipCursor confines the physical mouse to this, so 640 pinned the real cursor out of the right band" },
     // 0x0046FC75  add eax, 0x280
     //             -> add eax, 0x320
     { 0x0046FC75u,  5, 3, SC_WS_NO_FIXUP, 0x0u,

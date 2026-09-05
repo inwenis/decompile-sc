@@ -1833,6 +1833,48 @@ clamping them one at a time. Install logs `grid guard OK` with a `VirtualQuery`
 of both guard edges as the oracle (it prints `MISSING` and refuses on the
 pre-fix bare allocation), and `test-widescreen-input-800.ps1` asserts the line.
 
+#### 18.1.3 The PHYSICAL cursor clip: `ClipCursor` pins the real mouse to x<640 (2026-09-05, issue #113 follow-up)
+
+Second real-play report on the deployed 800 build, after §18.1.1's trigger move: *"I can't
+move my mouse over the new right stripe, thus I can't move right on the map with my
+mouse."* The wndproc clamps (§18.1) and the scroll trigger were both widened, and the
+cursor still stopped at 640 — because those govern what the engine READS from a mouse
+message, and no message past x=639 was ever generated: the OS itself would not let the
+cursor go there.
+
+`0x004215E0`, read end to end, is the clip-rect reset:
+
+```
+mov  ecx,[0x51BFB0]            ; the game HWND
+mov  esi,[ClientToScreen]
+[ebp-10]=0 ; [ebp-0C]=0        ; client {0,0}
+[ebp-08]=0x280 ; [ebp-04]=0x1E0 ; client {640,480}   <-- 0x00421600, the site
+call ClientToScreen(hwnd,&{0,0}) ; call ClientToScreen(hwnd,&{640,480})
+SetRect(&0x006CDDB0, l,t,r,b)   ; the clip global
+```
+
+All seven `ClipCursor(&0x006CDDB0)` call sites (`0x4216E0/42171E/42175E` the enable/disable
+toggles, `0x4A3ED2/4A4D57/4D3032/4E45AF` the activation and mode-change paths) run this reset
+first, so the physical mouse is confined to the left 640 client columns of cnc-ddraw's
+800-wide window. The one explicit-rect setter, `0x421690`, is called from the drag-box
+start `0x46FFAE` with the PLAYFIELD rect `0x5993B0`, which stage 2 already widens
+(`playfield.setrect.right`), so the reset was the only 640 clip left.
+
+Why no harness saw it: posted `WM_MOUSEMOVE` is not subject to `ClipCursor`, and the game
+issues `ClipCursor` only when active with the foreground — exactly what the invisible
+desktop never has (§"A test run happens on an INVISIBLE DESKTOP"). The AGENTS.md
+foreground section had even recorded *"every raise confined the user's real mouse to the
+game window"* — the window, at 640, was the wall, and nobody had asked how wide.
+
+**It is the coupled other half of §18.1.1's trigger move, and shipping one without the
+other is worse than neither:** clip 640 + trigger 638 (stock) = cursor pinned at 639,
+scroll-right works at the fake edge, band unreachable (report 1); clip 640 + trigger 798
+(after §18.1.1 alone) = cursor pinned at 639, trigger unreachable, mouse scroll-right DEAD
+(report 2); clip 800 + trigger 798 = cursor reaches the band, scrolls only at the true
+edge. `cursor.clip.right` (stage 3, `0x00421600` 640→W) ships with the trigger, and
+`test-widescreen-input-800.ps1` asserts both byte patterns. The behaviour — the cursor
+resting in the right band, scroll at 798 — is real-mouse only, the user's play.
+
 ### 18.2 NO-GO: moving the console by relocating dialog bounds moves the HIT-TEST, not the PIXELS
 
 The plan was to translate the `StatRes` and `StatBtn` root dialog bounds
