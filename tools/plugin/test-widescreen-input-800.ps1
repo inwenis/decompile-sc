@@ -140,7 +140,13 @@ function Invoke-Arm {
             # issue #113 crash: the relocated grid must carry a committed guard on
             # each side, or an off-edge dialog rect reads grid_base-1 and faults.
             $guard = @(Get-Content -LiteralPath $logPath | Select-String -Pattern 'WIDESCREEN: grid guard OK')
+            # issue #113 follow-up: the physical cursor clip (ClipCursor rect reset at
+            # 0x004215E0) must widen with the clamp, or the real mouse is pinned to
+            # x<640 and can never reach the moved scroll trigger.
+            $clip = @(Get-Content -LiteralPath $logPath | Select-String -Pattern 'WIDESCREEN patch stage=3 cursor\.clip\.right')
             if ($Widescreen -eq '1') {
+                Assert-That 'the stage-3 physical cursor clip was widened to the new screen' `
+                    ($clip.Count -eq 1 -and $clip[0].Line -match 'C745F880020000 -> C745F820030000') "($(($clip|ForEach-Object Line) -join ' | '))"
                 Assert-That 'the widescreen table is ACTIVE with 0 refused' `
                     ($ws.Count -gt 0 -and $ws[0].Line -match 'ACTIVE' -and $ws[0].Line -match ' 0 refused') "($(($ws|ForEach-Object Line) -join ' | '))"
                 Assert-That 'all 8 stage-3 mouse-clamp sites were written' ($clamps.Count -eq 8) "(got $($clamps.Count))"
