@@ -23,8 +23,10 @@ param(
     [string]$FixtureDir,
     [string]$FrameDir = 'C:\sc-work\logs\074-frames',
     [string]$WindowedHelperDll = 'C:\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll',
-    # 'widen' forces the fix on; unset would auto-arm anyway at widescreen stage>=2.
-    [ValidateSet('widen', 'probe')][string]$StormPresent = 'widen',
+    # 'widen' forces the fix on (what the deployed wide launcher passes). 'auto' passes
+    # nothing through to the DLL and lets its own auto-arm decide -- the arm issue #113
+    # was about: before the fix this arm read "STORM present: off", after it "WIDEN armed".
+    [ValidateSet('widen', 'probe', 'auto')][string]$StormPresent = 'widen',
     [switch]$KeepOpen
 )
 

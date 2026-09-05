@@ -321,7 +321,15 @@ void ScStormPresentInstall(BYTE* exeBase, bool writeAllowed) {
     g_mode = ScStormPresentModeWanted();
     g_logs = 0;
     if (g_mode == SC_STORM_OFF) {
-        ScLog("STORM present: off (%%SCPLUGIN_STORM_PRESENT%% unset/0)");
+        // Name the half that decided it. Issue #113: "unset/0" could not distinguish
+        // "the launcher exported 0" from "nothing to present", and the deployed wide
+        // game ran with the copy OFF behind exactly that line.
+        if (StormEnvExplicit() == SC_STORM_OFF)
+            ScLog("STORM present: off -- %%SCPLUGIN_STORM_PRESENT%%=0 (explicit)");
+        else
+            ScLog("STORM present: off -- %%SCPLUGIN_STORM_PRESENT%% unset and no widescreen "
+                  "playfield to present (widescreen=%d stage=%d; auto-arms at stage>=2)",
+                  ScScreenWidescreenWanted() ? 1 : 0, ScScreenStageWanted());
         return;
     }
     g_stormBase = (BYTE*)GetModuleHandleA("storm.dll");

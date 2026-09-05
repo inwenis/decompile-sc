@@ -371,8 +371,15 @@ param(
     # fallback lock pointer and the present region on the marker channel (works in
     # any mode, writes nothing). 'widen' = coerce storm's virtual screen to the
     # widescreen width so the present carries all 800 columns (writes game memory,
-    # ignored in -Mode observe like every writer). '0' = off.
-    [ValidateSet('0', 'probe', 'widen')][string]$StormPresent = '0'
+    # ignored in -Mode observe like every writer). '0' = off. 'auto' (default) leaves
+    # %SCPLUGIN_STORM_PRESENT% UNSET so the DLL decides: WIDEN when widescreen is at
+    # stage >= 2, off otherwise.
+    # Issue #113: the old default was '0' and was exported verbatim, so the DLL's
+    # auto-arm never once saw "unset" on any launch through this script -- the
+    # deployed (Wide) shortcut ran with the present copy OFF and the right band
+    # stayed black in real play while every offscreen proof passed -StormPresent
+    # widen explicitly.
+    [ValidateSet('auto', '0', 'probe', 'widen')][string]$StormPresent = 'auto'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -603,7 +610,12 @@ try {
     $env:SCPLUGIN_WS_STAGE       = $WidescreenStage
     $env:SCPLUGIN_CONSOLE_EDGE   = $ConsoleEdge
     $env:SCPLUGIN_CONSOLE_TRACE  = $ConsoleTrace
-    $env:SCPLUGIN_STORM_PRESENT  = $StormPresent
+    # 'auto' must reach the DLL as UNSET (issue #113). Remove-Item, not `$env:X = ''`:
+    # measured on pwsh 7.6, the empty assignment leaves the variable present-but-empty
+    # in a child's environment block; the DLL happens to treat length 0 as unset, but
+    # the launcher should not lean on that.
+    if ($StormPresent -eq 'auto') { Remove-Item Env:SCPLUGIN_STORM_PRESENT -ErrorAction SilentlyContinue }
+    else { $env:SCPLUGIN_STORM_PRESENT = $StormPresent }
     if ($Liveness -eq '0') {
         Write-Warning 'run-with-plugin: -Liveness 0 — the fan-out emit gate is back to the pre-task-020 uniqueness test ALONE. A unit killed by damage will be replayed into a Select. This is a deliberate defect-reproduction run.'
     }
