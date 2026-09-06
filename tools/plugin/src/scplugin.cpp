@@ -48,6 +48,7 @@
 #include "sc_queueind.h"
 #include "sc_screen.h"
 #include "sc_session.h"
+#include "sc_unit.h"
 #include "sc_stormpresent.h"
 #include "sc_upgrades.h"
 
@@ -238,20 +239,6 @@ static bool ReadU32(DWORD addr, DWORD* out) {
     return true;
 }
 
-// The same bounds/stride test the fan-out applies before it follows a unit pointer
-// (sc_fanout.cpp UnitPtrValid): inside the unit array, on a CUnit stride, within the
-// index range the wire tag can encode. A link that fails it is a torn read of a list
-// the game thread is editing, not a unit -- following it is what turns a benign race
-// into a fault.
-static bool WorldUnitPtrValid(DWORD ptr) {
-    if (!ptr) return false;
-    DWORD arrayBase = ScRuntimeVa(SC_VA_UNIT_ARRAY_BASE);
-    if (ptr < arrayBase) return false;
-    DWORD off = ptr - arrayBase;
-    if (off % SC_CUNIT_SIZE != 0) return false;
-    return (off / SC_CUNIT_SIZE + 1) <= SC_MAX_UNIT_INDEX;
-}
-
 // Counts one player's list without logging. Used for the second pass -- see ScanWorld.
 static int CountPlayerUnits(int p, bool* ok) {
     DWORD head = 0;
@@ -260,7 +247,7 @@ static int CountPlayerUnits(int p, bool* ok) {
         return 0;
     int n = 0;
     for (DWORD u = head; u && n < SC_MAX_UNITS_WALK; ) {
-        if (!WorldUnitPtrValid(u)) return n;
+        if (!ScUnitPtrValid(u)) return n;
         DWORD next = 0;
         if (!ReadU32(u + SC_CUNIT_OFF_LIST_NEXT, &next)) return n;
         u = next;
@@ -553,7 +540,7 @@ static void ScanWorld(const char* tag) {
         // Bounded exactly like the fan-out's own reachability walk: never trust a
         // game list to terminate.
         while (unit && n < SC_MAX_UNITS_WALK) {
-            if (!WorldUnitPtrValid(unit)) break;
+            if (!ScUnitPtrValid(unit)) break;
             unsigned type = 0xFFFF, order = 0xFF, order2 = 0xFF, owner = 0xFF, energy = 0xFFFF;
             unsigned stim = 0xFF;
             DWORD hp = 0xFFFFFFFF, flags = 0, sprite = 0;

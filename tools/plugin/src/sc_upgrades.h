@@ -184,7 +184,7 @@ enum ScUpgQueueStat {
     SC_UPGQ_STAT_WAITING_COST = 6,  // promotions deferred because the player cannot pay yet
     SC_UPGQ_STAT_UNBLOCKED = 7,     // card conditions answered as if the building were idle
     // MINERALS_SPENT and GAS_SPENT USED TO SIT HERE (issue #66, task 055). Nothing ever
-    // incremented them -- and in this module nothing could have: MineralsOf/GasOf return
+    // incremented them -- and in this module nothing could have: ScPlayerMinerals/Gas read
     // VALUES, not pointers, so it cannot write a resource global at all. The counters were
     // asserting the initialiser.
     //

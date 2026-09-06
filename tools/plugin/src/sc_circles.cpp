@@ -28,6 +28,7 @@
 #include "sc_hook.h"
 #include "sc_log.h"
 #include "sc_session.h"
+#include "sc_unit.h"
 
 #define SC_CIRCLES_MAX 256
 
@@ -136,18 +137,6 @@ static BYTE RemoveCircle(DWORD sprite) {
 // committed, readable, non-guard region. This is the same defence scplugin.cpp's
 // observer uses for its reads, kept local so this module has no dependency on it.
 
-// The unit array is a fixed 1700-entry global, so a valid CUnit* is exactly an
-// in-range, correctly-strided offset from its base. Same test sc_fanout.cpp applies
-// before it encodes a unit tag.
-static bool UnitInRange(DWORD unit) {
-    if (!unit) return false;
-    DWORD arrayBase = ScRuntimeVa(SC_VA_UNIT_ARRAY_BASE);
-    if (unit < arrayBase) return false;
-    DWORD off = unit - arrayBase;
-    if (off % SC_CUNIT_SIZE != 0) return false;
-    return (off / SC_CUNIT_SIZE + 1) <= SC_MAX_UNIT_INDEX;
-}
-
 // CSprite is 0x24 bytes (prev, next, ids, flags, size, position, three image
 // pointers) -- research/selection-circles.md 2.1. Requiring the whole struct rather
 // than just the flags byte means a pointer landing on the last bytes of a region
@@ -155,7 +144,7 @@ static bool UnitInRange(DWORD unit) {
 #define SC_CSPRITE_SIZE 0x24u
 
 static bool SpriteOf(DWORD unit, DWORD* outSprite) {
-    if (!UnitInRange(unit)) return false;
+    if (!ScUnitPtrValid(unit)) return false;
     if (!ScReadable(unit + SC_CUNIT_OFF_SPRITE, 4)) return false;
     DWORD sprite = *(DWORD*)(unit + SC_CUNIT_OFF_SPRITE);
     if (!ScReadable(sprite, SC_CSPRITE_SIZE)) return false;

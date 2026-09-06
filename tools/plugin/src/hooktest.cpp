@@ -1346,7 +1346,7 @@ static void Drive36Sync(void)   { DriveSelection(36); SetEngineSelectionFirst(12
 static void SmallSync(int n)    { SmallSelection(n);  SetEngineSelectionFirst(n); }
 
 // Link FakeUnit(0..n-1) into the fake playerUnitList[player] via +0x68/+0x6C, so
-// the click gate's InPlayerUnitList walk runs for real. Head-insert.
+// the click gate's ScUnitInOwnPlayerList walk runs for real. Head-insert.
 static void BuildFakePlayerList(int n, BYTE player) {
     DWORD* heads = (DWORD*)FakeRt(SC_VA_PLAYER_UNIT_LIST);
     heads[player] = 0;
@@ -4512,7 +4512,7 @@ static void QueueIndTests(void) {
         *gap = SC_BUILD_QUEUE_EMPTY;            // ring: B,B,B,_,_ then a foreign item at the tail
         *slot = (WORD)(PQ_TYPE_B + 1);
         const int dirtyBefore = ScQueueIndStat(SC_QIND_STAT_PHANTOM_DIRTY);
-        // EngineQueueLength counts occupied slots ANYWHERE in the ring, so it reads 4
+        // ScUnitQueueLength counts occupied slots ANYWHERE in the ring, so it reads 4
         // (three real + the foreign tail item) and apply's k=4 names slot head+4 -- the
         // foreign item, exactly the collision the refusal exists for.
         Check("a non-empty slot where the map expects a hole is REFUSED",

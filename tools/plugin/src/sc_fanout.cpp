@@ -48,6 +48,7 @@
 #include "sc_log.h"
 #include "sc_prodfan.h"
 #include "sc_session.h"
+#include "sc_unit.h"
 
 // ---------------------------------------------------------------------------
 // Tunables (all overridable by environment variable, all logged at attach)
@@ -235,37 +236,13 @@ static bool ShadowContainsUnit(const ShadowUnit* arr, int n, const ShadowUnit* u
     return false;
 }
 
-// Is this a pointer to a real slot of the unit array? The array is a fixed
-// 1700-entry global, so an in-range pointer is always readable -- but the pointer
-// itself has to be validated against the array's bounds and stride first, because a
-// bad one would otherwise be dereferenced. Every deref in this file goes through
-// here, including each link of the player-unit-list walk below.
-static bool UnitPtrValid(DWORD ptr) {
-    if (!ptr) return false;
-    DWORD arrayBase = ScRuntimeVa(SC_VA_UNIT_ARRAY_BASE);
-    if (ptr < arrayBase) return false;
-    DWORD off = ptr - arrayBase;
-    if (off % SC_CUNIT_SIZE != 0) return false;
-    return (off / SC_CUNIT_SIZE + 1) <= SC_MAX_UNIT_INDEX;   // the wire index is 1-based
-}
-
 // Reads a unit's identity fields.
 static bool ReadUnit(DWORD ptr, ShadowUnit* out) {
-    if (!UnitPtrValid(ptr)) return false;
+    if (!ScUnitPtrValid(ptr)) return false;
     out->ptr        = ptr;
     out->uniqueness = *(BYTE*)(ptr + SC_CUNIT_OFF_UNIQUENESS);
     out->player     = *(BYTE*)(ptr + SC_CUNIT_OFF_PLAYER);
     return true;
-}
-
-// index+uniqueness packed exactly as CMDACT_Select / the Right Click builder /
-// the Targeted Order builder all do it. Returns 0 for anything out of range,
-// which is what the engine encodes too.
-static WORD UnitTag(DWORD ptr) {
-    if (!UnitPtrValid(ptr)) return 0;
-    DWORD index = (ptr - ScRuntimeVa(SC_VA_UNIT_ARRAY_BASE)) / SC_CUNIT_SIZE + 1;
-    BYTE uniq = *(BYTE*)(ptr + SC_CUNIT_OFF_UNIQUENESS);
-    return (WORD)(((WORD)uniq << 11) | (WORD)index);
 }
 
 // ---------------------------------------------------------------------------
@@ -392,25 +369,6 @@ static bool SameUnit(const ShadowUnit* u) {
     return *(BYTE*)(u->ptr + SC_CUNIT_OFF_UNIQUENESS) == u->uniqueness;
 }
 
-// Is `unit` reachable from its owning player's unit list? A unit in play is
-// head-inserted into playerUnitList[player] (0x006283F8) by the unit (re)init
-// 0x004A0320 and threaded through CUnit+0x6C; the removal path 0x004A0740 UNLINKS a
-// unit removed from play (sc_addresses.h, hud-selection-row.md 6.1). Every link is
-// bounds/stride-validated before it is followed, and the walk is bounded, so a torn
-// or corrupt list fails closed rather than faulting or hanging.
-static bool InPlayerUnitList(DWORD unit) {
-    if (!unit) return false;
-    BYTE player = *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER);
-    if (player >= SC_MAX_PLAYERS) return false;
-    DWORD u = ((DWORD*)ScRuntimeAddr(SC_VA_PLAYER_UNIT_LIST))[player];
-    for (int guard = 0; u && guard < SC_MAX_UNITS_WALK; ++guard) {
-        if (!UnitPtrValid(u)) return false;
-        if (u == unit) return true;
-        u = *(DWORD*)(u + SC_CUNIT_OFF_LIST_NEXT);
-    }
-    return false;
-}
-
 // ---------------------------------------------------------------------------
 // SAME-TYPE BUILDING GROUPS (task 024)
 //
@@ -524,7 +482,7 @@ static bool UnitLive(const ShadowUnit* u, int* why) {
     else if (*(DWORD*)(u->ptr + SC_CUNIT_OFF_HITPOINTS) == 0) w = SC_DROP_DEAD;
     else if (*(BYTE*)(u->ptr + SC_CUNIT_OFF_PLAYER) != u->player) w = SC_DROP_FOREIGN;
     else if (*(DWORD*)(u->ptr + SC_CUNIT_OFF_SPRITE) == 0) w = SC_DROP_NOSPRITE;
-    else if (!InPlayerUnitList(u->ptr)) w = SC_DROP_REMOVED;
+    else if (!ScUnitInOwnPlayerList(u->ptr)) w = SC_DROP_REMOVED;
     if (why) *why = w;
     return w == SC_LIVE_OK;
 }
@@ -602,11 +560,11 @@ static void LogUnitForensics(const char* what, const ShadowUnit* u, int why) {
     }
     ScLog("%s: unit=0x%08X tag=%04X why=%s hp=%u uniq=%u/%u player=%u/%u "
           "sprite=0x%08X spriteFlags=%d inList=%d",
-          what, (unsigned)u->ptr, UnitTag(u->ptr), DropWhyName(why),
+          what, (unsigned)u->ptr, ScUnitTag(u->ptr), DropWhyName(why),
           u->ptr ? *(unsigned*)(u->ptr + SC_CUNIT_OFF_HITPOINTS) : 0,
           u->ptr ? *(BYTE*)(u->ptr + SC_CUNIT_OFF_UNIQUENESS) : 0, u->uniqueness,
           u->ptr ? *(BYTE*)(u->ptr + SC_CUNIT_OFF_PLAYER) : 0, u->player,
-          (unsigned)sprite, sflags, (u->ptr && InPlayerUnitList(u->ptr)) ? 1 : 0);
+          (unsigned)sprite, sflags, (u->ptr && ScUnitInOwnPlayerList(u->ptr)) ? 1 : 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -745,7 +703,7 @@ static int EmitSelect(const ShadowUnit* units, int n) {
         WORD tag = 0;
         bool allow = PassesGate(&units[i], &why);
         if (allow) {
-            tag = UnitTag(units[i].ptr);
+            tag = ScUnitTag(units[i].ptr);
             if (!tag) { allow = false; why = SC_DROP_NOTAG; }
         }
         if (!allow) {
@@ -1212,7 +1170,7 @@ static void GroupRecall(int group) {
         tags[0] = '\0';
         for (int i = 0; i < visibleCount; ++i) {
             used += _snprintf(tags + used, sizeof(tags) - used, "%s%04X",
-                              i ? " " : "", UnitTag(visible[i].ptr));
+                              i ? " " : "", ScUnitTag(visible[i].ptr));
         }
         ScLog("GROUP recall enter: group=%d activePlayerSelection holds visible=%d [%s] "
               "(read at queueCommand time, BEFORE anything of ours runs)",
@@ -1782,7 +1740,7 @@ unsigned ScFanoutGrowBuildingGroup(DWORD* candidates, DWORD* out, DWORD clicked,
     if (ret != 1 || !out || !candidates) return ret;
 
     const DWORD lead = out[0];
-    if (!UnitPtrValid(lead)) return ret;
+    if (!ScUnitPtrValid(lead)) return ret;
     // Both tests, same reason as everywhere else in task 036 (see UnitIsBuilding): the
     // predicate failing is not by itself "this is a building". Task 024 shipped with the
     // predicate alone, which was safe while `clicked == 0` also had to hold -- a box that
@@ -1801,7 +1759,7 @@ unsigned ScFanoutGrowBuildingGroup(DWORD* candidates, DWORD* out, DWORD clicked,
     for (int i = 0; candidates[i] != 0 && i < SC_MAX_UNITS_WALK; ++i) {
         const DWORD c = candidates[i];
         if (c == lead) continue;
-        if (!UnitPtrValid(c)) continue;
+        if (!ScUnitPtrValid(c)) continue;
         if (*(WORD*)(c + SC_CUNIT_OFF_UNIT_ID) != leadType) continue;
         if (*(BYTE*)(c + SC_CUNIT_OFF_PLAYER) != leadOwner) continue;
         // Fail closed. Same type as a unit that failed the gate cannot pass it, but a
@@ -1953,7 +1911,7 @@ ScFanoutMovableDecide(DWORD unit, DWORD retAddr, int verdict) {
     if (!IsExtendSite(retAddr)) return verdict;
 
     const DWORD lead = *(DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_SELECTION);
-    if (!UnitPtrValid(lead)) return verdict;
+    if (!ScUnitPtrValid(lead)) return verdict;
     // Not a building group -> the engine decides, exactly as it does today. This is the
     // branch every ordinary unit selection takes, so shift-clicking Marines is untouched.
     //
@@ -1964,7 +1922,7 @@ ScFanoutMovableDecide(DWORD unit, DWORD retAddr, int verdict) {
     if (UnitIsStandardAndMovable(lead) || !UnitIsBuilding(lead)) return verdict;
 
     ++g_statExtendSeen;
-    if (!UnitPtrValid(unit)) { ++g_statExtendRefuse; return 0; }
+    if (!ScUnitPtrValid(unit)) { ++g_statExtendRefuse; return 0; }
 
     const WORD leadType  = *(WORD*)(lead + SC_CUNIT_OFF_UNIT_ID);
     const BYTE leadOwner = *(BYTE*)(lead + SC_CUNIT_OFF_PLAYER);

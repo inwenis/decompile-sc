@@ -26,6 +26,7 @@
 #include "sc_session.h"
 #include "sc_upgrades.h"
 #include "sc_queueind.h"
+#include "sc_unit.h"
 
 // The indicator's own control id. NEGATIVE on purpose: the CREATE-time handler binder
 // 0x00418100 only rewrites +0x2A for controls with index > 0, so a negative id is
@@ -159,25 +160,15 @@ static void QIndSessionSync(void) {
 // ---------------------------------------------------------------------------
 
 static void CallShow(DWORD ctrl) {
-    if (g_show) { g_show(ctrl); return; }
-    void* fn = ScRuntimeAddr(SC_VA_SHOW_CONTROL);
-    __asm__ __volatile__("calll *%[fn]"
-        : : "S"(ctrl), [fn] "r"(fn) : "eax", "ecx", "edx", "cc", "memory");
+    if (g_show) g_show(ctrl); else ScCtrlShow(ctrl);
 }
 
 static void CallHide(DWORD ctrl) {
-    if (g_hide) { g_hide(ctrl); return; }
-    void* fn = ScRuntimeAddr(SC_VA_HIDE_CONTROL);
-    __asm__ __volatile__("calll *%[fn]"
-        : : "S"(ctrl), [fn] "r"(fn) : "eax", "ecx", "edx", "cc", "memory");
+    if (g_hide) g_hide(ctrl); else ScCtrlHide(ctrl);
 }
 
 static void CallUpdate(DWORD ctrl) {
-    if (g_update) { g_update(ctrl); return; }
-    void* fn = ScRuntimeAddr(SC_VA_UPDATE_CONTROL);
-    DWORD inout = ctrl;
-    __asm__ __volatile__("calll *%[fn]"
-        : "+a"(inout) : [fn] "r"(fn) : "ecx", "edx", "cc", "memory");
+    if (g_update) g_update(ctrl); else ScCtrlUpdate(ctrl);
 }
 
 typedef void (*OrigDriverFn)(void);
@@ -187,8 +178,6 @@ static void CallOrigDriver(void) {
     if (g_hkDriver.installed) ((OrigDriverFn)g_hkDriver.trampoline)();
 }
 
-static DWORD StatDialog(void)   { return *(DWORD*)ScRuntimeAddr(SC_VA_STATDATA_DIALOG); }
-static DWORD PortraitUnit(void) { return *(DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PORTRAIT_UNIT); }
 static int   SelectionCount(void) { return (int)*(BYTE*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT); }
 
 // ---------------------------------------------------------------------------
@@ -214,50 +203,6 @@ int ScQueueIndSmallFontHeight(void) {
 }
 
 static int SmallFontHeight(void) { return ScQueueIndSmallFontHeight(); }
-
-static DWORD ChildOf(DWORD dlg)  { return *(DWORD*)(dlg + SC_BINDLG_OFF_FIRST_CHILD); }
-static DWORD NextOf(DWORD ctrl)  { return *(DWORD*)(ctrl + SC_BINDLG_OFF_NEXT); }
-static short IndexOf(DWORD ctrl) { return *(short*)(ctrl + SC_BINDLG_OFF_INDEX); }
-
-static DWORD RootOf(DWORD dialog) {
-    if (*(WORD*)(dialog + SC_BINDLG_OFF_TYPE) != 0) {
-        return *(DWORD*)(dialog + SC_BINDLG_OFF_PARENT);
-    }
-    return dialog;
-}
-
-// Every child walk in this file is BOUNDED. ScQueueIndLogState runs on the OBSERVER
-// thread against a list the game thread owns, so a torn `next` has to end the walk rather
-// than spin it -- the same rule sc_card.cpp's walk follows.
-static DWORD FindChildById(DWORD root, short id) {
-    DWORD c = ChildOf(root);
-    for (int guard = 0; c && guard < SC_MAX_CTRLS_WALK; ++guard, c = NextOf(c)) {
-        if (IndexOf(c) == id) return c;
-    }
-    return 0;
-}
-
-// Is this a CUnit pointer, by the unit array's own bounds and stride? Same test the other
-// modules make; a pointer that fails it is never dereferenced.
-static bool UnitValid(DWORD unit) {
-    if (!unit) return false;
-    DWORD base = ScRuntimeVa(SC_VA_UNIT_ARRAY_BASE);
-    if (unit < base) return false;
-    DWORD off = unit - base;
-    if (off % SC_CUNIT_SIZE != 0) return false;
-    return (off / SC_CUNIT_SIZE) < SC_MAX_UNIT_INDEX;
-}
-
-// How many of the engine's five ring slots this building is holding. The plugin's
-// overflow is NOT counted here -- that is the whole point of the two numbers.
-static int EngineQueueLength(DWORD unit) {
-    int n = 0;
-    for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) {
-        WORD t = *(WORD*)(unit + SC_CUNIT_OFF_BUILD_QUEUE + (DWORD)i * 2);
-        if (t != SC_BUILD_QUEUE_EMPTY) ++n;
-    }
-    return n;
-}
 
 static int OverflowOf(DWORD unit) {
     int n = ScProdQueueOverflowCount(unit);   // -1 when the building is not tracked
@@ -319,12 +264,12 @@ int ScQueueIndPhantomApply(void) {
     g_phantomN    = 0;
     g_phantomUnit = 0;
     if (!g_enabled) return 0;
-    DWORD unit = PortraitUnit();   // the global queueLayout itself reads, per slot
-    if (!UnitValid(unit)) return 0;
+    DWORD unit = ScPortraitUnit();   // the global queueLayout itself reads, per slot
+    if (!ScUnitPtrValid(unit)) return 0;
     if (ScProdQueueOverflowCount(unit) <= 0) return 0;
 
     const BYTE head      = *(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
-    const int  engineLen = EngineQueueLength(unit);
+    const int  engineLen = ScUnitQueueLength(unit);
     int wrote = 0;
     for (int k = engineLen; k < SC_BUILD_QUEUE_SLOTS; ++k) {
         int type = ScProdQueueOverflowAt(unit, k - engineLen);
@@ -434,11 +379,11 @@ static int CoherentEngineLen(DWORD unit, int* stable) {
     for (int attempt = 0; attempt < 32; ++attempt) {
         unsigned g1 = ScQueueIndRingGen();
         if (g1 & 1) continue;
-        int n = EngineQueueLength(unit);
+        int n = ScUnitQueueLength(unit);
         if (ScQueueIndRingGen() == g1) { if (stable) *stable = 1; return n; }
     }
     if (stable) *stable = 0;
-    return EngineQueueLength(unit);
+    return ScUnitQueueLength(unit);
 }
 
 // Returns 1 when every ring read settled against the phantom window's seqlock, 0 when
@@ -450,8 +395,8 @@ static int ReadView(ScQueueIndView* v) {
     v->hudPages  = ScHudRowPageCount();
 
     if (v->selection <= 1) {
-        DWORD unit = PortraitUnit();
-        if (!UnitValid(unit)) return stable;
+        DWORD unit = ScPortraitUnit();
+        if (!ScUnitPtrValid(unit)) return stable;
         v->engineLen = CoherentEngineLen(unit, &stable);
         v->overflow  = OverflowOf(unit);
         int upg = ScUpgQueueCount(unit);          // -1 when the building is not tracked
@@ -466,7 +411,7 @@ static int ReadView(ScQueueIndView* v) {
     DWORD* slot = (DWORD*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_GROUP);
     for (int i = 0; i < SC_HUD_BUTTON_COUNT; ++i) {
         DWORD unit = slot[i];
-        if (!UnitValid(unit)) continue;
+        if (!ScUnitPtrValid(unit)) continue;
         int s = 1;
         int len = CoherentEngineLen(unit, &s) + OverflowOf(unit);
         if (!s) stable = 0;
@@ -481,8 +426,8 @@ static int ReadView(ScQueueIndView* v) {
 
 static bool InChain(DWORD root) {
     DWORD ind = (DWORD)&g_ctrl[0];
-    DWORD c = ChildOf(root);
-    for (int guard = 0; c && guard < SC_MAX_CTRLS_WALK; ++guard, c = NextOf(c)) {
+    DWORD c = ScDlgChild(root);
+    for (int guard = 0; c && guard < SC_MAX_CTRLS_WALK; ++guard, c = ScDlgNext(c)) {
         if (c == ind) return true;
     }
     return false;
@@ -557,13 +502,13 @@ static bool EnsureSpliced(DWORD root) {
     *(DWORD*)(ind + SC_BINDLG_OFF_NEXT)     = 0;
     // Append. The walk is bounded like every other walk in this file: a torn `next` ends
     // it, and an unterminated list costs one refused splice rather than a spin.
-    DWORD tail = ChildOf(root);
+    DWORD tail = ScDlgChild(root);
     if (!tail) {
         *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD) = ind;
     } else {
         int guard = 0;
-        while (NextOf(tail) && guard < SC_MAX_CTRLS_WALK) { tail = NextOf(tail); ++guard; }
-        if (NextOf(tail)) {
+        while (ScDlgNext(tail) && guard < SC_MAX_CTRLS_WALK) { tail = ScDlgNext(tail); ++guard; }
+        if (ScDlgNext(tail)) {
             ScLog("QIND: child list longer than %d -- splice refused", SC_MAX_CTRLS_WALK);
             ++g_stat[SC_QIND_STAT_REFUSED];
             return false;
@@ -584,7 +529,7 @@ static void Unsplice(DWORD root) {
         for (int guard = 0; *link && *link != ind && guard < SC_MAX_CTRLS_WALK; ++guard) {
             link = (DWORD*)(*link + SC_BINDLG_OFF_NEXT);
         }
-        if (*link == ind) *link = NextOf(ind);
+        if (*link == ind) *link = ScDlgNext(ind);
     }
     g_spliced = false;
     g_shown   = false;
@@ -632,8 +577,8 @@ static bool PlaceOn(short* b, DWORD anchor, DWORD root, int mode, int textLen) {
         // lower one ends. (AGENTS.md, task 034: an enumeration that scanned for a NAME is
         // not exhaustive -- here, a constant that was read off one install is not a layout.)
         int rowLeft = a[0], rowBottom = a[3];
-        DWORD c = FindChildById(root, SC_HUD_FIRST_SMALL_BUTTON);
-        for (int i = 0; i < SC_HUD_BUTTON_COUNT && c; ++i, c = NextOf(c)) {
+        DWORD c = ScDlgFindChild(root, SC_HUD_FIRST_SMALL_BUTTON);
+        for (int i = 0; i < SC_HUD_BUTTON_COUNT && c; ++i, c = ScDlgNext(c)) {
             if ((*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) == 0) continue;
             short* rb = (short*)(c + SC_BINDLG_OFF_BOUNDS);
             if (rb[0] < rowLeft)   rowLeft = rb[0];
@@ -732,9 +677,9 @@ static bool PlaceOn(short* b, DWORD anchor, DWORD root, int mode, int textLen) {
 // its caller looks at the unit's type, so the fix could not be Engineering-Bay-specific.
 static DWORD AnchorFor(DWORD root, int mode) {
     if (mode == SC_QIND_STRIP || mode == SC_QIND_UPGRADE) {
-        return FindChildById(root, SC_STATQ_LAST_CONTROL);
+        return ScDlgFindChild(root, SC_STATQ_LAST_CONTROL);
     }
-    if (mode == SC_QIND_GROUP) return FindChildById(root, SC_HUD_FIRST_SMALL_BUTTON);
+    if (mode == SC_QIND_GROUP) return ScDlgFindChild(root, SC_HUD_FIRST_SMALL_BUTTON);
     return 0;
 }
 
@@ -783,8 +728,8 @@ static void PublishOwnedIcons(DWORD root, const ScQueueIndView* v, DWORD unit) {
     DWORD owned[SC_STATQ_SLOTS];
     int   ownedN = 0;
     {
-        DWORD oc = FindChildById(root, SC_STATQ_FIRST_CONTROL);
-        for (int k = 0; k < SC_STATQ_SLOTS && oc; ++k, oc = NextOf(oc)) {
+        DWORD oc = ScDlgFindChild(root, SC_STATQ_FIRST_CONTROL);
+        for (int k = 0; k < SC_STATQ_SLOTS && oc; ++k, oc = ScDlgNext(oc)) {
             if (k >= v->engineLen && k < drawable &&
                 ScProdQueueOverflowAt(unit, k - v->engineLen) >= 0 &&
                 ownedN < SC_STATQ_SLOTS) {
@@ -797,8 +742,8 @@ static void PublishOwnedIcons(DWORD root, const ScQueueIndView* v, DWORD unit) {
 
     // The snapshot, taken after the fill, by the thread that did it.
     g_iconsN = 0;
-    DWORD sc = FindChildById(root, SC_STATQ_FIRST_CONTROL);
-    for (int k = 0; k < SC_STATQ_SLOTS && sc; ++k, sc = NextOf(sc)) {
+    DWORD sc = ScDlgFindChild(root, SC_STATQ_FIRST_CONTROL);
+    for (int k = 0; k < SC_STATQ_SLOTS && sc; ++k, sc = ScDlgNext(sc)) {
         DWORD su = *(DWORD*)(sc + SC_BINDLG_OFF_USER);
         QIconSnap* q = &g_icons[g_iconsN++];
         q->flags = *(DWORD*)(sc + SC_BINDLG_OFF_FLAGS);
@@ -999,8 +944,8 @@ static int __attribute__((fastcall)) SC_GAME_ENTRY QIndIconInteractShim(DWORD ct
 static void WrapIconInteracts(DWORD root) {
     const DWORD shim = (DWORD)&QIndIconInteractShim;
     g_iconWrapN = 0;
-    DWORD c = FindChildById(root, SC_STATQ_FIRST_CONTROL);
-    for (int k = 0; k < SC_STATQ_SLOTS && c; ++k, c = NextOf(c)) {
+    DWORD c = ScDlgFindChild(root, SC_STATQ_FIRST_CONTROL);
+    for (int k = 0; k < SC_STATQ_SLOTS && c; ++k, c = ScDlgNext(c)) {
         DWORD* fn = (DWORD*)(c + SC_BINDLG_OFF_INTERACT);
         if (*fn != shim) {
             if (!g_iconOrigFn) {
@@ -1090,7 +1035,7 @@ int ScQueueIndSlotDiff(DWORD root, int slotA, int slotB) {
 
     short* r[2];
     for (int i = 0; i < 2; ++i) {
-        DWORD c = FindChildById(root, (short)(SC_STATQ_FIRST_CONTROL + (i ? slotB : slotA)));
+        DWORD c = ScDlgFindChild(root, (short)(SC_STATQ_FIRST_CONTROL + (i ? slotB : slotA)));
         if (!c) return -1;
         if ((*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) == 0) return -1;
         r[i] = (short*)(c + SC_BINDLG_OFF_BOUNDS);
@@ -1204,8 +1149,8 @@ int ScQueueIndBoxDiff(DWORD root) {
 // only, inside the detour.
 void ScQueueIndLogState(const char* tag) {
     const char* t = tag ? tag : "-";
-    DWORD dlg  = ScEngineModuleBase() ? StatDialog() : 0;
-    DWORD root = dlg ? RootOf(dlg) : 0;
+    DWORD dlg  = ScEngineModuleBase() ? ScStatDialog() : 0;
+    DWORD root = dlg ? ScDlgRoot(dlg) : 0;
     if (!root) { ScLog("QIND [%s] dialog=0 (no status pane in this process state)", t); return; }
 
     DWORD ind = (DWORD)&g_ctrl[0];
@@ -1250,7 +1195,7 @@ void ScQueueIndLogState(const char* tag) {
     {
         const short cand[2] = { SC_STATQ_FIRST_CONTROL, SC_HUD_FIRST_SMALL_BUTTON };
         for (int i = 0; i < 2; ++i) {
-            DWORD ref = FindChildById(root, cand[i]);
+            DWORD ref = ScDlgFindChild(root, cand[i]);
             if (!ref) continue;
             if ((*(DWORD*)(ref + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) == 0) continue;
             short* rb2 = (short*)(ref + SC_BINDLG_OFF_BOUNDS);
@@ -1336,8 +1281,8 @@ void ScQueueIndLogState(const char* tag) {
 // THIS install, which is what hud-selection-row.md 10 listed as an open question.
 void ScQueueIndLogDialog(const char* tag) {
     const char* t = tag ? tag : "-";
-    DWORD dlg  = ScEngineModuleBase() ? StatDialog() : 0;
-    DWORD root = dlg ? RootOf(dlg) : 0;
+    DWORD dlg  = ScEngineModuleBase() ? ScStatDialog() : 0;
+    DWORD root = dlg ? ScDlgRoot(dlg) : 0;
     if (!root) { ScLog("QINDDLG [%s] dialog=0", t); return; }
 
     short* rb = (short*)(root + SC_BINDLG_OFF_BOUNDS);
@@ -1350,7 +1295,7 @@ void ScQueueIndLogDialog(const char* tag) {
           d ? (unsigned)*(DWORD*)(d + SC_SURFACE_OFF_BITS) : 0u);
 
     int n = 0;
-    for (DWORD c = ChildOf(root); c && n < SC_MAX_CTRLS_WALK; c = NextOf(c), ++n) {
+    for (DWORD c = ScDlgChild(root); c && n < SC_MAX_CTRLS_WALK; c = ScDlgNext(c), ++n) {
         short* b = (short*)(c + SC_BINDLG_OFF_BOUNDS);
         DWORD  f = *(DWORD*)(c + SC_BINDLG_OFF_FLAGS);
         DWORD  p = *(DWORD*)(c + SC_BINDLG_OFF_TEXT);
@@ -1361,7 +1306,7 @@ void ScQueueIndLogDialog(const char* tag) {
         // instead of an argument about dispatch (task 061).
         ScLog("QINDDLG [%s] id=%d type=%u flags=0x%08X vis=%d rect=(%d,%d,%d,%d) "
               "interact=0x%08X update=0x%08X text=\"%.24s\"",
-              t, (int)IndexOf(c), (unsigned)*(WORD*)(c + SC_BINDLG_OFF_TYPE),
+              t, (int)ScDlgIndex(c), (unsigned)*(WORD*)(c + SC_BINDLG_OFF_TYPE),
               (unsigned)f, (f & SC_CTRL_FLAG_VISIBLE) ? 1 : 0,
               b[0], b[1], b[2], b[3],
               (unsigned)*(DWORD*)(c + SC_BINDLG_OFF_INTERACT),
@@ -1391,15 +1336,15 @@ static void RepaintUnder(DWORD root) {
     // redraw is what is next to the line's pixels, and the group case is the one where the
     // engine has the most to put back.
     if (g_mode == SC_QIND_GROUP && root) {
-        DWORD c = FindChildById(root, SC_HUD_FIRST_SMALL_BUTTON);
-        for (int i = 0; i < SC_HUD_BUTTON_COUNT && c; ++i, c = NextOf(c)) {
+        DWORD c = ScDlgFindChild(root, SC_HUD_FIRST_SMALL_BUTTON);
+        for (int i = 0; i < SC_HUD_BUTTON_COUNT && c; ++i, c = ScDlgNext(c)) {
             if (*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) CallUpdate(c);
         }
     // "+N upg" can run past icon 6 into the space above icons 2..5 too (see PlaceOn), so
     // the same reasoning applies: repaint the whole strip, not just the icon it started on.
     } else if (g_mode == SC_QIND_UPGRADE && root) {
-        DWORD c = FindChildById(root, SC_STATQ_FIRST_CONTROL);
-        for (int i = 0; i < SC_STATQ_SLOTS && c; ++i, c = NextOf(c)) {
+        DWORD c = ScDlgFindChild(root, SC_STATQ_FIRST_CONTROL);
+        for (int i = 0; i < SC_STATQ_SLOTS && c; ++i, c = ScDlgNext(c)) {
             if (*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) CallUpdate(c);
         }
     }
@@ -1410,8 +1355,8 @@ void ScQueueIndOnFrame(void) {
     QIndSessionSync();
     ++g_stat[SC_QIND_STAT_FRAMES];
 
-    DWORD dlg  = StatDialog();
-    DWORD root = dlg ? RootOf(dlg) : 0;
+    DWORD dlg  = ScStatDialog();
+    DWORD root = dlg ? ScDlgRoot(dlg) : 0;
     if (root != g_dialog) {
         // A new dialog instance: every cached pointer belongs to the old one. Forget them
         // rather than dereference them. The wrapped interact pointers are among them --
@@ -1448,8 +1393,8 @@ void ScQueueIndOnFrame(void) {
     // owned-icon list and the game-thread snapshot, published from the settled post-layout
     // state.
     if (v.selection <= 1 && v.overflow > 0 && v.hudPages <= 1) {
-        DWORD unit = PortraitUnit();
-        if (UnitValid(unit)) PublishOwnedIcons(root, &v, unit);
+        DWORD unit = ScPortraitUnit();
+        if (ScUnitPtrValid(unit)) PublishOwnedIcons(root, &v, unit);
         else g_ownedIconN = 0;
     } else {
         // No overflow behind the strip this frame -- so the plugin owns no slot either.
@@ -1463,7 +1408,7 @@ void ScQueueIndOnFrame(void) {
 
     // The portrait unit is the engine's own precondition for the pane holding anything at
     // all; without it the dispatcher hides every child and there is nothing to sit beside.
-    if (mode != SC_QIND_NONE && !PortraitUnit()) mode = SC_QIND_NONE;
+    if (mode != SC_QIND_NONE && !ScPortraitUnit()) mode = SC_QIND_NONE;
 
     DWORD anchor = mode != SC_QIND_NONE ? AnchorFor(root, mode) : 0;
     if (mode != SC_QIND_NONE && !anchor) mode = SC_QIND_NONE;
@@ -1710,7 +1655,7 @@ void ScQueueIndRemoveHooks(void) {
             if (!ScReadable(*link + SC_BINDLG_OFF_NEXT, 4)) { link = NULL; break; }
             link = (DWORD*)(*link + SC_BINDLG_OFF_NEXT);
         }
-        if (link && *link == ind) *link = NextOf(ind);
+        if (link && *link == ind) *link = ScDlgNext(ind);
     }
     g_spliced = false;
     g_shown   = false;

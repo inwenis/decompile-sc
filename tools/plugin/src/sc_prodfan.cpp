@@ -18,6 +18,7 @@
 #include "sc_hook.h"
 #include "sc_log.h"
 #include "sc_prodfan.h"
+#include "sc_unit.h"
 
 // ---------------------------------------------------------------------------
 // State
@@ -62,29 +63,6 @@ static int CondReturn(int which) { ++g_condExit[which]; return 0; }
 // rebase. They are three loads each; the duplication is cheaper than the coupling.
 // ---------------------------------------------------------------------------
 
-static bool UnitPtrValid(DWORD ptr) {
-    if (!ptr) return false;
-    DWORD arrayBase = ScRuntimeVa(SC_VA_UNIT_ARRAY_BASE);
-    if (ptr < arrayBase) return false;
-    DWORD off = ptr - arrayBase;
-    if (off % SC_CUNIT_SIZE != 0) return false;
-    return (off / SC_CUNIT_SIZE + 1) <= SC_MAX_UNIT_INDEX;
-}
-
-static WORD QueueSlot(DWORD unit, int slot) {
-    return *(WORD*)(unit + SC_CUNIT_OFF_BUILD_QUEUE + (DWORD)slot * 2);
-}
-
-// The occupied-slot count. `0xE4` is the empty sentinel and every engine reader tests
-// against it (research/production-queue.md 2.4).
-static int EngineQueueLength(DWORD unit) {
-    int n = 0;
-    for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) {
-        if (QueueSlot(unit, i) != SC_BUILD_QUEUE_EMPTY) ++n;
-    }
-    return n;
-}
-
 // The engine's own movability predicate (0x0047B770, ECX = CUnit*). It is what makes a
 // selection a BUILDING group: the simulation refuses a non-movable unit every selection
 // slot but slot 0 (research/building-groups.md 3-4). Called rather than re-implemented --
@@ -94,13 +72,6 @@ typedef int (__attribute__((fastcall)) *ScMovableFn)(DWORD unit);
 static bool UnitMovable(DWORD unit) {
     ScMovableFn f = (ScMovableFn)ScRuntimeAddr(SC_VA_UNIT_IS_STANDARD_AND_MOVABLE);
     return f(unit) != 0;
-}
-
-static DWORD* MineralsOf(BYTE player) {
-    return (DWORD*)(ScRuntimeVa(SC_VA_PLAYER_MINERALS) + (DWORD)player * 4);
-}
-static DWORD* GasOf(BYTE player) {
-    return (DWORD*)(ScRuntimeVa(SC_VA_PLAYER_GAS) + (DWORD)player * 4);
 }
 
 // ---------------------------------------------------------------------------
@@ -203,7 +174,7 @@ static void FormatEngineQueue(DWORD unit, char* out, int outLen) {
     out[0] = '\0';
     for (int s = 0; s < SC_BUILD_QUEUE_SLOTS && used + 8 < outLen; ++s) {
         used += _snprintf(out + used, outLen - used, "%s0x%03X",
-                          s ? "," : "", (unsigned)QueueSlot(unit, s));
+                          s ? "," : "", (unsigned)ScUnitQueueSlot(unit, s));
     }
 }
 
@@ -223,7 +194,7 @@ void ScProdFanLogState(const char* tag) {
 
     for (int i = 0; i < n; ++i) {
         DWORD u = shadow[i].unit;
-        if (!UnitPtrValid(u)) {
+        if (!ScUnitPtrValid(u)) {
             ScLog("PRODFAN [%s] i=%d/%d unit=0x%08X INVALID (not a live CUnit slot)",
                   t, i, n, (unsigned)u);
             continue;
@@ -235,7 +206,7 @@ void ScProdFanLogState(const char* tag) {
         BYTE uniq = *(BYTE*)(u + SC_CUNIT_OFF_UNIQUENESS);
         BYTE owner = *(BYTE*)(u + SC_CUNIT_OFF_PLAYER);
         WORD type = *(WORD*)(u + SC_CUNIT_OFF_UNIT_ID);
-        int len = EngineQueueLength(u);
+        int len = ScUnitQueueLength(u);
         char eng[96];
         FormatEngineQueue(u, eng, (int)sizeof(eng));
 
@@ -270,7 +241,7 @@ void ScProdFanLogState(const char* tag) {
         bool haveFirst = false;
         for (unsigned i = 0; i < cn && used + 24 < (int)sizeof(units); ++i) {
             DWORD u = sel[i];
-            if (!UnitPtrValid(u)) {
+            if (!ScUnitPtrValid(u)) {
                 used += _snprintf(units + used, sizeof(units) - used, "%s(bad)", i ? "," : "");
                 continue;
             }
@@ -303,8 +274,8 @@ void ScProdFanLogState(const char* tag) {
           "lit=%d",
           t, buildings, n, visible, ScFanoutSimSlots(),
           (unsigned)*(BYTE*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT), totalQueued,
-          havePlayer ? (unsigned)*MineralsOf(player) : 0u,
-          havePlayer ? (unsigned)*GasOf(player) : 0u,
+          havePlayer ? (unsigned)*ScPlayerMinerals(player) : 0u,
+          havePlayer ? (unsigned)*ScPlayerGas(player) : 0u,
           ScProdFanEnabled() ? 1 : 0,
           g_stat[SC_PRODFAN_STAT_FANNED], g_stat[SC_PRODFAN_STAT_REFUSED],
           g_stat[SC_PRODFAN_STAT_BUILDINGS], g_stat[SC_PRODFAN_STAT_LIT]);
@@ -378,7 +349,7 @@ static int CollectClientSelection(WORD* types, int max, int* outSlots) {
     bool haveFirst = false;
     for (unsigned i = 0; i < n && k < max; ++i) {
         DWORD u = sel[i];
-        if (!UnitPtrValid(u)) continue;
+        if (!ScUnitPtrValid(u)) continue;
         if (!haveFirst) { *outSlots = UnitMovable(u) ? SC_SELECTION_SLOTS : 1; haveFirst = true; }
         types[k++] = *(WORD*)(u + SC_CUNIT_OFF_UNIT_ID);
     }
@@ -460,7 +431,7 @@ extern "C" int ScProdFanCondAllow(DWORD type, DWORD unit, DWORD player) {
     // would be a button that looks live and does nothing.
     if (type >= SC_TRAIN_TYPE_LIMIT) return CondReturn(COND_NOT_TRAIN);
 
-    if (!UnitPtrValid(unit)) return CondReturn(COND_BAD_UNIT);
+    if (!ScUnitPtrValid(unit)) return CondReturn(COND_BAD_UNIT);
 
     WORD types[SC_PRODFAN_MAX_SHADOW];
     int slots = SC_SELECTION_SLOTS;

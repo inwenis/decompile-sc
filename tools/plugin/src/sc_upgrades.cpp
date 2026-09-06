@@ -18,6 +18,7 @@
 #include "sc_log.h"
 #include "sc_session.h"
 #include "sc_upgrades.h"
+#include "sc_unit.h"
 
 // ---------------------------------------------------------------------------
 // State
@@ -68,33 +69,12 @@ static ScUpgStartFn g_start = &EngineStartItem;
 // is this pointer still the building we wrote down?
 // ---------------------------------------------------------------------------
 
-static bool UnitPtrValid(DWORD ptr) {
-    if (!ptr) return false;
-    DWORD arrayBase = ScRuntimeVa(SC_VA_UNIT_ARRAY_BASE);
-    if (ptr < arrayBase) return false;
-    DWORD off = ptr - arrayBase;
-    if (off % SC_CUNIT_SIZE != 0) return false;
-    return (off / SC_CUNIT_SIZE + 1) <= SC_MAX_UNIT_INDEX;
-}
-
-static bool InPlayerUnitList(DWORD ptr, BYTE player) {
-    if (player >= SC_MAX_PLAYERS) return false;
-    DWORD head = *(DWORD*)(ScRuntimeVa(SC_VA_PLAYER_UNIT_LIST) + (DWORD)player * 4);
-    int n = 0;
-    for (DWORD u = head; u && n < SC_MAX_UNITS_WALK; ++n) {
-        if (!UnitPtrValid(u)) return false;
-        if (u == ptr) return true;
-        u = *(DWORD*)(u + SC_CUNIT_OFF_LIST_NEXT);
-    }
-    return false;
-}
-
 static bool RecordStillLive(const UpgRecord* r, bool deep) {
-    if (!UnitPtrValid(r->unit)) return false;
+    if (!ScUnitPtrValid(r->unit)) return false;
     if (*(BYTE*)(r->unit + SC_CUNIT_OFF_UNIQUENESS) != r->uniqueness) return false;
     if (*(BYTE*)(r->unit + SC_CUNIT_OFF_PLAYER) != r->player) return false;
     if (*(DWORD*)(r->unit + SC_CUNIT_OFF_HITPOINTS) == 0) return false;
-    if (deep && !InPlayerUnitList(r->unit, r->player)) return false;
+    if (deep && !ScUnitInPlayerList(r->unit, r->player)) return false;
     return true;
 }
 
@@ -107,7 +87,7 @@ static bool RecordStillLive(const UpgRecord* r, bool deep) {
 // ---------------------------------------------------------------------------
 
 static bool IsResearchableBuilding(DWORD unit) {
-    if (!UnitPtrValid(unit)) return false;
+    if (!ScUnitPtrValid(unit)) return false;
     DWORD flags = *(DWORD*)(unit + SC_CUNIT_OFF_FLAGS);
     if ((flags & SC_UNIT_FLAG_BUILDING) == 0) return false;
     if ((flags & SC_UNIT_FLAG_COMPLETED) == 0) return false;
@@ -166,18 +146,11 @@ static void ItemCost(BYTE player, int kind, unsigned id, DWORD* minerals, DWORD*
     else                           UpgradeCost(player, id, minerals, gas);
 }
 
-static DWORD MineralsOf(BYTE player) {
-    return *(DWORD*)(ScRuntimeVa(SC_VA_PLAYER_MINERALS) + (DWORD)player * 4);
-}
-static DWORD GasOf(BYTE player) {
-    return *(DWORD*)(ScRuntimeVa(SC_VA_PLAYER_GAS) + (DWORD)player * 4);
-}
-
 static bool CanAfford(BYTE player, int kind, unsigned id) {
     if (player >= SC_MAX_PLAYERS) return false;
     DWORD m = 0, g = 0;
     ItemCost(player, kind, id, &m, &g);
-    return MineralsOf(player) >= m && GasOf(player) >= g;
+    return *ScPlayerMinerals(player) >= m && *ScPlayerGas(player) >= g;
 }
 
 // ---------------------------------------------------------------------------
@@ -434,7 +407,7 @@ void ScUpgQueueOnTick(DWORD unit) {
     else CollectGarbage(false);
 
     UpgRecord* r = FindRecord(unit);
-    if (r && r->count > 0 && UnitPtrValid(unit) && !EngineBusy(unit)) {
+    if (r && r->count > 0 && ScUnitPtrValid(unit) && !EngineBusy(unit)) {
         PromoteOldest(r);
         if (r->count == 0) DropRecordAt((int)(r - g_rec));
     }
@@ -502,8 +475,8 @@ static void LogUnitLine(const char* what, const char* tag, DWORD unit, const Upg
           (unsigned)*(BYTE*)(unit + SC_CUNIT_OFF_UPGRADE_LEVEL),
           (unsigned)*(WORD*)(unit + SC_CUNIT_OFF_RESEARCH_TIME),
           EngineBusy(unit) ? 1 : 0, r ? r->count : 0, q, LogicalLength(unit, r),
-          player < SC_MAX_PLAYERS ? (unsigned)MineralsOf(player) : 0u,
-          player < SC_MAX_PLAYERS ? (unsigned)GasOf(player) : 0u);
+          player < SC_MAX_PLAYERS ? (unsigned)*ScPlayerMinerals(player) : 0u,
+          player < SC_MAX_PLAYERS ? (unsigned)*ScPlayerGas(player) : 0u);
 }
 
 // THE "IT TOOK EFFECT" ORACLE. An item that finished is not the same claim as an item that
@@ -539,7 +512,7 @@ static void LogPlayerProgress(const char* tag, BYTE player) {
     ScLog("UPGQLVL [%s] p=%u levels=[%s] levelCount=%d techs=[%s] techCount=%d "
           "minerals=%u gas=%u",
           tag ? tag : "-", (unsigned)player, lv, lvN, tc, tcN,
-          (unsigned)MineralsOf(player), (unsigned)GasOf(player));
+          (unsigned)*ScPlayerMinerals(player), (unsigned)*ScPlayerGas(player));
 }
 
 void ScUpgQueueLogState(const char* tag) {
@@ -556,7 +529,7 @@ void ScUpgQueueLogState(const char* tag) {
     {
         DWORD* sel = (DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_SELECTION);
         DWORD u = sel[0];
-        if (u && !sel[1] && UnitPtrValid(u)) {
+        if (u && !sel[1] && ScUnitPtrValid(u)) {
             LogUnitLine("UPGQSEL", tag, u, FindRecord(u));
             LogPlayerProgress(tag, *(BYTE*)(u + SC_CUNIT_OFF_PLAYER));
         } else {
@@ -565,7 +538,7 @@ void ScUpgQueueLogState(const char* tag) {
     }
 
     for (int i = 0; i < g_recCount; ++i) {
-        if (UnitPtrValid(g_rec[i].unit)) LogUnitLine("UPGQ", tag, g_rec[i].unit, &g_rec[i]);
+        if (ScUnitPtrValid(g_rec[i].unit)) LogUnitLine("UPGQ", tag, g_rec[i].unit, &g_rec[i]);
         else ScLog("UPGQ [%s] unit=0x%08X (gone) queued=%d",
                    tag ? tag : "-", (unsigned)g_rec[i].unit, g_rec[i].count);
     }
@@ -790,7 +763,7 @@ static int PromoteOldest(UpgRecord* r) {
         ScLog("UPGQEV promote unit=0x%08X kind=%s id=%u -> started, queuedLeft=%d "
               "minerals=%u gas=%u",
               (unsigned)r->unit, kindName, (unsigned)it.id, r->count,
-              (unsigned)MineralsOf(r->player), (unsigned)GasOf(r->player));
+              (unsigned)*ScPlayerMinerals(r->player), (unsigned)*ScPlayerGas(r->player));
         return 1;
     }
     if (rc < 0) {
@@ -842,7 +815,7 @@ static DWORD SoleSelectedUnit(void) {
     DWORD* sel = (DWORD*)ScRuntimeAddr(SC_VA_PLAYERS_SELECTIONS) + player * SC_SELECTION_SLOTS;
     DWORD u = sel[0];
     if (!u || sel[1]) return 0;
-    return UnitPtrValid(u) ? u : 0;
+    return ScUnitPtrValid(u) ? u : 0;
 }
 
 DWORD ScUpgQueueSoleSelectedUnitForTest(void) { return SoleSelectedUnit(); }
@@ -1018,7 +991,7 @@ extern "C" void SC_GAME_ENTRY ScUpgTickUpgradeDetour(DWORD unit) {
                          : "0"(unit), [fn] "r"(g_hkTickUpg.trampoline)
                          : "ecx", "edx", "cc", "memory");
     (void)scratch;
-    if (UnitPtrValid(unit)) ScUpgQueueOnTick(unit);
+    if (ScUnitPtrValid(unit)) ScUpgQueueOnTick(unit);
 }
 
 extern "C" void SC_GAME_ENTRY ScUpgTickTechDetour(DWORD unit) {
@@ -1027,7 +1000,7 @@ extern "C" void SC_GAME_ENTRY ScUpgTickTechDetour(DWORD unit) {
                          : "0"(unit), [fn] "r"(g_hkTickTech.trampoline)
                          : "ecx", "edx", "cc", "memory");
     (void)scratch;
-    if (UnitPtrValid(unit)) ScUpgQueueOnTick(unit);
+    if (ScUnitPtrValid(unit)) ScUpgQueueOnTick(unit);
 }
 
 // Both order handlers take their only argument in EAX and no C calling convention says so,

@@ -38,6 +38,7 @@
 #include "sc_log.h"
 #include "sc_screen.h"
 #include "sc_session.h"
+#include "sc_unit.h"
 
 // The one widescreen geometry this repo builds is 800x480 (sc_screen stages), so
 // the right edge is +160 from the stock 640. If a second width ever exists this
@@ -102,14 +103,6 @@ static ScImgDesc g_sliverDesc;
 static unsigned  g_sliverSession = 0;
 static unsigned  g_slivers       = 0;
 
-// Engine updateControl: EAX = control (sc_addresses.h SC_VA_UPDATE_CONTROL; the
-// same asm seam sc_queueind uses, conventions verified by sc_hudrow).
-static void CallUpdate(DWORD ctrl) {
-    void* fn = ScRuntimeAddr(SC_VA_UPDATE_CONTROL);
-    DWORD inout = ctrl;
-    __asm__ __volatile__("calll *%[fn]"
-        : "+a"(inout) : [fn] "r"(fn) : "ecx", "edx", "cc", "memory");
-}
 
 // A dialog's name is its pszText. Game data: copied byte-guarded and sanitised.
 static void ReadName(DWORD dlg, char* out, size_t outLen) {
@@ -240,10 +233,10 @@ static void TryMove(DWORD dlg, const char* name) {
     m->dlg = dlg; m->l = bl[0]; m->t = bl[1]; m->r = bl[2]; m->b = bl[3];
 
     LogSurfaces(dlg, name);
-    CallUpdate(dlg);                    // the rect being VACATED goes dirty
+    ScCtrlUpdate(dlg);                    // the rect being VACATED goes dirty
     bl[0] = (short)(m->l + SC_CONSOLE_SHIFT_X);
     bl[2] = (short)(m->r + SC_CONSOLE_SHIFT_X);
-    CallUpdate(dlg);                    // the rect being CLAIMED goes dirty
+    ScCtrlUpdate(dlg);                    // the rect being CLAIMED goes dirty
     ++g_movedN;
     ++g_moves;
     ScLog("CONSOLE moved '%s' 0x%08X (%d,%d)-(%d,%d) -> (%d,%d)-(%d,%d) "
@@ -263,10 +256,10 @@ static void UnmoveAll(void) {
         // the record was freed and reused, and writing it would corrupt a stranger.
         if (bl[0] == (short)(g_moved[i].l + SC_CONSOLE_SHIFT_X) &&
             bl[2] == (short)(g_moved[i].r + SC_CONSOLE_SHIFT_X)) {
-            CallUpdate(dlg);
+            ScCtrlUpdate(dlg);
             bl[0] = g_moved[i].l;
             bl[2] = g_moved[i].r;
-            CallUpdate(dlg);
+            ScCtrlUpdate(dlg);
         }
     }
     g_movedN = 0;
