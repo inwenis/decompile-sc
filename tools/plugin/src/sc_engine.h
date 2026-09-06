@@ -64,6 +64,13 @@ static inline DWORD ScRuntimeVa(DWORD staticVa) {
 // a pointer. There is no overload: `ScReadable(NULL, 4)` would be ambiguous, and
 // this probe is exactly where an ambiguity must not be resolved by luck.
 bool ScReadable(DWORD addr, DWORD len);
+
+// Initialise `cs` the first time this is reached and never again. Two modules hold a
+// critical section they cannot initialise at load time (DllMain runs under the loader
+// lock) and both had their own copy of this.
+static inline void ScEnsureLock(CRITICAL_SECTION* cs, bool* ready) {
+    if (!*ready) { InitializeCriticalSection(cs); *ready = true; }
+}
 bool ScReadableAt(const void* addr, size_t len);
 
 // The probe plus the copy: reads `len` bytes out only if the whole range passes.

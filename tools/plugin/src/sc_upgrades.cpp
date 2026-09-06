@@ -16,6 +16,7 @@
 #include "sc_engine.h"
 #include "sc_env.h"
 #include "sc_hook.h"
+#include "sc_ledger.h"
 #include "sc_log.h"
 #include "sc_session.h"
 #include "sc_upgrades.h"
@@ -150,17 +151,6 @@ static bool CanAfford(BYTE player, int kind, unsigned id) {
 // Records
 // ---------------------------------------------------------------------------
 
-static UpgRecord* FindRecord(DWORD unit) {
-    for (int i = 0; i < g_recCount; ++i) if (g_rec[i].unit == unit) return &g_rec[i];
-    return NULL;
-}
-
-static void DropRecordAt(int i) {
-    if (i < 0 || i >= g_recCount) return;
-    g_rec[i] = g_rec[g_recCount - 1];
-    --g_recCount;
-}
-
 // A record whose building has gone is simply forgotten. There is deliberately no refund
 // here and no counterpart to sc_prodqueue's RefundRecord: a held item was never paid for,
 // so there is nothing to give back. Vanilla still refunds the item that was actually
@@ -178,8 +168,7 @@ static void DropRecordAt(int i) {
 static void UpgSessionSync(void) {
     const unsigned now = ScSessionEpoch();
     if (g_session == now) return;
-    int items = 0;
-    for (int i = 0; i < g_recCount; ++i) items += g_rec[i].count;
+    const int items = ScLedgerItemCount(g_rec, g_recCount);
     if (g_recCount > 0) {
         ScLog("UPGQEV session %u -> %u: dropping %d building record(s) holding %d "
               "item(s) queued in a game that has ended", g_session, now, g_recCount, items);
@@ -199,7 +188,7 @@ static void CollectGarbage(bool deep) {
                   (unsigned)g_rec[i].unit, (unsigned)g_rec[i].player, g_rec[i].count,
                   deep ? "building-gone" : "building-gone-fast");
         }
-        DropRecordAt(i);
+        ScLedgerDropAt(g_rec, &g_recCount, i);
     }
 }
 
@@ -250,7 +239,7 @@ bool ScUpgQueueShouldUnblock(DWORD unit) {
     // help, and lying about it would make the card offer buttons vanilla also offers --
     // pointless, and it would put a second answer in play for a state that already works.
     if (!EngineBusy(unit)) return false;
-    UpgRecord* r = FindRecord(unit);
+    UpgRecord* r = ScLedgerFind(g_rec, g_recCount, unit);
     return QueueRoom(unit, r) > 0;
 }
 
@@ -331,7 +320,8 @@ bool ScUpgQueueMaySuppressBusyBit(DWORD unit, int kind, unsigned id) {
     if (UpgradeInProgress(unit) != (BYTE)id) return false;   // <- the two-buildings guard
     BYTE player = ScUnitPlayer(unit);
     if (player >= SC_MAX_PLAYERS) return false;
-    return WantedLevel(unit, FindRecord(unit), kind, id) <= MaxUpgradeLevel(player, id);
+    const UpgRecord* r = ScLedgerFind(g_rec, g_recCount, unit);
+    return WantedLevel(unit, r, kind, id) <= MaxUpgradeLevel(player, id);
 }
 
 bool ScUpgQueueOnCommand(DWORD unit, int kind, unsigned id) {
@@ -350,7 +340,7 @@ bool ScUpgQueueOnCommand(DWORD unit, int kind, unsigned id) {
         if (kind == SC_UPGQ_KIND_TECH    && id >= SC_TECH_COUNT) break;
 
         BYTE player = ScUnitPlayer(unit);
-        UpgRecord* r = FindRecord(unit);
+        UpgRecord* r = ScLedgerFind(g_rec, g_recCount, unit);
         if (QueueRoom(unit, r) <= 0) {
             // Reachable only from a replay or a peer: at the cap the card conditions stop
             // being unblocked, so the client hides the button and never sends. Counted
@@ -399,10 +389,10 @@ void ScUpgQueueOnTick(DWORD unit) {
     if (g_deepGc) { CollectGarbage(true); g_deepGc = false; }
     else CollectGarbage(false);
 
-    UpgRecord* r = FindRecord(unit);
+    UpgRecord* r = ScLedgerFind(g_rec, g_recCount, unit);
     if (r && r->count > 0 && ScUnitPtrValid(unit) && !EngineBusy(unit)) {
         PromoteOldest(r);
-        if (r->count == 0) DropRecordAt((int)(r - g_rec));
+        if (r->count == 0) ScLedgerDropAt(g_rec, &g_recCount, (int)(r - g_rec));
     }
 
     LeaveCriticalSection(&g_lock);
@@ -420,7 +410,7 @@ bool ScUpgQueueOnCancel(DWORD unit) {
     // once the plugin holds nothing the cancel falls through to vanilla, which stops the
     // RUNNING item and refunds it exactly. Nothing is refunded here because a held item
     // was never paid for.
-    UpgRecord* r = FindRecord(unit);
+    UpgRecord* r = ScLedgerFind(g_rec, g_recCount, unit);
     if (r && r->count > 0) {
         UpgItem it = r->items[--r->count];
         ++g_stat[SC_UPGQ_STAT_CANCELLED];
@@ -428,7 +418,7 @@ bool ScUpgQueueOnCancel(DWORD unit) {
               "(no refund -- it was never paid for)",
               (unsigned)unit, it.kind == SC_UPGQ_KIND_TECH ? "tech" : "upgrade",
               (unsigned)it.id, r->count);
-        if (r->count == 0) DropRecordAt((int)(r - g_rec));
+        if (r->count == 0) ScLedgerDropAt(g_rec, &g_recCount, (int)(r - g_rec));
         RequestRedraw();
         consumed = true;
     }
@@ -523,7 +513,7 @@ void ScUpgQueueLogState(const char* tag) {
         DWORD* sel = (DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_SELECTION);
         DWORD u = sel[0];
         if (u && !sel[1] && ScUnitPtrValid(u)) {
-            LogUnitLine("UPGQSEL", tag, u, FindRecord(u));
+            LogUnitLine("UPGQSEL", tag, u, ScLedgerFind(g_rec, g_recCount, u));
             LogPlayerProgress(tag, ScUnitPlayer(u));
         } else {
             ScLog("UPGQSEL [%s] (no single unit selected)", tag ? tag : "-");
@@ -567,18 +557,18 @@ void ScUpgQueueLogStats(void) {
 // The read-backs sync as well, for the reason ScUpgQueueLogState does.
 int ScUpgQueueCount(DWORD unit) {
     UpgSessionSync();
-    UpgRecord* r = FindRecord(unit);
+    UpgRecord* r = ScLedgerFind(g_rec, g_recCount, unit);
     return r ? r->count : -1;
 }
 int ScUpgQueueKindAt(DWORD unit, int i) {
     UpgSessionSync();
-    UpgRecord* r = FindRecord(unit);
+    UpgRecord* r = ScLedgerFind(g_rec, g_recCount, unit);
     if (!r || i < 0 || i >= r->count) return -1;
     return (int)r->items[i].kind;
 }
 int ScUpgQueueIdAt(DWORD unit, int i) {
     UpgSessionSync();
-    UpgRecord* r = FindRecord(unit);
+    UpgRecord* r = ScLedgerFind(g_rec, g_recCount, unit);
     if (!r || i < 0 || i >= r->count) return -1;
     return (int)r->items[i].id;
 }
@@ -849,7 +839,7 @@ static DWORD CondCommon(ScHook* hook, int kind, DWORD unit, DWORD id, DWORD play
         // that will actually apply, and answers -1 (greyed) or 0 by itself.
         levelByte = UpgradeLevelByte(owner, id);
         savedLevel = *levelByte;
-        DWORD want = WantedLevel(unit, FindRecord(unit), kind, id);
+        DWORD want = WantedLevel(unit, ScLedgerFind(g_rec, g_recCount, unit), kind, id);
         *levelByte = (BYTE)(want > 0 ? want - 1 : 0);
         ++g_stat[SC_UPGQ_STAT_UNBLOCKED_LEVEL];
     }
@@ -1049,10 +1039,6 @@ static int ResolveMax(void) {
                     SC_UPGQ_ENGINE_SLOTS, SC_UPGQ_HARD_MAX);
 }
 
-static void EnsureLock(void) {
-    if (!g_lockReady) { InitializeCriticalSection(&g_lock); g_lockReady = true; }
-}
-
 int ScUpgQueueInstall(BYTE* moduleBase) {
     ScEngineSetModuleBase(moduleBase);
     g_recCount = 0;
@@ -1060,7 +1046,7 @@ int ScUpgQueueInstall(BYTE* moduleBase) {
     g_session = ScSessionEpoch();
     g_start = &EngineStartItem;
     memset(g_stat, 0, sizeof(g_stat));
-    EnsureLock();
+    ScEnsureLock(&g_lock, &g_lockReady);
 
     if (!ScUpgQueueEnabled()) { g_enabled = false; return 0; }
     g_maxTotal = ResolveMax();
@@ -1136,7 +1122,7 @@ void ScUpgQueueRemove(void) {
 }
 
 void ScUpgQueueTestBegin(BYTE* fakeModuleBase, int maxTotal, ScUpgStartFn starter) {
-    EnsureLock();
+    ScEnsureLock(&g_lock, &g_lockReady);
     ScEngineSetModuleBase(fakeModuleBase);
     g_enabled  = fakeModuleBase != NULL;
     g_testing  = fakeModuleBase != NULL;

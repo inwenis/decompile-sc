@@ -309,7 +309,7 @@ void ScProdFanLogStats(void) {
 
 static ScHook g_hkCond;
 static void*  g_condTrampoline = NULL;
-extern "C" void* g_scProdFanCondTramp = NULL;   // read by the asm thunk
+extern "C" { void* g_scProdFanCondTramp = NULL; }   // read by the asm thunk
 
 // The button condition's own prologue, from this binary (sc_addresses.h quotes the whole
 // listing): PUSH EBP / MOV EBP,ESP / MOV EAX,ECX -- three whole instructions, five bytes,
@@ -379,7 +379,7 @@ static int CallStockCondition(DWORD type, DWORD unit, DWORD player) {
 // game thread is the only writer and the only reader, between the thunk's call and its
 // return, so a single slot is enough.
 static int g_condResult = 0;
-extern "C" int  g_scProdFanResult = 0;
+extern "C" { int g_scProdFanResult = 0; }
 
 // Returns non-zero to mean "we are handling this call; return g_scProdFanResult". Called
 // from the thunk with the three values the condition received: ECX (the button's type

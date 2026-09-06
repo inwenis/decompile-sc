@@ -309,7 +309,7 @@ static bool WriteOne(const ScScreenPatch* p) {
         return false;
     }
 
-    if (g_savedCount < SC_WS_MAX_SAVED) {
+    if (g_savedCount < (int)SC_WS_MAX_SAVED) {
         g_saved[g_savedCount].addr = at;
         g_saved[g_savedCount].len = p->len;
         memcpy(g_saved[g_savedCount].bytes, at, p->len);

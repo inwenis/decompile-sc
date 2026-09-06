@@ -122,6 +122,15 @@ jobs:
               Write-Host 'No tools/ directory -- skipping'
           }
 
+      - name: C++ reuse gate (tools/plugin/src)
+        shell: pwsh
+        run: |
+          # Issue #130 section 9. Fails only on duplication that is NOT already in
+          # tools/check-cpp-reuse.baseline, so this is "no new copies" rather than a
+          # wall of red. tests/check-cpp-reuse.Tests.ps1 covers the checker itself.
+          python tools/check-cpp-reuse.py
+          exit $LASTEXITCODE
+
       - name: Lint (ruff, only if pulled in via requirements.txt)
         shell: pwsh
         run: |

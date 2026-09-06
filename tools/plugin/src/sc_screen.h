@@ -16,7 +16,7 @@
 
 #include <windows.h>
 
-#include "sc_fanout.h"   // ScMode
+#include "sc_mode.h"
 
 // The stage column of sc_screen_patches.h runs 0..3 (tools/renderer_patch_sites.py,
 // research/renderer-viewport.md 9.3). These name the three the code branches on, so

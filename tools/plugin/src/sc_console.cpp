@@ -164,8 +164,7 @@ static void WrapRoot(DWORD dlg, const char* name) {
     WrapSlot* w = &g_wrap[g_wrapN];
     w->dlg  = dlg;
     w->orig = *fn;
-    strncpy(w->name, name[0] ? name : "?", sizeof(w->name) - 1);
-    w->name[sizeof(w->name) - 1] = '\0';
+    lstrcpynA(w->name, name[0] ? name : "?", (int)sizeof(w->name));
     ++g_wrapN;
     *fn = (DWORD)&ConsoleInteractShim;
     ScLog("CTRACE wrapped root '%s' 0x%08X orig=0x%08X (dispatch order = dialog-list "
@@ -344,7 +343,8 @@ static void DoRequestedSelect(void) {
     DWORD player = ScReadable(ScRuntimeVa(SC_VA_ACTIVE_PLAYER_ID), 4)
                        ? *(DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_ID) : 0xFFFFFFFF;
     if (player >= SC_MAX_PLAYERS) {
-        ScLog("CONSOLE select: active player %u out of range -- nothing selected", player);
+        ScLog("CONSOLE select: active player %u out of range -- nothing selected",
+              (unsigned)player);
         return;
     }
     DWORD unit = *(DWORD*)((BYTE*)ScRuntimeAddr(SC_VA_PLAYER_UNIT_LIST) + player * 4);
@@ -357,7 +357,7 @@ static void DoRequestedSelect(void) {
     }
     if (!unit) {
         ScLog("CONSOLE select: no completed unit in player %u's list -- nothing selected",
-              player);
+              (unsigned)player);
         return;
     }
     DWORD list[2] = { unit, 0 };
@@ -372,7 +372,7 @@ static void DoRequestedSelect(void) {
     ++g_selects;
     ScLog("CONSOLE selected unit=0x%08X type=%d player=%u (engine funnel: 0x0049AE40 "
           "then CMDACT_Select; client_selection_changed set)",
-          (unsigned)unit, (int)*(WORD*)(unit + SC_CUNIT_OFF_UNIT_ID), player);
+          (unsigned)unit, (int)*(WORD*)(unit + SC_CUNIT_OFF_UNIT_ID), (unsigned)player);
 }
 
 // ---------------------------------------------------------------------------

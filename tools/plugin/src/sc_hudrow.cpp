@@ -164,18 +164,6 @@ static unsigned g_statGated    = 0;  // clicks the gate swallowed (stale unit)
 // Engine primitives, through the seam
 // ---------------------------------------------------------------------------
 
-static void CallShow(DWORD ctrl) {
-    if (g_show) g_show(ctrl); else ScCtrlShow(ctrl);
-}
-
-static void CallHide(DWORD ctrl) {
-    if (g_hide) g_hide(ctrl); else ScCtrlHide(ctrl);
-}
-
-static void CallUpdate(DWORD ctrl) {
-    if (g_update) g_update(ctrl); else ScCtrlUpdate(ctrl);
-}
-
 typedef int (__attribute__((fastcall)) *EngineInteractFn)(DWORD, DWORD);
 static int CallEngineInteract(DWORD ctrl, DWORD evt) {
     EngineInteractFn fn = g_engineInteract
@@ -580,8 +568,8 @@ static bool EnsureSpliced(DWORD root) {
 static void HideIndicator(void) {
     if (!g_indSpliced) { g_indShowing = false; return; }
     DWORD ind = (DWORD)&g_indCtrl[0];
-    CallHide(ind);
-    CallUpdate(ind);
+    ScCtrlHideVia(g_hide, ind);
+    ScCtrlUpdateVia(g_update, ind);
     g_indShowing = false;
 }
 
@@ -758,9 +746,9 @@ static bool IndicatorFrame(DWORD root, DWORD firstBtn) {
     // control is ours.
     if (changed || !visible || !g_indShowing) {
         memcpy(g_indText, want, sizeof(g_indText));
-        CallShow(ind);
+        ScCtrlShowVia(g_show, ind);
         *(DWORD*)(ind + SC_BINDLG_OFF_FLAGS) |= SC_CTRL_FLAG_DRAWN;
-        CallUpdate(ind);
+        ScCtrlUpdateVia(g_update, ind);
         g_indShowing = true;
         g_bandInkedN = 0;        // that copy belongs to the line that was there before
         g_bandPollAt = 0;        // poll again straight away, waiting for the paint
@@ -953,7 +941,7 @@ static void FillPage(DWORD root, DWORD firstBtn) {
     // decompile): hide everything once, then show what this run displays.
     BYTE* allHidden = (BYTE*)ScRuntimeAddr(SC_VA_STAT_ALL_HIDDEN);
     if (*allHidden != 1) {
-        for (DWORD c = ScDlgChild(root); c; c = ScDlgNext(c)) CallHide(c);
+        for (DWORD c = ScDlgChild(root); c; c = ScDlgNext(c)) ScCtrlHideVia(g_hide, c);
         *allHidden = 1;
     }
 
@@ -968,19 +956,19 @@ static void FillPage(DWORD root, DWORD firstBtn) {
             WORD  id   = *(WORD*)(unit + SC_CUNIT_OFF_UNIT_ID);
             *(DWORD*)(su + SC_STATUSER_OFF_UNIT) = unit;
             *(WORD*) (su + SC_STATUSER_OFF_ID)   = id;
-            CallShow(c);
+            ScCtrlShowVia(g_show, c);
             *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) |= SC_CTRL_FLAG_DRAWN;
             // Unconditional, unlike the engine's first-show-only update: a page
             // flip changes a button's content without changing its visibility,
             // and the wireframe repaints only when the control is updated.
-            CallUpdate(c);
+            ScCtrlUpdateVia(g_update, c);
             HudSlotCache* s = &g_cache[g_cacheN++];
             s->unit = unit;
             s->uniq = ScUnitUniqueness(unit);
             s->hp   = ScUnitHitPoints(unit);
             s->id   = id;
         } else {
-            CallHide(c);
+            ScCtrlHideVia(g_hide, c);
         }
     }
 
@@ -1032,7 +1020,7 @@ static void RestoreStock(DWORD root) {
     if (root) {
         DWORD c = ScDlgFindChild(root, SC_HUD_FIRST_SMALL_BUTTON);
         for (int i = 0; i < SC_HUD_BUTTON_COUNT && c; ++i, c = ScDlgNext(c)) {
-            if (*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) CallUpdate(c);
+            if (*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) ScCtrlUpdateVia(g_update, c);
         }
         LogVerifyStock(root);
     }

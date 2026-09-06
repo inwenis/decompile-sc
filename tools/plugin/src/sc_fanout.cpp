@@ -1977,27 +1977,6 @@ HkSortAllUnits(DWORD* candidates, DWORD* out, DWORD clicked) {
 // Mode + install
 // ---------------------------------------------------------------------------
 
-const char* ScModeName(ScMode m) {
-    switch (m) {
-        case SC_MODE_OBSERVE:  return "observe";
-        case SC_MODE_LOGONLY:  return "hooktest";   // the frozen launcher spelling
-        case SC_MODE_SHADOW:   return "shadow";
-        case SC_MODE_FANOUT:   return "fanout";
-    }
-    return "?";
-}
-
-ScMode ScFanoutResolveMode(void) {
-    char buf[32];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_MODE", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return SC_MODE_OBSERVE;
-    if (lstrcmpiA(buf, "hooktest") == 0) return SC_MODE_LOGONLY;   // the launcher spelling
-    if (lstrcmpiA(buf, "logonly")  == 0) return SC_MODE_LOGONLY;   // what it actually is
-    if (lstrcmpiA(buf, "shadow")   == 0) return SC_MODE_SHADOW;
-    if (lstrcmpiA(buf, "fanout")   == 0) return SC_MODE_FANOUT;
-    return SC_MODE_OBSERVE;
-}
-
 int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     g_mode = mode;
     ScEngineSetModuleBase(moduleBase);

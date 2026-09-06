@@ -278,6 +278,11 @@ static inline DWORD ScPortraitUnit(void) { return *(DWORD*)ScRuntimeAddr(SC_VA_A
 // what lives here.
 // ---------------------------------------------------------------------------
 
+// A test stand-in for one of the three primitives below. sc_hudrow and sc_queueind each
+// install their own offline, and each used to carry the same three-line wrapper that
+// picks between the stand-in and the engine.
+typedef void (*ScCtrlFn)(DWORD ctrl);
+
 static inline void ScCtrlShow(DWORD ctrl) {
     void* fn = ScRuntimeAddr(SC_VA_SHOW_CONTROL);
     __asm__ __volatile__("calll *%[fn]"
@@ -295,6 +300,18 @@ static inline void ScCtrlUpdate(DWORD ctrl) {
     DWORD inout = ctrl;
     __asm__ __volatile__("calll *%[fn]"
         : "+a"(inout) : [fn] "r"(fn) : "ecx", "edx", "cc", "memory");
+}
+
+// The same three, through `seam` when a test installed one. NULL means "call the
+// engine", which is what the shipped plugin always passes.
+static inline void ScCtrlShowVia(ScCtrlFn seam, DWORD ctrl) {
+    if (seam) seam(ctrl); else ScCtrlShow(ctrl);
+}
+static inline void ScCtrlHideVia(ScCtrlFn seam, DWORD ctrl) {
+    if (seam) seam(ctrl); else ScCtrlHide(ctrl);
+}
+static inline void ScCtrlUpdateVia(ScCtrlFn seam, DWORD ctrl) {
+    if (seam) seam(ctrl); else ScCtrlUpdate(ctrl);
 }
 
 #endif // SC_UNIT_H

@@ -160,18 +160,6 @@ static void QIndSessionSync(void) {
 // Engine primitives, through the seam (same conventions sc_hudrow verified)
 // ---------------------------------------------------------------------------
 
-static void CallShow(DWORD ctrl) {
-    if (g_show) g_show(ctrl); else ScCtrlShow(ctrl);
-}
-
-static void CallHide(DWORD ctrl) {
-    if (g_hide) g_hide(ctrl); else ScCtrlHide(ctrl);
-}
-
-static void CallUpdate(DWORD ctrl) {
-    if (g_update) g_update(ctrl); else ScCtrlUpdate(ctrl);
-}
-
 typedef void (*OrigDriverFn)(void);
 
 static void CallOrigDriver(void) {
@@ -492,21 +480,6 @@ static bool EnsureSpliced(DWORD root) {
     g_spliced = true;
     ++g_stat[SC_QIND_STAT_SPLICES];
     return true;
-}
-
-static void Unsplice(DWORD root) {
-    if (!g_spliced) return;
-    DWORD ind = (DWORD)&g_ctrl[0];
-    if (root) {
-        CallHide(ind);
-        DWORD* link = (DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD);
-        for (int guard = 0; *link && *link != ind && guard < SC_MAX_CTRLS_WALK; ++guard) {
-            link = (DWORD*)(*link + SC_BINDLG_OFF_NEXT);
-        }
-        if (*link == ind) *link = ScDlgNext(ind);
-    }
-    g_spliced = false;
-    g_shown   = false;
 }
 
 // Put the box on the anchor control, in the anchor's own coordinate space (control bounds
@@ -1303,23 +1276,23 @@ static void RepaintUnder(DWORD root) {
     // region -- and a hidden control draws nothing, so what lands there is whatever the
     // dialog paints under it. Repainting only the anchor would strand the line on the
     // surface the moment it was not sitting on an engine control any more.
-    if (g_spliced) CallUpdate((DWORD)&g_ctrl[0]);
+    if (g_spliced) ScCtrlUpdateVia(g_update, (DWORD)&g_ctrl[0]);
     if (!g_anchor) return;
-    if (*(DWORD*)(g_anchor + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) CallUpdate(g_anchor);
+    if (*(DWORD*)(g_anchor + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) ScCtrlUpdateVia(g_update, g_anchor);
     // ... and the whole row after it: the band is one gap below those buttons, so their
     // redraw is what is next to the line's pixels, and the group case is the one where the
     // engine has the most to put back.
     if (g_mode == SC_QIND_GROUP && root) {
         DWORD c = ScDlgFindChild(root, SC_HUD_FIRST_SMALL_BUTTON);
         for (int i = 0; i < SC_HUD_BUTTON_COUNT && c; ++i, c = ScDlgNext(c)) {
-            if (*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) CallUpdate(c);
+            if (*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) ScCtrlUpdateVia(g_update, c);
         }
     // "+N upg" can run past icon 6 into the space above icons 2..5 too (see PlaceOn), so
     // the same reasoning applies: repaint the whole strip, not just the icon it started on.
     } else if (g_mode == SC_QIND_UPGRADE && root) {
         DWORD c = ScDlgFindChild(root, SC_STATQ_FIRST_CONTROL);
         for (int i = 0; i < SC_STATQ_SLOTS && c; ++i, c = ScDlgNext(c)) {
-            if (*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) CallUpdate(c);
+            if (*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) ScCtrlUpdateVia(g_update, c);
         }
     }
 }
@@ -1390,7 +1363,7 @@ void ScQueueIndOnFrame(void) {
     if (mode == SC_QIND_NONE) {
         bool hidNow = false;
         if (g_shown) {
-            CallHide((DWORD)&g_ctrl[0]);
+            ScCtrlHideVia(g_hide, (DWORD)&g_ctrl[0]);
             g_shown = false;
             RepaintUnder(root);
             ++g_stat[SC_QIND_STAT_HIDES];
@@ -1428,7 +1401,7 @@ void ScQueueIndOnFrame(void) {
     short box[4];
     if (!PlaceOn(box, anchor, root, mode, (int)strlen(want))) {
         if (g_shown) {
-            CallHide(ind);
+            ScCtrlHideVia(g_hide, ind);
             g_shown = false;
             RepaintUnder(root);
             ++g_stat[SC_QIND_STAT_HIDES];
@@ -1463,9 +1436,9 @@ void ScQueueIndOnFrame(void) {
     // next boxDiff read 0.
     if (!g_shown) CaptureBaseline(root, b);
     if (changed || moved || !visible || !g_shown) {
-        CallShow(ind);
+        ScCtrlShowVia(g_show, ind);
         *(DWORD*)(ind + SC_BINDLG_OFF_FLAGS) |= SC_CTRL_FLAG_DRAWN;
-        CallUpdate(ind);
+        ScCtrlUpdateVia(g_update, ind);
         g_shown = true;
         ++g_stat[SC_QIND_STAT_SHOWS];
         if (changed || moved) ScQueueIndLogState("show");

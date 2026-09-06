@@ -24,6 +24,7 @@
 #include "sc_circles.h"
 #include "sc_fanout.h"
 #include "sc_hook.h"
+#include "sc_ledger.h"
 #include "sc_hudrow.h"
 #include "sc_queueind.h"
 #include "sc_log.h"
@@ -185,16 +186,25 @@ asm(
 );
 
 // Calls TgtMixed with the awkward convention from C.
+//
+// count and ptr are PINNED to EAX and ECX as in-out operands rather than loaded there
+// from two more "r" registers inside the block. Four "r" operands plus an eax/ecx
+// clobber is more registers than GCC can find at -O0, where nothing is already in a
+// register and EBP is a real frame pointer: `build.ps1 -DebugBuild -Test` would not
+// compile this function ("'asm' operand has impossible constraints"). The two PUSHED
+// values stay in registers on purpose -- a "g" or "m" operand could resolve
+// ESP-relative, and the first push would move the second one out from under its own
+// address.
 static void CallMixed(unsigned count, unsigned* ptr, unsigned unit, unsigned clicked) {
+    unsigned  inEax = count;
+    unsigned* inEcx = ptr;
     asm volatile(
         "pushl %[clicked]\n"
         "pushl %[unit]\n"
-        "movl  %[cnt], %%eax\n"
-        "movl  %[p],   %%ecx\n"
         "call  _TgtMixed\n"
-        :
-        : [clicked] "r"(clicked), [unit] "r"(unit), [cnt] "r"(count), [p] "r"(ptr)
-        : "eax", "ecx", "edx", "memory");
+        : "+a"(inEax), "+c"(inEcx)
+        : [clicked] "r"(clicked), [unit] "r"(unit)
+        : "edx", "memory");
 }
 
 // ---------------------------------------------------------------------------
@@ -5277,6 +5287,70 @@ static void CodeCaveTests(void) {
           ScScreenApplyCaveAt(fn2 + 5, 4, kCave, (int)sizeof(kCave)) ? 1 : 0, 0);
 }
 
+// ---------------------------------------------------------------------------
+// [24] The shared per-building ledger (sc_ledger.h). sc_prodqueue and sc_upgrades
+// both keep one, and both used to carry their own copy of the lookup and the
+// removal. Those two are driven here directly, on a record type that exists only
+// in this file, because the interesting case is not reachable through either
+// module's own API: DROPPING THE LAST RECORD makes ScLedgerDropAt assign an
+// element to itself. It falls out correctly rather than being special-cased,
+// which is the kind of thing that stays correct only while something watches it.
+// ---------------------------------------------------------------------------
+struct LedgerFake {
+    DWORD unit;
+    int   count;
+    int   tag;        // so a moved record can be told apart from a copied one
+};
+
+static void LedgerTests(void) {
+    Part("the shared per-building ledger: lookup, removal, and the total");
+
+    LedgerFake rec[4];
+    int n = 4;
+    for (int i = 0; i < 4; ++i) {
+        rec[i].unit  = 0x1000u + (DWORD)i * 0x100u;
+        rec[i].count = i + 1;                       // 1,2,3,4 -> 10 items
+        rec[i].tag   = 100 + i;
+    }
+
+    Check("finds the first record", (long long)(ScLedgerFind(rec, n, 0x1000u) - rec), 0);
+    Check("finds the last record",  (long long)(ScLedgerFind(rec, n, 0x1300u) - rec), 3);
+    Check("a unit with no record is NULL",
+          ScLedgerFind(rec, n, 0x9999u) == NULL ? 1 : 0, 1);
+    Check("nothing is found in an EMPTY ledger",
+          ScLedgerFind(rec, 0, 0x1000u) == NULL ? 1 : 0, 1);
+    Check("the whole ledger holds", ScLedgerItemCount(rec, n), 10);
+    Check("  and an empty one holds nothing", ScLedgerItemCount(rec, 0), 0);
+
+    // Drop the MIDDLE one: the last record moves over it, and the count drops.
+    ScLedgerDropAt(rec, &n, 1);
+    Check("dropping the middle leaves three", n, 3);
+    Check("  the last record moved into the hole", rec[1].tag, 103);
+    Check("  its unit came with it", (long long)rec[1].unit, 0x1300);
+    Check("  the dropped unit is gone", ScLedgerFind(rec, n, 0x1100u) == NULL ? 1 : 0, 1);
+    Check("  and the moved one is still findable",
+          (long long)(ScLedgerFind(rec, n, 0x1300u) - rec), 1);
+    Check("  the total lost exactly that record's items", ScLedgerItemCount(rec, n), 8);
+
+    // Drop the LAST one: rec[i] = rec[*count - 1] is a self-assignment here.
+    ScLedgerDropAt(rec, &n, 2);
+    Check("dropping the last leaves two", n, 2);
+    Check("  the record before it is untouched", rec[1].tag, 103);
+    Check("  and the dropped unit is gone", ScLedgerFind(rec, n, 0x1200u) == NULL ? 1 : 0, 1);
+
+    // Out of range in both directions changes nothing.
+    ScLedgerDropAt(rec, &n, 2);
+    ScLedgerDropAt(rec, &n, -1);
+    Check("an out-of-range drop is a no-op", n, 2);
+    Check("  and leaves the totals alone", ScLedgerItemCount(rec, n), 5);
+
+    ScLedgerDropAt(rec, &n, 0);
+    ScLedgerDropAt(rec, &n, 0);
+    Check("the ledger empties", n, 0);
+    ScLedgerDropAt(rec, &n, 0);
+    Check("  and an empty one refuses to go negative", n, 0);
+}
+
 int main(void) {
     // Unbuffered: this binary writes executable memory and drives a fake image, so the
     // interesting failure is a fault, and a faulting run must still say WHICH case it
@@ -5409,6 +5483,7 @@ int main(void) {
     UpgQueueIndTests();      // [21]  task 037
     SessionEpochTests();     // [22]  task 054
     CodeCaveTests();         // [23]  1280 wide
+    LedgerTests();           // [24]  the shared per-building ledger
 
     printf("\nhooktest: %d failure(s)\n", g_failures);
     ScLogClose();

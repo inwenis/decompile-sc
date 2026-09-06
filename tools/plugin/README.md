@@ -45,6 +45,8 @@ suite break, not a cleanup.
 | `sc_engine.h/.cpp` | **the relocation layer**: static VA → this process, and the readable-memory probe | `ScRuntime*`, `ScEngine*`, `ScReadable` | — | — |
 | `sc_unit.h` | **the shared reads**: CUnit fields, the player unit list, the build queue, the dialog tree | `ScUnit*`, `ScDlg*`, `ScCtrl*`, `ScPlayer*` | — | — |
 | `sc_env.h` | **the config reads**: every `%SCPLUGIN_*%` opt-in, flag and clamped int | `ScEnv*` | — | *(all of them)* |
+| `sc_mode.h` | **the permission level**: `%SCPLUGIN_MODE%` and what each mode allows | `ScMode*` | — | `SCPLUGIN_MODE` / `-Mode` |
+| `sc_ledger.h` | **the per-building record array** sc_prodqueue and sc_upgrades both keep | `ScLedger*` | — | — |
 | `sc_log.cpp` | the log file itself | `ScLog` | *(every line)* | `SCPLUGIN_LOG` |
 | `sc_hook.cpp` | the inline x86 detour engine | `ScHook*` | `HOOK` | — |
 | `sc_buildid.cpp` | the build stamp embedded in the DLL | `ScBuildId*` | *(in* `ATTACH`*)* | — |
@@ -81,16 +83,18 @@ suite break, not a cleanup.
 
 ### Two rules that keep it that way
 
-1. **A helper that two modules need goes in `sc_engine.h` or `sc_unit.h`, not in both `.cpp`s.**
-   Every module used to carry its own copy of the relocation arithmetic, the readable-memory
-   probe and the CUnit bounds check — up to twelve copies of one three-line function — because
-   each was written on its own branch and sharing a header would have made a sibling task
-   rebase. That reason is gone; the copies are gone with it.
+1. **A helper that two modules need goes in one of the shared headers above, not in both
+   `.cpp`s.** Every module used to carry its own copy of the relocation arithmetic, the
+   readable-memory probe and the CUnit bounds check — up to twelve copies of one three-line
+   function — because each was written on its own branch and sharing a header would have made
+   a sibling task rebase. That reason is gone; the copies are gone with it, and
+   `python tools/check-cpp-reuse.py` (which CI runs) fails a PR that adds a new one.
 2. **The log line is an API.** `ScLog("TAG ...")` format strings, `%SCPLUGIN_*%` names and
    `run-with-plugin.ps1` flags are read by the suites in `tools/plugin/*.ps1`. Change one and
    the oracle that was watching it goes quiet without failing — see the `CIRCLES stats:` line,
-   whose two suites could not match it for weeks after a field was added at the front. C
-   identifiers, on the other hand, are read by nothing but the compiler: rename freely.
+   whose two suites could not match it for weeks after a field was added at the front — put
+   a line you rely on in `tests/golden-line-seam.Tests.ps1`. C identifiers, on the other
+   hand, are read by nothing but the compiler: rename freely.
 
 ---
 

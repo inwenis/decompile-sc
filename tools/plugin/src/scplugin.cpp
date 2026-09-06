@@ -44,6 +44,7 @@
 #include "sc_fanout.h"
 #include "sc_hook.h"
 #include "sc_log.h"
+#include "sc_mode.h"
 #include "sc_prodfan.h"
 #include "sc_prodqueue.h"
 #include "sc_queueind.h"
@@ -816,8 +817,7 @@ static void ScanDialogs(void) {
     }
 
     if (strcmp(line, prev) == 0) return;
-    strncpy(prev, line, sizeof(prev) - 1);
-    prev[sizeof(prev) - 1] = '\0';
+    lstrcpynA(prev, line, (int)sizeof(prev));
     ScLog("DIALOGS n=%d%s%s", n, n ? " " : "", line);
 }
 
@@ -1024,7 +1024,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hinst);
         ScLogOpen();
-        g_mode = ScFanoutResolveMode();
+        g_mode = ScModeResolve();
         LogAttachBanner();
         // Task 034, and FIRST of everything that writes: the widescreen patch set
         // rewrites the operands of functions that run during the game's own
