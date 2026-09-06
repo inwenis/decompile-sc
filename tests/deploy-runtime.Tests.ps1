@@ -111,56 +111,60 @@ Describe 'a redeploy leaves the feature-test map in place (task 067)' {
     }
 }
 
-Describe 'the widescreen switch ships assembled and OFF by default (task 070)' {
+Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-06)' {
     # Static checks on deploy.ps1's text, same offline shape as the blocks above.
-    # Each fails on the pre-070 deploy.ps1 (no wide launcher, no cnc-ddraw staging,
-    # no -NoShortcut), so none is vacuous.
+    # Until 2026-09-06 widescreen was a SECOND launcher + shortcut, off by default;
+    # the user asked for one shortcut with the extended viewport, so the one launcher
+    # carries it. Each check fails on the two-launcher deploy.ps1, so none is vacuous.
 
     BeforeAll {
         $script:deployText = Get-Content -Raw -LiteralPath $script:deploy
         $lb = [regex]::Match($script:deployText, "(?s)\`$launcherBody = @'(.*?)'@")
-        $wb = [regex]::Match($script:deployText, "(?s)\`$wideLauncherBody = @'(.*?)'@")
-        $script:normalLauncher = $lb.Success ? $lb.Groups[1].Value : ''
-        $script:wideLauncher   = $wb.Success ? $wb.Groups[1].Value : ''
+        $script:launcher = $lb.Success ? $lb.Groups[1].Value : ''
     }
 
-    It 'both launcher bodies are findable (the parse itself is proved positive)' {
-        $script:normalLauncher.Length | Should -BeGreaterThan 100
-        $script:wideLauncher.Length | Should -BeGreaterThan 100
+    It 'the launcher body is findable (the parse itself is proved positive)' {
+        $script:launcher.Length | Should -BeGreaterThan 100
     }
 
-    It 'the wide launcher turns the assembled widescreen on: stage 3 + cnc-ddraw' {
-        $script:wideLauncher | Should -Match '-Widescreen 1'
-        $script:wideLauncher | Should -Match '-WidescreenStage 3'
+    It 'there is exactly ONE launcher body and no wide launcher left' {
+        ([regex]::Matches($script:deployText, "(?m)^\`$\w*[lL]auncherBody = @'")).Count | Should -Be 1
+        $script:deployText | Should -Not -Match 'wideLauncherBody'
+        $script:deployText | Should -Not -Match 'WideShortcutName'
+    }
+
+    It 'the launcher turns the assembled widescreen on: stage 3 + storm widen + cnc-ddraw' {
+        $script:launcher | Should -Match '-Widescreen 1'
+        $script:launcher | Should -Match '-WidescreenStage 3'
         # The ARGUMENT line, not the launcher's own header comment (which also says
         # "-StormPresent widen" and made a plain substring match unfalsifiable): the
         # stage line and the storm line, each a backtick-continued argument.
-        $script:wideLauncher | Should -Match '-WidescreenStage 3 `\s*\r?\n\s*-StormPresent widen `' -Because 'issue #113: run-with-plugin.ps1 exported its old default 0 verbatim, so the DLL auto-arm never fired and the deployed wide game showed a black right band; the wide launcher must pass the buffer->glass copy as an argument'
-        $script:wideLauncher | Should -Match 'cnc-ddraw\\ddraw\.dll'
-        $script:wideLauncher | Should -Not -Match 'InjectWindowedHelper' -Because 'WMode presents 640 columns whatever it is asked; the wide path must use the cnc-ddraw proxy'
+        $script:launcher | Should -Match '-WidescreenStage 3 `\s*\r?\n\s*-StormPresent widen `' -Because 'issue #113: run-with-plugin.ps1 exported its old default 0 verbatim, so the DLL auto-arm never fired and the deployed wide game showed a black right band; the launcher must pass the buffer->glass copy as an argument'
+        $script:launcher | Should -Match 'cnc-ddraw\\ddraw\.dll'
+        $script:launcher | Should -Not -Match 'InjectWindowedHelper' -Because 'WMode presents 640 columns whatever it is asked; the wide path must use the cnc-ddraw proxy'
     }
 
-    It 'the wide launcher keeps the normal feature set (it is the same game, wider)' {
+    It 'the launcher keeps the full feature set (it is the same game, wider)' {
         foreach ($flag in '-Mode fanout', '-Sound', '-NoLaunchLock', '-NoForegroundRestore',
                           '-Circles 1', '-HudRow 1', '-ProdQueue 1', '-ProdFan 1',
                           '-UpgradeQueue 1', '-QueueIndicator 1') {
-            $script:wideLauncher.Contains($flag) | Should -BeTrue -Because "the wide launcher must not silently drop $flag"
+            $script:launcher.Contains($flag) | Should -BeTrue -Because "the launcher must not silently drop $flag"
         }
     }
 
-    It 'the NORMAL launcher does not carry widescreen -- off by default means untouched' {
-        $script:normalLauncher | Should -Not -Match '-Widescreen'
+    It 'the launcher presents through cnc-ddraw with the 2x/lock ini, generated at 2x the plugin geometry' {
+        $script:launcher | Should -Match 'cnc-ddraw-2x\.ini'
+        # The ini is generated from the committed file with width/height rewritten to
+        # 2x SC_WS_SCREEN_W/H, and the verify step re-reads the shipped file.
+        $script:deployText | Should -Match 'SC_WS_SCREEN_W'
+        $script:deployText | Should -Match '\^width=\\d\+'
+        $script:deployText.Contains('does not carry width=') | Should -BeTrue -Because 'the verify step must read the ini that actually shipped'
     }
 
-    It 'the NORMAL launcher presents through cnc-ddraw with the 2x/lock ini, not WMode (task 075, issue #114)' {
-        # WMode has no export table or config (tools/plugin/README.md "Windowed mode:
-        # injected, not proxied"), so it cannot scale a window or clip the cursor --
-        # that used to be exactly what this suite asserted (InjectWindowedHelper WMode),
-        # which was only ever a proxy for "no widescreen geometry", not a promise about
-        # the presenter. Assert the presenter directly instead.
-        $script:normalLauncher | Should -Match 'cnc-ddraw\\ddraw\.dll'
-        $script:normalLauncher | Should -Match 'cnc-ddraw-2x\.ini'
-        $script:normalLauncher | Should -Not -Match 'InjectWindowedHelper' -Because 'WMode cannot deliver issue #114''s scale/lock; cnc-ddraw replaced it here'
+    It 'a leftover Wide launcher and shortcut from an earlier deploy are removed' {
+        $script:deployText.Contains("Launch-StarCraft-Modded-Wide.ps1") | Should -BeTrue
+        $script:deployText.Contains("StarCraft Modded (Wide).lnk") | Should -BeTrue
+        $script:deployText | Should -Match 'Remove-Item -LiteralPath \$staleWideShortcut'
     }
 
     It 'deploy stages cnc-ddraw only through its own sha256 pin' {
@@ -182,15 +186,17 @@ Describe 'the widescreen switch ships assembled and OFF by default (task 070)' {
     It 'the card deploy copies exists on disk and mentions the one action' {
         $card = Join-Path (Split-Path $script:deploy -Parent) 'widescreen-card.md'
         Test-Path -LiteralPath $card | Should -BeTrue
-        (Get-Content -Raw -LiteralPath $card) | Should -Match 'StarCraft Modded \(Wide\)'
+        (Get-Content -Raw -LiteralPath $card) | Should -Match 'double-click \*\*StarCraft Modded\*\*'
     }
 
     It '-NoShortcut skips the desktop entirely (scratch deploys must not touch it)' {
         $script:deployText.Contains('shortcuts SKIPPED (-NoShortcut)') | Should -BeTrue
-        # The gate must cover the WIDE shortcut too, not only the original.
+        # The gate must cover the shortcut write AND the stale-shortcut removal.
         $gateAt = $script:deployText.IndexOf('if ($NoShortcut) {')
-        $wideLnkAt = $script:deployText.IndexOf('$wlnk.Save()')
+        $lnkAt = $script:deployText.IndexOf('$lnk.Save()')
+        $staleAt = $script:deployText.IndexOf('$staleWideShortcut = ')
         $gateAt | Should -BeGreaterThan -1
-        $wideLnkAt | Should -BeGreaterThan $gateAt -Because 'the wide shortcut write must sit behind the same -NoShortcut gate'
+        $lnkAt | Should -BeGreaterThan $gateAt -Because 'the shortcut write must sit behind the -NoShortcut gate'
+        $staleAt | Should -BeGreaterThan $gateAt -Because 'a scratch deploy must not delete anything on the desktop either'
     }
 }
