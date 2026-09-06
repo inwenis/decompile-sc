@@ -1928,6 +1928,34 @@ function Send-ScDropdownPick {
     }
 }
 
+function Get-ScWideGeometry {
+    <#
+    .SYNOPSIS
+    The widescreen geometry the plugin was built for, read from the generated table header.
+    .DESCRIPTION
+    tools/plugin/src/sc_screen_patches.h is GENERATED (tools/renderer_patch_sites.py) and is
+    the one place the target width/height live. Every probe that asserts a client size, a
+    dump size or a band extent reads them here rather than carrying an 800 of its own --
+    three probes did, and every one went stale the day the width moved to 1280.
+    #>
+    [CmdletBinding()]
+    param([string]$Header = (Join-Path $PSScriptRoot 'src/sc_screen_patches.h'))
+    $read = {
+        param([string]$Name)
+        $m = Select-String -LiteralPath $Header -Pattern "^#define\s+$Name\s+(\d+)" | Select-Object -First 1
+        if (-not $m) { throw "drive-game: $Name not found in $Header" }
+        [int]$m.Matches[0].Groups[1].Value
+    }
+    [pscustomobject]@{
+        W      = & $read 'SC_WS_SCREEN_W'
+        H      = & $read 'SC_WS_SCREEN_H'
+        PfW    = & $read 'SC_WS_PLAYFIELD_W'
+        PfH    = & $read 'SC_WS_PLAYFIELD_H'
+        StockW = & $read 'SC_WS_STOCK_W'
+        StockH = & $read 'SC_WS_STOCK_H'
+    }
+}
+
 function Get-ScMinimapPoint {
     <#
     .SYNOPSIS

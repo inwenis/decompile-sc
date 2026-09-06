@@ -29,6 +29,7 @@
 #include "sc_log.h"
 #include "sc_prodfan.h"
 #include "sc_prodqueue.h"
+#include "sc_screen.h"
 #include "sc_session.h"
 #include "sc_upgrades.h"
 #include "sc_unit.h"
@@ -5236,6 +5237,46 @@ static void SessionEpochTests(void) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// [23] Code caves (1280 wide). A window's `jmp` out and the cave's `jmp` back
+// are two rel32s computed at runtime; a wrong one is a crash inside the game,
+// so the arithmetic is EXECUTED here first. The target is a hand-written x86
+// function -- mov eax,1 ; add eax,0x58 ; nop ; nop ; ret -- whose 5-byte window
+// (a 3-byte imm8 add plus two passengers) is the shape of the fog cell sites,
+// and the cave re-encodes it as add eax,0xA8 with an imm32 that no 5-byte
+// in-place rewrite could hold.
+// ---------------------------------------------------------------------------
+static void CodeCaveTests(void) {
+    Part("code caves: a window jumps out to a 32-bit re-encoding and back");
+    BYTE* fn = (BYTE*)VirtualAlloc(NULL, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!fn) { printf("  FAIL could not allocate the target\n"); ++g_failures; return; }
+    static const BYTE kBody[] = {
+        0xB8, 0x01, 0x00, 0x00, 0x00,   // mov eax,1
+        0x83, 0xC0, 0x58,               // add eax,0x58   <- the window starts here
+        0x90, 0x90,                     //   nop ; nop     (passengers: 5 bytes in all)
+        0xC3                            // ret            <- where the cave jumps back to
+    };
+    memcpy(fn, kBody, sizeof(kBody));
+    typedef int (*Fn)(void);
+    Check("baseline: 1 + 0x58", ((Fn)fn)(), 0x59);
+
+    static const BYTE kCave[] = { 0x05, 0xA8, 0x00, 0x00, 0x00 };    // add eax,0xA8 (imm32)
+    Check("apply: 5-byte window at +5, 5-byte cave",
+          ScScreenApplyCaveAt(fn + 5, 5, kCave, (int)sizeof(kCave)) ? 1 : 0, 1);
+    Check("the window now opens with jmp rel32 (0xE9)", fn[5], 0xE9);
+    Check("caved: 1 + 0xA8 through the cave and back", ((Fn)fn)(), 0xA9);
+
+    // A second cave from the same pool must not overlap the first.
+    BYTE* fn2 = fn + 64;
+    memcpy(fn2, kBody, sizeof(kBody));
+    static const BYTE kCave2[] = { 0x05, 0x00, 0x01, 0x00, 0x00 };   // add eax,0x100
+    Check("second cave applies", ScScreenApplyCaveAt(fn2 + 5, 5, kCave2, (int)sizeof(kCave2)) ? 1 : 0, 1);
+    Check("second cave: 1 + 0x100", ((Fn)fn2)(), 0x101);
+    Check("first cave still intact", ((Fn)fn)(), 0xA9);
+    Check("refused: a window shorter than the jmp",
+          ScScreenApplyCaveAt(fn2 + 5, 4, kCave, (int)sizeof(kCave)) ? 1 : 0, 0);
+}
+
 int main(void) {
     // Unbuffered: this binary writes executable memory and drives a fake image, so the
     // interesting failure is a fault, and a faulting run must still say WHICH case it
@@ -5367,6 +5408,7 @@ int main(void) {
     BuildingParityTests();   // [20]  task 036
     UpgQueueIndTests();      // [21]  task 037
     SessionEpochTests();     // [22]  task 054
+    CodeCaveTests();         // [23]  1280 wide
 
     printf("\nhooktest: %d failure(s)\n", g_failures);
     ScLogClose();

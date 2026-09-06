@@ -40,10 +40,10 @@
 #include "sc_session.h"
 #include "sc_unit.h"
 
-// The one widescreen geometry this repo builds is 800x480 (sc_screen stages), so
-// the right edge is +160 from the stock 640. If a second width ever exists this
-// becomes a read of the patched layer rect, not a second constant.
-#define SC_CONSOLE_SHIFT_X 160
+// The widescreen geometry this repo builds, asked of sc_screen (which owns the
+// generated table): the right edge is the new screen width minus the stock 640
+// the console art was drawn for. Was a literal 160 (800 wide) until 1280.
+#define SC_CONSOLE_SHIFT_X (ScScreenTargetWidth() - SC_SCREEN_W)
 
 #define SC_CONSOLE_MAX_ROOTS   16
 #define SC_CONSOLE_TRACE_MAX   2000
@@ -306,8 +306,8 @@ static void AddPresentSliver(void) {
                      ? *(DWORD*)ScRuntimeAddr(0x006CEFF4u) : 0;
     if (!bits) return;
     LogRegionRects("base 0x6D5E14 BEFORE sliver", 0x006D5E14u);
-    g_sliverDesc.w = 160;
-    g_sliverDesc.h = 480;
+    g_sliverDesc.w = (WORD)SC_CONSOLE_SHIFT_X;
+    g_sliverDesc.h = (WORD)ScScreenTargetHeight();
     g_sliverDesc.bits = bits;   // region SHAPE is what matters; content is the buffer
     void* fn = ScRuntimeAddr(0x0041D640u);
     ScImgDesc* d = &g_sliverDesc;

@@ -87,14 +87,71 @@ static int    g_writeFailures = 0;        // patches that failed their own write
 // have faulted stock too. If a real consumer ever needs more, clamp it instead.
 #define SC_WS_GRID_GUARD 0x10000
 
-// Saved originals, so a FreeLibrary detach can put the process back.
-#define SC_WS_MAX_SAVED 128
+// Saved originals, so a FreeLibrary detach can put the process back. Sized by
+// the table: a fixed 128 silently stopped saving at the 129th of 257 writes.
+#define SC_WS_MAX_SAVED SC_WS_PATCH_COUNT
 static struct {
     void* addr;
     BYTE  len;
     BYTE  bytes[SC_WS_MAX_PATCH_LEN];
 } g_saved[SC_WS_MAX_SAVED];
 static int g_savedCount = 0;
+
+// CODE CAVES. A value that fits no encoding of the instruction's own length --
+// the fog cell stride at 1280 wide is 168, and every one of its six sites is a
+// sign-extended imm8/disp8 -- gets a WINDOW of whole instructions replaced by
+// `jmp cave` + NOPs, the cave holding the same instructions re-encoded with
+// 32-bit fields and a `jmp` back to the window's end. The generator chose the
+// windows (>= 5 bytes, no PC-relative operand, nothing branches into them) and
+// carries the cave code; this side owns only the two rel32s, which need the
+// cave's runtime address. One RWX page, bump-allocated, leaked on remove like
+// a trampoline (a game thread may be executing inside it).
+#define SC_WS_CAVE_POOL 4096
+static BYTE*  g_cavePool = NULL;
+static SIZE_T g_caveUsed = 0;
+
+static BYTE* EmitCave(const BYTE* code, int codeLen, const BYTE* back) {
+    const SIZE_T need = (SIZE_T)codeLen + 5;
+    if (!g_cavePool) {
+        g_cavePool = (BYTE*)VirtualAlloc(NULL, SC_WS_CAVE_POOL, MEM_COMMIT | MEM_RESERVE,
+                                         PAGE_EXECUTE_READWRITE);
+        if (!g_cavePool) return NULL;
+    }
+    if (g_caveUsed + need > SC_WS_CAVE_POOL) return NULL;
+    BYTE* cave = g_cavePool + g_caveUsed;
+    memcpy(cave, code, (size_t)codeLen);
+    cave[codeLen] = 0xE9;
+    const DWORD rel = (DWORD)(DWORD_PTR)(back - (cave + codeLen + 5));
+    memcpy(cave + codeLen + 1, &rel, 4);
+    g_caveUsed += need;
+    FlushInstructionCache(GetCurrentProcess(), cave, need);
+    return cave;
+}
+
+// Fill the window's own `jmp rel32` toward `cave`. `window` is the image about
+// to be written at `at` (E9 + 4 zero bytes + NOPs, from the generator).
+static void PointWindowAt(BYTE* window, const BYTE* at, const BYTE* cave) {
+    window[0] = 0xE9;
+    const DWORD rel = (DWORD)(DWORD_PTR)(cave - (at + 5));
+    memcpy(window + 1, &rel, 4);
+}
+
+bool ScScreenApplyCaveAt(BYTE* at, int len, const BYTE* code, int codeLen) {
+    if (len < 5 || len > SC_WS_MAX_PATCH_LEN || codeLen <= 0 || codeLen > SC_WS_MAX_CAVE_LEN)
+        return false;
+    BYTE* cave = EmitCave(code, codeLen, at + len);
+    if (!cave) return false;
+    BYTE window[SC_WS_MAX_PATCH_LEN];
+    memset(window, 0x90, sizeof(window));
+    PointWindowAt(window, at, cave);
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(at, (SIZE_T)len, PAGE_EXECUTE_READWRITE, &oldProtect)) return false;
+    memcpy(at, window, (size_t)len);
+    FlushInstructionCache(GetCurrentProcess(), at, (SIZE_T)len);
+    DWORD ignore = 0;
+    VirtualProtect(at, (SIZE_T)len, oldProtect, &ignore);
+    return true;
+}
 
 // ---------------------------------------------------------------------------
 // Environment
@@ -157,6 +214,8 @@ static bool NameSelected(const char* name) {
 }
 
 bool ScScreenActive(void) { return g_active; }
+int  ScScreenTargetWidth(void)  { return SC_WS_SCREEN_W; }
+int  ScScreenTargetHeight(void) { return SC_WS_SCREEN_H; }
 
 int ScScreenViewportTilesX(void) {
     // scroll.clamp.x.tiles is a stage-3 site; below that, or with the table
@@ -240,6 +299,7 @@ static bool VerifyAll(int maxStage, int* checked) {
 static bool WriteOne(const ScScreenPatch* p) {
     BYTE bytes[SC_WS_MAX_PATCH_LEN];
     memcpy(bytes, p->patch, p->len);
+    void* at = ScRuntimeAddr(p->va);
 
     // Relocation fixups: the record carries a zeroed dword that only the running
     // process can fill, because the relocated grid's address comes from
@@ -251,7 +311,19 @@ static bool WriteOne(const ScScreenPatch* p) {
         memcpy(bytes + p->fixupOff, &target, 4);
     }
 
-    void* at = ScRuntimeAddr(p->va);
+    // A code cave: emit the re-encoded window + jmp back, then point the
+    // window's own jmp at it. The record's `patch` already holds E9 + NOPs.
+    BYTE* cave = NULL;
+    if (p->caveLen) {
+        cave = EmitCave(p->cave, p->caveLen, (BYTE*)at + p->len);
+        if (!cave) {
+            ScLog("WIDESCREEN %s @0x%08X: cave pool exhausted or unallocated (used %Iu of %d)",
+                  p->name, (unsigned)p->va, g_caveUsed, SC_WS_CAVE_POOL);
+            return false;
+        }
+        PointWindowAt(bytes, (BYTE*)at, cave);
+    }
+
     DWORD oldProtect = 0;
     if (!VirtualProtect(at, p->len, PAGE_EXECUTE_READWRITE, &oldProtect)) {
         ScLog("WIDESCREEN %s @0x%08X: VirtualProtect failed gle=%u",
@@ -274,8 +346,15 @@ static bool WriteOne(const ScScreenPatch* p) {
     char before[SC_WS_MAX_PATCH_LEN * 2 + 1], after[SC_WS_MAX_PATCH_LEN * 2 + 1];
     ScHexDump(p->expect, p->len, before, sizeof(before));
     ScHexDump(bytes, p->len, after, sizeof(after));
-    ScLog("WIDESCREEN patch stage=%d %-28s @0x%08X %s -> %s  (%s)",
-          p->stage, p->name, (unsigned)p->va, before, after, p->note);
+    if (cave) {
+        char code[SC_WS_MAX_CAVE_LEN * 2 + 1];
+        ScHexDump(p->cave, p->caveLen, code, sizeof(code));
+        ScLog("WIDESCREEN patch stage=%d %-28s @0x%08X %s -> %s  cave@%p [%s + jmp back]  (%s)",
+              p->stage, p->name, (unsigned)p->va, before, after, cave, code, p->note);
+    } else {
+        ScLog("WIDESCREEN patch stage=%d %-28s @0x%08X %s -> %s  (%s)",
+              p->stage, p->name, (unsigned)p->va, before, after, p->note);
+    }
     return true;
 }
 

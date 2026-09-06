@@ -27,8 +27,6 @@
 #include "sc_engine.h"
 #include "sc_hook.h"
 #include "sc_log.h"
-#include "sc_screen.h"
-#include "sc_screen_patches.h"
 #include "sc_session.h"
 #include "sc_unit.h"
 
@@ -277,8 +275,15 @@ static void LogCirclePositions(void) {
 
     const int left = (int)*(WORD*)ScRuntimeAddr(SC_VA_SCREEN_LEFT);
     const int top  = (int)*(WORD*)ScRuntimeAddr(SC_VA_SCREEN_TOP);
-    const int clientW = ScScreenActive() ? SC_WS_SCREEN_W : SC_SCREEN_W;
-    const int clientH = ScScreenActive() ? SC_WS_SCREEN_H : SC_SCREEN_H;
+    // The client's size is the engine's own screen bitmap descriptor (640x480
+    // stock, the widescreen table's size once it is live) -- read, not assumed,
+    // so a wider game does not drop every unit past x=639 as "off-screen".
+    int scrW = SC_SCREEN_W, scrH = SC_SCREEN_H;
+    if (ScReadable(ScRuntimeVa(SC_VA_SCREEN_BITMAP), 4)) {
+        const int w = (int)*(WORD*)ScRuntimeAddr(SC_VA_SCREEN_BITMAP + SC_BITMAP_OFF_WIDTH);
+        const int h = (int)*(WORD*)ScRuntimeAddr(SC_VA_SCREEN_BITMAP + SC_BITMAP_OFF_HEIGHT);
+        if (w > 0 && h > 0) { scrW = w; scrH = h; }
+    }
 
     char buf[1024];
     int used = 0;
@@ -288,13 +293,10 @@ static void LogCirclePositions(void) {
         if (!ScReadable(s, SC_CSPRITE_SIZE)) continue;
         const int x = (int)*(WORD*)(s + SC_CSPRITE_OFF_POS_X) - left;
         const int y = (int)*(WORD*)(s + SC_CSPRITE_OFF_POS_Y) - top;
-        // Off-screen units are useless to a test and would only be noise. The first
-        // coordinate OUTSIDE the client is the width itself -- an inclusive bound here
-        // would hand a test a point one pixel off the window. The width is asked of
-        // sc_screen rather than assumed: with the widescreen table active the client is
-        // 800 wide, and a 640 here silently dropped every circle in the right quarter
-        // from the line test-selection-circles.ps1 aims its clicks with.
-        if (x < 0 || y < 0 || x >= clientW || y >= clientH) continue;
+        // Off-screen units are useless to a test and would only be noise. scrW and
+        // scrH are the first coordinates OUTSIDE the client -- an inclusive bound
+        // here would hand a test a point one pixel off the window.
+        if (x < 0 || y < 0 || x >= scrW || y >= scrH) continue;
         const int room = (int)sizeof(buf) - used;
         if (room < 24) { break; }
         used += _snprintf(buf + used, (size_t)room, "%s%d,%d", listed ? " " : "", x, y);

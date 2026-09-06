@@ -39,10 +39,11 @@ import argparse
 import os
 import struct
 import sys
+from types import SimpleNamespace
 
 try:
-    from capstone import Cs, CS_ARCH_X86, CS_MODE_32
-    from capstone.x86_const import X86_REG_EFLAGS
+    from capstone import Cs, CS_ARCH_X86, CS_MODE_32, CS_GRP_JUMP, CS_GRP_CALL, CS_GRP_BRANCH_RELATIVE
+    from capstone.x86_const import X86_REG_EFLAGS, X86_OP_IMM
 except ImportError:  # pragma: no cover
     sys.exit("renderer_patch_sites: capstone is required (pip install capstone)")
 
@@ -65,6 +66,14 @@ STOCK_ROWS = STOCK_H // STOCK_BLOCK   # 30
 # fix the EFLAGS hazard are the long ones -- 0x0042D2C7 swallows three unrelated
 # stores between the compare and the branch.
 SC_MAX_PATCH_LEN = 32
+# Longest code cave (Builder.cave): the window's instructions re-encoded with
+# 32-bit fields, WITHOUT the jmp back (the plugin appends that).
+SC_MAX_CAVE_LEN = 32
+
+
+def le32(v: int) -> str:
+    """A 32-bit little-endian field as hex, two's complement for negatives."""
+    return (v & 0xFFFFFFFF).to_bytes(4, "little").hex()
 
 
 class Image:
@@ -144,15 +153,16 @@ class Patch:
     """
 
     def __init__(self, va, expect, patch, name, stage, note,
-                 fixup_off=None, fixup_addend=0, before="", after=""):
+                 fixup_off=None, fixup_addend=0, before="", after="", cave=None):
         assert len(expect) == len(patch), name
         assert len(patch) <= SC_MAX_PATCH_LEN,             "%s: %d-byte rewrite exceeds SC_MAX_PATCH_LEN" % (name, len(patch))
+        assert cave is None or len(cave) <= SC_MAX_CAVE_LEN,             "%s: %d-byte cave exceeds SC_MAX_CAVE_LEN" % (name, len(cave) if cave else 0)
         # A site whose stock value is already correct for the chosen geometry --
         # every 480/400 site when only the width changes. Kept in the evidence
         # table (it is still a site the map has to name) but not handed to the
         # plugin: writing a byte back over itself is a patch that can only ever
         # go wrong.
-        self.noop = (expect == patch and fixup_off is None)
+        self.noop = (expect == patch and fixup_off is None and cave is None)
         self.va = va
         self.expect = expect
         self.patch = patch
@@ -163,6 +173,9 @@ class Patch:
         self.fixup_addend = fixup_addend
         self.before = before
         self.after = after
+        # Code cave (see Builder.cave): the replacement instructions the window
+        # jumps out to. None for an in-place rewrite.
+        self.cave = cave
 
 
 class Builder:
@@ -176,6 +189,9 @@ class Builder:
     # -- immediate rewrite ---------------------------------------------------
     # -- flags safety --------------------------------------------------------
     def check_flags(self, p: "Patch"):
+        self.check_flags_bytes(p.name, p.va, p.expect, p.patch)
+
+    def check_flags_bytes(self, name, va, expect, patch):
         """Refuse a rewrite that destroys a live flags value.
 
         `lea` does not touch EFLAGS; `imul r32,r/m32,imm8` does. Swapping one for
@@ -190,6 +206,7 @@ class Builder:
         forward from the end of the patch and refuse if a flags READER is reached
         before a flags WRITER.
         """
+        p = SimpleNamespace(name=name, va=va, expect=expect, patch=patch)
         orig = disasm_all(p.va, p.expect)
         new = disasm_all(p.va, p.patch)
         if not orig or not new:
@@ -267,6 +284,15 @@ class Builder:
             self.errors.append("%s @0x%08X: new value 0x%X does not fit in %d byte(s)"
                                % (name, va, new, width))
             return
+        # A ONE-BYTE field is SIGN-EXTENDED by every encoding this table declares
+        # (imm8 of 83/6B/6A, disp8 of a ModRM), so a value above 127 ships as a
+        # NEGATIVE. This check used to be unsigned only: regenerated at W=960 the
+        # fog cell stride 128 became `add edx,-0x80` with 0 errors reported. Shift
+        # counts (C1 /n ib) are the one unsigned imm8 and never exceed 31 anyway.
+        if width == 1 and new > 127:
+            self.errors.append("%s @0x%08X: new value %d does not fit a SIGN-EXTENDED byte "
+                               "(it would ship as %d) -- use cave()" % (name, va, new, new - 256))
+            return
         patched = bytearray(raw)
         patched[off:off + width] = new.to_bytes(width, "little")
         after = disasm_one(va, bytes(patched))
@@ -338,6 +364,76 @@ class Builder:
                   fixup_off=fixup_off, fixup_addend=fixup_addend,
                   before=before, after=after)
         self.check_flags(p)
+        self.patches.append(p)
+
+    # -- code cave: a window that jumps out to a longer replacement ----------
+    def cave(self, va, expect_hex, cave_hex, name, stage, note):
+        """Detour one straight-line WINDOW of whole instructions to plugin-owned code.
+
+        For a value that does not fit the instruction's own field. The fog cell
+        stride is a sign-extended imm8/disp8 at six sites, and 168 (W=1280)
+        fits neither, nor does any encoding of the same length -- `add r,imm32`
+        is 6 bytes where `add r,imm8` is 3. So the window (>= 5 whole bytes, no
+        PC-relative operand, no branch target strictly inside it) becomes
+        `jmp cave` padded with NOPs, and the cave holds the SAME instructions
+        re-encoded with 32-bit fields followed by `jmp` back to the window's
+        end. Both rel32s are filled by the plugin at runtime (the cave's address
+        comes from VirtualAlloc); the table carries the window's original bytes
+        and the cave's code, and the reviewer reads two listings as usual.
+        """
+        expect = bytes.fromhex(expect_hex)
+        cave = bytes.fromhex(cave_hex)
+        actual = self.img.read(va, len(expect))
+        if actual != expect:
+            self.errors.append("%s @0x%08X: bytes are %s, table says %s"
+                               % (name, va, actual.hex(), expect.hex()))
+            return
+        if len(expect) < 5:
+            self.errors.append("%s @0x%08X: a %d-byte window cannot hold a 5-byte jmp"
+                               % (name, va, len(expect)))
+            return
+        orig = disasm_all(va, expect)
+        new = disasm_all(va, cave)
+        if sum(i.size for i in orig) != len(expect):
+            self.errors.append("%s @0x%08X: the window does not decode into whole "
+                               "instructions (%s)" % (name, va, expect.hex()))
+            return
+        if sum(i.size for i in new) != len(cave):
+            self.errors.append("%s @0x%08X: the cave does not decode cleanly (%s)"
+                               % (name, va, cave.hex()))
+            return
+        # The window's bytes are never executed in place again, so nothing in it
+        # may be PC-relative (it would be relocated) -- and nothing outside it may
+        # jump INTO it (it would land on the NOP tail or inside the jmp).
+        for i in orig:
+            if any(g in (CS_GRP_JUMP, CS_GRP_CALL, CS_GRP_BRANCH_RELATIVE) for g in i.groups):
+                self.errors.append("%s @0x%08X: `%s` in the window is PC-relative"
+                                   % (name, va, fmt(i)))
+                return
+        band_lo = va - 0x400
+        band = self.img.read(band_lo, 0x800)
+        pos = 0
+        while pos < len(band):
+            ins = disasm_one(band_lo + pos, band[pos:pos + 16])
+            if ins is None:
+                pos += 1
+                continue
+            if any(g in (CS_GRP_JUMP, CS_GRP_CALL) for g in ins.groups):
+                for op in ins.operands:
+                    if op.type == X86_OP_IMM and va < op.imm < va + len(expect):
+                        self.errors.append("%s @0x%08X: `%s` @0x%08X branches INTO the "
+                                           "window" % (name, va, fmt(ins), ins.address))
+                        return
+            pos += ins.size
+        # What the plugin writes over the window: jmp rel32 (filled at runtime)
+        # + NOPs. Never executed past the jmp; NOP rather than int3 so a stray
+        # landing is harmless rather than a breakpoint.
+        window = b"\xE9\0\0\0\0" + b"\x90" * (len(expect) - 5)
+        p = Patch(va, expect, window, name, stage, note,
+                  before=" ; ".join(fmt(i) for i in orig),
+                  after="[cave] " + " ; ".join(fmt(i) for i in new),
+                  cave=cave)
+        self.check_flags_bytes(name, va, expect, cave)
         self.patches.append(p)
 
     # -- absolute address rewrite (dirty-grid relocation) --------------------
@@ -794,17 +890,27 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
               "terrain.pitch@%08X" % va, 2, note)
 
     # The SAME multiply, decomposed into shifts, in the full-playfield blit:
-    # 672 == (t<<9)+(t<<7)+(t<<5). No 672 appears in that function, so neither an
-    # immediate sweep nor a lea+shl scan finds it -- and it positions every
-    # terrain row the non-dirty path draws. 832 == (t<<9)+(t<<8)+(t<<6), so the
-    # decomposition survives with two single-byte edits; a pitch that was not a
-    # sum of three powers of two would have needed the whole block rewritten.
-    assert TERRAIN_PITCH == 832, \
-        "the shift-decomposed pitch at 0x0040C275 is only a 3-term sum for 832"
-    b.code(0x0040C27E, "c1e307", "c1e308", "terrain.pitch.shift.b", 2,
-           "0x0040C253: shl ebx,7 -> shl ebx,8 (the 128 term becomes 256)")
-    b.code(0x0040C281, "c1e105", "c1e106", "terrain.pitch.shift.c", 2,
-           "0x0040C253: shl ecx,5 -> shl ecx,6 (the 32 term becomes 64)")
+    # 672 == (t<<9)+(t<<7)+(t<<5) -- three `shl r,imm8` at 0x0040C275 (eax),
+    # 0x0040C27E (ebx), 0x0040C281 (ecx), summed after. No 672 appears in that
+    # function, so neither an immediate sweep nor a lea+shl scan finds it -- and
+    # it positions every terrain row the non-dirty path draws. Any pitch that is
+    # a sum of exactly three powers of two survives as three one-byte count
+    # edits (832 = 9,8,6; 1312 = 10,8,5); anything else would need the block
+    # rewritten, which is what the assert says.
+    bits = [i for i in range(32) if (TERRAIN_PITCH >> i) & 1]
+    assert len(bits) == 3, \
+        "the shift-decomposed pitch at 0x0040C275 needs a 3-term power-of-two sum; %d is not" % TERRAIN_PITCH
+    hi, mid, lo = sorted(bits, reverse=True)
+    for va, reg_hex, stock_count, new_count, term in [
+        (0x0040C275, "e0", 9, hi, "a"),     # shl eax,9  (the 512 term)
+        (0x0040C27E, "e3", 7, mid, "b"),    # shl ebx,7  (the 128 term)
+        (0x0040C281, "e1", 5, lo, "c"),     # shl ecx,5  (the 32 term)
+    ]:
+        b.code(va, "c1" + reg_hex + "%02x" % stock_count,
+               "c1" + reg_hex + "%02x" % new_count,
+               "terrain.pitch.shift.%s" % term, 2,
+               "0x0040C253: shl by %d -> %d (the %d term becomes %d)"
+               % (stock_count, new_count, 1 << stock_count, 1 << new_count))
 
     for va, note in [
         (0x0040AAF0, "terrain writer: end-of-surface pointer"),
@@ -1135,8 +1241,18 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
           "bilinear: the tile one row down")
     b.imm(0x0047FE6B, 0x19, T_FILL + 1, 1, "fogcell.interp.k.downright", 2,
           "bilinear: the tile down-right")
-    b.imm(0x0047FEAB, 0x58, CELL_STRIDE, 1, "fogcell.interp.cellrow", 2,
-          "advance the cell dest one 8px row")
+    # The cell stride lives in SIGN-EXTENDED one-byte fields at six sites
+    # (imm8 of `add`/`imul`, disp8 of `movzx`), so it caps at 127: 88 stock,
+    # 108 at W=800, and 168 at W=1280 fits nothing of the same length. Each
+    # site is therefore a CODE CAVE (Builder.cave): the window jumps out to the
+    # same instructions re-encoded with 32-bit fields. Uniform for every width
+    # rather than "cave only when it does not fit", so one geometry cannot
+    # exercise a path another never runs.
+    b.cave(0x0047FEAB, "83c258" "8955fc",
+           "81c2" + le32(CELL_STRIDE) + "8955fc",
+           "fogcell.interp.cellrow", 2,
+           "advance the cell dest one 8px row (add edx,stride; the store that "
+           "follows rides along so the window reaches 5 bytes)")
     b.imm(0x0047FEC7, 0x15C, CELL_STRIDE * 4 - 4, 4, "fogcell.interp.colback", 2,
           "after 4 sub-rows: back up 4 cell rows, advance one dword of cells")
     b.imm(0x0047FEE4, 0x10C, CELL_STRIDE * 4 - T_COVER * 4, 4,
@@ -1157,17 +1273,29 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     b.imm(0x004BD5A8, 102, TMAP_ALLOC // 4, 4, "fogcell.sync.copy.b", 2,
           "rep movsd count, full-redraw path in layer 5's draw 0x004BD580")
 
-    # renderer, 0x004805F0: 2x2 cell neighborhood per 8x8 block
-    b.imm(0x00480617, 0x58, CELL_STRIDE, 1, "fogcell.render.rowmul", 2,
-          "cell row base = cellRow * stride")
-    b.imm(0x0048064C, 0x58, CELL_STRIDE, 1, "fogcell.render.rowadv.pre", 2,
-          "pre-loop advance so [esi-stride] is the current row")
-    b.simm(0x00480671, -0x58, -CELL_STRIDE, 1, "fogcell.render.k.up", 2,
-           "neighborhood read: this column, current row")
-    b.simm(0x00480675, -0x57, -(CELL_STRIDE - 1), 1, "fogcell.render.k.upright", 2,
-           "neighborhood read: next column, current row")
-    b.imm(0x004806CD, 0x58, CELL_STRIDE, 1, "fogcell.render.rowadv", 2,
-          "advance one cell row per 8px block row")
+    # renderer, 0x004805F0: 2x2 cell neighborhood per 8x8 block -- four more
+    # cave windows, each the stride instruction plus enough of what follows
+    # (or precedes) to reach 5 bytes; the passengers are copied unchanged.
+    b.cave(0x00480617, "6bc958" "c1eb03",
+           "69c9" + le32(CELL_STRIDE) + "c1eb03",
+           "fogcell.render.rowmul", 2,
+           "cell row base = cellRow * stride (imul ecx,ecx,stride; shr ebx,3 rides along)")
+    b.cave(0x0048064C, "83c658" "48" "c1e803",
+           "81c6" + le32(CELL_STRIDE) + "48" "c1e803",
+           "fogcell.render.rowadv.pre", 2,
+           "pre-loop advance so [esi-stride] is the current row (dec eax; shr eax,3 ride along)")
+    b.cave(0x00480671, "0fb656a8" "0fb646a9",
+           "0fb696" + le32(-CELL_STRIDE) + "0fb686" + le32(-(CELL_STRIDE - 1)),
+           "fogcell.render.k.up", 2,
+           "neighborhood read: this column and the next, current row "
+           "([esi-stride], [esi-stride+1] as disp32)")
+    # The block-row epilogue: the window starts at 0x004806C7, the `jge` target
+    # that ENDS a block row (the two loads ride along), so that `add ecx,8*pitch`
+    # right after it stays its own STAGE-1 immediate (fog.blockrowstep above).
+    b.cave(0x004806C7, "8b75f8" "8b45f0" "83c658",
+           "8b75f8" "8b45f0" "81c6" + le32(CELL_STRIDE),
+           "fogcell.render.rowadv", 2,
+           "advance one cell row per 8px block row (the two reloads ride along)")
 
     # -- item 14: build placement ------------------------------------------
     b.imm(0x0048D663, STOCK_W, PF_W, 2, "placement.reject.x", 2,
@@ -1334,15 +1462,18 @@ def emit_header(b: Builder, path: str):
     out.append("#define SC_WS_STOCK_H         %d" % STOCK_H)
     out.append("#define SC_WS_STOCK_GRID_VA   0x006CEFF8u")
     out.append("#define SC_WS_MAX_PATCH_LEN   %d" % SC_MAX_PATCH_LEN)
+    out.append("#define SC_WS_MAX_CAVE_LEN    %d" % SC_MAX_CAVE_LEN)
     out.append("#define SC_WS_NO_FIXUP        0xFFu\n")
     out.append("typedef struct {")
     out.append("    DWORD       va;          // static VA, rebased by the plugin")
     out.append("    BYTE        len;")
     out.append("    BYTE        stage;       // 0..3 -- see research/renderer-viewport.md 9.3; 3 = console/input, task 071")
     out.append("    BYTE        fixupOff;    // SC_WS_NO_FIXUP, or the offset of a dword")
+    out.append("    BYTE        caveLen;     // 0 = in-place rewrite; else `cave` holds the code the window jumps to")
     out.append("    DWORD       fixupAddend; // filled with (relocated grid base + this)")
     out.append("    BYTE        expect[SC_WS_MAX_PATCH_LEN];")
-    out.append("    BYTE        patch[SC_WS_MAX_PATCH_LEN];")
+    out.append("    BYTE        patch[SC_WS_MAX_PATCH_LEN];  // a cave: jmp rel32 (filled at runtime) + NOPs")
+    out.append("    BYTE        cave[SC_WS_MAX_CAVE_LEN];    // the re-encoded window; the plugin appends jmp back")
     out.append("    const char* name;")
     out.append("    const char* note;")
     out.append("} ScScreenPatch;\n")
@@ -1352,14 +1483,17 @@ def emit_header(b: Builder, path: str):
             continue
         exp = ", ".join("0x%02X" % c for c in p.expect)
         pat = ", ".join("0x%02X" % c for c in p.patch)
+        cav = ", ".join("0x%02X" % c for c in (p.cave or b"\0"))
         out.append("    // 0x%08X  %s" % (p.va, p.before))
         out.append("    //             -> %s" % p.after)
-        out.append("    { 0x%08Xu, %2d, %d, %s, 0x%Xu," %
+        out.append("    { 0x%08Xu, %2d, %d, %s, %d, 0x%Xu," %
                    (p.va, len(p.expect), p.stage,
                     "SC_WS_NO_FIXUP" if p.fixup_off is None else "%du" % p.fixup_off,
+                    len(p.cave) if p.cave else 0,
                     p.fixup_addend))
         out.append("      { %s }," % exp)
         out.append("      { %s }," % pat)
+        out.append("      { %s }," % cav)
         out.append("      \"%s\", \"%s\" }," % (cstr(p.name), cstr(p.note)))
     out.append("};\n")
     out.append("#define SC_WS_PATCH_COUNT (sizeof(SC_WS_PATCHES)/sizeof(SC_WS_PATCHES[0]))\n")
@@ -1369,12 +1503,13 @@ def emit_header(b: Builder, path: str):
 
 
 def emit_tsv(b: Builder, path: str):
-    rows = ["stage\tva\tlen\tchanged\tname\tbefore\tafter\texpect\tpatch\tnote"]
+    rows = ["stage\tva\tlen\tchanged\tname\tbefore\tafter\texpect\tpatch\tcave\tnote"]
     for p in b.patches:
         rows.append("\t".join([
             str(p.stage), "0x%08X" % p.va, str(len(p.expect)),
             "0" if p.noop else "1", p.name,
             p.before, p.after, p.expect.hex().upper(), p.patch.hex().upper(),
+            p.cave.hex().upper() if p.cave else "",
             p.note,
         ]))
     with open(path, "w", encoding="utf-8", newline="\n") as f:
@@ -1384,7 +1519,7 @@ def emit_tsv(b: Builder, path: str):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--exe", default=DEFAULT_EXE)
-    ap.add_argument("--width", type=int, default=800)
+    ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=480)
     ap.add_argument("--playfield-height", type=int, default=400)
     ap.add_argument("--check", action="store_true", help="verify only; write nothing")
@@ -1405,9 +1540,11 @@ def main():
             print("  " + w)
 
     live = [p for p in b.patches if not p.noop]
+    caves = [p for p in b.patches if p.cave]
     print("renderer_patch_sites: %d site(s) verified against %s (%d write, %d already "
-          "correct at %dx%d)"
-          % (len(b.patches), a.exe, len(live), len(b.patches) - len(live), a.width, a.height))
+          "correct at %dx%d, %d code cave(s))"
+          % (len(b.patches), a.exe, len(live), len(b.patches) - len(live), a.width, a.height,
+             len(caves)))
     by_stage = {}
     for p in b.patches:
         by_stage.setdefault(p.stage, []).append(p)

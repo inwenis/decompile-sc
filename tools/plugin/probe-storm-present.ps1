@@ -36,6 +36,13 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'drive-game.ps1')
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
 
+# The geometry under test comes from the generated table, never from this file.
+$ws = Get-ScWideGeometry
+$SCREEN_W = $ws.W; $SCREEN_H = $ws.H; $STOCK_W = $ws.StockW
+# The MAP right band the two numbers are read over: 20px in from the stock edge to
+# 10px short of the new one (was the fixed 660..790 of 19.8 at 800 wide).
+$BAND_X0 = $STOCK_W + 20; $BAND_X1 = $SCREEN_W - 10
+
 if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t074' -Suite 'stormpresent' }
 $mapName = 'stormpresent.scx'
 $mapPath = Join-Path $FixtureDir $mapName
@@ -114,10 +121,10 @@ function Get-StormBaseW18 {
 function Read-TwoNumbers {
     param([string]$Tag, [string]$ShotName)
     $dump = Get-BufferDump -Tag "$Tag-buf"
-    $buf = ($dump) ? (Get-DumpBand -Dump $dump -X0 660 -X1 790 -Y0 80 -Y1 300) : -1
+    $buf = ($dump) ? (Get-DumpBand -Dump $dump -X0 $BAND_X0 -X1 $BAND_X1 -Y0 80 -Y1 300) : -1
     $shot = Join-Path $FrameDir $ShotName
     Save-ScWindowImage -Hwnd $h -Path $shot | Out-Null
-    $glass = Get-PngRectNonzero -Path $shot -X0 660 -Y0 80 -X1 790 -Y1 300
+    $glass = Get-PngRectNonzero -Path $shot -X0 $BAND_X0 -Y0 80 -X1 $BAND_X1 -Y1 300
     [pscustomobject]@{ Buffer = $buf; Glass = $glass; Shot = $shot }
 }
 
@@ -189,7 +196,7 @@ try {
     Assert-True 'storm present is armed as WIDEN' `
         (@(Get-Content -LiteralPath $log | Where-Object { $_ -match 'STORM present: WIDEN armed' }).Count -gt 0)
     $client = Get-ScClientSize -Hwnd $h
-    Assert-True 'cnc-ddraw presents an 800x480 client area' ($client.Width -eq 800 -and $client.Height -eq 480) "(got $($client.Width)x$($client.Height))"
+    Assert-True "cnc-ddraw presents a $($SCREEN_W)x$($SCREEN_H) client area" ($client.Width -eq $SCREEN_W -and $client.Height -eq $SCREEN_H) "(got $($client.Width)x$($client.Height))"
 
     Write-Host 'probe-storm: walking to a loaded game'
     Walk-ToGame
@@ -199,9 +206,15 @@ try {
     # frame -- no dirty mark / no scroll needed. This is exactly what the base-region
     # widen could NOT do (run 7: base +0x18=800 yet glass map = 0 on the static frame).
     $n1 = Read-TwoNumbers -Tag 'ship-static' -ShotName 'storm-present-shipped-static.png'
-    Report-Finding "SHIPPED (ConsoleEdge OFF) STATIC load frame, MAP right band x=660..790 y=80..300: BUFFER=$($n1.Buffer) GLASS=$($n1.Glass) (capture $($n1.Shot))"
-    Assert-True 'STATIC load frame: the MAP right band is PRESENTED on glass past x=648 (no scroll needed)' `
-        ($n1.Glass -ge 0.30) "(buffer=$($n1.Buffer) glass=$($n1.Glass))"
+    Report-Finding "SHIPPED (ConsoleEdge OFF) STATIC load frame, MAP right band x=$BAND_X0..$BAND_X1 y=80..300: BUFFER=$($n1.Buffer) GLASS=$($n1.Glass) (capture $($n1.Shot))"
+    # The oracle is AGREEMENT (20.7: "buffer and glass agree for the first time"): the
+    # glass must carry what the buffer holds, and the buffer must hold something, or
+    # the check is vacuous. An absolute floor was the 800-era form (>= 0.30), calibrated
+    # on a 160-px band the fixture's sight had mostly explored; at 1280 the same sight
+    # explores a quarter of a 640-px band (buffer 0.16 static, 0.47 after a scroll) and
+    # the ratio glass/buffer is what stays put (0.86 at 800, 0.86 here).
+    Assert-True 'STATIC load frame: the MAP right band is PRESENTED on glass past x=648 (glass >= 0.8 x buffer, buffer >= 0.05; no scroll needed)' `
+        ($n1.Buffer -ge 0.05 -and $n1.Glass -ge 0.8 * $n1.Buffer) "(buffer=$($n1.Buffer) glass=$($n1.Glass))"
 
     # ---- HOLDS THROUGH A SCROLL, and the camera still steers (must-not-break) ----
     $a = Get-ScWorldState -LogPath $log -Tag 'mini-a' -MarkerPath $markerPath
@@ -213,8 +226,8 @@ try {
         "($($a.Screen.Left),$($a.Screen.Top) -> $($b.Screen.Left),$($b.Screen.Top))"
     $n2 = Read-TwoNumbers -Tag 'ship-scrolled' -ShotName 'storm-present-shipped-scrolled.png'
     Report-Finding "SHIPPED after a scroll, MAP right band: BUFFER=$($n2.Buffer) GLASS=$($n2.Glass) (capture $($n2.Shot))"
-    Assert-True 'after a scroll: the MAP right band is still PRESENTED past x=648' `
-        ($n2.Glass -ge 0.30) "(buffer=$($n2.Buffer) glass=$($n2.Glass))"
+    Assert-True 'after a scroll: the MAP right band is still PRESENTED past x=648 (glass >= 0.8 x buffer, buffer >= 0.05)' `
+        ($n2.Buffer -ge 0.05 -and $n2.Glass -ge 0.8 * $n2.Buffer) "(buffer=$($n2.Buffer) glass=$($n2.Glass))"
 
     # The strip runs every present and holds no engine state, so a save/load or a menu
     # return needs no re-assertion -- there is nothing to revert. (The per-frame strip
