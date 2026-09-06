@@ -374,7 +374,7 @@ finally {
 Write-Host ''
 Write-Host '[final] the run must balance'
 $stats = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
-           Select-String -Pattern 'CIRCLES stats: shown=(\d+) hidden=(\d+) held=(-?\d+) skipped=(\d+) noImage=(\d+) lost=(\d+)')
+           Select-String -Pattern 'CIRCLES stats:.* shown=(\d+) hidden=(\d+) held=(-?\d+) skipped=(\d+) noImage=(\d+) lost=(\d+)')
 if ($NoCircles) {
     Assert-That 'circles OFF: no stats line at all' ($stats.Count -eq 0)
 }

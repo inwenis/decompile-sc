@@ -33,9 +33,10 @@ bool ScScreenWidescreenWanted(void);
 // adds the playfield geometry; stage 3 (task 071) widens the window-proc mouse
 // clamps so posted/real input can REACH x=640..799 -- without it every mouse x
 // past 639 is clamped to 639, so the right 160 columns are unclickable. This is
-// what task 070's cnc-ddraw presentation needed and had no owner for; moving the
-// console into that region is a SEPARATE, unshipped problem (renderer-viewport.md
-// 18: the dialog bounds move but the pixels do not).
+// what task 070's cnc-ddraw presentation needed and had no owner for. Moving the
+// console INTO that region is a separate feature and now a shipped one -- see
+// sc_console.h, %SCPLUGIN_CONSOLE_EDGE%, which found that 071's "the pixels do not
+// follow" was really "nothing dirtied the rect".
 int ScScreenStageWanted(void);
 
 // Applies the patch table. Must run BEFORE the game's video init, which means

@@ -695,7 +695,7 @@ finally {
 Write-Host ''
 Write-Host '[final] the run must balance'
 $stats = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
-           Select-String -Pattern 'CIRCLES stats: shown=(\d+) hidden=(\d+) held=(-?\d+) skipped=(\d+) noImage=(\d+) lost=(\d+)')
+           Select-String -Pattern 'CIRCLES stats:.* shown=(\d+) hidden=(\d+) held=(-?\d+) skipped=(\d+) noImage=(\d+) lost=(\d+)')
 if ($stats.Count -eq 0) {
     Assert-That 'a CIRCLES stats line was written on detach' $false
 }

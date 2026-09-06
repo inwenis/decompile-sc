@@ -118,8 +118,11 @@ bool ScQueueIndEnabled(void);
 // the feature without this file knowing about modes.
 void ScQueueIndInit(BYTE* moduleBase, bool enabled);
 
-// Installs the ONE detour. Returns 1 on success, 0 on failure; a failure disables the
-// feature rather than leaving it half-armed. Call under the shared thread suspension.
+// Installs the TWO detours -- statDisplayDriver, and task 066's queueLayout bracket.
+// Returns 1 when both went in and 0 otherwise, rolling its own half back: a failure
+// disables the feature rather than leaving it half-armed. The count stays 0-or-1
+// because sc_fanout.cpp's install accounting counts modules, not hooks. Call under the
+// shared thread suspension.
 int  ScQueueIndInstall(void);
 void ScQueueIndRemove(void);
 

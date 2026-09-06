@@ -127,7 +127,8 @@ void ScUpgQueueLogStats(void);
 
 // ---------------------------------------------------------------------------
 // The core, hook-free -- driven byte-for-byte from hooktest.exe with no StarCraft in
-// sight. The six detours do nothing but marshal registers into these.
+// sight. The eight detours (condition, cmdrecv, tick and cancel, each x upgrade and
+// tech) do nothing but marshal registers into these.
 // ---------------------------------------------------------------------------
 
 // A 0x32 / 0x30 command has arrived for `unit`. Returns true when the plugin consumed it
