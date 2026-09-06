@@ -33,12 +33,11 @@
 #include <string.h>
 
 #include "sc_addresses.h"
+#include "sc_engine.h"
 #include "sc_hook.h"
 #include "sc_log.h"
 #include "sc_screen.h"
 #include "sc_session.h"
-
-#define SC_GAME_ENTRY __attribute__((force_align_arg_pointer))
 
 // The one widescreen geometry this repo builds is 800x480 (sc_screen stages), so
 // the right edge is +160 from the stock 640. If a second width ever exists this
@@ -49,7 +48,6 @@
 #define SC_CONSOLE_TRACE_MAX   2000
 #define SC_CONSOLE_NAME_LEN    20
 
-static BYTE* g_base    = NULL;
 static bool  g_edge    = false;
 static bool  g_trace   = false;
 static ScHook g_hkCompose;
@@ -104,27 +102,10 @@ static ScImgDesc g_sliverDesc;
 static unsigned  g_sliverSession = 0;
 static unsigned  g_slivers       = 0;
 
-static void* Rt(DWORD staticVa) {
-    return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE));
-}
-
-static bool Readable(DWORD addr, DWORD len) {
-    if (!addr || len == 0) return false;
-    MEMORY_BASIC_INFORMATION mbi;
-    if (VirtualQuery((LPCVOID)(DWORD_PTR)addr, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
-    if (mbi.State != MEM_COMMIT) return false;
-    if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return false;
-    const DWORD ok = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
-                     PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
-    if ((mbi.Protect & ok) == 0) return false;
-    DWORD regionEnd = (DWORD)(DWORD_PTR)mbi.BaseAddress + (DWORD)mbi.RegionSize;
-    return addr + len <= regionEnd;
-}
-
 // Engine updateControl: EAX = control (sc_addresses.h SC_VA_UPDATE_CONTROL; the
 // same asm seam sc_queueind uses, conventions verified by sc_hudrow).
 static void CallUpdate(DWORD ctrl) {
-    void* fn = Rt(SC_VA_UPDATE_CONTROL);
+    void* fn = ScRuntimeAddr(SC_VA_UPDATE_CONTROL);
     DWORD inout = ctrl;
     __asm__ __volatile__("calll *%[fn]"
         : "+a"(inout) : [fn] "r"(fn) : "ecx", "edx", "cc", "memory");
@@ -133,12 +114,12 @@ static void CallUpdate(DWORD ctrl) {
 // A dialog's name is its pszText. Game data: copied byte-guarded and sanitised.
 static void ReadName(DWORD dlg, char* out, size_t outLen) {
     out[0] = '\0';
-    if (!Readable(dlg + SC_BINDLG_OFF_TEXT, 4)) return;
+    if (!ScReadable(dlg + SC_BINDLG_OFF_TEXT, 4)) return;
     DWORD p = *(DWORD*)(dlg + SC_BINDLG_OFF_TEXT);
     if (!p) return;
     size_t i = 0;
     for (; i + 1 < outLen; ++i) {
-        if (!Readable(p + (DWORD)i, 1)) break;
+        if (!ScReadable(p + (DWORD)i, 1)) break;
         BYTE c = *(BYTE*)(p + i);
         if (c == 0) break;
         out[i] = (c < 32 || c > 126 || c == '|' || c == '\'') ? '.' : (char)c;
@@ -192,7 +173,7 @@ static int __attribute__((fastcall)) SC_GAME_ENTRY ConsoleInteractShim(DWORD ctr
 static void WrapRoot(DWORD dlg, const char* name) {
     if (FindWrap(dlg)) return;
     if (g_wrapN >= SC_CONSOLE_MAX_ROOTS) return;
-    if (!Readable(dlg + SC_BINDLG_OFF_INTERACT, 4)) return;
+    if (!ScReadable(dlg + SC_BINDLG_OFF_INTERACT, 4)) return;
     DWORD* fn = (DWORD*)(dlg + SC_BINDLG_OFF_INTERACT);
     if (*fn == (DWORD)&ConsoleInteractShim) return;   // stale table row survived; leave it
     WrapSlot* w = &g_wrap[g_wrapN];
@@ -210,7 +191,7 @@ static void WrapRoot(DWORD dlg, const char* name) {
 static void UnwrapAll(void) {
     for (int i = 0; i < g_wrapN; ++i) {
         DWORD dlg = g_wrap[i].dlg;
-        if (!Readable(dlg + SC_BINDLG_OFF_INTERACT, 4)) continue;
+        if (!ScReadable(dlg + SC_BINDLG_OFF_INTERACT, 4)) continue;
         DWORD* fn = (DWORD*)(dlg + SC_BINDLG_OFF_INTERACT);
         if (*fn == (DWORD)&ConsoleInteractShim) *fn = g_wrap[i].orig;
     }
@@ -233,7 +214,7 @@ static bool AlreadyMoved(DWORD dlg) {
 static void LogSurfaces(DWORD dlg, const char* name) {
     for (int k = 0; k < 2; ++k) {
         DWORD d = dlg + (k == 0 ? SC_BINDLG_OFF_SURFACE : SC_BINDLG_OFF_SURFACE_ALT);
-        if (!Readable(d, 8)) continue;
+        if (!ScReadable(d, 8)) continue;
         ScLog("CONSOLE surf '%s' +0x%02X: w=%d h=%d bits=0x%08X", name,
               (unsigned)(k == 0 ? SC_BINDLG_OFF_SURFACE : SC_BINDLG_OFF_SURFACE_ALT),
               (int)*(short*)(d + SC_SURFACE_OFF_W),
@@ -244,13 +225,13 @@ static void LogSurfaces(DWORD dlg, const char* name) {
 
 static void TryMove(DWORD dlg, const char* name) {
     if (AlreadyMoved(dlg) || g_movedN >= (int)(sizeof(g_moved) / sizeof(g_moved[0]))) return;
-    if (!Readable(dlg + SC_BINDLG_OFF_BOUNDS, 8)) return;
+    if (!ScReadable(dlg + SC_BINDLG_OFF_BOUNDS, 8)) return;
 
     // Wait for the surface: moving BEFORE 0x004C35F0 has copied the art slice
     // would make that copy read the 640-wide console.pcx out of range.
-    DWORD bits36 = Readable(dlg + SC_BINDLG_OFF_SURFACE + SC_SURFACE_OFF_BITS, 4)
+    DWORD bits36 = ScReadable(dlg + SC_BINDLG_OFF_SURFACE + SC_SURFACE_OFF_BITS, 4)
                        ? *(DWORD*)(dlg + SC_BINDLG_OFF_SURFACE + SC_SURFACE_OFF_BITS) : 0;
-    DWORD bits0C = Readable(dlg + SC_BINDLG_OFF_SURFACE_ALT + SC_SURFACE_OFF_BITS, 4)
+    DWORD bits0C = ScReadable(dlg + SC_BINDLG_OFF_SURFACE_ALT + SC_SURFACE_OFF_BITS, 4)
                        ? *(DWORD*)(dlg + SC_BINDLG_OFF_SURFACE_ALT + SC_SURFACE_OFF_BITS) : 0;
     if (!bits36 && !bits0C) return;   // not yet drawn once; try again next frame
 
@@ -276,7 +257,7 @@ static void TryMove(DWORD dlg, const char* name) {
 static void UnmoveAll(void) {
     for (int i = 0; i < g_movedN; ++i) {
         DWORD dlg = g_moved[i].dlg;
-        if (!Readable(dlg + SC_BINDLG_OFF_BOUNDS, 8)) continue;
+        if (!ScReadable(dlg + SC_BINDLG_OFF_BOUNDS, 8)) continue;
         short* bl = (short*)(dlg + SC_BINDLG_OFF_BOUNDS);
         // Restore only if the bounds still read as OUR move; anything else means
         // the record was freed and reused, and writing it would corrupt a stranger.
@@ -300,14 +281,14 @@ static void UnmoveAll(void) {
 // (0x00411E60: stdcall(region, &count, rects); count in = capacity, out =
 // rects written -- the exact call layer2Draw makes at 0x0041CC20).
 static void LogRegionRects(const char* what, DWORD regionVaOfPtr) {
-    DWORD region = Readable((DWORD)(DWORD_PTR)Rt(regionVaOfPtr), 4)
-                       ? *(DWORD*)Rt(regionVaOfPtr) : 0;
+    DWORD region = ScReadable(ScRuntimeVa(regionVaOfPtr), 4)
+                       ? *(DWORD*)ScRuntimeAddr(regionVaOfPtr) : 0;
     if (!region) { ScLog("CONSOLE region %s: handle NULL", what); return; }
     DWORD cnt = 8;
     int rects[8][4];
     memset(rects, 0, sizeof(rects));
     typedef void (__attribute__((stdcall)) *RgnRectsFn)(DWORD, DWORD*, void*);
-    ((RgnRectsFn)Rt(0x00411E60u))(region, &cnt, rects);
+    ((RgnRectsFn)ScRuntimeAddr(0x00411E60u))(region, &cnt, rects);
     char line[320];
     size_t used = 0;
     line[0] = '\0';
@@ -328,14 +309,14 @@ static void AddPresentSliver(void) {
     // The console node must exist first (its loader is what put the list head
     // up), and the buffer must be allocated -- both true once the console
     // dialogs are being drawn, which is when this is called.
-    DWORD bits = Readable((DWORD)(DWORD_PTR)Rt(0x006CEFF4u), 4)
-                     ? *(DWORD*)Rt(0x006CEFF4u) : 0;
+    DWORD bits = ScReadable(ScRuntimeVa(0x006CEFF4u), 4)
+                     ? *(DWORD*)ScRuntimeAddr(0x006CEFF4u) : 0;
     if (!bits) return;
     LogRegionRects("base 0x6D5E14 BEFORE sliver", 0x006D5E14u);
     g_sliverDesc.w = 160;
     g_sliverDesc.h = 480;
     g_sliverDesc.bits = bits;   // region SHAPE is what matters; content is the buffer
-    void* fn = Rt(0x0041D640u);
+    void* fn = ScRuntimeAddr(0x0041D640u);
     ScImgDesc* d = &g_sliverDesc;
     DWORD node = 0;
     __asm__ __volatile__("pushl $0\n\t"
@@ -346,7 +327,7 @@ static void AddPresentSliver(void) {
                          : "ecx", "edx", "cc", "memory");
     g_sliverSession = g_session;
     ++g_slivers;
-    if (node && Readable(node, 0x20)) {
+    if (node && ScReadable(node, 0x20)) {
         // The node the engine built from our descriptor, read back field by
         // field (imgCreate stores: +8 storm handle, +0xC x, +0x10 y, +0x14
         // x+w, +0x18 y+h). A NULL handle means Ordinal_445 rejected the
@@ -370,7 +351,7 @@ static void AddPresentSliver(void) {
 // Conventions from sc_addresses.h; the CreateNewUnitSelections asm seam is
 // sc_fanout's, verbatim.
 static void CallCreateSelections(DWORD* list, int count) {
-    void* fn = Rt(SC_VA_CREATE_NEW_UNIT_SELECTIONS);
+    void* fn = ScRuntimeAddr(SC_VA_CREATE_NEW_UNIT_SELECTIONS);
     __asm__ __volatile__("pushl %[n]\n\t"
                          "calll *%[fn]"
                          : "+a"(list)
@@ -387,16 +368,16 @@ void ScConsoleOnMarker(const char* label) {
 
 static void DoRequestedSelect(void) {
     if (!InterlockedCompareExchange(&g_selectReq, 0, 1)) return;
-    DWORD player = Readable((DWORD)(DWORD_PTR)Rt(SC_VA_ACTIVE_PLAYER_ID), 4)
-                       ? *(DWORD*)Rt(SC_VA_ACTIVE_PLAYER_ID) : 0xFFFFFFFF;
+    DWORD player = ScReadable(ScRuntimeVa(SC_VA_ACTIVE_PLAYER_ID), 4)
+                       ? *(DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_ID) : 0xFFFFFFFF;
     if (player >= SC_MAX_PLAYERS) {
         ScLog("CONSOLE select: active player %u out of range -- nothing selected", player);
         return;
     }
-    DWORD unit = *(DWORD*)((BYTE*)Rt(SC_VA_PLAYER_UNIT_LIST) + player * 4);
+    DWORD unit = *(DWORD*)((BYTE*)ScRuntimeAddr(SC_VA_PLAYER_UNIT_LIST) + player * 4);
     int walked = 0;
     while (unit && walked < SC_MAX_UNITS_WALK) {
-        if (!Readable(unit, 0x150)) { unit = 0; break; }
+        if (!ScReadable(unit, 0x150)) { unit = 0; break; }
         if (*(DWORD*)(unit + SC_CUNIT_OFF_FLAGS) & SC_UNIT_FLAG_COMPLETED) break;
         unit = *(DWORD*)(unit + SC_CUNIT_OFF_LIST_NEXT);
         ++walked;
@@ -408,13 +389,13 @@ static void DoRequestedSelect(void) {
     }
     DWORD list[2] = { unit, 0 };
     CallCreateSelections(list, 1);
-    ((ScCmdactSelectFn)Rt(SC_VA_CMDACT_SELECT))(1, list);
+    ((ScCmdactSelectFn)ScRuntimeAddr(SC_VA_CMDACT_SELECT))(1, list);
     // The client half: the funnel pair fills activePlayerSelection and the wire,
     // and the status driver's own updateSelectedUnitData (0x004C38B0) copies it
     // into clientSelectionGroup + portrait -- but only when this flag asks it to
     // (0x004D93F0's first instruction reads it). Measured without it: active=1
     // sim=1, client=0, card empty.
-    *(BYTE*)Rt(SC_VA_CLIENT_SEL_CHANGED) = 1;
+    *(BYTE*)ScRuntimeAddr(SC_VA_CLIENT_SEL_CHANGED) = 1;
     ++g_selects;
     ScLog("CONSOLE selected unit=0x%08X type=%d player=%u (engine funnel: 0x0049AE40 "
           "then CMDACT_Select; client_selection_changed set)",
@@ -440,11 +421,11 @@ static void OnFrame(void) {
     ++g_frames;
     SessionSync();
     DoRequestedSelect();
-    if (!Readable((DWORD)(DWORD_PTR)Rt(SC_VA_DIALOG_LIST), 4)) return;
-    DWORD dlg = *(DWORD*)Rt(SC_VA_DIALOG_LIST);
+    if (!ScReadable(ScRuntimeVa(SC_VA_DIALOG_LIST), 4)) return;
+    DWORD dlg = *(DWORD*)ScRuntimeAddr(SC_VA_DIALOG_LIST);
     int n = 0;
     while (dlg && n < SC_MAX_DIALOGS_WALK) {
-        if (!Readable(dlg, SC_BINDLG_SIZE)) break;
+        if (!ScReadable(dlg, SC_BINDLG_SIZE)) break;
         char name[SC_CONSOLE_NAME_LEN];
         ReadName(dlg, name, sizeof(name));
         if (g_trace) WrapRoot(dlg, name);
@@ -491,7 +472,7 @@ bool ScConsoleEdgeWanted(void)  { return EnvIsOne("SCPLUGIN_CONSOLE_EDGE"); }
 bool ScConsoleTraceWanted(void) { return EnvIsOne("SCPLUGIN_CONSOLE_TRACE"); }
 
 void ScConsoleInstall(BYTE* moduleBase, bool edge, bool trace) {
-    g_base  = moduleBase;
+    ScEngineSetModuleBase(moduleBase);
     g_edge  = edge;
     g_trace = trace;
     memset(&g_hkCompose, 0, sizeof(g_hkCompose));
@@ -510,7 +491,7 @@ void ScConsoleInstall(BYTE* moduleBase, bool edge, bool trace) {
         g_edge = false;
         if (!trace) return;
     }
-    if (!ScHookInstall(&g_hkCompose, "frameCompose", Rt(SC_VA_FRAME_COMPOSE),
+    if (!ScHookInstall(&g_hkCompose, "frameCompose", ScRuntimeAddr(SC_VA_FRAME_COMPOSE),
                        (void*)&HkFrameCompose, (int)sizeof(kPrologueCompose),
                        kPrologueCompose, (int)sizeof(kPrologueCompose))) {
         ScLog("CONSOLE: frame-compose hook failed to install -- feature disabled");
@@ -522,7 +503,7 @@ void ScConsoleInstall(BYTE* moduleBase, bool edge, bool trace) {
         // writer in the binary, so this one dword is the whole of why a dialog
         // moved past x=639 never repaints. Refuse the move if it does not read
         // stock -- a different value means a different build or another patch.
-        DWORD* x1 = (DWORD*)Rt(SC_VA_DLG_DIRTY_CLIP_X1);
+        DWORD* x1 = (DWORD*)ScRuntimeAddr(SC_VA_DLG_DIRTY_CLIP_X1);
         if (*x1 == 640) {
             g_clipOrigX1 = *x1;
             *x1 = 640 + SC_CONSOLE_SHIFT_X;
@@ -547,7 +528,7 @@ void ScConsoleRemove(void) {
     UnmoveAll();
     UnwrapAll();
     if (g_clipPatched) {
-        *(DWORD*)Rt(SC_VA_DLG_DIRTY_CLIP_X1) = g_clipOrigX1;
+        *(DWORD*)ScRuntimeAddr(SC_VA_DLG_DIRTY_CLIP_X1) = g_clipOrigX1;
         g_clipPatched = false;
     }
     ScHookRemove(&g_hkCompose);

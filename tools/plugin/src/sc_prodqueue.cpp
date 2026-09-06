@@ -12,13 +12,12 @@
 #include <string.h>
 
 #include "sc_addresses.h"
+#include "sc_engine.h"
 #include "sc_hook.h"
 #include "sc_log.h"
 #include "sc_prodqueue.h"
 #include "sc_queueind.h"   // ScQueueIndRingGen -- the phantom window's seqlock (task 066)
 #include "sc_session.h"
-
-#define SC_GAME_ENTRY __attribute__((force_align_arg_pointer))
 
 // One line per SITE, first call and any CHANGE. The phantom bracket's whole safety
 // argument is "every engine reader of the ring runs on the game thread" (sc_queueind.h);
@@ -44,7 +43,6 @@ struct ProdRecord {
     WORD  types[SC_PRODQ_HARD_MAX];   // FIFO: [0] is promoted next
 };
 
-static BYTE* g_base    = NULL;
 static bool  g_enabled = false;
 static bool  g_testing = false;      // driven by hooktest with no hooks anywhere
 static int   g_maxTotal = SC_PRODQ_DEFAULT_MAX;
@@ -69,9 +67,6 @@ static bool g_deepGc = false;
 // synced yet, which is distinguishable from every real epoch because those start at 1.
 static unsigned g_session = 0;
 
-static void* Rt(DWORD staticVa) { return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE)); }
-static DWORD RtA(DWORD staticVa) { return (DWORD)(DWORD_PTR)Rt(staticVa); }
-
 // ---------------------------------------------------------------------------
 // Unit validation -- the same shape as sc_fanout's UnitPtrValid/PassesGate, because the
 // question is the same one: is this pointer still the building we wrote down?
@@ -79,7 +74,7 @@ static DWORD RtA(DWORD staticVa) { return (DWORD)(DWORD_PTR)Rt(staticVa); }
 
 static bool UnitPtrValid(DWORD ptr) {
     if (!ptr) return false;
-    DWORD arrayBase = RtA(SC_VA_UNIT_ARRAY_BASE);
+    DWORD arrayBase = ScRuntimeVa(SC_VA_UNIT_ARRAY_BASE);
     if (ptr < arrayBase) return false;
     DWORD off = ptr - arrayBase;
     if (off % SC_CUNIT_SIZE != 0) return false;
@@ -91,7 +86,7 @@ static bool UnitPtrValid(DWORD ptr) {
 // exactly what has to give its queued resources back.
 static bool InPlayerUnitList(DWORD ptr, BYTE player) {
     if (player >= SC_MAX_PLAYERS) return false;
-    DWORD head = *(DWORD*)(RtA(SC_VA_PLAYER_UNIT_LIST) + (DWORD)player * 4);
+    DWORD head = *(DWORD*)(ScRuntimeVa(SC_VA_PLAYER_UNIT_LIST) + (DWORD)player * 4);
     int n = 0;
     for (DWORD u = head; u && n < SC_MAX_UNITS_WALK; ++n) {
         if (!UnitPtrValid(u)) return false;
@@ -159,20 +154,20 @@ static int EngineQueueLength(DWORD unit) {
 // ---------------------------------------------------------------------------
 
 static bool TypeMovesResources(unsigned type) {
-    BYTE f = *(BYTE*)(RtA(SC_VA_UNIT_COST_FLAGS) + (DWORD)type * 4);
+    BYTE f = *(BYTE*)(ScRuntimeVa(SC_VA_UNIT_COST_FLAGS) + (DWORD)type * 4);
     return (f & SC_UNIT_COST_FLAG_NO_SPEND) == 0;
 }
 static DWORD MineralCost(unsigned type) {
-    return *(WORD*)(RtA(SC_VA_UNIT_MINERAL_COST) + (DWORD)type * 2);
+    return *(WORD*)(ScRuntimeVa(SC_VA_UNIT_MINERAL_COST) + (DWORD)type * 2);
 }
 static DWORD GasCost(unsigned type) {
-    return *(WORD*)(RtA(SC_VA_UNIT_GAS_COST) + (DWORD)type * 2);
+    return *(WORD*)(ScRuntimeVa(SC_VA_UNIT_GAS_COST) + (DWORD)type * 2);
 }
 static DWORD* MineralsOf(BYTE player) {
-    return (DWORD*)(RtA(SC_VA_PLAYER_MINERALS) + (DWORD)player * 4);
+    return (DWORD*)(ScRuntimeVa(SC_VA_PLAYER_MINERALS) + (DWORD)player * 4);
 }
 static DWORD* GasOf(BYTE player) {
-    return (DWORD*)(RtA(SC_VA_PLAYER_GAS) + (DWORD)player * 4);
+    return (DWORD*)(ScRuntimeVa(SC_VA_PLAYER_GAS) + (DWORD)player * 4);
 }
 
 // A no-op for a type whose cost flag says the engine would not have moved anything on the
@@ -314,7 +309,7 @@ static int PromoteInto(ProdRecord* r) {
     if (promoted && !g_testing) {
         // Tell the status area to redraw, the way the Train handler's own tail does
         // (0x004C1C7C writes this flag). Without it an icon can lag a frame.
-        *(BYTE*)Rt(SC_VA_STAT_DIRTY) = 1;
+        *(BYTE*)ScRuntimeAddr(SC_VA_STAT_DIRTY) = 1;
     }
     return promoted;
 }
@@ -357,7 +352,7 @@ static int HoldBack(DWORD unit, BYTE player, ProdRecord** rp) {
               (unsigned)unit, (unsigned)type, slot, len - 1, (*rp)->count,
               (len - 1) + (*rp)->count);
     }
-    if (held && !g_testing) *(BYTE*)Rt(SC_VA_STAT_DIRTY) = 1;
+    if (held && !g_testing) *(BYTE*)ScRuntimeAddr(SC_VA_STAT_DIRTY) = 1;
     return held;
 }
 
@@ -571,7 +566,7 @@ void ScProdQueueLogState(const char* tag) {
     // mode AGENTS.md's absence-assertion rule exists to stop. It also gives a test the
     // engine's own five slots to watch drain, read from the building's memory.
     {
-        DWORD* sel = (DWORD*)Rt(SC_VA_ACTIVE_PLAYER_SELECTION);
+        DWORD* sel = (DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_SELECTION);
         DWORD u = sel[0];
         if (u && !sel[1] && UnitPtrValid(u)) {
             char eng[96];
@@ -729,9 +724,9 @@ static ScHook g_hkTick;
 typedef void (__attribute__((stdcall)) *CancelTrainFn)(DWORD);
 
 static DWORD SoleSelectedUnit(void) {
-    DWORD player = *(DWORD*)Rt(SC_VA_ACTIVE_PLAYER_ID);
+    DWORD player = *(DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_ID);
     if (player >= SC_MAX_PLAYERS) return 0;
-    DWORD* sel = (DWORD*)Rt(SC_VA_PLAYERS_SELECTIONS) + player * SC_SELECTION_SLOTS;
+    DWORD* sel = (DWORD*)ScRuntimeAddr(SC_VA_PLAYERS_SELECTIONS) + player * SC_SELECTION_SLOTS;
     DWORD u = sel[0];
     if (!u || sel[1]) return 0;
     return UnitPtrValid(u) ? u : 0;
@@ -857,7 +852,7 @@ static void EnsureLock(void) {
 }
 
 int ScProdQueueInstall(BYTE* moduleBase) {
-    g_base = moduleBase;
+    ScEngineSetModuleBase(moduleBase);
     g_recCount = 0;
     g_session  = ScSessionEpoch();
     memset(g_stat, 0, sizeof(g_stat));
@@ -876,13 +871,13 @@ int ScProdQueueInstall(BYTE* moduleBase) {
     ScLog("PRODQ: suspended %d other thread(s) for the splice", suspended);
 
     int installed = 0;
-    if (ScHookInstall(&g_hkTrain, "cmdrecvTrain", Rt(SC_VA_CMDRECV_TRAIN),
+    if (ScHookInstall(&g_hkTrain, "cmdrecvTrain", ScRuntimeAddr(SC_VA_CMDRECV_TRAIN),
                       (void*)&ScProdTrainThunk, 11,
                       kPrologueTrain, (int)sizeof(kPrologueTrain))) ++installed;
-    if (ScHookInstall(&g_hkCancel, "cmdrecvCancelTrain", Rt(SC_VA_CMDRECV_CANCEL_TRAIN),
+    if (ScHookInstall(&g_hkCancel, "cmdrecvCancelTrain", ScRuntimeAddr(SC_VA_CMDRECV_CANCEL_TRAIN),
                       (void*)&HkCmdrecvCancelTrain, 11,
                       kPrologueCancel, (int)sizeof(kPrologueCancel))) ++installed;
-    if (ScHookInstall(&g_hkTick, "productionTick", Rt(SC_VA_PRODUCTION_TICK),
+    if (ScHookInstall(&g_hkTick, "productionTick", ScRuntimeAddr(SC_VA_PRODUCTION_TICK),
                       (void*)&ScProdTickThunk, 9,
                       kPrologueTick, (int)sizeof(kPrologueTick))) ++installed;
 
@@ -930,7 +925,7 @@ void ScProdQueueRemove(void) {
 
 void ScProdQueueTestBegin(BYTE* fakeModuleBase, int maxTotal) {
     EnsureLock();
-    g_base     = fakeModuleBase;
+    ScEngineSetModuleBase(fakeModuleBase);
     g_enabled  = fakeModuleBase != NULL;
     g_testing  = fakeModuleBase != NULL;
     g_recCount = 0;

@@ -18,6 +18,7 @@
 #include <string.h>
 
 #include "sc_addresses.h"
+#include "sc_engine.h"
 #include "sc_hook.h"
 #include "sc_hudrow.h"
 #include "sc_log.h"
@@ -26,15 +27,12 @@
 #include "sc_upgrades.h"
 #include "sc_queueind.h"
 
-#define SC_GAME_ENTRY __attribute__((force_align_arg_pointer))
-
 // The indicator's own control id. NEGATIVE on purpose: the CREATE-time handler binder
 // 0x00418100 only rewrites +0x2A for controls with index > 0, so a negative id is
 // binder-proof (the same trick sc_hudrow's indicator uses, with a different value so the
 // two are distinguishable in a child walk).
 #define SC_QIND_CTRL_ID ((short)0xFFE1)
 
-static BYTE* g_base    = NULL;
 static bool  g_enabled = false;
 
 static ScHook g_hkDriver;
@@ -156,31 +154,27 @@ static void QIndSessionSync(void) {
     g_session = now;
 }
 
-static void* Rt(DWORD staticVa) {
-    return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE));
-}
-
 // ---------------------------------------------------------------------------
 // Engine primitives, through the seam (same conventions sc_hudrow verified)
 // ---------------------------------------------------------------------------
 
 static void CallShow(DWORD ctrl) {
     if (g_show) { g_show(ctrl); return; }
-    void* fn = Rt(SC_VA_SHOW_CONTROL);
+    void* fn = ScRuntimeAddr(SC_VA_SHOW_CONTROL);
     __asm__ __volatile__("calll *%[fn]"
         : : "S"(ctrl), [fn] "r"(fn) : "eax", "ecx", "edx", "cc", "memory");
 }
 
 static void CallHide(DWORD ctrl) {
     if (g_hide) { g_hide(ctrl); return; }
-    void* fn = Rt(SC_VA_HIDE_CONTROL);
+    void* fn = ScRuntimeAddr(SC_VA_HIDE_CONTROL);
     __asm__ __volatile__("calll *%[fn]"
         : : "S"(ctrl), [fn] "r"(fn) : "eax", "ecx", "edx", "cc", "memory");
 }
 
 static void CallUpdate(DWORD ctrl) {
     if (g_update) { g_update(ctrl); return; }
-    void* fn = Rt(SC_VA_UPDATE_CONTROL);
+    void* fn = ScRuntimeAddr(SC_VA_UPDATE_CONTROL);
     DWORD inout = ctrl;
     __asm__ __volatile__("calll *%[fn]"
         : "+a"(inout) : [fn] "r"(fn) : "ecx", "edx", "cc", "memory");
@@ -193,26 +187,13 @@ static void CallOrigDriver(void) {
     if (g_hkDriver.installed) ((OrigDriverFn)g_hkDriver.trampoline)();
 }
 
-static DWORD StatDialog(void)   { return *(DWORD*)Rt(SC_VA_STATDATA_DIALOG); }
-static DWORD PortraitUnit(void) { return *(DWORD*)Rt(SC_VA_ACTIVE_PORTRAIT_UNIT); }
-static int   SelectionCount(void) { return (int)*(BYTE*)Rt(SC_VA_CLIENT_SELECTION_COUNT); }
+static DWORD StatDialog(void)   { return *(DWORD*)ScRuntimeAddr(SC_VA_STATDATA_DIALOG); }
+static DWORD PortraitUnit(void) { return *(DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PORTRAIT_UNIT); }
+static int   SelectionCount(void) { return (int)*(BYTE*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT); }
 
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
-
-static bool Readable(DWORD addr, DWORD len) {
-    if (!addr || len == 0) return false;
-    MEMORY_BASIC_INFORMATION mbi;
-    if (VirtualQuery((LPCVOID)addr, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
-    if (mbi.State != MEM_COMMIT) return false;
-    if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return false;
-    const DWORD ok = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
-                     PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
-    if ((mbi.Protect & ok) == 0) return false;
-    DWORD regionEnd = (DWORD)mbi.BaseAddress + (DWORD)mbi.RegionSize;
-    return addr + len <= regionEnd;
-}
 
 // Forward: the box sizing needs the surface width, and the surface reader lives with the
 // ink probe further down.
@@ -223,18 +204,16 @@ static DWORD SurfaceOf(DWORD root);
 // measured against (sc_addresses.h). 0 when the handle is not up yet, which callers treat
 // as "no answer" rather than as zero.
 //
-// The base is a PARAMETER rather than this module's own g_base because sc_hudrow needs the
-// same number for the same reason (its box has to be taller than the font or the engine
-// refuses to draw it) and its test seam drives it with a FAKE module base. Reading g_base
-// here would answer a question about the wrong process image in that test.
-int ScQueueIndSmallFontHeight(BYTE* base) {
-    if (!base) return 0;
-    DWORD f = *(DWORD*)(base + (SC_VA_FONT_SMALLEST - SC_PREFERRED_IMAGE_BASE));
-    if (!Readable(f, SC_FONT_OFF_HEIGHT + 1)) return 0;
+// sc_hudrow asks for this too -- its own box has to be taller than the font or the engine
+// refuses to draw it -- which is why the answer is exported rather than kept private.
+int ScQueueIndSmallFontHeight(void) {
+    if (!ScEngineModuleBase()) return 0;
+    DWORD f = *(DWORD*)ScRuntimeAddr(SC_VA_FONT_SMALLEST);
+    if (!ScReadable(f, SC_FONT_OFF_HEIGHT + 1)) return 0;
     return (int)*(BYTE*)(f + SC_FONT_OFF_HEIGHT);
 }
 
-static int SmallFontHeight(void) { return ScQueueIndSmallFontHeight(g_base); }
+static int SmallFontHeight(void) { return ScQueueIndSmallFontHeight(); }
 
 static DWORD ChildOf(DWORD dlg)  { return *(DWORD*)(dlg + SC_BINDLG_OFF_FIRST_CHILD); }
 static DWORD NextOf(DWORD ctrl)  { return *(DWORD*)(ctrl + SC_BINDLG_OFF_NEXT); }
@@ -262,7 +241,7 @@ static DWORD FindChildById(DWORD root, short id) {
 // modules make; a pointer that fails it is never dereferenced.
 static bool UnitValid(DWORD unit) {
     if (!unit) return false;
-    DWORD base = (DWORD)Rt(SC_VA_UNIT_ARRAY_BASE);
+    DWORD base = ScRuntimeVa(SC_VA_UNIT_ARRAY_BASE);
     if (unit < base) return false;
     DWORD off = unit - base;
     if (off % SC_CUNIT_SIZE != 0) return false;
@@ -484,7 +463,7 @@ static int ReadView(ScQueueIndView* v) {
     // (0x00597208, walked to the sentinel). Buildings past the engine's twelve cannot be
     // shown by the row either, so counting the engine's list is counting what the pane is
     // about.
-    DWORD* slot = (DWORD*)Rt(SC_VA_CLIENT_SELECTION_GROUP);
+    DWORD* slot = (DWORD*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_GROUP);
     for (int i = 0; i < SC_HUD_BUTTON_COUNT; ++i) {
         DWORD unit = slot[i];
         if (!UnitValid(unit)) continue;
@@ -555,9 +534,9 @@ static bool EnsureSpliced(DWORD root) {
     // interact AND update handler for this control type in its own default tables. If
     // either is null, this build does not dispatch the type the way the table dump says,
     // so refuse to splice rather than hand the dialog a control it cannot draw.
-    DWORD tInteract = *(DWORD*)((DWORD)Rt(SC_VA_DEFAULT_INTERACT_TABLE) +
+    DWORD tInteract = *(DWORD*)(ScRuntimeVa(SC_VA_DEFAULT_INTERACT_TABLE) +
                                 SC_CTRL_TYPE_LSTATIC * 4);
-    DWORD tUpdate   = *(DWORD*)((DWORD)Rt(SC_VA_DEFAULT_UPDATE_TABLE) +
+    DWORD tUpdate   = *(DWORD*)(ScRuntimeVa(SC_VA_DEFAULT_UPDATE_TABLE) +
                                 SC_CTRL_TYPE_LSTATIC * 4);
     if (!tInteract || !tUpdate) {
         ScLog("QIND: no engine handler for control type %d (interact=0x%08X update=0x%08X)"
@@ -1045,7 +1024,7 @@ static void UnwrapIconInteracts(void) {
     const DWORD shim = (DWORD)&QIndIconInteractShim;
     for (int i = 0; i < g_iconWrapN; ++i) {
         DWORD c = g_iconWrapped[i];
-        if (!Readable(c + SC_BINDLG_OFF_INTERACT, 4)) continue;
+        if (!ScReadable(c + SC_BINDLG_OFF_INTERACT, 4)) continue;
         DWORD* fn = (DWORD*)(c + SC_BINDLG_OFF_INTERACT);
         if (*fn == shim && g_iconOrigFn) *fn = g_iconOrigFn;
     }
@@ -1063,12 +1042,12 @@ static DWORD SurfaceOf(DWORD root) {
     const DWORD cand[2] = { root + SC_BINDLG_OFF_SURFACE, root + SC_BINDLG_OFF_SURFACE_ALT };
     for (int i = 0; i < 2; ++i) {
         DWORD d = cand[i];
-        if (!Readable(d, 8)) continue;
+        if (!ScReadable(d, 8)) continue;
         int w = (int)*(WORD*)(d + SC_SURFACE_OFF_W);
         int h = (int)*(WORD*)(d + SC_SURFACE_OFF_H);
         DWORD bits = *(DWORD*)(d + SC_SURFACE_OFF_BITS);
         if (w <= 0 || h <= 0 || w > 640 || h > 480 || !bits) continue;
-        if (!Readable(bits, (DWORD)(w * h))) continue;
+        if (!ScReadable(bits, (DWORD)(w * h))) continue;
         return d;
     }
     return 0;
@@ -1225,7 +1204,7 @@ int ScQueueIndBoxDiff(DWORD root) {
 // only, inside the detour.
 void ScQueueIndLogState(const char* tag) {
     const char* t = tag ? tag : "-";
-    DWORD dlg  = g_base ? StatDialog() : 0;
+    DWORD dlg  = ScEngineModuleBase() ? StatDialog() : 0;
     DWORD root = dlg ? RootOf(dlg) : 0;
     if (!root) { ScLog("QIND [%s] dialog=0 (no status pane in this process state)", t); return; }
 
@@ -1236,7 +1215,7 @@ void ScQueueIndLogState(const char* tag) {
     const char* live = "";
     if (linked) {
         DWORD p = *(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
-        if (Readable(p, 1)) live = (const char*)p;
+        if (ScReadable(p, 1)) live = (const char*)p;
     }
 
     // THIS RUNS ON THE OBSERVER THREAD, and ReadView reads the ring -- which the phantom
@@ -1304,8 +1283,8 @@ void ScQueueIndLogState(const char* tag) {
 
     // The two GRPs the engine picks between, so every `art` letter below is decidable
     // against the engine's own globals rather than against a number this file remembers.
-    const DWORD grpIcons = *(DWORD*)Rt(SC_VA_GRP_CMDICONS);
-    const DWORD grpBtns  = *(DWORD*)Rt(SC_VA_GRP_CMDBTNS);
+    const DWORD grpIcons = *(DWORD*)ScRuntimeAddr(SC_VA_GRP_CMDICONS);
+    const DWORD grpBtns  = *(DWORD*)ScRuntimeAddr(SC_VA_GRP_CMDBTNS);
 
     // The strip as the game thread last left it (see g_icons), per slot:
     // `icon:mode:state:art:label`. `art` is I when the slot draws from the ICON grp (what
@@ -1357,7 +1336,7 @@ void ScQueueIndLogState(const char* tag) {
 // THIS install, which is what hud-selection-row.md 10 listed as an open question.
 void ScQueueIndLogDialog(const char* tag) {
     const char* t = tag ? tag : "-";
-    DWORD dlg  = g_base ? StatDialog() : 0;
+    DWORD dlg  = ScEngineModuleBase() ? StatDialog() : 0;
     DWORD root = dlg ? RootOf(dlg) : 0;
     if (!root) { ScLog("QINDDLG [%s] dialog=0", t); return; }
 
@@ -1375,7 +1354,7 @@ void ScQueueIndLogDialog(const char* tag) {
         short* b = (short*)(c + SC_BINDLG_OFF_BOUNDS);
         DWORD  f = *(DWORD*)(c + SC_BINDLG_OFF_FLAGS);
         DWORD  p = *(DWORD*)(c + SC_BINDLG_OFF_TEXT);
-        const char* s = (p && Readable(p, 1)) ? (const char*)p : "";
+        const char* s = (p && ScReadable(p, 1)) ? (const char*)p : "";
         // INTERACT as well as UPDATE. Two controls that look identical in flags and bounds
         // can still be dispatched by different code, and when one of them takes a click and
         // the other does not, that pointer is the first thing worth ruling out -- one line
@@ -1649,7 +1628,7 @@ bool ScQueueIndEnabled(void) {
 }
 
 void ScQueueIndInit(BYTE* moduleBase, bool enabled) {
-    g_base    = moduleBase;
+    ScEngineSetModuleBase(moduleBase);
     g_enabled = enabled;
     g_show = g_hide = g_update = NULL;
     g_testOrigDriver = NULL;
@@ -1693,14 +1672,14 @@ int ScQueueIndInstallHooks(void) {
     // over again (nothing lights the slot any more, but nothing owns the click either);
     // the bracket without the driver hook is a lit slot with no "+N" and no snapshot. A
     // partial install rolls itself back and disables the feature.
-    if (!ScHookInstall(&g_hkDriver, "statDisplayDriver", Rt(SC_VA_STAT_DISPLAY_DRIVER),
+    if (!ScHookInstall(&g_hkDriver, "statDisplayDriver", ScRuntimeAddr(SC_VA_STAT_DISPLAY_DRIVER),
                        (void*)&HkStatDisplayDriver, 5,
                        kPrologueDriver, (int)sizeof(kPrologueDriver))) {
         ScLog("QIND: driver hook failed to install -- feature disabled");
         g_enabled = false;
         return 0;
     }
-    if (!ScHookInstall(&g_hkLayout, "queueLayout", Rt(SC_VA_QUEUE_LAYOUT),
+    if (!ScHookInstall(&g_hkLayout, "queueLayout", ScRuntimeAddr(SC_VA_QUEUE_LAYOUT),
                        (void*)&HkQueueLayout, (int)sizeof(kPrologueLayout),
                        kPrologueLayout, (int)sizeof(kPrologueLayout))) {
         ScLog("QIND: queueLayout hook failed to install -- rolling the driver hook back, "
@@ -1724,11 +1703,11 @@ void ScQueueIndRemoveHooks(void) {
     // Take the control back out of the dialog. Single dword writes, guarded reads because
     // the dialog may already be gone. Mid-game unload stays unsupported (the game thread
     // may be inside the detour), same policy as sc_circles and sc_hudrow.
-    if (g_spliced && g_dialog && Readable(g_dialog + SC_BINDLG_OFF_FIRST_CHILD, 4)) {
+    if (g_spliced && g_dialog && ScReadable(g_dialog + SC_BINDLG_OFF_FIRST_CHILD, 4)) {
         DWORD ind = (DWORD)&g_ctrl[0];
         DWORD* link = (DWORD*)(g_dialog + SC_BINDLG_OFF_FIRST_CHILD);
         while (*link && *link != ind) {
-            if (!Readable(*link + SC_BINDLG_OFF_NEXT, 4)) { link = NULL; break; }
+            if (!ScReadable(*link + SC_BINDLG_OFF_NEXT, 4)) { link = NULL; break; }
             link = (DWORD*)(*link + SC_BINDLG_OFF_NEXT);
         }
         if (link && *link == ind) *link = NextOf(ind);

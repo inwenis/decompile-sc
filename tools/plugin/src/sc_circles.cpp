@@ -24,6 +24,7 @@
 
 #include "sc_addresses.h"
 #include "sc_circles.h"
+#include "sc_engine.h"
 #include "sc_hook.h"
 #include "sc_log.h"
 #include "sc_session.h"
@@ -32,7 +33,6 @@
 
 static void LogCirclePositions(void);
 
-static BYTE* g_base    = NULL;
 static bool  g_enabled = false;
 
 static ScCircleUnit g_circled[SC_CIRCLES_MAX];
@@ -77,10 +77,6 @@ static void CirclesSessionSync(void) {
     g_session = now;
 }
 
-static void* Rt(DWORD staticVa) {
-    return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE));
-}
-
 // ---------------------------------------------------------------------------
 // The two engine primitives
 //
@@ -95,7 +91,7 @@ static void* Rt(DWORD staticVa) {
 // Returns the new CImage*, or NULL when the image free list is empty.
 static DWORD RealAddCircle(DWORD sprite, DWORD colourByte, DWORD baseImageId) {
     DWORD result;
-    void* fn = Rt(SC_VA_SPRITE_ADD_SEL_CIRCLE);
+    void* fn = ScRuntimeAddr(SC_VA_SPRITE_ADD_SEL_CIRCLE);
     __asm__ __volatile__(
         "pushl %[img]\n\t"
         "pushl %[col]\n\t"
@@ -112,7 +108,7 @@ static DWORD RealAddCircle(DWORD sprite, DWORD colourByte, DWORD baseImageId) {
 static BYTE RealRemoveCircle(DWORD sprite) {
     DWORD result;
     DWORD spriteInOut = sprite;
-    void* fn = Rt(SC_VA_SPRITE_REMOVE_SEL_CIRCLE);
+    void* fn = ScRuntimeAddr(SC_VA_SPRITE_REMOVE_SEL_CIRCLE);
     __asm__ __volatile__(
         "calll *%[fn]\n\t"
         : "=a"(result), "=c"(spriteInOut)
@@ -139,25 +135,13 @@ static BYTE RemoveCircle(DWORD sprite) {
 // it is never dereferenced until the whole struct is known to sit inside one
 // committed, readable, non-guard region. This is the same defence scplugin.cpp's
 // observer uses for its reads, kept local so this module has no dependency on it.
-static bool Readable(DWORD addr, DWORD len) {
-    if (!addr || len == 0) return false;
-    MEMORY_BASIC_INFORMATION mbi;
-    if (VirtualQuery((LPCVOID)addr, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
-    if (mbi.State != MEM_COMMIT) return false;
-    if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return false;
-    const DWORD ok = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
-                     PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
-    if ((mbi.Protect & ok) == 0) return false;
-    DWORD regionEnd = (DWORD)mbi.BaseAddress + (DWORD)mbi.RegionSize;
-    return addr + len <= regionEnd;
-}
 
 // The unit array is a fixed 1700-entry global, so a valid CUnit* is exactly an
 // in-range, correctly-strided offset from its base. Same test sc_fanout.cpp applies
 // before it encodes a unit tag.
 static bool UnitInRange(DWORD unit) {
     if (!unit) return false;
-    DWORD arrayBase = (DWORD)Rt(SC_VA_UNIT_ARRAY_BASE);
+    DWORD arrayBase = ScRuntimeVa(SC_VA_UNIT_ARRAY_BASE);
     if (unit < arrayBase) return false;
     DWORD off = unit - arrayBase;
     if (off % SC_CUNIT_SIZE != 0) return false;
@@ -172,9 +156,9 @@ static bool UnitInRange(DWORD unit) {
 
 static bool SpriteOf(DWORD unit, DWORD* outSprite) {
     if (!UnitInRange(unit)) return false;
-    if (!Readable(unit + SC_CUNIT_OFF_SPRITE, 4)) return false;
+    if (!ScReadable(unit + SC_CUNIT_OFF_SPRITE, 4)) return false;
     DWORD sprite = *(DWORD*)(unit + SC_CUNIT_OFF_SPRITE);
-    if (!Readable(sprite, SC_CSPRITE_SIZE)) return false;
+    if (!ScReadable(sprite, SC_CSPRITE_SIZE)) return false;
     *outSprite = sprite;
     return true;
 }
@@ -262,7 +246,7 @@ void ScCirclesShow(const ScCircleUnit* units, int n) {
 
         // The colour byte the engine would have used: BYTE[0x00581D6A + player],
         // read exactly as 0x004E61A6 reads it.
-        BYTE colour = *(BYTE*)((DWORD)Rt(SC_VA_SELECTION_COLOR_TABLE) + units[i].player);
+        BYTE colour = *(BYTE*)(ScRuntimeVa(SC_VA_SELECTION_COLOR_TABLE) + units[i].player);
 
         DWORD img = AddCircle(sprite, colour, SC_SELECTION_CIRCLE_IMAGE_BASE);
         if (!img) {
@@ -300,15 +284,15 @@ void ScCirclesShow(const ScCircleUnit* units, int n) {
 static void LogCirclePositions(void) {
     if (g_circledCount <= 0) return;
 
-    const int left = (int)*(WORD*)Rt(SC_VA_SCREEN_LEFT);
-    const int top  = (int)*(WORD*)Rt(SC_VA_SCREEN_TOP);
+    const int left = (int)*(WORD*)ScRuntimeAddr(SC_VA_SCREEN_LEFT);
+    const int top  = (int)*(WORD*)ScRuntimeAddr(SC_VA_SCREEN_TOP);
 
     char buf[1024];
     int used = 0;
     int listed = 0;
     for (int i = 0; i < g_circledCount; ++i) {
         const DWORD s = g_circled[i].sprite;
-        if (!Readable(s, SC_CSPRITE_SIZE)) continue;
+        if (!ScReadable(s, SC_CSPRITE_SIZE)) continue;
         const int x = (int)*(WORD*)(s + SC_CSPRITE_OFF_POS_X) - left;
         const int y = (int)*(WORD*)(s + SC_CSPRITE_OFF_POS_Y) - top;
         // Off-screen units are useless to a test and would only be noise. The client is
@@ -378,7 +362,7 @@ static const BYTE kPrologueSelChange[] = { 0x55, 0x8B, 0xEC, 0x53, 0x56 };
 bool ScCirclesInstallHook(void) {
     if (!g_enabled) return true;
     if (!ScHookInstall(&g_hkSelChange, "CreateNewUnitSelectionsFromList",
-                       Rt(SC_VA_CREATE_NEW_UNIT_SELECTIONS),
+                       ScRuntimeAddr(SC_VA_CREATE_NEW_UNIT_SELECTIONS),
                        (void*)&ScCirclesSelChangeThunk, 5,
                        kPrologueSelChange, (int)sizeof(kPrologueSelChange))) {
         return false;
@@ -396,7 +380,7 @@ void ScCirclesRemoveHook(void) {
 // ---------------------------------------------------------------------------
 
 void ScCirclesInit(BYTE* moduleBase, bool enabled) {
-    g_base    = moduleBase;
+    ScEngineSetModuleBase(moduleBase);
     g_enabled = enabled;
     g_add     = NULL;
     g_remove  = NULL;
@@ -407,7 +391,7 @@ void ScCirclesInit(BYTE* moduleBase, bool enabled) {
 bool ScCirclesEnabled(void) { return g_enabled; }
 
 void ScCirclesTestBegin(BYTE* fakeModuleBase, ScAddCircleFn add, ScRemoveCircleFn remove) {
-    g_base    = fakeModuleBase;
+    ScEngineSetModuleBase(fakeModuleBase);
     g_enabled = true;
     g_add     = add;
     g_remove  = remove;

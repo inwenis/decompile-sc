@@ -51,6 +51,7 @@
 
 #include "sc_screen.h"
 #include "sc_addresses.h"
+#include "sc_engine.h"
 #include "sc_log.h"
 #include "sc_screen_patches.h"
 
@@ -58,7 +59,6 @@
 // State
 // ---------------------------------------------------------------------------
 
-static BYTE*  g_base = NULL;
 static bool   g_active = false;
 static int    g_stage = 1;
 static BYTE*  g_grid = NULL;          // the relocated dirty grid (data start)
@@ -91,10 +91,6 @@ static struct {
     BYTE  bytes[SC_WS_MAX_PATCH_LEN];
 } g_saved[SC_WS_MAX_SAVED];
 static int g_savedCount = 0;
-
-static void* Rt(DWORD staticVa) {
-    return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE));
-}
 
 static void HexDump(const BYTE* p, int n, char* out, int outLen) {
     int used = 0;
@@ -201,7 +197,7 @@ static bool RangeReadable(const void* addr, size_t n) {
 // ---------------------------------------------------------------------------
 
 static bool VideoAlreadyUp(DWORD* dataOut, unsigned* wOut, unsigned* hOut) {
-    const BYTE* desc = (const BYTE*)Rt(SC_VA_SCREEN_BITMAP);
+    const BYTE* desc = (const BYTE*)ScRuntimeAddr(SC_VA_SCREEN_BITMAP);
     DWORD data = 0;
     WORD w = 0, h = 0;
     if (!RangeReadable(desc, 8)) return false;   // unreadable -> not up yet
@@ -225,7 +221,7 @@ static bool VerifyAll(int maxStage, int* checked) {
         const ScScreenPatch* p = &SC_WS_PATCHES[i];
         if (p->stage > maxStage) continue;
         ++n;
-        const BYTE* at = (const BYTE*)Rt(p->va);
+        const BYTE* at = (const BYTE*)ScRuntimeAddr(p->va);
         if (!RangeReadable(at, p->len)) {
             ScLog("WIDESCREEN REFUSED %s @0x%08X: not readable", p->name, (unsigned)p->va);
             ok = false;
@@ -258,7 +254,7 @@ static bool WriteOne(const ScScreenPatch* p) {
         memcpy(bytes + p->fixupOff, &target, 4);
     }
 
-    void* at = Rt(p->va);
+    void* at = ScRuntimeAddr(p->va);
     DWORD oldProtect = 0;
     if (!VirtualProtect(at, p->len, PAGE_EXECUTE_READWRITE, &oldProtect)) {
         ScLog("WIDESCREEN %s @0x%08X: VirtualProtect failed gle=%u",
@@ -287,7 +283,7 @@ static bool WriteOne(const ScScreenPatch* p) {
 }
 
 void ScScreenInstall(BYTE* base, ScMode mode) {
-    g_base = base;
+    ScEngineSetModuleBase(base);
 
     const bool wanted = ScScreenWidescreenWanted();
     if (!wanted) {

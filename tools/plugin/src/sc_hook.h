@@ -28,6 +28,16 @@
 
 #define SC_HOOK_MAX_PATCH 16
 
+// force_align_arg_pointer on every entry point the GAME calls -- put it on each
+// detour, thunk and shim in this project.
+//
+// GCC at -O2 assumes the incoming stack is 16-byte aligned and will happily emit
+// aligned SSE spills on that assumption. StarCraft is a 1998-era VC6-class build
+// that guarantees 4-byte alignment and nothing more, so without this a detour can
+// fault on a `movaps` with no other symptom than the game vanishing. The attribute
+// makes each of these functions realign ESP itself.
+#define SC_GAME_ENTRY __attribute__((force_align_arg_pointer))
+
 struct ScHook {
     const char* name;
     void*  target;        // runtime address of the hooked function

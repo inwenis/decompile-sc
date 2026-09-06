@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "sc_addresses.h"
+#include "sc_engine.h"
 #include "sc_fanout.h"
 #include "sc_hook.h"
 #include "sc_log.h"
@@ -22,7 +23,6 @@
 // State
 // ---------------------------------------------------------------------------
 
-static BYTE* g_base    = NULL;
 static bool  g_enabled = false;
 static bool  g_inited  = false;
 static int   g_stat[SC_PRODFAN_STAT__COUNT] = { 0 };
@@ -56,9 +56,6 @@ static int CondReturn(int which) { ++g_condExit[which]; return 0; }
 // costs nothing but stack in a function that runs once per marker.
 #define SC_PRODFAN_MAX_SHADOW 64
 
-static void* Rt(DWORD staticVa) { return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE)); }
-static DWORD RtA(DWORD staticVa) { return (DWORD)(DWORD_PTR)Rt(staticVa); }
-
 // ---------------------------------------------------------------------------
 // Reads. Every one of these is the same read sc_prodqueue makes, deliberately duplicated
 // rather than shared: task 028 is live in sc_prodqueue.cpp and this file must not make it
@@ -67,7 +64,7 @@ static DWORD RtA(DWORD staticVa) { return (DWORD)(DWORD_PTR)Rt(staticVa); }
 
 static bool UnitPtrValid(DWORD ptr) {
     if (!ptr) return false;
-    DWORD arrayBase = RtA(SC_VA_UNIT_ARRAY_BASE);
+    DWORD arrayBase = ScRuntimeVa(SC_VA_UNIT_ARRAY_BASE);
     if (ptr < arrayBase) return false;
     DWORD off = ptr - arrayBase;
     if (off % SC_CUNIT_SIZE != 0) return false;
@@ -95,15 +92,15 @@ static int EngineQueueLength(DWORD unit) {
 // different question from the one the engine asks.
 typedef int (__attribute__((fastcall)) *ScMovableFn)(DWORD unit);
 static bool UnitMovable(DWORD unit) {
-    ScMovableFn f = (ScMovableFn)Rt(SC_VA_UNIT_IS_STANDARD_AND_MOVABLE);
+    ScMovableFn f = (ScMovableFn)ScRuntimeAddr(SC_VA_UNIT_IS_STANDARD_AND_MOVABLE);
     return f(unit) != 0;
 }
 
 static DWORD* MineralsOf(BYTE player) {
-    return (DWORD*)(RtA(SC_VA_PLAYER_MINERALS) + (DWORD)player * 4);
+    return (DWORD*)(ScRuntimeVa(SC_VA_PLAYER_MINERALS) + (DWORD)player * 4);
 }
 static DWORD* GasOf(BYTE player) {
-    return (DWORD*)(RtA(SC_VA_PLAYER_GAS) + (DWORD)player * 4);
+    return (DWORD*)(ScRuntimeVa(SC_VA_PLAYER_GAS) + (DWORD)player * 4);
 }
 
 // ---------------------------------------------------------------------------
@@ -118,7 +115,7 @@ bool ScProdFanEnabled(void) {
 }
 
 void ScProdFanInit(BYTE* moduleBase, bool enabled) {
-    g_base    = moduleBase;
+    ScEngineSetModuleBase(moduleBase);
     g_enabled = enabled;
     g_inited  = true;
     ScLog("PRODFAN: %s (%%SCPLUGIN_PRODFAN%%). The oracle runs either way; only the "
@@ -211,7 +208,7 @@ static void FormatEngineQueue(DWORD unit, char* out, int outLen) {
 }
 
 void ScProdFanLogState(const char* tag) {
-    if (!g_base) return;
+    if (!ScEngineModuleBase()) return;
     const char* t = tag ? tag : "-";
 
     ScShadowInfo shadow[SC_PRODFAN_MAX_SHADOW];
@@ -264,8 +261,8 @@ void ScProdFanLogState(const char* tag) {
     // must agree with the per-building lines above for a boxed group; where it does not,
     // that disagreement is the finding.
     {
-        DWORD* sel = (DWORD*)Rt(SC_VA_CLIENT_SELECTION_GROUP);
-        unsigned cn = *(BYTE*)Rt(SC_VA_CLIENT_SELECTION_COUNT);
+        DWORD* sel = (DWORD*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_GROUP);
+        unsigned cn = *(BYTE*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT);
         if (cn > SC_SELECTION_SLOTS) cn = SC_SELECTION_SLOTS;
         char units[256]; units[0] = '\0';
         int used = 0;
@@ -305,7 +302,7 @@ void ScProdFanLogState(const char* tag) {
           "totalQueued=%d minerals=%u gas=%u enabled=%d fanned=%d refused=%d reached=%d "
           "lit=%d",
           t, buildings, n, visible, ScFanoutSimSlots(),
-          (unsigned)*(BYTE*)Rt(SC_VA_CLIENT_SELECTION_COUNT), totalQueued,
+          (unsigned)*(BYTE*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT), totalQueued,
           havePlayer ? (unsigned)*MineralsOf(player) : 0u,
           havePlayer ? (unsigned)*GasOf(player) : 0u,
           ScProdFanEnabled() ? 1 : 0,
@@ -374,8 +371,8 @@ static const BYTE kPrologueCond[] = { 0x55, 0x8B, 0xEC, 0x8B, 0xC1 };
 // differ only in where they read the selection from, for the reason above.
 static int CollectClientSelection(WORD* types, int max, int* outSlots) {
     *outSlots = SC_SELECTION_SLOTS;
-    DWORD* sel = (DWORD*)Rt(SC_VA_CLIENT_SELECTION_GROUP);
-    unsigned n = *(BYTE*)Rt(SC_VA_CLIENT_SELECTION_COUNT);
+    DWORD* sel = (DWORD*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_GROUP);
+    unsigned n = *(BYTE*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT);
     if (n > SC_SELECTION_SLOTS) n = SC_SELECTION_SLOTS;
     int k = 0;
     bool haveFirst = false;
@@ -435,10 +432,10 @@ extern "C" int ScProdFanCondAllow(DWORD type, DWORD unit, DWORD player) {
         ScLog("PRODFAN cond: call#%d type=0x%03X unit=0x%08X player=%u clientCount=%u "
               "simSlots=%d shadow=%d",
               g_condCalls, (unsigned)type, (unsigned)unit, (unsigned)player,
-              g_base ? (unsigned)*(BYTE*)Rt(SC_VA_CLIENT_SELECTION_COUNT) : 0u,
+              ScEngineModuleBase() ? (unsigned)*(BYTE*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT) : 0u,
               ScFanoutSimSlots(), ScFanoutShadowCount());
     }
-    if (!g_enabled || !g_base) return CondReturn(COND_OFF);
+    if (!g_enabled || !ScEngineModuleBase()) return CondReturn(COND_OFF);
 
     // THE BUTTON PARAM IS A u16, AND ECX ARRIVES WITH A DIRTY UPPER HALF.
     //
@@ -453,7 +450,7 @@ extern "C" int ScProdFanCondAllow(DWORD type, DWORD unit, DWORD player) {
     // Only when the engine would actually refuse. At a count of 1 the original allows
     // anyway, so returning 0 here keeps the single-building path byte-for-byte stock --
     // which is what makes it usable as the control arm.
-    if (*(BYTE*)Rt(SC_VA_CLIENT_SELECTION_COUNT) <= 1) return CondReturn(COND_SINGLE);
+    if (*(BYTE*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT) <= 1) return CondReturn(COND_SINGLE);
 
     // TRAIN BUTTONS ONLY. This condition also gates the two ADDON buttons (measured:
     // slots 7 and 8 of the Command Center card, params 107 and 108, action 0x00423D10).
@@ -511,14 +508,14 @@ extern "C" int ScProdFanCondAllow(DWORD type, DWORD unit, DWORD player) {
     //    acceptable and worth knowing: the address space is going away with it.
     static int depth = 0;
     if (depth != 0) return CondReturn(COND_REENTERED);
-    BYTE* countPtr = (BYTE*)Rt(SC_VA_CLIENT_SELECTION_COUNT);
+    BYTE* countPtr = (BYTE*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT);
     BYTE savedCount = *countPtr;
     ++depth;
     *countPtr = 1;
     int r = CallStockCondition(type, unit, player);
     *countPtr = savedCount;
     --depth;
-    DWORD reason = *(DWORD*)Rt(SC_VA_CARD_REFUSE_REASON);
+    DWORD reason = *(DWORD*)ScRuntimeAddr(SC_VA_CARD_REFUSE_REASON);
 
     // Logged once per DISTINCT answer, not once per relayout: the card is laid out many
     // times a second and an unconditional line here would bury the log. The verdict and
@@ -582,9 +579,9 @@ asm(
 );
 
 int ScProdFanInstallGate(void) {
-    if (!g_enabled || !g_base) return 0;
+    if (!g_enabled || !ScEngineModuleBase()) return 0;
     int suspended = ScHookSuspendThreads();
-    bool ok = ScHookInstall(&g_hkCond, "btnTrainCondition", Rt(SC_VA_BTN_TRAIN_CONDITION),
+    bool ok = ScHookInstall(&g_hkCond, "btnTrainCondition", ScRuntimeAddr(SC_VA_BTN_TRAIN_CONDITION),
                             (void*)&ScProdFanCondThunk, 5,
                             kPrologueCond, (int)sizeof(kPrologueCond));
     if (ok) {

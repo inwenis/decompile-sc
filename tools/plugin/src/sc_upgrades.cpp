@@ -13,12 +13,11 @@
 #include <string.h>
 
 #include "sc_addresses.h"
+#include "sc_engine.h"
 #include "sc_hook.h"
 #include "sc_log.h"
 #include "sc_session.h"
 #include "sc_upgrades.h"
-
-#define SC_GAME_ENTRY __attribute__((force_align_arg_pointer))
 
 // ---------------------------------------------------------------------------
 // State
@@ -37,7 +36,6 @@ struct UpgRecord {
     UpgItem items[SC_UPGQ_HARD_MAX];   // FIFO: [0] is promoted next
 };
 
-static BYTE* g_base    = NULL;
 static bool  g_enabled = false;
 static bool  g_testing = false;
 static int   g_maxTotal = SC_UPGQ_DEFAULT_MAX;
@@ -65,9 +63,6 @@ static bool g_deepGc = false;
 static int  EngineStartItem(DWORD unit, int kind, unsigned id);
 static ScUpgStartFn g_start = &EngineStartItem;
 
-static void* Rt(DWORD staticVa) { return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE)); }
-static DWORD RtA(DWORD staticVa) { return (DWORD)(DWORD_PTR)Rt(staticVa); }
-
 // ---------------------------------------------------------------------------
 // Unit validation -- the same shape as sc_prodqueue's, because the question is the same:
 // is this pointer still the building we wrote down?
@@ -75,7 +70,7 @@ static DWORD RtA(DWORD staticVa) { return (DWORD)(DWORD_PTR)Rt(staticVa); }
 
 static bool UnitPtrValid(DWORD ptr) {
     if (!ptr) return false;
-    DWORD arrayBase = RtA(SC_VA_UNIT_ARRAY_BASE);
+    DWORD arrayBase = ScRuntimeVa(SC_VA_UNIT_ARRAY_BASE);
     if (ptr < arrayBase) return false;
     DWORD off = ptr - arrayBase;
     if (off % SC_CUNIT_SIZE != 0) return false;
@@ -84,7 +79,7 @@ static bool UnitPtrValid(DWORD ptr) {
 
 static bool InPlayerUnitList(DWORD ptr, BYTE player) {
     if (player >= SC_MAX_PLAYERS) return false;
-    DWORD head = *(DWORD*)(RtA(SC_VA_PLAYER_UNIT_LIST) + (DWORD)player * 4);
+    DWORD head = *(DWORD*)(ScRuntimeVa(SC_VA_PLAYER_UNIT_LIST) + (DWORD)player * 4);
     int n = 0;
     for (DWORD u = head; u && n < SC_MAX_UNITS_WALK; ++n) {
         if (!UnitPtrValid(u)) return false;
@@ -143,13 +138,13 @@ static bool EngineBusy(DWORD unit) {
 
 static DWORD CurrentUpgradeLevel(BYTE player, unsigned id) {
     if (id < SC_UPGRADE_COUNT_VANILLA) {
-        return *(BYTE*)(RtA(SC_VA_UPGRADE_LEVEL) + (DWORD)player * SC_UPGRADE_STRIDE_VANILLA + id);
+        return *(BYTE*)(ScRuntimeVa(SC_VA_UPGRADE_LEVEL) + (DWORD)player * SC_UPGRADE_STRIDE_VANILLA + id);
     }
-    return *(BYTE*)(RtA(SC_VA_UPGRADE_LEVEL_BW) + (DWORD)player * SC_UPGRADE_STRIDE_BW + id);
+    return *(BYTE*)(ScRuntimeVa(SC_VA_UPGRADE_LEVEL_BW) + (DWORD)player * SC_UPGRADE_STRIDE_BW + id);
 }
 
 static DWORD U16At(DWORD table, unsigned index) {
-    return *(WORD*)(RtA(table) + (DWORD)index * 2);
+    return *(WORD*)(ScRuntimeVa(table) + (DWORD)index * 2);
 }
 
 // base + factor * currentLevel, the expression 0x0042D190 and 0x00454170 both compute.
@@ -172,10 +167,10 @@ static void ItemCost(BYTE player, int kind, unsigned id, DWORD* minerals, DWORD*
 }
 
 static DWORD MineralsOf(BYTE player) {
-    return *(DWORD*)(RtA(SC_VA_PLAYER_MINERALS) + (DWORD)player * 4);
+    return *(DWORD*)(ScRuntimeVa(SC_VA_PLAYER_MINERALS) + (DWORD)player * 4);
 }
 static DWORD GasOf(BYTE player) {
-    return *(DWORD*)(RtA(SC_VA_PLAYER_GAS) + (DWORD)player * 4);
+    return *(DWORD*)(ScRuntimeVa(SC_VA_PLAYER_GAS) + (DWORD)player * 4);
 }
 
 static bool CanAfford(BYTE player, int kind, unsigned id) {
@@ -250,11 +245,11 @@ static void CollectGarbage(bool deep) {
 // have to refuse. The card is relaid on 0x0068C1B0, not on 0x0068C1F8.
 static void RequestRedraw(void) {
     if (g_testing) return;
-    *(DWORD*)Rt(SC_VA_REDRAW_CARD)    = 1;
-    *(BYTE*) Rt(SC_VA_REDRAW_CONSOLE) = 1;
-    *(BYTE*) Rt(SC_VA_STAT_DIRTY)     = 1;
-    *(DWORD*)Rt(SC_VA_REDRAW_SEL_A)   = 0;
-    *(DWORD*)Rt(SC_VA_REDRAW_SEL_B)   = 0;
+    *(DWORD*)ScRuntimeAddr(SC_VA_REDRAW_CARD)    = 1;
+    *(BYTE*) ScRuntimeAddr(SC_VA_REDRAW_CONSOLE) = 1;
+    *(BYTE*) ScRuntimeAddr(SC_VA_STAT_DIRTY)     = 1;
+    *(DWORD*)ScRuntimeAddr(SC_VA_REDRAW_SEL_A)   = 0;
+    *(DWORD*)ScRuntimeAddr(SC_VA_REDRAW_SEL_B)   = 0;
 }
 
 // The engine's one slot plus whatever this record holds.
@@ -322,14 +317,14 @@ bool ScUpgQueueShouldUnblock(DWORD unit) {
 
 static DWORD MaxUpgradeLevel(BYTE player, unsigned id) {
     if (id < SC_UPGRADE_COUNT_VANILLA) {
-        return *(BYTE*)(RtA(SC_VA_UPGRADE_MAX_LEVEL) +
+        return *(BYTE*)(ScRuntimeVa(SC_VA_UPGRADE_MAX_LEVEL) +
                         (DWORD)player * SC_UPGRADE_STRIDE_VANILLA + id);
     }
-    return *(BYTE*)(RtA(SC_VA_UPGRADE_MAX_BW) + (DWORD)player * SC_UPGRADE_STRIDE_BW + id);
+    return *(BYTE*)(ScRuntimeVa(SC_VA_UPGRADE_MAX_BW) + (DWORD)player * SC_UPGRADE_STRIDE_BW + id);
 }
 
 static BYTE* UpgradeBusyByte(BYTE player, unsigned id) {
-    return (BYTE*)(RtA(SC_VA_UPGRADE_INPROGRESS_BITS) +
+    return (BYTE*)(ScRuntimeVa(SC_VA_UPGRADE_INPROGRESS_BITS) +
                    (DWORD)player * SC_UPGRADE_BITS_STRIDE + (id >> 3));
 }
 
@@ -351,10 +346,10 @@ static DWORD WantedLevel(DWORD unit, const UpgRecord* r, int kind, unsigned id) 
 
 static BYTE* UpgradeLevelByte(BYTE player, unsigned id) {
     if (id < SC_UPGRADE_COUNT_VANILLA) {
-        return (BYTE*)(RtA(SC_VA_UPGRADE_LEVEL) +
+        return (BYTE*)(ScRuntimeVa(SC_VA_UPGRADE_LEVEL) +
                        (DWORD)player * SC_UPGRADE_STRIDE_VANILLA + id);
     }
-    return (BYTE*)(RtA(SC_VA_UPGRADE_LEVEL_BW) + (DWORD)player * SC_UPGRADE_STRIDE_BW + id);
+    return (BYTE*)(ScRuntimeVa(SC_VA_UPGRADE_LEVEL_BW) + (DWORD)player * SC_UPGRADE_STRIDE_BW + id);
 }
 
 // True when the card may be shown THIS upgrade's own button at THIS building: the building
@@ -533,8 +528,8 @@ static void LogPlayerProgress(const char* tag, BYTE player) {
     char tc[192]; int tcUsed = 0; int tcN = 0; tc[0] = '\0';
     for (unsigned t = 0; t < SC_TECH_COUNT; ++t) {
         BYTE done = (t < (unsigned)SC_TECH_COUNT_VANILLA)
-            ? *(BYTE*)(RtA(SC_VA_TECH_RESEARCHED) + (DWORD)player * SC_TECH_STRIDE_VANILLA + t)
-            : *(BYTE*)(RtA(SC_VA_TECH_RESEARCHED_BW) + (DWORD)player * SC_TECH_STRIDE_BW + t);
+            ? *(BYTE*)(ScRuntimeVa(SC_VA_TECH_RESEARCHED) + (DWORD)player * SC_TECH_STRIDE_VANILLA + t)
+            : *(BYTE*)(ScRuntimeVa(SC_VA_TECH_RESEARCHED_BW) + (DWORD)player * SC_TECH_STRIDE_BW + t);
         if (!done) continue;
         ++tcN;
         if (tcUsed + 8 < (int)sizeof(tc)) {
@@ -559,7 +554,7 @@ void ScUpgQueueLogState(const char* tag) {
     // did not run" would be the same observation, which is the failure mode AGENTS.md's
     // absence-assertion rule exists to stop.
     {
-        DWORD* sel = (DWORD*)Rt(SC_VA_ACTIVE_PLAYER_SELECTION);
+        DWORD* sel = (DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_SELECTION);
         DWORD u = sel[0];
         if (u && !sel[1] && UnitPtrValid(u)) {
             LogUnitLine("UPGQSEL", tag, u, FindRecord(u));
@@ -758,15 +753,15 @@ static int EngineStartItem(DWORD unit, int kind, unsigned id) {
     BYTE player = *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER);
     bool tech = (kind == SC_UPGQ_KIND_TECH);
 
-    DWORD gate = ScUpgCallGate(Rt(tech ? SC_VA_TECH_GATE : SC_VA_UPGRADE_GATE),
+    DWORD gate = ScUpgCallGate(ScRuntimeAddr(tech ? SC_VA_TECH_GATE : SC_VA_UPGRADE_GATE),
                                unit, id, player);
     if (gate != 1) return -1;   // refused for a reason that will not fix itself
 
-    DWORD ok = tech ? ScUpgCallStartTech(Rt(SC_VA_START_TECH), unit, id)
-                    : ScUpgCallStartUpgrade(Rt(SC_VA_START_UPGRADE), unit, id);
+    DWORD ok = tech ? ScUpgCallStartTech(ScRuntimeAddr(SC_VA_START_TECH), unit, id)
+                    : ScUpgCallStartUpgrade(ScRuntimeAddr(SC_VA_START_UPGRADE), unit, id);
     if (!ok) return 0;          // could not pay right now -- try again next tick
 
-    ScUpgCallAfterAccept(Rt(SC_VA_AFTER_ACCEPT), unit,
+    ScUpgCallAfterAccept(ScRuntimeAddr(SC_VA_AFTER_ACCEPT), unit,
                          tech ? SC_ORDER_RESEARCH : SC_ORDER_UPGRADE);
     RequestRedraw();
     return 1;
@@ -842,9 +837,9 @@ typedef void (__attribute__((stdcall)) *CmdFn)(DWORD);
 //   0049a86d  LEA  ESI,[ECX + EAX*4]                   ; iterator + player * 12
 //   0049a870  MOV  EAX,dword ptr [ESI*4 + 0x006284E8]  ; playersSelections[player][iter]
 static DWORD SoleSelectedUnit(void) {
-    DWORD player = *(DWORD*)Rt(SC_VA_ACTIVE_PLAYER_ID);
+    DWORD player = *(DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_ID);
     if (player >= SC_MAX_PLAYERS) return 0;
-    DWORD* sel = (DWORD*)Rt(SC_VA_PLAYERS_SELECTIONS) + player * SC_SELECTION_SLOTS;
+    DWORD* sel = (DWORD*)ScRuntimeAddr(SC_VA_PLAYERS_SELECTIONS) + player * SC_SELECTION_SLOTS;
     DWORD u = sel[0];
     if (!u || sel[1]) return 0;
     return UnitPtrValid(u) ? u : 0;
@@ -1107,7 +1102,7 @@ static void EnsureLock(void) {
 }
 
 int ScUpgQueueInstall(BYTE* moduleBase) {
-    g_base = moduleBase;
+    ScEngineSetModuleBase(moduleBase);
     g_recCount = 0;
     g_deepGc = false;
     g_session = ScSessionEpoch();
@@ -1122,28 +1117,28 @@ int ScUpgQueueInstall(BYTE* moduleBase) {
     ScLog("UPGQ: suspended %d other thread(s) for the splice", suspended);
 
     int installed = 0;
-    if (ScHookInstall(&g_hkCondUpg, "btnUpgradeCondition", Rt(SC_VA_BTN_UPGRADE_COND),
+    if (ScHookInstall(&g_hkCondUpg, "btnUpgradeCondition", ScRuntimeAddr(SC_VA_BTN_UPGRADE_COND),
                       (void*)&ScUpgCondUpgradeThunk, 6,
                       kPrologueCond, (int)sizeof(kPrologueCond))) ++installed;
-    if (ScHookInstall(&g_hkCondTech, "btnTechCondition", Rt(SC_VA_BTN_TECH_COND),
+    if (ScHookInstall(&g_hkCondTech, "btnTechCondition", ScRuntimeAddr(SC_VA_BTN_TECH_COND),
                       (void*)&ScUpgCondTechThunk, 6,
                       kPrologueCond, (int)sizeof(kPrologueCond))) ++installed;
-    if (ScHookInstall(&g_hkCmdUpg, "cmdrecvUpgrade", Rt(SC_VA_CMDRECV_UPGRADE),
+    if (ScHookInstall(&g_hkCmdUpg, "cmdrecvUpgrade", ScRuntimeAddr(SC_VA_CMDRECV_UPGRADE),
                       (void*)&HkCmdrecvUpgrade, 11,
                       kPrologueCmd, (int)sizeof(kPrologueCmd))) ++installed;
-    if (ScHookInstall(&g_hkCmdTech, "cmdrecvTech", Rt(SC_VA_CMDRECV_TECH),
+    if (ScHookInstall(&g_hkCmdTech, "cmdrecvTech", ScRuntimeAddr(SC_VA_CMDRECV_TECH),
                       (void*)&HkCmdrecvTech, 11,
                       kPrologueCmd, (int)sizeof(kPrologueCmd))) ++installed;
-    if (ScHookInstall(&g_hkTickUpg, "upgradeTick", Rt(SC_VA_UPGRADE_TICK),
+    if (ScHookInstall(&g_hkTickUpg, "upgradeTick", ScRuntimeAddr(SC_VA_UPGRADE_TICK),
                       (void*)&ScUpgTickUpgradeThunk, 6,
                       kPrologueTick, (int)sizeof(kPrologueTick))) ++installed;
-    if (ScHookInstall(&g_hkTickTech, "techTick", Rt(SC_VA_TECH_TICK),
+    if (ScHookInstall(&g_hkTickTech, "techTick", ScRuntimeAddr(SC_VA_TECH_TICK),
                       (void*)&ScUpgTickTechThunk, 6,
                       kPrologueTick, (int)sizeof(kPrologueTick))) ++installed;
-    if (ScHookInstall(&g_hkCancelUpg, "cmdrecvCancelUpgrade", Rt(SC_VA_CMDRECV_CANCEL_UPGRADE),
+    if (ScHookInstall(&g_hkCancelUpg, "cmdrecvCancelUpgrade", ScRuntimeAddr(SC_VA_CMDRECV_CANCEL_UPGRADE),
                       (void*)&HkCmdrecvCancelUpgrade, 8,
                       kPrologueCancel, (int)sizeof(kPrologueCancel))) ++installed;
-    if (ScHookInstall(&g_hkCancelTech, "cmdrecvCancelTech", Rt(SC_VA_CMDRECV_CANCEL_TECH),
+    if (ScHookInstall(&g_hkCancelTech, "cmdrecvCancelTech", ScRuntimeAddr(SC_VA_CMDRECV_CANCEL_TECH),
                       (void*)&HkCmdrecvCancelTech, 8,
                       kPrologueCancel, (int)sizeof(kPrologueCancel))) ++installed;
 
@@ -1190,7 +1185,7 @@ void ScUpgQueueRemove(void) {
 
 void ScUpgQueueTestBegin(BYTE* fakeModuleBase, int maxTotal, ScUpgStartFn starter) {
     EnsureLock();
-    g_base     = fakeModuleBase;
+    ScEngineSetModuleBase(fakeModuleBase);
     g_enabled  = fakeModuleBase != NULL;
     g_testing  = fakeModuleBase != NULL;
     g_recCount = 0;

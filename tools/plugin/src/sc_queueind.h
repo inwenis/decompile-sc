@@ -201,7 +201,7 @@ int ScQueueIndSurfaceSize(DWORD root, int* w, int* h);
 // The height of the font the SC_CTRL_FONT_SMALLEST bit selects, out of the font's own
 // header. `base` is the CALLER's module base, so a test seam driving a fake image gets its
 // own answer. 0 means "no answer" (the handle is not up yet), never "zero pixels tall".
-int ScQueueIndSmallFontHeight(BYTE* base);
+int ScQueueIndSmallFontHeight(void);
 
 // INK: how many non-background bytes the dialog's own 8-bit surface holds inside a rect.
 // The dialog surface is BinDlg+0x10 with {u16 w, u16 h} at +0x0C/+0x0E -- read off the

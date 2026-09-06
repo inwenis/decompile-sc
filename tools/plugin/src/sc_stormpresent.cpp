@@ -32,12 +32,12 @@
 #include <string.h>
 
 #include "sc_console.h"
+#include "sc_engine.h"
 #include "sc_hook.h"
 #include "sc_log.h"
 #include "sc_screen.h"
+#include "sc_screen_patches.h"   // SC_WS_SCREEN_W/H -- the geometry this repo builds
 #include "sc_session.h"
-
-#define SC_GAME_ENTRY __attribute__((force_align_arg_pointer))
 
 // storm RVAs (preferred base 0x15000000; resolved from the LOADED module below).
 #define STORM_RVA_BPP        0x0005A7C0u   // = 8
@@ -60,7 +60,6 @@
 #define EXE_VA_REGION_FRAME  0x006D5E18u
 #define EXE_VA_REGION_BASE   0x006D5E14u
 #define EXE_VA_ORD529_THUNK  0x00411E60u
-#define SC_EXE_PREFERRED_BASE 0x00400000u
 // storm ord432 (RVA 0x1A520), THE buffer->primary copy the exe present calls every
 // frame: stdcall(dst, src, dstPitch, srcPitch, region), RET 0x14, returns 1. It
 // copies only the dirty REGION (x<640, because the presentable region is 640 wide),
@@ -71,13 +70,8 @@
 // dirty mark. Prologue: push ebp; mov ebp,esp; mov eax,[ebp+0x18] (55 8B EC 8B 45 18),
 // 6 bytes / 3 whole instructions / no PC-relative. Resolved from the LOADED storm.dll.
 #define STORM_RVA_ORD432     0x0001A520u
-// The widescreen geometry this repo builds (sc_screen_patches.h SC_WS_SCREEN_*).
-#define SC_WS_WIDTH  800
-#define SC_WS_HEIGHT 480
-#define SC_STOCK_WIDTH 640
 
 static ScStormMode g_mode = SC_STORM_OFF;
-static BYTE*  g_exeBase   = NULL;
 static BYTE*  g_stormBase = NULL;
 static bool   g_writeAllowed = false;
 static unsigned g_logs = 0;
@@ -87,25 +81,14 @@ static ScHook   g_hkCopy;                   // hook on storm ord432 (the present
 static unsigned g_stripFrames = 0;          // frames the x>=640 strip was copied (stats)
 static unsigned g_stripSkipped = 0;         // present calls that did NOT meet the widescreen guard
 
-static void* ExeRt(DWORD staticVa) {
-    return (void*)(g_exeBase + (staticVa - SC_EXE_PREFERRED_BASE));
-}
 static void* StormRt(DWORD rva) {
     return (void*)(g_stormBase + rva);
 }
 
+// storm's globals are addressed as pointers here, not as VAs; sc_engine's probe
+// takes the VA form, so this is the one-line adapter rather than a second copy.
 static bool Readable(const void* addr, DWORD len) {
-    if (!addr || len == 0) return false;
-    MEMORY_BASIC_INFORMATION mbi;
-    if (VirtualQuery(addr, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
-    if (mbi.State != MEM_COMMIT) return false;
-    if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return false;
-    const DWORD ok = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
-                     PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
-    if ((mbi.Protect & ok) == 0) return false;
-    const BYTE* start = (const BYTE*)addr;
-    const BYTE* regEnd = (const BYTE*)mbi.BaseAddress + mbi.RegionSize;
-    return start >= (const BYTE*)mbi.BaseAddress && start + len <= regEnd;
+    return ScReadable((DWORD)(DWORD_PTR)addr, len);
 }
 
 static DWORD RdU32(const void* addr, bool* ok) {
@@ -148,13 +131,13 @@ ScStormMode ScStormPresentModeWanted(void) {
 // ---------------------------------------------------------------------------
 static void LogRegionRects(const char* what, DWORD regionVaOfPtr) {
     bool ok = false;
-    DWORD region = RdU32(ExeRt(regionVaOfPtr), &ok);
+    DWORD region = RdU32(ScRuntimeAddr(regionVaOfPtr), &ok);
     if (!ok || !region) { ScLog("STORM region %s: handle %s", what, ok ? "NULL" : "unreadable"); return; }
     DWORD cnt = 8;
     int rects[8][4];
     memset(rects, 0, sizeof(rects));
     typedef void (__attribute__((stdcall)) *RgnRectsFn)(DWORD, DWORD*, void*);
-    ((RgnRectsFn)ExeRt(EXE_VA_ORD529_THUNK))(region, &cnt, rects);
+    ((RgnRectsFn)ScRuntimeAddr(EXE_VA_ORD529_THUNK))(region, &cnt, rects);
     char line[320]; size_t used = 0; line[0] = '\0';
     for (DWORD i = 0; i < cnt && i < 8 && used + 48 < sizeof(line); ++i)
         used += (size_t)_snprintf(line + used, sizeof(line) - used, "%s(%d,%d,%d,%d)",
@@ -170,7 +153,7 @@ static void LogRegionRects(const char* what, DWORD regionVaOfPtr) {
 // 640 cap; (0,0,800,480) means the cap is elsewhere.
 static void LogRegionStruct(const char* t, const char* what, DWORD regionVaOfPtr) {
     bool ok = false;
-    DWORD r = RdU32(ExeRt(regionVaOfPtr), &ok);
+    DWORD r = RdU32(ScRuntimeAddr(regionVaOfPtr), &ok);
     if (!ok || !r || !Readable((void*)(DWORD_PTR)r, 0x30)) {
         ScLog("STORM [%s] region-struct %s: handle %s", t, what,
               (!ok || !r) ? "NULL/unreadable ptr" : "handle unreadable");
@@ -291,11 +274,11 @@ HkOrd432(DWORD dst, DWORD src, DWORD dstPitch, DWORD srcPitch, DWORD region) {
     // Then the far quarter, straight from the buffer. Guarded on the widescreen
     // geometry so a stray 640-pitch call can never write past a 640-wide surface.
     if (g_mode == SC_STORM_WIDEN && dst && src &&
-        dstPitch >= (DWORD)SC_WS_WIDTH && srcPitch >= (DWORD)SC_WS_WIDTH) {
-        const int stripW = SC_WS_WIDTH - SC_STOCK_WIDTH;   // 160
-        BYTE* d = (BYTE*)(DWORD_PTR)dst + SC_STOCK_WIDTH;
-        BYTE* s = (BYTE*)(DWORD_PTR)src + SC_STOCK_WIDTH;
-        for (int y = 0; y < SC_WS_HEIGHT; ++y) {
+        dstPitch >= (DWORD)SC_WS_SCREEN_W && srcPitch >= (DWORD)SC_WS_SCREEN_W) {
+        const int stripW = SC_WS_SCREEN_W - SC_SCREEN_W;   // 160
+        BYTE* d = (BYTE*)(DWORD_PTR)dst + SC_SCREEN_W;
+        BYTE* s = (BYTE*)(DWORD_PTR)src + SC_SCREEN_W;
+        for (int y = 0; y < SC_WS_SCREEN_H; ++y) {
             memcpy(d, s, (size_t)stripW);
             d += dstPitch;
             s += srcPitch;
@@ -316,7 +299,7 @@ static const BYTE kPrologueOrd432[] = { 0x55, 0x8B, 0xEC, 0x8B, 0x45, 0x18 };
 // ---------------------------------------------------------------------------
 
 void ScStormPresentInstall(BYTE* exeBase, bool writeAllowed) {
-    g_exeBase = exeBase;
+    ScEngineSetModuleBase(exeBase);
     g_writeAllowed = writeAllowed;
     g_mode = ScStormPresentModeWanted();
     g_logs = 0;

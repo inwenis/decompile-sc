@@ -22,6 +22,7 @@
 #include <string.h>
 
 #include "sc_addresses.h"
+#include "sc_engine.h"
 #include "sc_fanout.h"
 #include "sc_hook.h"
 #include "sc_hudrow.h"
@@ -31,7 +32,6 @@
 
 #define HUD_MAX 256
 
-static BYTE* g_base    = NULL;
 static bool  g_enabled = false;
 
 static ScHook g_hkDispatch;
@@ -159,10 +159,6 @@ static unsigned g_statSplices = 0;
 static unsigned g_statDiverged = 0;  // times the row handed back on engine divergence
 static unsigned g_statGated    = 0;  // clicks the gate swallowed (stale unit)
 
-static void* Rt(DWORD staticVa) {
-    return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE));
-}
-
 // ---------------------------------------------------------------------------
 // Engine primitives, through the seam
 // ---------------------------------------------------------------------------
@@ -172,14 +168,14 @@ static void* Rt(DWORD staticVa) {
 // callee-saved rules preserve EBX/ESI/EDI across the call.
 static void CallShow(DWORD ctrl) {
     if (g_show) { g_show(ctrl); return; }
-    void* fn = Rt(SC_VA_SHOW_CONTROL);
+    void* fn = ScRuntimeAddr(SC_VA_SHOW_CONTROL);
     __asm__ __volatile__("calll *%[fn]"
         : : "S"(ctrl), [fn] "r"(fn) : "eax", "ecx", "edx", "cc", "memory");
 }
 
 static void CallHide(DWORD ctrl) {
     if (g_hide) { g_hide(ctrl); return; }
-    void* fn = Rt(SC_VA_HIDE_CONTROL);
+    void* fn = ScRuntimeAddr(SC_VA_HIDE_CONTROL);
     __asm__ __volatile__("calll *%[fn]"
         : : "S"(ctrl), [fn] "r"(fn) : "eax", "ecx", "edx", "cc", "memory");
 }
@@ -187,7 +183,7 @@ static void CallHide(DWORD ctrl) {
 // 0x0041C400 takes the control in EAX.
 static void CallUpdate(DWORD ctrl) {
     if (g_update) { g_update(ctrl); return; }
-    void* fn = Rt(SC_VA_UPDATE_CONTROL);
+    void* fn = ScRuntimeAddr(SC_VA_UPDATE_CONTROL);
     DWORD inout = ctrl;
     __asm__ __volatile__("calll *%[fn]"
         : "+a"(inout) : [fn] "r"(fn) : "ecx", "edx", "cc", "memory");
@@ -197,7 +193,7 @@ typedef int (__attribute__((fastcall)) *EngineInteractFn)(DWORD, DWORD);
 static int CallEngineInteract(DWORD ctrl, DWORD evt) {
     EngineInteractFn fn = g_engineInteract
         ? (EngineInteractFn)g_engineInteract
-        : (EngineInteractFn)Rt(SC_VA_WIREFRAME_BTN_INTERACT);
+        : (EngineInteractFn)ScRuntimeAddr(SC_VA_WIREFRAME_BTN_INTERACT);
     return fn(ctrl, evt);
 }
 
@@ -209,25 +205,12 @@ static void CallOrigDispatch(void) {
     if (g_hkDispatch.installed) ((OrigDispatchFn)g_hkDispatch.trampoline)();
 }
 
-static DWORD StatDialog(void)   { return *(DWORD*)Rt(SC_VA_STATDATA_DIALOG); }
-static DWORD PortraitUnit(void) { return *(DWORD*)Rt(SC_VA_ACTIVE_PORTRAIT_UNIT); }
+static DWORD StatDialog(void)   { return *(DWORD*)ScRuntimeAddr(SC_VA_STATDATA_DIALOG); }
+static DWORD PortraitUnit(void) { return *(DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PORTRAIT_UNIT); }
 
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
-
-static bool Readable(DWORD addr, DWORD len) {
-    if (!addr || len == 0) return false;
-    MEMORY_BASIC_INFORMATION mbi;
-    if (VirtualQuery((LPCVOID)addr, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
-    if (mbi.State != MEM_COMMIT) return false;
-    if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return false;
-    const DWORD ok = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
-                     PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
-    if ((mbi.Protect & ok) == 0) return false;
-    DWORD regionEnd = (DWORD)mbi.BaseAddress + (DWORD)mbi.RegionSize;
-    return addr + len <= regionEnd;
-}
 
 // Is this still the same, LIVING unit it was at capture?
 //
@@ -256,7 +239,7 @@ static bool UnitAlive(const ScShadowInfo* u) {
 
 static WORD UnitTag(DWORD unit) {
     if (!unit) return 0;
-    DWORD base = (DWORD)Rt(SC_VA_UNIT_ARRAY_BASE);
+    DWORD base = ScRuntimeVa(SC_VA_UNIT_ARRAY_BASE);
     if (unit < base) return 0;
     DWORD off = unit - base;
     if (off % SC_CUNIT_SIZE != 0) return 0;
@@ -277,7 +260,7 @@ static bool InPlayerUnitList(DWORD unit) {
     if (!unit) return false;
     BYTE player = *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER);
     if (player >= SC_MAX_PLAYERS) return false;
-    DWORD u = ((DWORD*)Rt(SC_VA_PLAYER_UNIT_LIST))[player];
+    DWORD u = ((DWORD*)ScRuntimeAddr(SC_VA_PLAYER_UNIT_LIST))[player];
     for (int guard = 0; u && guard < SC_MAX_UNITS_WALK; ++guard) {
         if (u == unit) return true;
         u = *(DWORD*)(u + SC_CUNIT_OFF_LIST_NEXT);
@@ -363,7 +346,7 @@ static bool EngineSlotLive(DWORD unit) {
 static bool EngineSelectionMatchesVisible(void) {
     DWORD eng[SC_HUD_BUTTON_COUNT];
     int engN = 0;
-    DWORD* slot = (DWORD*)Rt(SC_VA_CLIENT_SELECTION_GROUP);
+    DWORD* slot = (DWORD*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_GROUP);
     for (int i = 0; i < SC_HUD_BUTTON_COUNT; ++i) {
         if (slot[i] && EngineSlotLive(slot[i]) && engN < SC_HUD_BUTTON_COUNT) {
             eng[engN++] = slot[i];
@@ -495,8 +478,6 @@ static bool RefreshShadow(bool* selChanged, bool* death) {
 // The button shim
 // ---------------------------------------------------------------------------
 
-#define SC_GAME_ENTRY __attribute__((force_align_arg_pointer))
-
 int ScHudRowOnButtonEvent(DWORD ctrl, DWORD evt) {
     // The dialog framework delivers the RAW mouse event to the control under the
     // cursor with its type intact -- 0x00418EB0 groups cases 4/6/7/9 and tail-calls
@@ -514,7 +495,7 @@ int ScHudRowOnButtonEvent(DWORD ctrl, DWORD evt) {
         if (type == SC_EVT_RBUTTONDOWN && g_pageCount > 1) {
             g_page = (g_page + 1) % g_pageCount;
             g_flipPending = true;
-            *(BYTE*)Rt(SC_VA_STAT_DIRTY) = 1;
+            *(BYTE*)ScRuntimeAddr(SC_VA_STAT_DIRTY) = 1;
             ++g_statFlips;
             ScLog("HUDROW flip -> page %d/%d", g_page + 1, g_pageCount);
             return 1;
@@ -537,7 +518,7 @@ int ScHudRowOnButtonEvent(DWORD ctrl, DWORD evt) {
                 ScLog("HUDROW click gate: unit 0x%08X is not live/in-play -- click "
                       "swallowed, handing back to stock", (unsigned)unit);
                 g_diverged = true;
-                *(BYTE*)Rt(SC_VA_STAT_DIRTY) = 1;
+                *(BYTE*)ScRuntimeAddr(SC_VA_STAT_DIRTY) = 1;
                 ++g_statGated;
                 return 1;                         // swallow: engine never sees it
             }
@@ -555,7 +536,7 @@ HudBtnInteractShim(DWORD ctrl, DWORD evt) {
 // paged act run, which is what survives the engine re-binding them at dialog
 // CREATE (the binder writes the table value back; the next act run re-wraps).
 static void EnsureWrapped(DWORD firstBtn) {
-    const DWORD engineFn = (DWORD)Rt(SC_VA_WIREFRAME_BTN_INTERACT);
+    const DWORD engineFn = ScRuntimeVa(SC_VA_WIREFRAME_BTN_INTERACT);
     const DWORD shim     = (DWORD)&HudBtnInteractShim;
     g_wrapCount = 0;
     DWORD c = firstBtn;
@@ -578,7 +559,7 @@ static void EnsureWrapped(DWORD firstBtn) {
 // dialog is gone: just drop the bookkeeping.
 static void Unwrap(DWORD root) {
     if (root) {
-        const DWORD engineFn = (DWORD)Rt(SC_VA_WIREFRAME_BTN_INTERACT);
+        const DWORD engineFn = ScRuntimeVa(SC_VA_WIREFRAME_BTN_INTERACT);
         const DWORD shim     = (DWORD)&HudBtnInteractShim;
         DWORD c = FindChildById(root, SC_HUD_FIRST_SMALL_BUTTON);
         for (int i = 0; i < SC_HUD_BUTTON_COUNT && c; ++i, c = NextOf(c)) {
@@ -634,9 +615,9 @@ static bool EnsureSpliced(DWORD root) {
     // does not dispatch that type the way BWAPI's enum says, so refuse to splice rather than
     // hand the dialog a control it cannot draw. The row still pages; it just shows no
     // indicator.
-    DWORD tInteract = *(DWORD*)((DWORD)Rt(SC_VA_DEFAULT_INTERACT_TABLE) +
+    DWORD tInteract = *(DWORD*)(ScRuntimeVa(SC_VA_DEFAULT_INTERACT_TABLE) +
                                 SC_CTRL_TYPE_LSTATIC * 4);
-    DWORD tUpdate   = *(DWORD*)((DWORD)Rt(SC_VA_DEFAULT_UPDATE_TABLE) +
+    DWORD tUpdate   = *(DWORD*)(ScRuntimeVa(SC_VA_DEFAULT_UPDATE_TABLE) +
                                 SC_CTRL_TYPE_LSTATIC * 4);
     if (!tInteract || !tUpdate) {
         ScLog("HUDROW: no engine handler for control type %d (interact=0x%08X "
@@ -751,7 +732,7 @@ static bool PlaceIndicator(short* box, DWORD root, DWORD firstBtn, int textLen) 
     // box narrower than the string draws a TRUNCATION, which is worse than nothing because it
     // reads as a working feature. Either one is refused here, loudly and once, rather than
     // being met by a player -- the task's own "draw nothing rather than overlap" outcome.
-    const int fontH = ScQueueIndSmallFontHeight(g_base);
+    const int fontH = ScQueueIndSmallFontHeight();
     if (bottom - top < (fontH > 0 ? fontH : SC_QIND_BAND_MIN_H) || right - left < want) {
         if (!g_bandTooSmall) {
             ScLog("HUDROW: the band below the row is (%d,%d,%d,%d) on a %dx%d surface -- too "
@@ -1002,7 +983,7 @@ static void LogReadback(DWORD firstBtn) {
     if (linked) {
         flags = *(DWORD*)(ind + SC_BINDLG_OFF_FLAGS);
         DWORD p = *(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
-        if (Readable(p, 1)) live = (const char*)p;
+        if (ScReadable(p, 1)) live = (const char*)p;
         ink = ScQueueIndSurfaceInk(g_dialog, ib[0], ib[1], ib[2], ib[3]);
     }
 
@@ -1028,7 +1009,7 @@ static void LogReadback(DWORD firstBtn) {
           linked ? ib[0] : 0, linked ? ib[1] : 0, linked ? ib[2] : 0, linked ? ib[3] : 0, ink,
           linked ? BandDiff(g_dialog) : -1, refInk, refId,
           ScQueueIndSurfaceInk(g_dialog, 0, 0, 0x7FFF, 0x7FFF),
-          ScQueueIndSmallFontHeight(g_base), g_indShowing ? 1 : 0);
+          ScQueueIndSmallFontHeight(), g_indShowing ? 1 : 0);
 }
 
 // Where the buttons are, so an automated test can aim a right-click at one --
@@ -1057,7 +1038,7 @@ static void LogButtonRects(DWORD root, DWORD firstBtn) {
 static void FillPage(DWORD root, DWORD firstBtn) {
     // The engine's own hidden-sweep, replicated (0x00425960 lines 11-20 of the
     // decompile): hide everything once, then show what this run displays.
-    BYTE* allHidden = (BYTE*)Rt(SC_VA_STAT_ALL_HIDDEN);
+    BYTE* allHidden = (BYTE*)ScRuntimeAddr(SC_VA_STAT_ALL_HIDDEN);
     if (*allHidden != 1) {
         for (DWORD c = ChildOf(root); c; c = NextOf(c)) CallHide(c);
         *allHidden = 1;
@@ -1106,7 +1087,7 @@ static void FillPage(DWORD root, DWORD firstBtn) {
 // infer it from the absence of paging.
 static void LogVerifyStock(DWORD root) {
     if (!root) { ScLog("HUDROW verify stock: no dialog"); return; }
-    const DWORD engineFn = (DWORD)Rt(SC_VA_WIREFRAME_BTN_INTERACT);
+    const DWORD engineFn = ScRuntimeVa(SC_VA_WIREFRAME_BTN_INTERACT);
     int engineOwned = 0, walked = 0;
     DWORD c = FindChildById(root, SC_HUD_FIRST_SMALL_BUTTON);
     for (int i = 0; i < SC_HUD_BUTTON_COUNT && c; ++i, c = NextOf(c)) {
@@ -1253,7 +1234,7 @@ void ScHudRowOnDispatch(void) {
 
     // Consume the redraw-needed flag the way the engine's dispatcher does at its
     // tail, since we are standing in for it this frame.
-    *(BYTE*)Rt(SC_VA_STAT_DIRTY) = 0;
+    *(BYTE*)ScRuntimeAddr(SC_VA_STAT_DIRTY) = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -1279,7 +1260,7 @@ static const BYTE kPrologueDispatch[] = { 0xA1, 0x48, 0x72, 0x59, 0x00 };
 // ---------------------------------------------------------------------------
 
 void ScHudRowInit(BYTE* moduleBase, bool enabled) {
-    g_base    = moduleBase;
+    ScEngineSetModuleBase(moduleBase);
     g_enabled = enabled;
     g_show = g_hide = g_update = NULL;
     g_engineInteract = NULL;
@@ -1318,7 +1299,7 @@ int ScHudRowInstallHooks(void) {
     if (!g_enabled) return 0;
 
     if (ScHookInstall(&g_hkDispatch, "statDataUpdate",
-                      Rt(SC_VA_STAT_DATA_UPDATE),
+                      ScRuntimeAddr(SC_VA_STAT_DATA_UPDATE),
                       (void*)&HkStatDispatch, 5,
                       kPrologueDispatch, (int)sizeof(kPrologueDispatch))) {
         return 1;
@@ -1335,20 +1316,20 @@ void ScHudRowRemoveHooks(void) {
     // because the dialog may be gone. Mid-game unload stays unsupported (the
     // game thread may be inside the shim), same policy as sc_circles.
     if (g_wrapCount > 0) {
-        const DWORD engineFn = (DWORD)Rt(SC_VA_WIREFRAME_BTN_INTERACT);
+        const DWORD engineFn = ScRuntimeVa(SC_VA_WIREFRAME_BTN_INTERACT);
         const DWORD shim     = (DWORD)&HudBtnInteractShim;
         for (int i = 0; i < g_wrapCount; ++i) {
             DWORD p = g_wrapBtn[i] + SC_BINDLG_OFF_INTERACT;
-            if (Readable(p, 4) && *(DWORD*)p == shim) *(DWORD*)p = engineFn;
+            if (ScReadable(p, 4) && *(DWORD*)p == shim) *(DWORD*)p = engineFn;
         }
         g_wrapCount = 0;
     }
     if (g_indSpliced && g_dialog &&
-        Readable(g_dialog + SC_BINDLG_OFF_FIRST_CHILD, 4)) {
+        ScReadable(g_dialog + SC_BINDLG_OFF_FIRST_CHILD, 4)) {
         DWORD ind = (DWORD)&g_indCtrl[0];
         DWORD* link = (DWORD*)(g_dialog + SC_BINDLG_OFF_FIRST_CHILD);
         while (*link && *link != ind) {
-            if (!Readable(*link + SC_BINDLG_OFF_NEXT, 4)) { link = NULL; break; }
+            if (!ScReadable(*link + SC_BINDLG_OFF_NEXT, 4)) { link = NULL; break; }
             link = (DWORD*)(*link + SC_BINDLG_OFF_NEXT);
         }
         if (link && *link == ind) *link = NextOf(ind);
