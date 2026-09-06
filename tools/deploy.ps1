@@ -174,9 +174,8 @@ install guard, injection, windowed helper, dialog health check) -- reimplementin
 here would be pure duplication risk for zero benefit. The question was only whether the
 deployed launcher should call this repo's copy in place, or its own copy. A thin pointer
 into the repo is fragile for this project specifically: worker worktrees (including the
-one this task was built in) are disposable and get pruned after merge (AGENTS.md
-"Conventions"), so a launcher baked with a worktree path would break the day its worktree
-is cleaned up. Copying run-with-plugin.ps1 + check-game-windows.ps1 into the deploy tree
+one this task was built in) are disposable and get pruned after merge, so a launcher
+baked with a worktree path would break the day its worktree is cleaned up. Copying run-with-plugin.ps1 + check-game-windows.ps1 into the deploy tree
 avoids that: the deployed install has everything it needs under one root and keeps
 working even if every git worktree on the machine is deleted. The cost is that a deployed
 install goes stale until the next ./tools/deploy.ps1 -- identical to how the plugin
