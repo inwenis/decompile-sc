@@ -34,11 +34,10 @@ enemy anywhere.
    five icons fill, then a `+N` badge appears on the last one for everything past
    five. That `+N` badge and the fifth slot are both the feature.
 3. **With that same building still holding a queue, click the last icon in its row**
-   (the one carrying the `+N` badge). **This is a known, currently-open bug
-   (issue #061, reported by you): the click does nothing at all** -- no cancel, no
-   refund, the queue count does not change. That is not this map misbehaving; it is
-   this map catching the bug on demand. Once #061 is fixed, this exact click should
-   remove the item and refund its cost -- come back and re-try this step then.
+   (the one carrying the `+N` badge). It should cancel one queued SCV and refund its
+   50 minerals: the `+N` counts down, and your minerals go up. This used to do
+   nothing at all -- the bug you reported, diagnosed in PR #95 and fixed in PR #102.
+   If the click ever goes dead again, this step is the fastest way to catch it.
 4. **Drag a box around several of the buildings, then click Train once.** Every
    building in the box queues one SCV from that single click -- that is the group
    queue indicator working across a multi-building selection.
