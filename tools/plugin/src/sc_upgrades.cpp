@@ -71,9 +71,9 @@ static ScUpgStartFn g_start = &EngineStartItem;
 
 static bool RecordStillLive(const UpgRecord* r, bool deep) {
     if (!ScUnitPtrValid(r->unit)) return false;
-    if (*(BYTE*)(r->unit + SC_CUNIT_OFF_UNIQUENESS) != r->uniqueness) return false;
-    if (*(BYTE*)(r->unit + SC_CUNIT_OFF_PLAYER) != r->player) return false;
-    if (*(DWORD*)(r->unit + SC_CUNIT_OFF_HITPOINTS) == 0) return false;
+    if (ScUnitUniqueness(r->unit) != r->uniqueness) return false;
+    if (ScUnitPlayer(r->unit) != r->player) return false;
+    if (ScUnitHitPoints(r->unit) == 0) return false;
     if (deep && !ScUnitInPlayerList(r->unit, r->player)) return false;
     return true;
 }
@@ -91,7 +91,7 @@ static bool IsResearchableBuilding(DWORD unit) {
     DWORD flags = *(DWORD*)(unit + SC_CUNIT_OFF_FLAGS);
     if ((flags & SC_UNIT_FLAG_BUILDING) == 0) return false;
     if ((flags & SC_UNIT_FLAG_COMPLETED) == 0) return false;
-    return *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER) < SC_MAX_PLAYERS;
+    return ScUnitPlayer(unit) < SC_MAX_PLAYERS;
 }
 
 static BYTE UpgradeInProgress(DWORD unit) {
@@ -336,7 +336,7 @@ bool ScUpgQueueMaySuppressBusyBit(DWORD unit, int kind, unsigned id) {
     if (kind != SC_UPGQ_KIND_UPGRADE) return false;   // a tech has no levels to stack
     if (id >= SC_UPGRADE_COUNT) return false;
     if (UpgradeInProgress(unit) != (BYTE)id) return false;   // <- the two-buildings guard
-    BYTE player = *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER);
+    BYTE player = ScUnitPlayer(unit);
     if (player >= SC_MAX_PLAYERS) return false;
     return WantedLevel(unit, FindRecord(unit), kind, id) <= MaxUpgradeLevel(player, id);
 }
@@ -356,7 +356,7 @@ bool ScUpgQueueOnCommand(DWORD unit, int kind, unsigned id) {
         if (kind == SC_UPGQ_KIND_UPGRADE && id >= SC_UPGRADE_COUNT) break;
         if (kind == SC_UPGQ_KIND_TECH    && id >= SC_TECH_COUNT) break;
 
-        BYTE player = *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER);
+        BYTE player = ScUnitPlayer(unit);
         UpgRecord* r = FindRecord(unit);
         if (QueueRoom(unit, r) <= 0) {
             // Reachable only from a replay or a peer: at the cap the card conditions stop
@@ -376,7 +376,7 @@ bool ScUpgQueueOnCommand(DWORD unit, int kind, unsigned id) {
             }
             r = &g_rec[g_recCount++];
             r->unit       = unit;
-            r->uniqueness = *(BYTE*)(unit + SC_CUNIT_OFF_UNIQUENESS);
+            r->uniqueness = ScUnitUniqueness(unit);
             r->player     = player;
             r->count      = 0;
         }
@@ -466,7 +466,7 @@ static void FormatQueue(const UpgRecord* r, char* out, int outLen) {
 static void LogUnitLine(const char* what, const char* tag, DWORD unit, const UpgRecord* r) {
     char q[192];
     FormatQueue(r, q, (int)sizeof(q));
-    BYTE player = *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER);
+    BYTE player = ScUnitPlayer(unit);
     ScLog("%s [%s] unit=0x%08X type=0x%03X player=%u upg=%u tech=%u lvl=%u time=%u "
           "busy=%d queued=%d queue=[%s] logical=%d minerals=%u gas=%u",
           what, tag ? tag : "-", (unsigned)unit,
@@ -531,7 +531,7 @@ void ScUpgQueueLogState(const char* tag) {
         DWORD u = sel[0];
         if (u && !sel[1] && ScUnitPtrValid(u)) {
             LogUnitLine("UPGQSEL", tag, u, FindRecord(u));
-            LogPlayerProgress(tag, *(BYTE*)(u + SC_CUNIT_OFF_PLAYER));
+            LogPlayerProgress(tag, ScUnitPlayer(u));
         } else {
             ScLog("UPGQSEL [%s] (no single unit selected)", tag ? tag : "-");
         }
@@ -723,7 +723,7 @@ asm(".text\n"
 // the item starts, not at the moment it was queued -- and then the engine's own start
 // pays for it and sets the field.
 static int EngineStartItem(DWORD unit, int kind, unsigned id) {
-    BYTE player = *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER);
+    BYTE player = ScUnitPlayer(unit);
     bool tech = (kind == SC_UPGQ_KIND_TECH);
 
     DWORD gate = ScUpgCallGate(ScRuntimeAddr(tech ? SC_VA_TECH_GATE : SC_VA_UPGRADE_GATE),
@@ -846,7 +846,7 @@ static DWORD CondCommon(ScHook* hook, int kind, DWORD unit, DWORD id, DWORD play
     BYTE* levelByte = NULL;
     BYTE savedLevel = 0;
     if (lieBit) {
-        BYTE owner = *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER);
+        BYTE owner = ScUnitPlayer(unit);
         bitByte = UpgradeBusyByte(owner, id);
         savedBits = *bitByte;
         *bitByte = (BYTE)(savedBits & ~(1u << (id & 7)));

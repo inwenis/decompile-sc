@@ -76,9 +76,9 @@ static unsigned g_session = 0;
 // `deep` adds the list walk. Without it this is four loads.
 static bool RecordStillLive(const ProdRecord* r, bool deep) {
     if (!ScUnitPtrValid(r->unit)) return false;
-    if (*(BYTE*)(r->unit + SC_CUNIT_OFF_UNIQUENESS) != r->uniqueness) return false;
-    if (*(BYTE*)(r->unit + SC_CUNIT_OFF_PLAYER) != r->player) return false;
-    if (*(DWORD*)(r->unit + SC_CUNIT_OFF_HITPOINTS) == 0) return false;
+    if (ScUnitUniqueness(r->unit) != r->uniqueness) return false;
+    if (ScUnitPlayer(r->unit) != r->player) return false;
+    if (ScUnitHitPoints(r->unit) == 0) return false;
     if (deep && !ScUnitInPlayerList(r->unit, r->player)) return false;
     return true;
 }
@@ -294,7 +294,7 @@ static int HoldBack(DWORD unit, BYTE player, ProdRecord** rp) {
         if (!*rp) {
             ProdRecord* n = &g_rec[g_recCount++];
             n->unit       = unit;
-            n->uniqueness = *(BYTE*)(unit + SC_CUNIT_OFF_UNIQUENESS);
+            n->uniqueness = ScUnitUniqueness(unit);
             n->player     = player;
             n->count      = 0;
             *rp = n;
@@ -335,7 +335,7 @@ void ScProdQueueOnTrain(DWORD unit, unsigned type, bool wasFull) {
 
     do {
         if (!ScUnitPtrValid(unit)) break;
-        BYTE player = *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER);
+        BYTE player = ScUnitPlayer(unit);
         if (player >= SC_MAX_PLAYERS) break;
         ProdRecord* r = FindRecord(unit);
 
@@ -530,7 +530,7 @@ void ScProdQueueLogState(const char* tag) {
             int engineLen = 0;
             int stable = CoherentEngineQueue(u, eng, (int)sizeof(eng), &head, &engineLen);
             ProdRecord* r = FindRecord(u);
-            BYTE player = *(BYTE*)(u + SC_CUNIT_OFF_PLAYER);
+            BYTE player = ScUnitPlayer(u);
             ScLog("PRODQSEL [%s] unit=0x%08X type=0x%03X player=%u head=%u engineLen=%d "
                   "engine=[%s] overflow=%d logical=%d minerals=%u gas=%u ringStable=%d",
                   tag ? tag : "-", (unsigned)u,

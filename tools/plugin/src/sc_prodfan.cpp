@@ -203,8 +203,8 @@ void ScProdFanLogState(const char* tag) {
         // this CUnit slot has been recycled and the pointer names a different unit now
         // (research/binary-selection-map.md 6.1). Reporting it rather than skipping it
         // keeps "the selection went stale" distinguishable from "the queue is empty".
-        BYTE uniq = *(BYTE*)(u + SC_CUNIT_OFF_UNIQUENESS);
-        BYTE owner = *(BYTE*)(u + SC_CUNIT_OFF_PLAYER);
+        BYTE uniq = ScUnitUniqueness(u);
+        BYTE owner = ScUnitPlayer(u);
         WORD type = *(WORD*)(u + SC_CUNIT_OFF_UNIT_ID);
         int len = ScUnitQueueLength(u);
         char eng[96];

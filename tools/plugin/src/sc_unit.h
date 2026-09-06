@@ -74,6 +74,14 @@ static inline bool ScUnitInOwnPlayerList(DWORD unit) {
     return ScUnitInPlayerList(unit, *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER));
 }
 
+// The three fields every module reads off a unit it has already validated. Named
+// rather than spelled out as a cast at each site, because `*(BYTE*)(u + 0xA5)` is
+// where a wrong offset hides.
+static inline BYTE  ScUnitUniqueness(DWORD unit) { return *(BYTE*)(unit + SC_CUNIT_OFF_UNIQUENESS); }
+static inline BYTE  ScUnitPlayer(DWORD unit)     { return *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER); }
+static inline DWORD ScUnitHitPoints(DWORD unit)  { return *(DWORD*)(unit + SC_CUNIT_OFF_HITPOINTS); }
+static inline DWORD ScUnitSprite(DWORD unit)     { return *(DWORD*)(unit + SC_CUNIT_OFF_SPRITE); }
+
 // ---------------------------------------------------------------------------
 // The engine's five-slot build queue, read and written the way the engine does
 // ---------------------------------------------------------------------------
@@ -135,6 +143,11 @@ static inline DWORD ScDlgFindChild(DWORD root, short id) {
     }
     return 0;
 }
+
+// A control's bounds: four shorts at +0x04, in LEFT, TOP, RIGHT, BOTTOM order, and
+// RELATIVE TO THE DIALOG -- the engine adds the dialog's own origin (0x00458850 does
+// `dlg->rct.left + child->rct.left`), so an absolute point is root + ctrl.
+static inline short* ScDlgBounds(DWORD ctrl) { return (short*)(ctrl + SC_BINDLG_OFF_BOUNDS); }
 
 static inline DWORD ScStatDialog(void)   { return *(DWORD*)ScRuntimeAddr(SC_VA_STATDATA_DIALOG); }
 static inline DWORD ScPortraitUnit(void) { return *(DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PORTRAIT_UNIT); }

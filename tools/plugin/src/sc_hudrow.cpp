@@ -217,8 +217,8 @@ static void CallOrigDispatch(void) {
 // clicked unit that is no longer in its player's unit list.
 static bool UnitAlive(const ScShadowInfo* u) {
     if (!u->unit) return false;
-    if (*(BYTE*)(u->unit + SC_CUNIT_OFF_UNIQUENESS) != u->uniqueness) return false;
-    return *(DWORD*)(u->unit + SC_CUNIT_OFF_HITPOINTS) != 0;
+    if (ScUnitUniqueness(u->unit) != u->uniqueness) return false;
+    return ScUnitHitPoints(u->unit) != 0;
 }
 
 // Is a clicked wireframe unit safe to hand to the engine's Select? It must be a
@@ -238,8 +238,8 @@ static bool ClickUnitValid(DWORD unit) {
         if (g_cache[i].unit == unit) { captured = g_cache[i].uniq; known = true; break; }
     }
     if (!known) return false;                                        // not a shown unit
-    if (*(BYTE*)(unit + SC_CUNIT_OFF_UNIQUENESS) != captured) return false;  // recycled
-    if (*(DWORD*)(unit + SC_CUNIT_OFF_HITPOINTS) == 0) return false;         // dead
+    if (ScUnitUniqueness(unit) != captured) return false;  // recycled
+    if (ScUnitHitPoints(unit) == 0) return false;         // dead
     return ScUnitInOwnPlayerList(unit);                                           // in play
 }
 
@@ -639,11 +639,11 @@ static bool PlaceIndicator(short* box, DWORD root, DWORD firstBtn, int textLen) 
     int surfW = 0, surfH = 0;
     if (!ScQueueIndSurfaceSize(root, &surfW, &surfH) || surfW <= 0 || surfH <= 0) return false;
 
-    short* fb = (short*)(firstBtn + SC_BINDLG_OFF_BOUNDS);
+    short* fb = ScDlgBounds(firstBtn);
     int rowLeft = fb[0], rowBottom = fb[3];
     DWORD c = firstBtn;
     for (int i = 0; i < SC_HUD_BUTTON_COUNT && c; ++i, c = ScDlgNext(c)) {
-        short* b = (short*)(c + SC_BINDLG_OFF_BOUNDS);
+        short* b = ScDlgBounds(c);
         if (b[0] < rowLeft)   rowLeft   = b[0];
         if (b[3] > rowBottom) rowBottom = b[3];
     }
@@ -739,7 +739,7 @@ static bool IndicatorFrame(DWORD root, DWORD firstBtn) {
     if (!EnsureSpliced(root)) return false;
 
     DWORD  ind = (DWORD)&g_indCtrl[0];
-    short* ib  = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
+    short* ib  = ScDlgBounds(ind);
     const bool moved = (ib[0] != box[0] || ib[1] != box[1] ||
                         ib[2] != box[2] || ib[3] != box[3]);
     if (moved) {
@@ -912,7 +912,7 @@ static void LogReadback(DWORD firstBtn) {
     const char* live = "";
     int ink = -1;
     DWORD flags = 0;
-    short* ib = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
+    short* ib = ScDlgBounds(ind);
     if (linked) {
         flags = *(DWORD*)(ind + SC_BINDLG_OFF_FLAGS);
         DWORD p = *(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
@@ -929,7 +929,7 @@ static void LogReadback(DWORD firstBtn) {
     int refInk = -1, refId = 0;
     DWORD ref = ScDlgFindChild(g_dialog, SC_HUD_FIRST_SMALL_BUTTON);
     if (ref && (*(DWORD*)(ref + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE)) {
-        short* rb = (short*)(ref + SC_BINDLG_OFF_BOUNDS);
+        short* rb = ScDlgBounds(ref);
         refInk = ScQueueIndSurfaceInk(g_dialog, rb[0], rb[1], rb[2], rb[3]);
         refId  = SC_HUD_FIRST_SMALL_BUTTON;
     }
@@ -953,12 +953,12 @@ static void LogButtonRects(DWORD root, DWORD firstBtn) {
     if (g_rectsLogged) return;
     char buf[512];
     int used = 0;
-    short* rb = (short*)(root + SC_BINDLG_OFF_BOUNDS);
+    short* rb = ScDlgBounds(root);
     used += _snprintf(buf + used, sizeof(buf) - (size_t)used, "root=[%d,%d,%d,%d]",
                       rb[0], rb[1], rb[2], rb[3]);
     DWORD c = firstBtn;
     for (int i = 0; i < SC_HUD_BUTTON_COUNT && c; ++i, c = ScDlgNext(c)) {
-        short* b = (short*)(c + SC_BINDLG_OFF_BOUNDS);
+        short* b = ScDlgBounds(c);
         int room = (int)sizeof(buf) - used;
         if (room < 32) break;
         used += _snprintf(buf + used, (size_t)room, " b%d=[%d,%d,%d,%d]",
@@ -996,8 +996,8 @@ static void FillPage(DWORD root, DWORD firstBtn) {
             CallUpdate(c);
             HudSlotCache* s = &g_cache[g_cacheN++];
             s->unit = unit;
-            s->uniq = *(BYTE*)(unit + SC_CUNIT_OFF_UNIQUENESS);
-            s->hp   = *(DWORD*)(unit + SC_CUNIT_OFF_HITPOINTS);
+            s->uniq = ScUnitUniqueness(unit);
+            s->hp   = ScUnitHitPoints(unit);
             s->id   = id;
         } else {
             CallHide(c);
@@ -1065,8 +1065,8 @@ static void RestoreStock(DWORD root) {
 static bool PageDrifted(void) {
     for (int i = 0; i < g_cacheN; ++i) {
         const HudSlotCache* s = &g_cache[i];
-        if (*(BYTE*)(s->unit + SC_CUNIT_OFF_UNIQUENESS) != s->uniq) return true;
-        if (*(DWORD*)(s->unit + SC_CUNIT_OFF_HITPOINTS) != s->hp)   return true;
+        if (ScUnitUniqueness(s->unit) != s->uniq) return true;
+        if (ScUnitHitPoints(s->unit) != s->hp)   return true;
         if (*(WORD*) (s->unit + SC_CUNIT_OFF_UNIT_ID)   != s->id)   return true;
     }
     return false;

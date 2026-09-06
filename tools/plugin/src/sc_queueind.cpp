@@ -555,7 +555,7 @@ static void Unsplice(DWORD root) {
 // necessarily changing (a seventh building that is not producing adds a row of buttons and
 // not a word). The caller compares, and only then moves the control and redraws.
 static bool PlaceOn(short* b, DWORD anchor, DWORD root, int mode, int textLen) {
-    short* a = (short*)(anchor + SC_BINDLG_OFF_BOUNDS);
+    short* a = ScDlgBounds(anchor);
     short left = (short)(a[0] + SC_QIND_INSET_X);
     short top  = (short)(a[1] + SC_QIND_INSET_Y);
     int   want = textLen * SC_QIND_CHAR_W;
@@ -580,7 +580,7 @@ static bool PlaceOn(short* b, DWORD anchor, DWORD root, int mode, int textLen) {
         DWORD c = ScDlgFindChild(root, SC_HUD_FIRST_SMALL_BUTTON);
         for (int i = 0; i < SC_HUD_BUTTON_COUNT && c; ++i, c = ScDlgNext(c)) {
             if ((*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) == 0) continue;
-            short* rb = (short*)(c + SC_BINDLG_OFF_BOUNDS);
+            short* rb = ScDlgBounds(c);
             if (rb[0] < rowLeft)   rowLeft = rb[0];
             if (rb[3] > rowBottom) rowBottom = rb[3];
         }
@@ -1038,7 +1038,7 @@ int ScQueueIndSlotDiff(DWORD root, int slotA, int slotB) {
         DWORD c = ScDlgFindChild(root, (short)(SC_STATQ_FIRST_CONTROL + (i ? slotB : slotA)));
         if (!c) return -1;
         if ((*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) == 0) return -1;
-        r[i] = (short*)(c + SC_BINDLG_OFF_BOUNDS);
+        r[i] = ScDlgBounds(c);
     }
     const int bw = r[0][2] - r[0][0], bh = r[0][3] - r[0][1];
     if (bw <= 0 || bh <= SC_QIND_SLOT_LABEL_ROWS) return -1;
@@ -1156,7 +1156,7 @@ void ScQueueIndLogState(const char* tag) {
     DWORD ind = (DWORD)&g_ctrl[0];
     bool  linked = InChain(root);
     DWORD flags  = linked ? *(DWORD*)(ind + SC_BINDLG_OFF_FLAGS) : 0;
-    short* b     = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
+    short* b     = ScDlgBounds(ind);
     const char* live = "";
     if (linked) {
         DWORD p = *(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
@@ -1198,7 +1198,7 @@ void ScQueueIndLogState(const char* tag) {
             DWORD ref = ScDlgFindChild(root, cand[i]);
             if (!ref) continue;
             if ((*(DWORD*)(ref + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) == 0) continue;
-            short* rb2 = (short*)(ref + SC_BINDLG_OFF_BOUNDS);
+            short* rb2 = ScDlgBounds(ref);
             refInk = ScQueueIndSurfaceInk(root, rb2[0], rb2[1], rb2[2], rb2[3]);
             refId  = cand[i];
             break;
@@ -1285,7 +1285,7 @@ void ScQueueIndLogDialog(const char* tag) {
     DWORD root = dlg ? ScDlgRoot(dlg) : 0;
     if (!root) { ScLog("QINDDLG [%s] dialog=0", t); return; }
 
-    short* rb = (short*)(root + SC_BINDLG_OFF_BOUNDS);
+    short* rb = ScDlgBounds(root);
     DWORD  d  = SurfaceOf(root);
     ScLog("QINDDLG [%s] root=0x%08X rect=(%d,%d,%d,%d) surfaceAt=+0x%02X %dx%d bits=0x%08X",
           t, (unsigned)root, rb[0], rb[1], rb[2], rb[3],
@@ -1296,7 +1296,7 @@ void ScQueueIndLogDialog(const char* tag) {
 
     int n = 0;
     for (DWORD c = ScDlgChild(root); c && n < SC_MAX_CTRLS_WALK; c = ScDlgNext(c), ++n) {
-        short* b = (short*)(c + SC_BINDLG_OFF_BOUNDS);
+        short* b = ScDlgBounds(c);
         DWORD  f = *(DWORD*)(c + SC_BINDLG_OFF_FLAGS);
         DWORD  p = *(DWORD*)(c + SC_BINDLG_OFF_TEXT);
         const char* s = (p && ScReadable(p, 1)) ? (const char*)p : "";
@@ -1450,7 +1450,7 @@ void ScQueueIndOnFrame(void) {
     // task that fixed this module said so in as many words: the indicator draws correctly or
     // it does not draw at all, because a line the player cannot read is worse than none.
     DWORD ind = (DWORD)&g_ctrl[0];
-    short* b = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
+    short* b = ScDlgBounds(ind);
     short box[4];
     if (!PlaceOn(box, anchor, root, mode, (int)strlen(want))) {
         if (g_shown) {

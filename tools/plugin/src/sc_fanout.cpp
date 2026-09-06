@@ -240,8 +240,8 @@ static bool ShadowContainsUnit(const ShadowUnit* arr, int n, const ShadowUnit* u
 static bool ReadUnit(DWORD ptr, ShadowUnit* out) {
     if (!ScUnitPtrValid(ptr)) return false;
     out->ptr        = ptr;
-    out->uniqueness = *(BYTE*)(ptr + SC_CUNIT_OFF_UNIQUENESS);
-    out->player     = *(BYTE*)(ptr + SC_CUNIT_OFF_PLAYER);
+    out->uniqueness = ScUnitUniqueness(ptr);
+    out->player     = ScUnitPlayer(ptr);
     return true;
 }
 
@@ -366,7 +366,7 @@ static const char* DropWhyName(int why) {
 // the added terms firing.
 static bool SameUnit(const ShadowUnit* u) {
     if (!u->ptr) return false;
-    return *(BYTE*)(u->ptr + SC_CUNIT_OFF_UNIQUENESS) == u->uniqueness;
+    return ScUnitUniqueness(u->ptr) == u->uniqueness;
 }
 
 // ---------------------------------------------------------------------------
@@ -478,10 +478,10 @@ static bool g_liveness = true;    // %SCPLUGIN_FANOUT_LIVENESS%
 static bool UnitLive(const ShadowUnit* u, int* why) {
     int w = SC_LIVE_OK;
     if (!u->ptr) w = SC_DROP_NOTAG;
-    else if (*(BYTE*)(u->ptr + SC_CUNIT_OFF_UNIQUENESS) != u->uniqueness) w = SC_DROP_RECYCLED;
-    else if (*(DWORD*)(u->ptr + SC_CUNIT_OFF_HITPOINTS) == 0) w = SC_DROP_DEAD;
-    else if (*(BYTE*)(u->ptr + SC_CUNIT_OFF_PLAYER) != u->player) w = SC_DROP_FOREIGN;
-    else if (*(DWORD*)(u->ptr + SC_CUNIT_OFF_SPRITE) == 0) w = SC_DROP_NOSPRITE;
+    else if (ScUnitUniqueness(u->ptr) != u->uniqueness) w = SC_DROP_RECYCLED;
+    else if (ScUnitHitPoints(u->ptr) == 0) w = SC_DROP_DEAD;
+    else if (ScUnitPlayer(u->ptr) != u->player) w = SC_DROP_FOREIGN;
+    else if (ScUnitSprite(u->ptr) == 0) w = SC_DROP_NOSPRITE;
     else if (!ScUnitInOwnPlayerList(u->ptr)) w = SC_DROP_REMOVED;
     if (why) *why = w;
     return w == SC_LIVE_OK;
@@ -548,7 +548,7 @@ static bool ShouldLogForensics(DWORD unit) {
 // means "the pointer is not readable memory" -- which is itself the answer.
 static void LogUnitForensics(const char* what, const ShadowUnit* u, int why) {
     if (!ShouldLogForensics(u->ptr)) return;
-    DWORD sprite = u->ptr ? *(DWORD*)(u->ptr + SC_CUNIT_OFF_SPRITE) : 0;
+    DWORD sprite = u->ptr ? ScUnitSprite(u->ptr) : 0;
     int   sflags = -1;
     if (sprite) {
         MEMORY_BASIC_INFORMATION mbi;
@@ -562,8 +562,8 @@ static void LogUnitForensics(const char* what, const ShadowUnit* u, int why) {
           "sprite=0x%08X spriteFlags=%d inList=%d",
           what, (unsigned)u->ptr, ScUnitTag(u->ptr), DropWhyName(why),
           u->ptr ? *(unsigned*)(u->ptr + SC_CUNIT_OFF_HITPOINTS) : 0,
-          u->ptr ? *(BYTE*)(u->ptr + SC_CUNIT_OFF_UNIQUENESS) : 0, u->uniqueness,
-          u->ptr ? *(BYTE*)(u->ptr + SC_CUNIT_OFF_PLAYER) : 0, u->player,
+          u->ptr ? ScUnitUniqueness(u->ptr) : 0, u->uniqueness,
+          u->ptr ? ScUnitPlayer(u->ptr) : 0, u->player,
           (unsigned)sprite, sflags, (u->ptr && ScUnitInOwnPlayerList(u->ptr)) ? 1 : 0);
 }
 
@@ -1749,7 +1749,7 @@ unsigned ScFanoutGrowBuildingGroup(DWORD* candidates, DWORD* out, DWORD clicked,
     if (UnitIsStandardAndMovable(lead) || !UnitIsBuilding(lead)) return ret;
 
     const WORD leadType  = *(WORD*)(lead + SC_CUNIT_OFF_UNIT_ID);
-    const BYTE leadOwner = *(BYTE*)(lead + SC_CUNIT_OFF_PLAYER);
+    const BYTE leadOwner = ScUnitPlayer(lead);
 
     EnterCriticalSection(&g_lock);
     FanoutSessionSync();
@@ -1761,7 +1761,7 @@ unsigned ScFanoutGrowBuildingGroup(DWORD* candidates, DWORD* out, DWORD clicked,
         if (c == lead) continue;
         if (!ScUnitPtrValid(c)) continue;
         if (*(WORD*)(c + SC_CUNIT_OFF_UNIT_ID) != leadType) continue;
-        if (*(BYTE*)(c + SC_CUNIT_OFF_PLAYER) != leadOwner) continue;
+        if (ScUnitPlayer(c) != leadOwner) continue;
         // Fail closed. Same type as a unit that failed the gate cannot pass it, but a
         // future type whose gate verdict depends on per-unit state (0x0047B770 reads
         // CUnit+0x117/+0x119/+0x124 as well as the type) would, and a movable unit has
@@ -1925,9 +1925,9 @@ ScFanoutMovableDecide(DWORD unit, DWORD retAddr, int verdict) {
     if (!ScUnitPtrValid(unit)) { ++g_statExtendRefuse; return 0; }
 
     const WORD leadType  = *(WORD*)(lead + SC_CUNIT_OFF_UNIT_ID);
-    const BYTE leadOwner = *(BYTE*)(lead + SC_CUNIT_OFF_PLAYER);
+    const BYTE leadOwner = ScUnitPlayer(lead);
     const WORD type      = *(WORD*)(unit + SC_CUNIT_OFF_UNIT_ID);
-    const BYTE owner     = *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER);
+    const BYTE owner     = ScUnitPlayer(unit);
 
     int  why  = SC_LIVE_OK;
     bool live = true;
@@ -2489,11 +2489,11 @@ void ScFanoutLogUnitStates(const char* tag) {
         // cap, so ONE count covers both and a >12 building group can assert that every
         // building is circled rather than only that our own share of them is. The unit
         // passed UnitLive above, so its sprite pointer is non-NULL.
-        if (*(BYTE*)(*(DWORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_SPRITE) + SC_CSPRITE_OFF_FLAGS)
+        if (*(BYTE*)(ScUnitSprite(g_shadow[i].ptr) + SC_CSPRITE_OFF_FLAGS)
                 & SC_SPRITE_FLAG_SEL_CIRCLE) ++circled;
         BYTE stim = *(BYTE*)(g_shadow[i].ptr + SC_CUNIT_OFF_STIM_TIMER);
         if (stim) ++stimmed;
-        Hist32::Add(*(DWORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_HITPOINTS),
+        Hist32::Add(ScUnitHitPoints(g_shadow[i].ptr),
                     hpKey, hpCnt, &hpN, 32, &hpOverflow);
         Hist::Add(stim, stimKey, stimCnt, &stimN, 32, &stimOverflow);
         Hist::Add(*(WORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_ENERGY),

@@ -56,14 +56,14 @@ struct ScCardSlot {
     WORD  graphic;       // control+0x24 -- the icon actually being drawn (0xFFFF = blanked)
     DWORD button;        // control+0x26 -- the Button* the layout function assigned
     bool  buttonOk;      // the Button record was readable
-    WORD  bSlot;         // Button+0x00
-    WORD  bIcon;         // Button+0x02
-    DWORD bCond;         // Button+0x04
-    DWORD bAction;       // Button+0x08
-    WORD  bCondParam;    // Button+0x0C
-    WORD  bActParam;     // Button+0x0E
-    WORD  bNameStr;      // Button+0x10
-    WORD  bDisStr;       // Button+0x12
+    WORD  btnSlot;         // Button+0x00
+    WORD  btnIcon;         // Button+0x02
+    DWORD btnCond;         // Button+0x04
+    DWORD btnAction;       // Button+0x08
+    WORD  btnCondParam;    // Button+0x0C
+    WORD  btnActParam;     // Button+0x0E
+    WORD  btnNameStr;      // Button+0x10
+    WORD  btnDisStr;       // Button+0x12
     // control+0x04 -- s16 left,top,right,bottom, RELATIVE TO THE DIALOG. The
     // engine adds the dialog's own origin (0x00458850 does exactly
     // `dlg->rct.left + child->rct.left`), so an absolute point is root+ctrl.
@@ -103,8 +103,8 @@ struct ScCardHeader {
 struct ScCardTechState {
     bool ok;
     int  player;
-    BYTE available[44];
-    BYTE researched[44];
+    BYTE available[SC_TECH_COUNT];
+    BYTE researched[SC_TECH_COUNT];
 };
 
 // ---------------------------------------------------------------------------
@@ -124,9 +124,9 @@ struct ScStatusSlot {
     WORD  graphic;       // control+0x24
     DWORD user;          // control+0x26 -- the 12-byte statUser record
     bool  userOk;        // that record was readable
-    WORD  uIcon;         // statUser+0x04 -- the frame drawn: the unit type, or k+6 empty
-    WORD  uMode;         // statUser+0x06 -- 3 occupied, 6 empty
-    WORD  uType;         // statUser+0x08 -- the unit type, occupied slots only
+    WORD  userIcon;         // statUser+0x04 -- the frame drawn: the unit type, or k+6 empty
+    WORD  userMode;         // statUser+0x06 -- 3 occupied, 6 empty
+    WORD  userType;         // statUser+0x08 -- the unit type, occupied slots only
     WORD  queueType;     // the building's OWN buildQueue[(head + display) % 5]
     short rect[4];       // control+0x04, dialog-relative, same arithmetic as a card slot
 };

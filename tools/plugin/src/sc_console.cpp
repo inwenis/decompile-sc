@@ -228,7 +228,7 @@ static void TryMove(DWORD dlg, const char* name) {
                        ? *(DWORD*)(dlg + SC_BINDLG_OFF_SURFACE_ALT + SC_SURFACE_OFF_BITS) : 0;
     if (!bits36 && !bits0C) return;   // not yet drawn once; try again next frame
 
-    short* bl = (short*)(dlg + SC_BINDLG_OFF_BOUNDS);       // l,t,r,b
+    short* bl = ScDlgBounds(dlg);       // l,t,r,b
     MoveSlot* m = &g_moved[g_movedN];
     m->dlg = dlg; m->l = bl[0]; m->t = bl[1]; m->r = bl[2]; m->b = bl[3];
 
@@ -251,7 +251,7 @@ static void UnmoveAll(void) {
     for (int i = 0; i < g_movedN; ++i) {
         DWORD dlg = g_moved[i].dlg;
         if (!ScReadable(dlg + SC_BINDLG_OFF_BOUNDS, 8)) continue;
-        short* bl = (short*)(dlg + SC_BINDLG_OFF_BOUNDS);
+        short* bl = ScDlgBounds(dlg);
         // Restore only if the bounds still read as OUR move; anything else means
         // the record was freed and reused, and writing it would corrupt a stranger.
         if (bl[0] == (short)(g_moved[i].l + SC_CONSOLE_SHIFT_X) &&

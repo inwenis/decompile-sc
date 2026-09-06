@@ -18,6 +18,13 @@
 
 #include "sc_fanout.h"   // ScMode
 
+// The stage column of sc_screen_patches.h runs 0..3 (tools/renderer_patch_sites.py,
+// research/renderer-viewport.md 9.3). These name the three the code branches on, so
+// a table that grows a stage 4 moves one line rather than three bare digits.
+#define SC_WS_STAGE_MAX           3   // console + input, task 071: the top stage there is
+#define SC_WS_STAGE_GRID          1   // at and above this the dirty grid is relocated
+#define SC_WS_STAGE_SCROLL_CLAMP  3   // scroll.clamp.x.tiles (0x0049BBE6) is a stage-3 site
+
 // %SCPLUGIN_WIDESCREEN% -- '1' turns the feature on. Off by default.
 bool ScScreenWidescreenWanted(void);
 

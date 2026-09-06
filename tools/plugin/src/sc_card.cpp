@@ -102,14 +102,14 @@ int ScCardSnapshot(ScCardHeader* hdr, ScCardSlot* out, int max) {
                 // All eight fields or none: a partially read Button is worse than an
                 // absent one, because it reads as a named ability with a wrong id.
                 s->buttonOk =
-                    RdU16(s->button + SC_BUTTON_OFF_SLOT,       &s->bSlot) &&
-                    RdU16(s->button + SC_BUTTON_OFF_ICON,       &s->bIcon) &&
-                    RdU32(s->button + SC_BUTTON_OFF_COND,       &s->bCond) &&
-                    RdU32(s->button + SC_BUTTON_OFF_ACTION,     &s->bAction) &&
-                    RdU16(s->button + SC_BUTTON_OFF_COND_PARAM, &s->bCondParam) &&
-                    RdU16(s->button + SC_BUTTON_OFF_ACT_PARAM,  &s->bActParam) &&
-                    RdU16(s->button + SC_BUTTON_OFF_NAME_STR,   &s->bNameStr) &&
-                    RdU16(s->button + SC_BUTTON_OFF_DIS_STR,    &s->bDisStr);
+                    RdU16(s->button + SC_BUTTON_OFF_SLOT,       &s->btnSlot) &&
+                    RdU16(s->button + SC_BUTTON_OFF_ICON,       &s->btnIcon) &&
+                    RdU32(s->button + SC_BUTTON_OFF_COND,       &s->btnCond) &&
+                    RdU32(s->button + SC_BUTTON_OFF_ACTION,     &s->btnAction) &&
+                    RdU16(s->button + SC_BUTTON_OFF_COND_PARAM, &s->btnCondParam) &&
+                    RdU16(s->button + SC_BUTTON_OFF_ACT_PARAM,  &s->btnActParam) &&
+                    RdU16(s->button + SC_BUTTON_OFF_NAME_STR,   &s->btnNameStr) &&
+                    RdU16(s->button + SC_BUTTON_OFF_DIS_STR,    &s->btnDisStr);
             }
 
             if (s->visible) {
@@ -221,9 +221,9 @@ int ScStatusSnapshot(ScStatusHeader* hdr, ScStatusSlot* out, int max) {
         if (s->user) {
             // All three fields or none, same rule as the card's Button record: a
             // half-read statUser reads as an icon drawing a wrong unit type.
-            s->userOk = RdU16(s->user + SC_STATUSER_OFF_ICON, &s->uIcon) &&
-                        RdU16(s->user + SC_STATUSER_OFF_MODE, &s->uMode) &&
-                        RdU16(s->user + SC_STATUSER_OFF_TYPE, &s->uType);
+            s->userOk = RdU16(s->user + SC_STATUSER_OFF_ICON, &s->userIcon) &&
+                        RdU16(s->user + SC_STATUSER_OFF_MODE, &s->userMode) &&
+                        RdU16(s->user + SC_STATUSER_OFF_TYPE, &s->userType);
         }
 
         // The building's own slot for this display index -- the engine's arithmetic,
@@ -286,9 +286,9 @@ void ScStatusScan(const char* tag) {
               t, s->display, state, s->index, (unsigned)s->control, (unsigned)s->flags,
               (unsigned)s->graphic, s->rect[0], s->rect[1], s->rect[2], s->rect[3],
               (unsigned)s->user,
-              s->userOk ? (unsigned)s->uIcon : 0xFFFFu,
-              s->userOk ? (unsigned)s->uMode : 0xFFFFu,
-              s->userOk ? (unsigned)s->uType : 0xFFFu,
+              s->userOk ? (unsigned)s->userIcon : 0xFFFFu,
+              s->userOk ? (unsigned)s->userMode : 0xFFFFu,
+              s->userOk ? (unsigned)s->userType : 0xFFFu,
               (unsigned)s->queueType);
     }
 
@@ -425,10 +425,10 @@ void ScCardScan(const char* tag) {
                   t, s->index, state, (unsigned)s->control, (unsigned)s->flags,
                   (unsigned)s->graphic,
                   s->rect[0], s->rect[1], s->rect[2], s->rect[3],
-                  (unsigned)s->button, (unsigned)s->bSlot,
-                  (unsigned)s->bIcon, (unsigned)s->bCond, (unsigned)s->bAction,
-                  (unsigned)s->bCondParam, (unsigned)s->bActParam,
-                  (unsigned)s->bNameStr, (unsigned)s->bDisStr);
+                  (unsigned)s->button, (unsigned)s->btnSlot,
+                  (unsigned)s->btnIcon, (unsigned)s->btnCond, (unsigned)s->btnAction,
+                  (unsigned)s->btnCondParam, (unsigned)s->btnActParam,
+                  (unsigned)s->btnNameStr, (unsigned)s->btnDisStr);
         } else {
             ScLog("CARD [%s] slot=%d %-7s ctrl=0x%08X flags=0x%08X icon=0x%04X "
                   "rect=(%d,%d,%d,%d) button=0x%08X (no button record)",

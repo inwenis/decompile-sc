@@ -121,7 +121,7 @@ int ScScreenStageWanted(void) {
     if (n == 0 || n >= sizeof(buf)) return 1;
     int v = buf[0] - '0';
     if (v < 0) v = 0;
-    if (v > 3) v = 3;
+    if (v > SC_WS_STAGE_MAX) v = SC_WS_STAGE_MAX;
     return v;
 }
 
@@ -169,7 +169,8 @@ bool ScScreenActive(void) { return g_active; }
 int ScScreenViewportTilesX(void) {
     // scroll.clamp.x.tiles is a stage-3 site; below that, or with the table
     // refused, the engine still clamps the camera at the stock 20 tiles.
-    return (g_active && g_stage >= 3) ? (SC_WS_SCREEN_W / 32) : SC_VIEWPORT_TILES_X;
+    return (g_active && g_stage >= SC_WS_STAGE_SCROLL_CLAMP)
+        ? (SC_WS_SCREEN_W / 32) : SC_VIEWPORT_TILES_X;
 }
 
 // ---------------------------------------------------------------------------
@@ -338,7 +339,7 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
 
     // --- relocate the dirty grid -------------------------------------------
     // Only stage 1 and above needs it; stage 0 touches the display mode alone.
-    if (g_stage >= 1) {
+    if (g_stage >= SC_WS_STAGE_GRID) {
         // GUARD + grid + GUARD, all committed, grid pointer into the middle
         // (see SC_WS_GRID_GUARD above). VirtualAlloc zeroes it, which is the
         // state the BSS array it replaces starts in -- stated rather than

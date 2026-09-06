@@ -146,7 +146,7 @@ static BYTE RemoveCircle(DWORD sprite) {
 static bool SpriteOf(DWORD unit, DWORD* outSprite) {
     if (!ScUnitPtrValid(unit)) return false;
     if (!ScReadable(unit + SC_CUNIT_OFF_SPRITE, 4)) return false;
-    DWORD sprite = *(DWORD*)(unit + SC_CUNIT_OFF_SPRITE);
+    DWORD sprite = ScUnitSprite(unit);
     if (!ScReadable(sprite, SC_CSPRITE_SIZE)) return false;
     *outSprite = sprite;
     return true;
@@ -187,7 +187,7 @@ void ScCirclesHide(void) {
         // attaches); it is checked anyway because "unreachable" and "never happens"
         // are different claims, and the counter says which.
         if (!SpriteOf(c->unit, &sprite) || sprite != c->sprite ||
-            *(BYTE*)(c->unit + SC_CUNIT_OFF_UNIQUENESS) != c->uniqueness) {
+            ScUnitUniqueness(c->unit) != c->uniqueness) {
             ++g_statLost;
             continue;
         }
@@ -219,7 +219,7 @@ void ScCirclesShow(const ScCircleUnit* units, int n) {
     for (int i = 0; i < n && g_circledCount < SC_CIRCLES_MAX; ++i) {
         DWORD sprite = 0;
         if (!SpriteOf(units[i].unit, &sprite)) { ++g_statSkipped; continue; }
-        if (*(BYTE*)(units[i].unit + SC_CUNIT_OFF_UNIQUENESS) != units[i].uniqueness) {
+        if (ScUnitUniqueness(units[i].unit) != units[i].uniqueness) {
             ++g_statSkipped;
             continue;
         }
