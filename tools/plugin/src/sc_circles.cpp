@@ -302,6 +302,15 @@ static void LogCirclePositions(void) {
 
     const int left = (int)*(WORD*)Rt(SC_VA_SCREEN_LEFT);
     const int top  = (int)*(WORD*)Rt(SC_VA_SCREEN_TOP);
+    // The client's size is the engine's own screen bitmap descriptor (640x480
+    // stock, the widescreen table's size once it is live) -- read, not assumed,
+    // so a wider game does not drop every unit past x=639 as "off-screen".
+    int scrW = SC_SCREEN_W, scrH = SC_SCREEN_H;
+    if (Readable((DWORD)(DWORD_PTR)Rt(SC_VA_SCREEN_BITMAP), 4)) {
+        const int w = (int)*(WORD*)Rt(SC_VA_SCREEN_BITMAP + SC_BITMAP_OFF_WIDTH);
+        const int h = (int)*(WORD*)Rt(SC_VA_SCREEN_BITMAP + SC_BITMAP_OFF_HEIGHT);
+        if (w > 0 && h > 0) { scrW = w; scrH = h; }
+    }
 
     char buf[1024];
     int used = 0;
@@ -311,10 +320,10 @@ static void LogCirclePositions(void) {
         if (!Readable(s, SC_CSPRITE_SIZE)) continue;
         const int x = (int)*(WORD*)(s + SC_CSPRITE_OFF_POS_X) - left;
         const int y = (int)*(WORD*)(s + SC_CSPRITE_OFF_POS_Y) - top;
-        // Off-screen units are useless to a test and would only be noise. The client is
-        // 640x480, so 640 and 480 are the first coordinates OUTSIDE it -- an inclusive
-        // bound here would hand a test a point one pixel off the window.
-        if (x < 0 || y < 0 || x >= 640 || y >= 480) continue;
+        // Off-screen units are useless to a test and would only be noise. scrW and
+        // scrH are the first coordinates OUTSIDE the client -- an inclusive bound
+        // here would hand a test a point one pixel off the window.
+        if (x < 0 || y < 0 || x >= scrW || y >= scrH) continue;
         const int room = (int)sizeof(buf) - used;
         if (room < 24) { break; }
         used += _snprintf(buf + used, (size_t)room, "%s%d,%d", listed ? " " : "", x, y);

@@ -61,6 +61,13 @@ function Get-WsDefine([string]$Name) {
     [int]$m.Matches[0].Groups[1].Value
 }
 $STOCK_W = Get-WsDefine 'SC_WS_STOCK_W'        # 640
+$SCREEN_W = Get-WsDefine 'SC_WS_SCREEN_W'             # the width the table was generated for
+# The stage-3 patch bytes this suite expects in the log, derived from $SCREEN_W so the
+# assertions move with the geometry: le32 of a value, and the imm8 tile count.
+function Hex32([int]$v) { ([BitConverter]::GetBytes([uint32]$v) | ForEach-Object { $_.ToString('X2') }) -join '' }
+$CLIP_HEX    = "C745F880020000 -> C745F8$(Hex32 $SCREEN_W)"          # cursor.clip.right: mov [ebp-8],640 -> W
+$CLAMP_HEX   = "83E914 -> 83E9$(($SCREEN_W / 32).ToString('X2'))"    # scroll.clamp.x.tiles: sub ecx,20 -> W/32
+$TRIGGER_HEX = "3D7E020000 -> 3D$(Hex32 ($SCREEN_W - 2))"            # scroll.right.trigger: cmp eax,638 -> W-2
 
 $NEXUS_TYPE = 154
 # 070's measured stock console rects -- asserted UNCHANGED in both arms (stage 3
@@ -149,15 +156,15 @@ function Invoke-Arm {
             $clampSite = @(Get-Content -LiteralPath $logPath | Select-String -Pattern 'WIDESCREEN patch stage=3 scroll\.clamp\.x\.tiles')
             if ($Widescreen -eq '1') {
                 Assert-That 'the stage-3 physical cursor clip was widened to the new screen' `
-                    ($clip.Count -eq 1 -and $clip[0].Line -match 'C745F880020000 -> C745F820030000') "($(($clip|ForEach-Object Line) -join ' | '))"
-                Assert-That 'the stage-3 camera scroll clamp was moved from 20 to 25 tiles' `
-                    ($clampSite.Count -eq 1 -and $clampSite[0].Line -match '83E914 -> 83E919') "($(($clampSite|ForEach-Object Line) -join ' | '))"
+                    ($clip.Count -eq 1 -and $clip[0].Line.Contains($CLIP_HEX)) "($(($clip|ForEach-Object Line) -join ' | '); want '$CLIP_HEX')"
+                Assert-That "the stage-3 camera scroll clamp was moved from 20 to $($SCREEN_W / 32) tiles" `
+                    ($clampSite.Count -eq 1 -and $clampSite[0].Line.Contains($CLAMP_HEX)) "($(($clampSite|ForEach-Object Line) -join ' | '); want '$CLAMP_HEX')"
                 Assert-That 'the widescreen table is ACTIVE with 0 refused' `
                     ($ws.Count -gt 0 -and $ws[0].Line -match 'ACTIVE' -and $ws[0].Line -match ' 0 refused') "($(($ws|ForEach-Object Line) -join ' | '))"
                 Assert-That 'all 8 stage-3 mouse-clamp sites were written' ($clamps.Count -eq 8) "(got $($clamps.Count))"
                 Assert-That 'both stage-3 click-search-rect sites were written' ($rects.Count -eq 2) "(got $($rects.Count))"
                 Assert-That 'the stage-3 edge-scroll-right trigger was moved to the widened edge' `
-                    ($scroll.Count -eq 1 -and $scroll[0].Line -match '3D7E020000 -> 3D1E030000') "($(($scroll|ForEach-Object Line) -join ' | '))"
+                    ($scroll.Count -eq 1 -and $scroll[0].Line.Contains($TRIGGER_HEX)) "($(($scroll|ForEach-Object Line) -join ' | '); want '$TRIGGER_HEX')"
                 Assert-That 'the relocated dirty grid has a committed guard on both sides' `
                     ($guard.Count -eq 1) "($(($guard|ForEach-Object Line) -join ' | '))"
             }
@@ -213,8 +220,9 @@ function Invoke-Arm {
                 $nx = @($w0.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $NEXUS_TYPE })[0]
                 Assert-That 'the world scan found the Nexus' ($null -ne $nx)
                 if ($null -eq $nx) { return }
-                # want client x ~704: origin.Left = nexus.X - 704; minimap
-                # click-to-centre bakes the stock 320/208px half-extents (item 17).
+                # want client x ~64px past the stock edge: origin.Left = nexus.X - 704;
+                # minimap click-to-centre bakes the stock 320/208px half-extents (item 17),
+                # so a wider screen only moves where the seam is, not this arithmetic.
                 $tileX = [int][math]::Round(($nx.X - 704 + 320) / 32)
                 $tileY = [int][math]::Round(($nx.Y - 240 + 208) / 32)
                 $p = Get-ScMinimapPoint -MapTilesW 128 -MapTilesH 96 -TileX $tileX -TileY $tileY
@@ -227,8 +235,8 @@ function Invoke-Arm {
                 if ($null -eq $nx1) { Assert-That 'the Nexus survived the steer' $false; return }
                 $cx = $nx1.X - $w1.Screen.Left; $cy = $nx1.Y - $w1.Screen.Top
                 Write-Host "       Nexus client position: ($cx,$cy)"
-                Assert-That "the Nexus sits PAST the stock edge (x=$cx > 639)" `
-                    ($cx -gt 639 -and $cx -lt 790 -and $cy -ge 0 -and $cy -lt 340)
+                Assert-That "the Nexus sits PAST the stock edge (x=$cx > 639, inside the $SCREEN_W-wide client)" `
+                    ($cx -gt 639 -and $cx -lt ($SCREEN_W - 10) -and $cy -ge 0 -and $cy -lt 340)
                 Send-ScClick -Hwnd $hwnd -X 200 -Y 200 -SettleMs 300   # deselect
                 $sel = Get-StatQ 'seam-sel'
                 for ($t = 1; $t -le 2 -and $sel.PortraitType -ne $NEXUS_TYPE; $t++) {

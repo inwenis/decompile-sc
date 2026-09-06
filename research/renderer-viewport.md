@@ -2429,3 +2429,177 @@ asserts it; the DLL's off line now prints which half decided
 (`off -- %SCPLUGIN_STORM_PRESENT%=0 (explicit)` vs `unset and no widescreen playfield
 (widescreen=%d stage=%d)`); `probe-storm-present.ps1 -StormPresent auto` exercises the
 DLL's own decision (pre-fix it reads `off`, post-fix `WIDEN armed`).
+
+## 21. 1280 wide (2x the stock width) -- the two blockers, and the code cave
+
+Follow-up to §20 (2026-09-06). The user asked for twice the stock viewport; the
+width half ships first, at the same screen height, so every §12-§20 instrument
+still applies unchanged. Everything below was read out of `StarCraft.exe` 1.16.1
+with capstone (`tools/renderer_patch_sites.py` verifies every byte it names
+against the exe on every run) and then confirmed in driven off-screen runs
+(§21.6).
+
+### 21.1 What the generator said at 1280
+
+`renderer_patch_sites.py --width 1280 --check` refused at two places, both of
+them the ones the 2026-09-05 costing predicted:
+
+1. `assert TERRAIN_PITCH == 832`: the full-playfield blit's shift-decomposed
+   pitch (§12.4 point 3) had been generalised by hand for exactly one target.
+2. The fog cell stride (§16.3) is `4*((W+31)/32+1)+4` = 168 at 1280, and it lives
+   in six SIGN-EXTENDED one-byte fields (imm8 of `add`/`imul`, disp8 of `movzx`)
+   whose range ends at 127.
+
+And a third thing the check did NOT say, which is the latent defect the costing
+note flagged: `imm()`'s fit test was `new < 256`, unsigned, so at any width whose
+stride lands in 128..255 the table shipped NEGATIVE strides (`add edx,-0x80` at
+W=960) with zero errors. The guard is now signed for one-byte fields; 960 is
+refused today for the honest reason (992 is not a three-term pitch, §21.2).
+
+### 21.2 The terrain pitch is three shifts, and any 3-bit pitch survives
+
+```
+0040C275  c1 e0 09    shl eax, 9      ; the 512 term
+0040C27E  c1 e3 07    shl ebx, 7      ; the 128 term
+0040C281  c1 e1 05    shl ecx, 5      ; the  32 term
+0040C284  03 c3       add eax, ebx
+0040C286  03 c1       add eax, ecx    ; = screenTop * 672
+```
+
+The pitch is the set bits of the three counts. 832 = 2^9+2^8+2^6 (the two edits
+task 034 hand-coded), 1312 = 2^10+2^8+2^5 (the FIRST count moves this time, the
+third does not). The generator now decomposes the pitch and refuses anything
+that is not exactly three powers of two -- `bits = [i for i in range(32) if
+TERRAIN_PITCH >> i & 1]; assert len(bits) == 3` -- and emits three one-byte
+count edits, no-ops included, so the table names all three sites at every width.
+
+### 21.3 The fog cell stride cannot be re-encoded in place: the code cave
+
+The six stride sites, with their encodings:
+
+| site | bytes | field |
+|---|---|---|
+| 0x0047FEAB `add edx,0x58` | `83 c2 58` | imm8, sign-extended |
+| 0x00480617 `imul ecx,ecx,0x58` | `6b c9 58` | imm8, sign-extended |
+| 0x0048064C `add esi,0x58` | `83 c6 58` | imm8 |
+| 0x00480671 `movzx edx,[esi-0x58]` | `0f b6 56 a8` | disp8 |
+| 0x00480675 `movzx eax,[esi-0x57]` | `0f b6 46 a9` | disp8 |
+| 0x004806CD `add esi,0x58` | `83 c6 58` | imm8 |
+
+168 fits none of them, and the 32-bit forms are longer (`81 c2 imm32` is 6 bytes
+for `83 c2 imm8`'s 3; `0f b6 96 disp32` is 7 for 4). A power-of-two stride
+would rescue only the `imul` (`shl ecx,8` is 3 bytes) and none of the others, so
+there is no in-place answer. The answer is a CODE CAVE, the plugin's first: a
+WINDOW of whole instructions -- the stride instruction plus enough neighbours to
+reach the 5 bytes a `jmp rel32` needs -- is overwritten with `jmp cave` + NOPs,
+and the cave holds the same instructions re-encoded with 32-bit fields, followed
+by `jmp` back to the window's end. The generator (`Builder.cave`) chooses and
+proves each window: it must decode into whole instructions, contain nothing
+PC-relative, and NOTHING within +/-1 KB may branch strictly into it (a branch
+target AT the window's start is fine; one inside it would land on the NOP tail
+or mid-`jmp`). The plugin owns only the two rel32s, because the cave's address
+comes from `VirtualAlloc`; `hooktest` part [23] executes a caved window before
+the game ever does.
+
+The five windows (two sites share one), each named for its stride site:
+
+| window | bytes | what rides along |
+|---|---|---|
+| 0x0047FEAB, 6 | `add edx,0x58 ; mov [ebp-4],edx` | the store after it |
+| 0x00480617, 6 | `imul ecx,ecx,0x58 ; shr ebx,3` | the shift after it |
+| 0x0048064C, 7 | `add esi,0x58 ; dec eax ; shr eax,3` | two after it |
+| 0x00480671, 8 | both `movzx` reads | each other |
+| 0x004806C7, 9 | `mov esi,[ebp-8] ; mov eax,[ebp-0x10] ; add esi,0x58` | two BEFORE it |
+
+The last window starts two instructions early on purpose: 0x004806C7 is the
+`jge` target that ends a block row, and the instruction AFTER the stride add,
+`add ecx,0x1400` (8 framebuffer rows), is the stage-1 site `fog.blockrowstep`.
+Starting the window at 0x004806CD would have swallowed a stage-1 immediate into
+a stage-2 cave, and a stage-1 build (§9.3, the pixel-identical arm the capture
+probe still runs) would then have walked fog block rows at the stock pitch.
+
+Caves are used at EVERY width, 800 included, rather than only where the value
+does not fit: one path, exercised by every geometry, instead of a path only the
+wide one runs.
+
+### 21.4 Three copies of 800 outside the table
+
+`SC_WS_SCREEN_W` is generated, and three modules had their own 800 or 160 beside
+it: `sc_stormpresent.cpp` (the strip copy's width and height), `sc_console.cpp`
+(the 073 experiment's +160 and its 160x480 sliver) and `sc_circles.cpp` (the
+on-screen filter `x >= 640 || y >= 480`, which at 800 already dropped every
+circled unit in the right band from its own log). The first two now ask
+`sc_screen` for the target geometry; the circles filter reads the engine's own
+screen bitmap descriptor (0x006CEFF0, §2). The probes carried the same copies
+(`800x480` client and dump asserts, `160*480` band sizes, `--x1 800`), now read
+once from the header through `Get-ScWideGeometry` in `drive-game.ps1`.
+
+### 21.5 What 1280 wide does NOT do
+
+- Height is unchanged (480; playfield 400). The console stays at its stock
+  place and the black rectangle beside it is now 640x80.
+- The minimap click-to-centre still bakes the stock 20/13 half-extents
+  (0x004A4D20, §7), so a click lands 320 px left of the window's centre. Left
+  for the height step together with the vertical extent it also bakes.
+- `star.spk` positions still cover 648 columns (§16.1 item 4).
+
+### 21.6 Measured (runs of 2026-09-06, off-screen, the 063/068/074 instruments unchanged)
+
+Predictions were registered before each run; misses are recorded as such.
+
+1. **The table applies.** `WIDESCREEN ACTIVE: 243 patch(es) applied, 0 refused,
+   stage<=2` (stage 3: 256), the five caves at `cave@01120000..0112003E` with
+   rel32s that decode back to those addresses, grid guard OK, storm strip armed
+   for x=640..1279 (`C:\sc-work\logs\063-framecap-s2.log`).
+2. **The frame is right** (`probe-framebuffer-capture.ps1 -Stage2`, stock vs
+   stage 2, 36-marine fixture, origin 544,416): every dump `1280x480` settled;
+   window-vouched consistency at pitch 1280 = 0.99247 in game, 0.99737 scrolled
+   (stock 0.98813); left 640 vs stock `dense_rows=0`; same-origin captures
+   `dense_rows=0`; the defect arm (`SCPLUGIN_WS_ONLY=terrain`) still reads RED
+   (`dense_rows=106`), so the oracle can fail; seam tooth clean (`788-788;
+   792-1279`, i.e. the map-anchored exploration edge 1332-544=788 as in 16.4);
+   sub-tile scroll to x%32=16 exercised.
+   *Miss:* the right band's `>= 0.30` map floor read 0.2313. PREDICTED FROM
+   THE MECHANISM, not the threshold: the fixture explores to map x 1332, so of
+   the 640 new columns only 148 (640..788) can hold map = 0.231 -- the same
+   148 columns that were 0.925 of the 160-px band at 800 (16.4's reading). The
+   oracle is now two-sided and derived from that edge (0.8x..+0.05 of the
+   predicted fraction), so the 16.3 leak class (too MUCH map) fails it too.
+   Rerun on the derived oracle: 48/48 PASS, `predicted 0.23125, got 0.2313`,
+   the defect arm still RED (`dense_rows=80`) in the same run.
+3. **Glass agrees with the buffer** (`probe-storm-present.ps1`, band
+   x=660..1270 y=80..300): static load frame buffer 0.1556 / glass 0.1343,
+   after a scroll 0.468 / 0.4495 -- the glass/buffer ratio (0.86, 0.96) is
+   §20.7's, on a band four times wider; client area 1280x480; minimap steers.
+   The 800-era `glass >= 0.30` floor was the same fixture-sight artefact as
+   item 2 and is now the agreement form (`glass >= 0.8 x buffer`, `buffer >=
+   0.05` so it cannot pass vacuously). Captures:
+   `C:\sc-work\logs\074-frames\storm-present-shipped-{static,scrolled}.png`.
+4. **Input reaches the new width** (`test-widescreen-input-800.ps1`, stock + stage
+   3 arms, WMode): at stock no widescreen verdict, no clamp, no trigger, no
+   guard, the Nexus selected by a click at (320,208); at stage 3 the table
+   ACTIVE with 0 refused, all 8 mouse-clamp sites and both click-search-rect
+   sites written, `cursor.clip.right` `C745F880020000 -> C745F800050000`,
+   `scroll.clamp.x.tiles` `83E914 -> 83E928` (20 -> 40 tiles),
+   `scroll.right.trigger` `3D7E020000 -> 3DFE040000`, StatBtn and Minimap at
+   their stock rects, and the Nexus steered to client x=672 (past 639, inside
+   the 1280 client). The x>639 click itself is reported, never asserted, for
+   the reason 17.2 gives: no off-screen path feeds a posted playfield click
+   past the seam. The suite's expected patch hexes are now derived from the
+   header's width, so they move with the geometry instead of pinning 800.
+
+### 21.7 How to reproduce
+
+```powershell
+python tools/renderer_patch_sites.py --check                 # 274 sites, 5 caves, 0 errors at 1280x480
+python tools/renderer_patch_sites.py --check --width 960     # refused: 992 is not a 3-term pitch
+./tools/plugin/build.ps1 -Test                               # hooktest part [23] executes a caved window
+$env:AGENT_TASK = '1280'
+./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-framebuffer-capture.ps1 -SuiteArgs @{ Stage2 = $true }
+#   stock + defect + stage 2 at 1280: interior diff, seam tracker, the band
+#   fraction predicted from the fixture's exploration edge (0.231 at origin 544)
+./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-storm-present.ps1
+#   glass vs buffer over x=660..1270, static and after a scroll
+./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/test-widescreen-input-800.ps1
+#   stage-3 sites at 1280 (hexes derived from the header), stock arm unchanged
+```

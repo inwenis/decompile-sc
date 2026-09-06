@@ -53,4 +53,15 @@ bool ScScreenActive(void);
 // column lies the moment the geometry moves.
 int ScScreenViewportTilesX(void);
 
+// The geometry the table was generated for (SC_WS_SCREEN_W/H), for modules that
+// must not pull the whole generated table into their own object file.
+int ScScreenTargetWidth(void);
+int ScScreenTargetHeight(void);
+
+// The code-cave writer, exposed for hooktest: overwrite the `len`-byte window at
+// `at` with `jmp cave` + NOPs, the cave holding `code` followed by `jmp at+len`.
+// Both rel32s are computed here; a wrong one is a crash in the game, which is
+// why the offline test executes a caved window before the game ever does.
+bool ScScreenApplyCaveAt(BYTE* at, int len, const BYTE* code, int codeLen);
+
 #endif  // SC_SCREEN_MOD_H
