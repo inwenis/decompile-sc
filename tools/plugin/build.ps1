@@ -106,7 +106,9 @@ if ($identity.Dirty) {
 # -s                    : strip (smaller; no symbols we need at runtime)
 $common = @(
     '-m32'
-    '-Wall', '-Wextra'
+    # -Werror since issue #48: the warning set below was clean when this went in
+    # and the toolchain is pinned, so a new warning is a change in OUR code.
+    '-Wall', '-Wextra', '-Werror'
     '-static', '-static-libgcc', '-static-libstdc++'
     '-fno-exceptions', '-fno-rtti'
     # Task 056. The two values sc_buildid.cpp turns into the embedded stamp.

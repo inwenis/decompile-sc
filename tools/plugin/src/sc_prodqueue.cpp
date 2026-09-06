@@ -434,14 +434,6 @@ bool ScProdQueueOnCancel(DWORD unit, unsigned payload) {
 // Oracles
 // ---------------------------------------------------------------------------
 
-// Formats a building's five engine slots, read straight out of CUnit+0x98.
-// Formats the ring AND answers how much of it is occupied, which is what every
-// caller here wants in the same breath.
-static int FormatEngineQueue(DWORD unit, char* out, int outLen) {
-    ScUnitFormatQueue(unit, out, outLen);
-    return ScUnitQueueLength(unit);
-}
-
 // The same read made COHERENT for the observer thread (task 066): the phantom bracket
 // makes owned ring slots non-empty for the length of each queueLayout call on the game
 // thread, and a log line must never carry that state -- a phantom item in a PRODQSEL

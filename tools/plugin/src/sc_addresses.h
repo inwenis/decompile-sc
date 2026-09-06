@@ -1083,9 +1083,9 @@
 
 // CUnit+0xDC bits, from the guards the engine puts in front of the two fields above:
 // upgradeTick 0x004546A0 opens `flags & 2`, and the upgrade gate 0x0046DFC0 refuses with
-// reason 0x14 when `flags & 1` is clear.
+// reason 0x14 when `flags & 1` is clear -- the second of which is SC_UNIT_FLAG_COMPLETED,
+// derived independently above from a production run and defined there.
 #define SC_UNIT_FLAG_BUILDING   0x2u
-#define SC_UNIT_FLAG_COMPLETED  0x1u
 
 // The LOCAL player id, as the two receive handlers read it -- `MOV EDI,[0x00512678]` at
 // 0x004C1B49 and 0x004C1BC9, and `CMP [ESI+0x4C], [0x00512678]` inside

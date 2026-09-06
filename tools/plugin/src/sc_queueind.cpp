@@ -482,21 +482,6 @@ static bool EnsureSpliced(DWORD root) {
     return true;
 }
 
-static void Unsplice(DWORD root) {
-    if (!g_spliced) return;
-    DWORD ind = (DWORD)&g_ctrl[0];
-    if (root) {
-        ScCtrlHideVia(g_hide, ind);
-        DWORD* link = (DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD);
-        for (int guard = 0; *link && *link != ind && guard < SC_MAX_CTRLS_WALK; ++guard) {
-            link = (DWORD*)(*link + SC_BINDLG_OFF_NEXT);
-        }
-        if (*link == ind) *link = ScDlgNext(ind);
-    }
-    g_spliced = false;
-    g_shown   = false;
-}
-
 // Put the box on the anchor control, in the anchor's own coordinate space (control bounds
 // are parent-relative -- updateControl 0x0041C400 adds the parent's origin itself). The
 // bounds come from the LIVE control every time the anchor changes, never from a constant.

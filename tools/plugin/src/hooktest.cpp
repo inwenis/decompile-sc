@@ -186,16 +186,25 @@ asm(
 );
 
 // Calls TgtMixed with the awkward convention from C.
+//
+// count and ptr are PINNED to EAX and ECX as in-out operands rather than loaded there
+// from two more "r" registers inside the block. Four "r" operands plus an eax/ecx
+// clobber is more registers than GCC can find at -O0, where nothing is already in a
+// register and EBP is a real frame pointer: `build.ps1 -DebugBuild -Test` would not
+// compile this function ("'asm' operand has impossible constraints"). The two PUSHED
+// values stay in registers on purpose -- a "g" or "m" operand could resolve
+// ESP-relative, and the first push would move the second one out from under its own
+// address.
 static void CallMixed(unsigned count, unsigned* ptr, unsigned unit, unsigned clicked) {
+    unsigned  inEax = count;
+    unsigned* inEcx = ptr;
     asm volatile(
         "pushl %[clicked]\n"
         "pushl %[unit]\n"
-        "movl  %[cnt], %%eax\n"
-        "movl  %[p],   %%ecx\n"
         "call  _TgtMixed\n"
-        :
-        : [clicked] "r"(clicked), [unit] "r"(unit), [cnt] "r"(count), [p] "r"(ptr)
-        : "eax", "ecx", "edx", "memory");
+        : "+a"(inEax), "+c"(inEcx)
+        : [clicked] "r"(clicked), [unit] "r"(unit)
+        : "edx", "memory");
 }
 
 // ---------------------------------------------------------------------------

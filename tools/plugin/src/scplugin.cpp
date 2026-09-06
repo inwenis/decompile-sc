@@ -816,8 +816,7 @@ static void ScanDialogs(void) {
     }
 
     if (strcmp(line, prev) == 0) return;
-    strncpy(prev, line, sizeof(prev) - 1);
-    prev[sizeof(prev) - 1] = '\0';
+    lstrcpynA(prev, line, (int)sizeof(prev));
     ScLog("DIALOGS n=%d%s%s", n, n ? " " : "", line);
 }
 
