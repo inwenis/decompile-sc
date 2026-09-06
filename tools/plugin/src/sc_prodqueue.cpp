@@ -15,6 +15,7 @@
 #include "sc_engine.h"
 #include "sc_env.h"
 #include "sc_hook.h"
+#include "sc_ledger.h"
 #include "sc_log.h"
 #include "sc_prodqueue.h"
 #include "sc_queueind.h"   // ScQueueIndRingGen -- the phantom window's seqlock (task 066)
@@ -124,17 +125,6 @@ static void Refund(BYTE player, unsigned type) {
 // Records
 // ---------------------------------------------------------------------------
 
-static ProdRecord* FindRecord(DWORD unit) {
-    for (int i = 0; i < g_recCount; ++i) if (g_rec[i].unit == unit) return &g_rec[i];
-    return NULL;
-}
-
-static void DropRecordAt(int i) {
-    if (i < 0 || i >= g_recCount) return;
-    g_rec[i] = g_rec[g_recCount - 1];
-    --g_recCount;
-}
-
 // A record whose building has gone gives its items back. Vanilla does the same for the
 // engine's own five: the unit-removal path 0x0049FD00 calls cancelAllAndClearQueue
 // (0x00466E80), which refunds every occupied slot before clearing the array
@@ -172,8 +162,7 @@ static void RefundRecord(ProdRecord* r, const char* why) {
 static void ProdQSessionSync(void) {
     const unsigned now = ScSessionEpoch();
     if (g_session == now) return;
-    int items = 0;
-    for (int i = 0; i < g_recCount; ++i) items += g_rec[i].count;
+    const int items = ScLedgerItemCount(g_rec, g_recCount);
     if (g_recCount > 0) {
         ScLog("PRODQEV session %u -> %u: dropping %d building record(s) holding %d "
               "item(s) queued in a game that has ended -- NOT refunded (those minerals "
@@ -189,7 +178,7 @@ static void CollectGarbage(bool deep) {
     for (int i = g_recCount - 1; i >= 0; --i) {
         if (RecordStillLive(&g_rec[i], deep) && g_rec[i].count > 0) continue;
         if (g_rec[i].count > 0) RefundRecord(&g_rec[i], deep ? "building-gone" : "building-gone-fast");
-        DropRecordAt(i);
+        ScLedgerDropAt(g_rec, &g_recCount, i);
     }
 }
 
@@ -303,7 +292,10 @@ static int HoldBack(DWORD unit, BYTE player, ProdRecord** rp) {
 static void Rebalance(DWORD unit, BYTE player, ProdRecord** rp) {
     HoldBack(unit, player, rp);
     if (*rp && (*rp)->count > 0) PromoteInto(*rp);
-    if (*rp && (*rp)->count == 0) { DropRecordAt((int)(*rp - g_rec)); *rp = NULL; }
+    if (*rp && (*rp)->count == 0) {
+        ScLedgerDropAt(g_rec, &g_recCount, (int)(*rp - g_rec));
+        *rp = NULL;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -321,7 +313,7 @@ void ScProdQueueOnTrain(DWORD unit, unsigned type, bool wasFull) {
         if (!ScUnitPtrValid(unit)) break;
         BYTE player = ScUnitPlayer(unit);
         if (player >= SC_MAX_PLAYERS) break;
-        ProdRecord* r = FindRecord(unit);
+        ProdRecord* r = ScLedgerFind(g_rec, g_recCount, unit);
 
         if (wasFull) {
             // The ring was already full when the command arrived, so the engine dropped
@@ -359,7 +351,7 @@ void ScProdQueueOnTick(DWORD unit) {
     if (g_deepGc) { CollectGarbage(true); g_deepGc = false; }
     else CollectGarbage(false);
 
-    ProdRecord* r = FindRecord(unit);
+    ProdRecord* r = ScLedgerFind(g_rec, g_recCount, unit);
     if (r) Rebalance(unit, r->player, &r);
 
     LeaveCriticalSection(&g_lock);
@@ -377,7 +369,7 @@ bool ScProdQueueOnCancel(DWORD unit, unsigned payload) {
     // cancelLastQueued at 0x00466E40) can be ours, and only when we are actually
     // holding the tail of this building's logical queue. Everything else -- a specific
     // slot 0..4, or the 0xFF no-op -- is the engine's, and it refunds it itself.
-    ProdRecord* r = FindRecord(unit);
+    ProdRecord* r = ScLedgerFind(g_rec, g_recCount, unit);
     if (r && r->count > 0 && payload == SC_CANCEL_TRAIN_LAST) {
         WORD type = r->types[--r->count];
         Refund(r->player, type);
@@ -385,7 +377,7 @@ bool ScProdQueueOnCancel(DWORD unit, unsigned payload) {
         ScLog("PRODQEV cancel-last unit=0x%08X type=0x%03X overflowLeft=%d back=%u/%u",
               (unsigned)unit, (unsigned)type, r->count,
               (unsigned)MineralCost(type), (unsigned)GasCost(type));
-        if (r->count == 0) DropRecordAt((int)(r - g_rec));
+        if (r->count == 0) ScLedgerDropAt(g_rec, &g_recCount, (int)(r - g_rec));
         consumed = true;
     } else if (payload < SC_BUILD_QUEUE_SLOTS &&
                ScUnitQueueSlot(unit, (int)(((unsigned)*(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT)
@@ -420,7 +412,7 @@ bool ScProdQueueOnCancel(DWORD unit, unsigned payload) {
                       "type=0x%03X overflowLeft=%d back=%u/%u",
                       (unsigned)unit, payload, idx, (unsigned)type, r->count,
                       (unsigned)MineralCost(type), (unsigned)GasCost(type));
-                if (r->count == 0) DropRecordAt((int)(r - g_rec));
+                if (r->count == 0) ScLedgerDropAt(g_rec, &g_recCount, (int)(r - g_rec));
             } else {
                 // Nothing behind that icon any more -- it drained between the draw and the
                 // click. SWALLOW rather than pass through: the engine's own handler would
@@ -510,7 +502,7 @@ void ScProdQueueLogState(const char* tag) {
             BYTE head = 0;
             int engineLen = 0;
             int stable = CoherentEngineQueue(u, eng, (int)sizeof(eng), &head, &engineLen);
-            ProdRecord* r = FindRecord(u);
+            ProdRecord* r = ScLedgerFind(g_rec, g_recCount, u);
             BYTE player = ScUnitPlayer(u);
             ScLog("PRODQSEL [%s] unit=0x%08X type=0x%03X player=%u head=%u engineLen=%d "
                   "engine=[%s] overflow=%d logical=%d minerals=%u gas=%u ringStable=%d",
@@ -602,12 +594,12 @@ void ScProdQueueLogStats(void) {
 // be a test oracle that cannot see the bug it exists to detect.
 int ScProdQueueOverflowCount(DWORD unit) {
     ProdQSessionSync();
-    ProdRecord* r = FindRecord(unit);
+    ProdRecord* r = ScLedgerFind(g_rec, g_recCount, unit);
     return r ? r->count : -1;
 }
 int ScProdQueueOverflowAt(DWORD unit, int i) {
     ProdQSessionSync();
-    ProdRecord* r = FindRecord(unit);
+    ProdRecord* r = ScLedgerFind(g_rec, g_recCount, unit);
     if (!r || i < 0 || i >= r->count) return -1;
     return (int)r->types[i];
 }
@@ -836,7 +828,7 @@ void ScProdQueueRemove(void) {
         ProdQSessionSync();
         for (int i = g_recCount - 1; i >= 0; --i) {
             if (ScUnitPtrValid(g_rec[i].unit)) RefundRecord(&g_rec[i], "plugin-unload");
-            DropRecordAt(i);
+            ScLedgerDropAt(g_rec, &g_recCount, i);
         }
         LeaveCriticalSection(&g_lock);
     }
