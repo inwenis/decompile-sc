@@ -762,16 +762,12 @@ static int ResolveMax(void) {
                     SC_BUILD_QUEUE_SLOTS, SC_PRODQ_HARD_MAX);
 }
 
-static void EnsureLock(void) {
-    if (!g_lockReady) { InitializeCriticalSection(&g_lock); g_lockReady = true; }
-}
-
 int ScProdQueueInstall(BYTE* moduleBase) {
     ScEngineSetModuleBase(moduleBase);
     g_recCount = 0;
     g_session  = ScSessionEpoch();
     memset(g_stat, 0, sizeof(g_stat));
-    EnsureLock();
+    ScEnsureLock(&g_lock, &g_lockReady);
 
     if (!ScProdQueueEnabled()) {
         g_enabled = false;
@@ -839,7 +835,7 @@ void ScProdQueueRemove(void) {
 }
 
 void ScProdQueueTestBegin(BYTE* fakeModuleBase, int maxTotal) {
-    EnsureLock();
+    ScEnsureLock(&g_lock, &g_lockReady);
     ScEngineSetModuleBase(fakeModuleBase);
     g_enabled  = fakeModuleBase != NULL;
     g_testing  = fakeModuleBase != NULL;

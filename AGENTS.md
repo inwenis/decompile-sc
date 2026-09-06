@@ -128,6 +128,8 @@ Your folder is `Maps\BroodWar\00-t<NNN>-<suite>\` (`<NNN>` = the digits in `$env
 - For any claim about what a dialog HOLDS (which button, which slot, enabled or greyed), DO walk the dialog and read its fields (`sc_card`/`sc_hudrow` show the shape; needs no hook, works in `-Mode observe`). Frame hashes and captures are corroboration for the human, never the oracle.
 - DO take the read BEFORE the action as well as after, and make the verifier something other than the thing that acts (the Cloak slot flips to its Decloak face on success and reports "no Cloak button").
   -> research/rulebook-history.md § "Read a dialog's CONTENT from memory; never hash its pixels"; research/command-card.md §6.4
+- A `ScLog` format string is an API: 24 `.ps1` files parse those lines, and a field inserted at the front of one silently stops every regex anchored to it. DO add a line you rely on to `tests/golden-line-seam.Tests.ps1`, which renders it from the C++ source and matches each suite's own regex against it.
+  -> tests/golden-line-seam.Tests.ps1
 - DO verify a UI action by reading the engine's own dialog list back afterwards, never by "no exception was thrown".
   -> tools/plugin/prime-game-type.ps1
 - "The probe never ran" must never be indistinguishable from "nothing happened": a missing baseline or reference reads -1 (never 0), a skipped comparison counts what reached it, zero samples are not agreement, a null reading is not a clean result.
@@ -228,6 +230,13 @@ Hard rule 4 applies to every line of `research/`.
   A dead parent is NOT evidence (the launcher exits once scinject hands off, so every harness game is parentless within seconds). A growing plugin log is NOT evidence (the plugin writes it, and the plugin is alive in an orphan by definition).
 - DO kill an orphan only with that positive proof. A StarCraft you did not launch is another run's game or the user's own play: ask the user, NEVER kill it yourself.
 -> research/rulebook-history.md § "Never stop an agent without checking for an in-flight game"; tools/plugin/close-game.ps1; tools/plugin/check-game-windows.ps1
+
+## Plugin code reuse
+
+- NEVER copy a helper into a second `tools/plugin/src` file. Shared code goes in `sc_engine.h` (relocation, memory probe), `sc_unit.h` (CUnit and dialog reads), `sc_env.h` (`%SCPLUGIN_*%`), `sc_ledger.h` (per-building records) or `sc_log.h`.
+- `python tools/check-cpp-reuse.py` is the gate and CI runs it; a copy that must stay goes in `tools/check-cpp-reuse.baseline` with the reason in the PR that adds it.
+- Copies drift silently: four copies of one memory probe had stopped agreeing about the low-end bounds check by the time anyone compared them.
+-> tools/check-cpp-reuse.py
 
 ## Layout
 

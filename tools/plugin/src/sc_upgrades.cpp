@@ -1039,10 +1039,6 @@ static int ResolveMax(void) {
                     SC_UPGQ_ENGINE_SLOTS, SC_UPGQ_HARD_MAX);
 }
 
-static void EnsureLock(void) {
-    if (!g_lockReady) { InitializeCriticalSection(&g_lock); g_lockReady = true; }
-}
-
 int ScUpgQueueInstall(BYTE* moduleBase) {
     ScEngineSetModuleBase(moduleBase);
     g_recCount = 0;
@@ -1050,7 +1046,7 @@ int ScUpgQueueInstall(BYTE* moduleBase) {
     g_session = ScSessionEpoch();
     g_start = &EngineStartItem;
     memset(g_stat, 0, sizeof(g_stat));
-    EnsureLock();
+    ScEnsureLock(&g_lock, &g_lockReady);
 
     if (!ScUpgQueueEnabled()) { g_enabled = false; return 0; }
     g_maxTotal = ResolveMax();
@@ -1126,7 +1122,7 @@ void ScUpgQueueRemove(void) {
 }
 
 void ScUpgQueueTestBegin(BYTE* fakeModuleBase, int maxTotal, ScUpgStartFn starter) {
-    EnsureLock();
+    ScEnsureLock(&g_lock, &g_lockReady);
     ScEngineSetModuleBase(fakeModuleBase);
     g_enabled  = fakeModuleBase != NULL;
     g_testing  = fakeModuleBase != NULL;
