@@ -24,14 +24,6 @@
 // argument is "every engine reader of the ring runs on the game thread" (sc_queueind.h);
 // these lines are how a run MEASURES that instead of trusting it. The observer's own
 // site is expected to print a DIFFERENT id -- that is the thread the seqlock exists for.
-static void ThreadCheck(const char* site, DWORD* seen) {
-    DWORD tid = GetCurrentThreadId();
-    if (*seen == tid) return;
-    ScLog("THREADCHECK %s tid=%u%s", site, (unsigned)tid,
-          *seen ? " CHANGED -- the single-thread claim this fix rests on is broken" : "");
-    *seen = tid;
-}
-
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -328,7 +320,7 @@ static void Rebalance(DWORD unit, BYTE player, ProdRecord** rp) {
 
 void ScProdQueueOnTrain(DWORD unit, unsigned type, bool wasFull) {
     if (!g_enabled || !unit) return;
-    { static DWORD tid = 0; ThreadCheck("prodq-train", &tid); }
+    { static DWORD tid = 0; ScThreadCheck("prodq-train", &tid); }
     EnterCriticalSection(&g_lock);
     ProdQSessionSync();
     CollectGarbage(true);
@@ -368,7 +360,7 @@ void ScProdQueueOnTick(DWORD unit) {
     // has something to look at, or on the next Train/Cancel/read-back, all of which
     // take it unconditionally.
     if (!g_enabled || !unit || g_recCount == 0) return;
-    { static DWORD tid = 0; ThreadCheck("prodq-tick", &tid); }
+    { static DWORD tid = 0; ScThreadCheck("prodq-tick", &tid); }
     EnterCriticalSection(&g_lock);
     ProdQSessionSync();
 
@@ -383,7 +375,7 @@ void ScProdQueueOnTick(DWORD unit) {
 
 bool ScProdQueueOnCancel(DWORD unit, unsigned payload) {
     if (!g_enabled || !unit) return false;
-    { static DWORD tid = 0; ThreadCheck("prodq-cancel", &tid); }
+    { static DWORD tid = 0; ScThreadCheck("prodq-cancel", &tid); }
     bool consumed = false;
     EnterCriticalSection(&g_lock);
     ProdQSessionSync();
@@ -508,7 +500,7 @@ void ScProdQueueLogState(const char* tag) {
     if (!g_enabled || !g_lockReady) return;
     // The observer's own site: this one is EXPECTED to print a different id from the
     // prodq-train/tick/cancel sites -- it is the thread the seqlock above exists for.
-    { static DWORD tid = 0; ThreadCheck("prodq-observer", &tid); }
+    { static DWORD tid = 0; ScThreadCheck("prodq-observer", &tid); }
     EnterCriticalSection(&g_lock);
     // The oracle syncs too, and that is the half of issue #63 a test can actually see:
     // arm 6 asserts on THIS line's `buildings=` in a game the plugin never queued in,
@@ -679,16 +671,7 @@ static ScHook g_hkTick;
 
 typedef void (__attribute__((stdcall)) *CancelTrainFn)(DWORD);
 
-static DWORD SoleSelectedUnit(void) {
-    DWORD player = *(DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_ID);
-    if (player >= SC_MAX_PLAYERS) return 0;
-    DWORD* sel = (DWORD*)ScRuntimeAddr(SC_VA_PLAYERS_SELECTIONS) + player * SC_SELECTION_SLOTS;
-    DWORD u = sel[0];
-    if (!u || sel[1]) return 0;
-    return ScUnitPtrValid(u) ? u : 0;
-}
-
-DWORD ScProdQueueSoleSelectedUnitForTest(void) { return SoleSelectedUnit(); }
+DWORD ScProdQueueSoleSelectedUnitForTest(void) { return ScSoleSelectedUnit(); }
 
 // Calls a trampoline whose target takes its only argument in EAX and returns void.
 static void CallEax(void* fn, DWORD eax) {
@@ -702,7 +685,7 @@ static void CallEax(void* fn, DWORD eax) {
 
 // cmdrecvTrain (0x004C1C20): EAX = the command bytes, void, bare RET.
 extern "C" void SC_GAME_ENTRY ScProdTrainDetour(DWORD cmd) {
-    DWORD unit = SoleSelectedUnit();
+    DWORD unit = ScSoleSelectedUnit();
     unsigned type = 0xFFFFu;
     bool wasFull = false;
     ++g_stat[SC_PRODQ_STAT_TRAIN_SEEN];
@@ -750,7 +733,7 @@ asm(".text\n"
 // thunk. PRE-hook: when the plugin owns the tail of the logical queue, a "cancel the
 // last item" is ours and the engine's handler must not also run.
 static void __attribute__((stdcall)) SC_GAME_ENTRY HkCmdrecvCancelTrain(DWORD cmd) {
-    DWORD unit = SoleSelectedUnit();
+    DWORD unit = ScSoleSelectedUnit();
     unsigned payload = cmd ? *(WORD*)(cmd + 1) : SC_CANCEL_TRAIN_NONE;
     ++g_stat[SC_PRODQ_STAT_CANCEL_SEEN];
     if (!unit) ++g_stat[SC_PRODQ_STAT_CANCEL_NO_UNIT];

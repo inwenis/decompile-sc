@@ -82,6 +82,18 @@ static inline BYTE  ScUnitPlayer(DWORD unit)     { return *(BYTE*)(unit + SC_CUN
 static inline DWORD ScUnitHitPoints(DWORD unit)  { return *(DWORD*)(unit + SC_CUNIT_OFF_HITPOINTS); }
 static inline DWORD ScUnitSprite(DWORD unit)     { return *(DWORD*)(unit + SC_CUNIT_OFF_SPRITE); }
 
+// The one unit this player has selected, or 0 -- 0 for an empty selection AND for a
+// selection of two or more, because every caller of this is asking "is there exactly one
+// building to talk about".
+static inline DWORD ScSoleSelectedUnit(void) {
+    DWORD player = *(DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_ID);
+    if (player >= SC_MAX_PLAYERS) return 0;
+    DWORD* sel = (DWORD*)ScRuntimeAddr(SC_VA_PLAYERS_SELECTIONS) + player * SC_SELECTION_SLOTS;
+    DWORD u = sel[0];
+    if (!u || sel[1]) return 0;
+    return ScUnitPtrValid(u) ? u : 0;
+}
+
 // ---------------------------------------------------------------------------
 // The engine's five-slot build queue, read and written the way the engine does
 // ---------------------------------------------------------------------------

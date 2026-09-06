@@ -7,6 +7,7 @@
 #ifndef SC_LOG_H
 #define SC_LOG_H
 
+#include <windows.h>
 #include <stddef.h>
 
 void ScLogOpen(void);
@@ -29,5 +30,15 @@ void ScLogResolvePath(char* out, size_t outLen);
 bool ScLogTestTryHoldLock(void);   // take the log lock, as a foreign owner would
 void ScLogTestReleaseLock(void);
 void ScLogTestClearTryLock(void);  // undo ScLogSetTryLock, so a test can run both modes
+
+// Bytes -> "5589EC" into `out`, truncated rather than overrun. Every caller is building
+// a log line out of engine bytes it is about to quote (a hook prologue, a patch site),
+// which is why it lives next to ScLog rather than in each of them.
+void ScHexDump(const BYTE* p, int n, char* out, int outLen);
+
+// One THREADCHECK line the first time a named site runs, and again if the thread ever
+// changes under it. Two modules hold cross-frame state that is only safe because the game
+// thread is the only writer; this is the assertion that says so out loud.
+void ScThreadCheck(const char* site, DWORD* seen);
 
 #endif // SC_LOG_H

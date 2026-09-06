@@ -96,14 +96,6 @@ static struct {
 } g_saved[SC_WS_MAX_SAVED];
 static int g_savedCount = 0;
 
-static void HexDump(const BYTE* p, int n, char* out, int outLen) {
-    int used = 0;
-    out[0] = '\0';
-    for (int i = 0; i < n && used + 3 < outLen; ++i) {
-        used += _snprintf(out + used, outLen - used, "%02X", p[i]);
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Environment
 // ---------------------------------------------------------------------------
@@ -234,8 +226,8 @@ static bool VerifyAll(int maxStage, int* checked) {
         }
         if (memcmp(at, p->expect, p->len) != 0) {
             char got[SC_WS_MAX_PATCH_LEN * 2 + 1], want[SC_WS_MAX_PATCH_LEN * 2 + 1];
-            HexDump(at, p->len, got, sizeof(got));
-            HexDump(p->expect, p->len, want, sizeof(want));
+            ScHexDump(at, p->len, got, sizeof(got));
+            ScHexDump(p->expect, p->len, want, sizeof(want));
             ScLog("WIDESCREEN REFUSED %s @0x%08X: bytes are %s, table expects %s "
                   "(wrong build, or already patched)", p->name, (unsigned)p->va, got, want);
             ok = false;
@@ -280,8 +272,8 @@ static bool WriteOne(const ScScreenPatch* p) {
     VirtualProtect(at, p->len, oldProtect, &ignore);
 
     char before[SC_WS_MAX_PATCH_LEN * 2 + 1], after[SC_WS_MAX_PATCH_LEN * 2 + 1];
-    HexDump(p->expect, p->len, before, sizeof(before));
-    HexDump(bytes, p->len, after, sizeof(after));
+    ScHexDump(p->expect, p->len, before, sizeof(before));
+    ScHexDump(bytes, p->len, after, sizeof(after));
     ScLog("WIDESCREEN patch stage=%d %-28s @0x%08X %s -> %s  (%s)",
           p->stage, p->name, (unsigned)p->va, before, after, p->note);
     return true;

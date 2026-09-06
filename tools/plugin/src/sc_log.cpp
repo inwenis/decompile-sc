@@ -144,3 +144,19 @@ void ScLogTestReleaseLock(void) {
 void ScLogTestClearTryLock(void) {
     InterlockedExchange(&g_logTryLock, 0);
 }
+
+void ScHexDump(const BYTE* p, int n, char* out, int outLen) {
+    int used = 0;
+    out[0] = '\0';
+    for (int i = 0; i < n && used + 3 < outLen; ++i) {
+        used += _snprintf(out + used, outLen - used, "%02X", p[i]);
+    }
+}
+
+void ScThreadCheck(const char* site, DWORD* seen) {
+    DWORD tid = GetCurrentThreadId();
+    if (*seen == tid) return;
+    ScLog("THREADCHECK %s tid=%u%s", site, (unsigned)tid,
+          *seen ? " CHANGED -- the single-thread claim this fix rests on is broken" : "");
+    *seen = tid;
+}

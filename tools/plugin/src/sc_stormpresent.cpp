@@ -91,7 +91,7 @@ static bool Readable(const void* addr, DWORD len) {
     return ScReadable((DWORD)(DWORD_PTR)addr, len);
 }
 
-static DWORD RdU32(const void* addr, bool* ok) {
+static DWORD StormReadU32(const void* addr, bool* ok) {
     if (!Readable(addr, 4)) { if (ok) *ok = false; return 0; }
     if (ok) *ok = true;
     return *(const DWORD*)addr;
@@ -131,7 +131,7 @@ ScStormMode ScStormPresentModeWanted(void) {
 // ---------------------------------------------------------------------------
 static void LogRegionRects(const char* what, DWORD regionVaOfPtr) {
     bool ok = false;
-    DWORD region = RdU32(ScRuntimeAddr(regionVaOfPtr), &ok);
+    DWORD region = StormReadU32(ScRuntimeAddr(regionVaOfPtr), &ok);
     if (!ok || !region) { ScLog("STORM region %s: handle %s", what, ok ? "NULL" : "unreadable"); return; }
     DWORD cnt = 8;
     int rects[8][4];
@@ -153,7 +153,7 @@ static void LogRegionRects(const char* what, DWORD regionVaOfPtr) {
 // 640 cap; (0,0,800,480) means the cap is elsewhere.
 static void LogRegionStruct(const char* t, const char* what, DWORD regionVaOfPtr) {
     bool ok = false;
-    DWORD r = RdU32(ScRuntimeAddr(regionVaOfPtr), &ok);
+    DWORD r = StormReadU32(ScRuntimeAddr(regionVaOfPtr), &ok);
     if (!ok || !r || !Readable((void*)(DWORD_PTR)r, 0x30)) {
         ScLog("STORM [%s] region-struct %s: handle %s", t, what,
               (!ok || !r) ? "NULL/unreadable ptr" : "handle unreadable");
@@ -176,17 +176,17 @@ void ScStormPresentLog(const char* tag) {
     ++g_logs;
 
     bool okW, okH, okB;
-    DWORD w = RdU32(StormRt(STORM_RVA_WIDTH), &okW);
-    DWORD h = RdU32(StormRt(STORM_RVA_HEIGHT), &okH);
-    DWORD bpp = RdU32(StormRt(STORM_RVA_BPP), &okB);
+    DWORD w = StormReadU32(StormRt(STORM_RVA_WIDTH), &okW);
+    DWORD h = StormReadU32(StormRt(STORM_RVA_HEIGHT), &okH);
+    DWORD bpp = StormReadU32(StormRt(STORM_RVA_BPP), &okB);
     ScLog("STORM [%s] geometry: bpp=%s%u width=%s%u height=%s%u (storm base 0x%08X)",
           t, okB ? "" : "?", (unsigned)bpp, okW ? "" : "?", (unsigned)w,
           okH ? "" : "?", (unsigned)h, (unsigned)(DWORD_PTR)g_stormBase);
 
     bool okF;
-    DWORD fb = RdU32(StormRt(STORM_RVA_FALLBACK_LOCK_PTR), &okF);
+    DWORD fb = StormReadU32(StormRt(STORM_RVA_FALLBACK_LOCK_PTR), &okF);
     bool okC[4]; DWORD clip[4];
-    for (int i = 0; i < 4; ++i) clip[i] = RdU32((BYTE*)StormRt(STORM_RVA_CLIP) + i * 4, &okC[i]);
+    for (int i = 0; i < 4; ++i) clip[i] = StormReadU32((BYTE*)StormRt(STORM_RVA_CLIP) + i * 4, &okC[i]);
     ScLog("STORM [%s] present path: fallbackLockPtr[0x5EA70]=%s0x%08X (%s) "
           "clip[0x5EA74]=(%d,%d,%d,%d)",
           t, okF ? "" : "?", (unsigned)fb,
@@ -195,8 +195,8 @@ void ScStormPresentLog(const char* tag) {
           (int)clip[0], (int)clip[1], (int)clip[2], (int)clip[3]);
 
     bool okS[4]; DWORD surf[4];
-    for (int i = 0; i < 4; ++i) surf[i] = RdU32((BYTE*)StormRt(STORM_RVA_SURFTABLE) + i * 4, &okS[i]);
-    bool okP; DWORD prim = RdU32(StormRt(STORM_RVA_PRIMARY), &okP);
+    for (int i = 0; i < 4; ++i) surf[i] = StormReadU32((BYTE*)StormRt(STORM_RVA_SURFTABLE) + i * 4, &okS[i]);
+    bool okP; DWORD prim = StormReadU32(StormRt(STORM_RVA_PRIMARY), &okP);
     ScLog("STORM [%s] surfaces[0x5EA84]: [0]=0x%08X [1]=0x%08X [2]=0x%08X [3]=0x%08X "
           "primary[0x5EA90]=0x%08X",
           t, (unsigned)surf[0], (unsigned)surf[1], (unsigned)surf[2], (unsigned)surf[3],
@@ -206,7 +206,7 @@ void ScStormPresentLog(const char* tag) {
     // Ordinal_440 width patch to 0x320 took, [+0x10] reads 800; if it still reads
     // 640, storm builds every region on a 640-wide grid and THAT clips the copy.
     bool okG[6]; DWORD g[6];
-    for (int i = 0; i < 6; ++i) g[i] = RdU32((BYTE*)StormRt(STORM_RVA_RGNGRID) + i * 4, &okG[i]);
+    for (int i = 0; i < 6; ++i) g[i] = StormReadU32((BYTE*)StormRt(STORM_RVA_RGNGRID) + i * 4, &okG[i]);
     ScLog("STORM [%s] region-grid[0x5AC10]: cells=%u/%u log2=(%u,%u) WIDTH=%s%u HEIGHT=%u",
           t, (unsigned)g[0], (unsigned)g[1], (unsigned)g[2], (unsigned)g[3],
           okG[4] ? "" : "?", (unsigned)g[4], (unsigned)g[5]);
@@ -215,7 +215,7 @@ void ScStormPresentLog(const char* tag) {
     // A black RIGHT band with no letterbox means the primary is 800 and only 0..639
     // were written (cap is the copy); a 640 primary would mean the surface itself is
     // narrow. Read-only COM call, pointer-guarded.
-    bool okS0; DWORD prim0 = RdU32(StormRt(STORM_RVA_SURFTABLE), &okS0);
+    bool okS0; DWORD prim0 = StormReadU32(StormRt(STORM_RVA_SURFTABLE), &okS0);
     if (okS0 && prim0 && Readable((void*)(DWORD_PTR)prim0, 4)) {
         DWORD vtbl = *(DWORD*)(DWORD_PTR)prim0;
         if (Readable((void*)(DWORD_PTR)(vtbl + DDS_VTBL_GETSURFACEDESC), 4)) {

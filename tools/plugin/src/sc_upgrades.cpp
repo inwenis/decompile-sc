@@ -809,16 +809,7 @@ typedef void (__attribute__((stdcall)) *CmdFn)(DWORD);
 //   0049a869  LEA  EAX,[EAX + EAX*2]                   ; player * 3
 //   0049a86d  LEA  ESI,[ECX + EAX*4]                   ; iterator + player * 12
 //   0049a870  MOV  EAX,dword ptr [ESI*4 + 0x006284E8]  ; playersSelections[player][iter]
-static DWORD SoleSelectedUnit(void) {
-    DWORD player = *(DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_ID);
-    if (player >= SC_MAX_PLAYERS) return 0;
-    DWORD* sel = (DWORD*)ScRuntimeAddr(SC_VA_PLAYERS_SELECTIONS) + player * SC_SELECTION_SLOTS;
-    DWORD u = sel[0];
-    if (!u || sel[1]) return 0;
-    return ScUnitPtrValid(u) ? u : 0;
-}
-
-DWORD ScUpgQueueSoleSelectedUnitForTest(void) { return SoleSelectedUnit(); }
+DWORD ScUpgQueueSoleSelectedUnitForTest(void) { return ScSoleSelectedUnit(); }
 
 // --- the card conditions -----------------------------------------------------
 //
@@ -940,7 +931,7 @@ asm(".text\n"
 // something is already running, so letting the engine's body run for a busy building would
 // overwrite the running item AND pay for the new one.
 static void __attribute__((stdcall)) SC_GAME_ENTRY HkCmdrecvUpgrade(DWORD cmd) {
-    DWORD unit = SoleSelectedUnit();
+    DWORD unit = ScSoleSelectedUnit();
     unsigned id = cmd ? *(BYTE*)(cmd + 1) : 0xFFu;
     g_deepGc = true;
     if (unit && ScUpgQueueOnCommand(unit, SC_UPGQ_KIND_UPGRADE, id)) return;
@@ -948,7 +939,7 @@ static void __attribute__((stdcall)) SC_GAME_ENTRY HkCmdrecvUpgrade(DWORD cmd) {
 }
 
 static void __attribute__((stdcall)) SC_GAME_ENTRY HkCmdrecvTech(DWORD cmd) {
-    DWORD unit = SoleSelectedUnit();
+    DWORD unit = ScSoleSelectedUnit();
     unsigned id = cmd ? *(BYTE*)(cmd + 1) : 0xFFu;
     g_deepGc = true;
     if (unit && ScUpgQueueOnCommand(unit, SC_UPGQ_KIND_TECH, id)) return;
@@ -969,14 +960,14 @@ static void __attribute__((stdcall)) SC_GAME_ENTRY HkCmdrecvTech(DWORD cmd) {
 typedef void (*CancelFn)(void);
 
 static void SC_GAME_ENTRY HkCmdrecvCancelUpgrade(void) {
-    DWORD unit = SoleSelectedUnit();
+    DWORD unit = ScSoleSelectedUnit();
     g_deepGc = true;
     if (unit && ScUpgQueueOnCancel(unit)) return;
     ((CancelFn)g_hkCancelUpg.trampoline)();
 }
 
 static void SC_GAME_ENTRY HkCmdrecvCancelTech(void) {
-    DWORD unit = SoleSelectedUnit();
+    DWORD unit = ScSoleSelectedUnit();
     g_deepGc = true;
     if (unit && ScUpgQueueOnCancel(unit)) return;
     ((CancelFn)g_hkCancelTech.trampoline)();

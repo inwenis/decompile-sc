@@ -63,14 +63,6 @@ void ScHookResumeThreads(void) {
 // Install / remove
 // ---------------------------------------------------------------------------
 
-static void HexDump(const BYTE* p, int n, char* out, int outLen) {
-    int used = 0;
-    out[0] = '\0';
-    for (int i = 0; i < n && used + 3 < outLen; ++i) {
-        used += _snprintf(out + used, outLen - used, "%02X", p[i]);
-    }
-}
-
 bool ScHookInstall(ScHook* h, const char* name, void* target, void* detour,
                    int patchLen, const BYTE* expect, int expectLen) {
     memset(h, 0, sizeof(*h));
@@ -91,8 +83,8 @@ bool ScHookInstall(ScHook* h, const char* name, void* target, void* detour,
     memcpy(actual, target, (size_t)patchLen);
     if (expectLen > 0 && memcmp(actual, expect, (size_t)expectLen) != 0) {
         char got[SC_HOOK_MAX_PATCH * 2 + 1], want[SC_HOOK_MAX_PATCH * 2 + 1];
-        HexDump(actual, expectLen, got, sizeof(got));
-        HexDump(expect, expectLen, want, sizeof(want));
+        ScHexDump(actual, expectLen, got, sizeof(got));
+        ScHexDump(expect, expectLen, want, sizeof(want));
         ScLog("HOOK %s: REFUSED at %p -- prologue is %s, expected %s "
               "(wrong address, wrong build, or already hooked)", name, target, got, want);
         return false;
@@ -139,7 +131,7 @@ bool ScHookInstall(ScHook* h, const char* name, void* target, void* detour,
     h->installed = true;
 
     char sig[SC_HOOK_MAX_PATCH * 2 + 1];
-    HexDump(h->saved, patchLen, sig, sizeof(sig));
+    ScHexDump(h->saved, patchLen, sig, sizeof(sig));
     ScLog("HOOK %s: installed at %p (patch %dB, was %s) detour=%p tramp=%p",
           name, target, patchLen, sig, detour, tramp);
     return true;

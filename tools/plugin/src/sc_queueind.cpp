@@ -305,14 +305,6 @@ void ScQueueIndPhantomRestore(void) {
 
 // One line per SITE, on the first call and on any CHANGE -- a changed id is the
 // single-thread claim breaking and must be loud, not deduplicated away.
-static void ThreadCheck(const char* site, DWORD* seen) {
-    DWORD tid = GetCurrentThreadId();
-    if (*seen == tid) return;
-    ScLog("THREADCHECK %s tid=%u%s", site, (unsigned)tid,
-          *seen ? " CHANGED -- the single-thread claim this fix rests on is broken" : "");
-    *seen = tid;
-}
-
 // ---------------------------------------------------------------------------
 // The composer -- pure, so hooktest drives exactly this
 // ---------------------------------------------------------------------------
@@ -861,7 +853,7 @@ typedef int (__attribute__((fastcall)) *ScIconInteractFn)(DWORD, DWORD);
 static int __attribute__((fastcall)) SC_GAME_ENTRY QIndIconInteractShim(DWORD ctrl, DWORD evt) {
     {
         static DWORD tid = 0;
-        ThreadCheck("qind-interact", &tid);
+        ScThreadCheck("qind-interact", &tid);
     }
     // MEASURES ONLY. There WAS a fix here -- restore the PRESSED bit the engine's disable
     // event clears on a slot the plugin owns -- and it is reverted, because the run that
@@ -1507,7 +1499,7 @@ void ScQueueIndOnFrame(void) {
 // before the indicator decides what to say and re-shows itself.
 static void SC_GAME_ENTRY HkStatDisplayDriver(void) {
     static DWORD tid = 0;
-    ThreadCheck("qind-driver", &tid);
+    ScThreadCheck("qind-driver", &tid);
     CallOrigDriver();
     ScQueueIndOnFrame();
 }
@@ -1530,7 +1522,7 @@ static int g_layoutDepth = 0;
 
 static void __attribute__((stdcall)) SC_GAME_ENTRY HkQueueLayout(DWORD ctrl) {
     static DWORD tid = 0;
-    ThreadCheck("qind-layout", &tid);
+    ScThreadCheck("qind-layout", &tid);
     ++g_layoutDepth;
     if (g_layoutDepth > 1) {
         static bool said = false;
