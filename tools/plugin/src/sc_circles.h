@@ -25,10 +25,10 @@
 //                                            Reached only from the 0x0049AE40 detour
 //                                            and sc_fanout's CMDACT_Select detour.
 //
-//   ScCirclesInit / ScCirclesInstallHook     Plugin globals and ScHookInstall only; no
+//   ScCirclesInit / ScCirclesInstall     Plugin globals and ScHookInstall only; no
 //                                            engine call. Run from DLL_PROCESS_ATTACH.
 //
-//   ScCirclesRemoveHook                      Un-splices only. Run from DLL_PROCESS_DETACH
+//   ScCirclesRemove                      Un-splices only. Run from DLL_PROCESS_DETACH
 //                                            under ScHookSuspendThreads.
 //
 //   ScCirclesCount / ScCirclesLogStats       Read plugin globals; no engine call.
@@ -94,9 +94,10 @@ bool ScCirclesEnabled(void);
 
 // Installs the ONE hook this feature needs: CreateNewUnitSelectionsFromList
 // (0x0049AE40), whose entry is where our circles come off before the engine puts its
-// own on. Returns true on success. Safe to call when disabled (does nothing, true).
-bool ScCirclesInstallHook(void);
-void ScCirclesRemoveHook(void);
+// own on. Returns the number of hooks installed -- 1 on success, 0 on failure, and 0
+// when disabled, which is not a failure. Safe to call when disabled.
+int  ScCirclesInstall(void);
+void ScCirclesRemove(void);
 
 // Attach a circle to each of `n` units. Detaches whatever was attached before, so a
 // caller can simply re-state the whole set. Units already carrying flag 0x08 (the

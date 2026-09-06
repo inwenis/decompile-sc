@@ -43,7 +43,7 @@
 #define STORM_RVA_BPP        0x0005A7C0u   // = 8
 #define STORM_RVA_WIDTH      0x0005A7C4u   // = 640
 #define STORM_RVA_HEIGHT     0x0005A7C8u   // = 480
-#define STORM_RVA_FBLOCKPTR  0x0005EA70u   // fallback sysmem lock pointer (0 = direct)
+#define STORM_RVA_FALLBACK_LOCK_PTR 0x0005EA70u   // fallback sysmem lock pointer (0 = direct)
 #define STORM_RVA_CLIP       0x0005EA74u   // {l,t,r,b} flip clip, 4 dwords
 #define STORM_RVA_SURFTABLE  0x0005EA84u   // IDirectDrawSurface*[4]; [0]=primary [3]=sysmem
 #define STORM_RVA_PRIMARY    0x0005EA90u   // the DirectDraw object / primary handle ord356 Blts to
@@ -184,7 +184,7 @@ void ScStormPresentLog(const char* tag) {
           okH ? "" : "?", (unsigned)h, (unsigned)(DWORD_PTR)g_stormBase);
 
     bool okF;
-    DWORD fb = RdU32(StormRt(STORM_RVA_FBLOCKPTR), &okF);
+    DWORD fb = RdU32(StormRt(STORM_RVA_FALLBACK_LOCK_PTR), &okF);
     bool okC[4]; DWORD clip[4];
     for (int i = 0; i < 4; ++i) clip[i] = RdU32((BYTE*)StormRt(STORM_RVA_CLIP) + i * 4, &okC[i]);
     ScLog("STORM [%s] present path: fallbackLockPtr[0x5EA70]=%s0x%08X (%s) "

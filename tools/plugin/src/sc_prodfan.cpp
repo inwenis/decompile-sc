@@ -549,7 +549,7 @@ asm(
     "  jmp   *_g_scProdFanCondTramp\n"
 );
 
-int ScProdFanInstallGate(void) {
+int ScProdFanInstall(void) {
     if (!g_enabled || !ScEngineModuleBase()) return 0;
     int suspended = ScHookSuspendThreads();
     bool ok = ScHookInstall(&g_hkCond, "btnTrainCondition", ScRuntimeAddr(SC_VA_BTN_TRAIN_CONDITION),
@@ -573,7 +573,7 @@ int ScProdFanInstallGate(void) {
     return 1;
 }
 
-void ScProdFanRemoveGate(void) {
+void ScProdFanRemove(void) {
     if (g_hkCond.installed) ScHookRemove(&g_hkCond);
     g_condTrampoline = NULL;
     g_scProdFanCondTramp = NULL;

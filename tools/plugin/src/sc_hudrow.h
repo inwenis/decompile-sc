@@ -65,13 +65,13 @@ bool ScHudRowEnabled(void);
 
 // Installs the one detour (dispatcher 0x00458120). Call under the same thread
 // suspension as the other hooks. Returns the number installed (0 or 1).
-int  ScHudRowInstallHooks(void);
+int  ScHudRowInstall(void);
 
 // Un-splices the detours and best-effort restores the 12 wrapped interact
 // pointers and un-splices the indicator. Mid-game unload remains unsupported for
 // the same reason as sc_circles (the game thread may be inside the shim), but the
 // pointer restores are single atomic dword writes, so they are attempted.
-void ScHudRowRemoveHooks(void);
+void ScHudRowRemove(void);
 
 void ScHudRowLogStats(void);
 

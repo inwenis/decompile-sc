@@ -1125,7 +1125,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             // player cannot issue the command at all, so this is the half of the feature
             // that has to succeed for the other half to mean anything -- and a failure
             // here turns the whole feature off rather than leaving it half-armed.
-            if (ScProdFanEnabled()) ScProdFanInstallGate();
+            if (ScProdFanEnabled()) ScProdFanInstall();
         }
         // Task 025. Gated on %SCPLUGIN_PRODQ% AND on not being in observe mode:
         // observe is the whole plugin's off switch and must stay byte-for-byte the
@@ -1197,7 +1197,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             // Task 030's detour holds nothing and moves nothing, so it can come out
             // anywhere in this sequence; it goes here so the card is back to stock
             // before the fan-out's own hooks leave.
-            ScProdFanRemoveGate();
+            ScProdFanRemove();
             // Task 029 has nothing to give back before it un-splices -- every item it
             // holds is unpaid -- so its order relative to the others does not matter. It
             // still goes before the fan-out's, so the whole splice comes out newest-first.

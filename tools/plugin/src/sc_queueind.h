@@ -120,8 +120,8 @@ void ScQueueIndInit(BYTE* moduleBase, bool enabled);
 
 // Installs the ONE detour. Returns 1 on success, 0 on failure; a failure disables the
 // feature rather than leaving it half-armed. Call under the shared thread suspension.
-int  ScQueueIndInstallHooks(void);
-void ScQueueIndRemoveHooks(void);
+int  ScQueueIndInstall(void);
+void ScQueueIndRemove(void);
 
 // THE READ-BACK ORACLE. Reads the indicator's state back OUT OF THE LIVE DIALOG -- is the
 // control linked into the child chain, is the engine's own visible bit set on it, what

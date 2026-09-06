@@ -12,7 +12,11 @@
 
 enum ScMode {
     SC_MODE_OBSERVE  = 0,  // task 008 behaviour: read-only, no hooks, no writes
-    SC_MODE_HOOKTEST = 1,  // stage A: ONE hook (queueCommand), logs only
+    // Stage A: ONE hook (queueCommand), logs only, no behaviour change. The
+    // %SCPLUGIN_MODE% string for it is still "hooktest", which is a launcher flag
+    // in ten .ps1 files and cannot move -- but it has nothing to do with
+    // hooktest.exe, the OFFLINE unit test that runs with no game at all.
+    SC_MODE_LOGONLY  = 1,
     SC_MODE_SHADOW   = 2,  // stage B: capture the untruncated selection, log it
     SC_MODE_FANOUT   = 3   // stage C: fan orders out across the whole shadow list
 };

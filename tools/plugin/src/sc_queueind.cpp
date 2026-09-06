@@ -1611,7 +1611,7 @@ void ScQueueIndInit(BYTE* moduleBase, bool enabled) {
           enabled ? "ON" : "off");
 }
 
-int ScQueueIndInstallHooks(void) {
+int ScQueueIndInstall(void) {
     if (!g_enabled) return 0;
     // BOTH or NEITHER. The driver hook without the layout bracket is task 061's fight all
     // over again (nothing lights the slot any more, but nothing owns the click either);
@@ -1636,7 +1636,7 @@ int ScQueueIndInstallHooks(void) {
     return 1;
 }
 
-void ScQueueIndRemoveHooks(void) {
+void ScQueueIndRemove(void) {
     ScHookRemove(&g_hkDriver);
     ScHookRemove(&g_hkLayout);
     // A phantom left in the ring survives its window only if the game thread died inside

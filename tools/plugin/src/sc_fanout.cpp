@@ -1985,7 +1985,7 @@ HkSortAllUnits(DWORD* candidates, DWORD* out, DWORD clicked) {
 const char* ScModeName(ScMode m) {
     switch (m) {
         case SC_MODE_OBSERVE:  return "observe";
-        case SC_MODE_HOOKTEST: return "hooktest";
+        case SC_MODE_LOGONLY:  return "hooktest";   // the frozen launcher spelling
         case SC_MODE_SHADOW:   return "shadow";
         case SC_MODE_FANOUT:   return "fanout";
     }
@@ -1996,7 +1996,8 @@ ScMode ScFanoutResolveMode(void) {
     char buf[32];
     DWORD n = GetEnvironmentVariableA("SCPLUGIN_MODE", buf, sizeof(buf));
     if (n == 0 || n >= sizeof(buf)) return SC_MODE_OBSERVE;
-    if (lstrcmpiA(buf, "hooktest") == 0) return SC_MODE_HOOKTEST;
+    if (lstrcmpiA(buf, "hooktest") == 0) return SC_MODE_LOGONLY;   // the launcher spelling
+    if (lstrcmpiA(buf, "logonly")  == 0) return SC_MODE_LOGONLY;   // what it actually is
     if (lstrcmpiA(buf, "shadow")   == 0) return SC_MODE_SHADOW;
     if (lstrcmpiA(buf, "fanout")   == 0) return SC_MODE_FANOUT;
     return SC_MODE_OBSERVE;
@@ -2063,7 +2064,7 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     //
     // It goes in here rather than in scplugin.cpp so its one detour lands under the SAME
     // thread suspension as the others.
-    const bool queueind = (mode == SC_MODE_FANOUT || mode == SC_MODE_HOOKTEST) &&
+    const bool queueind = (mode == SC_MODE_FANOUT || mode == SC_MODE_LOGONLY) &&
                           ScQueueIndEnabled();
     ScQueueIndInit(moduleBase, queueind);
 
@@ -2130,16 +2131,16 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
 
     // Task 014's one extra hook. It goes in under the same suspension as the rest so
     // a half-installed set is never observable.
-    if (circles && ScCirclesInstallHook()) ++installed;
+    if (circles) installed += ScCirclesInstall();
 
-    // Task 017's one dispatcher detour, same suspension. ScHudRowInstallHooks
-    // returns 0 or 1.
-    if (hudrow) installed += ScHudRowInstallHooks();
+    // Task 017's one dispatcher detour, same suspension. ScHudRowInstall
+    // returns 0 or 1, like every Sc*Install in this set.
+    if (hudrow) installed += ScHudRowInstall();
 
     // Task 033's HUD-driver detour plus task 066's queueLayout bracket -- TWO patches
     // inside sc_queueind, same suspension, still the 0-or-1 contract here: the module
     // installs both or rolls its own half back and reports 0.
-    if (queueind) installed += ScQueueIndInstallHooks();
+    if (queueind) installed += ScQueueIndInstall();
 
     ScHookResumeThreads();
 
@@ -2336,9 +2337,9 @@ void ScFanoutRemove(void) {
           "them (see tools/plugin/README.md, off switch 3)", ScCirclesCount());
 
     ScHookSuspendThreads();
-    ScQueueIndRemoveHooks();
-    ScHudRowRemoveHooks();
-    ScCirclesRemoveHook();
+    ScQueueIndRemove();
+    ScHudRowRemove();
+    ScCirclesRemove();
     ScHookRemove(&g_hkSort);
     ScHookRemove(&g_hkOverflow);
     ScHookRemove(&g_hkSelect);

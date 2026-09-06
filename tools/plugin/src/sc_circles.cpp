@@ -348,19 +348,19 @@ static ScHook g_hkSelChange;
 // none of which is PC-relative, so all four relocate into the trampoline unchanged.
 static const BYTE kPrologueSelChange[] = { 0x55, 0x8B, 0xEC, 0x53, 0x56 };
 
-bool ScCirclesInstallHook(void) {
-    if (!g_enabled) return true;
+int ScCirclesInstall(void) {
+    if (!g_enabled) return 0;
     if (!ScHookInstall(&g_hkSelChange, "CreateNewUnitSelectionsFromList",
                        ScRuntimeAddr(SC_VA_CREATE_NEW_UNIT_SELECTIONS),
                        (void*)&ScCirclesSelChangeThunk, 5,
                        kPrologueSelChange, (int)sizeof(kPrologueSelChange))) {
-        return false;
+        return 0;
     }
     g_selChangeTrampoline = g_hkSelChange.trampoline;
-    return true;
+    return 1;
 }
 
-void ScCirclesRemoveHook(void) {
+void ScCirclesRemove(void) {
     ScHookRemove(&g_hkSelChange);
 }
 

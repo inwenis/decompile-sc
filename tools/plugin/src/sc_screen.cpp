@@ -64,6 +64,11 @@ static int    g_stage = 1;
 static BYTE*  g_grid = NULL;          // the relocated dirty grid (data start)
 static BYTE*  g_gridRegion = NULL;    // the guarded allocation base (g_grid - GUARD)
 static int    g_applied = 0;
+// Two different refusals, which used to share one `g_refused`. The install veto is
+// set by the pre-flight checks, each of which RETURNS -- so it and the per-patch
+// failure count are never both non-zero, which is how one variable got away with it.
+static bool   g_installRefused = false;   // a pre-flight check said no; nothing written
+static int    g_writeFailures = 0;        // patches that failed their own write
 
 // Guard padding around the relocated grid. The stock grid at 0x006CEFF8 sits in
 // .data with live globals on both sides (research/renderer-viewport.md 5, "boxed
@@ -81,7 +86,6 @@ static int    g_applied = 0;
 // dialog coordinate (col +/-, row*stride); a wildly out-of-range coord would
 // have faulted stock too. If a real consumer ever needs more, clamp it instead.
 #define SC_WS_GRID_GUARD 0x10000
-static int    g_refused = 0;
 
 // Saved originals, so a FreeLibrary detach can put the process back.
 #define SC_WS_MAX_SAVED 128
@@ -312,7 +316,7 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
               "is allocated at startup, so patching now would overrun it. Inject early "
               "(scinject --early / run-with-plugin.ps1 -Widescreen 1, which passes it).",
               w, h, (unsigned)data);
-        g_refused = 1;
+        g_installRefused = true;
         return;
     }
 
@@ -327,7 +331,7 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
         ScLog("WIDESCREEN REFUSED: %d site(s) checked and at least one did not match. "
               "NOTHING was written -- a half-applied geometry corrupts silently instead "
               "of failing.", checked);
-        g_refused = 1;
+        g_installRefused = true;
         return;
     }
     ScLog("WIDESCREEN: %d site(s) verified against the live image", checked);
@@ -348,7 +352,7 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
         if (!g_gridRegion) {
             ScLog("WIDESCREEN REFUSED: VirtualAlloc(%Iu) for the guarded dirty grid "
                   "failed gle=%u", total, (unsigned)GetLastError());
-            g_refused = 1;
+            g_installRefused = true;
             return;
         }
         g_grid = g_gridRegion + SC_WS_GRID_GUARD;
@@ -377,7 +381,7 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
         if (!(lo && hi)) {
             ScLog("WIDESCREEN REFUSED: the grid guard did not commit -- refusing "
                   "rather than shipping the crash back.");
-            g_refused = 1;
+            g_installRefused = true;
             return;
         }
     }
@@ -389,12 +393,12 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
         if (p->stage > g_stage) continue;
         if (p->stage == g_stage && !NameSelected(p->name)) { ++skipped; continue; }
         if (WriteOne(p)) ++g_applied;
-        else ++g_refused;
+        else ++g_writeFailures;
     }
 
-    g_active = (g_applied > 0 && g_refused == 0);
+    g_active = (g_applied > 0 && g_writeFailures == 0);
     ScLog("WIDESCREEN %s: %d patch(es) applied, %d refused, stage<=%d",
-          g_active ? "ACTIVE" : "INCOMPLETE", g_applied, g_refused, g_stage);
+          g_active ? "ACTIVE" : "INCOMPLETE", g_applied, g_writeFailures, g_stage);
     // Announced even when nothing is filtered, so a run that FORGOT to clear the
     // variable cannot be read as a full-stage result. An unannounced subset is
     // the same class of mistake as an assertion that cannot fail.
@@ -427,6 +431,7 @@ void ScScreenRemove(void) {
 void ScScreenLogStats(void) {
     if (!ScScreenWidescreenWanted()) return;
     ScLog("WIDESCREEN STATS active=%d stage=%d applied=%d refused=%d grid=%p "
-          "target=%dx%d", g_active ? 1 : 0, g_stage, g_applied, g_refused,
+          "target=%dx%d", g_active ? 1 : 0, g_stage, g_applied,
+          g_installRefused ? 1 : g_writeFailures,
           g_grid, SC_WS_SCREEN_W, SC_WS_SCREEN_H);
 }

@@ -1228,7 +1228,7 @@ void ScHudRowInit(BYTE* moduleBase, bool enabled) {
 
 bool ScHudRowEnabled(void) { return g_enabled; }
 
-int ScHudRowInstallHooks(void) {
+int ScHudRowInstall(void) {
     if (!g_enabled) return 0;
 
     if (ScHookInstall(&g_hkDispatch, "statDataUpdate",
@@ -1242,7 +1242,7 @@ int ScHudRowInstallHooks(void) {
     return 0;
 }
 
-void ScHudRowRemoveHooks(void) {
+void ScHudRowRemove(void) {
     ScHookRemove(&g_hkDispatch);
 
     // Best-effort pointer restores. Single atomic dword writes; guarded reads
