@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "sc_addresses.h"
 #include "sc_console.h"
 #include "sc_hook.h"
 #include "sc_log.h"
@@ -71,10 +72,12 @@
 // dirty mark. Prologue: push ebp; mov ebp,esp; mov eax,[ebp+0x18] (55 8B EC 8B 45 18),
 // 6 bytes / 3 whole instructions / no PC-relative. Resolved from the LOADED storm.dll.
 #define STORM_RVA_ORD432     0x0001A520u
-// The widescreen geometry this repo builds (sc_screen_patches.h SC_WS_SCREEN_*).
-#define SC_WS_WIDTH  800
-#define SC_WS_HEIGHT 480
-#define SC_STOCK_WIDTH 640
+// The widescreen geometry this repo builds is asked of sc_screen (which owns
+// the generated table) so a regenerated width cannot leave a copy behind here
+// -- it did: 800 lived in this file as a literal.
+#define SC_WS_WIDTH    ScScreenTargetWidth()
+#define SC_WS_HEIGHT   ScScreenTargetHeight()
+#define SC_STOCK_WIDTH SC_SCREEN_W
 
 static ScStormMode g_mode = SC_STORM_OFF;
 static BYTE*  g_exeBase   = NULL;
@@ -288,14 +291,15 @@ static int __attribute__((stdcall)) SC_GAME_ENTRY
 HkOrd432(DWORD dst, DWORD src, DWORD dstPitch, DWORD srcPitch, DWORD region) {
     // The engine's own copy first (the dirty region, x<640, unchanged).
     int ret = ((ScOrd432Fn)g_hkCopy.trampoline)(dst, src, dstPitch, srcPitch, region);
-    // Then the far quarter, straight from the buffer. Guarded on the widescreen
+    // Then the far band, straight from the buffer. Guarded on the widescreen
     // geometry so a stray 640-pitch call can never write past a 640-wide surface.
+    const int W = SC_WS_WIDTH, H = SC_WS_HEIGHT;
     if (g_mode == SC_STORM_WIDEN && dst && src &&
-        dstPitch >= (DWORD)SC_WS_WIDTH && srcPitch >= (DWORD)SC_WS_WIDTH) {
-        const int stripW = SC_WS_WIDTH - SC_STOCK_WIDTH;   // 160
+        dstPitch >= (DWORD)W && srcPitch >= (DWORD)W) {
+        const int stripW = W - SC_STOCK_WIDTH;   // 160 at 800, 640 at 1280
         BYTE* d = (BYTE*)(DWORD_PTR)dst + SC_STOCK_WIDTH;
         BYTE* s = (BYTE*)(DWORD_PTR)src + SC_STOCK_WIDTH;
-        for (int y = 0; y < SC_WS_HEIGHT; ++y) {
+        for (int y = 0; y < H; ++y) {
             memcpy(d, s, (size_t)stripW);
             d += dstPitch;
             s += srcPitch;
@@ -377,10 +381,11 @@ void ScStormPresentInstall(BYTE* exeBase, bool writeAllowed) {
             g_mode = SC_STORM_PROBE;
         } else {
             ScLog("STORM present: WIDEN armed. storm base 0x%08X; game-thread hook at storm "
-                  "ord432 (0x%08X) copies the x=640..799 strip from the 800-wide buffer to the "
-                  "primary each present, so the buffer->glass present carries all 800 columns. "
+                  "ord432 (0x%08X) copies the x=%d..%d strip from the %d-wide buffer to the "
+                  "primary each present, so the buffer->glass present carries all %d columns. "
                   "The read-only geometry log also runs on the marker channel.",
-                  (unsigned)(DWORD_PTR)g_stormBase, (unsigned)(DWORD_PTR)ord432);
+                  (unsigned)(DWORD_PTR)g_stormBase, (unsigned)(DWORD_PTR)ord432,
+                  SC_STOCK_WIDTH, SC_WS_WIDTH - 1, SC_WS_WIDTH, SC_WS_WIDTH);
         }
     }
     if (g_mode == SC_STORM_PROBE) {

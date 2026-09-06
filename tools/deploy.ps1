@@ -590,11 +590,11 @@ Write-Host "launcher written: $launcherPath"
 # see its own comment block above), so the swap left here is the engine geometry:
 # -Widescreen 1 -WidescreenStage 3 (stage 2 playfield + fog cell pipeline, tasks
 # 064/068, + stage 3 input, task 071: the mouse clamps and click search rect widen to
-# 800 so a click can reach the right quarter; applied in-process at launch --
+# the new width so a click can reach the right half; applied in-process at launch --
 # StarCraft.exe on disk stays byte-identical) and the ini cnc-ddraw reads:
-# cnc-ddraw.ini here (065's, width=0/height=0 -- unscaled 800x480), cnc-ddraw-2x.ini
-# on the normal launcher (task 075 -- 1280x960). The two were never measured combined
-# (1600x960 stretched from an 800x480 source) and issue #114 asked only for the normal
+# cnc-ddraw.ini here (065's, width=0/height=0 -- unscaled; 1280x480 since 2026-09-06,
+# 800x480 before), cnc-ddraw-2x.ini on the normal launcher (task 075 -- 1280x960). The
+# two were never measured combined (a 2x stretch of the wide source) and issue #114 asked only for the normal
 # shortcut's scale/lock back, so this launcher stays unscaled rather than shipping an
 # unmeasured combination -- a SEPARATE launcher + shortcut is what makes that possible:
 # widescreen stays off by default, and trying wide is one double-click with no way to
@@ -609,18 +609,19 @@ to refresh this file rather than editing it by hand. Same feature set as
 Launch-StarCraft-Modded.ps1 (fan-out + circles + HUD row paging + production queue +
 group fan-out, windowed, sound on), plus the widescreen assembly (task 070):
 
-  -Widescreen 1 -WidescreenStage 3   800x480 engine geometry: stage 2 playfield
+  -Widescreen 1 -WidescreenStage 3   1280x480 engine geometry (2x the stock width;
+                                     800 until 2026-09-06): stage 2 playfield
                                      (task 064) + the fog cell pipeline (task 068)
                                      + stage 3 input (task 071: the window-proc
                                      mouse clamps and the mouse->world click search
-                                     rect widen from 640 to 800, so a click can
-                                     reach the new right quarter). Patched in-process
-                                     at launch -- the exe on disk is byte-identical
-                                     to the stock deploy. NOTE: selection past x=640
-                                     has never been watched working off-screen
-                                     (no harness can feed it); your first click in
-                                     the right quarter IS the test -- widescreen-card.md.
-  -StormPresent widen                the buffer->glass copy of columns 640..799 (task
+                                     rect widen from 640 to the new width, so a
+                                     click can reach the new right half). Patched
+                                     in-process at launch -- the exe on disk is
+                                     byte-identical to the stock deploy. NOTE:
+                                     selection past x=640 has never been watched
+                                     working off-screen with a REAL mouse (no
+                                     harness can feed one) -- widescreen-card.md.
+  -StormPresent widen                the buffer->glass copy of columns 640..1279 (task
                                      074, a hook on storm ord432). Named on purpose:
                                      the DLL would arm it by itself at stage >= 2,
                                      but until 2026-09-05 run-with-plugin.ps1
@@ -628,7 +629,8 @@ group fan-out, windowed, sound on), plus the widescreen assembly (task 070):
                                      deployed wide game ran with the copy OFF --
                                      the black right band of issue #113.
   -Windowed -WindowedHelperDll ...   cnc-ddraw (pinned v7.1.0.0, MIT) presents all
-                                     800 columns (research/renderer-viewport.md 14.2).
+                                     the columns the engine asks for
+                                     (research/renderer-viewport.md 14.2).
                                      Reads cnc-ddraw.ini (unscaled) -- the normal
                                      launcher points the same DLL at cnc-ddraw-2x.ini
                                      instead (task 075: 2x scale + cursor lock).
@@ -724,7 +726,7 @@ else {
     $wlnk.Arguments = "-WindowStyle Hidden -File `"$wideLauncherPath`""
     $wlnk.WorkingDirectory = $deployRootFull
     $wlnk.IconLocation = "$deployedExe,0"
-    $wlnk.Description = 'StarCraft 1.16.1, modded, WIDESCREEN 800x480 (stage 2 + fog + cnc-ddraw) -- see widescreen-card.md'
+    $wlnk.Description = 'StarCraft 1.16.1, modded, WIDESCREEN 1280x480 (stage 2 + fog + cnc-ddraw) -- see widescreen-card.md'
     $wlnk.Save()
     Write-Host "wide shortcut written: $wideShortcutPath"
 }

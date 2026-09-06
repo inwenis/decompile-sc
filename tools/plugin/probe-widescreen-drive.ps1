@@ -89,6 +89,10 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'drive-game.ps1')
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
 
+# The geometry under test comes from the generated table, never from this file.
+$ws = Get-ScWideGeometry
+$SCREEN_W = $ws.W; $SCREEN_H = $ws.H
+
 if (-not $FixtureDir) {
     $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t070-wsdrive' -Suite 'wsdrive'
 }
@@ -217,14 +221,14 @@ function Assert-WideCapture {
     Assert-True "[$($Pt.Tag)] a dump was written" ($null -ne $Pt.Dump) `
         ($Pt.Refused ? "(refused: $($Pt.Refused))" : '')
     if ($null -eq $Pt.Dump) { return }
-    Assert-True "[$($Pt.Tag)] the dump is the full 800x480" `
-        ($Pt.W -eq 800 -and $Pt.H -eq 480) "(got $($Pt.W)x$($Pt.H))"
+    Assert-True "[$($Pt.Tag)] the dump is the full $($SCREEN_W)x$($SCREEN_H)" `
+        ($Pt.W -eq $SCREEN_W -and $Pt.H -eq $SCREEN_H) "(got $($Pt.W)x$($Pt.H))"
     Assert-True "[$($Pt.Tag)] the copy settled" ($Pt.Stable -eq 1) "(reads=$($Pt.Reads))"
     if ($SkipSeam -or $Pt.OriginX -lt 0) { return }
     $zr = Invoke-FrameTool -ToolArgs @('zeroruns', '--dump', $Pt.Dump,
-            '--x0', '0', '--x1', '800', '--y0', '20', '--y1', '320')
+            '--x0', '0', '--x1', "$SCREEN_W", '--y0', '20', '--y1', '320')
     $edge = $EXPLORED_EDGE_X - $Pt.OriginX
-    if ($edge -ge 560 -and $edge -le 800) {
+    if ($edge -ge 560 -and $edge -le $SCREEN_W) {
         Report-Finding "[$($Pt.Tag)] exploration edge at screen x=$edge overlaps the seam test band; seam tooth reported, not asserted (runs: $($zr['zeroruns']))"
         return
     }
@@ -299,11 +303,11 @@ try {
 
     $client = Get-ScClientSize -Hwnd $h
     if ($Presenter -eq 'cnc') {
-        Assert-True 'cnc-ddraw presents an 800x480 client area (FOLLOW, in the launched window)' `
-            ($client.Width -eq 800 -and $client.Height -eq 480) "(got $($client.Width)x$($client.Height))"
+        Assert-True "cnc-ddraw presents a $($SCREEN_W)x$($SCREEN_H) client area (FOLLOW, in the launched window)" `
+            ($client.Width -eq $SCREEN_W -and $client.Height -eq $SCREEN_H) "(got $($client.Width)x$($client.Height))"
     }
     else {
-        Assert-True 'WMode presents its 640x480 window (the crop arm; the engine is still 800 wide underneath)' `
+        Assert-True "WMode presents its 640x480 window (the crop arm; the engine is still $SCREEN_W wide underneath)" `
             ($client.Width -eq 640 -and $client.Height -eq 480) "(got $($client.Width)x$($client.Height))"
     }
 
@@ -418,15 +422,15 @@ try {
     Assert-WideCapture -Pt $ptIngame
     if ($ptIngame.Dump) {
         $b = Invoke-FrameTool -ToolArgs @('band', '--dump', $ptIngame.Dump,
-                '--x0', '640', '--x1', '800', '--y0', '20', '--y1', '320')
+                '--x0', '640', '--x1', "$SCREEN_W", '--y0', '20', '--y1', '320')
         Assert-True 'the right band holds MAP at the start origin (explored; nonzero >= 0.30)' `
             ([double]($b['band_nonzero_frac'] ?? 0) -ge 0.30) "(got $($b['band_nonzero_frac']))"
-        # The console-right strip: 160x80 at the bottom right that no console
+        # The console-right strip: ($SCREEN_W-640)x80 at the bottom right that no console
         # art exists for (15.5 item 3). Reported so the card can say what the
         # user will actually see there.
         $strip = Invoke-FrameTool -ToolArgs @('band', '--dump', $ptIngame.Dump,
-                '--x0', '640', '--x1', '800', '--y0', '400', '--y1', '480')
-        Report-Finding "console-right strip x=640..799 y=400..479: nonzero_frac=$($strip['band_nonzero_frac']) distinct=$($strip['band_distinct']) (blank-by-design region; this is what fills it)"
+                '--x0', '640', '--x1', "$SCREEN_W", '--y0', '400', '--y1', '480')
+        Report-Finding "console-right strip x=640..$($SCREEN_W - 1) y=400..479: nonzero_frac=$($strip['band_nonzero_frac']) distinct=$($strip['band_distinct']) (blank-by-design region; this is what fills it)"
         $script:stripSamples += "ingame: nonzero=$($strip['band_nonzero_frac']) distinct=$($strip['band_distinct'])"
     }
 
@@ -442,7 +446,7 @@ try {
     # The console is the dialog whose rect contains the minimap box (7,348).
     $console = $dialogs | Where-Object { $_.Left -le 7 -and $_.Top -le 348 -and $_.Right -ge 135 -and $_.Bottom -ge 476 } | Select-Object -First 1
     if ($console) {
-        Report-Finding "HUD VERDICT: console dialog '$($console.Name)' sits at ($($console.Left),$($console.Top))-($($console.Right),$($console.Bottom)) in the 800-wide client -- $(if ($console.Left -eq 0 -and $console.Right -le 640) { 'LEFT-ANCHORED at its stock 640 geometry; the strip x=640..799 below y=400 has no console art' } elseif ($console.Right -gt 640) { 'WIDER THAN 640 -- not the stock anchor; read the rect' } else { 'not at the stock origin -- read the rect' })"
+        Report-Finding "HUD VERDICT: console dialog '$($console.Name)' sits at ($($console.Left),$($console.Top))-($($console.Right),$($console.Bottom)) in the $SCREEN_W-wide client -- $(if ($console.Left -eq 0 -and $console.Right -le 640) { "LEFT-ANCHORED at its stock 640 geometry; the strip x=640..$($SCREEN_W - 1) below y=400 has no console art" } elseif ($console.Right -gt 640) { 'WIDER THAN 640 -- not the stock anchor; read the rect' } else { 'not at the stock origin -- read the rect' })"
     }
     else {
         Report-Finding "HUD VERDICT: no dialog rect contains the stock minimap box (7,348) -- dialog rects logged above; the minimap click test below decides whether the minimap still works"
@@ -599,9 +603,9 @@ try {
     Assert-True "the plugin's own clamp prediction agrees with the engine (SCREEN match=1)" ($smMatch -eq 1) "(match=$smMatch)"
     if ($ptEdge.Dump -and $ptEdge.OriginX -ge 0) {
         $mapEdgeScreenX = [Math]::Max(0, $MAP_TILES_W * 32 - $ptEdge.OriginX)
-        Report-Finding "right map edge: camera clamped at origin x=$($ptEdge.OriginX); the map's own edge sits at screen x=$mapEdgeScreenX -- $(if ($mapEdgeScreenX -ge 800) { 'the whole 800-wide playfield is MAP' } else { "screen x=$mapEdgeScreenX..799 lies PAST the map (the stale band the user saw)" })"
+        Report-Finding "right map edge: camera clamped at origin x=$($ptEdge.OriginX); the map's own edge sits at screen x=$mapEdgeScreenX -- $(if ($mapEdgeScreenX -ge $SCREEN_W) { "the whole $SCREEN_W-wide playfield is MAP" } else { "screen x=$mapEdgeScreenX..$($SCREEN_W - 1) lies PAST the map (the stale band the user saw)" })"
         $eb = Invoke-FrameTool -ToolArgs @('band', '--dump', $ptEdge.Dump,
-                '--x0', '640', '--x1', '800', '--y0', '20', '--y1', '320')
+                '--x0', '640', '--x1', "$SCREEN_W", '--y0', '20', '--y1', '320')
         Report-Finding "right-band content at the clamped edge: nonzero_frac=$($eb['band_nonzero_frac']) distinct=$($eb['band_distinct']) (this fixture's right map edge is unexplored, so black shroud is the CORRECT post-fix reading; the pre-fix band held stale cells)"
     }
     # back toward the fixture
@@ -631,7 +635,7 @@ try {
                 # camera moves. A clean black strip is a footnote; flickering
                 # garbage there is what would make the feature feel broken.
                 $ss = Invoke-FrameTool -ToolArgs @('band', '--dump', $pt.Dump,
-                        '--x0', '640', '--x1', '800', '--y0', '400', '--y1', '480')
+                        '--x0', '640', '--x1', "$SCREEN_W", '--y0', '400', '--y1', '480')
                 $script:stripSamples += "iter${iter}: nonzero=$($ss['band_nonzero_frac']) distinct=$($ss['band_distinct'])"
             }
         }
@@ -655,11 +659,12 @@ try {
         # screen-anchored region, so any difference is content changing in
         # the strip itself, not the camera moving under it.
         $sf = Invoke-FrameTool -ToolArgs @('band', '--dump', $ptFinal.Dump,
-                '--x0', '640', '--x1', '800', '--y0', '400', '--y1', '480')
+                '--x0', '640', '--x1', "$SCREEN_W", '--y0', '400', '--y1', '480')
         $script:stripSamples += "final: nonzero=$($sf['band_nonzero_frac']) distinct=$($sf['band_distinct'])"
         $sd = Invoke-FrameTool -ToolArgs @('diff', '--a', $ptIngame.Dump, '--b', $ptFinal.Dump,
-                '--x0', '640', '--x1', '800', '--y0', '400', '--y1', '480')
-        Report-Finding "DEAD STRIP watched over the session (640..799 x 400..479): samples [$($script:stripSamples -join ' | ')]; first-vs-last diff_px=$($sd['diff_px']) of 12800 -- $(if ([int]($sd['diff_px'] ?? 12800) -eq 0) { 'STABLE: whatever is there at load never changes' } else { 'the strip CHANGES during play; describe what the PNGs show' })"
+                '--x0', '640', '--x1', "$SCREEN_W", '--y0', '400', '--y1', '480')
+        $stripPx = ($SCREEN_W - 640) * 80
+        Report-Finding "DEAD STRIP watched over the session (640..$($SCREEN_W - 1) x 400..479): samples [$($script:stripSamples -join ' | ')]; first-vs-last diff_px=$($sd['diff_px']) of $stripPx -- $(if ([int]($sd['diff_px'] ?? $stripPx) -eq 0) { 'STABLE: whatever is there at load never changes' } else { 'the strip CHANGES during play; describe what the PNGs show' })"
     }
     [void](Get-ScWorldState -LogPath $log -Tag 'dlgpump2' -MarkerPath $markerPath)
     $dialogsEnd = @(Get-ScDialogs -LogPath $log)
