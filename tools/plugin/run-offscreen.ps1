@@ -62,6 +62,17 @@ exit code is this script's exit code.
 Run on the desktop that IS on the monitor -- the debugging path. Everything else is
 identical.
 
+THE CURSOR CLIP (issue #135). ClipCursor confines the PHYSICAL cursor for the whole
+session, whatever desktop the calling window sits on: a game on the invisible desktop
+that clips (cnc-ddraw's mouse lock re-arms on every button-up, i.e. on every posted
+click; the engine's own clip reset 0x004215E0 on activation, which the menu walk's
+WM_ACTIVATEAPP nudges fake) pinned the user's real mouse to a rectangle nobody could
+see, until an Alt-Tab reset it. This parent process sits on the user's desktop, so it
+watches GetClipCursor every tick of its transcript loop, releases any clip smaller than
+the virtual screen (ClipCursor(NULL)), prints each one it found with its rect, and
+prints the count at the end -- a 0 is only believable because clipping runs print
+their rects. Same loop in -Visible, on purpose (same code path).
+
 .PARAMETER Desktop
 Name the desktop explicitly instead of generating one per run. Mostly for a second process
 that needs to join a run already in progress.
@@ -131,6 +142,15 @@ namespace ScSpawn {
     [DllImport("kernel32.dll", SetLastError=true)] public static extern uint WaitForSingleObject(IntPtr h, uint ms);
     [DllImport("kernel32.dll", SetLastError=true)] public static extern bool GetExitCodeProcess(IntPtr h, out uint code);
     [DllImport("kernel32.dll", SetLastError=true)] public static extern bool TerminateProcess(IntPtr h, uint code);
+
+    // The cursor clip (issue #135). ClipCursor confines the PHYSICAL cursor for the whole
+    // session whatever desktop the caller's window sits on, so a game on the invisible
+    // desktop that clips (cnc-ddraw's button-up lock, the engine's activation clip) pins
+    // the user's real mouse to a rectangle nobody can see. Read from here, released from here.
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int left, top, right, bottom; }
+    [DllImport("user32.dll", SetLastError=true)] public static extern bool GetClipCursor(out RECT r);
+    [DllImport("user32.dll", SetLastError=true)] public static extern bool ClipCursor(IntPtr r);
+    [DllImport("user32.dll")] public static extern int GetSystemMetrics(int n);
 
     private const uint GENERIC_WRITE = 0x40000000, GENERIC_READ = 0x80000000;
     private const uint FILE_SHARE_READ = 1, FILE_SHARE_WRITE = 2, FILE_SHARE_DELETE = 4;
@@ -300,8 +320,36 @@ try {
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
     $pos = 0L
     $exit = $null
+    # The virtual screen is what an UNCLIPPED cursor reads back (SM_XVIRTUALSCREEN 76,
+    # SM_YVIRTUALSCREEN 77, SM_CXVIRTUALSCREEN 78, SM_CYVIRTUALSCREEN 79). Anything
+    # smaller during the run is a clip some window of the run placed on the user's real
+    # mouse (issue #135); this loop releases it within one tick and counts it, so the
+    # summary line at the end is a measurement, not a hope -- a run that never clipped
+    # prints 0, and 0 is only believable because runs that did clip print their rects.
+    $vs = [ScSpawn.Native]::GetSystemMetrics(76), [ScSpawn.Native]::GetSystemMetrics(77),
+          [ScSpawn.Native]::GetSystemMetrics(78), [ScSpawn.Native]::GetSystemMetrics(79)
+    $vsRect = @{ left = $vs[0]; top = $vs[1]; right = $vs[0] + $vs[2]; bottom = $vs[1] + $vs[3] }
+    $clipsFound = 0
+    $clipLines = 0
     while ($true) {
-        $running = ([ScSpawn.Native]::WaitForSingleObject($hProc, 300) -ne 0)   # WAIT_OBJECT_0 == 0
+        $running = ([ScSpawn.Native]::WaitForSingleObject($hProc, 100) -ne 0)   # WAIT_OBJECT_0 == 0
+        $rc = New-Object 'ScSpawn.Native+RECT'
+        if ([ScSpawn.Native]::GetClipCursor([ref]$rc) -and
+            ($rc.left -gt $vsRect.left -or $rc.top -gt $vsRect.top -or
+             $rc.right -lt $vsRect.right -or $rc.bottom -lt $vsRect.bottom)) {
+            $clipsFound++
+            [void][ScSpawn.Native]::ClipCursor([IntPtr]::Zero)
+            $after = New-Object 'ScSpawn.Native+RECT'
+            [void][ScSpawn.Native]::GetClipCursor([ref]$after)
+            $freed = ($after.left -le $vsRect.left -and $after.top -le $vsRect.top -and
+                      $after.right -ge $vsRect.right -and $after.bottom -ge $vsRect.bottom)
+            if ($clipLines -lt 20 -or -not $freed) {
+                $clipLines++
+                Write-Host ("run-offscreen: cursor clip #{0} found ({1},{2})-({3},{4}) -> {5}" -f $clipsFound,
+                    $rc.left, $rc.top, $rc.right, $rc.bottom,
+                    ($freed ? 'released (reads the full virtual screen again)' : "NOT released: still ($($after.left),$($after.top))-($($after.right),$($after.bottom))"))
+            }
+        }
         if (Test-Path -LiteralPath $TranscriptPath) {
             $fs = $null
             try {
@@ -340,7 +388,11 @@ try {
     # -- often a stale 0 that read as a pass. Reinterpret the bits instead of range-checking
     # them; this is a no-op for any exit code that fits in Int32 (every ordinary suite exit).
     $exit = [BitConverter]::ToInt32([BitConverter]::GetBytes($code), 0)
+    # One last release: a clip placed between the final tick and the child's exit would
+    # otherwise outlive the run (the user's Alt-Tab was what used to clear it).
+    [void][ScSpawn.Native]::ClipCursor([IntPtr]::Zero)
     Write-Host ('-' * 70)
+    Write-Host "run-offscreen: cursor clip: $clipsFound clip(s) of the real mouse found and released during the run (issue #135; 0 = never confined)"
     Write-Host "run-offscreen: child pid $childPid exited $exit (desktop '$desktopName')"
     Write-Host "run-offscreen: transcript $TranscriptPath"
 

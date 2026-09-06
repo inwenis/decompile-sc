@@ -63,9 +63,11 @@ What it does, in order:
      unable to take the worker launch lock). Presenter is cnc-ddraw, not WMode (task
      075, issue #114): WMode has no export table and no config (tools/plugin/README.md
      "Windowed mode: injected, not proxied"), so it cannot scale a window or clip the
-     cursor, and both had gone missing from the user's play. cnc-ddraw-2x.ini
-     (tools/plugin/cnc-ddraw-2x.ini) is what sets 1280x960 (2x the 640x480 requested)
-     and locks the cursor to the window on the first click inside it. -Sound and
+     cursor, and both had gone missing from the user's play. The launcher runs the
+     WIDESCREEN geometry (-Widescreen 1 -WidescreenStage 3 -StormPresent widen; the
+     width in the generated sc_screen_patches.h, 1280x480 as of 2026-09-06) and
+     cnc-ddraw-2x.ini -- generated here at 2x that geometry (2560x960) -- sets the
+     window size and locks the cursor to the window on the first click inside it. -Sound and
      -NoLaunchLock both matter here specifically because this is the ONE launcher the
      user's own play goes through -- see
      run-with-plugin.ps1's "Launch lock" .DESCRIPTION for the regression that shipped
@@ -76,14 +78,12 @@ What it does, in order:
   9. Creates/updates the desktop shortcut "StarCraft Modded.lnk", target
      "pwsh -WindowStyle Hidden -File <launcher>" so double-clicking shows the game and
      nothing else -- no console window.
-  9b. Task 070, the widescreen switch: stages the pinned cnc-ddraw (sha256-verified
-      against this script's own pin) into <DeployRoot>\plugin\cnc-ddraw\, writes a
-      SECOND launcher Launch-StarCraft-Modded-Wide.ps1 (same feature set, plus
-      -Widescreen 1 -WidescreenStage 3 and cnc-ddraw as the windowed helper), copies
-      widescreen-card.md beside it, and creates the second shortcut
-      "StarCraft Modded (Wide).lnk". Widescreen is OFF BY DEFAULT: the normal
-      launcher and shortcut are byte-for-byte what they were, and the wide path is
-      opt-in per double-click. -NoShortcut skips both shortcuts for scratch deploys.
+  9b. Stages the pinned cnc-ddraw (sha256-verified against this script's own pin) into
+      <DeployRoot>\plugin\cnc-ddraw\ and copies widescreen-card.md beside the launcher.
+      Until 2026-09-06 widescreen was a SECOND launcher + shortcut ("StarCraft Modded
+      (Wide)"); the user asked for one shortcut with the extended viewport, so the
+      one launcher carries it and any leftover Wide launcher/shortcut from an earlier
+      deploy is removed. -NoShortcut skips the shortcut for scratch deploys.
   10. Regenerates the feature-test map (tools/make-feature-test-map.ps1, task 062) into
       <DeployRoot>\game\Maps\BroodWar\!feature-test.scx (task 067). It has to run AFTER
       the mirror: the map is a destination-only file (never in -SourceGameDir, never in
@@ -193,11 +193,6 @@ The pristine-verified working copy to deploy from. Never C:\sc-install (hard rul
 .PARAMETER ShortcutName
 File name of the desktop shortcut.
 
-.PARAMETER WideShortcutName
-File name of the WIDESCREEN desktop shortcut (task 070). The wide launcher is a
-second, separate shortcut -- the normal one is untouched, so widescreen stays
-off by default and opting in is one double-click.
-
 .PARAMETER CncDdrawDir
 Where the pinned cnc-ddraw release lives (fetch-cnc-ddraw.ps1's output). The
 ddraw.dll found there is sha256-verified against the pin recorded in this
@@ -216,7 +211,6 @@ param(
     [string]$DeployRoot = 'C:\sc-deploy\starcraft-modded',
     [string]$SourceGameDir = 'C:\sc-work\1161-base',
     [string]$ShortcutName = 'StarCraft Modded.lnk',
-    [string]$WideShortcutName = 'StarCraft Modded (Wide).lnk',
     [string]$CncDdrawDir = 'C:\sc-work\cnc-ddraw\v7.1.0.0',
     [switch]$NoShortcut
 )
@@ -504,9 +498,19 @@ $cncDeployDir = Join-Path $pluginDeployDir 'cnc-ddraw'
 New-Item -ItemType Directory -Path $cncDeployDir -Force | Out-Null
 Copy-Item -LiteralPath $cncSrcDll -Destination (Join-Path $cncDeployDir 'ddraw.dll') -Force
 Copy-Item -LiteralPath (Join-Path $pluginDir 'cnc-ddraw.ini') -Destination (Join-Path $pluginDeployDir 'cnc-ddraw.ini') -Force
+# The 2x ini is GENERATED from tools/plugin/cnc-ddraw-2x.ini with width/height set to
+# twice the geometry the plugin was built for (SC_WS_SCREEN_W/H in the generated
+# sc_screen_patches.h): 2560x960 at 1280x480. The committed file keeps the stock
+# 1280x960 (2x of 640x480) as its documented example; one shortcut, one window size.
+$patchHeader = Join-Path $pluginDir 'src\sc_screen_patches.h'
+$wsW = [int]((Select-String -LiteralPath $patchHeader -Pattern '^#define\s+SC_WS_SCREEN_W\s+(\d+)' | Select-Object -First 1).Matches[0].Groups[1].Value)
+$wsH = [int]((Select-String -LiteralPath $patchHeader -Pattern '^#define\s+SC_WS_SCREEN_H\s+(\d+)' | Select-Object -First 1).Matches[0].Groups[1].Value)
+if ($wsW -lt 640 -or $wsH -lt 480) { throw "deploy: could not read SC_WS_SCREEN_W/H from $patchHeader (got ${wsW}x${wsH})" }
 $cnc2xIniDeployPath = Join-Path $pluginDeployDir 'cnc-ddraw-2x.ini'
-Copy-Item -LiteralPath (Join-Path $pluginDir 'cnc-ddraw-2x.ini') -Destination $cnc2xIniDeployPath -Force
-Write-Host "cnc-ddraw staged: $cncDeployDir\ddraw.dll (sha256 verified) + plugin\cnc-ddraw.ini + plugin\cnc-ddraw-2x.ini"
+$cnc2x = Get-Content -Raw -LiteralPath (Join-Path $pluginDir 'cnc-ddraw-2x.ini')
+$cnc2x = $cnc2x -replace '(?m)^width=\d+', "width=$($wsW * 2)" -replace '(?m)^height=\d+', "height=$($wsH * 2)"
+Set-Content -LiteralPath $cnc2xIniDeployPath -Value $cnc2x -Encoding ascii -NoNewline
+Write-Host "cnc-ddraw staged: $cncDeployDir\ddraw.dll (sha256 verified) + plugin\cnc-ddraw.ini + plugin\cnc-ddraw-2x.ini (window $($wsW * 2)x$($wsH * 2) = 2x the ${wsW}x${wsH} the plugin renders)"
 
 # --- 4. write the zero-argument launcher --------------------------------------
 $launcherPath = Join-Path $deployRootFull 'Launch-StarCraft-Modded.ps1'
@@ -520,14 +524,20 @@ sound ON (run-with-plugin.ps1 mutes by default for unattended
 test suites -- -Sound here is what keeps the user's own play audible; see
 tools/README-deploy.md "Sound").
 
+Geometry: WIDESCREEN, on by default since 2026-09-06 (the user asked for ONE shortcut
+with the extended viewport): -Widescreen 1 -WidescreenStage 3 patch the engine to the
+width in tools/plugin/src/sc_screen_patches.h (1280x480 = 2x the stock width; stage 2
+playfield + fog + stage 3 input, tasks 064/068/071) in-process at launch -- the exe on
+disk is byte-identical -- and -StormPresent widen is the buffer->glass copy of the new
+columns (task 074; named on purpose, issue #113: the DLL's auto-arm was unreachable
+through this script's exported default). Known imperfections: widescreen-card.md.
+
 Presenter: cnc-ddraw, not WMode (task 075, issue #114 -- window scale + mouse lock had
 disappeared). WMode.dll has no export table and no config (README "Windowed mode:
-injected, not proxied"), so it cannot scale a window or clip the cursor; cnc-ddraw can,
-and is already proven live via the wide launcher (task 070). cnc-ddraw-2x.ini
-(plugin\cnc-ddraw-2x.ini) is what actually sets 1280x960 (2x the 640x480 this game
-requests) and locks the cursor to the window on the first click inside it -- see that
-file for the toggle (persistent: edit the ini and redeploy; per-session: hold Ctrl or
-Right Alt to free the cursor).
+injected, not proxied"), so it cannot scale a window or clip the cursor; cnc-ddraw can.
+cnc-ddraw-2x.ini (plugin\cnc-ddraw-2x.ini, generated by deploy.ps1 at 2x the plugin's
+geometry: 2560x960) sets the window size and locks the cursor to the window on the
+first click inside it -- per-session: hold Ctrl or Right Alt to free the cursor.
 
 -NoForegroundRestore is baked in for the same class of reason (issue #30): a worker
 launch hands the foreground back to whatever window had it before, because an unattended
@@ -561,6 +571,9 @@ try {
         -Windowed `
         -WindowedHelperDll (Join-Path $here 'plugin\cnc-ddraw\ddraw.dll') `
         -WindowedHelperIni (Join-Path $here 'plugin\cnc-ddraw-2x.ini') `
+        -Widescreen 1 `
+        -WidescreenStage 3 `
+        -StormPresent widen `
         -Sound `
         -NoLaunchLock `
         -NoForegroundRestore `
@@ -585,95 +598,6 @@ Set-Content -LiteralPath $launcherPath -Value $launcherBody -Encoding utf8NoBOM
 Write-Host ''
 Write-Host "launcher written: $launcherPath"
 
-# --- 4b. the WIDESCREEN launcher (task 070) -----------------------------------
-# Both launchers now go through cnc-ddraw (task 075 moved the normal one off WMode --
-# see its own comment block above), so the swap left here is the engine geometry:
-# -Widescreen 1 -WidescreenStage 3 (stage 2 playfield + fog cell pipeline, tasks
-# 064/068, + stage 3 input, task 071: the mouse clamps and click search rect widen to
-# the new width so a click can reach the right half; applied in-process at launch --
-# StarCraft.exe on disk stays byte-identical) and the ini cnc-ddraw reads:
-# cnc-ddraw.ini here (065's, width=0/height=0 -- unscaled; 1280x480 since 2026-09-06,
-# 800x480 before), cnc-ddraw-2x.ini on the normal launcher (task 075 -- 1280x960). The
-# two were never measured combined (a 2x stretch of the wide source) and issue #114 asked only for the normal
-# shortcut's scale/lock back, so this launcher stays unscaled rather than shipping an
-# unmeasured combination -- a SEPARATE launcher + shortcut is what makes that possible:
-# widescreen stays off by default, and trying wide is one double-click with no way to
-# half-enable it. Known imperfections are on the card (widescreen-card.md beside this
-# file).
-$wideLauncherPath = Join-Path $deployRootFull 'Launch-StarCraft-Modded-Wide.ps1'
-$wideLauncherBody = @'
-#Requires -Version 7
-<#
-Deployed WIDESCREEN launcher -- no arguments. Generated by tools/deploy.ps1; re-run that
-to refresh this file rather than editing it by hand. Same feature set as
-Launch-StarCraft-Modded.ps1 (fan-out + circles + HUD row paging + production queue +
-group fan-out, windowed, sound on), plus the widescreen assembly (task 070):
-
-  -Widescreen 1 -WidescreenStage 3   1280x480 engine geometry (2x the stock width;
-                                     800 until 2026-09-06): stage 2 playfield
-                                     (task 064) + the fog cell pipeline (task 068)
-                                     + stage 3 input (task 071: the window-proc
-                                     mouse clamps and the mouse->world click search
-                                     rect widen from 640 to the new width, so a
-                                     click can reach the new right half). Patched
-                                     in-process at launch -- the exe on disk is
-                                     byte-identical to the stock deploy. NOTE:
-                                     selection past x=640 has never been watched
-                                     working off-screen with a REAL mouse (no
-                                     harness can feed one) -- widescreen-card.md.
-  -StormPresent widen                the buffer->glass copy of columns 640..1279 (task
-                                     074, a hook on storm ord432). Named on purpose:
-                                     the DLL would arm it by itself at stage >= 2,
-                                     but until 2026-09-05 run-with-plugin.ps1
-                                     exported its default '0' verbatim, so the
-                                     deployed wide game ran with the copy OFF --
-                                     the black right band of issue #113.
-  -Windowed -WindowedHelperDll ...   cnc-ddraw (pinned v7.1.0.0, MIT) presents all
-                                     the columns the engine asks for
-                                     (research/renderer-viewport.md 14.2).
-                                     Reads cnc-ddraw.ini (unscaled) -- the normal
-                                     launcher points the same DLL at cnc-ddraw-2x.ini
-                                     instead (task 075: 2x scale + cursor lock).
-
-What to expect, and what is known-imperfect: widescreen-card.md next to this file.
-The -NoLaunchLock / -NoForegroundRestore / try-catch reasoning is the same as the
-normal launcher's -- read the comment block there.
-#>
-$ErrorActionPreference = 'Stop'
-$here = $PSScriptRoot
-try {
-    & (Join-Path $here 'plugin\run-with-plugin.ps1') `
-        -GameDir  (Join-Path $here 'game') `
-        -BuildDir (Join-Path $here 'plugin') `
-        -LogPath  (Join-Path $here 'logs\sc-plugin.log') `
-        -Mode fanout `
-        -Windowed `
-        -WindowedHelperDll (Join-Path $here 'plugin\cnc-ddraw\ddraw.dll') `
-        -Widescreen 1 `
-        -WidescreenStage 3 `
-        -StormPresent widen `
-        -Sound `
-        -NoLaunchLock `
-        -NoForegroundRestore `
-        -Circles 1 `
-        -HudRow 1 `
-        -ProdQueue 1 `
-        -ProdFan 1 `
-        -UpgradeQueue 1 `
-        -QueueIndicator 1
-}
-catch {
-    $errLog = Join-Path $here 'logs\launch-error.log'
-    New-Item -ItemType Directory -Path (Split-Path $errLog -Parent) -Force | Out-Null
-    "$([DateTime]::Now.ToString('o'))`r`n$($_ | Out-String)" | Out-File -LiteralPath $errLog -Append -Encoding utf8
-    Add-Type -AssemblyName System.Windows.Forms
-    [System.Windows.Forms.MessageBox]::Show(
-        "StarCraft Modded (Wide) failed to launch:`r`n`r`n$($_.Exception.Message)`r`n`r`nDetails logged to:`r`n$errLog",
-        'StarCraft Modded (Wide)', 'OK', 'Error') | Out-Null
-}
-'@
-Set-Content -LiteralPath $wideLauncherPath -Value $wideLauncherBody -Encoding utf8NoBOM
-Write-Host "wide launcher written: $wideLauncherPath"
 
 # The one-page card travels with the install, next to the launcher it describes.
 Copy-Item -LiteralPath (Join-Path $scriptDir 'widescreen-card.md') -Destination (Join-Path $deployRootFull 'widescreen-card.md') -Force
@@ -704,7 +628,11 @@ if (-not $pwshExe) {
 }
 
 $deployedExe = Join-Path $gameDeployDir 'StarCraft.exe'
-$wideShortcutPath = Join-Path $desktop $WideShortcutName
+# The pre-2026-09-06 wide launcher + shortcut, removed if an earlier deploy left them:
+# one shortcut is what the user asked for, and a stale Wide launcher would run an old
+# ini/argument set against the current plugin.
+$staleWideLauncher = Join-Path $deployRootFull 'Launch-StarCraft-Modded-Wide.ps1'
+if (Test-Path -LiteralPath $staleWideLauncher) { Remove-Item -LiteralPath $staleWideLauncher -Force; Write-Host "removed the stale wide launcher: $staleWideLauncher" }
 if ($NoShortcut) {
     Write-Host 'shortcuts SKIPPED (-NoShortcut): a scratch/test deploy must not touch the desktop'
 }
@@ -715,20 +643,11 @@ else {
     $lnk.Arguments = "-WindowStyle Hidden -File `"$launcherPath`""
     $lnk.WorkingDirectory = $deployRootFull
     $lnk.IconLocation = "$deployedExe,0"
-    $lnk.Description = 'StarCraft 1.16.1, modded (fan-out select-past-12 + circles + HUD row), windowed 2x scale, mouse locked'
+    $lnk.Description = "StarCraft 1.16.1, modded (fan-out select-past-12 + circles + HUD row), WIDESCREEN ${wsW}x${wsH} shown at 2x, mouse locked -- see widescreen-card.md"
     $lnk.Save()
     Write-Host "shortcut written: $shortcutPath"
-
-    # Task 070: the widescreen entry point. A second shortcut, not a mode on the
-    # first -- off by default means the normal shortcut never changes behaviour.
-    $wlnk = $shell.CreateShortcut($wideShortcutPath)
-    $wlnk.TargetPath = $pwshExe
-    $wlnk.Arguments = "-WindowStyle Hidden -File `"$wideLauncherPath`""
-    $wlnk.WorkingDirectory = $deployRootFull
-    $wlnk.IconLocation = "$deployedExe,0"
-    $wlnk.Description = 'StarCraft 1.16.1, modded, WIDESCREEN 1280x480 (stage 2 + fog + cnc-ddraw) -- see widescreen-card.md'
-    $wlnk.Save()
-    Write-Host "wide shortcut written: $wideShortcutPath"
+    $staleWideShortcut = Join-Path $desktop 'StarCraft Modded (Wide).lnk'
+    if (Test-Path -LiteralPath $staleWideShortcut) { Remove-Item -LiteralPath $staleWideShortcut -Force; Write-Host "removed the stale wide shortcut: $staleWideShortcut (one shortcut carries the wide geometry now)" }
 }
 
 # --- 6. regenerate the feature-test map (task 067) ----------------------------
@@ -826,14 +745,15 @@ Write-Host "verify: build receipt written -> $buildIdPath"
 # The wide assembly, shortcut or not: launcher + staged helper + card must exist
 # and the staged DLL must still match the pin (a copy that half-took would
 # otherwise surface as a user-facing DirectDraw error, not a deploy error).
-if (-not (Test-Path -LiteralPath $wideLauncherPath)) { throw "deploy: wide launcher was not written: $wideLauncherPath" }
 $stagedCnc = Join-Path $cncDeployDir 'ddraw.dll'
 $stagedHash = (Get-FileHash -LiteralPath $stagedCnc -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($stagedHash -ne $CNC_DDRAW_DLL_SHA256) { throw "deploy: staged cnc-ddraw hash mismatch after copy: $stagedCnc" }
 if (-not (Test-Path -LiteralPath (Join-Path $pluginDeployDir 'cnc-ddraw.ini'))) { throw 'deploy: plugin\cnc-ddraw.ini missing -- the wide launcher would run cnc-ddraw unconfigured (fullscreen-shaped).' }
-if (-not (Test-Path -LiteralPath $cnc2xIniDeployPath)) { throw 'deploy: plugin\cnc-ddraw-2x.ini missing -- the normal launcher would run cnc-ddraw unconfigured (fullscreen-shaped), losing the 2x scale + mouse lock task 075 added.' }
+if (-not (Test-Path -LiteralPath $cnc2xIniDeployPath)) { throw 'deploy: plugin\cnc-ddraw-2x.ini missing -- the launcher would run cnc-ddraw unconfigured (fullscreen-shaped), losing the 2x scale + mouse lock task 075 added.' }
+$iniText = Get-Content -Raw -LiteralPath $cnc2xIniDeployPath
+if ($iniText -notmatch "(?m)^width=$($wsW * 2)$" -or $iniText -notmatch "(?m)^height=$($wsH * 2)$") { throw "deploy: plugin\cnc-ddraw-2x.ini does not carry width=$($wsW * 2)/height=$($wsH * 2) (2x the plugin's ${wsW}x${wsH})." }
 if (-not (Test-Path -LiteralPath (Join-Path $deployRootFull 'widescreen-card.md'))) { throw 'deploy: widescreen-card.md missing from the deploy root.' }
-Write-Host 'verify: normal + wide launchers, pinned cnc-ddraw, both inis + card all present'
+Write-Host "verify: launcher, pinned cnc-ddraw, both inis (2x ini at $($wsW * 2)x$($wsH * 2)) + card all present"
 
 if ($NoShortcut) {
     Write-Host 'verify: shortcuts skipped (-NoShortcut)'
@@ -845,12 +765,6 @@ else {
     if ($resolved.Arguments -notmatch [Regex]::Escape($launcherPath)) { throw "deploy: shortcut arguments do not reference the launcher: $($resolved.Arguments)" }
     if (-not (Test-Path -LiteralPath $launcherPath)) { throw "deploy: shortcut points at a launcher that does not exist: $launcherPath" }
     Write-Host "verify: shortcut resolves ($shortcutPath -> $pwshExe $($resolved.Arguments))"
-
-    if (-not (Test-Path -LiteralPath $wideShortcutPath)) { throw "deploy: wide shortcut was not written: $wideShortcutPath" }
-    $wresolved = $shell.CreateShortcut($wideShortcutPath)
-    if ($wresolved.TargetPath -ne $pwshExe) { throw "deploy: wide shortcut target mismatch: $($wresolved.TargetPath)" }
-    if ($wresolved.Arguments -notmatch [Regex]::Escape($wideLauncherPath)) { throw "deploy: wide shortcut arguments do not reference the wide launcher: $($wresolved.Arguments)" }
-    Write-Host "verify: wide shortcut resolves ($wideShortcutPath -> $pwshExe $($wresolved.Arguments))"
 }
 
 } finally {
@@ -865,6 +779,5 @@ if ($NoShortcut) {
 }
 else {
     Write-Host "deploy: shortcut -> $shortcutPath"
-    Write-Host "deploy: wide shortcut -> $wideShortcutPath (widescreen, off by default -- widescreen-card.md)"
 }
 exit 0
