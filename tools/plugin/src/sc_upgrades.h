@@ -93,8 +93,14 @@
 // Which command an item came from. The two are queued in one list per building, in the
 // order the player pressed them, because a building that offers both (an Academy) should
 // run them in that order.
-#define SC_UPGQ_KIND_UPGRADE 0   // wire 0x32
-#define SC_UPGQ_KIND_TECH    1   // wire 0x30
+//
+// `kind` travels as an int (and as a BYTE inside a record, and as -1 from the
+// out-of-range accessors), so the signatures below still say int. The enum is here so
+// the two values read as one closed set rather than as two loose defines.
+enum ScUpgQueueKind {
+    SC_UPGQ_KIND_UPGRADE = 0,   // wire 0x32
+    SC_UPGQ_KIND_TECH    = 1    // wire 0x30
+};
 
 // Reads %SCPLUGIN_UPGQ%. Unset/0 -> disabled, which is the off switch: nothing in this
 // file runs, no hook is installed and no game memory is written.

@@ -340,12 +340,12 @@ enum ScDropWhy {
 // The header publishes the same set for hooktest to assert on; the two must agree
 // numerically, and a mismatch would silently turn a "dropped for the right reason"
 // assertion into a coincidence.
-static_assert((int)SC_DROP_RECYCLED == (int)SC_FANOUT_RECYCLED, "drop reason drift");
-static_assert((int)SC_DROP_DEAD     == (int)SC_FANOUT_DEAD,     "drop reason drift");
-static_assert((int)SC_DROP_FOREIGN  == (int)SC_FANOUT_FOREIGN,  "drop reason drift");
-static_assert((int)SC_DROP_NOSPRITE == (int)SC_FANOUT_NOSPRITE, "drop reason drift");
-static_assert((int)SC_DROP_REMOVED  == (int)SC_FANOUT_REMOVED,  "drop reason drift");
-static_assert((int)SC_DROP_NOTAG    == (int)SC_FANOUT_NOTAG,    "drop reason drift");
+static_assert((int)SC_DROP_RECYCLED == (int)SC_FANOUT_DROP_RECYCLED, "drop reason drift");
+static_assert((int)SC_DROP_DEAD     == (int)SC_FANOUT_DROP_DEAD,     "drop reason drift");
+static_assert((int)SC_DROP_FOREIGN  == (int)SC_FANOUT_DROP_FOREIGN,  "drop reason drift");
+static_assert((int)SC_DROP_NOSPRITE == (int)SC_FANOUT_DROP_NOSPRITE, "drop reason drift");
+static_assert((int)SC_DROP_REMOVED  == (int)SC_FANOUT_DROP_REMOVED,  "drop reason drift");
+static_assert((int)SC_DROP_NOTAG    == (int)SC_FANOUT_DROP_NOTAG,    "drop reason drift");
 
 static const char* DropWhyName(int why) {
     switch (why) {
@@ -2233,13 +2233,13 @@ int ScFanoutGroupCount(int group) {
 
 int ScFanoutGroupStat(int which) {
     switch (which) {
-        case SC_GROUPSTAT_ASSIGN:  return (int)g_statGroupAssign;
-        case SC_GROUPSTAT_ADD:     return (int)g_statGroupAdd;
-        case SC_GROUPSTAT_RECALL:  return (int)g_statGroupRecall;
-        case SC_GROUPSTAT_WIDE:    return (int)g_statGroupWide;
-        case SC_GROUPSTAT_DISCARD: return (int)g_statGroupDiscard;
-        case SC_GROUPSTAT_RESET:   return (int)g_statGroupReset;
-        case SC_GROUPSTAT_SESSION: FanoutSessionSync(); return (int)g_statSessionDrop;
+        case SC_FANOUT_GROUP_ASSIGN:  return (int)g_statGroupAssign;
+        case SC_FANOUT_GROUP_ADD:     return (int)g_statGroupAdd;
+        case SC_FANOUT_GROUP_RECALL:  return (int)g_statGroupRecall;
+        case SC_FANOUT_GROUP_WIDE:    return (int)g_statGroupWide;
+        case SC_FANOUT_GROUP_DISCARD: return (int)g_statGroupDiscard;
+        case SC_FANOUT_GROUP_RESET:   return (int)g_statGroupReset;
+        case SC_FANOUT_GROUP_SESSION: FanoutSessionSync(); return (int)g_statSessionDrop;
     }
     return -1;
 }
@@ -2267,9 +2267,9 @@ void ScFanoutTestSetCreateSelections(ScCreateSelectionsFn f) {
 
 int ScFanoutExtendStat(int which) {
     switch (which) {
-        case SC_EXTEND_SEEN:   return (int)g_statExtendSeen;
-        case SC_EXTEND_ALLOW:  return (int)g_statExtendAllow;
-        case SC_EXTEND_REFUSE: return (int)g_statExtendRefuse;
+        case SC_FANOUT_EXTEND_SEEN:   return (int)g_statExtendSeen;
+        case SC_FANOUT_EXTEND_ALLOW:  return (int)g_statExtendAllow;
+        case SC_FANOUT_EXTEND_REFUSE: return (int)g_statExtendRefuse;
         default: return -1;
     }
 }

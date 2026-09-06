@@ -40,10 +40,10 @@ static ScHook g_hkDriver;
 static ScHook g_hkLayout;   // queueLayout 0x004268D0 -- the phantom bracket (task 066)
 
 // Test seam -- NULL means "call the real engine".
-static ScQIndCtlFn    g_show          = NULL;
-static ScQIndCtlFn    g_hide          = NULL;
-static ScQIndCtlFn    g_update        = NULL;
-static ScQIndDriverFn g_testOrigDriver = NULL;
+static ScQueueIndCtlFn    g_show          = NULL;
+static ScQueueIndCtlFn    g_hide          = NULL;
+static ScQueueIndCtlFn    g_update        = NULL;
+static ScQueueIndDriverFn g_testOrigDriver = NULL;
 static bool           g_testing       = false;
 
 // Dialog bookkeeping. Every pointer below belongs to ONE dialog instance; a new dialog
@@ -1690,8 +1690,8 @@ void ScQueueIndLogStats(void) {
 // ---------------------------------------------------------------------------
 
 void ScQueueIndTestBegin(BYTE* fakeModuleBase,
-                         ScQIndCtlFn show, ScQIndCtlFn hide, ScQIndCtlFn update,
-                         ScQIndDriverFn origDriver) {
+                         ScQueueIndCtlFn show, ScQueueIndCtlFn hide, ScQueueIndCtlFn update,
+                         ScQueueIndDriverFn origDriver) {
     ScQueueIndInit(fakeModuleBase, fakeModuleBase != NULL);
     g_show           = show;
     g_hide           = hide;

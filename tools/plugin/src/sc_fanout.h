@@ -82,13 +82,13 @@ void ScFanoutTestBegin(unsigned char* fakeModuleBase, ScQueueFn emit, int budget
 // sc_fanout.cpp; hooktest asserts on the individual reasons so "it was dropped"
 // and "it was dropped for the right reason" are different failures.
 enum ScFanoutDrop {
-    SC_FANOUT_LIVE     = 0,
-    SC_FANOUT_RECYCLED = 1,   // CUnit+0xA5 moved -- the slot holds a different unit
-    SC_FANOUT_DEAD     = 2,   // hitpoints == 0 -- a damage death, slot not recycled
-    SC_FANOUT_FOREIGN  = 3,   // CUnit+0x4C changed -- no longer this player's unit
-    SC_FANOUT_NOSPRITE = 4,   // CUnit+0x0C == 0 -- nothing for the receive path to deref
-    SC_FANOUT_REMOVED  = 5,   // not reachable from playerUnitList[player]
-    SC_FANOUT_NOTAG    = 6    // the pointer does not encode to a wire tag
+    SC_FANOUT_DROP_LIVE     = 0,
+    SC_FANOUT_DROP_RECYCLED = 1,   // CUnit+0xA5 moved -- the slot holds a different unit
+    SC_FANOUT_DROP_DEAD     = 2,   // hitpoints == 0 -- a damage death, slot not recycled
+    SC_FANOUT_DROP_FOREIGN  = 3,   // CUnit+0x4C changed -- no longer this player's unit
+    SC_FANOUT_DROP_NOSPRITE = 4,   // CUnit+0x0C == 0 -- nothing for the receive path to deref
+    SC_FANOUT_DROP_REMOVED  = 5,   // not reachable from playerUnitList[player]
+    SC_FANOUT_DROP_NOTAG    = 6    // the pointer does not encode to a wire tag
 };
 
 // Test-only: drive %SCPLUGIN_FANOUT_LIVENESS% directly. `false` is the pre-task-020
@@ -158,7 +158,7 @@ void ScFanoutTestSetCreateSelections(ScCreateSelectionsFn f);
 
 // Test-only: the extend override's own counters -- calls that reached one of the four
 // sites with a building lead, and how that split into allow/refuse.
-enum ScExtendStat { SC_EXTEND_SEEN = 0, SC_EXTEND_ALLOW = 1, SC_EXTEND_REFUSE = 2 };
+enum ScExtendStat { SC_FANOUT_EXTEND_SEEN = 0, SC_FANOUT_EXTEND_ALLOW = 1, SC_FANOUT_EXTEND_REFUSE = 2 };
 int ScFanoutExtendStat(int which);
 
 // Test-only: units the building-group append refused, by ScFanoutDrop reason. Counted
@@ -183,18 +183,18 @@ int ScFanoutDroppedFor(int why);
 
 // Which group counter ScFanoutGroupStat returns.
 enum ScGroupStat {
-    SC_GROUPSTAT_ASSIGN  = 0,   // Ctrl+N stores
-    SC_GROUPSTAT_ADD     = 1,   // shift-adds into a group
-    SC_GROUPSTAT_RECALL  = 2,   // N recalls
-    SC_GROUPSTAT_WIDE    = 3,   // recalls that put back MORE than the engine's 12
-    SC_GROUPSTAT_DISCARD = 4,   // recalls whose group failed the containment check
-    SC_GROUPSTAT_RESET   = 5,   // groups dropped because the engine restarted a game
+    SC_FANOUT_GROUP_ASSIGN  = 0,   // Ctrl+N stores
+    SC_FANOUT_GROUP_ADD     = 1,   // shift-adds into a group
+    SC_FANOUT_GROUP_RECALL  = 2,   // N recalls
+    SC_FANOUT_GROUP_WIDE    = 3,   // recalls that put back MORE than the engine's 12
+    SC_FANOUT_GROUP_DISCARD = 4,   // recalls whose group failed the containment check
+    SC_FANOUT_GROUP_RESET   = 5,   // groups dropped because the engine restarted a game
     // Task 054: times the GAME-SESSION EPOCH (sc_session.h) threw this module's
     // cross-frame state away. Separate from RESET because RESET is an INFERENCE from
     // the engine's own hotkey row being empty, and a save/load restores that row
     // NON-empty with the same pointers in it -- so RESET cannot fire on the one case
     // this counter exists for.
-    SC_GROUPSTAT_SESSION = 6
+    SC_FANOUT_GROUP_SESSION = 6
 };
 
 // Test-only: units the plugin holds for control group `group` (0..9), or -1 if that

@@ -215,12 +215,12 @@ int ScQueueIndSurfaceInk(DWORD root, int left, int top, int right, int bottom);
 // Test seam -- the frame path driven against a fake dialog tree from hooktest.exe.
 // ---------------------------------------------------------------------------
 
-typedef void (*ScQIndCtlFn)(DWORD ctrl);
-typedef void (*ScQIndDriverFn)(void);
+typedef void (*ScQueueIndCtlFn)(DWORD ctrl);
+typedef void (*ScQueueIndDriverFn)(void);
 
 void ScQueueIndTestBegin(BYTE* fakeModuleBase,
-                         ScQIndCtlFn show, ScQIndCtlFn hide, ScQIndCtlFn update,
-                         ScQIndDriverFn origDriver);
+                         ScQueueIndCtlFn show, ScQueueIndCtlFn hide, ScQueueIndCtlFn update,
+                         ScQueueIndDriverFn origDriver);
 
 // The per-frame body the detour calls. Exposed so the offline test drives exactly the
 // code the game drives.

@@ -451,7 +451,7 @@ static void FanoutCoreTests(void) {
     Check("first Select carries 9 units, not 12", g_capture[1], 9);
     Check("bytes queued drops by 3 tags (6B)", g_captureLen, 102);
     Check("all three were charged to `recycled`, not to another reason",
-          ScFanoutDroppedFor(SC_FANOUT_RECYCLED), 3);
+          ScFanoutDroppedFor(SC_FANOUT_DROP_RECYCLED), 3);
     Check("and nothing else was dropped", ScFanoutStaleSkipped(), 3);
     for (int i = 12; i < 15; ++i) *(BYTE*)(FakeUnit(i) + SC_CUNIT_OFF_UNIQUENESS) -= 1;
 
@@ -488,7 +488,7 @@ static void FanoutCoreTests(void) {
               CaptureHasTag(deadTag, (int)sizeof(kRightClick)) ? 1 : 0, 0);
         Check("35 of the 36 went out", CaptureTagCount((int)sizeof(kRightClick)), 35);
         Check("it was dropped as a DEATH, not as a recycled slot",
-              ScFanoutDroppedFor(SC_FANOUT_DEAD), 1);
+              ScFanoutDroppedFor(SC_FANOUT_DROP_DEAD), 1);
         Check("staleSkipped counted exactly it", ScFanoutStaleSkipped(), 1);
         Check("the order still fanned out over the survivors", g_captureCount, 6);
 
@@ -533,7 +533,7 @@ static void FanoutCoreTests(void) {
         Check("the removed unit's tag is in NO emitted Select",
               CaptureHasTag(goneTag, (int)sizeof(kRightClick)) ? 1 : 0, 0);
         Check("it was dropped as REMOVED FROM PLAY",
-              ScFanoutDroppedFor(SC_FANOUT_REMOVED), 1);
+              ScFanoutDroppedFor(SC_FANOUT_DROP_REMOVED), 1);
         Check("35 of the 36 went out", CaptureTagCount((int)sizeof(kRightClick)), 35);
         RelinkFakeUnit(gone, 1);
     }
@@ -550,7 +550,7 @@ static void FanoutCoreTests(void) {
         ScFanoutOnCommand(kRightClick, sizeof(kRightClick));
         Check("the tag of a unit that changed hands is in NO emitted Select",
               CaptureHasTag(takenTag, (int)sizeof(kRightClick)) ? 1 : 0, 0);
-        Check("dropped as FOREIGN", ScFanoutDroppedFor(SC_FANOUT_FOREIGN), 1);
+        Check("dropped as FOREIGN", ScFanoutDroppedFor(SC_FANOUT_DROP_FOREIGN), 1);
         *(BYTE*)(FakeUnit(taken) + SC_CUNIT_OFF_PLAYER) = 1;
     }
 
@@ -567,7 +567,7 @@ static void FanoutCoreTests(void) {
         ScFanoutOnCommand(kRightClick, sizeof(kRightClick));
         Check("a unit with no sprite is in NO emitted Select",
               CaptureHasTag(baldTag, (int)sizeof(kRightClick)) ? 1 : 0, 0);
-        Check("dropped as NOSPRITE", ScFanoutDroppedFor(SC_FANOUT_NOSPRITE), 1);
+        Check("dropped as NOSPRITE", ScFanoutDroppedFor(SC_FANOUT_DROP_NOSPRITE), 1);
         *(DWORD*)(FakeUnit(bald) + SC_CUNIT_OFF_SPRITE) = sprite;
     }
 
@@ -602,7 +602,7 @@ static void FanoutCoreTests(void) {
                 break;
             }
         }
-        Check("all 12 were charged to hp0", ScFanoutDroppedFor(SC_FANOUT_DEAD), 12);
+        Check("all 12 were charged to hp0", ScFanoutDroppedFor(SC_FANOUT_DROP_DEAD), 12);
         // THE WEAKENED INVARIANT, stated as the test sees it: the LAST Select of the
         // run is an overflow chunk, not the visible one, so the simulation is left
         // holding units the player cannot see. Asserted rather than hidden.
@@ -1473,7 +1473,7 @@ static void ControlGroupTests(void) {
               Hotkey(SC_HOTKEY_ASSIGN, 1) ? 1 : 0, 0);
         Check("  and we emitted nothing of our own for it", g_captureCount, 0);
         Check("plugin group 1 holds all 36", ScFanoutGroupCount(1), 36);
-        Check("  one assign counted", ScFanoutGroupStat(SC_GROUPSTAT_ASSIGN), 1);
+        Check("  one assign counted", ScFanoutGroupStat(SC_FANOUT_GROUP_ASSIGN), 1);
 
         // The engine now executes that store: its own group holds its twelve.
         FakeEngineHotkeyRow(1, kFirstTwelve, 12);
@@ -1498,8 +1498,8 @@ static void ControlGroupTests(void) {
 
         Check("ALL 36 ARE BACK", ScFanoutShadowCount(), 36);
         Check("  the engine still holds only twelve", ScFanoutVisibleCount(), 12);
-        Check("  counted as a >12 recall", ScFanoutGroupStat(SC_GROUPSTAT_WIDE), 1);
-        Check("  nothing was discarded", ScFanoutGroupStat(SC_GROUPSTAT_DISCARD), 0);
+        Check("  counted as a >12 recall", ScFanoutGroupStat(SC_FANOUT_GROUP_WIDE), 1);
+        Check("  nothing was discarded", ScFanoutGroupStat(SC_FANOUT_GROUP_DISCARD), 0);
 
         // ... and the order that follows reaches every one of them, on the wire.
         g_captureLen = 0; g_captureCount = 0;
@@ -1611,7 +1611,7 @@ static void ControlGroupTests(void) {
 
         Check("the shadow list is the engine's twelve and nothing more",
               ScFanoutShadowCount(), 12);
-        Check("  one discard counted", ScFanoutGroupStat(SC_GROUPSTAT_DISCARD), 1);
+        Check("  one discard counted", ScFanoutGroupStat(SC_FANOUT_GROUP_DISCARD), 1);
         Check("  and the poisoned group is forgotten", ScFanoutGroupCount(4), -1);
     }
 
@@ -1629,7 +1629,7 @@ static void ControlGroupTests(void) {
         FakeEngineHotkeyRow(5, kFirstTwelve, 12);
         Hotkey(SC_HOTKEY_ADD, 5);
         Check("a shift-add with the row filled keeps the group", ScFanoutGroupCount(5), 36);
-        Check("  no reset counted", ScFanoutGroupStat(SC_GROUPSTAT_RESET), 0);
+        Check("  no reset counted", ScFanoutGroupStat(SC_FANOUT_GROUP_RESET), 0);
 
         // Now a new game: 0x004EEC30 zeroes the whole array.
         ZeroEngineHotkeys();
@@ -1637,7 +1637,7 @@ static void ControlGroupTests(void) {
         Hotkey(SC_HOTKEY_ADD, 5);
         Check("the stale group was dropped, so the add behaves as an assign",
               ScFanoutGroupCount(5), 1);
-        Check("  a reset was counted", ScFanoutGroupStat(SC_GROUPSTAT_RESET) > 0 ? 1 : 0, 1);
+        Check("  a reset was counted", ScFanoutGroupStat(SC_FANOUT_GROUP_RESET) > 0 ? 1 : 0, 1);
     }
 
     // -----------------------------------------------------------------------
@@ -1677,7 +1677,7 @@ static void ControlGroupTests(void) {
         // Was 25 (36 of game A's records unioned with the new 5) before the fix.
         Check("the previous game's 36 are gone; the add holds only the new 5",
               ScFanoutGroupCount(8), 5);
-        Check("  and a reset was counted", ScFanoutGroupStat(SC_GROUPSTAT_RESET) > 0 ? 1 : 0, 1);
+        Check("  and a reset was counted", ScFanoutGroupStat(SC_FANOUT_GROUP_RESET) > 0 ? 1 : 0, 1);
     }
 
     // -----------------------------------------------------------------------
@@ -1714,7 +1714,7 @@ static void ControlGroupTests(void) {
         Hotkey(SC_HOTKEY_RECALL, 9);
 
         Check("the recycled slots are NOT contained, so the group is discarded",
-              ScFanoutGroupStat(SC_GROUPSTAT_DISCARD), 1);
+              ScFanoutGroupStat(SC_FANOUT_GROUP_DISCARD), 1);
         Check("  and the shadow list is the engine's twelve alone",
               ScFanoutShadowCount(), 12);
         Check("  the poisoned group is forgotten", ScFanoutGroupCount(9), -1);
@@ -1746,7 +1746,7 @@ static void ControlGroupTests(void) {
         Hotkey(SC_HOTKEY_ADD, 6);
         // 0..19 plus 12..31 = 0..31, deduplicated.
         Check("the union is 32 units, not 40", ScFanoutGroupCount(6), 32);
-        Check("  one add counted", ScFanoutGroupStat(SC_GROUPSTAT_ADD), 1);
+        Check("  one add counted", ScFanoutGroupStat(SC_FANOUT_GROUP_ADD), 1);
     }
 
     printf("\n    a 0x13 we do not understand falls back to the pre-021 behaviour\n");
@@ -1761,7 +1761,7 @@ static void ControlGroupTests(void) {
         Hotkey(SC_HOTKEY_RECALL, 12);
         Check("the over-cap units are dropped, as before task 021",
               ScFanoutShadowCount(), 12);
-        Check("  and no group was touched", ScFanoutGroupStat(SC_GROUPSTAT_RECALL), 0);
+        Check("  and no group was touched", ScFanoutGroupStat(SC_FANOUT_GROUP_RECALL), 0);
 
         ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
         ResetQueueCounters();
@@ -2444,7 +2444,7 @@ static void BuildingGroupTests(void) {
     {
         const DWORD hpWas = *(DWORD*)(FakeUnit(1) + SC_CUNIT_OFF_HITPOINTS);
         *(DWORD*)(FakeUnit(1) + SC_CUNIT_OFF_HITPOINTS) = 0;   // a damage death
-        const int before = ScFanoutGroupRefusedFor(SC_FANOUT_DEAD);
+        const int before = ScFanoutGroupRefusedFor(SC_FANOUT_DROP_DEAD);
 
         DWORD cand[8];
         const int all[4] = { 0, 1, 2, 3 };
@@ -2454,7 +2454,7 @@ static void BuildingGroupTests(void) {
         unsigned n = ScFanoutGrowBuildingGroup(cand, out, 0, 1);
         Check("a destroyed building never enters the selection", (int)n, 3);
         Check("  and it was refused for being DEAD, not merely absent",
-              ScFanoutGroupRefusedFor(SC_FANOUT_DEAD) - before, 1);
+              ScFanoutGroupRefusedFor(SC_FANOUT_DROP_DEAD) - before, 1);
         bool none = true;
         for (unsigned j = 0; j < n; ++j) if (out[j] == FakeUnit(1)) none = false;
         Check("  the dead building's pointer is in no slot", none ? 1 : 0, 1);
@@ -2679,14 +2679,14 @@ static void BuildingParityTests(void) {
     {
         const int marineLead[1] = { 20 };
         SetFakeEngineSelection(marineLead, 1);
-        const int seen = ScFanoutExtendStat(SC_EXTEND_SEEN);
+        const int seen = ScFanoutExtendStat(SC_FANOUT_EXTEND_SEEN);
         Check("a Marine joining Marines is the engine's own answer",
               ScFanoutMovableDecide(FakeUnit(21), retShiftHit, 1), 1);
         Check("a Barracks shift-clicked onto Marines stays refused",
               ScFanoutMovableDecide(FakeUnit(0), retShiftHit, 0), 0);
         // The counter is the proof that this branch was never entered, rather than
         // entered and coincidentally agreeing.
-        Check("  and the override never even ran", ScFanoutExtendStat(SC_EXTEND_SEEN) - seen, 0);
+        Check("  and the override never even ran", ScFanoutExtendStat(SC_FANOUT_EXTEND_SEEN) - seen, 0);
     }
 
     printf("\n    with the feature OFF the override is inert\n");
@@ -2694,9 +2694,9 @@ static void BuildingParityTests(void) {
         const int leadIdx[1] = { 0 };
         SetFakeEngineSelection(leadIdx, 1);
         ScFanoutTestSetBuildingGroups(false);
-        const int seen = ScFanoutExtendStat(SC_EXTEND_SEEN);
+        const int seen = ScFanoutExtendStat(SC_FANOUT_EXTEND_SEEN);
         Check("a sibling Barracks is refused again", ScFanoutMovableDecide(FakeUnit(1), retShiftHit, 0), 0);
-        Check("  because the override did not run", ScFanoutExtendStat(SC_EXTEND_SEEN) - seen, 0);
+        Check("  because the override did not run", ScFanoutExtendStat(SC_FANOUT_EXTEND_SEEN) - seen, 0);
         ScFanoutTestSetBuildingGroups(true);
         Check("and allowed once more when it is back on",
               ScFanoutMovableDecide(FakeUnit(1), retShiftHit, 0), 1);
@@ -5067,9 +5067,9 @@ static void SessionEpochTests(void) {
         Check("WITHOUT a game start the recall restores all 36 -- the defect, reproduced",
               ScFanoutShadowCount(), 36);
         Check("  ResetGroupIfEngineRowEmpty did NOT fire (the row is not empty)",
-              ScFanoutGroupStat(SC_GROUPSTAT_RESET), 0);
+              ScFanoutGroupStat(SC_FANOUT_GROUP_RESET), 0);
         Check("  and containment did NOT discard it (the pointers all match)",
-              ScFanoutGroupStat(SC_GROUPSTAT_DISCARD), 0);
+              ScFanoutGroupStat(SC_FANOUT_GROUP_DISCARD), 0);
 
         // --- the treatment arm: identical, plus one game start ----------------------
         ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
@@ -5095,9 +5095,9 @@ static void SessionEpochTests(void) {
         }
         Check("the plugin no longer holds group 5", ScFanoutGroupCount(5), -1);
         Check("  counted against the epoch, not against the empty-row inference",
-              ScFanoutGroupStat(SC_GROUPSTAT_SESSION) > 0 ? 1 : 0, 1);
+              ScFanoutGroupStat(SC_FANOUT_GROUP_SESSION) > 0 ? 1 : 0, 1);
         Check("  and the empty-row inference is still at zero, as it must be",
-              ScFanoutGroupStat(SC_GROUPSTAT_RESET), 0);
+              ScFanoutGroupStat(SC_FANOUT_GROUP_RESET), 0);
 
         FakeEngineVisible(kFirstTwelve, 12);
         Hotkey(SC_HOTKEY_RECALL, 5);
@@ -5120,7 +5120,7 @@ static void SessionEpochTests(void) {
         ScSessionTestNewGame();
         Check("the shadow list is empty in the new game", ScFanoutShadowCount(), 0);
         Check("  and so is its visible tail", ScFanoutVisibleCount(), 0);
-        Check("  one session drop counted", ScFanoutGroupStat(SC_GROUPSTAT_SESSION), 1);
+        Check("  one session drop counted", ScFanoutGroupStat(SC_FANOUT_GROUP_SESSION), 1);
 
         // The plan. A budget small enough that a 36-unit fan-out cannot finish in one
         // turn is what leaves chunks pending -- the state #67 item 2 is about.
