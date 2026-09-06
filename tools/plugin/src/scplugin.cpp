@@ -40,6 +40,7 @@
 #include "sc_card.h"
 #include "sc_console.h"
 #include "sc_engine.h"
+#include "sc_env.h"
 #include "sc_fanout.h"
 #include "sc_hook.h"
 #include "sc_log.h"
@@ -57,30 +58,6 @@ static volatile LONG g_stop = 0;
 // ---------------------------------------------------------------------------
 // Read-only memory access
 // ---------------------------------------------------------------------------
-
-// Copies n bytes out of the target address if, and only if, the whole range sits
-// inside one committed, readable region. Returns false instead of faulting on a bad
-// address, so a wrong static offset produces a log line saying "unreadable" rather
-// than a crashed game.
-static bool SafeRead(const void* addr, void* out, size_t n) {
-    MEMORY_BASIC_INFORMATION mbi;
-    if (VirtualQuery(addr, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
-    if (mbi.State != MEM_COMMIT) return false;
-    if (mbi.Protect & PAGE_GUARD) return false;
-
-    const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
-                           PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
-                           PAGE_EXECUTE_WRITECOPY;
-    if ((mbi.Protect & readable) == 0) return false;
-
-    const BYTE* start  = (const BYTE*)addr;
-    const BYTE* regEnd = (const BYTE*)mbi.BaseAddress + mbi.RegionSize;
-    if (start < (const BYTE*)mbi.BaseAddress) return false;
-    if (start + n > regEnd) return false;
-
-    memcpy(out, addr, n);
-    return true;
-}
 
 // ---------------------------------------------------------------------------
 // Selection snapshot
@@ -130,20 +107,20 @@ static void FormatSlots(const DWORD* arr, char* out, size_t outLen) {
 static void TakeSnapshot(Snapshot* s) {
     memset(s, 0, sizeof(*s));
 
-    if (SafeRead(ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT), &s->count, 1)) s->ok |= OK_COUNT;
-    SafeRead(ScRuntimeAddr(SC_VA_SELECTION_ITERATOR), &s->iterator, 1);
+    if (ScSafeRead(ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT), &s->count, 1)) s->ok |= OK_COUNT;
+    ScSafeRead(ScRuntimeAddr(SC_VA_SELECTION_ITERATOR), &s->iterator, 1);
 
-    if (SafeRead(ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_ID), &s->playerId, 4) &&
-        SafeRead(ScRuntimeAddr(SC_VA_PLAYER_ID_512688), &s->playerId688, 4) &&
-        SafeRead(ScRuntimeAddr(SC_VA_PLAYER_ID_512678), &s->playerId678, 4)) {
+    if (ScSafeRead(ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_ID), &s->playerId, 4) &&
+        ScSafeRead(ScRuntimeAddr(SC_VA_PLAYER_ID_512688), &s->playerId688, 4) &&
+        ScSafeRead(ScRuntimeAddr(SC_VA_PLAYER_ID_512678), &s->playerId678, 4)) {
         s->ok |= OK_IDS;
     }
 
-    if (SafeRead(ScRuntimeAddr(SC_VA_CLIENT_SELECTION_GROUP), s->group, sizeof(s->group)))
+    if (ScSafeRead(ScRuntimeAddr(SC_VA_CLIENT_SELECTION_GROUP), s->group, sizeof(s->group)))
         s->ok |= OK_GROUP;
-    if (SafeRead(ScRuntimeAddr(SC_VA_CLIENT_SELECTION_GROUP2), s->group2, sizeof(s->group2)))
+    if (ScSafeRead(ScRuntimeAddr(SC_VA_CLIENT_SELECTION_GROUP2), s->group2, sizeof(s->group2)))
         s->ok |= OK_GROUP2;
-    if (SafeRead(ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_SELECTION), s->active, sizeof(s->active)))
+    if (ScSafeRead(ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_SELECTION), s->active, sizeof(s->active)))
         s->ok |= OK_ACTIVE;
 
     // playersSelections[player] -- clamp the index, the id global is exactly the
@@ -151,7 +128,7 @@ static void TakeSnapshot(Snapshot* s) {
     DWORD p = (s->ok & OK_IDS) ? (s->playerId & 0xFF) : 0;
     if (p < SC_MAX_PLAYERS) {
         DWORD rowVa = SC_VA_PLAYERS_SELECTIONS + p * SC_SELECTION_SLOTS * 4;
-        if (SafeRead(ScRuntimeAddr(rowVa), s->playerRow, sizeof(s->playerRow))) s->ok |= OK_ROW;
+        if (ScSafeRead(ScRuntimeAddr(rowVa), s->playerRow, sizeof(s->playerRow))) s->ok |= OK_ROW;
     }
 }
 
@@ -220,21 +197,21 @@ static bool g_worldScan = false;
 
 static bool ReadU8(DWORD addr, unsigned* out) {
     BYTE v = 0;
-    if (!SafeRead((const void*)addr, &v, 1)) return false;
+    if (!ScSafeRead((const void*)addr, &v, 1)) return false;
     *out = v;
     return true;
 }
 
 static bool ReadU16(DWORD addr, unsigned* out) {
     WORD v = 0;
-    if (!SafeRead((const void*)addr, &v, 2)) return false;
+    if (!ScSafeRead((const void*)addr, &v, 2)) return false;
     *out = v;
     return true;
 }
 
 static bool ReadU32(DWORD addr, DWORD* out) {
     DWORD v = 0;
-    if (!SafeRead((const void*)addr, &v, 4)) return false;
+    if (!ScSafeRead((const void*)addr, &v, 4)) return false;
     *out = v;
     return true;
 }
@@ -408,7 +385,7 @@ static bool GetFrameDump(void) {
 // which a 307200/384000-byte block legitimately can.
 static bool CopyFrameRows(DWORD bits, unsigned w, unsigned h, BYTE* dst) {
     for (unsigned y = 0; y < h; ++y) {
-        if (!SafeRead((const void*)(DWORD_PTR)(bits + y * w), dst + (size_t)y * w, w))
+        if (!ScSafeRead((const void*)(DWORD_PTR)(bits + y * w), dst + (size_t)y * w, w))
             return false;
     }
     return true;
@@ -768,16 +745,7 @@ static bool g_dialogScan = true;
 // SafeRead, and sanitises it for the log: dialog text is game data, so a stray
 // newline or '|' would corrupt the line a parser is about to read.
 static void ReadDlgText(DWORD ptr, char* out, size_t outLen) {
-    out[0] = '\0';
-    if (!ptr || outLen < 2) return;
-    size_t i = 0;
-    for (; i + 1 < outLen; ++i) {
-        BYTE c = 0;
-        if (!SafeRead((const void*)(ptr + i), &c, 1)) break;
-        if (c == 0) break;
-        out[i] = (c < 32 || c > 126 || c == '|' || c == '\'') ? '.' : (char)c;
-    }
-    out[i] = '\0';
+    ScLogCopyText(ptr, out, outLen);
 }
 
 // left,top,right,bottom -- four s16 at +0x04 (SC_BINDLG_OFF_BOUNDS).
@@ -858,50 +826,32 @@ static void ScanDialogs(void) {
 // ---------------------------------------------------------------------------
 
 static DWORD GetPollMs(void) {
-    char buf[32];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_POLL_MS", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return 250;
-    int v = atoi(buf);
-    if (v < 20) v = 20;
-    if (v > 5000) v = 5000;
-    return (DWORD)v;
+    return (DWORD)ScEnvInt("SCPLUGIN_POLL_MS", 250, 20, 5000);
 }
 
 static ScMode g_mode = SC_MODE_OBSERVE;
 
 static bool GetWorldScan(void) {
-    char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_WORLDSCAN", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return false;
-    return buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y';
+    return ScEnvOptIn("SCPLUGIN_WORLDSCAN");
 }
 
 // ON by default, unlike the world scan: it logs one line per CHANGE of the dialog
 // set, so a whole run adds a handful of lines, and the tips-dialog dismissal in
 // every suite depends on it.
 static bool GetDialogScan(void) {
-    char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_DIALOGS", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return true;
-    return !(buf[0] == '0' || buf[0] == 'n' || buf[0] == 'N');
+    return ScEnvFlag("SCPLUGIN_DIALOGS", true);
 }
 
 // OFF by default, same shape as the world scan: %SCPLUGIN_CARDSCAN%=1 turns on the
 // read-only command-card walk (task 026).
 static bool GetCardScan(void) {
-    char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_CARDSCAN", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return false;
-    return buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y';
+    return ScEnvOptIn("SCPLUGIN_CARDSCAN");
 }
 
 // OFF by default, same shape as the world scan and for the same reason: %SCPLUGIN_SCREENSCAN%=1
 // turns on the read-only renderer/viewport read-back (task 032).
 static bool GetScreenScan(void) {
-    char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_SCREENSCAN", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return false;
-    return buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y';
+    return ScEnvOptIn("SCPLUGIN_SCREENSCAN");
 }
 
 static DWORD WINAPI ObserverThread(LPVOID) {
@@ -1058,7 +1008,7 @@ static void LogAttachBanner(void) {
     // Read a couple of bytes at the image base as a sanity check that we are
     // reading the mapped image at all ('MZ' == 0x5A4D).
     WORD mz = 0;
-    if (SafeRead(ScEngineModuleBase(), &mz, 2)) {
+    if (ScSafeRead(ScEngineModuleBase(), &mz, 2)) {
         ScLog("  image[0..1]   : 0x%04X %s", mz,
               mz == 0x5A4D ? "('MZ' - mapped image confirmed)" : "(UNEXPECTED)");
     } else {

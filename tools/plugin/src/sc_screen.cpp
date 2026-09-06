@@ -52,6 +52,7 @@
 #include "sc_screen.h"
 #include "sc_addresses.h"
 #include "sc_engine.h"
+#include "sc_env.h"
 #include "sc_log.h"
 #include "sc_screen_patches.h"
 
@@ -158,20 +159,11 @@ bool ScScreenApplyCaveAt(BYTE* at, int len, const BYTE* code, int codeLen) {
 // ---------------------------------------------------------------------------
 
 bool ScScreenWidescreenWanted(void) {
-    char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_WIDESCREEN", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return false;
-    return buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y';
+    return ScEnvOptIn("SCPLUGIN_WIDESCREEN");
 }
 
 int ScScreenStageWanted(void) {
-    char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_WS_STAGE", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return 1;
-    int v = buf[0] - '0';
-    if (v < 0) v = 0;
-    if (v > SC_WS_STAGE_MAX) v = SC_WS_STAGE_MAX;
-    return v;
+    return ScEnvInt("SCPLUGIN_WS_STAGE", 1, 0, SC_WS_STAGE_MAX);
 }
 
 // %SCPLUGIN_WS_ONLY% -- comma-separated NAME PREFIXES. When set, a patch at the
@@ -229,20 +221,6 @@ int ScScreenViewportTilesX(void) {
 // inside the game.
 // ---------------------------------------------------------------------------
 
-static bool RangeReadable(const void* addr, size_t n) {
-    MEMORY_BASIC_INFORMATION mbi;
-    if (VirtualQuery(addr, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
-    if (mbi.State != MEM_COMMIT) return false;
-    if (mbi.Protect & PAGE_GUARD) return false;
-    const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
-                           PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
-                           PAGE_EXECUTE_WRITECOPY;
-    if ((mbi.Protect & readable) == 0) return false;
-    const BYTE* start = (const BYTE*)addr;
-    const BYTE* regEnd = (const BYTE*)mbi.BaseAddress + mbi.RegionSize;
-    return start >= (const BYTE*)mbi.BaseAddress && start + n <= regEnd;
-}
-
 // ---------------------------------------------------------------------------
 // The gate: has the video init already run?
 //
@@ -256,7 +234,7 @@ static bool VideoAlreadyUp(DWORD* dataOut, unsigned* wOut, unsigned* hOut) {
     const BYTE* desc = (const BYTE*)ScRuntimeAddr(SC_VA_SCREEN_BITMAP);
     DWORD data = 0;
     WORD w = 0, h = 0;
-    if (!RangeReadable(desc, 8)) return false;   // unreadable -> not up yet
+    if (!ScReadableAt(desc, 8)) return false;   // unreadable -> not up yet
     memcpy(&w, desc + SC_BITMAP_OFF_WIDTH, 2);
     memcpy(&h, desc + SC_BITMAP_OFF_HEIGHT, 2);
     memcpy(&data, desc + SC_BITMAP_OFF_DATA, 4);
@@ -278,7 +256,7 @@ static bool VerifyAll(int maxStage, int* checked) {
         if (p->stage > maxStage) continue;
         ++n;
         const BYTE* at = (const BYTE*)ScRuntimeAddr(p->va);
-        if (!RangeReadable(at, p->len)) {
+        if (!ScReadableAt(at, p->len)) {
             ScLog("WIDESCREEN REFUSED %s @0x%08X: not readable", p->name, (unsigned)p->va);
             ok = false;
             continue;
@@ -442,8 +420,8 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
         // crashed. grid-1 is where 0x0041DE84 faulted; grid+BYTES+GUARD-1 is the
         // far side. Both must read as committed, or the box is not there. This
         // line would say MISSING on the pre-fix bare allocation.
-        const bool lo = RangeReadable(g_grid - 1, 1);
-        const bool hi = RangeReadable(g_grid + SC_WS_GRID_BYTES + SC_WS_GRID_GUARD - 1, 1);
+        const bool lo = ScReadableAt(g_grid - 1, 1);
+        const bool hi = ScReadableAt(g_grid + SC_WS_GRID_BYTES + SC_WS_GRID_GUARD - 1, 1);
         ScLog("WIDESCREEN: grid guard %s -- region %p..%p, %d bytes each side; "
               "grid-1 %s, grid+size+guard-1 %s (issue #113 crash: 0x0041DE84 read "
               "grid_base-1 on the pre-guard allocation)",

@@ -14,6 +14,7 @@
 #define SC_UNIT_H
 
 #include <windows.h>
+#include <stdio.h>
 
 #include "sc_addresses.h"
 #include "sc_engine.h"
@@ -94,6 +95,24 @@ static inline DWORD ScSoleSelectedUnit(void) {
     return ScUnitPtrValid(u) ? u : 0;
 }
 
+// Is the building a plugin record was written against still THAT building, alive?
+//
+// Four terms, and each catches something the others miss: the pointer must still be a
+// unit-array slot, the slot must not have been recycled (CUnit+0xA5), it must not have
+// changed hands, and it must not be a damage death (hitpoints 0, which 0xA5 does not
+// catch -- research/selection-circles.md 4.5). `deep` adds the list walk, which is the
+// only term that sees a removal with no damage and no recycle; without it this is four
+// loads. sc_prodqueue and sc_upgrades both hold per-building ledgers and both ask
+// exactly this before touching one.
+static inline bool ScUnitRecordLive(DWORD unit, BYTE uniqueness, BYTE player, bool deep) {
+    if (!ScUnitPtrValid(unit)) return false;
+    if (ScUnitUniqueness(unit) != uniqueness) return false;
+    if (ScUnitPlayer(unit) != player) return false;
+    if (ScUnitHitPoints(unit) == 0) return false;
+    if (deep && !ScUnitInPlayerList(unit, player)) return false;
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // The engine's five-slot build queue, read and written the way the engine does
 // ---------------------------------------------------------------------------
@@ -160,6 +179,89 @@ static inline DWORD ScDlgFindChild(DWORD root, short id) {
 // RELATIVE TO THE DIALOG -- the engine adds the dialog's own origin (0x00458850 does
 // `dlg->rct.left + child->rct.left`), so an absolute point is root + ctrl.
 static inline short* ScDlgBounds(DWORD ctrl) { return (short*)(ctrl + SC_BINDLG_OFF_BOUNDS); }
+
+// Fill a plugin-owned control record so the engine treats it as one of its own LSTATIC
+// labels: our flags, our (negative, binder-proof) id, the engine's own interact/update
+// handlers for the type, and the parent it is about to be linked to. NOT visible -- a
+// control that arrives visible is painted by the very next redraw walk, with an empty
+// rect nobody has measured yet.
+static inline void ScDlgMakeStaticText(DWORD ctrl, DWORD root, short id, const char* text,
+                                       DWORD interact, DWORD update) {
+    *(DWORD*)(ctrl + SC_BINDLG_OFF_FLAGS)    = SC_CTRL_FONT_SMALLEST;
+    *(short*)(ctrl + SC_BINDLG_OFF_INDEX)    = id;
+    *(WORD*) (ctrl + SC_BINDLG_OFF_TYPE)     = (WORD)SC_CTRL_TYPE_LSTATIC;
+    *(DWORD*)(ctrl + SC_BINDLG_OFF_TEXT)     = (DWORD)(DWORD_PTR)text;
+    *(DWORD*)(ctrl + SC_BINDLG_OFF_PARENT)   = root;
+    *(DWORD*)(ctrl + SC_BINDLG_OFF_INTERACT) = interact;
+    *(DWORD*)(ctrl + SC_BINDLG_OFF_UPDATE)   = update;
+    *(DWORD*)(ctrl + SC_BINDLG_OFF_NEXT)     = 0;
+}
+
+// Append `ctrl` to `root`'s child chain. false means the chain did not terminate within
+// SC_MAX_CTRLS_WALK links and NOTHING was written: the walk is bounded like every other
+// walk over a list the game thread owns, so a torn `next` costs one refused splice
+// rather than a spin on that thread. The caller logs the refusal -- each module says it
+// with its own tag and counts it in its own stats.
+static inline bool ScDlgAppendChild(DWORD root, DWORD ctrl) {
+    DWORD tail = ScDlgChild(root);
+    if (!tail) {
+        *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD) = ctrl;
+        return true;
+    }
+    int guard = 0;
+    while (ScDlgNext(tail) && guard < SC_MAX_CTRLS_WALK) { tail = ScDlgNext(tail); ++guard; }
+    if (ScDlgNext(tail)) return false;
+    *(DWORD*)(tail + SC_BINDLG_OFF_NEXT) = ctrl;
+    return true;
+}
+
+// The engine's own default interact/update handler for a control type, out of the two
+// tables it dispatches through. Both are non-zero on a build that really draws the type
+// -- a null in either is the evidence that this build does not dispatch it the way the
+// table dump says, and both callers refuse to splice rather than hand the dialog a
+// control it cannot draw.
+static inline void ScDlgDefaultHandlers(int ctrlType, DWORD* interact, DWORD* update) {
+    *interact = *(DWORD*)(ScRuntimeVa(SC_VA_DEFAULT_INTERACT_TABLE) + (DWORD)ctrlType * 4);
+    *update   = *(DWORD*)(ScRuntimeVa(SC_VA_DEFAULT_UPDATE_TABLE)   + (DWORD)ctrlType * 4);
+}
+
+// Unlink a control we spliced in. Every link is probed before it is followed: this runs
+// on the detach path, where the dialog may already be gone. A control that is not in the
+// chain is left alone, which is why there is no return value to check -- there is nothing
+// a caller could do differently.
+static inline void ScDlgRemoveChild(DWORD root, DWORD ctrl) {
+    DWORD* link = (DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD);
+    while (*link && *link != ctrl) {
+        if (!ScReadable(*link + SC_BINDLG_OFF_NEXT, 4)) return;
+        link = (DWORD*)(*link + SC_BINDLG_OFF_NEXT);
+    }
+    if (*link == ctrl) *link = ScDlgNext(ctrl);
+}
+
+// The engine's five ring slots as "0x000,0x0E4,..." for a log line. Truncates rather
+// than overruns; returns the characters written.
+static inline int ScUnitFormatQueue(DWORD unit, char* out, int outLen) {
+    int used = 0;
+    out[0] = '\0';
+    for (int s = 0; s < SC_BUILD_QUEUE_SLOTS && used + 8 < outLen; ++s) {
+        used += _snprintf(out + used, outLen - used, "%s0x%03X",
+                          s ? "," : "", (unsigned)ScUnitQueueSlot(unit, s));
+    }
+    return used;
+}
+
+// CreateNewUnitSelections (0x0049AE40): EAX = the CUnit* list, count PUSHED. The count is
+// a memory operand rather than a register because the callee reads it ESP-relative, and
+// an ESP-relative operand would be four bytes off if GCC had spilled it. sc_fanout wraps
+// this with a test seam; sc_console calls it directly.
+static inline void ScCreateSelections(DWORD* list, int count) {
+    void* fn = ScRuntimeAddr(SC_VA_CREATE_NEW_UNIT_SELECTIONS);
+    __asm__ __volatile__("pushl %[n]\n\t"
+                         "calll *%[fn]"
+                         : "+a"(list)
+                         : [n] "m"(count), [fn] "r"(fn)
+                         : "ecx", "edx", "cc", "memory");
+}
 
 static inline DWORD ScStatDialog(void)   { return *(DWORD*)ScRuntimeAddr(SC_VA_STATDATA_DIALOG); }
 static inline DWORD ScPortraitUnit(void) { return *(DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PORTRAIT_UNIT); }

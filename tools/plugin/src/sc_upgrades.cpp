@@ -14,6 +14,7 @@
 
 #include "sc_addresses.h"
 #include "sc_engine.h"
+#include "sc_env.h"
 #include "sc_hook.h"
 #include "sc_log.h"
 #include "sc_session.h"
@@ -64,18 +65,10 @@ static bool g_deepGc = false;
 static int  EngineStartItem(DWORD unit, int kind, unsigned id);
 static ScUpgStartFn g_start = &EngineStartItem;
 
-// ---------------------------------------------------------------------------
-// Unit validation -- the same shape as sc_prodqueue's, because the question is the same:
-// is this pointer still the building we wrote down?
-// ---------------------------------------------------------------------------
-
+// Is this pointer still the building we wrote down? Same question sc_prodqueue asks,
+// and now literally the same test -- see ScUnitRecordLive in sc_unit.h.
 static bool RecordStillLive(const UpgRecord* r, bool deep) {
-    if (!ScUnitPtrValid(r->unit)) return false;
-    if (ScUnitUniqueness(r->unit) != r->uniqueness) return false;
-    if (ScUnitPlayer(r->unit) != r->player) return false;
-    if (ScUnitHitPoints(r->unit) == 0) return false;
-    if (deep && !ScUnitInPlayerList(r->unit, r->player)) return false;
-    return true;
+    return ScUnitRecordLive(r->unit, r->uniqueness, r->player, deep);
 }
 
 // ---------------------------------------------------------------------------
@@ -1052,13 +1045,8 @@ bool ScUpgQueueEnabled(void) {
 }
 
 static int ResolveMax(void) {
-    char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_UPGQ_MAX", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return SC_UPGQ_DEFAULT_MAX;
-    int v = atoi(buf);
-    if (v < SC_UPGQ_ENGINE_SLOTS) v = SC_UPGQ_ENGINE_SLOTS;
-    if (v > SC_UPGQ_HARD_MAX) v = SC_UPGQ_HARD_MAX;
-    return v;
+    return ScEnvInt("SCPLUGIN_UPGQ_MAX", SC_UPGQ_DEFAULT_MAX,
+                    SC_UPGQ_ENGINE_SLOTS, SC_UPGQ_HARD_MAX);
 }
 
 static void EnsureLock(void) {

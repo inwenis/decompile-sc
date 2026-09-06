@@ -59,6 +59,17 @@ static inline DWORD ScRuntimeVa(DWORD staticVa) {
 // own threads, so a stale pointer has to fail closed here rather than fault
 // there. Addresses the plugin computed itself from a validated base do not need
 // it; the bounds check that validated the base is the guard.
+//
+// Two spellings of one question, because half the callers hold a VA and half hold
+// a pointer. There is no overload: `ScReadable(NULL, 4)` would be ambiguous, and
+// this probe is exactly where an ambiguity must not be resolved by luck.
 bool ScReadable(DWORD addr, DWORD len);
+bool ScReadableAt(const void* addr, size_t len);
+
+// The probe plus the copy: reads `len` bytes out only if the whole range passes.
+// A wrong static address produces a log line saying "unreadable" instead of a
+// crashed game, which is the entire reason the observer can walk engine lists at
+// all.
+bool ScSafeRead(const void* addr, void* out, size_t len);
 
 #endif // SC_ENGINE_H

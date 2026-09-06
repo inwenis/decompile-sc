@@ -14,6 +14,7 @@
 
 #include "sc_addresses.h"
 #include "sc_engine.h"
+#include "sc_env.h"
 #include "sc_fanout.h"
 #include "sc_hook.h"
 #include "sc_log.h"
@@ -80,9 +81,7 @@ static bool UnitMovable(DWORD unit) {
 
 bool ScProdFanEnabled(void) {
     if (g_inited) return g_enabled;
-    char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_PRODFAN", buf, sizeof(buf));
-    return (n > 0 && n < sizeof(buf) && buf[0] != '0');
+    return ScEnvFlag("SCPLUGIN_PRODFAN", false);
 }
 
 void ScProdFanInit(BYTE* moduleBase, bool enabled) {
@@ -169,14 +168,7 @@ int ScProdFanDecide(const WORD* types, int count, int simSlots, unsigned cmdLen)
 
 // Formats a building's five engine slots, read straight out of CUnit+0x98, in SLOT order
 // (not display order) so the raw memory is what a reader sees.
-static void FormatEngineQueue(DWORD unit, char* out, int outLen) {
-    int used = 0;
-    out[0] = '\0';
-    for (int s = 0; s < SC_BUILD_QUEUE_SLOTS && used + 8 < outLen; ++s) {
-        used += _snprintf(out + used, outLen - used, "%s0x%03X",
-                          s ? "," : "", (unsigned)ScUnitQueueSlot(unit, s));
-    }
-}
+
 
 void ScProdFanLogState(const char* tag) {
     if (!ScEngineModuleBase()) return;
@@ -208,7 +200,7 @@ void ScProdFanLogState(const char* tag) {
         WORD type = *(WORD*)(u + SC_CUNIT_OFF_UNIT_ID);
         int len = ScUnitQueueLength(u);
         char eng[96];
-        FormatEngineQueue(u, eng, (int)sizeof(eng));
+        ScUnitFormatQueue(u, eng, (int)sizeof(eng));
 
         if (!havePlayer && owner < SC_MAX_PLAYERS) { player = owner; havePlayer = true; }
         ++buildings;

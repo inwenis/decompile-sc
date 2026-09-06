@@ -348,27 +348,10 @@ static void FormatTechList(const BYTE* bits, char* out, size_t outLen) {
 // Plumbing
 // ---------------------------------------------------------------------------
 
-// The plugin's own reader. Declared here rather than shared from scplugin.cpp so
-// this translation unit links into hooktest without dragging the observer in.
+// The reader this module uses when nobody installed a test seam. It takes a VA
+// because ScCardReadFn does; sc_engine owns the probe behind it.
 static bool DefaultRead(DWORD addr, void* out, size_t n) {
-    const void* p = (const void*)(DWORD_PTR)addr;
-    MEMORY_BASIC_INFORMATION mbi;
-    if (VirtualQuery(p, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
-    if (mbi.State != MEM_COMMIT) return false;
-    if (mbi.Protect & PAGE_GUARD) return false;
-
-    const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
-                           PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
-                           PAGE_EXECUTE_WRITECOPY;
-    if ((mbi.Protect & readable) == 0) return false;
-
-    const BYTE* start  = (const BYTE*)p;
-    const BYTE* regEnd = (const BYTE*)mbi.BaseAddress + mbi.RegionSize;
-    if (start < (const BYTE*)mbi.BaseAddress) return false;
-    if (start + n > regEnd) return false;
-
-    memcpy(out, p, n);
-    return true;
+    return ScSafeRead((const void*)(DWORD_PTR)addr, out, n);
 }
 
 void ScCardInit(BYTE* moduleBase, bool enabled) {

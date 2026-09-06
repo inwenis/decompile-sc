@@ -34,6 +34,7 @@
 
 #include "sc_addresses.h"
 #include "sc_engine.h"
+#include "sc_env.h"
 #include "sc_hook.h"
 #include "sc_log.h"
 #include "sc_screen.h"
@@ -108,16 +109,7 @@ static unsigned  g_slivers       = 0;
 static void ReadName(DWORD dlg, char* out, size_t outLen) {
     out[0] = '\0';
     if (!ScReadable(dlg + SC_BINDLG_OFF_TEXT, 4)) return;
-    DWORD p = *(DWORD*)(dlg + SC_BINDLG_OFF_TEXT);
-    if (!p) return;
-    size_t i = 0;
-    for (; i + 1 < outLen; ++i) {
-        if (!ScReadable(p + (DWORD)i, 1)) break;
-        BYTE c = *(BYTE*)(p + i);
-        if (c == 0) break;
-        out[i] = (c < 32 || c > 126 || c == '|' || c == '\'') ? '.' : (char)c;
-    }
-    out[i] = '\0';
+    ScLogCopyText(*(DWORD*)(dlg + SC_BINDLG_OFF_TEXT), out, outLen);
 }
 
 // ---------------------------------------------------------------------------
@@ -340,18 +332,6 @@ static void AddPresentSliver(void) {
 // The marker-driven select aid (see the header for why it exists)
 // ---------------------------------------------------------------------------
 
-// The engine's client-side selection pair, in the click handler's own order.
-// Conventions from sc_addresses.h; the CreateNewUnitSelections asm seam is
-// sc_fanout's, verbatim.
-static void CallCreateSelections(DWORD* list, int count) {
-    void* fn = ScRuntimeAddr(SC_VA_CREATE_NEW_UNIT_SELECTIONS);
-    __asm__ __volatile__("pushl %[n]\n\t"
-                         "calll *%[fn]"
-                         : "+a"(list)
-                         : [n] "m"(count), [fn] "r"(fn)
-                         : "ecx", "edx", "cc", "memory");
-}
-
 typedef void (__attribute__((stdcall)) *ScCmdactSelectFn)(DWORD count, DWORD* units);
 
 void ScConsoleOnMarker(const char* label) {
@@ -381,7 +361,7 @@ static void DoRequestedSelect(void) {
         return;
     }
     DWORD list[2] = { unit, 0 };
-    CallCreateSelections(list, 1);
+    ScCreateSelections(list, 1);
     ((ScCmdactSelectFn)ScRuntimeAddr(SC_VA_CMDACT_SELECT))(1, list);
     // The client half: the funnel pair fills activePlayerSelection and the wire,
     // and the status driver's own updateSelectedUnitData (0x004C38B0) copies it
@@ -454,15 +434,8 @@ static const BYTE kPrologueCompose[] = { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x14 };
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-static bool EnvIsOne(const char* var) {
-    char buf[16];
-    DWORD n = GetEnvironmentVariableA(var, buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return false;
-    return buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y';
-}
-
-bool ScConsoleEdgeWanted(void)  { return EnvIsOne("SCPLUGIN_CONSOLE_EDGE"); }
-bool ScConsoleTraceWanted(void) { return EnvIsOne("SCPLUGIN_CONSOLE_TRACE"); }
+bool ScConsoleEdgeWanted(void)  { return ScEnvOptIn("SCPLUGIN_CONSOLE_EDGE"); }
+bool ScConsoleTraceWanted(void) { return ScEnvOptIn("SCPLUGIN_CONSOLE_TRACE"); }
 
 void ScConsoleInstall(BYTE* moduleBase, bool edge, bool trace) {
     ScEngineSetModuleBase(moduleBase);

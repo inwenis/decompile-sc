@@ -548,10 +548,8 @@ static bool EnsureSpliced(DWORD root) {
     // does not dispatch that type the way BWAPI's enum says, so refuse to splice rather than
     // hand the dialog a control it cannot draw. The row still pages; it just shows no
     // indicator.
-    DWORD tInteract = *(DWORD*)(ScRuntimeVa(SC_VA_DEFAULT_INTERACT_TABLE) +
-                                SC_CTRL_TYPE_LSTATIC * 4);
-    DWORD tUpdate   = *(DWORD*)(ScRuntimeVa(SC_VA_DEFAULT_UPDATE_TABLE) +
-                                SC_CTRL_TYPE_LSTATIC * 4);
+    DWORD tInteract = 0, tUpdate = 0;
+    ScDlgDefaultHandlers(SC_CTRL_TYPE_LSTATIC, &tInteract, &tUpdate);
     if (!tInteract || !tUpdate) {
         ScLog("HUDROW: no engine handler for control type %d (interact=0x%08X "
               "update=0x%08X) -- indicator suppressed", SC_CTRL_TYPE_LSTATIC,
@@ -559,31 +557,13 @@ static bool EnsureSpliced(DWORD root) {
         return false;
     }
     memset(g_indCtrl, 0, sizeof(g_indCtrl));
-    // NOT visible at splice time: the box is positioned and the band copied before anything
-    // is shown (see IndicatorFrame), and a control that arrives already visible would be
-    // painted by the very next redraw walk with an empty rect nobody has measured.
-    *(DWORD*)(ind + SC_BINDLG_OFF_FLAGS)    = SC_CTRL_FONT_SMALLEST;
-    *(short*)(ind + SC_BINDLG_OFF_INDEX)    = (short)0xFFE0;   // negative: binder-proof
-    *(WORD*) (ind + SC_BINDLG_OFF_TYPE)     = (WORD)SC_CTRL_TYPE_LSTATIC;
-    *(DWORD*)(ind + SC_BINDLG_OFF_TEXT)     = (DWORD)g_indText;
-    *(DWORD*)(ind + SC_BINDLG_OFF_PARENT)   = root;
-    *(DWORD*)(ind + SC_BINDLG_OFF_INTERACT) = tInteract;
-    *(DWORD*)(ind + SC_BINDLG_OFF_UPDATE)   = tUpdate;
-    *(DWORD*)(ind + SC_BINDLG_OFF_NEXT)     = 0;
-    // Append. Bounded like every other walk here: a torn `next` costs one refused splice
-    // rather than a spin on the game thread.
-    DWORD tail = ScDlgChild(root);
-    if (!tail) {
-        *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD) = ind;
-    } else {
-        int guard = 0;
-        while (ScDlgNext(tail) && guard < SC_MAX_CTRLS_WALK) { tail = ScDlgNext(tail); ++guard; }
-        if (ScDlgNext(tail)) {
-            ScLog("HUDROW: child list longer than %d -- indicator splice refused",
-                  SC_MAX_CTRLS_WALK);
-            return false;
-        }
-        *(DWORD*)(tail + SC_BINDLG_OFF_NEXT) = ind;
+    // The box is positioned and the band copied before anything is shown (see
+    // IndicatorFrame), which is why ScDlgMakeStaticText leaves it not-visible.
+    ScDlgMakeStaticText(ind, root, (short)0xFFE0, g_indText, tInteract, tUpdate);
+    if (!ScDlgAppendChild(root, ind)) {
+        ScLog("HUDROW: child list longer than %d -- indicator splice refused",
+              SC_MAX_CTRLS_WALK);
+        return false;
     }
     g_indSpliced = true;
     ++g_statSplices;
@@ -1259,13 +1239,7 @@ void ScHudRowRemove(void) {
     }
     if (g_indSpliced && g_dialog &&
         ScReadable(g_dialog + SC_BINDLG_OFF_FIRST_CHILD, 4)) {
-        DWORD ind = (DWORD)&g_indCtrl[0];
-        DWORD* link = (DWORD*)(g_dialog + SC_BINDLG_OFF_FIRST_CHILD);
-        while (*link && *link != ind) {
-            if (!ScReadable(*link + SC_BINDLG_OFF_NEXT, 4)) { link = NULL; break; }
-            link = (DWORD*)(*link + SC_BINDLG_OFF_NEXT);
-        }
-        if (link && *link == ind) *link = ScDlgNext(ind);
+        ScDlgRemoveChild(g_dialog, (DWORD)&g_indCtrl[0]);
         g_indSpliced = false;
     }
 }

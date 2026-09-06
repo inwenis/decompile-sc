@@ -13,6 +13,7 @@
 
 #include "sc_addresses.h"
 #include "sc_engine.h"
+#include "sc_env.h"
 #include "sc_hook.h"
 #include "sc_log.h"
 #include "sc_prodqueue.h"
@@ -60,19 +61,10 @@ static bool g_deepGc = false;
 // synced yet, which is distinguishable from every real epoch because those start at 1.
 static unsigned g_session = 0;
 
-// ---------------------------------------------------------------------------
-// Unit validation -- the same shape as sc_fanout's ScUnitPtrValid/PassesGate, because the
-// question is the same one: is this pointer still the building we wrote down?
-// ---------------------------------------------------------------------------
-
-// `deep` adds the list walk. Without it this is four loads.
+// Is this pointer still the building we wrote down? The four terms and the cost of
+// `deep` are documented once, on ScUnitRecordLive in sc_unit.h.
 static bool RecordStillLive(const ProdRecord* r, bool deep) {
-    if (!ScUnitPtrValid(r->unit)) return false;
-    if (ScUnitUniqueness(r->unit) != r->uniqueness) return false;
-    if (ScUnitPlayer(r->unit) != r->player) return false;
-    if (ScUnitHitPoints(r->unit) == 0) return false;
-    if (deep && !ScUnitInPlayerList(r->unit, r->player)) return false;
-    return true;
+    return ScUnitRecordLive(r->unit, r->uniqueness, r->player, deep);
 }
 
 // ---------------------------------------------------------------------------
@@ -451,13 +443,10 @@ bool ScProdQueueOnCancel(DWORD unit, unsigned payload) {
 // ---------------------------------------------------------------------------
 
 // Formats a building's five engine slots, read straight out of CUnit+0x98.
+// Formats the ring AND answers how much of it is occupied, which is what every
+// caller here wants in the same breath.
 static int FormatEngineQueue(DWORD unit, char* out, int outLen) {
-    int used = 0;
-    out[0] = '\0';
-    for (int s = 0; s < SC_BUILD_QUEUE_SLOTS && used + 8 < outLen; ++s) {
-        used += _snprintf(out + used, outLen - used, "%s0x%03X",
-                          s ? "," : "", (unsigned)ScUnitQueueSlot(unit, s));
-    }
+    ScUnitFormatQueue(unit, out, outLen);
     return ScUnitQueueLength(unit);
 }
 
@@ -777,13 +766,8 @@ bool ScProdQueueEnabled(void) {
 }
 
 static int ResolveMax(void) {
-    char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_PRODQ_MAX", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return SC_PRODQ_DEFAULT_MAX;
-    int v = atoi(buf);
-    if (v < SC_BUILD_QUEUE_SLOTS) v = SC_BUILD_QUEUE_SLOTS;
-    if (v > SC_PRODQ_HARD_MAX) v = SC_PRODQ_HARD_MAX;
-    return v;
+    return ScEnvInt("SCPLUGIN_PRODQ_MAX", SC_PRODQ_DEFAULT_MAX,
+                    SC_BUILD_QUEUE_SLOTS, SC_PRODQ_HARD_MAX);
 }
 
 static void EnsureLock(void) {

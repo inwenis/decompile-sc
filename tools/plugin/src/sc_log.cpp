@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "sc_engine.h"
 #include "sc_log.h"
 
 // How long the process-exit path waits for the log lock before writing without it.
@@ -159,4 +160,18 @@ void ScThreadCheck(const char* site, DWORD* seen) {
     ScLog("THREADCHECK %s tid=%u%s", site, (unsigned)tid,
           *seen ? " CHANGED -- the single-thread claim this fix rests on is broken" : "");
     *seen = tid;
+}
+
+void ScLogCopyText(DWORD addr, char* out, size_t outLen) {
+    if (!out || outLen < 2) { if (out && outLen) out[0] = '\0'; return; }
+    out[0] = '\0';
+    if (!addr) return;
+    size_t i = 0;
+    for (; i + 1 < outLen; ++i) {
+        BYTE c = 0;
+        if (!ScSafeRead((const void*)(DWORD_PTR)(addr + i), &c, 1)) break;
+        if (c == 0) break;
+        out[i] = (c < 32 || c > 126 || c == '|' || c == '\'') ? '.' : (char)c;
+    }
+    out[i] = '\0';
 }

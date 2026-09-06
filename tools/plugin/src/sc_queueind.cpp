@@ -19,6 +19,7 @@
 
 #include "sc_addresses.h"
 #include "sc_engine.h"
+#include "sc_env.h"
 #include "sc_hook.h"
 #include "sc_hudrow.h"
 #include "sc_log.h"
@@ -471,10 +472,8 @@ static bool EnsureSpliced(DWORD root) {
     // interact AND update handler for this control type in its own default tables. If
     // either is null, this build does not dispatch the type the way the table dump says,
     // so refuse to splice rather than hand the dialog a control it cannot draw.
-    DWORD tInteract = *(DWORD*)(ScRuntimeVa(SC_VA_DEFAULT_INTERACT_TABLE) +
-                                SC_CTRL_TYPE_LSTATIC * 4);
-    DWORD tUpdate   = *(DWORD*)(ScRuntimeVa(SC_VA_DEFAULT_UPDATE_TABLE) +
-                                SC_CTRL_TYPE_LSTATIC * 4);
+    DWORD tInteract = 0, tUpdate = 0;
+    ScDlgDefaultHandlers(SC_CTRL_TYPE_LSTATIC, &tInteract, &tUpdate);
     if (!tInteract || !tUpdate) {
         ScLog("QIND: no engine handler for control type %d (interact=0x%08X update=0x%08X)"
               " -- indicator suppressed", SC_CTRL_TYPE_LSTATIC,
@@ -484,28 +483,11 @@ static bool EnsureSpliced(DWORD root) {
     }
 
     memset(g_ctrl, 0, sizeof(g_ctrl));
-    *(DWORD*)(ind + SC_BINDLG_OFF_FLAGS)    = SC_CTRL_FONT_SMALLEST;
-    *(short*)(ind + SC_BINDLG_OFF_INDEX)    = SC_QIND_CTRL_ID;
-    *(WORD*) (ind + SC_BINDLG_OFF_TYPE)     = (WORD)SC_CTRL_TYPE_LSTATIC;
-    *(DWORD*)(ind + SC_BINDLG_OFF_TEXT)     = (DWORD)g_text;
-    *(DWORD*)(ind + SC_BINDLG_OFF_PARENT)   = root;
-    *(DWORD*)(ind + SC_BINDLG_OFF_INTERACT) = tInteract;
-    *(DWORD*)(ind + SC_BINDLG_OFF_UPDATE)   = tUpdate;
-    *(DWORD*)(ind + SC_BINDLG_OFF_NEXT)     = 0;
-    // Append. The walk is bounded like every other walk in this file: a torn `next` ends
-    // it, and an unterminated list costs one refused splice rather than a spin.
-    DWORD tail = ScDlgChild(root);
-    if (!tail) {
-        *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD) = ind;
-    } else {
-        int guard = 0;
-        while (ScDlgNext(tail) && guard < SC_MAX_CTRLS_WALK) { tail = ScDlgNext(tail); ++guard; }
-        if (ScDlgNext(tail)) {
-            ScLog("QIND: child list longer than %d -- splice refused", SC_MAX_CTRLS_WALK);
-            ++g_stat[SC_QIND_STAT_REFUSED];
-            return false;
-        }
-        *(DWORD*)(tail + SC_BINDLG_OFF_NEXT) = ind;
+    ScDlgMakeStaticText(ind, root, SC_QIND_CTRL_ID, g_text, tInteract, tUpdate);
+    if (!ScDlgAppendChild(root, ind)) {
+        ScLog("QIND: child list longer than %d -- splice refused", SC_MAX_CTRLS_WALK);
+        ++g_stat[SC_QIND_STAT_REFUSED];
+        return false;
     }
     g_spliced = true;
     ++g_stat[SC_QIND_STAT_SPLICES];
@@ -1558,10 +1540,7 @@ static const BYTE kPrologueLayout[] = { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x20 };
 // ---------------------------------------------------------------------------
 
 bool ScQueueIndEnabled(void) {
-    char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_QUEUEIND", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return false;
-    return buf[0] != '0';
+    return ScEnvFlag("SCPLUGIN_QUEUEIND", false);
 }
 
 void ScQueueIndInit(BYTE* moduleBase, bool enabled) {
@@ -1586,11 +1565,7 @@ void ScQueueIndInit(BYTE* moduleBase, bool enabled) {
     g_phantomUnit = 0;
     g_ringGen = 0;
     g_clickTraceLines = 0;
-    {
-        char buf[16];
-        DWORD n = GetEnvironmentVariableA("SCPLUGIN_QIND_CLICKTRACE", buf, sizeof(buf));
-        g_clickTrace = (n > 0 && n < sizeof(buf) && buf[0] != '0');
-    }
+    g_clickTrace = ScEnvFlag("SCPLUGIN_QIND_CLICKTRACE", false);
     if (g_clickTrace) {
         ScLog("QINDCLICK: click trace ON (%%SCPLUGIN_QIND_CLICKTRACE%%) -- every non-MOUSEMOVE "
               "event the engine hands a queue icon is logged, up to %d lines, and passed "
@@ -1641,13 +1616,7 @@ void ScQueueIndRemove(void) {
     // the dialog may already be gone. Mid-game unload stays unsupported (the game thread
     // may be inside the detour), same policy as sc_circles and sc_hudrow.
     if (g_spliced && g_dialog && ScReadable(g_dialog + SC_BINDLG_OFF_FIRST_CHILD, 4)) {
-        DWORD ind = (DWORD)&g_ctrl[0];
-        DWORD* link = (DWORD*)(g_dialog + SC_BINDLG_OFF_FIRST_CHILD);
-        while (*link && *link != ind) {
-            if (!ScReadable(*link + SC_BINDLG_OFF_NEXT, 4)) { link = NULL; break; }
-            link = (DWORD*)(*link + SC_BINDLG_OFF_NEXT);
-        }
-        if (link && *link == ind) *link = ScDlgNext(ind);
+        ScDlgRemoveChild(g_dialog, (DWORD)&g_ctrl[0]);
     }
     g_spliced = false;
     g_shown   = false;

@@ -84,14 +84,8 @@ static void* StormRt(DWORD rva) {
     return (void*)(g_stormBase + rva);
 }
 
-// storm's globals are addressed as pointers here, not as VAs; sc_engine's probe
-// takes the VA form, so this is the one-line adapter rather than a second copy.
-static bool Readable(const void* addr, DWORD len) {
-    return ScReadable((DWORD)(DWORD_PTR)addr, len);
-}
-
 static DWORD StormReadU32(const void* addr, bool* ok) {
-    if (!Readable(addr, 4)) { if (ok) *ok = false; return 0; }
+    if (!ScReadableAt(addr, 4)) { if (ok) *ok = false; return 0; }
     if (ok) *ok = true;
     return *(const DWORD*)addr;
 }
@@ -153,7 +147,7 @@ static void LogRegionRects(const char* what, DWORD regionVaOfPtr) {
 static void LogRegionStruct(const char* t, const char* what, DWORD regionVaOfPtr) {
     bool ok = false;
     DWORD r = StormReadU32(ScRuntimeAddr(regionVaOfPtr), &ok);
-    if (!ok || !r || !Readable((void*)(DWORD_PTR)r, 0x30)) {
+    if (!ok || !r || !ScReadableAt((void*)(DWORD_PTR)r, 0x30)) {
         ScLog("STORM [%s] region-struct %s: handle %s", t, what,
               (!ok || !r) ? "NULL/unreadable ptr" : "handle unreadable");
         return;
@@ -215,9 +209,9 @@ void ScStormPresentLog(const char* tag) {
     // were written (cap is the copy); a 640 primary would mean the surface itself is
     // narrow. Read-only COM call, pointer-guarded.
     bool okS0; DWORD prim0 = StormReadU32(StormRt(STORM_RVA_SURFTABLE), &okS0);
-    if (okS0 && prim0 && Readable((void*)(DWORD_PTR)prim0, 4)) {
+    if (okS0 && prim0 && ScReadableAt((void*)(DWORD_PTR)prim0, 4)) {
         DWORD vtbl = *(DWORD*)(DWORD_PTR)prim0;
-        if (Readable((void*)(DWORD_PTR)(vtbl + DDS_VTBL_GETSURFACEDESC), 4)) {
+        if (ScReadableAt((void*)(DWORD_PTR)(vtbl + DDS_VTBL_GETSURFACEDESC), 4)) {
             DWORD fn = *(DWORD*)(DWORD_PTR)(vtbl + DDS_VTBL_GETSURFACEDESC);
             BYTE ddsd[0x6C];
             memset(ddsd, 0, sizeof(ddsd));

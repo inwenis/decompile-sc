@@ -44,6 +44,7 @@ suite break, not a cleanup.
 | `scplugin.cpp` | `DllMain`, the read-only observer, attach/detach | — | `ATTACH` `DETACH` `OBSERVER` `SEL` `SELSNAP` `WORLD` `SCREEN` `DIALOGS` `HEARTBEAT` `ERROR` | `SCPLUGIN_MODE`, `SCPLUGIN_LOG`, `SCPLUGIN_POLL_MS`, `SCPLUGIN_MARKER`, `SCPLUGIN_WORLDSCAN`, `SCPLUGIN_SCREENSCAN`, `SCPLUGIN_DIALOGS`, `SCPLUGIN_FRAMEDUMP` |
 | `sc_engine.h/.cpp` | **the relocation layer**: static VA → this process, and the readable-memory probe | `ScRuntime*`, `ScEngine*`, `ScReadable` | — | — |
 | `sc_unit.h` | **the shared reads**: CUnit fields, the player unit list, the build queue, the dialog tree | `ScUnit*`, `ScDlg*`, `ScCtrl*`, `ScPlayer*` | — | — |
+| `sc_env.h` | **the config reads**: every `%SCPLUGIN_*%` opt-in, flag and clamped int | `ScEnv*` | — | *(all of them)* |
 | `sc_log.cpp` | the log file itself | `ScLog` | *(every line)* | `SCPLUGIN_LOG` |
 | `sc_hook.cpp` | the inline x86 detour engine | `ScHook*` | `HOOK` | — |
 | `sc_buildid.cpp` | the build stamp embedded in the DLL | `ScBuildId*` | *(in* `ATTACH`*)* | — |

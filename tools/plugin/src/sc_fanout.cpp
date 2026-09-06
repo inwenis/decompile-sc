@@ -41,6 +41,7 @@
 #include "sc_addresses.h"
 #include "sc_circles.h"
 #include "sc_engine.h"
+#include "sc_env.h"
 #include "sc_fanout.h"
 #include "sc_hook.h"
 #include "sc_hudrow.h"
@@ -1105,13 +1106,7 @@ typedef void (*ScCreateSelectionFn)(DWORD* list, int count);
 static ScCreateSelectionFn g_createSelFn = NULL;
 
 static void CallCreateNewUnitSelections(DWORD* list, int count) {
-    if (g_createSelFn) { g_createSelFn(list, count); return; }
-    void* fn = ScRuntimeAddr(SC_VA_CREATE_NEW_UNIT_SELECTIONS);
-    __asm__ __volatile__("pushl %[n]\n\t"
-                         "calll *%[fn]"
-                         : "+a"(list)
-                         : [n] "m"(count), [fn] "r"(fn)
-                         : "ecx", "edx", "cc", "memory");
+    if (g_createSelFn) g_createSelFn(list, count); else ScCreateSelections(list, count);
 }
 
 // Ctrl+N / shift-add. `add` false = the engine's ASSIGN (replace), true = its ADD.
@@ -2003,16 +1998,6 @@ ScMode ScFanoutResolveMode(void) {
     return SC_MODE_OBSERVE;
 }
 
-static int EnvInt(const char* name, int def, int lo, int hi) {
-    char buf[32];
-    DWORD n = GetEnvironmentVariableA(name, buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return def;
-    int v = atoi(buf);
-    if (v < lo) v = lo;
-    if (v > hi) v = hi;
-    return v;
-}
-
 int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     g_mode = mode;
     ScEngineSetModuleBase(moduleBase);
@@ -2021,19 +2006,19 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     if (!g_lockInit) { InitializeCriticalSection(&g_lock); g_lockInit = true; }
 
     g_session = ScSessionEpoch();
-    g_budget      = EnvInt("SCPLUGIN_FANOUT_BUDGET", SC_DEFAULT_BUDGET, 40, 480);
-    g_maxUnits    = EnvInt("SCPLUGIN_MAX_UNITS", SC_SHADOW_MAX - 1, 12, SC_SHADOW_MAX - 1);
-    g_verboseCmds = EnvInt("SCPLUGIN_LOG_COMMANDS", 1, 0, 1) != 0;
+    g_budget      = ScEnvInt("SCPLUGIN_FANOUT_BUDGET", SC_DEFAULT_BUDGET, 40, 480);
+    g_maxUnits    = ScEnvInt("SCPLUGIN_MAX_UNITS", SC_SHADOW_MAX - 1, 12, SC_SHADOW_MAX - 1);
+    g_verboseCmds = ScEnvInt("SCPLUGIN_LOG_COMMANDS", 1, 0, 1) != 0;
     // Task 020's liveness gate, ON by default. Setting it to 0 restores the
     // uniqueness-only test the fan-out shipped with, which is a KNOWN-BAD
     // configuration -- it exists so an A/B run can show the defect and so the
     // in-game regression assertion can be shown to be capable of failing.
-    g_liveness    = EnvInt("SCPLUGIN_FANOUT_LIVENESS", 1, 0, 1) != 0;
+    g_liveness    = ScEnvInt("SCPLUGIN_FANOUT_LIVENESS", 1, 0, 1) != 0;
     // Task 024's same-type building groups. Its own off switch on top of the mode, so
     // a run can prove the STOCK one-building behaviour with the same binary -- an
     // "it selected four" assertion is only worth something next to an arm where the
     // same box selects one.
-    g_buildingGroups = EnvInt("SCPLUGIN_BUILDING_GROUPS", 1, 0, 1) != 0;
+    g_buildingGroups = ScEnvInt("SCPLUGIN_BUILDING_GROUPS", 1, 0, 1) != 0;
     g_movableFn      = NULL;    // in the game, ask the engine
     g_simSlots       = SC_SELECTION_SLOTS;
     LoadFanoutCmds();
@@ -2042,14 +2027,14 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     // "capture and log, change nothing", and drawing a circle is a change. %SCPLUGIN_CIRCLES%
     // is its own off switch on top of the mode, so a fan-out run can be compared with and
     // without the visuals without rebuilding anything.
-    const bool circles = (mode == SC_MODE_FANOUT) && EnvInt("SCPLUGIN_CIRCLES", 1, 0, 1) != 0;
+    const bool circles = (mode == SC_MODE_FANOUT) && ScEnvInt("SCPLUGIN_CIRCLES", 1, 0, 1) != 0;
     ScCirclesInit(moduleBase, circles);
 
     // Task 017's HUD-row paging. Same shape as the circles: fanout mode only
     // (shadow mode's contract is "capture and log, change nothing"), with
     // %SCPLUGIN_HUDROW% as its own off switch so the row can be compared stock
     // and paged without rebuilding anything.
-    const bool hudrow = (mode == SC_MODE_FANOUT) && EnvInt("SCPLUGIN_HUDROW", 1, 0, 1) != 0;
+    const bool hudrow = (mode == SC_MODE_FANOUT) && ScEnvInt("SCPLUGIN_HUDROW", 1, 0, 1) != 0;
     ScHudRowInit(moduleBase, hudrow);
 
     // Task 033's queue-overflow indicator, with %SCPLUGIN_QUEUEIND% as its own off switch.
