@@ -5,16 +5,12 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "sc_engine.h"
 #include "sc_log.h"
 #include "sc_queueind.h"   // ScQueueIndRingGen -- the phantom window's seqlock (task 066)
 
-static BYTE*        g_base    = NULL;
 static bool         g_enabled = false;
 static ScCardReadFn g_read    = NULL;
-
-static DWORD Rt(DWORD staticVa) {
-    return (DWORD)(DWORD_PTR)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE));
-}
 
 static bool Rd(DWORD addr, void* out, size_t n) {
     if (!g_read || !addr) return false;
@@ -44,15 +40,15 @@ int ScCardSnapshot(ScCardHeader* hdr, ScCardSlot* out, int max) {
     if (!hdr) return 0;
     memset(hdr, 0, sizeof(*hdr));
 
-    if (!RdU32(Rt(SC_VA_CARD_DIALOG), &hdr->dialog) || hdr->dialog == 0) return 0;
+    if (!RdU32(ScRuntimeVa(SC_VA_CARD_DIALOG), &hdr->dialog) || hdr->dialog == 0) return 0;
     hdr->ok = true;
 
-    RdU16(Rt(SC_VA_CARD_ID), &hdr->cardId);
-    RdU16(Rt(SC_VA_CARD_OVERRIDE_SEL), &hdr->overrideSel);
-    RdU16(Rt(SC_VA_CARD_OVERRIDE_SUB), &hdr->overrideSub);
-    RdU32(Rt(SC_VA_CARD_REFUSE_REASON), &hdr->refuseReason);
+    RdU16(ScRuntimeVa(SC_VA_CARD_ID), &hdr->cardId);
+    RdU16(ScRuntimeVa(SC_VA_CARD_OVERRIDE_SEL), &hdr->overrideSel);
+    RdU16(ScRuntimeVa(SC_VA_CARD_OVERRIDE_SUB), &hdr->overrideSub);
+    RdU32(ScRuntimeVa(SC_VA_CARD_REFUSE_REASON), &hdr->refuseReason);
 
-    if (RdU32(Rt(SC_VA_ACTIVE_PORTRAIT_UNIT), &hdr->portrait) && hdr->portrait) {
+    if (RdU32(ScRuntimeVa(SC_VA_ACTIVE_PORTRAIT_UNIT), &hdr->portrait) && hdr->portrait) {
         RdU16(hdr->portrait + SC_CUNIT_OFF_UNIT_ID, &hdr->portraitType);
         RdU16(hdr->portrait + SC_CUNIT_OFF_BUTTONSET, &hdr->portraitSet);
         RdU16(hdr->portrait + SC_CUNIT_OFF_ENERGY, &hdr->portraitEnergy);
@@ -62,7 +58,7 @@ int ScCardSnapshot(ScCardHeader* hdr, ScCardSlot* out, int max) {
     // The buttonset the card id resolves to, straight out of the table. Bounded by
     // the table's own length, which is read off the binary (sc_addresses.h).
     if (hdr->cardId < SC_BUTTONSET_COUNT) {
-        DWORD e = Rt(SC_VA_BUTTONSET_TABLE) + (DWORD)hdr->cardId * SC_BUTTONSET_STRIDE;
+        DWORD e = ScRuntimeVa(SC_VA_BUTTONSET_TABLE) + (DWORD)hdr->cardId * SC_BUTTONSET_STRIDE;
         RdU16(e + SC_BUTTONSET_OFF_N, &hdr->setCount);
         RdU32(e + SC_BUTTONSET_OFF_PTR, &hdr->setButtons);
     }
@@ -106,14 +102,14 @@ int ScCardSnapshot(ScCardHeader* hdr, ScCardSlot* out, int max) {
                 // All eight fields or none: a partially read Button is worse than an
                 // absent one, because it reads as a named ability with a wrong id.
                 s->buttonOk =
-                    RdU16(s->button + SC_BUTTON_OFF_SLOT,       &s->bSlot) &&
-                    RdU16(s->button + SC_BUTTON_OFF_ICON,       &s->bIcon) &&
-                    RdU32(s->button + SC_BUTTON_OFF_COND,       &s->bCond) &&
-                    RdU32(s->button + SC_BUTTON_OFF_ACTION,     &s->bAction) &&
-                    RdU16(s->button + SC_BUTTON_OFF_COND_PARAM, &s->bCondParam) &&
-                    RdU16(s->button + SC_BUTTON_OFF_ACT_PARAM,  &s->bActParam) &&
-                    RdU16(s->button + SC_BUTTON_OFF_NAME_STR,   &s->bNameStr) &&
-                    RdU16(s->button + SC_BUTTON_OFF_DIS_STR,    &s->bDisStr);
+                    RdU16(s->button + SC_BUTTON_OFF_SLOT,       &s->btnSlot) &&
+                    RdU16(s->button + SC_BUTTON_OFF_ICON,       &s->btnIcon) &&
+                    RdU32(s->button + SC_BUTTON_OFF_COND,       &s->btnCond) &&
+                    RdU32(s->button + SC_BUTTON_OFF_ACTION,     &s->btnAction) &&
+                    RdU16(s->button + SC_BUTTON_OFF_COND_PARAM, &s->btnCondParam) &&
+                    RdU16(s->button + SC_BUTTON_OFF_ACT_PARAM,  &s->btnActParam) &&
+                    RdU16(s->button + SC_BUTTON_OFF_NAME_STR,   &s->btnNameStr) &&
+                    RdU16(s->button + SC_BUTTON_OFF_DIS_STR,    &s->btnDisStr);
             }
 
             if (s->visible) {
@@ -150,7 +146,7 @@ int ScStatusSnapshot(ScStatusHeader* hdr, ScStatusSlot* out, int max) {
     if (!hdr) return 0;
     memset(hdr, 0, sizeof(*hdr));
 
-    if (!RdU32(Rt(SC_VA_STATDATA_DIALOG), &hdr->dialog) || hdr->dialog == 0) return 0;
+    if (!RdU32(ScRuntimeVa(SC_VA_STATDATA_DIALOG), &hdr->dialog) || hdr->dialog == 0) return 0;
     hdr->ok = true;
 
     hdr->root = hdr->dialog;
@@ -164,7 +160,7 @@ int ScStatusSnapshot(ScStatusHeader* hdr, ScStatusSlot* out, int max) {
     // The queue the strip is DRAWING is the portrait unit's, not the selection's --
     // 0x004268D0 reads DAT_00597248 for every one of its five slots. Reading the same
     // global is what makes "icon k shows type t" checkable against the building's ring.
-    if (RdU32(Rt(SC_VA_ACTIVE_PORTRAIT_UNIT), &hdr->portrait) && hdr->portrait) {
+    if (RdU32(ScRuntimeVa(SC_VA_ACTIVE_PORTRAIT_UNIT), &hdr->portrait) && hdr->portrait) {
         RdU16(hdr->portrait + SC_CUNIT_OFF_UNIT_ID, &hdr->portraitType);
         RdU8(hdr->portrait + SC_CUNIT_OFF_PLAYER, &hdr->portraitOwner);
         // COHERENT against the phantom bracket (task 066, sc_queueind.h): this walk runs
@@ -225,9 +221,9 @@ int ScStatusSnapshot(ScStatusHeader* hdr, ScStatusSlot* out, int max) {
         if (s->user) {
             // All three fields or none, same rule as the card's Button record: a
             // half-read statUser reads as an icon drawing a wrong unit type.
-            s->userOk = RdU16(s->user + SC_STATUSER_OFF_ICON, &s->uIcon) &&
-                        RdU16(s->user + SC_STATUSER_OFF_MODE, &s->uMode) &&
-                        RdU16(s->user + SC_STATUSER_OFF_TYPE, &s->uType);
+            s->userOk = RdU16(s->user + SC_STATUSER_OFF_ICON, &s->userIcon) &&
+                        RdU16(s->user + SC_STATUSER_OFF_MODE, &s->userMode) &&
+                        RdU16(s->user + SC_STATUSER_OFF_TYPE, &s->userType);
         }
 
         // The building's own slot for this display index -- the engine's arithmetic,
@@ -290,9 +286,9 @@ void ScStatusScan(const char* tag) {
               t, s->display, state, s->index, (unsigned)s->control, (unsigned)s->flags,
               (unsigned)s->graphic, s->rect[0], s->rect[1], s->rect[2], s->rect[3],
               (unsigned)s->user,
-              s->userOk ? (unsigned)s->uIcon : 0xFFFFu,
-              s->userOk ? (unsigned)s->uMode : 0xFFFFu,
-              s->userOk ? (unsigned)s->uType : 0xFFFu,
+              s->userOk ? (unsigned)s->userIcon : 0xFFFFu,
+              s->userOk ? (unsigned)s->userMode : 0xFFFFu,
+              s->userOk ? (unsigned)s->userType : 0xFFFu,
               (unsigned)s->queueType);
     }
 
@@ -317,14 +313,14 @@ bool ScCardReadTechState(int player, ScCardTechState* out) {
     bool ok = true;
     for (int t = 0; t < SC_TECH_COUNT_VANILLA; ++t) {
         DWORD off = (DWORD)player * SC_TECH_STRIDE_VANILLA + (DWORD)t;
-        ok = RdU8(Rt(SC_VA_TECH_AVAILABLE)  + off, &out->available[t])  && ok;
-        ok = RdU8(Rt(SC_VA_TECH_RESEARCHED) + off, &out->researched[t]) && ok;
+        ok = RdU8(ScRuntimeVa(SC_VA_TECH_AVAILABLE)  + off, &out->available[t])  && ok;
+        ok = RdU8(ScRuntimeVa(SC_VA_TECH_RESEARCHED) + off, &out->researched[t]) && ok;
     }
     for (int t = 0; t < SC_TECH_COUNT_BW; ++t) {
         DWORD off = (DWORD)player * SC_TECH_STRIDE_BW + (DWORD)t;
-        ok = RdU8(Rt(SC_VA_TECH_AVAILABLE_BW)  + off,
+        ok = RdU8(ScRuntimeVa(SC_VA_TECH_AVAILABLE_BW)  + off,
                   &out->available[SC_TECH_COUNT_VANILLA + t])  && ok;
-        ok = RdU8(Rt(SC_VA_TECH_RESEARCHED_BW) + off,
+        ok = RdU8(ScRuntimeVa(SC_VA_TECH_RESEARCHED_BW) + off,
                   &out->researched[SC_TECH_COUNT_VANILLA + t]) && ok;
     }
     out->ok = ok;
@@ -352,31 +348,14 @@ static void FormatTechList(const BYTE* bits, char* out, size_t outLen) {
 // Plumbing
 // ---------------------------------------------------------------------------
 
-// The plugin's own reader. Declared here rather than shared from scplugin.cpp so
-// this translation unit links into hooktest without dragging the observer in.
+// The reader this module uses when nobody installed a test seam. It takes a VA
+// because ScCardReadFn does; sc_engine owns the probe behind it.
 static bool DefaultRead(DWORD addr, void* out, size_t n) {
-    const void* p = (const void*)(DWORD_PTR)addr;
-    MEMORY_BASIC_INFORMATION mbi;
-    if (VirtualQuery(p, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
-    if (mbi.State != MEM_COMMIT) return false;
-    if (mbi.Protect & PAGE_GUARD) return false;
-
-    const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
-                           PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
-                           PAGE_EXECUTE_WRITECOPY;
-    if ((mbi.Protect & readable) == 0) return false;
-
-    const BYTE* start  = (const BYTE*)p;
-    const BYTE* regEnd = (const BYTE*)mbi.BaseAddress + mbi.RegionSize;
-    if (start < (const BYTE*)mbi.BaseAddress) return false;
-    if (start + n > regEnd) return false;
-
-    memcpy(out, p, n);
-    return true;
+    return ScSafeRead((const void*)(DWORD_PTR)addr, out, n);
 }
 
 void ScCardInit(BYTE* moduleBase, bool enabled) {
-    g_base    = moduleBase;
+    ScEngineSetModuleBase(moduleBase);
     g_enabled = enabled;
     g_read    = DefaultRead;
 }
@@ -384,13 +363,12 @@ void ScCardInit(BYTE* moduleBase, bool enabled) {
 bool ScCardEnabled(void) { return g_enabled; }
 
 void ScCardTestBegin(BYTE* fakeModuleBase, ScCardReadFn reader) {
-    g_base    = fakeModuleBase;
+    ScEngineSetModuleBase(fakeModuleBase);
     g_read    = reader;
     g_enabled = true;
 }
 
 void ScCardTestEnd(void) {
-    g_base    = NULL;
     g_read    = NULL;
     g_enabled = false;
 }
@@ -430,10 +408,10 @@ void ScCardScan(const char* tag) {
                   t, s->index, state, (unsigned)s->control, (unsigned)s->flags,
                   (unsigned)s->graphic,
                   s->rect[0], s->rect[1], s->rect[2], s->rect[3],
-                  (unsigned)s->button, (unsigned)s->bSlot,
-                  (unsigned)s->bIcon, (unsigned)s->bCond, (unsigned)s->bAction,
-                  (unsigned)s->bCondParam, (unsigned)s->bActParam,
-                  (unsigned)s->bNameStr, (unsigned)s->bDisStr);
+                  (unsigned)s->button, (unsigned)s->btnSlot,
+                  (unsigned)s->btnIcon, (unsigned)s->btnCond, (unsigned)s->btnAction,
+                  (unsigned)s->btnCondParam, (unsigned)s->btnActParam,
+                  (unsigned)s->btnNameStr, (unsigned)s->btnDisStr);
         } else {
             ScLog("CARD [%s] slot=%d %-7s ctrl=0x%08X flags=0x%08X icon=0x%04X "
                   "rect=(%d,%d,%d,%d) button=0x%08X (no button record)",

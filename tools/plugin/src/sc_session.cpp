@@ -4,11 +4,10 @@
 #include <windows.h>
 
 #include "sc_addresses.h"
+#include "sc_engine.h"
 #include "sc_hook.h"
 #include "sc_log.h"
 #include "sc_session.h"
-
-static BYTE* g_base = NULL;
 
 // Written by the game thread from inside a detour, read by the observer thread and by
 // every module's SessionSync. A LONG through the Interlocked* API rather than a plain
@@ -18,8 +17,6 @@ static volatile LONG g_epoch = 1;
 
 static volatile LONG g_stat[SC_SESSION_STAT__COUNT] = { 0, 0 };
 static volatile LONG g_epochAtLastLoad = 0;
-
-static void* Rt(DWORD staticVa) { return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE)); }
 
 // A PLAIN ALIGNED LOAD, deliberately, and this is the one function in the plugin where
 // that choice is worth measuring rather than assuming: it is on the fast path of every
@@ -63,8 +60,8 @@ unsigned ScSessionEpochAtLastLoad(void) {
 // dword ptr [0x006D1218],0`). Read here PURELY so the log line can say which kind of
 // game start this was -- nothing branches on it, because the epoch must move for both.
 static bool LoadPending(void) {
-    if (!g_base) return false;
-    return *(DWORD*)Rt(SC_VA_PENDING_SAVE_NAME) != 0;
+    if (!ScEngineModuleBase()) return false;
+    return *(DWORD*)ScRuntimeAddr(SC_VA_PENDING_SAVE_NAME) != 0;
 }
 
 static void OnGameStart(void) {
@@ -156,7 +153,7 @@ static const BYTE kSiteGameStart[] = { 0xB8, 0xFF, 0xFF, 0x00, 0x00 };
 static const BYTE kSiteLoad[] = { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x0C };
 
 int ScSessionInstall(BYTE* moduleBase, bool enabled) {
-    g_base = moduleBase;
+    ScEngineSetModuleBase(moduleBase);
     if (!enabled) {
         ScLog("SESSION: not installed (observe mode writes nothing to game memory). "
               "The epoch stays 1 for the life of the process, which is correct -- no "
@@ -165,7 +162,7 @@ int ScSessionInstall(BYTE* moduleBase, bool enabled) {
     }
 
     int n = 0;
-    if (ScHookInstall(&g_hkStart, "gameStartClear+7", Rt(SC_VA_GAME_START_EPOCH_SITE),
+    if (ScHookInstall(&g_hkStart, "gameStartClear+7", ScRuntimeAddr(SC_VA_GAME_START_EPOCH_SITE),
                       (void*)&ScSessionOnGameStartThunk, 5,
                       kSiteGameStart, (int)sizeof(kSiteGameStart))) {
         g_sessionStartTramp = g_hkStart.trampoline;
@@ -174,7 +171,7 @@ int ScSessionInstall(BYTE* moduleBase, bool enabled) {
     // The witness. Its absence does NOT disable the epoch: it costs nothing at runtime
     // and buys nothing but evidence, so a failure here is logged and the feature carries
     // on with one hook.
-    if (ScHookInstall(&g_hkLoad, "loadSavedGame", Rt(SC_VA_LOAD_SAVED_GAME),
+    if (ScHookInstall(&g_hkLoad, "loadSavedGame", ScRuntimeAddr(SC_VA_LOAD_SAVED_GAME),
                       (void*)&ScSessionOnLoadThunk, 6,
                       kSiteLoad, (int)sizeof(kSiteLoad))) {
         g_sessionLoadTramp = g_hkLoad.trampoline;
@@ -221,7 +218,6 @@ void ScSessionTestBegin(void) {
     InterlockedExchange(&g_stat[SC_SESSION_STAT_STARTS], 0);
     InterlockedExchange(&g_stat[SC_SESSION_STAT_LOADS], 0);
     InterlockedExchange(&g_epochAtLastLoad, 0);
-    g_base = NULL;
 }
 
 void ScSessionTestNewGame(void) {

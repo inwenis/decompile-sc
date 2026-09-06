@@ -118,10 +118,13 @@ bool ScQueueIndEnabled(void);
 // the feature without this file knowing about modes.
 void ScQueueIndInit(BYTE* moduleBase, bool enabled);
 
-// Installs the ONE detour. Returns 1 on success, 0 on failure; a failure disables the
-// feature rather than leaving it half-armed. Call under the shared thread suspension.
-int  ScQueueIndInstallHooks(void);
-void ScQueueIndRemoveHooks(void);
+// Installs the TWO detours -- statDisplayDriver, and task 066's queueLayout bracket.
+// Returns 1 when both went in and 0 otherwise, rolling its own half back: a failure
+// disables the feature rather than leaving it half-armed. The count stays 0-or-1
+// because sc_fanout.cpp's install accounting counts modules, not hooks. Call under the
+// shared thread suspension.
+int  ScQueueIndInstall(void);
+void ScQueueIndRemove(void);
 
 // THE READ-BACK ORACLE. Reads the indicator's state back OUT OF THE LIVE DIALOG -- is the
 // control linked into the child chain, is the engine's own visible bit set on it, what
@@ -201,7 +204,7 @@ int ScQueueIndSurfaceSize(DWORD root, int* w, int* h);
 // The height of the font the SC_CTRL_FONT_SMALLEST bit selects, out of the font's own
 // header. `base` is the CALLER's module base, so a test seam driving a fake image gets its
 // own answer. 0 means "no answer" (the handle is not up yet), never "zero pixels tall".
-int ScQueueIndSmallFontHeight(BYTE* base);
+int ScQueueIndSmallFontHeight(void);
 
 // INK: how many non-background bytes the dialog's own 8-bit surface holds inside a rect.
 // The dialog surface is BinDlg+0x10 with {u16 w, u16 h} at +0x0C/+0x0E -- read off the
@@ -215,12 +218,12 @@ int ScQueueIndSurfaceInk(DWORD root, int left, int top, int right, int bottom);
 // Test seam -- the frame path driven against a fake dialog tree from hooktest.exe.
 // ---------------------------------------------------------------------------
 
-typedef void (*ScQIndCtlFn)(DWORD ctrl);
-typedef void (*ScQIndDriverFn)(void);
+typedef void (*ScQueueIndCtlFn)(DWORD ctrl);
+typedef void (*ScQueueIndDriverFn)(void);
 
 void ScQueueIndTestBegin(BYTE* fakeModuleBase,
-                         ScQIndCtlFn show, ScQIndCtlFn hide, ScQIndCtlFn update,
-                         ScQIndDriverFn origDriver);
+                         ScQueueIndCtlFn show, ScQueueIndCtlFn hide, ScQueueIndCtlFn update,
+                         ScQueueIndDriverFn origDriver);
 
 // The per-frame body the detour calls. Exposed so the offline test drives exactly the
 // code the game drives.

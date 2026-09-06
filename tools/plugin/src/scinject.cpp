@@ -46,6 +46,19 @@
 
 #define MAX_EARLY 8
 
+// What this process returns, and what each number MEANS. The values are a
+// contract -- drive-game.ps1, run-with-plugin.ps1 and test-combat-death.ps1 all
+// branch on the number -- so they are named here rather than renumbered.
+enum ScInjectExit {
+    SCINJECT_OK             = 0,
+    SCINJECT_BAD_ARGS       = 1,   // usage, unknown flag, or a path that is not there
+    SCINJECT_WIN32          = 2,   // a Win32 call failed; the reason is on stderr
+    SCINJECT_GAME_EXITED    = 3,   // the game died on its own before injection
+    SCINJECT_INJECT_FAILED  = 4,   // LoadLibraryA returned NULL inside the game
+    SCINJECT_EARLY_FAILED   = 5,   // an early DLL could not be injected
+    SCINJECT_RESUME_FAILED  = 6,   // ResumeThread failed; the game never started
+};
+
 // MinGW's CRT expands wildcards in argv by default. '?' is a wildcard, so
 // '\\?\C:\sc-install\...' arrived at main() already mangled -- which silently
 // defeated the pristine-install guard below, since it never saw the real path.
@@ -53,9 +66,12 @@
 // knows what it means; there is nothing to glob.
 extern "C" { int _CRT_glob = 0; }
 
-static int Fail(const char* what) {
+// Prints why a Win32 call failed and hands back the exit code for it. It does NOT
+// terminate anything and it does NOT end the run -- five of its callers deliberately
+// carry on and clean up first. (Bail(), below, is the one that ends things.)
+static int ReportWin32Error(const char* what) {
     fprintf(stderr, "scinject: %s failed, GetLastError=%lu\n", what, GetLastError());
-    return 2;
+    return SCINJECT_WIN32;
 }
 
 // Runs LoadLibraryA(dllPath) on a remote thread. Returns the resulting HMODULE
@@ -64,18 +80,18 @@ static int Fail(const char* what) {
 static DWORD InjectDll(HANDLE hProc, const char* dllPath) {
     size_t bytes = strlen(dllPath) + 1;
     LPVOID remote = VirtualAllocEx(hProc, NULL, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if (!remote) { Fail("VirtualAllocEx"); return 0; }
+    if (!remote) { ReportWin32Error("VirtualAllocEx"); return 0; }
 
     SIZE_T written = 0;
     if (!WriteProcessMemory(hProc, remote, dllPath, bytes, &written) || written != bytes) {
-        Fail("WriteProcessMemory");
+        ReportWin32Error("WriteProcessMemory");
         VirtualFreeEx(hProc, remote, 0, MEM_RELEASE);
         return 0;
     }
 
     FARPROC loadLibrary = GetProcAddress(GetModuleHandleA("kernel32.dll"), "LoadLibraryA");
     if (!loadLibrary) {
-        Fail("GetProcAddress(LoadLibraryA)");
+        ReportWin32Error("GetProcAddress(LoadLibraryA)");
         VirtualFreeEx(hProc, remote, 0, MEM_RELEASE);
         return 0;
     }
@@ -84,7 +100,7 @@ static DWORD InjectDll(HANDLE hProc, const char* dllPath) {
     // thread start routine on x86 stdcall: one pointer argument, return in EAX.
     LPTHREAD_START_ROUTINE start = (LPTHREAD_START_ROUTINE)(void*)loadLibrary;
     HANDLE hThread = CreateRemoteThread(hProc, NULL, 0, start, remote, 0, NULL);
-    if (!hThread) { Fail("CreateRemoteThread"); VirtualFreeEx(hProc, remote, 0, MEM_RELEASE); return 0; }
+    if (!hThread) { ReportWin32Error("CreateRemoteThread"); VirtualFreeEx(hProc, remote, 0, MEM_RELEASE); return 0; }
 
     DWORD wait = WaitForSingleObject(hThread, 20000);
     DWORD mod = 0;
@@ -167,14 +183,14 @@ int main(int argc, char** argv) {
         fprintf(stderr,
             "usage: scinject.exe <game-exe> <plugin-dll> [--early-dll <path>]... "
             "[--early] [--no-plugin] [--wait-ms N] [--no-wait-exit] [--desktop <name>]\n");
-        return 1;
+        return SCINJECT_BAD_ARGS;
     }
 
     char gameExe[MAX_PATH], dllPath[MAX_PATH], raw[MAX_PATH];
     StripDevicePrefix(argv[1], raw, sizeof(raw));
-    if (!GetFullPathNameA(raw, MAX_PATH, gameExe, NULL)) return Fail("GetFullPathName(game)");
+    if (!GetFullPathNameA(raw, MAX_PATH, gameExe, NULL)) return ReportWin32Error("GetFullPathName(game)");
     StripDevicePrefix(argv[2], raw, sizeof(raw));
-    if (!GetFullPathNameA(raw, MAX_PATH, dllPath, NULL)) return Fail("GetFullPathName(dll)");
+    if (!GetFullPathNameA(raw, MAX_PATH, dllPath, NULL)) return ReportWin32Error("GetFullPathName(dll)");
 
     DWORD settleMs = 4000;
     bool waitExit = true;
@@ -197,16 +213,16 @@ int main(int argc, char** argv) {
         else if (strcmp(argv[i], "--no-plugin") == 0) noPlugin = true;
         else if (strcmp(argv[i], "--desktop") == 0 && i + 1 < argc) desktopName = argv[++i];
         else if (strcmp(argv[i], "--early-dll") == 0 && i + 1 < argc) {
-            if (earlyCount >= MAX_EARLY) { fprintf(stderr, "scinject: too many --early-dll\n"); return 1; }
+            if (earlyCount >= MAX_EARLY) { fprintf(stderr, "scinject: too many --early-dll\n"); return SCINJECT_BAD_ARGS; }
             StripDevicePrefix(argv[++i], raw, sizeof(raw));
             if (!GetFullPathNameA(raw, MAX_PATH, early[earlyCount], NULL))
-                return Fail("GetFullPathName(early-dll)");
+                return ReportWin32Error("GetFullPathName(early-dll)");
             if (GetFileAttributesA(early[earlyCount]) == INVALID_FILE_ATTRIBUTES) {
-                fprintf(stderr, "scinject: early dll not found: %s\n", early[earlyCount]); return 1;
+                fprintf(stderr, "scinject: early dll not found: %s\n", early[earlyCount]); return SCINJECT_BAD_ARGS;
             }
             ++earlyCount;
         }
-        else { fprintf(stderr, "scinject: unknown argument '%s'\n", argv[i]); return 1; }
+        else { fprintf(stderr, "scinject: unknown argument '%s'\n", argv[i]); return SCINJECT_BAD_ARGS; }
     }
 
     char gameCanon[MAX_PATH];
@@ -215,14 +231,14 @@ int main(int argc, char** argv) {
                         "          '%s' resolves to '%s'.\n"
                         "          Use the working copy (C:\\sc-work\\1161-base).\n",
                 argv[1], gameCanon);
-        return 1;
+        return SCINJECT_BAD_ARGS;
     }
 
     if (GetFileAttributesA(gameExe) == INVALID_FILE_ATTRIBUTES) {
-        fprintf(stderr, "scinject: game exe not found: %s\n", gameExe); return 1;
+        fprintf(stderr, "scinject: game exe not found: %s\n", gameExe); return SCINJECT_BAD_ARGS;
     }
     if (GetFileAttributesA(dllPath) == INVALID_FILE_ATTRIBUTES) {
-        fprintf(stderr, "scinject: plugin dll not found: %s\n", dllPath); return 1;
+        fprintf(stderr, "scinject: plugin dll not found: %s\n", dllPath); return SCINJECT_BAD_ARGS;
     }
 
     char workDir[MAX_PATH];
@@ -240,7 +256,7 @@ int main(int argc, char** argv) {
     // away and the plugin goes in after init instead.
     if (!CreateProcessA(gameExe, NULL, NULL, NULL, FALSE, CREATE_SUSPENDED,
                         NULL, workDir, &si, &pi)) {
-        return Fail("CreateProcess");
+        return ReportWin32Error("CreateProcess");
     }
     printf("scinject: launched pid=%lu  %s\n", pi.dwProcessId, gameExe);
     printf("scinject: PID=%lu\n", pi.dwProcessId);   // machine-readable, for callers
@@ -251,7 +267,7 @@ int main(int argc, char** argv) {
         DWORD m = InjectDll(pi.hProcess, early[i]);
         if (m == 0) {
             fprintf(stderr, "scinject: EARLY injection FAILED for %s\n", early[i]);
-            return Bail(&pi, 5);
+            return Bail(&pi, SCINJECT_EARLY_FAILED);
         }
         printf("scinject: early-injected %s -> HMODULE 0x%08lX\n", early[i], m);
     }
@@ -259,7 +275,7 @@ int main(int argc, char** argv) {
         DWORD m = InjectDll(pi.hProcess, dllPath);
         if (m == 0) {
             fprintf(stderr, "scinject: EARLY injection FAILED for %s\n", dllPath);
-            return Bail(&pi, 5);
+            return Bail(&pi, SCINJECT_EARLY_FAILED);
         }
         printf("scinject: early-injected %s -> HMODULE 0x%08lX\n", dllPath, m);
     }
@@ -267,8 +283,8 @@ int main(int argc, char** argv) {
     // An unchecked ResumeThread leaves the game suspended forever, holding the
     // working copy open, with a zero exit code saying everything is fine.
     if (ResumeThread(pi.hThread) == (DWORD)-1) {
-        Fail("ResumeThread");
-        return Bail(&pi, 6);
+        ReportWin32Error("ResumeThread");
+        return Bail(&pi, SCINJECT_RESUME_FAILED);
     }
 
     // Let the game finish its own module loading (storm.dll, ddraw.dll, ...).
@@ -281,7 +297,7 @@ int main(int argc, char** argv) {
     if (WaitForSingleObject(pi.hProcess, 0) == WAIT_OBJECT_0) {
         DWORD ec = 0; GetExitCodeProcess(pi.hProcess, &ec);
         fprintf(stderr, "scinject: process exited before injection (code %lu)\n", ec);
-        return Bail(&pi, 3);   // already dead; Bail is here for the handles
+        return Bail(&pi, SCINJECT_GAME_EXITED);   // Bail is here for the handles
     }
 
     if (noPlugin) {
@@ -292,7 +308,7 @@ int main(int argc, char** argv) {
         if (remoteModule == 0) {
             fprintf(stderr, "scinject: LoadLibraryA returned NULL in target -- DLL not loaded\n");
             fprintf(stderr, "scinject: terminating the game rather than leaving it running unobserved\n");
-            return Bail(&pi, 4);
+            return Bail(&pi, SCINJECT_INJECT_FAILED);
         }
         printf("scinject: injected %s -> HMODULE 0x%08lX in pid %lu\n",
                dllPath, remoteModule, pi.dwProcessId);
@@ -307,5 +323,5 @@ int main(int argc, char** argv) {
 
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
-    return 0;
+    return SCINJECT_OK;
 }

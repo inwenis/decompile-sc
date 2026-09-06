@@ -10,8 +10,8 @@ object of zeros with no `else` branch, so the failure mode is not a red suite --
 that asserts against zeros and PASSES.
 
 WHAT THIS FILE DOES, for each golden line named in issue #81 (PRODQ/PRODQSEL/PRODQSTATS,
-UPGQ/UPGQSEL/UPGQSTATS, HUDROW show, FANOUT select:, WORLD, CIRCLES show) plus QIND's one
-real (non-diagnostic) consumer:
+UPGQ/UPGQSEL/UPGQSTATS, HUDROW show, FANOUT select:, WORLD, CIRCLES show), plus CIRCLES stats
+and QIND's one real (non-diagnostic) consumer:
 
   1. reads the ScLog(...) format string OUT OF THE C++ SOURCE, so it cannot drift from what
      the plugin actually prints;
@@ -210,6 +210,23 @@ pinned `ExpectMatch = $true` below.
                    Fragments = @('CIRCLES show: (\d+)/(\d+)') }
                 @{ Suite = 'test-selection-circles.ps1'; SuiteLine = 222; Groups = 2; ExpectMatch = $true
                    Fragments = @('CIRCLES show: (\d+)/(\d+)') }
+            )
+        }
+        @{
+            # Added by the readability audit (#130 section 7). PR #82 put `session=` at the
+            # FRONT of this line -- the same PR that broke the six PRODQ/UPGQ parsers above --
+            # and both suites anchor straight from "CIRCLES stats: " to "shown=", so neither
+            # matched. Their $stats.Count was always 0, which took the
+            # "a CIRCLES stats line was written on detach" FAILURE branch and skipped the
+            # three accounting assertions under it entirely. This line was not in the issue
+            # #81 table, which is why nothing caught it. It is now.
+            Name = 'CIRCLES stats (sc_circles.cpp)'
+            SourceFile = 'sc_circles.cpp'; Marker = 'CIRCLES stats: session=%u shown=%u'; First = $null
+            Parsers = @(
+                @{ Suite = 'test-selection-circles.ps1'; SuiteLine = 377; Groups = 6; ExpectMatch = $true
+                   Fragments = @('CIRCLES stats:.* shown=(\d+) hidden=(\d+) held=(-?\d+) skipped=(\d+) noImage=(\d+) lost=(\d+)') }
+                @{ Suite = 'test-building-groups.ps1'; SuiteLine = 698; Groups = 6; ExpectMatch = $true
+                   Fragments = @('CIRCLES stats:.* shown=(\d+) hidden=(\d+) held=(-?\d+) skipped=(\d+) noImage=(\d+) lost=(\d+)') }
             )
         }
         @{

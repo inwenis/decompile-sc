@@ -12,26 +12,19 @@
 #include <string.h>
 
 #include "sc_addresses.h"
+#include "sc_engine.h"
+#include "sc_env.h"
 #include "sc_hook.h"
 #include "sc_log.h"
 #include "sc_prodqueue.h"
 #include "sc_queueind.h"   // ScQueueIndRingGen -- the phantom window's seqlock (task 066)
 #include "sc_session.h"
-
-#define SC_GAME_ENTRY __attribute__((force_align_arg_pointer))
+#include "sc_unit.h"
 
 // One line per SITE, first call and any CHANGE. The phantom bracket's whole safety
 // argument is "every engine reader of the ring runs on the game thread" (sc_queueind.h);
 // these lines are how a run MEASURES that instead of trusting it. The observer's own
 // site is expected to print a DIFFERENT id -- that is the thread the seqlock exists for.
-static void ThreadCheck(const char* site, DWORD* seen) {
-    DWORD tid = GetCurrentThreadId();
-    if (*seen == tid) return;
-    ScLog("THREADCHECK %s tid=%u%s", site, (unsigned)tid,
-          *seen ? " CHANGED -- the single-thread claim this fix rests on is broken" : "");
-    *seen = tid;
-}
-
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -44,7 +37,6 @@ struct ProdRecord {
     WORD  types[SC_PRODQ_HARD_MAX];   // FIFO: [0] is promoted next
 };
 
-static BYTE* g_base    = NULL;
 static bool  g_enabled = false;
 static bool  g_testing = false;      // driven by hooktest with no hooks anywhere
 static int   g_maxTotal = SC_PRODQ_DEFAULT_MAX;
@@ -69,58 +61,15 @@ static bool g_deepGc = false;
 // synced yet, which is distinguishable from every real epoch because those start at 1.
 static unsigned g_session = 0;
 
-static void* Rt(DWORD staticVa) { return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE)); }
-static DWORD RtA(DWORD staticVa) { return (DWORD)(DWORD_PTR)Rt(staticVa); }
-
-// ---------------------------------------------------------------------------
-// Unit validation -- the same shape as sc_fanout's UnitPtrValid/PassesGate, because the
-// question is the same one: is this pointer still the building we wrote down?
-// ---------------------------------------------------------------------------
-
-static bool UnitPtrValid(DWORD ptr) {
-    if (!ptr) return false;
-    DWORD arrayBase = RtA(SC_VA_UNIT_ARRAY_BASE);
-    if (ptr < arrayBase) return false;
-    DWORD off = ptr - arrayBase;
-    if (off % SC_CUNIT_SIZE != 0) return false;
-    return (off / SC_CUNIT_SIZE + 1) <= SC_MAX_UNIT_INDEX;
-}
-
-// Reachable from playerUnitList[player] via CUnit+0x6C. A unit removed from play is
-// unlinked there (sc_addresses.h, SC_VA_PLAYER_UNIT_LIST), and a removed building is
-// exactly what has to give its queued resources back.
-static bool InPlayerUnitList(DWORD ptr, BYTE player) {
-    if (player >= SC_MAX_PLAYERS) return false;
-    DWORD head = *(DWORD*)(RtA(SC_VA_PLAYER_UNIT_LIST) + (DWORD)player * 4);
-    int n = 0;
-    for (DWORD u = head; u && n < SC_MAX_UNITS_WALK; ++n) {
-        if (!UnitPtrValid(u)) return false;
-        if (u == ptr) return true;
-        u = *(DWORD*)(u + SC_CUNIT_OFF_LIST_NEXT);
-    }
-    return false;
-}
-
-// `deep` adds the list walk. Without it this is four loads.
+// Is this pointer still the building we wrote down? The four terms and the cost of
+// `deep` are documented once, on ScUnitRecordLive in sc_unit.h.
 static bool RecordStillLive(const ProdRecord* r, bool deep) {
-    if (!UnitPtrValid(r->unit)) return false;
-    if (*(BYTE*)(r->unit + SC_CUNIT_OFF_UNIQUENESS) != r->uniqueness) return false;
-    if (*(BYTE*)(r->unit + SC_CUNIT_OFF_PLAYER) != r->player) return false;
-    if (*(DWORD*)(r->unit + SC_CUNIT_OFF_HITPOINTS) == 0) return false;
-    if (deep && !InPlayerUnitList(r->unit, r->player)) return false;
-    return true;
+    return ScUnitRecordLive(r->unit, r->uniqueness, r->player, deep);
 }
 
 // ---------------------------------------------------------------------------
 // The engine's queue, read and written exactly the way the engine does
 // ---------------------------------------------------------------------------
-
-static WORD QueueSlot(DWORD unit, int slot) {
-    return *(WORD*)(unit + SC_CUNIT_OFF_BUILD_QUEUE + (DWORD)slot * 2);
-}
-static void SetQueueSlot(DWORD unit, int slot, WORD type) {
-    *(WORD*)(unit + SC_CUNIT_OFF_BUILD_QUEUE + (DWORD)slot * 2) = type;
-}
 
 // A faithful re-implementation of findFreeBuildQueueSlot (0x004669B0), whose thirteen
 // instructions are quoted in research/production-queue.md 3.1: start at the head, wrap
@@ -131,18 +80,10 @@ static int FindFreeSlot(DWORD unit) {
     unsigned slot = *(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
     for (int tries = SC_BUILD_QUEUE_SLOTS; tries > 0; --tries) {
         if (slot >= SC_BUILD_QUEUE_SLOTS) slot = 0;
-        if (QueueSlot(unit, (int)slot) == SC_BUILD_QUEUE_EMPTY) return (int)slot;
+        if (ScUnitQueueSlot(unit, (int)slot) == SC_BUILD_QUEUE_EMPTY) return (int)slot;
         ++slot;
     }
     return SC_BUILD_QUEUE_SLOTS;
-}
-
-static int EngineQueueLength(DWORD unit) {
-    int n = 0;
-    for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) {
-        if (QueueSlot(unit, i) != SC_BUILD_QUEUE_EMPTY) ++n;
-    }
-    return n;
 }
 
 // ---------------------------------------------------------------------------
@@ -159,28 +100,22 @@ static int EngineQueueLength(DWORD unit) {
 // ---------------------------------------------------------------------------
 
 static bool TypeMovesResources(unsigned type) {
-    BYTE f = *(BYTE*)(RtA(SC_VA_UNIT_COST_FLAGS) + (DWORD)type * 4);
+    BYTE f = *(BYTE*)(ScRuntimeVa(SC_VA_UNIT_COST_FLAGS) + (DWORD)type * 4);
     return (f & SC_UNIT_COST_FLAG_NO_SPEND) == 0;
 }
 static DWORD MineralCost(unsigned type) {
-    return *(WORD*)(RtA(SC_VA_UNIT_MINERAL_COST) + (DWORD)type * 2);
+    return *(WORD*)(ScRuntimeVa(SC_VA_UNIT_MINERAL_COST) + (DWORD)type * 2);
 }
 static DWORD GasCost(unsigned type) {
-    return *(WORD*)(RtA(SC_VA_UNIT_GAS_COST) + (DWORD)type * 2);
-}
-static DWORD* MineralsOf(BYTE player) {
-    return (DWORD*)(RtA(SC_VA_PLAYER_MINERALS) + (DWORD)player * 4);
-}
-static DWORD* GasOf(BYTE player) {
-    return (DWORD*)(RtA(SC_VA_PLAYER_GAS) + (DWORD)player * 4);
+    return *(WORD*)(ScRuntimeVa(SC_VA_UNIT_GAS_COST) + (DWORD)type * 2);
 }
 
 // A no-op for a type whose cost flag says the engine would not have moved anything on the
 // way in either.
 static void Refund(BYTE player, unsigned type) {
     if (player >= SC_MAX_PLAYERS || !TypeMovesResources(type)) return;
-    *MineralsOf(player) += MineralCost(type);
-    *GasOf(player)      += GasCost(type);
+    *ScPlayerMinerals(player) += MineralCost(type);
+    *ScPlayerGas(player)      += GasCost(type);
     g_stat[SC_PRODQ_STAT_MINERALS_REFUNDED] += (int)MineralCost(type);
     g_stat[SC_PRODQ_STAT_GAS_REFUNDED]      += (int)GasCost(type);
 }
@@ -299,11 +234,11 @@ static int HoldRoom(const ProdRecord* r) {
 
 static int PromoteInto(ProdRecord* r) {
     int promoted = 0;
-    while (r->count > 0 && EngineQueueLength(r->unit) < SC_PRODQ_ENGINE_HOLD) {
+    while (r->count > 0 && ScUnitQueueLength(r->unit) < SC_PRODQ_ENGINE_HOLD) {
         int slot = FindFreeSlot(r->unit);
         if (slot >= SC_BUILD_QUEUE_SLOTS) break;
         WORD type = r->types[0];
-        SetQueueSlot(r->unit, slot, type);
+        ScUnitSetQueueSlot(r->unit, slot, type);
         for (int i = 1; i < r->count; ++i) r->types[i - 1] = r->types[i];
         --r->count;
         ++promoted;
@@ -314,7 +249,7 @@ static int PromoteInto(ProdRecord* r) {
     if (promoted && !g_testing) {
         // Tell the status area to redraw, the way the Train handler's own tail does
         // (0x004C1C7C writes this flag). Without it an icon can lag a frame.
-        *(BYTE*)Rt(SC_VA_STAT_DIRTY) = 1;
+        *(BYTE*)ScRuntimeAddr(SC_VA_STAT_DIRTY) = 1;
     }
     return promoted;
 }
@@ -329,7 +264,7 @@ static int PromoteInto(ProdRecord* r) {
 static int HoldBack(DWORD unit, BYTE player, ProdRecord** rp) {
     int held = 0;
     for (;;) {
-        int len = EngineQueueLength(unit);
+        int len = ScUnitQueueLength(unit);
         if (len <= SC_PRODQ_ENGINE_HOLD) break;
         if (HoldRoom(*rp) <= 0) break;
         if (!*rp && g_recCount >= SC_PRODQ_MAX_BUILDINGS) {
@@ -337,18 +272,18 @@ static int HoldBack(DWORD unit, BYTE player, ProdRecord** rp) {
             break;
         }
         int slot = TailSlot(unit, len);
-        WORD type = QueueSlot(unit, slot);
+        WORD type = ScUnitQueueSlot(unit, slot);
         if (type == SC_BUILD_QUEUE_EMPTY) break;   // cannot happen; never loop on it
 
         if (!*rp) {
             ProdRecord* n = &g_rec[g_recCount++];
             n->unit       = unit;
-            n->uniqueness = *(BYTE*)(unit + SC_CUNIT_OFF_UNIQUENESS);
+            n->uniqueness = ScUnitUniqueness(unit);
             n->player     = player;
             n->count      = 0;
             *rp = n;
         }
-        SetQueueSlot(unit, slot, SC_BUILD_QUEUE_EMPTY);
+        ScUnitSetQueueSlot(unit, slot, SC_BUILD_QUEUE_EMPTY);
         (*rp)->types[(*rp)->count++] = type;
         ++held;
         ++g_stat[SC_PRODQ_STAT_CAPTURED];
@@ -357,7 +292,7 @@ static int HoldBack(DWORD unit, BYTE player, ProdRecord** rp) {
               (unsigned)unit, (unsigned)type, slot, len - 1, (*rp)->count,
               (len - 1) + (*rp)->count);
     }
-    if (held && !g_testing) *(BYTE*)Rt(SC_VA_STAT_DIRTY) = 1;
+    if (held && !g_testing) *(BYTE*)ScRuntimeAddr(SC_VA_STAT_DIRTY) = 1;
     return held;
 }
 
@@ -377,14 +312,14 @@ static void Rebalance(DWORD unit, BYTE player, ProdRecord** rp) {
 
 void ScProdQueueOnTrain(DWORD unit, unsigned type, bool wasFull) {
     if (!g_enabled || !unit) return;
-    { static DWORD tid = 0; ThreadCheck("prodq-train", &tid); }
+    { static DWORD tid = 0; ScThreadCheck("prodq-train", &tid); }
     EnterCriticalSection(&g_lock);
     ProdQSessionSync();
     CollectGarbage(true);
 
     do {
-        if (!UnitPtrValid(unit)) break;
-        BYTE player = *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER);
+        if (!ScUnitPtrValid(unit)) break;
+        BYTE player = ScUnitPlayer(unit);
         if (player >= SC_MAX_PLAYERS) break;
         ProdRecord* r = FindRecord(unit);
 
@@ -397,7 +332,7 @@ void ScProdQueueOnTrain(DWORD unit, unsigned type, bool wasFull) {
             ++g_stat[SC_PRODQ_STAT_REFUSED_FULL];
             ScLog("PRODQEV refuse-full unit=0x%08X type=0x%03X logical=%d max=%d",
                   (unsigned)unit, type,
-                  EngineQueueLength(unit) + (r ? r->count : 0), g_maxTotal);
+                  ScUnitQueueLength(unit) + (r ? r->count : 0), g_maxTotal);
             break;
         }
 
@@ -417,7 +352,7 @@ void ScProdQueueOnTick(DWORD unit) {
     // has something to look at, or on the next Train/Cancel/read-back, all of which
     // take it unconditionally.
     if (!g_enabled || !unit || g_recCount == 0) return;
-    { static DWORD tid = 0; ThreadCheck("prodq-tick", &tid); }
+    { static DWORD tid = 0; ScThreadCheck("prodq-tick", &tid); }
     EnterCriticalSection(&g_lock);
     ProdQSessionSync();
 
@@ -432,7 +367,7 @@ void ScProdQueueOnTick(DWORD unit) {
 
 bool ScProdQueueOnCancel(DWORD unit, unsigned payload) {
     if (!g_enabled || !unit) return false;
-    { static DWORD tid = 0; ThreadCheck("prodq-cancel", &tid); }
+    { static DWORD tid = 0; ScThreadCheck("prodq-cancel", &tid); }
     bool consumed = false;
     EnterCriticalSection(&g_lock);
     ProdQSessionSync();
@@ -453,7 +388,7 @@ bool ScProdQueueOnCancel(DWORD unit, unsigned payload) {
         if (r->count == 0) DropRecordAt((int)(r - g_rec));
         consumed = true;
     } else if (payload < SC_BUILD_QUEUE_SLOTS &&
-               QueueSlot(unit, (int)(((unsigned)*(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT)
+               ScUnitQueueSlot(unit, (int)(((unsigned)*(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT)
                                       + payload) % SC_BUILD_QUEUE_SLOTS))
                    == SC_BUILD_QUEUE_EMPTY) {
         // A specific queue ICON whose RING SLOT IS EMPTY, payload = its display index.
@@ -472,7 +407,7 @@ bool ScProdQueueOnCancel(DWORD unit, unsigned payload) {
         // icons from the plugin's own overflow (the user: "when i queue more then 5 units
         // the 5'th slot is emtpy") and lights them. So the plugin owns every such click:
         // it cancels its own item, or swallows the click if it no longer has one.
-        const int engineLen = EngineQueueLength(unit);
+        const int engineLen = ScUnitQueueLength(unit);
         const int idx = (int)payload - engineLen;
         {
             if (r && idx >= 0 && idx < r->count) {
@@ -508,14 +443,11 @@ bool ScProdQueueOnCancel(DWORD unit, unsigned payload) {
 // ---------------------------------------------------------------------------
 
 // Formats a building's five engine slots, read straight out of CUnit+0x98.
+// Formats the ring AND answers how much of it is occupied, which is what every
+// caller here wants in the same breath.
 static int FormatEngineQueue(DWORD unit, char* out, int outLen) {
-    int used = 0;
-    out[0] = '\0';
-    for (int s = 0; s < SC_BUILD_QUEUE_SLOTS && used + 8 < outLen; ++s) {
-        used += _snprintf(out + used, outLen - used, "%s0x%03X",
-                          s ? "," : "", (unsigned)QueueSlot(unit, s));
-    }
-    return EngineQueueLength(unit);
+    ScUnitFormatQueue(unit, out, outLen);
+    return ScUnitQueueLength(unit);
 }
 
 // The same read made COHERENT for the observer thread (task 066): the phantom bracket
@@ -534,12 +466,12 @@ static int CoherentEngineQueue(DWORD unit, char* out, int outLen, BYTE* head, in
         unsigned g1 = ScQueueIndRingGen();
         if (g1 & 1) continue;
         *head = *(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
-        for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) ring[i] = QueueSlot(unit, i);
+        for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) ring[i] = ScUnitQueueSlot(unit, i);
         if (ScQueueIndRingGen() == g1) stable = 1;
     }
     if (!stable) {
         *head = *(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
-        for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) ring[i] = QueueSlot(unit, i);
+        for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) ring[i] = ScUnitQueueSlot(unit, i);
     }
     int used = 0;
     int n = 0;
@@ -557,7 +489,7 @@ void ScProdQueueLogState(const char* tag) {
     if (!g_enabled || !g_lockReady) return;
     // The observer's own site: this one is EXPECTED to print a different id from the
     // prodq-train/tick/cancel sites -- it is the thread the seqlock above exists for.
-    { static DWORD tid = 0; ThreadCheck("prodq-observer", &tid); }
+    { static DWORD tid = 0; ScThreadCheck("prodq-observer", &tid); }
     EnterCriticalSection(&g_lock);
     // The oracle syncs too, and that is the half of issue #63 a test can actually see:
     // arm 6 asserts on THIS line's `buildings=` in a game the plugin never queued in,
@@ -571,23 +503,23 @@ void ScProdQueueLogState(const char* tag) {
     // mode AGENTS.md's absence-assertion rule exists to stop. It also gives a test the
     // engine's own five slots to watch drain, read from the building's memory.
     {
-        DWORD* sel = (DWORD*)Rt(SC_VA_ACTIVE_PLAYER_SELECTION);
+        DWORD* sel = (DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_SELECTION);
         DWORD u = sel[0];
-        if (u && !sel[1] && UnitPtrValid(u)) {
+        if (u && !sel[1] && ScUnitPtrValid(u)) {
             char eng[96];
             BYTE head = 0;
             int engineLen = 0;
             int stable = CoherentEngineQueue(u, eng, (int)sizeof(eng), &head, &engineLen);
             ProdRecord* r = FindRecord(u);
-            BYTE player = *(BYTE*)(u + SC_CUNIT_OFF_PLAYER);
+            BYTE player = ScUnitPlayer(u);
             ScLog("PRODQSEL [%s] unit=0x%08X type=0x%03X player=%u head=%u engineLen=%d "
                   "engine=[%s] overflow=%d logical=%d minerals=%u gas=%u ringStable=%d",
                   tag ? tag : "-", (unsigned)u,
                   (unsigned)*(WORD*)(u + SC_CUNIT_OFF_UNIT_ID), (unsigned)player,
                   (unsigned)head, engineLen, eng,
                   r ? r->count : 0, engineLen + (r ? r->count : 0),
-                  player < SC_MAX_PLAYERS ? (unsigned)*MineralsOf(player) : 0u,
-                  player < SC_MAX_PLAYERS ? (unsigned)*GasOf(player) : 0u, stable);
+                  player < SC_MAX_PLAYERS ? (unsigned)*ScPlayerMinerals(player) : 0u,
+                  player < SC_MAX_PLAYERS ? (unsigned)*ScPlayerGas(player) : 0u, stable);
         } else {
             ScLog("PRODQSEL [%s] (no single building selected)", tag ? tag : "-");
         }
@@ -599,7 +531,7 @@ void ScProdQueueLogState(const char* tag) {
         BYTE head = 0xFFu;
         int engineLen = 0;
         int stable = 1;
-        if (UnitPtrValid(r->unit)) {
+        if (ScUnitPtrValid(r->unit)) {
             stable = CoherentEngineQueue(r->unit, eng, (int)sizeof(eng), &head, &engineLen);
         } else lstrcpynA(eng, "(gone)", (int)sizeof(eng));
         char ovf[128];
@@ -615,8 +547,8 @@ void ScProdQueueLogState(const char* tag) {
               "overflow=%d overflowTypes=[%s] logical=%d minerals=%u gas=%u ringStable=%d",
               tag ? tag : "-", (unsigned)r->unit, (unsigned)r->player,
               (unsigned)head, engineLen, eng, r->count, ovf, engineLen + r->count,
-              r->player < SC_MAX_PLAYERS ? (unsigned)*MineralsOf(r->player) : 0u,
-              r->player < SC_MAX_PLAYERS ? (unsigned)*GasOf(r->player) : 0u, stable);
+              r->player < SC_MAX_PLAYERS ? (unsigned)*ScPlayerMinerals(r->player) : 0u,
+              r->player < SC_MAX_PLAYERS ? (unsigned)*ScPlayerGas(r->player) : 0u, stable);
     }
     // ALWAYS a summary line, even with zero records -- an absence has to be
     // positively reported or "the oracle did not run" and "there is nothing queued"
@@ -728,16 +660,7 @@ static ScHook g_hkTick;
 
 typedef void (__attribute__((stdcall)) *CancelTrainFn)(DWORD);
 
-static DWORD SoleSelectedUnit(void) {
-    DWORD player = *(DWORD*)Rt(SC_VA_ACTIVE_PLAYER_ID);
-    if (player >= SC_MAX_PLAYERS) return 0;
-    DWORD* sel = (DWORD*)Rt(SC_VA_PLAYERS_SELECTIONS) + player * SC_SELECTION_SLOTS;
-    DWORD u = sel[0];
-    if (!u || sel[1]) return 0;
-    return UnitPtrValid(u) ? u : 0;
-}
-
-DWORD ScProdQueueSoleSelectedUnitForTest(void) { return SoleSelectedUnit(); }
+DWORD ScProdQueueSoleSelectedUnitForTest(void) { return ScSoleSelectedUnit(); }
 
 // Calls a trampoline whose target takes its only argument in EAX and returns void.
 static void CallEax(void* fn, DWORD eax) {
@@ -751,7 +674,7 @@ static void CallEax(void* fn, DWORD eax) {
 
 // cmdrecvTrain (0x004C1C20): EAX = the command bytes, void, bare RET.
 extern "C" void SC_GAME_ENTRY ScProdTrainDetour(DWORD cmd) {
-    DWORD unit = SoleSelectedUnit();
+    DWORD unit = ScSoleSelectedUnit();
     unsigned type = 0xFFFFu;
     bool wasFull = false;
     ++g_stat[SC_PRODQ_STAT_TRAIN_SEEN];
@@ -771,7 +694,7 @@ extern "C" void SC_GAME_ENTRY ScProdTrainDetour(DWORD cmd) {
 // slot frees is the frame the next overflow item takes it.
 extern "C" void SC_GAME_ENTRY ScProdTickDetour(DWORD unit) {
     CallEax(g_hkTick.trampoline, unit);
-    if (UnitPtrValid(unit)) ScProdQueueOnTick(unit);
+    if (ScUnitPtrValid(unit)) ScProdQueueOnTick(unit);
 }
 
 // Both targets take their argument in EAX and no C calling convention says so, so each
@@ -799,7 +722,7 @@ asm(".text\n"
 // thunk. PRE-hook: when the plugin owns the tail of the logical queue, a "cancel the
 // last item" is ours and the engine's handler must not also run.
 static void __attribute__((stdcall)) SC_GAME_ENTRY HkCmdrecvCancelTrain(DWORD cmd) {
-    DWORD unit = SoleSelectedUnit();
+    DWORD unit = ScSoleSelectedUnit();
     unsigned payload = cmd ? *(WORD*)(cmd + 1) : SC_CANCEL_TRAIN_NONE;
     ++g_stat[SC_PRODQ_STAT_CANCEL_SEEN];
     if (!unit) ++g_stat[SC_PRODQ_STAT_CANCEL_NO_UNIT];
@@ -843,13 +766,8 @@ bool ScProdQueueEnabled(void) {
 }
 
 static int ResolveMax(void) {
-    char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_PRODQ_MAX", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return SC_PRODQ_DEFAULT_MAX;
-    int v = atoi(buf);
-    if (v < SC_BUILD_QUEUE_SLOTS) v = SC_BUILD_QUEUE_SLOTS;
-    if (v > SC_PRODQ_HARD_MAX) v = SC_PRODQ_HARD_MAX;
-    return v;
+    return ScEnvInt("SCPLUGIN_PRODQ_MAX", SC_PRODQ_DEFAULT_MAX,
+                    SC_BUILD_QUEUE_SLOTS, SC_PRODQ_HARD_MAX);
 }
 
 static void EnsureLock(void) {
@@ -857,7 +775,7 @@ static void EnsureLock(void) {
 }
 
 int ScProdQueueInstall(BYTE* moduleBase) {
-    g_base = moduleBase;
+    ScEngineSetModuleBase(moduleBase);
     g_recCount = 0;
     g_session  = ScSessionEpoch();
     memset(g_stat, 0, sizeof(g_stat));
@@ -876,13 +794,13 @@ int ScProdQueueInstall(BYTE* moduleBase) {
     ScLog("PRODQ: suspended %d other thread(s) for the splice", suspended);
 
     int installed = 0;
-    if (ScHookInstall(&g_hkTrain, "cmdrecvTrain", Rt(SC_VA_CMDRECV_TRAIN),
+    if (ScHookInstall(&g_hkTrain, "cmdrecvTrain", ScRuntimeAddr(SC_VA_CMDRECV_TRAIN),
                       (void*)&ScProdTrainThunk, 11,
                       kPrologueTrain, (int)sizeof(kPrologueTrain))) ++installed;
-    if (ScHookInstall(&g_hkCancel, "cmdrecvCancelTrain", Rt(SC_VA_CMDRECV_CANCEL_TRAIN),
+    if (ScHookInstall(&g_hkCancel, "cmdrecvCancelTrain", ScRuntimeAddr(SC_VA_CMDRECV_CANCEL_TRAIN),
                       (void*)&HkCmdrecvCancelTrain, 11,
                       kPrologueCancel, (int)sizeof(kPrologueCancel))) ++installed;
-    if (ScHookInstall(&g_hkTick, "productionTick", Rt(SC_VA_PRODUCTION_TICK),
+    if (ScHookInstall(&g_hkTick, "productionTick", ScRuntimeAddr(SC_VA_PRODUCTION_TICK),
                       (void*)&ScProdTickThunk, 9,
                       kPrologueTick, (int)sizeof(kPrologueTick))) ++installed;
 
@@ -917,7 +835,7 @@ void ScProdQueueRemove(void) {
         // must be dropped, not paid back into the game the process is in now.
         ProdQSessionSync();
         for (int i = g_recCount - 1; i >= 0; --i) {
-            if (UnitPtrValid(g_rec[i].unit)) RefundRecord(&g_rec[i], "plugin-unload");
+            if (ScUnitPtrValid(g_rec[i].unit)) RefundRecord(&g_rec[i], "plugin-unload");
             DropRecordAt(i);
         }
         LeaveCriticalSection(&g_lock);
@@ -930,7 +848,7 @@ void ScProdQueueRemove(void) {
 
 void ScProdQueueTestBegin(BYTE* fakeModuleBase, int maxTotal) {
     EnsureLock();
-    g_base     = fakeModuleBase;
+    ScEngineSetModuleBase(fakeModuleBase);
     g_enabled  = fakeModuleBase != NULL;
     g_testing  = fakeModuleBase != NULL;
     g_recCount = 0;

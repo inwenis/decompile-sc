@@ -79,8 +79,8 @@ void ScProdFanLogStats(void);
 // out, because the client never emits one (measured: the button is absent from the card
 // entirely with several buildings selected). Returns 1 on success, 0 on failure, and a
 // failure DISABLES the feature rather than leaving it half-armed. No-op unless enabled.
-int  ScProdFanInstallGate(void);
-void ScProdFanRemoveGate(void);
+int  ScProdFanInstall(void);
+void ScProdFanRemove(void);
 
 // ---------------------------------------------------------------------------
 // The policy, hook-free -- driven from hooktest.exe with no StarCraft in sight.

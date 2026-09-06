@@ -93,8 +93,14 @@
 // Which command an item came from. The two are queued in one list per building, in the
 // order the player pressed them, because a building that offers both (an Academy) should
 // run them in that order.
-#define SC_UPGQ_KIND_UPGRADE 0   // wire 0x32
-#define SC_UPGQ_KIND_TECH    1   // wire 0x30
+//
+// `kind` travels as an int (and as a BYTE inside a record, and as -1 from the
+// out-of-range accessors), so the signatures below still say int. The enum is here so
+// the two values read as one closed set rather than as two loose defines.
+enum ScUpgQueueKind {
+    SC_UPGQ_KIND_UPGRADE = 0,   // wire 0x32
+    SC_UPGQ_KIND_TECH    = 1    // wire 0x30
+};
 
 // Reads %SCPLUGIN_UPGQ%. Unset/0 -> disabled, which is the off switch: nothing in this
 // file runs, no hook is installed and no game memory is written.
@@ -121,7 +127,8 @@ void ScUpgQueueLogStats(void);
 
 // ---------------------------------------------------------------------------
 // The core, hook-free -- driven byte-for-byte from hooktest.exe with no StarCraft in
-// sight. The six detours do nothing but marshal registers into these.
+// sight. The eight detours (condition, cmdrecv, tick and cancel, each x upgrade and
+// tech) do nothing but marshal registers into these.
 // ---------------------------------------------------------------------------
 
 // A 0x32 / 0x30 command has arrived for `unit`. Returns true when the plugin consumed it
@@ -184,7 +191,7 @@ enum ScUpgQueueStat {
     SC_UPGQ_STAT_WAITING_COST = 6,  // promotions deferred because the player cannot pay yet
     SC_UPGQ_STAT_UNBLOCKED = 7,     // card conditions answered as if the building were idle
     // MINERALS_SPENT and GAS_SPENT USED TO SIT HERE (issue #66, task 055). Nothing ever
-    // incremented them -- and in this module nothing could have: MineralsOf/GasOf return
+    // incremented them -- and in this module nothing could have: ScPlayerMinerals/Gas read
     // VALUES, not pointers, so it cannot write a resource global at all. The counters were
     // asserting the initialiser.
     //

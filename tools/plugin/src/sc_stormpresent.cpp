@@ -33,18 +33,17 @@
 
 #include "sc_addresses.h"
 #include "sc_console.h"
+#include "sc_engine.h"
 #include "sc_hook.h"
 #include "sc_log.h"
 #include "sc_screen.h"
 #include "sc_session.h"
 
-#define SC_GAME_ENTRY __attribute__((force_align_arg_pointer))
-
 // storm RVAs (preferred base 0x15000000; resolved from the LOADED module below).
 #define STORM_RVA_BPP        0x0005A7C0u   // = 8
 #define STORM_RVA_WIDTH      0x0005A7C4u   // = 640
 #define STORM_RVA_HEIGHT     0x0005A7C8u   // = 480
-#define STORM_RVA_FBLOCKPTR  0x0005EA70u   // fallback sysmem lock pointer (0 = direct)
+#define STORM_RVA_FALLBACK_LOCK_PTR 0x0005EA70u   // fallback sysmem lock pointer (0 = direct)
 #define STORM_RVA_CLIP       0x0005EA74u   // {l,t,r,b} flip clip, 4 dwords
 #define STORM_RVA_SURFTABLE  0x0005EA84u   // IDirectDrawSurface*[4]; [0]=primary [3]=sysmem
 #define STORM_RVA_PRIMARY    0x0005EA90u   // the DirectDraw object / primary handle ord356 Blts to
@@ -61,7 +60,6 @@
 #define EXE_VA_REGION_FRAME  0x006D5E18u
 #define EXE_VA_REGION_BASE   0x006D5E14u
 #define EXE_VA_ORD529_THUNK  0x00411E60u
-#define SC_EXE_PREFERRED_BASE 0x00400000u
 // storm ord432 (RVA 0x1A520), THE buffer->primary copy the exe present calls every
 // frame: stdcall(dst, src, dstPitch, srcPitch, region), RET 0x14, returns 1. It
 // copies only the dirty REGION (x<640, because the presentable region is 640 wide),
@@ -72,15 +70,7 @@
 // dirty mark. Prologue: push ebp; mov ebp,esp; mov eax,[ebp+0x18] (55 8B EC 8B 45 18),
 // 6 bytes / 3 whole instructions / no PC-relative. Resolved from the LOADED storm.dll.
 #define STORM_RVA_ORD432     0x0001A520u
-// The widescreen geometry this repo builds is asked of sc_screen (which owns
-// the generated table) so a regenerated width cannot leave a copy behind here
-// -- it did: 800 lived in this file as a literal.
-#define SC_WS_WIDTH    ScScreenTargetWidth()
-#define SC_WS_HEIGHT   ScScreenTargetHeight()
-#define SC_STOCK_WIDTH SC_SCREEN_W
-
 static ScStormMode g_mode = SC_STORM_OFF;
-static BYTE*  g_exeBase   = NULL;
 static BYTE*  g_stormBase = NULL;
 static bool   g_writeAllowed = false;
 static unsigned g_logs = 0;
@@ -90,29 +80,12 @@ static ScHook   g_hkCopy;                   // hook on storm ord432 (the present
 static unsigned g_stripFrames = 0;          // frames the x>=640 strip was copied (stats)
 static unsigned g_stripSkipped = 0;         // present calls that did NOT meet the widescreen guard
 
-static void* ExeRt(DWORD staticVa) {
-    return (void*)(g_exeBase + (staticVa - SC_EXE_PREFERRED_BASE));
-}
 static void* StormRt(DWORD rva) {
     return (void*)(g_stormBase + rva);
 }
 
-static bool Readable(const void* addr, DWORD len) {
-    if (!addr || len == 0) return false;
-    MEMORY_BASIC_INFORMATION mbi;
-    if (VirtualQuery(addr, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
-    if (mbi.State != MEM_COMMIT) return false;
-    if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return false;
-    const DWORD ok = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
-                     PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
-    if ((mbi.Protect & ok) == 0) return false;
-    const BYTE* start = (const BYTE*)addr;
-    const BYTE* regEnd = (const BYTE*)mbi.BaseAddress + mbi.RegionSize;
-    return start >= (const BYTE*)mbi.BaseAddress && start + len <= regEnd;
-}
-
-static DWORD RdU32(const void* addr, bool* ok) {
-    if (!Readable(addr, 4)) { if (ok) *ok = false; return 0; }
+static DWORD StormReadU32(const void* addr, bool* ok) {
+    if (!ScReadableAt(addr, 4)) { if (ok) *ok = false; return 0; }
     if (ok) *ok = true;
     return *(const DWORD*)addr;
 }
@@ -151,13 +124,13 @@ ScStormMode ScStormPresentModeWanted(void) {
 // ---------------------------------------------------------------------------
 static void LogRegionRects(const char* what, DWORD regionVaOfPtr) {
     bool ok = false;
-    DWORD region = RdU32(ExeRt(regionVaOfPtr), &ok);
+    DWORD region = StormReadU32(ScRuntimeAddr(regionVaOfPtr), &ok);
     if (!ok || !region) { ScLog("STORM region %s: handle %s", what, ok ? "NULL" : "unreadable"); return; }
     DWORD cnt = 8;
     int rects[8][4];
     memset(rects, 0, sizeof(rects));
     typedef void (__attribute__((stdcall)) *RgnRectsFn)(DWORD, DWORD*, void*);
-    ((RgnRectsFn)ExeRt(EXE_VA_ORD529_THUNK))(region, &cnt, rects);
+    ((RgnRectsFn)ScRuntimeAddr(EXE_VA_ORD529_THUNK))(region, &cnt, rects);
     char line[320]; size_t used = 0; line[0] = '\0';
     for (DWORD i = 0; i < cnt && i < 8 && used + 48 < sizeof(line); ++i)
         used += (size_t)_snprintf(line + used, sizeof(line) - used, "%s(%d,%d,%d,%d)",
@@ -173,8 +146,8 @@ static void LogRegionRects(const char* what, DWORD regionVaOfPtr) {
 // 640 cap; (0,0,800,480) means the cap is elsewhere.
 static void LogRegionStruct(const char* t, const char* what, DWORD regionVaOfPtr) {
     bool ok = false;
-    DWORD r = RdU32(ExeRt(regionVaOfPtr), &ok);
-    if (!ok || !r || !Readable((void*)(DWORD_PTR)r, 0x30)) {
+    DWORD r = StormReadU32(ScRuntimeAddr(regionVaOfPtr), &ok);
+    if (!ok || !r || !ScReadableAt((void*)(DWORD_PTR)r, 0x30)) {
         ScLog("STORM [%s] region-struct %s: handle %s", t, what,
               (!ok || !r) ? "NULL/unreadable ptr" : "handle unreadable");
         return;
@@ -196,17 +169,17 @@ void ScStormPresentLog(const char* tag) {
     ++g_logs;
 
     bool okW, okH, okB;
-    DWORD w = RdU32(StormRt(STORM_RVA_WIDTH), &okW);
-    DWORD h = RdU32(StormRt(STORM_RVA_HEIGHT), &okH);
-    DWORD bpp = RdU32(StormRt(STORM_RVA_BPP), &okB);
+    DWORD w = StormReadU32(StormRt(STORM_RVA_WIDTH), &okW);
+    DWORD h = StormReadU32(StormRt(STORM_RVA_HEIGHT), &okH);
+    DWORD bpp = StormReadU32(StormRt(STORM_RVA_BPP), &okB);
     ScLog("STORM [%s] geometry: bpp=%s%u width=%s%u height=%s%u (storm base 0x%08X)",
           t, okB ? "" : "?", (unsigned)bpp, okW ? "" : "?", (unsigned)w,
           okH ? "" : "?", (unsigned)h, (unsigned)(DWORD_PTR)g_stormBase);
 
     bool okF;
-    DWORD fb = RdU32(StormRt(STORM_RVA_FBLOCKPTR), &okF);
+    DWORD fb = StormReadU32(StormRt(STORM_RVA_FALLBACK_LOCK_PTR), &okF);
     bool okC[4]; DWORD clip[4];
-    for (int i = 0; i < 4; ++i) clip[i] = RdU32((BYTE*)StormRt(STORM_RVA_CLIP) + i * 4, &okC[i]);
+    for (int i = 0; i < 4; ++i) clip[i] = StormReadU32((BYTE*)StormRt(STORM_RVA_CLIP) + i * 4, &okC[i]);
     ScLog("STORM [%s] present path: fallbackLockPtr[0x5EA70]=%s0x%08X (%s) "
           "clip[0x5EA74]=(%d,%d,%d,%d)",
           t, okF ? "" : "?", (unsigned)fb,
@@ -215,8 +188,8 @@ void ScStormPresentLog(const char* tag) {
           (int)clip[0], (int)clip[1], (int)clip[2], (int)clip[3]);
 
     bool okS[4]; DWORD surf[4];
-    for (int i = 0; i < 4; ++i) surf[i] = RdU32((BYTE*)StormRt(STORM_RVA_SURFTABLE) + i * 4, &okS[i]);
-    bool okP; DWORD prim = RdU32(StormRt(STORM_RVA_PRIMARY), &okP);
+    for (int i = 0; i < 4; ++i) surf[i] = StormReadU32((BYTE*)StormRt(STORM_RVA_SURFTABLE) + i * 4, &okS[i]);
+    bool okP; DWORD prim = StormReadU32(StormRt(STORM_RVA_PRIMARY), &okP);
     ScLog("STORM [%s] surfaces[0x5EA84]: [0]=0x%08X [1]=0x%08X [2]=0x%08X [3]=0x%08X "
           "primary[0x5EA90]=0x%08X",
           t, (unsigned)surf[0], (unsigned)surf[1], (unsigned)surf[2], (unsigned)surf[3],
@@ -226,7 +199,7 @@ void ScStormPresentLog(const char* tag) {
     // Ordinal_440 width patch to 0x320 took, [+0x10] reads 800; if it still reads
     // 640, storm builds every region on a 640-wide grid and THAT clips the copy.
     bool okG[6]; DWORD g[6];
-    for (int i = 0; i < 6; ++i) g[i] = RdU32((BYTE*)StormRt(STORM_RVA_RGNGRID) + i * 4, &okG[i]);
+    for (int i = 0; i < 6; ++i) g[i] = StormReadU32((BYTE*)StormRt(STORM_RVA_RGNGRID) + i * 4, &okG[i]);
     ScLog("STORM [%s] region-grid[0x5AC10]: cells=%u/%u log2=(%u,%u) WIDTH=%s%u HEIGHT=%u",
           t, (unsigned)g[0], (unsigned)g[1], (unsigned)g[2], (unsigned)g[3],
           okG[4] ? "" : "?", (unsigned)g[4], (unsigned)g[5]);
@@ -235,10 +208,10 @@ void ScStormPresentLog(const char* tag) {
     // A black RIGHT band with no letterbox means the primary is 800 and only 0..639
     // were written (cap is the copy); a 640 primary would mean the surface itself is
     // narrow. Read-only COM call, pointer-guarded.
-    bool okS0; DWORD prim0 = RdU32(StormRt(STORM_RVA_SURFTABLE), &okS0);
-    if (okS0 && prim0 && Readable((void*)(DWORD_PTR)prim0, 4)) {
+    bool okS0; DWORD prim0 = StormReadU32(StormRt(STORM_RVA_SURFTABLE), &okS0);
+    if (okS0 && prim0 && ScReadableAt((void*)(DWORD_PTR)prim0, 4)) {
         DWORD vtbl = *(DWORD*)(DWORD_PTR)prim0;
-        if (Readable((void*)(DWORD_PTR)(vtbl + DDS_VTBL_GETSURFACEDESC), 4)) {
+        if (ScReadableAt((void*)(DWORD_PTR)(vtbl + DDS_VTBL_GETSURFACEDESC), 4)) {
             DWORD fn = *(DWORD*)(DWORD_PTR)(vtbl + DDS_VTBL_GETSURFACEDESC);
             BYTE ddsd[0x6C];
             memset(ddsd, 0, sizeof(ddsd));
@@ -293,12 +266,12 @@ HkOrd432(DWORD dst, DWORD src, DWORD dstPitch, DWORD srcPitch, DWORD region) {
     int ret = ((ScOrd432Fn)g_hkCopy.trampoline)(dst, src, dstPitch, srcPitch, region);
     // Then the far band, straight from the buffer. Guarded on the widescreen
     // geometry so a stray 640-pitch call can never write past a 640-wide surface.
-    const int W = SC_WS_WIDTH, H = SC_WS_HEIGHT;
+    const int W = ScScreenTargetWidth(), H = ScScreenTargetHeight();
     if (g_mode == SC_STORM_WIDEN && dst && src &&
         dstPitch >= (DWORD)W && srcPitch >= (DWORD)W) {
-        const int stripW = W - SC_STOCK_WIDTH;   // 160 at 800, 640 at 1280
-        BYTE* d = (BYTE*)(DWORD_PTR)dst + SC_STOCK_WIDTH;
-        BYTE* s = (BYTE*)(DWORD_PTR)src + SC_STOCK_WIDTH;
+        const int stripW = W - SC_SCREEN_W;   // 160 at 800, 640 at 1280
+        BYTE* d = (BYTE*)(DWORD_PTR)dst + SC_SCREEN_W;
+        BYTE* s = (BYTE*)(DWORD_PTR)src + SC_SCREEN_W;
         for (int y = 0; y < H; ++y) {
             memcpy(d, s, (size_t)stripW);
             d += dstPitch;
@@ -320,7 +293,7 @@ static const BYTE kPrologueOrd432[] = { 0x55, 0x8B, 0xEC, 0x8B, 0x45, 0x18 };
 // ---------------------------------------------------------------------------
 
 void ScStormPresentInstall(BYTE* exeBase, bool writeAllowed) {
-    g_exeBase = exeBase;
+    ScEngineSetModuleBase(exeBase);
     g_writeAllowed = writeAllowed;
     g_mode = ScStormPresentModeWanted();
     g_logs = 0;
@@ -385,7 +358,7 @@ void ScStormPresentInstall(BYTE* exeBase, bool writeAllowed) {
                   "primary each present, so the buffer->glass present carries all %d columns. "
                   "The read-only geometry log also runs on the marker channel.",
                   (unsigned)(DWORD_PTR)g_stormBase, (unsigned)(DWORD_PTR)ord432,
-                  SC_STOCK_WIDTH, SC_WS_WIDTH - 1, SC_WS_WIDTH, SC_WS_WIDTH);
+                  SC_SCREEN_W, ScScreenTargetWidth() - 1, ScScreenTargetWidth(), ScScreenTargetWidth());
         }
     }
     if (g_mode == SC_STORM_PROBE) {

@@ -40,6 +40,8 @@
 
 #include "sc_addresses.h"
 #include "sc_circles.h"
+#include "sc_engine.h"
+#include "sc_env.h"
 #include "sc_fanout.h"
 #include "sc_hook.h"
 #include "sc_hudrow.h"
@@ -47,6 +49,7 @@
 #include "sc_log.h"
 #include "sc_prodfan.h"
 #include "sc_session.h"
+#include "sc_unit.h"
 
 // ---------------------------------------------------------------------------
 // Tunables (all overridable by environment variable, all logged at attach)
@@ -68,14 +71,9 @@
 #define SC_DEFAULT_BUDGET   200
 
 static ScMode  g_mode = SC_MODE_OBSERVE;
-static BYTE*   g_base = NULL;
 static int     g_budget = SC_DEFAULT_BUDGET;
 static int     g_maxUnits = SC_SHADOW_MAX - 1;
 static bool    g_verboseCmds = true;
-
-static void* Rt(DWORD staticVa) {
-    return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE));
-}
 
 // ---------------------------------------------------------------------------
 // Which commands get fanned out
@@ -239,37 +237,13 @@ static bool ShadowContainsUnit(const ShadowUnit* arr, int n, const ShadowUnit* u
     return false;
 }
 
-// Is this a pointer to a real slot of the unit array? The array is a fixed
-// 1700-entry global, so an in-range pointer is always readable -- but the pointer
-// itself has to be validated against the array's bounds and stride first, because a
-// bad one would otherwise be dereferenced. Every deref in this file goes through
-// here, including each link of the player-unit-list walk below.
-static bool UnitPtrValid(DWORD ptr) {
-    if (!ptr) return false;
-    DWORD arrayBase = (DWORD)Rt(SC_VA_UNIT_ARRAY_BASE);
-    if (ptr < arrayBase) return false;
-    DWORD off = ptr - arrayBase;
-    if (off % SC_CUNIT_SIZE != 0) return false;
-    return (off / SC_CUNIT_SIZE + 1) <= SC_MAX_UNIT_INDEX;   // the wire index is 1-based
-}
-
 // Reads a unit's identity fields.
 static bool ReadUnit(DWORD ptr, ShadowUnit* out) {
-    if (!UnitPtrValid(ptr)) return false;
+    if (!ScUnitPtrValid(ptr)) return false;
     out->ptr        = ptr;
-    out->uniqueness = *(BYTE*)(ptr + SC_CUNIT_OFF_UNIQUENESS);
-    out->player     = *(BYTE*)(ptr + SC_CUNIT_OFF_PLAYER);
+    out->uniqueness = ScUnitUniqueness(ptr);
+    out->player     = ScUnitPlayer(ptr);
     return true;
-}
-
-// index+uniqueness packed exactly as CMDACT_Select / the Right Click builder /
-// the Targeted Order builder all do it. Returns 0 for anything out of range,
-// which is what the engine encodes too.
-static WORD UnitTag(DWORD ptr) {
-    if (!UnitPtrValid(ptr)) return 0;
-    DWORD index = (ptr - (DWORD)Rt(SC_VA_UNIT_ARRAY_BASE)) / SC_CUNIT_SIZE + 1;
-    BYTE uniq = *(BYTE*)(ptr + SC_CUNIT_OFF_UNIQUENESS);
-    return (WORD)(((WORD)uniq << 11) | (WORD)index);
 }
 
 // ---------------------------------------------------------------------------
@@ -367,12 +341,12 @@ enum ScDropWhy {
 // The header publishes the same set for hooktest to assert on; the two must agree
 // numerically, and a mismatch would silently turn a "dropped for the right reason"
 // assertion into a coincidence.
-static_assert((int)SC_DROP_RECYCLED == (int)SC_FANOUT_RECYCLED, "drop reason drift");
-static_assert((int)SC_DROP_DEAD     == (int)SC_FANOUT_DEAD,     "drop reason drift");
-static_assert((int)SC_DROP_FOREIGN  == (int)SC_FANOUT_FOREIGN,  "drop reason drift");
-static_assert((int)SC_DROP_NOSPRITE == (int)SC_FANOUT_NOSPRITE, "drop reason drift");
-static_assert((int)SC_DROP_REMOVED  == (int)SC_FANOUT_REMOVED,  "drop reason drift");
-static_assert((int)SC_DROP_NOTAG    == (int)SC_FANOUT_NOTAG,    "drop reason drift");
+static_assert((int)SC_DROP_RECYCLED == (int)SC_FANOUT_DROP_RECYCLED, "drop reason drift");
+static_assert((int)SC_DROP_DEAD     == (int)SC_FANOUT_DROP_DEAD,     "drop reason drift");
+static_assert((int)SC_DROP_FOREIGN  == (int)SC_FANOUT_DROP_FOREIGN,  "drop reason drift");
+static_assert((int)SC_DROP_NOSPRITE == (int)SC_FANOUT_DROP_NOSPRITE, "drop reason drift");
+static_assert((int)SC_DROP_REMOVED  == (int)SC_FANOUT_DROP_REMOVED,  "drop reason drift");
+static_assert((int)SC_DROP_NOTAG    == (int)SC_FANOUT_DROP_NOTAG,    "drop reason drift");
 
 static const char* DropWhyName(int why) {
     switch (why) {
@@ -393,26 +367,7 @@ static const char* DropWhyName(int why) {
 // the added terms firing.
 static bool SameUnit(const ShadowUnit* u) {
     if (!u->ptr) return false;
-    return *(BYTE*)(u->ptr + SC_CUNIT_OFF_UNIQUENESS) == u->uniqueness;
-}
-
-// Is `unit` reachable from its owning player's unit list? A unit in play is
-// head-inserted into playerUnitList[player] (0x006283F8) by the unit (re)init
-// 0x004A0320 and threaded through CUnit+0x6C; the removal path 0x004A0740 UNLINKS a
-// unit removed from play (sc_addresses.h, hud-selection-row.md 6.1). Every link is
-// bounds/stride-validated before it is followed, and the walk is bounded, so a torn
-// or corrupt list fails closed rather than faulting or hanging.
-static bool InPlayerUnitList(DWORD unit) {
-    if (!unit) return false;
-    BYTE player = *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER);
-    if (player >= SC_MAX_PLAYERS) return false;
-    DWORD u = ((DWORD*)Rt(SC_VA_PLAYER_UNIT_LIST))[player];
-    for (int guard = 0; u && guard < SC_MAX_UNITS_WALK; ++guard) {
-        if (!UnitPtrValid(u)) return false;
-        if (u == unit) return true;
-        u = *(DWORD*)(u + SC_CUNIT_OFF_LIST_NEXT);
-    }
-    return false;
+    return ScUnitUniqueness(u->ptr) == u->uniqueness;
 }
 
 // ---------------------------------------------------------------------------
@@ -461,7 +416,7 @@ static bool UnitIsStandardAndMovable(DWORD unit) {
     if (!unit) return false;
     ScMovableFn f = g_movableFn ? g_movableFn
                   : g_scMovableTrampoline ? (ScMovableFn)g_scMovableTrampoline
-                                          : (ScMovableFn)Rt(SC_VA_UNIT_IS_STANDARD_AND_MOVABLE);
+                                          : (ScMovableFn)ScRuntimeAddr(SC_VA_UNIT_IS_STANDARD_AND_MOVABLE);
     return f(unit) != 0;
 }
 
@@ -473,7 +428,7 @@ static int g_simSlots = SC_SELECTION_SLOTS;
 // units.dat prototype flags for a type, read only so a log line can say WHICH bit the
 // gate objected to. Returns 0 for a type id outside the table's addressable range.
 static DWORD UnitsDatFlags(WORD unitType) {
-    return ((DWORD*)Rt(SC_VA_UNITS_DAT_FLAGS))[unitType];
+    return ((DWORD*)ScRuntimeAddr(SC_VA_UNITS_DAT_FLAGS))[unitType];
 }
 
 // "Is this unit a BUILDING?" -- the units.dat prototype flag, bit 0x01, which is the
@@ -524,11 +479,11 @@ static bool g_liveness = true;    // %SCPLUGIN_FANOUT_LIVENESS%
 static bool UnitLive(const ShadowUnit* u, int* why) {
     int w = SC_LIVE_OK;
     if (!u->ptr) w = SC_DROP_NOTAG;
-    else if (*(BYTE*)(u->ptr + SC_CUNIT_OFF_UNIQUENESS) != u->uniqueness) w = SC_DROP_RECYCLED;
-    else if (*(DWORD*)(u->ptr + SC_CUNIT_OFF_HITPOINTS) == 0) w = SC_DROP_DEAD;
-    else if (*(BYTE*)(u->ptr + SC_CUNIT_OFF_PLAYER) != u->player) w = SC_DROP_FOREIGN;
-    else if (*(DWORD*)(u->ptr + SC_CUNIT_OFF_SPRITE) == 0) w = SC_DROP_NOSPRITE;
-    else if (!InPlayerUnitList(u->ptr)) w = SC_DROP_REMOVED;
+    else if (ScUnitUniqueness(u->ptr) != u->uniqueness) w = SC_DROP_RECYCLED;
+    else if (ScUnitHitPoints(u->ptr) == 0) w = SC_DROP_DEAD;
+    else if (ScUnitPlayer(u->ptr) != u->player) w = SC_DROP_FOREIGN;
+    else if (ScUnitSprite(u->ptr) == 0) w = SC_DROP_NOSPRITE;
+    else if (!ScUnitInOwnPlayerList(u->ptr)) w = SC_DROP_REMOVED;
     if (why) *why = w;
     return w == SC_LIVE_OK;
 }
@@ -594,7 +549,7 @@ static bool ShouldLogForensics(DWORD unit) {
 // means "the pointer is not readable memory" -- which is itself the answer.
 static void LogUnitForensics(const char* what, const ShadowUnit* u, int why) {
     if (!ShouldLogForensics(u->ptr)) return;
-    DWORD sprite = u->ptr ? *(DWORD*)(u->ptr + SC_CUNIT_OFF_SPRITE) : 0;
+    DWORD sprite = u->ptr ? ScUnitSprite(u->ptr) : 0;
     int   sflags = -1;
     if (sprite) {
         MEMORY_BASIC_INFORMATION mbi;
@@ -606,11 +561,11 @@ static void LogUnitForensics(const char* what, const ShadowUnit* u, int why) {
     }
     ScLog("%s: unit=0x%08X tag=%04X why=%s hp=%u uniq=%u/%u player=%u/%u "
           "sprite=0x%08X spriteFlags=%d inList=%d",
-          what, (unsigned)u->ptr, UnitTag(u->ptr), DropWhyName(why),
+          what, (unsigned)u->ptr, ScUnitTag(u->ptr), DropWhyName(why),
           u->ptr ? *(unsigned*)(u->ptr + SC_CUNIT_OFF_HITPOINTS) : 0,
-          u->ptr ? *(BYTE*)(u->ptr + SC_CUNIT_OFF_UNIQUENESS) : 0, u->uniqueness,
-          u->ptr ? *(BYTE*)(u->ptr + SC_CUNIT_OFF_PLAYER) : 0, u->player,
-          (unsigned)sprite, sflags, (u->ptr && InPlayerUnitList(u->ptr)) ? 1 : 0);
+          u->ptr ? ScUnitUniqueness(u->ptr) : 0, u->uniqueness,
+          u->ptr ? ScUnitPlayer(u->ptr) : 0, u->player,
+          (unsigned)sprite, sflags, (u->ptr && ScUnitInOwnPlayerList(u->ptr)) ? 1 : 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -749,7 +704,7 @@ static int EmitSelect(const ShadowUnit* units, int n) {
         WORD tag = 0;
         bool allow = PassesGate(&units[i], &why);
         if (allow) {
-            tag = UnitTag(units[i].ptr);
+            tag = ScUnitTag(units[i].ptr);
             if (!tag) { allow = false; why = SC_DROP_NOTAG; }
         }
         if (!allow) {
@@ -795,8 +750,8 @@ static int DrainPlan(void) {
 
     // How much room is left in the engine's own turn buffer this turn? queueCommand
     // silently DROPS a command on two of its overflow paths, so never push past it.
-    DWORD inQueue = *(DWORD*)Rt(SC_VA_BYTES_IN_CMD_QUEUE);
-    DWORD maxQueue = *(DWORD*)Rt(SC_VA_MAX_CMD_QUEUE_BYTES);
+    DWORD inQueue = *(DWORD*)ScRuntimeAddr(SC_VA_BYTES_IN_CMD_QUEUE);
+    DWORD maxQueue = *(DWORD*)ScRuntimeAddr(SC_VA_MAX_CMD_QUEUE_BYTES);
     int   room = (int)maxQueue - (int)inQueue - 8;   // 8B margin for the engine
     int   budget = g_budget < room ? g_budget : room;
 
@@ -1033,9 +988,9 @@ static void FanoutSessionSync(void) {
 // the array being read, and DisagreeingPlayerIds() below reports it if the three ever
 // diverge rather than letting a wrong row pass silently.
 static bool EngineGroupNonEmpty(int group) {
-    const BYTE player = *(BYTE*)Rt(SC_VA_ACTIVE_PLAYER_ID);
+    const BYTE player = *(BYTE*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_ID);
     if (player >= SC_MAX_PLAYERS) return false;   // fail-closed, as everywhere here
-    const DWORD* row = (const DWORD*)Rt(SC_VA_SELECTION_HOTKEYS)
+    const DWORD* row = (const DWORD*)ScRuntimeAddr(SC_VA_SELECTION_HOTKEYS)
                      + (size_t)(player * SC_HOTKEY_GROUPS_PER_PLAYER + group)
                        * SC_HOTKEY_SLOTS_PER_GROUP;
     for (int i = 0; i < SC_HOTKEY_SLOTS_PER_GROUP; ++i) if (row[i]) return true;
@@ -1043,9 +998,9 @@ static bool EngineGroupNonEmpty(int group) {
 }
 
 static bool DisagreeingPlayerIds(void) {
-    const BYTE a = *(BYTE*)Rt(SC_VA_ACTIVE_PLAYER_ID);
-    const BYTE b = *(BYTE*)Rt(SC_VA_PLAYER_ID_512688);
-    const BYTE c = *(BYTE*)Rt(SC_VA_PLAYER_ID_512678);
+    const BYTE a = *(BYTE*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_ID);
+    const BYTE b = *(BYTE*)ScRuntimeAddr(SC_VA_PLAYER_ID_512688);
+    const BYTE c = *(BYTE*)ScRuntimeAddr(SC_VA_PLAYER_ID_512678);
     return !(a == b && b == c);
 }
 
@@ -1103,7 +1058,7 @@ static bool ResetGroupIfEngineRowEmpty(int group) {
 // slot 0 and whose own clear loop terminates on the first NULL -- so stopping at a NULL
 // is the engine's own termination rule, not an assumption about the array.
 static int ReadEngineVisible(ShadowUnit* out, int maxOut) {
-    DWORD* arr = (DWORD*)Rt(SC_VA_ACTIVE_PLAYER_SELECTION);
+    DWORD* arr = (DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_SELECTION);
     int n = 0;
     for (int i = 0; i < SC_SELECTION_SLOTS && n < maxOut; ++i) {
         if (!arr[i]) break;
@@ -1151,13 +1106,7 @@ typedef void (*ScCreateSelectionFn)(DWORD* list, int count);
 static ScCreateSelectionFn g_createSelFn = NULL;
 
 static void CallCreateNewUnitSelections(DWORD* list, int count) {
-    if (g_createSelFn) { g_createSelFn(list, count); return; }
-    void* fn = Rt(SC_VA_CREATE_NEW_UNIT_SELECTIONS);
-    __asm__ __volatile__("pushl %[n]\n\t"
-                         "calll *%[fn]"
-                         : "+a"(list)
-                         : [n] "m"(count), [fn] "r"(fn)
-                         : "ecx", "edx", "cc", "memory");
+    if (g_createSelFn) g_createSelFn(list, count); else ScCreateSelections(list, count);
 }
 
 // Ctrl+N / shift-add. `add` false = the engine's ASSIGN (replace), true = its ADD.
@@ -1216,7 +1165,7 @@ static void GroupRecall(int group) {
         tags[0] = '\0';
         for (int i = 0; i < visibleCount; ++i) {
             used += _snprintf(tags + used, sizeof(tags) - used, "%s%04X",
-                              i ? " " : "", UnitTag(visible[i].ptr));
+                              i ? " " : "", ScUnitTag(visible[i].ptr));
         }
         ScLog("GROUP recall enter: group=%d activePlayerSelection holds visible=%d [%s] "
               "(read at queueCommand time, BEFORE anything of ours runs)",
@@ -1415,8 +1364,8 @@ static bool OnHotkeyCommand(const BYTE* buf, unsigned len) {
         // block comes from one of the three (binary-selection-map.md 7 note 7).
         ScLog("GROUP WARNING: the three player-id globals disagree (%u/%u/%u) -- the "
               "engine row this block reads may not be the one the store writes",
-              *(BYTE*)Rt(SC_VA_ACTIVE_PLAYER_ID), *(BYTE*)Rt(SC_VA_PLAYER_ID_512688),
-              *(BYTE*)Rt(SC_VA_PLAYER_ID_512678));
+              *(BYTE*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_ID), *(BYTE*)ScRuntimeAddr(SC_VA_PLAYER_ID_512688),
+              *(BYTE*)ScRuntimeAddr(SC_VA_PLAYER_ID_512678));
     }
     switch (action) {
         case SC_HOTKEY_ASSIGN: GroupStore(group, false); return true;
@@ -1434,14 +1383,6 @@ static bool OnHotkeyCommand(const BYTE* buf, unsigned len) {
 // ---------------------------------------------------------------------------
 
 static volatile LONG g_inFanout = 0;
-
-// force_align_arg_pointer on every entry point the GAME calls:
-// GCC at -O2 assumes the incoming stack is 16-byte aligned and will happily emit
-// aligned SSE spills on that assumption. StarCraft is a 1998-era VC6-class build
-// that guarantees 4-byte alignment and nothing more, so without this a detour can
-// fault on a `movaps` with no other symptom than the game vanishing. The attribute
-// makes each of these functions realign ESP itself.
-#define SC_GAME_ENTRY __attribute__((force_align_arg_pointer))
 
 // The decision half, callable without any hook installed.
 bool ScFanoutOnCommand(const BYTE* buf, unsigned len) {
@@ -1794,7 +1735,7 @@ unsigned ScFanoutGrowBuildingGroup(DWORD* candidates, DWORD* out, DWORD clicked,
     if (ret != 1 || !out || !candidates) return ret;
 
     const DWORD lead = out[0];
-    if (!UnitPtrValid(lead)) return ret;
+    if (!ScUnitPtrValid(lead)) return ret;
     // Both tests, same reason as everywhere else in task 036 (see UnitIsBuilding): the
     // predicate failing is not by itself "this is a building". Task 024 shipped with the
     // predicate alone, which was safe while `clicked == 0` also had to hold -- a box that
@@ -1803,7 +1744,7 @@ unsigned ScFanoutGrowBuildingGroup(DWORD* candidates, DWORD* out, DWORD clicked,
     if (UnitIsStandardAndMovable(lead) || !UnitIsBuilding(lead)) return ret;
 
     const WORD leadType  = *(WORD*)(lead + SC_CUNIT_OFF_UNIT_ID);
-    const BYTE leadOwner = *(BYTE*)(lead + SC_CUNIT_OFF_PLAYER);
+    const BYTE leadOwner = ScUnitPlayer(lead);
 
     EnterCriticalSection(&g_lock);
     FanoutSessionSync();
@@ -1813,9 +1754,9 @@ unsigned ScFanoutGrowBuildingGroup(DWORD* candidates, DWORD* out, DWORD clicked,
     for (int i = 0; candidates[i] != 0 && i < SC_MAX_UNITS_WALK; ++i) {
         const DWORD c = candidates[i];
         if (c == lead) continue;
-        if (!UnitPtrValid(c)) continue;
+        if (!ScUnitPtrValid(c)) continue;
         if (*(WORD*)(c + SC_CUNIT_OFF_UNIT_ID) != leadType) continue;
-        if (*(BYTE*)(c + SC_CUNIT_OFF_PLAYER) != leadOwner) continue;
+        if (ScUnitPlayer(c) != leadOwner) continue;
         // Fail closed. Same type as a unit that failed the gate cannot pass it, but a
         // future type whose gate verdict depends on per-unit state (0x0047B770 reads
         // CUnit+0x117/+0x119/+0x124 as well as the type) would, and a movable unit has
@@ -1945,17 +1886,17 @@ asm(
 // static VA would be wrong under any base other than 0x00400000, and the plugin already
 // relocates every other address it uses.
 static bool IsExtendSite(DWORD retAddr) {
-    return retAddr == (DWORD)(DWORD_PTR)Rt(SC_RET_MOVABLE_SHIFT_LEAD)
-        || retAddr == (DWORD)(DWORD_PTR)Rt(SC_RET_MOVABLE_SHIFT_CLICKED)
-        || retAddr == (DWORD)(DWORD_PTR)Rt(SC_RET_MOVABLE_COMBINE_NEW)
-        || retAddr == (DWORD)(DWORD_PTR)Rt(SC_RET_MOVABLE_COMBINE_OLD);
+    return retAddr == ScRuntimeVa(SC_RET_MOVABLE_SHIFT_LEAD)
+        || retAddr == ScRuntimeVa(SC_RET_MOVABLE_SHIFT_CLICKED)
+        || retAddr == ScRuntimeVa(SC_RET_MOVABLE_COMBINE_NEW)
+        || retAddr == ScRuntimeVa(SC_RET_MOVABLE_COMBINE_OLD);
 }
 
 static const char* ExtendSiteName(DWORD retAddr) {
-    if (retAddr == (DWORD)(DWORD_PTR)Rt(SC_RET_MOVABLE_SHIFT_LEAD))    return "shift-click/lead";
-    if (retAddr == (DWORD)(DWORD_PTR)Rt(SC_RET_MOVABLE_SHIFT_CLICKED)) return "shift-click/clicked";
-    if (retAddr == (DWORD)(DWORD_PTR)Rt(SC_RET_MOVABLE_COMBINE_NEW))   return "combine/new-list";
-    if (retAddr == (DWORD)(DWORD_PTR)Rt(SC_RET_MOVABLE_COMBINE_OLD))   return "combine/existing";
+    if (retAddr == ScRuntimeVa(SC_RET_MOVABLE_SHIFT_LEAD))    return "shift-click/lead";
+    if (retAddr == ScRuntimeVa(SC_RET_MOVABLE_SHIFT_CLICKED)) return "shift-click/clicked";
+    if (retAddr == ScRuntimeVa(SC_RET_MOVABLE_COMBINE_NEW))   return "combine/new-list";
+    if (retAddr == ScRuntimeVa(SC_RET_MOVABLE_COMBINE_OLD))   return "combine/existing";
     return "?";
 }
 
@@ -1964,8 +1905,8 @@ ScFanoutMovableDecide(DWORD unit, DWORD retAddr, int verdict) {
     if (!g_buildingGroups || g_mode != SC_MODE_FANOUT) return verdict;
     if (!IsExtendSite(retAddr)) return verdict;
 
-    const DWORD lead = *(DWORD*)Rt(SC_VA_ACTIVE_PLAYER_SELECTION);
-    if (!UnitPtrValid(lead)) return verdict;
+    const DWORD lead = *(DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_SELECTION);
+    if (!ScUnitPtrValid(lead)) return verdict;
     // Not a building group -> the engine decides, exactly as it does today. This is the
     // branch every ordinary unit selection takes, so shift-clicking Marines is untouched.
     //
@@ -1976,12 +1917,12 @@ ScFanoutMovableDecide(DWORD unit, DWORD retAddr, int verdict) {
     if (UnitIsStandardAndMovable(lead) || !UnitIsBuilding(lead)) return verdict;
 
     ++g_statExtendSeen;
-    if (!UnitPtrValid(unit)) { ++g_statExtendRefuse; return 0; }
+    if (!ScUnitPtrValid(unit)) { ++g_statExtendRefuse; return 0; }
 
     const WORD leadType  = *(WORD*)(lead + SC_CUNIT_OFF_UNIT_ID);
-    const BYTE leadOwner = *(BYTE*)(lead + SC_CUNIT_OFF_PLAYER);
+    const BYTE leadOwner = ScUnitPlayer(lead);
     const WORD type      = *(WORD*)(unit + SC_CUNIT_OFF_UNIT_ID);
-    const BYTE owner     = *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER);
+    const BYTE owner     = ScUnitPlayer(unit);
 
     int  why  = SC_LIVE_OK;
     bool live = true;
@@ -2039,7 +1980,7 @@ HkSortAllUnits(DWORD* candidates, DWORD* out, DWORD clicked) {
 const char* ScModeName(ScMode m) {
     switch (m) {
         case SC_MODE_OBSERVE:  return "observe";
-        case SC_MODE_HOOKTEST: return "hooktest";
+        case SC_MODE_LOGONLY:  return "hooktest";   // the frozen launcher spelling
         case SC_MODE_SHADOW:   return "shadow";
         case SC_MODE_FANOUT:   return "fanout";
     }
@@ -2050,43 +1991,34 @@ ScMode ScFanoutResolveMode(void) {
     char buf[32];
     DWORD n = GetEnvironmentVariableA("SCPLUGIN_MODE", buf, sizeof(buf));
     if (n == 0 || n >= sizeof(buf)) return SC_MODE_OBSERVE;
-    if (lstrcmpiA(buf, "hooktest") == 0) return SC_MODE_HOOKTEST;
+    if (lstrcmpiA(buf, "hooktest") == 0) return SC_MODE_LOGONLY;   // the launcher spelling
+    if (lstrcmpiA(buf, "logonly")  == 0) return SC_MODE_LOGONLY;   // what it actually is
     if (lstrcmpiA(buf, "shadow")   == 0) return SC_MODE_SHADOW;
     if (lstrcmpiA(buf, "fanout")   == 0) return SC_MODE_FANOUT;
     return SC_MODE_OBSERVE;
 }
 
-static int EnvInt(const char* name, int def, int lo, int hi) {
-    char buf[32];
-    DWORD n = GetEnvironmentVariableA(name, buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return def;
-    int v = atoi(buf);
-    if (v < lo) v = lo;
-    if (v > hi) v = hi;
-    return v;
-}
-
 int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     g_mode = mode;
-    g_base = moduleBase;
+    ScEngineSetModuleBase(moduleBase);
     if (mode == SC_MODE_OBSERVE) return 0;
 
     if (!g_lockInit) { InitializeCriticalSection(&g_lock); g_lockInit = true; }
 
     g_session = ScSessionEpoch();
-    g_budget      = EnvInt("SCPLUGIN_FANOUT_BUDGET", SC_DEFAULT_BUDGET, 40, 480);
-    g_maxUnits    = EnvInt("SCPLUGIN_MAX_UNITS", SC_SHADOW_MAX - 1, 12, SC_SHADOW_MAX - 1);
-    g_verboseCmds = EnvInt("SCPLUGIN_LOG_COMMANDS", 1, 0, 1) != 0;
+    g_budget      = ScEnvInt("SCPLUGIN_FANOUT_BUDGET", SC_DEFAULT_BUDGET, 40, 480);
+    g_maxUnits    = ScEnvInt("SCPLUGIN_MAX_UNITS", SC_SHADOW_MAX - 1, 12, SC_SHADOW_MAX - 1);
+    g_verboseCmds = ScEnvInt("SCPLUGIN_LOG_COMMANDS", 1, 0, 1) != 0;
     // Task 020's liveness gate, ON by default. Setting it to 0 restores the
     // uniqueness-only test the fan-out shipped with, which is a KNOWN-BAD
     // configuration -- it exists so an A/B run can show the defect and so the
     // in-game regression assertion can be shown to be capable of failing.
-    g_liveness    = EnvInt("SCPLUGIN_FANOUT_LIVENESS", 1, 0, 1) != 0;
+    g_liveness    = ScEnvInt("SCPLUGIN_FANOUT_LIVENESS", 1, 0, 1) != 0;
     // Task 024's same-type building groups. Its own off switch on top of the mode, so
     // a run can prove the STOCK one-building behaviour with the same binary -- an
     // "it selected four" assertion is only worth something next to an arm where the
     // same box selects one.
-    g_buildingGroups = EnvInt("SCPLUGIN_BUILDING_GROUPS", 1, 0, 1) != 0;
+    g_buildingGroups = ScEnvInt("SCPLUGIN_BUILDING_GROUPS", 1, 0, 1) != 0;
     g_movableFn      = NULL;    // in the game, ask the engine
     g_simSlots       = SC_SELECTION_SLOTS;
     LoadFanoutCmds();
@@ -2095,14 +2027,14 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     // "capture and log, change nothing", and drawing a circle is a change. %SCPLUGIN_CIRCLES%
     // is its own off switch on top of the mode, so a fan-out run can be compared with and
     // without the visuals without rebuilding anything.
-    const bool circles = (mode == SC_MODE_FANOUT) && EnvInt("SCPLUGIN_CIRCLES", 1, 0, 1) != 0;
+    const bool circles = (mode == SC_MODE_FANOUT) && ScEnvInt("SCPLUGIN_CIRCLES", 1, 0, 1) != 0;
     ScCirclesInit(moduleBase, circles);
 
     // Task 017's HUD-row paging. Same shape as the circles: fanout mode only
     // (shadow mode's contract is "capture and log, change nothing"), with
     // %SCPLUGIN_HUDROW% as its own off switch so the row can be compared stock
     // and paged without rebuilding anything.
-    const bool hudrow = (mode == SC_MODE_FANOUT) && EnvInt("SCPLUGIN_HUDROW", 1, 0, 1) != 0;
+    const bool hudrow = (mode == SC_MODE_FANOUT) && ScEnvInt("SCPLUGIN_HUDROW", 1, 0, 1) != 0;
     ScHudRowInit(moduleBase, hudrow);
 
     // Task 033's queue-overflow indicator, with %SCPLUGIN_QUEUEIND% as its own off switch.
@@ -2117,7 +2049,7 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     //
     // It goes in here rather than in scplugin.cpp so its one detour lands under the SAME
     // thread suspension as the others.
-    const bool queueind = (mode == SC_MODE_FANOUT || mode == SC_MODE_HOOKTEST) &&
+    const bool queueind = (mode == SC_MODE_FANOUT || mode == SC_MODE_LOGONLY) &&
                           ScQueueIndEnabled();
     ScQueueIndInit(moduleBase, queueind);
 
@@ -2147,23 +2079,23 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
 
     int installed = 0;
 
-    if (ScHookInstall(&g_hkQueue, "queueCommand", Rt(SC_VA_QUEUE_COMMAND),
+    if (ScHookInstall(&g_hkQueue, "queueCommand", ScRuntimeAddr(SC_VA_QUEUE_COMMAND),
                       (void*)&HkQueueCommand, 9,
                       kPrologueQueue, (int)sizeof(kPrologueQueue))) ++installed;
 
     if (mode >= SC_MODE_SHADOW) {
-        if (ScHookInstall(&g_hkSelect, "CMDACT_Select", Rt(SC_VA_CMDACT_SELECT),
+        if (ScHookInstall(&g_hkSelect, "CMDACT_Select", ScRuntimeAddr(SC_VA_CMDACT_SELECT),
                           (void*)&HkCmdactSelect, 6,
                           kPrologueSelect, (int)sizeof(kPrologueSelect))) ++installed;
 
-        if (ScHookInstall(&g_hkOverflow, "sortOverflowHandler", Rt(SC_VA_SORT_OVERFLOW),
+        if (ScHookInstall(&g_hkOverflow, "sortOverflowHandler", ScRuntimeAddr(SC_VA_SORT_OVERFLOW),
                           (void*)&ScOverflowThunk, 5,
                           kPrologueOverflow, (int)sizeof(kPrologueOverflow))) {
             g_overflowTrampoline = g_hkOverflow.trampoline;
             ++installed;
         }
 
-        if (ScHookInstall(&g_hkSort, "SortAllUnits", Rt(SC_VA_SORT_ALL_UNITS),
+        if (ScHookInstall(&g_hkSort, "SortAllUnits", ScRuntimeAddr(SC_VA_SORT_ALL_UNITS),
                           (void*)&HkSortAllUnits, 6,
                           kPrologueSort, (int)sizeof(kPrologueSort))) ++installed;
 
@@ -2174,7 +2106,7 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
         // still behaves exactly like vanilla, which is what makes that arm's "one
         // building" mean something about the FEATURE rather than about the hooks.
         if (ScHookInstall(&g_hkMovable, "unit_IsStandardAndMovable",
-                          Rt(SC_VA_UNIT_IS_STANDARD_AND_MOVABLE),
+                          ScRuntimeAddr(SC_VA_UNIT_IS_STANDARD_AND_MOVABLE),
                           (void*)&ScFanoutMovableThunk, SC_MOVABLE_PATCH_LEN,
                           kPrologueMovable, (int)sizeof(kPrologueMovable))) {
             g_scMovableTrampoline = g_hkMovable.trampoline;
@@ -2184,16 +2116,16 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
 
     // Task 014's one extra hook. It goes in under the same suspension as the rest so
     // a half-installed set is never observable.
-    if (circles && ScCirclesInstallHook()) ++installed;
+    if (circles) installed += ScCirclesInstall();
 
-    // Task 017's one dispatcher detour, same suspension. ScHudRowInstallHooks
-    // returns 0 or 1.
-    if (hudrow) installed += ScHudRowInstallHooks();
+    // Task 017's one dispatcher detour, same suspension. ScHudRowInstall
+    // returns 0 or 1, like every Sc*Install in this set.
+    if (hudrow) installed += ScHudRowInstall();
 
     // Task 033's HUD-driver detour plus task 066's queueLayout bracket -- TWO patches
     // inside sc_queueind, same suspension, still the 0-or-1 contract here: the module
     // installs both or rolls its own half back and reports 0.
-    if (queueind) installed += ScQueueIndInstallHooks();
+    if (queueind) installed += ScQueueIndInstall();
 
     ScHookResumeThreads();
 
@@ -2229,7 +2161,7 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
 // fan-out and assert the emitted bytes.
 void ScFanoutTestBegin(BYTE* fakeModuleBase, ScQueueFn emit, int budget) {
     if (!g_lockInit) { InitializeCriticalSection(&g_lock); g_lockInit = true; }
-    g_base   = fakeModuleBase;
+    ScEngineSetModuleBase(fakeModuleBase);
     g_emit   = emit;
     g_mode   = emit ? SC_MODE_FANOUT : SC_MODE_OBSERVE;
     g_budget = budget;
@@ -2286,13 +2218,13 @@ int ScFanoutGroupCount(int group) {
 
 int ScFanoutGroupStat(int which) {
     switch (which) {
-        case SC_GROUPSTAT_ASSIGN:  return (int)g_statGroupAssign;
-        case SC_GROUPSTAT_ADD:     return (int)g_statGroupAdd;
-        case SC_GROUPSTAT_RECALL:  return (int)g_statGroupRecall;
-        case SC_GROUPSTAT_WIDE:    return (int)g_statGroupWide;
-        case SC_GROUPSTAT_DISCARD: return (int)g_statGroupDiscard;
-        case SC_GROUPSTAT_RESET:   return (int)g_statGroupReset;
-        case SC_GROUPSTAT_SESSION: FanoutSessionSync(); return (int)g_statSessionDrop;
+        case SC_FANOUT_GROUP_ASSIGN:  return (int)g_statGroupAssign;
+        case SC_FANOUT_GROUP_ADD:     return (int)g_statGroupAdd;
+        case SC_FANOUT_GROUP_RECALL:  return (int)g_statGroupRecall;
+        case SC_FANOUT_GROUP_WIDE:    return (int)g_statGroupWide;
+        case SC_FANOUT_GROUP_DISCARD: return (int)g_statGroupDiscard;
+        case SC_FANOUT_GROUP_RESET:   return (int)g_statGroupReset;
+        case SC_FANOUT_GROUP_SESSION: FanoutSessionSync(); return (int)g_statSessionDrop;
     }
     return -1;
 }
@@ -2320,9 +2252,9 @@ void ScFanoutTestSetCreateSelections(ScCreateSelectionsFn f) {
 
 int ScFanoutExtendStat(int which) {
     switch (which) {
-        case SC_EXTEND_SEEN:   return (int)g_statExtendSeen;
-        case SC_EXTEND_ALLOW:  return (int)g_statExtendAllow;
-        case SC_EXTEND_REFUSE: return (int)g_statExtendRefuse;
+        case SC_FANOUT_EXTEND_SEEN:   return (int)g_statExtendSeen;
+        case SC_FANOUT_EXTEND_ALLOW:  return (int)g_statExtendAllow;
+        case SC_FANOUT_EXTEND_REFUSE: return (int)g_statExtendRefuse;
         default: return -1;
     }
 }
@@ -2390,9 +2322,9 @@ void ScFanoutRemove(void) {
           "them (see tools/plugin/README.md, off switch 3)", ScCirclesCount());
 
     ScHookSuspendThreads();
-    ScQueueIndRemoveHooks();
-    ScHudRowRemoveHooks();
-    ScCirclesRemoveHook();
+    ScQueueIndRemove();
+    ScHudRowRemove();
+    ScCirclesRemove();
     ScHookRemove(&g_hkSort);
     ScHookRemove(&g_hkOverflow);
     ScHookRemove(&g_hkSelect);
@@ -2542,11 +2474,11 @@ void ScFanoutLogUnitStates(const char* tag) {
         // cap, so ONE count covers both and a >12 building group can assert that every
         // building is circled rather than only that our own share of them is. The unit
         // passed UnitLive above, so its sprite pointer is non-NULL.
-        if (*(BYTE*)(*(DWORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_SPRITE) + SC_CSPRITE_OFF_FLAGS)
+        if (*(BYTE*)(ScUnitSprite(g_shadow[i].ptr) + SC_CSPRITE_OFF_FLAGS)
                 & SC_SPRITE_FLAG_SEL_CIRCLE) ++circled;
         BYTE stim = *(BYTE*)(g_shadow[i].ptr + SC_CUNIT_OFF_STIM_TIMER);
         if (stim) ++stimmed;
-        Hist32::Add(*(DWORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_HITPOINTS),
+        Hist32::Add(ScUnitHitPoints(g_shadow[i].ptr),
                     hpKey, hpCnt, &hpN, 32, &hpOverflow);
         Hist::Add(stim, stimKey, stimCnt, &stimN, 32, &stimOverflow);
         Hist::Add(*(WORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_ENERGY),

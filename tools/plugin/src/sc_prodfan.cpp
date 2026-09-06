@@ -13,16 +13,18 @@
 #include <string.h>
 
 #include "sc_addresses.h"
+#include "sc_engine.h"
+#include "sc_env.h"
 #include "sc_fanout.h"
 #include "sc_hook.h"
 #include "sc_log.h"
 #include "sc_prodfan.h"
+#include "sc_unit.h"
 
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
 
-static BYTE* g_base    = NULL;
 static bool  g_enabled = false;
 static bool  g_inited  = false;
 static int   g_stat[SC_PRODFAN_STAT__COUNT] = { 0 };
@@ -56,37 +58,11 @@ static int CondReturn(int which) { ++g_condExit[which]; return 0; }
 // costs nothing but stack in a function that runs once per marker.
 #define SC_PRODFAN_MAX_SHADOW 64
 
-static void* Rt(DWORD staticVa) { return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE)); }
-static DWORD RtA(DWORD staticVa) { return (DWORD)(DWORD_PTR)Rt(staticVa); }
-
 // ---------------------------------------------------------------------------
 // Reads. Every one of these is the same read sc_prodqueue makes, deliberately duplicated
 // rather than shared: task 028 is live in sc_prodqueue.cpp and this file must not make it
 // rebase. They are three loads each; the duplication is cheaper than the coupling.
 // ---------------------------------------------------------------------------
-
-static bool UnitPtrValid(DWORD ptr) {
-    if (!ptr) return false;
-    DWORD arrayBase = RtA(SC_VA_UNIT_ARRAY_BASE);
-    if (ptr < arrayBase) return false;
-    DWORD off = ptr - arrayBase;
-    if (off % SC_CUNIT_SIZE != 0) return false;
-    return (off / SC_CUNIT_SIZE + 1) <= SC_MAX_UNIT_INDEX;
-}
-
-static WORD QueueSlot(DWORD unit, int slot) {
-    return *(WORD*)(unit + SC_CUNIT_OFF_BUILD_QUEUE + (DWORD)slot * 2);
-}
-
-// The occupied-slot count. `0xE4` is the empty sentinel and every engine reader tests
-// against it (research/production-queue.md 2.4).
-static int EngineQueueLength(DWORD unit) {
-    int n = 0;
-    for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) {
-        if (QueueSlot(unit, i) != SC_BUILD_QUEUE_EMPTY) ++n;
-    }
-    return n;
-}
 
 // The engine's own movability predicate (0x0047B770, ECX = CUnit*). It is what makes a
 // selection a BUILDING group: the simulation refuses a non-movable unit every selection
@@ -95,15 +71,8 @@ static int EngineQueueLength(DWORD unit) {
 // different question from the one the engine asks.
 typedef int (__attribute__((fastcall)) *ScMovableFn)(DWORD unit);
 static bool UnitMovable(DWORD unit) {
-    ScMovableFn f = (ScMovableFn)Rt(SC_VA_UNIT_IS_STANDARD_AND_MOVABLE);
+    ScMovableFn f = (ScMovableFn)ScRuntimeAddr(SC_VA_UNIT_IS_STANDARD_AND_MOVABLE);
     return f(unit) != 0;
-}
-
-static DWORD* MineralsOf(BYTE player) {
-    return (DWORD*)(RtA(SC_VA_PLAYER_MINERALS) + (DWORD)player * 4);
-}
-static DWORD* GasOf(BYTE player) {
-    return (DWORD*)(RtA(SC_VA_PLAYER_GAS) + (DWORD)player * 4);
 }
 
 // ---------------------------------------------------------------------------
@@ -112,13 +81,11 @@ static DWORD* GasOf(BYTE player) {
 
 bool ScProdFanEnabled(void) {
     if (g_inited) return g_enabled;
-    char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_PRODFAN", buf, sizeof(buf));
-    return (n > 0 && n < sizeof(buf) && buf[0] != '0');
+    return ScEnvFlag("SCPLUGIN_PRODFAN", false);
 }
 
 void ScProdFanInit(BYTE* moduleBase, bool enabled) {
-    g_base    = moduleBase;
+    ScEngineSetModuleBase(moduleBase);
     g_enabled = enabled;
     g_inited  = true;
     ScLog("PRODFAN: %s (%%SCPLUGIN_PRODFAN%%). The oracle runs either way; only the "
@@ -201,17 +168,10 @@ int ScProdFanDecide(const WORD* types, int count, int simSlots, unsigned cmdLen)
 
 // Formats a building's five engine slots, read straight out of CUnit+0x98, in SLOT order
 // (not display order) so the raw memory is what a reader sees.
-static void FormatEngineQueue(DWORD unit, char* out, int outLen) {
-    int used = 0;
-    out[0] = '\0';
-    for (int s = 0; s < SC_BUILD_QUEUE_SLOTS && used + 8 < outLen; ++s) {
-        used += _snprintf(out + used, outLen - used, "%s0x%03X",
-                          s ? "," : "", (unsigned)QueueSlot(unit, s));
-    }
-}
+
 
 void ScProdFanLogState(const char* tag) {
-    if (!g_base) return;
+    if (!ScEngineModuleBase()) return;
     const char* t = tag ? tag : "-";
 
     ScShadowInfo shadow[SC_PRODFAN_MAX_SHADOW];
@@ -226,7 +186,7 @@ void ScProdFanLogState(const char* tag) {
 
     for (int i = 0; i < n; ++i) {
         DWORD u = shadow[i].unit;
-        if (!UnitPtrValid(u)) {
+        if (!ScUnitPtrValid(u)) {
             ScLog("PRODFAN [%s] i=%d/%d unit=0x%08X INVALID (not a live CUnit slot)",
                   t, i, n, (unsigned)u);
             continue;
@@ -235,12 +195,12 @@ void ScProdFanLogState(const char* tag) {
         // this CUnit slot has been recycled and the pointer names a different unit now
         // (research/binary-selection-map.md 6.1). Reporting it rather than skipping it
         // keeps "the selection went stale" distinguishable from "the queue is empty".
-        BYTE uniq = *(BYTE*)(u + SC_CUNIT_OFF_UNIQUENESS);
-        BYTE owner = *(BYTE*)(u + SC_CUNIT_OFF_PLAYER);
+        BYTE uniq = ScUnitUniqueness(u);
+        BYTE owner = ScUnitPlayer(u);
         WORD type = *(WORD*)(u + SC_CUNIT_OFF_UNIT_ID);
-        int len = EngineQueueLength(u);
+        int len = ScUnitQueueLength(u);
         char eng[96];
-        FormatEngineQueue(u, eng, (int)sizeof(eng));
+        ScUnitFormatQueue(u, eng, (int)sizeof(eng));
 
         if (!havePlayer && owner < SC_MAX_PLAYERS) { player = owner; havePlayer = true; }
         ++buildings;
@@ -264,8 +224,8 @@ void ScProdFanLogState(const char* tag) {
     // must agree with the per-building lines above for a boxed group; where it does not,
     // that disagreement is the finding.
     {
-        DWORD* sel = (DWORD*)Rt(SC_VA_CLIENT_SELECTION_GROUP);
-        unsigned cn = *(BYTE*)Rt(SC_VA_CLIENT_SELECTION_COUNT);
+        DWORD* sel = (DWORD*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_GROUP);
+        unsigned cn = *(BYTE*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT);
         if (cn > SC_SELECTION_SLOTS) cn = SC_SELECTION_SLOTS;
         char units[256]; units[0] = '\0';
         int used = 0;
@@ -273,7 +233,7 @@ void ScProdFanLogState(const char* tag) {
         bool haveFirst = false;
         for (unsigned i = 0; i < cn && used + 24 < (int)sizeof(units); ++i) {
             DWORD u = sel[i];
-            if (!UnitPtrValid(u)) {
+            if (!ScUnitPtrValid(u)) {
                 used += _snprintf(units + used, sizeof(units) - used, "%s(bad)", i ? "," : "");
                 continue;
             }
@@ -305,9 +265,9 @@ void ScProdFanLogState(const char* tag) {
           "totalQueued=%d minerals=%u gas=%u enabled=%d fanned=%d refused=%d reached=%d "
           "lit=%d",
           t, buildings, n, visible, ScFanoutSimSlots(),
-          (unsigned)*(BYTE*)Rt(SC_VA_CLIENT_SELECTION_COUNT), totalQueued,
-          havePlayer ? (unsigned)*MineralsOf(player) : 0u,
-          havePlayer ? (unsigned)*GasOf(player) : 0u,
+          (unsigned)*(BYTE*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT), totalQueued,
+          havePlayer ? (unsigned)*ScPlayerMinerals(player) : 0u,
+          havePlayer ? (unsigned)*ScPlayerGas(player) : 0u,
           ScProdFanEnabled() ? 1 : 0,
           g_stat[SC_PRODFAN_STAT_FANNED], g_stat[SC_PRODFAN_STAT_REFUSED],
           g_stat[SC_PRODFAN_STAT_BUILDINGS], g_stat[SC_PRODFAN_STAT_LIT]);
@@ -374,14 +334,14 @@ static const BYTE kPrologueCond[] = { 0x55, 0x8B, 0xEC, 0x8B, 0xC1 };
 // differ only in where they read the selection from, for the reason above.
 static int CollectClientSelection(WORD* types, int max, int* outSlots) {
     *outSlots = SC_SELECTION_SLOTS;
-    DWORD* sel = (DWORD*)Rt(SC_VA_CLIENT_SELECTION_GROUP);
-    unsigned n = *(BYTE*)Rt(SC_VA_CLIENT_SELECTION_COUNT);
+    DWORD* sel = (DWORD*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_GROUP);
+    unsigned n = *(BYTE*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT);
     if (n > SC_SELECTION_SLOTS) n = SC_SELECTION_SLOTS;
     int k = 0;
     bool haveFirst = false;
     for (unsigned i = 0; i < n && k < max; ++i) {
         DWORD u = sel[i];
-        if (!UnitPtrValid(u)) continue;
+        if (!ScUnitPtrValid(u)) continue;
         if (!haveFirst) { *outSlots = UnitMovable(u) ? SC_SELECTION_SLOTS : 1; haveFirst = true; }
         types[k++] = *(WORD*)(u + SC_CUNIT_OFF_UNIT_ID);
     }
@@ -435,10 +395,10 @@ extern "C" int ScProdFanCondAllow(DWORD type, DWORD unit, DWORD player) {
         ScLog("PRODFAN cond: call#%d type=0x%03X unit=0x%08X player=%u clientCount=%u "
               "simSlots=%d shadow=%d",
               g_condCalls, (unsigned)type, (unsigned)unit, (unsigned)player,
-              g_base ? (unsigned)*(BYTE*)Rt(SC_VA_CLIENT_SELECTION_COUNT) : 0u,
+              ScEngineModuleBase() ? (unsigned)*(BYTE*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT) : 0u,
               ScFanoutSimSlots(), ScFanoutShadowCount());
     }
-    if (!g_enabled || !g_base) return CondReturn(COND_OFF);
+    if (!g_enabled || !ScEngineModuleBase()) return CondReturn(COND_OFF);
 
     // THE BUTTON PARAM IS A u16, AND ECX ARRIVES WITH A DIRTY UPPER HALF.
     //
@@ -453,7 +413,7 @@ extern "C" int ScProdFanCondAllow(DWORD type, DWORD unit, DWORD player) {
     // Only when the engine would actually refuse. At a count of 1 the original allows
     // anyway, so returning 0 here keeps the single-building path byte-for-byte stock --
     // which is what makes it usable as the control arm.
-    if (*(BYTE*)Rt(SC_VA_CLIENT_SELECTION_COUNT) <= 1) return CondReturn(COND_SINGLE);
+    if (*(BYTE*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT) <= 1) return CondReturn(COND_SINGLE);
 
     // TRAIN BUTTONS ONLY. This condition also gates the two ADDON buttons (measured:
     // slots 7 and 8 of the Command Center card, params 107 and 108, action 0x00423D10).
@@ -463,7 +423,7 @@ extern "C" int ScProdFanCondAllow(DWORD type, DWORD unit, DWORD player) {
     // would be a button that looks live and does nothing.
     if (type >= SC_TRAIN_TYPE_LIMIT) return CondReturn(COND_NOT_TRAIN);
 
-    if (!UnitPtrValid(unit)) return CondReturn(COND_BAD_UNIT);
+    if (!ScUnitPtrValid(unit)) return CondReturn(COND_BAD_UNIT);
 
     WORD types[SC_PRODFAN_MAX_SHADOW];
     int slots = SC_SELECTION_SLOTS;
@@ -511,14 +471,14 @@ extern "C" int ScProdFanCondAllow(DWORD type, DWORD unit, DWORD player) {
     //    acceptable and worth knowing: the address space is going away with it.
     static int depth = 0;
     if (depth != 0) return CondReturn(COND_REENTERED);
-    BYTE* countPtr = (BYTE*)Rt(SC_VA_CLIENT_SELECTION_COUNT);
+    BYTE* countPtr = (BYTE*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT);
     BYTE savedCount = *countPtr;
     ++depth;
     *countPtr = 1;
     int r = CallStockCondition(type, unit, player);
     *countPtr = savedCount;
     --depth;
-    DWORD reason = *(DWORD*)Rt(SC_VA_CARD_REFUSE_REASON);
+    DWORD reason = *(DWORD*)ScRuntimeAddr(SC_VA_CARD_REFUSE_REASON);
 
     // Logged once per DISTINCT answer, not once per relayout: the card is laid out many
     // times a second and an unconditional line here would bury the log. The verdict and
@@ -581,10 +541,10 @@ asm(
     "  jmp   *_g_scProdFanCondTramp\n"
 );
 
-int ScProdFanInstallGate(void) {
-    if (!g_enabled || !g_base) return 0;
+int ScProdFanInstall(void) {
+    if (!g_enabled || !ScEngineModuleBase()) return 0;
     int suspended = ScHookSuspendThreads();
-    bool ok = ScHookInstall(&g_hkCond, "btnTrainCondition", Rt(SC_VA_BTN_TRAIN_CONDITION),
+    bool ok = ScHookInstall(&g_hkCond, "btnTrainCondition", ScRuntimeAddr(SC_VA_BTN_TRAIN_CONDITION),
                             (void*)&ScProdFanCondThunk, 5,
                             kPrologueCond, (int)sizeof(kPrologueCond));
     if (ok) {
@@ -605,7 +565,7 @@ int ScProdFanInstallGate(void) {
     return 1;
 }
 
-void ScProdFanRemoveGate(void) {
+void ScProdFanRemove(void) {
     if (g_hkCond.installed) ScHookRemove(&g_hkCond);
     g_condTrampoline = NULL;
     g_scProdFanCondTramp = NULL;

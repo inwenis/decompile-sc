@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "sc_engine.h"
 #include "sc_log.h"
 
 // How long the process-exit path waits for the log lock before writing without it.
@@ -143,4 +144,34 @@ void ScLogTestReleaseLock(void) {
 
 void ScLogTestClearTryLock(void) {
     InterlockedExchange(&g_logTryLock, 0);
+}
+
+void ScHexDump(const BYTE* p, int n, char* out, int outLen) {
+    int used = 0;
+    out[0] = '\0';
+    for (int i = 0; i < n && used + 3 < outLen; ++i) {
+        used += _snprintf(out + used, outLen - used, "%02X", p[i]);
+    }
+}
+
+void ScThreadCheck(const char* site, DWORD* seen) {
+    DWORD tid = GetCurrentThreadId();
+    if (*seen == tid) return;
+    ScLog("THREADCHECK %s tid=%u%s", site, (unsigned)tid,
+          *seen ? " CHANGED -- the single-thread claim this fix rests on is broken" : "");
+    *seen = tid;
+}
+
+void ScLogCopyText(DWORD addr, char* out, size_t outLen) {
+    if (!out || outLen < 2) { if (out && outLen) out[0] = '\0'; return; }
+    out[0] = '\0';
+    if (!addr) return;
+    size_t i = 0;
+    for (; i + 1 < outLen; ++i) {
+        BYTE c = 0;
+        if (!ScSafeRead((const void*)(DWORD_PTR)(addr + i), &c, 1)) break;
+        if (c == 0) break;
+        out[i] = (c < 32 || c > 126 || c == '|' || c == '\'') ? '.' : (char)c;
+    }
+    out[i] = '\0';
 }

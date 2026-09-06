@@ -32,6 +32,7 @@
 #include "sc_screen.h"
 #include "sc_session.h"
 #include "sc_upgrades.h"
+#include "sc_unit.h"
 
 static int g_failures = 0;
 
@@ -451,7 +452,7 @@ static void FanoutCoreTests(void) {
     Check("first Select carries 9 units, not 12", g_capture[1], 9);
     Check("bytes queued drops by 3 tags (6B)", g_captureLen, 102);
     Check("all three were charged to `recycled`, not to another reason",
-          ScFanoutDroppedFor(SC_FANOUT_RECYCLED), 3);
+          ScFanoutDroppedFor(SC_FANOUT_DROP_RECYCLED), 3);
     Check("and nothing else was dropped", ScFanoutStaleSkipped(), 3);
     for (int i = 12; i < 15; ++i) *(BYTE*)(FakeUnit(i) + SC_CUNIT_OFF_UNIQUENESS) -= 1;
 
@@ -488,7 +489,7 @@ static void FanoutCoreTests(void) {
               CaptureHasTag(deadTag, (int)sizeof(kRightClick)) ? 1 : 0, 0);
         Check("35 of the 36 went out", CaptureTagCount((int)sizeof(kRightClick)), 35);
         Check("it was dropped as a DEATH, not as a recycled slot",
-              ScFanoutDroppedFor(SC_FANOUT_DEAD), 1);
+              ScFanoutDroppedFor(SC_FANOUT_DROP_DEAD), 1);
         Check("staleSkipped counted exactly it", ScFanoutStaleSkipped(), 1);
         Check("the order still fanned out over the survivors", g_captureCount, 6);
 
@@ -533,7 +534,7 @@ static void FanoutCoreTests(void) {
         Check("the removed unit's tag is in NO emitted Select",
               CaptureHasTag(goneTag, (int)sizeof(kRightClick)) ? 1 : 0, 0);
         Check("it was dropped as REMOVED FROM PLAY",
-              ScFanoutDroppedFor(SC_FANOUT_REMOVED), 1);
+              ScFanoutDroppedFor(SC_FANOUT_DROP_REMOVED), 1);
         Check("35 of the 36 went out", CaptureTagCount((int)sizeof(kRightClick)), 35);
         RelinkFakeUnit(gone, 1);
     }
@@ -550,7 +551,7 @@ static void FanoutCoreTests(void) {
         ScFanoutOnCommand(kRightClick, sizeof(kRightClick));
         Check("the tag of a unit that changed hands is in NO emitted Select",
               CaptureHasTag(takenTag, (int)sizeof(kRightClick)) ? 1 : 0, 0);
-        Check("dropped as FOREIGN", ScFanoutDroppedFor(SC_FANOUT_FOREIGN), 1);
+        Check("dropped as FOREIGN", ScFanoutDroppedFor(SC_FANOUT_DROP_FOREIGN), 1);
         *(BYTE*)(FakeUnit(taken) + SC_CUNIT_OFF_PLAYER) = 1;
     }
 
@@ -567,7 +568,7 @@ static void FanoutCoreTests(void) {
         ScFanoutOnCommand(kRightClick, sizeof(kRightClick));
         Check("a unit with no sprite is in NO emitted Select",
               CaptureHasTag(baldTag, (int)sizeof(kRightClick)) ? 1 : 0, 0);
-        Check("dropped as NOSPRITE", ScFanoutDroppedFor(SC_FANOUT_NOSPRITE), 1);
+        Check("dropped as NOSPRITE", ScFanoutDroppedFor(SC_FANOUT_DROP_NOSPRITE), 1);
         *(DWORD*)(FakeUnit(bald) + SC_CUNIT_OFF_SPRITE) = sprite;
     }
 
@@ -602,7 +603,7 @@ static void FanoutCoreTests(void) {
                 break;
             }
         }
-        Check("all 12 were charged to hp0", ScFanoutDroppedFor(SC_FANOUT_DEAD), 12);
+        Check("all 12 were charged to hp0", ScFanoutDroppedFor(SC_FANOUT_DROP_DEAD), 12);
         // THE WEAKENED INVARIANT, stated as the test sees it: the LAST Select of the
         // run is an overflow chunk, not the visible one, so the simulation is left
         // holding units the player cannot see. Asserted rather than hidden.
@@ -1132,7 +1133,7 @@ static bool  g_paintOff   = false;     // the negative control below turns the r
 
 static void FakeUpdateCtl(DWORD ctrl) {
     ++g_ctlUpdates;
-    const short* r = (const short*)(ctrl + SC_BINDLG_OFF_BOUNDS);
+    const short* r = ScDlgBounds(ctrl);
     if (r[2] <= r[0] || r[3] <= r[1]) return;
     if (!g_dirtyAny) {
         g_dirty[0] = r[0]; g_dirty[1] = r[1]; g_dirty[2] = r[2]; g_dirty[3] = r[3];
@@ -1195,7 +1196,7 @@ static void FakePaint(void) {
     for (DWORD c = *(DWORD*)(FakeRoot() + SC_BINDLG_OFF_FIRST_CHILD); c;
          c = *(DWORD*)(c + SC_BINDLG_OFF_NEXT)) {
         if ((*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) == 0) continue;
-        const short* rc = (const short*)(c + SC_BINDLG_OFF_BOUNDS);
+        const short* rc = ScDlgBounds(c);
         const BYTE v = HudPaintByte(c);
         const int y0 = rc[1] > t ? rc[1] : t, y1 = rc[3] < b ? rc[3] : b;
         const int x0 = rc[0] > l ? rc[0] : l, x1 = rc[2] < r ? rc[2] : r;
@@ -1246,7 +1247,7 @@ static void BuildFakeDialog(void) {
         *(short*)(c + SC_BINDLG_OFF_INDEX)  = (i == 0) ? 1 : (short)(SC_HUD_FIRST_SMALL_BUTTON + i - 1);
         *(DWORD*)(c + SC_BINDLG_OFF_PARENT) = root;
         *(DWORD*)(c + SC_BINDLG_OFF_NEXT)   = (i < 12) ? FakeCtl(i + 1) : 0;
-        short* b = (short*)(c + SC_BINDLG_OFF_BOUNDS);
+        short* b = ScDlgBounds(c);
         const int slot = (i == 0) ? 0 : i - 1;                  // ctl 0 is the image
         b[0] = (short)(HUD_BTN_LEFT + (slot / 2) * HUD_BTN_COL);
         b[1] = (short)(HUD_BTN_TOP  + (slot % 2) * HUD_BTN_ROW);
@@ -1347,7 +1348,7 @@ static void Drive36Sync(void)   { DriveSelection(36); SetEngineSelectionFirst(12
 static void SmallSync(int n)    { SmallSelection(n);  SetEngineSelectionFirst(n); }
 
 // Link FakeUnit(0..n-1) into the fake playerUnitList[player] via +0x68/+0x6C, so
-// the click gate's InPlayerUnitList walk runs for real. Head-insert.
+// the click gate's ScUnitInOwnPlayerList walk runs for real. Head-insert.
 static void BuildFakePlayerList(int n, BYTE player) {
     DWORD* heads = (DWORD*)FakeRt(SC_VA_PLAYER_UNIT_LIST);
     heads[player] = 0;
@@ -1473,7 +1474,7 @@ static void ControlGroupTests(void) {
               Hotkey(SC_HOTKEY_ASSIGN, 1) ? 1 : 0, 0);
         Check("  and we emitted nothing of our own for it", g_captureCount, 0);
         Check("plugin group 1 holds all 36", ScFanoutGroupCount(1), 36);
-        Check("  one assign counted", ScFanoutGroupStat(SC_GROUPSTAT_ASSIGN), 1);
+        Check("  one assign counted", ScFanoutGroupStat(SC_FANOUT_GROUP_ASSIGN), 1);
 
         // The engine now executes that store: its own group holds its twelve.
         FakeEngineHotkeyRow(1, kFirstTwelve, 12);
@@ -1498,8 +1499,8 @@ static void ControlGroupTests(void) {
 
         Check("ALL 36 ARE BACK", ScFanoutShadowCount(), 36);
         Check("  the engine still holds only twelve", ScFanoutVisibleCount(), 12);
-        Check("  counted as a >12 recall", ScFanoutGroupStat(SC_GROUPSTAT_WIDE), 1);
-        Check("  nothing was discarded", ScFanoutGroupStat(SC_GROUPSTAT_DISCARD), 0);
+        Check("  counted as a >12 recall", ScFanoutGroupStat(SC_FANOUT_GROUP_WIDE), 1);
+        Check("  nothing was discarded", ScFanoutGroupStat(SC_FANOUT_GROUP_DISCARD), 0);
 
         // ... and the order that follows reaches every one of them, on the wire.
         g_captureLen = 0; g_captureCount = 0;
@@ -1611,7 +1612,7 @@ static void ControlGroupTests(void) {
 
         Check("the shadow list is the engine's twelve and nothing more",
               ScFanoutShadowCount(), 12);
-        Check("  one discard counted", ScFanoutGroupStat(SC_GROUPSTAT_DISCARD), 1);
+        Check("  one discard counted", ScFanoutGroupStat(SC_FANOUT_GROUP_DISCARD), 1);
         Check("  and the poisoned group is forgotten", ScFanoutGroupCount(4), -1);
     }
 
@@ -1629,7 +1630,7 @@ static void ControlGroupTests(void) {
         FakeEngineHotkeyRow(5, kFirstTwelve, 12);
         Hotkey(SC_HOTKEY_ADD, 5);
         Check("a shift-add with the row filled keeps the group", ScFanoutGroupCount(5), 36);
-        Check("  no reset counted", ScFanoutGroupStat(SC_GROUPSTAT_RESET), 0);
+        Check("  no reset counted", ScFanoutGroupStat(SC_FANOUT_GROUP_RESET), 0);
 
         // Now a new game: 0x004EEC30 zeroes the whole array.
         ZeroEngineHotkeys();
@@ -1637,7 +1638,7 @@ static void ControlGroupTests(void) {
         Hotkey(SC_HOTKEY_ADD, 5);
         Check("the stale group was dropped, so the add behaves as an assign",
               ScFanoutGroupCount(5), 1);
-        Check("  a reset was counted", ScFanoutGroupStat(SC_GROUPSTAT_RESET) > 0 ? 1 : 0, 1);
+        Check("  a reset was counted", ScFanoutGroupStat(SC_FANOUT_GROUP_RESET) > 0 ? 1 : 0, 1);
     }
 
     // -----------------------------------------------------------------------
@@ -1677,7 +1678,7 @@ static void ControlGroupTests(void) {
         // Was 25 (36 of game A's records unioned with the new 5) before the fix.
         Check("the previous game's 36 are gone; the add holds only the new 5",
               ScFanoutGroupCount(8), 5);
-        Check("  and a reset was counted", ScFanoutGroupStat(SC_GROUPSTAT_RESET) > 0 ? 1 : 0, 1);
+        Check("  and a reset was counted", ScFanoutGroupStat(SC_FANOUT_GROUP_RESET) > 0 ? 1 : 0, 1);
     }
 
     // -----------------------------------------------------------------------
@@ -1714,7 +1715,7 @@ static void ControlGroupTests(void) {
         Hotkey(SC_HOTKEY_RECALL, 9);
 
         Check("the recycled slots are NOT contained, so the group is discarded",
-              ScFanoutGroupStat(SC_GROUPSTAT_DISCARD), 1);
+              ScFanoutGroupStat(SC_FANOUT_GROUP_DISCARD), 1);
         Check("  and the shadow list is the engine's twelve alone",
               ScFanoutShadowCount(), 12);
         Check("  the poisoned group is forgotten", ScFanoutGroupCount(9), -1);
@@ -1746,7 +1747,7 @@ static void ControlGroupTests(void) {
         Hotkey(SC_HOTKEY_ADD, 6);
         // 0..19 plus 12..31 = 0..31, deduplicated.
         Check("the union is 32 units, not 40", ScFanoutGroupCount(6), 32);
-        Check("  one add counted", ScFanoutGroupStat(SC_GROUPSTAT_ADD), 1);
+        Check("  one add counted", ScFanoutGroupStat(SC_FANOUT_GROUP_ADD), 1);
     }
 
     printf("\n    a 0x13 we do not understand falls back to the pre-021 behaviour\n");
@@ -1761,7 +1762,7 @@ static void ControlGroupTests(void) {
         Hotkey(SC_HOTKEY_RECALL, 12);
         Check("the over-cap units are dropped, as before task 021",
               ScFanoutShadowCount(), 12);
-        Check("  and no group was touched", ScFanoutGroupStat(SC_GROUPSTAT_RECALL), 0);
+        Check("  and no group was touched", ScFanoutGroupStat(SC_FANOUT_GROUP_RECALL), 0);
 
         ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
         ResetQueueCounters();
@@ -1874,7 +1875,7 @@ static void HudRowTests(void) {
         ScHudRowIndicatorBox(box);
         int rowBottom = 0, rowLeft = 0x7FFF;
         for (int i = 1; i <= 12; ++i) {
-            short* b = (short*)(FakeCtl(i) + SC_BINDLG_OFF_BOUNDS);
+            short* b = ScDlgBounds(FakeCtl(i));
             if (b[3] > rowBottom) rowBottom = b[3];
             if (b[0] < rowLeft)   rowLeft   = b[0];
         }
@@ -2444,7 +2445,7 @@ static void BuildingGroupTests(void) {
     {
         const DWORD hpWas = *(DWORD*)(FakeUnit(1) + SC_CUNIT_OFF_HITPOINTS);
         *(DWORD*)(FakeUnit(1) + SC_CUNIT_OFF_HITPOINTS) = 0;   // a damage death
-        const int before = ScFanoutGroupRefusedFor(SC_FANOUT_DEAD);
+        const int before = ScFanoutGroupRefusedFor(SC_FANOUT_DROP_DEAD);
 
         DWORD cand[8];
         const int all[4] = { 0, 1, 2, 3 };
@@ -2454,7 +2455,7 @@ static void BuildingGroupTests(void) {
         unsigned n = ScFanoutGrowBuildingGroup(cand, out, 0, 1);
         Check("a destroyed building never enters the selection", (int)n, 3);
         Check("  and it was refused for being DEAD, not merely absent",
-              ScFanoutGroupRefusedFor(SC_FANOUT_DEAD) - before, 1);
+              ScFanoutGroupRefusedFor(SC_FANOUT_DROP_DEAD) - before, 1);
         bool none = true;
         for (unsigned j = 0; j < n; ++j) if (out[j] == FakeUnit(1)) none = false;
         Check("  the dead building's pointer is in no slot", none ? 1 : 0, 1);
@@ -2679,14 +2680,14 @@ static void BuildingParityTests(void) {
     {
         const int marineLead[1] = { 20 };
         SetFakeEngineSelection(marineLead, 1);
-        const int seen = ScFanoutExtendStat(SC_EXTEND_SEEN);
+        const int seen = ScFanoutExtendStat(SC_FANOUT_EXTEND_SEEN);
         Check("a Marine joining Marines is the engine's own answer",
               ScFanoutMovableDecide(FakeUnit(21), retShiftHit, 1), 1);
         Check("a Barracks shift-clicked onto Marines stays refused",
               ScFanoutMovableDecide(FakeUnit(0), retShiftHit, 0), 0);
         // The counter is the proof that this branch was never entered, rather than
         // entered and coincidentally agreeing.
-        Check("  and the override never even ran", ScFanoutExtendStat(SC_EXTEND_SEEN) - seen, 0);
+        Check("  and the override never even ran", ScFanoutExtendStat(SC_FANOUT_EXTEND_SEEN) - seen, 0);
     }
 
     printf("\n    with the feature OFF the override is inert\n");
@@ -2694,9 +2695,9 @@ static void BuildingParityTests(void) {
         const int leadIdx[1] = { 0 };
         SetFakeEngineSelection(leadIdx, 1);
         ScFanoutTestSetBuildingGroups(false);
-        const int seen = ScFanoutExtendStat(SC_EXTEND_SEEN);
+        const int seen = ScFanoutExtendStat(SC_FANOUT_EXTEND_SEEN);
         Check("a sibling Barracks is refused again", ScFanoutMovableDecide(FakeUnit(1), retShiftHit, 0), 0);
-        Check("  because the override did not run", ScFanoutExtendStat(SC_EXTEND_SEEN) - seen, 0);
+        Check("  because the override did not run", ScFanoutExtendStat(SC_FANOUT_EXTEND_SEEN) - seen, 0);
         ScFanoutTestSetBuildingGroups(true);
         Check("and allowed once more when it is back on",
               ScFanoutMovableDecide(FakeUnit(1), retShiftHit, 0), 1);
@@ -3782,7 +3783,7 @@ static void BuildFakeCard(bool cloakDisabled) {
     memset((void*)(DWORD_PTR)root, 0, SC_BINDLG_SIZE);
     *(WORD*)(DWORD_PTR)(root + SC_BINDLG_OFF_TYPE) = 0;             // a dialog, not a control
     {
-        short* rr = (short*)(DWORD_PTR)(root + SC_BINDLG_OFF_BOUNDS);
+        short* rr = ScDlgBounds(root);
         rr[0] = 500; rr[1] = 358; rr[2] = 639; rr[3] = 479;         // the card's own origin
     }
 
@@ -3797,7 +3798,7 @@ static void BuildFakeCard(bool cloakDisabled) {
         // A 3x3 grid of 33x33 buttons, dialog-relative -- the shape the real card
         // has, so the "compute a slot centre from the read-back" arithmetic the
         // probe does is exercised here rather than only in game.
-        short* r = (short*)(DWORD_PTR)(c + SC_BINDLG_OFF_BOUNDS);
+        short* r = ScDlgBounds(c);
         r[0] = (short)(3 + (i % 3) * 46); r[1] = (short)(6 + (i / 3) * 42);
         r[2] = (short)(r[0] + 32);        r[3] = (short)(r[1] + 32);
 
@@ -3896,11 +3897,11 @@ static void CardScanTests(void) {
     Check("slot 7 exists", s7 ? 1 : 0, 1);
     if (s7) {
         Check("slot 7 carries a Button record", s7->buttonOk ? 1 : 0, 1);
-        Check("slot 7's button is slotted 7",   s7->bSlot, 7);
-        Check("slot 7's condition is the cloak one", (long long)s7->bCond, 0x004293E0);
-        Check("slot 7's action is the cloak one",    (long long)s7->bAction, 0x00423730);
+        Check("slot 7's button is slotted 7",   s7->btnSlot, 7);
+        Check("slot 7's condition is the cloak one", (long long)s7->btnCond, 0x004293E0);
+        Check("slot 7's action is the cloak one",    (long long)s7->btnAction, 0x00423730);
         Check("slot 7's conditionParam is Personnel Cloaking",
-              s7->bCondParam, SC_TECH_PERSONNEL_CLOAKING);
+              s7->btnCondParam, SC_TECH_PERSONNEL_CLOAKING);
         Check("slot 7 is visible",  s7->visible ? 1 : 0, 1);
         Check("slot 7 reads GREYED", s7->disabled ? 1 : 0, 1);
         // The click point the probe computes: dialog origin + control rect centre.
@@ -4109,7 +4110,7 @@ static void BuildFakeStatusPane(const WORD* queuedByDisplay, BYTE head, bool swa
     memset((void*)(DWORD_PTR)root, 0, SC_BINDLG_SIZE);
     *(WORD*)(DWORD_PTR)(root + SC_BINDLG_OFF_TYPE) = 0;
     {
-        short* rr = (short*)(DWORD_PTR)(root + SC_BINDLG_OFF_BOUNDS);
+        short* rr = ScDlgBounds(root);
         rr[0] = 0; rr[1] = 358; rr[2] = 639; rr[3] = 479;      // the console's own origin
     }
 
@@ -4129,7 +4130,7 @@ static void BuildFakeStatusPane(const WORD* queuedByDisplay, BYTE head, bool swa
         *(short*)(DWORD_PTR)(c + SC_BINDLG_OFF_INDEX)  = (short)(SC_STATQ_FIRST_CONTROL + k);
         *(DWORD*)(DWORD_PTR)(c + SC_BINDLG_OFF_PARENT) = root;
         *(DWORD*)(DWORD_PTR)(c + SC_BINDLG_OFF_NEXT)   = (k < SC_STATQ_SLOTS - 1) ? FakeStatCtl(k + 1) : 0;
-        short* r = (short*)(DWORD_PTR)(c + SC_BINDLG_OFF_BOUNDS);
+        short* r = ScDlgBounds(c);
         r[0] = (short)(220 + k * 22); r[1] = 8;
         r[2] = (short)(r[0] + 20);    r[3] = 28;
 
@@ -4246,7 +4247,7 @@ static void BuildFakeQIndPane(int engineLen, WORD type) {
     DWORD root = QiRoot();
     memset((void*)root, 0, SC_BINDLG_SIZE);
     *(WORD*)(root + SC_BINDLG_OFF_TYPE) = 0;
-    short* rr = (short*)(root + SC_BINDLG_OFF_BOUNDS);
+    short* rr = ScDlgBounds(root);
     rr[0] = 138; rr[1] = 388; rr[2] = 407; rr[3] = 479;
 
     // The dialog's own 8-bit surface, at the offset the draw walk installs. The group
@@ -4276,7 +4277,7 @@ static void BuildFakeQIndPane(int engineLen, WORD type) {
         *(short*)(c + SC_BINDLG_OFF_INDEX)  = (short)(SC_STATQ_FIRST_CONTROL + k);
         *(DWORD*)(c + SC_BINDLG_OFF_PARENT) = root;
         *(DWORD*)(c + SC_BINDLG_OFF_NEXT)   = QiCtl(k + 1);
-        short* r = (short*)(c + SC_BINDLG_OFF_BOUNDS);
+        short* r = ScDlgBounds(c);
         if (k == 0) { r[0] = 104; r[1] = 14; }
         else        { r[0] = (short)(104 + (k - 1) * 39); r[1] = 53; }
         r[2] = (short)(r[0] + 38); r[3] = (short)(r[1] + 35);
@@ -4309,7 +4310,7 @@ static void BuildFakeQIndPane(int engineLen, WORD type) {
         *(DWORD*)(c + SC_BINDLG_OFF_PARENT) = root;
         *(DWORD*)(c + SC_BINDLG_OFF_NEXT)   = (i + 1 < QI_BTN_COUNT)
                                             ? QiCtl(SC_STATQ_SLOTS + i + 1) : 0;
-        QiBtnRect(i, (short*)(c + SC_BINDLG_OFF_BOUNDS));
+        QiBtnRect(i, ScDlgBounds(c));
         *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) = SC_CTRL_FLAG_VISIBLE;
     }
     *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD) = QiCtl(0);
@@ -4441,7 +4442,7 @@ static void QueueIndTests(void) {
                   (long long)*(DWORD*)(ind + SC_BINDLG_OFF_UPDATE), (long long)0x44444444u);
             Check("  its id is negative, so the CREATE binder skips it",
                   (long long)(*(short*)(ind + SC_BINDLG_OFF_INDEX) < 0), 1);
-            short* b = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
+            short* b = ScDlgBounds(ind);
             // The box has to be TALLER than the font or the engine's own draw refuses,
             // silently (research/status-pane-text.md 3). The in-game ink assertion is what
             // proves the number is big enough; this proves the box was not left flat.
@@ -4452,7 +4453,7 @@ static void QueueIndTests(void) {
             Check("  and wide enough for the string it holds",
                   (b[2] - b[0]) >= (int)strlen(ScQueueIndCurrentText()) * SC_QIND_CHAR_W ? 1 : 0, 1);
             Check("  and sits inside the anchor icon (id 6)",
-                  (long long)(b[0] >= *(short*)(QiCtl(4) + SC_BINDLG_OFF_BOUNDS) &&
+                  (long long)(b[0] >= *ScDlgBounds(QiCtl(4)) &&
                               b[2] <= *(short*)(QiCtl(4) + SC_BINDLG_OFF_BOUNDS + 4)), 1);
             // AND THE VERY FIRST SHOW ALREADY HAS A BASELINE. The copy taken on hidden frames
             // needs a splice to exist, and the splice happens on this frame -- so without the
@@ -4513,7 +4514,7 @@ static void QueueIndTests(void) {
         *gap = SC_BUILD_QUEUE_EMPTY;            // ring: B,B,B,_,_ then a foreign item at the tail
         *slot = (WORD)(PQ_TYPE_B + 1);
         const int dirtyBefore = ScQueueIndStat(SC_QIND_STAT_PHANTOM_DIRTY);
-        // EngineQueueLength counts occupied slots ANYWHERE in the ring, so it reads 4
+        // ScUnitQueueLength counts occupied slots ANYWHERE in the ring, so it reads 4
         // (three real + the foreign tail item) and apply's k=4 names slot head+4 -- the
         // foreign item, exactly the collision the refusal exists for.
         Check("a non-empty slot where the map expects a hole is REFUSED",
@@ -4577,7 +4578,7 @@ static void QueueIndTests(void) {
         Check("the indicator is in GROUP mode", ScQueueIndCurrentMode(), SC_QIND_GROUP);
         DWORD ind = QiIndicator();
         if (ind) {
-            short* b = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
+            short* b = ScDlgBounds(ind);
             const char* text = (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
             int need = (int)strlen(text) * SC_QIND_CHAR_W;
             printf("      box=(%d,%d,%d,%d) for \"%s\" (needs %d px)\n",
@@ -4652,7 +4653,7 @@ static void QueueIndTests(void) {
     // same rect compared against a copy of it taken while the indicator was hidden.
     {
         DWORD  ind = QiIndicator();
-        short* ib  = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
+        short* ib  = ScDlgBounds(ind);
         short  was[4] = { ib[0], ib[1], ib[2], ib[3] };
         BYTE*  px  = (BYTE*)QiBits();
 
@@ -4781,7 +4782,7 @@ static void UpgQueueIndTests(void) {
             const char* text = (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
             Check("its pszText says \"+2 upg\"",
                   (long long)(text && strcmp(text, "+2 upg") == 0), 1);
-            short* b = (short*)(ind + SC_BINDLG_OFF_BOUNDS);
+            short* b = ScDlgBounds(ind);
             Check("the box is at least SC_QIND_BOX_H tall", b[3] - b[1] >= SC_QIND_BOX_H, 1);
             Check("and wide enough for the string it holds",
                   (b[2] - b[0]) >= (int)strlen(ScQueueIndCurrentText()) * SC_QIND_CHAR_W ? 1 : 0, 1);
@@ -4842,12 +4843,12 @@ static void StatusStripTests(void) {
     Check("only the three OCCUPIED icons are clickable", hdr.clickable, 3);
     for (int k = 0; k < 3; ++k) {
         Check("  an occupied icon is enabled", slots[k].disabled ? 1 : 0, 0);
-        Check("  and draws the queued unit type", slots[k].uIcon, PROBE);
+        Check("  and draws the queued unit type", slots[k].userIcon, PROBE);
         Check("  which is the type in the ring at (head + k) % 5", slots[k].queueType, PROBE);
         Check("  its control index is display + 2", slots[k].index, k + SC_STATQ_FIRST_CONTROL);
     }
     Check("the first empty icon is GREYED", slots[3].disabled ? 1 : 0, 1);
-    Check("  its statUser mode is the empty one", slots[3].uMode, 6);
+    Check("  its statUser mode is the empty one", slots[3].userMode, 6);
     Check("  and its ring slot really is empty", slots[3].queueType, SC_BUILD_QUEUE_EMPTY);
     // The click point the suite computes, the same sum as a card slot.
     Check("display 1's centre computes to x",
@@ -5067,9 +5068,9 @@ static void SessionEpochTests(void) {
         Check("WITHOUT a game start the recall restores all 36 -- the defect, reproduced",
               ScFanoutShadowCount(), 36);
         Check("  ResetGroupIfEngineRowEmpty did NOT fire (the row is not empty)",
-              ScFanoutGroupStat(SC_GROUPSTAT_RESET), 0);
+              ScFanoutGroupStat(SC_FANOUT_GROUP_RESET), 0);
         Check("  and containment did NOT discard it (the pointers all match)",
-              ScFanoutGroupStat(SC_GROUPSTAT_DISCARD), 0);
+              ScFanoutGroupStat(SC_FANOUT_GROUP_DISCARD), 0);
 
         // --- the treatment arm: identical, plus one game start ----------------------
         ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
@@ -5095,9 +5096,9 @@ static void SessionEpochTests(void) {
         }
         Check("the plugin no longer holds group 5", ScFanoutGroupCount(5), -1);
         Check("  counted against the epoch, not against the empty-row inference",
-              ScFanoutGroupStat(SC_GROUPSTAT_SESSION) > 0 ? 1 : 0, 1);
+              ScFanoutGroupStat(SC_FANOUT_GROUP_SESSION) > 0 ? 1 : 0, 1);
         Check("  and the empty-row inference is still at zero, as it must be",
-              ScFanoutGroupStat(SC_GROUPSTAT_RESET), 0);
+              ScFanoutGroupStat(SC_FANOUT_GROUP_RESET), 0);
 
         FakeEngineVisible(kFirstTwelve, 12);
         Hotkey(SC_HOTKEY_RECALL, 5);
@@ -5120,7 +5121,7 @@ static void SessionEpochTests(void) {
         ScSessionTestNewGame();
         Check("the shadow list is empty in the new game", ScFanoutShadowCount(), 0);
         Check("  and so is its visible tail", ScFanoutVisibleCount(), 0);
-        Check("  one session drop counted", ScFanoutGroupStat(SC_GROUPSTAT_SESSION), 1);
+        Check("  one session drop counted", ScFanoutGroupStat(SC_FANOUT_GROUP_SESSION), 1);
 
         // The plan. A budget small enough that a 36-unit fan-out cannot finish in one
         // turn is what leaves chunks pending -- the state #67 item 2 is about.

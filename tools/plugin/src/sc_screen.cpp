@@ -51,6 +51,8 @@
 
 #include "sc_screen.h"
 #include "sc_addresses.h"
+#include "sc_engine.h"
+#include "sc_env.h"
 #include "sc_log.h"
 #include "sc_screen_patches.h"
 
@@ -58,12 +60,16 @@
 // State
 // ---------------------------------------------------------------------------
 
-static BYTE*  g_base = NULL;
 static bool   g_active = false;
 static int    g_stage = 1;
 static BYTE*  g_grid = NULL;          // the relocated dirty grid (data start)
 static BYTE*  g_gridRegion = NULL;    // the guarded allocation base (g_grid - GUARD)
 static int    g_applied = 0;
+// Two different refusals, which used to share one `g_refused`. The install veto is
+// set by the pre-flight checks, each of which RETURNS -- so it and the per-patch
+// failure count are never both non-zero, which is how one variable got away with it.
+static bool   g_installRefused = false;   // a pre-flight check said no; nothing written
+static int    g_writeFailures = 0;        // patches that failed their own write
 
 // Guard padding around the relocated grid. The stock grid at 0x006CEFF8 sits in
 // .data with live globals on both sides (research/renderer-viewport.md 5, "boxed
@@ -81,7 +87,6 @@ static int    g_applied = 0;
 // dialog coordinate (col +/-, row*stride); a wildly out-of-range coord would
 // have faulted stock too. If a real consumer ever needs more, clamp it instead.
 #define SC_WS_GRID_GUARD 0x10000
-static int    g_refused = 0;
 
 // Saved originals, so a FreeLibrary detach can put the process back. Sized by
 // the table: a fixed 128 silently stopped saving at the 129th of 257 writes.
@@ -105,10 +110,6 @@ static int g_savedCount = 0;
 #define SC_WS_CAVE_POOL 4096
 static BYTE*  g_cavePool = NULL;
 static SIZE_T g_caveUsed = 0;
-
-static void* Rt(DWORD staticVa) {
-    return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE));
-}
 
 static BYTE* EmitCave(const BYTE* code, int codeLen, const BYTE* back) {
     const SIZE_T need = (SIZE_T)codeLen + 5;
@@ -153,33 +154,16 @@ bool ScScreenApplyCaveAt(BYTE* at, int len, const BYTE* code, int codeLen) {
     return true;
 }
 
-static void HexDump(const BYTE* p, int n, char* out, int outLen) {
-    int used = 0;
-    out[0] = '\0';
-    for (int i = 0; i < n && used + 3 < outLen; ++i) {
-        used += _snprintf(out + used, outLen - used, "%02X", p[i]);
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Environment
 // ---------------------------------------------------------------------------
 
 bool ScScreenWidescreenWanted(void) {
-    char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_WIDESCREEN", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return false;
-    return buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y';
+    return ScEnvOptIn("SCPLUGIN_WIDESCREEN");
 }
 
 int ScScreenStageWanted(void) {
-    char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_WS_STAGE", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return 1;
-    int v = buf[0] - '0';
-    if (v < 0) v = 0;
-    if (v > 3) v = 3;
-    return v;
+    return ScEnvInt("SCPLUGIN_WS_STAGE", 1, 0, SC_WS_STAGE_MAX);
 }
 
 // %SCPLUGIN_WS_ONLY% -- comma-separated NAME PREFIXES. When set, a patch at the
@@ -228,27 +212,14 @@ int  ScScreenTargetHeight(void) { return SC_WS_SCREEN_H; }
 int ScScreenViewportTilesX(void) {
     // scroll.clamp.x.tiles is a stage-3 site; below that, or with the table
     // refused, the engine still clamps the camera at the stock 20 tiles.
-    return (g_active && g_stage >= 3) ? (SC_WS_SCREEN_W / 32) : SC_VIEWPORT_TILES_X;
+    return (g_active && g_stage >= SC_WS_STAGE_SCROLL_CLAMP)
+        ? (SC_WS_SCREEN_W / 32) : SC_VIEWPORT_TILES_X;
 }
 
 // ---------------------------------------------------------------------------
 // Safe reads -- a wrong static address must produce a refusal, never a fault
 // inside the game.
 // ---------------------------------------------------------------------------
-
-static bool RangeReadable(const void* addr, size_t n) {
-    MEMORY_BASIC_INFORMATION mbi;
-    if (VirtualQuery(addr, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
-    if (mbi.State != MEM_COMMIT) return false;
-    if (mbi.Protect & PAGE_GUARD) return false;
-    const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
-                           PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
-                           PAGE_EXECUTE_WRITECOPY;
-    if ((mbi.Protect & readable) == 0) return false;
-    const BYTE* start = (const BYTE*)addr;
-    const BYTE* regEnd = (const BYTE*)mbi.BaseAddress + mbi.RegionSize;
-    return start >= (const BYTE*)mbi.BaseAddress && start + n <= regEnd;
-}
 
 // ---------------------------------------------------------------------------
 // The gate: has the video init already run?
@@ -260,10 +231,10 @@ static bool RangeReadable(const void* addr, size_t n) {
 // ---------------------------------------------------------------------------
 
 static bool VideoAlreadyUp(DWORD* dataOut, unsigned* wOut, unsigned* hOut) {
-    const BYTE* desc = (const BYTE*)Rt(SC_VA_SCREEN_BITMAP);
+    const BYTE* desc = (const BYTE*)ScRuntimeAddr(SC_VA_SCREEN_BITMAP);
     DWORD data = 0;
     WORD w = 0, h = 0;
-    if (!RangeReadable(desc, 8)) return false;   // unreadable -> not up yet
+    if (!ScReadableAt(desc, 8)) return false;   // unreadable -> not up yet
     memcpy(&w, desc + SC_BITMAP_OFF_WIDTH, 2);
     memcpy(&h, desc + SC_BITMAP_OFF_HEIGHT, 2);
     memcpy(&data, desc + SC_BITMAP_OFF_DATA, 4);
@@ -284,16 +255,16 @@ static bool VerifyAll(int maxStage, int* checked) {
         const ScScreenPatch* p = &SC_WS_PATCHES[i];
         if (p->stage > maxStage) continue;
         ++n;
-        const BYTE* at = (const BYTE*)Rt(p->va);
-        if (!RangeReadable(at, p->len)) {
+        const BYTE* at = (const BYTE*)ScRuntimeAddr(p->va);
+        if (!ScReadableAt(at, p->len)) {
             ScLog("WIDESCREEN REFUSED %s @0x%08X: not readable", p->name, (unsigned)p->va);
             ok = false;
             continue;
         }
         if (memcmp(at, p->expect, p->len) != 0) {
             char got[SC_WS_MAX_PATCH_LEN * 2 + 1], want[SC_WS_MAX_PATCH_LEN * 2 + 1];
-            HexDump(at, p->len, got, sizeof(got));
-            HexDump(p->expect, p->len, want, sizeof(want));
+            ScHexDump(at, p->len, got, sizeof(got));
+            ScHexDump(p->expect, p->len, want, sizeof(want));
             ScLog("WIDESCREEN REFUSED %s @0x%08X: bytes are %s, table expects %s "
                   "(wrong build, or already patched)", p->name, (unsigned)p->va, got, want);
             ok = false;
@@ -306,7 +277,7 @@ static bool VerifyAll(int maxStage, int* checked) {
 static bool WriteOne(const ScScreenPatch* p) {
     BYTE bytes[SC_WS_MAX_PATCH_LEN];
     memcpy(bytes, p->patch, p->len);
-    void* at = Rt(p->va);
+    void* at = ScRuntimeAddr(p->va);
 
     // Relocation fixups: the record carries a zeroed dword that only the running
     // process can fill, because the relocated grid's address comes from
@@ -351,11 +322,11 @@ static bool WriteOne(const ScScreenPatch* p) {
     VirtualProtect(at, p->len, oldProtect, &ignore);
 
     char before[SC_WS_MAX_PATCH_LEN * 2 + 1], after[SC_WS_MAX_PATCH_LEN * 2 + 1];
-    HexDump(p->expect, p->len, before, sizeof(before));
-    HexDump(bytes, p->len, after, sizeof(after));
+    ScHexDump(p->expect, p->len, before, sizeof(before));
+    ScHexDump(bytes, p->len, after, sizeof(after));
     if (cave) {
         char code[SC_WS_MAX_CAVE_LEN * 2 + 1];
-        HexDump(p->cave, p->caveLen, code, sizeof(code));
+        ScHexDump(p->cave, p->caveLen, code, sizeof(code));
         ScLog("WIDESCREEN patch stage=%d %-28s @0x%08X %s -> %s  cave@%p [%s + jmp back]  (%s)",
               p->stage, p->name, (unsigned)p->va, before, after, cave, code, p->note);
     } else {
@@ -366,7 +337,7 @@ static bool WriteOne(const ScScreenPatch* p) {
 }
 
 void ScScreenInstall(BYTE* base, ScMode mode) {
-    g_base = base;
+    ScEngineSetModuleBase(base);
 
     const bool wanted = ScScreenWidescreenWanted();
     if (!wanted) {
@@ -395,7 +366,7 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
               "is allocated at startup, so patching now would overrun it. Inject early "
               "(scinject --early / run-with-plugin.ps1 -Widescreen 1, which passes it).",
               w, h, (unsigned)data);
-        g_refused = 1;
+        g_installRefused = true;
         return;
     }
 
@@ -410,14 +381,14 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
         ScLog("WIDESCREEN REFUSED: %d site(s) checked and at least one did not match. "
               "NOTHING was written -- a half-applied geometry corrupts silently instead "
               "of failing.", checked);
-        g_refused = 1;
+        g_installRefused = true;
         return;
     }
     ScLog("WIDESCREEN: %d site(s) verified against the live image", checked);
 
     // --- relocate the dirty grid -------------------------------------------
     // Only stage 1 and above needs it; stage 0 touches the display mode alone.
-    if (g_stage >= 1) {
+    if (g_stage >= SC_WS_STAGE_GRID) {
         // GUARD + grid + GUARD, all committed, grid pointer into the middle
         // (see SC_WS_GRID_GUARD above). VirtualAlloc zeroes it, which is the
         // state the BSS array it replaces starts in -- stated rather than
@@ -431,7 +402,7 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
         if (!g_gridRegion) {
             ScLog("WIDESCREEN REFUSED: VirtualAlloc(%Iu) for the guarded dirty grid "
                   "failed gle=%u", total, (unsigned)GetLastError());
-            g_refused = 1;
+            g_installRefused = true;
             return;
         }
         g_grid = g_gridRegion + SC_WS_GRID_GUARD;
@@ -449,8 +420,8 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
         // crashed. grid-1 is where 0x0041DE84 faulted; grid+BYTES+GUARD-1 is the
         // far side. Both must read as committed, or the box is not there. This
         // line would say MISSING on the pre-fix bare allocation.
-        const bool lo = RangeReadable(g_grid - 1, 1);
-        const bool hi = RangeReadable(g_grid + SC_WS_GRID_BYTES + SC_WS_GRID_GUARD - 1, 1);
+        const bool lo = ScReadableAt(g_grid - 1, 1);
+        const bool hi = ScReadableAt(g_grid + SC_WS_GRID_BYTES + SC_WS_GRID_GUARD - 1, 1);
         ScLog("WIDESCREEN: grid guard %s -- region %p..%p, %d bytes each side; "
               "grid-1 %s, grid+size+guard-1 %s (issue #113 crash: 0x0041DE84 read "
               "grid_base-1 on the pre-guard allocation)",
@@ -460,7 +431,7 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
         if (!(lo && hi)) {
             ScLog("WIDESCREEN REFUSED: the grid guard did not commit -- refusing "
                   "rather than shipping the crash back.");
-            g_refused = 1;
+            g_installRefused = true;
             return;
         }
     }
@@ -472,12 +443,12 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
         if (p->stage > g_stage) continue;
         if (p->stage == g_stage && !NameSelected(p->name)) { ++skipped; continue; }
         if (WriteOne(p)) ++g_applied;
-        else ++g_refused;
+        else ++g_writeFailures;
     }
 
-    g_active = (g_applied > 0 && g_refused == 0);
+    g_active = (g_applied > 0 && g_writeFailures == 0);
     ScLog("WIDESCREEN %s: %d patch(es) applied, %d refused, stage<=%d",
-          g_active ? "ACTIVE" : "INCOMPLETE", g_applied, g_refused, g_stage);
+          g_active ? "ACTIVE" : "INCOMPLETE", g_applied, g_writeFailures, g_stage);
     // Announced even when nothing is filtered, so a run that FORGOT to clear the
     // variable cannot be read as a full-stage result. An unannounced subset is
     // the same class of mistake as an assertion that cannot fail.
@@ -510,6 +481,7 @@ void ScScreenRemove(void) {
 void ScScreenLogStats(void) {
     if (!ScScreenWidescreenWanted()) return;
     ScLog("WIDESCREEN STATS active=%d stage=%d applied=%d refused=%d grid=%p "
-          "target=%dx%d", g_active ? 1 : 0, g_stage, g_applied, g_refused,
+          "target=%dx%d", g_active ? 1 : 0, g_stage, g_applied,
+          g_installRefused ? 1 : g_writeFailures,
           g_grid, SC_WS_SCREEN_W, SC_WS_SCREEN_H);
 }

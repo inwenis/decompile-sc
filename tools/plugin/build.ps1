@@ -154,15 +154,16 @@ $exeOut  = Join-Path $OutDir 'scinject.exe'
 $testOut = Join-Path $OutDir 'hooktest.exe'
 
 # The plugin is several translation units since task 011: the observer, the log,
-# the detour engine, the fan-out hooks, (task 014) the selection circles,
+# the shared relocation layer (sc_engine.cpp), the detour engine, the fan-out
+# hooks, (task 014) the selection circles,
 # (task 017) the HUD selection-row paging, (task 025) the production queue,
 # (task 026) the command-card read-back, (task 029) the upgrade queue,
 # (task 030) the group production fan-out, (task 033) the queue-overflow indicator,
 # (task 034) the widescreen patch set, (task 056) the build identity,
 # (task 054) the game-session epoch and (task 073) the console edge move + trace.
-$pluginSrc = @('scplugin.cpp', 'sc_log.cpp', 'sc_hook.cpp', 'sc_fanout.cpp', 'sc_circles.cpp', 'sc_hudrow.cpp', 'sc_prodqueue.cpp', 'sc_card.cpp', 'sc_upgrades.cpp', 'sc_prodfan.cpp', 'sc_queueind.cpp', 'sc_screen.cpp', 'sc_buildid.cpp', 'sc_session.cpp', 'sc_console.cpp', 'sc_stormpresent.cpp') |
+$pluginSrc = @('scplugin.cpp', 'sc_log.cpp', 'sc_engine.cpp', 'sc_hook.cpp', 'sc_fanout.cpp', 'sc_circles.cpp', 'sc_hudrow.cpp', 'sc_prodqueue.cpp', 'sc_card.cpp', 'sc_upgrades.cpp', 'sc_prodfan.cpp', 'sc_queueind.cpp', 'sc_screen.cpp', 'sc_buildid.cpp', 'sc_session.cpp', 'sc_console.cpp', 'sc_stormpresent.cpp') |
              ForEach-Object { Join-Path $srcDir $_ }
-$testSrc   = @('hooktest.cpp', 'sc_log.cpp', 'sc_hook.cpp', 'sc_fanout.cpp', 'sc_circles.cpp', 'sc_hudrow.cpp', 'sc_prodqueue.cpp', 'sc_card.cpp', 'sc_upgrades.cpp', 'sc_prodfan.cpp', 'sc_queueind.cpp', 'sc_screen.cpp', 'sc_session.cpp') |
+$testSrc   = @('hooktest.cpp', 'sc_log.cpp', 'sc_engine.cpp', 'sc_hook.cpp', 'sc_fanout.cpp', 'sc_circles.cpp', 'sc_hudrow.cpp', 'sc_prodqueue.cpp', 'sc_card.cpp', 'sc_upgrades.cpp', 'sc_prodfan.cpp', 'sc_queueind.cpp', 'sc_screen.cpp', 'sc_session.cpp') |
              ForEach-Object { Join-Path $srcDir $_ }
 
 Write-Host 'build: compiling scplugin.dll ...'

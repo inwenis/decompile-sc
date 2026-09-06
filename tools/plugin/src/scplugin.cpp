@@ -39,6 +39,8 @@
 #include "sc_buildid.h"
 #include "sc_card.h"
 #include "sc_console.h"
+#include "sc_engine.h"
+#include "sc_env.h"
 #include "sc_fanout.h"
 #include "sc_hook.h"
 #include "sc_log.h"
@@ -47,6 +49,7 @@
 #include "sc_queueind.h"
 #include "sc_screen.h"
 #include "sc_session.h"
+#include "sc_unit.h"
 #include "sc_stormpresent.h"
 #include "sc_upgrades.h"
 
@@ -55,30 +58,6 @@ static volatile LONG g_stop = 0;
 // ---------------------------------------------------------------------------
 // Read-only memory access
 // ---------------------------------------------------------------------------
-
-// Copies n bytes out of the target address if, and only if, the whole range sits
-// inside one committed, readable region. Returns false instead of faulting on a bad
-// address, so a wrong static offset produces a log line saying "unreadable" rather
-// than a crashed game.
-static bool SafeRead(const void* addr, void* out, size_t n) {
-    MEMORY_BASIC_INFORMATION mbi;
-    if (VirtualQuery(addr, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
-    if (mbi.State != MEM_COMMIT) return false;
-    if (mbi.Protect & PAGE_GUARD) return false;
-
-    const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
-                           PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
-                           PAGE_EXECUTE_WRITECOPY;
-    if ((mbi.Protect & readable) == 0) return false;
-
-    const BYTE* start  = (const BYTE*)addr;
-    const BYTE* regEnd = (const BYTE*)mbi.BaseAddress + mbi.RegionSize;
-    if (start < (const BYTE*)mbi.BaseAddress) return false;
-    if (start + n > regEnd) return false;
-
-    memcpy(out, addr, n);
-    return true;
-}
 
 // ---------------------------------------------------------------------------
 // Selection snapshot
@@ -101,12 +80,6 @@ enum {
     OK_COUNT = 1 << 0, OK_GROUP = 1 << 1, OK_GROUP2 = 1 << 2,
     OK_ACTIVE = 1 << 3, OK_ROW = 1 << 4, OK_IDS = 1 << 5
 };
-
-static BYTE* g_base = NULL;   // actual load address of StarCraft.exe
-
-static void* Rt(DWORD staticVa) {
-    return (void*)(g_base + (staticVa - SC_PREFERRED_IMAGE_BASE));
-}
 
 static int NonNull(const DWORD* arr) {
     int n = 0;
@@ -134,20 +107,20 @@ static void FormatSlots(const DWORD* arr, char* out, size_t outLen) {
 static void TakeSnapshot(Snapshot* s) {
     memset(s, 0, sizeof(*s));
 
-    if (SafeRead(Rt(SC_VA_CLIENT_SELECTION_COUNT), &s->count, 1)) s->ok |= OK_COUNT;
-    SafeRead(Rt(SC_VA_SELECTION_ITERATOR), &s->iterator, 1);
+    if (ScSafeRead(ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT), &s->count, 1)) s->ok |= OK_COUNT;
+    ScSafeRead(ScRuntimeAddr(SC_VA_SELECTION_ITERATOR), &s->iterator, 1);
 
-    if (SafeRead(Rt(SC_VA_ACTIVE_PLAYER_ID), &s->playerId, 4) &&
-        SafeRead(Rt(SC_VA_PLAYER_ID_512688), &s->playerId688, 4) &&
-        SafeRead(Rt(SC_VA_PLAYER_ID_512678), &s->playerId678, 4)) {
+    if (ScSafeRead(ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_ID), &s->playerId, 4) &&
+        ScSafeRead(ScRuntimeAddr(SC_VA_PLAYER_ID_512688), &s->playerId688, 4) &&
+        ScSafeRead(ScRuntimeAddr(SC_VA_PLAYER_ID_512678), &s->playerId678, 4)) {
         s->ok |= OK_IDS;
     }
 
-    if (SafeRead(Rt(SC_VA_CLIENT_SELECTION_GROUP), s->group, sizeof(s->group)))
+    if (ScSafeRead(ScRuntimeAddr(SC_VA_CLIENT_SELECTION_GROUP), s->group, sizeof(s->group)))
         s->ok |= OK_GROUP;
-    if (SafeRead(Rt(SC_VA_CLIENT_SELECTION_GROUP2), s->group2, sizeof(s->group2)))
+    if (ScSafeRead(ScRuntimeAddr(SC_VA_CLIENT_SELECTION_GROUP2), s->group2, sizeof(s->group2)))
         s->ok |= OK_GROUP2;
-    if (SafeRead(Rt(SC_VA_ACTIVE_PLAYER_SELECTION), s->active, sizeof(s->active)))
+    if (ScSafeRead(ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_SELECTION), s->active, sizeof(s->active)))
         s->ok |= OK_ACTIVE;
 
     // playersSelections[player] -- clamp the index, the id global is exactly the
@@ -155,7 +128,7 @@ static void TakeSnapshot(Snapshot* s) {
     DWORD p = (s->ok & OK_IDS) ? (s->playerId & 0xFF) : 0;
     if (p < SC_MAX_PLAYERS) {
         DWORD rowVa = SC_VA_PLAYERS_SELECTIONS + p * SC_SELECTION_SLOTS * 4;
-        if (SafeRead(Rt(rowVa), s->playerRow, sizeof(s->playerRow))) s->ok |= OK_ROW;
+        if (ScSafeRead(ScRuntimeAddr(rowVa), s->playerRow, sizeof(s->playerRow))) s->ok |= OK_ROW;
     }
 }
 
@@ -224,48 +197,34 @@ static bool g_worldScan = false;
 
 static bool ReadU8(DWORD addr, unsigned* out) {
     BYTE v = 0;
-    if (!SafeRead((const void*)addr, &v, 1)) return false;
+    if (!ScSafeRead((const void*)addr, &v, 1)) return false;
     *out = v;
     return true;
 }
 
 static bool ReadU16(DWORD addr, unsigned* out) {
     WORD v = 0;
-    if (!SafeRead((const void*)addr, &v, 2)) return false;
+    if (!ScSafeRead((const void*)addr, &v, 2)) return false;
     *out = v;
     return true;
 }
 
 static bool ReadU32(DWORD addr, DWORD* out) {
     DWORD v = 0;
-    if (!SafeRead((const void*)addr, &v, 4)) return false;
+    if (!ScSafeRead((const void*)addr, &v, 4)) return false;
     *out = v;
     return true;
-}
-
-// The same bounds/stride test the fan-out applies before it follows a unit pointer
-// (sc_fanout.cpp UnitPtrValid): inside the unit array, on a CUnit stride, within the
-// index range the wire tag can encode. A link that fails it is a torn read of a list
-// the game thread is editing, not a unit -- following it is what turns a benign race
-// into a fault.
-static bool WorldUnitPtrValid(DWORD ptr) {
-    if (!ptr) return false;
-    DWORD arrayBase = (DWORD)(DWORD_PTR)Rt(SC_VA_UNIT_ARRAY_BASE);
-    if (ptr < arrayBase) return false;
-    DWORD off = ptr - arrayBase;
-    if (off % SC_CUNIT_SIZE != 0) return false;
-    return (off / SC_CUNIT_SIZE + 1) <= SC_MAX_UNIT_INDEX;
 }
 
 // Counts one player's list without logging. Used for the second pass -- see ScanWorld.
 static int CountPlayerUnits(int p, bool* ok) {
     DWORD head = 0;
     *ok = false;
-    if (!ReadU32((DWORD)(DWORD_PTR)Rt(SC_VA_PLAYER_UNIT_LIST) + (DWORD)p * 4, &head))
+    if (!ReadU32(ScRuntimeVa(SC_VA_PLAYER_UNIT_LIST) + (DWORD)p * 4, &head))
         return 0;
     int n = 0;
     for (DWORD u = head; u && n < SC_MAX_UNITS_WALK; ) {
-        if (!WorldUnitPtrValid(u)) return n;
+        if (!ScUnitPtrValid(u)) return n;
         DWORD next = 0;
         if (!ReadU32(u + SC_CUNIT_OFF_LIST_NEXT, &next)) return n;
         u = next;
@@ -300,12 +259,12 @@ static bool g_screenScan = false;
 static void ScanScreen(const char* tag) {
     if (!g_screenScan) return;
     const char* t = tag ? tag : "-";
-    const DWORD delta = (DWORD)(DWORD_PTR)g_base - SC_PREFERRED_IMAGE_BASE;
+    const DWORD delta = (DWORD)(DWORD_PTR)ScEngineModuleBase() - SC_PREFERRED_IMAGE_BASE;
 
     // The screen Bitmap. `data` is the 640*480 SMemAlloc from 0x004DB060; a non-zero value
     // here is the evidence that the buffer exists and that the descriptor is the live one.
     {
-        DWORD b = (DWORD)(DWORD_PTR)Rt(SC_VA_SCREEN_BITMAP);
+        DWORD b = ScRuntimeVa(SC_VA_SCREEN_BITMAP);
         unsigned w = 0xFFFF, h = 0xFFFF;
         DWORD data = 0;
         bool okW = ReadU16(b + SC_BITMAP_OFF_WIDTH, &w);
@@ -321,7 +280,7 @@ static void ScanScreen(const char* tag) {
     // the order 0x0041E280 walks them in, and "layer 0 is the cursor" is only meaningful
     // next to the direction of the walk.
     for (int i = SC_GRAPHIC_LAYERS - 1; i >= 0; --i) {
-        DWORD l = (DWORD)(DWORD_PTR)Rt(SC_VA_GRAPHIC_LAYERS) + (DWORD)i * SC_LAYER_STRIDE;
+        DWORD l = ScRuntimeVa(SC_VA_GRAPHIC_LAYERS) + (DWORD)i * SC_LAYER_STRIDE;
         unsigned used = 0xFF, flags = 0xFF;
         unsigned left = 0, top = 0, width = 0, height = 0;
         DWORD param = 0, draw = 0;
@@ -347,16 +306,16 @@ static void ScanScreen(const char* tag) {
         unsigned left = 0xFFFF, top = 0xFFFF, tx = 0xFFFF, ty = 0xFFFF;
         unsigned mapTw = 0xFFFF, mapTh = 0xFFFF, mapPw = 0xFFFF, mapPh = 0xFFFF;
         DWORD maxX = 0xFFFFFFFF, maxY = 0xFFFFFFFF;
-        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_SCREEN_LEFT), &left);
-        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_SCREEN_TOP), &top);
-        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_SCREEN_TILE_X), &tx);
-        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_SCREEN_TILE_Y), &ty);
-        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_MAP_TILE_W), &mapTw);
-        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_MAP_TILE_H), &mapTh);
-        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_MAP_PIXEL_W), &mapPw);
-        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_MAP_PIXEL_H), &mapPh);
-        ReadU32((DWORD)(DWORD_PTR)Rt(SC_VA_SCROLL_MAX_X), &maxX);
-        ReadU32((DWORD)(DWORD_PTR)Rt(SC_VA_SCROLL_MAX_Y), &maxY);
+        ReadU16(ScRuntimeVa(SC_VA_SCREEN_LEFT), &left);
+        ReadU16(ScRuntimeVa(SC_VA_SCREEN_TOP), &top);
+        ReadU16(ScRuntimeVa(SC_VA_SCREEN_TILE_X), &tx);
+        ReadU16(ScRuntimeVa(SC_VA_SCREEN_TILE_Y), &ty);
+        ReadU16(ScRuntimeVa(SC_VA_MAP_TILE_W), &mapTw);
+        ReadU16(ScRuntimeVa(SC_VA_MAP_TILE_H), &mapTh);
+        ReadU16(ScRuntimeVa(SC_VA_MAP_PIXEL_W), &mapPw);
+        ReadU16(ScRuntimeVa(SC_VA_MAP_PIXEL_H), &mapPh);
+        ReadU32(ScRuntimeVa(SC_VA_SCROLL_MAX_X), &maxX);
+        ReadU32(ScRuntimeVa(SC_VA_SCROLL_MAX_Y), &maxY);
 
         // The prediction, stated in the log rather than only in the document: the clamp is
         // built as (mapTiles - viewportTiles) * 32, with +8 on the vertical axis
@@ -426,7 +385,7 @@ static bool GetFrameDump(void) {
 // which a 307200/384000-byte block legitimately can.
 static bool CopyFrameRows(DWORD bits, unsigned w, unsigned h, BYTE* dst) {
     for (unsigned y = 0; y < h; ++y) {
-        if (!SafeRead((const void*)(DWORD_PTR)(bits + y * w), dst + (size_t)y * w, w))
+        if (!ScSafeRead((const void*)(DWORD_PTR)(bits + y * w), dst + (size_t)y * w, w))
             return false;
     }
     return true;
@@ -436,7 +395,7 @@ static void DumpFrame(const char* tag) {
     if (!g_frameDump) return;
     const char* t = tag ? tag : "-";
 
-    DWORD b = (DWORD)(DWORD_PTR)Rt(SC_VA_SCREEN_BITMAP);
+    DWORD b = ScRuntimeVa(SC_VA_SCREEN_BITMAP);
     unsigned w = 0, h = 0;
     DWORD data = 0;
     if (!ReadU16(b + SC_BITMAP_OFF_WIDTH, &w) || !ReadU16(b + SC_BITMAP_OFF_HEIGHT, &h) ||
@@ -539,8 +498,8 @@ static void ScanWorld(const char* tag) {
     // same pair for the same reason and arrived at the same two globals independently.
     {
         unsigned left = 0xFFFF, top = 0xFFFF;
-        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_SCREEN_LEFT), &left);
-        ReadU16((DWORD)(DWORD_PTR)Rt(SC_VA_SCREEN_TOP), &top);
+        ReadU16(ScRuntimeVa(SC_VA_SCREEN_LEFT), &left);
+        ReadU16(ScRuntimeVa(SC_VA_SCREEN_TOP), &top);
         ScLog("WORLD [%s] screen=(%u,%u)", tag ? tag : "-", left, top);
     }
 
@@ -549,7 +508,7 @@ static void ScanWorld(const char* tag) {
     // empty players would make that signal depend on which slots happen to own units.
     for (int p = 0; p < SC_MAX_PLAYERS; ++p) {
         DWORD head = 0;
-        bool  headOk = ReadU32((DWORD)(DWORD_PTR)Rt(SC_VA_PLAYER_UNIT_LIST) + (DWORD)p * 4,
+        bool  headOk = ReadU32(ScRuntimeVa(SC_VA_PLAYER_UNIT_LIST) + (DWORD)p * 4,
                                &head);
 
         DWORD unit = headOk ? head : 0;
@@ -558,7 +517,7 @@ static void ScanWorld(const char* tag) {
         // Bounded exactly like the fan-out's own reachability walk: never trust a
         // game list to terminate.
         while (unit && n < SC_MAX_UNITS_WALK) {
-            if (!WorldUnitPtrValid(unit)) break;
+            if (!ScUnitPtrValid(unit)) break;
             unsigned type = 0xFFFF, order = 0xFF, order2 = 0xFF, owner = 0xFF, energy = 0xFFFF;
             unsigned stim = 0xFF;
             DWORD hp = 0xFFFFFFFF, flags = 0, sprite = 0;
@@ -786,16 +745,7 @@ static bool g_dialogScan = true;
 // SafeRead, and sanitises it for the log: dialog text is game data, so a stray
 // newline or '|' would corrupt the line a parser is about to read.
 static void ReadDlgText(DWORD ptr, char* out, size_t outLen) {
-    out[0] = '\0';
-    if (!ptr || outLen < 2) return;
-    size_t i = 0;
-    for (; i + 1 < outLen; ++i) {
-        BYTE c = 0;
-        if (!SafeRead((const void*)(ptr + i), &c, 1)) break;
-        if (c == 0) break;
-        out[i] = (c < 32 || c > 126 || c == '|' || c == '\'') ? '.' : (char)c;
-    }
-    out[i] = '\0';
+    ScLogCopyText(ptr, out, outLen);
 }
 
 // left,top,right,bottom -- four s16 at +0x04 (SC_BINDLG_OFF_BOUNDS).
@@ -816,7 +766,7 @@ static void ScanDialogs(void) {
 
     DWORD dlg = 0;
     int n = 0;
-    if (ReadU32((DWORD)(DWORD_PTR)Rt(SC_VA_DIALOG_LIST), &dlg)) {
+    if (ReadU32(ScRuntimeVa(SC_VA_DIALOG_LIST), &dlg)) {
         while (dlg && n < SC_MAX_DIALOGS_WALK) {
             char name[64];
             DWORD text = 0;
@@ -876,50 +826,32 @@ static void ScanDialogs(void) {
 // ---------------------------------------------------------------------------
 
 static DWORD GetPollMs(void) {
-    char buf[32];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_POLL_MS", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return 250;
-    int v = atoi(buf);
-    if (v < 20) v = 20;
-    if (v > 5000) v = 5000;
-    return (DWORD)v;
+    return (DWORD)ScEnvInt("SCPLUGIN_POLL_MS", 250, 20, 5000);
 }
 
 static ScMode g_mode = SC_MODE_OBSERVE;
 
 static bool GetWorldScan(void) {
-    char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_WORLDSCAN", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return false;
-    return buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y';
+    return ScEnvOptIn("SCPLUGIN_WORLDSCAN");
 }
 
 // ON by default, unlike the world scan: it logs one line per CHANGE of the dialog
 // set, so a whole run adds a handful of lines, and the tips-dialog dismissal in
 // every suite depends on it.
 static bool GetDialogScan(void) {
-    char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_DIALOGS", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return true;
-    return !(buf[0] == '0' || buf[0] == 'n' || buf[0] == 'N');
+    return ScEnvFlag("SCPLUGIN_DIALOGS", true);
 }
 
 // OFF by default, same shape as the world scan: %SCPLUGIN_CARDSCAN%=1 turns on the
 // read-only command-card walk (task 026).
 static bool GetCardScan(void) {
-    char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_CARDSCAN", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return false;
-    return buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y';
+    return ScEnvOptIn("SCPLUGIN_CARDSCAN");
 }
 
 // OFF by default, same shape as the world scan and for the same reason: %SCPLUGIN_SCREENSCAN%=1
 // turns on the read-only renderer/viewport read-back (task 032).
 static bool GetScreenScan(void) {
-    char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_SCREENSCAN", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return false;
-    return buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y';
+    return ScEnvOptIn("SCPLUGIN_SCREENSCAN");
 }
 
 static DWORD WINAPI ObserverThread(LPVOID) {
@@ -931,7 +863,7 @@ static DWORD WINAPI ObserverThread(LPVOID) {
     // Task 026: the read-only command-card scan. Same shape and same off switch as
     // the world scan, and for the same reason -- it must exist in observe mode too,
     // because "the card the stock game draws" is half of every comparison.
-    ScCardInit(g_base, GetCardScan());
+    ScCardInit(ScEngineModuleBase(), GetCardScan());
     ResolveMarkerPath();
     ScLog("OBSERVER start pollMs=%u mode=%s%s", (unsigned)pollMs, ScModeName(g_mode),
           g_mode == SC_MODE_OBSERVE ? " (read-only; no writes to game memory)" : "");
@@ -996,7 +928,7 @@ static DWORD WINAPI ObserverThread(LPVOID) {
 
 static void LogAttachBanner(void) {
     HMODULE exeMod = GetModuleHandleA(NULL);
-    g_base = (BYTE*)exeMod;
+    ScEngineSetModuleBase((BYTE*)exeMod);
 
     char exePath[MAX_PATH] = {0};
     GetModuleFileNameA(exeMod, exePath, MAX_PATH);
@@ -1008,7 +940,7 @@ static void LogAttachBanner(void) {
                        (LPCSTR)&LogAttachBanner, &self);
     if (self) GetModuleFileNameA(self, dllPath, MAX_PATH);
 
-    LONG delta = (LONG)((DWORD_PTR)g_base - SC_PREFERRED_IMAGE_BASE);
+    LONG delta = (LONG)((DWORD_PTR)ScEngineModuleBase() - SC_PREFERRED_IMAGE_BASE);
 
     ScLog("========================================================");
     ScLog("ATTACH pid=%u tid=%u", (unsigned)GetCurrentProcessId(),
@@ -1067,7 +999,7 @@ static void LogAttachBanner(void) {
                   "cannot say whether it was relocated)", (unsigned)loadedAt);
         }
     }
-    ScLog("  module base   : 0x%08X", (unsigned)(DWORD_PTR)g_base);
+    ScLog("  module base   : 0x%08X", (unsigned)(DWORD_PTR)ScEngineModuleBase());
     ScLog("  preferred base: 0x%08X", (unsigned)SC_PREFERRED_IMAGE_BASE);
     ScLog("  reloc delta   : %s0x%08X  => static addresses are %s",
           delta < 0 ? "-" : "+", (unsigned)(delta < 0 ? -delta : delta),
@@ -1076,7 +1008,7 @@ static void LogAttachBanner(void) {
     // Read a couple of bytes at the image base as a sanity check that we are
     // reading the mapped image at all ('MZ' == 0x5A4D).
     WORD mz = 0;
-    if (SafeRead(g_base, &mz, 2)) {
+    if (ScSafeRead(ScEngineModuleBase(), &mz, 2)) {
         ScLog("  image[0..1]   : 0x%04X %s", mz,
               mz == 0x5A4D ? "('MZ' - mapped image confirmed)" : "(UNEXPECTED)");
     } else {
@@ -1099,7 +1031,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         // startup, so it is only correct if it lands before the video init. It
         // refuses (and changes nothing) if it finds the framebuffer already
         // allocated, which is what happens on the default late injection.
-        ScScreenInstall(g_base, g_mode);
+        ScScreenInstall(ScEngineModuleBase(), g_mode);
         // Task 054, issue #67, and it goes in BEFORE every module that keeps records:
         // the game-session epoch. Each of those modules asks it "which game is this?"
         // at the top of every entry point, so it has to exist -- and be at its
@@ -1107,7 +1039,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         // outside observe mode, like everything else that writes game memory; in
         // observe the epoch stays 1, which is correct because no module holds
         // cross-frame state there.
-        ScSessionInstall(g_base, g_mode != SC_MODE_OBSERVE);
+        ScSessionInstall(ScEngineModuleBase(), g_mode != SC_MODE_OBSERVE);
         // Task 073: the console move + click-route trace. Both write to dialog
         // records on the game thread, so observe -- the whole plugin's off
         // switch -- ignores them like every other writer.
@@ -1120,13 +1052,13 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
                       "to game memory.");
                 consoleEdge = consoleTrace = false;
             }
-            ScConsoleInstall(g_base, consoleEdge, consoleTrace);
+            ScConsoleInstall(ScEngineModuleBase(), consoleEdge, consoleTrace);
         }
         // Task 074: the storm-side buffer->glass present. PROBE is read-only and
         // runs in any mode; WIDEN writes storm's geometry and is gated out of
         // observe like every other writer (the module enforces this itself).
-        ScStormPresentInstall(g_base, g_mode != SC_MODE_OBSERVE);
-        ScFanoutInstall(g_base, g_mode);
+        ScStormPresentInstall(ScEngineModuleBase(), g_mode != SC_MODE_OBSERVE);
+        ScFanoutInstall(ScEngineModuleBase(), g_mode);
         // Task 030. The oracle needs the module base in EVERY mode, because the stock
         // arm of this feature's comparison runs in observe and is measured with it. The
         // FEATURE half is gated the same way task 025's is: observe writes nothing to
@@ -1137,13 +1069,13 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
                 ScLog("PRODFAN: %%SCPLUGIN_PRODFAN%% is set but the mode is observe -- "
                       "the fan-out is IGNORED. The read-only oracle still runs.");
             }
-            ScProdFanInit(g_base, prodfanWanted && g_mode != SC_MODE_OBSERVE);
+            ScProdFanInit(ScEngineModuleBase(), prodfanWanted && g_mode != SC_MODE_OBSERVE);
             // The button-condition detour goes in under its own thread suspension, after
             // the fan-out's splice has been made and resumed. Without the button the
             // player cannot issue the command at all, so this is the half of the feature
             // that has to succeed for the other half to mean anything -- and a failure
             // here turns the whole feature off rather than leaving it half-armed.
-            if (ScProdFanEnabled()) ScProdFanInstallGate();
+            if (ScProdFanEnabled()) ScProdFanInstall();
         }
         // Task 025. Gated on %SCPLUGIN_PRODQ% AND on not being in observe mode:
         // observe is the whole plugin's off switch and must stay byte-for-byte the
@@ -1155,7 +1087,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             // the feature off" is half of what this run has to show, and an oracle that
             // goes silent in the control arm cannot show it (AGENTS.md: prove an absence
             // against a pattern that has matched somewhere).
-            ScQueueIndInit(g_base, false);
+            ScQueueIndInit(ScEngineModuleBase(), false);
             if (ScQueueIndEnabled()) {
                 ScLog("QIND: %%SCPLUGIN_QUEUEIND%% is set but the mode is observe -- "
                       "IGNORED. Observe writes nothing to game memory.");
@@ -1170,8 +1102,8 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
                       "IGNORED. Observe writes nothing to game memory.");
             }
         } else {
-            ScProdQueueInstall(g_base);
-            ScUpgQueueInstall(g_base);
+            ScProdQueueInstall(ScEngineModuleBase());
+            ScUpgQueueInstall(ScEngineModuleBase());
         }
         // The observer runs on its own thread; DllMain itself does nothing but
         // start it, so we never hold the loader lock while polling.
@@ -1215,7 +1147,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             // Task 030's detour holds nothing and moves nothing, so it can come out
             // anywhere in this sequence; it goes here so the card is back to stock
             // before the fan-out's own hooks leave.
-            ScProdFanRemoveGate();
+            ScProdFanRemove();
             // Task 029 has nothing to give back before it un-splices -- every item it
             // holds is unpaid -- so its order relative to the others does not matter. It
             // still goes before the fan-out's, so the whole splice comes out newest-first.
