@@ -68,6 +68,11 @@ function Hex32([int]$v) { ([BitConverter]::GetBytes([uint32]$v) | ForEach-Object
 $CLIP_HEX    = "C745F880020000 -> C745F8$(Hex32 $SCREEN_W)"          # cursor.clip.right: mov [ebp-8],640 -> W
 $CLAMP_HEX   = "83E914 -> 83E9$(($SCREEN_W / 32).ToString('X2'))"    # scroll.clamp.x.tiles: sub ecx,20 -> W/32
 $TRIGGER_HEX = "3D7E020000 -> 3D$(Hex32 ($SCREEN_W - 2))"            # scroll.right.trigger: cmp eax,638 -> W-2
+# console.hittest.xguard (2026-09-07): the cave body the plugin logs after the window's
+# runtime `jmp`. The 0x280 is the console.pcx WIDTH (stock 640, whatever the screen is),
+# so it is a constant here, not derived from $SCREEN_W: cmp ecx,640 / jl +3 / xor eax,eax
+# / ret / cmp [0x6D6430],ecx (the displaced memo probe).
+$XGUARD_HEX  = "[81F9800200007C0333C0C3390D30646D00 + jmp back]"
 
 $NEXUS_TYPE = 154
 # 070's measured stock console rects -- asserted UNCHANGED in both arms (stage 3
@@ -154,6 +159,11 @@ function Invoke-Arm {
             # issue #113 follow-up: the camera's scroll clamp moves from 20 to 25 tiles
             # (0x0049BBE6), or the right map edge shows a stale band past the map.
             $clampSite = @(Get-Content -LiteralPath $logPath | Select-String -Pattern 'WIDESCREEN patch stage=3 scroll\.clamp\.x\.tiles')
+            # 2026-09-07 (the right-click dead band beside the console): the console
+            # hit-test 0x004D1140 asks the 640-wide console region about x>=640 and
+            # answers "console"; the stage-3 cave guards it by x. A cave line carries
+            # its runtime address ("cave@") and the body; assert both were written.
+            $xguard = @(Get-Content -LiteralPath $logPath | Select-String -Pattern 'WIDESCREEN patch stage=3 console\.hittest\.xguard')
             if ($Widescreen -eq '1') {
                 Assert-That 'the stage-3 physical cursor clip was widened to the new screen' `
                     ($clip.Count -eq 1 -and $clip[0].Line.Contains($CLIP_HEX)) "($(($clip|ForEach-Object Line) -join ' | '); want '$CLIP_HEX')"
@@ -167,12 +177,15 @@ function Invoke-Arm {
                     ($scroll.Count -eq 1 -and $scroll[0].Line.Contains($TRIGGER_HEX)) "($(($scroll|ForEach-Object Line) -join ' | '); want '$TRIGGER_HEX')"
                 Assert-That 'the relocated dirty grid has a committed guard on both sides' `
                     ($guard.Count -eq 1) "($(($guard|ForEach-Object Line) -join ' | '))"
+                Assert-That 'the stage-3 console hit-test x guard was caved (right-click beside the console)' `
+                    ($xguard.Count -eq 1 -and $xguard[0].Line.Contains('cave@') -and $xguard[0].Line.Contains($XGUARD_HEX)) "($(($xguard|ForEach-Object Line) -join ' | '); want '$XGUARD_HEX')"
             }
             else {
                 Assert-That 'no widescreen verdict exists at stock' ($ws.Count -eq 0)
                 Assert-That 'no stage-3 clamp was written at stock' ($clamps.Count -eq 0)
                 Assert-That 'no stage-3 click-rect was written at stock' ($rects.Count -eq 0)
                 Assert-That 'no edge-scroll trigger was moved at stock' ($scroll.Count -eq 0)
+                Assert-That 'no console hit-test guard was caved at stock' ($xguard.Count -eq 0)
                 Assert-That 'no relocated grid guard at stock' ($guard.Count -eq 0)
             }
         }

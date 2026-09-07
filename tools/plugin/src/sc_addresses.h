@@ -1222,6 +1222,21 @@
 #define SC_LAYER_STRIDE            0x14u
 #define SC_LAYER_OFF_USED          0x00u   // u8
 #define SC_LAYER_OFF_FLAGS         0x01u   // u8; bit 0 = needs redraw
+// The composer 0x0041E280 draws a layer when `test bl,0x21` (0x0041E35F) is non-zero,
+// else when its rect covers a dirty cell (0x0041DE20 at 0x0041E37B; sets bit 0x04),
+// else when bit 0x02 is set (0x0041E38C `and ebx,2`); after a draw it masks the flags
+// with 0xF8 (0x0041E3A3), which CLEARS 0x01/0x02/0x04 and KEEPS 0x20. Every writer of
+// layer 0's flags byte 0x006CEF51 in the image is a read-modify-write OR of 0x01
+// (0x0041E205, 0x0041E24C, 0x004843B7, 0x004BE077, 0x004BE0CC, 0x004BD6C4,
+// 0x004DE163, 0x004E4920), never a plain store -- so 0x20, once set, is sticky and
+// means "compose this layer every frame". The engine uses it exactly so: the dialog
+// layer's setup 0x0041A030 ships layer 2 with `mov byte [0x6CEF79],0x20` (0x0041A071),
+// the only plain store of the bit in the image. The only wipe is the layer-table init
+// 0x0041E050 (zeroes all 8x20 bytes), which is why the storm present widen re-sets it
+// on the cursor layer every present rather than once (sc_stormpresent.cpp,
+// renderer-viewport.md 21.9).
+#define SC_LAYER_FLAG_NEEDS_REDRAW 0x01u
+#define SC_LAYER_FLAG_ALWAYS_DRAW  0x20u
 #define SC_LAYER_OFF_LEFT          0x02u   // s16
 #define SC_LAYER_OFF_TOP           0x04u   // s16
 #define SC_LAYER_OFF_WIDTH         0x06u   // s16

@@ -1841,6 +1841,13 @@ static const ScScreenPatch SC_WS_PATCHES[] = {
       { 0x05, 0x00, 0x05, 0x00, 0x00 },
       { 0x00 },
       "click.searchrect.right.drag", "0x0046FB40 drag-box arm: same rect, same widen" },
+    // 0x004D1159  cmp dword ptr [0x6d6430], ecx
+    //             -> [cave] cmp ecx, 0x280 ; jl 0x4d1164 ; xor eax, eax ; ret  ; cmp dword ptr [0x6d6430], ecx
+    { 0x004D1159u,  6, 3, SC_WS_NO_FIXUP, 17, 0x0u,
+      { 0x39, 0x0D, 0x30, 0x64, 0x6D, 0x00 },
+      { 0xE9, 0x00, 0x00, 0x00, 0x00, 0x90 },
+      { 0x81, 0xF9, 0x80, 0x02, 0x00, 0x00, 0x7C, 0x03, 0x33, 0xC0, 0xC3, 0x39, 0x0D, 0x30, 0x64, 0x6D, 0x00 },
+      "console.hittest.xguard", "0x004D1140 isPointOverUi: x >= 640 (the console.pcx width) is bare playfield -- never ask the 640-wide console region about it (right-click orders and the contextual cursor beside the console)" },
 };
 
 #define SC_WS_PATCH_COUNT (sizeof(SC_WS_PATCHES)/sizeof(SC_WS_PATCHES[0]))

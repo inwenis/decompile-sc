@@ -1415,6 +1415,41 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     b.imm(0x0046FE18, STOCK_W, PF_W, 4, "click.searchrect.right.drag", 3,
           "0x0046FB40 drag-box arm: same rect, same widen")
 
+    # The console HIT-TEST's x guard (2026-09-07; the user's "I cannot right-click
+    # beside the console" and "the cursor flickers over the extended space").
+    # 0x004D1140 is isPointOverUi(ecx = screen x, eax = screen y) -> 1 = the
+    # console covers this point. Three tiers: y < [0x596B6C] (the console art's
+    # first row, 302) -> 0; y >= [0x596B74] (its first fully opaque row, 400)
+    # -> 1; otherwise a memo cache on (x,y) and then storm ord442 point-in-
+    # region on the console.pcx TRANSPARENCY region [0x6D5E14]. That region is
+    # built once from the 640-wide console image (imgCreate 0x0041D640 has one
+    # caller, 0x004C3A03) and ord442 rejects any x >= the region's width
+    # outright, so for x >= 640 and y in [302,400) -- the visible map beside
+    # the console -- the answer is "over the console". Five callers share the
+    # predicate: the right-click order handler 0x004564E0 (bails, no order),
+    # the three left-down handlers 0x0046FF70 / 0x0048E5D0 / 0x004BD500 (no
+    # drag anchor), and the per-frame cursor chooser 0x004D1460 (plain arrow
+    # in the band, the contextual cursor above it: the cursor swaps at y=302).
+    # Guard tier 3 by x: past the console image there is no console. The
+    # constant is the console.pcx WIDTH (stock 640), not the screen width --
+    # the HUD stays in the left 640 columns whatever the screen is. Tiers 1
+    # and 2 keep their bytes, so the black rectangle x>=640,y>=400 stays
+    # non-playfield exactly as stock's console rows do. The window is the
+    # memo probe (6 bytes, the target of tier 2's `jl`, which lands on the
+    # window's START and is allowed); the cave returns straight out of the
+    # predicate for x >= 640 and otherwise re-runs the probe and jumps back,
+    # so the `jne` at 0x004D115F still reads that probe's flags.
+    b.cave(0x004D1159, "390d30646d00",
+           "81f9" + le32(STOCK_W)      # cmp ecx, 640
+           + "7c03"                    # jl  +3      (x < 640: the stock path)
+           + "33c0"                    # xor eax,eax
+           + "c3"                      # ret         (beyond the console image: playfield)
+           + "390d30646d00",           # cmp [0x6D6430],ecx  (the displaced probe)
+           "console.hittest.xguard", 3,
+           "0x004D1140 isPointOverUi: x >= 640 (the console.pcx width) is bare "
+           "playfield -- never ask the 640-wide console region about it (right-click "
+           "orders and the contextual cursor beside the console)")
+
     return b
 
 

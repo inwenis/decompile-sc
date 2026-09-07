@@ -67,7 +67,10 @@
 // even though the 800-wide buffer holds map there. The WIDEN hooks this and, after
 // the engine's own copy, copies the x=640..799 strip straight from the buffer to the
 // primary EVERY frame -- so the far quarter tracks the buffer without depending on a
-// dirty mark. Prologue: push ebp; mov ebp,esp; mov eax,[ebp+0x18] (55 8B EC 8B 45 18),
+// dirty mark. Because that mirror also carries whatever the CURSOR left in the buffer
+// at present time, the hook sets the cursor layer's sticky always-draw bit each present
+// (see HkOrd432; renderer-viewport.md 21.9) so the strip never shows a cursor-free
+// frame. Prologue: push ebp; mov ebp,esp; mov eax,[ebp+0x18] (55 8B EC 8B 45 18),
 // 6 bytes / 3 whole instructions / no PC-relative. Resolved from the LOADED storm.dll.
 #define STORM_RVA_ORD432     0x0001A520u
 static ScStormMode g_mode = SC_STORM_OFF;
@@ -78,6 +81,7 @@ static unsigned g_logs = 0;
 // --- WIDEN state ---
 static ScHook   g_hkCopy;                   // hook on storm ord432 (the present copy)
 static unsigned g_stripFrames = 0;          // frames the x>=640 strip was copied (stats)
+static unsigned g_cursorForced = 0;         // times layer 0's always-draw bit was found clear and set
 static unsigned g_stripSkipped = 0;         // present calls that did NOT meet the widescreen guard
 
 static void* StormRt(DWORD rva) {
@@ -270,6 +274,29 @@ HkOrd432(DWORD dst, DWORD src, DWORD dstPitch, DWORD srcPitch, DWORD region) {
     if (g_mode == SC_STORM_WIDEN && dst && src &&
         dstPitch >= (DWORD)W && srcPitch >= (DWORD)W) {
         const int stripW = W - SC_SCREEN_W;   // 160 at 800, 640 at 1280
+        // THE CURSOR IN THE STRIP (2026-09-07, the user's "over the extended space it
+        // flickers"). The engine's own copy is dirty-driven, so at x<640 the primary
+        // ACCUMULATES: a frame that does not redraw the cursor leaves its last pixels on
+        // the glass. This strip copy MIRRORS the buffer instead -- and the composer
+        // (0x0041E280) draws layer 0 only when its flags carry 0x01/0x02, or its rect
+        // covers a dirty cell; otherwise save-under has already run and the buffer holds
+        // the cursor-FREE pixels at present time. A parked plain arrow (one-frame GRP,
+        // the animation tick bails at 0x004BE209) is redrawn only when something else
+        // dirties a cell under it, so the strip copy blanked it on every other present:
+        // a strobe confined to x>=640. Bit 0x20 of the layer's flags is the composer's
+        // sticky "draw every frame" (sc_addresses.h SC_LAYER_FLAG_ALWAYS_DRAW): with it
+        // set the cursor is composed into the buffer on every frame (save-under before,
+        // restore-under after, so the buffer is left cursor-free exactly as before) and
+        // the mirror always carries it. Cost at x<640 is nil: pixels drawn into cells
+        // that are not dirty are not presented. Set per present, not once: it survives
+        // the composer's mask (0xF8) but this is where its absence would show, and a
+        // counter says how often it had to be set (1 = sticky as read; more = something
+        // clears it).
+        BYTE* layer0Flags = (BYTE*)ScRuntimeAddr(SC_VA_GRAPHIC_LAYERS + SC_LAYER_OFF_FLAGS);
+        if (!(*layer0Flags & SC_LAYER_FLAG_ALWAYS_DRAW)) {
+            *layer0Flags |= SC_LAYER_FLAG_ALWAYS_DRAW;
+            ++g_cursorForced;
+        }
         BYTE* d = (BYTE*)(DWORD_PTR)dst + SC_SCREEN_W;
         BYTE* s = (BYTE*)(DWORD_PTR)src + SC_SCREEN_W;
         for (int y = 0; y < H; ++y) {
@@ -343,6 +370,7 @@ void ScStormPresentInstall(BYTE* exeBase, bool writeAllowed) {
     }
     if (g_mode == SC_STORM_WIDEN) {
         g_stripFrames = 0;
+        g_cursorForced = 0;
         g_stripSkipped = 0;
         memset(&g_hkCopy, 0, sizeof(g_hkCopy));
         void* ord432 = StormRt(STORM_RVA_ORD432);   // resolved from the LOADED storm.dll
@@ -377,7 +405,7 @@ void ScStormPresentRemove(void) {
 
 void ScStormPresentLogStats(void) {
     if (g_mode == SC_STORM_OFF) return;
-    ScLog("STORMSTATS mode=%d logs=%u stripFrames=%u stripSkipped=%u stormBase=0x%08X",
-          (int)g_mode, g_logs, g_stripFrames, g_stripSkipped,
+    ScLog("STORMSTATS mode=%d logs=%u stripFrames=%u stripSkipped=%u cursorForced=%u stormBase=0x%08X",
+          (int)g_mode, g_logs, g_stripFrames, g_stripSkipped, g_cursorForced,
           (unsigned)(DWORD_PTR)g_stormBase);
 }
