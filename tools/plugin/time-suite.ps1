@@ -4,37 +4,22 @@
 Run an in-game suite and report WHERE ITS WALL CLOCK WENT, phase by phase.
 
 .DESCRIPTION
-Task 031 opened with a question nobody could answer from the logs alone: a suite costs
-about four minutes, and nobody knew which four minutes. This wrapper answers it without
-editing a single suite.
-
-It works because every suite in this repo already announces its own phases on stdout --
-`[3] menus: ...`, `[7] watch it drain: ...` -- and already writes a plugin log whose every
-line carries a millisecond timestamp. This script stamps the suite's stdout as it streams
-(so a `[N]` header becomes a timestamped phase boundary) and then reports:
-
-  * the WHOLE run, from before the fixture is generated to after the process is gone;
-  * every `[N] <step>` the suite printed, with its own duration;
-  * the four phases that are NOT the suite's own steps, taken from the plugin log:
-    launch+injection, menu walk, map load, and the tips dialog.
-
-Nothing here drives the game, takes the launch lock, or writes to the fixture folder. It
-is a stopwatch with a transcript, so running a suite under it is the same run.
-
-WHY THE STDOUT STAMP AND NOT Measure-Command. Measure-Command tells you a suite took 244
-seconds, which is the number we already had. The step boundaries are what tell you that
-130 of those seconds were nine SCVs being built one after another and 25 were
-`Start-Sleep` in the menu walk -- and those only exist on stdout.
+Stamps the suite's stdout as it streams, so every `[N] <step>` header becomes a phase
+boundary, and reads the plugin log for the in-game phases stdout cannot see: launch and
+injection, menu walk, map load, tips dialog. Nothing here drives the game, takes the
+launch lock, or writes to the fixture folder, so a suite run under it is the same run.
+Measure-Command reports only the total; the step boundaries that say which minutes went
+where exist on stdout alone.
 
 .EXAMPLE
 ./tools/plugin/time-suite.ps1 -Suite ./tools/plugin/test-production-queue.ps1 `
-    -SuiteArgs @{ FixtureDir = 'C:\sc-work\1161-base\Maps\BroodWar\00-t031' } `
-    -PluginLog C:\sc-work\logs\031\production-queue.log `
-    -OutFile C:\sc-work\logs\031\timing-prodqueue-before.txt
+    -SuiteArgs @{ FixtureDir = 'C:\sc-work\1161-base\Maps\BroodWar\00-t<NNN>-production-queue' } `
+    -PluginLog C:\sc-work\logs\timing\production-queue.log `
+    -OutFile C:\sc-work\logs\timing\prodqueue.txt
 
 .EXAMPLE
 # Just re-report from a transcript this script already wrote:
-./tools/plugin/time-suite.ps1 -ReportOnly C:\sc-work\logs\031\timing-prodqueue-before.txt
+./tools/plugin/time-suite.ps1 -ReportOnly C:\sc-work\logs\timing\prodqueue.txt
 #>
 [CmdletBinding(DefaultParameterSetName = 'Run')]
 param(
@@ -109,7 +94,8 @@ function Get-PluginPhases {
         if ($body.StartsWith('DIALOGS')) {
             # The HUD dialogs (Minimap, StatBtn, ...) exist only once the map is LOADED, so
             # the first DIALOGS line naming Minimap is map-load-complete -- read out of the
-            # engine's own dialog list rather than off a frame (AGENTS.md, task 026).
+            # engine's own dialog list rather than off a frame
+            # (AGENTS.md § "Oracles: what counts as a read-back").
             $names = [regex]::Matches($body, "dlg='([^']+)'") | ForEach-Object { $_.Groups[1].Value }
             if ($names -contains 'Minimap') {
                 if ($null -eq $ingame) { $ingame = $t }

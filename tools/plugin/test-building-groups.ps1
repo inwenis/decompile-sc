@@ -1,58 +1,24 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-End-to-end, UNATTENDED proof of task 024: a drag box over N same-type BUILDINGS selects
-all N, every one of them gets a selection circle, and one right-click rallies every one
-of them -- asserted per building from in-process state, never from the picture.
+End-to-end, UNATTENDED proof that a drag box over N same-type BUILDINGS selects all N,
+every one of them gets a selection circle, and one right-click rallies every one of them
+-- asserted per building from in-process state, never from the picture.
 
 .DESCRIPTION
-WHAT VANILLA DOES, AND WHY. `unit_IsStandardAndMovable` (0x0047B770) is consulted on both
-sides of the selection path. On the client, `SortAllUnits` (0x0046F0F0) drops every
-candidate that fails it and then, if that emptied the list, substitutes the LAST one it
-dropped and returns a count of 1 (`0x0046F223` remembers it; `0x0046F27A`..`0x0046F281`
-put it back). On the simulation side, `addUnitToSelectionSlot` (0x0049AF80) refuses every
-slot but the first to a unit that fails it. So vanilla selects exactly one building per
-box, and the simulation holds exactly one whatever arrives on the wire. Full evidence:
-research/building-groups.md.
+WHAT VANILLA DOES. `unit_IsStandardAndMovable` (0x0047B770) gates both sides of the
+selection path: on the client `SortAllUnits` (0x0046F0F0) drops every candidate that
+fails it and, if that emptied the list, substitutes the LAST one it dropped and returns
+a count of 1 (`0x0046F223` remembers it; `0x0046F27A`..`0x0046F281` put it back); in the
+simulation `addUnitToSelectionSlot` (0x0049AF80) refuses every slot but the first to a
+unit that fails it. So vanilla selects exactly one building per box, and the simulation
+holds exactly one whatever arrives on the wire. Evidence: research/building-groups.md.
 
-THREE ARMS, one script, one arm per invocation -- each is its own game launch because the
-thing being varied is set at plugin-install time:
-
-  -Stock    %SCPLUGIN_BUILDING_GROUPS%=0. The same box, the same map, the same binary,
-            selects ONE building. This arm is what makes the feature arm's "sixteen"
-            mean something: an assertion with nothing to fail against is not evidence
-            (AGENTS.md, "absence assertions must first be proved positive").
-  (default) The feature: 16 turrets selected from one box, every one circled, 6 Barracks
-            rallied by one right-click, a mixed-building box, and a single click.
-  -Combat   The liveness arm: 6 BARRACKS at low HP with a computer force shooting them.
-            A building dies inside the selection and its tag must appear in no emitted
-            Select -- task 020's gate, reused unchanged. Barracks rather than turrets
-            because this arm's claim is about the COMMAND path, and a Missile Turret
-            accepts no right-click at all: immobile and non-production, it has neither a
-            move order nor a rally point, so the engine queues nothing and there is no
-            fan-out to inspect. Measured, not assumed -- see the note by $VICTIM_ID.
-
-THE FIXTURES, generated at run time and deleted afterwards (generated maps are game
-content -- AGENTS.md hard rule 1). One name per arm-shape, both declared up front:
-
-  building-groups.scx         16 Missile Turrets (units.dat 124), 4x4 at 64 px, plus
-                              6 Barracks (111) 512 px east, 3x2 at 128 px, BOTH owned by
-                              the human (--enemy-owner player). Turrets are 2x2 tiles so
-                              sixteen of them span 192x192 px and fit one screen; Barracks
-                              are there because a rally point is the one order a plain
-                              right-click gives a building, and only a production building
-                              has one.
-  building-groups-combat.scx  6 Barracks at 60% hit points, 3x2 at 128 px, with 4
-                              computer Marines next to them -- close enough to open fire
-                              at once, few enough that the group dies as a trickle the
-                              suite can command in the middle of.
-
-The camera is moved between the two blocks with a minimap click (Get-ScMinimapPoint, the
-technique task 019 calibrated). They are far enough apart that centring on one puts the
-other entirely off screen, so a full-screen drag box is unambiguous and no map-to-screen
-arithmetic is needed anywhere in this file.
-
-Frames are captured as a DIAGNOSTIC only and land outside the repo.
+One arm per invocation, each its own game launch because the arm is fixed at
+plugin-install time: -Stock is the negative control that gives the feature arm's
+"sixteen" something to fail against, the default arm is the feature, -Combat is the
+liveness arm. Fixtures are generated at run time and deleted afterwards, because
+generated maps are game content (AGENTS.md § "Test fixtures").
 
 .EXAMPLE
 ./tools/plugin/test-building-groups.ps1 -Stock
@@ -95,33 +61,33 @@ $step = 0
 #            unit_IsStandardAndMovable on the units.dat Building flag (0x01) and it is
 #            not in unit_isUnselectable's list, so vanilla selects exactly one of them.
 #   BARRACKS units.dat 111 (0x6F). 4x3 tiles, and a PRODUCTION building, which is what
-#            gives it the rally point step 5 reads back.
-#   MARINE   the computer force for the -Combat arm. Anything that shoots a building
-#            would do; it is named so the fixture's own unit-count check can see it.
+#            gives it the rally point the right-click step reads back.
+#   MARINE   the computer force for the -Combat arm: anything that shoots a building
+#            would do, it is named so the fixture's unit-count check can see it.
 $TURRET_ID     = 124
 $BARRACKS_ID   = 111
 $TURRET_TYPE   = '0x7C'
 $BARRACKS_TYPE = '0x6F'
+# Sixteen 2x2-tile turrets on the 64 px grid form a 4x4 block spanning 192x192 px, which is
+# what lets one drag box hold them all inside the 632x336 battlefield Select-ScUnitsByMap
+# clamps to.
 $TURRET_COUNT   = 16
 $BARRACKS_COUNT = 6
-# FOUR marines, not eight, and see UnitHp below. Measured, not guessed: the first run of
-# this arm used eight against turrets at 12% hit points and they dealt ~0.96 HP/s each,
-# which wiped all sixteen in about fifty seconds -- seven were already dead when the box
-# landed and ALL of them were dead by the time the right-click went out, so the fan-out
-# built nothing and the arm proved nothing. A liveness arm needs the group to die as a
-# TRICKLE (the same word test-combat-death.ps1 uses for the same reason), not as a volley.
+# FOUR marines, not eight, and see UnitHp below. Measured, not guessed: eight marines
+# against sixteen turrets at 12% hit points deal ~0.96 HP/s each and wipe the block in
+# about fifty seconds -- half of it dead before the box lands, all of it dead before the
+# right-click goes out, so the fan-out builds nothing and the arm proves nothing. A
+# liveness arm needs the group to die as a TRICKLE, not as a volley.
 $ENEMY_COUNT    = 4
 
-# THE -Combat ARM'S VICTIMS ARE BARRACKS, NOT TURRETS, and that is a correctness fix
-# rather than a preference. This arm's claim is about the COMMAND path -- "a dead building
-# in the selection reaches no emitted Select" -- so it needs a building that accepts a
-# right-click at all. A Missile Turret does not: it is immobile and produces nothing, so
-# it has neither a move order nor a rally point. Measured, from the engine's own command
-# stream: a right-click with sixteen turrets selected queued NOTHING (the plugin's CMD log
-# for that run holds only 0x37 sync commands and not one 0x14), so there was no command to
-# fan out, `dropped` was 0 because nothing was ever considered, and the arm could not fail
-# honestly. Barracks are the type the feature arm already proves a right-click fans out
-# (`FANOUT start: cmd=0x14`), which is exactly why they are the right victims here.
+# THE -Combat ARM'S VICTIMS ARE BARRACKS, NOT TURRETS. Its claim is about the COMMAND
+# path -- "a dead building in the selection reaches no emitted Select" -- so it needs a
+# building that accepts a right-click at all. A Missile Turret does not: immobile and
+# non-production, it has neither a move order nor a rally point. Measured from the
+# engine's own command stream: a right-click with sixteen turrets selected queues NOTHING
+# (the plugin's CMD log holds only 0x37 syncs and not one 0x14), so there is no command
+# to fan out, `dropped` stays 0, and the arm cannot fail honestly. Barracks are the type
+# the feature arm proves a right-click fans out (`FANOUT start: cmd=0x14`).
 $VICTIM_ID    = if ($Combat) { $BARRACKS_ID } else { $TURRET_ID }
 $VICTIM_TYPE  = if ($Combat) { $BARRACKS_TYPE } else { $TURRET_TYPE }
 $VICTIM_COUNT = if ($Combat) { $BARRACKS_COUNT } else { $TURRET_COUNT }
@@ -131,9 +97,9 @@ $VICTIM_SPACING = if ($Combat) { 128 } else { 64 }
 
 if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-testmap' -Suite 'building-groups' }
 $mapDir = $FixtureDir
-# One name per fixture SHAPE, named for this SUITE (not for the task), so "mine" is
-# decidable from the filename alone. Only the one this arm creates is declared: the
-# declaration is the list this run cleans up.
+# One name per fixture SHAPE, named for this SUITE, so "mine" is decidable from the
+# filename alone. Only the name this arm creates is declared -- the declaration is the
+# list this run cleans up.
 $mapName = if ($Combat) { 'building-groups-combat.scx' } else { 'building-groups.scx' }
 $mapPath = Join-Path $mapDir $mapName
 $fixtures = New-ScFixtureRun -Dir $mapDir -Names @($mapName)
@@ -153,9 +119,9 @@ function Step {
 }
 
 # The plugin watches ONE marker path and it is not ours to choose: it logs the one it
-# opened (`OBSERVER marker file:`) and that is `<log dir>\marker.txt`. Writing a
-# per-arm name instead produced a run where every state read timed out with the plugin
-# working perfectly. The arms are sequential, so sharing it is not a contention risk.
+# opened (`OBSERVER marker file:`) and that is `<log dir>\marker.txt`. A per-arm name
+# here makes every state read time out with the plugin working perfectly. The arms are
+# sequential, so sharing it is not a contention risk.
 $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
 function Get-ScState {
     param([string]$Tag, [int]$TimeoutSec = 15)
@@ -195,20 +161,14 @@ function Shot([string]$tag) {
 }
 
 # Box a set of units EXACTLY, by map position, with the camera moved to them first.
-#
-# WHY NOT A FULL-SCREEN DRAG. Every earlier suite could box the whole battlefield because
-# its map held one block and nothing else selectable. This fixture holds two, and the
-# first in-game run of this suite proved the point: a full-screen drag after centring on
-# the turret block still reached a Barracks, and vanilla's "last rejected candidate"
-# fallback picked THAT -- so the run measured the wrong block. A box has to mean exactly
-# the units it is aimed at.
-#
-# So: centre with a minimap click, then ask the plugin where the viewport is
-# (`WORLD [...] screen=(left,top)`, read from the engine's own 0x0062848C / 0x006284A8)
-# and convert each unit's map position into the client coordinate a posted drag carries:
-# client = map - origin. The rect is the block's bounding box plus a margin, clamped to
-# the battlefield above the HUD. It returns $false if the block is not fully on screen,
-# so "the camera did not go where we asked" fails as itself instead of as a wrong count.
+# NOT a full-screen drag: this fixture holds two selectable blocks, and a full-screen
+# drag after centring on the turret block still reaches a Barracks -- vanilla's "last
+# rejected candidate" fallback then picks THAT and the run measures the wrong block.
+# So: centre with a minimap click, ask the plugin where the viewport is (`WORLD [...]
+# screen=(left,top)`, the engine's own 0x0062848C / 0x006284A8) and convert each unit's
+# map position into the client coordinate a posted drag carries: client = map - origin.
+# Returns $false when the block is not fully on screen, so "the camera did not go where
+# we asked" fails as itself instead of as a wrong count.
 function Select-ScUnitsByMap {
     param(
         [Parameter(Mandatory)][object[]]$Units,      # WORLD-scan rows: .X and .Y in map px
@@ -245,38 +205,36 @@ function Select-ScUnitsByMap {
 try {
     Step "generate the fixture: $mapName" {
         Wait-ScFixtureFolderFree -Run $fixtures
-        # --enemy-owner player is the two-block form: the same generator that places a
-        # COMPUTER force for the combat fixture places this one under the human, which is
-        # the only way to get two selectable blocks of DIFFERENT types onto one map.
-        # 512 px east clears the default 256 px minimum gap between the bounding boxes
-        # (turrets end at +96, barracks start at +384) and, more to the point, puts each
-        # block off screen when the view is centred on the other.
+        # --enemy-owner player is the two-block form: the generator that places a COMPUTER
+        # force for the combat fixture places this one under the human, the only way to
+        # get two selectable blocks of DIFFERENT types onto one map. 512 px east clears
+        # the default 256 px minimum gap between the bounding boxes (turrets end at +96,
+        # barracks start at +384) and puts each block off screen when the view is centred
+        # on the other.
         $genArgs = @{
             UnitCount = $VICTIM_COUNT; UnitType = "$VICTIM_ID"; Player = 0
             GridSpacing = $VICTIM_SPACING; Race = 'terran'; OutputPath = $mapPath
         }
         if ($Combat) {
             # The victims must die on a schedule this suite can steer between: the first
-            # death AFTER the box (step 5 asserts all six were still alive when the group
-            # formed) and the last one well after the order (step 6 needs live ones left
-            # on the wire to compare the dead ones against). The first run's 12% put the
-            # first death before the box and the last before the order -- both ends wrong.
-            # The number is measured against THIS fixture rather than extrapolated from
-            # the turret one: at 15% (150 HP) four marines focus-firing took one Barracks
-            # all the way down and put 46 more into a second inside the ~20 s before the
-            # box -- about 12 HP/s between them. 60% of a Barracks' 1000 HP is 600, so the
-            # first falls around fifty seconds in: comfortably AFTER the box, and still
-            # inside step 6's 180 s deadline even if the rate turns out half what was
-            # measured.
+            # death AFTER the box (step 5 asserts all six are alive when the group forms)
+            # and the last one well after the order (step 6 needs live ones left on the
+            # wire to compare the dead ones against). Do not lower it: at 12% the first
+            # death lands before the box and the last before the order. Measured on THIS
+            # fixture: at 15% (150 HP) four marines focus-firing take one Barracks all the
+            # way down and put 46 more into a second inside the ~20 s before the box --
+            # about 12 HP/s between them. 60% of a Barracks' 1000 HP is 600, so the first
+            # falls around fifty seconds in: after the box, and inside step 6's 180 s
+            # deadline even at half that rate.
             $genArgs += @{
                 UnitHp = 60
                 EnemyCount = $ENEMY_COUNT; EnemyType = 'marine'
                 EnemyOwner = 'computer'; EnemyRace = 'terran'
                 # 256 px east leaves 112 px between the two bounding boxes -- INSIDE a
-                # Marine's 128 px range, which is the point: this arm needs them to
-                # engage on the first frame, where every other fixture in this repo
-                # needs the opposite. Hence MinEnemyGap 96: the generator's 128 px floor
-                # exists to keep fixtures idle and would refuse this one.
+                # Marine's 128 px range, which is the point: this arm needs them to engage
+                # on the first frame where every other fixture needs the opposite. Hence
+                # MinEnemyGap 96: the generator's 128 px floor keeps fixtures idle and
+                # would refuse this one.
                 EnemyOffsetX = 256; EnemyOffsetY = 0; EnemySpacing = 48; MinEnemyGap = 96
             }
         }
@@ -311,8 +269,8 @@ try {
 
     Step 'the plugin came up in the configuration this arm asked for' {
         # Proved POSITIVE from the plugin's own config line rather than assumed from the
-        # argument: the whole point of the stock arm is that the feature really is off,
-        # and "we passed 0" is not that.
+        # argument: the stock arm's point is that the feature really is off, and "we
+        # passed 0" is not that.
         $cfg = @(Wait-ScLogMatch -LogPath $LogPath -Pattern 'FANOUT config: .* buildingGroups=(\d)' -TimeoutSec 30)
         Assert-That 'the plugin logged its configuration' ($cfg.Count -gt 0)
         if ($cfg.Count -gt 0) {
@@ -344,21 +302,20 @@ try {
         Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
         Start-Sleep -Seconds 10
         # The tips dialog is found in the engine's own dialog list and dismissed by ITS OWN
-        # OK button, then asserted gone (task 027) -- never a fixed point, never the registry.
+        # OK button, then asserted gone (AGENTS.md § "Tips dialog") -- never a fixed point,
+        # never the registry.
         Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
         Start-Sleep -Seconds 2
         Shot 'in-game'
     }
 
     # Where the blocks actually are, read out of the engine's own unit lists rather than
-    # computed from the generator's arguments. A block the engine refused to place shows
-    # up here as a wrong count, before any selection claim rests on it -- and the tile
-    # coordinates are what every minimap click below uses.
+    # computed from the generator's arguments: a block the engine refused to place shows
+    # up here as a wrong count, before any selection claim rests on it. The tile
+    # coordinates are what every minimap click below aims at.
     Step 'the map spawned what it was asked to, and this is where it is' {
         $world = Get-ScWorldState -LogPath $LogPath -Tag 'world' -MarkerPath $markerPath
         $mine = @($world.Units | Where-Object { $_.Owner -eq 0 })
-        # The block this arm boxes: turrets everywhere except -Combat, which boxes Barracks
-        # because they are the only one of the two that accepts a right-click at all.
         $script:victims = @($mine | Where-Object { $_.Type -eq $VICTIM_ID })
         $victims = $script:victims
         $victimName = if ($Combat) { 'Barracks' } else { 'Missile Turrets' }
@@ -394,10 +351,10 @@ try {
                 Y = [int]((($barracks | Measure-Object Y -Average).Average) / 32)
             }
             Write-Host "       barracks centred on tile ($($barracksTile.X),$($barracksTile.Y))"
-            # The mixed-building box cannot hold BOTH whole blocks -- 512 px apart is
-            # wider than the battlefield -- so it is aimed at the facing edges: the
-            # easternmost column of turrets and the westernmost column of barracks. That
-            # is a genuine mixed box (two building types, no units) and it fits.
+            # The mixed-building box cannot hold BOTH whole blocks -- 512 px apart is wider
+            # than the battlefield -- so it is aimed at the facing edges: the easternmost
+            # column of turrets and the westernmost column of barracks. That is a genuine
+            # mixed box (two building types, no units) and it fits.
             $tx = ($script:turrets | Measure-Object X -Maximum).Maximum
             $bx = ($script:barracks | Measure-Object X -Minimum).Minimum
             $script:mixedUnits = @($script:turrets | Where-Object { $_.X -eq $tx }) +
@@ -424,8 +381,8 @@ try {
             Assert-That "  and the sim's capacity is reported as one (simSlots=$($stockState.SimSlots))" `
                 ($stockState.SimSlots -eq 1)
             # Nothing grew: the log line the feature writes must be ABSENT here, and the
-            # feature arm proves the same pattern MATCHES, which is what makes this
-            # absence worth asserting at all.
+            # feature arm proves the same pattern MATCHES -- which is what makes the
+            # absence worth asserting (AGENTS.md § "Oracles: absence and defect-era checks").
             $bg = @(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'BGROUP box:')
             Assert-That 'no building group was ever formed' ($bg.Count -eq 0) `
                 ($bg.Count -gt 0 ? "($($bg[0].Line.Trim()))" : '')
@@ -448,13 +405,13 @@ try {
 
         Step 'a building in the selection dies, and its tag reaches no Select' {
             # Wait for a MIXED selection -- some dead AND some still alive -- not merely
-            # for "one died". That distinction is the whole arm. The first run waited on
-            # `live < n` alone, the fixture then killed the rest before the order was
-            # posted, and the fan-out was handed a selection with nothing live in it: it
-            # emitted no Select at all, so "no dead tag reached the wire" passed with
-            # zero tags on the wire. An absence with nothing to fail against is not
-            # evidence (AGENTS.md), so the live ones are now part of the precondition and
-            # a window that never opens fails HERE, naming itself, instead of downstream.
+            # for "one died": that distinction is the whole arm. On `live < n` alone the
+            # fixture can kill the rest before the order is posted, handing the fan-out a
+            # selection with nothing live in it: it emits no Select at all, so "no dead tag
+            # reached the wire" passes with zero tags on the wire. An absence with nothing
+            # to fail against is not evidence (AGENTS.md § "Oracles: absence and defect-era
+            # checks"), so the live ones are part of the precondition and a window that
+            # never opens fails HERE, naming itself, instead of downstream.
             $deadline = (Get-Date).AddSeconds(180)
             $state = $null
             while ((Get-Date) -lt $deadline) {
@@ -464,8 +421,8 @@ try {
             }
             Assert-That "the selection holds dead AND live buildings at once ($($state.Live) live of $($state.N))" `
                 ($state.Live -lt $state.N -and $state.Live -gt 0) "(got $($state.Line))"
-            # hp0 is the task-020 term: a unit killed by DAMAGE whose slot has not been
-            # recycled, which the pre-020 uniqueness test cannot see.
+            # hp0: a unit killed by DAMAGE whose slot has not been recycled, which a
+            # uniqueness check comparing slots alone cannot see.
             Assert-That "the dead one is seen as dead, not merely as recycled (hp0=$($state.Hp0) removed=$($state.Removed))" `
                 (($state.Hp0 + $state.Removed) -gt 0)
             Write-Host "       $($state.Line)"
@@ -477,11 +434,8 @@ try {
             $lines = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
 
             # PROVE A COMMAND WAS ISSUED AT ALL, before asking what the fan-out did with
-            # it. This is the assertion the first two runs of this arm were missing, and
-            # missing it is what let them fail silently: a right-click on a selection of
-            # MISSILE TURRETS queues nothing whatsoever (immobile, produces nothing, so no
-            # order to give -- the engine's command stream held only 0x37 syncs), and
-            # "no Select carried a dead tag" is trivially true when no Select was built.
+            # it: "no Select carried a dead tag" is trivially true when no Select was
+            # built (see $VICTIM_ID for the selection that queues nothing).
             $started = @($lines | Select-String -Pattern 'FANOUT start: cmd=0x14')
             Assert-That 'the right-click actually queued a command for these buildings' `
                 ($started.Count -gt 0) '(no FANOUT start line -- the engine issued no command)'
@@ -501,10 +455,10 @@ try {
             # below it is about an empty wire.
             Assert-That "the live buildings were put on the wire (out=$emitted)" ($emitted -gt 0)
             Assert-That "the dead buildings were dropped from it (dropped=$dropped)" ($dropped -gt 0)
-            # The fan-out's own accounting, summed over the same lines: every member of
-            # the selection it looked at either went out or was refused, and none was
-            # silently forgotten. Per-line identity, so it holds however many chunks the
-            # turn budget let out before the rest deferred.
+            # The fan-out's own accounting, summed over the same lines: every member of the
+            # selection it looked at either went out or was refused, none silently
+            # forgotten. A per-line identity, so it holds however many chunks the turn
+            # budget lets out before the rest defer.
             Assert-That "every building it considered was either emitted or dropped ($considered = $emitted + $dropped)" `
                 ($considered -eq $emitted + $dropped)
             # The forensics line names the unit AND the term that refused it, so "it was
@@ -554,9 +508,9 @@ try {
 
         Step "every one of the $TURRET_COUNT has a selection circle" {
             # Per building, from its OWN sprite flag 0x01 -- the bit that says a circle
-            # image (0x231..0x23A) is attached. The ENGINE sets it for the twelve it
-            # selected and sc_circles sets it for the four past the cap, so this one
-            # number covers both halves and is not satisfied by "our share is circled".
+            # image (0x231..0x23A) is attached. The ENGINE sets it for the twelve it selects
+            # and sc_circles for the four past the cap, so this one number covers both
+            # halves and is not satisfied by "our share is circled".
             Assert-That "all $TURRET_COUNT buildings are circled ($($boxed.Circled)/$($boxed.CircledOf))" `
                 ($boxed.Circled -eq $TURRET_COUNT -and $boxed.CircledOf -eq $TURRET_COUNT)
             $show = @(Get-Content -LiteralPath $LogPath |
@@ -605,10 +559,10 @@ try {
 
             $after = Get-ScState 'rallied'
             # THE ASSERTION. One rally bucket covering every live building: the histogram
-            # key is the packed (x << 16) | y each building carries in CUnit+0xF8/+0xFA,
-            # so a fan-out that reached four of six shows up as two buckets rather than
-            # as a smaller total. `before` is the same read taken before the click, so
-            # "they were already rallied there" is ruled out rather than assumed.
+            # key is the packed (x << 16) | y each building carries in CUnit+0xF8/+0xFA, so
+            # a fan-out that reached four of six shows up as two buckets rather than as a
+            # smaller total. `before` is the same read taken ahead of the click, so "they
+            # were already rallied there" is ruled out rather than assumed.
             $nowKeys = @($after.Rally.Keys)
             Assert-That "the rally point changed (was [$($before.RallyText)], now [$($after.RallyText)])" `
                 ($after.RallyText -ne $before.RallyText)
@@ -621,12 +575,11 @@ try {
         }
 
         Step 'a MIXED-BUILDING box selects one type, and only one' {
-            # The scope answer. Vanilla already picks one building out of a mixed box,
-            # arbitrarily; this feature keeps THAT choice and widens it to that
-            # building's type, so the outcome is vanilla's lead plus its siblings and
-            # never a second arbitrary rule of ours. Which type wins is therefore
-            # whatever vanilla would have selected alone -- so the assertion is "exactly
-            # one type, and more than one of it", not a fixed type.
+            # Vanilla picks one building out of a mixed box, arbitrarily; the feature keeps
+            # THAT choice and widens it to that building's type, so the outcome is
+            # vanilla's lead plus its siblings and never a second arbitrary rule of ours.
+            # Which type wins is whatever vanilla alone would select, so the assertion is
+            # "exactly one type, and more than one of it", not a fixed type.
             $aimed = Select-ScUnitsByMap -Units $script:mixedUnits -TileX $midTile.X -TileY $midTile.Y -Tag 'aim-mixed'
             Assert-That 'both building types are on screen and were boxed together' $aimed
             $mixed = Get-ScState 'mixed'
@@ -641,19 +594,17 @@ try {
         }
 
         Step 'a single CLICK on a building still selects exactly one' {
-            # SortAllUnits is called with `clicked != 0` on every click path and the
-            # feature refuses to touch those, so this must stay stock. Asserted, because
-            # "we only changed the drag box" is a claim about a branch nobody can see
-            # from outside the process.
+            # SortAllUnits is called with `clicked != 0` on every click path and the feature
+            # refuses to touch those, so this must stay stock. Asserted, because "only the
+            # drag box changed" is a claim about a branch nobody can see from outside.
             $aimed = Select-ScUnitsByMap -Units $script:barracks -TileX $barracksTile.X -TileY $barracksTile.Y -Tag 'aim-click'
             Assert-That 'the barracks block is on screen and was boxed' $aimed
             $boxedAgain = Get-ScState 'before-click'
             Assert-That "the box selected $BARRACKS_COUNT first ($($boxedAgain.N))" `
                 ($boxedAgain.N -eq $BARRACKS_COUNT)
-            # Aimed at a REAL barracks, converted from its map position through the
-            # viewport origin the box above just read -- not at the middle of the screen
-            # and a hope. A click that lands on empty ground clears the selection and
-            # would pass this step for the wrong reason.
+            # Aimed at a REAL barracks, converted from its map position through the viewport
+            # origin the box above just read: a click that lands on empty ground clears the
+            # selection and would pass this step for the wrong reason.
             $target = $script:barracks | Select-Object -First 1
             $cx = $target.X - $script:lastScreen.Left
             $cy = $target.Y - $script:lastScreen.Top

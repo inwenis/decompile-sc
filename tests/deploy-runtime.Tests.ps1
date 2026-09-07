@@ -1,24 +1,18 @@
 #Requires -Version 7
 <#
 Pester coverage for the contracts between tools/deploy.ps1 and the rest of the repo:
-(1) every helper run-with-plugin.ps1 dot-sources must also be copied into the deploy
-tree, and (2) a redeploy must leave the feature-test map in place (task 067).
+every helper run-with-plugin.ps1 dot-sources is also copied into the deploy tree, a
+redeploy leaves the feature-test map in place, and the one launcher ships the wide
+geometry. Offline: no game, no toolchain.
 
-WHY THIS EXISTS (issue #30, 2026-08-11). The deployed install is deliberately
-self-contained -- deploy.ps1 copies run-with-plugin.ps1 and each of its helpers into
-<DeployRoot>\plugin so the user's game keeps working after every worktree on the machine
-has been pruned (tools/deploy.ps1, "Design: self-contained, not a thin repo pointer").
-That makes the copy list a hand-maintained mirror of a dot-source list, in a different
-file, with nothing tying the two together -- and issue #30 added a helper to one of them.
+The deployed install is self-contained -- deploy.ps1 copies run-with-plugin.ps1 and each
+of its helpers into <DeployRoot>\plugin so the user's game keeps working after every
+worktree on the machine has been pruned. The copy list is therefore a hand-maintained
+mirror of a dot-source list in another file, with nothing tying the two together.
 
-The failure mode is the worst shape available: it is invisible in this repo (where every
-file is present), invisible in CI (which never deploys), and lands on the USER, whose
-double-clicked shortcut runs `pwsh -WindowStyle Hidden` and therefore fails with no
-console to fail in. Exactly the regression class run-with-plugin.ps1's -NoLaunchLock note
-already records shipping once.
-
-So: parse the dot-sources out of run-with-plugin.ps1 and require each one in deploy.ps1's
-copy list. Offline, no game, no toolchain.
+A helper missing from that mirror is invisible in this repo (every file is present),
+invisible in CI (which never deploys), and lands on the user, whose double-clicked
+shortcut runs `pwsh -WindowStyle Hidden` and so fails with no console to fail in.
 #>
 
 BeforeAll {
@@ -38,8 +32,8 @@ BeforeAll {
 Describe 'the deployed plugin runtime carries every dependency it dot-sources' {
 
     It 'finds the dot-sourced helpers at all (the parse itself is proved positive)' {
-        # An empty match list would make every assertion below vacuously true -- the
-        # absence-assertion rule in AGENTS.md, applied to a test's own input.
+        # An empty match list makes every assertion below vacuously true -- AGENTS.md
+        # § "Oracles: absence and defect-era checks", applied to a test's own input.
         $helpers = @(Get-DotSourcedHelper -Path $script:runner)
         $helpers.Count | Should -BeGreaterThan 2
         $helpers | Should -Contain 'sc-canonical-path.ps1'
@@ -62,19 +56,16 @@ Describe 'the deployed plugin runtime carries every dependency it dot-sources' {
 }
 
 Describe 'a redeploy leaves the feature-test map in place (task 067)' {
-    # tools/deploy.ps1 mirrors -SourceGameDir with /MIR, and !feature-test.scx is a
-    # destination-only file -- so every redeploy purges it, and until task 067 the
-    # user had to know to re-run the generator from a terminal. The fix regenerates
-    # the map as deploy.ps1's last assembly step. These are static checks on the
-    # script text (offline, no game, no toolchain -- same shape as the block above);
-    # the live proof is an actual deploy run. Every one of them fails on the pre-067
-    # deploy.ps1, so the coverage is not vacuous.
+    # tools/deploy.ps1 mirrors -SourceGameDir with /MIR and !feature-test.scx is a
+    # destination-only file, so every redeploy purges it unless deploy.ps1 regenerates
+    # the map as its last assembly step. These are static checks on the script text;
+    # the live proof is an actual deploy run. Each check fails against a deploy.ps1
+    # without the regeneration step, so the coverage is not vacuous.
 
     BeforeAll {
         $script:deployText = Get-Content -Raw -LiteralPath $script:deploy
-        # The literal invocation form in deploy.ps1's code -- NOT a bare
-        # 'make-feature-test-map.ps1' match, which the header comment would satisfy
-        # on its own (the absence-assertion rule: match the thing that does the work).
+        # The literal invocation form in deploy.ps1's code: a bare
+        # 'make-feature-test-map.ps1' match is satisfied by its header comment alone.
         $script:genInvocation = "& (Join-Path `$scriptDir 'make-feature-test-map.ps1')"
     }
 
@@ -99,8 +90,8 @@ Describe 'a redeploy leaves the feature-test map in place (task 067)' {
     }
 
     It 'the verify step requires the map to exist AND to be from this run' {
-        # Presence alone would pass on a stale leftover; deploy.ps1 checks freshness
-        # the same way it does for the plugin binaries.
+        # Presence alone passes on a stale leftover, so deploy.ps1 checks freshness the
+        # same way it does for the plugin binaries.
         $script:deployText.Contains('feature-test map missing after deploy') | Should -BeTrue
         $script:deployText.Contains('predates this deploy run -- the regeneration step did not actually write it') | Should -BeTrue
     }
@@ -112,10 +103,9 @@ Describe 'a redeploy leaves the feature-test map in place (task 067)' {
 }
 
 Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-06)' {
-    # Static checks on deploy.ps1's text, same offline shape as the blocks above.
-    # Until 2026-09-06 widescreen was a SECOND launcher + shortcut, off by default;
-    # the user asked for one shortcut with the extended viewport, so the one launcher
-    # carries it. Each check fails on the two-launcher deploy.ps1, so none is vacuous.
+    # The deploy ships ONE launcher and one shortcut, and it carries the extended
+    # viewport; a separate "Wide" launcher off by default is the shape these checks
+    # forbid, and each fails against a two-launcher deploy.ps1, so none is vacuous.
 
     BeforeAll {
         $script:deployText = Get-Content -Raw -LiteralPath $script:deploy
@@ -136,9 +126,9 @@ Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-
     It 'the launcher turns the assembled widescreen on: stage 3 + storm widen + cnc-ddraw' {
         $script:launcher | Should -Match '-Widescreen 1'
         $script:launcher | Should -Match '-WidescreenStage 3'
-        # The ARGUMENT line, not the launcher's own header comment (which also says
-        # "-StormPresent widen" and made a plain substring match unfalsifiable): the
-        # stage line and the storm line, each a backtick-continued argument.
+        # The ARGUMENT lines -- stage and storm, each backtick-continued -- not the
+        # launcher's own header comment, which also says "-StormPresent widen" and so
+        # satisfies a plain substring match.
         $script:launcher | Should -Match '-WidescreenStage 3 `\s*\r?\n\s*-StormPresent widen `' -Because 'issue #113: run-with-plugin.ps1 exported its old default 0 verbatim, so the DLL auto-arm never fired and the deployed wide game showed a black right band; the launcher must pass the buffer->glass copy as an argument'
         $script:launcher | Should -Match 'cnc-ddraw\\ddraw\.dll'
         $script:launcher | Should -Not -Match 'InjectWindowedHelper' -Because 'WMode presents 640 columns whatever it is asked; the wide path must use the cnc-ddraw proxy'
@@ -154,8 +144,7 @@ Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-
 
     It 'the launcher presents through cnc-ddraw with the 2x/lock ini, generated at 2x the plugin geometry' {
         $script:launcher | Should -Match 'cnc-ddraw-2x\.ini'
-        # The ini is generated from the committed file with width/height rewritten to
-        # 2x SC_WS_SCREEN_W/H, and the verify step re-reads the shipped file.
+        # The ini is the committed file with width/height rewritten to 2x SC_WS_SCREEN_W/H.
         $script:deployText | Should -Match 'SC_WS_SCREEN_W'
         $script:deployText | Should -Match '\^width=\\d\+'
         $script:deployText.Contains('does not carry width=') | Should -BeTrue -Because 'the verify step must read the ini that actually shipped'
@@ -191,7 +180,6 @@ Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-
 
     It '-NoShortcut skips the desktop entirely (scratch deploys must not touch it)' {
         $script:deployText.Contains('shortcuts SKIPPED (-NoShortcut)') | Should -BeTrue
-        # The gate must cover the shortcut write AND the stale-shortcut removal.
         $gateAt = $script:deployText.IndexOf('if ($NoShortcut) {')
         $lnkAt = $script:deployText.IndexOf('$lnk.Save()')
         $staleAt = $script:deployText.IndexOf('$staleWideShortcut = ')

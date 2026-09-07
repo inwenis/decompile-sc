@@ -1,19 +1,17 @@
 // hooktest.cpp -- offline unit test for the inline-detour engine in sc_hook.cpp.
 //
-// WHY THIS EXISTS
-//   The detour engine is the one piece of task 011 that writes executable memory in
-//   a foreign process. A bug in it does not produce a wrong answer, it produces a
-//   corrupted game -- and the only place we can observe that is a user's single
-//   hand-driven test run. So the engine is proved HERE first, in a throwaway 32-bit
-//   process, against three functions whose prologues are hand-written to be
-//   byte-identical in shape to the three real StarCraft functions we patch:
+// The detour engine writes executable memory in a foreign process: a bug there does not
+// produce a wrong answer, it produces a corrupted game, and the only place to observe
+// that is a hand-driven run of the real game. So the engine is proved HERE first, in a
+// throwaway 32-bit process, against three functions whose prologues are hand-written to
+// match, byte for byte in shape, the three real StarCraft functions we patch:
 //
-//     55 8B EC 51 A1 <abs32>   9 bytes, 4 instrs  -- queueCommand        (fastcall)
-//     55 8B EC 83 EC 5C        6 bytes, 3 instrs  -- CMDACT_Select       (stdcall, RET 8)
-//     55 8B EC 53 56           5 bytes, 4 instrs  -- sortOverflowHandler (EAX/ECX + stack, RET 8)
+//   55 8B EC 51 A1 <abs32>   9 bytes, 4 instrs  -- queueCommand        (fastcall)
+//   55 8B EC 83 EC 5C        6 bytes, 3 instrs  -- CMDACT_Select       (stdcall, RET 8)
+//   55 8B EC 53 56           5 bytes, 4 instrs  -- sortOverflowHandler (EAX/ECX + stack, RET 8)
 //
-//   No StarCraft file is involved and the game is not launched. `build.ps1 -Test`
-//   builds and runs it; a non-zero exit fails the build.
+// No StarCraft file is involved and the game is not launched. `build.ps1 -Test` builds
+// and runs it; a non-zero exit fails the build.
 
 #include <windows.h>
 #include <stdio.h>
@@ -38,32 +36,16 @@
 static int g_failures = 0;
 
 // ---------------------------------------------------------------------------
-// Parts: numbered by the order they RUN, never by hand (issue #35)
+// Parts: numbered by the order they RUN, never by hand.
 //
-// Three separate branches claimed a part number that another branch had already
-// taken -- 024 and 026 both took [13], 021 and 025 both took [11], 028 and 029 both
-// took [16]. Every one of them was invisible until somebody merged both sides: the
-// declarations sit in different regions of this file (or in different files), so git
-// reports no conflict and both parts simply arrive with the same number.
-//
-// The number exists for exactly one purpose: naming which part failed in a redirected
-// overnight log. Two parts sharing one defeats that purpose precisely when it is
-// needed. So the number is no longer a thing a branch claims -- Part() assigns it from
-// the order the parts actually run in, and prints the part's NAME beside it. There is
-// nothing left to collide over, and adding a part is one call with no shared resource
-// to check first.
-//
-// The NAME is now the real identifier: Check() prints it on every failing line, so a
-// reader greppping a 4000-line log for FAIL learns the subsystem without scrolling back
-// to a header. Duplicate names are refused below, for the same reason duplicate numbers
-// were a defect.
-//
-// The call order at the bottom of main() is deliberately chosen so the derived numbers
-// still match the ones research/ already cites (control-groups.md cites part [11] four
-// times, selection-circles.md cites [8], and so on). NEW PARTS GO AT THE END and take
-// the next number automatically. Reordering existing calls renumbers them and silently
-// invalidates those citations, so don't -- unless you are also fixing the citations.
-// ---------------------------------------------------------------------------
+// A hand-claimed number collides silently: two parts declared in different regions of
+// this file (or in different files) merge with no git conflict and arrive with the same
+// number, defeating the number's only purpose -- naming which part failed in a redirected
+// overnight log. Part() derives it from run order and prints the part's NAME beside it,
+// and Check() prints that name on every failing line, so a reader grepping a 4000-line
+// log for FAIL learns the subsystem without scrolling back. Duplicate names are refused
+// below for the same reason. The call order at the bottom of main() decides every number;
+// see the note there before touching it.
 #define SC_MAX_PARTS 64
 static int g_partCount = 0;
 static const char* g_partNames[SC_MAX_PARTS];
@@ -87,9 +69,8 @@ static void Check(const char* what, long long got, long long want) {
     if (got == want) {
         printf("  ok   %-46s = %lld\n", what, got);
     } else {
-        // The part NAME on the failing line itself. "part [16] failed" was unanswerable
-        // when two parts held [16]; "[16] the status pane's production-queue strip" is
-        // answerable however the numbering came out.
+        // The part NAME on the failing line itself: "part [16] failed" is unanswerable if
+        // two parts ever hold [16], the name however the numbering came out.
         printf("  FAIL %-46s = %lld (expected %lld)   <- [%d] %s\n",
                what, got, want, g_partCount, g_partName);
         ++g_failures;
@@ -97,10 +78,8 @@ static void Check(const char* what, long long got, long long want) {
 }
 
 // ---------------------------------------------------------------------------
-// Test targets, written in assembly so their prologues match the real ones byte
-// for byte in shape (length and instruction boundaries), which is precisely what
-// the patch-window constants encode.
-// ---------------------------------------------------------------------------
+// Test targets in assembly: prologue length and instruction boundaries are exactly what
+// the patch-window constants encode, so they must match the real ones byte for byte.
 
 extern "C" unsigned __attribute__((fastcall)) TgtFastcall(unsigned a, unsigned b);
 extern "C" unsigned __attribute__((stdcall))  TgtStdcall(unsigned a, unsigned b);
@@ -129,9 +108,8 @@ asm(
 ".globl _TgtFastcall\n"
 "_TgtFastcall:\n"
     // `55 8B EC` verbatim: GAS assembles `mov %esp,%ebp` as 89 E5, the other legal
-    // encoding, and StarCraft's VC6-era build uses 8B EC. The prologue check found
-    // that difference the first time this test ran -- which is exactly its job, but
-    // here the point is to reproduce the game's byte shape, so pin the encoding.
+    // encoding, and StarCraft's VC6-era build uses 8B EC. The point here is to reproduce
+    // the game's byte shape, so pin the encoding.
     "  .byte 0x55, 0x8B, 0xEC\n"
     "  push %ecx\n"
     "  mov  _g_testGlobal, %eax\n"
@@ -146,10 +124,7 @@ asm(
     // prologue: 55 8B EC 83 EC 5C        == 6 bytes / 3 instructions
 ".globl _TgtStdcall\n"
 "_TgtStdcall:\n"
-    // `55 8B EC` verbatim: GAS assembles `mov %esp,%ebp` as 89 E5, the other legal
-    // encoding, and StarCraft's VC6-era build uses 8B EC. The prologue check found
-    // that difference the first time this test ran -- which is exactly its job, but
-    // here the point is to reproduce the game's byte shape, so pin the encoding.
+    // 8B EC rather than GAS's 89 E5, for the reason given at _TgtFastcall.
     "  .byte 0x55, 0x8B, 0xEC\n"
     "  sub  $0x5c, %esp\n"
     "  mov  8(%ebp), %eax\n"
@@ -165,10 +140,7 @@ asm(
     // prologue: 55 8B EC 53 56           == 5 bytes / 4 instructions
 ".globl _TgtMixed\n"
 "_TgtMixed:\n"
-    // `55 8B EC` verbatim: GAS assembles `mov %esp,%ebp` as 89 E5, the other legal
-    // encoding, and StarCraft's VC6-era build uses 8B EC. The prologue check found
-    // that difference the first time this test ran -- which is exactly its job, but
-    // here the point is to reproduce the game's byte shape, so pin the encoding.
+    // 8B EC rather than GAS's 89 E5, for the reason given at _TgtFastcall.
     "  .byte 0x55, 0x8B, 0xEC\n"
     "  push %ebx\n"
     "  push %esi\n"
@@ -187,14 +159,12 @@ asm(
 
 // Calls TgtMixed with the awkward convention from C.
 //
-// count and ptr are PINNED to EAX and ECX as in-out operands rather than loaded there
-// from two more "r" registers inside the block. Four "r" operands plus an eax/ecx
-// clobber is more registers than GCC can find at -O0, where nothing is already in a
-// register and EBP is a real frame pointer: `build.ps1 -DebugBuild -Test` would not
-// compile this function ("'asm' operand has impossible constraints"). The two PUSHED
-// values stay in registers on purpose -- a "g" or "m" operand could resolve
-// ESP-relative, and the first push would move the second one out from under its own
-// address.
+// count and ptr are PINNED to EAX and ECX as in-out operands: four "r" operands plus an
+// eax/ecx clobber is more registers than GCC can find at -O0, where nothing is already in
+// a register and EBP is a real frame pointer ("'asm' operand has impossible constraints"
+// out of `build.ps1 -DebugBuild -Test`). The two PUSHED values stay in registers on
+// purpose -- a "g" or "m" operand could resolve ESP-relative, and the first push would
+// move the second one out from under its own address.
 static void CallMixed(unsigned count, unsigned* ptr, unsigned unit, unsigned clicked) {
     unsigned  inEax = count;
     unsigned* inEcx = ptr;
@@ -206,10 +176,6 @@ static void CallMixed(unsigned count, unsigned* ptr, unsigned unit, unsigned cli
         : [clicked] "r"(clicked), [unit] "r"(unit)
         : "edx", "memory");
 }
-
-// ---------------------------------------------------------------------------
-// Detours
-// ---------------------------------------------------------------------------
 
 static ScHook g_hFast, g_hStd, g_hMixed;
 
@@ -267,16 +233,12 @@ extern "C" void ScTestMixedObserve(unsigned count, unsigned* ptr, unsigned unit,
 // ---------------------------------------------------------------------------
 // [7] The fan-out core, driven with no game and no hooks.
 //
-// A fake 3 MB "module image" is allocated so that every static VA the core touches
-// (the unit array at 0x0059CCA8, the turn-buffer counters at 0x00654AA0 /
-// 0x0057F0D8) resolves inside it. Units are synthesised at the real 336-byte stride
-// with real uniqueness bytes, the three core entry points are called in the order
-// the engine calls them, and the EXACT bytes the core would have queued are
-// captured and asserted.
-//
-// This proves everything about stage C except whether the engine obeys the
-// commands -- which is the one thing only a human at the keyboard can show.
-// ---------------------------------------------------------------------------
+// A fake 3 MB "module image" is allocated so every static VA the core touches (the unit
+// array at 0x0059CCA8, the turn-buffer counters at 0x00654AA0 / 0x0057F0D8) resolves
+// inside it. Units are synthesised at the real 336-byte stride with real uniqueness
+// bytes, the three entry points are called in the order the engine calls them, and the
+// EXACT bytes the core would have queued are asserted. Whether the engine OBEYS them is
+// the one thing only a human at the keyboard can show.
 
 #define FAKE_IMAGE_BYTES 0x00300000u   // covers 0x00400000 .. 0x00700000
 
@@ -302,18 +264,17 @@ static WORD  ExpectTag(int i) {
 }
 
 // Defined with parts [8] and [10], used here: a unit is only "live" to sc_fanout's
-// task-020 gate if it has a sprite and is linked into its player's unit list, so
-// every part that drives the fan-out core needs both.
+// liveness gate if it has a sprite and is linked into its player's unit list, so every
+// part that drives the fan-out core needs both.
 static void MakeSprites(int n);
 static void BuildFakePlayerList(int n, BYTE player);
 static void UnlinkFakeUnit(int i, BYTE player);
 static void RelinkFakeUnit(int i, BYTE player);
 
-// A block of units in the state the engine leaves a unit that is IN PLAY: a
-// uniqueness byte, an owner, hit points, a sprite, and a place in
-// playerUnitList[owner]. Every one of those is a term of the emit-side liveness gate
-// (sc_fanout.cpp, "LIVENESS"), so a test that wants a unit to be emitted has to set
-// all of them -- and a test that wants one DROPPED breaks exactly one and says which.
+// A block of units as the engine leaves one that is IN PLAY: uniqueness byte, owner, hit
+// points, sprite, and a place in playerUnitList[owner] -- every term of the emit-side liveness
+// gate (sc_fanout.cpp, "LIVENESS"). A test wanting a unit emitted sets all of them; one
+// wanting it DROPPED breaks exactly one and says which.
 static void MakeUnits(int n, BYTE player) {
     for (int i = 0; i < n; ++i) {
         BYTE* u = (BYTE*)FakeUnit(i);
@@ -357,10 +318,9 @@ static int ExpectSelectAt(const char* what, int off, const int* idx, int n) {
     return off + 2 + n * 2;
 }
 
-// Walks the capture as the wire stream it is -- Select(0x09) then a fixed-length
-// order, repeating -- and answers whether `tag` is in ANY emitted Select. That is the
-// question task 020's gate is about: not "how many units went out" but "did THIS
-// unit's tag reach the receive path".
+// Walks the capture as the wire stream it is -- Select(0x09) then a fixed-length order,
+// repeating -- and answers whether `tag` is in ANY emitted Select. That is the liveness
+// gate's question: not "how many went out" but "did THIS tag reach the receive path".
 static bool CaptureHasTag(WORD tag, int orderLen) {
     int off = 0;
     while (off + 2 <= g_captureLen) {
@@ -375,7 +335,6 @@ static bool CaptureHasTag(WORD tag, int orderLen) {
     return false;
 }
 
-// How many unit tags all the emitted Selects carry between them.
 static int CaptureTagCount(int orderLen) {
     int off = 0, n = 0;
     while (off + 2 <= g_captureLen) {
@@ -453,8 +412,8 @@ static void FanoutCoreTests(void) {
     ResetQueueCounters();
     DriveSelection(36);
     // The slot was re-initialised into a different unit: 0x004A0320 bumps CUnit+0xA5
-    // (selection-circles.md 4.5), which is the one case the engine's own stale-tag
-    // test detects -- and the only one the pre-task-020 gate detected.
+    // (selection-circles.md 4.5), which is the one case the engine's own stale-tag test
+    // detects.
     for (int i = 12; i < 15; ++i) *(BYTE*)(FakeUnit(i) + SC_CUNIT_OFF_UNIQUENESS) += 1;
     g_captureLen = 0; g_captureCount = 0;
     ScFanoutOnCommand(kRightClick, sizeof(kRightClick));
@@ -466,19 +425,13 @@ static void FanoutCoreTests(void) {
     Check("and nothing else was dropped", ScFanoutStaleSkipped(), 3);
     for (int i = 12; i < 15; ++i) *(BYTE*)(FakeUnit(i) + SC_CUNIT_OFF_UNIQUENESS) -= 1;
 
-    // ---------------------------------------------------------------------
-    // TASK 020. The case the uniqueness test cannot see: a unit killed by DAMAGE.
-    //
-    // CUnit+0xA5 is written by one instruction in the binary, inside the unit
-    // (re)init 0x004A0320 -- so it moves on slot REUSE and NOT on death
-    // (selection-circles.md 4.5). A damage-killed unit whose slot has not been
-    // recycled therefore still carries the uniqueness we captured, its tag still
-    // passes the receive side's check (CMDRECV_Select 0x004C2750), and
-    // addUnitToSelectionSlot 0x0049AF80 then dereferences its sprite pointer.
-    //
-    // The two halves are asserted SEPARATELY -- uniqueness UNCHANGED is what makes
-    // this test about the new term rather than the old one.
-    // ---------------------------------------------------------------------
+    // The case the uniqueness test cannot see: a unit killed by DAMAGE. CUnit+0xA5 is
+    // written by one instruction in the binary, inside the unit (re)init 0x004A0320, so it
+    // moves on slot REUSE and NOT on death (selection-circles.md 4.5). A damage-killed unit
+    // whose slot has not been recycled still carries the uniqueness we captured, its tag
+    // still passes the receive side's check (CMDRECV_Select 0x004C2750), and
+    // addUnitToSelectionSlot 0x0049AF80 then dereferences its sprite pointer. Uniqueness
+    // UNCHANGED is asserted separately, so this tests the liveness term, not that one.
     printf("\n    DAMAGE DEATH: hitpoints 0 with uniqueness UNCHANGED -- the 0xA5 case\n");
     {
         ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
@@ -503,9 +456,8 @@ static void FanoutCoreTests(void) {
         Check("staleSkipped counted exactly it", ScFanoutStaleSkipped(), 1);
         Check("the order still fanned out over the survivors", g_captureCount, 6);
 
-        // THE POINT, stated as a test: with the gate back at its pre-task-020 shape
-        // the very same unit IS replayed. An assertion that cannot fail proves
-        // nothing, so the failing configuration is exercised here too.
+        // The negative control: with the liveness gate off the very same unit IS
+        // replayed. An assertion that cannot fail proves nothing.
         ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
         ScFanoutTestSetLiveness(false);
         ResetQueueCounters();
@@ -521,10 +473,8 @@ static void FanoutCoreTests(void) {
         *(DWORD*)(FakeUnit(dead) + SC_CUNIT_OFF_HITPOINTS) = 40 * 256;
     }
 
-    // ---------------------------------------------------------------------
     // The other removal paths. None of them touches hitpoints OR uniqueness, which
     // is why the gate needs a term that is not death-shaped: the unit-list walk.
-    // ---------------------------------------------------------------------
     printf("\n    REMOVED FROM PLAY: unlinked from playerUnitList, HP and 0xA5 intact\n");
     {
         ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
@@ -582,17 +532,11 @@ static void FanoutCoreTests(void) {
         *(DWORD*)(FakeUnit(bald) + SC_CUNIT_OFF_SPRITE) = sprite;
     }
 
-    // ---------------------------------------------------------------------
-    // The one place the gate WEAKENS an invariant, pinned so it cannot drift
-    // further without a test noticing.
-    //
-    // "The visible chunk is emitted LAST, so the simulation ends up holding exactly
-    // what the player sees" holds only while at least one visible unit is live. Kill
-    // all twelve and that chunk emits nothing, so the simulation is left holding the
-    // last OVERFLOW chunk. Narrow (all twelve inside the death window at once) and
-    // self-healing on the next order, but it is real and the file's header comment now
-    // says so -- this asserts the behaviour that comment describes.
-    // ---------------------------------------------------------------------
+    // The one place the gate WEAKENS an invariant, pinned so it cannot drift further
+    // unnoticed. "The visible chunk is emitted LAST, so the simulation holds exactly what the
+    // player sees" holds only while one visible unit is live: kill all twelve and that chunk
+    // emits nothing, leaving the simulation on the last OVERFLOW chunk. Narrow and self-healing
+    // next order, but real.
     printf("\n    ALL 12 VISIBLE dead, overflow alive: the order still reaches the living\n");
     {
         ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
@@ -614,9 +558,6 @@ static void FanoutCoreTests(void) {
             }
         }
         Check("all 12 were charged to hp0", ScFanoutDroppedFor(SC_FANOUT_DROP_DEAD), 12);
-        // THE WEAKENED INVARIANT, stated as the test sees it: the LAST Select of the
-        // run is an overflow chunk, not the visible one, so the simulation is left
-        // holding units the player cannot see. Asserted rather than hidden.
         Check("the last Select carries the SECOND overflow chunk (units 25-36), which "
               "is the invariant this case weakens",
               CaptureHasTag(ExpectTag(35), (int)sizeof(kRightClick)) ? 1 : 0, 1);
@@ -667,17 +608,15 @@ static void FanoutCoreTests(void) {
 }
 
 // ---------------------------------------------------------------------------
-// [9] The per-opcode fan-out policy (task 015), driven the same way as [7].
+// [9] The per-opcode fan-out policy, driven the same way as [7].
 //
-// [7] proves the chunking machinery with one 10-byte right-click. This part proves the
-// POLICY that decides which commands go through that machinery at all: the untargeted
-// orders a player issues to a group -- Stop, Hold Position, an ability -- reach every
-// unit, and the commands that must never be replayed do not, whatever the selection size.
+// [7] proves the chunking machinery with one 10-byte right-click; this part proves the
+// POLICY that decides which commands go through it at all: the untargeted orders a player
+// issues to a group -- Stop, Hold Position, an ability -- reach every unit, and the
+// commands that must never be replayed do not, whatever the selection size.
 //
-// Every id used below is a row in research/data/command-opcodes.tsv, and the two named
-// ones were named by pressing their key in a live game and reading the id the plugin
-// logged (research/command-opcodes.md 4).
-// ---------------------------------------------------------------------------
+// Every id below is a row in research/data/command-opcodes.tsv; the two named ones were
+// read off the plugin's own log in a live game (research/command-opcodes.md 4).
 
 static int ExpectBytesAt(const char* what, int off, const BYTE* want, int n) {
     bool ok = (off + n <= g_captureLen) && memcmp(g_capture + off, want, (size_t)n) == 0;
@@ -708,7 +647,7 @@ static void OpcodePolicyTests(void) {
     if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
     MakeUnits(64, 1);
 
-    // --- Stop: 2 bytes, id + queued. The user's ask, in one line of assertions.
+    // --- Stop: 2 bytes, id + queued.
     printf("\n    Stop (0x1A) reaches all 36: 3 Select+order pairs, exact bytes\n");
     {
         const BYTE stop[2] = { 0x1A, 0x00 };
@@ -759,7 +698,7 @@ static void OpcodePolicyTests(void) {
         Check("bytes queued", o.bytes, 78 + 3);
     }
 
-    // --- The passthrough set. These are the commands the task exists to NOT duplicate.
+    // --- The passthrough set: the commands that must never be duplicated.
     printf("\n    production, cancel and research are NOT duplicated, at any selection size\n");
     {
         struct { const char* what; BYTE bytes[8]; int len; } kMustPassThrough[] = {
@@ -827,11 +766,10 @@ static void OpcodePolicyTests(void) {
         }
         Check("all 19 fan out at their own length", fannedOut, 19);
 
-        // And nothing else does. ALL 39 other ids the dispatcher accepts must pass through
-        // -- including the five whose length the dispatcher computes rather than reads from
-        // an immediate (0x06, 0x07, 0x09, 0x0A, 0x0B). Those five carry `len = -1` in the
-        // opcode table, so the length guard refuses them at any length; the arbitrary
-        // lengths below are exactly the point.
+        // And nothing else does: ALL 39 other accepted ids must pass through, including the
+        // five whose length the dispatcher computes rather than reads from an immediate (0x06,
+        // 0x07, 0x09, 0x0A, 0x0B). Those carry `len = -1`, so the length guard refuses them at
+        // any length -- the arbitrary lengths below are the point.
         static const BYTE kOther[] = {
             0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
             0x11, 0x12, 0x13, 0x18, 0x19, 0x1F, 0x20, 0x23, 0x27, 0x29, 0x2F, 0x30,
@@ -866,14 +804,12 @@ static void OpcodePolicyTests(void) {
 // ---------------------------------------------------------------------------
 // [8] The selection circles, driven with fake sprites and fake engine primitives.
 //
-// sc_circles reaches the engine through two function pointers precisely so this can
-// run: the attach/detach state machine, the staleness rules and -- the point of the
-// whole design -- the promise that neither sprite flag 0x08 nor CSprite::selectionIndex
-// is ever written, are all asserted here with no StarCraft in the process.
-//
-// What is NOT provable offline is whether the engine DRAWS the image it was asked to
-// attach. That is the one thing the in-game run exists to answer.
-// ---------------------------------------------------------------------------
+// sc_circles reaches the engine through two function pointers precisely so this can run:
+// the attach/detach state machine, the staleness rules and -- the point of the whole
+// design -- the promise that neither sprite flag 0x08 nor CSprite::selectionIndex is ever
+// written are all asserted here with no StarCraft in the process. What is NOT provable
+// offline is whether the engine DRAWS the image it was asked to attach; only the in-game
+// run answers that.
 
 #define FAKE_SPRITE_VA 0x00680000u          // inside the fake image, clear of everything else
 
@@ -1022,11 +958,10 @@ static void CircleTests(void) {
     {
         ScCircleUnit set[2] = { CircleFor(50), CircleFor(51) };
         ScCirclesShow(set, 2);
-        // Bump the uniqueness byte the way 0x004A03FD does. That instruction is the
-        // ONLY write to CUnit+0xA5 in the whole binary and it lives in unit CREATION
-        // (0x004A0320), so this models SLOT REUSE, not death -- see
-        // research/selection-circles.md 4.5. Reuse is what makes blind removal
-        // dangerous: the flag bit may be set again, but by somebody else's circle.
+        // Bump the uniqueness byte the way 0x004A03FD does -- the ONLY write to CUnit+0xA5 in
+        // the binary, and it lives in unit CREATION (0x004A0320), so this models SLOT REUSE,
+        // not death (research/selection-circles.md 4.5). Reuse is what makes blind removal
+        // dangerous: the flag may be set again, by another circle.
         *(BYTE*)(FakeUnit(50) + SC_CUNIT_OFF_UNIQUENESS) += 1;
         ResetCircleCounters();
         ScCirclesHide();
@@ -1039,11 +974,10 @@ static void CircleTests(void) {
     printf("\n    a unit that DIED -- the engine already took our circle off\n");
     ResetCircleCounters();
     {
-        // What death actually does: 0x004A0740 (the unit-removal path) calls
-        // 0x004975D0 on the way out, which frees the 0x231..0x23A image and clears
-        // flag 0x01 -- regardless of flag 0x08, so it takes OUR circle too. Death does
-        // NOT bump CUnit+0xA5. So the record that protects us here is the flag check,
-        // not the uniqueness check, and a second remove must not be attempted.
+        // What death does: 0x004A0740 (unit removal) calls 0x004975D0 on the way out, freeing
+        // the 0x231..0x23A image and clearing flag 0x01 regardless of flag 0x08 -- so it takes
+        // OUR circle too, and does NOT bump CUnit+0xA5. The flag check protects us here, not
+        // the uniqueness one: do not remove twice.
         ScCircleUnit set[2] = { CircleFor(58), CircleFor(59) };
         ScCirclesShow(set, 2);
         *(BYTE*)(FakeSprite(58) + SC_CSPRITE_OFF_FLAGS) &= (BYTE)~SC_SPRITE_FLAG_SEL_CIRCLE;
@@ -1097,18 +1031,15 @@ static void CircleTests(void) {
 }
 
 // ---------------------------------------------------------------------------
-// [10] The HUD-row paging (task 017), driven against a fake dialog tree.
+// [10] The HUD-row paging, driven against a fake dialog tree.
 //
-// sc_hudrow reaches the engine through six pointers (show/hide/update control,
-// the button interact, and the two detour originals), so the whole page machine
-// -- refresh, page math, the wrap, the splice, snap-back-to-page-1, and the
-// restore-to-stock transition -- runs here with no StarCraft in the process.
-// The fake sprites from part [8] are kept poisoned throughout: this module never
-// touches a sprite, and the final assertions prove it the same way part [8] does.
-//
-// What is NOT provable offline is whether the engine draws the page and routes
-// real dialog events -- that is what tools/plugin/test-hud-row.ps1 is for.
-// ---------------------------------------------------------------------------
+// sc_hudrow reaches the engine through six pointers (show/hide/update control, the button
+// interact, and the two detour originals), so the whole page machine -- refresh, page
+// math, the wrap, the splice, snap-back-to-page-1 and the restore-to-stock transition --
+// runs here with no StarCraft in the process. The fake sprites from part [8] are kept
+// poisoned throughout: this module never touches a sprite, and the final assertions prove
+// it the same way part [8] does. Whether the engine DRAWS the page and routes real dialog
+// events is not provable offline; that is what tools/plugin/test-hud-row.ps1 is for.
 
 #define FAKE_DLG_VA      0x00690000u
 #define FAKE_STATUSER_VA 0x00691000u
@@ -1120,23 +1051,21 @@ static unsigned g_origDispatchCalls = 0;
 static void FakeShowCtl(DWORD ctrl)   { ++g_ctlShows;   *(DWORD*)(ctrl + SC_BINDLG_OFF_FLAGS) |= SC_CTRL_FLAG_VISIBLE; }
 static void FakeHideCtl(DWORD ctrl)   { ++g_ctlHides;   *(DWORD*)(ctrl + SC_BINDLG_OFF_FLAGS) &= ~(DWORD)SC_CTRL_FLAG_VISIBLE; }
 
-// A MODEL OF WHEN PIXELS LAND -- and it is a model; the engine is not in this process. It is
-// here because the two facts task 048's fix rests on are both about TIMING and ORDER, and a
-// primitive that only counts calls cannot exercise either:
+// A MODEL OF WHEN PIXELS LAND -- and it is a model; the engine is not in this process. The two
+// facts the band placement rests on are both about TIMING and ORDER, which a primitive that
+// only counts calls cannot exercise:
 //
 //   * updateControl (0x0041C400) does NOT paint. It intersects the control's rect with the
-//     dialog's and merges the result into the screen's dirty region. The paint is the dialog's
-//     own redraw walk (0x0041C683), later -- which is why a copy of the band taken on the
-//     frame that asks for a fill is a copy of the PREVIOUS layout;
+//     dialog's and merges that into the screen's dirty region; the paint is the dialog's own
+//     redraw walk (0x0041C683), later -- so a copy of the band taken on the frame that asks
+//     for a fill is a copy of the PREVIOUS layout;
 //   * that walk takes the children from [dlg+0x42] and steps [esi], HEAD TO TAIL, so a control
-//     earlier in the list is painted UNDER everything after it. At the head, this indicator
-//     was painted first and the twelve wireframes painted over it, every frame.
+//     earlier in the list is painted UNDER everything after it.
 //
 // So FakeUpdateCtl accumulates a dirty box and FakePaint runs the walk, each visible control
 // writing a byte derived from its own address so "who ended up on top" is decidable from the
-// surface. WHAT THIS PROVES is the module's own bookkeeping: which frame each copy is taken
-// on, and that the stranded count can fail. What the ENGINE draws is test-hud-row.ps1's job
-// and nothing here substitutes for it.
+// surface. That proves the module's bookkeeping -- which frame each copy is taken on, and
+// that the stranded count can fail. What the ENGINE draws is test-hud-row.ps1's job.
 static short g_dirty[4];
 static bool  g_dirtyAny   = false;
 static bool  g_paintOff   = false;     // the negative control below turns the repaint off
@@ -1171,13 +1100,11 @@ static DWORD FakeCtl(int i)      { return (DWORD)FakeRt(FAKE_DLG_VA) + 0x100u + 
 static DWORD FakeStatUser(int i) { return (DWORD)FakeRt(FAKE_STATUSER_VA) + (DWORD)i * 8u; }
 static DWORD FakeRoot(void)      { return (DWORD)FakeRt(FAKE_DLG_VA); }
 
-// THE ROW'S REAL GEOMETRY, and the pane's, off the live dialog on this install -- the
-// QINDDLG child dump in C:\sc-work\logs\039\group-fixed-production.log. It is here rather
-// than in the module (where a constant would be a layout read off one install, AGENTS.md
-// task 034) because the FAKE has to be a plausible pane or the placement it exercises is
-// not the one the game gets. The twelve buttons are two rows of six, COLUMN-major -- ids
-// 0x21/0x23/0x25/... on the upper row and 0x22/0x24/... on the lower -- which is why the
-// row's lowest edge is 78 whether two units are selected or twelve.
+// THE ROW'S REAL GEOMETRY, and the pane's, off a live dialog's QINDDLG child dump. It lives in
+// the fixture, not the module -- where it would be one install's layout baked into shipped code
+// -- because the FAKE has to be a plausible pane or the placement it exercises is not the one
+// the game gets. The twelve buttons are two rows of six, COLUMN-major (0x21/0x23/... upper,
+// 0x22/0x24/... lower): the row's lowest edge is 78 at any selection size.
 #define HUD_SURF_W    270
 #define HUD_SURF_H    92
 #define HUD_BTN_LEFT  30
@@ -1217,7 +1144,6 @@ static void FakePaint(void) {
     g_dirtyAny = false;
 }
 
-// One whole frame the way the game runs one: the detour, then the redraw.
 static void HudFrame(void) { ScHudRowOnDispatch(); FakePaint(); }
 
 // Root dialog + one non-button control (id 1) + the 12 wireframe buttons
@@ -1229,12 +1155,10 @@ static void BuildFakeDialog(void) {
     memset((void*)root, 0, SC_BINDLG_SIZE);
     *(WORD*)(root + SC_BINDLG_OFF_TYPE) = 0;                    // a dialog
 
-    // The dialog's own 8-bit surface, at the offset the draw walk installs. Without one the
-    // indicator has nowhere to be measured against and PlaceIndicator refuses outright --
-    // which is the correct production behaviour and would make this whole part vacuous, so
-    // the fake carries a real surface (the same thing part [19]'s pane does). It is filled
-    // with a non-zero pattern on purpose: a zeroed surface would make an ink count and a
-    // difference count agree, and the entire point of task 048 is that they do not.
+    // The dialog's own 8-bit surface, at the offset the draw walk installs. Without one
+    // PlaceIndicator refuses outright -- correct in production, vacuous here -- so the fake
+    // carries a real one, as part [19]'s pane does. Filled with a non-zero pattern on purpose:
+    // a zeroed surface makes an ink count and a difference count agree, and they must not.
     for (int i = 0; i < (int)sizeof(g_hudSurf); ++i) g_hudSurf[i] = HudBackgroundAt(i);
     g_dirtyAny = false;
     g_paintOff = false;
@@ -1242,10 +1166,10 @@ static void BuildFakeDialog(void) {
     *(WORD*) (root + SC_BINDLG_OFF_SURFACE + SC_SURFACE_OFF_H)    = HUD_SURF_H;
     *(DWORD*)(root + SC_BINDLG_OFF_SURFACE + SC_SURFACE_OFF_BITS) = (DWORD)&g_hudSurf[0];
 
-    // The small font's header. 11 is what the live pane reports (`fontH=11` on every QIND
-    // line), and the band this module places into is 13 rows tall -- so the margin the
-    // engine's own draw rule needs (`top + fontHeight <= clip.bottom`) is two pixels, and a
-    // regression that shrinks either number fails here rather than in front of a player.
+    // The small font's header. 11 is what the live pane reports (`fontH=11` on every QIND line)
+    // and the band this module places into is 13 rows tall, so the margin the engine's draw rule
+    // needs (`top + fontHeight <= clip.bottom`) is two pixels: shrink either number and this
+    // fails here rather than in front of a player.
     memset((void*)&g_hudFont[0], 0, sizeof(g_hudFont));
     g_hudFont[SC_FONT_OFF_HEIGHT] = 11;
     *(DWORD*)FakeRt(SC_VA_FONT_SMALLEST) = (DWORD)&g_hudFont[0];
@@ -1292,9 +1216,8 @@ static DWORD ShownStatUserUnit(int btn) {   // 0-based button index
 }
 
 // The indicator, found by walking the LIVE child chain for its own negative id -- never by
-// assuming which END of the list it sits on. That assumption is exactly what task 048 had to
-// change (head -> tail), and a test that hardcodes it reports the assumption rather than the
-// truth.
+// assuming which END of the list it sits on. A test that hardcodes that end reports its own
+// assumption rather than the truth.
 static DWORD HudIndicator(void) {
     for (DWORD c = *(DWORD*)(FakeRoot() + SC_BINDLG_OFF_FIRST_CHILD); c;
          c = *(DWORD*)(c + SC_BINDLG_OFF_NEXT)) {
@@ -1304,9 +1227,8 @@ static DWORD HudIndicator(void) {
 }
 
 // Is it the LAST child? Not decoration: the dialog's redraw walk (0x0041C683) takes the
-// children head to tail, so a control EARLIER in the list is painted UNDER everything after
-// it. At the head, this indicator was painted first and the twelve wireframes painted over
-// it -- which is why it was never seen in a game.
+// children head to tail, so an indicator earlier in the list is painted UNDER the twelve
+// wireframes and never seen in a game.
 static int HudIndicatorIsLast(void) {
     DWORD ind = HudIndicator();
     return (ind && *(DWORD*)(ind + SC_BINDLG_OFF_NEXT) == 0) ? 1 : 0;
@@ -1317,11 +1239,11 @@ static const char* HudIndicatorText(void) {
     return ind ? (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT) : NULL;
 }
 
-// Entering paged mode, the band's clean copy has to be taken on a frame that FOLLOWS the one
-// asking for the fill -- it must be a copy of the pane THIS page draws, and updateControl only
-// dirties (IndicatorFrame). So a test that wants to read the TEXT drives frames until the line
-// is up rather than assuming one dispatch is enough. Bounded: a module that never shows it
-// fails the next assertion instead of hanging here.
+// Entering paged mode, the band's clean copy must be taken on a frame FOLLOWING the one that
+// asks for the fill -- it has to be a copy of the pane THIS page draws, and updateControl only
+// dirties (IndicatorFrame). So a test wanting the TEXT drives frames until the line is up
+// rather than assuming one dispatch is enough; bounded, so a module that never shows it fails
+// the next assertion instead of hanging.
 static void HudDispatchUntilShown(int maxFrames) {
     for (int i = 0; i < maxFrames && !ScHudRowIndicatorShowing(); ++i) ScHudRowOnDispatch();
 }
@@ -1332,7 +1254,6 @@ static void SmallSelection(int n) {
     ScFanoutOnSelect((unsigned)n, v);
 }
 
-// Point the dispatcher's two globals at the fake dialog + a live portrait unit.
 static void SetHudGlobals(DWORD dialog, DWORD portrait) {
     *(DWORD*)FakeRt(SC_VA_STATDATA_DIALOG)      = dialog;
     *(DWORD*)FakeRt(SC_VA_ACTIVE_PORTRAIT_UNIT) = portrait;
@@ -1406,21 +1327,15 @@ static void ResetHudCounters(void) {
 }
 
 // ---------------------------------------------------------------------------
-// [11] Shadow control groups (task 021), driven the same way as [7].
+// [11] Shadow control groups, driven the same way as [7].
 //
-// The feature has no hook and no engine call: it is entirely a reaction to wire
-// command 0x13 arriving at ScFanoutOnCommand, plus TWO READS of engine memory --
-// activePlayerSelection (0x006284B8), which the engine's client-side recall has
-// already filled by then, and selectionHotkeys (0x0057FE60), which it reads only to
-// notice that the engine has restarted a game underneath it. Both live inside the fake
-// 3 MB image, so the whole state machine drives offline with no StarCraft in the
-// process and every emitted byte still asserted on the wire.
-//
-// What stays untestable here is the ONE runtime claim the design rests on -- that the
-// engine really has filled activePlayerSelection by the time it queues `13 01 g`. That
-// is what test-control-groups.ps1 checks in the live game, off the plugin's own
-// `GROUP recall enter:` read-back.
-// ---------------------------------------------------------------------------
+// No hook, no engine call: entirely a reaction to wire command 0x13 arriving at
+// ScFanoutOnCommand, plus TWO READS of engine memory inside the fake image --
+// activePlayerSelection (0x006284B8), which the engine's client-side recall has already
+// filled by then, and selectionHotkeys (0x0057FE60), read only to notice that the engine
+// has restarted a game underneath it. That the engine really HAS filled
+// activePlayerSelection by the time it queues `13 01 g` is the one claim only
+// test-control-groups.ps1 can check, off the plugin's `GROUP recall enter:` read-back.
 
 // The engine's own control-group row, as CMDRECV_Hotkey's store would have left it:
 // StoredUnit tags, not pointers.
@@ -1502,9 +1417,8 @@ static void ControlGroupTests(void) {
         FakeEngineVisible(kFirstTwelve, 12);
         g_captureLen = 0; g_captureCount = 0;
         Check("the recall is NOT suppressed either", Hotkey(SC_HOTKEY_RECALL, 1) ? 1 : 0, 0);
-        // Conductor's point (3a): a recall must not itself be a burst of replayed
-        // Selects. It emits NOTHING -- the replay only ever happens when the player next
-        // issues a fanned order, exactly as before this task.
+        // A recall must not itself be a burst of replayed Selects: it emits NOTHING, and
+        // the replay happens only when the player next issues a fanned order.
         Check("  a recall emits no Select of its own", g_captureCount, 0);
 
         Check("ALL 36 ARE BACK", ScFanoutShadowCount(), 36);
@@ -1523,11 +1437,10 @@ static void ControlGroupTests(void) {
             if (!CaptureHasTag(ExpectTag(i), (int)sizeof(kRightClick))) ++missing;
         }
         Check("  and every one of the 36 units is among them", missing, 0);
-        // The exact wire stream, chunk by chunk. The group was stored in shadow order
-        // (overflow 12..35, then visible 0..11), so a recall reproduces the same chunking
-        // part [7] asserts for a fresh drag box -- and crucially the VISIBLE chunk is
-        // still LAST, which is the invariant that leaves the simulation holding what the
-        // player can see. A recall must not quietly break it.
+        // The exact wire stream, chunk by chunk. The group was stored in shadow order (overflow
+        // 12..35, then visible 0..11), so a recall reproduces the chunking part [7] asserts for a
+        // fresh drag box -- crucially with the VISIBLE chunk still LAST, which is what leaves the
+        // simulation holding what the player can see.
         {
             int a[SC_SELECTION_SLOTS], b[SC_SELECTION_SLOTS], v[SC_SELECTION_SLOTS];
             for (int i = 0; i < SC_SELECTION_SLOTS; ++i) {
@@ -1651,22 +1564,15 @@ static void ControlGroupTests(void) {
         Check("  a reset was counted", ScFanoutGroupStat(SC_FANOUT_GROUP_RESET) > 0 ? 1 : 0, 1);
     }
 
-    // -----------------------------------------------------------------------
-    // THE CASE THAT USED TO SHIP BROKEN, AND THE ONE THE OLD TEST COULD NOT SEE.
+    // THE SEQUENCE A REMEMBERED "I HAVE SEEN THE ENGINE'S ROW FILLED" FLAG CANNOT SEE.
     //
-    // Review found that the first version of the reset kept a per-group "I have
-    // observed the engine's row filled" flag and only reset when that flag was set. The
-    // store is RECEIVE-SIDE, so on a FIRST Ctrl+N the row is still empty at that
-    // instant and the flag was never recorded -- which made a group used exactly once
-    // permanently immune to the reset. That is ordinary play, not a corner: assign a
-    // group, never touch it again, start a new mission, shift-add into it.
-    //
-    // The block above could not catch it, because it issues an extra shift-add WITH the
-    // row filled before the new game, which is what set the flag. This block is the
-    // sequence with no such command in it, and it is why the mechanism is now the
-    // engine-mirroring rule (an add into an empty row is an assign) with no memory at
-    // all. Deleting that rule fails HERE.
-    // -----------------------------------------------------------------------
+    // The engine's store is RECEIVE-SIDE, so on a FIRST Ctrl+N its row is still empty at
+    // that instant. A reset gated on having once observed the row filled therefore never
+    // arms for a group used exactly once -- ordinary play, not a corner: assign a group,
+    // never touch it again, start a new mission, shift-add into it. The block above cannot
+    // catch that, because its extra shift-add WITH the row filled would have armed such a
+    // flag. So the rule is the engine-mirroring one instead (an add into an empty row is an
+    // assign), with no memory at all; deleting it fails HERE.
     printf("\n    NEW GAME after a group used exactly ONCE (the shipped-broken case)\n");
     {
         ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
@@ -1685,23 +1591,19 @@ static void ControlGroupTests(void) {
             ScFanoutOnSelect(5, fresh);
         }
         Hotkey(SC_HOTKEY_ADD, 8);
-        // Was 25 (36 of game A's records unioned with the new 5) before the fix.
         Check("the previous game's 36 are gone; the add holds only the new 5",
               ScFanoutGroupCount(8), 5);
         Check("  and a reset was counted", ScFanoutGroupStat(SC_FANOUT_GROUP_RESET) > 0 ? 1 : 0, 1);
     }
 
-    // -----------------------------------------------------------------------
     // IDENTITY IS THE (POINTER, UNIQUENESS) PAIR, NOT THE POINTER.
     //
-    // Also from review. A CUnit* is a slot in a fixed global that the engine reuses
-    // game after game, so a stale record whose slot now holds a DIFFERENT live unit
-    // must not read as "contained". The containment gate is the cross-session staleness
-    // detector, and comparing bare pointers would make it pass on exactly the input it
-    // exists to catch. The NEW-GAME containment case earlier in this part uses disjoint
-    // slots (40..51 against a group of 0..35), which is the one shape where comparing
-    // pointers and comparing pairs agree -- so it could not see this either.
-    // -----------------------------------------------------------------------
+    // A CUnit* is a slot in a fixed global the engine reuses game after game, so a stale
+    // record whose slot now holds a DIFFERENT live unit must not read as "contained". The
+    // containment gate is the cross-session staleness detector, and comparing bare pointers
+    // would make it pass on exactly the input it exists to catch. The NEW-GAME containment
+    // case earlier in this part uses disjoint slots (40..51 against a group of 0..35), the
+    // one shape where comparing pointers and comparing pairs agree -- so it cannot see this.
     printf("\n    CONTAINMENT compares (pointer, uniqueness), not the pointer alone\n");
     {
         ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
@@ -1712,10 +1614,9 @@ static void ControlGroupTests(void) {
         Check("group 9 holds 36", ScFanoutGroupCount(9), 36);
         FakeEngineHotkeyRow(9, kFirstTwelve, 12);
 
-        // Every slot the engine is about to recall is RECYCLED into a different unit --
-        // the same addresses, new uniqueness bytes, exactly what a second game does to
-        // the same 1700-entry array. Bare-pointer containment would call this contained
-        // and hand the player a group built from the previous game's records.
+        // Every slot the engine is about to recall is RECYCLED into a different unit: same
+        // addresses, new uniqueness bytes, what a second game does to the same 1700-entry
+        // array. Bare-pointer containment calls this contained and hands back stale records.
         for (int i = 0; i < SC_SELECTION_SLOTS; ++i) {
             BYTE* u = (BYTE*)FakeUnit(i);
             u[SC_CUNIT_OFF_UNIQUENESS] = (BYTE)(u[SC_CUNIT_OFF_UNIQUENESS] + 1);
@@ -1876,11 +1777,9 @@ static void HudRowTests(void) {
               (text && strstr(text, "36 units") && strstr(text, "1-12") &&
                strstr(text, "(1/3)")) ? 1 : 0, 1);
 
-        // TASK 048: WHERE IT IS. The box used to start one pixel below the first button's own
-        // top -- inside the icon row, across the wireframes -- which is the placement the user
-        // reported for task 039's group line and which this indicator still carried. It now
-        // goes in the band below the row, and "outside the row" is asserted as a NUMBER
-        // against the row's own lowest edge rather than against a remembered constant.
+        // WHERE IT IS. The line belongs in the band BELOW the icon row, not inside it across
+        // the wireframes, and "outside the row" is asserted as a NUMBER against the row's own
+        // lowest edge rather than against a remembered constant.
         short box[4];
         ScHudRowIndicatorBox(box);
         int rowBottom = 0, rowLeft = 0x7FFF;
@@ -1896,13 +1795,13 @@ static void HudRowTests(void) {
         Check("  it stays inside the dialog's own surface",
               (box[2] <= HUD_SURF_W && box[3] <= HUD_SURF_H) ? 1 : 0, 1);
         // The engine's string draw refuses OUTRIGHT when top + fontHeight > clip.bottom, and
-        // the clip box is these bounds -- the defect that made task 033's indicator invisible.
+        // the clip box is these bounds: a box too short draws nothing, silently.
         Check("  and is at least as tall as the font says it must be (fontH=11)",
               (box[3] - box[1]) >= 11 ? 1 : 0, 1);
-        // A box too NARROW does not fail loudly, it draws a TRUNCATION, which reads as a
-        // working feature. The width is reserved for the LONGEST line this selection can
-        // produce ("36 units  25-36  (3/3)"), not the one showing, so a page flip cannot move
-        // the right edge -- and a box that moved would throw its baseline away every flip.
+        // A box too NARROW does not fail loudly, it draws a TRUNCATION, which reads as a working
+        // feature. The width is reserved for the LONGEST line this selection can produce ("36
+        // units  25-36  (3/3)"), so a page flip cannot move the right edge -- and a box that
+        // moved would throw its baseline away every flip.
         Check("  wide enough for the longest line this selection can produce",
               (box[2] - box[0]) >= (int)strlen("36 units  25-36  (3/3)") * 5 ? 1 : 0, 1);
         g_hudBox[0] = box[0]; g_hudBox[1] = box[1];
@@ -1934,11 +1833,9 @@ static void HudRowTests(void) {
             const char* text = HudIndicatorText();
             Check("  indicator says 13-24 (2/3)",
                   (text && strstr(text, "13-24") && strstr(text, "(2/3)")) ? 1 : 0, 1);
-            // AND THE BOX DID NOT MOVE. "1-12" and "13-24" are different lengths, so a box
-            // sized to the CURRENT string would grow here -- and a box that has moved has no
-            // baseline, so the screen-level oracle would answer "no answer" on exactly the
-            // flip it exists to measure. It is sized for the longest line the selection can
-            // produce instead.
+            // AND THE BOX DID NOT MOVE. "1-12" and "13-24" differ in length, so a box sized to
+            // the CURRENT string would grow here -- and a moved box has no baseline, so the
+            // screen-level oracle answers "no answer" on the very flip it exists to measure.
             short box[4];
             ScHudRowIndicatorBox(box);
             Check("  and the box is byte-identical across the flip",
@@ -1970,10 +1867,9 @@ static void HudRowTests(void) {
     Check("a displayed unit losing HP forces a re-fill", g_ctlShows > 0 ? 1 : 0, 1);
 
     printf("\n    a unit DYING (HP->0, uniqueness UNCHANGED) snaps back to page 1\n");
-    // The blocker fix: death is detected by HP==0, NOT by the uniqueness byte --
-    // research/selection-circles.md 4.5 proves death does not bump 0xA5. Unit 15 is
-    // an OVERFLOW unit (page 2), so this isolates HP-death from the engine-selection
-    // path (clientSelectionGroup, the visible 12, is untouched).
+    // Death is detected by HP==0, NOT by the uniqueness byte -- research/selection-circles.md
+    // 4.5 proves death does not bump 0xA5. Unit 15 is an OVERFLOW unit (page 2), so this
+    // isolates HP-death from the engine-selection path (clientSelectionGroup is untouched).
     {
         BYTE evt[0x14];
         memset(evt, 0, sizeof(evt));
@@ -2015,16 +1911,12 @@ static void HudRowTests(void) {
     }
 
     printf("\n    VISIBLE units dying re-flow the row; they do NOT hand it back to stock\n");
-    // Task 033, from the user playing the deployed build: "when i have more than 12 units
-    // selected and some die - the group display in tug doesn't get updated (i might have 30
-    // units selected but the group shows 6 cuz 6 of the ones from tug died)".
-    //
     // The skew this reproduces: the engine zeroes hitPoints in its damage primitive
     // (0x004797B0) and clears the unit out of clientSelectionGroup on a LATER path, so for
     // at least one frame our liveness test says "dead" while the engine's own selection
     // still lists it. Counting a LIVE-FILTERED tail against an UNFILTERED engine list makes
     // that ordinary skew look like an engine-side REMOVAL -- and the divergence latch is
-    // permanent until the next commit, so one frame of it stranded the row on stock for the
+    // permanent until the next commit, so one frame of it strands the row on stock for the
     // rest of the selection, showing only the survivors of the engine's twelve.
     //
     // clientSelectionGroup is deliberately NOT updated here. That IS the case.
@@ -2068,10 +1960,10 @@ static void HudRowTests(void) {
     }
 
     printf("\n    PERSISTENT engine divergence hands back to stock and stays there\n");
-    // An engine-side removal that bypassed CMDACT_Select (transport, mind control,
-    // trigger RemoveUnit): the visible unit is gone from clientSelectionGroup but the
-    // version counter never moved. The row must hand back to stock and STAY stock
-    // (no per-frame churn, flip structurally dead) until the next real commit.
+    // An engine-side removal that bypassed CMDACT_Select (transport, mind control, trigger
+    // RemoveUnit): the visible unit is gone from clientSelectionGroup but the version counter
+    // never moved. The row must hand back to stock and STAY stock -- no per-frame churn, flip
+    // structurally dead -- until the next real commit.
     {
         Drive36Sync();
         ScHudRowOnDispatch();                                   // paged, page 1
@@ -2105,13 +1997,11 @@ static void HudRowTests(void) {
     }
 
     printf("\n    the CLICK GATE swallows a click on a removed-not-killed OVERFLOW unit\n");
-    // The exposure (b) closes: an overflow unit REMOVED FROM PLAY (trigger RemoveUnit
-    // / archon-consumed -- i.e. unlinked from its player unit list) keeps HP and
-    // uniqueness and is NOT in clientSelectionGroup, so the divergence check cannot
-    // see it. UnlinkFakeUnit models exactly that removal. A click on its portrait must
-    // be swallowed before the engine's Select sees the stale pointer. (A transport-
-    // loaded or mind-controlled unit stays list-linked and would correctly PASS -- it
-    // is a live, identity-correct CUnit*.)
+    // An overflow unit REMOVED FROM PLAY (trigger RemoveUnit / archon-consumed, i.e. unlinked
+    // from its player unit list, which UnlinkFakeUnit models) keeps HP and uniqueness and is NOT
+    // in clientSelectionGroup, so the divergence check cannot see it: a click on its portrait
+    // must be swallowed before the engine's Select sees the stale pointer. (Transport-loaded or
+    // mind-controlled stays list-linked and correctly PASSES.)
     {
         BYTE rbtn[0x14], act[0x14];
         MakeRButtonEvt(rbtn);
@@ -2163,12 +2053,10 @@ static void HudRowTests(void) {
         Check("all 12 interact pointers restored to the engine fn", restored ? 1 : 0, 1);
     }
     Check("the indicator is unspliced (13 children)", CountChildren(), 13);
-    // The hand-back asks the engine to repaint what the indicator was covering. That used to
-    // be the twelve buttons alone and it was enough, because the box sat ON them. Now the box
-    // is in a band NO control occupies, so UnspliceIndicator asks for OUR OWN rect too --
-    // updateControl on the hidden control -- and without that ask nothing would ever repaint
-    // there. The count below is the weak form of that; the stranded measurement further down
-    // is the strong one.
+    // The hand-back asks the engine to repaint what the indicator was covering. The box sits in
+    // a band NO control occupies, so UnspliceIndicator must ask for OUR OWN rect too --
+    // updateControl on the hidden control -- or nothing repaints there. This count is the weak
+    // form; the stranded measurement further down is the strong one.
     Check("the hand-back asked for a repaint (band + row)", g_ctlUpdates > 0 ? 1 : 0, 1);
     ResetHudCounters();
     ScHudRowOnDispatch();
@@ -2182,9 +2070,9 @@ static void HudRowTests(void) {
     Check("still 14 children after two frames", CountChildren(), 14);
 
     printf("\n    task 048: our line goes ON the band, and comes OFF it again\n");
-    // Everything from here on runs the frames through HudFrame -- detour, then redraw walk --
-    // so the surface actually changes and the module's two screen-level readings have
-    // something to read. See FakeUpdateCtl for what is being modelled and what is not.
+    // Everything from here on runs frames through HudFrame -- detour, then redraw walk -- so
+    // the surface actually changes and the module's two screen-level readings have something
+    // to read. See FakeUpdateCtl for what is modelled and what is not.
     {
         SmallSync(1);
         HudFrame();                                     // stock, and a painted surface
@@ -2194,10 +2082,9 @@ static void HudRowTests(void) {
         HudFrame();                                     // paged call 1: splice + place, nothing shown
         Check("  one paged call is deliberately NOT enough to show it",
               ScHudRowIndicatorShowing() ? 1 : 0, 0);
-        // Then poll, WITHOUT painting in between, until the band has been read unchanged and
-        // the clean copy is taken. Nothing repaints here, so this settles immediately -- in a
-        // game it is a wall-clock window, because the walk can be tens of thousands of calls
-        // away and a call count cannot stand in for it.
+        // Then poll, WITHOUT painting in between, until the band reads unchanged and the clean
+        // copy is taken. Nothing repaints here, so it settles immediately; in a game it is a
+        // wall-clock window, the walk being tens of thousands of calls away.
         int settleCalls = 0;
         while (!ScHudRowIndicatorShowing() && settleCalls < 8) {
             ScHudRowOnDispatch(); ++settleCalls;
@@ -2206,16 +2093,15 @@ static void HudRowTests(void) {
               ScHudRowIndicatorShowing() ? 1 : 0, 1);
 
         // The show has only asked for a dirty region: the redraw walk has not run, so NOTHING
-        // of ours is on the surface yet. That is the reading task 033's `ink` could never
-        // give -- it read 2368 of 2368 here whatever the truth was.
+        // of ours is on the surface yet. An ink COUNT cannot give that reading -- it reads
+        // 2368 of 2368 here whatever the truth is.
         Check("  before the redraw walk, the band still matches its clean copy",
               (long long)ScHudRowBandDiff(), 0);
         FakePaint();                                    // the walk
         Check("  after it, the band differs from that copy -- the line IS on the surface",
               ScHudRowBandDiff() > 0 ? 1 : 0, 1);
         // ... and the paint that put it there is the LAST one in the walk. At the head of the
-        // child list the buttons would have overwritten it, which is what a diff of 0 here
-        // would mean and what the game was actually doing.
+        // child list the buttons overwrite it, which is what a diff of 0 here would mean.
         Check("  and it was painted OVER, not under (the tail splice)",
               HudIndicatorIsLast(), 1);
 
@@ -2225,8 +2111,8 @@ static void HudRowTests(void) {
               ScHudRowBandStranded(&glyph) >= 0 ? 1 : 0, 1);
         Check("  and the glyph mask is not empty", glyph > 0 ? 1 : 0, 1);
 
-        // THE HAND-BACK. This is what the old placement bought for free and what moving into
-        // an unowned band puts at risk, so it is measured rather than argued.
+        // THE HAND-BACK. A box in a band no control owns is what puts this at risk, so it is
+        // measured rather than argued.
         SmallSync(1);
         HudFrame();                                     // RestoreStock: hide + ask; then paint
         ScHudRowOnDispatch();                           // the reading, on a LATER stock frame
@@ -2235,11 +2121,11 @@ static void HudRowTests(void) {
         Check("after the hand-back the probe still has a mask to check", glyph > 0 ? 1 : 0, 1);
         Check("  and NOTHING of our line survived it", (long long)stranded, 0);
 
-        // THE NEGATIVE CONTROL, so that 0 is a result and not a property of the instrument.
-        // Same sequence, with the model's redraw suppressed across the hand-back: nothing
-        // repaints the band, every byte our line owns is still sitting there, and the count
-        // has to say so. Without this, "stranded=0" and "the probe cannot see anything" are
-        // the same reading (AGENTS.md: prove the pattern positive where it should match).
+        // THE NEGATIVE CONTROL, so that 0 is a result and not a property of the instrument. Same
+        // sequence with the model's redraw suppressed across the hand-back: nothing repaints,
+        // every byte our line owns is still there, and the count has to say so. Without it,
+        // "stranded=0" and "the probe is blind" read alike
+        // (AGENTS.md § "Oracles: absence and defect-era checks").
         Drive36Sync();
         for (int i = 0; i < 4 && !ScHudRowIndicatorShowing(); ++i) HudFrame();
         HudFrame();                                     // paint the line
@@ -2291,24 +2177,14 @@ static void HudRowTests(void) {
 }
 
 // ---------------------------------------------------------------------------
-// [13] Same-type building groups (task 024), driven the same way as [7].
-//
-// Two halves, both hook-free and both asserted here:
-//
-//   the CLIENT half -- ScFanoutGrowBuildingGroup, which turns SortAllUnits' one-building
-//   fallback into the whole same-type group. Its inputs are exactly the engine's: the
-//   NULL-terminated candidate list, the caller's 12-slot output array, the `clicked`
-//   argument and the count the original returned.
-//
-//   the SIM half -- the chunk size. The simulation gate (addUnitToSelectionSlot
-//   0x0049AF80) refuses a building every slot but the first, so the fan-out has to
-//   deliver a building group ONE unit per Select, and that shows up here as the exact
-//   wire stream: N x (Select(1) + order) instead of one Select(N).
-//
-// The engine's predicate (0x0047B770) is supplied as a stub -- a test process has no
-// engine code, only a fake image -- and the stub answers by unit TYPE, which is what
-// the real one does for a building (units.dat flag 0x01).
-// ---------------------------------------------------------------------------
+// [13] Same-type building groups, driven the same way as [7]. Two hook-free halves: the
+// CLIENT half, ScFanoutGrowBuildingGroup, which turns SortAllUnits' one-building fallback
+// into the whole same-type group on exactly the engine's inputs (NULL-terminated candidate
+// list, the caller's 12-slot output, `clicked`, the count); and the SIM half, the chunk size
+// -- the simulation gate (addUnitToSelectionSlot 0x0049AF80) refuses a building every slot
+// but the first, so a building group must go out ONE unit per Select, N x (Select(1) + order)
+// instead of one Select(N). The engine's predicate (0x0047B770) is a stub here (a test
+// process has no engine code) answering by TYPE, as the real one does for a building.
 
 // Type ids: anything below 106 is an ordinary unit, 106+ a building. 106 is Terran
 // Command Center and 109 Supply Depot in units.dat, which is also what the in-game
@@ -2327,12 +2203,12 @@ static void SetFakeType(int i, WORD type) {
 
 // The units.dat prototype flags, in the fake image, agreeing with FakeMovable above.
 //
-// Task 036 made the plugin ask TWO questions where task 024 asked one -- "the predicate
-// refused it" AND "units.dat says it is a building" -- because the predicate also refuses
-// plenty of things that are not buildings, and a feature named building groups must not
-// widen anything for those. The fake table has to carry the same split the stub does, or
-// every case in this part would exercise the not-a-building branch and pass for the wrong
-// reason. Called after every MakeUnits/ScFanoutTestBegin, since those reset the image.
+// The plugin asks TWO questions -- "the predicate refused it" AND "units.dat says it is a
+// building" -- because the predicate also refuses plenty of things that are not buildings,
+// and a feature named building groups must not widen anything for those. The fake table has
+// to carry the same split the stub does, or every case in this part exercises the
+// not-a-building branch and passes for the wrong reason. Called after every
+// MakeUnits/ScFanoutTestBegin, since those reset the image.
 static void SetFakeUnitsDatFlags(void) {
     DWORD* flags = (DWORD*)FakeRt(SC_VA_UNITS_DAT_FLAGS);
     for (int t = 0; t < 256; ++t) {
@@ -2513,13 +2389,10 @@ static void BuildingGroupTests(void) {
         DWORD out[SC_SELECTION_SLOTS] = { 0 };
         out[0] = FakeUnit(3);
 
-        // TASK 036 CHANGED THIS ONE, and it is left here rather than moved so the
-        // reversal is visible next to what it reversed. Task 024 asserted that a
-        // `clicked != 0` call was untouched, because it believed every click path passed
-        // one. It does -- but only TWO click paths reach SortAllUnits at all, and both
-        // are the ctrl-click / double-click "select all of this type on screen" branches
-        // (sc_addresses.h SC_VA_CLICK_SELECT_HANDLER). A plain click and a shift-click
-        // never call it. So the growth is now exactly as correct here as it is for a box.
+        // Only TWO click paths reach SortAllUnits at all, both the ctrl-click / double-click
+        // "select all of this type on screen" branches (sc_addresses.h
+        // SC_VA_CLICK_SELECT_HANDLER); a plain click and a shift-click never call it, so growing
+        // a `clicked != 0` call is exactly as correct as growing a box.
         {
             DWORD cout[SC_SELECTION_SLOTS] = { 0 };
             cout[0] = FakeUnit(3);
@@ -2531,10 +2404,9 @@ static void BuildingGroupTests(void) {
         Check("a count other than 1 is untouched -- the engine found real units",
               (int)ScFanoutGrowBuildingGroup(cand, out, 0, 2), 2);
 
-        // A MOVABLE lead is an ordinary unit the engine selected on its own merits, not
-        // the one-building fallback, so the group logic must not fire at all. This is
-        // also the stock arm for the whole feature: with every unit movable, the
-        // function is the identity.
+        // A MOVABLE lead is an ordinary unit the engine selected on its own merits, not the
+        // one-building fallback, so the group logic must not fire at all. Also the stock arm for
+        // the whole feature: with every unit movable, the function is the identity.
         DWORD unitCand[8];
         const int marines[4] = { 20, 21, 22, 23 };
         MakeCandidates(unitCand, marines, 4);
@@ -2565,20 +2437,14 @@ static void BuildingGroupTests(void) {
 }
 
 // ---------------------------------------------------------------------------
-// [20] Building-group PARITY (task 036): extending a group, and recalling one.
-//
-// Two mechanisms, neither of which goes through SortAllUnits:
-//
-//   the EXTEND override -- ScFanoutMovableDecide, the decision half of the detour on
-//   unit_IsStandardAndMovable. It is asked (unit, return address, the engine's verdict)
-//   and answers what the caller should see. Everything about it is decidable offline:
-//   the allowlist, the "is the lead a building" test, and the same-type-and-owner rule.
-//
-//   the RECALL re-install -- a control group of buildings must end up in the ENGINE's
-//   client selection, not only in the shadow list, because the stock status row draws
-//   the engine's array. The engine call is replaced by a recorder here, so the test can
-//   assert WHAT would have been installed as well as that something was.
-// ---------------------------------------------------------------------------
+// [20] Building-group PARITY: extending a group, and recalling one -- two mechanisms, neither
+// going through SortAllUnits. The EXTEND override is ScFanoutMovableDecide, the decision half
+// of the detour on unit_IsStandardAndMovable: asked (unit, return address, the engine's
+// verdict) it answers what the caller should see, and allowlist, "is the lead a building" and
+// the same-type-and-owner rule are all decidable offline. The RECALL re-install must reach the
+// ENGINE's client selection, not only the shadow list, because the stock status row draws the
+// engine's array; a recorder stands in for that engine call so the test can assert WHAT would
+// have been installed as well as that something was.
 
 // The recorder standing in for CreateNewUnitSelectionsFromList. It does what the engine
 // does that this plugin depends on: write the list into activePlayerSelection, densely
@@ -2638,10 +2504,9 @@ static void BuildingParityTests(void) {
         Check("a sibling Barracks is allowed at the shift-click site",
               ScFanoutMovableDecide(FakeUnit(1), retShiftHit, 0), 1);
 
-        // ... and refused everywhere else in the binary, with the engine's own answer
-        // handed straight back. 0x0046F1AA is SortAllUnits' own call site -- a real
-        // address, deliberately, so this is "not in the allowlist" rather than "not a
-        // code address at all".
+        // ... and refused everywhere else in the binary, with the engine's own answer handed
+        // straight back. 0x0046F1AA is SortAllUnits' own call site -- a real address on purpose,
+        // so this reads "not in the allowlist" rather than "not a code address at all".
         Check("SortAllUnits' own call site is NOT in the allowlist",
               ScFanoutMovableDecide(FakeUnit(1), (DWORD)FakeRt(0x0046F1AAu), 0), 0);
         Check("nor is an arbitrary return address",
@@ -2736,10 +2601,10 @@ static void BuildingParityTests(void) {
         (void)ScFanoutOnCommand(assign, sizeof(assign));
         Check("the plugin's group holds all six", ScFanoutGroupCount(1), 6);
 
-        // Press 1. THE ENGINE HANDS BACK ONE, which is not a fault in its recall: its own
-        // row was filled from playersSelections, and the sim gate capped that at one
-        // building. This is the measured shape -- the in-game -Measure arm read exactly
-        // `GROUP recall enter: ... visible=1` against six stored.
+        // Press 1. THE ENGINE HANDS BACK ONE, which is not a fault in its recall: its own row
+        // was filled from playersSelections and the sim gate capped that at one building. The
+        // measured shape -- the in-game -Measure arm reads `GROUP recall enter: ... visible=1`
+        // against six stored.
         const int engineGave[1] = { 0 };
         SetFakeEngineSelection(engineGave, 1);
         const BYTE recall[3] = { 0x13, SC_HOTKEY_RECALL, 0x01 };
@@ -2763,9 +2628,8 @@ static void BuildingParityTests(void) {
               ScFanoutShadowCount() - ScFanoutVisibleCount(), 0);
         Check("the chunk size is still ONE -- the SIM gate is untouched", ScFanoutSimSlots(), 1);
 
-        // The order still reaches every one of them, one Select per building. This is the
-        // half that already worked before task 036 and must not have been disturbed by
-        // re-ordering the shadow list.
+        // The order still reaches every one of them, one Select per building: the guard on
+        // re-ordering the shadow list during the re-install.
         g_captureLen = 0; g_captureCount = 0;
         (void)ScFanoutOnCommand(kRightClick, sizeof(kRightClick));
         Check("6 pairs x (Select + order)", g_captureCount, 12);
@@ -2777,10 +2641,10 @@ static void BuildingParityTests(void) {
 
     printf("\n    a control group of UNITS recalls exactly as task 021 left it\n");
     {
-        // THE REGRESSION GUARD on the branch above. With 36 Marines the engine hands back
-        // its own twelve and the re-install must not run at all -- if it did, the shadow
-        // list's overflow-first invariant would be rebuilt from a different source and
-        // part [11]'s numbers would move.
+        // THE REGRESSION GUARD on the branch above. With 36 Marines the engine hands back its
+        // own twelve and the re-install must not run at all: if it did, the shadow list's
+        // overflow-first invariant would be rebuilt from another source and part [11]'s
+        // numbers would move.
         MakeUnits(64, 1);
         ScFanoutTestBegin(g_fake, &CaptureEmit, 4000);
         ScFanoutTestSetMovable(&FakeMovable);
@@ -2814,21 +2678,15 @@ static void BuildingParityTests(void) {
 }
 
 // ---------------------------------------------------------------------------
-// [12] the process-exit log path (task 023)
+// [12] the process-exit log path
 //
-// THE FAILURE THIS PINS DOWN. One run's detach wrote NOTHING -- no STATS, no
-// GROUPSTATS, no CIRCLES stats, not even DETACH -- and test-selection-circles
-// failed on the missing CIRCLES line while the plugin had done nothing wrong
-// (task 021 found it, task 022 found the mechanism). ScLog's exit mode used a
-// TryEnterCriticalSection and returned on the first failure; on the exit path the
-// lock's owner is a thread the OS has already terminated, so it never comes back
-// and every line of the sequence is dropped.
-//
-// The test holds the log lock from ANOTHER THREAD that never releases it -- which
-// is the dead-owner state, reproduced exactly -- and requires the line to land
-// anyway. It fails against the old code by construction: TryEnterCriticalSection
-// cannot succeed while a different thread owns the section.
-// ---------------------------------------------------------------------------
+// THE FAILURE THIS PINS DOWN: a detach that writes NOTHING -- no STATS, no GROUPSTATS, no
+// CIRCLES stats, not even DETACH -- while the plugin has done nothing wrong. ScLog's exit mode
+// must not be a TryEnterCriticalSection that gives up on the first failure: on the exit path
+// the lock's owner is a thread the OS has already terminated, so it never comes back and every
+// line of the sequence is dropped. The test holds the log lock from ANOTHER THREAD that never
+// releases it -- the dead-owner state exactly -- and requires the line to land anyway, which
+// a TryEnterCriticalSection cannot do while another thread owns the section.
 
 static HANDLE g_lockHeld = NULL;    // signalled once the holder owns the lock
 static HANDLE g_lockDrop = NULL;    // signalled to make the holder let go
@@ -2853,20 +2711,13 @@ static int CountLines(const char* path, const char* needle) {
 }
 
 // ---------------------------------------------------------------------------
-// [15] The production-queue core (task 025), driven with no game and no hooks.
-// Renumbered from [11] by task 026: task 021's shadow control groups already held that
-// number and four passages in research/control-groups.md cite `hooktest part [11]` for
-// it. Two parts sharing a number defeats the only thing the numbers are for -- naming
-// which part failed in a redirected log -- and the collision was invisible to both sides
-// because each merged cleanly on its own.
+// [15] The production-queue core, driven with no game and no hooks.
 //
 // Everything the feature can do to a player's resources happens in three functions --
 // ScProdQueueOnTrain, ScProdQueueOnTick, ScProdQueueOnCancel -- and all three take a
-// CUnit* and read/write globals that live inside the fake image. So the whole
-// "paid exactly once, refunded exactly once" claim is decidable HERE, arithmetically,
-// against a counter this test owns, instead of only in a game run where a stray
-// mineral is invisible.
-// ---------------------------------------------------------------------------
+// CUnit* and read/write globals that live inside the fake image. So the whole "paid
+// exactly once, refunded exactly once" claim is decidable HERE, arithmetically, against a
+// counter this test owns, instead of only in a game run where a stray mineral is invisible.
 
 #define PQ_BUILDING   0        // fake unit index used as the producing building
 #define PQ_TYPE_A     0x00     // Terran Marine's id; any id under 0x6A works here
@@ -2922,12 +2773,11 @@ static int PqFreeSlot(void) {
     return SC_BUILD_QUEUE_SLOTS;
 }
 
-// ONE PRESS OF TRAIN, with the ENGINE's half modelled first -- because under this design
-// the engine is the only thing that ever pays, and a test that let the plugin pay would
-// be testing a different program. addToBuildQueue (0x00467250) takes the first free slot,
-// stores the type there and deducts the cost; it does nothing at all if the ring is full,
-// if the id is out of range, or if the player cannot afford it. Then the post-hook runs,
-// which is what the detour does.
+// ONE PRESS OF TRAIN, with the ENGINE's half modelled first: the engine is the only thing that
+// ever pays, and a test that let the plugin pay would be testing a different program.
+// addToBuildQueue (0x00467250) takes the first free slot, stores the type and deducts the cost,
+// and does nothing at all if the ring is full, the id is out of range, or the player cannot
+// afford it. Then the post-hook runs, as the detour does.
 static void PqTrain(unsigned type) {
     DWORD u = PqBuilding();
     int   slot = PqFreeSlot();
@@ -2977,10 +2827,8 @@ static void ProdQueueTests(void) {
     Check("the ring is held one below the engine's five", PqEngineLen(), SC_PRODQ_ENGINE_HOLD);
     Check("and the fifth item is with the plugin", ScProdQueueOverflowCount(PqBuilding()), 1);
     Check("so the logical queue is five",  PqEngineLen() + PqOverflow(), 5);
-    // "and the plugin spent NOTHING" used to be asserted here from the plugin's own
-    // MINERALS_SPENT counter. Deleted with the counter (issue #66): the line above is the
-    // same claim read out of the engine's resource global, and it is the one that fails
-    // when a spend is actually added -- measured, work/scratch/055-defect.
+    // "the plugin spent NOTHING" is this line, read out of the ENGINE's resource global:
+    // a plugin-side spend counter reads zero whether or not the code path exists.
     Check("the ENGINE paid for all five",  (long long)*PqMinerals(), 1000 - 5 * 50);
     Check("held counter",                  ScProdQueueStat(SC_PRODQ_STAT_CAPTURED), 1);
 
@@ -3003,10 +2851,9 @@ static void ProdQueueTests(void) {
           ScProdQueueOverflowAt(PqBuilding(), 1), PQ_TYPE_B);
     {
         DWORD mineralsAfterHold = *PqMinerals();
-        // The engine finishes the head item and frees its slot, as productionTick does.
-        // The ring now runs 1,2,3 with the head at 1, so the slot the engine's own
-        // free-slot rule offers next is 4 -- NOT the one just vacated, which is behind
-        // the head and unreachable until the ring wraps round to it.
+        // The engine finishes the head item and frees its slot, as productionTick does. The
+        // ring now runs 1,2,3 with the head at 1, so the engine's free-slot rule offers 4
+        // next -- NOT the slot just vacated, which is behind the head until the ring wraps.
         *(WORD*)(PqBuilding() + SC_CUNIT_OFF_BUILD_QUEUE) = SC_BUILD_QUEUE_EMPTY;
         *(BYTE*)(PqBuilding() + SC_CUNIT_OFF_BUILD_QUEUE_SLOT) = 1;
         ScProdQueueOnTick(PqBuilding());
@@ -3065,13 +2912,10 @@ static void ProdQueueTests(void) {
           ScProdQueueOnCancel(PqBuilding(), SC_CANCEL_TRAIN_LAST) ? 1 : 0, 0);
 
     printf("\n    a cancel naming a slot the RING HOLDS is the engine's; one it does not is ours\n");
-    // Task 033 changed this contract, and the change is the whole point of the fifth icon.
-    // The ring holds four (SC_PRODQ_ENGINE_HOLD) and the plugin holds one, so display
-    // indices 0..3 name real ring items -- the engine's, passed through, exactly as before
-    // -- while display 4 names a slot holding 0xE4. Before task 033 that click could not
-    // exist (an empty slot's icon is drawn DISABLED); now the indicator draws that icon
-    // from the plugin's overflow and lights it, so the click is real and the plugin owns
-    // the item behind it. Handing it to the engine would refund by type 0xE4.
+    // The ring holds four (SC_PRODQ_ENGINE_HOLD) and the plugin holds one, so display indices
+    // 0..3 name real ring items -- the engine's, passed through -- while display 4 names a slot
+    // holding 0xE4. The indicator draws that icon from the plugin's overflow and lights it, so
+    // the click is real and the plugin owns the item behind it; the engine would refund 0xE4.
     PqBegin(16, 1000, 500);
     for (int i = 0; i < 5; ++i) PqTrain(PQ_TYPE_A);
     Check("the ring holds four, the plugin one", PqEngineLen(), SC_PRODQ_ENGINE_HOLD);
@@ -3140,8 +2984,8 @@ static void ProdQueueTests(void) {
     for (int i = 0; i < 5; ++i) PqTrain(PQ_TYPE_A);
     PqTrain(PQ_TYPE_B);
     Check("the engine paid for six", (long long)*PqMinerals(), 1000 - 5 * 50 - 100);
-    // A damage death: the slot is not recycled, the hit points are zero. This is the
-    // same signal sc_fanout's task-020 gate uses.
+    // A damage death: the slot is not recycled, the hit points are zero -- the same
+    // signal sc_fanout's liveness gate uses.
     *(DWORD*)(PqBuilding() + SC_CUNIT_OFF_HITPOINTS) = 0;
     ScProdQueueOnTick(FakeUnit(1));     // any other building's tick runs the sweep
     Check("record dropped",  ScProdQueueTrackedBuildings(), 0);
@@ -3210,31 +3054,24 @@ static void ProdQueueTests(void) {
         Check("nothing left in the plugin",        ScProdQueueTrackedBuildings(), 0);
         Check("promoted exactly the eleven", ScProdQueueStat(SC_PRODQ_STAT_PROMOTED), 11);
         Check("no refund happened",  ScProdQueueStat(SC_PRODQ_STAT_REFUNDED), 0);
-        // THE PAY-ONCE IDENTITY. Every one of the sixteen was paid for by the engine at
-        // the moment it accepted it; holding an item back and handing it over again are
-        // bare stores. So the balance is down by sixteen costs -- not seventeen (the
-        // refused one), and not twenty-seven (a second payment on each promotion).
+        // THE PAY-ONCE IDENTITY. The engine paid for each of the sixteen when it accepted it;
+        // holding an item back and handing it over again are bare stores. So the balance is down
+        // sixteen costs -- not seventeen (the refused one), not twenty-seven (paying again on
+        // each promotion).
         Check("total spend is sixteen costs, not seventeen and not twenty-seven",
               (long long)(start - *PqMinerals()), 16 * 50);
     }
 
-    // -----------------------------------------------------------------------------
-    // TASK 038. WHICH SELECTION ARRAY THE DETOURS READ, decided here because the two
-    // arrays ABUT (0x006284B8 + 12*4 == 0x006284E8) and agree in every single-building
-    // case -- so the wrong one passes every test that selects one building, which is
-    // every test this part had until now.
-    //
-    // The engine's own gate walks playersSelections[activePlayerId]
-    // (getActivePlayerNextSelection 0x0049A850, quoted in sc_prodqueue.cpp). The client's
-    // activePlayerSelection is a different list, and a fanned-out Select+Train pair makes
-    // them disagree on purpose: the SIMULATION is moved to one building at a time while
-    // the player still has the whole group selected. Reading the client's list there
-    // returned "no single building", the plugin held nothing, and every ring filled to
-    // five -- the bug this task exists to fix.
-    //
-    // So each case below writes the two arrays to DIFFERENT things and says which one the
-    // answer has to come from.
-    // -----------------------------------------------------------------------------
+    // WHICH SELECTION ARRAY THE DETOURS READ, decided here because the two arrays ABUT
+    // (0x006284B8 + 12*4 == 0x006284E8) and agree in every single-building case, so the wrong
+    // one passes any test that selects exactly one building. The engine's own gate walks
+    // playersSelections[activePlayerId] (getActivePlayerNextSelection 0x0049A850, quoted in
+    // sc_prodqueue.cpp); the client's activePlayerSelection is a different list, and a
+    // fanned-out Select+Train pair makes them disagree on purpose -- the SIMULATION moves to
+    // one building at a time while the player still has the whole group selected. Reading the
+    // client's list there answers "no single building", so the plugin holds nothing and every
+    // ring fills to five. Each case below writes the two arrays to DIFFERENT things and says
+    // which one the answer has to come from.
     printf("\n    the building a receive handler acts on comes from the ENGINE's selection array\n");
     PqBegin(16, 1000, 500);
     {
@@ -3244,7 +3081,7 @@ static void ProdQueueTests(void) {
         for (int i = 0; i < SC_SELECTION_SLOTS; ++i) { engineSel[i] = 0; clientSel[i] = 0; }
         *activeId = PQ_PLAYER;
 
-        // THE CASE THAT WAS BROKEN: the fan-out has just replayed Select(building 0), so
+        // THE CASE THAT DECIDES IT: the fan-out has just replayed Select(building 0), so
         // the simulation holds ONE building, while the player's own selection still holds
         // three. The answer is the simulation's building.
         engineSel[0] = FakeUnit(0);
@@ -3297,26 +3134,16 @@ static void ProdQueueTests(void) {
 }
 
 // ---------------------------------------------------------------------------
-// [17] the upgrade-queue core (task 029), with no game and no hooks.
+// [17] the upgrade-queue core, with no game and no hooks.
 //
-// Numbered 17, not 16: task 028's status-strip tests took 16 on main while this task was
-// in flight, and the two collided on the merge. Two parts sharing a number defeats the
-// only thing the numbers are for -- naming which part failed in a redirected log -- and
-// this repo has now had that collision three times, each time invisible to both sides
-// because each merged cleanly on its own.
-//
-// WHAT THIS HAS TO DECIDE, and why offline is the right place for it. The claim the
-// whole feature rests on is "the plugin never moves a resource, and every item is paid
-// for exactly once, by the engine, at the moment it starts". In a game run a stray
-// mineral is invisible; here the fake image's resource globals are a counter this test
-// owns, and the promotion seam (ScUpgStartFn) is a function this test writes -- so the
-// engine's half can be modelled EXACTLY, including its refusals, and the arithmetic is
-// decidable.
-//
-// The fake starter below is startUpgrade/startTech as research/upgrade-queue.md 5 reads
-// them: check affordability, and only then set the field and subtract the cost. A test
-// whose starter paid nothing would let a plugin that also paid look correct.
-// ---------------------------------------------------------------------------
+// The claim the whole feature rests on is "the plugin never moves a resource, and every item
+// is paid for exactly once, by the engine, at the moment it starts". In a game run a stray
+// mineral is invisible; here the fake image's resource globals are a counter this test owns
+// and the promotion seam (ScUpgStartFn) is a function this test writes, so the engine's half
+// is modelled EXACTLY, refusals included, and the arithmetic is decidable. The fake starter
+// below is startUpgrade/startTech as research/upgrade-queue.md 5 reads them: affordability
+// first, only then the field and the deduction. A starter that paid nothing would let a
+// plugin that also paid look correct.
 
 #define UQ_BUILDING 0
 #define UQ_PLAYER   1
@@ -3563,22 +3390,19 @@ static void UpgradeQueueTests(void) {
         // nothing, because the plugin never took anything.
         Check("and NOT ONE MINERAL came back or went away",
               (long long)*UqMinerals(), (long long)before);
-        // This used to read the plugin's own MINERALS_SPENT/GAS_SPENT counters, which no
-        // code path could move (issue #66). The gas half is now the same read-back as the
-        // mineral half -- the engine's own global, before and after -- so the claim keeps
-        // an oracle instead of losing one.
+        // The gas half is the same read-back as the mineral half -- the engine's own
+        // global, before and after. A plugin-side "spent" counter no code path can move
+        // would pass this whatever the plugin did.
         Check("nor a single unit of gas", (long long)*UqGas(), (long long)gasBefore);
     }
 
-    // -----------------------------------------------------------------------
     // LEVEL STACKING, and the engine rule it must not break.
     //
-    // The dangerous version of this feature would suppress upgradeBusy for everybody. The
-    // shipped version suppresses it only for the building whose own CUnit+0xC9 already
-    // holds that upgrade id -- so the assertions below are a PAIR: the running building
-    // may stack, and a SECOND building of the same player may not. A test that only made
-    // the first claim would pass for the dangerous version too.
-    // -----------------------------------------------------------------------
+    // Suppressing upgradeBusy for everybody would let two buildings pay for one level, so it
+    // is suppressed only for the building whose own CUnit+0xC9 already holds that upgrade id.
+    // The assertions below are a PAIR: the running building may stack, a SECOND building of
+    // the same player may not. A test making only the first claim passes for the dangerous
+    // version too.
     printf("\n    LEVEL STACKING: the running building may queue its own next level\n");
     UqBegin(8, 5000, 5000);
     *(BYTE*)((DWORD)FakeRt(SC_VA_UPGRADE_MAX_LEVEL) +
@@ -3631,13 +3455,10 @@ static void UpgradeQueueTests(void) {
         Check("the queue is empty", UqQueued(), 0);
     }
 
-    // -----------------------------------------------------------------------------
-    // TASK 042. WHICH SELECTION ARRAY THE RECEIVE HANDLERS READ, same shape as task 038's
-    // sc_prodqueue.cpp coverage: the two arrays ABUT (0x006284B8 + 12*4 == 0x006284E8) and
-    // agree whenever exactly one building is selected, which is every case this part had
-    // until now. Latent here (no upgrade command fans out today), but the trap is the same
-    // one 038 found, and this proves the fix reads the SIMULATION's array, not the CLIENT's.
-    // -----------------------------------------------------------------------------
+    // WHICH SELECTION ARRAY THE RECEIVE HANDLERS READ, the same trap sc_prodqueue.cpp has:
+    // the two arrays ABUT (0x006284B8 + 12*4 == 0x006284E8) and agree whenever exactly one
+    // building is selected. Latent while no upgrade command fans out, so this pins the
+    // handlers to the SIMULATION's array rather than the CLIENT's.
     printf("\n    the building a research receive handler acts on comes from the ENGINE's selection array\n");
     UqBegin(8, 1000, 1000);
     {
@@ -3729,25 +3550,16 @@ static void ExitLogTests(void) {
 }
 
 // ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// [14] the command-card read-back (task 026), driven against a fake card dialog.
-// Numbered 14, not 13: task 024 took 13 for the building groups on main, and two parts
-// sharing a number makes "which part failed?" unanswerable from a redirected log.
+// [14] the command-card read-back, driven against a fake card dialog.
 //
-// WHY IT NEEDS A TEST AT ALL. This module is the ORACLE for the whole task: the
-// answer to "why can nothing drive the Ghost's Cloak" is a single bit it reports,
-// control+0x18 & 0x2. An oracle that reports GREYED unconditionally would produce
-// exactly the finding the task expects and would be worthless -- AGENTS.md's
-// absence-assertions rule in its other direction. So the same walk is driven over
-// the same dialog twice, once with the bit set and once with it clear, and both
-// readings are required. It also has to REFUSE to fault on a bad Button pointer
-// and to terminate on a looped `next`, because it runs on the observer thread
-// against a list the game thread is editing.
-//
-// The module reaches memory through exactly two things -- the module base and the
-// reader -- so replacing both runs the whole walk with no StarCraft in the process.
-// ---------------------------------------------------------------------------
+// This module is the ORACLE for "why can nothing drive the Ghost's Cloak": the answer is a
+// single bit it reports, control+0x18 & 0x2. An oracle reporting GREYED unconditionally would
+// produce exactly the expected finding and be worthless (AGENTS.md § "Oracles: absence and
+// defect-era checks"), so the same walk is driven over the same dialog twice, once with the
+// bit set and once with it clear, and both readings are required. It must also REFUSE to fault
+// on a bad Button pointer and terminate on a looped `next`: it runs on the observer thread
+// against a list the game thread is editing. Module base and reader are its only routes to
+// memory, so replacing both runs the walk with no StarCraft present.
 
 #define FAKE_CARD_DLG_VA 0x006A0000u
 #define FAKE_CARD_BTN_VA 0x006A2000u
@@ -3784,10 +3596,9 @@ static const FakeBtnDef kGhostCard[9] = {
     { 9, 0x0137, 0x00428810, 0x00423A40,  0,  0, 0x02AD, 0x02F9 },  // Nuclear Strike
 };
 
-// One card control per slot 1..9, laid out the way the engine's own layout
-// function leaves them: the button assigned to the control whose index matches
-// its slot, slot 6 blanked (no button reaches it), slot 8 hidden (Lockdown not
-// researched), slot 9 visible-but-greyed (no silo).
+// One card control per slot 1..9, laid out the way the engine's own layout function leaves
+// them: each button on the control whose index matches its slot, slot 6 blanked (no button
+// reaches it), slot 8 hidden (Lockdown not researched), slot 9 visible-but-greyed (no silo).
 static void BuildFakeCard(bool cloakDisabled) {
     DWORD root = (DWORD)FakeRt(FAKE_CARD_DLG_VA);
     memset((void*)(DWORD_PTR)root, 0, SC_BINDLG_SIZE);
@@ -3958,21 +3769,18 @@ static void CardScanTests(void) {
     Check("a null card dialog reports not-ok, no slots", (n == 0 && !hdr.ok) ? 1 : 0, 1);
 
     // --- (f) the per-player tech state, at the ENGINE's indexing ---------------
-    // The reason this is here and not left to the game: the whole Ghost result turned
-    // on a PTEx writer that used tech-major indexing while the engine uses
-    // player-major, and its own read-back agreed with it. So the reader is pinned
-    // against literal player*stride+tech offsets, and against the specific pair the
-    // bug confused -- player 0 tech 10 versus the byte the old arithmetic would have
-    // reached.
+    // Not left to the game: a writer using tech-major indexing where the engine is
+    // player-major agrees with its own read-back and answers the Ghost question wrongly. So
+    // the reader is pinned against literal player*stride+tech offsets, and against the pair
+    // that arithmetic confuses -- player 0 tech 10 versus the byte tech-major reaches.
     BuildFakeCard(true);
     memset(FakeRt(SC_VA_TECH_AVAILABLE),  0, 12 * SC_TECH_STRIDE_VANILLA);
     memset(FakeRt(SC_VA_TECH_RESEARCHED), 0, 12 * SC_TECH_STRIDE_VANILLA);
     memset(FakeRt(SC_VA_TECH_AVAILABLE_BW),  0, 12 * SC_TECH_STRIDE_BW);
     memset(FakeRt(SC_VA_TECH_RESEARCHED_BW), 0, 12 * SC_TECH_STRIDE_BW);
-    // Player 0: Personnel Cloaking available AND researched. Player 2: tech 32 of the
-    // BW tail researched -- which is precisely where the old tech-major write for
-    // (tech 10, player 0) actually landed, so a reader that still used it would read
-    // player 0 as not researched and player 2 as researched.
+    // Player 0: Personnel Cloaking available AND researched. Player 2: tech 32 of the BW
+    // tail researched -- precisely where a tech-major write for (tech 10, player 0) lands,
+    // so a tech-major reader reads player 0 as not researched and player 2 as researched.
     *(BYTE*)((DWORD_PTR)FakeRt(SC_VA_TECH_AVAILABLE)  + 0 * SC_TECH_STRIDE_VANILLA + 10) = 1;
     *(BYTE*)((DWORD_PTR)FakeRt(SC_VA_TECH_RESEARCHED) + 0 * SC_TECH_STRIDE_VANILLA + 10) = 1;
     *(BYTE*)((DWORD_PTR)FakeRt(SC_VA_TECH_RESEARCHED_BW) + 2 * SC_TECH_STRIDE_BW + (32 - 24)) = 1;
@@ -3996,20 +3804,14 @@ static void CardScanTests(void) {
 }
 
 // ---------------------------------------------------------------------------
-// [18] Group production (task 030): the policy that decides whether ONE Train click
-// reaches every selected production building.
-//
-// This is the pure half of the feature and it is worth testing on its own, because it is
-// the thing standing between "the fan-out delivers one item per building" and the two
-// ways that could go wrong: firing for a selection it was never meant to fire for, and
-// paying for a building that cannot build the unit.
-//
-// ScProdFanDecide is called from TWO places in the shipped plugin -- the button-condition
-// detour, which decides whether the player is offered the button at all, and the command
-// path, which decides whether the command is fanned out. Testing it once therefore tests
-// both, and that shared call is also the guarantee that this feature cannot fire for a
-// selection task 024 would not have produced.
-// ---------------------------------------------------------------------------
+// [18] Group production: the policy deciding whether ONE Train click reaches every selected
+// production building. The pure half of the feature, and it stands between "the fan-out
+// delivers one item per building" and the two ways that can go wrong: firing for a selection
+// it was never meant to fire for, and paying for a building that cannot build the unit.
+// ScProdFanDecide is called from TWO places -- the button-condition detour, which decides
+// whether the player is offered the button at all, and the command path, which decides
+// whether the command is fanned out -- so testing it once tests both, and that shared call
+// also stops the feature firing for a selection building groups cannot produce.
 static void ProdFanTests(void) {
     Part("group production: one Train click, one item per building");
 
@@ -4047,13 +3849,11 @@ static void ProdFanTests(void) {
           ScProdFanDecide(one, 0, 1, 3), SC_PRODFAN_ONE_BUILDING);
 
     printf("\n    ACCEPTANCE CRITERION 5: a selection whose buildings differ\n");
-    // The task file allows either "refuse" or "queue only where the unit is valid".
-    // This refuses, and refuses the WHOLE command rather than the odd building: a partial
-    // fan-out would spend the player's minerals on a subset they never chose. It is also
-    // belt and braces -- the engine's own requirement interpreter (0x0046E1C0, opcode
-    // 0xFF02) compares the required type against the PRODUCER's own CUnit+0x64 and
-    // returns -1, so a wrong-kind building would be refused for free even if this line
-    // were not here. Two independent refusals, and the plugin's is the outer one.
+    // Refusing the WHOLE command rather than the odd building: a partial fan-out would
+    // spend the player's minerals on a subset they never chose. Belt and braces, too --
+    // the engine's own requirement interpreter (0x0046E1C0, opcode 0xFF02) compares the
+    // required type against the PRODUCER's own CUnit+0x64 and returns -1, so a wrong-kind
+    // building is refused for free even without this line. The plugin's is the outer one.
     Check("a mixed building group is refused outright",
           ScProdFanDecide(mixed3, 3, 1, 3), SC_PRODFAN_MIXED_TYPES);
     WORD mixedTail[3] = { CC, CC, BARRACKS };
@@ -4078,23 +3878,18 @@ static void ProdFanTests(void) {
 }
 
 // ---------------------------------------------------------------------------
-// [16] the status pane's production-queue strip (task 028), against a fake dialog.
+// [16] the status pane's production-queue strip, against a fake dialog.
 //
-// WHY IT NEEDS A TEST. This walk is the thing that decides WHERE the run clicks to
-// cancel a queued unit, and what it then claims the player could see. Two failure
-// modes would both look like a clean result in game:
+// This walk decides WHERE the run clicks to cancel a queued unit, and what it then claims the
+// player could see. Two failure modes both look like a clean result in game:
 //
-//   * a walk that reports every icon clickable would send the suite clicking an
-//     EMPTY queue slot's icon and reading the silence as "the engine refused" --
-//     the disabled bit here is the same bit that made task 022's Ghost negative,
-//     so it is driven in both directions over the same dialog, exactly as [14] does;
-//   * a walk that takes the display index from the control's `index` field rather
-//     than from the walk POSITION would agree with the engine on a normal dialog and
-//     disagree on a re-ordered one -- and the engine takes one from each
-//     (queueLayout by position, statusCtrlActivate by index - 2). So the fake is
-//     also built with its child list deliberately out of order, and the reading must
-//     make that visible instead of hiding it.
-// ---------------------------------------------------------------------------
+//   * a walk that reports every icon clickable sends the suite clicking an EMPTY queue
+//     slot's icon and reading the silence as "the engine refused", so the disabled bit is
+//     driven in both directions over the same dialog, exactly as [14] does;
+//   * a walk that takes the display index from the control's `index` field rather than
+//     from the walk POSITION agrees with the engine on a normal dialog and disagrees on a
+//     re-ordered one (queueLayout indexes by position, statusCtrlActivate by index - 2).
+//     So the fake's child list is deliberately out of order and the reading must show it.
 
 #define FAKE_STAT_DLG_VA  0x006B0000u
 #define FAKE_STAT_USER_VA 0x006B2000u
@@ -4190,24 +3985,21 @@ static void BuildFakeStatusPane(const WORD* queuedByDisplay, BYTE head, bool swa
 }
 
 // ---------------------------------------------------------------------------
-// [19] the queue-overflow indicator (task 033), against a fake status pane.
+// [19] the queue-overflow indicator, against a fake status pane.
 //
 // Two things are decidable here and both are the feature: WHAT the module decides to say
 // (the composer is pure), and WHAT IT LEAVES IN THE DIALOG when it says it -- the spliced
-// control's own fields, the five icons' statUser records, and the fact that all of it goes
-// away again when the queue drops back under.
-//
-// What is NOT provable offline is that the engine's text routine actually puts ink on the
-// dialog surface. That needs a running game, and it is what tools/plugin/test-queue-
-// indicator.ps1 asserts (`QIND ... ink=`) -- the same gap that let sc_hudrow's indicator
-// pass its own test for weeks while drawing nothing.
-// ---------------------------------------------------------------------------
+// control's fields, the five icons' statUser records, and all of it going away again when
+// the queue drops back under. What is NOT provable offline is that the engine's text
+// routine puts ink on the surface: that needs a running game and is what
+// tools/plugin/test-production-queue.ps1 asserts against the live `QIND` line. Without it
+// an indicator passes every offline assertion while drawing nothing.
 
 #define FAKE_QIND_DLG_VA 0x006B8000u
 
 // The fake pane holds the five queue icons AND the twelve wireframe buttons, because the
-// group line is now placed from the ROW's own rects (task 039) and a fake with one button
-// in it would let a placement bug through.
+// group line is placed from the ROW's own rects and a fake with one button in it would
+// let a placement bug through.
 #define QI_BTN_COUNT SC_HUD_BUTTON_COUNT
 #define QI_CTL_COUNT (SC_STATQ_SLOTS + QI_BTN_COUNT)
 
@@ -4224,10 +4016,9 @@ static DWORD QiRoot(void) { return (DWORD)FakeRt(FAKE_QIND_DLG_VA); }
 static DWORD QiGrpIcons(void) { return (DWORD)FakeRt(FAKE_QIND_DLG_VA) + 0x990u; }
 static DWORD QiGrpBtns(void)  { return (DWORD)FakeRt(FAKE_QIND_DLG_VA) + 0x9A0u; }
 
-// The pane's own geometry, as the live dialog reports it (work/scratch/033 QINDDLG dump,
-// and the same numbers again in this task's run): a 270x92 surface, the strip's five icons
-// 38x35 with slot 0 above the other four, and the row's twelve buttons in TWO ROWS of six
-// -- which is the fact the group line's band depends on.
+// The pane's own geometry, as the live dialog's QINDDLG dump reports it: a 270x92 surface,
+// the strip's five icons 38x35 with slot 0 above the other four, and the row's twelve
+// buttons in TWO ROWS of six -- the fact the group line's band depends on.
 #define QI_SURF_W 270
 #define QI_SURF_H 92
 static const short kQiBtnX[6] = { 30, 66, 102, 138, 174, 210 };
@@ -4245,14 +4036,12 @@ static void QiUpdate(DWORD c) { ++g_qiUpdates; (void)c; }
 static void QiOrigDriver(void) { ++g_qiDriverCalls; }
 
 // Root + the five queue icons (ids 2..6) + the twelve wireframe buttons (ids 0x21..0x2C),
-// laid out the way the live dialog reports them (work/scratch/033 and 039 QINDDLG dumps).
+// laid out the way the live dialog's QINDDLG dump reports them.
 //
-// THE FIVE ICONS START IN THE STATE THE ENGINE'S OWN LAYOUT LEAVES THEM IN, and that means
-// all FIVE fields queueLayout writes, not the three this fixture used to model: an occupied
-// slot draws from the ICON grp and carries its slot label, an empty one draws the
-// placeholder frame FROM THE BUTTON-BORDER GRP and carries no label at all. Task 039's bug
-// was leaving that grp behind, and a fake that zeroed the field could not see it happen --
-// the old assertions passed on a build that drew the wrong picture for every queued type.
+// THE FIVE ICONS START IN THE STATE THE ENGINE'S OWN LAYOUT LEAVES THEM IN, meaning all FIVE
+// fields queueLayout writes: an occupied slot draws from the ICON grp and carries its slot
+// label, an empty one draws the placeholder frame FROM THE BUTTON-BORDER GRP with no label.
+// A fake that zeroes the grp field cannot see a build that leaves the wrong grp behind.
 static void BuildFakeQIndPane(int engineLen, WORD type) {
     DWORD root = QiRoot();
     memset((void*)root, 0, SC_BINDLG_SIZE);
@@ -4434,15 +4223,14 @@ static void QueueIndTests(void) {
         DWORD ind = QiIndicator();
         Check("  and the walk finds it", ind ? 1 : 0, 1);
         // Z-ORDER, and it is a position in a list rather than a preference. The dialog's
-        // redraw walk takes the children head to tail, so the LAST one is the one drawn
-        // over the others; at the head -- where this control used to be spliced -- the
-        // engine's own controls painted over it in the same frame, every frame.
+        // redraw walk takes the children head to tail, so the LAST one is drawn over the
+        // others; at the head, the engine's own controls paint over it every frame.
         Check("  and it is the LAST child, so it is painted over the others, not under",
               (long long)(ind == QiLastChild()), 1);
         if (ind) {
             const char* text = (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
-            // Read out of the CONTROL, not out of the module: this is the assertion
-            // sc_hudrow's suite was missing.
+            // Read out of the CONTROL, not out of the module: a module that says "+4"
+            // while the control holds nothing passes any read of its own state.
             Check("  its pszText says \"+4\"", (long long)(text && strcmp(text, "+4") == 0), 1);
             Check("  the engine's visible bit is set on it",
                   (*(DWORD*)(ind + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) ? 1 : 0, 1);
@@ -4454,23 +4242,23 @@ static void QueueIndTests(void) {
                   (long long)(*(short*)(ind + SC_BINDLG_OFF_INDEX) < 0), 1);
             short* b = ScDlgBounds(ind);
             // The box has to be TALLER than the font or the engine's own draw refuses,
-            // silently (research/status-pane-text.md 3). The in-game ink assertion is what
-            // proves the number is big enough; this proves the box was not left flat.
+            // silently (research/status-pane-text.md 3). The in-game ink assertion proves
+            // the number is big enough; this proves the box was not left flat.
             Check("  the box is at least SC_QIND_BOX_H tall", b[3] - b[1] >= SC_QIND_BOX_H, 1);
             // ... AND wide enough for the string it holds. A box too SHORT draws nothing;
             // a box too NARROW draws a TRUNCATION, which reads as a working feature and is
-            // therefore worse. Found live, not here -- see the group case below.
+            // therefore worse.
             Check("  and wide enough for the string it holds",
                   (b[2] - b[0]) >= (int)strlen(ScQueueIndCurrentText()) * SC_QIND_CHAR_W ? 1 : 0, 1);
             Check("  and sits inside the anchor icon (id 6)",
                   (long long)(b[0] >= *ScDlgBounds(QiCtl(4)) &&
                               b[2] <= *(short*)(QiCtl(4) + SC_BINDLG_OFF_BOUNDS + 4)), 1);
             // AND THE VERY FIRST SHOW ALREADY HAS A BASELINE. The copy taken on hidden frames
-            // needs a splice to exist, and the splice happens on this frame -- so without the
-            // second capture site (just before the show) a pane that goes straight from an
-            // empty queue to "+4" reports boxDiff=-1 for as long as it stays up, and every
-            // suite asserting on it skips instead of measuring. -1 is "no answer"; this must
-            // be a number, and offline that number is 0 because nothing paints here.
+            // needs a splice to exist, and the splice happens on this frame -- so without a
+            // second capture site (just before the show) a pane going straight from an empty
+            // queue to "+4" reports boxDiff=-1 for as long as it stays up and every suite
+            // asserting on it skips instead of measuring. -1 is "no answer"; this must be a
+            // number, and offline that number is 0 because nothing paints here.
             Check("  and the first show already has a baseline, so boxDiff answers",
                   (long long)(ScQueueIndBoxDiff(QiRoot()) >= 0), 1);
         }
@@ -4478,13 +4266,12 @@ static void QueueIndTests(void) {
     Check("the original driver ran first, every frame", (long long)g_qiDriverCalls, 0);
 
     printf("\n    ... and the FIFTH icon is the ENGINE's to draw now: the phantom bracket\n");
-    // Task 066. The hand-fill of the fifth icon is DELETED: the detour on queueLayout
-    // (0x004268D0) writes the held item's type into the empty ring slot before the
-    // engine's own layout runs and restores 0xE4 the instant it returns, so the engine
-    // lays the slot out as occupied with its own code and no disableControl ever fires
-    // on it (task 061's defect). Offline there is no engine layout to observe, so what
-    // is provable here is the bracket itself -- the writes, the byte-exact restore, the
-    // seqlock generation around them -- and that the frame path no longer hand-writes.
+    // The fifth icon is the ENGINE's to draw: the detour on queueLayout (0x004268D0) writes
+    // the held item's type into the empty ring slot before the engine's own layout runs and
+    // restores 0xE4 the instant it returns, so the engine lays the slot out as occupied with
+    // its own code and no disableControl ever fires on it. Offline there is no engine layout
+    // to observe, so what is provable is the bracket itself -- the writes, the byte-exact
+    // restore, the seqlock generation around them -- and that the frame path does not write.
     {
         DWORD unit = PqBuilding();
         const BYTE head = *(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
@@ -4536,11 +4323,10 @@ static void QueueIndTests(void) {
         *slot = SC_BUILD_QUEUE_EMPTY;
     }
     {
-        // AND THE DELETED WRITES STAY DELETED. The frame path used to write five fields
-        // and clear DISABLED on the fifth icon; every one of those writes is now the
-        // engine's, so a frame over the fake pane -- where no engine exists -- must leave
+        // THE WRITES THAT MUST NOT COME BACK. Every field of the fifth icon is the engine's
+        // to write, so a frame over the fake pane -- where no engine exists -- must leave
         // the empty-slot layout EXACTLY as the engine's own empty branch left it. This is
-        // the regression guard for the hand-fill quietly coming back.
+        // the regression guard on a hand-fill quietly reappearing in the frame path.
         BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
         ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiOrigDriver);
         ScQueueIndOnFrame();
@@ -4567,12 +4353,11 @@ static void QueueIndTests(void) {
     }
 
     printf("\n    the GROUP line gets a box sized for IT, not for the button it starts on\n");
-    // The defect this covers was found in a live run rather than here: the group text is
-    // ~17 characters and the wireframe button it anchors to is 34 pixels wide, so clamping
-    // the box to the anchor truncated it -- and every assertion above (mode, text, linked,
-    // visible, ink>0) still passed, because a truncated string is still ink. The strip's
-    // "+N" is short and stays inside its icon; the row's line may run across buttons, which
-    // is why leaving it repaints the whole row.
+    // The group text is ~17 characters and the wireframe button it anchors to is 34 pixels
+    // wide, so clamping the box to the anchor TRUNCATES it -- while mode, text, linked,
+    // visible and ink>0 all still pass, a truncated string being still ink. The strip's "+N"
+    // stays inside its icon; the row's line may run across buttons, so leaving it repaints
+    // the whole row.
     {
         // Two producing buildings in the engine's own selection is what GROUP mode needs.
         DWORD* g = (DWORD*)FakeRt(SC_VA_CLIENT_SELECTION_GROUP);
@@ -4596,10 +4381,9 @@ static void QueueIndTests(void) {
             Check("  its box is wider than the 32px button the row starts with",
                   (b[2] - b[0]) > 32 ? 1 : 0, 1);
             Check("  and wide enough for the whole string", (b[2] - b[0]) >= need ? 1 : 0, 1);
-            // BELOW THE ROW, not on it. The user could not read this line because it was
-            // drawn in the icons' own rectangles; the fix is a place of its own, computed
-            // from the buttons' live bounds -- so what this asserts is that the box clears
-            // EVERY one of the twelve, not merely the one it is anchored to.
+            // BELOW THE ROW, not on it: a line drawn inside the icons' own rectangles is
+            // unreadable. The place is computed from the buttons' live bounds, so what this
+            // asserts is that the box clears EVERY one of the twelve, not merely its anchor.
             short lowest = 0;
             int overlaps = 0;
             for (int i = 0; i < QI_BTN_COUNT; ++i) {
@@ -4655,12 +4439,11 @@ static void QueueIndTests(void) {
     }
 
     printf("\n    boxDiff: the box measured against a copy of itself with none of ours in it\n");
-    // THE ORACLE EVERY PIXEL CLAIM IN THIS MODULE NOW RESTS ON, and the reason it is a
-    // DIFFERENCE and not a count. `ink` inside the indicator's box counts THE PANE'S OWN ART:
-    // this task's first live run read 448 of 448 bytes set inside that box, and 1330 of 1330
-    // over a queue icon, before anything of ours had been drawn. So `ink > 0` is true whatever
-    // the plugin does, and the suites that asserted it could not fail. What CAN fail is the
-    // same rect compared against a copy of it taken while the indicator was hidden.
+    // THE ORACLE EVERY PIXEL CLAIM HERE RESTS ON, and why it is a DIFFERENCE and not a count:
+    // `ink` inside the indicator's box counts THE PANE'S OWN ART. A live run reads 448 of 448
+    // bytes set inside that box, 1330 of 1330 over a queue icon, before anything of ours is
+    // drawn -- so `ink > 0` cannot fail. What CAN fail is that rect against a copy of it
+    // taken while the indicator was hidden.
     {
         DWORD  ind = QiIndicator();
         short* ib  = ScDlgBounds(ind);
@@ -4679,7 +4462,8 @@ static void QueueIndTests(void) {
               ScQueueIndBoxDiff(QiRoot()), 7);
 
         // A copy of a DIFFERENT rect is not a copy of this one. -1 says so; a count would be
-        // a number about the wrong pixels, which is worse than no number (AGENTS.md, task 030).
+        // a number about the wrong pixels, worse than no number
+        // (AGENTS.md § "Oracles: pixel counts and instruments").
         ib[0] = (short)(was[0] + 1); ib[2] = (short)(was[2] + 1);
         Check("  a box that has MOVED reports -1 rather than a count against the wrong rect",
               ScQueueIndBoxDiff(QiRoot()), -1);
@@ -4687,12 +4471,12 @@ static void QueueIndTests(void) {
         for (int i = 0; i < 7; ++i) px[(was[1] + 1) * QI_SURF_W + was[0] + i] = 0;
 
         // THE FRAME THE COPY MUST NOT BE TAKEN ON. Hiding only marks the region dirty -- the
-        // paint is the dialog's own redraw walk, which has not run when ScQueueIndOnFrame
-        // returns -- so on that one frame the surface still holds OUR OWN line. A copy taken
-        // then would make the next boxDiff read 0 with the text plainly on the screen: a
-        // check that fails at random, which AGENTS.md rates no better than one that cannot
-        // fail. The show below takes its own copy first (the surface is clean here), and the
-        // seven bytes are written AFTER it, standing in for the line the engine draws.
+        // paint is the dialog's redraw walk, which has not run when ScQueueIndOnFrame returns
+        // -- so on that frame the surface still holds OUR OWN line. A copy taken then makes
+        // the next boxDiff read 0 with the text plainly on screen: a check that fails at
+        // random, worth as little as one that cannot fail (AGENTS.md § "Oracles: what counts
+        // as a read-back"). The show below takes its own copy first, and the seven bytes are
+        // written AFTER it, standing in for the engine's own draw.
         for (int i = 0; i < 5; ++i) PqTrain(PQ_TYPE_B);
         ScQueueIndOnFrame();
         Check("the indicator comes back for the same queue", ScQueueIndCurrentMode(),
@@ -4741,19 +4525,16 @@ static void QueueIndTests(void) {
 }
 
 // ---------------------------------------------------------------------------
-// [21] task 037: SC_QIND_UPGRADE through the FRAME PATH, not just the composer.
+// [21] SC_QIND_UPGRADE through the FRAME PATH, not just the composer.
 //
-// QueueIndTests above drives ScQueueIndCompose directly for the upgrade case ("queued
-// upgrades -> \"+3 upg\"") and stops there -- it never calls ScQueueIndOnFrame for that
-// mode the way it does for STRIP and GROUP. That gap is exactly what let this ship: the
-// composer is pure and cannot see AnchorFor(), which is the function that decides whether
-// the frame path gets a control to splice the text onto at all. AnchorFor had a case for
-// SC_QIND_STRIP and one for SC_QIND_GROUP and none for SC_QIND_UPGRADE, so it fell through
-// to `return 0`, and ScQueueIndOnFrame reads a null anchor as "nothing to show" and resets
-// the mode to SC_QIND_NONE before a splice is even attempted -- on every building, not just
-// an Engineering Bay, because neither AnchorFor nor the mode it is given ever look at the
-// unit's type. The user: "i do not see upgrade queue - tested on terran engineering bay".
-// ---------------------------------------------------------------------------
+// QueueIndTests drives ScQueueIndCompose directly for the upgrade case and stops there,
+// never calling ScQueueIndOnFrame for that mode the way it does for STRIP and GROUP. The
+// gap hides a whole class of defect: the composer is pure and cannot see AnchorFor(), the
+// function deciding whether the frame path gets a control to splice the text onto at all.
+// An AnchorFor with cases for STRIP and GROUP but none for UPGRADE falls through to
+// `return 0`, and ScQueueIndOnFrame reads a null anchor as "nothing to show" and resets the
+// mode to NONE before a splice is attempted -- on EVERY building, because neither AnchorFor
+// nor the mode it is given looks at the unit's type.
 static void UpgQueueIndTests(void) {
     Part("the queue indicator shows QUEUED UPGRADES through the real frame path (task 037)");
 
@@ -4779,8 +4560,8 @@ static void UpgQueueIndTests(void) {
     Check("nothing spliced before the first frame", QiChildren(), QI_CTL_COUNT);
     ScQueueIndOnFrame();
 
-    // THE ASSERTIONS QueueIndTests NEVER MADE for this mode -- the ones that actually ask
-    // whether the player would see anything, rather than what the composer intended.
+    // The assertions the composer cannot make for this mode: whether the player would see
+    // anything, rather than what the composer intended to say.
     Check("the frame path settles on UPGRADE mode", ScQueueIndCurrentMode(), SC_QIND_UPGRADE);
     Check("the indicator is linked into the dialog's child chain",
           ScQueueIndIsSpliced() ? 1 : 0, 1);
@@ -4796,10 +4577,10 @@ static void UpgQueueIndTests(void) {
             Check("the box is at least SC_QIND_BOX_H tall", b[3] - b[1] >= SC_QIND_BOX_H, 1);
             Check("and wide enough for the string it holds",
                   (b[2] - b[0]) >= (int)strlen(ScQueueIndCurrentText()) * SC_QIND_CHAR_W ? 1 : 0, 1);
-            // ... which on the LIVE pane means sliding left off icon 6's own start: the
-            // icon begins at x=231 of a 270-wide surface and "+2 upg" needs 42px, so a box
-            // clamped to the surface edge would have held 38 and cut the string. The fake
-            // only started saying so once it carried the real surface (task 039).
+            // ... which on the LIVE pane means sliding left off icon 6's own start: the icon
+            // begins at x=231 of a 270-wide surface and "+2 upg" needs 42px, so a box clamped
+            // to the surface edge holds 38 and cuts the string. The fake can only say so
+            // because it carries a real surface.
             Check("and it stays inside the dialog's surface",
                   (b[2] <= QI_SURF_W) ? 1 : 0, 1);
         }
@@ -4929,24 +4710,17 @@ static void StatusStripTests(void) {
 }
 
 // ---------------------------------------------------------------------------
-// THE GAME-SESSION EPOCH (task 054; issue #63 and its five siblings in #67)
+// THE GAME-SESSION EPOCH
 //
-// WHAT MAKES THIS PART DIFFERENT FROM EVERY OTHER ONE HERE, and it is worth stating
-// because it is the reason the tests below look strange at first reading: THE FAKE
-// MEMORY IS NOT TOUCHED BETWEEN THE TWO GAMES. Not one byte.
-//
-// That is not a shortcut, it is the fixture. The engine restores a save into its own
-// static 1700-slot CUnit table IN PLACE, index by index, 336 bytes each -- so the
-// building sits at the same address with the same uniqueness byte, the same owner and
-// the same hitpoints it had in the game the record was made in (issue #63, measured in
-// game by task 051). "Nothing changed" IS what a load looks like to every per-unit
-// check this plugin has. The only thing that moves is the epoch.
-//
-// So each scenario below runs twice where it can: once with no game start, which is
-// the state before this task and must still show the old behaviour, and once with the
-// game start, which must show the state gone. Without that pairing these would be
-// assertions that cannot fail -- the exact defect AGENTS.md opens with.
-// ---------------------------------------------------------------------------
+// WHY THE TESTS BELOW LOOK STRANGE: THE FAKE MEMORY IS NOT TOUCHED BETWEEN THE TWO GAMES. Not
+// one byte. That is not a shortcut, it is the fixture. The engine restores a save into its own
+// static 1700-slot CUnit table IN PLACE, index by index, 336 bytes each, so the building sits
+// at the same address with the same uniqueness byte, owner and hitpoints it had in the game
+// the record was made in (measured in game). "Nothing changed" IS what a load looks like to
+// every per-unit check this plugin has; only the epoch moves. So each scenario runs twice
+// where it can: once with no game start, which must show the unguarded behaviour, and once
+// with it, which must show the state gone -- without that pairing these cannot fail
+// (AGENTS.md § "Oracles: what counts as a read-back").
 static void SessionEpochTests(void) {
     Part("the game-session epoch: six kinds of cross-game state, one counter");
 
@@ -4971,10 +4745,7 @@ static void SessionEpochTests(void) {
     Check("  in the CURRENT epoch, i.e. after the bump, never before it",
           (long long)ScSessionEpochAtLastLoad(), (long long)ScSessionEpoch());
 
-    // -----------------------------------------------------------------------
-    // #63 itself: production overflow. This is the offline twin of
-    // test-save-load.ps1's arm 6.
-    // -----------------------------------------------------------------------
+    // Production overflow: the offline twin of test-save-load.ps1's arm 6.
     printf("\n    #63 sc_prodqueue: held items do NOT follow the player into another game\n");
     {
         PqBegin(16, 1000, 500);
@@ -5006,7 +4777,7 @@ static void SessionEpochTests(void) {
         Check("  four items counted against the epoch, by name",
               ScProdQueueStat(SC_PRODQ_STAT_STALE_SESSION), 4);
         // THE RESOURCE RULE FOR THIS PATH, and it is the opposite of the building-died
-        // one: the minerals were spent in a game that no longer exists.
+        // one: the minerals were spent in a game that has since ended.
         Check("NOT ONE MINERAL WAS REFUNDED INTO THE NEW GAME",
               (long long)*PqMinerals(), spentInGameA);
         Check("  and the refund counter did not move",
@@ -5026,9 +4797,7 @@ static void SessionEpochTests(void) {
               ScProdQueueStat(SC_PRODQ_STAT_STALE_SESSION), 0);
     }
 
-    // -----------------------------------------------------------------------
-    // #67 item 1: sc_upgrades, whose RecordStillLive is byte-identical to #63's.
-    // -----------------------------------------------------------------------
+    // sc_upgrades, whose RecordStillLive is byte-identical to sc_prodqueue's.
     printf("\n    #67(1) sc_upgrades: a queued research does not promote into another game\n");
     {
         UqBegin(8, 1000, 1000);
@@ -5051,12 +4820,9 @@ static void SessionEpochTests(void) {
         Check("A TICK IN THE NEW GAME PROMOTES NOTHING", g_uqStarted, startsInGameA);
     }
 
-    // -----------------------------------------------------------------------
-    // #67 item 5: control groups. THE ONE THAT CANNOT BE FIXED BY A PER-UNIT CHECK,
-    // and the reason is visible in the fixture: the containment check compares the
-    // engine's restored row against the group's records, and a load restores the row
-    // NON-EMPTY holding the SAME (pointer, uniqueness) pairs. It passes.
-    // -----------------------------------------------------------------------
+    // Control groups: THE ONE NO PER-UNIT CHECK CAN FIX, and the reason is visible in the
+    // fixture -- containment compares the engine's restored row against the group's records,
+    // and a load restores that row NON-EMPTY holding the SAME (pointer, uniqueness) pairs.
     printf("\n    #67(5) sc_fanout control groups: BOTH existing defences pass a load\n");
     {
         MakeUnits(64, 1);
@@ -5064,7 +4830,7 @@ static void SessionEpochTests(void) {
         *(BYTE*)FakeRt(SC_VA_PLAYER_ID_512688) = 1;
         *(BYTE*)FakeRt(SC_VA_PLAYER_ID_512678) = 1;
 
-        // --- the control arm: no game start, which is main's behaviour today --------
+        // --- the control arm: no game start ----------------------------------------
         ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
         ResetQueueCounters();
         ZeroEngineHotkeys();
@@ -5116,9 +4882,7 @@ static void SessionEpochTests(void) {
               ScFanoutShadowCount(), 12);
     }
 
-    // -----------------------------------------------------------------------
-    // #67 items 2, 3 and 4: the deferred plan, the shadow/accumulator, the version.
-    // -----------------------------------------------------------------------
+    // The deferred plan, the shadow/accumulator, and the shadow version.
     printf("\n    #67(2,3) sc_fanout: the shadow list and a deferred plan do not cross\n");
     {
         ScFanoutTestBegin(g_fake, &CaptureEmit, 200);
@@ -5133,8 +4897,8 @@ static void SessionEpochTests(void) {
         Check("  and so is its visible tail", ScFanoutVisibleCount(), 0);
         Check("  one session drop counted", ScFanoutGroupStat(SC_FANOUT_GROUP_SESSION), 1);
 
-        // The plan. A budget small enough that a 36-unit fan-out cannot finish in one
-        // turn is what leaves chunks pending -- the state #67 item 2 is about.
+        // The plan. A budget small enough that a 36-unit fan-out cannot finish in one turn
+        // is what leaves chunks pending.
         ScFanoutTestBegin(g_fake, &CaptureEmit, 60);
         ResetQueueCounters();
         DriveSelection(36);
@@ -5160,9 +4924,8 @@ static void SessionEpochTests(void) {
         int vis = 0; unsigned verA = 0, verB = 0;
         ScFanoutCopyShadow(snap, 64, &vis, &verA);
 
-        // No commit, no selection change, no click -- only a game start. This is the
-        // exact input the counter could not express before, and the reason sc_hudrow
-        // kept the previous game's page.
+        // No commit, no selection change, no click -- only a game start. A commit counter
+        // cannot express this input, which is how sc_hudrow keeps the previous game's page.
         ScSessionTestNewGame();
         int n = ScFanoutCopyShadow(snap, 64, &vis, &verB);
         Check("the list handed to the HUD row is empty", n, 0);
@@ -5170,10 +4933,8 @@ static void SessionEpochTests(void) {
               verB != verA ? 1 : 0, 1);
     }
 
-    // -----------------------------------------------------------------------
-    // #67 item 6: circles. The ordering case -- the epoch must be tested BEFORE the
-    // CSprite* is dereferenced, because that pointer is a HEAP address.
-    // -----------------------------------------------------------------------
+    // Circles: the ordering case -- the epoch must be tested BEFORE the CSprite* is
+    // dereferenced, because that pointer is a HEAP address.
     printf("\n    #67(6) sc_circles: a circle from another game is ABANDONED, never detached\n");
     {
         MakeUnits(64, 1);
@@ -5210,9 +4971,7 @@ static void SessionEpochTests(void) {
               (long long)g_removeCalls, 3);
     }
 
-    // -----------------------------------------------------------------------
-    // #67 item 4's consumer: the HUD row's page state.
-    // -----------------------------------------------------------------------
+    // The shadow version's consumer: the HUD row's page state.
     printf("\n    #67(4) sc_hudrow: the page and the slot cache do not survive a game\n");
     {
         MakeUnits(64, 1);
@@ -5255,7 +5014,6 @@ static void SessionEpochTests(void) {
 // (a 3-byte imm8 add plus two passengers) is the shape of the fog cell sites,
 // and the cave re-encodes it as add eax,0xA8 with an imm32 that no 5-byte
 // in-place rewrite could hold.
-// ---------------------------------------------------------------------------
 static void CodeCaveTests(void) {
     Part("code caves: a window jumps out to a 32-bit re-encoding and back");
     BYTE* fn = (BYTE*)VirtualAlloc(NULL, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
@@ -5310,14 +5068,12 @@ static void CodeCaveTests(void) {
 }
 
 // ---------------------------------------------------------------------------
-// [24] The shared per-building ledger (sc_ledger.h). sc_prodqueue and sc_upgrades
-// both keep one, and both used to carry their own copy of the lookup and the
-// removal. Those two are driven here directly, on a record type that exists only
-// in this file, because the interesting case is not reachable through either
-// module's own API: DROPPING THE LAST RECORD makes ScLedgerDropAt assign an
-// element to itself. It falls out correctly rather than being special-cased,
-// which is the kind of thing that stays correct only while something watches it.
-// ---------------------------------------------------------------------------
+// [24] The shared per-building ledger (sc_ledger.h), which sc_prodqueue and sc_upgrades
+// both keep. Lookup and removal are driven here directly, on a record type that exists
+// only in this file, because the interesting case is not reachable through either
+// module's own API: DROPPING THE LAST RECORD makes ScLedgerDropAt assign an element to
+// itself. It falls out correctly rather than being special-cased, which is the kind of
+// thing that stays correct only while something watches it.
 struct LedgerFake {
     DWORD unit;
     int   count;
@@ -5380,13 +5136,12 @@ int main(void) {
     // process and the crash looks like it happened at the end of the previous part.
     setvbuf(stdout, NULL, _IONBF, 0);
 
-    // PER PROCESS, not one path for the whole machine. Every worktree used to write
-    // %TEMP%\scplugin-hooktest.log, so two workers running run-ci-local.ps1 at the same
-    // time fought over one file -- task 030 saw the hooktest gate fail once and pass on a
-    // re-run at the SAME commit, which is the worst possible shape for a gate: it makes a
-    // real failure indistinguishable from a collision. A caller that wants the log
-    // somewhere specific can still set SCPLUGIN_LOG itself; this only fills in a default
-    // that cannot collide.
+    // PER PROCESS, not one path for the whole machine. A single %TEMP%\scplugin-hooktest.log
+    // lets two workers running run-ci-local.ps1 at the same time fight over one file, and a
+    // gate that fails once then passes on a re-run at the SAME commit is the worst shape a
+    // gate can have: a real failure is indistinguishable from a collision. A caller that
+    // wants the log somewhere specific can still set SCPLUGIN_LOG; this only fills in a
+    // default that cannot collide.
     char tmp[MAX_PATH];
     if (GetEnvironmentVariableA("SCPLUGIN_LOG", tmp, MAX_PATH) == 0) {
         char dir[MAX_PATH];
@@ -5471,23 +5226,16 @@ int main(void) {
     Check("no detour ran after removal (std)",   g_stdCalls - stdBefore, 0);
     Check("no detour ran after removal (mixed)", g_mixedCalls - mixedBefore, 0);
 
-    // THIS ORDER IS THE PART NUMBERING (issue #35). Part() numbers by the order these
-    // run, so the list below is the only place a number is decided -- and it is ordered
-    // to reproduce the numbers research/ already cites ([8] selection circles, [11]
-    // shadow control groups, [12] the exit log, [16] the status strip, ...) rather than
-    // to renumber six parts and quietly falsify a dozen citations.
+    // THIS ORDER IS THE PART NUMBERING. Part() numbers by the order these run, so the list
+    // below is the only place a number is decided -- ordered to reproduce the numbers
+    // research/ already cites ([8] selection circles, [11] shadow control groups, [12] the
+    // exit log, [16] the status strip, ...) rather than to renumber parts and quietly
+    // falsify a dozen citations -- research/control-groups.md alone names `hooktest part
+    // [11]` four times.
     //
-    // ADD NEW PARTS AT THE END. That is the whole mechanism: the next number is
-    // whatever the previous one was plus one, nobody claims it, and two branches adding
-    // a part each end up with different numbers however they merge.
-    //
-    // [19] and [20] ARE THAT MECHANISM'S FIRST LIVE TEST. Tasks 033 and 036 merged while
-    // this branch was in flight, each hand-numbering a new part: 033 wrote [19] for the
-    // queue indicator, 036 wrote [20] for building-group parity -- and 036's ran BEFORE
-    // 033's, so on main the parts printed 20 then 19. They did not collide this time; the
-    // numbers were simply already lying about the order. Ordered here so the derived
-    // numbers match the ones each branch published, and both headers converted to Part(),
-    // which is what the numbers now come from.
+    // ADD NEW PARTS AT THE END. That is the whole mechanism: the next number is whatever the
+    // previous one was plus one, nobody claims it, and two branches adding a part each end
+    // up with different numbers however they merge.
     FanoutCoreTests();       // [7]
     CircleTests();           // [8]
     OpcodePolicyTests();     // [9]
@@ -5500,10 +5248,10 @@ int main(void) {
     StatusStripTests();      // [16]
     UpgradeQueueTests();     // [17]
     ProdFanTests();          // [18]
-    QueueIndTests();         // [19]  task 033
-    BuildingParityTests();   // [20]  task 036
-    UpgQueueIndTests();      // [21]  task 037
-    SessionEpochTests();     // [22]  task 054
+    QueueIndTests();         // [19]
+    BuildingParityTests();   // [20]
+    UpgQueueIndTests();      // [21]
+    SessionEpochTests();     // [22]
     CodeCaveTests();         // [23]  1280 wide
     LedgerTests();           // [24]  the shared per-building ledger
 

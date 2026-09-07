@@ -1,11 +1,6 @@
-// sc_unit.h -- the reads of a CUnit and of the dialog tree that every module makes.
-//
-// Six modules independently grew the same handful of helpers: is this pointer a real
-// unit array slot, is that unit still linked into its player's list, how long is its
-// build queue, walk the dialog's children. They were copied rather than shared for the
-// same branch-rebase reason sc_engine.h describes; the bodies were identical, and where
-// they were not the difference was an accident rather than a decision (sc_hudrow's list
-// walk skipped the per-link bounds check its four siblings all made).
+// sc_unit.h -- the reads of a CUnit and of the dialog tree that every module makes: is
+// this pointer a real unit array slot, is that unit still linked into its player's list,
+// how long is its build queue, walk the dialog's children.
 //
 // Everything here is a small, stateless read through sc_engine.h's relocation layer, so
 // it is header-only: `static inline`, no sc_unit.cpp, nothing to add to a build list.
@@ -25,9 +20,8 @@
 
 // Is this a pointer to a real slot of the unit array? The array is a fixed 1700-entry
 // global, so a valid CUnit* is exactly an in-range, correctly-strided offset from its
-// base. EVERY dereference of a unit pointer the game handed us is gated on this --
-// including each link of the list walks below -- because a bad one would otherwise be
-// dereferenced inside the game's own thread.
+// base. EVERY dereference of a unit pointer the game handed us is gated on this -- each
+// link of the list walks below included -- or a bad one faults inside the game's thread.
 static inline bool ScUnitPtrValid(DWORD unit) {
     if (!unit) return false;
     DWORD arrayBase = ScRuntimeVa(SC_VA_UNIT_ARRAY_BASE);
@@ -37,9 +31,8 @@ static inline bool ScUnitPtrValid(DWORD unit) {
     return (off / SC_CUNIT_SIZE + 1) <= SC_MAX_UNIT_INDEX;   // the wire index is 1-based
 }
 
-// index+uniqueness packed exactly as CMDACT_Select / the Right Click builder / the
-// Targeted Order builder all do it. 0 for anything out of range, which is what the
-// engine encodes too.
+// index+uniqueness packed exactly as CMDACT_Select and the Right Click / Targeted Order
+// builders do it; 0 for anything out of range, which is what the engine encodes too.
 static inline WORD ScUnitTag(DWORD unit) {
     if (!ScUnitPtrValid(unit)) return 0;
     DWORD index = (unit - ScRuntimeVa(SC_VA_UNIT_ARRAY_BASE)) / SC_CUNIT_SIZE + 1;
@@ -47,16 +40,14 @@ static inline WORD ScUnitTag(DWORD unit) {
     return (WORD)(((WORD)uniq << 11) | (WORD)index);
 }
 
-// Reachable from playerUnitList[player] via CUnit+0x6C? A unit in play is linked in
-// there by the unit (re)init 0x004A0320 and UNLINKED by the removal path 0x004A0740
-// (sc_addresses.h, SC_VA_PLAYER_UNIT_LIST, hud-selection-row.md 6.1). So a unit that
-// is NOT reachable has been removed -- killed-and-not-recycled, trigger RemoveUnit,
-// archon-consumed -- whichever path dropped it. Transport-loaded and mind-controlled
-// units stay linked and read as reachable, which is correct: they are live,
-// identity-correct units.
-//
-// Every link is bounds/stride-validated before it is followed and the walk is
-// bounded, so a torn or corrupt list fails closed rather than faulting or hanging.
+// Reachable from playerUnitList[player] via CUnit+0x6C? Unit (re)init 0x004A0320 links a
+// unit in play there and removal 0x004A0740 unlinks it (sc_addresses.h,
+// SC_VA_PLAYER_UNIT_LIST, hud-selection-row.md 6.1), so a unit that is NOT reachable has
+// been removed, whichever path dropped it. Transport-loaded and mind-controlled units
+// stay linked and read as reachable, which is correct: they are live, identity-correct
+// units.
+// Every link is bounds/stride-validated before it is followed and the walk is bounded, so
+// a torn or corrupt list fails closed rather than faulting or hanging.
 static inline bool ScUnitInPlayerList(DWORD unit, BYTE player) {
     if (player >= SC_MAX_PLAYERS) return false;
     DWORD head = *(DWORD*)(ScRuntimeVa(SC_VA_PLAYER_UNIT_LIST) + (DWORD)player * 4);
@@ -69,23 +60,21 @@ static inline bool ScUnitInPlayerList(DWORD unit, BYTE player) {
     return false;
 }
 
-// The same question asked of the unit's OWN player, read out of the unit.
 static inline bool ScUnitInOwnPlayerList(DWORD unit) {
     if (!ScUnitPtrValid(unit)) return false;
     return ScUnitInPlayerList(unit, *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER));
 }
 
-// The three fields every module reads off a unit it has already validated. Named
-// rather than spelled out as a cast at each site, because `*(BYTE*)(u + 0xA5)` is
-// where a wrong offset hides.
+// Fields of an already-validated unit. Named rather than spelled out as a cast at each
+// site, because `*(BYTE*)(u + 0xA5)` is where a wrong offset hides.
 static inline BYTE  ScUnitUniqueness(DWORD unit) { return *(BYTE*)(unit + SC_CUNIT_OFF_UNIQUENESS); }
 static inline BYTE  ScUnitPlayer(DWORD unit)     { return *(BYTE*)(unit + SC_CUNIT_OFF_PLAYER); }
 static inline DWORD ScUnitHitPoints(DWORD unit)  { return *(DWORD*)(unit + SC_CUNIT_OFF_HITPOINTS); }
 static inline DWORD ScUnitSprite(DWORD unit)     { return *(DWORD*)(unit + SC_CUNIT_OFF_SPRITE); }
 
 // The one unit this player has selected, or 0 -- 0 for an empty selection AND for a
-// selection of two or more, because every caller of this is asking "is there exactly one
-// building to talk about".
+// selection of two or more, because every caller asks "is there exactly one building to
+// talk about".
 static inline DWORD ScSoleSelectedUnit(void) {
     DWORD player = *(DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_ID);
     if (player >= SC_MAX_PLAYERS) return 0;
@@ -96,14 +85,11 @@ static inline DWORD ScSoleSelectedUnit(void) {
 }
 
 // Is the building a plugin record was written against still THAT building, alive?
-//
 // Four terms, and each catches something the others miss: the pointer must still be a
 // unit-array slot, the slot must not have been recycled (CUnit+0xA5), it must not have
 // changed hands, and it must not be a damage death (hitpoints 0, which 0xA5 does not
-// catch -- research/selection-circles.md 4.5). `deep` adds the list walk, which is the
-// only term that sees a removal with no damage and no recycle; without it this is four
-// loads. sc_prodqueue and sc_upgrades both hold per-building ledgers and both ask
-// exactly this before touching one.
+// catch -- research/selection-circles.md 4.5). `deep` adds the list walk, the only term
+// that sees a removal with no damage and no recycle; without it this is four loads.
 static inline bool ScUnitRecordLive(DWORD unit, BYTE uniqueness, BYTE player, bool deep) {
     if (!ScUnitPtrValid(unit)) return false;
     if (ScUnitUniqueness(unit) != uniqueness) return false;
@@ -125,9 +111,9 @@ static inline void ScUnitSetQueueSlot(DWORD unit, int slot, WORD type) {
     *(WORD*)(unit + SC_CUNIT_OFF_BUILD_QUEUE + (DWORD)slot * 2) = type;
 }
 
-// The occupied-slot count. `0xE4` is the empty sentinel and every engine reader tests
-// against it (research/production-queue.md 2.4). The plugin's own overflow is NOT
-// counted here -- that is the whole point of the two numbers.
+// The occupied-slot count. `0xE4` is the empty sentinel every engine reader tests against
+// (research/production-queue.md 2.4). The plugin's own overflow is deliberately NOT
+// counted here: the engine's five slots and the plugin's queue stay two separate numbers.
 static inline int ScUnitQueueLength(DWORD unit) {
     int n = 0;
     for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) {
@@ -183,8 +169,7 @@ static inline short* ScDlgBounds(DWORD ctrl) { return (short*)(ctrl + SC_BINDLG_
 // Fill a plugin-owned control record so the engine treats it as one of its own LSTATIC
 // labels: our flags, our (negative, binder-proof) id, the engine's own interact/update
 // handlers for the type, and the parent it is about to be linked to. NOT visible -- a
-// control that arrives visible is painted by the very next redraw walk, with an empty
-// rect nobody has measured yet.
+// control that arrives visible is painted by the next redraw walk with an unmeasured rect.
 static inline void ScDlgMakeStaticText(DWORD ctrl, DWORD root, short id, const char* text,
                                        DWORD interact, DWORD update) {
     *(DWORD*)(ctrl + SC_BINDLG_OFF_FLAGS)    = SC_CTRL_FONT_SMALLEST;
@@ -200,8 +185,7 @@ static inline void ScDlgMakeStaticText(DWORD ctrl, DWORD root, short id, const c
 // Append `ctrl` to `root`'s child chain. false means the chain did not terminate within
 // SC_MAX_CTRLS_WALK links and NOTHING was written: the walk is bounded like every other
 // walk over a list the game thread owns, so a torn `next` costs one refused splice
-// rather than a spin on that thread. The caller logs the refusal -- each module says it
-// with its own tag and counts it in its own stats.
+// rather than a spin on that thread.
 static inline bool ScDlgAppendChild(DWORD root, DWORD ctrl) {
     DWORD tail = ScDlgChild(root);
     if (!tail) {
@@ -216,10 +200,9 @@ static inline bool ScDlgAppendChild(DWORD root, DWORD ctrl) {
 }
 
 // The engine's own default interact/update handler for a control type, out of the two
-// tables it dispatches through. Both are non-zero on a build that really draws the type
-// -- a null in either is the evidence that this build does not dispatch it the way the
-// table dump says, and both callers refuse to splice rather than hand the dialog a
-// control it cannot draw.
+// tables it dispatches through. Both are non-zero on a build that really draws the type;
+// a null in either is evidence that this build does not dispatch it the way the table
+// dump says, and both callers refuse to splice rather than hand over an undrawable one.
 static inline void ScDlgDefaultHandlers(int ctrlType, DWORD* interact, DWORD* update) {
     *interact = *(DWORD*)(ScRuntimeVa(SC_VA_DEFAULT_INTERACT_TABLE) + (DWORD)ctrlType * 4);
     *update   = *(DWORD*)(ScRuntimeVa(SC_VA_DEFAULT_UPDATE_TABLE)   + (DWORD)ctrlType * 4);
@@ -227,8 +210,7 @@ static inline void ScDlgDefaultHandlers(int ctrlType, DWORD* interact, DWORD* up
 
 // Unlink a control we spliced in. Every link is probed before it is followed: this runs
 // on the detach path, where the dialog may already be gone. A control that is not in the
-// chain is left alone, which is why there is no return value to check -- there is nothing
-// a caller could do differently.
+// chain is left alone -- no return value, because a caller could do nothing differently.
 static inline void ScDlgRemoveChild(DWORD root, DWORD ctrl) {
     DWORD* link = (DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD);
     while (*link && *link != ctrl) {
@@ -238,8 +220,8 @@ static inline void ScDlgRemoveChild(DWORD root, DWORD ctrl) {
     if (*link == ctrl) *link = ScDlgNext(ctrl);
 }
 
-// The engine's five ring slots as "0x000,0x0E4,..." for a log line. Truncates rather
-// than overruns; returns the characters written.
+// The engine's five ring slots as "0x000,0x0E4,..." for a log line; truncates rather than
+// overruns the caller's buffer.
 static inline int ScUnitFormatQueue(DWORD unit, char* out, int outLen) {
     int used = 0;
     out[0] = '\0';
@@ -252,8 +234,7 @@ static inline int ScUnitFormatQueue(DWORD unit, char* out, int outLen) {
 
 // CreateNewUnitSelections (0x0049AE40): EAX = the CUnit* list, count PUSHED. The count is
 // a memory operand rather than a register because the callee reads it ESP-relative, and
-// an ESP-relative operand would be four bytes off if GCC had spilled it. sc_fanout wraps
-// this with a test seam; sc_console calls it directly.
+// an ESP-relative operand would be four bytes off if GCC had spilled it.
 static inline void ScCreateSelections(DWORD* list, int count) {
     void* fn = ScRuntimeAddr(SC_VA_CREATE_NEW_UNIT_SELECTIONS);
     __asm__ __volatile__("pushl %[n]\n\t"
@@ -272,15 +253,10 @@ static inline DWORD ScPortraitUnit(void) { return *(DWORD*)ScRuntimeAddr(SC_VA_A
 // 0x004186A0 / 0x00418700 take the control in ESI (GPTP unit_stat_selection.cpp
 // helpers; our decompile of 0x00425960 shows the same register use) and 0x0041C400
 // takes it in EAX. VC6 callee-saved rules preserve EBX/ESI/EDI across the call.
-//
-// The modules that hook these keep their own one-line wrapper, because each has a test
-// seam that stands in for the engine offline. What was copied is the asm, and that is
-// what lives here.
 // ---------------------------------------------------------------------------
 
-// A test stand-in for one of the three primitives below. sc_hudrow and sc_queueind each
-// install their own offline, and each used to carry the same three-line wrapper that
-// picks between the stand-in and the engine.
+// A test stand-in for one of the three primitives below, so a module's own logic can run
+// with no engine under it.
 typedef void (*ScCtrlFn)(DWORD ctrl);
 
 static inline void ScCtrlShow(DWORD ctrl) {

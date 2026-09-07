@@ -1,57 +1,15 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Task 070. Drives a REAL game for minutes on the assembled widescreen build --
-stage 2 + fog (renderer_patch_sites.py, 068's table) presented through cnc-ddraw
-(065's FOLLOW vector) -- and measures the things a frozen frame cannot:
-scrolling across sub-tile origins, clicks past x=640, selection, commands,
-minimap navigation, HUD placement, and stability over time.
+Drives a REAL game for minutes on the assembled widescreen build and measures
+what a frozen frame cannot: scrolling across sub-tile origins, clicks past
+x=640, selection, commands, minimap navigation, HUD placement, stability.
 
 .DESCRIPTION
-Every capture this project took before this suite was a frozen frame, and the
-presentation joint (cnc-ddraw) had only ever been measured at the MENU (065).
-This suite is the first time the assembled combination -- engine patched to
-800x480 with correct fog, cnc-ddraw presenting all 800 columns -- is driven
-in game.
-
-What it asserts, and with which oracle (never pixels -- AGENTS.md "Read a
-dialog's CONTENT from memory"):
-
-  - WIDESCREEN ACTIVE, 0 refused, whole stage (plugin's own install verdict;
-    a refused table runs stock and everything below passes vacuously).
-  - The in-game client area is 800x480 THROUGH cnc-ddraw (GetClientRect).
-  - Frame dumps read 800x480, settled, at every camera stop (FRAMEDUMP header).
-  - CLICK-SELECT: a posted click at screen x>640 selects exactly the unit whose
-    engine position (WORLD scan) predicted that screen point -- the engine's own
-    clientSelectionGroup (SELSNAP) is the oracle, cross-referenced by CUnit
-    pointer. A control click at x<640 proves the instrument first.
-  - DRAG-SELECT across the 640 seam: the box's selection contains the aimed
-    units on BOTH sides of x=640.
-  - COMMAND at x>640: a right-click move order moves the selected units' own
-    engine positions toward the point (position delta, not bookkeeping).
-  - SCROLL: held arrow keys stop the camera at several sub-tile origins
-    (x%32 != 0); at every stop the fog seam tooth holds (no zero-column run
-    intersecting x=660..700 unless the map-anchored exploration edge sits
-    there, which is computed and excluded per capture).
-  - MINIMAP: a minimap click moves the camera to the commanded origin (SCREEN
-    scan), with the stock 640-era minimap geometry (Get-ScMinimapPoint).
-  - HUD PLACEMENT: the engine's own dialog list (DIALOGS) is logged in game at
-    800 wide; the console dialog's rect IS the verdict on where the HUD sits.
-  - STABILITY: the session runs at least -MinSessionMinutes of in-game driving;
-    the process stays alive, WORLD scans stay complete, and the final capture
-    still reads 800x480 with the seam tooth holding.
-
-The right MAP EDGE is visited and REPORTED, not asserted: the scroll clamp is
-stock (stage 3 unbuilt, renderer-viewport.md 15.5), so the camera stops 20
-tiles short and the right band there shows whatever the terrain cache holds --
-a KNOWN, documented imperfection this suite records for the user card.
-
-Window PNGs are saved beside every dump for the human (gitignored; paths
-travel, images never -- hard rule 1). No window-vouched consistency check runs
-here: the cnc-ddraw window's caption geometry differs from WMode's (065 14.3)
-and probe-framebuffer-capture already owns that instrument under WMode. The
-dump-internal oracles (geometry, seam, band, cross-capture diff) carry this
-suite.
+Every verdict reads engine memory, never pixels (AGENTS.md § "Oracles: what
+counts as a read-back"). No window-vouched consistency check runs here: the
+cnc-ddraw window's caption geometry differs from WMode's, and
+probe-framebuffer-capture already owns that instrument under WMode.
 
 .EXAMPLE
 ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-widescreen-drive.ps1
@@ -64,21 +22,20 @@ param(
     [string]$FrameDir = 'C:\sc-work\logs\070-frames',
     # The pinned cnc-ddraw (fetch-cnc-ddraw.ps1, sha256-verified at fetch).
     [string]$WindowedHelperDll = 'C:\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll',
-    # Which helper PRESENTS. The engine build is identical either way (stage 2 +
-    # fog, in-process); what differs is the window. 'cnc' is the user's wide
-    # presentation (window 800, and the harness's posted playfield mouse does
-    # NOT register there -- measured, attempts 8-10, see the PR); 'wmode' crops
-    # the window to 640 but posts reach every engine path, so it is the arm
-    # that PROVES the engine's input mapping past x=640 (hit-testing is engine
-    # arithmetic on its own stored coordinates; the presenter never sees it).
+    # Which helper PRESENTS. The engine build is identical either way (the
+    # -WidescreenStage table + fog, in-process); what differs is the window.
+    # 'cnc' is the user's wide presentation (window 800, and the harness's
+    # posted playfield mouse does NOT register there -- measured); 'wmode' crops
+    # it to 640 but posts reach every engine path, so it is the arm that PROVES
+    # the engine's input mapping past x=640 (hit-testing is engine arithmetic on
+    # its own stored coordinates; the presenter never sees it).
     [ValidateSet('cnc', 'wmode')][string]$Presenter = 'cnc',
     # The stability floor: in-game driving keeps going until this much wall
     # clock has passed since the game loaded. The click/scroll/command tests
     # above run inside it, so a passing run IS a driven session of this length.
     [int]$MinSessionMinutes = 3,
-    # Stage 3 is the shipped (Wide) config since task 071; 2 is what this probe
-    # was written against (task 070). The right-map-edge phase's expected clamp
-    # follows this: 25 tiles at stage 3 (scroll.clamp.x.tiles), 20 below.
+    # Stage 3 is the shipped (Wide) config. The right-map-edge phase's expected
+    # clamp follows this: 25 tiles at stage 3 (scroll.clamp.x.tiles), 20 below.
     [ValidateSet('2', '3')][string]$WidescreenStage = '3',
     [switch]$KeepOpen
 )
@@ -118,8 +75,8 @@ $completedDrive = $false
 
 # The map the fixture generator writes: 128x96 tiles, start location centred by
 # the engine at origin (544,416); the marine grid explores to map x ~1332
-# (measured, renderer-viewport.md 16.4). Used to compute the exploration edge
-# per origin so a map-anchored shroud run is never mistaken for the seam.
+# (measured, renderer-viewport.md 16.4). The exploration edge is derived from
+# these per origin, so a map-anchored shroud run is never mistaken for the seam.
 $MAP_TILES_W = 128
 $MAP_TILES_H = 96
 $EXPLORED_EDGE_X = 1332
@@ -139,10 +96,10 @@ function Report-Finding {
 
 # Playfield-input steps assert only where posted input REACHES the playfield.
 # Under cnc-ddraw on the invisible desktop it does not (measured 0/8 across
-# three mechanisms -- a harness limit, AGENTS.md "Glue-screen input is
-# ACTIVATION-GATED"), so there the same steps run and REPORT; under WMode
-# posted coordinates reach every engine path and the steps assert. The
-# readings themselves are identical either way.
+# three mechanisms -- a harness limit, AGENTS.md § "Glue-screen (menu) input
+# under cnc-ddraw"), so there the same steps run and REPORT; under WMode posted
+# coordinates reach every engine path and the steps assert. The readings
+# themselves are identical either way.
 function Assert-Input {
     param([string]$What, [bool]$Ok, [string]$Detail = '')
     if ($Ok -or $Presenter -eq 'wmode') { Assert-True $What $Ok $Detail }
@@ -160,8 +117,6 @@ function Invoke-FrameTool {
     $m
 }
 
-# One captured point: window PNG, marker-driven dump + SCREEN origin, window
-# PNG again. Same shape as probe-framebuffer-capture's, minus the window-vouch.
 function Get-CapturePoint {
     param(
         [Parameter(Mandatory)][IntPtr]$Hwnd,
@@ -196,8 +151,8 @@ function Get-CapturePoint {
     $r
 }
 
-# The engine's twelve, tagged: set a marker, wait for the SELSNAP line carrying
-# that label, return the clientSelectionGroup pointers (upper-case hex, no 0x).
+# The engine's clientSelectionGroup is twelve fixed slots; empty ones read
+# 0x00000000, so they are dropped rather than counted as a selected unit.
 function Get-ScSelectionTagged {
     param([Parameter(Mandatory)][string]$Tag, [int]$TimeoutSec = 10)
     $from = Get-ScLogLineCount -LogPath $log
@@ -214,8 +169,8 @@ function Get-ScSelectionTagged {
 # Assert the dump geometry + the fog seam tooth for one captured point. The
 # tooth excludes the map-anchored exploration edge: at origin O the fixture's
 # explored boundary sits at screen x = EXPLORED_EDGE_X - O, and a zero run
-# there is legitimate shroud, not the 068 seam class (renderer-viewport.md
-# 16.4 measured that edge at three origins and scrollmid).
+# there is legitimate shroud, not a fog seam (renderer-viewport.md 16.4
+# measured that edge at three origins and scrollmid).
 function Assert-WideCapture {
     param([Parameter(Mandatory)]$Pt, [switch]$SkipSeam)
     Assert-True "[$($Pt.Tag)] a dump was written" ($null -ne $Pt.Dump) `
@@ -263,15 +218,13 @@ try {
     if (Test-Path -LiteralPath $markerPath) { Remove-Item -LiteralPath $markerPath -Force }
 
     # The launch: the USER's feature set (deploy.ps1's launcher flags) plus the
-    # assembled widescreen -- stage 2 + fog in-process, cnc-ddraw presenting.
-    # This exact flag combination is what the wide launcher ships.
-    # Task 070: the engine's glue-screen input is ACTIVATION-GATED, and on the
-    # invisible desktop a cnc-ddraw window is never told it is active -- a
-    # posted click at a fully interactive menu registers 0/4 runs without this,
-    # and in 0.4s with it (probe-cnc-clickdelay, arm B). The flag makes every
-    # drive-game input primitive post the activation triple first; real
-    # foreground/focus are untouched. Cleared in finally. WMode needs none of
-    # this (its runs never gate).
+    # assembled widescreen -- the -WidescreenStage table + fog, in-process.
+    # The engine's glue-screen input is ACTIVATION-GATED, and on the invisible
+    # desktop a cnc-ddraw window is never told it is active -- a posted click at
+    # a fully interactive menu registers 0/4 runs without this flag and in 0.4s
+    # with it (AGENTS.md § "Glue-screen (menu) input under cnc-ddraw"). The flag
+    # makes every input primitive post the activation triple first; real
+    # foreground/focus are untouched. Cleared in finally; WMode never gates.
     if ($Presenter -eq 'cnc') { $env:SCDRIVE_POST_ACTIVATE = '1' }
 
     Write-Host "probe-wsdrive: launching (fanout features + stage $WidescreenStage, presenter=$Presenter)"
@@ -293,6 +246,8 @@ try {
     Start-Sleep -Seconds 3
 
     # ---- install verdicts, before anything is driven ----------------------
+    # A refused or partly-filtered table leaves the engine running stock at 640,
+    # where every widescreen assertion below would pass vacuously.
     $wsLines = @(Get-Content -LiteralPath $log | Where-Object { $_ -match 'WIDESCREEN (ACTIVE|INCOMPLETE|REFUSED)' })
     Assert-True 'the widescreen table is ACTIVE with 0 refused' `
         ($wsLines.Count -gt 0 -and $wsLines[0] -match 'WIDESCREEN ACTIVE' -and $wsLines[0] -match ', 0 refused') `
@@ -311,10 +266,10 @@ try {
             ($client.Width -eq 640 -and $client.Height -eq 480) "(got $($client.Width)x$($client.Height))"
     }
 
-    # A marker round-trip proving the plugin's observer is ALIVE. The cnc-ddraw
-    # attempts before this gate existed produced a DETACH mid-menu and every
-    # log-based oracle after it silently read a frozen log; this turns "the log
-    # stopped" into a named failure at the step where it happened.
+    # A marker round-trip proving the plugin's observer is ALIVE. A DLL unloaded
+    # out of the live process leaves every log-based oracle silently reading a
+    # frozen log; this turns "the log stopped" into a named failure at the step
+    # where it happened.
     function Assert-PluginAlive {
         param([Parameter(Mandatory)][string]$Stage)
         $from = Get-ScLogLineCount -LogPath $log
@@ -328,14 +283,12 @@ try {
     }
 
     # ---- menu walk to a loaded game -- every step gated on the ENGINE's own
-    # dialog list, never on sleep guesswork. The first cnc-ddraw attempt clicked
-    # into a menu that was not up yet and every later click landed on the wrong
-    # screen; the fingerprints then "confirmed" a browser walk that never
-    # happened (this run's own lesson).
+    # dialog list, never on sleep guesswork: a click into a menu that is not up
+    # yet lands on the wrong screen, and the fingerprints then "confirm" a walk
+    # that never happened.
     # A menu click that must produce a dialog, retried: the activation gate can
-    # swallow the first click even nudged (measured -- the probe's arm B was
-    # itself a retry after a dead click), so "click, wait for the ENGINE to show
-    # the dialog, click again if it did not" is the resilient form.
+    # swallow the first click even nudged (measured), so "click, wait for the
+    # ENGINE to show the dialog, click again if it did not" is the resilient form.
     function Click-UntilDialog {
         param([int]$X, [int]$Y, [string]$Name, [int]$Tries = 3, [int]$WaitSec = 10)
         for ($i = 1; $i -le $Tries; $i++) {
@@ -359,10 +312,9 @@ try {
     Send-ScClick -Hwnd $h -X 373 -Y 300                       # Expansion
     Start-Sleep -Seconds 1
     Send-ScClick -Hwnd $h -X 75  -Y 111                       # login-profile row
-    # (516,392) OK leaves the Login screen for the campaign RaceSelection
-    # screen; Create (the map browser) only appears after Play Custom
-    # (327,415) THERE. Attempt 7 waited for Create one screen early and
-    # concluded "walk lost" with a perfectly healthy walk.
+    # (516,392) OK leaves Login for the campaign RaceSelection screen; Create
+    # (the map browser) only appears after Play Custom (327,415) THERE --
+    # waiting for Create one screen early reads a healthy walk as lost.
     if (-not (Click-UntilDialog -X 516 -Y 392 -Name 'RaceSelection' -WaitSec 15)) {
         Assert-PluginAlive -Stage 'post-login'     # names WHICH failed: plugin or walk
         throw 'probe-wsdrive: the campaign (RaceSelection) screen never appeared, with the plugin alive -- the walk is lost.'
@@ -385,22 +337,18 @@ try {
     Start-Sleep -Seconds 3
     Assert-PluginAlive -Stage 'in-game'
 
-    # In game, the activation nudge comes OFF for playfield input: attempt 8 ran
-    # the whole session with it on and every playfield click-select returned an
-    # EMPTY selection -- including the x<640 control -- while the minimap
-    # (console dialog) and the scroll keys worked. The activation handler
-    # re-syncs the engine's cursor (the "Foreground" section's measured
-    # raise-destroys-the-posted-position effect), which is a fine price before
-    # a GLUE click and fatal immediately before a playfield button-down. The
-    # glue gate does not exist in-game for WMode and the hypothesis under test
-    # here is that it does not exist for cnc-ddraw either; minimap clicks keep
-    # a nudged RETRY (Click-MinimapVerified) in case the console dialog path
-    # still wants it.
+    # In game the activation nudge comes OFF for playfield input: with it on,
+    # every playfield click-select returns an EMPTY selection -- including the
+    # x<640 control -- while the minimap (console dialog) and scroll keys still
+    # work. The activation handler re-syncs the engine's cursor (AGENTS.md §
+    # "Foreground": raising the window destroys the posted position), a fine
+    # price before a GLUE click and fatal immediately before a playfield
+    # button-down. Minimap clicks keep a nudged RETRY (Click-MinimapVerified)
+    # in case the console dialog path still wants it.
     $env:SCDRIVE_POST_ACTIVATE = '0'
 
     # A minimap click whose effect is VERIFIED against the engine's own origin,
-    # with one nudged retry: attempt 8 saw one minimap click take and another
-    # (same run, same shape) not take.
+    # with one nudged retry: identical minimap clicks in one run do not all take.
     function Click-MinimapVerified {
         param([Parameter(Mandatory)]$Point, [Parameter(Mandatory)][int]$ExpectedOriginX, [Parameter(Mandatory)][string]$Tag)
         Send-ScClick -Hwnd $h -X $Point.X -Y $Point.Y
@@ -425,9 +373,8 @@ try {
                 '--x0', '640', '--x1', "$SCREEN_W", '--y0', '20', '--y1', '320')
         Assert-True 'the right band holds MAP at the start origin (explored; nonzero >= 0.30)' `
             ([double]($b['band_nonzero_frac'] ?? 0) -ge 0.30) "(got $($b['band_nonzero_frac']))"
-        # The console-right strip: ($SCREEN_W-640)x80 at the bottom right that no console
-        # art exists for (15.5 item 3). Reported so the card can say what the
-        # user will actually see there.
+        # No console art exists for the bottom-right ($SCREEN_W-640)x80 strip
+        # (renderer-viewport.md 15.5), so what fills it is reported, not asserted.
         $strip = Invoke-FrameTool -ToolArgs @('band', '--dump', $ptIngame.Dump,
                 '--x0', '640', '--x1', "$SCREEN_W", '--y0', '400', '--y1', '480')
         Report-Finding "console-right strip x=640..$($SCREEN_W - 1) y=400..479: nonzero_frac=$($strip['band_nonzero_frac']) distinct=$($strip['band_distinct']) (blank-by-design region; this is what fills it)"
@@ -573,22 +520,21 @@ try {
     $ptv = Get-CapturePoint -Hwnd $h -Tag 'drive-scroll-v'
     Assert-WideCapture -Pt $ptv
     # The keyboard stepper lands on 16px multiples -- every held-arrow stop
-    # measured at 800 sits at x%32 in {0,16} (068's scrollmid and this suite's
-    # runs, 5 of 5), so ">= 2 distinct nonzero phases" is unsatisfiable and a
-    # single sub-tile (x%32=16) stop is what exercises the fog alignment terms.
+    # measured at 800 sits at x%32 in {0,16} (5 of 5 runs), so ">= 2 distinct
+    # nonzero phases" is unsatisfiable; one sub-tile (x%32=16) stop is what
+    # exercises the fog alignment terms.
     Assert-True 'the held-key scrolls stopped at a sub-tile origin (x%32 != 0)' `
         (@($phases.Keys | Where-Object { $_ -ne 0 }).Count -ge 1) `
         "(phases=[$(($phases.Keys | Sort-Object) -join ',')] stops=[$($stops -join ' | ')])"
     $script:completedPhases += 'scroll'
 
     # ---- the right MAP EDGE: the clamp must move with the viewport ---------
-    # Stage 3 moves the camera's scroll clamp from 20 to 25 tiles
-    # (scroll.clamp.x.tiles, issue #113 follow-up, renderer-viewport.md 18.1.4);
-    # at stage 2 it is stock. The ORACLE is the engine's own maximum, read from
-    # memory by the screen scan (SCREEN ... scrollMax=(x,y)), not this script's
-    # arithmetic; the minimap click must then land the camera exactly there.
-    # On the stock clamp this assertion reads scrollMax.x=3456 against 3296 and
-    # FAILS -- that is the pre-fix reading (2026-09-05 baseline run).
+    # Stage 3 puts the camera's scroll clamp at 25 tiles rather than the stock 20
+    # (scroll.clamp.x.tiles, renderer-viewport.md 18.1.4). The ORACLE is the
+    # engine's own maximum, read from memory by the screen scan (SCREEN ...
+    # scrollMax=(x,y)), not this script's arithmetic; the minimap click must then
+    # land the camera exactly there. Against a stock clamp this assertion reads
+    # scrollMax.x=3456 where it wants 3296, and FAILS.
     $viewportTiles = if ($WidescreenStage -eq '3') { 25 } else { 20 }
     $clampOriginX = ($MAP_TILES_W - $viewportTiles) * 32
     $mmEdge = Get-ScMinimapPoint -MapTilesW $MAP_TILES_W -MapTilesH $MAP_TILES_H -TileX ($MAP_TILES_W - 1) -TileY $tileY
@@ -629,11 +575,10 @@ try {
             $pt = Get-CapturePoint -Hwnd $h -Tag "drive-stab$iter"
             Assert-WideCapture -Pt $pt
             if ($pt.Dump) {
-                # The dead strip, WATCHED, not sampled once (conductor,
-                # 2026-08-13): 640..799 x 400..479 -- beside the console,
-                # below the map. Screen-anchored, so it is comparable across
-                # camera moves. A clean black strip is a footnote; flickering
-                # garbage there is what would make the feature feel broken.
+                # The dead strip beside the console and below the map is
+                # WATCHED, not sampled once: it is screen-anchored, so samples
+                # stay comparable across camera moves, and flickering garbage
+                # there is what would make the feature feel broken.
                 $ss = Invoke-FrameTool -ToolArgs @('band', '--dump', $pt.Dump,
                         '--x0', '640', '--x1', "$SCREEN_W", '--y0', '400', '--y1', '480')
                 $script:stripSamples += "iter${iter}: nonzero=$($ss['band_nonzero_frac']) distinct=$($ss['band_distinct'])"
@@ -655,9 +600,8 @@ try {
     $ptFinal = Get-CapturePoint -Hwnd $h -Tag 'drive-final'
     Assert-WideCapture -Pt $ptFinal
     if ($ptIngame.Dump -and $ptFinal.Dump) {
-        # The strip across the WHOLE session, first in-game dump vs last:
-        # screen-anchored region, so any difference is content changing in
-        # the strip itself, not the camera moving under it.
+        # First in-game dump vs last: the region is screen-anchored, so a
+        # difference is the strip's own content changing, not the camera.
         $sf = Invoke-FrameTool -ToolArgs @('band', '--dump', $ptFinal.Dump,
                 '--x0', '640', '--x1', "$SCREEN_W", '--y0', '400', '--y1', '480')
         $script:stripSamples += "final: nonzero=$($sf['band_nonzero_frac']) distinct=$($sf['band_distinct'])"
@@ -687,7 +631,7 @@ finally {
     # -NoLaunchLock is REQUIRED here: this suite still holds the launch lock, and
     # run-with-plugin takes the same lock for -RemoveWindowed (it mutates the shared
     # game dir) -- without the flag this finally deadlocks on its own suite's lock
-    # for the lock's whole 5-minute timeout (measured, this task's diag run).
+    # for the lock's whole 5-minute timeout (measured).
     try {
         & (Join-Path $scriptDir 'run-with-plugin.ps1') -RemoveWindowed -NoLaunch -NoLaunchLock -GameDir $GameDir | Write-Host
     }
@@ -708,8 +652,8 @@ if ($script:findings.Count) {
     $script:findings | ForEach-Object { Write-Host "  - $_" }
 }
 Write-Host ''
-# 041's structural rule: a verdict that does not depend on reaching the end of
-# the work is not a verdict. PASS requires the drive to have COMPLETED.
+# A verdict that does not depend on reaching the end of the work is not a
+# verdict: PASS requires the drive to have COMPLETED.
 if (-not $completedDrive) {
     Write-Host "probe-wsdrive: INCOMPLETE -- the driven session did not run to its end (phases done: $($script:completedPhases -join ', ')); $script:failures failure(s) so far"
     exit 1

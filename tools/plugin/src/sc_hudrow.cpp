@@ -1,21 +1,18 @@
 // sc_hudrow.cpp -- see sc_hudrow.h.
 //
 // PAGE MODEL. The shadow list arrives from sc_fanout ordered overflow-first,
-// visible-last. The DISPLAY list reorders it live-visible-first, then live
-// overflow -- so page 1 is always the engine's own <=12 units (the conductor's
-// rule: the engine's truth is one flip away, and a selection change snaps back to
-// it). Liveness is HP>0 plus a uniqueness match (UnitAlive) -- NOT uniqueness
-// alone, which death does not change (selection-circles.md 4.5) -- so a dead unit
-// is dropped from the display list on the next dispatch and never shown, or
-// clickable, for more than that one frame.
+// visible-last. The DISPLAY list reorders it live-visible-first, then live overflow,
+// so page 1 is always the engine's own <=12 units and a selection change snaps back
+// to it. Liveness is HP>0 plus a uniqueness match (UnitAlive), NOT uniqueness alone,
+// which death does not change (selection-circles.md 4.5): a dead unit leaves the
+// display list on the next dispatch, never shown or clickable for longer than a frame.
 //
-// WHAT THE ENGINE SEES. While a page is displayed, the only game state this module
-// has written is: the 12 buttons' statUser records (the exact bytes the engine's
-// own layout function writes), the buttons' interact POINTERS (control+0x2A, data
-// in the dialog heap -- restored on the way back to stock), the dirty/all-hidden
-// bytes the engine's own click handlers also write, and one spliced text control
-// whose handlers are the engine's own per-type defaults. Sprites are never touched
-// -- there is no path from here to CSprite::selectionIndex or flag 0x08.
+// WHAT THE ENGINE SEES while a page is displayed: the 12 buttons' statUser records
+// (the bytes the engine's own layout function writes), their interact POINTERS
+// (control+0x2A, restored on the way back to stock), the dirty/all-hidden bytes the
+// engine's own click handlers also write, and one spliced text control using the
+// engine's per-type default handlers. Sprites are never touched -- there is no path
+// from here to CSprite::selectionIndex or flag 0x08.
 
 #include <windows.h>
 #include <stdio.h>
@@ -52,20 +49,18 @@ static int          g_vis = 0;
 static unsigned     g_ver = 0;
 static bool         g_verValid = false;
 
-// The display list: live visible units first, then live overflow.
 static DWORD g_disp[HUD_MAX];
 static int   g_dispN     = 0;
 static int   g_page      = 0;
 static int   g_pageCount = 1;
 static bool  g_flipPending = false;
 
-// Latched when our shadow list diverges from the engine's own selection with NO
-// new commit behind it -- an engine-side removal (transport load, mind control,
-// archon merge, trigger RemoveUnit) that sc_fanout's version counter never saw, or
-// a click the gate rejected. While latched the row HANDS BACK TO STOCK and does not
-// page, so the engine shows its own truth (removed units gone by construction) and
-// there is no per-frame churn. Cleared only by the next real selection commit (a
-// version bump), which rebuilds a consistent shadow.
+// Latched when our shadow list diverges from the engine's own selection with NO new
+// commit behind it -- an engine-side removal (transport load, mind control, archon
+// merge, trigger RemoveUnit) that sc_fanout's version counter never saw, or a click
+// the gate rejected. While latched the row HANDS BACK TO STOCK and does not page, so
+// the engine shows its own truth with no per-frame churn. Cleared only by the next
+// selection commit (a version bump), which rebuilds a consistent shadow.
 static bool  g_diverged = false;
 
 // What the 12 buttons currently show, for the cond drift check.
@@ -91,14 +86,10 @@ static bool  g_rectsLogged = false;
 // and the box is SC_QIND_BOX_H tall, so 270*16 is the most this can ever need.
 #define SC_HUD_BAND_MAX 4352
 
-// `clean` is that rect with none of our line on it; `inked` is the same rect a frame AFTER
-// the text was shown -- i.e. once the redraw walk that paints it has run. The bytes where the
-// two differ are the ones our text owns, and that mask is what makes both of this module's
-// screen-level readings honest:
-//   * how many of the band's bytes differ from `clean` right now  -> did the engine draw it;
-//   * how many of the masked bytes still hold the `inked` value after the row has handed back
-//     to stock                                                    -> did anything strand.
-// Neither is an ink count, and that is the point. See LogReadback.
+// `clean` is that rect with none of our line on it; `inked` is the same rect once the redraw
+// walk that paints the text has run. The bytes where the two differ are the ones our text
+// owns, and that mask is what makes both of this module's screen-level readings honest
+// (BandDiff, BandStranded). Neither is an ink count, and that is the point -- see LogReadback.
 static BYTE  g_bandClean[SC_HUD_BAND_MAX];
 static BYTE  g_bandInked[SC_HUD_BAND_MAX];
 static BYTE  g_bandCand[SC_HUD_BAND_MAX];      // "has it stopped changing yet" candidate
@@ -116,38 +107,33 @@ static bool  g_bandPending  = false;           // a hand-back is waiting to be m
 static unsigned g_statSuppressed = 0;          // calls the band refused to hold the line
 static unsigned g_statEpisodes   = 0;          // times the row ENTERED paged mode -- COVERAGE
 
-// THE PAINT-LATENCY DIAGNOSTIC, and it is deliberately a pair rather than a bare count.
-// A raw "dispatcher calls" total is a number nobody can check: this detour runs tens of
-// thousands of times a second, so a seven-digit figure is indistinguishable from a global
-// tick read by mistake or from uninitialised memory -- and AGENTS.md (task 030) is explicit
-// that a wrong number in a log is worse than no number, because you will reason from it. So
-// the only place a call count is reported is DIVIDED BY ITS OWN ELAPSED MILLISECONDS, once,
-// at the moment the inked copy lands: `after N calls / M ms` is self-checking arithmetic, and
-// it is also the exact evidence for why the band copies are gated on a clock instead of on
-// call counts.
+// THE PAINT-LATENCY DIAGNOSTIC, a pair rather than a bare count. This detour runs tens
+// of thousands of times a second, so a seven-digit "dispatcher calls" total is
+// indistinguishable from a global tick read by mistake, and a wrong number in a log is
+// worse than no number because a reader reasons from it (AGENTS.md § "Diagnostics and
+// reporting"). The one call count reported is DIVIDED BY ITS OWN ELAPSED MILLISECONDS at
+// the moment the inked copy lands: `N calls / M ms` is self-checking arithmetic, and it is
+// the evidence for gating the band copies on a clock rather than on call counts.
 static unsigned g_showCalls  = 0;              // paged calls since the last show
 static DWORD    g_showTick   = 0;
 static bool     g_inkedLogged = false;         // that pair is worth one line per run
 
-// HOW LONG THE SURFACE IS GIVEN TO SETTLE, in milliseconds, and why this is a CLOCK and not a
-// count of dispatcher calls. The first version of this counted calls -- "take the copy one
-// call after the one that asked for the fill" -- on the assumption that the detour runs once
-// per rendered frame. IT DOES NOT: measured in one 40-second run of test-hud-row, this module
-// took 1,659,828 paged calls and 20,681,359 stock ones, tens of thousands per second, so "the
-// next call" is almost always THE SAME painted frame. The copy came out identical to the one
-// before it and the glyph mask was empty -- and because an empty mask makes `stranded=0`
-// meaningless, the suite said so instead of passing. 100 ms is about six frames at 60 Hz.
+// HOW LONG THE SURFACE IS GIVEN TO SETTLE, in milliseconds, and why this is a CLOCK and not
+// a count of dispatcher calls. Do not gate on "the next dispatcher call": the detour does
+// NOT run once per rendered frame. Measured over one 40-second run, this module took
+// 1,659,828 paged calls and 20,681,359 stock ones -- tens of thousands per second -- so the
+// next call is almost always THE SAME painted frame, the copy comes out identical to the one
+// before it, and the glyph mask is empty. An empty mask makes `stranded=0` meaningless.
+// 100 ms is about six frames at 60 Hz.
 #define SC_HUD_BAND_SETTLE_MS 100
 // And the poll is throttled, because the alternative is copying two kilobytes tens of
 // thousands of times a second on the GAME thread. ~16 ms is GetTickCount's own resolution.
 #define SC_HUD_BAND_POLL_MS   16
 
-// Both are overridable through the test seam ONLY, and the offline test sets them to zero.
-// It has no engine and no real clock between its frames: its paint model runs synchronously
-// inside the test's own frame function, so a wall-clock window there would measure the test
-// harness rather than anything about this module. The SEQUENCE the windows exist to enforce
-// -- copy, see it unchanged, only then trust it -- still runs at zero, because it takes two
-// polls either way.
+// Both are overridable through the test seam ONLY, and the offline test sets them to zero:
+// it has no engine and no real clock between frames, so a wall-clock window there would
+// measure the harness rather than this module. The SEQUENCE the windows enforce -- copy, see
+// it unchanged, only then trust it -- still holds at zero, because it takes two polls.
 static int g_bandSettleMs = SC_HUD_BAND_SETTLE_MS;
 static int g_bandPollMs   = SC_HUD_BAND_POLL_MS;
 
@@ -186,39 +172,28 @@ static void CallOrigDispatch(void) {
 
 // Is this still the same, LIVING unit it was at capture?
 //
-// Two independent things can invalidate a captured unit, and CUnit+0xA5 alone
-// catches only ONE of them. research/selection-circles.md 4.5 (task 014,
-// byte-level verified) proves 0xA5 is bumped by slot REUSE (0x004A0320, unit
-// (re)init) and NOT by death -- death runs 0x004A0740 without touching it. So:
-//
-//   * uniqueness mismatch  -> the slot was recycled into a different unit;
-//   * hitpoints == 0        -> a DAMAGE death (its slot may not be reused yet, so
-//                              0xA5 still matches -- the case 0xA5 misses).
-//
-// hitpoints is CUnit+0x08, which the engine's DAMAGE primitive 0x004797B0 drives to
-// 0 on a kill (research/command-opcodes.md 6), so a damage-killed unit reads 0 here
-// one frame before its slot recycles. This term covers damage deaths only; the
-// OTHER removal paths (transport load, mind control, archon merge, trigger
-// RemoveUnit) leave HP and 0xA5 untouched and are handled structurally, not here --
-// the divergence latch hands the row to stock when the engine's visible selection
-// diverges (ScHudRowOnDispatch), and the click gate (ClickUnitValid) refuses any
-// clicked unit that is no longer in its player's unit list.
+// Two independent things can invalidate a captured unit and CUnit+0xA5 alone catches
+// only ONE: research/selection-circles.md 4.5 (byte-level verified) proves 0xA5 is
+// bumped by slot REUSE (0x004A0320, unit (re)init) and NOT by death, which runs
+// 0x004A0740 without touching it. So a uniqueness mismatch means the slot was recycled,
+// and hitpoints == 0 (CUnit+0x08, driven to 0 by the DAMAGE primitive 0x004797B0 --
+// research/command-opcodes.md 6) catches a damage death whose slot is not reused yet.
+// The OTHER removal paths (transport load, mind control, archon merge, trigger
+// RemoveUnit) leave HP and 0xA5 untouched and are handled structurally instead: the
+// divergence latch (ScHudRowOnDispatch) and the click gate (ClickUnitValid).
 static bool UnitAlive(const ScShadowInfo* u) {
     if (!u->unit) return false;
     if (ScUnitUniqueness(u->unit) != u->uniqueness) return false;
     return ScUnitHitPoints(u->unit) != 0;
 }
 
-// Is a clicked wireframe unit safe to hand to the engine's Select? It must be a
-// unit we are currently displaying (so we hold its captured uniqueness), NOT
-// recycled (uniqueness match), NOT dead (HP>0), and STILL IN PLAY (reachable in its
-// player's unit list). This closes the DANGEROUS exposure -- a stale/freed CUnit*
-// reaching CMDACT_Select where its tag would pass the receive-side uniqueness check:
-// a removed-from-play unit fails the list check and a recycled slot fails the
-// uniqueness check. Units that pass but are no longer in OUR selection (a loaded or
-// mind-controlled unit) are still live, identity-correct CUnit*s and are harmless to
-// select; the divergence latch separately hands the row to stock when the engine's
-// visible selection changes, so the row never keeps offering them.
+// Is a clicked wireframe unit safe to hand to the engine's Select? It must be one we
+// are currently displaying (so we hold its captured uniqueness), NOT recycled, NOT dead
+// (HP>0), and STILL IN PLAY (reachable in its player's unit list). That closes the
+// DANGEROUS exposure -- a stale/freed CUnit* reaching CMDACT_Select where its tag would
+// pass the receive-side uniqueness check. A unit that passes but has left OUR selection
+// (loaded, mind-controlled) is still a live, identity-correct CUnit* and harmless to
+// select; the divergence latch stops the row from offering it.
 static bool ClickUnitValid(DWORD unit) {
     if (!unit) return false;
     BYTE captured = 0; bool known = false;
@@ -236,9 +211,8 @@ static bool ClickUnitValid(DWORD unit) {
 // ---------------------------------------------------------------------------
 
 // Is this engine-held unit one WE already know to be dead? Death is our own liveness
-// verdict (UnitAlive: uniqueness match + HP > 0) applied to the entry we captured, so a
-// unit we are not tracking counts as live -- it is a genuine difference and must be
-// allowed to diverge.
+// verdict (UnitAlive) applied to the entry we captured, so a unit we are not tracking
+// counts as live -- it is a genuine difference and must be allowed to diverge.
 static bool EngineSlotLive(DWORD unit) {
     for (int i = 0; i < g_n; ++i) {
         if (g_list[i].unit == unit) return g_alive[i] != 0;
@@ -246,24 +220,20 @@ static bool EngineSlotLive(DWORD unit) {
     return true;
 }
 
-// Does the engine's own client selection (clientSelectionGroup, 0x00597208,
-// walked to the sentinel 0x597238) still match the visible tail of our shadow
-// list, as a SET? The engine mutates clientSelectionGroup on death and on some
-// selection edits WITHOUT going through CMDACT_Select (so sc_fanout's version
-// counter would not move); comparing here catches those and snaps us to page 1.
+// Does the engine's own client selection (clientSelectionGroup, 0x00597208, walked to
+// the sentinel 0x597238) still match the visible tail of our shadow list, as a SET? The
+// engine mutates that group on death and on some selection edits WITHOUT going through
+// CMDACT_Select, so sc_fanout's version counter never moves; this catches those.
 //
-// BOTH SIDES ARE FILTERED FOR LIVENESS, and that is the whole point of the function
-// rather than a detail (task 033, from the user's play-test: ">12 selected, some die, the
-// row shows only the survivors"). The engine zeroes hitPoints in its damage primitive
-// 0x004797B0 and clears the unit out of clientSelectionGroup on a LATER path, so for at
-// least one frame a dead unit is still IN the engine's list while our tail has already
-// dropped it. Comparing a live-filtered tail against an unfiltered engine list turned that
-// ordinary one-frame skew into "an engine-side removal", and since the divergence latch is
-// permanent until the next commit, one frame of it stranded the row on stock -- displaying
-// a page of corpses -- for the rest of the selection. Filtering both sides with the SAME
-// liveness test makes an ordinary death cancel out on both sides, and leaves the case the
-// latch actually exists for (a LIVE unit the engine dropped without a commit: transport
-// load, mind control, trigger RemoveUnit) still detected.
+// BOTH SIDES ARE FILTERED FOR LIVENESS, and that is the point of the function rather
+// than a detail. The engine zeroes hitPoints in its damage primitive 0x004797B0 and
+// clears the unit out of clientSelectionGroup on a LATER path, so for at least one
+// frame a dead unit is still IN the engine's list while our tail has dropped it.
+// Comparing a live-filtered tail against an unfiltered engine list reads that ordinary
+// skew as an engine-side removal, and the latch is permanent until the next commit, so
+// one frame of it strands the row on stock -- a page of corpses -- for the rest of the
+// selection. Filtering both sides with the SAME test cancels an ordinary death out and
+// still detects what the latch exists for: a LIVE unit dropped without a commit.
 static bool EngineSelectionMatchesVisible(void) {
     DWORD eng[SC_HUD_BUTTON_COUNT];
     int engN = 0;
@@ -277,7 +247,6 @@ static bool EngineSelectionMatchesVisible(void) {
     int visN = 0;
     for (int i = overflowN; i < g_n; ++i) if (g_alive[i]) ++visN;
     if (visN != engN) return false;
-    // Every engine slot must appear in our (live) visible tail.
     for (int e = 0; e < engN; ++e) {
         bool found = false;
         for (int i = overflowN; i < g_n && !found; ++i) {
@@ -288,21 +257,15 @@ static bool EngineSelectionMatchesVisible(void) {
     return true;
 }
 
-// THE EPOCH TEST (sc_session.h) -- issue #67 item 4's OTHER half, and the reason the
-// version counter alone was never going to be enough.
-//
-// This module's whole page state is derived: the display list, the page number, the
-// slot cache, the divergence latch and the dialog pointers all describe ONE selection
-// in ONE game. Every one of them was invalidated by a single signal -- sc_fanout's
-// `version`, a counter that moves on a selection COMMIT. A load commits nothing, so
-// across it that counter does not move, which this module reads as "same selection"
-// and keeps the previous game's page and list until the player's first click.
-//
-// sc_fanout now bumps that version when the epoch moves, which is sufficient on its
-// own. This is here anyway, and not as belt-and-braces for its own sake: the dialog
-// pointers below belong to a console the new game RE-CREATES, so they have to be
-// dropped on a game change whatever the selection did, and making that depend on
-// another module's counter would be the same mistake one level up.
+// THE EPOCH TEST (sc_session.h). This module's whole page state is derived: the display
+// list, the page number, the slot cache, the divergence latch and the dialog pointers all
+// describe ONE selection in ONE game, and a counter that moves on a selection COMMIT
+// cannot see a game change -- a load commits nothing, so the counter holds still and the
+// previous game's page survives until the player's first click. sc_fanout bumps its
+// version when the epoch moves, which alone is sufficient; this stays because the dialog
+// pointers below belong to a console the new game RE-CREATES and must be dropped on a
+// game change whatever the selection did, and making that depend on another module's
+// counter would be the same mistake one level up.
 static unsigned g_session = 0;
 static unsigned g_statSessionDrop = 0;
 
@@ -323,9 +286,8 @@ static void HudRowSessionSync(void) {
     g_cacheN     = 0;
     g_diverged   = false;
     g_flipPending = false;
-    // The dialog bookkeeping: a new game re-creates the console, so every pointer here
-    // names a control that no longer exists. Re-splicing is what ScHudRowOnDispatch
-    // does when it next sees a dialog it does not recognise.
+    // A new game re-creates the console, so every pointer here names a control that is
+    // gone. ScHudRowOnDispatch re-splices when it next sees an unrecognised dialog.
     g_dialog     = 0;
     g_wrapCount  = 0;
     g_indSpliced = false;
@@ -334,10 +296,9 @@ static void HudRowSessionSync(void) {
     g_session = now;
 }
 
-// Returns true when the display list holds more than 12 live units. Sets
-// *selChanged when the shadow version moved OR the engine's own selection diverged
-// from our visible tail, *death when a listed unit died since the last refresh --
-// all three snap back to page 1.
+// Returns true when the display list holds more than 12 live units. Sets *selChanged when
+// the shadow version moved OR the engine's own selection diverged from our visible tail,
+// *death when a listed unit died since the last refresh -- all three snap back to page 1.
 static bool RefreshShadow(bool* selChanged, bool* death) {
     HudRowSessionSync();
     unsigned ver = 0;
@@ -361,11 +322,8 @@ static bool RefreshShadow(bool* selChanged, bool* death) {
     g_verValid = true;
 
     // A real new commit (version bump) heals any divergence -- the shadow is fresh.
-    // Otherwise, if the engine's own visible selection no longer matches our visible
-    // tail, an engine-side removal happened that CMDACT_Select never reported: LATCH
-    // diverged so the dispatcher hands the row back to stock. Not treated as a
-    // "changed" (which would keep paging with page 1) -- divergence means stop
-    // paging entirely until the next commit.
+    // Otherwise a mismatch against the engine's own visible selection is an engine-side
+    // removal CMDACT_Select never reported: LATCH so the dispatcher hands back to stock.
     if (changed) {
         g_diverged = false;
     } else if (n > 0 && !EngineSelectionMatchesVisible()) {
@@ -377,8 +335,7 @@ static bool RefreshShadow(bool* selChanged, bool* death) {
         g_cacheValid = false;
     }
 
-    // Display list: live visible units (the tail of the shadow list) first, so
-    // page 1 is the engine's own selection; then live overflow (the head).
+    // Live visible units (the shadow tail) first, then live overflow -- see PAGE MODEL.
     const int overflowN = g_n - g_vis;
     g_dispN = 0;
     for (int i = overflowN; i < g_n; ++i) {
@@ -400,11 +357,10 @@ static bool RefreshShadow(bool* selChanged, bool* death) {
 // ---------------------------------------------------------------------------
 
 int ScHudRowOnButtonEvent(DWORD ctrl, DWORD evt) {
-    // The dialog framework delivers the RAW mouse event to the control under the
-    // cursor with its type intact -- 0x00418EB0 groups cases 4/6/7/9 and tail-calls
-    // control+0x2A (hud-selection-row.md 5.1). So a right-click arrives here as
-    // event->type == 7, and the stock button interact ignores it, which is what
-    // makes the gesture free to claim.
+    // The dialog framework delivers the RAW mouse event to the control under the cursor
+    // with its type intact -- 0x00418EB0 groups cases 4/6/7/9 and tail-calls control+0x2A
+    // (hud-selection-row.md 5.1). A right-click arrives as event->type == 7 and the stock
+    // button interact ignores it, which is what makes the gesture free to claim.
     if (g_enabled && evt) {
         // The click gate below reads g_cache to decide whether the unit under the
         // cursor is one WE are displaying, so it must not be answering out of the
@@ -412,7 +368,6 @@ int ScHudRowOnButtonEvent(DWORD ctrl, DWORD evt) {
         HudRowSessionSync();
         WORD type = *(WORD*)(evt + SC_EVT_OFF_TYPE);
 
-        // Right-click flips the page.
         if (type == SC_EVT_RBUTTONDOWN && g_pageCount > 1) {
             g_page = (g_page + 1) % g_pageCount;
             g_flipPending = true;
@@ -423,14 +378,13 @@ int ScHudRowOnButtonEvent(DWORD ctrl, DWORD evt) {
         }
 
         // THE CLICK GATE. An ACTIVATE (a completed click) is where the stock handler
-        // 0x00458220 would put the button's statUser CUnit* into a Select command.
-        // While we are paging (buttons wrapped), a displayed OVERFLOW unit can have
-        // been removed from play by a path our divergence check cannot see (trigger
-        // RemoveUnit, archon-consumed -- neither touches clientSelectionGroup).
-        // Validate it FIRST: if it is not a live, in-play, non-recycled unit, SWALLOW
-        // the click (the engine never sees the stale pointer) and latch diverged so
-        // the row hands back to stock. This bounds the dangerous exposure to zero
-        // regardless of removal path; the corpse-display window becomes cosmetic-only.
+        // 0x00458220 would put the button's statUser CUnit* into a Select command. While
+        // we are paging, a displayed OVERFLOW unit can have been removed from play by a
+        // path the divergence check cannot see (trigger RemoveUnit, archon-consumed --
+        // neither touches clientSelectionGroup). Validate FIRST: if it is not a live,
+        // in-play, non-recycled unit, SWALLOW the click and latch diverged, which bounds
+        // the dangerous exposure to zero regardless of removal path and leaves the
+        // corpse-display window cosmetic-only.
         if (type == SC_EVT_TYPE_USER && g_wrapCount > 0 &&
             *(DWORD*)(evt + SC_EVT_OFF_USER) == SC_USER_ACTIVATE) {
             DWORD su = *(DWORD*)(ctrl + SC_BINDLG_OFF_USER);
@@ -453,9 +407,8 @@ HudBtnInteractShim(DWORD ctrl, DWORD evt) {
     return ScHudRowOnButtonEvent(ctrl, evt);
 }
 
-// (Re)wrap the 12 buttons' interact pointers. Idempotent; called from every
-// paged act run, which is what survives the engine re-binding them at dialog
-// CREATE (the binder writes the table value back; the next act run re-wraps).
+// (Re)wrap the 12 buttons' interact pointers. Idempotent, and called from every paged act
+// run, which is what survives the engine re-binding them at dialog CREATE.
 static void EnsureWrapped(DWORD firstBtn) {
     const DWORD engineFn = ScRuntimeVa(SC_VA_WIREFRAME_BTN_INTERACT);
     const DWORD shim     = (DWORD)&HudBtnInteractShim;
@@ -474,10 +427,9 @@ static void EnsureWrapped(DWORD firstBtn) {
 
 // Restore the wrapped interact pointers by walking the CURRENT dialog's own button
 // chain -- never g_wrapBtn, whose cached addresses can be into freed heap after a
-// same-address dialog realloc (root == g_dialog, so the new-dialog reset never
-// fired). Walking the live chain validates membership by construction: only a
-// button actually linked into `root` right now is touched. `root == 0` means the
-// dialog is gone: just drop the bookkeeping.
+// same-address dialog realloc (root == g_dialog, so the new-dialog reset never fired).
+// Walking the live chain validates membership by construction: only a button actually
+// linked into `root` is touched. `root == 0` means the dialog is gone: drop the state.
 static void Unwrap(DWORD root) {
     if (root) {
         const DWORD engineFn = ScRuntimeVa(SC_VA_WIREFRAME_BTN_INTERACT);
@@ -495,10 +447,9 @@ static void Unwrap(DWORD root) {
 // The indicator control
 // ---------------------------------------------------------------------------
 
-// Is the indicator actually linked into this root's child chain? g_indSpliced can
-// be stale if the engine freed the dialog and allocated a NEW one at the SAME
-// address (our root==g_dialog check cannot see that). Walking the chain settles it
-// from the live data instead of trusting the flag.
+// Is the indicator actually linked into this root's child chain? g_indSpliced goes stale
+// when the engine frees the dialog and allocates a NEW one at the SAME address, which the
+// root==g_dialog check cannot see; walk the chain rather than trust the flag.
 static bool IndicatorInChain(DWORD root) {
     DWORD ind = (DWORD)&g_indCtrl[0];
     for (DWORD c = ScDlgChild(root); c; c = ScDlgNext(c)) if (c == ind) return true;
@@ -509,21 +460,13 @@ static bool IndicatorInChain(DWORD root) {
 // (index <= 0) and the engine's hide-all sweep hides it wherever it sits -- but the END of the
 // list is what decides whether the text lands ON TOP of what it overlaps.
 //
-// THIS USED TO BE THE HEAD, under a comment claiming "drawing last in our act keeps its text
-// on top". That is the wrong model of when pixels land, and it is why nobody has ever seen
-// this indicator. CallUpdate reaches updateControl 0x0041C400, which does not paint: it
-// intersects the control's rect with the dialog's and merges the result into the screen's
-// dirty region. The PAINT is the dialog's own redraw walk at 0x0041C683, which takes the
-// children from [dlg+0x42] and steps [esi] -- head to tail -- so a control drawn EARLIER is a
-// control drawn UNDER. At the head of the list our text was painted first and the twelve
-// wireframes painted over it, in the same frame, every frame. Task 039 found and fixed exactly
-// this in sc_queueind after the user reported it; the same defect was still here.
-//
-// THE EVIDENCE THAT IT WAS INVISIBLE RATHER THAN MERELY HARD TO READ, off the last run of
-// test-hud-row.ps1 on merged main: the box was (32,9,180,25), which is 148 x 16 = 2368 bytes,
-// and `indInk` read 2368 -- the whole box, saturated by the buttons' own art -- IDENTICALLY
-// for "36 units  1-12  (1/3)", for "36 units  13-24  (2/3)" and for the wrap back to page 1.
-// Three different strings cannot leave one identical count if any of them is on the surface.
+// Do not splice at the HEAD on the theory that drawing last in our act keeps the text on
+// top: CallUpdate reaches updateControl 0x0041C400, which does not paint -- it merges the
+// control's rect into the screen's dirty region. The PAINT is the dialog's own redraw walk
+// at 0x0041C683, which takes the children from [dlg+0x42] and steps [esi] head to tail, so
+// a control drawn EARLIER is drawn UNDER. At the head this text is painted first and the
+// twelve wireframes paint over it, in the same frame, every frame -- invisible, not merely
+// hard to read (the measurement that proves it is in LogReadback).
 static bool EnsureSpliced(DWORD root) {
     DWORD ind = (DWORD)&g_indCtrl[0];
     // Re-splice if we think we are spliced but are not actually in the chain
@@ -534,8 +477,7 @@ static bool EnsureSpliced(DWORD root) {
     // Runtime evidence guard for the type: the engine must have a real interact AND update
     // handler for SC_CTRL_TYPE_LSTATIC in the default tables. If either is null this build
     // does not dispatch that type the way BWAPI's enum says, so refuse to splice rather than
-    // hand the dialog a control it cannot draw. The row still pages; it just shows no
-    // indicator.
+    // hand the dialog a control it cannot draw. The row still pages, without an indicator.
     DWORD tInteract = 0, tUpdate = 0;
     ScDlgDefaultHandlers(SC_CTRL_TYPE_LSTATIC, &tInteract, &tUpdate);
     if (!tInteract || !tUpdate) {
@@ -559,12 +501,10 @@ static bool EnsureSpliced(DWORD root) {
 }
 
 // Take the line off the surface: hide it, then ask the engine to repaint the rect it was
-// using. That ask is the half the OLD placement got for free -- the box sat on the buttons,
-// and the buttons repaint themselves, which is exactly what the old comment was defending.
-// A box in a band that belongs to NO control has to ask for its own repaint, and
+// using. A box in a band that belongs to NO control has to ask for its own repaint, and
 // updateControl on our own (now hidden) control is the ask: a hidden control draws nothing,
-// so what lands in that rect is whatever the dialog paints under it. Same fix, same reason,
-// as sc_queueind's RepaintUnder.
+// so what lands in that rect is whatever the dialog paints under it -- the same reason as
+// sc_queueind's RepaintUnder.
 static void HideIndicator(void) {
     if (!g_indSpliced) { g_indShowing = false; return; }
     DWORD ind = (DWORD)&g_indCtrl[0];
@@ -573,11 +513,11 @@ static void HideIndicator(void) {
     g_indShowing = false;
 }
 
-// THE LONGEST LINE THIS SELECTION CAN PRODUCE -- which is what the box is sized for, not the
-// line currently on it. Sizing to the current string would move the right edge on a page flip
-// whose digits grow ("1-12" -> "13-24"), and a box that has MOVED has no baseline: the copies
-// above are copies of a RECT, so the oracle would answer "no answer" on exactly the flip it
-// exists to measure. The LAST page carries the biggest numbers, so it decides the width.
+// THE LONGEST LINE THIS SELECTION CAN PRODUCE -- what the box is sized for, not the line
+// currently on it. Sizing to the current string would move the right edge on a page flip
+// whose digits grow ("1-12" -> "13-24"), and the band copies are copies of a RECT, so a
+// moved box leaves the oracle with no baseline on exactly the flip it exists to measure.
+// The LAST page carries the biggest numbers, so it decides the width.
 static int IndicatorWidestLen(void) {
     char buf[sizeof(g_indText)];
     const int lastStart = (g_pageCount - 1) * SC_HUD_BUTTON_COUNT + 1;
@@ -587,18 +527,14 @@ static int IndicatorWidestLen(void) {
     return (int)strlen(buf);
 }
 
-// WHERE THE LINE GOES, and why it is not on the buttons any more.
+// WHERE THE LINE GOES, and why it is not on the buttons.
 //
-// It used to start at the first button's own top-left plus one pixel -- (32,9,180,25) on this
-// install, measured -- which is INSIDE the icon row, across the wireframes. That is the same
-// placement task 039 fixed for the group production line after the user reported it ("there
-// was some text printed in the spot where the 12 icons are ... but it was behind the buildings
-// icons so couldn't rly tell"); this indicator carried the identical mistake and only appears
-// once a selection passes twelve, which is why nobody complained about it.
+// Do not start it at the first button's own top-left: that is INSIDE the icon row, across
+// the wireframes, where the row paints over the text and it reads as absent.
 //
 // The pane has exactly one band no control occupies: below the row's lower buttons. It is
 // measured off the LIVE row every frame rather than taken from a constant -- a constant read
-// off one install is not a layout (AGENTS.md, task 034) -- and off ALL TWELVE button rects
+// off one install is not a layout (AGENTS.md § "Layout") -- and off ALL TWELVE button rects
 // rather than the visible ones. That last part is where this differs from sc_queueind's
 // PlaceOn, deliberately: the row is a fixed 12-slot grid whose rects come from statdata.bin,
 // a last page can light as few as ONE button, and a box that moved between pages would throw
@@ -629,10 +565,9 @@ static bool PlaceIndicator(short* box, DWORD root, DWORD firstBtn, int textLen) 
     // `top + fontHeight > clip.bottom`, and the clip box is these bounds -- research/
     // status-pane-text.md 3), checked against the FONT'S own height rather than a constant.
     // A band shorter than the font draws nothing while every field read-back says the
-    // indicator is fine: that is precisely task 033's nine-pixel box, green for weeks. And a
-    // box narrower than the string draws a TRUNCATION, which is worse than nothing because it
-    // reads as a working feature. Either one is refused here, loudly and once, rather than
-    // being met by a player -- the task's own "draw nothing rather than overlap" outcome.
+    // indicator is fine -- a nine-pixel box passes every non-pixel check. A box narrower
+    // than the string draws a TRUNCATION, worse than nothing because it reads as a working
+    // feature. Refuse both here, loudly and once, rather than let a player meet them.
     const int fontH = ScQueueIndSmallFontHeight();
     if (bottom - top < (fontH > 0 ? fontH : SC_QIND_BAND_MIN_H) || right - left < want) {
         if (!g_bandTooSmall) {
@@ -657,13 +592,12 @@ static void BandForget(void) {
     g_bandPollAt = 0;
 }
 
-// HAS THE BAND STOPPED CHANGING? Polled at most every SC_HUD_BAND_POLL_MS, and true only once
-// the rect has read byte-identical for SC_HUD_BAND_SETTLE_MS. That is the honest way to ask
-// "has the redraw walk run": updateControl only marks a region dirty, the paint happens later,
-// and this detour cannot see the walk -- but it can see the walk's RESULT stop moving.
-//
-// On success the settled bytes are in g_bandCand / g_bandCandN, so the caller copies from
-// there rather than taking a fresh (and possibly already-changed) read.
+// HAS THE BAND STOPPED CHANGING? Polled at most every SC_HUD_BAND_POLL_MS, true only once the
+// rect has read byte-identical for SC_HUD_BAND_SETTLE_MS. That is the honest way to ask "has
+// the redraw walk run": updateControl only marks a region dirty, the paint happens later, and
+// this detour cannot see the walk -- but it can see the walk's RESULT stop moving. On success
+// the settled bytes are in g_bandCand, so the caller copies from there rather than taking a
+// fresh (and possibly already-changed) read.
 static bool BandStable(DWORD root) {
     const DWORD now = GetTickCount();
     if (g_bandPollAt && (int)(now - g_bandPollAt) < 0) return false;
@@ -680,22 +614,20 @@ static bool BandStable(DWORD root) {
     return (int)(now - g_bandCandAt) >= g_bandSettleMs;
 }
 
-// THE INDICATOR, once per paged frame. Split out of FillPage because the band's copies are a
-// three-frame sequence and FillPage runs only when the PAGE changes -- on a quiet frame the
-// old code did nothing at all, so a copy that must be taken "the frame after" would never have
-// been taken at all.
+// THE INDICATOR, once per paged frame -- not from FillPage, which runs only when the PAGE
+// changes: the band's copies are a three-frame sequence, so on a quiet frame a copy that has
+// to be taken "the frame after" would never be taken at all.
 //
-// THE SEQUENCE, every step of which is one of task 039's dearly-bought rules:
+// THE SEQUENCE:
 //   1. position the box off the live row; a refusal HIDES and draws nothing;
-//   2. with no clean copy for this rect, take one -- but only on a paged frame that FOLLOWS a
-//      paged frame, and show nothing until it is taken. It has to be a copy of the pane THIS
-//      PAGE DRAWS: updateControl only dirties, so on the frame the fill runs the surface still
-//      holds the previous layout, and a copy taken there would make every later reading count
-//      the layout change as well as our text. Two paged frames (~80 ms) of the row without its
-//      caption is invisible to a player and is what makes the number exact;
+//   2. with no clean copy for this rect, take one -- but only on a paged frame that FOLLOWS
+//      a paged frame, showing nothing until it is taken. updateControl only dirties, so on
+//      the fill frame the surface still holds the PREVIOUS layout and a copy there would
+//      make every later reading count that change as well as our text. Two paged frames
+//      (~80 ms) of the row without its caption is invisible and is what makes it exact;
 //   3. write the text and show it, remembering which frame that was;
-//   4. on a LATER frame -- never the show frame, whose paint has not run yet -- take the inked
-//      copy, which is the pane WITH our line on it.
+//   4. on a LATER frame -- never the show frame, whose paint has not run yet -- take the
+//      inked copy, which is the pane WITH our line on it.
 // Returns true when it changed something worth logging.
 static bool IndicatorFrame(DWORD root, DWORD firstBtn) {
     short box[4];
@@ -711,8 +643,7 @@ static bool IndicatorFrame(DWORD root, DWORD firstBtn) {
     const bool moved = (ib[0] != box[0] || ib[1] != box[1] ||
                         ib[2] != box[2] || ib[3] != box[3]);
     if (moved) {
-        // Hide FIRST, at the old rect, so the repaint request covers the pixels that are
-        // actually on the surface; then move.
+        // Hide FIRST, at the old rect, so the repaint covers the pixels actually on screen.
         if (g_indShowing) HideIndicator();
         ib[0] = box[0]; ib[1] = box[1]; ib[2] = box[2]; ib[3] = box[3];
         g_bandRect[0] = box[0]; g_bandRect[1] = box[1];
@@ -723,9 +654,8 @@ static bool IndicatorFrame(DWORD root, DWORD firstBtn) {
 
     if (g_bandCleanN <= 0) {
         if (g_indShowing) { HideIndicator(); return true; }
-        // Wait for the pane THIS PAGE draws to have landed and stopped moving. Until then any
-        // copy would hold the PREVIOUS layout and every later reading would count the change
-        // of layout as well as our text.
+        // Wait for the pane THIS PAGE draws to have landed and stopped moving; a copy taken
+        // earlier would hold the PREVIOUS layout.
         if (!BandStable(root)) return false;
         memcpy(g_bandClean, g_bandCand, (size_t)g_bandCandN);
         g_bandCleanN = g_bandCandN;
@@ -741,9 +671,8 @@ static bool IndicatorFrame(DWORD root, DWORD firstBtn) {
 
     const bool changed = (strcmp(want, g_indText) != 0);
     const bool visible = (*(DWORD*)(ind + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) != 0;
-    // Re-show whenever the engine's own hide-all sweep has taken the visible bit off us, the
-    // same way sc_queueind does -- that sweep runs on every re-layout and does not know this
-    // control is ours.
+    // Re-show whenever the engine's own hide-all sweep has taken the visible bit off us --
+    // that sweep runs on every re-layout and does not know this control is ours.
     if (changed || !visible || !g_indShowing) {
         memcpy(g_indText, want, sizeof(g_indText));
         ScCtrlShowVia(g_show, ind);
@@ -758,11 +687,10 @@ static bool IndicatorFrame(DWORD root, DWORD firstBtn) {
     }
 
     // THE INKED COPY: the band the first time it is seen to DIFFER from the clean copy, which
-    // is the moment the redraw walk has actually put our line on the surface. Triggering on
-    // the difference rather than on elapsed calls is the whole correction here -- the paint
-    // can be tens of thousands of calls away, and clean is by construction the settled pane
-    // with none of our line in it, so nothing else in this rect can move it. Polled at the
-    // same throttle and only until it is taken, so a settled page costs nothing.
+    // is the moment the redraw walk has actually put our line on the surface. Trigger on the
+    // difference, not on elapsed calls -- the paint can be tens of thousands of calls away,
+    // and clean is by construction the settled pane with none of our line in it, so nothing
+    // else in this rect can move it. Polled at the same throttle and only until it is taken.
     if (g_bandInkedN <= 0 && g_bandCleanN > 0) {
         const DWORD now = GetTickCount();
         if (g_bandPollAt && (int)(now - g_bandPollAt) < 0) return false;
@@ -773,10 +701,8 @@ static bool IndicatorFrame(DWORD root, DWORD firstBtn) {
         memcpy(g_bandInked, g_bandNow, (size_t)n);
         g_bandInkedN = n;
         if (!g_inkedLogged) {
-            // The one call count this module prints, and it prints the milliseconds beside it
-            // so the rate is the reader's own division rather than a figure to be trusted.
-            // This is also the measurement that justifies the clock: the redraw walk landed
-            // this many dispatcher calls after the show asked for it.
+            // The one call count this module prints, with its own elapsed milliseconds beside
+            // it so the rate is the reader's division rather than a figure to be trusted.
             ScLog("HUDROW band inked: the line landed %u dispatcher call(s) / %u ms after the "
                   "show asked for it", g_showCalls, (unsigned)(now - g_showTick));
             g_inkedLogged = true;
@@ -797,9 +723,9 @@ static void UnspliceIndicator(DWORD root) {
 }
 
 // HOW MANY OF THE BAND'S BYTES ARE OURS RIGHT NOW: the same rect compared against the copy
-// taken with none of our line on it. This is the only number here that can say the engine drew
-// the text, and the reason it is a DIFFERENCE and not an ink count is in LogReadback.
-// -1 is an honest "no answer" (no copy for this rect yet, or the surface moved); never a 0.
+// taken with none of our line on it -- the only number here that can say the engine drew the
+// text; why it is a DIFFERENCE and not an ink count is in LogReadback. -1 is an honest "no
+// answer" (no copy for this rect yet, or the surface moved); never a 0.
 static int BandDiff(DWORD root) {
     if (g_bandCleanN <= 0) return -1;
     const int n = ScQueueIndCopyRect(root, g_bandRect, g_bandNow, SC_HUD_BAND_MAX);
@@ -811,13 +737,11 @@ static int BandDiff(DWORD root) {
 
 // HOW MANY OF OUR OWN BYTES SURVIVED THE HAND-BACK. The bytes where `inked` differs from
 // `clean` are the ones our text put on the surface -- the glyph mask -- and this counts the
-// masked positions that STILL hold the inked value. 0 means the band was repainted and nothing
-// of ours is left, which is exactly what the old on-the-buttons placement was buying and what
-// moving into a band that belongs to no control puts at risk.
-//
-// `*glyphOut` is the size of that mask, and it travels with the answer on purpose: a
-// `stranded=0` over an EMPTY mask is not a clean band, it is a probe that never saw our line,
-// and the two must not print the same.
+// masked positions that STILL hold the inked value. 0 means the band was repainted and
+// nothing of ours is left, which is what a band belonging to no control puts at risk.
+// `*glyphOut` is the size of that mask and travels with the answer on purpose: a `stranded=0`
+// over an EMPTY mask is not a clean band, it is a probe that never saw our line, and the two
+// must not print the same.
 static int BandStranded(DWORD root, int* glyphOut) {
     if (glyphOut) *glyphOut = -1;
     if (g_bandCleanN <= 0 || g_bandInkedN != g_bandCleanN) return -1;
@@ -856,23 +780,22 @@ static void LogReadback(DWORD firstBtn) {
         ++shown;
     }
     // The indicator, read back the same way -- out of the CONTROL, not out of g_indText.
-    // The difference matters: printing our own buffer says what the module INTENDED, which
-    // is exactly the self-echo AGENTS.md's "assert the engine's own result" rule is about,
-    // and it is what let a nine-pixel-tall (i.e. never drawn) indicator pass for weeks.
+    // Printing our own buffer says what the module INTENDED, which is the self-echo
+    // AGENTS.md § "Oracles: what counts as a read-back" rules out, and it is what lets a
+    // nine-pixel-tall (i.e. never drawn) indicator pass.
     //
-    // `indInk` STAYS ON THIS LINE AND IS NO LONGER THE ORACLE, and the reason is the finding
-    // this task opened with. Ink counts non-background bytes inside a rect, which can only
-    // detect text over a region the ENGINE leaves as background. Over a region the engine also
-    // paints, it SATURATES: every byte is already non-zero before one pixel of ours exists, so
-    // the count is the rect's area whatever we did. Measured, on merged main, box (32,9,180,25)
-    // = 148 x 16 = 2368 bytes: `indInk=2368` for "36 units  1-12  (1/3)", 2368 for
-    // "13-24  (2/3)", 2368 for the wrap back. One number, three strings, the full area -- and
-    // the suite asserted `indInk > 0` on it for weeks. That failure mode does not look like
-    // zero; it looks healthy, which is why the positive control task 033 added (guarding
-    // against ink=0 meaning "blind probe") could not catch it.
+    // `indInk` STAYS ON THIS LINE BUT IS NOT THE ORACLE. Ink counts non-background bytes
+    // inside a rect, so it can only detect text over a region the ENGINE leaves as
+    // background; over a region the engine also paints it SATURATES -- every byte is already
+    // non-zero before one pixel of ours exists, so the count is the rect's area whatever we
+    // did. Measured with the box at (32,9,180,25) = 148 x 16 = 2368 bytes: `indInk=2368` for
+    // "36 units  1-12  (1/3)", 2368 for "13-24  (2/3)", 2368 for the wrap back -- one number,
+    // three strings, the full area, and `indInk > 0` asserted on it. That failure does not
+    // look like zero, it looks healthy, so a positive control against ink=0 ("blind probe")
+    // cannot catch it.
     //
-    // `indBoxDiff` is what replaces it: the same rect compared against a copy of itself taken
-    // with none of our line on it (BandDiff). `indRefInk`/`indSurfInk` stay as the two
+    // `indBoxDiff` is the oracle instead: the same rect compared against a copy of itself
+    // taken with none of our line on it (BandDiff). `indRefInk`/`indSurfInk` stay as the two
     // blindness checks -- a control the engine fills, and the whole surface.
     DWORD ind = (DWORD)&g_indCtrl[0];
     bool linked = false;
@@ -889,11 +812,10 @@ static void LogReadback(DWORD firstBtn) {
     }
 
     // THE POSITIVE CONTROL for the numbers above: ink over a rect the ENGINE fills. The first
-    // wireframe button is up precisely because we are paging, so unlike sc_queueind's version
-    // this one always has a visible candidate here -- and it still reports -1 rather than
-    // falling back to a hidden control, because ink over something nobody can see answers
-    // neither question. `surfInk` (whole surface) is the check that has an answer in EVERY
-    // state, including the one where the row has just handed back.
+    // wireframe button is up precisely because we are paging, so there is always a visible
+    // candidate here -- and it still reports -1 rather than falling back to a hidden control,
+    // because ink over something nobody can see answers neither question. `surfInk` (whole
+    // surface) is the check that has an answer in EVERY state, hand-back included.
     int refInk = -1, refId = 0;
     DWORD ref = ScDlgFindChild(g_dialog, SC_HUD_FIRST_SMALL_BUTTON);
     if (ref && (*(DWORD*)(ref + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE)) {
@@ -913,10 +835,9 @@ static void LogReadback(DWORD firstBtn) {
           ScQueueIndSmallFontHeight(), g_indShowing ? 1 : 0);
 }
 
-// Where the buttons are, so an automated test can aim a right-click at one --
-// same rationale as sc_circles' LogCirclePositions. Raw control bounds plus the
-// root's own rect, logged once per dialog instance; the reader decides the
-// coordinate space from both.
+// Where the buttons are, so an automated test can aim a right-click at one. Raw control
+// bounds plus the root's own rect, logged once per dialog instance; the reader decides
+// the coordinate space from both.
 static void LogButtonRects(DWORD root, DWORD firstBtn) {
     if (g_rectsLogged) return;
     char buf[512];
@@ -972,19 +893,14 @@ static void FillPage(DWORD root, DWORD firstBtn) {
         }
     }
 
-    // The indicator is NOT touched here any more. It runs once per paged frame from
-    // ScHudRowOnDispatch instead, because its band copies are a three-frame sequence and this
-    // function runs only when the page CHANGES -- on a quiet frame a copy that has to be taken
-    // "the frame after" would never be taken at all. Same reason the read-back line moved out.
     g_cacheValid  = true;
     g_flipPending = false;
     ++g_statActs;
 }
 
-// A positive read-back that the dialog is genuinely back to stock: all 12 wireframe
-// buttons point at the engine's own interact, the indicator is not linked into the
-// child chain, and the chain itself is intact (the head is reachable and the button
-// run is contiguous). Logged so an in-game test can ASSERT the hand-back rather than
+// A positive read-back that the dialog is genuinely back to stock: all 12 wireframe buttons
+// point at the engine's own interact, the indicator is not linked into the child chain, and
+// the chain itself is intact. Logged so an in-game test can ASSERT the hand-back rather than
 // infer it from the absence of paging.
 static void LogVerifyStock(DWORD root) {
     if (!root) { ScLog("HUDROW verify stock: no dialog"); return; }
@@ -1007,12 +923,10 @@ static void LogVerifyStock(DWORD root) {
 // cached button pointers are into freed heap: drop the bookkeeping without dereferencing (the
 // next paged frame re-wraps fresh).
 //
-// THE REPAINT NOW HAS TWO HALVES, and the first one is new. While the indicator sat ON the
-// buttons, updating the buttons was the whole answer -- their own repaint covered our pixels,
-// which is what the old placement was defending. In the band below the row there is no control
-// to repaint, so UnspliceIndicator asks for OUR OWN rect first (updateControl on the hidden
-// control), and the button sweep below stays because the row is what is next to the band.
-// `HUDROW band after stock` in the dispatcher is the measurement that this works.
+// THE REPAINT HAS TWO HALVES: the band below the row belongs to no control, so
+// UnspliceIndicator asks for OUR OWN rect first (updateControl on the hidden control), and
+// the button sweep below covers the row that sits beside the band. `HUDROW band after stock`
+// in the dispatcher is the measurement that this works.
 static void RestoreStock(DWORD root) {
     Unwrap(root);
     if (root) UnspliceIndicator(root); else { g_indSpliced = false; g_indShowing = false; }
@@ -1058,10 +972,10 @@ void ScHudRowOnDispatch(void) {
         g_page        = 0;
         g_cacheValid  = false;
         g_rectsLogged = false;
-        // AND THE BAND COPIES BELONG TO THE OLD DIALOG'S SURFACE. Its rect can match the new
-        // one exactly -- the pane is laid out the same way every time -- so without this the
-        // first reading in a new dialog would diff live pixels against a buffer that no
-        // longer exists. "No answer" is the only honest state here (sc_queueind, task 039).
+        // AND THE BAND COPIES BELONG TO THE OLD DIALOG'S SURFACE, whose rect can match the
+        // new one exactly -- the pane is laid out the same way every time -- so without this
+        // the first reading would diff live pixels against a buffer for a surface that is
+        // gone. "No answer" is the only honest state here.
         g_indShowing  = false;
         g_bandTooSmall = false;
         g_bandPending  = false;
@@ -1070,12 +984,10 @@ void ScHudRowOnDispatch(void) {
 
     DWORD firstBtn = root ? ScDlgFindChild(root, SC_HUD_FIRST_SMALL_BUTTON) : 0;
 
-    // Page only when there is real overflow AND a dialog with a row AND a portrait
-    // unit (the engine's own precondition), AND we have not DIVERGED from the
-    // engine's own selection. On divergence (an engine-side removal our version
-    // counter never saw, or a click the gate rejected) we HAND BACK TO STOCK and
-    // stay stock until the next commit rebuilds a consistent shadow -- the engine
-    // then shows its own truth, with no per-frame churn and no stale tail.
+    // Page only when there is real overflow AND a dialog with a row AND a portrait unit
+    // (the engine's own precondition), AND we have not DIVERGED from the engine's own
+    // selection. On divergence we hand back to stock and stay stock until the next commit
+    // rebuilds a consistent shadow.
     if (g_diverged && (g_wrapCount > 0 || g_indSpliced)) ++g_statDiverged;
     if (!overflow || g_diverged || !root || !firstBtn || !ScPortraitUnit()) {
         bool hidNow = false;
@@ -1084,10 +996,9 @@ void ScHudRowOnDispatch(void) {
         g_wasPaged = false;
         ++g_statStock;
 
-        // CRITERION 4, measured rather than argued: does leaving paged mode leave any of our
-        // pixels behind? The old placement bought that for free by sitting on controls that
-        // repaint themselves; a band that belongs to no control has to ask for its repaint
-        // (HideIndicator), and this is the reading that says whether the ask worked.
+        // Does leaving paged mode strand any of our pixels? A band that belongs to no control
+        // has to ask for its own repaint (HideIndicator), and this reading, measured rather
+        // than argued, is what says whether the ask worked.
         //
         // NOT ON THE FRAME WE HID ON. RestoreStock only marks the region dirty -- the paint is
         // the dialog's own redraw walk, which has not run when this returns -- so a reading
@@ -1111,25 +1022,22 @@ void ScHudRowOnDispatch(void) {
     if (!g_wasPaged) {
         ++g_statEpisodes;
         // Entering paged mode: the surface still holds the STOCK layout, so no copy taken now
-        // is a copy of the pane this page draws. BandForget throws the copies away and
-        // BandStable is what decides when the new layout has landed.
+        // is a copy of the pane this page draws. BandStable decides when the new one lands.
         BandForget();
         g_wasPaged = true;
     }
     EnsureWrapped(firstBtn);
     LogButtonRects(root, firstBtn);
 
-    // Throttle the re-fill exactly as the engine throttles its own layout: only
-    // when something the page depends on changed. On a quiet frame the page just
-    // persists -- nothing else writes the status buttons once we skip the engine's
-    // dispatcher.
+    // Throttle the re-fill exactly as the engine throttles its own layout: only when
+    // something the page depends on changed. On a quiet frame the page just persists --
+    // nothing else writes the status buttons once we skip the engine's dispatcher.
     bool filled = false;
     if (selChanged || death || g_flipPending || !g_cacheValid || PageDrifted()) {
         FillPage(root, firstBtn);
         filled = true;
     }
-    // The indicator runs EVERY paged frame, quiet ones included: its band copies are a
-    // three-frame sequence and the fill above is not.
+    // The indicator runs EVERY paged frame, quiet ones included (see IndicatorFrame).
     const bool indChanged = IndicatorFrame(root, firstBtn);
     if (filled || indChanged) LogReadback(firstBtn);
 
@@ -1142,9 +1050,8 @@ void ScHudRowOnDispatch(void) {
 // Detour entry point
 // ---------------------------------------------------------------------------
 
-// The engine calls the dispatcher with no arguments and ignores the return; a
-// plain void function matches (EBX/ESI/EDI preserved by GCC, EAX/ECX/EDX scratch
-// under VC6's rules).
+// The engine calls the dispatcher with no arguments and ignores the return; a plain void
+// function matches (EBX/ESI/EDI preserved by GCC, EAX/ECX/EDX scratch under VC6's rules).
 static void SC_GAME_ENTRY HkStatDispatch(void) {
     ScHudRowOnDispatch();
 }
@@ -1213,9 +1120,9 @@ int ScHudRowInstall(void) {
 void ScHudRowRemove(void) {
     ScHookRemove(&g_hkDispatch);
 
-    // Best-effort pointer restores. Single atomic dword writes; guarded reads
-    // because the dialog may be gone. Mid-game unload stays unsupported (the
-    // game thread may be inside the shim), same policy as sc_circles.
+    // Best-effort pointer restores: single atomic dword writes, guarded reads because the
+    // dialog may be gone. Mid-game unload stays unsupported (the game thread may be in the
+    // shim), same policy as sc_circles.
     if (g_wrapCount > 0) {
         const DWORD engineFn = ScRuntimeVa(SC_VA_WIREFRAME_BTN_INTERACT);
         const DWORD shim     = (DWORD)&HudBtnInteractShim;
@@ -1234,19 +1141,15 @@ void ScHudRowRemove(void) {
 
 void ScHudRowLogStats(void) {
     if (!g_enabled) return;
-    // `pagedEpisodes` IS THE COVERAGE NUMBER -- times the row ENTERED paged mode -- and it is
-    // on this line for the reason AGENTS.md gives for task 041's: this module's whole seam is
-    // the >12 state, and a run that never reached it proves nothing about the indicator in
-    // either direction while looking exactly like a clean pass. 0 here means no verdict,
-    // whatever else the run says.
+    // `pagedEpisodes` IS THE COVERAGE NUMBER -- times the row ENTERED paged mode. This
+    // module's whole seam is the >12 state, so a run that never reached it proves nothing
+    // about the indicator in either direction while looking exactly like a clean pass
+    // (AGENTS.md § "Oracles: absence and defect-era checks"); 0 here means no verdict.
     //
-    // It is an EPISODE count and not a call count on purpose. This detour runs tens of
-    // thousands of times a second, so a seven-digit total is a number no reader can check
-    // against anything -- it is indistinguishable from a tick global read by mistake. `acts`
-    // beside it (pages actually displayed) is the same size and the same kind of fact, and
-    // both are cross-checkable against the run's own `HUDROW show` lines. The one call count
-    // this module prints is `HUDROW band inked`, which prints its own elapsed milliseconds
-    // next to it so the rate can be divided out.
+    // An EPISODE count and not a call count on purpose: this detour runs tens of thousands of
+    // times a second, so a seven-digit total is indistinguishable from a tick global read by
+    // mistake. `acts` beside it (pages actually displayed) is the same size and kind of fact,
+    // and both cross-check against the run's own `HUDROW show` lines.
     ScLog("HUDROW stats: acts=%u stock=%u flips=%u staleDropped=%u wraps=%u splices=%u "
           "diverged=%u gated=%u pagedEpisodes=%u bandSuppressed=%u session=%u "
           "sessionDrops=%u",
@@ -1274,9 +1177,8 @@ void ScHudRowTestBegin(BYTE* fakeModuleBase,
     g_statDiverged = g_statGated = 0;
 }
 
-// The read-backs sync as well: "which page is the row on" has no answer that spans a
-// game change, and a test that could read the previous game's page here could not see
-// #67 item 4 at all.
+// The read-backs sync too: "which page is the row on" has no answer that spans a game
+// change, and a test reading the previous game's page here could not see a stale page.
 int ScHudRowCurrentPage(void)  { HudRowSessionSync(); return g_page; }
 int ScHudRowPageCount(void)    { HudRowSessionSync(); return g_pageCount; }
 int ScHudRowGatedCount(void)   { return (int)g_statGated; }

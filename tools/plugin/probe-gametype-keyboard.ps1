@@ -1,32 +1,15 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-MEASURE, do not assume: does the Create Game screen's Game Type combo respond to posted
-keyboard messages at all -- no mouse, no capture, no foreground? Task 050.
+Does the Create Game screen's Game Type combo answer posted keyboard messages at all?
 
 .DESCRIPTION
-Send-ScDropdownPick needs the foreground because the combo is a press-and-hold control
-and the game calls SetCapture on button-DOWN (task 027 half 2) -- that requirement is
-specifically about the MOUSE walk. Posted keyboard messages are a different code path
-(WM_KEYDOWN/WM_KEYUP, no capture involved) and task 043 already measured every OTHER
-posted input working fine off-screen. If this one widget also answers to a plain
-Down-arrow + Enter, the foreground requirement narrows to nothing instead of staying a
-permanent tax -- worth one cheap, off-screen, read-the-engine's-own-value check before
-assuming the answer either way.
-
-Three arms, same lobby, same combo, read back through Get-ScGameTypeControl each time
-(never trust "no exception" -- read the engine's own dialog list):
-  A. baseline -- whatever 'Custom Type' the machine already has.
-  B. blind    -- Down-arrow, Enter, no prior click or Tab. Tests whether the combo
-                 already has whatever concept of "current" this engine's dialog system
-                 uses for keyboard input, with nothing done to establish it.
-  C. tabbed   -- one Tab first, then Down-arrow, Enter. Tests whether Tab moves this
-                 custom dialog system's notion of focus onto the combo the way it would
-                 for a real Win32 tab order.
-
-This is read-only with respect to the value that matters (it never asserts pass/fail on
-whether the combo CHANGED -- a negative here is exactly as reportable as a positive) and
-never presses Start, so it plays no game and asserts nothing about a fixture.
+Send-ScDropdownPick needs the foreground because the combo is press-and-hold and the
+game calls SetCapture on button-DOWN -- a requirement of the MOUSE walk. Posted keys
+take a different path (WM_KEYDOWN/WM_KEYUP, no capture), so that tax may not apply to
+them, and every other posted input measures fine off-screen. Nothing here asserts the
+combo changed (a measured negative is as reportable as a positive) and it never presses
+Start, so it plays no game. See AGENTS.md § "Game Type / `Custom Type`".
 
 .EXAMPLE
 ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-gametype-keyboard.ps1
@@ -43,7 +26,7 @@ $scriptDir = $PSScriptRoot
 
 $VK_TAB = 0x09; $VK_UP = 0x26; $VK_DOWN = 0x28; $VK_RETURN = 0x0D
 
-# STOCK map, same reasoning as prime-game-type.ps1: nothing generated, nothing to clean up.
+# A stock map keeps the probe generating nothing, so there is nothing to clean up.
 $stock = @(Get-ChildItem -LiteralPath (Join-Path $GameDir 'Maps\BroodWar') -File `
     -Include '*.scm', '*.scx' -ErrorAction SilentlyContinue | Sort-Object Name)
 if ($stock.Count -eq 0) { throw "probe-gametype-keyboard: no stock map found under $GameDir\Maps\BroodWar." }
@@ -72,10 +55,14 @@ try {
     Start-Sleep -Seconds 2
     Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
 
+    # Every arm reads the engine's own dialog list back: "no exception" is not a read-back
+    # (AGENTS.md § "Oracles: what counts as a read-back").
     $before = Get-ScGameTypeControl -LogPath $LogPath
     if (-not $before) { throw 'probe-gametype-keyboard: no Create dialog found at baseline -- the lobby never came up.' }
     Write-Host "probe: [A] baseline -- Custom Type reads '$($before.Value)'"
 
+    # Nothing establishes focus first: does the combo already carry this dialog system's
+    # notion of "current" for keyboard input?
     Send-ScKey -Hwnd $hwnd -VirtualKey $VK_DOWN -SettleMs 300
     Send-ScKey -Hwnd $hwnd -VirtualKey $VK_RETURN -SettleMs 300
     $blind = Get-ScGameTypeControl -LogPath $LogPath
@@ -87,6 +74,9 @@ try {
             $blind.Value, $(if ($blind.Value -eq $before.Value) { 'UNCHANGED' } else { 'CHANGED' }))
     }
 
+    # The added leading Tab is what this arm tests: does this custom dialog system have a
+    # Win32-like tab order that can land focus on the combo? It runs on whatever state the
+    # blind arm left, so it reads back against that arm's value, not the baseline.
     Send-ScKey -Hwnd $hwnd -VirtualKey $VK_TAB -SettleMs 300
     Send-ScKey -Hwnd $hwnd -VirtualKey $VK_DOWN -SettleMs 300
     Send-ScKey -Hwnd $hwnd -VirtualKey $VK_RETURN -SettleMs 300

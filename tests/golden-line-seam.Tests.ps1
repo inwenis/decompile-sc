@@ -1,59 +1,35 @@
 #Requires -Version 7
 <#
-Golden-line tests for the printf-to-regex oracle seam -- issue #81, sibling of #78 (task 057).
+Golden-line tests for the printf-to-regex oracle seam.
 
-THE HAZARD. tools/plugin/src writes ScLog(...) format strings; every suite under tools/plugin
-reads them back with its OWN, hand-copied regex. There is no contract between the two. PR #77
-proved this is not hypothetical: deleting three dead counters (issue #66) broke FIVE parsers
-across FOUR suites, found only by a grep. Most of those parsers fall through to a default
-object of zeros with no `else` branch, so the failure mode is not a red suite -- it is a suite
-that asserts against zeros and PASSES.
+THE HAZARD: tools/plugin/src writes the ScLog(...) format strings, every suite under
+tools/plugin reads them back with its OWN hand-copied regex, and nothing binds the two.
+Deleting three dead counters broke five parsers across four suites, caught only by a grep.
+Most such parsers fall through to a default object of zeros with no `else`, so drift does not
+show as a red suite -- it is a suite asserting against zeros and PASSING.
+-> AGENTS.md § "Oracles: what counts as a read-back"
 
-WHAT THIS FILE DOES, for each golden line named in issue #81 (PRODQ/PRODQSEL/PRODQSTATS,
-UPGQ/UPGQSEL/UPGQSTATS, HUDROW show, FANOUT select:, WORLD, CIRCLES show), plus CIRCLES stats
-and QIND's one real (non-diagnostic) consumer:
-
-  1. reads the ScLog(...) format string OUT OF THE C++ SOURCE, so it cannot drift from what
-     the plugin actually prints;
-  2. renders one line from it with placeholder values;
-  3. asserts every parser regex that reads that line still matches, with the group count the
-     suite indexes;
-  4. asserts the regex is present VERBATIM in the suite it claims to come from, so this file's
-     copy cannot itself go stale while the shipped one rots -- Contains() on the raw file text,
-     not a normalised or re-derived comparison.
-
-FIXED (issue #87, task 060): six of these parsers, across four suites, stopped matching the
-plugin's OWN current output when PR #82 (efa1d8d) inserted `staleSession=%d` between
-`refunded=`/`dropped=` and `refusedFull=` in the PRODQ/UPGQ summary lines and in PRODQSTATS.
-Task 058 pinned the six as `ExpectMatch = $false` on purpose (AGENTS.md: report a finding, do
-not quietly fix it). Task 060 repaired all six: the gap immediately before `refusedFull=` in
-each regex now tolerates any number of extra `name=value` tokens, not just today's
-`staleSession=`, so the next field a future PR inserts at that same junction cannot silently
-re-break these parsers again. The four sites that had no `else` (their fields would otherwise
-silently keep the zero the result object was initialised with) gained one, matching the
-`else { Assert-That ... $false }` shape the other two (PRODQSTATS) already had. All six are now
-pinned `ExpectMatch = $true` below.
+So for each golden line this file reads the ScLog(...) format string out of the C++ source
+(it cannot drift from what the plugin prints), renders one line with placeholder values,
+asserts every parser regex reading it still matches with the group count its suite indexes,
+and asserts that regex appears VERBATIM in the suite -- Contains() on the raw file text, so
+this file's own copy of a regex cannot keep passing while the shipped one it stands for rots.
 #>
 
-# The line table below is plain top-level script code, not inside a BeforeAll: -ForEach
-# needs $script:Lines at DISCOVERY time, and BeforeAll is deferred to the run phase -- a
-# BeforeAll-wrapped table would discover zero tests. Conversely, the helper FUNCTIONS and the
-# repo-root lookup live in the Describe-level BeforeAll below the table (not here): Pester v5
-# runs top-level statements only once, during discovery, and re-invokes just the registered
-# block bodies for the run phase in what is otherwise a fresh scope -- a plain top-level
-# `$script:X = ...` or `function Foo {}` up here is invisible by the time any BeforeAll or It
-# actually runs. Proved by running it both ways before settling on this split.
-#
-# Every golden line issue #81 names, in its blast-radius order, and every parser (suite +
-    # regex) that reads it with an indexed/named capture -- not a bare existence check, which
-    # fails LOUDLY (a timeout or thrown exception) rather than silently defaulting to zero, so
-    # it is not this hazard (see the PR's coverage table for the suites/lines left out on that
-    # basis: STATQ, and the WORLD/QIND/CARD/PRODFAN existence gates).
-    #
-    # Fragments = the regex EXACTLY as it appears in the suite's source, split the same way the
-    # suite's own source splits it (string concatenation across lines) -- each piece is checked
-    # verbatim via .Contains(). Pattern = Fragments joined into one usable .NET regex, with any
-    # '$esc' placeholder swapped for the same 'ABCD' Expand-ScFormat renders.
+# The line table is plain top-level script code, not inside a BeforeAll: -ForEach needs
+# $script:Lines at DISCOVERY time, and BeforeAll is deferred to the run phase, so a
+# BeforeAll-wrapped table discovers zero tests. The helper FUNCTIONS and the repo-root lookup
+# sit the other way round, in the Describe-level BeforeAll: Pester v5 runs top-level statements
+# only once, during discovery, then re-invokes just the registered block bodies in an otherwise
+# fresh scope, where a top-level `$script:X = ...` or `function Foo {}` is invisible.
+
+    # Every golden line, in blast-radius order, and every parser (suite + regex) that reads it
+    # with an indexed/named capture. Bare existence checks are out of scope: they fail LOUDLY
+    # (a timeout or thrown exception) instead of silently defaulting to zero.
+
+    # Fragments = the regex EXACTLY as it appears in the suite's source, split the same way that
+    # source splits it (string concatenation across lines) -- each piece is checked verbatim via
+    # .Contains(); joined, they are the runnable .NET regex.
     $script:Lines = @(
         @{
             Name = 'PRODQ per-record (sc_prodqueue.cpp)'
@@ -71,18 +47,16 @@ pinned `ExpectMatch = $true` below.
             Name = 'PRODQ session summary (sc_prodqueue.cpp)'
             SourceFile = 'sc_prodqueue.cpp'; Marker = 'PRODQ [%s] session=%u buildings='; First = $null
             Parsers = @(
-                # FIXED (issue #87, task 060): the gap before refusedFull= now tolerates any
-                # number of extra "name=value" tokens -- not just today's staleSession=, so the
-                # next field PR #82-style inserts at this junction cannot silently re-break it.
-                # Each site also gained an `else` (see the suite source): a summary line that
-                # still fails to parse now fails loudly instead of leaving its fields at zero.
+                # The gap before refusedFull= tolerates any number of extra "name=value" tokens:
+                # a field inserted at that junction must not silently re-break these parsers.
+                # Each suite site pairs its match with an `else` so a summary line that fails to
+                # parse fails loudly instead of leaving its fields at the zeros they start from.
                 @{ Suite = 'test-group-queue-over-five.ps1'; SuiteLine = 214; Groups = 7; ExpectMatch = $true
                    Fragments = @('buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+)') }
                 @{ Suite = 'test-production-queue.ps1'; SuiteLine = 606; Groups = 7; ExpectMatch = $true
                    Fragments = @('buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+)') }
                 @{ Suite = 'test-random-conformance.ps1'; SuiteLine = 511; Groups = 7; ExpectMatch = $true
                    Fragments = @('PRODQ \[[^\]]+\](?:\s+\w+=\S+)*\s+buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+)') }
-                # Unaffected: a separate match against the same rendered line, own field pair.
                 @{ Suite = 'test-random-conformance.ps1'; SuiteLine = 519; Groups = 2; ExpectMatch = $true
                    Fragments = @('trainSeen=(\d+) trainNoUnit=(\d+)') }
                 @{ Suite = 'test-save-load.ps1'; SuiteLine = 182; Groups = 1; ExpectMatch = $true
@@ -93,9 +67,6 @@ pinned `ExpectMatch = $true` below.
             Name = 'PRODQSTATS (sc_prodqueue.cpp)'
             SourceFile = 'sc_prodqueue.cpp'; Marker = 'PRODQSTATS captured=%d'; First = $null
             Parsers = @(
-                # FIXED (issue #87, task 060), same tolerant-gap fix as the summary line above.
-                # Both sites already had an explicit `else { Assert-That ... $false }`, so they
-                # were the loud-fail half of #87 rather than the silent-zero half; unchanged here.
                 @{ Suite = 'test-production-queue.ps1'; SuiteLine = 1517; Groups = 6; ExpectMatch = $true
                    Fragments = @('captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+) mineralsRefunded=(\d+)') }
                 @{ Suite = 'test-group-queue-over-five.ps1'; SuiteLine = 776; Groups = 7; ExpectMatch = $true
@@ -113,8 +84,8 @@ pinned `ExpectMatch = $true` below.
             )
         }
         @{
-            # LogUnitLine, shared by the UPGQSEL and UPGQ tags -- the leading %s is the tag,
-            # supplied here via -First since it is a runtime argument, not literal source text.
+            # LogUnitLine is shared by the UPGQSEL and UPGQ tags: its leading %s is the tag, a
+            # runtime argument absent from the source text, so it must come in via -First.
             Name = 'UPGQSEL (sc_upgrades.cpp, LogUnitLine)'
             SourceFile = 'sc_upgrades.cpp'
             Marker = '%s [%s] unit=0x%08X type=0x%03X player=%u upg=%u tech=%u lvl=%u time=%u '
@@ -128,10 +99,8 @@ pinned `ExpectMatch = $true` below.
             Name = 'UPGQ session summary (sc_upgrades.cpp)'
             SourceFile = 'sc_upgrades.cpp'; Marker = 'UPGQ [%s] session=%u buildings='; First = $null
             Parsers = @(
-                # FIXED (issue #87, task 060), same tolerant-gap fix and same added `else` as the
-                # PRODQ summary above. test-upgrade-queue.ps1:490's `Assert-That ... ($q.RefusedFull
-                # -eq 0)` was a tautology while this regex silently zeroed the field; now that it
-                # parses again, that assertion reads a real value and is no longer vacuous.
+                # Same tolerant gap as the PRODQ summary above: if this regex misses, the
+                # suite's `RefusedFull -eq 0` assertion reads a zeroed field and is vacuous.
                 @{ Suite = 'test-upgrade-queue.ps1'; SuiteLine = 220; Groups = 11; ExpectMatch = $true
                    Fragments = @('buildings=(\d+) max=(\d+) queued=(\d+) promoted=(\d+) cancelled=(\d+) dropped=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+) refusedGate=(\d+) waitingCost=(\d+) unblocked=(\d+) unblockedLevel=(\d+)') }
             )
@@ -140,8 +109,8 @@ pinned `ExpectMatch = $true` below.
             Name = 'UPGQSTATS (sc_upgrades.cpp)'
             SourceFile = 'sc_upgrades.cpp'; Marker = 'UPGQSTATS queued=%d'; First = $null
             Parsers = @(
-                # Unaffected: this suite only indexes the first four fields (queued/promoted/
-                # cancelled/dropped), all BEFORE staleSession= in the format string.
+                # No tolerant gap needed: this suite indexes only the first four fields, all
+                # ahead of the junction where later fields get inserted.
                 @{ Suite = 'test-upgrade-queue.ps1'; SuiteLine = 736; Groups = 4; ExpectMatch = $true
                    Fragments = @('queued=(\d+) promoted=(\d+) cancelled=(\d+) dropped=(\d+)') }
             )
@@ -213,13 +182,10 @@ pinned `ExpectMatch = $true` below.
             )
         }
         @{
-            # Added by the readability audit (#130 section 7). PR #82 put `session=` at the
-            # FRONT of this line -- the same PR that broke the six PRODQ/UPGQ parsers above --
-            # and both suites anchor straight from "CIRCLES stats: " to "shown=", so neither
-            # matched. Their $stats.Count was always 0, which took the
-            # "a CIRCLES stats line was written on detach" FAILURE branch and skipped the
-            # three accounting assertions under it entirely. This line was not in the issue
-            # #81 table, which is why nothing caught it. It is now.
+            # Both suites span "CIRCLES stats:" to "shown=" with .*, so a field inserted at the
+            # front of the line cannot orphan them: a stats regex that misses leaves
+            # $stats.Count at 0, which takes the "a CIRCLES stats line was written on detach"
+            # failure branch and skips the three accounting assertions under it entirely.
             Name = 'CIRCLES stats (sc_circles.cpp)'
             SourceFile = 'sc_circles.cpp'; Marker = 'CIRCLES stats: session=%u shown=%u'; First = $null
             Parsers = @(
@@ -258,10 +224,9 @@ Describe 'Golden-line seam: every parser regex still matches the plugin''s own f
         $script:renderN    = 0
 
         # Concatenate the adjacent string literals of the ScLog(...) call whose first literal
-        # starts with $Marker, the way the C preprocessor does. Finding the call's own closing
-        # ');' is safe here because a C++ argument list cannot itself contain the two-character
-        # substring ');' -- every intermediate call/cast in this codebase closes with ',' or
-        # ' ', never ';', so the first ');' found is the call's own end.
+        # starts with $Marker, the way the C preprocessor does. Stopping at the first ');' is
+        # safe because no argument list here contains that two-character substring: every
+        # intermediate call or cast closes with ',' or ' ', never ';'.
         function Get-ScLogFormat {
             param([Parameter(Mandatory)][string]$File, [Parameter(Mandatory)][string]$Marker)
             $text = Get-Content -Raw -LiteralPath $File
@@ -278,10 +243,7 @@ Describe 'Golden-line seam: every parser regex still matches the plugin''s own f
 
         # Render one concrete line from a printf-style format string. %s -> a fixed placeholder
         # tag, %d/%u(/l-variants) -> a distinct decimal, %X/%x -> a distinct hex run. -First
-        # substitutes ONLY the first %s with a literal (LogUnitLine in sc_upgrades.cpp is
-        # shared by the UPGQSEL and UPGQ tags -- the tag itself is the first %s, not part of
-        # the literal format text, so it cannot be read out of the source and must be supplied
-        # by the caller).
+        # substitutes ONLY the first %s, for a tag the caller must supply.
         function Expand-ScFormat {
             param([Parameter(Mandatory)][string]$Fmt, [string]$First)
             if ($First) {
@@ -292,10 +254,10 @@ Describe 'Golden-line seam: every parser regex still matches the plugin''s own f
             [regex]::Replace($Fmt, '%[-0-9.]*(l?)([dusXx])', {
                 param($m)
                 $conv = $m.Groups[2].Value
-                # Uppercase-hex-only, not e.g. 'tag1': some %s fields are rendered by the
-                # plugin as hex lists (HUDROW's bracketed tag string, FANOUT's tags=[...]) and
-                # their suites' regexes constrain the content to [0-9A-F ]* -- a placeholder
-                # with a 't' or 'g' in it would make those, and only those, stop matching.
+                # Uppercase-hex-only, not e.g. 'tag1': the plugin renders some %s fields as hex
+                # lists (HUDROW's bracketed tags, FANOUT's tags=[...]) whose suite regexes
+                # constrain the content to [0-9A-F ]*, and a placeholder holding a 't' or 'g'
+                # would make those, and only those, stop matching.
                 if ($conv -eq 's') { return 'ABCD' }
                 $script:renderN++
                 if ($conv -eq 'X' -or $conv -eq 'x') { '{0:X}' -f ($script:renderN * 47) }
@@ -303,11 +265,10 @@ Describe 'Golden-line seam: every parser regex still matches the plugin''s own f
             })
         }
 
-        # A handful of suites build their regex against a marker-scoped line with
-        # "...\[$esc\]..." (a double-quoted string interpolating the escaped run label). $esc
-        # is always [regex]::Escape() of a marker label, i.e. an escaped copy of the same tag
-        # Expand-ScFormat renders as the literal text 'ABCD' -- so substituting the literal
-        # text '$esc' for 'ABCD' turns the suite's own pattern into something this file can run.
+        # Some suites scope their regex to a run with "...\[$esc\]...", where $esc is always
+        # [regex]::Escape() of a marker label -- the same tag Expand-ScFormat renders as the
+        # literal 'ABCD', so swapping the literal text '$esc' for 'ABCD' makes the suite's own
+        # pattern runnable here.
         function Resolve-EscPlaceholder { param([string]$Pattern) $Pattern -replace '\$esc', 'ABCD' }
     }
 
@@ -342,10 +303,11 @@ Describe 'Golden-line seam: every parser regex still matches the plugin''s own f
                     $m.Success | Should -BeTrue -Because $detail
                     ($m.Groups.Count - 1) | Should -Be $Groups
                 } else {
-                    # PINNED FINDING (see the header comment and the PR): this parser does NOT
-                    # match the plugin's own current output. If this It starts FAILING, someone
-                    # fixed the suite's regex -- flip ExpectMatch to $true and the group-count
-                    # assert above will confirm the fix is complete, group-for-group.
+                    # ExpectMatch = $false pins a REPORTED finding: the parser does not match
+                    # the plugin's own output, and the finding is reported rather than quietly
+                    # patched (AGENTS.md § "Diagnostics and reporting"). If this It starts
+                    # FAILING, someone repaired the suite's regex -- flip ExpectMatch to $true
+                    # so the group-count assert above confirms the fix group-for-group.
                     $m.Success | Should -BeFalse -Because "known-broken finding, issue #87, not fixed here. $detail"
                 }
             }

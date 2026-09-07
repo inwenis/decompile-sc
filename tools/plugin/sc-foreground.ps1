@@ -1,49 +1,19 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Record the foreground window before something steals it, and hand it back afterwards.
-Dot-sourced by run-with-plugin.ps1; issue #30.
-
+Record the foreground window before the launch steals it, and hand it back afterwards.
 .DESCRIPTION
-Task 027 removed the per-input foreground raise from the harness, so a suite no longer
-takes the user's window on every click. It did not cover THE LAUNCH, and the launch is
-where the game takes the foreground: StarCraft activates its own window when it creates
-it, and nothing hands it back.
+StarCraft activates its own window when it creates it and nothing hands the foreground back;
+on an idle desktop, where nothing else asks for it, it held the foreground for a measured 72s
+-- a whole run. That also poisons the borrow in Send-ScDropdownPick, which hands the
+foreground back to whatever held it (AGENTS.md § "Foreground").
 
-That gap is invisible on a busy desktop and total on an idle one. Task 029 measured both,
-same branch, twenty minutes apart:
-
-  * desktop busy  -- three brief game-foreground intervals, ~9s total; the terminal and
-    the user's Chrome kept reclaiming it.
-  * desktop IDLE  -- the game took the foreground at window creation and HELD IT FOR 72
-    SECONDS, until it exited. The whole run.
-
-Nothing "hands it back" on the idle desktop because nothing else asks for it. Worse, it
-poisons the one legitimate borrow: Send-ScDropdownPick raises for one pick and returns
-the foreground to whatever had it before -- and on an idle desktop, by then, that is the
-game. The borrow-and-return is behaving exactly as documented; the launch is the
-uncovered part, and AGENTS.md's "exactly one borrow-and-return pair" expectation is
-simply false until it is covered.
-
-So: record the foreground window BEFORE the launch, restore it once the game's window
-exists. One SetForegroundWindow on a recorded handle, symmetric with what
-Send-ScDropdownPick already does per pick.
-
-WHY THIS IS ITS OWN FILE. run-with-plugin.ps1 is copied into the deploy tree and must
-keep working with no repo present (tools/deploy.ps1 "self-contained, not a thin repo
-pointer"), and drive-game.ps1 -- which owns the equivalent MakeForeground for the
-dropdown borrow -- is 120KB of input machinery that a launch has no business loading.
-This is the same shape as sc-canonical-path.ps1 / sc-launch-lock.ps1: one small file,
-dot-sourced by both callers, copied by deploy.ps1. tests/deploy-runtime.Tests.ps1 fails
-if a dependency of run-with-plugin.ps1 is ever left out of that copy list.
-
-WHO GETS THE RESTORE. Workers, and only workers. A human double-clicking their shortcut
-launched the game in order to play it, and shoving it behind their editor would be a
-worse bug than the one this fixes -- so Restore-ScForeground is called only under the
-same $env:AGENT_TASK gate the launch lock uses, with -NoForegroundRestore as an
-independent second guard that the deployed launcher bakes in. $env:SCDRIVE_RAISE=1 (the
-existing "a human wants to watch this run" knob, drive-game.ps1 Set-ScWindowActive) also
-turns it off: someone watching a run wants to see it.
+Its own file because run-with-plugin.ps1 is copied into the deploy tree and must work with no
+repo present, while drive-game.ps1 -- owner of the equivalent MakeForeground -- is the whole
+input machinery a launch has no business loading; deploy-runtime.Tests.ps1 fails if one of
+run-with-plugin.ps1's dependencies is missing from deploy.ps1's copy list. Callers restore
+only under $env:AGENT_TASK, and never when $env:SCDRIVE_RAISE=1: a human who launched or is
+watching the game wants to see it.
 #>
 
 if (-not ('ScFg.Native' -as [type])) {
@@ -107,9 +77,8 @@ function Test-ScForegroundIsGame {
     .SYNOPSIS
     Does this window belong to a StarCraft process?
     .DESCRIPTION
-    Used twice, for opposite reasons: a recorded handle that is already a game window must
-    NOT be restored (that would raise another worker's run -- see Restore-ScForeground),
-    and the post-launch check wants to say whether the game is still holding it.
+    A recorded handle that is already a game window must NOT be restored: that would raise
+    another worker's run (see Restore-ScForeground).
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][IntPtr]$Hwnd)
@@ -125,16 +94,11 @@ function Restore-ScForeground {
     .SYNOPSIS
     Give the foreground back to a window recorded earlier. NEVER throws.
     .DESCRIPTION
-    Cosmetic by nature: by the time this runs the launch has already succeeded, and a
-    window that has since closed, or a shell that refuses to give the foreground up, must
-    not fail a good launch. Same reasoning as Send-ScDropdownPick's own hand-back, which
-    is deliberately non-fatal for the same reason.
-
-    RETRIED, because the race is real. The game activates its window when it creates it,
-    and under the windowed-mode helper it is still settling for a second or so afterwards
-    -- a single SetForegroundWindow issued into the middle of that can be undone by the
-    game's own next activation. So this restores, re-reads the foreground, and tries
-    again while the game is still the one holding it.
+    Cosmetic: the launch has already succeeded by the time this runs, so a window that has
+    since closed, or a shell that refuses to give the foreground up, must not fail a good
+    launch. Retried because the race is real -- the game keeps re-activating its own window
+    for a second or so after creating it under the windowed-mode helper, and a single
+    SetForegroundWindow issued into the middle of that gets undone.
 
     Returns $true if the recorded window ended up foreground.
     #>

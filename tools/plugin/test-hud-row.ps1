@@ -1,32 +1,16 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-End-to-end, UNATTENDED proof that the bottom-HUD wireframe row pages through a >12
-selection (task 017, design (c)): 36 Lurkers are boxed, the row shows page 1 (the
-engine's own 12) with a "36 units" indicator, a right-click on the row flips to pages
-2 and 3, clicking a page-2 portrait selects exactly that shadow unit through the
-engine's own click path, and any selection change snaps back to page 1.
-
+Unattended proof that the bottom-HUD row pages a >12 selection: page 1 is the engine's own
+12 plus an indicator, right-clicks flip pages, a page-2 portrait click selects that shadow
+unit through the engine's own click path, and any selection change snaps back to page 1.
 .DESCRIPTION
-The oracle is IN-PROCESS UI-STATE READ-BACK: after every layout run the plugin logs
-the unit tags it reads back OUT OF the live dialog's button records (`HUDROW show`),
-plus where the buttons are on screen (`HUDROW rects`) so this script can aim clicks.
-Frame captures corroborate that a page flip changes the pixels; they are a
-diagnostic, never the oracle, and never committed.
-
-The three conductor amendments to the stage-B spec are asserted here by name:
-  1. any selection change (row click included) snaps back to page 1 / stock;
-  2. no overflow -> no HUDROW activity at all (plus the stock-restored hand-back);
-  3. clicking a shadow unit's portrait emits a vanilla 1-unit Select carrying that
-     exact unit's tag, and the shadow list rebuilds coherently around it.
-
-Same fixture and driving recipe as test-burrow-fanout.ps1 (task 016 map generator;
-task 012's D1 posted-message driving). The map is generated for the run and deleted
-afterwards -- generated maps are game content (AGENTS.md hard rule 1).
-
+Oracle: in-process UI-state read-back (`HUDROW show` = unit tags read out of the live dialog's
+button records; `HUDROW rects` aims the clicks). Frame captures only corroborate that a flip
+changes pixels: diagnostic, never the oracle, never committed. Fixture and driving recipe as
+test-burrow-fanout.ps1; the map is generated per run and deleted (game content, hard rule 1).
 .EXAMPLE
 ./tools/plugin/test-hud-row.ps1
-
 .EXAMPLE
 ./tools/plugin/test-hud-row.ps1 -KeepOpen
 #>
@@ -35,13 +19,11 @@ param(
     [string]$GameDir = 'C:\sc-work\1161-base',
     [string]$LogPath = 'C:\sc-work\logs\017-hud-row.log',
     [string]$ShotDir = 'C:\sc-work\logs\017-hud-row-frames',
-    # Which plugin build to run. Defaulted through to run-with-plugin.ps1, and the reason it
-    # is a parameter at all is task 048's before/after pair: the DEFECT arm is merged main's
-    # plugin built into its own directory, so the before-numbers and before-frames come from
-    # the build that is actually shipping rather than from a description of it.
+    # Plugin build to run (default: run-with-plugin.ps1's). A parameter so a before/after
+    # pair can run this suite against a defect build in its own directory: before-numbers
+    # and before-frames then come from the build that actually ships, not a description.
     [string]$BuildDir,
-    # Which folder under Maps\ the fixture is generated into; see test-burrow-fanout.ps1.
-    # Default is what this suite has always used.
+    # Folder under Maps\ the fixture is generated into; see test-burrow-fanout.ps1.
     [string]$FixtureDir,
     [int]$UnitCount = 36,
     [switch]$KeepOpen
@@ -57,12 +39,10 @@ $step = 0
 
 $LURKER_TYPE = '0x67'
 
-# The fixture name is this SUITE's own: it and test-burrow-fanout.ps1 both generated
-# `lurkers.scx`, which made "delete only your own file" undecidable between them and
-# blocked a run outright (task 022, 2026-08-09).
-# Not a bare default any more: with $env:AGENT_TASK set this resolves to THIS
-# agent's own folder, so two concurrent runs of this same suite cannot land in one
-# folder and overwrite each other's identically-named fixture (task 023 review).
+# The fixture name is this SUITE's own (AGENTS.md § Shared test-fixture folder): two suites
+# generating the same name make "delete only your own file" undecidable. With
+# $env:AGENT_TASK set the folder resolves per agent, so two concurrent runs of this same
+# suite cannot overwrite each other's identically-named fixture.
 if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-testmap' -Suite 'hud-row' }
 $mapDir = $FixtureDir
 $mapName = 'hud-row.scx'
@@ -95,24 +75,20 @@ function Get-HudShow {
     param([int]$FromLine, [int]$TimeoutSec = 15)
     $hits = @(Wait-ScLogMatch -LogPath $LogPath -FromLine $FromLine -TimeoutSec $TimeoutSec `
         -Pattern 'HUDROW show n=\d+ page=\d+/\d+ slots=\d+')
-    # Task 033 widened this line. `Indicator` is now read through the CONTROL's own
-    # pszText pointer rather than printed from the module's buffer, and the four fields
-    # after it are what say the player can actually SEE it: linked into the dialog's child
-    # chain, the engine's own visible bit, the box, and the ink the engine's text routine
-    # left in the dialog surface inside that box.
-    # BY NAME, NOT BY POSITION. Task 048 appended six fields to this line, and a positional
-    # parse shifts every group after the insertion WITHOUT failing -- it just starts reading
-    # one number out of another (task 039 hit exactly that on the QIND line).
+    # `Indicator` is read through the CONTROL's own pszText, not the module's buffer; the
+    # fields after it say whether the player can SEE it: linked into the dialog's child
+    # chain, the engine's visible bit, the box, and the ink the engine's text routine left
+    # inside that box. Groups are BY NAME, NOT BY POSITION: a positional parse survives a
+    # field inserted into this line without failing, it just reads one number out of another.
     $m = [regex]::Match($hits[-1],
         'HUDROW show n=(?<n>\d+) page=(?<page>\d+)/(?<pages>\d+) slots=(?<slots>\d+) ' +
         '\[(?<tags>[0-9A-F ]*)\] indicator="(?<text>[^"]*)" ' +
         'indLinked=(?<linked>\d+) indVisible=(?<visible>\d+) ' +
         'indBounds=\((?<l>-?\d+),(?<t>-?\d+),(?<r>-?\d+),(?<b>-?\d+)\) indInk=(?<ink>-?\d+)' +
-        # THE TAIL IS OPTIONAL, and that is what lets this ONE suite run both of task 048's
-        # arms. The DEFECT arm is merged main's plugin, which does not log these six fields at
-        # all -- and a run that cannot even parse its own log is not a measurement of the
-        # defect, it is a broken run. Missing reads as -1, "no answer", and every assertion
-        # that depends on one fails saying so.
+        # The tail is OPTIONAL so this one suite can also run a defect build that does not log
+        # these six fields: a run that cannot parse its own log is a broken run, not a
+        # measurement. A missing field reads as -1, "no answer", and each assertion that
+        # depends on one fails saying so.
         '(?: indBoxDiff=(?<boxDiff>-?\d+) indRefInk=(?<refInk>-?\d+) indRefId=(?<refId>-?\d+)' +
         ' indSurfInk=(?<surfInk>-?\d+) indFontH=(?<fontH>-?\d+) indShowing=(?<showing>\d+))?')
     if (-not $m.Success) { throw "test: unparseable HUDROW show line: $($hits[-1])" }
@@ -139,13 +115,11 @@ function Get-HudShow {
     }
 }
 
-# `HUDROW band after stock`, the reading that answers "did leaving paged mode strand any of
-# our pixels". Written once per hand-back, on a stock frame AFTER the one that hid the line
-# (the repaint it asked for had not run on that one).
-#
-# Returns $null when the running plugin never wrote one -- which is the DEFECT arm, whose
-# build has no such reading. A null is reported as a failed assertion by the caller, not as
-# an exception: "this build cannot answer the question" is the measurement there.
+# `HUDROW band after stock` answers "did leaving paged mode strand any of our pixels". The
+# plugin writes it once per hand-back, on a stock frame AFTER the one that hid the line (the
+# repaint it asked for has not run on that one). Returns $null when the running build never
+# wrote one; the caller reports that as a failed assertion, not an exception: "this build
+# cannot answer the question" is the measurement.
 function Get-HudBand {
     param([int]$FromLine, [int]$TimeoutSec = 15)
     $hits = @()
@@ -262,8 +236,8 @@ function Get-CropBytes {
 
 try {
     Step "generate the fixture: $UnitCount Lurkers, Use Map Settings, no triggers" {
-        # AGENTS.md rule 4 (task 022): the fixture folder may be shared between workers and
-        # the map browser opens a ROW, so a foreign .scx moves which map loads. Wait for
+        # AGENTS.md § Shared test-fixture folder: the folder may be shared between workers
+        # and the map browser opens a ROW, so a foreign .scx moves which map loads. Wait for
         # theirs to go; clear only ours; never the folder.
         Wait-ScFixtureFolderFree -Run $fixtures
         $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
@@ -277,9 +251,8 @@ try {
 
     $runArgs = @{ Mode = 'fanout'; InjectWindowedHelper = 'WMode'; GameDir = $GameDir; LogPath = $LogPath }
     if ($BuildDir) { $runArgs.BuildDir = $BuildDir }
-    # WHICH PLUGIN THIS RUN IS ABOUT TO LOAD, hashed before it loads it. Task 048 runs this
-    # suite twice against two different builds, and "which tree did that DLL come from" is not
-    # a question a reviewer should have to answer by hand afterwards.
+    # Hash the plugin this run is about to load, before it loads it: when the suite runs
+    # against two builds, "which tree did that DLL come from" must not need answering by hand.
     $dllDir  = if ($BuildDir) { $BuildDir } else { Join-Path $repoRoot 'work/scratch/plugin-build' }
     $dllPath = Join-Path $dllDir 'scplugin.dll'
     if (Test-Path -LiteralPath $dllPath) {
@@ -296,27 +269,20 @@ try {
     $hwnd = Get-ScGameWindow -ProcessId $gamePid
 
     Step 'the hudrow hook is actually installed, by NAME (task 047 / task 050)' {
-        # This used to assert a hardcoded total (`-eq 6`) that task 036 outgrew (it
-        # bumped the shadow-mode base from 4 to 5 for unit_IsStandardAndMovable)
-        # without the literal moving with it -- a count mismatch that names no hook
-        # (AGENTS.md's diagnostics rule), and a check that would stay silent if
-        # statDataUpdate (the ONE hook this suite exists to test) were ever replaced
-        # by some other hook while the total happened to stay put. task 047 already
-        # fixed the identical defect in test-combat-death.ps1 by comparing hook NAMES
-        # instead of a total; this suite now shares that same comparison
-        # (Get-ScFanoutExpectedHooks / Compare-ScHookNames, drive-game.ps1) rather
-        # than growing its own copy of the bug.
+        # Compare hook NAMES, never a hardcoded total: a count mismatch names no hook
+        # (AGENTS.md § Your DIAGNOSTICS are under the same rule as your assertions), and a
+        # total stays silent if statDataUpdate (the ONE hook this suite exists to test) is
+        # replaced by some other hook while the count happens to hold. The expected sets
+        # live in drive-game.ps1 (Get-ScFanoutExpectedHooks / Compare-ScHookNames).
         $cfg = @(Wait-ScLogMatch -LogPath $LogPath -Pattern 'FANOUT config: .*hudrow=1' -TimeoutSec 20)
         Assert-That 'the config line says hudrow=1' ($cfg.Count -gt 0)
         $cm = [regex]::Match($cfg[-1], 'circles=(\d) hudrow=(\d) queueind=(\d)')
         Assert-That "the config line carries circles/hudrow/queueind flags ($($cfg[-1]))" $cm.Success
-        # TWO SETS, and they are different on purpose (task 054). The log's own
-        # `HOOK <name>: installed at` lines carry EVERY module's hooks, so the by-name
-        # comparison is against the whole plugin's set. The `HOOK: n/n installed`
-        # summary a few lines below is sc_fanout's own, counting only what sc_fanout
-        # installed, so the count corroboration is against the fan-out set alone.
-        # Comparing either one against the other set is comparing two things that were
-        # never meant to be equal.
+        # TWO SETS, different on purpose. `HOOK <name>: installed at` lines carry EVERY
+        # module's hooks, so the by-name comparison is against the whole plugin's set. The
+        # `HOOK: n/n installed` summary is sc_fanout's own count of what sc_fanout installed,
+        # so the count corroboration is against the fan-out set alone. Cross-comparing them
+        # compares two things never meant to be equal.
         $expectedFanout = Get-ScFanoutExpectedHooks -Circles ($cm.Groups[1].Value -eq '1') `
             -HudRow ($cm.Groups[2].Value -eq '1') -QueueInd ($cm.Groups[3].Value -eq '1')
         $expectedAll = Get-ScPluginExpectedHooks -Circles ($cm.Groups[1].Value -eq '1') `
@@ -364,7 +330,7 @@ try {
         Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
         Start-Sleep -Seconds 10
         # The tips dialog is found in the engine's own dialog list and dismissed by ITS OWN
-        # OK button, then asserted gone (task 027) -- never a fixed point, never the registry.
+        # OK button, then asserted gone -- never a fixed point, never the registry (AGENTS.md).
         Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
         Start-Sleep -Seconds 2
     }
@@ -421,30 +387,22 @@ try {
         Assert-That 'the indicator text changed across the flip' `
             ($p2.Indicator -ne $page1.Indicator -and $p2.Indicator -match '13-24' -and $p2.Indicator -match '\(2/3\)') `
             "(page1='$($page1.Indicator)' page2='$($p2.Indicator)')"
-        # TASK 033. Everything above reads a STRING; none of it says the player can see it.
-        # This suite asserted that string out of the module's own buffer until then, and the
-        # indicator has been nine pixels tall since task 017 -- shorter than the font, which
-        # makes the engine's text routine return without drawing anything at all. So: the
-        # string is read back through the CONTROL's pszText, and the two assertions below are
-        # the ones that would have caught it.
+        # Everything above reads a STRING; none of it says the player can see it. Do not
+        # assert the string out of the module's own buffer: a nine-pixel indicator box, shorter
+        # than the font, makes the engine's text routine return without drawing anything, and
+        # a buffer read-back passes over that. The string comes through the CONTROL's pszText,
+        # and the two assertions below are what catch an invisible control.
         Assert-That 'the indicator control is linked into the status dialog' ($p2.IndLinked)
         Assert-That "and the ENGINE's own visible bit is set on it" ($p2.IndVisible)
 
-        # ------------------------------------------------------------------------------
-        # TASK 048. `IndInk > 0` used to be the third assertion here, and it could not fail.
-        #
-        # Ink counts non-background bytes in a rect, so it can only detect our text over a
-        # region the ENGINE leaves as background. Over a region the engine also paints it
-        # SATURATES -- every byte is already non-zero before one pixel of ours exists -- and
-        # it does not fail by reading zero, it reads the rect's whole area and looks healthy.
-        # Measured on merged main, box (32,9,180,25) = 148 x 16 = 2368 bytes: indInk=2368 for
-        # "1-12 (1/3)", 2368 for "13-24 (2/3)", 2368 for the wrap back. Three strings, one
-        # number, the full area. It is still logged, as corroboration; it is not asserted on.
-        #
-        # What replaces it is a DIFFERENCE, the same remedy task 039 arrived at: the band
-        # compared against a copy of the SAME RECT taken with none of our line on it. Its two
-        # blindness checks come first, because boxDiff=0 and "the probe cannot read anything"
-        # must not be the same reading.
+        # Do not assert `IndInk > 0`: ink counts non-background bytes, so over a region the
+        # engine also paints it SATURATES and cannot fail. Measured: box (32,9,180,25) =
+        # 148 x 16 = 2368 bytes read indInk=2368 for "1-12 (1/3)", "13-24 (2/3)" and the wrap
+        # back -- three strings, one number, the full area (research/status-pane-text.md
+        # § 5.2). Ink stays logged as corroboration. The oracle is boxDiff, the band compared
+        # against a copy of the SAME RECT with none of our line on it; its two blindness
+        # checks come first so boxDiff=0 and "the probe cannot read anything" are not the
+        # same reading.
         Assert-That "the probe can read the dialog surface at all (surfInk=$($p2.SurfInk))" `
             ($p2.SurfInk -gt 0)
         Assert-That "and a control the ENGINE fills (refInk=$($p2.RefInk) over control $($p2.RefId))" `
@@ -463,9 +421,9 @@ try {
             ($p2.IndBox[1] -ge $rowBottom)
         Assert-That "it is flush with the row's left edge (left=$($p2.IndBox[0]) vs $($rects.RowLeft))" `
             ($p2.IndBox[0] -eq $rects.RowLeft)
-        # The engine's string draw refuses OUTRIGHT when the box is shorter than the font --
-        # the defect that made task 033's indicator invisible for weeks -- so the band's
-        # height is checked against the font's own, read live.
+        # The engine's string draw refuses OUTRIGHT when the box is shorter than the font
+        # (research/status-pane-text.md § 5), so the band's height is checked against the
+        # font's own, read live.
         $boxH = $p2.IndBox[3] - $p2.IndBox[1]
         $boxW = $p2.IndBox[2] - $p2.IndBox[0]
         Assert-That "the band is at least as tall as the font ($boxH >= $($p2.FontH))" `
@@ -542,7 +500,6 @@ try {
         $sel = @($lines | Select-String -Pattern "CMD id=0x09 len=4 bytes=\[09 01 $tagLo $tagHi\]")
         Assert-That "a vanilla Select(1) carried the clicked unit's tag $targetTag" `
             ($sel.Count -gt 0)
-        # The shadow list rebuilt coherently around the new 1-unit selection.
         Assert-That 'the shadow list rebuilt as a 1-unit selection' `
             (@($lines | Select-String -Pattern 'SELECT commit: 1 units').Count -gt 0)
         # And with no overflow left, the row handed itself back to the engine.
@@ -646,19 +603,13 @@ try {
             (@($lines2 | Select-String -Pattern 'HUDROW (show|flip)').Count -eq 0)
         Shot 'stock-small-selection' | Out-Null
 
-        # ------------------------------------------------------------------------------
-        # TASK 048, and this is the one the MOVE puts at risk rather than fixes.
-        #
-        # The old box sat on the first buttons ON PURPOSE: those rects repaint whenever the
-        # buttons redraw, so leaving paged mode could not strand indicator pixels on the
-        # dialog surface. A box in the band below the row has no control under it, so the
-        # module asks for its own rect to be repainted (updateControl on the hidden control)
-        # -- and this is where that ask is measured instead of argued.
-        #
-        # `stranded` counts the bytes our line owns that STILL hold its value now the row is
-        # back to stock; 0 is the pass. `glyphBytes` is how many bytes it owned in the first
-        # place, and it travels with the answer because stranded=0 over an EMPTY mask is a
-        # probe that never saw the line, not a clean band.
+        # The indicator box sits in the band BELOW the row, where no control repaints it (a
+        # box over the first buttons would be repainted whenever they redraw), so the module
+        # asks for its own rect to be repainted on hand-back (updateControl on the hidden
+        # control). This measures that ask instead of arguing it: `stranded` counts the bytes
+        # our line owns that STILL hold its value once the row is back to stock, 0 is the
+        # pass; `glyphBytes` travels with it because stranded=0 over an EMPTY mask is a probe
+        # that never saw the line, not a clean band.
         $band = Get-HudBand -FromLine $mark
         if ($null -eq $band) {
             Assert-That ('the plugin reported the band after the hand-back ' +
@@ -674,17 +625,14 @@ try {
         }
     }
 
-    # NOTE on the death / removal legs: in-game unit death and removal (transport
-    # load, mind control, archon merge) are not exercised here because this fixture
-    # has NO combat and no transports -- one unit-less computer slot, no enemy, no
-    # triggers (exactly what keeps the map from ending itself; see
-    # test-burrow-fanout.ps1). Producing any of them unattended would need an
-    # attacker/transport and a reliable wait, which the fixture deliberately excludes.
-    # These are instead modelled correctly OFFLINE in hooktest part [10]: real damage
-    # death (HP->0, uniqueness UNCHANGED -- the case the 0xA5 bug hid), slot reuse,
-    # PERSISTENT engine-side divergence (hand back to stock, no churn, heal on the
-    # next commit), and the CLICK GATE swallowing a click on a removed-not-killed
-    # overflow unit before it can reach the engine's Select.
+    # Unit death and removal (transport load, mind control, archon merge) are not exercised
+    # here: the fixture has no combat and no transports (one unit-less computer slot, no
+    # enemy, no triggers -- what keeps the map from ending itself; see test-burrow-fanout.ps1),
+    # and producing them unattended would need an attacker/transport and a reliable wait.
+    # They are covered OFFLINE in hooktest part [10]: damage death (HP->0, uniqueness
+    # UNCHANGED), slot reuse, persistent engine-side divergence (hand back to stock, no
+    # churn, heal on the next commit), and the CLICK GATE swallowing a click on a
+    # removed-not-killed overflow unit before it reaches the engine's Select.
 }
 catch {
     Write-Host "  FAIL a test step threw: $($_.Exception.Message)"
@@ -717,8 +665,8 @@ Write-Host ''
 Write-Host '[final] the run must balance'
 $left = if ($gamePid -gt 0) { Get-Process -Id $gamePid -ErrorAction SilentlyContinue } else { $null }
 Assert-That 'the game process this test started is gone' ($KeepOpen -or $null -eq $left)
-# This test's own fixture, not the folder: the folder is shared with other workers and
-# this suite no longer removes it (AGENTS.md rule 4 -- see the note at the generation step).
+# This test's own fixture, not the folder: the folder is shared with other workers
+# (AGENTS.md § Shared test-fixture folder).
 Assert-That 'the generated map was cleaned up' ($KeepOpen -or -not (Test-Path -LiteralPath $mapPath))
 
 $hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
@@ -726,12 +674,10 @@ Write-Host "  StarCraft.exe SHA-256 after:  $hashAfter"
 Assert-That 'StarCraft.exe on disk is byte-identical to before the run' ($hashAfter -eq $hashBefore)
 Assert-That 'and still byte-identical to pristine 1.16.1' ($hashAfter -eq $PRISTINE_SHA256)
 
-# ------------------------------------------------------------------------------------
-# COVERAGE, printed beside the verdict on every run (AGENTS.md, task 041). The ONE state
-# this suite exists to reach is the row PAGING a >12 selection: nothing above can say
-# anything about the page indicator unless the run got there, and a run that never did
-# looks exactly like a clean pass. So it is counted and printed, not inferred.
-# ------------------------------------------------------------------------------------
+# COVERAGE, printed beside the verdict on every run (AGENTS.md § A random suite must report
+# the coverage of its SEAM). The ONE state this suite exists to reach is the row PAGING a
+# >12 selection: nothing above says anything about the indicator unless the run got there,
+# and a run that never did looks exactly like a clean pass. Counted and printed, not inferred.
 Write-Host ''
 Write-Host '[coverage] the seam this suite exists to reach'
 $logLines = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue)

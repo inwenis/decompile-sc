@@ -1,22 +1,18 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Task 063, the OFF-SCREEN half of probe-fullscreen-desktop.ps1. Launches the game
-in TRUE FULLSCREEN (no windowed helper) on the desktop this process was born on,
-holds it up briefly, reports what happened, closes it.
+The OFF-SCREEN half of probe-fullscreen-desktop.ps1: launches the game in TRUE
+FULLSCREEN (no windowed helper) on the desktop this process was born on, holds
+it up briefly, reports what happened, closes it.
 
 .DESCRIPTION
-Run this ONLY through run-offscreen.ps1 -- probe-fullscreen-desktop.ps1 does,
-and it is the only caller. On the visible desktop this launch would be exactly
-the mode switch hard rule 5 forbids running unattended; the parent probe exists
-to measure whether an invisible desktop CONTAINS it, and the measurement is
-taken by the parent from the visible side while this child runs.
-
-Every observation is printed as a `CHILD key=value` line for the parent to parse
-out of the run-offscreen transcript. This child never touches display settings
-itself -- it only launches the game, which does whatever the engine's video init
-(0x0041D930: SetCooperativeLevel EXCLUSIVE|FULLSCREEN, SetDisplayMode 640x480x8,
-on failure SetDisplayMode(GetSystemMetrics(0/1), 8)) does on this desktop.
+Run this ONLY through run-offscreen.ps1: on the visible desktop this launch is
+the unattended mode switch AGENTS.md § "Hard rules" forbids, and the parent
+measures from the visible side whether an invisible desktop CONTAINS it.
+Observations print as `CHILD key=value` lines for the parent to parse out of the
+run-offscreen transcript. This child never touches display settings -- the
+engine's video init does (0x0041D930: SetCooperativeLevel EXCLUSIVE|FULLSCREEN,
+SetDisplayMode 640x480x8, on failure SetDisplayMode(GetSystemMetrics(0/1), 8)).
 #>
 [CmdletBinding()]
 param(
@@ -37,9 +33,8 @@ Write-Host "CHILD desktop=$(Get-ScThreadDesktopName)"
 $gamePid = 0
 $healthErr = $null
 try {
-    # No -InjectWindowedHelper and no -Windowed: the whole point is the stock
-    # DirectDraw fullscreen path. -NoLaunchLock: the PARENT holds the lock for
-    # the probe's whole duration.
+    # No -InjectWindowedHelper and no -Windowed: the measurement needs the stock
+    # DirectDraw fullscreen path. -NoLaunchLock: the PARENT holds the launch lock.
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
         -Mode observe -ScreenScan 1 -NoLaunchLock `
         -GameDir $GameDir -LogPath $log 6>&1 | ForEach-Object {
@@ -49,7 +44,7 @@ try {
 }
 catch {
     # An unhealthy launch (e.g. a DirectDraw error box) is a RESULT of this
-    # probe, not a crash of it -- exactly probe-widescreen-present's stance.
+    # probe, not a crash of it: report it, do not rethrow.
     $healthErr = $_.Exception.Message
     if (-not $gamePid) {
         $p = @(Get-Process StarCraft -ErrorAction SilentlyContinue)
@@ -62,13 +57,14 @@ if ($healthErr) { Write-Host "CHILD unhealthy=$healthErr" }
 
 if ($gamePid -gt 0) {
     Start-Sleep -Seconds 5
-    # The window inventory, from THIS desktop (EnumWindows is desktop-scoped):
-    # an SWarClass rect says what mode the fullscreen window believes it has; a
-    # #32770 dialog is the DirectDraw error box.
+    # EnumWindows is desktop-scoped, so only this child can inventory the windows:
+    # an SWarClass rect gives the mode, a #32770 dialog is the DirectDraw error box.
     try { & (Join-Path $scriptDir 'check-game-windows.ps1') -ProcessId $gamePid | ForEach-Object { Write-Host "       $_" } }
     catch { Write-Host "CHILD checkwindows-error=$($_.Exception.Message)" }
 
     Write-Host "CHILD holding=$HoldSec"
+    # The parent samples the visible desktop only while this child lives, so the
+    # hold is the window in which a real-desktop mode change can be caught.
     Start-Sleep -Seconds $HoldSec
 
     try {
@@ -80,7 +76,7 @@ if ($gamePid -gt 0) {
     }
 }
 else {
-    Write-Host 'CHILD closed=1'   # nothing to close
+    Write-Host 'CHILD closed=1'
 }
 Write-Host 'CHILD done=1'
 exit 0

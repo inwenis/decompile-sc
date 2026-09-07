@@ -1,18 +1,12 @@
 #Requires -Version 7
 <#
-Regression coverage for the #105 strict-mode regression (task 070, 2026-08-13).
+Takes the launch lock the way a real suite takes it: drive-game.ps1 dot-sourced
+first, so `Set-StrictMode -Version Latest` is in force. Under strict mode a bare
+read of an unset global throws, so a test that exercises the lock DIRECTLY can
+stay green while every lock-taking suite on the machine is broken.
 
-sc-launch-lock.ps1's self-deadlock guard read `$global:ScLaunchLockHeld` bare.
-#105's own lock tests exercised the lock DIRECTLY and passed -- but no test took
-the lock the way every real suite takes it: after dot-sourcing drive-game.ps1,
-which sets `Set-StrictMode -Version Latest` for the whole session state. Under
-strict mode a bare read of an unset global THROWS, so every lock-taking suite
-on the machine broke on #105's first day while 282 tests stayed green.
-
-So this file takes the lock exactly the way a suite does: drive-game.ps1 first,
-strict mode and all. It lives in its own file, deliberately -- the strict mode
-it turns on leaks to everything after it in the same session state, and no
-other Describe should inherit that by accident.
+Its own file, deliberately: the strict mode leaks to everything after it in the
+same session state, and no other Describe should inherit it by accident.
 #>
 
 BeforeAll {
@@ -26,7 +20,8 @@ Describe 'the launch lock survives a real suite''s strict mode (task 070)' {
         . (Join-Path $script:pluginDir 'sc-launch-lock.ps1')
 
         $tmp = Join-Path $TestDrive 'strictmode-test.lock'
-        # The #105 regression threw right here, before any file was touched.
+        # The strict-mode oracle: if the held-map global is read bare, this call
+        # throws under strict mode before any file is touched.
         $lock = Enter-ScLaunchLock -TaskId 'pester-strictmode' -LockPath $tmp -TimeoutMinutes 1
         try {
             $lock | Should -Not -BeNullOrEmpty
@@ -38,10 +33,10 @@ Describe 'the launch lock survives a real suite''s strict mode (task 070)' {
         finally {
             Exit-ScLaunchLock -Lock $lock
         }
-        # #103's fix: the file is deleted on release.
         Test-Path -LiteralPath $tmp | Should -BeFalse
 
-        # And the held-map bookkeeping was cleaned up: re-entering now succeeds.
+        # Exit must also clear the held-map entry, or the next Enter in this
+        # process hits the self-deadlock guard instead of taking the lock.
         $lock2 = Enter-ScLaunchLock -TaskId 'pester-strictmode-2' -LockPath $tmp -TimeoutMinutes 1
         $lock2 | Should -Not -BeNullOrEmpty
         Exit-ScLaunchLock -Lock $lock2

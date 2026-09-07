@@ -1,21 +1,17 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Make watching an assertion FAIL cost about three minutes instead of a task (issue #78).
+Build a baseline arm and a patched arm, and report every hooktest check whose verdict moved.
 
 .DESCRIPTION
-Builds TWO throwaway copies of tools/plugin -- baseline (untouched) and defect (one patch
-applied) -- each in its own work/scratch/defect-arm/<name>/{baseline,defect} tree, runs
-build.ps1 -Test (which builds and runs hooktest.exe, no game involved) on both, and prints
-every check whose verdict CHANGED between them.
-
-That last part is the whole point. A defect build that everything reads green against
-proves nothing about the report; a check that never moves when the code under it breaks was
-never testing that code. This is exactly how #66 stopped being an opinion: a real defect
-build measured 28 balance checks fail while every "spent NOTHING" check stayed green.
-
-The REAL tree is never touched -- both arms are copies. Get-ScSourceDigest over the real
-tools/plugin/src is taken before and after; the run throws if they differ.
+Builds two throwaway copies of tools/plugin -- baseline and defect (one patch applied) --
+runs build.ps1 -Test on each (hooktest.exe, no game) and prints every check whose verdict
+CHANGED. A check that stays green while the code under it is broken was never testing that
+code, so an unchanged verdict is a finding about the suite, not a pass for the patch.
+Measured this way, one real defect build moved 28 balance checks to FAIL while every
+"spent NOTHING" check stayed green -- that family of checks was never testing its code.
+Both arms are copies: Get-ScSourceDigest over the real tools/plugin/src is taken around the
+run, and the run throws if it differs.
 
 .EXAMPLE
 ./tools/plugin/build-defect-arm.ps1 -Patch work/defects/prodqueue-cap-off-by-slots.patch
@@ -30,7 +26,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot
 $repoRoot  = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
-. (Join-Path $scriptDir 'sc-build-id.ps1')   # Get-ScSourceDigest, over the REAL tree only
+. (Join-Path $scriptDir 'sc-build-id.ps1')   # Get-ScSourceDigest
 
 $patchPath = (Resolve-Path -LiteralPath $Patch).Path
 $realSrc   = Join-Path $repoRoot 'tools/plugin/src'
@@ -66,10 +62,9 @@ $baseText = Build-Arm -ArmName 'baseline'
 Write-Host "defect-arm: building defect ($Name) ..."
 $defText  = Build-Arm -ArmName 'defect' -ApplyPatch $patchPath
 
-# --- parse: every "ok"/"FAIL" line, in the order hooktest printed it, with the [N] Part
-# it fell under. Same test binary source runs both arms, so the sequence of Check() calls
-# is identical unless the patch itself changed control flow -- which the length check below
-# catches rather than silently misaligning.
+# Verdicts are compared by position: both arms run the same Check() sequence, so index i is
+# the same check -- unless the patch changed control flow, which the count check below catches
+# rather than silently misaligning.
 function Get-HooktestChecks {
     param([string]$Text)
     $part = '(none)'

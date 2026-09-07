@@ -1,32 +1,23 @@
 #Requires -Version 7
 <#
-Pester cases for tools/make_test_map.py's PTEx tech-state writer (task 026).
+Pester cases for tools/make_test_map.py's PTEx tech-state writer.
 
-WHY THESE EXIST AT ALL. The generator wrote PTEx with a TECH-major index and read it
-back with the same tech-major index, so its own validator confirmed its own mistake and
-printed `PTEx: player 0 has researched 10(personnel-cloaking)` for a map on which player
-0 had researched nothing. Every fixture that needed a tech other than Stim Packs was
-silently wrong, and one of them cost tasks 022 and 023 the entire Ghost question.
+The generator writes PTEx and reads it back through one shared helper, so both halves
+agreeing proves nothing: a tech-major index on both sides reports `PTEx: player 0 has
+researched 10(personnel-cloaking)` for a map on which player 0 has researched nothing.
 
-A shared helper stops the write and the read drifting apart again, but it cannot prove
-the convention -- both halves agreeing is exactly the failure that happened. So these
-cases assert the LITERAL byte offsets that the engine's own applier dictates, taken from
-its disassembly (0x004CB870: `SUB EBX,0x2c` per player, `MOV EAX,0x2c` down to 0 per
-tech; research/command-card.md 6). They fail against the pre-026 indexing by
-construction -- `ptexIndex(10, 0)` was 120 and has to be 10 -- and the tech-0/player-0
-case is pinned separately because it is the one point where both conventions agree, and
-therefore the reason nobody noticed.
+So these cases assert the LITERAL byte offsets the engine's own applier dictates, taken
+from its disassembly (0x004CB870: `SUB EBX,0x2c` per player, `MOV EAX,0x2c` down to 0
+per tech; research/command-card.md 6). Player-major is the convention: `ptex_index(10, 0)`
+must be 10, not the tech-major 120.
 #>
 
 BeforeAll {
     $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-    # Task 069, issue #97: the old chain here took `python` on PATH whenever no LOCAL
-    # .venv existed -- in a fresh worktree that interpreter has no richchk, so all of
-    # these cases FAILED (rather than skipped) for a reason unrelated to the code under
-    # test, and every fresh worktree started with a red local CI gate. Resolve-ScPython
-    # finds the main checkout's .venv from a worktree, and rejects any interpreter that
-    # cannot import richchk -- so a machine with no usable python SKIPS with the real
-    # reason on the skip.
+    # Resolve-ScPython finds the main checkout's .venv from a worktree and rejects any
+    # interpreter that cannot import richchk: a bare `python` from PATH has no richchk in
+    # a fresh worktree, so these cases would FAIL for a reason unrelated to the code under
+    # test instead of SKIPPING with the real reason.
     . (Join-Path $script:RepoRoot 'tools/sc-python.ps1')
     $resolved = Resolve-ScPython -RepoRoot $script:RepoRoot -RequireModule 'richchk'
     $script:Python = $resolved.Path
@@ -45,13 +36,13 @@ BeforeAll {
         ) -join "`n"
         $out = & $script:Python -c "$prelude`n$Snippet" 2>&1
         if ($LASTEXITCODE -ne 0) { throw "python failed: $out" }
-        # richchk's StormLib loader writes a warning to stderr on every archive it opens.
-        # Dropped by name, and only by name, so a snippet that really fails still arrives
-        # whole -- the exit-code check above happens first and carries the full output.
+        # richchk's StormLib loader warns to stderr on every archive it opens. Dropped by
+        # name, and only by name, and only below the exit-code check above -- so a snippet
+        # that really fails still throws with its full, unfiltered output.
         $out = @($out | Where-Object { "$_" -notmatch 'StormLibFinder' })
-        # Normalised to LF: Out-String joins with the platform's newline, so a
-        # multi-line expectation written with `n in this file would otherwise never
-        # match on Windows however right the snippet is.
+        # Out-String joins with the platform's newline, so a multi-line expectation
+        # written with `n in this file would never match on Windows, however right the
+        # snippet is.
         (($out | Out-String).Trim()) -replace "`r`n", "`n"
     }
 }
@@ -71,10 +62,9 @@ Describe 'make_test_map PTEx indexing' {
     }
 
     It 'agrees with the old tech-major indexing at the two corner cells and nowhere else' {
-        # Two fixed points, not one: the first cell and the last, since
-        # t*12 + p == p*44 + t only for (0,0) and (43,11) -> 0 and 527. The first is the
-        # whole reason the bug survived -- Stim Packs for the human slot is the one
-        # fixture that could ever have worked, and it is the one every suite used.
+        # Two fixed points, not one: t*12 + p == p*44 + t only for (0,0) and (43,11).
+        # (0,0) is Stim Packs for the human slot -- the one cell every suite touches, and
+        # so the one cell where a tech-major index passes unnoticed.
         Invoke-MapPy @'
 same = [(t, p) for t in range(m.PTEX_TECHS) for p in range(m.PTEX_PLAYERS)
         if m.ptex_index(t, p) == t * m.PTEX_PLAYERS + p]
@@ -139,17 +129,15 @@ except ValueError:
 }
 
 <#
-UNIx, the map's own unit-settings override (task 031).
+UNIx, the map's own unit-settings override.
 
-The layout here was NOT taken from prose. These cases pin it against the two things that
-can contradict it: the section's real size, and the real stats of units anyone can check
-by hand. If an offset drifts, `Marine has 40 hit points` stops being true and the case
-below says so -- which is the same discipline the PTEx cases use, for the same reason
-(a generator that verifies its own write with its own indexing verifies nothing).
+The layout is NOT taken from prose. It is pinned against the two things that can
+contradict it: the section's real size, and the real stats of units anyone can check by
+hand. If an offset drifts, `Marine has 40 hit points` stops being true and the case below
+says so -- a generator that verifies its own write with its own indexing verifies nothing.
 
-What none of this proves is that the ENGINE reads these bytes. That is
-tools/plugin/probe-unit-settings.ps1's job, in a running game, and no unit test can stand
-in for it.
+None of this proves the ENGINE reads these bytes. That is
+tools/plugin/probe-unit-settings.ps1's job, in a running game.
 #>
 Describe 'make_test_map UNIx layout' {
     BeforeEach {
@@ -298,14 +286,14 @@ for bad in ("scv", "nosuchunit=1", "scv=fast"):
 }
 
 <#
-make-test-map.ps1's OWN failure behaviour (task 069, issue #97).
+make-test-map.ps1's OWN failure behaviour.
 
-The wrapper used to propagate the generator's exit code and nothing else; every suite
-captures its output and checks a file later, so a failed generation scrolled past as a
-warning and the first LOUD message was drive-game blaming another worker for the file
-that was never written. These cases pin the fix: a failed or empty generation THROWS at
-the generation step, naming what happened. They drive the wrapper through -Python (a
-stub interpreter), so they need no venv, no richchk and no template map.
+Every suite captures the wrapper's output and checks for the file later, so a wrapper
+that merely propagates the generator's exit code lets a failed generation scroll past as
+a warning, and the first LOUD message is drive-game blaming another worker for a file
+nobody wrote. So a failed or empty generation THROWS at the generation step, naming what
+happened. These cases drive the wrapper through -Python (a stub interpreter): no venv,
+no richchk, no template map needed.
 #>
 Describe 'make-test-map.ps1 refuses at generation instead of failing downstream' {
     BeforeAll {

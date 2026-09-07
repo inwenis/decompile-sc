@@ -1,26 +1,15 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Task 037. Queues 2+ upgrades at a real building and reads back whether the QUEUE INDICATOR
-(sc_queueind.cpp, SC_QIND_UPGRADE) actually shows it -- both from the in-process oracle and
-from a captured frame, because task 037's own finding is that the oracle alone let this ship
-invisible once already (AGENTS.md, task 034's nine-pixel box).
+Queues 2+ upgrades at a real building and reads back whether the QUEUE INDICATOR
+(sc_queueind.cpp, SC_QIND_UPGRADE) shows it -- from the in-process oracle AND a real frame.
 
 .DESCRIPTION
-The user, 2026-08-11: "i do not see upgrade queue - tested on terran engineering bay". Static
-reading of sc_queueind.cpp found AnchorFor() had no case for SC_QIND_UPGRADE -- it fell
-through to `return 0`, and ScQueueIndOnFrame reads a null anchor as "nothing to show" and
-resets the mode to NONE before ever attempting a splice. Building-agnostic: neither AnchorFor
-nor the mode it is given look at the unit's type, so every upgrade-producing building was
-affected identically, not just an Engineering Bay.
-
-THE ORACLE IS NOT ENOUGH HERE (2026-08-12, conductor + task 039's disassembly of the paint
-path): the indicator control is spliced at the HEAD of the dialog's child list and dialogs
-paint children in list order, so the spliced text paints UNDER whatever the engine paints
-after it in that frame. QIND can report `mode=3 text="+2 upg" ink>0` -- entirely truthfully
--- for a string sitting behind an opaque control the player can never see. So this probe
-captures a real frame (`-CaptureFrames`) on top of reading QIND, and the frame is what
-settles it, not the log line.
+QIND reports the module's own state, and that state can be entirely truthful about a string
+no player can read: `mode=3 text="+2 upg" ink>0` says nothing about paint order or about the
+art the text lands on, which is what decides whether it reaches the glass legibly. So the
+frame `-CaptureFrames` captures is what settles this probe, not the log line
+(AGENTS.md § "Oracles: what counts as a read-back").
 
 .EXAMPLE
 ./tools/plugin/probe-upgrade-queue-indicator.ps1 -UnitType engineering-bay -CaptureFrames
@@ -30,6 +19,9 @@ settles it, not the log line.
 [CmdletBinding()]
 param(
     [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
+    # Two interchangeable samples, not a required set: neither AnchorFor nor the mode it is
+    # given looks at the unit's type, so the indicator behaves identically at every
+    # upgrade-producing building.
     [ValidateSet('engineering-bay', 'academy')]
     [string]$UnitType = 'engineering-bay',
     [string]$BuildDir,
@@ -52,7 +44,7 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 $failures = 0
 $step = 0
 
-# units.dat ids, evidence: tools/make_test_map.py UNIT_TYPE_IDS (task 029's own table).
+# units.dat ids, evidence: the UNIT_TYPE_IDS table in tools/make_test_map.py.
 $UNIT_TYPE_ID = @{ 'engineering-bay' = 122; 'academy' = 112 }
 $BUILDING_TYPE = $UNIT_TYPE_ID[$UnitType]
 $UPGRADE_CMD = '0x32'
@@ -85,16 +77,14 @@ function Get-World { param([string]$Tag, [int]$TimeoutSec = 20)
 function Get-Card { param([string]$Tag, [int]$TimeoutSec = 20)
     Get-ScCardState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -TimeoutSec $TimeoutSec }
 
-# Task 033's indicator, read back OUT OF THE LIVE DIALOG. Same parser test-production-
-# queue.ps1 uses; copied rather than shared because the two suites do not otherwise share
-# a file.
+# The indicator, read back OUT OF THE LIVE DIALOG. Same parser as test-production-queue.ps1,
+# duplicated because the two suites share no file.
 $script:qindSeq = 0
 function ConvertFrom-QIndLine {
     param($Hit)
-    # BY NAME. This parser was written against the line as it stood before task 039 added
-    # refId/slotDiff, then surfInk/boxDiff -- four insertions, each of which shifts every
-    # positional group after it. It did not degrade gracefully: it threw "unparseable" and
-    # took the whole probe down with it. Named groups survive the next field too.
+    # Match BY NAME: fields get inserted into the QIND line, and each insertion shifts every
+    # positional group after it -- a positional parser throws "unparseable" and takes the
+    # whole probe down with it. Named groups survive the next field.
     $m = [regex]::Match($Hit.Line,
                 'QIND \[[^\]]+\] mode=(?<mode>\d+) linked=(?<linked>\d+) visible=(?<visible>\d+) ' +
                 'text="(?<text>[^"]*)" ' +
@@ -263,11 +253,10 @@ try {
         Assert-That 'it is linked into the dialog' ($q.Linked)
         Assert-That 'the engine''s own visible bit is set' ($q.Visible)
         Assert-That "text says +N upg (got `"$($q.Text)`")" ($q.Text -match '^\+\d+ upg$')
-        # NOT `ink > 0` any more, and this is the assertion task 039 came back to correct.
-        # The pane draws its own art into the surface this probe counts, so every rect in it
-        # is already saturated: `ink=608` here is a number about the pane, not about us, and
-        # it is true before one pixel of ours exists. boxDiff is the same box against a copy
-        # of itself taken while the indicator was hidden -- the bytes we are responsible for.
+        # Do not assert `ink > 0`: the pane draws its own art into the surface this probe
+        # counts, so every rect in it is saturated (ink=608 here) before one pixel of ours
+        # exists. boxDiff is that same box against a copy taken while the indicator was
+        # hidden -- the only bytes this plugin is responsible for.
         Assert-That "the box holds bytes this plugin put there (boxDiff=$($q.BoxDiff), ink=$($q.Ink) is saturated by the pane's own art)" `
             ($q.BoxDiff -gt 0)
         Assert-That "and the probe can read this surface at all (surfInk=$($q.SurfInk))" `

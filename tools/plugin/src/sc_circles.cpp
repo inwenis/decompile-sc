@@ -1,22 +1,18 @@
 // sc_circles.cpp -- see sc_circles.h.
-//
 // ORDERING IS THE WHOLE DESIGN. Two sets of circles exist at once: the engine's (on
 // the <=12 units it holds) and ours (on everything the cap threw away). They must
 // never overlap, or one of us frees the other's image.
 //
-//   0x0049AE40 CreateNewUnitSelectionsFromList   <- the client's "replace the whole
-//   |                                               selection" funnel, 10 callers
-//   |  [OUR PRE-HOOK]  ScCirclesHide()             our circles come off FIRST, while
-//   |                                              the engine's old ones are still on
-//   |  detach loop over activePlayerSelection      the engine takes its own off
-//   |  attach loop over the new list               the engine puts its own on
+//   0x0049AE40 CreateNewUnitSelectionsFromList  <- the client's "replace the whole
+//   |  [OUR PRE-HOOK] ScCirclesHide()              selection" funnel, 10 callers;
+//   |  detach loop over activePlayerSelection      ours come off FIRST, then the
+//   |  attach loop over the new list               engine detaches and re-attaches
 //   v
-//   0x004C0860 CMDACT_Select                     <- sc_fanout's existing hook
-//      [OUR HOOK]  ScCirclesShow(overflow units)   our circles go on LAST
+//   0x004C0860 CMDACT_Select                    <- sc_fanout's hook
+//      [OUR HOOK] ScCirclesShow(overflow units)    our circles go on LAST
 //
-// Because our detach runs before the engine's attach, a unit can never be in both
-// sets: at the moment we let go of a unit the engine has not yet taken it, and at the
-// moment we take one the engine has already finished.
+// So a unit is never in both sets: when we let go the engine has not yet taken it,
+// and when we take one the engine has already finished.
 
 #include <windows.h>
 #include <stdio.h>
@@ -39,29 +35,24 @@ static bool  g_enabled = false;
 static ScCircleUnit g_circled[SC_CIRCLES_MAX];
 static int          g_circledCount = 0;
 
-static unsigned g_statShown    = 0;   // circles attached
-static unsigned g_statHidden   = 0;   // circles detached
-static unsigned g_statSkipped  = 0;   // units skipped (engine owns it, or stale)
+static unsigned g_statShown    = 0;
+static unsigned g_statHidden   = 0;
+static unsigned g_statSkipped  = 0;   // engine owns the sprite, or the unit is stale
 static unsigned g_statNoImage  = 0;   // the engine's image free list said no
-static unsigned g_statLost     = 0;   // recorded unit no longer matched at detach
+static unsigned g_statLost     = 0;   // record failed revalidation at detach
 static unsigned g_statSession  = 0;   // circles abandoned because the game changed
 
 // ---------------------------------------------------------------------------
-// THE EPOCH TEST (sc_session.h) -- issue #67 item 6, and THE ONE WHERE THE ORDER OF
-// THE CHECKS IS THE FIX RATHER THAN A DETAIL
+// THE EPOCH TEST (sc_session.h): the ORDER of the checks is the safety property.
 //
-// g_circled[] holds CSprite* HEAP addresses. Every other module in this plugin holds
-// CUnit*s, which are seats in a fixed global array: a stale one is always readable and
-// only ever wrong. A stale CSprite* is neither -- the sprite was freed when its game
-// ended, and the allocator hands the same address out again. So ScCirclesHide's
-// `sprite != c->sprite` comparison, which is what stops us freeing an image that is
-// not ours, can be satisfied by an unrelated sprite that merely landed on the same
-// bytes, and RemoveCircle would then unlink an image out of a live sprite belonging to
-// the game the player is actually in.
+// g_circled[] holds CSprite* HEAP addresses, not CUnit*s. A stale CUnit* is a seat in
+// a fixed global array -- always readable, only ever wrong. A stale CSprite* was freed
+// when its game ended and the allocator hands the same address out again, so
+// ScCirclesHide's `sprite != c->sprite` guard can be satisfied by an unrelated LIVE
+// sprite, and RemoveCircle would unlink an image out of the game the player is in.
 //
-// Hence: this runs BEFORE anything dereferences c->unit or c->sprite, and it drops the
-// records rather than detaching them. There is nothing to detach -- the circles went
-// with the sprites when the game ended.
+// Hence this runs BEFORE anything dereferences c->unit or c->sprite, and it drops the
+// records rather than detaching them: the circles went with the sprites.
 static unsigned g_session = 0;
 
 static void CirclesSessionSync(void) {
@@ -82,9 +73,8 @@ static void CirclesSessionSync(void) {
 // The two engine primitives
 //
 // Neither has a calling convention a C declaration can express: both take their
-// CSprite* in a register. The call sites they were copied from are quoted above each
-// one, so the register setup can be checked against the binary rather than trusted.
-// ---------------------------------------------------------------------------
+// CSprite* in a register. Each quotes the engine bytes it was derived from, so the
+// register setup can be checked against the binary rather than trusted.
 
 // 0x004D7070. Verbatim from the engine's own call at 0x004E61B4:
 //     PUSH 0x231 ; PUSH EAX ; MOV EAX,ESI ; CALL 0x004d7070
@@ -128,19 +118,15 @@ static BYTE RemoveCircle(DWORD sprite) {
     return g_remove ? g_remove(sprite) : RealRemoveCircle(sprite);
 }
 
-// ---------------------------------------------------------------------------
-// Reading game memory without trusting it
-// ---------------------------------------------------------------------------
-
 // A CSprite pointer comes out of a CUnit that may have died since we recorded it, so
 // it is never dereferenced until the whole struct is known to sit inside one
-// committed, readable, non-guard region. This is the same defence scplugin.cpp's
-// observer uses for its reads, kept local so this module has no dependency on it.
+// committed, readable, non-guard region. It is the same defence scplugin.cpp's observer
+// uses for its reads, kept local so this module has no dependency on it.
 
-// CSprite is 0x24 bytes (prev, next, ids, flags, size, position, three image
-// pointers) -- research/selection-circles.md 2.1. Requiring the whole struct rather
-// than just the flags byte means a pointer landing on the last bytes of a region
-// fails here instead of faulting inside the engine.
+// CSprite is 0x24 bytes (prev, next, ids, flags, size, position, three image pointers)
+// -- research/selection-circles.md 2.1. Requiring the whole struct rather than just the
+// flags byte makes a pointer landing on a region's last bytes fail here instead of
+// faulting inside the engine.
 #define SC_CSPRITE_SIZE 0x24u
 
 static bool SpriteOf(DWORD unit, DWORD* outSprite) {
@@ -156,14 +142,9 @@ static BYTE* SpriteFlags(DWORD sprite) {
     return (BYTE*)(sprite + SC_CSPRITE_OFF_FLAGS);
 }
 
-// ---------------------------------------------------------------------------
-// Attach / detach
-// ---------------------------------------------------------------------------
-
 void ScCirclesHide(void) {
-    // FIRST -- before the count check and before any pointer in g_circled is looked at.
-    // See CirclesSessionSync: a record from a previous game must be abandoned, never
-    // detached, because detaching means writing through a freed CSprite*.
+    // FIRST -- before the count check and before any pointer in g_circled is read.
+    // See CirclesSessionSync.
     CirclesSessionSync();
     if (g_circledCount == 0) return;
 
@@ -172,20 +153,16 @@ void ScCirclesHide(void) {
         const ScCircleUnit* c = &g_circled[i];
         DWORD sprite = 0;
 
-        // Four things must still be true, and each rules out a different way this
-        // record can have gone bad since ScCirclesShow recorded it:
-        //   1. the unit still exists and is the SAME unit (uniqueness, CUnit+0xA5) --
-        //      the engine's own staleness test for a stored unit;
-        //   2. it still points at the same CSprite -- a unit that died and came back
-        //      gets a different one, and the old one is on the sprite free list;
-        //   3. the circle flag is still set -- if it is not, the engine has already
-        //      taken the circle off and there is nothing of ours left;
-        //   4. the engine has NOT since marked the sprite selected -- if it had, the
-        //      circle now belongs to the engine and removing it would leave a
-        //      genuinely selected unit with a health bar and no circle.
-        // Ordering makes 4 unreachable in practice (we detach before the engine
-        // attaches); it is checked anyway because "unreachable" and "never happens"
-        // are different claims, and the counter says which.
+        // Each check rules out a different way the record can have gone bad:
+        //   1. same unit (uniqueness, CUnit+0xA5) -- the engine's own staleness test;
+        //   2. same CSprite -- a unit that died and came back gets a different one,
+        //      and the old one is on the sprite free list;
+        //   3. circle flag still set -- otherwise the engine already took it off;
+        //   4. sprite NOT engine-selected -- removing then would leave a genuinely
+        //      selected unit with a health bar and no circle.
+        // Ordering makes 4 unreachable in practice; it is checked anyway because
+        // "unreachable" and "never happens" are different claims, and the counter
+        // says which.
         if (!SpriteOf(c->unit, &sprite) || sprite != c->sprite ||
             ScUnitUniqueness(c->unit) != c->uniqueness) {
             ++g_statLost;
@@ -225,9 +202,8 @@ void ScCirclesShow(const ScCircleUnit* units, int n) {
         }
 
         BYTE flags = *SpriteFlags(sprite);
-        // Already the engine's: it holds this unit in its 12, or something else has
-        // put a circle on this sprite. Either way the image is not ours to own, and
-        // adopting it would mean freeing someone else's image later.
+        // Already the engine's: it holds this unit in its 12, or something else put a
+        // circle on this sprite. Adopting it would mean freeing someone else's image.
         if (flags & (SC_SPRITE_FLAG_SELECTED | SC_SPRITE_FLAG_SEL_CIRCLE)) {
             ++g_statSkipped;
             continue;
@@ -239,8 +215,8 @@ void ScCirclesShow(const ScCircleUnit* units, int n) {
 
         DWORD img = AddCircle(sprite, colour, SC_SELECTION_CIRCLE_IMAGE_BASE);
         if (!img) {
-            // The engine's image free list is empty. Not an error we can do anything
-            // about, and not a reason to stop: later units may still fit.
+            // The engine's image free list is empty. Not a reason to stop: later
+            // units may still fit.
             ++g_statNoImage;
             continue;
         }
@@ -260,24 +236,22 @@ void ScCirclesShow(const ScCircleUnit* units, int n) {
 
 // Where the circled units are ON SCREEN, in client pixels.
 //
-// This exists for one reason: an automated test cannot aim a click at "one of the units
-// the plugin circled" unless something tells it where they are. Without it the only
-// >12 shift-click a test can perform lands on whichever unit happens to be there, and
-// has to accept either outcome -- which is a much weaker assertion than the one this
-// design deserves (tools/plugin/test-selection-circles.ps1, step 7).
+// A test cannot aim a click at "one of the units the plugin circled" unless something
+// reports where they are; without it a >12 shift-click lands on whichever unit happens
+// to be there and must accept either outcome -- a far weaker assertion
+// (tools/plugin/test-selection-circles.ps1, step 7).
 //
-// client = mapPixel - viewportOrigin, with the origin read exactly where the click
-// handler at 0x0046FB40 reads it. Purely diagnostic: nothing in the feature depends on
-// these two globals, and a wrong value here can only mis-aim a test, never mis-draw a
-// circle.
+// client = mapPixel - viewportOrigin, the origin read exactly where the click handler
+// at 0x0046FB40 reads it. Purely diagnostic: a wrong value here can only mis-aim a
+// test, never mis-draw a circle.
 static void LogCirclePositions(void) {
     if (g_circledCount <= 0) return;
 
     const int left = (int)*(WORD*)ScRuntimeAddr(SC_VA_SCREEN_LEFT);
     const int top  = (int)*(WORD*)ScRuntimeAddr(SC_VA_SCREEN_TOP);
-    // The client's size is the engine's own screen bitmap descriptor (640x480
-    // stock, the widescreen table's size once it is live) -- read, not assumed,
-    // so a wider game does not drop every unit past x=639 as "off-screen".
+    // The client's size is the engine's own screen bitmap descriptor (640x480 stock,
+    // the widescreen table's size once it is live) -- read, not assumed, so a wider
+    // game does not drop every unit past x=639 as "off-screen".
     int scrW = SC_SCREEN_W, scrH = SC_SCREEN_H;
     if (ScReadable(ScRuntimeVa(SC_VA_SCREEN_BITMAP), 4)) {
         const int w = (int)*(WORD*)ScRuntimeAddr(SC_VA_SCREEN_BITMAP + SC_BITMAP_OFF_WIDTH);
@@ -293,9 +267,8 @@ static void LogCirclePositions(void) {
         if (!ScReadable(s, SC_CSPRITE_SIZE)) continue;
         const int x = (int)*(WORD*)(s + SC_CSPRITE_OFF_POS_X) - left;
         const int y = (int)*(WORD*)(s + SC_CSPRITE_OFF_POS_Y) - top;
-        // Off-screen units are useless to a test and would only be noise. scrW and
-        // scrH are the first coordinates OUTSIDE the client -- an inclusive bound
-        // here would hand a test a point one pixel off the window.
+        // scrW and scrH are the first coordinates OUTSIDE the client -- an inclusive
+        // bound here would hand a test a point one pixel off the window.
         if (x < 0 || y < 0 || x >= scrW || y >= scrH) continue;
         const int room = (int)sizeof(buf) - used;
         if (room < 24) { break; }
@@ -314,10 +287,9 @@ unsigned ScCirclesStaleSessionCount(void) { CirclesSessionSync(); return g_statS
 // The hook: CreateNewUnitSelectionsFromList (0x0049AE40)
 //
 // EAX = CUnit**, one stdcall argument (count), RET 4. No C calling convention
-// describes that, and the detour must not disturb either -- so it is an explicit
-// thunk that saves everything, calls a normal C function that takes no arguments at
-// all, restores, and jumps to the trampoline. The stack argument is never touched.
-// ---------------------------------------------------------------------------
+// describes that and the detour must not disturb either, so the thunk saves
+// everything, calls a C function taking no arguments, restores, and jumps to the
+// trampoline. The stack argument is never touched.
 
 extern "C" void ScCirclesOnSelectionChange(void);
 extern "C" void ScCirclesSelChangeThunk(void);
@@ -336,10 +308,9 @@ asm(
     "  jmp *_g_selChangeTrampoline\n"
 );
 
-// force_align_arg_pointer for the same reason sc_fanout.cpp puts it on every entry
-// point the game calls: GCC at -O2 assumes a 16-byte-aligned incoming stack and will
-// emit aligned SSE spills on that assumption, while StarCraft is a VC6-class build
-// that guarantees 4.
+// force_align_arg_pointer on every entry point the game calls: GCC at -O2 assumes a
+// 16-byte-aligned incoming stack and emits aligned SSE spills on that assumption,
+// while StarCraft is a VC6-class build that guarantees 4.
 extern "C" void __attribute__((force_align_arg_pointer))
 ScCirclesOnSelectionChange(void) {
     ScCirclesHide();
@@ -348,8 +319,7 @@ ScCirclesOnSelectionChange(void) {
 static ScHook g_hkSelChange;
 
 // Verified prologue -- ScHookInstall refuses to patch if memory disagrees. Bytes and
-// the 5-byte/4-instruction patch window come from HookProbe against this binary
-// (work/scratch/selhooks/CreateNewUnitSelectionsFromList.FUN_0049ae40.asm):
+// the 5-byte/4-instruction patch window come from HookProbe against this binary:
 //     0x0049AE40  55        PUSH EBP
 //     0x0049AE41  8BEC      MOV EBP,ESP
 //     0x0049AE43  53        PUSH EBX
@@ -372,10 +342,6 @@ int ScCirclesInstall(void) {
 void ScCirclesRemove(void) {
     ScHookRemove(&g_hkSelChange);
 }
-
-// ---------------------------------------------------------------------------
-// Mode + stats
-// ---------------------------------------------------------------------------
 
 void ScCirclesInit(BYTE* moduleBase, bool enabled) {
     ScEngineSetModuleBase(moduleBase);

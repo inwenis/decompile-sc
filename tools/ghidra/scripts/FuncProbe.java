@@ -1,26 +1,19 @@
 // Validates INHERITED function addresses against the binary.
 //
-// Every function address in research/selection-cap.md comes from a public project's source
-// comment, not from this binary. Before any of them is used, the first question is the cheap
-// one: is that address a function ENTRY POINT in StarCraft.exe at all? An address that lands
-// mid-function, or in data, or outside any function, is a finding -- either the prior art is
-// wrong or it is expressed against a different base.
+// Addresses in research/selection-cap.md come from other projects' source comments, not from this
+// binary. The first question is whether one is a function ENTRY POINT in StarCraft.exe at all: a
+// hit mid-function, in data, or outside any function means the prior art is wrong or is expressed
+// against a different base.
 //
-// Per spec address this emits: whether it is an exact entry point, the enclosing function if
-// not, the function's extent, instruction count, first instruction, and a BREAKDOWN of the
-// references that reach its entry point.
+// The reference breakdown is three columns because "how many places call this?" has two right
+// answers here: getActivePlayerNextSelection (0x0049A850) is reached by 72 CALL instructions and
+// one tail JMP, against a document quoting 71 sourced to nothing. Quote the column that matches
+// the claim and say which -- callRefs is CALL-type, jumpRefs JUMP-type, refsTotal every reference
+// of any type. Ghidra files that tail JMP as a call, so this entry reads callRefs 73, jumpRefs 0;
+// only a raw rel32 scan of .text separates the two forms.
 //
-// The breakdown is three columns, not one, because "how many places call this?" has two
-// different right answers on this binary. getActivePlayerNextSelection (0x0049A850) is reached
-// by 72 CALL instructions and by one tail JMP; a review of task 005 round 1 found the document
-// quoting 71, sourced to nothing. `callRefs` counts CALL-type references, `jumpRefs` counts
-// JUMP-type ones (a tail call is a jump), `refsTotal` counts every reference of any type. Quote
-// the column that matches the claim being made, and say which.
-//
-// Script args:
-//   1: output TSV path (<path>.manifest is the run's success signal)
-//   2: spec file -- one address per line: label,addrHex
-//
+// Args: 1 = output TSV path (<path>.manifest is the run's success signal)
+//       2 = spec file, one address per line: label,addrHex
 //@category Headless
 
 import ghidra.app.script.GhidraScript;

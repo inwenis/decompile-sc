@@ -1,115 +1,15 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-End-to-end, UNATTENDED proof that a production building can hold MORE THAN FIVE queued
-items AND that CANCELLING one gives back exactly its cost -- both for an item the engine
-is holding and for an item the PLUGIN is holding -- with every number read out of the
-building's own memory, not off the screen.
-
-Task 025, from the user's words: "enable queuing more then 5 units."
-Task 028, from the user's words: "why is there no test that cancels a unit?"
+Unattended proof that a production building holds MORE THAN FIVE queued items and that
+cancelling one refunds exactly its cost, whether the ENGINE's ring or the PLUGIN holds it.
+Every number is read from the building's own memory, never off the screen.
 
 .DESCRIPTION
-The engine's queue is `u16 buildQueue[5]` at `CUnit+0x98`, a five-slot ring whose head is
-the byte at `+0xA4`, and the 5 is a literal in six functions
-(research/production-queue.md 2-3). The plugin does not widen it. It keeps the ring one
-item BELOW the engine's five and holds the rest itself, because the CLIENT stops sending
-Train commands once the ring holds five -- the first run of this very suite measured that:
-five `CMD id=0x1F` at the press cadence and then silence for seven more presses, with the
-Train button drawn dark. The engine accepts and pays for every item; the plugin only ever
-moves items in and out of the ring, which costs nothing (production-queue.md 4.2, 5.2).
-
-So there are three claims to make in a live game, and this suite makes all three from
-memory reads:
-
-  1. MORE THAN FIVE ARE QUEUED. The `PRODQSEL` oracle prints the five slots of
-     `CUnit+0x98` verbatim beside what the plugin holds, so `logical=9` is `engineLen=5`
-     (read from the building) plus `overflow=4` (read from the plugin). Nothing here comes
-     from the status area, which draws at most five icons whatever the truth is.
-  2. THEY BUILD, IN ORDER, ONE PER FREED SLOT. Every promotion logs a `PRODQEV promote`
-     line naming the type, the slot it went into and how many are left; the run asserts
-     one per held item, with the count walking down to zero, and then asserts the
-     resulting units exist in the engine's own unit list.
-  3. EACH IS PAID FOR ONCE, BY THE ENGINE. Minerals are asserted to an exact figure after
-     the burst and asserted UNCHANGED thereafter -- neither holding an item back nor
-     handing it over moves money, so a second payment would show up as a drop while the
-     queue drains. (The plugin's own `mineralsSpent` counter used to be asserted zero
-     beside that; it was deleted in task 055 -- issue #66 -- because nothing incremented
-     it. The engine's own balance, above, is the oracle and always was.)
-
-TASK 028 ADDS THE OTHER DIRECTION: CANCELLING, IN A REAL GAME, BOTH WAYS
-
-Nothing had ever clicked cancel in a running game -- task 025 proved the cancel path
-offline only, which AGENTS.md's own rule ("a player-input feature is unproven until the
-wire has been watched") says is not proof. There are two cases and they take different
-code, so this suite drives both, with the CONTROL LOCATED BY READING THE DIALOG THAT
-OWNS IT (research/production-queue.md 8):
-
-  4. AN ITEM THE PLUGIN HOLDS. The card's slot-9 Cancel button sends {0x20, 0xFE},
-     "cancel the LAST queued item" -- which, while the plugin holds the tail of the
-     logical queue, is the plugin's item and not the engine's. The suite reads the card,
-     asserts slot 9 really carries that button (action 0x00423490, actionParam 254) and
-     is not greyed, clicks the centre computed from the live control rect, and then
-     requires: one `CMD id=0x20` with payload 0xFE on the wire, the plugin's own
-     `cancel-last` event, the LOGICAL queue one shorter, minerals up by exactly one
-     unit's cost, and the plugin's refund counter up by exactly that -- ONCE.
-  5. AN ITEM THE ENGINE'S RING HOLDS. That is a different control: the five icons of the
-     PRODUCTION QUEUE STRIP in the status pane (statdata dialog, control ids 2..6). A
-     click on icon k sends {0x20, k} and the engine's own cancelBuildQueueSlot refunds
-     it. The suite reads the strip, clicks the icon for display index 1, and requires the
-     engine's ring to be one shorter with minerals up by one unit's cost -- and the
-     PLUGIN to have done nothing at all (its `cancelled` counter stays where it was).
-  6. THE TOTALS RECONCILE, from memory: spent = built + queued + cancelled, at every
-     point where all four are known, so a double refund or a lost item cannot hide
-     inside a number that merely looks plausible.
-
-WHY THE FIXTURE IS A NEXUS, AND WHAT THE FIRST RUN CORRECTED ABOUT THAT
-
-The fixture is a Protoss Nexus because slot 9 of its buttonset carries the Cancel button
-with nothing ahead of it, while every Terran producer's slot 9 is SHARED with Land and
-Lift Off -- and a card control takes the first button whose condition survives, slots
-never shifting. Reading the button table alone, that looked like it made the Cancel button
-unreachable on a Command Center, which is why this suite trains Probes rather than SCVs.
-
-THE FIRST RUN SHOWED THAT WAS WRONG, which is exactly what reading a dialog instead of
-reasoning about a table is for. Lift Off's condition (0x004287D0) requires the "is this
-building busy" helper 0x00401500 to return 0, and that helper returns 1 precisely when the
-head slot holds a real unit type -- the same thing the Cancel button's own condition tests.
-The two are complementary: the control shows Lift Off while the queue is empty and Cancel
-the moment anything is queued. The suite now asserts that pair in game on the Command
-Center it also places, and the Nexus stays as the fixture because the arms are written for
-it and it is proved (research/production-queue.md 8.3).
-
-WHY THE RESULT CANNOT BE FAKED
-
-  * The queue length is read from `CUnit+0x98` on the game's side of the wire. The plugin
-    cannot make `engineLen` read 5 without five real entries being there.
-  * The positive/negative pair is inside one run and one oracle. Before the clicks,
-    `PRODQ ... buildings=0 captured=0` -- the same line that later reads `captured=4`. An
-    oracle that could not fail would print the second without the first.
-  * THE COUNT OF COMMANDS ON THE WIRE IS THE HEADLINE MEASUREMENT. Vanilla sends five and
-    stops; this run presses 12 times and asserts EXACTLY 9 went out, which is the cap
-    itself, moved, measured on the engine's own command funnel rather than inferred.
-  * The cap is exercised on purpose (`-QueueMax` below `-Clicks`), so "it queues without
-    limit" and "it queues what it was configured to" are distinguishable.
-  * The map has no hostiles, one unit-less computer slot, and its only trigger sets
-    resources once -- so nothing but this test can move a mineral.
-
-THE FIXTURE needs something no earlier one did: STARTING RESOURCES. A CHK has no such
-field and Use Map Settings hands out none, so task 025 added `--starting-minerals` /
-`--starting-gas` to tools/make_test_map.py -- one `Always -> Set Resources` trigger, and
-the generator's own validation proves from the bytes that the trigger carries no
-game-ending action.
-
-MEASUREMENT WINDOWS. A cancel is measured across a window in which a queued unit may
-also FINISH, and a finished unit shortens the queue by one without moving a single
-mineral. That confound is not tolerated and not merely hoped against: every cancel arm
-counts the units that exist before and after, and asserts the queue dropped by
-`1 + completions` while minerals rose by exactly one unit's cost. So a completion inside
-the window changes what the assertion expects instead of quietly passing or failing it.
-
-.EXAMPLE
-./tools/plugin/test-production-queue.ps1
+The engine ring is `u16 buildQueue[5]` at CUnit+0x98; the plugin keeps it one below five
+and holds the rest, because the client stops sending Train once the ring is full
+(research/production-queue.md 2-5, 8). Card Cancel (payload 0xFE) cancels the LAST item,
+the plugin's while it holds any; a status-strip icon click (payload k) is the engine's.
 
 .EXAMPLE
 ./tools/plugin/test-production-queue.ps1 -Clicks 12 -QueueMax 9 -KeepOpen
@@ -138,77 +38,30 @@ param(
     [int]$EngineArmDisplay = 1,
     [int]$StartingMinerals = 3000,
     [int]$StartingGas = 1000,
-    # THE FIXTURE SPEED-UP (task 031). The map's own UNIx section overrides the Probe's
-    # build time for THIS MAP only; vanilla is 20 game seconds, and the Probes building one
-    # after another were measured as the single largest term in this suite's wall clock.
-    # 0 restores the vanilla fixture exactly -- the flag is not passed at all, and the map
-    # the generator writes is byte-for-byte the pre-031 one.
-    #
-    # WHY IT DOES NOT WEAKEN THE TEST. Every claim this suite makes is about the QUEUE: how
-    # many items are in the ring, how many the plugin holds, that each is promoted into a
-    # freed slot in order, what a cancel refunds, and that each item is paid for exactly
-    # once. Build time is how long the engine takes between one item finishing and the next
-    # starting -- the setup this suite waits through, not anything it asserts on.
-    #
-    # WHAT IT CAN BREAK, and why this number is what it is. TWO windows constrain it, both
-    # measured on this suite rather than reasoned about, and a game second is ~0.7 real
-    # seconds (measured: tools/plugin/probe-unit-settings.ps1 trains one at build time 1 and
-    # it exists 0.7s later).
-    #
-    #  1. THE BURST. Exactly $QueueMax of the $Clicks clicks may reach the wire, and that
-    #     holds only while NO SLOT FREES while they are going out: a Probe completing
-    #     mid-burst drops the ring to 4, the plugin promotes into it, the logical queue
-    #     falls below the cap and the client sends a TENTH command. Measured on the SCV
-    #     version of this suite before task 028 turned it Protoss: at 1 game second ALL
-    #     TWELVE clicks reached the wire and the suite reported 21 failures. The burst is
-    #     ~2s, so this is the easy constraint.
-    #  2. THE PLUGIN-CANCEL ARM, which is the tight one. It asserts the plugin ends up
-    #     having captured one MORE item than the burst left it, because the cancel frees
-    #     room under the cap and the next rebalance takes one more out of the ring. That is
-    #     only true if the ring is still FULL when the cancel lands -- if a Probe has
-    #     already completed, the ring is at 4 already and there is nothing extra to take.
-    #     The cancel lands about 6s after the first click, so the first completion has to be
-    #     later than that. At 8 game seconds (~5.6s) it is not, and the run failed exactly
-    #     there: `and it captured one more than the burst left it, because the cancel made
-    #     room (4)`.
-    #
-    # 12 game seconds is ~8.4s, which clears the 6s cancel window with room, and still cuts
-    # the drain from ~125s to ~76s. Anything much lower re-opens (2); 0 restores vanilla.
-    #
-    # Neither margin is left to this comment. The burst step ASSERTS its invariant
-    # (`promoted` still 0), and Get-TraineeCount below now counts only COMPLETED units, so
-    # the cancel arms' own arithmetic stops mistaking a build that has STARTED for one that
-    # has finished -- which is what made the 8-second run fail its first assertion too.
+    # The map's UNIx section overrides the Probe's build time for this map only (vanilla
+    # 20 game s; 0 = pass no flag, vanilla fixture). Build time is setup the suite waits
+    # through, never something it asserts on. Two measured bounds (a game second is ~0.7s
+    # real, tools/plugin/probe-unit-settings.ps1): at 1 game s a slot frees mid-burst and
+    # ALL 12 clicks reach the wire; the plugin-cancel arm needs the ring still FULL when
+    # the cancel lands ~6s after the first click, and 8 game s (~5.6s) fails exactly there.
+    # 12 (~8.4s) clears both and cuts the drain from ~125s to ~76s. The burst step asserts
+    # its own invariant (`promoted` still 0), so neither margin rests on this comment.
     [int]$ProbeBuildSeconds = 12,
-    # Long enough for nine Probes, from the first click to the last unit existing. One
-    # Probe is 20 game seconds; a single-player custom game runs at Fastest, so ~9-13 real
-    # seconds each, and the measured rate is ~16s per unit including the marker round
-    # trip. 300s leaves room, and the drain loop exits as soon as the LOGICAL queue is
-    # empty.
+    # Nine Probes from the first click to the last unit. At Fastest the measured rate is
+    # ~16s real per unit including the marker round trip; 300s leaves room, and the drain
+    # loop exits as soon as the LOGICAL queue is empty.
     [int]$DrainTimeoutSec = 300,
-    # THE RATE ARM for the open defect in research/production-queue.md 8.6, off by default
-    # because it is a MEASUREMENT and it perturbs every count after it (task 061).
-    #
-    # The click that cannot cancel the last queue slot is a RACE, and nothing in this
-    # project has ever measured its rate -- four runs across two builds flipped the outcome
-    # in both directions, so every "it works" and "it does not" on record, including this
-    # suite's own, is a single coin flip. This clicks the same slot N times at each of
-    # several BUTTON HOLD DURATIONS and reports the cancel rate for each.
-    #
-    # Duration is the variable because it is the one that separates the user from the
-    # harness. Every automated click this project makes is 60ms; a human pressing a slot
-    # they mean to cancel holds it longer, and the longer the hold the more of the engine's
-    # disable events land inside it. If the rate falls off a cliff above 60ms, that is the
-    # difference between "the user says it never works" and "our runs say it sometimes
-    # does" -- and it is a real target for the fix instead of a coin.
+    # THE RATE ARM: clicks the last slot N times at each hold duration in -HoldSweepMs and
+    # asserts every click cancels. Off by default because it is a MEASUREMENT that perturbs
+    # every count after it (steps tagged -SweepPerturbed are skipped). Hold duration is the
+    # variable because it separates the user from the harness: every automated click is
+    # 60ms, a human holds longer, and the longer the hold the more of the engine's disable
+    # events land inside it.
     [int]$HoldSweepClicks = 0,
     [string]$HoldSweepMs = '40,60,80,120,200',
-    # Task 071: run the SAME suite on the widescreen build. '1' + stage 3 is the
-    # input-widened build (mouse clicks reach x=640..799). Every click in this
-    # suite is computed from live control rects (Get-ScCardSlotPoint and
-    # friends), so it exercises the console at its stock 640 position through the
-    # widescreen presentation. Defaults unchanged: the stock run this suite has
-    # always been is byte-for-byte the same.
+    # '1' + stage 3 is the input-widened build (mouse clicks reach x=640..799). Every click
+    # here is computed from live control rects, so the run exercises the console at its
+    # stock 640 position through the widescreen presentation.
     [ValidateSet('0', '1')][string]$Widescreen = '0',
     [ValidateSet('0', '1', '2', '3')][string]$WidescreenStage = '3',
     [switch]$KeepOpen
@@ -230,9 +83,9 @@ $script:cancels = 0
 # plugin's own refund shows up in its stats line.
 $script:pluginCancels = 0
 # ... and how many of them were made while the engine's ring was still ABOVE the plugin's
-# hold, which is the only condition under which a cancel makes the plugin capture one more
-# item. Counted from each cancel's own before-reading rather than assumed, because it is
-# NOT a property of cancelling -- see the drain step's `captured` assertion (task 061).
+# hold, the only condition under which a cancel makes the plugin capture one more item.
+# Counted from each cancel's own before-reading, because it is NOT a property of
+# cancelling -- see the drain step's `captured` assertion.
 $script:capturesFromCancel = 0
 # How many Train commands the ENGINE has accepted so far, counted on its own command
 # funnel. Every one of them was paid for there, so this is the run's ledger: see
@@ -252,10 +105,9 @@ $TRAIN_CMD  = '0x1F'      # research/data/command-opcodes.tsv
 $CANCEL_CMD = '0x20'      # same table: Cancel Train
 $ENGINE_SLOTS = 5         # research/production-queue.md 2.3
 
-# The card's Train button, read out of buttonset 154 in the file image
-# (work/scratch/028/peek.py): slot 1, condition 0x00428E60, action 0x004234B0, and
-# actionParam = the unit type it trains. The suite CLICKS this button at the centre
-# computed from the live control rect rather than pressing a guessed hotkey letter.
+# The card's Train button, from buttonset 154: slot 1, condition 0x00428E60, action
+# 0x004234B0, actionParam = the unit type it trains. Clicked at the centre of the live
+# control rect, never by a guessed hotkey letter.
 $TRAIN_ACT   = '004234B0'   # as the card read-back reports it: uppercase hex, no 0x
 $TRAIN_SLOT  = 1
 # The card's Cancel button: slot 9, condition 0x00428530 ("the head slot holds a real
@@ -263,20 +115,17 @@ $TRAIN_SLOT  = 1
 # wire form the plugin can be asked to serve for an item it is holding.
 $CANCEL_ACT    = '00423490'
 $CANCEL_SLOT   = 9
-# The button that SHARES slot 9 with Cancel on every Terran producer: Lift Off (record
-# 0x00517FC4, condition 0x004287D0, action 0x00423230). The two conditions are
-# complementary -- Lift Off's requires the building NOT to be busy producing, Cancel's
-# requires it to have something at the head of its ring -- so the control swaps between
-# them, which the Command Center arm reads in both states.
+# Lift Off SHARES slot 9 with Cancel on every Terran producer (record 0x00517FC4,
+# condition 0x004287D0); the Command Center arm reads the swap in both states.
 $LIFTOFF_ACT   = '00423230'
 $CANCEL_APARAM = 254
 # The status pane's queue strip: five controls, ids 2..6, one per display index, and a
 # click on display k emits {0x20, k} (research/production-queue.md 8.1).
 $STATQ_FIRST_CONTROL = 2
 $STATQ_SLOTS         = 5
-# The last icon of that strip -- display 4, control id 6. It is the one the plugin fills
-# from its own overflow AND the one it anchors the "+N" text to, so it is the only slot
-# where a click has to pass through pixels this repo drew (task 061).
+# The last icon of that strip, display 4, control id 6: the slot the plugin fills from its
+# own overflow AND anchors the "+N" text to, so it is the only one where a click has to
+# pass through pixels this repo drew.
 $STATQ_LAST_DISPLAY  = $STATQ_SLOTS - 1
 # ScQueueIndMode: 1 = SC_QIND_STRIP, the one-building "+N" (sc_queueind.h).
 $QIND_MODE_STRIP     = 1
@@ -302,10 +151,8 @@ function Assert-That {
     else { Write-Host "  FAIL $What $Detail"; $script:failures++ }
 }
 
-# A SKIPPED CHECK IS NOT A PASSED CHECK, and this suite had no way to say so, so an arm
-# that could not be measured recorded itself as `Assert-That '...' $true` -- a check that
-# cannot fail, padding the ok count with a non-event (task 052 section 6.5, task 055).
-# `ci-local`'s own step accounting has said this since task 023; the suites had not caught up.
+# A SKIPPED CHECK IS NOT A PASSED CHECK: an arm that cannot be measured says so with its
+# own word, never `Assert-That '...' $true`, which cannot fail and pads the ok count.
 $script:skipped = @()
 function Skip-That {
     param([Parameter(Mandatory)][string]$What, [string]$Detail = '')
@@ -331,14 +178,12 @@ function Step {
     $script:step++
     Write-Host ''
     Write-Host ("[{0}] {1}" -f $script:step, $Name)
-    # A MEASUREMENT RUN ENDS AT THE MEASUREMENT (task 066). The hold sweep clicks the
-    # last slot ~30 times and tops the queue back up between clicks, which consumes the
-    # preconditions of every drain-and-after step: measured on the first post-fix sweep
-    # run, 11 tail assertions failed on counts the sweep had legitimately moved while
-    # every fix arm and the table itself were green. Steps that depend on the unperturbed
-    # click/cancel ledger are tagged and SKIPPED -- loudly, with their own word, never a
-    # silent pass (AGENTS.md task 041) -- and the full-suite verdict on them comes from
-    # runs without -HoldSweepClicks, which is every regression run.
+    # A MEASUREMENT RUN ENDS AT THE MEASUREMENT. The hold sweep clicks the last slot ~30
+    # times and tops the queue up between clicks, consuming the preconditions of every
+    # drain-and-after step (measured: 11 tail assertions failed on counts the sweep had
+    # legitimately moved while every fix arm and the table were green). Tagged steps are
+    # SKIPPED loudly, never passed silently; their verdict comes from runs without
+    # -HoldSweepClicks, which is every regression run.
     if ($SweepPerturbed -and $HoldSweepClicks -gt 0) {
         Write-Host '       SKIPPED (measurement run): the hold sweep consumed this step''s preconditions.'
         Write-Host '       Its verdict comes from runs without -HoldSweepClicks.'
@@ -360,49 +205,30 @@ function Get-Card { param([string]$Tag, [int]$TimeoutSec = 20)
 function Get-StatusQueue { param([string]$Tag, [int]$TimeoutSec = 20)
     Get-ScStatusQueue -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -TimeoutSec $TimeoutSec }
 
-# Task 033's indicator, read back OUT OF THE LIVE DIALOG on the same marker channel: is
-# its control linked into the status pane's child chain, has the engine's own visible bit
-# been set on it, and what string does its pszText pointer actually hold.
-#
-# THE PIXEL FIELDS, and what each can and cannot say (task 039):
-#   ink      non-background bytes inside the indicator's own rect. For the GROUP line, whose
-#            band belongs to no control, this is a real "was anything drawn". For the STRIP
-#            "+N", whose box sits INSIDE a queue icon, it is not: the icon's own pixels are
-#            in that box, so it reads > 0 whether or not our text landed. It passed for a
-#            whole task while the icon underneath was drawing the wrong art.
-#   refInk   the same count over a control the ENGINE fills, so `ink=0` cannot be confused
-#            with a blind probe. refId says which control it used -- the first queue icon
-#            normally, the first wireframe button when the strip is hidden by a group. It is
-#            -1 when NEITHER is visible, which is a real state (a single building with an
-#            empty queue has no queue icons up and no wireframe row), and it stays -1 rather
-#            than falling back to a hidden control: ink over something nobody can see answers
-#            neither question this number is for.
-#   surfInk  the same count over the WHOLE dialog surface. This is the blindness check that
-#            has an answer in every state, drained pane included -- the pane's own art covers
-#            that surface, so a live one is never 0.
-#   boxDiff  bytes inside the indicator's own box that differ from a copy of that same box
-#            taken by the game thread while the indicator was HIDDEN. THIS is the oracle for
-#            "did our line land", and `ink` is not: measured in this task's first live run,
-#            ink read 448 of 448 bytes inside the box and refInk 1330 of 1330 over a queue
-#            icon, before anything of ours had been drawn. -1 means there is no baseline for
-#            this rect yet (it moved, or the indicator has not been hidden in this dialog),
-#            which is an honest "no answer" and never a 0.
-#   slotDiff bytes that differ between queue slot 0 and slot 4 on the dialog's own surface,
-#            below the rows their labels occupy. Same rect size, same border graphic, same
-#            queued type, so this is the honest screen-level check on the fifth icon: a
-#            wrong GRP shows up as hundreds, our "+N" on top as tens, our text painted
-#            under the icon as zero.
-#   fontH    the height of the small font, from the font's own header -- the number the
-#            engine's string draw refuses a box shorter than.
-# Each icon entry is `icon:mode:state:art:label`, where art is I (the icon GRP an occupied
-# slot must draw from), B (the empty-slot placeholder art) or ?.
+# The "+N" indicator, read back OUT OF THE LIVE DIALOG: is its control linked into the
+# status pane's child chain, is the engine's visible bit set, what does its pszText hold.
+# The pixel fields, and what each can say:
+#   ink      non-background bytes in the indicator's rect. Honest for the GROUP line, whose
+#            band belongs to no control; NOT for the STRIP "+N", whose box sits inside a
+#            queue icon -- measured 448 of 448 (and refInk 1330 of 1330 over a queue icon)
+#            before anything of ours was drawn, so it stays > 0 over the wrong art.
+#   refInk   the same over a control the ENGINE fills (refId), so ink=0 is not a blind
+#            probe. -1 when neither queue icon nor wireframe button is visible: a real
+#            state (one building, empty queue), never a fallback to a hidden control.
+#   surfInk  the same over the WHOLE dialog surface: the blindness check that has an
+#            answer in every state, since the pane's own art always covers it.
+#   boxDiff  bytes in the box that differ from a game-thread copy taken while the
+#            indicator was HIDDEN. THE oracle for "did our line land"; -1 = no baseline.
+#   slotDiff bytes differing between queue slot 0 and slot 4 below their labels: same
+#            rect, border and type, so a wrong GRP reads hundreds, our "+N" tens.
+#   fontH    small-font height from the font header; the engine refuses a shorter box.
+# Icon entries are `icon:mode:state:art:label`, art I (icon GRP), B (empty-slot art) or ?.
 $script:qindSeq = 0
 function ConvertFrom-QIndLine {
     param($Hit)
-    # PARSED BY NAME, NOT BY POSITION. This line gained two fields in one task (boxDiff, then
-    # surfInk) and a positional parse shifts EVERY group after the insertion point without
-    # failing: `bldgs` then reads out of `queued`, and an assertion passes or fails on a number
-    # nobody wrote. Named groups cannot shift, and an added field costs one line here.
+    # PARSED BY NAME, NOT BY POSITION: a positional parse shifts EVERY group after an
+    # inserted field without failing, so `bldgs` reads out of `queued` and an assertion
+    # passes or fails on a number nobody wrote.
     $m = [regex]::Match($Hit.Line,
                 'QIND \[[^\]]+\] mode=(?<mode>\d+) linked=(?<linked>\d+) visible=(?<visible>\d+) ' +
                 'text="(?<text>[^"]*)" ' +
@@ -413,18 +239,16 @@ function ConvertFrom-QIndLine {
                 'icons=\[(?<icons>[^\]]*)\] ' +
                 'sel=(?<sel>\d+) engineLen=(?<engineLen>\d+) overflow=(?<overflow>\d+) ' +
                 'upg=(?<upg>\d+) bldgs=(?<bldgs>\d+) queued=(?<queued>\d+)')
-    # Parsed SEPARATELY, and deliberately not folded into the big pattern above: these two
-    # were added after it and a field a caller does not read must never be able to make the
-    # whole line unparseable. `owned` is how many icons the plugin is holding an item behind
-    # right now; `pressKept` is the running count of presses carried across the engine's own
-    # disable event on one of them (task 061). -1 means the field was not on the line, which
-    # is a different fact from 0 and has to stay different -- an arm that requires the count
-    # to MOVE would otherwise read a missing field as "the fix did nothing".
+    # Parsed SEPARATELY so a field a caller does not read can never make the whole line
+    # unparseable. `owned` = icons the plugin holds an item behind; `pressKept` = presses
+    # carried across the engine's own disable event on one of them. -1 = the field was not
+    # on the line, a different fact from 0 that must stay different: an arm that requires
+    # the count to MOVE would otherwise read a missing field as "the fix did nothing".
     $extra = [regex]::Match($Hit.Line,
         'owned=(?<owned>-?\d+) disableOnOwned=(?<disOwned>\d+) disableWithPress=(?<disPressed>\d+) pressKept=(?<pressKept>\d+)')
-    # Task 066's fields, separate for the same reason: `phantom` counts ring slots made
-    # visible to queueLayout by the bracket (the fix's own activity), `ringStable` says the
-    # observer's ring reads settled against the bracket's seqlock.
+    # Separate for the same reason: `phantom` counts ring slots the bracket makes visible
+    # to queueLayout (the fix's own activity); `ringStable` says the observer's ring reads
+    # settled against the bracket's seqlock.
     $extra66 = [regex]::Match($Hit.Line,
         'phantom=(?<phantom>\d+) phantomDirty=(?<phantomDirty>\d+) ringGen=(?<ringGen>\d+) ringStable=(?<ringStable>\d+)')
     if (-not $m.Success) { throw "test: unparseable QIND line: $($Hit.Line)" }
@@ -457,13 +281,11 @@ function ConvertFrom-QIndLine {
     }
 }
 
-# Reads the indicator line the observer already wrote for SOMEBODY ELSE'S marker, taking
-# the newest one past $FromLine. This exists so an assertion can be added to this suite
-# without adding a marker round trip: two of the arms below are TIMING-SENSITIVE (the
-# plugin-cancel arm asserts the ring is still full when the cancel lands, which is only
-# true before the first Probe completes), and a spare second between the burst and the
-# cancel is enough to break them. The freshness gate is $FromLine plus the state
-# assertions the caller makes on the numbers in the line.
+# Reads the newest QIND line past $FromLine that the observer wrote for SOMEBODY ELSE'S
+# marker -- no round trip of its own, because the plugin-cancel arm asserts the ring is
+# still full when the cancel lands (only true before the first Probe completes) and a
+# spare second between burst and cancel breaks it. Freshness is $FromLine plus the
+# caller's own state assertions on the numbers in the line.
 function Get-QIndAfter {
     param([int]$FromLine, [int]$TimeoutSec = 20)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
@@ -479,12 +301,10 @@ function Get-QIndAfter {
 
 function Get-QInd {
     param([string]$Tag, [int]$TimeoutSec = 20)
-    # A line whose own ringStable says 0 carries ring numbers that may be mid-phantom-
-    # window (task 066); run 2's last-slot arm consumed engineLen=5 from exactly such a
-    # line and failed its precondition on a value the plugin had flagged as suspect. So a
-    # ringStable=0 answer is re-asked (fresh marker, fresh read), up to three times; only
-    # then is the unstable line returned, and the caller's assertion fails with the line
-    # visible -- never silently on a flagged number.
+    # ringStable=0 means the ring numbers may be mid-phantom-window; measured: the
+    # last-slot arm once consumed engineLen=5 from such a line and failed its precondition
+    # on a value the plugin had flagged. Re-ask (fresh marker) up to three times; only then
+    # return the flagged line, so the caller's assertion fails with it visible.
     for ($ask = 0; $ask -lt 3; $ask++) {
         $script:qindSeq++
         $label = "qi-$Tag-$script:qindSeq"
@@ -511,25 +331,12 @@ function Get-QInd {
 # is counted rather than assumed to be zero.
 function Get-TraineeCount {
     <#
-    COMPLETED Probes only, and the flag test is the whole point (task 031).
-
-    A unit still being TRAINED is already linked into the player's unit list, so counting
-    the list answers "how many exist", not "how many have been BUILT". Observed in this
-    suite's own log, the same type before and after:
-
-        in progress   type=0x007 hp=13484 flags=0x00130000
-        finished      type=0x007 hp=15360 flags=0x00130001
-
-    -- hit points ramping up towards the type's maximum with bit 0x01 clear, then set once
-    it is there (SC_UNIT_FLAG_COMPLETED, tools/plugin/src/sc_addresses.h).
-
-    This function's answer feeds `$completed`, which the cancel arms subtract from the
-    expected queue length -- so counting a STARTED build as a finished one makes the arm
-    expect one item fewer than the engine has and fail an assertion about cancelling.
-    Task 031 hit exactly that when it shortened the Probe's build time: the first run
-    reported `the LOGICAL queue drops by one: 8 -> 7 ... (expected 6)`. The same mis-count
-    can happen on the vanilla fixture whenever a build happens to finish inside a cancel
-    window -- it is simply rarer there, which is the worst kind of rare.
+    COMPLETED Probes only. A unit still being TRAINED is already linked into the player's
+    unit list; observed on the same type: in progress hp=13484 flags=0x00130000, finished
+    hp=15360 flags=0x00130001 -- bit 0x01 (SC_UNIT_FLAG_COMPLETED, sc_addresses.h) set
+    once it is there. Counting a STARTED build as finished makes a cancel arm expect one
+    item fewer than the engine has (measured: `8 -> 7 ... (expected 6)`); on the vanilla
+    fixture the same mis-count is merely rarer.
     #>
     param([string]$Tag)
     $w = Get-World $Tag
@@ -548,10 +355,9 @@ function Invoke-CancelAndMeasure {
         [Parameter(Mandatory)][string]$Tag,
         [Parameter(Mandatory)][scriptblock]$Do,
         # The payload byte this click must put on the wire: 0xFE for "the last queued
-        # item", or a display index for one queue icon. Mandatory, because THE WIRE IS
-        # ASSERTED BEFORE ANY REFUND CLAIM IS MADE -- AGENTS.md's rule from task 025, whose
-        # first design was inert and whose offline proof said otherwise. If the command
-        # never went out, nothing below it means anything and the run says so first.
+        # item", or a display index for one queue icon. Mandatory because the wire is
+        # asserted before any refund claim (below): an inert design with a passing offline
+        # proof is what that rule exists against.
         [Parameter(Mandatory)][int]$ExpectPayload,
         [int]$SettleSec = 3
     )
@@ -595,30 +401,14 @@ function Invoke-CancelAndMeasure {
     return $r
 }
 
-# THE RECONCILIATION: spent = built + queued + cancelled.
-#
-# `built + queued + cancelled` is the same number as ACCEPTED -- every item the engine
-# took a Train command for either exists, is still waiting, or was cancelled; there is no
-# fourth place for one to be. So the identity is asserted in that form, and it has to be,
-# because BUILT CANNOT BE COUNTED FROM THE UNIT LIST WHILE THE QUEUE IS RUNNING:
-#
-#   the engine creates the unit when production STARTS, not when it finishes
-#   (research/production-queue.md 4.3 -- FUN_00468200, stashed at CUnit+0xEC), so the item
-#   being built is in the world AND in the ring at the same time, and adding the two
-#   double-counts it by exactly one.
-#
-# That is measured, not theorised: the first run of this arm read 1 unit and a 9-item
-# logical queue for 9 accepted items, and the sum came out one too high.
-#
-# So: `accepted` comes from the engine's own command funnel (the CMD id=0x1F lines this
-# run counted), `cancelled` from the cancels this run made, and the money from the
-# player's resource global. Every item is paid once at accept and refunded once at cancel,
-# so the balance must be exactly `(accepted - cancelled) x cost` -- a double refund reads
-# too high here and a swallowed item too low.
-#
-# The other half of the identity -- that no item was LOST -- is asserted where it can be
-# said without ambiguity: at the end of the drain, when the logical queue is zero and
-# nothing is in progress, the units that exist must be exactly `accepted - cancelled`.
+# THE RECONCILIATION: spent = built + queued + cancelled, asserted as ACCEPTED (no fourth
+# place for an item to be) because BUILT CANNOT BE COUNTED FROM THE UNIT LIST WHILE THE
+# QUEUE RUNS: the engine creates the unit when production STARTS (research/
+# production-queue.md 4.3, FUN_00468200, stashed at CUnit+0xEC), so the item being built
+# is in the world AND the ring, and the sum is one too high -- measured: 1 unit + 9
+# logical for 9 accepted. `accepted` is the engine's own command funnel, `cancelled` this
+# run's cancels, money the player's resource global; a double refund reads too high, a
+# swallowed item too low. "No item LOST" is asserted at the end of the drain.
 function Assert-Reconciles {
     param([Parameter(Mandatory)][string]$Tag, [Parameter(Mandatory)]$Q,
           [Parameter(Mandatory)][int]$Accepted, [Parameter(Mandatory)][int]$Cancelled)
@@ -636,14 +426,12 @@ function Assert-Reconciles {
 $script:prodqSeq = 0
 function Get-ProdQueue {
     param([string]$Tag, [int]$TimeoutSec = 20)
-  # A LINE THE PLUGIN FLAGGED IS NOT CONSUMABLE (task 066, and it took two consumers to
-  # learn it once): PRODQSEL/PRODQ carry ringStable=0 when the observer's ring read never
-  # settled against the phantom bracket's seqlock -- an OS preemption inside the guarded
-  # section can straddle every retry, so the flag can appear even with a tight guard. The
-  # first sweep re-run consumed `engineLen=5 ringStable=0` here and failed two assertions
-  # on a phantom the plugin had already disclaimed. Same rule as Get-QInd: re-ask, up to
-  # three times; only then return the flagged answer so the assertion fails with the flag
-  # in view.
+  # A LINE THE PLUGIN FLAGGED IS NOT CONSUMABLE: ringStable=0 means the observer's ring
+  # read never settled against the phantom bracket's seqlock (an OS preemption inside the
+  # guarded section can straddle every retry). Measured: `engineLen=5 ringStable=0`
+  # consumed here failed two assertions on a phantom the plugin had disclaimed. Same rule
+  # as Get-QInd: re-ask up to three times, then return the flagged answer so the failure
+  # shows the flag.
   for ($ask = 0; $ask -lt 3; $ask++) {
     $script:prodqSeq++
     $label = "pq-$Tag-$script:prodqSeq"
@@ -750,17 +538,12 @@ function Shot([string]$tag) {
 try {
     Step "generate the fixture: two Nexuses + one Command Center, $StartingMinerals minerals" {
         Wait-ScFixtureFolderFree -Run $fixtures
-        # TWO Nexuses, because two supply 18 psi between them and a queue of $QueueMax
-        # Probes needs 9 -- so no Pylon has to land on buildable ground for the run to
-        # mean anything. Only ONE of them is ever selected; the second is supply.
-        #
-        # And ONE Command Center, owned by the PLAYER too (-EnemyOwner player is the
-        # generator's "same block, human-owned" mode). It is not scenery: the claim that
-        # a Terran producer's card cannot show the Cancel button is a claim about a
-        # dialog, and this repo proves those by reading the dialog rather than by
-        # reasoning about a button table. So the run trains at it and reads its card.
-        # -UnitBuildTime is opt-in: at 0 the argument is not passed at all and the map is
-        # byte-for-byte the one this suite generated before task 031.
+        # TWO Nexuses: 18 psi between them covers $QueueMax Probes, so no Pylon has to land
+        # on buildable ground. Only the first is ever selected; the second is supply.
+        # ONE Command Center, PLAYER-owned (-EnemyOwner player is the generator's "same
+        # block, human-owned" mode): what a Terran producer's card shows is a claim about
+        # a dialog, proved by reading the dialog, so the run trains at it and reads its
+        # card. -UnitBuildTime is opt-in: at 0 it is not passed and the map is vanilla.
         $genArgs = @{
             UnitCount = 2; UnitType = 'nexus'; Player = 0; ClearPlayerUnits = $true
             Race = 'protoss'; GridSpacing = 160
@@ -801,13 +584,10 @@ try {
     Wait-ScNoGameRunning
     $launchLock = Enter-ScLaunchLock -TaskId '028-production-cancel-refund'
     # hooktest mode: the ONE queueCommand hook, so `CMD id=` lines exist, and none of the
-    # selection machinery. The production queue is a per-building feature and has nothing
-    # to do with selection fan-out -- running in `fanout` would put four unrelated hooks
-    # in the picture for no gain.
-    #
-    # -CardScan 1 adds the two READ-ONLY dialog walks (command card + status-pane queue
-    # strip). They install no hook and write nothing, which is why they can be on in a run
-    # that is also asserting the plugin's own writes.
+    # selection machinery -- the production queue is per-building, and `fanout` would put
+    # four unrelated hooks in the picture. -CardScan 1 adds the two READ-ONLY dialog walks
+    # (command card + status-pane strip); they install no hook and write nothing, so they
+    # can be on in a run that is asserting the plugin's own writes.
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
         -Mode hooktest -LogCommands 1 -Circles 0 -HudRow 0 -WorldScan 1 -CardScan 1 `
         -ProdQueue 1 -ProdQueueMax $QueueMax -QueueIndicator 1 `
@@ -826,7 +606,7 @@ try {
             (@($cfg | Select-String -Pattern "max=$QueueMax ").Count -gt 0) `
             "(lines: $($cfg.Count))"
         # The absence check below is only worth anything because this positive one exists:
-        # 'HOOK <name>: installed at' is the plugin's real wording (AGENTS.md, 2026-08-09).
+        # 'HOOK <name>: installed at' is the plugin's real wording.
         $hooks = @(Get-Content -LiteralPath $LogPath |
                    Select-String -Pattern 'HOOK (cmdrecvTrain|cmdrecvCancelTrain|productionTick): installed at')
         Assert-That 'all three production detours are spliced' ($hooks.Count -eq 3) `
@@ -854,7 +634,7 @@ try {
         Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
         Start-Sleep -Seconds 10
         # The tips dialog is found in the engine's own dialog list and dismissed by ITS OWN
-        # OK button, then asserted gone (task 027) -- never a fixed point, never the registry.
+        # OK button, then asserted gone -- never a fixed point, never the registry.
         Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
         Start-Sleep -Seconds 2
         Shot 'in-game'
@@ -877,18 +657,12 @@ try {
     }
 
     Step 'select a Nexus -- exactly one building, nothing else' {
-        # NOT a drag box. The first run of this suite boxed the whole play area and the
-        # engine handed back a neutral MINERAL FIELD (`type=0x0B2 player=11`) that shares
-        # the box with the building -- so a box is not a way to name a specific building
-        # when the only thing you own is one.
-        #
-        # The click point is DERIVED FROM MEMORY instead, never measured off a frame
-        # (AGENTS.md, task 026): the world scan reports the building's own map-pixel
-        # position and the viewport's top-left, and `client = map - viewport` is exactly
-        # the arithmetic the engine's own click handler at 0x0046FB40 does when it builds
-        # the rectangle it hit-tests. So this clicks the building the scan found, and if
-        # the sums ever put it off the play area the step says so instead of clicking
-        # somewhere arbitrary.
+        # NOT a drag box: measured, a box over the play area hands back a neutral MINERAL
+        # FIELD (`type=0x0B2 player=11`) that shares the box with the building. The click
+        # point is DERIVED FROM MEMORY, never measured off a frame: the world scan reports
+        # the building's map-pixel position and the viewport origin, and
+        # `client = map - viewport` is the arithmetic the engine's own click handler at
+        # 0x0046FB40 does. If the sum lands off the play area the step says so.
         $w = Get-World 'aim'
         $cc = @($w.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $NEXUS_TYPE -and
                                           ($null -eq $script:nexusUnit -or $_.Unit -eq $script:nexusUnit) })[0]
@@ -910,8 +684,7 @@ try {
         if ($q.Selected) {
             Assert-That "and it is the Nexus (type 0x$('{0:x}' -f $q.Selected.Type))" `
                 ($q.Selected.Type -eq $NEXUS_TYPE)
-            # The mineral field the box used to grab was player 11. Naming the owner keeps
-            # that failure mode from ever reading as a pass again.
+            # Naming the owner keeps a player-11 mineral field from ever reading as a pass.
             Assert-That "owned by the human player 0 ($($q.Selected.Player))" `
                 ($q.Selected.Player -eq 0)
             Assert-That "and it is the same building the world scan found ($($q.Selected.Unit))" `
@@ -977,31 +750,22 @@ try {
         $lines = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
         $cmds = @($lines | Select-String -Pattern "CMD id=$TRAIN_CMD ")
         # THE HEADLINE MEASUREMENT, on the engine's own command funnel. Vanilla puts FIVE
-        # Train commands on the wire and then goes quiet, because the client greys the
-        # button out once the ring holds five -- this suite measured exactly that before
-        # the plugin kept the ring below it. With the plugin, the client keeps offering
-        # the button until the logical queue reaches the configured maximum, so the number
-        # of commands that actually went out IS the cap.
+        # Train commands on the wire and goes quiet because the client greys the button
+        # once the ring holds five (measured: five `CMD id=0x1F` at the press cadence, then
+        # silence). With the plugin the client keeps offering the button until the logical
+        # queue reaches the maximum, so the number that went out IS the cap.
         Assert-That "$QueueMax of the $Clicks presses reached the wire, not $ENGINE_SLOTS ($($cmds.Count))" `
             ($cmds.Count -eq $QueueMax)
         Assert-That "and the $expectNotSent presses past the cap were refused by the client itself" `
             ($cmds.Count -eq $Clicks - $expectNotSent)
         $script:cmdsSent = $cmds.Count
 
-        # THE ASSUMPTION THE COUNT ABOVE RESTS ON, checked rather than commented. If a slot
-        # freed while the clicks were going out, the plugin would have promoted an item into
-        # it, the logical queue would have fallen below the cap, and the client would have
-        # sent a TENTH command -- so both assertions above would fail with nothing to say
-        # about why. A faster fixture is exactly what causes that (task 031,
-        # -ProbeBuildSeconds), so the cause is named here instead of being guessed at.
-        #
-        # `promoted` IS THE INVARIANT, not "how many Probes exist". An earlier version of
-        # this guard counted units and failed a run whose fixture was fine, because a unit
-        # still being TRAINED is already linked into the player's unit list -- that run's log
-        # has `hp=13484 flags=0x00130000` beside the finished ones' `hp=15360
-        # flags=0x00130001`, i.e. HP ramping up with the completed bit (0x01) still clear.
-        # A slot frees when a unit FINISHES, and the plugin's promotion counter is the
-        # engine-side record of exactly that.
+        # THE ASSUMPTION THE COUNT ABOVE RESTS ON, checked rather than commented: a slot
+        # freeing mid-burst lets the plugin promote into it, the logical queue falls below
+        # the cap and the client sends a TENTH command. A short -ProbeBuildSeconds is what
+        # causes that, so the cause is named here. `promoted` IS THE INVARIANT, not a unit
+        # count: a unit still being trained is already in the unit list (Get-TraineeCount),
+        # and a slot frees only when one FINISHES, which the promotion counter records.
         $burst = Get-ProdQueue 'burst-end'
         Assert-That "no queue slot freed while the burst was going out (promoted=$($burst.Promoted)) -- the wire count depends on it" `
             ($burst.Promoted -eq 0) `
@@ -1028,25 +792,20 @@ try {
                 ($s.Overflow -eq $expectOverflow)
             Assert-That "so the logical queue is $QueueMax, which is MORE THAN $ENGINE_SLOTS ($($s.Logical))" `
                 ($s.Logical -eq $QueueMax -and $s.Logical -gt $ENGINE_SLOTS)
-            # PAID EXACTLY ONCE, each. $QueueMax accepted items, $expectRefused refused
-            # ones that must have cost nothing at all.
+            # PAID EXACTLY ONCE, each: $QueueMax accepted items, and the refused presses
+            # must have cost nothing at all.
             $expectMinerals = $StartingMinerals - $QueueMax * $PROBE_COST
             Assert-That "minerals are down by exactly $QueueMax x $PROBE_COST and no more ($($s.Minerals))" `
                 ($s.Minerals -eq $expectMinerals) "(expected $expectMinerals)"
         }
         Assert-That "the plugin is holding exactly $expectOverflow item(s) ($($q.Captured))" `
             ($q.Captured -eq $expectOverflow)
-        # NOTHING was refused by the plugin: at the cap it simply stops taking items back,
-        # the ring is left full, and vanilla's own UI declines the rest. A refusal here
-        # would mean an over-cap command reached the handler, which the client should
-        # never have sent.
+        # NOTHING was refused by the plugin: at the cap it stops taking items back, the ring
+        # is left full, and vanilla's own UI declines the rest. A refusal here would mean an
+        # over-cap command reached the handler, which the client should never have sent.
         Assert-That "and refused nothing itself ($($q.RefusedFull))" ($q.RefusedFull -eq 0)
-        # "nothing was refused for cost" was asserted here from refusedCost, a counter no
-        # code path could move (issue #66). The fixture's resource state is asserted for
-        # real by the exact-minerals check above, which is what a starved fixture breaks.
-        # The engine's cap, stated as a subtraction over this run's own counters: 9
-        # commands went out and 4 of them are with the plugin, so the engine is holding 5
-        # -- its five slots, full, which is what stopped the tenth press.
+        # The engine's cap as a subtraction over this run's own counters: sent minus what
+        # the plugin holds is the ring, full at five, which is what stopped the tenth press.
         $engineHas = $cmdsSent - $q.Captured
         Assert-That "the engine itself is holding $ENGINE_SLOTS of the $cmdsSent sent ($engineHas)" `
             ($engineHas -eq $ENGINE_SLOTS)
@@ -1059,9 +818,7 @@ try {
         Assert-Reconciles 'queued' $q -Accepted $script:accepted -Cancelled $script:cancels
     }
 
-    # ---------------------------------------------------------------------------
-    # TASK 028: what the player can actually SEE and CLICK, with nine queued
-    # ---------------------------------------------------------------------------
+    # --- what the player can actually SEE and CLICK, with nine queued ---------------
     Step 'READ the status pane: five icons for a nine-item queue' {
         # The line mark the indicator step below reads from, so it costs no extra marker
         # round trip -- see Get-QIndAfter for why a spare second here is expensive.
@@ -1093,50 +850,33 @@ try {
     }
 
     Step 'THE INDICATOR says what the strip cannot show (task 033)' {
-        # The user asked for this in as many words: "when more then 5 units a queued - is
-        # the info showing that? (some +x number somewhere in tug?)". At the CAP the plugin
-        # has stopped taking items back, so the ring is full at five and the four it holds
-        # are the ones no icon can draw -- which is exactly what the "+N" is for.
-        # The observer writes the QIND line on EVERY marker, so the strip read above has
-        # already produced one; taking that line costs nothing, where a marker of our own
-        # would delay the timing-sensitive cancel arm below.
+        # At the CAP the plugin has stopped taking items back, so the ring is full at five
+        # and the four it holds are the ones no icon can draw -- what the "+N" is for. The
+        # observer writes QIND on EVERY marker, so the strip read above already produced
+        # one; a marker of our own would delay the timing-sensitive cancel arm below.
         $qi = Get-QIndAfter $script:stripMark
         Write-Host "       $($qi.Line)"
         Assert-That 'the indicator control is spliced into the status dialog' ($qi.Linked)
         Assert-That "and the ENGINE's own visible bit is set on it" ($qi.Visible)
         # Read through the control's pszText pointer, not echoed from the module's buffer:
-        # that distinction is what let sc_hudrow's indicator pass its own test for weeks
-        # while drawing nothing (AGENTS.md: assert the engine's own result).
+        # an indicator that echoes its own buffer passes while drawing nothing
+        # (AGENTS.md: assert the engine's own result).
         Assert-That "its text says +$expectOverflow -- the items the strip cannot draw (`"$($qi.Text)`")" `
             ($qi.Text -eq "+$expectOverflow")
         Assert-That "and the numbers behind it are the building's own ($($qi.EngineLen) + $($qi.Overflow))" `
             ($qi.EngineLen -eq $ENGINE_SLOTS -and $qi.Overflow -eq $expectOverflow)
-        # THE DRAW ITSELF. A control can be linked, visible and hold the right string and
-        # still put no pixel on the screen -- the engine's text routine refuses to draw at
-        # all when the box is shorter than the font. refInk is the positive control: if the
-        # probe cannot see the surface, BOTH numbers are 0 and the ink assertion means
-        # nothing, so it is asserted first.
+        # THE DRAW ITSELF. Linked, visible and holding the right string still puts no pixel
+        # on screen when the box is shorter than the font. refInk is the positive control
+        # and goes first: a blind probe reads 0 for both numbers.
         Assert-That "the ink probe can see the dialog's surface (refInk=$($qi.RefInk) over control $($qi.RefId))" `
             ($qi.RefInk -gt 0)
         Assert-That "the box is taller than the font, or the engine would refuse it outright ($($qi.Bottom - $qi.Top) >= $($qi.FontH))" `
             (($qi.Bottom - $qi.Top) -ge $qi.FontH)
-        # ... and THAT is as far as ink can take this case. The "+N" box sits inside queue
-        # icon 6, so the icon's own pixels are inside it: ink > 0 is true here whether or not
-        # one pixel of ours was drawn, and it stayed true through the whole of task 039's
-        # defect, when the icon under it was drawing the wrong art entirely. What CAN fail is
-        # the difference between slot 0 and slot 4: same rect size, same border graphic, same
-        # queued Probe, so with the ring full and the strip settled the only bytes that differ
-        # are the ones this plugin put there.
-        # `ink` is reported for continuity and is NOT an oracle here: this pane's own art
-        # lives in the same surface, so every rect in it reads saturated (this run: 1330 of
-        # 1330 bytes over a queue icon). What can fail is boxDiff -- the same box compared
-        # against a copy of itself taken while the indicator was hidden.
-        # AND WHAT boxDiff CLAIMS HERE, exactly. This box sits inside queue icon 6, which is
-        # the icon this module also FILLS, and the baseline predates that fill -- so in STRIP
-        # mode the number is "bytes inside the box this plugin is responsible for", the icon
-        # and the text together, not "the text drew". The text-specific oracle in this mode is
-        # slotDiff below, where both slots hold the same art and the string is all that is
-        # left to differ. In GROUP mode the band belongs to no control and boxDiff IS the text.
+        # `ink` is NOT an oracle here (ConvertFrom-QIndLine: the icon's own art saturates
+        # the box). boxDiff in STRIP mode counts the bytes this plugin is responsible for --
+        # icon fill AND text, since the baseline predates the fill -- so the text-specific
+        # oracle is slotDiff: both slots hold the same art and only the "+N" is left to
+        # differ. In GROUP mode the band belongs to no control and boxDiff IS the text.
         Assert-That "the box holds bytes this plugin put there: boxDiff=$($qi.BoxDiff) (ink=$($qi.Ink), saturated by the pane art)" `
             ($qi.BoxDiff -gt 0)
         Assert-That ("the fifth icon draws the SAME picture as the first: slotDiff=$($qi.SlotDiff) bytes, " +
@@ -1160,8 +900,6 @@ try {
         if ($cancel -and $cancel.HasButton) {
             Assert-That "slot $CANCEL_SLOT is the Cancel action 0x$CANCEL_ACT (0x$($cancel.Action))" `
                 ($cancel.Action -eq $CANCEL_ACT)
-            # 0xFE is the whole reason this button is the plugin's: it means "cancel the
-            # LAST queued item", which is the item the plugin is holding.
             Assert-That "and its actionParam is 0x00FE, cancel-the-last ($($cancel.ActParam))" `
                 ($cancel.ActParam -eq $CANCEL_APARAM)
             Assert-That 'and it is not greyed -- the click can reach the action' `
@@ -1172,9 +910,6 @@ try {
     }
 
     Step 'CANCEL AN ITEM THE PLUGIN IS HOLDING -- the refund path with real money on it' {
-        # The payload the card's Cancel button carries: "the LAST queued item", which is
-        # the plugin's while it holds any. Asserted on the wire inside the helper, before
-        # a single refund number is looked at.
         $r = Invoke-CancelAndMeasure -Tag 'plugin-cancel' -ExpectPayload $CANCEL_APARAM -Do {
             Send-ScClick -Hwnd $hwnd -X $script:cancelPoint.X -Y $script:cancelPoint.Y
         }
@@ -1202,8 +937,7 @@ try {
         $script:cancels++
         $script:pluginCancels++
         # Whether THIS cancel makes the plugin take one more item out of the ring is a
-        # property of the ring at the moment it was made, not of cancelling -- see the
-        # drain step. Recorded from this arm's own before-reading.
+        # property of the ring at that moment, not of cancelling -- see the drain step.
         if ($r.Before.Selected.EngineLen -gt $ENGINE_HOLD) { $script:capturesFromCancel++ }
         $script:mineralsAfterBurst = $r.After.Selected.Minerals
         Assert-Reconciles 'after-plugin-cancel' $r.After -Accepted $script:accepted -Cancelled $script:cancels
@@ -1211,14 +945,11 @@ try {
     }
 
     Step 'THE FIFTH ICON: below the cap the plugin draws the slot the engine leaves empty' {
-        # The user's second report: "when i queue more then 5 units the 5'th slot is emtpy".
-        # It is task 025's SC_PRODQ_ENGINE_HOLD = 4 showing through -- the ring is kept one
-        # below its cap so the client keeps sending Train commands. The cancel above put the
-        # logical queue back under the maximum, so the plugin is holding the ring at four
-        # again, which is precisely the state where display 4 has nothing behind it.
-        #
-        # Both halves are read from the ENGINE's own dialog: the strip walk says which icons
-        # are drawn and clickable, and the indicator line says what the plugin put there.
+        # SC_PRODQ_ENGINE_HOLD = 4 showing through: the ring is kept one below its cap so
+        # the client keeps sending Train. The cancel above put the logical queue back under
+        # the maximum, so the plugin holds the ring at four again -- the state where display
+        # 4 has nothing behind it. Both halves are read from the ENGINE's own dialog: the
+        # strip walk says which icons are drawn, the indicator line what the plugin put there.
         $qi = Get-QInd 'fifth-icon'
         Write-Host "       $($qi.Line)"
         if ($qi.EngineLen -ge $ENGINE_SLOTS) {
@@ -1229,16 +960,12 @@ try {
                 ($qi.EngineLen -eq $ENGINE_HOLD)
             Assert-That "and the plugin still holds items to draw there ($($qi.Overflow))" `
                 ($qi.Overflow -gt 0)
-            # THE HEADLINE: five icons drawn and lit for a queue whose ring holds four.
-            # Before task 033 this read four, and the fifth came back GREYED with 0xE4
-            # behind it (research/production-queue.md 8.4 recorded exactly that).
-            #
-            # Asserted from the indicator's OWN snapshot, which the GAME THREAD takes at the
-            # end of the frame that filled the icons -- not from the observer's asynchronous
-            # walk. The engine's layout re-greys these slots microseconds before the plugin
-            # re-fills them, inside the same driver call and before anything is drawn, so an
-            # async reader can sample a state the player never sees. It did, and it made this
-            # assertion pass one run and fail the next.
+            # THE HEADLINE: five icons lit for a ring of four (the defect: four lit, the
+            # fifth GREYED over 0xE4 -- research/production-queue.md 8.4). Asserted from the
+            # indicator's OWN snapshot, taken by the GAME THREAD at the end of the frame that
+            # filled the icons: the engine's layout re-greys these slots microseconds before
+            # the plugin re-fills them, inside the same driver call, so an async reader
+            # samples a state the player never sees and flips this assertion run to run.
             $lit = @($qi.Icons | Where-Object { $_.State -eq 'lit' })
             Assert-That "all $STATQ_SLOTS icons are lit, not $ENGINE_HOLD ($($lit.Count)): [$(($qi.Icons | ForEach-Object { "0x$('{0:x}' -f $_.Icon):$($_.State)" }) -join ' ')]" `
                 ($lit.Count -eq $STATQ_SLOTS)
@@ -1249,30 +976,25 @@ try {
                 Assert-That "with the OCCUPIED mode the engine writes for a real item ($($fifth.Mode))" `
                     ($fifth.Mode -eq 3)
                 Assert-That 'and it is NOT greyed' ($fifth.State -eq 'lit')
-                # THE FIELD THIS SUITE USED TO MISS, and the one task 039 exists for. An
-                # icon INDEX is meaningless without the GRP it indexes, and the plugin was
-                # inheriting the GRP the engine leaves on a slot it drew EMPTY -- the command
-                # button borders -- so this slot was blitting frame #unitType out of the
-                # wrong art. Every assertion above passed while that was true. `art` is read
-                # back from the live statUser record and compared against the engine's own
-                # two globals, so B here is precisely the defect the user reported.
+                # An icon INDEX is meaningless without the GRP it indexes: a slot the engine
+                # drew EMPTY carries the command-button-border GRP, and inheriting it blits
+                # frame #unitType out of the wrong art while every assertion above passes.
+                # `art` is read from the live statUser record against the engine's own two
+                # globals, so B here is exactly that defect.
                 Assert-That "and it draws from the ICON grp, not the empty-slot art (art=$($fifth.Art))" `
                     ($fifth.Art -eq 'I') `
                     '(B = <race>cmdbtns.grp, the placeholder art -- the frame index then means nothing)'
                 Assert-That 'and carries a slot label, like the four the engine filled' `
                     ($fifth.Label)
-                # The screen itself: slot 4 and slot 0 hold the same Probe, are the same
-                # size and take the same border graphic, so what differs between them below
-                # their labels is our "+N" and nothing else. With the wrong GRP the two are
-                # not the same picture at all and this runs to hundreds.
+                # The screen itself: with the wrong GRP slot 0 and slot 4 are not the same
+                # picture and slotDiff runs to hundreds.
                 Assert-That "the two slots are the same picture: slotDiff=$($qi.SlotDiff) bytes" `
                     ($qi.SlotDiff -ge 0 -and $qi.SlotDiff -lt 200)
             }
-            # ... and the engine's own ring slot behind it is still EMPTY. That is the point
-            # of the whole exercise: the item is real and paid for, but it lives in the
-            # plugin, which is why a click on that icon is the plugin's to serve and never
-            # reaches cancelBuildQueueSlot. This one IS the async walk -- the ring is the
-            # BUILDING's memory, which nothing in this frame path writes, so it cannot race.
+            # ... and the engine's own ring slot behind it is still EMPTY: the item is real
+            # and paid for but lives in the plugin, so a click on that icon is the plugin's
+            # to serve and never reaches cancelBuildQueueSlot. This one IS the async walk --
+            # the ring is the BUILDING's memory, which nothing in this frame path writes.
             $st = Get-StatusQueue 'strip-fifth'
             Assert-That 'the status-strip read-back answered' ($st.Ok)
             $ring = @($st.Slots | Where-Object { $_.Display -eq ($ENGINE_SLOTS - 1) })[0]
@@ -1283,33 +1005,14 @@ try {
         }
     }
 
-    # ---------------------------------------------------------------------------
-    # TASK 061. The user, playing the deployed build 2c239e6: "i can cancel a queue
-    # unit by clicking it, but it doesn't work if i click the last slock when it has
-    # our extra +x text".
-    #
-    # Every arm above this one cancels a slot our own drawing is NOT on: the card's
-    # Cancel button (0xFE) and, later, a middle icon on a below-cap queue. The LAST
-    # icon is the only one where a click has to pass through pixels this repo put on
-    # the screen -- it is both the slot the plugin fills from its own overflow and the
-    # control the "+N" indicator anchors to -- and that is the slot the user cannot
-    # cancel. It had never been clicked by anything.
-    #
-    # THE SEAM THIS ARM EXISTS TO REACH, named and measured rather than assumed
-    # (AGENTS.md, task 041 -- a generated or state-dependent case that never reaches
-    # its seam is a passing check standing guard over a bug):
-    #
-    #   1. the strip's last icon is LIT and its RING SLOT IS EMPTY, so the item behind
-    #      it is the plugin's and the click is the plugin's to serve;
-    #   2. the indicator is in STRIP mode with a "+N" on that icon;
-    #   3. OUR PIXELS ARE ACTUALLY ON IT -- boxDiff, never ink: the icon's own art is
-    #      inside that box, so ink reads saturated before anything of ours is drawn
-    #      (measured in task 039: 448 of 448 bytes);
-    #   4. and the point this arm clicks is INSIDE that box, so it is the user's click
-    #      and not some corner of the slot their report is not about.
-    #
-    # All four are assertions. A run that does not reach that state FAILS here rather
-    # than skipping, because below it this arm cannot detect the bug at all.
+    # --- THE LAST SLOT: the one place a click passes through pixels this repo drew ----
+    # Every arm above cancels a slot our drawing is NOT on. THE SEAM this arm must reach,
+    # asserted rather than assumed (a case that never reaches its seam is a passing check
+    # standing guard over a bug): the last icon is LIT with its RING SLOT EMPTY, so the
+    # click is the plugin's to serve; the indicator is in STRIP mode with a "+N" on it;
+    # OUR PIXELS ARE ON IT (boxDiff, never ink); and the click point is INSIDE that box,
+    # so it is the user's click and not a corner of the slot. A run that does not reach
+    # that state FAILS here rather than skipping: below it this arm cannot detect the bug.
     Step 'THE LAST SLOT, WITH "+N" DRAWN ON IT: clicking it must cancel like any other' {
         $qi = Get-QInd 'last-slot-before'
         Write-Host "       $($qi.Line)"
@@ -1317,10 +1020,7 @@ try {
             ($qi.Mode -eq $QIND_MODE_STRIP -and $qi.Text -match '^\+\d+$')
         Assert-That "and the engine has our control linked and visible (linked=$($qi.Linked) visible=$($qi.Visible))" `
             ($qi.Linked -and $qi.Visible)
-        # THE ORACLE FOR "OUR TEXT IS ON THAT SLOT", and the reason it is not `ink`:
-        # boxDiff counts the bytes inside the box that differ from a copy of the SAME
-        # rect taken while the indicator was hidden. 0 means nothing of ours is on the
-        # screen; -1 means the probe has no baseline and therefore never answered.
+        # boxDiff, not ink -- see ConvertFrom-QIndLine.
         Assert-That "and OUR pixels are on that box: boxDiff=$($qi.BoxDiff) bytes differ from the same rect without them" `
             ($qi.BoxDiff -gt 0) `
             '(0 = nothing of ours is drawn there; -1 = no baseline, so the probe never answered)'
@@ -1354,22 +1054,14 @@ try {
             "(dialog-relative ($dx,$dy))"
         Shot 'last-slot-before-cancel'
 
-        # THIS ARM TURNED GREEN WITH TASK 066, and green here is not "the race was won":
-        # the race is REMOVED. The phantom bracket around queueLayout makes the engine lay
-        # the owned slot out as OCCUPIED (enableControl, its own fields), so the disable
-        # event that used to clear the player's PRESSED bit mid-click -- exactly once per
-        # click, deterministically, PR #95's paired rows -- never fires at all. What makes
-        # a single click assertable where 061's task file forbade it is that determinism:
-        # pre-fix EVERY collided click failed (30 of 30) and every click collided exactly
-        # once; post-fix the collision cannot occur, and the counters below prove WHICH
-        # world this click ran in rather than trusting the outcome. The RATE arm
-        # (-HoldSweepClicks) is still the acceptance measurement across hold durations.
-        #
-        # THE WIRE FIRST, and it is the whole diagnosis in one reading (AGENTS.md, task
-        # 025): if no Cancel Train command leaves queueCommand, the click never became a
-        # cancel at all. If one leaves and nothing is refunded, it became the WRONG cancel.
-        # The helper asserts the command and its payload before it looks at a single
-        # mineral.
+        # GREEN HERE IS NOT "THE RACE WAS WON": the race is REMOVED. The phantom bracket
+        # around queueLayout makes the engine lay the owned slot out as OCCUPIED, so the
+        # disable event that cleared the player's PRESSED bit mid-click never fires. A
+        # single click is assertable because the defect was deterministic (30 of 30
+        # collided clicks failed, every click collided exactly once) and the counters below
+        # prove WHICH world this click ran in. THE WIRE FIRST: no Cancel Train out of
+        # queueCommand means the click never became a cancel; one out and nothing refunded
+        # means the WRONG cancel. The helper asserts command and payload before any mineral.
         $r = Invoke-CancelAndMeasure -Tag 'last-slot-cancel' -ExpectPayload $STATQ_LAST_DISPLAY -Do {
             Send-ScClick -Hwnd $hwnd -X $script:lastSlotPoint.X -Y $script:lastSlotPoint.Y
         }
@@ -1401,19 +1093,13 @@ try {
         # The later "minerals are UNCHANGED across the whole drain" assertion is written
         # against this, so it has to move with every cancel that spends or refunds.
         $script:mineralsAfterBurst = $r.After.Selected.Minerals
-        # AND IT PASSED FOR THE RIGHT REASON (task 066). A green wire assertion alone
-        # cannot separate "the fix removed the collision" from "the click won the race the
-        # collision creates" -- 061 measured that race flipping in both directions. So the
-        # arm requires the fix's own signature, both halves:
-        #
-        #   * `phantom` MOVED across the click: the bracket was actively making the slot
-        #     occupied for queueLayout while the strip was up. A green with phantom +0
-        #     means the fix never ran and this arm is guarding nothing.
-        #   * `disableOnOwned` DID NOT MOVE: pre-fix, every fill provoked exactly one
-        #     disable (1153974 = 1153974) and every click collided exactly once,
-        #     deterministically (PR #95). +0 here is therefore a POSITIVE reading -- the
-        #     fight is gone -- and any movement is the fight back, red, whatever the wire
-        #     said.
+        # AND IT PASSED FOR THE RIGHT REASON. A green wire alone cannot separate "the fix
+        # removed the collision" from "the click won the race". The fix's own signature:
+        #   * `phantom` MOVED across the click -- +0 means the fix never ran and this arm
+        #     guards nothing;
+        #   * `disableOnOwned` DID NOT MOVE -- pre-fix every fill provoked exactly one
+        #     disable (1153974 = 1153974), so +0 is a POSITIVE reading and any movement is
+        #     the fight back, red, whatever the wire said.
         $qiAfter = Get-QInd 'last-slot-after'
         Write-Host "       $($qiAfter.Line)"
         $dOwned   = $qiAfter.DisableOnOwned - $qi.DisableOnOwned
@@ -1439,11 +1125,10 @@ try {
 
     Step 'ONE GAME THREAD: the claim the phantom bracket rests on, measured in this run' {
         # The bracket's safety argument is "every engine reader of the ring runs on the
-        # game thread" (research/production-queue.md 8.8). Each hooked site logs its
-        # thread id once (THREADCHECK), and a CHANGED suffix if it ever moves -- so the
-        # claim is a reading here, not an assumption. By this point in the run all six
-        # game-side sites have fired (the cancel arm above was the last), and the
-        # observer -- the thread the seqlock exists FOR -- must be a DIFFERENT id.
+        # game thread" (research/production-queue.md 8.8). Each hooked site logs its thread
+        # id once (THREADCHECK) and a CHANGED suffix if it ever moves, so the claim is a
+        # reading. By this step all six game-side sites have fired (the cancel arm above was
+        # the last), and the observer -- the thread the seqlock exists FOR -- must differ.
         $tc = @(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'THREADCHECK (\S+) tid=(\d+)')
         foreach ($l in $tc) { Write-Host "       $($l.Line.Trim())" }
         $sites = @{}
@@ -1505,20 +1190,14 @@ try {
                 Send-ScClick -Hwnd $hwnd -X $p.X -Y $p.Y -HoldMs $hold -SettleMs 400
                 Start-Sleep -Milliseconds 900
                 $lines = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
-                # Get-QInd, NOT Get-QIndAfter. The `-After` form takes a line some OTHER
-                # marker caused the observer to write, and nothing in this loop asks for
-                # one -- so it waited 20s for a line that was never going to appear and
-                # threw the whole step away. Asking for our own marker costs a round trip
-                # per click and always has an answer.
+                # Get-QInd, NOT Get-QIndAfter: the `-After` form takes a line some OTHER
+                # marker made the observer write, and nothing in this loop asks for one, so
+                # it waits 20s for a line that never appears and throws the step away.
                 $qa = Get-QInd "sweep-$hold-$i-a"
                 $tried++
-                # PAIRED PER CLICK, not summed per duration. The first version of this
-                # printed only the two totals, and "the one click that cancelled is the one
-                # click with no collision" was then inference from two aggregates agreeing
-                # -- the same shape as the single-sample conclusions this task spent a
-                # morning retracting. One row per click makes the anti-correlation a
-                # measurement instead: the CLICK line carries its own verdict and its own
-                # collision count, so a reader can pair them without trusting a summary.
+                # PAIRED PER CLICK, not summed per duration: two totals agreeing is
+                # inference; one row per click, carrying its own verdict and collision
+                # count, makes the anti-correlation a measurement.
                 $didCancel = @($lines | Select-String -Pattern "CMD id=$CANCEL_CMD ").Count -gt 0
                 $dCollide  = $qa.DisableWithPress - $qb.DisableWithPress
                 if ($didCancel) { $ok++; $script:cancels++; $script:pluginCancels++ }
@@ -1536,20 +1215,12 @@ try {
             Write-Host ("       RATE holdMs={0} clicks={1} cancelled={2} pct={3} collided={4}" -f
                         $r.HoldMs, $r.Clicks, $r.Cancelled, $r.Pct, $r.Collided)
         }
-        # THE RATE IS ASSERTED NOW, and here is why that stopped being the made-up
-        # threshold 061 refused to invent (task 066):
-        #
-        #   * The baseline exists. PR #95 measured the pre-fix rate: 0 of 18 above a 60ms
-        #     hold, 30 of 30 collided clicks failed, and every click collided exactly
-        #     once. The user lives at long holds; that is where the defect was absolute.
-        #   * The fix claims DETERMINISM, not luck: with the phantom bracket in place no
-        #     disable event exists to lose a race against, so every click that reaches the
-        #     slot must cancel, at every hold. 100% is the mechanism's own prediction, and
-        #     asserting less would be tolerating the race this fix claims to have removed.
-        #     A miss here is a real finding -- report it, never widen the threshold.
-        #
-        # The collided column is the same claim from the other side: pre-fix it read one
-        # per click, deterministically; the bracket leaves nothing to collide with.
+        # THE RATE IS ASSERTED AT 100%, not at a made-up threshold. Pre-fix baseline: 0 of
+        # 18 cancelled above a 60ms hold, 30 of 30 collided clicks failed, every click
+        # collided exactly once -- absolute at the long holds a user lives at. The fix
+        # claims DETERMINISM: no disable event exists to race, so every click must cancel at
+        # every hold; a miss is a real finding, never a reason to widen the threshold. The
+        # collided column is the same claim from the other side.
         $measured = @($rows | Where-Object { $_.Clicks -gt 0 })
         Assert-That "the sweep actually clicked: $($measured.Count) of $($durations.Count) durations got real clicks" `
             ($measured.Count -eq $durations.Count) `
@@ -1583,45 +1254,31 @@ try {
                         ($q.Selected.EngineLen -ge $ENGINE_HOLD)
                 }
             }
-            # WAIT FOR THE WHOLE LOGICAL QUEUE, not just for the plugin's part of it. The
-            # plugin empties four items before the end -- it hands its last one over while
-            # four are still building -- so exiting on "the plugin is done" would walk
-            # straight into the next step with half the units not yet made.
+            # WAIT FOR THE WHOLE LOGICAL QUEUE, not the plugin's part: it hands its last
+            # item over while four are still building, so exiting on "the plugin is done"
+            # walks into the next step with half the units not yet made.
             if ($q.Buildings -eq 0 -and $q.Selected -and $q.Selected.Logical -eq 0) { break }
-            # 2s, not 5. This is a DETECTION loop, not a measurement window: every pass
-            # takes a fresh PRODQ reading and re-asserts the ring invariant, so polling
-            # more often strictly adds evidence and only costs a marker round trip. At the
-            # old 5s the drain's tail was mostly waiting for the next look, which matters
-            # once the builds themselves are seconds rather than tens of seconds
-            # (task 031, -ProbeBuildSeconds).
+            # A DETECTION loop, not a measurement window: every pass re-asserts the ring
+            # invariant, so polling often only adds evidence at the cost of a marker round
+            # trip, and with short builds a longer sleep is mostly waiting for the next look.
             Start-Sleep -Seconds 2
         }
         Write-Host "       $($seen -join ' -> ')"
 
         $q = Get-ProdQueue 'drained'
-        # THE CONSERVATION LAW FOR THE PLUGIN'S OWN LIST, which is what "no item was lost"
-        # means on its side: everything it ever took back it either handed over or
-        # cancelled. `captured` is NOT `-QueueMax - 5` any more once a cancel has
-        # happened -- the cancel frees room under the cap, so the next rebalance takes one
-        # more item back out of the ring and the plugin ends up holding the same four
-        # again. Measured: captured 5, promoted 4, cancelled 1. Writing the expectation as
-        # a literal would have hidden that; writing it as the law makes it visible.
+        # THE CONSERVATION LAW FOR THE PLUGIN'S OWN LIST: everything it took back it handed
+        # over or cancelled. `captured` is NOT `-QueueMax - 5` once a cancel has happened --
+        # a cancel at a full ring frees room under the cap and the next rebalance takes one
+        # more item out (measured: captured 5, promoted 4, cancelled 1). The law makes that
+        # visible; a literal would hide it.
         $expectPromoted = $q.Captured - $q.Cancelled
         Assert-That "everything the plugin captured was promoted or cancelled: $($q.Captured) - $($q.Cancelled) = $($q.Promoted)" `
             ($q.Promoted -eq $expectPromoted)
-        # A CANCEL DOES NOT ALWAYS MAKE ROOM, and writing that it does was a coincidence of
-        # having exactly one cancel in this phase (task 061). This used to read
-        # `captured == expectOverflow + cancels`, which held for the plugin-cancel arm and
-        # failed the moment a second plugin-served cancel was added: measured, captured 5
-        # with 2 cancels where that formula wanted 6.
-        #
-        # The reason is the RING, not the cancel. The plugin takes an item back only when
-        # the ring is ABOVE its hold; the first cancel happened while the ring was full at
-        # five, so the next rebalance pulled one out and `captured` went up. The second
-        # happened with the ring already at four, so there was nothing to pull. So the
-        # expectation is counted from the state each cancel was actually made in --
-        # `$script:capturesFromCancel`, incremented by the arms themselves -- rather than
-        # from how many cancels there were.
+        # A CANCEL DOES NOT ALWAYS MAKE ROOM. The plugin takes an item back only while the
+        # ring is ABOVE its hold: a cancel at a full ring makes the next rebalance pull one
+        # out, a cancel at four pulls nothing (measured: captured 5 with 2 cancels, where
+        # `expectOverflow + cancels` wants 6). So the expectation is counted from the state
+        # each cancel was made in -- $script:capturesFromCancel -- not from how many there were.
         Assert-That ("and it captured one more for each cancel made while the ring was still above the hold: " +
                      "$expectOverflow + $script:capturesFromCancel = $($q.Captured)") `
             ($q.Captured -eq $expectOverflow + $script:capturesFromCancel)
@@ -1643,17 +1300,11 @@ try {
                 ($okType -and $okSlot) "($($ev[$i].Line.Trim()))"
         }
 
-        # THE COUNT ITSELF, asserted across EVERY event that moves it rather than against a
-        # per-promotion literal. The old form expected promotion i to leave
-        # `expectPromoted - 1 - i` behind, which silently assumed promotions are the only
-        # thing that changes the plugin's list. They are not: a CANCEL removes an item and a
-        # HOLD adds one, and with two cancels in this phase the sequence stopped matching --
-        # a real ordering the run does not guarantee, encoded as arithmetic (task 061).
-        #
-        # So walk all four event kinds in the order the plugin logged them and require each
-        # to move its own reported count by exactly one, in the right direction. That is
-        # strictly stronger than the old check -- it covers the cancels and the captures too
-        # -- and it cannot be broken by adding an arm.
+        # THE COUNT ITSELF, asserted across EVERY event that moves it, never against a
+        # per-promotion literal: promotions are not the only thing that changes the plugin's
+        # list -- a CANCEL removes an item and a HOLD adds one, in an order the run does not
+        # guarantee. Walk all four event kinds in logged order and require each to move its
+        # own count by exactly one, in its direction; adding an arm cannot break that.
         $moves = @(Get-Content -LiteralPath $LogPath |
                    Select-String -Pattern 'PRODQEV (promote|hold|cancel-last|cancel-icon) ')
         $running = $null
@@ -1707,33 +1358,27 @@ try {
         Shot 'built'
     }
 
-    # ---------------------------------------------------------------------------
-    # TASK 028: the OTHER cancel -- an item inside the ENGINE's own ring, cancelled
-    # through the control vanilla actually gives the player for it
-    # ---------------------------------------------------------------------------
     Step 'AND IT GOES AWAY: an empty queue puts the indicator back out of sight' -SweepPerturbed {
-        # The other half of criterion 3, and the half a "does it appear" test cannot give
-        # you: with the logical queue drained there is nothing the strip cannot show, so the
-        # engine's visible bit must be OFF our control again and the module must say it is
-        # showing nothing. The control stays LINKED on purpose -- it is ours, hiding it is
-        # one flag write, and re-splicing it every time a queue empties would be churn.
+        # The half a "does it appear" test cannot give: with the logical queue drained there
+        # is nothing the strip cannot show, so the engine's visible bit must be OFF our
+        # control and the module must say it is showing nothing. The control stays LINKED on
+        # purpose: hiding is one flag write, re-splicing on every empty queue would be churn.
         $qi = Get-QInd 'drained'
         Write-Host "       $($qi.Line)"
         Assert-That "the building's logical queue really is empty ($($qi.EngineLen) + $($qi.Overflow))" `
             ($qi.EngineLen + $qi.Overflow -eq 0)
         Assert-That 'the indicator reports itself showing nothing (mode 0)' ($qi.Mode -eq 0)
         Assert-That "and the engine's visible bit is CLEAR on the control" (-not $qi.Visible)
-        # 'HIDDEN' HAS TO BE A READING RATHER THAN A BLIND SPOT, and the number that says so
-        # here is surfInk, not refInk. This is precisely the state in which refInk has no
-        # answer: the queue is empty, so the strip's icons are down, and one building is
-        # selected, so the wireframe row is down too -- neither candidate is visible and
-        # refInk is -1 ON PURPOSE. The old assertion demanded a number the pane cannot
-        # produce, and the fix for that is NOT to let refInk fall back to a control nobody
-        # can see. surfInk counts the whole surface, which the pane's own art always covers.
+        # 'HIDDEN' HAS TO BE A READING, NOT A BLIND SPOT, and the number is surfInk, not
+        # refInk: with the queue empty the strip's icons are down and with one building
+        # selected the wireframe row is down too, so refInk is -1 ON PURPOSE -- never let
+        # it fall back to a control nobody can see. surfInk counts the whole surface, which
+        # the pane's own art always covers.
         Assert-That "the probe can still read the surface, so 'hidden' is a reading and not a blind spot (surfInk=$($qi.SurfInk))" `
             ($qi.SurfInk -gt 0)
     }
 
+    # --- the OTHER cancel: an item in the ENGINE's own ring, through vanilla's control ---
     Step "queue $EngineArmQueue more, so the plugin holds NOTHING and the ring is the whole queue" -SweepPerturbed {
         $mark = Get-ScLogLineCount -LogPath $LogPath
         for ($i = 1; $i -le $EngineArmQueue; $i++) {
@@ -1761,10 +1406,9 @@ try {
         Assert-That 'the status-strip read-back answered' ($st.Ok)
         Assert-That "it still holds $STATQ_SLOTS icon controls ($($st.Slots.Count))" `
             ($st.Slots.Count -eq $STATQ_SLOTS)
-        # THE OTHER DIRECTION of the earlier reading, on the same walk: with three queued
-        # instead of five, exactly three icons are clickable and the other two are GREYED
-        # by the layout's own 0x00418640 call. An oracle that always said "clickable"
-        # passed the first reading and fails here.
+        # THE OTHER DIRECTION of the earlier reading, on the same walk: with three queued,
+        # exactly three icons are clickable and the other two are GREYED by the layout's
+        # own 0x00418640 call. An oracle that always says "clickable" fails here.
         Assert-That "exactly $EngineArmQueue icons are clickable ($($st.Clickable))" `
             ($st.Clickable -eq $EngineArmQueue)
         $empties = @($st.Slots | Where-Object { $_.Display -ge $EngineArmQueue })
@@ -1784,16 +1428,14 @@ try {
     }
 
     Step "CANCEL AN ITEM IN THE ENGINE'S RING -- the vanilla control, the engine's refund" -SweepPerturbed {
-        # The payload here is the DISPLAY INDEX of the icon clicked, not 0xFE -- that one
-        # byte is the whole difference between the two cases, and the helper asserts it on
-        # the wire before any refund number is read.
+        # The payload is the DISPLAY INDEX of the icon clicked, not 0xFE -- that one byte
+        # is the whole difference between the two cases.
         $r = Invoke-CancelAndMeasure -Tag 'engine-cancel' -ExpectPayload $EngineArmDisplay -Do {
             Send-ScClick -Hwnd $hwnd -X $script:iconPoint.X -Y $script:iconPoint.Y
         }
-        # THE ENGINE DID IT, NOT THE PLUGIN. The ring itself is one shorter, read from
-        # CUnit+0x98, and the plugin's cancel counter has not moved -- so this refund came
-        # out of the engine's cancelBuildQueueSlot and the plugin passed the command
-        # through, which is the behaviour the two-case design claims.
+        # THE ENGINE DID IT, NOT THE PLUGIN: the ring itself is one shorter, read from
+        # CUnit+0x98, and the plugin's cancel counter has not moved -- the refund came out
+        # of the engine's cancelBuildQueueSlot with the plugin passing the command through.
         Assert-That "the engine's own ring is one shorter ($($r.Before.Selected.EngineLen) -> $($r.After.Selected.EngineLen))" `
             ($r.After.Selected.EngineLen -eq $r.Before.Selected.EngineLen - 1 - $r.Completed)
         Assert-That "the plugin's cancel counter did NOT move ($($r.After.Cancelled))" `
@@ -1814,15 +1456,12 @@ try {
     }
 
     Step 'and the strip agrees afterwards: one fewer icon can be clicked' -SweepPerturbed {
-        # RE-READ ON MISMATCH, bounded. There is a real one-frame window here that is not
-        # a defect: productionTick clears a ring slot the instant a unit completes, and
-        # the icon's flags are re-greyed by the NEXT queueLayout pass -- so an async walk
-        # landing between the two reads flags one layout behind the ring (run 2 measured
-        # exactly that: clickable 2 vs engineLen 1, with the plugin holding nothing, one
-        # completion inside the sample). The player never sees that state (the pane is
-        # rendered after the layout). Two consecutive agreeing reads is the assertion;
-        # three disagreements in a row is a real desynchronisation and fails with both
-        # numbers printed.
+        # RE-READ ON MISMATCH, bounded. A real one-frame window, not a defect: productionTick
+        # clears a ring slot the instant a unit completes and the icon's flags are re-greyed
+        # by the NEXT queueLayout pass, so an async walk between the two reads flags one
+        # layout behind the ring (measured: clickable 2 vs engineLen 1, plugin holding
+        # nothing, one completion inside the sample). The player never sees that state.
+        # Two agreeing reads is the assertion; three disagreements is a real desync.
         $st = $null; $q = $null
         for ($try = 0; $try -lt 3; $try++) {
             $st = Get-StatusQueue 'strip-after-cancel'
@@ -1835,11 +1474,9 @@ try {
             ($st.Clickable -eq $q.Selected.EngineLen)
     }
 
-    # ---------------------------------------------------------------------------
-    # TASK 028: the same read on a TERRAN producer, whose slot 9 is SHARED between
-    # Lift Off and Cancel. Which one is drawn is a claim about a dialog, so it is
-    # READ -- and the first (static) reading of the button table got it wrong.
-    # ---------------------------------------------------------------------------
+    # --- a TERRAN producer, whose slot 9 is SHARED between Lift Off and Cancel: which is
+    # drawn is a claim about a dialog, so it is READ; the static button-table reading
+    # ("Cancel unreachable on a Command Center") is wrong --------------------------------
     Step 'a Command Center: slot 9 holds Lift Off when idle and Cancel when training' {
         $w = Get-World 'cc-aim'
         $cc = @($w.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $CC_TYPE })[0]
@@ -1848,9 +1485,7 @@ try {
         $onScreen = ($null -ne $cc -and $cx -ge 0 -and $cx -lt 630 -and $cy -ge 0 -and $cy -lt 340)
         Write-Host "       Command Center at client ($cx,$cy) -- on screen: $onScreen"
         if (-not $onScreen) {
-            # A definite outcome either way: this arm never silently disappears. The
-            # static half stands on its own (buttonset 106 is in the binary), and the
-            # acceptance criteria do not rest on it.
+            # A definite outcome either way: this arm never silently disappears.
             Skip-That 'the Command Center is off the opening viewport, so this arm is not measured' `
                 "(client $cx,$cy -- the claim about Terran cards stays static-only for this run)"
             return
@@ -1881,13 +1516,11 @@ try {
         $q = Get-ProdQueue 'cc-queued'
         Assert-That "the Command Center now has something queued ($($q.Selected.EngineLen))" `
             ($q.Selected.EngineLen -ge 1)
-        # THE SECOND HALF OF THE PAIR, and the point of the arm: the two conditions are
-        # complementary. Lift Off's (0x004287D0) requires the "is this building busy"
-        # helper 0x00401500 to return 0, and that helper returns 1 exactly when the head
-        # slot holds a real type -- which is exactly when the Cancel button's own
-        # condition (0x00428530) is true. So the same control swaps from one to the other
-        # the moment anything is queued, and the Cancel button IS reachable on a Terran
-        # producer, at precisely the times it would be useful.
+        # THE SECOND HALF OF THE PAIR: the two conditions are complementary. Lift Off's
+        # (0x004287D0) requires the "is this building busy" helper 0x00401500 to return 0,
+        # and that helper returns 1 exactly when the head slot holds a real type -- which is
+        # when the Cancel button's own condition (0x00428530) is true. So the same control
+        # swaps the moment anything is queued, and Cancel IS reachable on a Terran producer.
         $card = Get-Card 'cc-card-queued'
         $slot9 = Get-ScCardSlot -Card $card -Slot $CANCEL_SLOT
         Write-Host ("       training: slot 9 state={0} act=0x{1} aparam={2} icon=0x{3:x}" -f
@@ -1906,12 +1539,10 @@ try {
 
     Step 'the engine was never asked to do anything outside the production path' {
         $log = @(Get-Content -LiteralPath $LogPath)
-        # Nothing here fans anything out -- the suite runs in hooktest mode, which installs
-        # no selection hooks at all. Proved positively first: the mode line says hooktest,
-        # so "no FANOUT lines" is a real absence and not a missing feature.
-        # The COUNT is not pinned: task 033's indicator installs a second detour in this
-        # mode when -QueueIndicator is on. What has to hold is the mode (so "no FANOUT
-        # lines" below is a real absence) and that every hook the run wanted went in.
+        # hooktest installs no selection hooks, proved positively first: the mode line says
+        # hooktest, so "no FANOUT lines" is a real absence. The COUNT is not pinned -- the
+        # indicator installs a second detour in this mode when -QueueIndicator is on; what
+        # must hold is the mode and that every hook the run wanted went in.
         $hookLine = @($log | Select-String -Pattern 'HOOK: (\d+)/(\d+) installed, mode=hooktest')
         Assert-That 'the run really was in hooktest mode' ($hookLine.Count -gt 0)
         if ($hookLine.Count -gt 0) {
@@ -1968,14 +1599,11 @@ if ($statLine.Count -gt 0) {
         $cancelled = [int]$m.Groups[3].Value
         $refunded  = [int]$m.Groups[4].Value
         $back = [int]$m.Groups[6].Value
-        # "the plugin spent NOTHING of its own" was asserted here from mineralsSpent.
-        # Deleted with the counter (issue #66, task 055). The pay-once claim is carried by
-        # the engine's own balance -- asserted exactly at the burst and asserted UNCHANGED
-        # across the drain -- which is where a plugin that also paid would show up.
-        # THE REFUND, ONCE. The plugin served exactly the cancels that were its own, and
-        # gave back exactly one unit's cost for each. This is the counter that would read
-        # 2 x 50 on a double refund and 0 on a swallowed item, and neither would show up
-        # in the player's balance as anything but a number that still looked plausible.
+        # THE REFUND, ONCE. The plugin served exactly the cancels that were its own and gave
+        # back one unit's cost for each: this counter reads 2 x 50 on a double refund and 0
+        # on a swallowed item, neither of which the player's balance shows as anything but
+        # a plausible-looking number. The pay-once claim itself is carried by the engine's
+        # balance, asserted exact at the burst and UNCHANGED across the drain.
         Assert-That "the plugin served exactly $script:pluginCancels cancel(s) of its own ($cancelled)" `
             ($cancelled -eq $script:pluginCancels)
         Assert-That "and refunded exactly $script:pluginCancels x $PROBE_COST minerals for them ($back)" `

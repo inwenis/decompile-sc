@@ -1,37 +1,15 @@
 ﻿#Requires -Version 7
 <#
 .SYNOPSIS
-Prove, in the live game, that the map browser is opened by a row computed from the
-filesystem and that the harness can tell WHICH folder it actually opened -- with a second
-task's fixture folder present at the same time.
+Prove in the live game that the map browser opens a row computed from the filesystem, and
+that the harness can tell WHICH folder it opened, with a decoy fixture folder present.
 
 .DESCRIPTION
-This is the demonstration behind task 023's first acceptance criterion, kept as a script
-rather than a paragraph so it can be re-run whenever the browser model is touched.
-
-WHAT IT SETS UP. Two `00-t*` folders under Maps\BroodWar at once:
-
-  * a DECOY that sorts FIRST and holds a map of a DIFFERENT unit type. Under the old
-    harness the fixed row-1 folder click plus row-2 map click landed here, and the run
-    went on to box somebody else's units and report internally consistent nonsense --
-    that is the 2026-08-09 incident, reproduced deliberately;
-  * this run's OWN folder, which sorts second.
-
-WHAT IT PROVES, in order, each one loudly:
-
-  1. the computed rows differ from the old hardcoded ones (printed side by side, so the
-     old click is shown landing on the decoy);
-  2. the row the walk clicks really is a MAP row and not a folder or empty space, read
-     back off the browser's own map-information panel -- Assert-ScBrowserMapSelected,
-     which throws if it is not;
-  3. the map that LOADED is this run's own, read out of the process: the world scan holds
-     this fixture's unit type and none of the decoy's.
-
-(3) is the one that cannot be argued with. (1) and (2) are what make the failure loud and
-early instead of a wrong-unit-type mystery ten minutes later.
-
-Nothing here is committed: the maps are game content, generated for the run and deleted
-afterwards (AGENTS.md hard rule 1).
+The decoy sorts FIRST and holds a map of a DIFFERENT unit type, so a fixed row-1 click
+lands on it and the run boxes somebody else's units while reporting internally consistent
+nonsense. The claim that cannot be argued with is the world scan: it holds this fixture's
+unit type and none of the decoy's. The maps are game content, generated for the run and
+deleted afterwards, never committed (AGENTS.md § "Hard rules").
 
 .EXAMPLE
 ./tools/plugin/probe-browser-rows.ps1
@@ -101,6 +79,8 @@ try {
 
     Write-Host ''
     Write-Host '[2] the computed row is not the row the old harness clicked'
+    # The world scan in [4] is the conclusive check; these row checks earn their keep by
+    # making a wrong row fail here and loudly, not as a wrong-unit-type mystery in-game.
     $bwListing = Get-ScBrowserListing -Dir $broodWar -MapsRoot $mapsRoot
     Write-Host "       Maps\BroodWar: $($bwListing.Text)"
     $myEntry = Get-ScBrowserEntry -Listing $bwListing -Name $MyFolder
@@ -111,7 +91,8 @@ try {
         ($row1.Name -eq $DecoyFolder)
     Assert-That 'the computed row is ours and is not row 1' `
         ($myEntry.Row -gt 1)
-    # Level 3, in the same listing: the parent entry the campaign suites click has moved.
+    # [Up One Level] is no fixed row either: it sorts alphabetically AMONG the folders, so
+    # any folder that sorts before it pushes it down a row.
     $up = @($bwListing.Entries | Where-Object Kind -eq 'up')[0]
     Write-Host ("       [Up One Level] is row {0} (y={1}); the campaign suites used to click y=178 (row 3)" -f $up.Row, $up.Y)
     Assert-That 'the two extra folders moved [Up One Level] off row 3 as well' ($up.Row -ne 3)
@@ -140,9 +121,8 @@ try {
     Start-Sleep -Seconds 2
     Save-ScWindowImage -Hwnd $hwnd -Path (Join-Path $shotDir '01-broodwar-listing.png') -FullWindow | Out-Null
 
-    # THE OPENING LIST IS SCROLLED, which is why the harness never reads a row without
-    # putting the list somewhere known first. Shown here rather than asserted invisibly:
-    # the rows before and after the scroll-to-top are different rows.
+    # THE OPENING LIST IS SCROLLED, which is why no row is read before the list is put
+    # somewhere known: the rows before and after the scroll-to-top are different rows.
     $fpOpen = @(Get-ScBrowserRowOccupancy -Hwnd $hwnd)
     Sync-ScBrowserToTop -Hwnd $hwnd
     $fpTop = @(Get-ScBrowserRowOccupancy -Hwnd $hwnd)
@@ -152,11 +132,11 @@ try {
     Assert-That 'the browser did not open at the top of its own list' `
         (@(0..5 | Where-Object { $fpOpen[$_] -ne $fpTop[$_] }).Count -gt 0)
 
-    # The negative half, measured here rather than assumed: EVERY folder row leaves the
-    # SAME blank map-information panel. That is what makes "the panel changed" mean "the
-    # row I clicked was a map" when Select-ScBrowserMap checks it below -- and it is the
-    # positive-first half of the absence claim (AGENTS.md, 2026-08-09).
-    Send-ScClick -Hwnd $hwnd -X 117 -Y 140          # row 1 at the top == [00-t000], a folder
+    # The negative half, measured rather than assumed: EVERY folder row leaves the SAME
+    # blank map-information panel, which is what makes "the panel changed" mean "the row
+    # I clicked was a map" when Select-ScBrowserMap checks it below -- the positive-first
+    # half of the absence claim (AGENTS.md § "Oracles: absence and defect-era checks").
+    Send-ScClick -Hwnd $hwnd -X 117 -Y 140          # row 1 at the top == the decoy, a folder
     Start-Sleep -Milliseconds 400
     $panelOnFolder = Get-ScBrowserInfoPanel -Hwnd $hwnd
     Send-ScClick -Hwnd $hwnd -X 117 -Y 178          # row 3 == [Allied], a different folder
@@ -178,8 +158,8 @@ try {
     Start-Sleep -Seconds 6
     Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
     Start-Sleep -Seconds 10
-    # The tips dialog is found in the engine's own dialog list and dismissed by ITS OWN
-    # OK button, then asserted gone (task 027) -- never a fixed point, never the registry.
+    # Found in the engine's own dialog list and dismissed by ITS OWN OK button, then
+    # asserted gone: never a fixed point, never the registry (AGENTS.md § "Tips dialog").
     Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $logPath | Out-Null
     Start-Sleep -Seconds 3
     Save-ScWindowImage -Hwnd $hwnd -Path (Join-Path $shotDir '03-in-game.png') -FullWindow | Out-Null
@@ -189,8 +169,8 @@ try {
     $decoyUnits = @($world.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $MARINE_TYPE })
     Write-Host ("       world scan: player 0 holds {0} Lurker(s) (ours) and {1} Marine(s) (the decoy's)" -f `
         $mineUnits.Count, $decoyUnits.Count)
-    # Positive AND negative, in that order: the absence claim is worth nothing on its own
-    # (AGENTS.md, 2026-08-09), so the same scan has to show our units present first.
+    # Positive first, then negative: an absence claim alone is worth nothing, so the same
+    # scan must show our units present (AGENTS.md § "Oracles: absence and defect-era checks").
     Assert-That 'our own map loaded -- its 36 Lurkers are in the world' ($mineUnits.Count -eq 36)
     Assert-That "and the decoy's Marines are not" ($decoyUnits.Count -eq 0)
 }

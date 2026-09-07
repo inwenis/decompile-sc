@@ -1,18 +1,17 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-The EPISODE bodies of the randomized conformance harness (task 041): what one generated
-action sequence actually does to the game, and which invariant each assertion belongs to.
+The EPISODE bodies of the randomized conformance harness: what one generated action
+sequence does to the game, and which invariant each assertion belongs to.
 
 .DESCRIPTION
 Dot-sourced by test-random-conformance.ps1 into the same scope, so these see the run's
-handle, log path and pinned constants. Split out only because the runner is already the
-longest thing in this directory and the two halves change for different reasons: the runner
-changes when the harness does, this file changes when a FEATURE does.
+handle, log path and pinned constants. The runner changes when the harness does; this
+file changes when a FEATURE does.
 
-Every assertion here names its invariant, and every invariant's ground truth is stated
-where it is read. The one exception is called out in place: the plugin's overflow count is
-its own bookkeeping and appears only to compute headroom and to explain a number.
+Every assertion names its invariant, and every invariant's ground truth is stated where
+it is read. The one exception is called out in place: the plugin's overflow count is its
+own bookkeeping and appears only to compute headroom and to explain a number.
 #>
 
 # ---------------------------------------------------------------------------
@@ -29,10 +28,9 @@ function Invoke-QueueEpisode {
         [Parameter(Mandatory)][int]$SelCount
     )
 
-    # A drain episode wants the queues EMPTY first, because its claim ("what left the queue
-    # appeared in the engine's unit list") is only checkable against a known starting
-    # count. Waiting is bounded and a timeout SKIPS rather than fails -- a busy queue is
-    # not a defect.
+    # A drain episode needs EMPTY queues first: its claim ("what left the queue appeared in
+    # the engine's unit list") is only checkable from a known starting count. The wait is
+    # bounded and a timeout SKIPS rather than fails -- a busy queue is not a defect.
     if ($Ep.kind -eq 'queue-drain') {
         if (-not (Wait-QueuesEmpty -Units $Units -TimeoutSec 45)) {
             Write-Skip -Id 'INV-B' -Why 'the selected buildings would not drain to empty inside 45 s'
@@ -45,8 +43,8 @@ function Invoke-QueueEpisode {
     # COMPLETED only: a unit under construction is already linked into the player's list, so a
     # raw count answers "how many exist", and every claim here is about how many were BUILT.
     $scvBefore = Get-OwnedCount -Eng $Before -Type $SCV_TYPE -Completed
-    # The same count WITHOUT the completion filter: the baseline for "a unit appeared", which is
-    # what an item leaving a queue looks like from the engine's side.
+    # The same count WITHOUT the completion filter: the baseline for "a unit appeared", which
+    # is what an item leaving a queue looks like from the engine's side.
     $scvRawBefore = Get-OwnedCount -Eng $Before -Type $SCV_TYPE
     $refusedFullBefore = $Before.RefusedFull
     $promotedBefore = $Before.Promoted
@@ -54,8 +52,7 @@ function Invoke-QueueEpisode {
     foreach ($u in $Units) { $logicalBefore[$u] = (Get-Logical -Eng $Before -Unit $u).Logical }
 
     # ---- press ------------------------------------------------------------
-    # Through the card's own button (see Invoke-TrainPress for the run that made that a
-    # measurement rather than a preference).
+    # Through the card's own button, never the hotkey (Get-TrainPoint says why).
     $trainPt = Get-TrainPoint -Tag "ep$($Ep.index)"
     $mark = Get-ScLogMark
     Invoke-TrainPress -Times $Presses -Point $trainPt
@@ -64,19 +61,16 @@ function Invoke-QueueEpisode {
     # ---- INV-W: the wire --------------------------------------------------
     # GROUND TRUTH: the detour on queueCommand (0x00485BD0). Every command this game sends
     # passes through it, so a press that produced no line here produced no command at all.
-    # THIS IS THE ASSERTION TASK 038'S PARENT FAILS: with a group selected, the client
-    # stops offering the Train button once each ring holds five, and presses six onward
-    # never reach the funnel.
-    #
-    # One press is exactly ONE `CMD id=0x1F`: the fan-out's replayed Select+Train pairs go
-    # out through the TRAMPOLINE and deliberately do not pass the logger again.
+    # This is the assertion the unpatched client fails: with a group selected it stops
+    # offering the Train button once each ring holds five, and presses six onward never
+    # reach the funnel. One press is exactly ONE `CMD id=0x1F`: the fan-out's replayed
+    # Select+Train pairs go out through the TRAMPOLINE and do not pass the logger again.
     $cmds = @($fresh | Select-String -Pattern "CMD id=$TRAIN_CMD ")
     $starts = @($fresh | Select-String -Pattern 'FANOUT start: cmd=0x1F')
     # ZERO IS A DIFFERENT CLAIM FROM "SOME". A burst in which NOT ONE press produced a command,
-    # while the card was showing an enabled Train button when we aimed at it, is this harness
-    # failing to deliver input -- not the game refusing to accept it. Both used to print the
-    # same INV-W failure, and on 2026-08-12 that turned one lost input path into three episodes
-    # of "the feature is broken". Named separately so the two can never be confused again.
+    # while the card showed an enabled Train button when we aimed, is this harness failing to
+    # deliver input, not the game refusing it. Named apart from INV-W because under one shared
+    # verdict a single lost input path reads as three episodes of "the feature is broken".
     if ($cmds.Count -eq 0 -and $Presses -gt 0 -and $trainPt) {
         Assert-Inv -Id 'INPUT' -What "the $Presses click(s) on the card's Train button reached the game at all (0 commands)" `
             -Ok $false `
@@ -113,8 +107,6 @@ function Invoke-QueueEpisode {
     # GROUND TRUTH: the engine's per-player mineral global. This is drain-proof -- a unit
     # completing shortens a queue but never un-spends a mineral -- so it holds whether or
     # not anything finished while the burst was going out.
-    # refusedCost was dropped in task 055 (issue #66): nothing ever incremented it, so it
-    # contributed a constant 0 to this sum.
     $refusals = $after.RefusedFull - $refusedFullBefore
     $expectItems = $Presses * $SelCount
     $paid = $mineralsBefore - $after.Minerals
@@ -124,72 +116,45 @@ function Invoke-QueueEpisode {
             -Detail "(minerals $mineralsBefore -> $($after.Minerals))"
     } else {
         # A refusal is a legitimate engine answer, so it changes the expectation instead of
-        # failing -- but it is REPORTED, because a silent one would turn every later number
-        # into a mystery.
+        # failing -- but it is REPORTED: a silent one turns every later number into a mystery.
         Note "$refusals command(s) were refused for a full ring (full=$($after.RefusedFull - $refusedFullBefore)); the charge is asserted as a bound, not an equality"
         Assert-Inv -Id 'INV-M' -What "the engine charged for no more than the $expectItems items asked for ($paid)" `
             -Ok ($paid -le $expectItems * $SCV_COST -and $paid -ge 0)
     }
 
     # ---- the logical queue, CROSS-CHECK ------------------------------------
-    # The ring half is the engine's; the overflow half is the plugin's own bookkeeping.
-    # It is asserted because a wrong number here is still a bug worth catching, but it is
-    # labelled a cross-check and it is never the evidence for a claim about the game.
+    # The ring half is the engine's; the overflow half is the plugin's own bookkeeping. It is
+    # asserted because a wrong number is still a bug, but it is labelled a cross-check and is
+    # never the evidence for a claim about the game.
     #
-    # WHAT LEAVES A QUEUE IS A COMPLETION, NOT A PROMOTION, and the first version of this
-    # guarded on the wrong one. A promotion moves an item from the plugin's overflow into the
-    # engine's ring and leaves the LOGICAL count alone; a unit COMPLETING takes one out of the
-    # queue for good. Guarding on `promoted` let a completion through, so a deep queue (which
-    # completes an SCV every -UnitBuildTime seconds, burst or no burst) failed this check by
-    # exactly one, twice in one run, while INV-M was exact to the mineral -- the signature of
-    # a race in the CHECK rather than a defect in the game (AGENTS.md: a check that fails at
-    # random is worth as little as one that cannot fail).
-    #
-    # The repair is to read the completions rather than hope there were none: the engine's own
-    # unit list is the only place an item goes when it leaves a queue, so the SCV delta over
-    # the same window is the correction term, and the sum becomes exactly assertable.
+    # Do not guard on `promoted`: a promotion moves an item between the plugin's overflow and
+    # the engine's ring and leaves the LOGICAL count alone. What shrinks a queue is a unit
+    # STARTING, and a deep queue does that every -UnitBuildTime seconds, burst or no burst --
+    # a promotion guard fails by exactly one at random while INV-M stays exact to the mineral.
     $scvAfterBurst = Get-OwnedCount -Eng $after -Type $SCV_TYPE -Completed
     $completed = $scvAfterBurst - $scvBefore
-    # Units of the type that APPEARED during the window, in any state of completion. This is
-    # what "left a queue" means to the engine (see the bound below for why it is not `completed`
-    # and not PRODFAN's `buildUnit`), and it is needed outside the refusal guard as well, so it
-    # is read once here.
+    # Units of the type that APPEARED during the window, in any state of completion -- what
+    # "left a queue" means to the engine (the floor bound below says why not `completed`).
     $left = (Get-OwnedCount -Eng $after -Type $SCV_TYPE) - $scvRawBefore
     $promoted = $after.Promoted - $promotedBefore
     $sumBefore = 0; foreach ($u in $Units) { $sumBefore += $logicalBefore[$u] }
     $sumAfter = 0; foreach ($u in $Units) { $sumAfter += (Get-Logical -Eng $after -Unit $u).Logical }
     $queued = $Presses * $SelCount
     if ($refusals -eq 0) {
-        # A BOUND, not an equality, and the asymmetry is the reason. `completed` is a count for
-        # the WHOLE PLAYER: the engine's unit list does not say which building finished a unit,
-        # and buildings this episode never selected are draining their own queues the whole
-        # time. So a completion elsewhere may loosen the lower bound and must never fail this
-        # check -- while the upper bound is absolute, because nothing can add to a queue except
-        # the presses this episode sent.
+        # The upper bound is absolute: nothing can add to a queue except the presses this
+        # episode sent. The lower bound below is the loose one, and says why.
         Assert-Inv -Id 'INV-R' -What "the selected buildings gained no more than the $queued item(s) queued ($sumBefore -> $sumAfter)" `
             -Ok ($sumAfter -le $sumBefore + $queued) `
             -Detail "(promoted=$promoted; a promotion moves an item between the ring and the plugin and must not change this total)"
-        # WHAT LEAVES A QUEUE IS A UNIT APPEARING. Two earlier versions of this term were wrong
-        # in the same direction, and both cost a run:
-        #
-        #   `completed`  counts only units that FINISHED. The engine takes an item out of the
-        #                ring the moment production STARTS, so a one-press burst read back as
-        #                ring 0 with nothing built and the bound called that a loss.
-        #   `buildUnit`  PRODFAN's own "what is this building making" pointer, which sounds
-        #                exactly right and is ZERO in this state. Measured on the parent build:
-        #                `engineLen=0 buildState=0 buildUnit=0x00000000` on the row, while the
-        #                WORLD scan showed the missing item as an SCV with the COMPLETED bit
-        #                CLEAR and hp=8466 of 15360. The unit exists; that field does not name
-        #                it. A plausible field is not a reading.
-        #
-        # So the term is the engine's own unit list, counting units of the type REGARDLESS of
-        # completion: an item leaves a queue exactly when it appears there.
-        #
-        # It is a count for the WHOLE PLAYER, and that is why this stays a bound rather than
-        # becoming an equality: the unit list does not say which building made one, and the
-        # buildings this episode did not select are draining their own queues throughout.
-        # Measured: 10 -> 17 units across an episode that queued ONE item. An over-estimate of
-        # what left these queues is safe in a lower bound and fatal in an equality.
+        # WHAT LEAVES A QUEUE IS A UNIT APPEARING, of the type, in ANY state of completion.
+        # Do not use `completed`: the engine takes an item out of the ring the moment
+        # production STARTS, so a one-press burst reads ring 0 with nothing built.
+        # Do not use PRODFAN's `buildUnit`: measured `engineLen=0 buildState=0
+        # buildUnit=0x00000000` while the WORLD scan held the missing item as an SCV with the
+        # COMPLETED bit clear and hp=8466 of 15360. A plausible field is not a reading.
+        # The unit list counts the WHOLE PLAYER (measured 10 -> 17 across an episode that
+        # queued ONE item; unselected buildings drain throughout), so this is a lower bound:
+        # an over-estimate of what left these queues is safe in a floor, fatal in an equality.
         $floor = $sumBefore + $queued - $left
         Assert-Inv -Id 'INV-R' -What "and lost no more than the $left unit(s) that appeared during the burst ($sumAfter >= $floor)" `
             -Ok ($sumAfter -ge $floor) `
@@ -207,16 +172,14 @@ function Invoke-QueueEpisode {
     } else {
         Note "$left unit(s) appeared ($completed of them finished) and $refusals command(s) were refused during the burst; the per-building split is not predictable (the engine's unit list does not say WHICH building made one), so the bounds above are asserted instead"
     }
-    # This one holds either way: it is about where the ring is HELD, not about how many items
-    # are in the queue, and that is the whole mechanism of task 025 (keep the engine's ring
-    # below its cap so the client never greys the button).
+    # This one holds either way: it is about where the ring is HELD, not how many items are
+    # queued -- the whole mechanism is keeping the engine's ring below its cap so the client
+    # never greys the button.
     #
-    # It is also THE SEAM MEASUREMENT (issue #68). The runner used to count "this episode is
-    # about to push past five" from the planned press count, before the burst; this is the
-    # same question asked of the engine AFTERWARDS, off the building's own logical queue. A
-    # press that was refused, a ring that never filled and a headroom clamp all read as a
-    # reach in the planned count and as no reach here -- which is the whole difference
-    # between what a run intended and what it covered.
+    # It is also THE SEAM MEASUREMENT, taken off the engine AFTER the burst and never from the
+    # planned press count: a refused press, a ring that never filled and a headroom clamp all
+    # read as a reach in the plan and as no reach here -- the difference between what a run
+    # intended and what it covered.
     $pastFive = 0
     foreach ($u in $Units) {
         $l = Get-Logical -Eng $after -Unit $u
@@ -226,16 +189,16 @@ function Invoke-QueueEpisode {
                 -Ok ($l.Ring -eq $ENGINE_HOLD)
         }
     }
-    # Task 038's seam is specifically the MULTI-BUILDING one: with one building selected the
-    # two selection arrays agree and a plugin reading the wrong one behaves correctly.
+    # The seam is specifically the MULTI-BUILDING one: with one building selected the two
+    # selection arrays agree and a plugin reading the wrong one behaves correctly.
     if ($SelCount -gt 1 -and $pastFive -gt 0) {
         $script:groupOverflowReached++
         Note "SEAM REACHED: $pastFive of $SelCount selected building(s) went past the engine's $ENGINE_SLOTS slots with a multi-building selection (task 038's seam)"
     }
 
     # ---- the card is still live -------------------------------------------
-    # The client half of task 025's design: the button never goes dark, so the next press
-    # still reaches the wire. Read out of the dialog, never off a frame.
+    # The client half of the design: the button never goes dark, so the next press still
+    # reaches the wire. Read out of the dialog, never off a frame.
     if ($after.Card) {
         Assert-Inv -Id 'INV-W' -What 'the Train button is still drawn and enabled after the burst' `
             -Ok ($after.Card.State -eq 'enabled') -Detail "(state $($after.Card.State))"
@@ -301,9 +264,9 @@ function Invoke-CancelByCard {
 
 # ---------------------------------------------------------------------------
 # CANCEL, by a queue ICON in the status strip ({0x20,k}). A different control sending a
-# different payload -- and, since task 033, an icon the PLUGIN may have drawn over an
-# empty engine slot, which the plugin then has to serve itself or the engine would refund
-# by the sentinel type 0xE4 and read both cost tables out of bounds.
+# different payload -- and possibly an icon the PLUGIN drew over an empty engine slot, which
+# the plugin then has to serve itself or the engine would refund by the sentinel type 0xE4
+# and read both cost tables out of bounds.
 # ---------------------------------------------------------------------------
 function Invoke-CancelBySlot {
     [CmdletBinding()]
@@ -353,11 +316,9 @@ function Invoke-CancelBySlot {
 
 # ---------------------------------------------------------------------------
 # DRAIN -- "and it built 12".
-#
 # GROUND TRUTH: the engine's own per-player unit lists. Every item that left the queue has
-# to appear there as a unit, exactly once, and no more than that. This is the only
-# assertion in the harness whose cost is a BUILD TIME rather than a click, which is why
-# the plan emits it rarely and small.
+# to appear there as a unit, exactly once, and no more. This is the only assertion whose
+# cost is a BUILD TIME rather than a click, which is why the plan emits it rarely and small.
 # ---------------------------------------------------------------------------
 function Invoke-Drain {
     [CmdletBinding()]
@@ -372,8 +333,8 @@ function Invoke-Drain {
     Note "waiting up to ${budget}s for $Expect unit(s) to be built"
     # -AlsoWaitProduction, because "the queue is empty" is TRUE while the last item is still
     # being built -- the engine takes it out of the ring when production starts. Counting
-    # completed units at that instant would read one short, and the fixed sleep that used to
-    # cover it is the kind of timing that passes until the machine is busy.
+    # completed units at that instant reads one short; a fixed sleep instead is timing that
+    # passes until the machine is busy.
     if (-not (Wait-QueuesEmpty -Units $Units -TimeoutSec $budget -AlsoWaitProduction)) {
         Write-Skip -Id 'INV-B' -Why "the queues had not emptied (and finished producing) inside ${budget}s"
         return
@@ -420,37 +381,22 @@ function Wait-QueuesEmpty {
 }
 
 # ---------------------------------------------------------------------------
-# INV-Q -- the queue indicator, as a DIFFERENCE, and NOT built on `ink`.
+# INV-Q -- the queue indicator, as a DIFFERENCE against a baseline, NOT built on `ink`.
 #
-# A PRESENCE test here is worthless, and that is not a hypothetical: task 033 shipped
-# `ink > 0` over the indicator's own bounds and it passed while the box was invisible,
-# because the pane's own art lies inside those bounds and supplies the ink. Task 039
-# measured it on 2026-08-12 -- `ink=448 of 448` bytes inside the box BEFORE anything of
-# ours was drawn, and `refInk=1330 of 1330` over the reference icon. A positive control
-# does not rescue that: the positive control also only proves that something drew.
+# Do not assert on `ink` (set bytes inside the indicator's bounds) in either direction: the
+# pane's own art supplies it, measured `ink=448 of 448` BEFORE anything of ours was drawn
+# and `refInk=1330 of 1330` over the reference icon. A presence test passes with the box
+# invisible, and at saturation our glyph changes WHICH bytes are set, never HOW MANY, so a
+# difference test on ink calls a working indicator broken on every run. A positive control
+# only proves that something drew. `ink` and `refInk` are PRINTED and asserted on nowhere.
 #
-# The saturation is worth stating precisely, because it kills the obvious repair too. At
-# 448 of 448, our glyph changes WHICH bytes are set and cannot change HOW MANY -- so a
-# difference test built on `ink` would not merely fail to fail, it would fail to PASS,
-# reporting a working indicator as broken on every run. `ink` and `refInk` are therefore
-# PRINTED here and asserted on nowhere. Do not put them back.
-#
-# What this asserts instead is task 039's `boxDiff`: bytes inside the indicator's live
-# bounds that differ from a baseline copy of that same rect, taken on the game thread on a
-# frame where the indicator was HIDDEN. That has a defined zero -- "our pixels are
-# identical to the pane with no indicator on it" -- which is exactly the bug being hunted.
-#
-# The episode reads it in two states that differ ONLY in our string: a logical queue of 6
-# ("+1") against one of 14 ("+9"). Five icons are lit in both and both strings are two
-# characters wide, so the bounds and everything underneath are identical, and the only
-# variable left is the glyph the engine drew out of our buffer. Hence two assertions:
-# boxDiff > 0 in both states (our text changed the box at all), and boxDiff(low) !=
-# boxDiff(high) (the change tracks OUR string, rather than something else that drew).
-#
-# WHAT IT DOES NOT PROVE, stated so nobody has to infer it: that the text is legible, or
-# in the right place, or the right size. It proves the engine drew OUR string into the
-# pixels we asked for. Legibility is a human's judgement and stays one -- which is why
-# both states are also captured as frames, named for the state, for the user to open.
+# The oracle is `boxDiff`: bytes inside the live bounds that differ from a copy of the same
+# rect taken on the game thread on a frame where the indicator was HIDDEN. Its zero means
+# "our pixels are identical to the pane with no indicator on it" -- the bug being hunted.
+# Two states differing only in our string (a short "+1", a longer "+10") must carry
+# different strings, fit each in the box, and read boxDiff > 0 in both. NOT proved: that
+# the text is legible, placed or sized right -- a human's judgement, which is why both
+# states are captured as frames named for the state.
 # ---------------------------------------------------------------------------
 function Invoke-IndicatorEpisode {
     [CmdletBinding()]
@@ -472,19 +418,15 @@ function Invoke-IndicatorEpisode {
 
     Invoke-TrainPress -Times $lowTotal
     $low = Read-Engine -Tag "ep$($Ep.index)-qind-low" -Need @('prodq', 'prodfan', 'qind')
-    # The frame is for the HUMAN and is named for the state it holds, never for its order in
-    # the run. It is not the oracle and nothing below asserts on it (AGENTS.md: read a
-    # dialog's content from memory, never hash its pixels).
-    # The frame's name carries the string it is a picture OF, with '+' spelled out so the name
-    # is a filename on every path that will ever handle it.
+    # The frame is for the HUMAN, named for the string it is a picture OF (Get-TextTag), never
+    # for its order in the run. It is not the oracle and nothing below asserts on it
+    # (AGENTS.md: read a dialog's content from memory, never hash its pixels).
     Shot "queueind-short-string-$(Get-TextTag -Text $(if ($low.Qind) { $low.Qind.Text } else { '' }))-ep$($Ep.index)" | Out-Null
 
-    # THE SECOND STATE IS DEFINED BY THE READING, NOT BY THE PRESS COUNT. The plan's target is
-    # a target: an SCV completes every -UnitBuildTime seconds and a deep queue is completing
-    # them throughout the burst, so "press to 15" measured a logical 14 on the first run of
-    # this episode and drew "+9" -- the same LENGTH as "+1", which is the one property the
-    # width assertion below rests on. Pressing until the string has actually grown is the
-    # difference between a state this episode assumed and a state it verified.
+    # THE SECOND STATE IS DEFINED BY THE READING, NOT BY THE PRESS COUNT. An SCV completes
+    # every -UnitBuildTime seconds throughout the burst, so "press to 15" measures a logical
+    # 14 and draws "+9" -- the same LENGTH as "+1", which the width assertion below rests on.
+    # Press until the string has actually grown.
     $high = $null
     $pressed = $lowTotal
     $step = [math]::Max(1, $highTotal - $lowTotal)
@@ -493,11 +435,10 @@ function Invoke-IndicatorEpisode {
         $pressed += $step
         $high = Read-Engine -Tag "ep$($Ep.index)-qind-high$attempt" -Need @('prodq', 'prodfan', 'qind')
         if ($high.Qind -and $low.Qind -and $high.Qind.Text.Length -gt $low.Qind.Text.Length) { break }
-        # THE CAP IS A FACT ABOUT THE QUEUE, NOT ABOUT HOW MANY TIMES WE PRESSED. Guarding on
-        # the press count stopped this loop on its first pass -- the plan's target IS the cap,
-        # so `pressed >= QueueMax-1` was true immediately and the top-up never ran, leaving the
-        # episode skipping on a "+9" it could have pressed one item past. The queue is shorter
-        # than the presses by however many units completed, and only the engine knows that.
+        # THE CAP IS A FACT ABOUT THE QUEUE, NOT ABOUT HOW MANY TIMES WE PRESSED. Do not guard
+        # on `pressed`: the plan's target IS the cap, so `pressed >= QueueMax-1` is true on the
+        # first pass and the top-up never runs, skipping on a "+9" one press short. The queue
+        # is shorter than the presses by however many units completed; only the engine knows.
         $curLogical = (Get-Logical -Eng $high -Unit $Unit).Logical
         if ($curLogical -ge $QueueMax) {
             Note "the building is at the plugin's cap of $QueueMax with `"$($high.Qind.Text)`" showing; no room to lengthen the string"
@@ -514,12 +455,9 @@ function Invoke-IndicatorEpisode {
         Write-Skip -Id 'INV-Q' -Why 'the plugin reported no indicator state (is -QueueIndicator 1 on?)'
         return
     }
-    # ink/refInk are printed and NOT asserted, and the reason is measured rather than
-    # supposed: 039 read ink saturated (448 of 448 inside the box before anything of ours was
-    # drawn), so it can neither fail nor pass. refInk is ink over the first VISIBLE of the
-    # queue icon and the wireframe button and is legitimately -1 when neither is up, so it is
-    # not a blindness control either. They stay on the line because a number that explains a
-    # verdict is worth having beside it. Do not assert on them.
+    # ink/refInk are printed, never asserted (saturated; see the banner above). refInk is ink
+    # over the first VISIBLE of the queue icon and the wireframe button and is legitimately -1
+    # when neither is up, so it is not a blindness control either.
     $lowW = $low.Qind.Bounds[2] - $low.Qind.Bounds[0]
     $highW = $high.Qind.Bounds[2] - $high.Qind.Bounds[0]
     Note "low:  text=`"$($low.Qind.Text)`" bounds=($($low.Qind.Bounds -join ',')) width=$lowW boxDiff=$($low.Qind.BoxDiff) [diagnostic only: ink=$($low.Qind.Ink) refInk=$($low.Qind.RefInk) surfInk=$($low.Qind.SurfInk)]"
@@ -531,17 +469,12 @@ function Invoke-IndicatorEpisode {
     # WHAT IT SAYS -- the content oracle, read out of the live control's own pszText.
     Assert-Inv -Id 'INV-Q' -What "the two states really do carry different strings (`"$($low.Qind.Text)`" vs `"$($high.Qind.Text)`")" `
         -Ok ($low.Qind.Text -ne $high.Qind.Text)
-    # AND THAT THE BOX CAN HOLD IT. Note what this does NOT assert: that a longer string made
-    # the box wider. It does not, by design, and asserting it raised a false alarm against a
-    # perfectly correct build -- `"+1"` and `"+10"` both measured 28 px. In STRIP mode PlaceOn
-    # CLAMPS the box to its anchor icon (`b[2] = min(left + want, a[2])`) precisely so our
-    # pixels sit inside a control the engine repaints, which is what guarantees they are
-    # painted over when the indicator goes away. The width is the icon's, not the string's.
-    #
-    # What must hold, and what actually breaks when it does not, is the other direction: the
-    # box has to be wide enough for the string it is showing, or the engine draws it
-    # TRUNCATED (the failure the GROUP branch's comment says was paid for once already). That
-    # is the same invariant hooktest asserts offline, checked here against the live control.
+    # AND THAT THE BOX CAN HOLD IT. Do not assert that a longer string made the box WIDER:
+    # `"+1"` and `"+10"` both measure 28 px, because in STRIP mode PlaceOn CLAMPS the box to
+    # its anchor icon (`b[2] = min(left + want, a[2])`) so our pixels sit inside a control the
+    # engine repaints -- which is what paints them over when the indicator goes away. What
+    # must hold is the other direction: a box narrower than its string is drawn TRUNCATED.
+    # Same invariant hooktest asserts offline, checked here against the live control.
     foreach ($state in @(
         [pscustomobject]@{ Name = 'short'; Q = $low.Qind },
         [pscustomobject]@{ Name = 'long';  Q = $high.Qind }
@@ -554,9 +487,9 @@ function Invoke-IndicatorEpisode {
     }
 
     # THAT IT LANDED -- the pixel oracle, and it refuses to run rather than guess. $null means
-    # this plugin has no boxDiff field at all (039's is not merged yet); -1 means it has one
-    # but no baseline was captured for this rect. Both are "the probe did not run", which is
-    # NOT the same claim as "the probe ran and saw nothing" -- and only the second is a bug.
+    # this plugin build has no boxDiff field; -1 means it has one but no baseline was captured
+    # for this rect. Both are "the probe did not run", which is NOT the same claim as "the
+    # probe ran and saw nothing" -- and only the second is a bug.
     if ($null -eq $low.Qind.BoxDiff -or $null -eq $high.Qind.BoxDiff) {
         Write-Skip -Id 'INV-Q' -Why 'this plugin build reports no boxDiff on its QIND line (task 039 is landing ScQueueIndBoxDiff) -- the surface half of INV-Q did not run, and ink= is NOT a substitute for it (039 measured it saturated at 448 of 448)'
         return
@@ -565,10 +498,10 @@ function Invoke-IndicatorEpisode {
         Write-Skip -Id 'INV-Q' -Why "boxDiff has no baseline for this rect yet (low=$($low.Qind.BoxDiff) high=$($high.Qind.BoxDiff)); a run with no baseline cannot tell 'nothing was drawn' from 'nothing was measured'"
         return
     }
-    # THE BLINDNESS CONTROL, on 039's ruling: surfInk is ink over the WHOLE dialog surface, and
-    # it is the one number that is positive in every state a player can be in. A zero there
-    # means the probe cannot see this surface at all, and its verdict on our box means nothing
-    # whichever way it comes out (AGENTS.md: prove the pattern positive before trusting it).
+    # THE BLINDNESS CONTROL: surfInk is ink over the WHOLE dialog surface, the one number that
+    # is positive in every state a player can be in. A zero there means the probe cannot see
+    # this surface at all, and its verdict on our box means nothing whichever way it comes out
+    # (AGENTS.md: prove the pattern positive before trusting it).
     if ($null -ne $low.Qind.SurfInk -and $null -ne $high.Qind.SurfInk) {
         Assert-Inv -Id 'INV-Q' -What "the surface probe can see this dialog at all in both states (surfInk $($low.Qind.SurfInk) / $($high.Qind.SurfInk))" `
             -Ok ($low.Qind.SurfInk -gt 0 -and $high.Qind.SurfInk -gt 0)
@@ -589,21 +522,14 @@ function Get-TextTag {
     if ([string]::IsNullOrEmpty($t)) { 'empty' } else { $t }
 }
 
-# TRAIN IS DRIVEN BY CLICKING THE CARD'S OWN BUTTON, NOT BY THE HOTKEY, and that is a
-# measurement rather than a preference.
-#
-# A run on 2026-08-12 had posted hotkeys stop being processed part-way through, in the middle
-# of an episode, and stay dead for the rest of the game: `trainSeen` froze at 11 while three
-# further episodes pressed 22 more times, minerals never moved, and the plugin's detour was
-# never entered -- so the CLIENT never sent anything. Posted CLICKS kept working the whole
-# time (every selection in those same episodes landed), and the card read `slot=1 enabled
-# act=0x004234B0` throughout, so the button was there and lit. Whatever swallowed the keys,
-# the effect on this harness is worse than a lost run: every later episode fails INV-W and
-# INV-M with "0 presses reached the funnel", which reads exactly like the feature being broken.
-# A generator that manufactures its own failures is worth less than no generator.
-#
-# So the press goes through the control a player would click, located from the card's own
-# rects (Get-ScCardSlotPoint), which is the same path the cancel episodes already use.
+# TRAIN IS DRIVEN BY CLICKING THE CARD'S OWN BUTTON, NOT BY THE HOTKEY. Do not drive it by
+# posted keys: measured, they stop being processed mid-episode and stay dead for the rest of
+# the game -- `trainSeen` froze at 11 while three further episodes pressed 22 more times,
+# minerals never moved and the detour was never entered, so the CLIENT sent nothing. Posted
+# CLICKS kept landing the whole time and the card read `slot=1 enabled act=0x004234B0`
+# throughout. Every later episode then fails INV-W and INV-M with "0 presses reached the
+# funnel", which reads exactly like the feature being broken. So the press goes through the
+# control a player would click, located from the card's own rects (Get-ScCardSlotPoint).
 function Get-TrainPoint {
     [CmdletBinding()]
     param([string]$Tag = 'train')
