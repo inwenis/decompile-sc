@@ -26,12 +26,9 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot
 . (Join-Path $scriptDir 'drive-game.ps1')
 
+. (Join-Path $scriptDir 'sc-suite.ps1')
+
 $failures = 0
-function Assert-That {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    if ($Ok) { Write-Host "  ok   $What" }
-    else { Write-Host "  FAIL $What $Detail"; $script:failures++ }
-}
 
 # A stock map ships with the working copy, so this run generates nothing and owns no
 # file -- no fixture-folder bookkeeping applies. Sorted-first rather than a hardcoded

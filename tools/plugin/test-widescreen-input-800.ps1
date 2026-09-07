@@ -33,6 +33,8 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'drive-game.ps1')
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
 
+. (Join-Path $scriptDir 'sc-suite.ps1')
+
 $patchHeader = Join-Path $scriptDir 'src/sc_screen_patches.h'
 function Get-WsDefine([string]$Name) {
     $m = Select-String -LiteralPath $patchHeader -Pattern "^#define\s+$Name\s+(\d+)" | Select-Object -First 1
@@ -74,11 +76,6 @@ $launchLock = $null
 
 function Step([string]$What, [scriptblock]$Body) {
     $script:step++; Write-Host "[$script:step] $What"; & $Body
-}
-function Assert-That {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    if ($Ok) { Write-Host "  ok   $What" }
-    else { Write-Host "  FAIL $What $Detail"; $script:failures++ }
 }
 
 # A behavioural claim the OFF-SCREEN HARNESS CANNOT FEED is REPORTED, never

@@ -30,22 +30,10 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot
 . (Join-Path $scriptDir 'drive-game.ps1')
 
+. (Join-Path $scriptDir 'sc-suite.ps1')
+
 $failures = 0
 $step = 0
-
-function Assert-That {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    if ($Ok) { Write-Host "  ok   $What" }
-    else { Write-Host "  FAIL $What $Detail"; $script:failures++ }
-}
-
-function Step {
-    param([string]$Name, [scriptblock]$Body)
-    $script:step++
-    Write-Host ''
-    Write-Host ("[{0}] {1}" -f $script:step, $Name)
-    & $Body
-}
 
 # --- on-disk binary, BEFORE anything runs ------------------------------------
 # AGENTS.md § "Hard rules": patching is in-process only, so StarCraft.exe on disk must

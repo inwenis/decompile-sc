@@ -89,6 +89,8 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'drive-game.ps1')
 . (Join-Path $scriptDir 'sc-oracle-guard.ps1')
 
+. (Join-Path $scriptDir 'sc-suite.ps1')
+
 $failures = 0
 $step = 0
 
@@ -113,20 +115,6 @@ $BURROW_KEY = 0x55
 if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-testmap' -Suite 'combat-death' }
 $mapDir = $FixtureDir
 $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
-
-function Assert-That {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    if ($Ok) { Write-Host "  ok   $What" }
-    else { Write-Host "  FAIL $What $Detail"; $script:failures++ }
-}
-
-function Step {
-    param([string]$Name, [scriptblock]$Body)
-    $script:step++
-    Write-Host ''
-    Write-Host ("[{0}] {1}" -f $script:step, $Name)
-    & $Body
-}
 
 function Get-ScState {
     param([string]$Tag, [int]$TimeoutSec = 15)

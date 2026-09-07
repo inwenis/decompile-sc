@@ -51,6 +51,8 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'drive-game.ps1')
 . (Join-Path $scriptDir 'sc-oracle-guard.ps1')
 
+. (Join-Path $scriptDir 'sc-suite.ps1')
+
 $failures = 0
 $step = 0
 
@@ -66,26 +68,12 @@ $BARRACKS_COUNT = 6
 $MARINE_COUNT   = 6
 $GROUP          = 1     # the control group this suite drives
 
-function Assert-That {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    if ($Ok) { Write-Host "  ok   $What" }
-    else { Write-Host "  FAIL $What $Detail"; $script:failures++ }
-}
-
 # The measurement arm REPORTS where the feature arm ASSERTS. Same call sites, so the two
 # arms cannot drift apart, and a measurement run can never be read as a passing test.
 function Assert-Feature {
     param([string]$What, [bool]$Ok, [string]$Detail = '')
     if ($script:Measure) { Write-Host "  ---- (measure) $What -> $(if ($Ok) { 'yes' } else { 'NO' }) $Detail" }
     else { Assert-That $What $Ok $Detail }
-}
-
-function Step {
-    param([string]$Name, [scriptblock]$Body)
-    $script:step++
-    Write-Host ''
-    Write-Host ("[{0}] {1}" -f $script:step, $Name)
-    & $Body
 }
 
 $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
@@ -705,11 +693,7 @@ try {
         Shot 'group-rallied'
     }
 }
-catch {
-    Write-Host "  FAIL a test step threw: $($_.Exception.Message)"
-    Write-Host "       $($_.ScriptStackTrace)"
-    $failures++
-}
+catch { Write-ScStepFailure $_ 'a test step' }
 finally {
     if (-not $KeepOpen -and $gamePid -gt 0) {
         try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | Write-Host }

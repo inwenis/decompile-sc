@@ -31,14 +31,9 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot
 . (Join-Path $scriptDir 'drive-game.ps1')
 
+. (Join-Path $scriptDir 'sc-suite.ps1')
+
 $step = 0
-function Step {
-    param([string]$Name, [scriptblock]$Body)
-    $script:step++
-    Write-Host ''
-    Write-Host ("[{0}] {1}" -f $script:step, $Name)
-    & $Body
-}
 function Note([string]$m) { Write-Host "       $m" }
 function Fg { [ScDrive.Native]::GetForegroundWindow() }
 
