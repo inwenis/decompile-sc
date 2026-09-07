@@ -220,6 +220,8 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'drive-game.ps1')
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
 
+. (Join-Path $scriptDir 'sc-suite.ps1')
+
 $failures = 0
 $step = 0
 # How many items this run has cancelled so far. Every later expectation is written
@@ -295,12 +297,6 @@ $mapDir = $FixtureDir
 $mapName = 'production-queue.scx'
 $mapPath = Join-Path $mapDir $mapName
 $fixtures = New-ScFixtureRun -Dir $mapDir -Names @($mapName)
-
-function Assert-That {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    if ($Ok) { Write-Host "  ok   $What" }
-    else { Write-Host "  FAIL $What $Detail"; $script:failures++ }
-}
 
 # A SKIPPED CHECK IS NOT A PASSED CHECK, and this suite had no way to say so, so an arm
 # that could not be measured recorded itself as `Assert-That '...' $true` -- a check that
@@ -1927,11 +1923,7 @@ try {
         if ($stats.Count -gt 0) { Write-Host "       $($stats[-1].Line.Trim())" }
     }
 }
-catch {
-    Write-Host "  FAIL a test step threw: $($_.Exception.Message)"
-    Write-Host "       $($_.ScriptStackTrace)"
-    $failures++
-}
+catch { Write-ScStepFailure $_ 'a test step' }
 finally {
     if (-not $KeepOpen -and $gamePid -gt 0) {
         try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | Write-Host }

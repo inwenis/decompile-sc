@@ -47,12 +47,9 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot
 . (Join-Path $scriptDir 'drive-game.ps1')
 
+. (Join-Path $scriptDir 'sc-suite.ps1')
+
 $failures = 0
-function Assert-That {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    if ($Ok) { Write-Host "  ok   $What" }
-    else { Write-Host "  FAIL $What $Detail"; $script:failures++ }
-}
 
 # A STOCK map already shipped with the working copy -- nothing generated, no fixture-
 # folder bookkeeping (hard rule, 2026-08-09): this run owns no file, so none of that

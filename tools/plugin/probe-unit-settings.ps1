@@ -77,6 +77,8 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'drive-game.ps1')
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
 
+. (Join-Path $scriptDir 'sc-suite.ps1')
+
 $failures = 0
 $step = 0
 
@@ -84,14 +86,6 @@ $MARINE_TYPE = 0
 $CC_TYPE     = 106
 $SCV_TYPE    = 7
 $TRAIN_KEY   = 0x53      # 'S' -- the Command Center card's Train SCV hotkey
-
-function Assert-That {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    if ($Ok) { Write-Host "  ok   $What" }
-    else { Write-Host "  FAIL $What $Detail"; $script:failures++ }
-}
-function Step { param([string]$Name, [scriptblock]$Body)
-    $script:step++; Write-Host ''; Write-Host ("[{0}] {1}" -f $script:step, $Name); & $Body }
 
 if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t031' -Suite 'unit-settings' }
 $mapName = 'unit-settings-probe.scx'
@@ -276,11 +270,7 @@ try {
         }
     }
 }
-catch {
-    Write-Host "  FAIL a probe step threw: $($_.Exception.Message)"
-    Write-Host "       $($_.ScriptStackTrace)"
-    $failures++
-}
+catch { Write-ScStepFailure $_ 'a probe step' }
 finally {
     if (-not $KeepOpen -and $gamePid -gt 0) {
         try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | Write-Host }

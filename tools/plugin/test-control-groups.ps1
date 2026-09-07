@@ -75,6 +75,8 @@ $scriptDir = $PSScriptRoot
 $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'drive-game.ps1')
 
+. (Join-Path $scriptDir 'sc-suite.ps1')
+
 $failures = 0
 $step = 0
 
@@ -124,20 +126,6 @@ $fixtures = New-ScFixtureRun -Dir $mapDir -Names @($mapName)
 function Remove-MyFixtureDirIfEmpty { Remove-ScOwnFixtureDir -Dir $mapDir }
 function Remove-MyFixture { Remove-ScOwnFixture -Run $fixtures }
 function Assert-FixtureFolderIsOurs { Assert-ScFixtureFolderMine -Run $fixtures }
-
-function Assert-That {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    if ($Ok) { Write-Host "  ok   $What" }
-    else { Write-Host "  FAIL $What $Detail"; $script:failures++ }
-}
-
-function Step {
-    param([string]$Name, [scriptblock]$Body)
-    $script:step++
-    Write-Host ''
-    Write-Host ("[{0}] {1}" -f $script:step, $Name)
-    & $Body
-}
 
 $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
 function Get-ScState {
@@ -554,11 +542,7 @@ try {
             ($ids -notcontains '0x13')
     }
 }
-catch {
-    Write-Host "  FAIL a test step threw: $($_.Exception.Message)"
-    Write-Host "       $($_.ScriptStackTrace)"
-    $failures++
-}
+catch { Write-ScStepFailure $_ 'a test step' }
 finally {
     if (-not $KeepOpen -and $gamePid -gt 0) {
         try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | Write-Host }

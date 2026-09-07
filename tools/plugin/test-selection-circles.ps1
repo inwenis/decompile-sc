@@ -47,26 +47,15 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot
 . (Join-Path $scriptDir 'drive-game.ps1')
 
+. (Join-Path $scriptDir 'sc-suite.ps1')
+
 $failures = 0
 $step = 0
-
-function Assert-That {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    if ($Ok) { Write-Host "  ok   $What" }
-    else { Write-Host "  FAIL $What $Detail"; $script:failures++ }
-}
 
 # The windowed-mode helper leaves its caption inside the reported client rectangle, so
 # a coordinate read off a captured frame is 5 px right and 32 px down from the client
 # coordinate a message must carry. Every constant below is already a CLIENT coordinate;
 # this note is here so the next person reading a frame does not re-derive it.
-function Step {
-    param([string]$Name, [scriptblock]$Body)
-    $script:step++
-    Write-Host ''
-    Write-Host ("[{0}] {1}" -f $script:step, $Name)
-    & $Body
-}
 
 # --- on-disk binary, BEFORE anything runs ------------------------------------
 # Project hard rule 3: "Patch memory in-process only -- StarCraft.exe on disk must stay

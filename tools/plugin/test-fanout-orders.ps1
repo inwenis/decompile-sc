@@ -54,6 +54,8 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot
 . (Join-Path $scriptDir 'drive-game.ps1')
 
+. (Join-Path $scriptDir 'sc-suite.ps1')
+
 $failures = 0
 $step = 0
 
@@ -69,20 +71,6 @@ $step = 0
 #   $IDLE_ORDER  what every unit is on after Stop, and before anything has been ordered.
 $HOLD_ORDER = '0x6B'
 $IDLE_ORDER = '0x03'
-
-function Assert-That {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    if ($Ok) { Write-Host "  ok   $What" }
-    else { Write-Host "  FAIL $What $Detail"; $script:failures++ }
-}
-
-function Step {
-    param([string]$Name, [scriptblock]$Body)
-    $script:step++
-    Write-Host ''
-    Write-Host ("[{0}] {1}" -f $script:step, $Name)
-    & $Body
-}
 
 # --- the plugin's marker channel, used as a request/response --------------------
 # Writing a marker makes the observer thread stamp the label into the log AND dump a
@@ -346,11 +334,7 @@ try {
         Assert-That 'at least one command id passed through untouched' ($passedThrough.Count -gt 0)
     }
 }
-catch {
-    Write-Host "  FAIL a test step threw: $($_.Exception.Message)"
-    Write-Host "       $($_.ScriptStackTrace)"
-    $failures++
-}
+catch { Write-ScStepFailure $_ 'a test step' }
 finally {
     if (-not $KeepOpen -and $gamePid -gt 0) {
         try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | Write-Host }

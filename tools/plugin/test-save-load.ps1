@@ -105,6 +105,8 @@ $repoRoot = Split-Path (Split-Path $scriptDir -Parent) -Parent
 . (Join-Path $scriptDir 'drive-game.ps1')
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
 
+. (Join-Path $scriptDir 'sc-suite.ps1')
+
 if (-not $LogPath) { $LogPath = "C:\sc-work\logs\051\save-load-$Phase.log" }
 
 # --- fixture ------------------------------------------------------------------
@@ -132,20 +134,6 @@ $stashDir = Join-Path $StateDir 'stash'
 $failures = 0
 $step = 0
 $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
-
-function Assert-That {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    if ($Ok) { Write-Host "  ok   $What" }
-    else { Write-Host "  FAIL $What $Detail"; $script:failures++ }
-}
-
-function Step {
-    param([string]$Name, [scriptblock]$Body)
-    $script:step++
-    Write-Host ''
-    Write-Host ("[{0}] {1}" -f $script:step, $Name)
-    & $Body
-}
 
 # =============================================================================
 # READS
@@ -940,11 +928,7 @@ try {
         }
     }
 }
-catch {
-    Write-Host "  FAIL a test step threw: $($_.Exception.Message)"
-    Write-Host "       $($_.ScriptStackTrace)"
-    $failures++
-}
+catch { Write-ScStepFailure $_ 'a test step' }
 finally {
     if (-not $KeepOpen -and $gamePid -gt 0) {
         try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | Write-Host }

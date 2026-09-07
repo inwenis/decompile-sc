@@ -60,6 +60,8 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
 . (Join-Path $scriptDir 'sc-oracle-guard.ps1')
 
+. (Join-Path $scriptDir 'sc-suite.ps1')
+
 $failures = 0
 $step = 0
 $script:armLock = $null
@@ -93,19 +95,6 @@ if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fa
 $mapDir = $FixtureDir
 $mapName = 'sunken-acquire.scx'
 $fixtures = New-ScFixtureRun -Dir $mapDir -Names @($mapName)
-
-function Assert-That {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    if ($Ok) { Write-Host "  ok   $What" }
-    else { Write-Host "  FAIL $What $Detail"; $script:failures++ }
-}
-function Step {
-    param([string]$Name, [scriptblock]$Body)
-    $script:step++
-    Write-Host ''
-    Write-Host ("[{0}] {1}" -f $script:step, $Name)
-    & $Body
-}
 
 # The leading comma keeps the ARRAY an array on the way out. Without it PowerShell
 # unrolls a function's array return, so a group that has been wiped comes back as $null
@@ -424,11 +413,7 @@ try {
         }
     }
 }
-catch {
-    Write-Host "  FAIL a test step threw: $($_.Exception.Message)"
-    Write-Host "       $($_.ScriptStackTrace)"
-    $failures++
-}
+catch { Write-ScStepFailure $_ 'a test step' }
 
 Write-Host ''
 Write-Host '[final] the run must balance'

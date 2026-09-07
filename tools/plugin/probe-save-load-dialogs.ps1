@@ -44,19 +44,13 @@ $scriptDir = $PSScriptRoot
 . (Join-Path $scriptDir 'drive-game.ps1')
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
 
+. (Join-Path $scriptDir 'sc-suite.ps1')
+
 $failures = 0
 $step = 0
 $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
 $saveRoot = Join-Path $GameDir 'save'
 
-function Assert-That {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    if ($Ok) { Write-Host "  ok   $What" } else { Write-Host "  FAIL $What $Detail"; $script:failures++ }
-}
-function Step {
-    param([string]$Name, [scriptblock]$Body)
-    $script:step++; Write-Host ''; Write-Host ("[{0}] {1}" -f $script:step, $Name); & $Body
-}
 function Get-SaveFiles {
     if (-not (Test-Path -LiteralPath $saveRoot)) { return @() }
     @(Get-ChildItem -LiteralPath $saveRoot -Recurse -File -Filter '*.snx' -ErrorAction SilentlyContinue)
@@ -244,11 +238,7 @@ try {
         Assert-That 'and the same multiset of unit types' ($t1 -eq $t2)
     }
 }
-catch {
-    Write-Host "  FAIL a probe step threw: $($_.Exception.Message)"
-    Write-Host "       $($_.ScriptStackTrace)"
-    $failures++
-}
+catch { Write-ScStepFailure $_ 'a probe step' }
 finally {
     foreach ($m in $stashed) {
         if (Test-Path -LiteralPath $m.To) { Move-Item -LiteralPath $m.To -Destination $m.From -Force }
