@@ -1,40 +1,24 @@
 #Requires -Version 7
 <#
-Two vacuities a PARSER can find, so nobody has to. Task 055, issues #69 and #70.
+Two vacuities a PARSER can find, so nobody has to; the rest of the class needs a human.
+  1. SELF-COMPARISON. `$x -eq $x` -- the same source text on both sides. A money claim
+     written that way reads green forever, and spotting it needs no judgement.
+  2. A LITERAL `$true` HANDED TO AN ASSERTION. Cannot fail by construction, and it stands
+     in for a SKIP: an arm that could not be measured, recorded as a pass. A skipped check
+     is not a passed check.  -> AGENTS.md § "Oracles: what counts as a read-back"
 
-Most of the checks-that-cannot-fail in this repo need a human to notice that two sets are
-disjoint, or that a witness was never asserted. Two of them do not:
+`$false` is deliberately NOT flagged: it is the correct way to record a definite failure in
+an else branch, and this file would be worth nothing if it pushed authors away from that.
 
-  1. A SELF-COMPARISON. `$x -eq $x`. test-upgrade-queue.ps1:554 carried the money claim
-     as `$script:mineralsAfterFirst -eq $script:mineralsAfterFirst` and read green for
-     three tasks (issue #69). Nothing about that needs judgement: the two operands are the
-     same source text.
-
-  2. A LITERAL `$true` HANDED TO AN ASSERTION. `Assert-That '...' $true` is a check that
-     cannot fail by construction, and both times it appeared here it was standing in for a
-     SKIP -- an arm that could not be measured, recorded as a pass (task 052 section 6.5).
-     A skipped check is not a passed check; that rule has been in run-ci-local.ps1 since
-     task 023 and the suites had not caught up. `$false` is deliberately NOT flagged: it is
-     the correct way to record a definite failure in an else branch, and this file would be
-     worth nothing if it pushed authors away from that.
-
-Run against the tree as it stood before this task (3db4eef), the first scan finds
-test-upgrade-queue.ps1:554 and the second finds test-production-queue.ps1:1392 -- the two
-sites issue #69 and task 052 named by hand. That is the whole argument for having it: the
-same two findings, for free, on every run, for every suite written afterwards.
-
-WHAT IT DOES NOT CLAIM. It is a lint, not a proof. `$a.X -eq $b.X` where $a and $b are the
-same object, a witness nobody asserted, two sets that cannot intersect -- none of those are
-visible to a parser, and the rest of this task was fixing exactly those by hand. It catches
-the cheapest tenth of the class, which is the tenth that should never have cost anybody a
-review.
+A lint, not a proof. `$a.X -eq $b.X` over one object, a witness nobody asserted, two sets
+that cannot intersect are invisible to a parser and still cost a human a review.
 #>
 
 BeforeAll {
     $script:PluginRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' 'tools' 'plugin')).Path
 
-    # Every assertion helper in the suites. They are 25 separate copies of the same idea
-    # (task 052 section 4.2), which is why this is a list rather than one name.
+    # The suites carry 25 separate copies of the same assertion idea under different names,
+    # so the guard has to match a list rather than one name.
     $script:AssertNames = @('Assert-That', 'Assert-Feature', 'Assert-Inv', 'Assert-Every', 'Check')
 
     function Find-VacuousAssertion {
@@ -46,7 +30,6 @@ BeforeAll {
             $ast = [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$errors)
             if ($errors.Count) { throw "guard could not parse $($file.Name): $($errors[0].Message)" }
 
-            # 1. `$x <cmp> $x` -- identical source text on both sides of a comparison.
             $cmp = @('Ieq', 'Ine', 'Ige', 'Ile', 'Igt', 'Ilt', 'Ceq', 'Cne')
             foreach ($b in $ast.FindAll({ $args[0] -is [System.Management.Automation.Language.BinaryExpressionAst] }, $true)) {
                 if ($b.Operator -notin $cmp) { continue }
@@ -57,7 +40,6 @@ BeforeAll {
                 }
             }
 
-            # 2. a bare $true passed to an assertion helper.
             foreach ($c in $ast.FindAll({ $args[0] -is [System.Management.Automation.Language.CommandAst] }, $true)) {
                 if ($c.GetCommandName() -notin $script:AssertNames) { continue }
                 foreach ($e in $c.CommandElements) {
@@ -79,9 +61,8 @@ BeforeAll {
 Describe 'No assertion in tools/plugin is vacuous by inspection (issues #69, #70)' {
 
     It 'POSITIVE CONTROL: both scans find a planted instance' {
-        # Without this the guard could pass by finding nothing, forever, over any tree --
-        # which is the exact failure mode it exists to catch, so it would be funny rather
-        # than acceptable to skip it.
+        # Without a planted instance the guard passes by finding nothing, over any tree --
+        # the exact failure mode it exists to catch.
         $dir = Join-Path ([IO.Path]::GetTempPath()) ("sc-vac-" + [Guid]::NewGuid().ToString('n'))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         try {

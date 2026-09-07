@@ -1,34 +1,18 @@
-// scplugin.cpp -- StarCraft 1.16.1 plugin DLL.
+// scplugin.cpp -- StarCraft 1.16.1 plugin DLL, injected into a running StarCraft.exe.
+// It polls the selection globals mapped in research/binary-selection-map.md and logs
+// each observed change. %SCPLUGIN_MODE% selects how much more it does; every module that
+// writes to game memory is gated out of observe:
+//   observe   (DEFAULT)  read-only: no hooks, no writes. THIS IS THE OFF SWITCH.
+//   hooktest             one hook (queueCommand), logging only
+//   shadow               + log the pre-cap selection, still no behaviour change
+//   fanout               + fan orders out over the whole captured selection
+// Unset or unrecognised -> observe: the plugin is passive unless asked for more.
 //
-// WHAT THIS DOES
-//   Loaded into a running StarCraft.exe by scinject.exe. On attach it records the
-//   process id, the module base StarCraft.exe actually loaded at, and the relocation
-//   delta against the PE's preferred base. It then polls the selection globals
-//   mapped statically in research/binary-selection-map.md and appends a line to a
-//   log file whenever the observed state changes (task 008, rung 1).
+// It never patches StarCraft.exe on disk; every modification lives in this process's
+// memory and is undone on unload.
 //
-//   Depending on %SCPLUGIN_MODE% it additionally installs the fan-out hooks
-//   (task 011, sc_fanout.cpp), which is the only part of this plugin that writes to
-//   game memory:
-//
-//     observe   (DEFAULT)  read-only. No hooks, no writes, byte-for-byte the
-//                          task-008 observer. THIS IS THE OFF SWITCH.
-//     hooktest             one hook (queueCommand), logging only, no behaviour change
-//     shadow               + capture the pre-cap selection and log it, still no
-//                          behaviour change
-//     fanout               + fan orders out over the whole captured selection
-//
-//   Unset, misspelled, or unrecognised -> observe. The plugin is passive unless
-//   something explicitly asks for more.
-//
-// WHAT THIS NEVER DOES
-//   It never patches StarCraft.exe on disk. Every modification is in this process's
-//   memory, is reversible, and is undone on unload. The game directory is not
-//   written to at all.
-//
-// Log destination: %SCPLUGIN_LOG% if set, else C:\sc-work\logs\sc-plugin.log.
-// Both are outside the repo; C:/sc-work/ is gitignored -- no captured game data is
-// ever committed (AGENTS.md hard rule 1).
+// Log destination: %SCPLUGIN_LOG%, else C:\sc-work\logs\sc-plugin.log -- outside the
+// repo and gitignored, so no captured game data is committed (AGENTS.md § "Hard rules").
 
 #include <windows.h>
 #include <stdio.h>
@@ -55,14 +39,6 @@
 #include "sc_upgrades.h"
 
 static volatile LONG g_stop = 0;
-
-// ---------------------------------------------------------------------------
-// Read-only memory access
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Selection snapshot
-// ---------------------------------------------------------------------------
 
 struct Snapshot {
     BYTE  count;                              // clientSelectionCount (u8)
@@ -124,8 +100,8 @@ static void TakeSnapshot(Snapshot* s) {
     if (ScSafeRead(ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_SELECTION), s->active, sizeof(s->active)))
         s->ok |= OK_ACTIVE;
 
-    // playersSelections[player] -- clamp the index, the id global is exactly the
-    // kind of thing this task exists to check rather than trust.
+    // playersSelections[player] -- clamp the index: the player id is read out of game
+    // memory and is exactly the kind of value to check rather than trust.
     DWORD p = (s->ok & OK_IDS) ? (s->playerId & 0xFF) : 0;
     if (p < SC_MAX_PLAYERS) {
         DWORD rowVa = SC_VA_PLAYERS_SELECTIONS + p * SC_SELECTION_SLOTS * 4;
@@ -133,10 +109,10 @@ static void TakeSnapshot(Snapshot* s) {
     }
 }
 
-// Task 036: one tagged line holding all three selection layers, written on the marker
-// rather than on change (see the call site for why). Counts are non-NULL entries, which
-// is the engine's own termination rule for every one of these arrays -- they are filled
-// densely from slot 0 and every walker in the binary stops at the first NULL.
+// One tagged line holding all three selection layers, written on the marker rather than
+// on change (see the call site). Counts are non-NULL entries, the engine's own
+// termination rule for these arrays -- they are filled densely from slot 0 and every
+// walker in the binary stops at the first NULL.
 static void LogSelectionArrays(const char* tag) {
     Snapshot s;
     TakeSnapshot(&s);
@@ -170,24 +146,18 @@ static void LogSnapshot(const Snapshot* s) {
 }
 
 // ---------------------------------------------------------------------------
-// World scan (task 022) -- READ-ONLY, and deliberately INDEPENDENT of the hooks
+// World scan -- READ-ONLY, and deliberately INDEPENDENT of the hooks
 //
-// The fan-out's UNITSTATE line walks the SHADOW list, so it exists only in a mode
-// that installs hooks. Task 022 needs an oracle that also works in `-Mode observe`
-// -- the fully stock control run -- because the question it answers is "does the
-// game behave differently with our plugin in it?", and an oracle that only exists
-// on one side of that comparison cannot answer it.
+// The fan-out's UNITSTATE line walks the SHADOW list, so it exists only in a mode that
+// installs hooks. "Does the game behave differently with our plugin in it?" needs an
+// oracle that also works in `-Mode observe`, the fully stock control arm: an oracle
+// that exists on only one side of that comparison cannot answer it. So this walks the
+// ENGINE's own per-player unit lists (playerUnitList, SC_VA_PLAYER_UNIT_LIST, threaded
+// on CUnit+0x6C -- sc_addresses.h). Every read goes through SafeRead, so a wrong offset
+// produces a missing field, never a fault; nothing here writes, hooks or calls in.
 //
-// So this walks the ENGINE's own per-player unit lists (playerUnitList,
-// SC_VA_PLAYER_UNIT_LIST, threaded on CUnit+0x6C -- sc_addresses.h) and reports one
-// line per unit. Every read goes through SafeRead, exactly like the selection
-// snapshot: a wrong offset produces a missing field, never a fault inside the game.
-// Nothing here writes, hooks, or calls into the game -- it is the task-008 observer
-// pointed at a different global.
-//
-// Off by default (%SCPLUGIN_WORLDSCAN%, launcher flag -WorldScan 1): the existing
-// suites parse this log, and a fixture with 36 units would otherwise add 36 lines
-// per marker to every one of their runs.
+// Off by default (%SCPLUGIN_WORLDSCAN%, launcher flag -WorldScan 1): the suites parse
+// this log, and a fixture with 36 units adds 36 lines per marker to every run.
 // ---------------------------------------------------------------------------
 
 static bool g_worldScan = false;
@@ -217,7 +187,7 @@ static bool ReadU32(DWORD addr, DWORD* out) {
     return true;
 }
 
-// Counts one player's list without logging. Used for the second pass -- see ScanWorld.
+// Counts one player's list without logging -- the recount pass; see ScanWorld.
 static int CountPlayerUnits(int p, bool* ok) {
     DWORD head = 0;
     *ok = false;
@@ -236,23 +206,21 @@ static int CountPlayerUnits(int p, bool* ok) {
 }
 
 // ---------------------------------------------------------------------------
-// Screen/viewport scan (task 032) -- READ-ONLY
+// Screen/viewport scan -- READ-ONLY
 //
-// Why it exists: research/renderer-viewport.md is a static map, and a static map of a
-// subsystem nobody had touched before is exactly the kind of claim this project has been
-// burned by. AGENTS.md's standing rule is to READ THE ENGINE'S OWN MEMORY rather than reason
-// about it, so every number that document asserts about the live layout -- the screen
-// Bitmap's width/height/pointer, each graphic layer's rectangle and draw callback, the
-// scroll maxima and the tile-granular origin -- is printed here straight out of the running
-// process and quoted back into the document beside the disassembly it was predicted from.
+// research/renderer-viewport.md is a static map, and a static map is a prediction until
+// the running process confirms it (AGENTS.md § "Claims about the binary"). So every
+// number it asserts about the live layout -- the screen Bitmap's width/height/pointer,
+// each layer's rectangle and draw callback, the scroll maxima, the tile-granular origin
+// -- is printed here out of the process, to be quoted back beside the disassembly it was
+// predicted from.
 //
-// It installs NO hook, calls nothing in the game and writes nothing, so it runs in
-// -Mode observe. Off by default (%SCPLUGIN_SCREENSCAN%, launcher flag -ScreenScan 1): it
-// adds ten lines per marker and the existing suites parse this same log.
+// No hook, no calls into the game, no writes, so it runs in -Mode observe. Off by default
+// (%SCPLUGIN_SCREENSCAN%, launcher flag -ScreenScan 1): it adds ten lines per marker to a
+// log the suites parse.
 //
-// The layer draw callbacks are printed as STATIC VAs (runtime minus the relocation delta)
-// so they can be compared directly against the addresses in sc_addresses.h and the Ghidra
-// listing, which is the whole point of reading them.
+// Layer draw callbacks print as STATIC VAs (runtime minus the relocation delta) so they
+// compare directly against sc_addresses.h and the Ghidra listing.
 // ---------------------------------------------------------------------------
 
 static bool g_screenScan = false;
@@ -322,9 +290,9 @@ static void ScanScreen(const char* tag) {
         // built as (mapTiles - viewportTiles) * 32, with +8 on the vertical axis
         // (0x0049BB90). Printing what it SHOULD be beside what it IS makes a wrong reading
         // of that function visible in the run instead of surviving into research/.
-        // The viewport width follows the geometry: 20 tiles stock, SC_WS_SCREEN_W/32
-        // once stage 3's scroll.clamp.x.tiles is live (issue #113 follow-up) -- a
-        // prediction pinned at 20 would print match=0 against a correct clamp.
+        // The viewport width has to come from the live geometry (20 tiles stock,
+        // SC_WS_SCREEN_W/32 when widescreen is patched in): a prediction pinned at 20
+        // prints match=0 against a correct widened clamp.
         const int vpTilesX = ScScreenViewportTilesX();
         long predX = ((long)mapTw - vpTilesX) * 32;
         long predY = ((long)mapTh - SC_VIEWPORT_TILES_Y) * 32 + 8;
@@ -337,35 +305,27 @@ static void ScanScreen(const char* tag) {
 }
 
 // ---------------------------------------------------------------------------
-// Framebuffer dump (task 063) -- READ-ONLY
+// Framebuffer dump -- READ-ONLY
 //
-// Why it exists: every frame this project had ever captured went through the
-// PRESENTED window, and the presented window is WMode.dll's columns 0..639 of
-// whatever the engine composed (research/renderer-viewport.md 12.6, 12.10).
-// Task 034 judged itself blocked because its instrument could not see the
-// right 160 columns of an 800-wide frame. This reads the engine's OWN
-// composed frame -- the screen Bitmap 0x006CEFF0 (u16 w, u16 h, u8* data;
-// pitch == width, research/renderer-viewport.md 2) -- straight out of process
-// memory and writes it to a file, so the full composition is visible without
-// presenting it and without touching the user's display.
+// The PRESENTED window is WMode.dll's columns 0..639 of whatever the engine composed
+// (research/renderer-viewport.md 12.6, 12.10), so no capture of it can see the right 160
+// columns of an 800-wide frame. This reads the engine's OWN composed frame -- the screen
+// Bitmap 0x006CEFF0 (u16 w, u16 h, u8* data; pitch == width, research/renderer-viewport.md
+// 2) -- out of process memory, without presenting it and without touching the display.
 //
-// Same family as the SCREEN scan above: installs no hook, calls nothing in
-// the game, writes nothing to game memory, so it exists in -Mode observe.
-// Off by default: %SCPLUGIN_FRAMEDUMP% names the directory the dumps go to
-// (launcher flag -FrameDump). THE DUMP REPRODUCES GAME ARTWORK: the
-// directory must be on the gitignored diagnostic path (C:\sc-work\...) and
-// no dump is ever committed (AGENTS.md hard rule 1, "Screenshots vs hard
-// rule 1" -- the same rules as for a PNG, in a different container).
+// Same family as the SCREEN scan above: no hook, no writes, so it exists in -Mode observe.
+// Off by default: %SCPLUGIN_FRAMEDUMP% names the directory (launcher flag -FrameDump).
+// THE DUMP REPRODUCES GAME ARTWORK, so that directory must be on the gitignored diagnostic
+// path (C:\sc-work\...) and no dump is ever committed -- the same rules as for a PNG, in a
+// different container (AGENTS.md § "Screenshots").
 //
-// TEARING. The observer reads while the game thread composes, so a single
-// copy can be half of one frame and half of the next. The dump therefore
-// copies the buffer repeatedly until two CONSECUTIVE copies are byte-equal
-// -- equality means no compose landed between the first copy's start and the
-// second copy's end, i.e. the pair straddles a settled frame -- and reports
-// how many reads that took (reads=) plus whether it ever settled (stable=).
-// A dump that never settled is still written (it is evidence), with stable=0
-// on its line and in its header, so a consumer can refuse it rather than
-// trust it silently.
+// TEARING. The observer reads while the game thread composes, so one copy can be half of
+// one frame and half of the next. The dump therefore copies until two CONSECUTIVE copies
+// are byte-equal -- equality means no compose landed between the first copy's start and
+// the second copy's end, i.e. the pair straddles a settled frame -- and reports how many
+// reads that took (reads=) and whether it ever settled (stable=). A dump that never
+// settled is still written (it is evidence), with stable=0 on its line and in its header,
+// so a consumer can refuse it rather than trust it silently.
 // ---------------------------------------------------------------------------
 
 static bool g_frameDump = false;
@@ -442,7 +402,6 @@ static void DumpFrame(const char* tag) {
         return;
     }
 
-    // fd-<tag>.bin, tag sanitised to filename-safe characters.
     char name[96];
     unsigned ni = 0;
     for (const char* p = t; *p && ni < sizeof(name) - 1; ++p) {
@@ -491,12 +450,10 @@ static void ScanWorld(const char* tag) {
 
     // THE VIEWPORT, first, so a reader can turn every pos=(x,y) below into a CLIENT
     // coordinate: client = map - origin. Without it a script driving the mouse has to
-    // guess where the camera is, and a drag box aimed by guesswork picks up whatever
-    // else happens to be on screen -- which is how task 024's first in-game run boxed
-    // two blocks at once and got the other one's building. The two globals are the ones
-    // the engine's own click handler 0x0046FB40 builds its search rectangle from
-    // (sc_addresses.h); read-only, and read here rather than hooked. Task 025 needed the
-    // same pair for the same reason and arrived at the same two globals independently.
+    // guess where the camera is, and a drag box aimed by guesswork picks up whatever else
+    // is on screen -- measured once as two unit blocks boxed at once and the wrong
+    // building selected. Both globals are the ones the engine's own click handler
+    // 0x0046FB40 builds its search rectangle from (sc_addresses.h).
     {
         unsigned left = 0xFFFF, top = 0xFFFF;
         ReadU16(ScRuntimeVa(SC_VA_SCREEN_LEFT), &left);
@@ -557,16 +514,14 @@ static void ScanWorld(const char* tag) {
         }
 
         // THE CONTROL'S HONESTY CHECK. This runs on the observer thread, so the game
-        // thread can head-insert or unlink while the walk is in progress. That cannot
-        // fault (every link is validated above and the walk is bounded), but it CAN
-        // make one pass MISS a unit that is in play the whole time -- and an undercount
-        // in an order-stability measurement looks exactly like the defect being hunted
-        // ("a unit stopped existing"). So the count is taken a second time and both are
-        // reported: a reader that sees `units=13 recount=13 complete=1` knows the sample
-        // was not torn, and one that sees a disagreement knows to discard it rather than
-        // to believe it. Sampling on the game thread would be better still, and is not
-        // available here on purpose -- it would need a hook, and the stock arm of this
-        // comparison must install none.
+        // thread can head-insert or unlink mid-walk. That cannot fault (every link is
+        // validated above and the walk is bounded) but it CAN make one pass MISS a unit
+        // that is in play the whole time -- and an undercount in an order-stability
+        // measurement looks exactly like the defect being hunted ("a unit stopped
+        // existing"). So the count is taken twice: `units=13 recount=13 complete=1` says
+        // the sample was not torn, a disagreement says to discard it. Sampling on the
+        // game thread is refused on purpose -- it needs a hook, and the stock arm of
+        // this comparison must install none.
         bool recountOk = false;
         int  recount = CountPlayerUnits(p, &recountOk);
         ScLog("WORLD [%s] p=%d units=%d recount=%d complete=%d%s",
@@ -579,14 +534,11 @@ static void ScanWorld(const char* tag) {
 // ---------------------------------------------------------------------------
 // Marker channel
 //
-// Correlating "what I did on screen" with "what the log says" after the fact is
-// the whole point of the exercise, and timestamps alone are ambiguous once the
-// game is running at 250ms poll granularity. The driver writes a one-line label
-// into a marker file before each test case; the observer notices the change and
-// stamps it into the log, in-band, between the snapshots it separates.
-//
-// This is a read of a file the observer owns -- it is not a write to, or a hook
-// into, the game.
+// Correlating "what I did on screen" with "what the log says" after the fact is the whole
+// point of the exercise, and timestamps alone are ambiguous at 250ms poll granularity. The
+// driver writes a one-line label into a marker file before each test case; the observer
+// notices the change and stamps it into the log, in-band, between the snapshots it
+// separates. Reading a file the observer owns is not a write to, or a hook into, the game.
 // ---------------------------------------------------------------------------
 
 static char g_markerPath[MAX_PATH];
@@ -627,114 +579,98 @@ static void PollMarker(void) {
     lstrcpynA(g_lastMarker, buf, sizeof(g_lastMarker));
     ScLog("---- MARK: %s ----", g_lastMarker);
 
-    // Task 022: the world scan fires on the same trigger, and BEFORE the shadow dump,
-    // so a run that reads both gets the engine's own view first. It is the only oracle
-    // that exists in observe mode, which is the stock arm of the plugin-vs-stock
-    // comparison.
+    // Every scan below fires on the marker and is read-only. Ordering rule: the reads of
+    // the ENGINE's own state come before the plugin's own bookkeeping (the shadow dump),
+    // so a run that reads both gets the engine's view first.
+
+    // The only view of unit state that exists in observe mode, the stock arm of the
+    // plugin-vs-stock comparison.
     ScanWorld(g_lastMarker);
 
-    // Task 036: the three selection arrays, tagged, on the same trigger.
+    // LogSnapshot below prints the same three arrays, but only when the snapshot CHANGED
+    // since the last 250 ms tick. "Did that shift-click do anything?" needs a read AT a
+    // named instant, and a change-gated line is silent precisely when the answer is
+    // "nothing happened" -- silence indistinguishable from "the observer stopped".
     //
-    // LogSnapshot below already prints all three -- but only when the snapshot CHANGED
-    // since the last 250 ms tick, which is exactly wrong for the question this task had
-    // to answer. "Did that shift-click do anything?" needs a read AT a named instant,
-    // and a change-gated line is silent precisely when the answer is "nothing happened".
-    // Worse, silence there is indistinguishable from "the observer stopped".
-    //
-    // The three arrays are three different layers and a symptom does not say which one
-    // refused (research/building-groups.md 2, 3): `client` is what the STOCK status row
-    // draws, `active` is what the client selected, `sim` is what the simulation holds and
-    // what every order applier iterates. Read-only.
+    // All three, because they are three different layers and a symptom does not say which
+    // one refused (research/building-groups.md 2, 3): `client` is what the STOCK status
+    // row draws, `active` is what the client selected, `sim` is what the simulation holds
+    // and what every order applier iterates.
     LogSelectionArrays(g_lastMarker);
 
-    // Task 026: and so does the command-card read-back. It goes BEFORE the shadow
-    // dump for the same reason the world scan does -- the engine's own view first.
     ScCardScan(g_lastMarker);
 
-    // Task 028: and the status pane's production-queue strip, on the same switch. The
-    // card and the strip are the two dialogs a player can click to cancel a queued
-    // unit -- the card's slot-9 button sends "cancel the LAST item", the strip's five
-    // icons address a SPECIFIC one -- so a run that reads one wants the other beside it.
+    // The card and the status strip are the two dialogs a player can click to cancel a
+    // queued unit -- the card's slot-9 button sends "cancel the LAST item", the strip's
+    // five icons address a SPECIFIC one -- so a run that reads one wants the other too.
     ScStatusScan(g_lastMarker);
 
-    // Task 054: which GAME this marker was taken in. It goes FIRST of the per-marker
-    // lines, before anything that prints a record, so a reader never has to work out
-    // which side of a game start a record's line fell on -- the epoch it was read
-    // under is directly above it.
+    // Which GAME this marker was taken in, before anything that prints a record, so a
+    // reader never has to work out which side of a game start a record's line fell on --
+    // the epoch it was read under is directly above it.
     ScSessionLogState(g_lastMarker);
 
-    // Task 073: the console module's marker-driven test aid (a 'conedge-select'
-    // label asks the GAME thread to select the first completed own unit on its
-    // next frame). A no-op unless the module is installed, which observe never does.
+    // The console module's marker-driven test aid (a 'conedge-select' label asks the
+    // GAME thread to select the first completed own unit on its next frame). A no-op
+    // unless the module is installed, which observe never does.
     ScConsoleOnMarker(g_lastMarker);
 
-    // Task 032: the renderer's own view of itself. Same trigger, same read-only shape.
     ScanScreen(g_lastMarker);
 
-    // Task 063: the composed frame itself, straight out of the screen Bitmap --
-    // the one oracle that sees the columns the presented window discards. Same
-    // trigger, same read-only shape; off unless %SCPLUGIN_FRAMEDUMP% names a
-    // directory.
+    // The composed frame itself, straight out of the screen Bitmap -- the one oracle
+    // that sees the columns the presented window discards.
     DumpFrame(g_lastMarker);
 
-    // Task 074: storm's own present state -- geometry, the flip clip, the fallback
-    // lock pointer and the present region -- read straight out of storm.dll. This is
-    // the instrument that says which buffer->glass present path is live. Read-only;
-    // off unless %SCPLUGIN_STORM_PRESENT% is set.
+    // Storm's own present state -- geometry, the flip clip, the fallback lock pointer
+    // and the present region -- read straight out of storm.dll: the instrument that says
+    // which buffer->glass present path is live. Off unless %SCPLUGIN_STORM_PRESENT%.
     ScStormPresentLog(g_lastMarker);
 
-    // Task 015: a marker is the driver saying "look now", so it is also the trigger for
-    // the per-unit state dump. Driving it off the marker rather than off a timer is what
-    // makes an unattended assertion possible at all -- the test writes a marker, waits for
-    // the UNITSTATE line carrying that exact tag, and asserts on it. No polling race, and
-    // no extra IPC beyond the file channel that already exists.
+    // A marker is the driver saying "look now", so it is also the trigger for the
+    // per-unit state dump. Driving it off the marker rather than off a timer is what
+    // makes an unattended assertion possible at all -- the test writes a marker, waits
+    // for the UNITSTATE line carrying that exact tag, and asserts on it. No polling
+    // race, and no extra IPC beyond the file channel that already exists.
     ScFanoutLogUnitStates(g_lastMarker);
 
-    // Task 025: the production-queue oracle, on the same trigger and for the same
-    // reason. It prints the ENGINE's own five slots read straight out of CUnit+0x98
-    // beside the plugin's overflow, so an unattended run asserts a queue length from
-    // the building's memory rather than from the screen. Read-only; a no-op when
-    // %SCPLUGIN_PRODQ% never switched the feature on.
+    // The ENGINE's own five slots read straight out of CUnit+0x98 beside the plugin's
+    // overflow, so an unattended run asserts a queue length from the building's memory
+    // rather than from the screen. A no-op when %SCPLUGIN_PRODQ% is off.
     ScProdQueueLogState(g_lastMarker);
 
-    // Task 030: one line per building in the shadow selection, each carrying that
-    // building's own five queue slots. Unlike the line above it does NOT depend on its
-    // feature being enabled -- the baseline measurement ("with N buildings selected, how
-    // many gain an item in a stock game") is taken with this oracle, and an oracle that
-    // only exists in the treatment arm proves nothing about the control arm. Read-only.
+    // One line per building in the shadow selection, each carrying that building's own
+    // five queue slots. Unlike the line above it does NOT depend on its feature being
+    // enabled: the baseline ("with N buildings selected, how many gain an item in a
+    // stock game") is taken with this oracle, and an oracle that only exists in the
+    // treatment arm proves nothing about the control arm.
     ScProdFanLogState(g_lastMarker);
-    // Task 029: the upgrade-queue oracle, on the same trigger. It prints the building's
-    // OWN research state -- CUnit+0xC8/0xC9/0xC6/0xCD -- beside the plugin's queue, so an
-    // unattended run reads "which upgrade, at which level, with how long left" out of the
-    // engine's memory instead of off the status area. Read-only; a no-op when
-    // %SCPLUGIN_UPGQ% never switched the feature on.
+    // The building's OWN research state -- CUnit+0xC8/0xC9/0xC6/0xCD -- beside the
+    // plugin's queue, so an unattended run reads "which upgrade, at which level, with
+    // how long left" out of the engine's memory instead of off the status area. A no-op
+    // when %SCPLUGIN_UPGQ% is off.
     ScUpgQueueLogState(g_lastMarker);
 
-    // Task 033: what the QUEUE-OVERFLOW INDICATOR is actually showing, read back out of
-    // the live dialog -- is its control linked into the child chain, does the engine's own
-    // visible bit sit on it, and what string does its pszText pointer really hold. It runs
-    // whether or not the feature is enabled, for the same reason task 030's oracle does:
-    // "nothing is drawn with the feature off" is half the acceptance criteria, and an
-    // oracle that only exists in the treatment arm cannot measure the control arm.
-    // Read-only.
+    // What the QUEUE-OVERFLOW INDICATOR is actually showing, read back out of the live
+    // dialog: is its control linked into the child chain, does the engine's own visible
+    // bit sit on it, what string does its pszText pointer really hold. Enabled or not,
+    // for the same reason the prodfan oracle above is -- "nothing is drawn with the
+    // feature off" is half the acceptance criteria, and an oracle that only exists in
+    // the treatment arm cannot measure the control arm.
     ScQueueIndLogState(g_lastMarker);
 }
 
 // ---------------------------------------------------------------------------
-// Active-dialog scan (task 027) -- READ-ONLY
+// Active-dialog scan -- READ-ONLY
 //
-// Why it exists: every in-game suite dismissed the "StarCraft Tips" dialog by
-// clicking a HARDCODED point (200,261) with no check that a dialog was ever there
-// and no check that it went away. That is the same shape as the map-browser
-// row-by-number bug this repo already has a hard rule about. With the dialog list
-// readable, a suite can find the tips dialog, click ITS OWN OK button wherever the
-// engine put it, and assert the dialog is gone.
+// Dismissing the "StarCraft Tips" dialog by clicking a HARDCODED point (200,261)
+// checks neither that a dialog was ever there nor that it went away. With the dialog
+// list readable, a suite finds the tips dialog, clicks ITS OWN OK button wherever the
+// engine put it, and asserts the dialog is gone (AGENTS.md § "Tips dialog").
 //
 // The walk is the engine's own: head at SC_VA_DIALOG_LIST, "next" at +0x00, controls
 // from +0x42, each with text at +0x14 and bounds at +0x04 -- the layout sc_hudrow
-// already reads (sc_addresses.h carries the per-offset evidence). Every read goes
-// through SafeRead, so a wrong offset produces a missing field, never a fault inside
-// the game. Nothing here writes, hooks or calls into the game.
+// also reads (sc_addresses.h carries the per-offset evidence). Every read goes through
+// SafeRead; nothing here writes, hooks or calls into the game.
 //
 // One line per CHANGE of the dialog set, not per tick: a menu that sits still logs
 // once. %SCPLUGIN_DIALOGS%=0 turns it off.
@@ -821,10 +757,6 @@ static void ScanDialogs(void) {
     ScLog("DIALOGS n=%d%s%s", n, n ? " " : "", line);
 }
 
-// ---------------------------------------------------------------------------
-// Observer thread
-// ---------------------------------------------------------------------------
-
 static DWORD GetPollMs(void) {
     return (DWORD)ScEnvInt("SCPLUGIN_POLL_MS", 250, 20, 5000);
 }
@@ -835,21 +767,18 @@ static bool GetWorldScan(void) {
     return ScEnvOptIn("SCPLUGIN_WORLDSCAN");
 }
 
-// ON by default, unlike the world scan: it logs one line per CHANGE of the dialog
-// set, so a whole run adds a handful of lines, and the tips-dialog dismissal in
-// every suite depends on it.
+// ON by default, unlike the world scan: one line per CHANGE of the dialog set is a
+// handful of lines per run, and every suite's tips-dialog dismissal depends on it.
 static bool GetDialogScan(void) {
     return ScEnvFlag("SCPLUGIN_DIALOGS", true);
 }
 
-// OFF by default, same shape as the world scan: %SCPLUGIN_CARDSCAN%=1 turns on the
-// read-only command-card walk (task 026).
+// OFF by default, same shape and reason as the world scan.
 static bool GetCardScan(void) {
     return ScEnvOptIn("SCPLUGIN_CARDSCAN");
 }
 
-// OFF by default, same shape as the world scan and for the same reason: %SCPLUGIN_SCREENSCAN%=1
-// turns on the read-only renderer/viewport read-back (task 032).
+// OFF by default, same shape and reason as the world scan.
 static bool GetScreenScan(void) {
     return ScEnvOptIn("SCPLUGIN_SCREENSCAN");
 }
@@ -860,9 +789,8 @@ static DWORD WINAPI ObserverThread(LPVOID) {
     g_screenScan = GetScreenScan();
     g_frameDump = GetFrameDump();
     g_dialogScan = GetDialogScan();
-    // Task 026: the read-only command-card scan. Same shape and same off switch as
-    // the world scan, and for the same reason -- it must exist in observe mode too,
-    // because "the card the stock game draws" is half of every comparison.
+    // The read-only command-card scan must exist in observe mode too, because "the
+    // card the stock game draws" is half of every comparison.
     ScCardInit(ScEngineModuleBase(), GetCardScan());
     ResolveMarkerPath();
     ScLog("OBSERVER start pollMs=%u mode=%s%s", (unsigned)pollMs, ScModeName(g_mode),
@@ -884,9 +812,9 @@ static DWORD WINAPI ObserverThread(LPVOID) {
           "in observe mode)%s%s",
           g_frameDump ? 1 : 0,
           g_frameDump ? " dir=" : "", g_frameDump ? g_frameDumpDir : "");
-    // Task 034: which ARM this run is. Printed next to the read-back's own switch
-    // because every SCREEN line below is only interpretable against it -- 800x480
-    // is the result in one arm and a defect in the other.
+    // Which ARM this run is, printed next to the read-back's own switch because every
+    // SCREEN line below is only interpretable against it -- 800x480 is the result in
+    // one arm and a defect in the other.
     ScLog("OBSERVER widescreen=%d (%%SCPLUGIN_WIDESCREEN%%; %s)",
           ScScreenActive() ? 1 : 0,
           ScScreenActive() ? "the screen geometry HAS been repatched"
@@ -922,10 +850,6 @@ static DWORD WINAPI ObserverThread(LPVOID) {
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// Attach
-// ---------------------------------------------------------------------------
-
 static void LogAttachBanner(void) {
     HMODULE exeMod = GetModuleHandleA(NULL);
     ScEngineSetModuleBase((BYTE*)exeMod);
@@ -945,29 +869,25 @@ static void LogAttachBanner(void) {
     ScLog("========================================================");
     ScLog("ATTACH pid=%u tid=%u", (unsigned)GetCurrentProcessId(),
           (unsigned)GetCurrentThreadId());
-    // FIRST line of the banner, and the point of task 056 (issue #73): every log,
-    // transcript and frame this run produces can now name the build that produced
-    // it. "<short sha>[+dirty] SRC=<12 hex over tools/plugin/src + build.ps1>" --
-    // the sha answers "which commit", the digest answers "which source bytes",
-    // and the second one is the one that still means something when +dirty says
-    // the first one is a lie. UNSTAMPED means this DLL did not come from
-    // build.ps1 and nothing about it can be trusted to be current.
+    // FIRST line of the banner, so every log, transcript and frame this run produces can
+    // name the build behind it. "<short sha>[+dirty] SRC=<12 hex over tools/plugin/src +
+    // build.ps1>": the sha answers "which commit", the digest answers "which source
+    // bytes", and the digest is the half that still means something when +dirty says the
+    // sha is a lie. UNSTAMPED means this DLL did not come from build.ps1 at all.
     ScLog("  build         : %s", ScBuildStampShort());
     ScLog("  host exe      : %s", exePath);
     ScLog("  plugin dll    : %s", dllPath);
-    // Task 056. Where WE landed, against the base the FILE asks for. build.ps1
-    // pins that base to make the build byte-reproducible, and whether the loader
-    // honours it is a fact about this process, not about the flag.
+    // Where WE landed, against the base the FILE asks for. build.ps1 pins that base to
+    // make the build byte-reproducible, and whether the loader honours it is a fact about
+    // this process, not about the flag.
     //
-    // READ FROM THE FILE, NOT FROM THE MAPPED IMAGE, and this cost a run to find:
-    // the Windows loader REWRITES OptionalHeader.ImageBase in the mapped header
-    // to the address it actually used. Measured here -- the file on disk holds
-    // 0x71000000, the mapped header read 0x717D0000, and the module was loaded at
-    // 0x717D0000 -- so the first version of this check compared the load address
-    // against itself and printed "the pinned base took" for a module the loader
-    // had just relocated. An instrument whose reading moves with its own input
-    // cannot fail (AGENTS.md, task 048); this one had to be read out of the bytes
-    // the linker wrote instead.
+    // READ FROM THE FILE, NOT FROM THE MAPPED IMAGE: the Windows loader REWRITES
+    // OptionalHeader.ImageBase in the mapped header to the address it actually used.
+    // Measured -- the file on disk holds 0x71000000, the mapped header read 0x717D0000,
+    // the module loaded at 0x717D0000 -- so a check reading the mapped header compares
+    // the load address against itself and reports "the pinned base took" for a module the
+    // loader has just relocated. An instrument whose reading moves with its own input
+    // cannot fail (AGENTS.md § "Oracles: what counts as a read-back").
     if (self && dllPath[0]) {
         DWORD loadedAt = (DWORD)(DWORD_PTR)self;
         DWORD preferred = 0;
@@ -1026,23 +946,22 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         ScLogOpen();
         g_mode = ScModeResolve();
         LogAttachBanner();
-        // Task 034, and FIRST of everything that writes: the widescreen patch set
-        // rewrites the operands of functions that run during the game's own
-        // startup, so it is only correct if it lands before the video init. It
-        // refuses (and changes nothing) if it finds the framebuffer already
-        // allocated, which is what happens on the default late injection.
+        // FIRST of everything that writes: the widescreen patch set rewrites the
+        // operands of functions that run during the game's own startup, so it is only
+        // correct if it lands before the video init. It refuses (and changes nothing)
+        // if it finds the framebuffer already allocated, which is what happens on the
+        // default late injection.
         ScScreenInstall(ScEngineModuleBase(), g_mode);
-        // Task 054, issue #67, and it goes in BEFORE every module that keeps records:
-        // the game-session epoch. Each of those modules asks it "which game is this?"
-        // at the top of every entry point, so it has to exist -- and be at its
-        // starting value -- before any of them can hold anything. It is spliced only
-        // outside observe mode, like everything else that writes game memory; in
-        // observe the epoch stays 1, which is correct because no module holds
-        // cross-frame state there.
+        // The game-session epoch, in BEFORE every module that keeps records: each of
+        // those asks it "which game is this?" at the top of every entry point, so it
+        // has to exist -- and be at its starting value -- before any of them can hold
+        // anything. Spliced only outside observe mode, like everything else that
+        // writes game memory; in observe the epoch stays 1, which is correct because
+        // no module holds cross-frame state there.
         ScSessionInstall(ScEngineModuleBase(), g_mode != SC_MODE_OBSERVE);
-        // Task 073: the console move + click-route trace. Both write to dialog
-        // records on the game thread, so observe -- the whole plugin's off
-        // switch -- ignores them like every other writer.
+        // The console move + click-route trace both write to dialog records on the
+        // game thread, so observe -- the whole plugin's off switch -- ignores them
+        // like every other writer.
         {
             bool consoleEdge  = ScConsoleEdgeWanted();
             bool consoleTrace = ScConsoleTraceWanted();
@@ -1054,15 +973,15 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             }
             ScConsoleInstall(ScEngineModuleBase(), consoleEdge, consoleTrace);
         }
-        // Task 074: the storm-side buffer->glass present. PROBE is read-only and
-        // runs in any mode; WIDEN writes storm's geometry and is gated out of
-        // observe like every other writer (the module enforces this itself).
+        // The storm-side buffer->glass present. PROBE is read-only and runs in any
+        // mode; WIDEN writes storm's geometry and is gated out of observe like every
+        // other writer (the module enforces this itself).
         ScStormPresentInstall(ScEngineModuleBase(), g_mode != SC_MODE_OBSERVE);
         ScFanoutInstall(ScEngineModuleBase(), g_mode);
-        // Task 030. The oracle needs the module base in EVERY mode, because the stock
-        // arm of this feature's comparison runs in observe and is measured with it. The
-        // FEATURE half is gated the same way task 025's is: observe writes nothing to
-        // game memory and emits no command, whatever else the environment asks for.
+        // The prodfan oracle needs the module base in EVERY mode, because the stock arm
+        // of this feature's comparison runs in observe and is measured with it. The
+        // FEATURE half is gated like every other writer: observe writes nothing to game
+        // memory and emits no command, whatever else the environment asks for.
         {
             bool prodfanWanted = ScProdFanEnabled();
             if (g_mode == SC_MODE_OBSERVE && prodfanWanted) {
@@ -1077,16 +996,16 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             // here turns the whole feature off rather than leaving it half-armed.
             if (ScProdFanEnabled()) ScProdFanInstall();
         }
-        // Task 025. Gated on %SCPLUGIN_PRODQ% AND on not being in observe mode:
-        // observe is the whole plugin's off switch and must stay byte-for-byte the
-        // task-008 read-only observer, whatever else is set in the environment.
+        // Gated on %SCPLUGIN_PRODQ% AND on not being in observe mode: observe is the
+        // whole plugin's off switch and must stay a byte-for-byte read-only observer,
+        // whatever else is set in the environment.
         if (g_mode == SC_MODE_OBSERVE) {
-            // Task 033: observe never reaches ScFanoutInstall, so the indicator is
-            // initialised here instead -- DISABLED, but with a module base, so its
-            // read-only oracle still answers on the marker channel. "Nothing is drawn with
-            // the feature off" is half of what this run has to show, and an oracle that
-            // goes silent in the control arm cannot show it (AGENTS.md: prove an absence
-            // against a pattern that has matched somewhere).
+            // Observe never reaches ScFanoutInstall, so the indicator is initialised
+            // here instead -- DISABLED, but with a module base, so its read-only oracle
+            // still answers on the marker channel. "Nothing is drawn with the feature
+            // off" is half of what a run has to show, and an oracle that goes silent in
+            // the control arm cannot show it
+            // (AGENTS.md § "Oracles: absence and defect-era checks").
             ScQueueIndInit(ScEngineModuleBase(), false);
             if (ScQueueIndEnabled()) {
                 ScLog("QIND: %%SCPLUGIN_QUEUEIND%% is set but the mode is observe -- "
@@ -1096,7 +1015,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
                 ScLog("PRODQ: %%SCPLUGIN_PRODQ%% is set but the mode is observe -- "
                       "IGNORED. Observe writes nothing to game memory.");
             }
-            // Task 029, same gate and same reason.
+            // Same gate and same reason.
             if (ScUpgQueueEnabled()) {
                 ScLog("UPGQ: %%SCPLUGIN_UPGQ%% is set but the mode is observe -- "
                       "IGNORED. Observe writes nothing to game memory.");
@@ -1113,16 +1032,15 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
     } else if (reason == DLL_PROCESS_DETACH) {
         InterlockedExchange(&g_stop, 1);
 
-        // lpReserved == NULL means FreeLibrary: the observer thread is still
-        // running and this DLL's code is about to be unmapped underneath it, so
-        // it has to be joined before the log handle and the lock are destroyed.
-        // The thread only calls file, memory and Sleep APIs -- never LoadLibrary
-        // or FreeLibrary -- so it cannot be waiting on the loader lock DllMain
-        // holds, and this bounded wait cannot deadlock against it.
+        // lpReserved == NULL means FreeLibrary: the observer thread is still running and
+        // this DLL's code is about to be unmapped underneath it, so it has to be joined
+        // before the log handle and the lock are destroyed. The thread only calls file,
+        // memory and Sleep APIs -- never LoadLibrary or FreeLibrary -- so it cannot be
+        // waiting on the loader lock DllMain holds, and this bounded wait cannot deadlock.
         //
-        // lpReserved != NULL means the process is exiting: Windows has already
-        // terminated every other thread, so there is nothing to join, and the
-        // log lock may be permanently owned by a thread that no longer exists.
+        // lpReserved != NULL means the process is exiting: Windows has already terminated
+        // every other thread, so there is nothing to join, and the log lock may be
+        // permanently owned by one of those terminated threads.
         bool joined = true;
         if (lpReserved != NULL) ScLogSetTryLock();
         ScFanoutLogStats();   // the run's counters, on both detach paths
@@ -1144,24 +1062,21 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             // holding before it un-splices. The other order would leave paid-for items
             // with no hook left to promote or refund them.
             ScProdQueueRemove();
-            // Task 030's detour holds nothing and moves nothing, so it can come out
-            // anywhere in this sequence; it goes here so the card is back to stock
-            // before the fan-out's own hooks leave.
+            // The prodfan detour holds nothing, so its position is free; here the card
+            // is back to stock before the fan-out's own hooks leave.
             ScProdFanRemove();
-            // Task 029 has nothing to give back before it un-splices -- every item it
-            // holds is unpaid -- so its order relative to the others does not matter. It
-            // still goes before the fan-out's, so the whole splice comes out newest-first.
+            // Every item the upgrade queue holds is unpaid, so it has nothing to give
+            // back and its position is free too. Before the fan-out's, so the whole
+            // splice comes out newest-first.
             ScUpgQueueRemove();
             ScFanoutRemove();
-            // Task 073: bounds restored and interacts unwrapped before the
-            // widescreen geometry (which the move's +160 only makes sense on)
-            // comes out below.
+            // Console bounds restored and interacts unwrapped before the widescreen
+            // geometry (which the move's +160 only makes sense on) comes out below.
             ScConsoleRemove();
-            // Task 074: storm present. PROBE has nothing to restore; WIDEN restores
-            // storm's geometry. Comes out before the exe geometry below.
+            // Storm present: PROBE has nothing to restore, WIDEN restores storm's
+            // geometry. Comes out before the exe geometry below.
             ScStormPresentRemove();
-            // Task 034 last, mirroring its install-first position: the geometry
-            // patches are the outermost change, so they come out after every
+            // The geometry patches are the outermost change, so they leave after every
             // detour that might still be running against them.
             ScScreenRemove();
             // The epoch's own splice comes out LAST, after every module that reads it:

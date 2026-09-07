@@ -1,66 +1,23 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Task 036: the three ways of selecting a group of buildings that task 024's drag box did
-NOT cover -- double-click, ctrl-click, shift-click -- and control-group recall. Every
-claim is read out of the process: the three engine selection arrays, the plugin's shadow
-list, and the engine's own command funnel.
+Building-group selection by double-click, ctrl-click, shift-click and control-group recall.
 
 .DESCRIPTION
-WHY THE DRAG BOX WAS NOT ENOUGH. `unit_IsStandardAndMovable` (0x0047B770) is consulted on
-every selection path, not only the box, and task 024 relaxed exactly one of them. The
-other three, each read off this binary (research/building-groups.md 8):
-
-  double-click / ctrl-click  0x0046FB40 calls SortAllUnits (0x0046F0F0) with the clicked
-                             unit as its third argument and a candidate list scanned from
-                             the screen rect. Every building candidate fails the predicate
-                             at 0x0046F1A3, so the count stays at the 1 the entry seeded
-                             (0x0046F0F5) and one building is selected.
-  shift-click ADD            gated INLINE in 0x0046FB40 -- CALL 0x0047B770 at 0x0046FD27
-                             on the selection's lead and again at 0x0046FD44 on the clicked
-                             unit; either failure returns without appending.
-  shift+box / shift+ctrl     combineSelectionsLists (0x0046F290) calls the same predicate
-                             at 0x0046F2C8 and 0x0046F2E8 and, on failure, returns the
-                             EXISTING count untouched -- the merge never happens.
-  control-group recall       the engine's own group row is filled by hotkeySaveOrAdd from
-                             playersSelections, which the SIM gate (0x0049AF80) has already
-                             capped at ONE building. The client recall 0x00496B40 hands
-                             back that one, and the stock status row draws one.
-
-THREE ARMS, one game launch each -- the thing being varied is set at plugin-install time:
-
-  -Measure  the BEFORE picture. Runs every input path and reports what each layer holds
-            without asserting a fix: it is the evidence that names, per path, whether the
-            client refused, the simulation dropped, or only the display is wrong.
-            Deliberately assertion-light -- it asserts only the fixture and that each
-            input reached the engine at all.
-  (default) the feature: each path must select the whole same-type building group, and
-            the mixed cases must stay refused.
-  -Stock    %SCPLUGIN_BUILDING_GROUPS%=0. The same inputs on the same map and the same
-            binary select ONE building. Without this arm the feature arm's numbers have
-            nothing to fail against (AGENTS.md, "absence assertions must first be proved
-            positive").
-
-THE FIXTURE, generated at run time and deleted afterwards (generated maps are game
-content -- AGENTS.md hard rule 1):
-
-  building-parity.scx   6 Barracks (units.dat 111) 3x2 at 128 px owned by the human, plus
-                        6 Marines 512 px east ALSO owned by the human. Barracks because a
-                        production building is the one building type a plain right-click
-                        gives an order to (task 024 measured that a Missile Turret accepts
-                        none), and SIX because the whole block must fit on the battlefield
-                        with a margin: the generator lays a block out square-ish, so eight
-                        Barracks at the 128 px a 4x3-tile building needs span 304 client
-                        pixels vertically once a box margin is added, and the battlefield
-                        ends at y=340 with the camera centred -- measured, in the first run
-                        of this suite, as "the block is not fully on the battlefield". Six
-                        is also under the engine's twelve, which is what lets this suite
-                        assert "the ENGINE itself holds all of them" rather than only that
-                        the plugin does. The Marines are the MIXED arm: shift-clicking a
-                        building onto a unit selection must stay refused, and that needs
-                        units on the same map under the same owner.
-
-Frames are captured as a DIAGNOSTIC only and land outside the repo.
+unit_IsStandardAndMovable (0x0047B770) gates every selection path, not only the drag box:
+SortAllUnits 0x0046F0F0 at 0x0046F1A3 (double/ctrl-click), the click handler 0x0046FB40 at
+0x0046FD27/0x0046FD44 (shift-click ADD), combineSelectionsLists 0x0046F290 at
+0x0046F2C8/0x0046F2E8 (shift+box), and the SIM gate 0x0049AF80 that caps the control-group
+row at one (research/building-groups.md 8). Three arms, one launch each: -Measure reports
+every layer, asserting only the fixture and that each input reached the engine; the default
+asserts the feature; -Stock (%SCPLUGIN_BUILDING_GROUPS%=0) proves the same inputs select ONE
+building, so the feature arm has something to fail against (AGENTS.md "Absence assertions
+must first be proved positive"). Fixture, generated per run and deleted after (AGENTS.md hard
+rule 1): 6 Barracks plus 6 Marines for the mixed arm, both human-owned. Barracks because a
+production building takes a plain right-click order (a Missile Turret takes none); six because
+eight at 128 px span 304 client px vertically plus box margin and the battlefield ends at
+y=340 with the camera centred, and six is under the engine's twelve so "the ENGINE holds all
+of them" is assertable.
 
 .EXAMPLE
 ./tools/plugin/test-building-parity.ps1 -Measure
@@ -125,14 +82,11 @@ function Get-ScState {
     Get-ScUnitState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -TimeoutSec $TimeoutSec
 }
 
-# THE THREE-LAYER READ. Defined here rather than in drive-game.ps1 on purpose: task 035
-# owns that file this cycle, and a helper only this suite uses has no business racing it.
-#
-# `client` is clientSelectionGroup (0x00597208), which is what the STOCK status row draws;
-# `active` is activePlayerSelection (0x006284B8), the client's own selection; `sim` is
-# playersSelections[player] (0x006284E8), what the simulation holds and what every order
-# applier iterates. A symptom does not say which of the three refused, and these three
-# numbers do (research/building-groups.md 2-3).
+# THE THREE-LAYER READ. `client` is clientSelectionGroup (0x00597208), what the STOCK
+# status row draws; `active` is activePlayerSelection (0x006284B8), the client's own
+# selection; `sim` is playersSelections[player] (0x006284E8), what the simulation holds
+# and what every order applier iterates. A symptom does not say which of the three
+# refused; these three numbers do (research/building-groups.md 2-3).
 function Get-ScSelSnap {
     param([string]$Tag)
     $line = @(Get-Content -LiteralPath $script:LogPath -ErrorAction SilentlyContinue |
@@ -141,11 +95,9 @@ function Get-ScSelSnap {
     $m = [regex]::Match($line.Line,
         'client=(\d+) clientCount=(\d+) active=(\d+) sim=(\d+)')
     if (-not $m.Success) { throw "test: could not parse SELSNAP: $($line.Line)" }
-    # The POINTERS the engine is holding, not only how many. A step that must click a
-    # unit the engine has actually selected cannot use "the first one in the fixture":
-    # in the stock arm the box selects vanilla's own arbitrary choice, and clicking a
-    # different building takes the ADD branch instead of the REMOVE one and measures the
-    # wrong thing. Format matches Get-ScWorldState's `unit=0x...` so the two intersect.
+    # The POINTERS the engine holds, not only how many: a step that must click a unit the
+    # engine has selected picks from these. Format matches Get-ScWorldState's `unit=0x...`
+    # so the two intersect.
     $ptrLine = @(Get-Content -LiteralPath $script:LogPath -ErrorAction SilentlyContinue |
                  Select-String -Pattern 'SELSNAP activePlayerSelection') | Select-Object -Last 1
     $ptrs = @()
@@ -162,8 +114,8 @@ function Get-ScSelSnap {
 }
 
 # One read, both oracles, one marker: the plugin's shadow list AND the engine's three
-# arrays, taken at the same instant from the same marker (scplugin.cpp PollMarker writes
-# SELSNAP and UNITSTATE off the one trigger).
+# arrays at the same instant (scplugin.cpp PollMarker writes SELSNAP and UNITSTATE off
+# the one trigger).
 function Read-ScBoth {
     param([string]$Tag, [int]$TimeoutSec = 15)
     $u = Get-ScState $Tag $TimeoutSec
@@ -217,9 +169,9 @@ function Shot([string]$tag) {
     Save-ScWindowImage -Hwnd $script:hwnd -Path (Join-Path $ShotDir ("{0}-{1:d2}-{2}.png" -f $arm, $script:shotN, $tag)) -FullWindow | Out-Null
 }
 
-# Centre on a block and remember the viewport, so every later click can be aimed at a
-# REAL unit by converting its map position into a client coordinate (task 024's rule: a
-# hardcoded point is the defect that cost six runs in one day).
+# Centre on a block and remember the viewport, so every later click is aimed at a REAL
+# unit through its map position. A hardcoded client point is the defect that cost six
+# runs in one day.
 function Set-ScView {
     param(
         [Parameter(Mandatory)][int]$TileX, [Parameter(Mandatory)][int]$TileY,
@@ -264,16 +216,12 @@ function Select-ScUnitsByMap {
     return $true
 }
 
-# A DOUBLE CLICK, posted.
-#
-# The engine's own double-click state is one global, DAT_0066FF58, and it is written in
-# exactly one function (0x0046FF70, the mouse-event tick): the event type at +0xC is
-# compared against 6 and nothing else sets the flag. Type 6 is what the window procedure
-# hands to 0x004D1A50 for message 0x203 -- WM_LBUTTONDBLCLK -- so posting that message IS
-# the double click as far as every layer above the window procedure is concerned. The
-# click handler then requires the clicked unit to be ALREADY SELECTED
-# (sprite flags & 8, 0x0046FB6E), which is why the ordinary click comes first: that is
-# also the order Windows delivers a real double click in.
+# A DOUBLE CLICK, posted. The engine's double-click state is one global, DAT_0066FF58,
+# written only by the mouse-event tick (0x0046FF70) when the event type at +0xC is 6 --
+# the type the window procedure hands to 0x004D1A50 for WM_LBUTTONDBLCLK (0x203) -- so
+# posting that message IS the double click above the window procedure. The click handler
+# then requires the clicked unit to be ALREADY SELECTED (sprite flags & 8, 0x0046FB6E),
+# so the ordinary click comes first; that is also the order Windows delivers.
 function Send-ScDoubleClick {
     param([Parameter(Mandatory)][IntPtr]$Hwnd, [Parameter(Mandatory)][int]$X,
           [Parameter(Mandatory)][int]$Y, [int]$SettleMs = 1200)
@@ -294,9 +242,8 @@ function Get-ScSortLines {
 }
 
 function Show-SortLines {
-    # @() on the way in, not on the way out: a single Select-String match arrives here as
-    # a SCALAR (PowerShell unrolls a one-element array through a parameter), and `.Count`
-    # on that threw and took the first run of this suite down.
+    # @() on the way in: a single Select-String match arrives as a SCALAR (PowerShell
+    # unrolls a one-element array through a parameter) and `.Count` on it throws.
     param($Lines, [string]$What)
     $l = @($Lines)
     if ($l.Count -eq 0) { Write-Host "       $What`: NO SortAllUnits call reached the client funnel" }
@@ -389,9 +336,8 @@ try {
     }
 
     # ---------------------------------------------------------------------------
-    # BASELINE: the drag box, which task 024 shipped. It is here in every arm because
-    # every later step needs a building group to start from AND because "024 still
-    # works" is one of this task's acceptance criteria.
+    # BASELINE: the drag box, in every arm. Every later step needs a building group to
+    # start from, and the box must keep working alongside the click paths.
     # ---------------------------------------------------------------------------
     Step "BOX (task 024, the regression guard): a box over $BARRACKS_COUNT Barracks" {
         Set-ScView -TileX $script:barracksTile.X -TileY $script:barracksTile.Y -Tag 'aim-box' | Out-Null
@@ -425,9 +371,8 @@ try {
     # PATH 1 -- DOUBLE CLICK
     # ---------------------------------------------------------------------------
     Step 'PATH 1 -- DOUBLE-CLICK a Barracks' {
-        # Clear first: the double click's own precondition is that the clicked unit is
-        # already selected, and Send-ScDoubleClick's leading click is what does that. A
-        # click on empty ground is the reset, aimed away from both blocks.
+        # Click empty ground first, away from both blocks, so Send-ScDoubleClick's leading
+        # click is what selects the target (the double click's own precondition).
         Send-ScClick -Hwnd $hwnd -X 20 -Y 20
         Start-Sleep -Milliseconds 500
         $target = $script:barracks | Select-Object -First 1
@@ -527,10 +472,10 @@ try {
             (Select-ScUnitsByMap -Units $script:barracks)
         $before = Read-ScBoth 'remove-before'
         Show-Both $before 'boxed'
-        # Aim at a building the ENGINE is actually holding. In the stock arm the box
-        # leaves vanilla's own arbitrary one selected, and shift-clicking any OTHER
-        # building takes the add branch instead -- so "the first barracks in the fixture"
-        # would measure the wrong branch in exactly the arm that exists to be the control.
+        # Aim at a building the ENGINE is holding. In the stock arm the box leaves vanilla's
+        # own arbitrary one selected, and shift-clicking any OTHER building takes the add
+        # branch -- "the first barracks in the fixture" measures the wrong branch in
+        # exactly the arm that exists to be the control.
         $target = $script:barracks | Where-Object { $before.Sel.Units -contains $_.Unit.ToUpperInvariant() } |
                   Select-Object -First 1
         Assert-That "a selected building was found to shift-click off (engine holds $($before.Sel.Units.Count))" `
@@ -580,10 +525,9 @@ try {
     }
 
     # ---------------------------------------------------------------------------
-    # THE MIXED DECISION -- stated in research/building-groups.md 9 and asserted here.
-    # A building group is ONE TYPE. Shift-clicking a building onto a selection of
-    # UNITS, or a unit onto a building group, stays refused -- which is exactly what
-    # vanilla does today, so nothing regresses either way.
+    # THE MIXED DECISION (research/building-groups.md 9): a building group is ONE TYPE.
+    # Shift-clicking a building onto a selection of UNITS, or a unit onto a building
+    # group, stays refused -- which is what vanilla does, so nothing regresses either way.
     # ---------------------------------------------------------------------------
     Step 'MIXED -- shift-clicking a Barracks onto a MARINE selection stays refused' {
         Set-ScView -TileX ([int](($script:barracksTile.X + $script:marineTile.X) / 2)) `
@@ -600,19 +544,14 @@ try {
             Send-ScClick -Hwnd $hwnd -X $p.X -Y $p.Y -Shift -SettleMs 1200
             $after = Read-ScBoth 'mixed-after'
             Show-Both $after 'after shift-clicking a Barracks onto them'
-            # THE CLICK HAS TO BE PROVED TO HAVE LANDED (issue #70). `after.N -eq before.N`
-            # is EXACTLY what a click on empty ground produces, so the shipped assertion
-            # passed whether the engine refused the mix or the aim simply missed -- and the
-            # aim is computed from a world position through a screen transform, which is the
-            # likeliest thing here to go wrong.
-            #
-            # The refusal itself leaves nothing to read: the engine declines the mix
-            # client-side, so the selection does not change and no command goes out. The
-            # witness therefore has to be a POSITIVE CONTROL on the same point -- click it
-            # again WITHOUT shift and see whether a Barracks comes up. That runs after the
-            # reading above is taken, so it cannot disturb what it is corroborating, and the
-            # step ends here. (AGENTS.md: prove the pattern positive where it should match,
-            # then require it absent where it should not.)
+            # THE CLICK HAS TO BE PROVED TO HAVE LANDED. `after.N -eq before.N` is EXACTLY
+            # what a click on empty ground produces, and the aim is a world position through
+            # a screen transform, the likeliest thing here to go wrong. The refusal itself
+            # leaves nothing to read (declined client-side: no selection change, no command
+            # out), so the witness is a POSITIVE CONTROL on the same point: click it again
+            # WITHOUT shift and a Barracks must come up. It runs after the reading above, so
+            # it cannot disturb what it corroborates, and the step ends here (AGENTS.md
+            # "Absence assertions must first be proved positive").
             Send-ScClick -Hwnd $hwnd -X $p.X -Y $p.Y -SettleMs 1200
             $probe = Read-ScBoth 'mixed-aimcheck'
             Show-Both $probe 'the same point clicked WITHOUT shift -- the aim control'
@@ -650,11 +589,10 @@ try {
         if ($assign.Count -gt 0) {
             Write-Host "       $($assign[-1].Line.Trim())"
             $stored = [int][regex]::Match($assign[-1].Line, 'now holds (\d+)').Groups[1].Value
-            # The group stores whatever the SELECTION held, so the expectation is
-            # per-arm: with the feature off the box selected one building, and a group of
-            # one is the correct stock outcome. Asserting six here failed the stock arm
-            # for the feature working exactly as intended -- an assertion about the arm,
-            # not about the engine.
+            # The group stores whatever the SELECTION held, so the expectation is per-arm:
+            # with the feature off the box selected one building and a group of one is the
+            # correct stock outcome. Asserting six here fails the stock arm for the feature
+            # working as intended.
             if ($Stock) {
                 Assert-That "  with the feature off the group holds the one boxed building ($stored)" `
                     ($stored -eq 1)
@@ -663,23 +601,18 @@ try {
                 Assert-Feature "  the plugin stored all $BARRACKS_COUNT ($stored)" ($stored -eq $BARRACKS_COUNT)
             }
         }
-        # What the ENGINE stored, read from its own row -- this is the number that makes
-        # the recall able to give back only one, and it is a fact about the simulation
-        # gate rather than about the plugin.
+        # What the ENGINE stored, read from its own row: the number that lets the recall
+        # give back only one, a fact about the simulation gate rather than the plugin.
         $stampedAssign = Read-ScBoth 'group-assigned'
         Show-Both $stampedAssign 'after Ctrl+1'
 
-        # SELECT SOMETHING ELSE, rather than "clear". A left click on empty ground does
-        # NOT deselect in this engine and that is not a harness bug: the click handler
-        # returns immediately when resolveClickedUnit finds nothing (0x0046FB4B), and the
-        # drag-box handler returns when SortAllUnits reports an empty box (0x0046FA5E), so
-        # neither path touches the selection. The first run of this suite asserted "the
-        # selection really was cleared" against a click at (20,20) and read back all six
-        # still selected -- an assertion about the harness, failing honestly.
-        #
-        # Boxing the MARINES is a better precondition anyway: it is a selection with
-        # nothing in common with the group, on the other side of the map, so a recall that
-        # did nothing at all would leave marines behind and be unmistakable.
+        # SELECT SOMETHING ELSE, not "clear": a left click on empty ground does NOT deselect
+        # in this engine. The click handler returns when resolveClickedUnit finds nothing
+        # (0x0046FB4B) and the drag-box handler returns on an empty box (0x0046FA5E), so
+        # neither touches the selection; asserting "cleared" after a click at (20,20) reads
+        # back all six still selected. Boxing the MARINES is the better precondition anyway:
+        # nothing in common with the group, other side of the map, so a recall that did
+        # nothing would leave marines behind and be unmistakable.
         Set-ScView -TileX $script:marineTile.X -TileY $script:marineTile.Y -Tag 'aim-elsewhere' | Out-Null
         $elsewhere = @($script:marines | Where-Object { Test-ScOnBattlefield (Get-ScClientPoint $_) })
         Assert-That 'the marines are on screen to select instead' ($elsewhere.Count -gt 0)
@@ -729,14 +662,10 @@ try {
         Shot 'group-recalled'
 
         # AND THE ORDER: a recalled building group must still take one. The rally point is
-        # the oracle -- one histogram bucket over all of them, and it must have MOVED.
-        #
-        # "AND IT MUST HAVE MOVED" is what the comment always said, and what the assertion
-        # never checked (issue #70). One bucket + bucket == live is also true of buildings
-        # that were NEVER RALLIED: an unrallied building carries the same default packed
-        # rally value as every other, so they land in one bucket of their own accord. The
-        # before-reading is captured here so the assertion can require a change --
-        # test-building-groups.ps1:613 has this guard; this suite dropped it.
+        # the oracle: one histogram bucket over all of them, and it must have MOVED. One
+        # bucket + bucket == live is also true of buildings NEVER RALLIED (every unrallied
+        # building carries the same default packed rally value), so the before-reading is
+        # captured and the assertion requires a change.
         $rallyBefore = $back.Unit.RallyText
         $mark = Get-ScLogLineCount -LogPath $LogPath
         Send-ScClick -Hwnd $hwnd -X 60 -Y 40 -Right

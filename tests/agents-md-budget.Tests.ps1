@@ -1,19 +1,13 @@
 #Requires -Version 7
 <#
-AGENTS.md is loaded into every agent turn. Between 2026-08-06 and 2026-08-13 it grew from
-166 to 1229 lines by append-only incident journalling; the rules it carried were restated
-up to four times, buried 40-100 lines into stories, and contradicted by later appends.
-The file was rebuilt as a short topic-ordered rulebook (research/rulebook-history.md holds
-the old text). These checks keep it that way:
+AGENTS.md is loaded into every agent turn, so it must stay a short topic-ordered
+rulebook: append-only incident journalling buries the rules, restates them, and lets
+later appends contradict earlier ones. Incident detail belongs in the PR; the archived
+journal text lives in research/rulebook-history.md.
 
-  1. line budget (300)
-  2. no dates or task ids in headings (incident journalling goes in the PR, not here)
-  3. no vocabulary from the removed orchestration layer
-  4. every `research/rulebook-history.md § "..."` pointer names a heading that exists
-
-The positive control runs the same checks against the archive, which must FAIL them --
-otherwise this file is not testing anything (AGENTS.md: an absence assertion is worth
-nothing until the pattern has been shown to match somewhere it should).
+The positive control runs the same checks against the archive, which must FAIL them:
+an absence assertion is worth nothing until the pattern is shown to match somewhere it
+should (AGENTS.md § "Oracles: absence and defect-era checks").
 #>
 
 BeforeAll {
@@ -25,8 +19,8 @@ BeforeAll {
     function Get-AgentsMdViolations {
         param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$ArchivePath)
         $v = [System.Collections.Generic.List[string]]::new()
-        # A missing file must be a violation, not an empty list -- Get-Content's
-        # non-terminating error left $lines null and this test green once already.
+        # A missing file must be a violation, not an empty list: an empty $lines trips
+        # no check below, leaving this test green having read nothing.
         if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { $v.Add("missing: $Path"); return $v }
         $lines = @(Get-Content -LiteralPath $Path -ErrorAction Stop)
 

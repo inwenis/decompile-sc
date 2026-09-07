@@ -50,21 +50,19 @@ except ImportError:  # pragma: no cover
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_EXE = r"C:\sc-work\1161-base\StarCraft.exe"
 
-# The stock geometry every site below is declared against. A site whose current
-# bytes do not carry the stock value is refused, which is what makes this table
-# specific to 1.16.1 rather than hopeful.
+# The stock geometry every site below is declared against: a site whose current
+# bytes do not carry the stock value is refused, which pins the table to 1.16.1.
 STOCK_W = 640
 STOCK_H = 480
 STOCK_PF_H = 400          # playfield height; the console occupies 400..479
 STOCK_TERRAIN_PITCH = 672  # 640 + 32, one tile of margin
 STOCK_TERRAIN_ROWS = 448   # 400 + 48
 STOCK_BLOCK = 16           # dirty-grid block size, both axes
-STOCK_COLS = STOCK_W // STOCK_BLOCK   # 40
-STOCK_ROWS = STOCK_H // STOCK_BLOCK   # 30
+STOCK_COLS = STOCK_W // STOCK_BLOCK
+STOCK_ROWS = STOCK_H // STOCK_BLOCK
 
-# Longest single rewrite the plugin's record can hold. The reordered windows that
-# fix the EFLAGS hazard are the long ones -- 0x0042D2C7 swallows three unrelated
-# stores between the compare and the branch.
+# Longest single rewrite the plugin's record can hold. The EFLAGS-hazard reorder
+# windows are the long ones: 0x0042D2C7 swallows three stores between cmp and jg.
 SC_MAX_PATCH_LEN = 32
 # Longest code cave (Builder.cave): the window's instructions re-encoded with
 # 32-bit fields, WITHOUT the jmp back (the plugin appends that).
@@ -138,9 +136,7 @@ def fmt(ins) -> str:
     return "%s %s" % (ins.mnemonic, ins.op_str)
 
 
-# ---------------------------------------------------------------------------
-# Patch records
-# ---------------------------------------------------------------------------
+# --------------------------- Patch records ---------------------------------
 
 class Patch:
     """One instruction-level rewrite.
@@ -157,11 +153,9 @@ class Patch:
         assert len(expect) == len(patch), name
         assert len(patch) <= SC_MAX_PATCH_LEN,             "%s: %d-byte rewrite exceeds SC_MAX_PATCH_LEN" % (name, len(patch))
         assert cave is None or len(cave) <= SC_MAX_CAVE_LEN,             "%s: %d-byte cave exceeds SC_MAX_CAVE_LEN" % (name, len(cave) if cave else 0)
-        # A site whose stock value is already correct for the chosen geometry --
-        # every 480/400 site when only the width changes. Kept in the evidence
-        # table (it is still a site the map has to name) but not handed to the
-        # plugin: writing a byte back over itself is a patch that can only ever
-        # go wrong.
+        # A site already correct for the chosen geometry (every 480/400 site when
+        # only the width changes). Kept in the evidence table but never handed to
+        # the plugin: writing a byte back over itself can only ever go wrong.
         self.noop = (expect == patch and fixup_off is None and cave is None)
         self.va = va
         self.expect = expect
@@ -186,7 +180,6 @@ class Builder:
         self.errors: list[str] = []
         self.warnings: list[str] = []
 
-    # -- immediate rewrite ---------------------------------------------------
     # -- flags safety --------------------------------------------------------
     def check_flags(self, p: "Patch"):
         self.check_flags_bytes(p.name, p.va, p.expect, p.patch)
@@ -214,11 +207,9 @@ class Builder:
         orig_writes = any(touches_flags(i)[1] for i in orig)
         new_writes = any(touches_flags(i)[1] for i in new)
         if orig_writes and new_writes:
-            # Both write flags, but not necessarily the SAME flags: changing
-            # `shl r,3` to `shl r,1` changes SF/ZF/CF as well as the result. Only
-            # a warning, because the window may legitimately contain the setter
-            # a downstream branch wants (the reorder case) -- but every one of
-            # these gets read by a human before the table ships.
+            # Both write flags, but not necessarily the SAME flags: `shl r,3` ->
+            # `shl r,1` changes SF/ZF/CF too. Only a warning, because a reorder
+            # window legitimately holds the setter a downstream branch wants.
             if [fmt(i) for i in orig] != [fmt(i) for i in new]:
                 after = self.img.read(p.va + len(p.expect), 64)
                 for ins in disasm_all(p.va + len(p.expect), after):
@@ -234,13 +225,12 @@ class Builder:
             return
         if not new_writes:
             return
-        # NOTE the exemption is `orig_writes`, above, and nothing else. An earlier
-        # version of this check also exempted a window whose LAST instruction sets
-        # flags, reasoning that a deliberate reorder puts the setter last -- which
-        # exempted every single-instruction `lea`->`imul` swap, i.e. exactly the
-        # sites the check exists for, and it reported a clean table over a broken
-        # game. A reorder is safe because the window then CONTAINS the original
-        # `cmp`, which makes `orig_writes` true on its own; it needs no second rule.
+        # The ONLY exemption is `orig_writes`, above. Do not also exempt a window
+        # whose LAST instruction sets flags on the theory that a reorder puts the
+        # setter last: that exempts every single-instruction `lea`->`imul` swap,
+        # i.e. exactly the sites this check exists for, and reports a clean table
+        # over a broken game. A reorder is already covered, because its window
+        # CONTAINS the original `cmp` and so makes `orig_writes` true on its own.
         after = self.img.read(p.va + len(p.expect), 64)
         for ins in disasm_all(p.va + len(p.expect), after):
             reads, writes = touches_flags(ins)
@@ -285,10 +275,9 @@ class Builder:
                                % (name, va, new, width))
             return
         # A ONE-BYTE field is SIGN-EXTENDED by every encoding this table declares
-        # (imm8 of 83/6B/6A, disp8 of a ModRM), so a value above 127 ships as a
-        # NEGATIVE. This check used to be unsigned only: regenerated at W=960 the
-        # fog cell stride 128 became `add edx,-0x80` with 0 errors reported. Shift
-        # counts (C1 /n ib) are the one unsigned imm8 and never exceed 31 anyway.
+        # (imm8 of 83/6B/6A, disp8 of a ModRM), so a value above 127 ships NEGATIVE:
+        # an unsigned-only bound passes the W=960 fog cell stride 128 as
+        # `add edx,-0x80` with 0 errors. Shift counts (C1 /n ib) never exceed 31.
         if width == 1 and new > 127:
             self.errors.append("%s @0x%08X: new value %d does not fit a SIGN-EXTENDED byte "
                                "(it would ship as %d) -- use cave()" % (name, va, new, new - 256))
@@ -426,8 +415,7 @@ class Builder:
                         return
             pos += ins.size
         # What the plugin writes over the window: jmp rel32 (filled at runtime)
-        # + NOPs. Never executed past the jmp; NOP rather than int3 so a stray
-        # landing is harmless rather than a breakpoint.
+        # + NOPs -- NOP rather than int3 so a stray landing is harmless.
         window = b"\xE9\0\0\0\0" + b"\x90" * (len(expect) - 5)
         p = Patch(va, expect, window, name, stage, note,
                   before=" ; ".join(fmt(i) for i in orig),
@@ -465,18 +453,15 @@ class Builder:
                                   after="%s [grid+0x%X]" % (ins.mnemonic, addend)))
 
 
-# ---------------------------------------------------------------------------
-# The site table
-# ---------------------------------------------------------------------------
+# --------------------------- The site table --------------------------------
 
 def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     PF_W = W                       # the playfield spans the full width
     TERRAIN_PITCH = PF_W + 32      # stock: 640 + 32
     TERRAIN_SIZE = TERRAIN_PITCH * STOCK_TERRAIN_ROWS
     COLS = W // STOCK_BLOCK
-    # ROUNDED UP: a height that is not a multiple of the 16-pixel block still needs
-    # a row for the partial one, and the engine's `y >> 4` will index it. 480 gives
-    # 30 exactly; 600 gives 38, not 37.
+    # ROUNDED UP: a partial block row still needs a row and the engine's `y >> 4`
+    # indexes it. 480 gives 30 exactly; 600 gives 38, not 37.
     ROWS = (H + STOCK_BLOCK - 1) // STOCK_BLOCK
     GRID_BYTES = COLS * ROWS
 
@@ -486,13 +471,10 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     b = Builder(img, geom)
 
     # =====================================================================
-    # STAGE 0 -- the display mode, and nothing else.
-    #
-    # §9.3's cheapest possible falsification: does the presentation half come
-    # up at all at a non-640x480 mode? Everything the engine renders is still
-    # 640x480 after this, so the expected outcome is a small image in the
-    # corner of a bigger one.
-    # =====================================================================
+    # STAGE 0 -- the display mode, and nothing else. §9.3's cheapest possible
+    # falsification: does the presentation half come up at all at a non-640x480
+    # mode? Everything the engine renders is still 640x480 after this, so the
+    # expected outcome is a small image in the corner of a bigger one.
     b.imm(0x0041DA3D, STOCK_H, H, 4, "displaymode.height", 0,
           "IDirectDraw::SetDisplayMode height")
     b.imm(0x0041DA42, STOCK_W, W, 4, "displaymode.width", 0,
@@ -504,7 +486,6 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
 
     # =====================================================================
     # STAGE 1 -- the screen surface itself.
-    # =====================================================================
 
     # -- the one framebuffer and its descriptor (§2, item 2) ---------------
     b.imm(0x004DB077, STOCK_W * STOCK_H, W * H, 4, "screenbuffer.alloc", 1,
@@ -517,9 +498,8 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
           "screenBitmap.width, second writer (gds\\image.cpp 0x0041E050)")
     b.imm(0x0041E084, STOCK_H, H, 2, "screenbitmap.height.image", 1,
           "screenBitmap.height, second writer")
-    # A THIRD allocate-and-describe site, not in 032's table -- found by this
-    # task's own sweep. It is a second copy of the video init, same file and
-    # same line number (vidinimo.cpp:0x37), and it allocates its own buffer.
+    # A THIRD allocate-and-describe site: a second copy of the video init, same
+    # file and same line number (vidinimo.cpp:0x37), allocating its own buffer.
     b.imm(0x0041DDD9, STOCK_W * STOCK_H, W * H, 4, "screenbuffer.alloc.third", 1,
           "SMemAlloc size, THIRD copy of the video init (new in task 034)")
     b.imm(0x0041DDDE, STOCK_W, W, 2, "screenbitmap.width.third", 1,
@@ -535,13 +515,12 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     b.imm(0x0041D531, STOCK_W, W, 4, "storm.region.width", 2,
           "Ordinal_440 width; the same call passes the 16x16 block size")
 
-    # -- the screen FILL helper 0x0041D3A0 (new in task 034) ---------------
+    # -- the screen FILL helper 0x0041D3A0 ---------------------------------
     # The composer's whole-screen-clear branch calls this. It carries the screen
     # pitch TWICE, and only one of them is an immediate: the other is
     # `lea edi,[eax+eax*4]; shl edi,7`, i.e. y*5<<7 == y*640. An immediate sweep
-    # is blind to that shape, which is why 032's table does not have it and why
-    # this task went looking for it (work/scratch/034/scan_mul.py found four
-    # such multiplies in the whole binary; the other three are stage 2 fog).
+    # is blind to that shape. Four such multiplies exist in the whole binary;
+    # the other three are the fog's framebuffer rowmuls below.
     b.imm(0x0041D3D9, STOCK_W, W, 4, "fillscreen.pitch.imm", 1,
           "0x0041D3A0: destination pitch passed to the fill")
     assert W % 32 == 0, "the x(W/32)<<5 rewrite needs a width that is a multiple of 32"
@@ -578,41 +557,36 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     b.imm(0x0041E122, STOCK_H - 1, H - 1, 4, "dirty.clamp.y2.set", 2, "y2 = 479")
 
     # -- layer 2, the dialog layer (item 16) -------------------------------
-    # Stage 1 rather than stage 4: the composer clips every layer to the screen
-    # and a dialog layer still 640 wide would clip the cursor layer's redraw of
-    # the right-hand strip.
+    # Stage 1 rather than stage 4: the composer clips every layer to the screen,
+    # and a dialog layer still 640 wide clips the cursor layer's redraw of the
+    # right-hand strip.
     b.imm(0x0041A049, STOCK_W, W, 2, "layer2.width", 2, "dialog layer width")
     b.imm(0x0041A052, STOCK_H, H, 2, "layer2.height", 2, "dialog layer height")
 
-    # -- the copier's DESTINATION pitch (new in task 034) ------------------
+    # -- the copier's DESTINATION pitch ------------------------------------
     # 0x0040C2BD computes the destination address from the screen Bitmap
     # descriptor, so it follows the new width for free -- but the row step
-    # inside the copy loop it calls is a hardcoded 640. Not in 032's §8 table;
-    # without it every terrain row lands one row-fragment further left.
+    # inside the copy loop it calls is a hardcoded 640, and without it every
+    # terrain row lands one row-fragment further left.
     b.imm(0x0040C247, STOCK_W, W, 4, "copyrun.destpitch", 1,
           "row step of the scratch->screen copy loop (new in task 034)")
 
     # -- fog: FRAMEBUFFER ADDRESSING, which is stage 1, not stage 2 --------
+    # The rule that sorts these: a site that computes an address INTO THE
+    # FRAMEBUFFER moves when the framebuffer widens (stage 1); a site that CLIPS
+    # to the playfield moves when the playfield widens (stage 2). Fog has both,
+    # and at 800x480 they are the same number, so nothing in the source
+    # distinguishes them -- only a live run does. Scanning .text for the
+    # framebuffer pointer 0x006CEFF4 finds 19 instructions; three of them --
+    # 0x0047EDCC, 0x0047EF35, 0x00480631 -- are immediately followed by a
+    # `lea r,[y+y*4]` + `shl r,7`, i.e. y*640 into the frame. Left in stage 2 the
+    # fog writes every row at the old pitch and the playfield comes out sheared
+    # while the descriptor, the layer rects and the HUD all read correctly.
     #
-    # These were in stage 2 with the rest of the fog and that was WRONG, in a way
-    # a live run caught and no amount of reading would have. The rule that sorts
-    # them is: a site that computes an address INTO THE FRAMEBUFFER moves when the
-    # framebuffer widens (stage 1); a site that CLIPS to the playfield moves when
-    # the playfield widens (stage 2). Fog has both, and at 800x480 they are the
-    # same number, so nothing in the source distinguishes them.
-    #
-    # Found by scanning .text for the framebuffer pointer 0x006CEFF4, which finds
-    # 19 instructions. Three of them -- 0x0047EDCC, 0x0047EF35, 0x00480631 -- are
-    # immediately followed by a `lea r,[y+y*4]` + `shl r,7`, i.e. y*640 into the
-    # frame. Left at stage 1 the fog wrote every row at the old pitch, and the
-    # playfield came out sheared while the descriptor, the layer rects and the HUD
-    # all still read correctly.
-    #
-    # THAT SCAN IS NOT AN EXHAUSTIVE ENUMERATION, and an earlier version of this
-    # comment claimed it was. "Every routine that writes the framebuffer must load
-    # 0x006CEFF4" is false: a routine that is HANDED the pointer by its caller
-    # writes the framebuffer without ever naming it. The block writers below are
-    # exactly that, and the first stage-1 run failed because of them.
+    # THAT SCAN IS NOT AN EXHAUSTIVE ENUMERATION. "Every routine that writes the
+    # framebuffer must load 0x006CEFF4" is false: a routine that is HANDED the
+    # pointer by its caller writes the framebuffer without ever naming it. The
+    # block writers below are exactly that.
     for lea_va, lea_hex, imul_hex, shl_va in [
         (0x0047EDD3, "8d0c89", "6bc9", 0x0047EDD6),
         (0x0047EF3A, "8d0cb6", "6bce", 0x0047EF3D),
@@ -626,58 +600,46 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
                "fog: shl ecx,7 -> shl ecx,5, so y*%d<<5 == y*%d" % (MUL32, W))
     # FUN_0047EA60 is the routine all three of those callers hand a framebuffer
     # address to, and it holds the pitch itself: `mov esi,640; sub esi,ebx`, i.e.
-    # "row step = pitch - run width". Left at 640 it walked the shroud down the
-    # frame at the old stride while everything else used the new one -- and
-    # because the shroud is only drawn at the edges of an explored map, the damage
-    # was a frame around the playfield with the middle perfectly intact. That is
-    # what made it survive a centre-weighted look and what the block map found.
+    # "row step = pitch - run width". Left at 640 it walks the shroud down the
+    # frame at the old stride, and because the shroud is only drawn at the edges
+    # of an explored map the damage is a frame around the playfield with the
+    # middle intact -- invisible to a centre-weighted look, plain in a block map.
     b.imm(0x0047EA6B, STOCK_W, W, 4, "fog.rowpitch.writer", 1,
           "FUN_0047EA60: dest row step is (pitch - run width) -- FRAMEBUFFER pitch")
-    # The inner blend loops step one framebuffer row at a time.
     for va in (0x0047FFDE, 0x00480087):
         b.imm(va, STOCK_W, W, 4, "fog.rowstep@%08X" % va, 1,
               "fog blend loop: advance one FRAMEBUFFER row")
 
     # -- fog, the 8x8 BLOCK GRID: the sites the pointer scan cannot reach ----
-    #
     # FUN_00480600 draws fog in 8x8 blocks over the framebuffer: `add ecx,8` per
     # column (0x004806B7) and one row of blocks per outer turn. For each block it
     # calls one of three writers with ecx as the destination -- FUN_0047FF10 and
     # FUN_00480000 step with `add esi,640` (declared above), and FUN_004800A0,
     # the fully-shrouded case, is UNROLLED and holds its pitch as fourteen
-    # displacements.
-    #
-    # This is the third syntactic shape of §12.5's rule (a stride is a number that
-    # describes a layout without pointing at it) and the one that hid best:
-    #
-    #   * `mov [ecx + k*640], eax` for k=1..7 -- only k=1 spells 640 at all; the
-    #     rest are 1280, 1920, 2560, 3200, 3840, 4480, which no sweep for the
-    #     pitch's own value will match;
-    #   * and each row's SECOND dword is at k*640 + 4, which is not a multiple of
-    #     the pitch at all. A sweep that looked only for multiples found seven of
-    #     these fourteen instructions and would have shipped half a fix.
-    #
-    # Missing them put every shrouded 8x8 block in the wrong row of an 800-pitch
-    # frame, which is why the first stage-1 run came back with the EXPLORED area
-    # pixel-perfect and everything under fog wrong -- 163 of 190 interior rows.
+    # displacements. It is §12.5's rule (a stride is a number that describes a
+    # layout without pointing at it) in its best-hidden shape:
+    # `mov [ecx + k*640], eax` for k=1..7 spells 640 only at k=1, the rest being
+    # 1280, 1920, 2560, 3200, 3840, 4480; and each row's SECOND dword sits at
+    # k*640 + 4, no multiple of the pitch at all, so a multiples-only sweep finds
+    # seven of the fourteen and ships half a fix. Missing them puts every
+    # shrouded 8x8 block in the wrong row of an 800-pitch frame: the EXPLORED
+    # area pixel-perfect and everything under fog wrong, 163 of 190 interior rows.
     FOG_BLOCK_CLEAR = 0x004800B4          # first of 14 x 6-byte stores
     for i in range(14):
         k, d = 1 + i // 2, (i % 2) * 4
         b.imm(FOG_BLOCK_CLEAR + 6 * i, STOCK_W * k + d, W * k + d, 4,
               "fog.blockclear.r%d%s" % (k, "hi" if d else "lo"), 1,
               "FUN_004800A0: shrouded 8x8 block, row %d of 8 at (pitch*%d)+%d" % (k, k, d))
-    # The outer loop advances a whole block row: 8 * pitch.
     b.imm(0x004806D0, STOCK_W * 8, W * 8, 4, "fog.blockrowstep", 1,
           "fog draw: advance 8 FRAMEBUFFER rows (one block row)")
 
     # -- the dirty grid (item 5): relocation ------------------------------
     # 0x006CEFF8's u8[30][40] cannot grow in place -- 0x006CF4A8 is the live
     # render-target pointer, and 126 instructions name it. So the grid moves to
-    # plugin-owned memory and every absolute reference is re-pointed. The
-    # references were enumerated by scanning .text for the encoded address
-    # (work/scratch/034/scan_refs.py): 21 in total, not the 62 instructions
-    # 032 counted -- that count included register-derived accesses inside loops,
-    # which follow the base they were loaded from.
+    # plugin-owned memory and every absolute reference is re-pointed. A .text
+    # scan for the encoded address finds 21 of them; register-derived accesses
+    # inside loops are not among them, since they follow the base they were
+    # loaded from.
     GRID = 0x006CEFF8
     for va, note in [
         (0x0041D755, "drawing gate 0x0041D710: clear all"),
@@ -692,8 +654,7 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     ]:
         b.rebase(va, GRID, 0, "grid.base@%08X" % va, 2, note)
 
-    # References that name a ROW rather than the array: their offset is
-    # recomputed for the new stride instead of carried across.
+    # References that name a ROW: the offset is recomputed, never carried across.
     b.rebase(0x0048CC00, 0x006CF03A, 1 * COLS + 26, "grid.row1col26", 2,
              "0x0048CB80 names grid[row 1][col 26]; recomputed for the new stride")
     b.rebase(0x004B2314, 0x006CF2C8, 18 * COLS, "grid.row18", 2,
@@ -701,26 +662,21 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     # ...and the BYTE COUNT that fill uses is stride arithmetic too:
     # `lea ecx,[eax+eax*4-0x55]` then `shl ecx,3` is 40*(row-17), i.e. "every row
     # from 18 down to `row`". Re-pointing the base without rebuilding the count
-    # would fill 40 bytes per row of a 50-byte row and leave the right of every
-    # one of them unmarked -- a missed redraw, not a crash, which is the kind
-    # that survives into a screenshot.
+    # fills 40 bytes of a 50-byte row and leaves the right of every one unmarked
+    # -- a missed redraw, not a crash, which is the kind that reaches a screenshot.
     assert COLS <= 127, "imul r32,r/m32,imm8 needs the column count to fit a signed byte"
     b.code(0x004B2303, "8d4c80ab" "c1e103",
            "8d48ef" + "6bc9" + bytes([COLS]).hex() + "90",
            "grid.row18.count", 2,
            "0x004B1FA0: ecx = (row - 17) * %d, was (row - 17) * %d" % (COLS, STOCK_COLS))
-    # The same function's sibling at 0x0048CB80 walks rows with an explicit step.
     b.imm(0x0048CC1F, STOCK_COLS, COLS, 1, "grid.rowstep.48CB80", 2,
           "0x0048CB80: next row of the grid is +40 bytes")
-    # 0x0048CB80's OTHER branch (task 064): the 21st named grid reference, found
-    # by 034's scan_refs (which counted "three name a row") and lost between the
-    # scan and the table -- the table carried only two row rebases. It fills grid
+    # 0x0048CB80's OTHER branch: the 21st named grid reference. It fills grid
     # rows 18..N with 1s via rep stos, naming grid[row 18][0] absolutely and
     # holding the byte count as the same `lea ecx,[eax+eax*4-0x55]; shl ecx,3`
-    # == 40*(row-17) shape 034 already patched at 0x004B2303. Left stock, these
-    # dirty marks land in the DEAD relocated-away array: missed console-band
-    # redraws that render rather than crash. Two copies of the shape exist in
-    # .text (byte-pattern scan, task 064); both are now declared.
+    # == 40*(row-17) shape as 0x004B2303. Left stock, these dirty marks land in
+    # the DEAD relocated-away array: missed console-band redraws that render
+    # rather than crash. Two copies of the shape exist in .text; both are here.
     b.rebase(0x0048CBC7, 0x006CF2C8, 18 * COLS, "grid.row18.b", 2,
              "0x0048CB80 branch 1 names grid[row 18][col 0]; recomputed for the new stride")
     b.code(0x0048CBB5, "8d4c80ab" "c1e103",
@@ -728,35 +684,29 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
            "grid.row18.count.b", 2,
            "0x0048CB80: ecx = (row - 17) * %d, was (row - 17) * %d -- the twin of "
            "grid.row18.count" % (COLS, STOCK_COLS))
-    # 0x0042D280 fills a row and then steps to the next one the same way. Found by
-    # sweeping every grid-touching function for stride-shaped operands rather than
-    # for the grid's address -- a stride names no address, so the relocation pass
-    # cannot see it (see the "damage that renders" note in the doc's 12.5).
+    # 0x0042D280 fills a row and steps to the next the same way. A stride names no
+    # address, so the relocation pass cannot see it: only a sweep for stride-shaped
+    # operands finds it (§12.5, the "damage that renders" note).
     b.imm(0x0042D305, STOCK_COLS, COLS, 1, "grid.rowstep.42D280", 2,
           "0x0042D280: next row of the grid is +40 bytes")
 
     # Row addressing: `lea r,[c+c*4]` (x5) feeding a SIB scale of 8 gives the
-    # stock stride of 40. For 50 the multiply becomes x25 and the scale becomes
-    # x2 -- a 3-byte-for-3-byte swap plus one SIB nibble, which is why the
-    # stride is reachable at all.
+    # stock stride of 40; for 50 the multiply becomes x25 and the scale x2 -- a
+    # 3-byte-for-3-byte swap plus one SIB nibble, which is why 50 is reachable.
     assert COLS % 2 == 0, "the x25/scale-2 rewrite needs an even column count"
     HALF = COLS // 2
     assert HALF <= 127, "imul r32,r/m32,imm8 needs the half-stride to fit a signed byte"
 
-    # 0x0041E0D0, the dirty marker.
-    #
-    # THE WINDOW INCLUDES THE `cmp` AND THE `jg` ON PURPOSE. `lea` leaves EFLAGS
-    # alone and `imul` does not, and here a `cmp ecx,esi` two bytes earlier is
-    # consumed by a `jg` five bytes later. Splicing the multiply between them --
-    # which is what the first version of this table did -- makes the marker branch
-    # on the multiply's flags, so whole bands of blocks are never marked dirty and
-    # never redrawn. The frame comes out shredded while every read-back still says
-    # 800x400, because the layer rect is the plugin's bookkeeping and the pixels
-    # are the engine's result.
-    #
-    # The fix is a reorder, not a longer sequence: the same 14 bytes hold
-    # imul / lea / cmp / jg, the `jg` keeps its address so its rel8 is unchanged,
-    # and the flag setter is now the last thing before the branch that reads it.
+    # 0x0041E0D0, the dirty marker. THE WINDOW INCLUDES THE `cmp` AND THE `jg`
+    # ON PURPOSE: `lea` leaves EFLAGS alone and `imul` does not, and here a
+    # `cmp ecx,esi` two bytes earlier is consumed by a `jg` five bytes later.
+    # Splicing the multiply between them makes the marker branch on the
+    # multiply's flags, so whole bands of blocks are never marked dirty and never
+    # redrawn -- a shredded frame while every read-back still says 800x400,
+    # because the layer rect is the plugin's bookkeeping and the pixels are the
+    # engine's result. So: a reorder, not a longer sequence. The same 14 bytes
+    # hold imul / lea / cmp / jg, the `jg` keeps its address so its rel8 is
+    # unchanged, and the flag setter is the last thing before the branch.
     b.code(0x0041E15B,
            "3bce" "8d0489" "8d9cc7f8ef6c00" "7f2a",
            "6bc1" + bytes([HALF]).hex() + "8d9c47" + "00000000" + "3bce" "7f2a",
@@ -767,7 +717,6 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     b.imm(0x0041E18A, STOCK_COLS, COLS, 1, "grid.rowstep.marker", 2,
           "dirty marker: next row is +40 bytes")
 
-    # 0x0041DE20, the "is this rectangle dirty" test.
     b.code(0x0041DE4E, "8d0489", "6bc1" + bytes([HALF]).hex(),
            "grid.stride.testrect", 2, "0x0041DE20: eax = row * 25")
     b.code(0x0041DE51, "8d9cc6f8ef6c00", "8d9c46" + "00000000",
@@ -798,12 +747,10 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
           "0x00497000: columns per row")
 
     # 0x0047EBF0, the scrolled fog arm. Three separate row computations feed five
-    # reads of the grid. These are grid references, so they belong to stage 1 with
-    # the relocation -- NOT to stage 2 with the rest of the fog geometry. Leaving
-    # them behind is a bug that hides at the main menu and only appears in game:
-    # the fog would go on reading an array nothing writes any more, so it would
-    # believe the screen was never dirty. (Found exactly that way: stage 1 passed
-    # its menu-only run with these missing.)
+    # reads of the grid, so they belong with the relocation, not with the rest of
+    # the fog geometry. Left behind, the fog goes on reading an array nothing
+    # writes any more and believes the screen is never dirty -- a bug that hides
+    # at the main menu and only appears in game.
     b.code(0x0047ECEB, "8d3c80", "6bf8" + bytes([HALF]).hex(),
            "grid.stride.fog.a", 2, "0x0047EBF0: edi = row * 25")
     b.code(0x0047ECF9, "8a94f8f8ef6c00", "8a9478" + "00000000",
@@ -833,7 +780,7 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
            "grid.rowaddr.fog.c2", 2, "0x0047EBF0: [eax + edx + grid]",
            fixup_off=3, fixup_addend=0)
 
-    # The three `rep stosd` clears of the whole grid: 300 dwords -> COLS*ROWS/4.
+    # The `rep stosd` clears of the whole grid: 300 dwords -> COLS*ROWS/4.
     assert GRID_BYTES % 4 == 0, "the grid clears are dword-granular"
     for va, note in [
         (0x0041D750, "drawing gate 0x0041D710"),
@@ -846,16 +793,14 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
               "grid.clearcount@%08X" % va, 2, note + ": rep stosd count")
 
     # =====================================================================
-    # STAGE 2 -- the playfield geometry. 9.3 calls this "the stage that can
-    # actually look wrong", and it is where the count stops being the problem
-    # and the SHAPE of each site starts being the problem.
-    # =====================================================================
+    # STAGE 2 -- the playfield geometry: 9.3's "stage that can actually look
+    # wrong", where the SHAPE of a site matters more than the count of them.
 
     # -- item 8: the terrain scratch surface -------------------------------
     # A second fixed-size buffer, 672x448, allocated at 0x004BD745 into
-    # 0x00628454 (task 032 3 10 item 3 records its producer as unread; it is
-    # 0x0040AAE0, and the family around it). Its pitch and its wrap size are
-    # immediates in the routines that read AND write it, so both move together.
+    # 0x00628454; its producer is 0x0040AAE0 and the family around it. Its pitch
+    # and its wrap size are immediates in the routines that read AND write it,
+    # so both move together.
     b.imm(0x004BD745, STOCK_TERRAIN_PITCH * STOCK_TERRAIN_ROWS, TERRAIN_SIZE, 4,
           "terrain.alloc", 2, "SMemAlloc size of the terrain scratch surface")
 
@@ -863,24 +808,22 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
         (0x0040AAFE, "terrain WRITER 0x0040AAE0: row stride"),
         (0x0040C23A, "scratch->screen copy: source row step"),
         (0x0040C240, "scratch->screen copy: source offset row step"),
-        # FOUR of these run-writers exist, not two. 0x0040C495 and 0x0040C4C4
-        # were found by tools/renderer_pitch_sweep.py --pitch 672, and the way
-        # they hid is worth naming: each of the four is an 8-row loop whose WRAP
-        # test (`cmp edx,0x49800` / `sub edx,0x49800`) was declared and whose row
-        # STEP was not, so the surface size was right everywhere and the stride
-        # was right in half the writers. Terrain went into the wrong rows of the
-        # scratch surface, which is every pixel of the playfield rather than an
-        # edge case -- stage 2's first run came back with 332 of 380 rows damaged
-        # and 16 points more black than the control.
+        # FOUR of these run-writers exist, not two. Each is an 8-row loop whose
+        # WRAP test (`cmp edx,0x49800` / `sub edx,0x49800`) is easy to spot and
+        # whose row STEP is not, so declaring the wraps alone gets the surface
+        # size right everywhere and the stride right in half the writers: terrain
+        # lands in the wrong rows of the scratch surface, which is every pixel of
+        # the playfield -- 332 of 380 rows damaged, 16 points more black than the
+        # control. `tools/renderer_pitch_sweep.py --pitch 672` is what enumerates
+        # all four: it flags every stride-shaped operand this table leaves
+        # undeclared.
         (0x0040C402, "scratch writer (8-pixel run, forward): row step"),
         (0x0040C44C, "scratch writer (8-pixel run, forward): row step"),
         (0x0040C495, "scratch writer (8-pixel run, reverse): row step"),
         (0x0040C4C4, "scratch writer (8-pixel run, forward 2): row step"),
         (0x004BCDD1, "terrain blitter: screenTop * pitch"),
-        # Four more of the same multiply in the scroll band. The first sweep for
-        # 0x2A0 truncated its output before these; a second pass with a general
-        # multiplier dataflow (work/scratch/034/scan_mul2.py) found them by shape
-        # rather than by immediate, which is why they are here and not lost.
+        # Four more of the same multiply in the scroll band, reachable only by a
+        # multiplier-dataflow sweep: by shape, not by the immediate 0x2A0.
         (0x0049BC51, "scroll: row * terrain pitch"),
         (0x0049BD70, "scroll: row * terrain pitch"),
         (0x0049BE2C, "scroll: row * terrain pitch"),
@@ -894,9 +837,9 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     # 0x0040C27E (ebx), 0x0040C281 (ecx), summed after. No 672 appears in that
     # function, so neither an immediate sweep nor a lea+shl scan finds it -- and
     # it positions every terrain row the non-dirty path draws. Any pitch that is
-    # a sum of exactly three powers of two survives as three one-byte count
-    # edits (832 = 9,8,6; 1312 = 10,8,5); anything else would need the block
-    # rewritten, which is what the assert says.
+    # a sum of exactly three powers of two survives as three one-byte count edits
+    # (832 = 9,8,6; 1312 = 10,8,5); anything else needs the block rewritten,
+    # which is what the assert says.
     bits = [i for i in range(32) if (TERRAIN_PITCH >> i) & 1]
     assert len(bits) == 3, \
         "the shift-decomposed pitch at 0x0040C275 needs a 3-term power-of-two sum; %d is not" % TERRAIN_PITCH
@@ -946,9 +889,8 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
               "terrain.wrap@%08X" % va, 2, note)
 
     # The terrain blitter's own walk of the dirty grid: 40 columns, and a row
-    # step that is `pitch*16 - width` because the column loop already advanced it
-    # by 16 per column. (032 read this as 0x2790 == 672*16-640+16; the instruction
-    # is 0x2780 == 672*16-640. Corrected here from the encoding.)
+    # step of `pitch*16 - width` (0x2780 == 672*16-640, read from the encoding)
+    # because the column loop already advanced it by 16 per column.
     for va in (0x004BCE0E, 0x004BCE28, 0x004BCE66):
         b.imm(va, STOCK_COLS, COLS, 1, "terrain.cols@%08X" % va, 2,
               "terrain blitter: columns per row")
@@ -958,16 +900,15 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     b.imm(0x0040C25A, STOCK_W, PF_W, 4, "terrain.fullblit.runwidth", 2,
           "0x0040C253: the run width of the whole-playfield blit")
 
-    # -- the terrain REFRESH band, 0x49B8D0..0x49C8xx (task 064) -----------
-    #
+    # -- the terrain REFRESH band, 0x49B8D0..0x49C8xx ----------------------
     # The functions that FILL the scratch surface: the per-megatile writer
     # 0x49B9F0, the jump-scroll refresh 0x49BC20, the column/row refreshes
     # 0x49BD40 / 0x49BE20 (called by the steppers 0x49C0C0 / 0x49C280 and the
     # full refresh 0x49BF20), the per-frame tile updater 0x49C780 -> 0x49C620
     # (called from layer 5's own draw 0x4BD580), and the clamp helper 0x49B8D0.
-    # 034's sweeps patched their four `x672` multiplies and one wrap pair --
-    # and missed 54 sites in the SAME functions, because every one of them is
-    # an encoding no immediate sweep for 672/0x49800 can match:
+    # Beside their four `x672` multiplies and one wrap pair sit 54 more sites
+    # in the SAME functions, each an encoding no immediate sweep for
+    # 672/0x49800 can match:
     #
     #   * the wrap arithmetic is mod-reduction CHAINS: successive
     #     `lea r,[r - k*0x49800]` for k=16,8,4,2,1, the constants encoded as
@@ -982,24 +923,20 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     #     columns, ten sites (the 0xE == 14 == 448/32 row constants stay,
     #     because the height does not change at this geometry).
     #
-    # THE CONSEQUENCE OF MISSING THESE is 12.9's wreck, mechanism and all: at
-    # the fixture origin (544,416) the patched x832 multiply produces offset
-    # 0x54A20, the unpatched chain reduces it mod 0x49800 to 0xB220, and the
-    # (patched) blitter reads 0x54A20 -- producer and consumer disagree over
-    # the whole surface from frame one. "Stage 2 does not decompose" was an
-    # enumeration gap wearing a structural costume: the bisect was correct
-    # about what it could observe, and what it could not observe was that the
-    # terrain group's own feeding path was half-patched in every subset.
+    # Miss one and producer and consumer disagree over the whole surface from
+    # frame one: at origin (544,416) the patched x832 multiply produces offset
+    # 0x54A20, an unpatched chain reduces it mod 0x49800 to 0xB220, and the
+    # patched blitter reads 0x54A20. Half-patching this one feeding path reads
+    # under a bisect as "stage 2 does not decompose", which is an enumeration
+    # gap wearing a structural costume.
     #
-    # How found (task 064): a value-FAMILY sweep of .text -- multiples of the
-    # wrap in both signs, tile-row multiples, the unrolled k*pitch+d family,
-    # band-restricted tile-unit immediates -- touching 100.0% of .text BYTES
-    # (linear decode, resuming past undecodable bytes). Coverage means "no
-    # byte unexamined", not "every decoded instruction is real": padding and
-    # jump tables decode as junk, so every hit was then read in its function
-    # (one discarded: a `jne` whose branch TARGET spelled 0x498000). The
-    # residual failure class is a constant computed at runtime or split
-    # across instructions. work/scratch/064/scan_064.py is the sweep.
+    # Only a value-FAMILY sweep of .text reaches these -- wrap multiples in both
+    # signs, tile-row multiples, the unrolled k*pitch+d family, band-restricted
+    # tile-unit immediates -- and each hit still needs reading in its function,
+    # since padding and jump tables decode as junk. Such a sweep linear-decodes
+    # 100% of .text BYTES, resuming past undecodable ones, and it is that "no
+    # byte unexamined" which bounds the residual failure class to a constant
+    # computed at runtime or split across instructions.
     TILE = 32
     assert TERRAIN_PITCH % TILE == 0
     TILE_COLS = TERRAIN_PITCH // TILE            # 26 (stock 21)
@@ -1108,76 +1045,62 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
         (0x00480948, "clipping helper"),
     ]:
         b.imm(va, STOCK_W, PF_W, 4, "fog.width@%08X" % va, 2, note)
-    # The fog wraps a horizontal coordinate modulo 648 == 640 + 8, in BOTH arms
-    # and with the same three-instruction shape (compare, subtract, add-back)
-    # around an 8-pixel-granular walk. Six sites, three per arm; the symmetry is
-    # what makes "playfield width + one 8-pixel unit" a reading rather than a
-    # guess, since nothing else in the pair would be mirrored.
-    #
-    # STATED AS INFERRED: this is the one site group here whose meaning comes from
-    # shape rather than from a decompiled use. If stage 2's interior diff shows a
-    # seam in the fog, this is the first suspect -- and the diff can see it, which
-    # is why carrying it is safe.
+    # A horizontal coordinate wraps modulo 648 == 640 + 8 in BOTH arms, with the
+    # same three-instruction shape (compare, subtract, add-back) around an
+    # 8-pixel-granular walk. Six sites, three per arm; the symmetry is what makes
+    # "playfield width + one 8-pixel unit" a reading rather than a guess. Meaning
+    # inferred from shape, so a seam here is an interior diff's first suspect --
+    # which is what makes carrying the group safe.
     for va in (0x0047EC53, 0x0047EC66, 0x0047EC72, 0x0047EE83, 0x0047EE8D, 0x0047EE98):
         b.imm(va, STOCK_W + 8, PF_W + 8, 4, "fog.wrap@%08X" % va, 2,
               "fog coordinate wrap at (playfield width + 8), inferred from shape")
-    # CORRECTED by task 068: the six sites above (and the two draw "arms"
-    # 0x0047EBF0/0x0047EE20 they sit in) are the SPACE-TILESET PARALLAX
-    # STARFIELD, not fog -- the arms draw star.spk items from lists at
-    # 0x00658AA8 in a 648x488 ring, gated on tileset [0x0057F1DC] == 1
-    # (space platform), with per-layer parallax factors. The patches are
-    # still correct and still needed (stars must cover the full width on
-    # space maps), but the star POSITIONS come from star.spk, which is
-    # authored for 648 columns -- so x in [648, W+8) holds no stars until
-    # somebody synthesizes items. Cosmetic, space tilesets only, recorded
-    # in research/renderer-viewport.md 16.
+    # The six sites above (and the two draw "arms" 0x0047EBF0/0x0047EE20 they
+    # sit in) are the SPACE-TILESET PARALLAX STARFIELD, not fog: the arms draw
+    # star.spk items from lists at 0x00658AA8 in a 648x488 ring, gated on
+    # tileset [0x0057F1DC] == 1 (space platform), with per-layer parallax
+    # factors. The patches are still needed -- stars must cover the full width
+    # on space maps -- but star POSITIONS come from star.spk, authored for 648
+    # columns, so x in [648, W+8) holds no stars until somebody synthesizes
+    # items. Cosmetic, space tilesets only; research/renderer-viewport.md 16.
 
-    # -- task 068: THE FOG CELL PIPELINE -----------------------------------
-    # The real fog of war. research/renderer-viewport.md 16 has the dossier;
-    # the shape is the terrain refresh band's, one subsystem over, with every
-    # buffer heap-allocated at game start (0x00480960, called from the
-    # layer-5 init 0x004BDA83) -- so unlike the dirty grid there is NOTHING
-    # to relocate: patch the allocation sizes and every stride/count and the
-    # engine builds the wider buffers itself.
+    # -- THE FOG CELL PIPELINE ---------------------------------------------
+    # The real fog of war (research/renderer-viewport.md 16). Its shape is the
+    # terrain refresh band's, one subsystem over, with every buffer heap-
+    # allocated at game start (0x00480960, called from the layer-5 init
+    # 0x004BDA83) -- so unlike the dirty grid there is NOTHING to relocate:
+    # patch the allocation sizes and every stride/count and the engine builds
+    # the wider buffers itself.
     #
     # Data flow, per frame (orchestrated by layer 5's draw 0x004BD580):
     #   [0x006D1260] map-tile visibility dwords (map-sized, geometry-free)
-    #     -> 0x0047FC50 fill:    raw tile map [0x006D5C14], T_FILL cols x
-    #        R_FILL rows of {0,15,31}, from tile origin [0x0057F1D0]-1
-    #     -> same fn smooth:     3x3 kernel -> [0x006D5C0C], interior only
-    #     -> 0x004804D0 change:  smoothed vs prev [0x006D5C10], dirty rects
-    #        (or full-redraw path: memcpy sync at 0x004BD5A8/0x004805E3)
-    #     -> 0x0047FE10 interp:  bilinear 4x4 cells per tile via the LUT at
-    #        [0x00657AA0] -> the 8px CELL buffer [0x006D5C18]
-    #     -> 0x004805F0 render:  per 8x8 block reads a 2x2 cell neighborhood,
-    #        dispatches the 12.8 block writers (black/uniform/gradient)
+    #     -> 0x0047FC50 fill   -> raw tile map [0x006D5C14], from tile origin
+    #        [0x0057F1D0]-1;  same fn smooth -> [0x006D5C0C]
+    #     -> 0x004804D0 change -> vs prev [0x006D5C10], dirty rects (or the
+    #        full-redraw memcpy sync at 0x004BD5A8/0x004805E3)
+    #     -> 0x0047FE10 interp -> 8px CELL buffer [0x006D5C18], LUT [0x00657AA0]
+    #     -> 0x004805F0 render -> the 12.8 block writers
     #
-    # WHY THE TWO MEASURED DEFECTS FOLLOW (15.4): the cell buffer holds
-    # T_COVER*4 = 84 used columns at stride 88. The (already patched) dirty
-    # walk asks the renderer for x up to 800, so cell index runs to 99+3:
-    # indices 84..86 read the row's zero PADDING -> the black seam at px
-    # 672..695; indices >= 88 wrap into the NEXT cell row's left columns,
-    # which the fixture had explored (value 31 = fully lit -> nothing drawn)
-    # -> raw terrain at px 696+ over unexplored map. One geometry, both
-    # symptoms.
+    # WHY AN UNPATCHED STRIDE SHOWS AS TWO DEFECTS (15.4): the cell buffer holds
+    # T_COVER*4 = 84 used columns at stride 88, while the dirty walk asks the
+    # renderer for x up to 800, so the cell index runs to 99+3. Indices 84..86
+    # read the row's zero PADDING -> a black seam at px 672..695; indices >= 88
+    # wrap into the NEXT cell row's left columns, explored (31 = fully lit,
+    # nothing drawn) -> raw terrain at px 696+ over unexplored map.
     #
-    # Column-side derivation (mirrors the terrain cache; at W=800 each value
-    # in parentheses):
-    T_COVER = (PF_W + 31) // 32 + 1        # tiles covering the playfield at
-    #                                        any sub-tile scroll; 21 (26)
+    # Column-side derivation (mirrors the terrain cache; W=800 in parentheses):
+    T_COVER = (PF_W + 31) // 32 + 1        # tiles covering the playfield at any
+    #                                        sub-tile scroll; 21 (26)
     T_SMOOTH = T_COVER + 1                 # smoothed interior cols; 22 (27)
-    T_FILL = T_SMOOTH + 2                  # raw cols incl. kernel border;
-    #                                        ALSO the tile-map STRIDE -- the
-    #                                        engine's own invariant, kept, so
-    #                                        the three structural pads
-    #                                        (stride-T_SMOOTH = 2 twice,
-    #                                        stride-T_COVER = 3 once) never
-    #                                        change and are NOT declared;
-    #                                        24 (29)
+    T_FILL = T_SMOOTH + 2                  # raw cols incl. kernel border, and
+    #                                        ALSO the tile-map STRIDE, an engine
+    #                                        invariant kept as is, so the three
+    #                                        structural pads (stride-T_SMOOTH = 2
+    #                                        twice, stride-T_COVER = 3 once) never
+    #                                        change and are NOT declared; 24 (29)
     CELL_STRIDE = T_COVER * 4 + 4          # 4 cells per tile + 4 pad; 88 (108).
-    #                                        Renderer max index = 3 + (W-1)/8
-    #                                        + 1 neighbor = T_COVER*4 - 1
-    #                                        exactly, in both geometries.
+    #                                        Renderer max index = 3 + (W-1)/8 + 1
+    #                                        neighbor = T_COVER*4 - 1 exactly, in
+    #                                        both geometries.
     # Row-side (noops at H=480, real if the table is ever regenerated taller):
     R_INTERP = (PF_H + 31) // 32 + 1       # 14 (14)
     R_SMOOTH = R_INTERP + 1                # 15 (15)
@@ -1241,13 +1164,12 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
           "bilinear: the tile one row down")
     b.imm(0x0047FE6B, 0x19, T_FILL + 1, 1, "fogcell.interp.k.downright", 2,
           "bilinear: the tile down-right")
-    # The cell stride lives in SIGN-EXTENDED one-byte fields at six sites
-    # (imm8 of `add`/`imul`, disp8 of `movzx`), so it caps at 127: 88 stock,
-    # 108 at W=800, and 168 at W=1280 fits nothing of the same length. Each
-    # site is therefore a CODE CAVE (Builder.cave): the window jumps out to the
-    # same instructions re-encoded with 32-bit fields. Uniform for every width
-    # rather than "cave only when it does not fit", so one geometry cannot
-    # exercise a path another never runs.
+    # The cell stride lives in SIGN-EXTENDED one-byte fields at six sites (imm8
+    # of `add`/`imul`, disp8 of `movzx`), so it caps at 127: 88 stock, 108 at
+    # W=800, and 168 at W=1280 fits nothing of the same length. Each site is
+    # therefore a CODE CAVE (Builder.cave) re-encoding the window with 32-bit
+    # fields -- uniform for every width rather than "cave only when it does not
+    # fit", so one geometry cannot exercise a path another never runs.
     b.cave(0x0047FEAB, "83c258" "8955fc",
            "81c2" + le32(CELL_STRIDE) + "8955fc",
            "fogcell.interp.cellrow", 2,
@@ -1273,9 +1195,9 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     b.imm(0x004BD5A8, 102, TMAP_ALLOC // 4, 4, "fogcell.sync.copy.b", 2,
           "rep movsd count, full-redraw path in layer 5's draw 0x004BD580")
 
-    # renderer, 0x004805F0: 2x2 cell neighborhood per 8x8 block -- four more
-    # cave windows, each the stride instruction plus enough of what follows
-    # (or precedes) to reach 5 bytes; the passengers are copied unchanged.
+    # renderer, 0x004805F0: 2x2 cell neighborhood per 8x8 block -- four more cave
+    # windows, each the stride instruction plus enough of what follows (or
+    # precedes) to reach 5 bytes, the passengers copied unchanged.
     b.cave(0x00480617, "6bc958" "c1eb03",
            "69c9" + le32(CELL_STRIDE) + "c1eb03",
            "fogcell.render.rowmul", 2,
@@ -1310,35 +1232,28 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
           "parks the mask layer just off the right edge of the playfield")
 
     # ------------------------------------------------------------------
-    # STAGE 3 -- input reaches the full width (task 071)
-    # ------------------------------------------------------------------
+    # STAGE 3 -- input reaches the full width
+    #
     # The window procedure clamps every mouse coordinate to the STOCK screen
     # before building an input event or writing the cursor globals
-    # (research/renderer-viewport.md 8, last row of the 640x480 table), so at
-    # 800 wide the right 160 columns are unreachable by any click -- a real or
-    # posted x past 639 is clamped to 639. This is what task 070's cnc-ddraw
-    # presentation needed and had no owner for. Each clamp is a PAIR: a
-    # `cmp .., 640` that decides and a `mov .., 639` that replaces (read from
-    # the disassembly, task 071 -- patching the 639 alone would turn "click at
-    # 700" into "click at 799"). X pairs widen to the new screen; the Y clamps
-    # stay, the height is unchanged.
-    #
-    # NOTE: moving the CONSOLE into that widened region is a separate, unshipped
-    # problem -- renderer-viewport.md 18 measured that relocating the console
-    # dialogs' bounds moves their hit-test but NOT their on-screen pixels.
+    # (research/renderer-viewport.md 8, last row of the 640x480 table), so an x
+    # past 639 -- real or posted -- becomes 639 and the right 160 columns are
+    # unreachable by any click. Each clamp is a PAIR: a `cmp .., 640` that
+    # decides and a `mov .., 639` that replaces; patching the 639 alone turns
+    # "click at 700" into "click at 799". X pairs widen to the new screen; the Y
+    # clamps stay, the height is unchanged. Moving the CONSOLE into the widened
+    # region is a separate, unshipped problem: relocating the console dialogs'
+    # bounds moves their hit-test but NOT their on-screen pixels
+    # (renderer-viewport.md 18).
     #
     # The one other consumer of the widened coordinate range that a full
-    # cmp-immediate sweep of .text finds (100.0%% coverage, task 071) is the
-    # edge-scroll trigger 0x004D12FF `cmp eax,0x27E / jl` -- scroll the camera
-    # RIGHT when the mouse x >= 638. It ships below, and it MUST move with the
-    # clamp: task 071 left it at 638 reasoning "the clamp already pins x to 639,
-    # so 638 is only ever the last 2px" -- but the clamp and this trigger are
-    # the SAME stage 3, and once the clamp is lifted the whole widened band
-    # (x 638..799) fires the scroll. The camera then slides the instant the
-    # cursor crosses 638, so the right ~160px cannot be rested on or clicked:
-    # the user's "can't move my mouse there, it starts moving the screen as if
-    # the viewport is still smaller" (issue #113 follow-up). renderer-viewport.md
-    # 18.1.1 is corrected to match.
+    # cmp-immediate sweep of .text finds is the edge-scroll trigger 0x004D12FF
+    # `cmp eax,0x27E / jl` -- scroll the camera RIGHT when the mouse x >= 638.
+    # It ships below and MUST move with the clamp, being the same stage: with
+    # the clamp lifted and the trigger at 638 the whole widened band
+    # (x 638..799) fires the scroll, the camera slides the instant the cursor
+    # crosses 638, and the right ~160px can be neither rested on nor clicked.
+    # renderer-viewport.md 18.1.1.
     for cmp_va, mov_va, mov_w in (
             (0x004D1960, 0x004D196D, 2),   # 0x004D1940: cmp si,640 / mov ax,639
             (0x004D19EC, 0x004D19F9, 2),   # 0x004D19C0: same pair
@@ -1350,48 +1265,42 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
         b.imm(mov_va, STOCK_W - 1, W - 1, mov_w, "mouse.clamp.x@%08X" % mov_va, 3,
               "window-proc mouse x clamp: the replacement value 639")
 
-    # The edge-scroll-right trigger, moved with the clamp above (see the note).
+    # The edge-scroll-right trigger, widened with the clamp above.
     # `cmp eax,638 / jl no-scroll` -- pan right only in the true right 2px, so
-    # 638 -> W-2 (the stock 640 screen's own margin, carried to the new width).
+    # 638 -> W-2 (the stock screen's own margin, carried to the new width).
     b.imm(0x004D12FF, STOCK_W - 2, W - 2, 4, "scroll.right.trigger", 3,
           "0x004D12A0 edge-scroll: pan the camera right when mouse x >= "
           "screenW-2 (was 638; must widen with the mouse clamp or the whole "
           "right band scrolls)")
 
-    # The PHYSICAL cursor clip (2026-09-05, issue #113 follow-up, found only by
-    # real play). 0x004215E0 is the clip-rect reset every one of the seven
-    # ClipCursor call sites runs first: it maps client {0,0} and client
+    # The PHYSICAL cursor clip. 0x004215E0 is the clip-rect reset every one of
+    # the seven ClipCursor call sites runs first: it maps client {0,0} and client
     # {640,480} through ClientToScreen and SetRects the result into 0x006CDDB0,
     # which ClipCursor then confines the OS cursor to. The 640 is a hardcoded
-    # client width, so under cnc-ddraw's 800-wide window the real mouse is
-    # pinned to the left 640 columns -- it cannot ENTER the right band at all,
-    # and no WM_MOUSEMOVE past x=639 is ever generated for the (already
-    # widened) wndproc clamp to read. Posted harness input is never subject to
-    # ClipCursor and the game only calls it with the foreground, which the
-    # off-screen desktop never has, so 070/071 could not see this wall. It is
-    # the coupled other half of scroll.right.trigger: with the clip at 640 and
-    # the trigger at W-2 the cursor can never reach the trigger and mouse
-    # scroll-right is dead (the user's "can't move my mouse over the new right
-    # stripe thus can't move right on the map"). The two ship together.
-    # Height stays 480. The 0x421690 explicit-rect setter is separate (4
-    # callers pass their own rect) and is not touched here.
+    # client width, so under cnc-ddraw's 800-wide window the real mouse is pinned
+    # to the left 640 columns -- it cannot ENTER the right band at all, and no
+    # WM_MOUSEMOVE past x=639 is ever generated for the (already widened) wndproc
+    # clamp to read. Only real play shows this wall: posted harness input is never
+    # subject to ClipCursor, and the game calls it only with the foreground, which
+    # an off-screen desktop never has. It is the coupled other half of
+    # scroll.right.trigger -- clip at 640 plus trigger at W-2 means the cursor can
+    # never reach the trigger and mouse scroll-right is dead -- so the two ship
+    # together. Height stays 480. The 0x421690 explicit-rect setter takes its rect
+    # from its 4 callers and is not touched here.
     b.imm(0x00421600, STOCK_W, W, 4, "cursor.clip.right", 3,
           "0x004215E0 clip-rect reset: ClientToScreen({640,480}) -> ({W,480}); "
           "ClipCursor confines the physical mouse to this, so 640 pinned the "
           "real cursor out of the right band")
 
-    # The CAMERA'S scroll clamp (2026-09-05, issue #113 follow-up; research
-    # 15.5 item 1 had deferred it to stage 3). 0x0049BB90 builds the maximum
-    # screenLeft once per game as (mapTileW - 20) * 32 -- 20 tiles = the stock
-    # 640-px viewport. At 800 the viewport is 25 tiles, so parked at the right
-    # map edge the playfield's last 5 tile columns (the whole new band) lie
-    # PAST the map: the terrain cache clamps to the map and the band shows
-    # whatever scratch it last held, and the fog fill reads visibility for
-    # tiles beyond the row end -- explored/unexplored blotches that belong to
-    # the next map row. On a real map a player parks at the right edge all
-    # the time; the fixtures keep the camera interior, which is why 064-070
-    # only ever saw it as "2.28% stale at the edge" (17.1 item 4) and the user
-    # saw it as "fog behaves odd in the added width and the right stripe".
+    # The CAMERA'S scroll clamp. 0x0049BB90 builds the maximum screenLeft once
+    # per game as (mapTileW - 20) * 32 -- 20 tiles = the stock 640-px viewport.
+    # At 800 the viewport is 25 tiles, so parked at the right map edge the
+    # playfield's last 5 tile columns (the whole new band) lie PAST the map: the
+    # terrain cache clamps to the map and the band shows whatever scratch it last
+    # held, and the fog fill reads visibility for tiles beyond the row end --
+    # explored/unexplored blotches belonging to the next map row. A player parks
+    # at the right map edge all the time; a fixture that keeps the camera
+    # interior only ever sees this as "2.28% stale at the edge" (17.1 item 4).
     # Move the clamp with the viewport: 20 -> W/32 tiles. The vertical clamp
     # (sub eax,0xC, 12 tiles + 8) stays, the height is unchanged. The minimap
     # click-to-centre's own 20/13 (0x4A4D20, research 7) is NOT moved: it only
@@ -1402,25 +1311,53 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
           "so the playfield never extends past the map's right edge")
 
     # The wndproc clamp is necessary but NOT sufficient for click-SELECT past
-    # x=639: the mouse->world click search rect (0x0046FB40, 9.1 item 12) is
-    # ALSO 640 wide -- right = screenLeft + 640 -- so a click whose world point
-    # lands past screenLeft+640 falls outside the rect and selects nothing,
-    # even with the cursor global carrying the true x. Widen the two x extents
-    # to screenLeft + 800 (the click arm and the drag-box arm; the +400 height
+    # x=639: the mouse->world click search rect (0x0046FB40, 9.1 item 12) is ALSO
+    # 640 wide -- right = screenLeft + 640 -- so a click whose world point lands
+    # past screenLeft+640 falls outside the rect and selects nothing even with the
+    # cursor global carrying the true x. Widen the two x extents to
+    # screenLeft + 800 (the click arm and the drag-box arm; the +400 height
     # extents beside them stay). Measured with a deselect-first select: without
-    # these two sites a click at client x=672 selects NOTHING (the wndproc
-    # clamp alone is invisible to selection).
+    # these two sites a click at client x=672 selects NOTHING.
     b.imm(0x0046FC75, STOCK_W, PF_W, 4, "click.searchrect.right", 3,
           "0x0046FB40: click search rect right = screenLeft + 640 -> + 800")
     b.imm(0x0046FE18, STOCK_W, PF_W, 4, "click.searchrect.right.drag", 3,
           "0x0046FB40 drag-box arm: same rect, same widen")
 
+    # The console HIT-TEST's x guard. 0x004D1140 is isPointOverUi(ecx = screen x,
+    # eax = screen y) -> 1 = the console covers this point. Three tiers: y <
+    # [0x596B6C] (the console art's first row, 302) -> 0; y >= [0x596B74] (its
+    # first fully opaque row, 400) -> 1; otherwise a memo cache on (x,y) and then
+    # storm ord442 point-in-region on the console.pcx TRANSPARENCY region
+    # [0x6D5E14]. That region is built once from the 640-wide console image
+    # (imgCreate 0x0041D640 has one caller, 0x004C3A03) and ord442 rejects any
+    # x >= the region's width outright, so for x >= 640 and y in [302,400) -- the
+    # visible map beside the console -- the answer is "over the console", and the
+    # five callers that share the predicate lose their right-click order
+    # (0x004564E0), their drag anchor (0x0046FF70 / 0x0048E5D0 / 0x004BD500), or
+    # their contextual cursor (0x004D1460, which swaps at y=302). Guard tier 3 by
+    # x: past the console image there is no console. The constant is the
+    # console.pcx WIDTH (stock 640), not the screen width -- the HUD stays in the
+    # left 640 columns whatever the screen is. Tiers 1 and 2 keep their bytes, so
+    # the black rectangle x>=640,y>=400 stays non-playfield exactly as stock's
+    # console rows do. The window is the memo probe (6 bytes, the target of tier
+    # 2's `jl`, which lands on the window's START and is allowed); the cave
+    # returns straight out of the predicate for x >= 640 and otherwise re-runs
+    # the probe and jumps back, so the `jne` at 0x004D115F still reads its flags.
+    b.cave(0x004D1159, "390d30646d00",
+           "81f9" + le32(STOCK_W)      # cmp ecx, 640
+           + "7c03"                    # jl  +3      (x < 640: the stock path)
+           + "33c0"                    # xor eax,eax
+           + "c3"                      # ret         (beyond the console image: playfield)
+           + "390d30646d00",           # cmp [0x6D6430],ecx  (the displaced probe)
+           "console.hittest.xguard", 3,
+           "0x004D1140 isPointOverUi: x >= 640 (the console.pcx width) is bare "
+           "playfield -- never ask the 640-wide console region about it (right-click "
+           "orders and the contextual cursor beside the console)")
+
     return b
 
 
-# ---------------------------------------------------------------------------
-# Emit
-# ---------------------------------------------------------------------------
+# ------------------------------- Emit --------------------------------------
 
 HEADER_DOC = """// sc_screen_patches.h -- GENERATED by tools/renderer_patch_sites.py. DO NOT EDIT.
 //

@@ -5,53 +5,21 @@ Drive a running StarCraft 1.16.1 window with POSTED Win32 messages, and read fra
 out of it. Dot-source it; every function is a primitive, nothing here runs on import.
 
 .DESCRIPTION
-This is task 012's D1 recipe (research/automated-testing-options.md §4.1) turned into
-reusable primitives, so a test can load a map, drag a selection box and issue an order with
-no human at the keyboard.
+Posted messages, never synthetic input: `SendInput`/`SendKeys` are BANNED by
+config/guard-destructive.ps1, and this binary imports no DirectInput, never calls
+`GetAsyncKeyState`, and takes the pointer position from the message's own `lParam`
+(research/pe-anatomy.md § Imports). Every coordinate here is therefore a CLIENT
+coordinate, independent of window position, DPI, monitor and foreground.
 
-Why posted messages and not synthetic input:
+KNOWN LIMIT -- MODIFIER KEYS: `GetKeyState` is in the import table, and Windows never
+updates a thread's key-state table for POSTED keyboard messages, so a game reading shift
+that way cannot be shift-clicked from here. `Send-ScClick -Shift` sets `MK_SHIFT` in
+`wParam` AND brackets the click with posted VK_SHIFT down/up; a failure means "test shift
+by hand", not "shift is broken".
 
-- `SendInput`/`SendKeys` are BANNED by config/guard-destructive.ps1, and task 012 diagnosed
-  why they never worked here anyway.
-- StarCraft imports no DirectInput and does not call `GetAsyncKeyState`; its input arrives
-  through `GetMessageA`/`PeekMessageA`/`DispatchMessageA` (research/pe-anatomy.md § Imports).
-  It takes the pointer position from the message's `lParam`, which task 012 demonstrated
-  live: a posted click moved the game's OWN rendered cursor to the posted point.
-- **No screen coordinates are involved.** Everything below is client coordinates, so nothing
-  depends on where the window sits, on DPI, or on which monitor is which.
-- Focus is NOT required (task 012 probe 3). The window must not be MINIMISED (probe 2) --
-  `Assert-ScDrivable` refuses in that state rather than posting into a black hole.
-
-KNOWN LIMIT -- POSITIONAL SELECTION IS A CORRECTNESS HAZARD, not a convenience. Every
-menu step in this repo clicks a ROW, not a name: "the map file is row 2, because there is
-exactly one .scx in the folder". That assumption is not checkable from a click, and when
-it breaks the run does not fail -- it succeeds against the wrong thing and reports
-confident nonsense.
-
-For the MAP BROWSER that is now handled rather than merely warned about: `Select-ScBrowserMap`
-computes every row from the filesystem and verifies each directory it opens against the
-live window before the next click (see the block comment above Get-ScBrowserListing). The
-warning still stands for every other screen here -- the main menu, the lobby, the in-game
-command card -- whose coordinates are fixed points read off a frame.
-
-It has happened. On 2026-08-09 another worker's `022-ghosts.scx` appeared in the shared
-fixture folder beside `combat.scx`; it sorts first, so a suite's row-2 click loaded THEIR
-map and the test went on to box 36 units of type `0x01` (Ghost) where its own fixture
-places Lurkers (`0x67`). The map was deleted afterwards too, but that was the lesser harm:
-a deleted file is noticed, a silently substituted one is not.
-
-So a test that selects by position must make the assumption behind the position TRUE
-before it clicks -- refuse to start if anything it did not create is in that folder -- and
-must assert what it actually got afterwards (unit types and counts), never just that a
-click landed. AGENTS.md § "Shared test-fixture folder" carries the fixture-naming rules.
-
-KNOWN LIMIT -- modifier keys. `GetKeyState` is in the import table, and Windows does not
-update a thread's key-state table for POSTED keyboard messages. So a game that reads shift
-via `GetKeyState` cannot be shift-clicked this way. `Send-ScClick -Shift` therefore does
-BOTH: it sets `MK_SHIFT` in `wParam` (which is what a real click carries) and brackets the
-click with posted `WM_KEYDOWN`/`WM_KEYUP` for VK_SHIFT. Whether that is enough is an
-empirical question about this binary -- `Test-ScShiftClick` in the caller decides, and a
-failure means "test shift by hand", not "shift is broken".
+POSITIONAL SELECTION IS A CORRECTNESS HAZARD: a click picks a ROW, not a name, so a suite
+must make its assumption TRUE before it clicks and assert what it actually got, or it
+succeeds against the wrong thing (AGENTS.md § "Test fixtures").
 
 .EXAMPLE
 . ./tools/plugin/drive-game.ps1
@@ -63,22 +31,18 @@ Save-ScWindowImage -Hwnd $h -Path C:\temp\frame.png
 
 Set-StrictMode -Version Latest
 
-# System.Drawing is deliberately NOT used from the C# below. On .NET 10 the GDI+ types
-# live in a private assembly that Add-Type's reference list cannot name, so the bitmap
-# half is done in PowerShell (Save-ScWindowImage) after a normal Add-Type -AssemblyName.
-# The C# here is pure Win32 P/Invoke, which needs no extra references at all.
-# Tolerated rather than required, so this file can be dot-sourced somewhere with no GDI+
-# at all -- a CI runner running the Pester tests for the browser model and the fixture
-# registry, neither of which touches a bitmap. The two functions that DO need it
-# (Save-ScWindowImage, Get-ScRegionFingerprint) say so themselves if it is missing,
-# instead of the whole harness failing to load with an unrelated message.
+# System.Drawing is deliberately NOT used from the C# below: on .NET 10 the GDI+ types
+# live in a private assembly Add-Type's reference list cannot name, so the bitmap half is
+# done in PowerShell and the C# stays pure Win32 P/Invoke. Its absence is tolerated so
+# this file can be dot-sourced where there is no GDI+ at all (a CI runner exercising the
+# browser model and the fixture registry touches no bitmap); the two functions that DO
+# need it say so themselves rather than failing the load with an unrelated message.
 $script:ScHaveDrawing = $true
 try { Add-Type -AssemblyName System.Drawing -ErrorAction Stop | Out-Null }
 catch { $script:ScHaveDrawing = $false }
 
-# Which desktop this thread is on. Needed by exactly one thing here: the foreground gate,
-# which must be able to say WHY it cannot have the foreground when a run is off-screen
-# (task 043 -- see Assert-ScWindowActive). Nothing in that file runs on import either.
+# Which desktop this thread is on: the foreground gate must be able to say WHY it cannot
+# have the foreground when a run is off-screen (see Assert-ScWindowActive).
 . (Join-Path $PSScriptRoot 'sc-desktop.ps1')
 
 function Assert-ScDrawing {
@@ -259,9 +223,9 @@ function Assert-ScDrivable {
     .SYNOPSIS
     Refuse to post into a window that cannot receive input.
     .DESCRIPTION
-    A MINIMISED window silently swallows posted mouse messages (task 012 probe 2), so a
-    test that posted anyway would report "the click did nothing" and send the reader
-    hunting for a bug in the plugin.
+    A MINIMISED window silently swallows posted mouse messages, so a test that posted
+    anyway would report "the click did nothing" and send the reader hunting for a bug in
+    the plugin.
     #>
     param([Parameter(Mandatory)][IntPtr]$Hwnd)
     if (-not [ScDrive.Native]::IsWindow($Hwnd)) { throw 'drive-game: window handle is dead (the game exited?).' }
@@ -274,24 +238,20 @@ function Send-ScActivationNudge {
     Post WM_ACTIVATEAPP(1) + WM_ACTIVATE(WA_ACTIVE) + WM_SETFOCUS -- open the
     engine's activation-gated input path without touching the real foreground.
     .DESCRIPTION
-    TASK 070, measured under cnc-ddraw on the invisible desktop: a posted click
-    at a fully interactive main menu NEVER registers (0/4 runs, one with a 60s
-    watch), while the identical click under WMode registers every time. Posting
-    this activation triple first, the same click registered in 0.4s -- and the
-    gate RE-CLOSES later (the next screen's clicks died again), so callers nudge
-    before EVERY posted input, not once per run.
+    Measured under cnc-ddraw on the invisible desktop: a posted click at a fully
+    interactive main menu NEVER registers (0/4 runs, one watched 60s), while the
+    identical click under WMode registers every time; after this triple the same
+    click registers in 0.4s. The gate RE-CLOSES on the next screen, so callers
+    nudge before EVERY posted input, not once per run.
 
-    Mechanism, consistent with the decompiled wndproc (research "Foreground"
-    section): the engine gates GLUE-SCREEN input on its activation state
-    (DAT_0051bfa8 family, written by the WM_ACTIVATEAPP case). WMode's injected
-    windowed mode leaves the game believing it is active; cnc-ddraw's subclassed
-    window on a desktop that can never hold the foreground does not. These are
-    POSTED messages: the real foreground, the user's focus and the visible
-    desktop's cursor are untouched (the ClipCursor the handler runs applies to
-    the window's own invisible desktop).
-
-    Gated on %SCDRIVE_POST_ACTIVATE%=1 at the call sites in the input
-    primitives, so nothing changes for any existing suite unless a run opts in.
+    The engine gates GLUE-SCREEN input on its activation state (DAT_0051bfa8
+    family, written by the WM_ACTIVATEAPP case -- AGENTS.md § "Glue-screen (menu)
+    input under cnc-ddraw"): WMode leaves the game believing it is active,
+    cnc-ddraw's subclassed window on a desktop that can never hold the foreground
+    does not. These are POSTED messages, so the real foreground, the user's focus
+    and the visible desktop's cursor are untouched (the ClipCursor the handler
+    runs applies to the window's own invisible desktop).
+    %SCDRIVE_POST_ACTIVATE%=1 at the call sites opts a run in.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][IntPtr]$Hwnd)
@@ -306,8 +266,8 @@ function Send-ScActivationNudge {
 function Send-ScMouseMove {
     <#
     .SYNOPSIS
-    One posted WM_MOUSEMOVE. Does NOT need the window foreground (task 027) -- it must
-    only be a live, non-minimised window. See Assert-ScWindowActive.
+    One posted WM_MOUSEMOVE. Does NOT need the window foreground -- only a live,
+    non-minimised window. See Assert-ScWindowActive.
     #>
     [CmdletBinding()]
     param(
@@ -328,18 +288,14 @@ function Send-ScClick {
     .SYNOPSIS
     One click at a client coordinate: move, button-down, button-up.
     .DESCRIPTION
-    The leading WM_MOUSEMOVE is not decoration. The game tracks a cursor position of its
-    own and draws it; moving first means the down/up pair land where the game already
-    believes the pointer is, which is how a real mouse behaves.
-
-    The game's window procedure stores that move's x/y unconditionally, foreground or not
-    (task 027 -- see Set-ScWindowActive for the decompiled case and the live measurement),
-    so this works with the game sitting behind whatever the user is doing. Tasks 022/023
-    raised the window here; task 027 removed that, because the raise stole the user's
-    foreground window and confined their mouse without buying the input.
-
-    Assert-ScWindowActive is still called: a minimised or dead window DOES swallow posted
-    mouse messages. -NoActivate is for a caller that has already checked.
+    The leading WM_MOUSEMOVE is not decoration: the game tracks and draws a cursor position
+    of its own, so moving first means the down/up pair land where the game already believes
+    the pointer is, which is how a real mouse behaves. The window procedure stores that
+    move's x/y unconditionally, foreground or not (see Set-ScWindowActive), so this drives
+    the game while it sits behind whatever the user is doing. Never raise the window for
+    it: the raise steals the user's foreground and confines their mouse without buying any
+    input. Assert-ScWindowActive still runs, because a minimised or dead window DOES
+    swallow posted mouse messages; -NoActivate is for a caller that has already checked.
     #>
     [CmdletBinding()]
     param(
@@ -399,11 +355,9 @@ function Send-ScDrag {
         [switch]$NoActivate
     )
     Assert-ScDrivable -Hwnd $Hwnd
-    # A DRAG IS MADE OF MOUSE MOVES, and the posted moves reach the engine whether or not
-    # the window is foreground (task 027 measured it; tasks 022/023 believed otherwise and
-    # raised the window here, which is what stole the user's focus on every run). What
-    # still swallows them is a MINIMISED or dead window, which is what this gate catches.
-    # -NoActivate is for a caller that has already checked.
+    # A drag is made of mouse MOVES, and posted moves reach the engine whether or not the
+    # window is foreground (measured -- see Set-ScWindowActive). What still swallows them
+    # is a MINIMISED or dead window, which is what this gate catches.
     if (-not $NoActivate) {
         Assert-ScWindowActive -Hwnd $Hwnd -Because 'a drag, which is made of mouse MOVES and'
     }
@@ -444,14 +398,11 @@ function Send-ScKey {
         [int]$HoldMs = 50, [int]$SettleMs = 200
     )
     Assert-ScDrivable -Hwnd $Hwnd
-    # -Ctrl / -Shift bracket the key with posted modifier KEYDOWN/KEYUP, exactly as
-    # Send-ScClick does. Whether that is ENOUGH is a property of this binary, not of
-    # this function: Windows does not update the thread key-state table for posted
-    # keyboard messages, so a game that resolves its modifiers through `GetKeyState`
-    # will not see them (the KNOWN LIMIT at the top of this file). Task 021 answered it
-    # for the control-group keys in the live game and recorded the result in
-    # research/control-groups.md -- read that before assuming either way, and treat a
-    # failure as "drive it another way", never as "the modifier is broken".
+    # -Ctrl / -Shift bracket the key with posted modifier KEYDOWN/KEYUP. Whether that is
+    # ENOUGH is a property of this binary: Windows does not update the thread key-state
+    # table for posted messages, so a game resolving modifiers through `GetKeyState` will
+    # not see them. research/control-groups.md holds the answer for the control-group
+    # keys; treat a failure as "drive it another way", never as "the modifier is broken".
     if ($Shift) { [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_KEYDOWN, [IntPtr]0x10, [IntPtr]0x002A0001) }
     if ($Ctrl)  { [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_KEYDOWN, [IntPtr]0x11, [IntPtr]0x001D0001) }
     [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_KEYDOWN, [IntPtr]$VirtualKey, [IntPtr]1)
@@ -466,60 +417,30 @@ function Send-ScKey {
 }
 
 # =============================================================================
-# THE MAP BROWSER, MODELLED FROM THE FILESYSTEM (task 023)
+# THE MAP BROWSER, MODELLED FROM THE FILESYSTEM
 # =============================================================================
 #
-# THE BUG THIS REPLACES, in three levels -- all three observed, none hypothetical:
-#
-#   1. `Send-ScClick -X 117 -Y 140` opens "row 1", which was the fixture folder while
-#      exactly one `00-*` folder existed. Per-task folders (`00-t021`, `00-t022`) made
-#      row 1 whoever sorts first, and everyone else opened somebody else's work.
-#   2. The same defect one level down: `022-ghosts.scx` sorts before `combat.scx`, so a
-#      hardcoded row-2 map click loaded another worker's map. That run then boxed 36
-#      Ghosts where its own fixture places Lurkers and reported internally consistent
-#      nonsense (AGENTS.md § "Shared test-fixture folder").
-#   3. MERELY CREATING A DIRECTORY shifts rows for a suite that does not use the shared
-#      folder at all. `test-selection-circles` reaches `Maps\campaign` by clicking
-#      `[Up One Level]` in `Maps\BroodWar` -- an entry that sorts among the folders, so
-#      one extra `00-*` directory pushes it down a row. The click then opened a folder,
-#      the map never loaded, and the suite timed out looking exactly like menu flake
-#      (task 022, 2026-08-09).
-#
-# Level 3 is why nothing here is per-fixture-folder: EVERY row this harness clicks is
-# computed from the filesystem, and what actually opened is verified before proceeding.
+# NEVER CLICK A ROW BY NUMBER. `[Up One Level]` is NOT pinned to the top -- it sorts among
+# the directories by its own displayed name -- so merely creating one `00-*` folder pushes
+# it down a row, and a suite that never touches that folder opens a directory where it
+# meant to go up. One level down the same defect loads another worker's map, and the run
+# then reports internally consistent nonsense (AGENTS.md § "Test fixtures"). So EVERY row
+# this harness clicks is computed from the filesystem, and what actually opened is
+# verified before the next click.
 #
 # THE LISTING MODEL, read off captured frames rather than assumed:
+#   * directories first (with `[Up One Level]` sorted among them), then map files, each
+#     group sorted: a frame reads `[Allied] [Ladder] [Up One Level] [WebMaps]
+#     (2)Astral Balance.scm ...`, exactly alphabetical over the four directory names;
+#   * `Maps\` is the browser's ROOT: it has no `[Up One Level]` row;
+#   * six rows are visible at a 640x480 client;
+#   * THE LIST IS SCROLLED WHEN IT OPENS -- measured, with entry 1 off the top of a
+#     listing this harness was about to click row 1 of, and clicking the list's own UP
+#     ARROW until the rows stop moving restores the filesystem order exactly. That offset
+#     is not modelled: `Sync-ScBrowserToTop` puts the list in the ONE state this describes.
 #
-#   * `[Up One Level]` is NOT pinned to the top -- it is sorted among the directories by
-#     its own displayed name. C:\sc-work\logs\016-frames\05-browse.png reads, in order:
-#         [Allied]  [Ladder]  [Up One Level]  [WebMaps]  (2)Astral Balance.scm  ...
-#     which is exactly alphabetical over {Allied, Ladder, Up One Level, WebMaps}. That
-#     single fact IS level 3.
-#   * Directories (including that entry) come first, then map files, each group sorted.
-#   * `Maps\` is the browser's ROOT: it has no `[Up One Level]` row.
-#   * Six rows are visible at a 640x480 client.
-#
-# THE LIST IS SCROLLED WHEN IT OPENS, AND THAT IS NOT A DETAIL -- it is the whole reason
-# this needed a live probe rather than a directory listing. Measured on 2026-08-09
-# (C:\sc-work\logs\023\scroll-frames): with `00-t000` and `00-t023` both present, the
-# freshly-opened browser showed
-#     [00-t023] [Allied] [Ladder] [Up One Level] [WebMaps] (2)Astral Balance.scm
-# -- entry 1 was off the top. Clicking the list's own UP ARROW until the rows stop moving
-# then showed
-#     [00-t000] [00-t023] [Allied] [Ladder] [Up One Level] [WebMaps]
-# which is the filesystem order exactly. So the harness does not model the initial scroll
-# offset at all: `Sync-ScBrowserToTop` puts the list in the ONE state the model describes,
-# and every row is computed from there.
-#
-# (An earlier reading of the same evidence had `BroodWar` "not listed" under `Maps\`,
-# from a frame that starts at `[campaign]`. It was a scrolled view, not an exclusion.
-# Recorded here because a harness that silently skips a directory would put every row
-# below it off by one -- exactly the bug this file exists to kill.)
-#
-# Geometry: the frames above are FULL-WINDOW captures, offset ~(+5,+32) from the client
-# coordinates every click uses (Save-ScWindowImage). Row 1's text sits at image y~172,
-# i.e. client y=140, and the rows are 19px apart. Those are the numbers below; the +32
-# is the trap that made task 021 "fix" a correct coordinate.
+# Geometry: row 1's text is at client y=140 and the rows are 19px apart -- the numbers
+# below, read off FULL-WINDOW frames whose (+5,+32) offset Save-ScWindowImage explains.
 # =============================================================================
 
 $script:ScBrowserFirstRowY   = 140
@@ -548,10 +469,10 @@ function Sort-ScBrowserNames {
     Sort names the way the browser's list appears to: ordinal, case-insensitive.
     .DESCRIPTION
     NOT PowerShell's `Sort-Object`, which is culture-aware and weights punctuation
-    differently -- and these lists are full of punctuation (`(2)Astral Balance.scm`,
-    `00-t021`). Every entry ordering visible in the frames cited above is reproduced by
-    this comparer, and Assert-ScBrowserMapSelected re-checks the row it lands on live, so a
-    disagreement surfaces as a failed run rather than a wrong map.
+    differently -- and these lists are full of punctuation (`(2)Astral Balance.scm`).
+    Every entry ordering visible in a captured frame is reproduced by this comparer, and
+    Assert-ScBrowserMapSelected re-checks the row it lands on live, so a disagreement
+    surfaces as a failed run rather than a wrong map.
     #>
     param([string[]]$Names)
     if (-not $Names -or $Names.Count -eq 0) { return @() }
@@ -566,7 +487,7 @@ function Get-ScBrowserListing {
     What the map browser will show for a directory, in row order, computed from disk.
     .DESCRIPTION
     -MapsRoot is the directory the browser treats as its root (`<GameDir>\Maps`): the one
-    listing with no `[Up One Level]` entry, and the one where the exclusion above applies.
+    listing with no `[Up One Level]` entry.
 
     Returns an object with .Entries (Name / Kind / Row / Y, in the browser's own order),
     .Count, .Dir and .IsRoot. Kind is 'up', 'dir' or 'file'.
@@ -590,10 +511,6 @@ function Get-ScBrowserListing {
                    Where-Object { $script:ScBrowserMapExt -contains $_.Extension.ToLowerInvariant() } |
                    ForEach-Object { $_.Name })
 
-    # Ordinal-ignore-case, not PowerShell's culture-aware Sort-Object: a culture sort
-    # weights punctuation differently, and this list is full of it ((2)Astral Balance.scm,
-    # 00-t021). The frames above are consistent with ordinal-ignore-case at every entry
-    # they show, and Assert-ScBrowserMapSelected re-checks the row this lands on live.
     $dirNames  = @(Sort-ScBrowserNames ([string[]]$dirNames))
     $fileNames = @(Sort-ScBrowserNames ([string[]]$fileNames))
 
@@ -642,16 +559,13 @@ function Get-ScBrowserEntry {
 function Get-ScBrowserRowOccupancy {
     <#
     .SYNOPSIS
-    Which of the six visible rows currently have TEXT on them, read off the live window.
+    A per-row fingerprint of the six visible rows, read off the live window.
     .DESCRIPTION
     Not OCR and not a picture: Get-ScRegionFingerprint returns a hex digest of one
-    rectangle. Six digests, in row order.
-
-    They answer exactly one question -- DID THIS ROW CHANGE -- and that is all the callers
-    here ask (Sync-ScBrowserToTop: has the list stopped moving yet, i.e.
-    is it at the top). They do NOT say whether a row has text on it: the list control is
-    transparent, so a blank row shows whatever menu artwork is behind it and two blank rows
-    do not match each other.
+    rectangle, six of them in row order. They answer exactly one question -- DID THIS ROW
+    CHANGE -- which is all Sync-ScBrowserToTop asks. They do NOT say whether a row has
+    text on it: the list control is transparent, so a blank row shows the menu artwork
+    behind it and two blank rows do not match each other.
 
     The strip is 18px tall (one row pitch less a pixel, so neighbouring rows cannot bleed
     into each other) and stops short of the scrollbar at client x~336.
@@ -669,28 +583,24 @@ function Sync-ScBrowserToTop {
     Scroll the map browser's list to its first entry, and know that it got there.
     .DESCRIPTION
     THE STEP THAT MAKES THE FILESYSTEM MODEL TRUE. A freshly opened browser is already
-    scrolled -- measured, not assumed (see the block comment above Get-ScBrowserListing:
-    entry 1 was off the top of a listing this harness was about to click row 1 of). Rather
-    than model an offset that depends on what the game remembers, this puts the list in
-    the one state the model describes.
+    scrolled (see the block comment above Get-ScBrowserListing), so rather than model an
+    offset that depends on what the game remembers, this puts the list in the one state
+    the model describes.
 
     It clicks the list's own up arrow in batches and stops when a batch changes nothing,
     which is what "the top" looks like through the only oracle available here -- the row
-    fingerprints. Termination is therefore observed, not counted: a listing 95 entries long
-    can need far more clicks than any constant a caller would guess, and running out of
-    them silently would leave the list somewhere arbitrary. Running out THROWS instead.
+    fingerprints. Termination is observed, not counted: a 95-entry listing needs more
+    clicks than any constant a caller would guess, and running out silently would leave
+    the list somewhere arbitrary, so running out THROWS.
 
-    SELF-ANIMATING ROWS ARE MEASURED OUT, PER BATCH (task 070). Under cnc-ddraw the
-    selected row's art changes BY ITSELF -- measured: five samples 300ms apart with no
-    clicks at all changed rows 4-5 every time, while under WMode the same screen is
-    static. "Did any row change" therefore never settles there and the pre-070 version
-    of this function threw after 160 clicks with the list already at the top. So each
-    batch now takes TWO post-batch samples: rows that differ between them are animating
-    on their own RIGHT NOW and say nothing about scrolling, and "the top" is when no
-    OTHER row changed across the batch. The animating row is re-measured every batch
-    rather than baselined once, because the selection (and its animation) sits at a
-    different visible row index as the list scrolls under it. Under a helper where no
-    row self-animates, both samples agree and this is exactly the old comparison.
+    SELF-ANIMATING ROWS ARE MEASURED OUT, PER BATCH. Under cnc-ddraw the selected row's
+    art changes BY ITSELF -- five samples 300ms apart with no clicks changed rows 4-5 every
+    time, while under WMode the same screen is static -- so "did any row change" never
+    settles and a single-sample test throws with the list already at the top. Each batch
+    therefore takes TWO post-batch samples: rows differing between them are animating RIGHT
+    NOW and say nothing about scrolling, so "the top" is when no OTHER row changed across
+    the batch. Re-measured per batch rather than baselined once, because the selection sits
+    at a different visible row index as the list scrolls under it.
     #>
     [CmdletBinding()]
     param(
@@ -747,10 +657,8 @@ function Get-ScBrowserInfoPanel {
     The panel is blank while the selected row is a FOLDER, and shows the map's name, size,
     tileset and slot counts while it is a MAP. That is the browser telling us what it
     thinks it has, which is exactly what a positional click cannot tell us. A digest, not
-    a picture (see Get-ScRegionFingerprint).
-
-    Rectangle in client coordinates at a 640x480 client, covering the title and the
-    size/tileset/slots block.
+    a picture (see Get-ScRegionFingerprint). The rectangle is client coordinates at a
+    640x480 client, covering the title and the size/tileset/slots block.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][IntPtr]$Hwnd)
@@ -762,30 +670,22 @@ function Assert-ScBrowserMapSelected {
     .SYNOPSIS
     Prove the row this run just clicked actually SELECTED A MAP.
     .DESCRIPTION
-    THE CHECK THAT SURVIVED CONTACT. Two others did not, and both failures are worth
-    keeping here because they are the kind that reads as working:
+    TWO OTHER CHECKS ARE REFUTED, and both are the kind that reads as working:
 
       * counting rows that "have text on them" -- the list control is TRANSPARENT, so a
         blank row shows menu artwork through it and two blank rows do not match each
-        other (C:\sc-work\logs\023\walk-frames\5-top2.png: the fixture folder correctly
-        opened, four blank rows, four different fingerprints);
+        other (measured: a correctly opened folder, four blank rows, four fingerprints);
       * clicking the scrollbar's down arrow to measure the list's length -- a SHORT list
         draws no scrollbar, so that click lands in the list body and selects a row, and
         the probe reports movement it caused itself.
 
-    What is left is the browser's own read-back. Selecting a FOLDER row blanks the panel
-    -- measured, not assumed: clicking `[00-t000]` while `(2)Astral Balance.scm` was
-    selected changed the panel, and every folder row leaves the same blank one. So the
-    caller grounds the comparison by selecting a folder row first, and then a click that
-    CHANGES the panel selected a map, while a click that leaves it selected a folder or
-    nothing at all.
-
-    That catches the failure that actually costs runs -- the walk did not go where it
-    thought, so the "map row" is a folder row or empty (the browser still in the parent
-    listing, a stale folder shifting every row, a sort order that drifted). It does NOT
-    identify WHICH map: two fixture folders each holding one map look alike here. That
-    claim belongs to the suite's in-process unit assertion after the map loads, which is
-    the only place it can honestly be made.
+    What is left is the browser's own read-back: selecting a FOLDER row blanks the panel,
+    and every folder row leaves the same blank one. So the caller grounds the comparison by
+    selecting a folder row first; then a click that CHANGES the panel selected a map, while
+    a click that leaves it selected a folder or nothing at all. That catches the failure
+    that costs runs -- the walk did not go where it thought -- but does NOT identify WHICH
+    map: two fixture folders each holding one map look alike here, and that claim belongs
+    to the suite's in-process unit assertion after the map loads.
     #>
     [CmdletBinding()]
     param(
@@ -811,10 +711,9 @@ function Enter-ScBrowserEntry {
     Open one directory entry (or `Up One Level`) of the map browser, and verify what opened.
     .DESCRIPTION
     Re-lists the CURRENT directory immediately before clicking, not once at the start:
-    another worker creating a folder in between moves every row below it, and that gap is
-    exactly how task 022 lost a run. A listing that changed between the two reads is a
-    throw, not a retry -- the harness has no way to know which of the two the game is
-    showing.
+    another worker creating a folder in between moves every row below it, and a run has
+    been lost to exactly that gap. A listing that changed between the two reads is a
+    throw, not a retry -- the harness cannot know which of the two the game is showing.
     #>
     [CmdletBinding()]
     param(
@@ -850,12 +749,10 @@ function Select-ScBrowserMap {
     Walk the map browser from wherever it opened to one named map file, and SELECT it.
     .DESCRIPTION
     THE one entry point every suite uses, so there is one model of the browser in this
-    repo instead of nine copies of `-X 117 -Y 140`. Every click on the way is computed
-    from the filesystem and every directory it opens is verified before the next click
-    (Assert-ScBrowserMapSelected).
-
-    Selecting only -- the caller still sets the Game Type and presses Ok, because what
-    happens between selecting a map and launching it differs per suite.
+    repo instead of nine copies of `-X 117 -Y 140`. Every click on the way is computed from
+    the filesystem and every directory it opens is verified before the next click
+    (Assert-ScBrowserMapSelected). Selecting only: the caller still sets the Game Type and
+    presses Ok, because what happens between selecting and launching differs per suite.
 
     -OpenDir is where the browser opens, which for Single Player -> Expansion -> Play
     Custom is `<GameDir>\Maps\BroodWar`. The route out of it is up to the common ancestor
@@ -904,8 +801,8 @@ function Select-ScBrowserMap {
     # GROUND THE COMPARISON FIRST. Selecting any folder row blanks the map-information
     # panel, so clicking one before the map row makes "the panel changed" mean "that row
     # was a map" rather than "that row was a different map from whatever was selected".
-    # Without it the check would pass on a browser sitting in the wrong folder as long as
-    # the row happened to hold some map (see Assert-ScBrowserMapSelected).
+    # Without it the check passes on a browser sitting in the wrong folder whenever that
+    # row happens to hold some map (see Assert-ScBrowserMapSelected).
     $folderRow = @($listing.Entries |
         Where-Object { $_.Kind -ne 'file' -and $_.Row -le $script:ScBrowserVisibleRows } |
         Select-Object -First 1)
@@ -923,72 +820,51 @@ function Select-ScBrowserMap {
 }
 
 # =============================================================================
-# FIXTURE OWNERSHIP: PER-SUITE-RUN, DECLARED UP FRONT (task 023)
+# FIXTURE OWNERSHIP: PER-SUITE-RUN, DECLARED UP FRONT
 # =============================================================================
 #
-# The rule stays what AGENTS.md § "Shared test-fixture folder" says -- refuse to start on
-# any fixture this run did not create, delete only your own, never the folder. What
-# changes is WHAT "mine" MEANS.
+# AGENTS.md § "Test fixtures" is the rule: refuse to start on any fixture this run did not
+# create, delete only your own, never the folder. "Mine" here is a RUN, not a file -- a
+# suite declares every fixture name it will ever create before it creates any of them, and
+# the checks below test against that whole set. One filename is not enough: a suite that
+# creates two fixtures in sequence counts its own earlier one as foreign and waits for
+# itself, a deadlock manufactured by the safety rule rather than by a collision.
 #
-# It used to mean one filename, tested at startup. `test-combat-death.ps1` creates two
-# fixtures in sequence (a placement probe, then the combat map), so on the second the rule
-# counted the suite's OWN phase-A probe as foreign and the suite waited for itself. A
-# self-deadlock manufactured by the safety rule, not by a collision (task 022,
-# 2026-08-09).
-#
-# So ownership is now a RUN, not a file: a suite declares every fixture name it will ever
-# create before it creates any of them, and the checks below test against that whole set.
-# That fixes the deadlock without softening anything -- the set is fixed at declaration
-# time and every file outside it is still foreign, so this is not "ignore anything that
-# looks a bit like mine". A name has to have been declared, and declaring it is the same
-# act as promising to delete it.
+# The set is fixed at declaration time and every file outside it is still foreign, so this
+# is not "ignore anything that looks a bit like mine": a name has to have been declared,
+# and declaring it is the same act as promising to delete it.
 # =============================================================================
 
 function Resolve-ScFixtureDir {
     <#
     .SYNOPSIS
     Where this run's fixtures go: the caller's `-FixtureDir` if given, otherwise this
-    AGENT'S OWN folder for THIS SUITE, otherwise the suite's historical by-hand default.
+    AGENT'S OWN folder for THIS SUITE, otherwise the suite's by-hand default.
 
     .DESCRIPTION
-    THE HOLE THIS CLOSES (task 023 review, 2026-08-09). Ownership is keyed on the declared
-    NAME set, which decides "mine" against ANOTHER suite perfectly -- and not at all
-    against ANOTHER RUN OF THE SAME SUITE. Two concurrent runs of `test-combat-death` with
-    no `-FixtureDir` land in the same folder and declare the same names, so each one's file
-    is "mine" to the other, the foreign check never fires, and one deletes-then-rewrites the
-    other's fixture underneath it. Bounded (it needs two same-suite runs both omitting the
-    parameter) and forbidden by AGENTS.md already -- but this task's whole point was moving
-    contention guards out of documentation and into code, and a neutral default that allows
-    self-collision is the one place that was left to the convention.
+    The agent default is `00-t<task>-<suite>`, keyed on BOTH. Keyed on the task alone, two
+    suites of one task share a folder, and a suite that deliberately leaves its fixture in
+    place between phases then makes the next one apply the foreign-file rule correctly and
+    wait forever on a file its own task wrote. Keyed on task+suite, a multi-phase suite
+    keeps the SAME folder across its own phases, two suites of one task never see each
+    other's files, and the foreign-file rule stays exactly as strict.
 
-    Four suites had the mirror-image bug: their defaults were nailed to `00-t021`/`00-t022`,
-    the folders of the tasks that WROTE them, so any later worker running them by default
-    wrote into a finished task's folder.
+    A worker always has `$env:AGENT_TASK` (AGENTS.md § "Before any suite run: arm
+    `$env:AGENT_TASK`"). Without it -- a human at a prompt, one run at a time -- the
+    suite's by-hand default is used and `-Suite` is unused. The task id is its leading
+    digits, so `<NNN>` and `<NNN>-<slug>` share one leaf.
 
-    THE SECOND HOLE (task 059 / issue #80, 2026-08-13). One task running TWO suites used to
-    land both in `00-t<NNN>` -- the same folder, keyed on task alone. `test-save-load`
-    deliberately leaves its fixture in place between phases (only its last phase deletes
-    it), so a second suite started under the same task saw that leftover, applied the
-    foreign-file rule correctly, and waited forever on a file its own task had written and
-    nothing was contending for. So the agent leaf now carries the SUITE too:
-    `00-t<NNN>-<suite>`. A multi-phase suite keeps the SAME folder across its own phases
-    (same task, same `-Suite`), two suites of one task can never see each other's files, and
-    the foreign-file rule stays exactly as strict as it was.
-
-    A worker always has `$env:AGENT_TASK`, so the fix needs no new discipline: with it set,
-    the default is that agent's own per-suite folder and two agents (or two suites of one
-    agent) can never collide. Without it -- a human at a prompt, one run at a time -- the
-    suite's historical default is preserved exactly, which is what `-FixtureDir` defaulting
-    "to current behaviour" promised; `-Suite` is unused on that path.
-
-    The task id is taken as leading digits, so `023` and `023-ghost-cloak` both give
-    `00-t023-<suite>` (Enter-ScLaunchLock's -TaskId convention appends a suffix to the same
-    id).
+    KNOWN HOLE: ownership is keyed on the declared NAME set, which decides "mine" against
+    ANOTHER suite perfectly and not at all against ANOTHER RUN OF THE SAME SUITE. Two
+    concurrent runs of one suite with no `-FixtureDir` land in the same folder and declare
+    the same names, so the foreign check never fires and one rewrites the other's fixture
+    underneath it. Bounded, and forbidden by AGENTS.md § "Test fixtures", but not closed
+    by code.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$GameDir,
-        # What this suite used before agents existed. Kept for by-hand runs.
+        # This suite's by-hand default, used when no agent task is set.
         [Parameter(Mandatory)][string]$Fallback,
         # This suite's own short name (e.g. 'save-load', 'hud-row') -- what separates it
         # from every other suite this same task might run. Mandatory: a caller that cannot
@@ -1034,16 +910,13 @@ function Get-ScFixtureFolderOwnerNote {
     <#
     .SYNOPSIS
     What the fixture-folder PATH ITSELF proves about who else could own a foreign file
-    found in it -- for the refusal/wait messages, so they stop asserting "another run"
-    as fact (task 059 / issue #80).
+    found in it -- so the refusal and wait messages stop asserting "another run" as fact.
     .DESCRIPTION
-    Since the fix above, an agent's fixture folder is `00-t<task>-<suite>` -- unique to
-    ONE task AND ONE suite, so a same-task-different-suite file can no longer land there.
-    A foreign file found in a folder shaped that way is therefore a genuine cross-task
-    file, or a leftover from an earlier run of this exact task+suite that declared a
-    different name. Folders that do NOT match that shape (the by-hand shared defaults,
-    e.g. `00-testmap`) carry no such guarantee -- ownership there is genuinely unknown,
-    and the note says so rather than guessing.
+    An agent's fixture folder `00-t<task>-<suite>` is unique to ONE task AND ONE suite, so
+    a same-task-different-suite file cannot land there: a foreign file in a folder shaped
+    that way is a genuine cross-task file, or a leftover from an earlier run of this exact
+    task+suite that declared a different name. Folders that do NOT match that shape carry
+    no such guarantee, and the note says ownership is unknown rather than guessing.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Dir)
@@ -1077,8 +950,8 @@ function Assert-ScFixtureFolderMine {
     Refuse to go on while a fixture this run did not declare is in its folder.
     .DESCRIPTION
     Called at generate time AND again immediately before the browser walk. Once is not
-    enough: the folder can be added to in between, and the browser row would move under
-    the click. Task 022 lost a run to exactly that gap.
+    enough: the folder can be added to in between, and the browser row moves under the
+    click -- a run has been lost to exactly that gap.
 
     Never deletes the other file -- it may belong to a game that is running right now.
     #>
@@ -1106,12 +979,10 @@ function Assert-ScFixtureStillMine {
     map to play (regenerate, do not interpret the run), a foreign one means a
     collision (wait for them).
 
-    Task 069, issue #97: the missing-fixture message used to assert "another worker's
-    cleanup took it" -- a named culprit derived from nothing but the file's absence.
-    The real cause that day was a worktree without .venv: generation had failed and no
-    file was ever written, and the accusation sent readers hunting a fleet-coordination
-    race that did not exist. This check cannot know WHY the file is absent, so its
-    message now says only what it observed and which prior step's output to read.
+    The missing-fixture message names only what it observed and which prior step's output
+    to read. It cannot know WHY the file is absent -- a worktree without .venv fails
+    generation and writes no file at all -- and blaming another worker's cleanup for a
+    plain absence sends readers hunting a fleet-coordination race that does not exist.
     #>
     [CmdletBinding()]
     param(
@@ -1160,11 +1031,10 @@ function Remove-ScOwnFixtureDir {
     .SYNOPSIS
     Delete a fixture folder this run created, but only if it is EMPTY.
     .DESCRIPTION
-    A suite with its own fixture folder must take it away again: every suite in this
-    directory reaches its map with a first-row folder click, so an empty folder left
-    behind changes which folder that click lands on for everyone else. Refusing to delete
-    a non-empty one is the same rule as everywhere else here -- never remove a file this
-    run did not create.
+    A suite with its own fixture folder must take it away again: rows are computed from
+    the filesystem, so an empty folder left behind moves every row below it for everyone
+    else. A non-empty one is never deleted -- the rule everywhere here is never to remove
+    what this run did not create.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Dir)
@@ -1180,20 +1050,15 @@ function Wait-ScFixtureFolderFree {
     Wait until this run's fixture folder holds nothing it did not declare, then clear out
     its own leftovers so the generator can write into a clean folder.
     .DESCRIPTION
-    Replaces Wait-ScTestMapDirFree, whose ownership test was ONE filename -- which made a
-    multi-fixture suite wait for itself (see the block comment above New-ScFixtureRun).
-
     Two waits, for two different reasons:
       * for somebody ELSE's fixture to go: never deleted, because a running game may have
-        it open, and killing another worker's run is the 2026-07 incident class in a
-        different costume;
+        it open, and ending another worker's run is the damage this repo guards hardest
+        against (AGENTS.md § "Hard rules");
       * for OUR OWN previous file to become deletable: a stale one can still be held open
         by a game that is shutting down.
 
     -Names narrows the deletion to the fixtures the caller is about to (re)write, so an
     earlier phase's file survives into a later phase. Omitted, it clears all of them.
-
-    Throws, with the cause named, if either wait runs out.
     #>
     [CmdletBinding()]
     param(
@@ -1243,21 +1108,14 @@ function Get-ScSelectionGroup {
     own snapshot line.
     .DESCRIPTION
     Needed to say anything about "the engine's selection" as a SET rather than as a count.
-    Task 022 used it to settle which units the twelve actually contained, after a claim in
-    that task's own writeup about where a pre-damaged block landed turned out to be false
-    when the pointers were cross-referenced.
+    The pointers come back as upper-case hex without the 0x, the format Get-ScWorldState
+    reports per unit, so the two can be intersected directly.
 
-    Returns the pointers as upper-case hex strings without the 0x, matching the format
-    Get-ScWorldState reports for each unit, so the two can be intersected directly.
-
-    RETURNED UNROLLED, deliberately. This used to end in `,@(...)`, the idiom that stops a
-    one-element result collapsing to a scalar -- but its one caller wraps the call in
-    `@(...)`, and the two together produce an array holding ONE element which is itself the
-    array of twelve. `$engine.Count` then reads 1, `-contains` matches nothing, and
-    test-stim-fanout failed two assertions about the ENGINE'S TWELVE while the log in front
-    of it held all twelve pointers. A harness bug wearing the costume of a finding, which
-    is the class this whole task is about. PowerShell 7 gives scalars a .Count of 1, so the
-    idiom buys nothing here anyway.
+    RETURNED UNROLLED, deliberately. Do not end this in `,@(...)`: the caller already
+    wraps the call in `@(...)`, and the two together give an array holding ONE element
+    which is itself the array of twelve -- `.Count` reads 1, `-contains` matches nothing,
+    and assertions about the ENGINE'S TWELVE fail with all twelve pointers in the log.
+    PowerShell 7 gives scalars a .Count of 1, so the idiom buys nothing here anyway.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$LogPath)
@@ -1274,16 +1132,14 @@ function Get-ScRegionFingerprint {
     A hash of one rectangle of the game window. Not a picture, a comparison key.
     .DESCRIPTION
     Frames are a diagnostic in this repo, never an oracle -- reading text off one is not
-    something a script can do reliably. But comparing the SAME rectangle before and after
-    an action is different: it answers "did this region change at all", which is a real
-    yes/no, and nothing about it reproduces game artwork: the return value is a hex digest.
+    something a script can do reliably. Comparing the SAME rectangle before and after an
+    action is different: it answers "did this region change at all", which is a real
+    yes/no, and the return value is a hex digest, so nothing here reproduces game artwork.
 
-    Set-ScGameType used to be its main caller and no longer is (issue #29). "Did this
-    region change at all" was the wrong question there: it cannot separate "the pick did
-    not take" from "the value was already right", and the Game Type combo's real value was
-    readable out of the engine's dialog list the whole time. What is left using this is the
-    map-browser row reads, where the question genuinely is "is this row different from that
-    one" rather than "what does this row say".
+    Only use it where that IS the question -- the map-browser row reads. It cannot carry a
+    dialog's VALUE: "changed" cannot separate "the pick did not take" from "the value was
+    already right", and a dialog's content is readable out of the engine's own dialog list
+    (AGENTS.md § "Oracles: what counts as a read-back").
     #>
     [CmdletBinding()]
     param(
@@ -1324,13 +1180,12 @@ function Get-ScRegionFingerprint {
     } finally { $bmp.Dispose() }
 }
 
-# --- the Game Type, read out of the engine's dialog memory (issue #29) --------
+# --- the Game Type, read out of the engine's dialog memory --------------------
 #
 # The dropdown's entries, by position, for the two-player maps this harness generates.
-# Read off a held-open frame originally (task 016, re-checked by 022); now also CHECKED
-# on every use, because the read below reports what the engine actually selected -- so a
-# map whose list is a different shape (a four-player map has Top vs Bottom in it) fails
-# here, immediately, instead of playing a melee game with the wrong units on it.
+# CHECKED on every use against what the engine reports selected, so a map whose list is a
+# different shape (a four-player map has Top vs Bottom in it) fails here, immediately,
+# instead of playing a melee game with the wrong units on it.
 $script:ScGameTypeByIndex = @{ 0 = 'Melee'; 1 = 'Free For All'; 2 = 'Use Map Settings' }
 
 # Control type 13 in the engine's dialog list. Observed on the Create Game screen: the
@@ -1343,19 +1198,9 @@ function Get-ScGameTypeControl {
     The Create Game screen's Game Type combo, READ OUT OF THE ENGINE'S DIALOG LIST:
     which entry is selected, and where the box is. $null if the screen is not up.
     .DESCRIPTION
-    ISSUE #29, and AGENTS.md's hard rule "read a dialog's CONTENT from memory; never hash
-    its pixels" applied to the one control that had escaped it.
-
-    The old oracle could not answer the question it was asked. It picked a known OTHER
-    entry, fingerprinted the map-information panel, picked the wanted one and required the
-    pixels to have CHANGED -- so "the pick did not take" and "the value was already
-    right" produced identical evidence, and the sticky remembered value makes the second
-    case the common one. It was also the only reason the harness ever raised the game
-    window: the pick needs the foreground (task 027 measured that three ways), and a pick
-    that can be SKIPPED needs no foreground at all.
-
-    Nothing new was needed to read it. Task 027's own active-dialog scan already walks the
-    list at SC_VA_DIALOG_LIST and logs every control that carries text, and the Game Type
+    AGENTS.md § "Oracles: what counts as a read-back": a dialog's CONTENT comes from
+    memory, never from a hash of its pixels. The active-dialog scan already walks the list
+    at SC_VA_DIALOG_LIST and logs every control that carries text, and the Game Type
     combo's text IS the selected entry's label:
 
       DIALOGS n=1  dlg='Create' rect=0,0,639,479 ... ctrl='Game Type' rect=58,262,169,281
@@ -1363,13 +1208,9 @@ function Get-ScGameTypeControl {
 
     The combo is found by its ROW, not by its index among the controls and not by a fixed
     rect: the one type-13 control that starts to the RIGHT of the 'Game Type' label and
-    overlaps it vertically. That is the same discipline Dismiss-ScTipsDialog uses for the
-    OK button and Select-ScBrowserMap uses for a map row -- ask the engine where its own
-    control is, then aim at that.
-
-    The returned ClickX/ClickY are the box's own centre (dialog origin + control rect),
-    which also retires the hardcoded (265,268) the picker used to be given. On the frame
-    above the two agree to a pixel, which is why nobody noticed it was a fixed point.
+    overlaps it vertically -- ask the engine where its own control is, then aim at that.
+    ClickX/ClickY are that box's own centre (dialog origin + control rect); a hardcoded
+    point agrees to a pixel on one frame and silently stops agreeing on any other.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$LogPath)
@@ -1457,31 +1298,20 @@ function Set-ScGameType {
     It is also sticky: it remembers what this machine last used, so a no-op pick can look
     like a success for months.
 
-    WHAT CHANGED (issue #29). The old version proved the pick with a PIXEL FINGERPRINT of
-    the map-information panel: pick a known OTHER entry, hash, pick the wanted one, require
-    the hash to differ. Two costs, both real:
-
-      1. It could not tell "the pick did not take" from "the value was already right" --
-         both leave the two hashes equal -- so the common case and the failure case
-         produced the same evidence.
-      2. It was the ONLY reason this harness still raised the game window. A dropdown pick
-         genuinely needs the foreground (task 027, three measured arms), so the pick costs
-         the user their window for about two seconds. A pick that is SKIPPED costs nothing.
-
-    Now the value is READ (Get-ScGameTypeControl, out of the engine's own dialog list) and:
-
-      * already the wanted entry -> no pick, no raise, no dropdown at all;
-      * otherwise pick, then WAIT FOR THE ENGINE TO READ BACK the wanted entry by name.
-        Not "something changed" -- the right value, or a retry, or a throw naming what the
-        combo actually says.
+    So the value is READ (Get-ScGameTypeControl, out of the engine's own dialog list): the
+    wanted entry already there means no pick, no raise and no dropdown at all -- and with
+    it goes the foreground raise a dropdown pick genuinely needs, the only raise this
+    harness ever performs. Otherwise it picks and then WAITS FOR THE ENGINE TO READ BACK
+    the wanted entry BY NAME: not "something changed", but the right value, a retry, or a
+    throw naming what the combo actually says.
 
     That also checks the index/name table for free: -Index 2 means "Use Map Settings", and
     if this map's list is a different shape (a four-player map carries Top vs Bottom) the
     read says so here instead of the run playing the wrong game type.
 
     -Force picks even when the value already matches. Only probe-quiet-dropdown.ps1 wants
-    that: it is measuring whether a pick TAKES under three foreground arms, so skipping the
-    pick would be skipping its experiment.
+    that: it measures whether a pick TAKES under three foreground arms, so a skipped pick
+    would be a skipped experiment.
     #>
     [CmdletBinding()]
     param(
@@ -1525,24 +1355,18 @@ function Set-ScGameType {
         }
         catch {
             # Off-screen, the underlying throw (Assert-ScWindowActive) names the desktop and
-            # points at -Visible -- true, but not the useful fact. The useful fact is WHY a pick
-            # is needed at all: 'Custom Type' is ONE machine-wide value in the real
-            # HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft key (its own 'Recent Maps' entries
-            # prove that key is live, shared with the user's real play -- task 050), not per-suite
-            # and not per-map. It only changes through a real foreground pick -- writing it
-            # directly is exactly the class of thing hard rule 5 forbids -- so a mismatch here
-            # cannot be cleared off-screen no matter how the caller is invoked. One foreground
-            # pick fixes it for every suite, until the user's own next game changes it again.
-            # The original throw is appended, not replaced -- it still names the desktop/window
-            # detail this one does not.
-            # PARENTHESISED BEFORE -f, and that is not style. `-f` binds TIGHTER than `+`, so
-            # the un-parenthesised version formatted only the LAST literal and concatenated the
-            # first three unformatted: this exact throw reached task 061 reading
-            # `Game Type reads '{0}', want '{1}' ... Underlying: drive-game: this input needs the
-            # game window in the FOREGROUND` -- {2} substituted, {0} and {1} printed as braces,
-            # so the two facts a reader needs first (what it reads, what it wants) were the two
-            # this message lost, while still looking complete. AGENTS.md's task-030 rule is about
-            # exactly this: a diagnostic that cannot say the thing it claims to say.
+            # points at -Visible -- true, but not the useful fact. 'Custom Type' is ONE
+            # machine-wide value in the live HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft
+            # key, shared with the user's real play (AGENTS.md § "Game Type / `Custom Type`"),
+            # not per-suite and not per-map, and it only changes through a real foreground
+            # pick -- writing it directly is what AGENTS.md § "Hard rules" forbids. So a
+            # mismatch cannot be cleared off-screen however the caller is invoked, and one
+            # foreground pick fixes it for every suite. The original throw is appended, not
+            # replaced: it still names the desktop/window detail this one does not.
+            # PARENTHESISED BEFORE -f, and that is not style: `-f` binds TIGHTER than `+`, so
+            # an un-parenthesised version formats only the LAST literal and concatenates the
+            # rest unformatted -- the message loses {0} and {1} (what it reads, what it wants)
+            # while still looking complete (AGENTS.md § "Diagnostics and reporting").
             throw (("Set-ScGameType: Game Type reads '{0}', want '{1}' -- 'Custom Type' is one " +
                     "machine-wide value shared with real play, changeable only by a real foreground " +
                     "pick (hard rule 5 forbids writing it directly). One foreground pick fixes it for " +
@@ -1571,18 +1395,14 @@ function Wait-ScNoGameRunning {
     THE GAME IS SINGLE-INSTANCE, MACHINE-WIDE. Launching a second one -- even from a
     different working copy, with a different injector -- gets an immediate exit, which
     `scinject.exe` reports as exit 3 ("the game exited on its own before injection") and
-    `run-with-plugin.ps1` turns into a thrown launch failure. Task 022 hit this repeatedly
-    while another worker's suite was mid-run, and copying the install to a private
-    directory did NOT help, which is what established that the constraint is per machine
-    and not per directory.
+    `run-with-plugin.ps1` turns into a thrown launch failure. Copying the install to a
+    private directory does NOT help: the constraint is per machine, not per directory.
 
-    The launch lock (sc-launch-lock.ps1) does not cover this on its own: it is held
-    around the LAUNCH, not for as long as the game is alive, so a worker can be holding a
-    running game with the lock free. So a caller that wants a game waits for the machine
-    to be free FIRST and then takes the lock for as long as its own game lives.
-
-    Waiting, never killing: another worker's game is another worker's run, and ending it
-    is the 2026-07 incident class in a different costume.
+    The launch lock (sc-launch-lock.ps1) does not cover this on its own: it is held around
+    the LAUNCH, not for as long as the game is alive, so a worker can be holding a running
+    game with the lock free (AGENTS.md § "Launch lock"). A caller that wants a game waits
+    for the machine to be free FIRST, then holds the lock for as long as its own game
+    lives. Waiting, never killing: another worker's game is another worker's run.
     #>
     [CmdletBinding()]
     param([int]$TimeoutMinutes = 30, [int]$PollSeconds = 15)
@@ -1603,15 +1423,11 @@ function Set-ScWindowActive {
     <#
     .SYNOPSIS
     Make the game window the foreground window. NOT needed to drive it -- see
-    Assert-ScWindowActive, which no longer calls this. Kept as an explicit, opt-in tool.
+    Assert-ScWindowActive. Only two things reach for it: Send-ScDropdownPick's raise, and
+    a human passing -RaiseWindow to watch a run.
     .DESCRIPTION
-    THE HARNESS DOES NOT RAISE THE GAME ANY MORE (task 027). Every unattended run used to
-    call this from every click, drag and dropdown pick, which yanked the user's active
-    window away while they worked -- the symptom that opened task 027.
-
-    Tasks 022/023 believed the raise was load-bearing ("the game ignores a posted
-    WM_MOUSEMOVE while its window is not foreground"). Task 027 measured it two ways and
-    that is not what the game does:
+    DO NOT RAISE THE GAME TO DELIVER INPUT. Posted moves register while the window is in
+    the background, measured two ways:
 
       * STATIC (Ghidra, StarCraft.exe FUN_004d1d70, the window procedure). Its
         WM_MOUSEMOVE case is three unconditional stores and a return -- no foreground
@@ -1620,34 +1436,24 @@ function Set-ScWindowActive {
                         _DAT_006cddc4 = lParam & 0xffff;    /* x, clamped to 0x27f  */
                         _DAT_006cddc8 = lParam >> 16;       /* y, clamped to 0x1df  */
                         return 1;
-        The binary's only GetForegroundWindow call site (0x004eddf0) is a diagnostic and
-        is nowhere near the input path.
-      * LIVE (tools/plugin/probe-quiet-input.ps1, main menu, one launch). With the USER'S
-        window holding the foreground the whole time, a posted move onto the Single Player
-        button changed that button's region (FF975A03A546737B -> 271D215ABFB1EF45), and
-        GetForegroundWindow never changed. So the move registered AND was drawn while the
-        game was in the background.
+        The binary's only GetForegroundWindow call site (0x004eddf0) is a diagnostic.
+      * LIVE (tools/plugin/probe-quiet-input.ps1). With the USER'S window holding the
+        foreground throughout, a posted move onto the Single Player button changed that
+        button's region (FF975A03A546737B -> 271D215ABFB1EF45) and GetForegroundWindow
+        never changed: the move registered AND was drawn from the background.
 
-    What activation actually does is WORSE than useless here. The window procedure's
-    WM_ACTIVATEAPP case (case 0x1c) runs 0x004d1750 and 0x00421730, which between them
-    call SetCursor/GetCursorPos/SetCursorPos and ClipCursor(window rect) -- so every raise
-    re-syncs the game's cursor to the PHYSICAL mouse and confines the user's mouse to the
-    game window. The probe caught the re-sync directly: after the raise the button region
-    went straight back to its parked value (271D... -> FF975A03A546737B), i.e. the raise
-    threw away the position the posted move had just set.
+    Raising is WORSE than useless for input. The WM_ACTIVATEAPP case (0x1c) runs 0x004d1750
+    and 0x00421730, which between them call SetCursor/GetCursorPos/SetCursorPos and
+    ClipCursor(window rect), so every raise re-syncs the game's cursor to the PHYSICAL
+    mouse and confines the user's mouse to the game window -- measured: after the raise the
+    button region went straight back to its parked value, throwing away the position the
+    posted move had just set.
 
-    The other thing 022 read as an input failure was a drawing one: the game gates
-    DRAWING on activation (0x0041d710 returns 0 while DAT_0051bfa8, written by that same
-    WM_ACTIVATEAPP case, is 0), so a frame taken while the window is inactive can be stale
-    on a stock launch. Under the windowed-mode helper every suite injects it is not: the
-    probe fingerprinted the animated main menu 3 s apart with the window in the background
-    and got two different frames, so the pixel oracles (Get-ScRegionFingerprint, the
-    browser-row reads) work in the background too. Set-ScGameType was on that list until
-    issue #29 replaced its fingerprint with a read of the engine's dialog list, which needs
-    no drawing at all.
-
-    So this function stays -- for a human who wants to watch a run, and as the thing
-    -RaiseWindow reaches for -- but nothing in the harness calls it by default.
+    A stale FRAME is a different failure from lost input: the game gates DRAWING on
+    activation (0x0041d710 returns 0 while DAT_0051bfa8, written by that same handler, is
+    0), so a frame from an inactive window can be stale on a stock launch. Under the
+    windowed-mode helper every suite injects it is not -- the animated main menu
+    fingerprinted 3 s apart in the background gives two different frames.
 
     SetForegroundWindow alone is refused for a background process (it returns TRUE and
     flashes the taskbar instead), so this goes through the documented AttachThreadInput
@@ -1676,31 +1482,22 @@ function Set-ScWindowActive {
 function Assert-ScWindowActive {
     <#
     .SYNOPSIS
-    The gate every move-dependent primitive goes through. It NO LONGER RAISES THE WINDOW
-    (task 027) -- it only refuses to post into a window that cannot receive the message.
+    The gate every move-dependent primitive goes through. It does NOT raise the window --
+    it only refuses to post into a window that cannot receive the message.
     .DESCRIPTION
-    Tasks 022/023 made this raise the game window before every posted move, because a
-    dropped move is a silent no-op and that was believed to be the cause. Task 027 measured
-    the mechanism instead of the symptom -- see Set-ScWindowActive for the decompiled
-    WM_MOUSEMOVE case and the live probe -- and the finding is that posted moves register
-    while the window is in the background. The raise was not buying the input; it was
-    stealing the user's foreground window on every click of every unattended run, and
-    (through the game's own WM_ACTIVATEAPP handler, which calls ClipCursor) CONFINING THE
-    USER'S MOUSE to the game window while it ran.
-
-    So the gate stays, and what it gates changed: a MINIMISED or dead window really does
-    swallow posted mouse messages (task 012 probe 2), and that is what Assert-ScDrivable
-    catches. Nothing here touches the foreground.
+    What it gates is Assert-ScDrivable's fact: a MINIMISED or dead window really does
+    swallow posted mouse messages. It does not touch the foreground, because posted moves
+    register in the background anyway (see Set-ScWindowActive for the decompiled
+    WM_MOUSEMOVE case and the live probe) -- a raise buys no input, and costs the user
+    their foreground window and, through the game's own ClipCursor, their mouse.
 
     -RaiseWindow is the opt-in escape hatch for a human who wants to watch a run. It is
     never set by the suites; if you find yourself reaching for it to make a test pass,
     the test is telling you something else is wrong.
 
-    OFF-SCREEN RUNS (task 043) cannot grant it at all, and the throw below names that case
-    specifically. Windows has one foreground window and it belongs to the desktop currently
-    receiving input, so a run on an invisible desktop has none to take -- which matters for
-    exactly one primitive, Send-ScDropdownPick. The rest of this file is unaffected: posted
-    moves, clicks, drags, keys and PrintWindow all work off-screen, measured.
+    OFF-SCREEN RUNS cannot grant it at all, and the throw below names that case
+    specifically. It matters for exactly one primitive, Send-ScDropdownPick: posted moves,
+    clicks, drags, keys and PrintWindow all work off-screen, measured.
 
     -Because is glued into the message so the failure names the operation that refused,
     not just the fact that a window cannot take input.
@@ -1720,13 +1517,11 @@ function Assert-ScWindowActive {
 
     # An OFF-SCREEN run can never satisfy this, and it must say so in those words. The
     # foreground window is a property of the desktop that is receiving input; a window on any
-    # other desktop cannot hold it, and GetForegroundWindow() reads 0 there all run.
-    # Measured, task 043: probe-quiet-dropdown.ps1 run through run-offscreen.ps1 failed all
-    # THREE arms -- including arm C, the foreground control that passes every time on the
-    # visible desktop, which could not raise at all.
-    #
-    # Without this branch the message below sends the reader hunting for a modal dialog that
-    # does not exist (AGENTS.md, task 030: a diagnostic must name the term that refused).
+    # other desktop cannot hold it, and GetForegroundWindow() reads 0 there all run --
+    # measured: off-screen, even the foreground control arm that passes every time on the
+    # visible desktop could not raise. Without this branch the message below sends the reader
+    # hunting for a modal dialog that does not exist (AGENTS.md § "Diagnostics and
+    # reporting": a diagnostic must name the term that refused).
     $myDesktop = Get-ScThreadDesktopName
     $onScreen = Get-ScInputDesktopName
     if ($myDesktop -and $onScreen -and $myDesktop -ne $onScreen) {
@@ -1751,25 +1546,24 @@ function Send-ScCommand {
     Fire one of the game's own ACCELERATOR commands by posting WM_COMMAND -- the only way
     to drive a MODIFIED key (Ctrl+1, Shift+1) from a script.
     .DESCRIPTION
-    Task 021, evidence in research/control-groups.md. StarCraft does not read Ctrl or
-    Shift in its window procedure. Its message pump (0x004D1BF0) calls
-    `TranslateAcceleratorA` FIRST and only dispatches the message normally when that
-    returns 0, and the merged accelerator table comes from the binaries' own resources
-    (`Local.dll` id 0x65 holds Ctrl+0..9 and Alt+0..9; `StarCraft.exe` id 0x71 holds
-    Shift+0..9). `TranslateAcceleratorA` resolves FCONTROL/FSHIFT against the calling
-    THREAD's key-state table, which Windows never updates for POSTED messages -- so a
-    posted Ctrl+1 cannot match, and one was measured producing no command at all.
+    Evidence in research/control-groups.md. StarCraft does not read Ctrl or Shift in its
+    window procedure: its message pump (0x004D1BF0) calls `TranslateAcceleratorA` FIRST
+    and dispatches normally only when that returns 0, and the merged accelerator table
+    comes from the binaries' own resources (`Local.dll` id 0x65 holds Ctrl+0..9 and
+    Alt+0..9; `StarCraft.exe` id 0x71 holds Shift+0..9). `TranslateAcceleratorA` resolves
+    FCONTROL/FSHIFT against the calling THREAD's key-state table, which Windows never
+    updates for POSTED messages -- so a posted Ctrl+1 cannot match, measured as no command
+    at all.
 
-    What the accelerator does on a match is send `WM_COMMAND` carrying its command id,
-    and the window proc's `case 0x111` puts that id straight into the game's own key
-    dispatcher (`0x004846E0` via `[0x005968E0]`), which reads NOTHING from the event but
-    that id. So posting the WM_COMMAND is not a simulation of the keypress: it is the
-    same call, with only `TranslateAcceleratorA`'s modifier check skipped. The engine
-    posts exactly such a message to itself at 0x004D1BA0, which is the precedent.
+    On a match the accelerator sends `WM_COMMAND` carrying its command id, and the window
+    proc's `case 0x111` puts that id straight into the game's own key dispatcher
+    (`0x004846E0` via `[0x005968E0]`), which reads NOTHING from the event but that id. So
+    posting the WM_COMMAND is not a simulation of the keypress: it is the same call with
+    only the modifier check skipped, and the engine posts exactly such a message to itself
+    at 0x004D1BA0.
 
-    PLAIN digits are NOT accelerators -- they reach the dispatcher through the window
-    proc -- so a plain control-group RECALL is driven with `Send-ScKey` as normal, and
-    only the assign/add halves need this.
+    PLAIN digits are NOT accelerators -- they reach the dispatcher through the window proc
+    -- so a control-group RECALL is driven with `Send-ScKey`; only assign/add need this.
 
     Ids come from `python tools/parse_accelerators.py <working-copy PE>`; the ones this
     repo uses are in research/data/accelerators.tsv.
@@ -1817,44 +1611,32 @@ function Send-ScDropdownPick {
     .SYNOPSIS
     Pick the Nth entry of one of the game's menu dropdowns (Game Type, race, ...).
     .DESCRIPTION
-    These are press-and-hold controls, not click-to-open ones: the entry under the
-    cursor at button-UP is the one selected, and the list is on screen only while the
-    button is held.
+    These are press-and-hold controls, not click-to-open ones: the entry under the cursor
+    at button-UP is the one selected, the list is on screen only while the button is held,
+    and a plain click leaves the box closed with its label unchanged, choosing nothing. The
+    offsets below were read off a frame captured with WM_LBUTTONDOWN posted and the UP
+    withheld, at a 640x480 client: first entry (-Index 0) 16px below the closed box's own
+    centre line, 15px apart after that.
 
-    How that was established (task 016, Game Type combo on the Create Game screen):
-    a plain Send-ScClick on the box left the frame captured a second later showing the
-    box closed with its label unchanged, and the game behaved the same as with no click
-    at all -- so a click is not a way to choose, and the label alone says nothing about
-    what is set. Posting WM_LBUTTONDOWN *without* the matching UP and capturing the frame
-    then shows the list open; the offsets below were read off that frame, at a 640x480
-    client: first entry 16px below the closed box's own centre line, 15px apart after
-    that. -Index 0 is that first entry.
-
-    THIS IS THE ONE INPUT IN THE HARNESS THAT REALLY DOES NEED THE FOREGROUND, and task
-    027 measured it three ways rather than assuming it (probe-quiet-dropdown.ps1, one
-    launch, all three arms on the Create Game screen, using Set-ScGameType's own verdict):
+    THIS IS THE ONE INPUT IN THE HARNESS THAT REALLY DOES NEED THE FOREGROUND, measured
+    three ways rather than assumed (probe-quiet-dropdown.ps1, one launch, all three arms
+    on the Create Game screen, using Set-ScGameType's own verdict):
 
       A  background, no raise                                  -> pick did NOT take
       B  background + AttachThreadInput(game) + SetActiveWindow -> pick did NOT take
       C  foreground                                             -> pick took, attempt 1
 
-    ...AND THE CHEAPEST WAY TO PAY THAT COST IS NOT TO PICK. Since issue #29 the caller
-    reads the combo's current entry out of the engine's dialog list first and skips the
-    pick -- and therefore this raise -- whenever the value is already what it wants, which
-    on a machine with a sticky remembered game type is most runs.
+    So "share the input queue without taking the foreground" is dead for this control, on
+    measurement and not on theory. The likely mechanism: the game calls SetCapture on
+    button-down (0x004d1a76) and Windows grants the capture only to the FOREGROUND window.
+    A world drag-box is also a held-button walk and works fine in the background, so it is
+    this dialog control's handling, not held buttons in general.
 
-    So the cheap "share the input queue without taking the foreground" answer is dead for
-    this control, on measurement and not on theory. The likely mechanism: this is a
-    press-and-hold control and the game calls SetCapture on button-down (0x004d1a76), and
-    Windows only grants the capture to the FOREGROUND window. A world drag-box is also a
-    held-button walk and works fine in the background, so it is this dialog control's
-    handling, not held buttons in general.
-
-    Everything else in this file works with the game in the background (task 027 removed
-    the raise from Assert-ScWindowActive). This function therefore raises for the length
-    of ONE pick and then HANDS THE FOREGROUND BACK to whatever had it, so a suite that
-    picks a game type costs the user about two seconds of their window during the menu
-    walk instead of the entire run. -NoActivate opts out of both.
+    THE CHEAPEST WAY TO PAY THAT COST IS NOT TO PICK: the caller reads the combo's current
+    entry out of the engine's dialog list first and skips both the pick and this raise
+    whenever the value already matches. When it does pick, this raises for the length of
+    ONE pick and then HANDS THE FOREGROUND BACK to whatever had it, so the user loses their
+    window for about two seconds rather than the entire run. -NoActivate opts out of both.
     #>
     [CmdletBinding()]
     param(
@@ -1866,19 +1648,15 @@ function Send-ScDropdownPick {
         # How long to wait for the list to APPEAR after the button goes down, and how long
         # to sit on the chosen entry before releasing.
         #
-        # These were hardcoded at 200ms each, and 200 is not enough. Task 021 had a Game
-        # Type pick silently do nothing: the lobby stayed on Melee and the map played as a
-        # melee game -- 4 Drones instead of the fixture's 36 Lurkers, and eight downstream
-        # assertions failing about something else entirely. Holding the combo open and
-        # photographing it (work/scratch/probe-gametype.ps1) ruled out the two obvious
-        # suspects: on that fixture the list is exactly three entries, the entry centres
-        # land on the 16px/15px offsets below, and index 2 really is "Use Map Settings".
-        # What was left was the timing, and raising these made it reproducible-green.
-        #
-        # THIS FAILURE IS SILENT AND STICKY, which is why the defaults moved rather than
-        # one caller: the combo remembers the last choice in the machine's profile, so a
-        # pick that does nothing leaves the WRONG game type set for every later run too.
-        # Every suite that picks a game type was exposed to it, not just this task's.
+        # 200ms each is NOT enough: at that timing a pick silently did nothing, the lobby
+        # stayed on Melee, and the map played as a melee game -- 4 Drones instead of the
+        # fixture's 36 Lurkers, with eight downstream assertions failing about something
+        # else. Holding the combo open and photographing it ruled out the alternatives:
+        # the list is exactly three entries, the entry centres land on the 16px/15px
+        # offsets below, and index 2 really is "Use Map Settings". What is left is timing.
+        # THE FAILURE IS SILENT AND STICKY -- the combo remembers the last choice in the
+        # machine's profile, so a pick that does nothing leaves the WRONG game type set
+        # for every later run too. Hence a default here rather than one caller's override.
         [int]$OpenMs = 700, [int]$HoverMs = 400
     )
     Assert-ScDrivable -Hwnd $Hwnd
@@ -1908,11 +1686,9 @@ function Send-ScDropdownPick {
         # Give the user their window back, on every path including a throw. Deactivating
         # also makes the game call ClipCursor(NULL) (0x00421730), which releases the mouse
         # confinement its own WM_ACTIVATEAPP handler applied -- so the borrow ends cleanly
-        # rather than leaving the user's cursor trapped in a 640x480 box.
-        #
-        # NEVER FATAL. By the time this runs the pick has already happened; if the window
-        # that had the foreground has closed, or something else refuses to give it up, that
-        # is a cosmetic loss and must not fail an otherwise good suite.
+        # rather than leaving the user's cursor trapped in a 640x480 box. NEVER FATAL: the
+        # pick has already happened, so a window that has closed or refuses to take the
+        # foreground back is a cosmetic loss, not a reason to fail a good suite.
         if ($prevFg -ne [IntPtr]::Zero -and $prevFg -ne $Hwnd) {
             try {
                 if ([ScDrive.Native]::IsWindow($prevFg)) {
@@ -1935,8 +1711,8 @@ function Get-ScWideGeometry {
     .DESCRIPTION
     tools/plugin/src/sc_screen_patches.h is GENERATED (tools/renderer_patch_sites.py) and is
     the one place the target width/height live. Every probe that asserts a client size, a
-    dump size or a band extent reads them here rather than carrying an 800 of its own --
-    three probes did, and every one went stale the day the width moved to 1280.
+    dump size or a band extent reads them here: a literal width copied into a probe goes
+    stale, silently, the moment the target size moves.
     #>
     [CmdletBinding()]
     param([string]$Header = (Join-Path $PSScriptRoot 'src/sc_screen_patches.h'))
@@ -1962,25 +1738,23 @@ function Get-ScMinimapPoint {
     The client pixel to click on the minimap to centre the view on a map TILE.
     .DESCRIPTION
     The view is otherwise unmovable from a script: the camera opens centred on the
-    player's start location and never moves on its own, edge-scrolling needs the
-    pointer parked at the very edge (which posted WM_MOUSEMOVE does not sustain --
-    task 019 tried it, the view did not move and the game exited during the attempt),
-    and the keyboard scroll keys are modifier-adjacent. A LEFT click on the minimap
-    does move the camera, and it is one posted click.
+    player's start location and never moves on its own, edge-scrolling needs the pointer
+    parked at the very edge (which a posted WM_MOUSEMOVE does not sustain -- measured: the
+    view did not move and the game exited during the attempt), and the keyboard scroll
+    keys are modifier-adjacent. A LEFT click on the minimap does move the camera.
 
     Geometry, at a 640x480 client: the minimap box is 128x128 client pixels with its
-    top-left at (7, 348) -- the console art's minimap panel, whose right edge is where
-    the 12-button wireframe row's root dialog begins (`HUDROW rects root=[138,...]`,
-    research/hud-selection-row.md). A map of W x H tiles with both <= 128 is drawn at
-    one pixel per tile and CENTRED in that box.
+    top-left at (7, 348) -- the console art's minimap panel, whose right edge is where the
+    12-button wireframe row's root dialog begins (`HUDROW rects root=[138,...]`,
+    research/hud-selection-row.md). A map of W x H tiles with both <= 128 is drawn at one
+    pixel per tile and CENTRED in that box.
 
-    Calibrated in game (task 019) on the generated 128x96-tile fixture, whose enemy
-    block sits at tile (41,19): this formula gives client (48, 383), and clicking
-    there then drag-boxing the screen selected exactly the six placed Hydralisks and
-    nothing else (`UNITSTATE n=6 types=[0x26:6]`). Clicking four pixels higher put
-    only three of them on screen, so the vertical centring term is real and not a
-    rounding accident. Nine origin candidates were scanned; (7, 348) with the
-    (128-H)/2 offset is the one that reproduces the result for every x tried.
+    Calibrated in game on a 128x96-tile fixture whose enemy block sits at tile (41,19):
+    this formula gives client (48, 383), and clicking there then drag-boxing the screen
+    selected exactly the six placed Hydralisks and nothing else. Clicking four pixels
+    higher put only three on screen, so the vertical centring term is real and not a
+    rounding accident; of nine origin candidates scanned, (7, 348) with the (128-H)/2
+    offset is the one that reproduces the result for every x tried.
     #>
     [CmdletBinding()]
     param(
@@ -2009,48 +1783,33 @@ function Set-ScMarker {
     .SYNOPSIS
     Write one label into the plugin's marker file. The ONE place any marker is written.
     .DESCRIPTION
-    ISSUE #37. Every marker write used to be `Set-Content -LiteralPath $MarkerPath`, and
-    a sweep caught it throwing mid-run:
+    NEVER `Set-Content` HERE. It opens the file with FileShare.NONE, so ANY reader holding
+    it open makes the write throw -- including the plugin's own deliberately permissive
+    observer, which polls this same file about four times a second. The race is only in
+    the OVERLAP, not in the outcome: given overlap, the failure is certain, not rare.
 
-        FAIL a test step threw: The process cannot access the file
-        'C:\sc-work\logs\031\sweep\marker.txt' because it is being used by another process
-
-    The issue filed it as a rare race between the write and the plugin's observer thread,
-    which polls that same file about four times a second. Measured, it is not rare and it
-    is not subtle -- `Set-Content` opens the file with FileShare.NONE, so ANY reader
-    holding it open makes the write throw, including the plugin's own deliberately
-    permissive one. The race is only in the OVERLAP, not in the outcome: given overlap,
-    the failure is certain.
-
-    Measured on 2026-08-11, one reader held open with the flags scplugin.cpp PollMarker
-    actually uses (GENERIC_READ, FILE_SHARE_READ|WRITE|DELETE), three writers tried
-    against it:
+    Measured, one reader held open on the flags scplugin.cpp PollMarker uses
+    (GENERIC_READ, FILE_SHARE_READ|WRITE|DELETE), three writers against it:
 
         reader share            Set-Content   File.WriteAllText   FileShare.RW|Delete
         R|W|D (the plugin's)    FAIL          ok                  ok
         R|W   (no DELETE)       FAIL          ok                  ok
         none  (worst case)      FAIL          FAIL                FAIL
 
-    So the fix is the SHARE MODE, not a retry: open FileShare.ReadWrite|Delete, the most
-    permissive there is. That tolerates the observer, and -- unlike File.WriteAllText,
-    whose default is FileShare.Read -- it also tolerates a second driver holding the same
-    marker, which is the case that made task 031's eight-suite sweep hit this at all.
+    So the fix is the SHARE MODE, not a retry: FileShare.ReadWrite|Delete is the most
+    permissive there is, and -- unlike File.WriteAllText, whose default is FileShare.Read
+    -- it tolerates a second driver holding the same marker too. The retry left here is a
+    bounded backstop for what the share mode cannot cover: another process holding a WRITE
+    handle (a second driver mid-write, an editor, a scanner).
 
-    WRITE-TO-TEMP-THEN-RENAME, the fix the issue proposed, was tried first and is WORSE:
-    with the marker open by that same permissive reader, both [IO.File]::Move(overwrite)
-    and a raw MoveFileEx(MOVEFILE_REPLACE_EXISTING) fail with ERROR_ACCESS_DENIED (5).
-    A rename cannot replace an open destination on this filesystem even when the holder
-    granted FILE_SHARE_DELETE, so it removes nothing and fails harder than the write it
-    was meant to replace. Not used, and recorded here so nobody re-suggests it.
+    WRITE-TO-TEMP-THEN-RENAME is WORSE and is not used: with the marker open by that same
+    permissive reader, both [IO.File]::Move(overwrite) and a raw
+    MoveFileEx(MOVEFILE_REPLACE_EXISTING) fail with ERROR_ACCESS_DENIED (5) -- a rename
+    cannot replace an open destination here even when the holder granted FILE_SHARE_DELETE.
 
-    The retry is still here, bounded and backing off, for the residue the share mode
-    cannot cover: another process holding a WRITE handle (a second driver mid-write, an
-    editor, a virus scanner). It is a backstop, not the mechanism.
-
-    TORN READS are not a concern at this size. The write is one Write() of under ~40
-    bytes onto a truncated file, so an observer poll landing inside it sees either the
-    empty file -- which PollMarker already returns from without logging -- or the whole
-    label. Nothing in between has ever been observed and nothing shorter can be written.
+    TORN READS are not a concern at this size. The write is one Write() of under ~40 bytes
+    onto a truncated file, so an observer poll landing inside it sees either the empty file
+    -- which PollMarker already returns from without logging -- or the whole label.
     #>
     [CmdletBinding()]
     param(
@@ -2087,13 +1846,11 @@ function Get-ScUnitState {
     Ask the plugin for a UNITSTATE line and parse it. THE test oracle.
     .DESCRIPTION
     Writes a unique label into the plugin's marker file and waits for the UNITSTATE
-    line carrying that exact label. The plugin dumps the line when it notices the
-    marker change (scplugin.cpp PollMarker), so this is a SYNCHRONOUS read of every
-    unit's own state from inside the process -- not a race against the 250ms poll,
-    and not a claim about the picture.
-
-    The line covers the whole shadow list, i.e. the entire pre-cap selection, not the
-    twelve the engine holds.
+    line carrying that exact label. The plugin dumps the line when it notices the marker
+    change (scplugin.cpp PollMarker), so this is a SYNCHRONOUS read of every unit's own
+    state from inside the process -- not a race against the 250ms poll, and not a claim
+    about the picture. It covers the whole shadow list, i.e. the entire pre-cap selection,
+    not the twelve the engine holds.
     #>
     [CmdletBinding()]
     param(
@@ -2115,19 +1872,13 @@ function Get-ScUnitState {
             $m = [regex]::Match($line.Line,
                 'UNITSTATE \[[^\]]*\] n=(\d+) live=(\d+) visible=(\d+) overflow=(\d+) orders=\[([^\]]*)\] orders2=\[([^\]]*)\] types=\[([^\]]*)\] burrowed=(\d+)/(\d+)')
             if (-not $m.Success) { break }
-            # Task 020 appended the liveness breakdown to the same line. Parsed
-            # separately and optionally, so this reader still works against a log
-            # written by an older plugin build (the fields are absent, not wrong).
+            # Every trailing field group is parsed separately and optionally, so a log
+            # written by an older plugin build still parses: a missing field reads as
+            # "this build did not report it", never as zero.
             $lv = [regex]::Match($line.Line,
                 'uniqOnly=(\d+) recycled=(\d+) hp0=(\d+) foreign=(\d+) nosprite=(\d+) removed=(\d+) staleSkipped=(\d+) liveness=(\d+)')
-            # Task 022 appended the per-unit COST/EFFECT histograms. Same rule as the
-            # task-020 block above: parsed separately and optionally, so a reader written
-            # against an older plugin build still works and a missing field reads as
-            # "this build did not report it", never as zero.
             $ce = [regex]::Match($line.Line,
                 'stimmed=(\d+)/(\d+) hp=\[([^\]]*)\] stim=\[([^\]]*)\] energy=\[([^\]]*)\]')
-            # Task 024 appended the chunk size and the RALLY-POINT histogram. Same rule
-            # again: optional, so an older log parses with these reported as absent.
             # Rally keys are the packed (x << 16) | y the plugin logs, so ONE key means
             # every unit in the selection is rallied to the same map point -- which is
             # what "the order reached all of them" has to mean for a building.
@@ -2192,29 +1943,21 @@ function Get-ScWorldState {
     Same marker handshake as Get-ScUnitState, but the plugin answers by walking the
     ENGINE's own per-player unit lists rather than the fan-out's shadow list -- so this
     works in `-Mode observe`, where no hook is installed and there is no shadow list at
-    all. That is what makes a plugin-vs-stock comparison possible with the SAME oracle
-    on both sides.
+    all, which is what makes a plugin-vs-stock comparison possible with the SAME oracle on
+    both sides. Needs -WorldScan 1; without it no WORLD lines are written and this throws
+    on the timeout.
 
-    Needs the plugin launched with -WorldScan 1; without it the plugin logs no WORLD
-    lines and this throws on the timeout.
-
-    Returns one object with .Units (one entry per unit, with Player/Type/Hp/Order/
-    Order2/Stim/Energy/X/Y/Flags), .Counts (per player: Units, Recount, Complete) and
-    .Screen (the viewport's top-left corner in MAP pixels). A Recount that disagrees with
-    Units means the sample was taken while the game thread was editing the list -- the
-    caller should discard it, not believe it.
+    A .Counts entry whose Recount disagrees with its Units means the sample was taken
+    while the game thread was editing the list -- discard it, do not believe it.
 
     .Screen is how a suite aims a click at a unit WITHOUT measuring anything off a
-    screenshot (AGENTS.md: read a thing's position from memory, not from its pixels):
+    screenshot (AGENTS.md § "Oracles: what counts as a read-back"):
 
-        $c = Get-ScWorldState ...
-        $u = $c.Units | Where-Object { ... }
         Send-ScClick -Hwnd $h -X ($u.X - $c.Screen.Left) -Y ($u.Y - $c.Screen.Top)
 
     `client = map - viewport` is the arithmetic the engine's own click handler at
-    0x0046FB40 does when it builds the rectangle it hit-tests, and the plugin reads the
-    pair where that handler reads it. Check the result is inside the play area (x < 640,
-    y < 340) before clicking -- below that is the console, which eats the click.
+    0x0046FB40 does when it builds the rectangle it hit-tests. Check the result is inside
+    the play area (x < 640, y < 340) first -- below that is the console, which eats it.
     #>
     [CmdletBinding()]
     param(
@@ -2294,27 +2037,21 @@ function Get-ScCardState {
     .SYNOPSIS
     Ask the plugin to READ THE COMMAND CARD out of process memory, and parse it.
     .DESCRIPTION
-    Task 026. Tasks 022 and 023 tried to reach the Ghost's Cloak by posting input at
-    the card -- every key A-Z and all nine slots -- and got a bounded negative: input
-    reaches the card, the ability is on the card, and neither path issues it. That
-    experiment could not distinguish "the button is greyed" from "the click missed",
-    because both produce an empty log.
+    DO NOT ANSWER "can this ability be issued" BY CLICKING. Posting every key A-Z and all
+    nine slots at the card gives only a bounded negative: it cannot distinguish "the
+    button is greyed" from "the click missed", because both produce an empty log.
 
-    This does not click. The plugin walks the card dialog (0x0068C148) and reports,
-    per slot, the control's own visible/disabled flags plus the Button record behind
-    it -- ability condition, action, params and strings (research/command-card.md).
-    Both of the engine's input paths refuse a control with the disabled bit set
-    (the mouse at 0x00459947, the hotkey predicate at 0x004588C0), so that one bit
-    is the whole answer, and it is a READ.
+    This does not click. The plugin walks the card dialog (0x0068C148) and reports, per
+    slot, the control's own visible/disabled flags plus the Button record behind it --
+    ability condition, action, params and strings (research/command-card.md). Both of the
+    engine's input paths refuse a control with the disabled bit set (the mouse at
+    0x00459947, the hotkey predicate at 0x004588C0), so that one bit is the whole answer.
 
-    Same marker handshake as Get-ScWorldState, and like it this installs no hook and
-    therefore works in `-Mode observe` too. Needs the plugin launched with
-    -CardScan 1; without it no CARD lines are written and this throws on the timeout.
+    Same marker handshake as Get-ScWorldState, and like it this installs no hook and so
+    works in `-Mode observe` too. Needs -CardScan 1; without it no CARD lines are written
+    and this throws on the timeout.
 
-    Returns .Slots (one entry per card control, Index/Visible/Disabled/State/Icon/
-    Button/BSlot/BIcon/Cond/Action/CondParam/ActParam/NameStr/DisStr), plus the header
-    fields (CardId, PortraitType, PortraitSet, PortraitEnergy, SetCount, Reason) and
-    .Shown / .Greyed. `Get-ScCardSlot $card 7` picks one slot out.
+    `Get-ScCardSlot $card 7` picks one slot out of the returned .Slots.
     #>
     [CmdletBinding()]
     param(
@@ -2429,14 +2166,12 @@ function Get-ScCardSlotPoint {
     .SYNOPSIS
     The CLIENT-coordinate centre of a card slot, computed from the live dialog.
     .DESCRIPTION
-    Never a hardcoded coordinate. A control's rect (+0x04) is relative to its
-    dialog's own origin -- the engine adds them itself at 0x00458850
-    (`dlg->rct.left + child->rct.left`) -- so the point is rootRect + rect, halved.
-
-    This is the card's answer to the "never click a browser row by number" rule:
-    a probe that clicks a guessed slot centre cannot tell "the button refused the
-    click" from "the click landed between buttons", and task 022 lost the whole
-    Ghost question to exactly that ambiguity. Returns @{X;Y}.
+    Never a hardcoded coordinate. A control's rect (+0x04) is relative to its dialog's own
+    origin -- the engine adds them itself at 0x00458850 (`dlg->rct.left + child->rct.left`)
+    -- so the point is rootRect + rect, halved. This is the card's answer to the "never
+    click a row by number" rule: a probe that clicks a guessed slot centre cannot tell "the
+    button refused the click" from "the click landed between buttons", and a whole question
+    has been lost to that ambiguity. Returns @{X;Y}.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Card, [Parameter(Mandatory)][int]$Slot)
@@ -2451,27 +2186,19 @@ function Get-ScStatusQueue {
     .SYNOPSIS
     Ask the plugin to READ THE PRODUCTION-QUEUE STRIP out of process memory, and parse it.
     .DESCRIPTION
-    Task 028. Cancelling a queued unit is NOT a command-card action in vanilla: the
-    card's slot-9 Cancel button sends "cancel the LAST queued item" (actionParam
-    0xFE), and the control that addresses a SPECIFIC queued item is one of five
-    icons in the STATUS PANE -- children of the statdata dialog 0x0068C1F0 with
-    control ids 2..6, one per display index.
+    Cancelling a queued unit is NOT a command-card action in vanilla: the card's slot-9
+    Cancel button sends "cancel the LAST queued item" (actionParam 0xFE), and the control
+    that addresses a SPECIFIC queued item is one of five icons in the STATUS PANE --
+    children of the statdata dialog 0x0068C1F0 with control ids 2..6, one per display index.
 
-    This does not click. The plugin walks that strip the way the engine's own
-    layout 0x004268D0 does and reports, per icon: the enabled bit BOTH input paths
-    refuse, the unit type the icon is drawing (its statUser record), the rect, and
-    the type in the building's OWN ring at (head + display) % 5 -- so "what the
-    player sees" and "what the building holds" are two independent reads that a
-    suite can compare instead of a screenshot.
+    This does not click. The plugin walks that strip the way the engine's own layout
+    0x004268D0 does and reports, per icon: the enabled bit BOTH input paths refuse, the
+    unit type the icon is drawing (its statUser record), the rect, and the type in the
+    building's OWN ring at (head + display) % 5 -- so "what the player sees" and "what the
+    building holds" are two independent reads a suite can compare instead of a screenshot.
 
-    An EMPTY queue slot's icon is DISABLED by the layout (0x00418640), so
-    `.Clickable` is literally how many queued items the player can cancel by
-    clicking. Needs -CardScan 1, the same switch as Get-ScCardState.
-
-    Returns .Slots (Display/Index/State/Visible/Disabled/Control/Flags/Graphic/
-    Rect/User/UIcon/UMode/UType/QueueType), the header fields (Dialog/Root/
-    RootRect/Portrait/PortraitType/PortraitOwner/Head/Engine/QueueOk) and
-    .Shown / .Clickable.
+    An EMPTY queue slot's icon is DISABLED by the layout (0x00418640), so `.Clickable` is
+    literally how many queued items the player can cancel by clicking. Needs -CardScan 1.
     #>
     [CmdletBinding()]
     param(
@@ -2481,12 +2208,12 @@ function Get-ScStatusQueue {
         [int]$TimeoutSec = 15
     )
     if (-not $MarkerPath) { $MarkerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt' }
-  # A walk whose header carries ringStable=0 is NOT consumable (task 066): the plugin
-  # itself flagged that its ring read never settled against the phantom bracket's
-  # seqlock (an OS preemption inside the guarded section can straddle every retry), so
-  # head/engine/qtype on that walk may be mid-window. Re-ask with a fresh marker, up to
-  # three times; only then return the flagged walk so a caller's assertion fails with
-  # `.RingStable = $false` in view rather than passing or failing on a disclaimed value.
+  # A walk whose header carries ringStable=0 is NOT consumable: the plugin is saying its
+  # ring read never settled against the phantom bracket's seqlock (an OS preemption inside
+  # the guarded section can straddle every retry), so head/engine/qtype may be mid-window.
+  # Re-ask with a fresh marker, up to three times; only then return the flagged walk, so a
+  # caller's assertion fails with `.RingStable = $false` in view rather than passing or
+  # failing on a disclaimed value.
   for ($scAsk = 0; $scAsk -lt 3; $scAsk++) {
     $script:ScMarkerSeq++
     $label = "$Tag-$script:ScMarkerSeq"
@@ -2528,9 +2255,8 @@ function Get-ScStatusQueue {
                     $st.PortraitOwner = [int]$h.Groups[9].Value
                     $st.Head = [int]$h.Groups[10].Value
                     $st.QueueOk = ($h.Groups[11].Value -eq '1')
-                    # ringStable=0 means the walk's ring read never settled against the
-                    # phantom bracket's seqlock (task 066) -- head/engine/qtype on this
-                    # walk may be mid-window and a caller should re-read, not trust.
+                    # ringStable=0: head/engine/qtype on this walk may be mid-window, so a
+                    # caller re-reads rather than trusting them (see the re-ask loop above).
                     $st.RingStable = ($h.Groups[12].Value -eq '1')
                     $st.Engine = @($h.Groups[13].Value -split ',' |
                                    Where-Object { $_ -match '^0x' } |
@@ -2603,20 +2329,16 @@ function Save-ScWindowImage {
     .DESCRIPTION
     A DIAGNOSTIC, never an oracle (research/automated-testing-options.md O4). The output
     reproduces game artwork, so it must stay on a gitignored path and must never be
-    committed (AGENTS.md hard rule 1) -- this function refuses to write inside the repo.
+    committed (AGENTS.md § "Hard rules") -- this refuses to write inside the repo.
 
-    READ THIS BEFORE MEASURING A COORDINATE OFF ONE OF THESE FRAMES.
-
-    With -FullWindow the capture is the WINDOW, including the border and title bar, while
-    every function in this file clicks in CLIENT coordinates. At this game's window size
-    the two differ by roughly (+5, +32): a control drawn at y=300 in the image is at
-    y~268 in the coordinates you must post.
-
-    That is not a footnote. Task 021 measured the lobby's Game Type combo off exactly such
-    a frame, concluded every suite had been clicking 32 px too high for months, and
-    "fixed" a coordinate that was already correct -- which made the failure worse, not
-    better. The real cause was timing (see Send-ScDropdownPick). Subtract the offset, or
-    capture without -FullWindow, before concluding a coordinate is wrong.
+    READ THIS BEFORE MEASURING A COORDINATE OFF ONE OF THESE FRAMES. With -FullWindow the
+    capture is the WINDOW, including the border and title bar, while every function in
+    this file clicks in CLIENT coordinates. At this game's window size the two differ by
+    roughly (+5, +32): a control drawn at y=300 in the image is at y~268 in the
+    coordinates you must post. That trap has already produced a "fix" to an
+    already-correct combo coordinate, where the real cause was timing (see
+    Send-ScDropdownPick). Subtract the offset, or capture without -FullWindow, before
+    concluding a coordinate is wrong.
     #>
     [CmdletBinding()]
     param(
@@ -2642,8 +2364,8 @@ function Save-ScWindowImage {
     $flags = if ($FullWindow) { 0 } else { 2 }
     if ($sz.Width -le 0 -or $sz.Height -le 0) { throw 'drive-game: the window has no client area.' }
 
-    # PW_CLIENTONLY == 2. Task 012 called PrintWindow twice against the live game and
-    # the game survived both -- it is a read of one window, never a screen grab.
+    # PW_CLIENTONLY == 2. PrintWindow reads one window and the live game survives it --
+    # never a screen grab.
     $bmp = New-Object System.Drawing.Bitmap($sz.Width, $sz.Height,
                      [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
     try {
@@ -2655,20 +2377,17 @@ function Save-ScWindowImage {
         } finally { $g.Dispose() }
         if (-not $ok) { throw "drive-game: PrintWindow failed for hwnd 0x$('{0:X}' -f [int64]$Hwnd)." }
 
-        # THE SHIM-CAPTION TRAP, fixed HERE because it has now produced a wrong
-        # number TWICE IN ONE DAY from two independent readers: task 065 ("a
-        # caption-colored strip in rows 0..30 ... sat inside my first right-band
-        # non-black 11%") and task 073 (a y=1..18 'resource bar' band that read
-        # the gray caption, nonzero=1.0 forever -- a probe that could not fail).
-        # cnc-ddraw leaves its caption INSIDE the reported client rectangle and
-        # presents the game's H rows scaled into the (H - caption) rows below
-        # it, so a raw client grab is a picture of the TITLE BAR plus a
-        # vertically squeezed game, and "row y" means nothing. Detect the
-        # near-uniform light strip anchored at row 0, crop it, and resample the
-        # remainder back to the client height (NearestNeighbor -- this inverts
-        # the shim's own downscale, it does not invent pixels). WMode skins its
-        # caption outside the client area and dark game rows never match the
-        # detector, so those captures pass through untouched (h=0).
+        # THE SHIM-CAPTION TRAP, fixed HERE because independent readers keep
+        # measuring the caption instead of the game (a "resource bar" band that read
+        # the gray caption reported nonzero=1.0 forever -- a probe that could not
+        # fail). cnc-ddraw leaves its caption INSIDE the reported client rectangle
+        # and presents the game's H rows scaled into the (H - caption) rows below it,
+        # so a raw client grab is the TITLE BAR plus a vertically squeezed game and
+        # "row y" means nothing. Detect the near-uniform light strip anchored at row
+        # 0, crop it, and resample the remainder back to the client height
+        # (NearestNeighbor inverts the shim's own downscale, it invents no pixels).
+        # WMode skins its caption outside the client area and dark game rows never
+        # match the detector, so those captures pass through untouched (h=0).
         if (-not $FullWindow) {
             $capH = 0
             for ($y = 0; $y -lt [Math]::Min(40, $bmp.Height); $y++) {
@@ -2749,16 +2468,14 @@ function Get-ScLogLineCount {
     @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue).Count
 }
 
-# --- the game's own dialogs (task 027) ---------------------------------------
+# --- the game's own dialogs --------------------------------------------------
 #
-# The plugin walks the engine's active-dialog list every tick and logs one line per
-# CHANGE of the set (scplugin.cpp ScanDialogs, list head SC_VA_DIALOG_LIST). That line
-# is what makes "is the tips dialog up, and where is its OK button" answerable without
-# a hardcoded point -- the same reason every map-browser row is computed.
-#
-# Line shape (one dialog per ' | ' chunk, controls inline):
+# The plugin walks the engine's active-dialog list every tick and logs one line per CHANGE
+# of the set (scplugin.cpp ScanDialogs, list head SC_VA_DIALOG_LIST). That line is what
+# makes "is the tips dialog up, and where is its OK button" answerable without a hardcoded
+# point -- the same reason every map-browser row is computed. Line shape (one dialog per
+# ' | ' chunk, controls inline):
 #   DIALOGS n=13  dlg='Tips_Dlg' rect=128,32,511,287 ctrl='o.O.K' rect=20,216,123,243 type=1 flags=0x...
-#
 # Control bounds are LOCAL to their dialog's origin -- the same convention the HUD row
 # uses -- so a client pixel is dialog.left + ctrl.left.
 
@@ -2797,10 +2514,9 @@ function Get-ScDialogs {
             Controls = $ctrls
         }
     }
-    # Streamed, not returned as one array object: `,$out` would hand the whole array to
-    # a downstream Where-Object AS A SINGLE ITEM, and `$_.Name -match ...` on an array is
-    # truthy whenever any element matches -- so every filter would "match" and return the
-    # entire list. Cost one live run to find.
+    # Streamed, not returned as one array object: `,$out` would hand the whole array to a
+    # downstream Where-Object AS A SINGLE ITEM, and `$_.Name -match ...` on an array is
+    # truthy whenever any element matches, so every filter would return the entire list.
     $out
 }
 
@@ -2834,24 +2550,20 @@ function Dismiss-ScTipsDialog {
     Close the in-game "StarCraft Tips" dialog by clicking ITS OWN OK button, and prove
     it is gone.
     .DESCRIPTION
-    Every in-game suite used to do this with one unconditional `Send-ScClick -X 200
-    -Y 261` and no check at either end: nothing said a dialog was there, and nothing
-    said it went away. That is the map-browser row-by-number defect in a different
-    costume -- a fixed point that is right until the day it is not, failing silently
-    into the game world underneath.
+    A fixed `Send-ScClick -X 200 -Y 261` with no check at either end is the map-browser
+    row-by-number defect in a different costume: a point that is right until the day it is
+    not, then failing silently into the game world underneath.
 
-    So this reads the engine's own dialog list (the plugin's DIALOGS line) and:
-      1. waits for `Tips_Dlg` to be up -- if it never appears, there is nothing to
-         dismiss and that is a normal, reported outcome, not a failure;
-      2. computes the OK button's centre from the button's OWN bounds, which are local
-         to the dialog's origin (client = dialog.left + ctrl.left), and clicks that;
-      3. waits for the dialog to leave the list, and THROWS if it is still there --
-         a tip dialog left up eats every later click in the run.
+    So this reads the engine's own dialog list (the plugin's DIALOGS line): the OK
+    button's centre comes from the button's OWN bounds, which are local to the dialog's
+    origin (client = dialog.left + ctrl.left). A dialog that never appears is a normal
+    reported outcome; one still up after the click THROWS, because a tip dialog left up
+    eats every later click in the run.
 
-    NOT the registry. The dialog has a "Show Tips at Startup" checkbox wired to
+    NOT the registry. The dialog's "Show Tips at Startup" checkbox is wired to
     HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft, which is live user state and
-    AGENTS.md hard rule 5 territory (a worker wiped that key once already). This
-    dismisses the dialog for THIS run and leaves the user's setting exactly as it was.
+    AGENTS.md § "Hard rules" territory. This dismisses the dialog for THIS run and
+    leaves the user's setting exactly as it was.
     #>
     [CmdletBinding()]
     param(
@@ -2888,14 +2600,13 @@ function Dismiss-ScTipsDialog {
 }
 
 # =============================================================================
-# ANY DIALOG, BY ITS OWN CONTROLS (task 051)
+# ANY DIALOG, BY ITS OWN CONTROLS
 # =============================================================================
 #
-# Dismiss-ScTipsDialog is one dialog's worth of a general move: find the control by what
-# the ENGINE says it says, compute the click point from that control's OWN bounds, and
-# print the whole inventory when it is not there rather than clicking a guessed point.
-# Task 051 needs the same move for the in-game menu and the Save/Load dialogs, which no
-# suite had ever driven, so it lives here instead of in one suite.
+# The general form of Dismiss-ScTipsDialog: find the control by what the ENGINE says it
+# says, compute the click point from that control's OWN bounds, and print the whole
+# inventory when it is not there rather than clicking a guessed point. Shared here so the
+# in-game menu and the Save/Load dialogs need no per-suite copy of it.
 #
 # Control text is what the plugin's DIALOGS line carries, and the plugin renders the
 # engine's hotkey markers as '.' -- so every match here is made on the LETTERS of the
@@ -3027,23 +2738,20 @@ function Send-ScText {
     .DESCRIPTION
     ONE MESSAGE PER CHARACTER, AND THAT IS THE WHOLE POINT. `Send-ScKey -Char` posts
     WM_KEYDOWN, then WM_CHAR, then WM_KEYUP -- and this engine's dialog edit control
-    takes BOTH the key-down and the char as an insertion. Measured, task 051, first run
-    that ever typed into the Save dialog: the string 'slprobe' arrived in the box as
+    takes BOTH the key-down and the char as an insertion. Measured, typing into the Save
+    dialog: the string 'slprobe' arrived in the box as
 
         ctrl 'ssllpprroobbee' rect=32,44,351,61 type=8
 
-    read straight out of the engine's own control text. A suite that had trusted its own
-    variable for the filename would have saved to a name it never chose and then looked
-    for the wrong file -- the read-back rule (AGENTS.md § task 033) catching a bug in the
-    thing it was written to check.
+    read straight out of the engine's own control text. A suite trusting its own variable
+    for the filename would save to a name it never chose and then look for the wrong file
+    (AGENTS.md § "Oracles: what counts as a read-back").
 
-    So the character path posts WM_CHAR alone. -ClearCount sends that many VK_BACK
-    presses first (a key with no char, which the box takes exactly once), because a box
-    that opens pre-filled -- and this one does, with the last save's name -- would
-    otherwise produce a string the caller cannot predict.
-
-    Nothing here proves the text landed. The CALLER must check the engine's own result:
-    the control's text on the next dialog read, or the file that appeared on disk.
+    So the character path posts WM_CHAR alone. -ClearCount sends that many VK_BACK presses
+    first (a key with no char, which the box takes exactly once), because this box opens
+    pre-filled with the last save's name and would otherwise produce a string the caller
+    cannot predict. Nothing here proves the text landed: the CALLER checks the engine's
+    own result -- the control's text on the next dialog read, or the file on disk.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][IntPtr]$Hwnd, [Parameter(Mandatory)][string]$Text,
@@ -3058,26 +2766,19 @@ function Send-ScText {
     }
 }
 
-# --- task 047: hook-set composition, by NAME rather than a hardcoded total -----
-# Lifted from test-combat-death.ps1 into this shared file (task 050) so
-# test-hud-row.ps1 could use the same by-name comparison instead of growing its own
-# copy of a hardcoded total -- which is the exact defect 047 removed here.
+# --- hook-set composition, by NAME rather than a hardcoded total ---------------
 
-# The five hooks sc_fanout.cpp installs unconditionally at mode >= shadow
-# (queueCommand, CMDACT_Select, sortOverflowHandler, SortAllUnits and, since task
-# 036, unit_IsStandardAndMovable) plus the three optional single-hook features,
-# named exactly as ScHookInstall logs them (sc_circles.cpp:340, sc_hudrow.cpp:828,
-# sc_queueind.cpp:788). Callers pass what the RUN'S OWN `FANOUT config:` line
-# reported, never a source-level default, so this stays right even if a default
-# changes.
+# The five hooks sc_fanout.cpp installs unconditionally at mode >= shadow plus the three
+# optional single-hook features, named exactly as ScHookInstall logs them
+# (sc_circles.cpp:340, sc_hudrow.cpp:828, sc_queueind.cpp:788). Callers pass what the
+# RUN'S OWN `FANOUT config:` line reported, never a source-level default, so this stays
+# right even if a default changes.
 #
 # THIS FUNCTION RETURNS SC_FANOUT'S OWN INSTALLS AND NOTHING ELSE, and that scope is
 # load-bearing rather than tidy: sc_fanout logs its own `HOOK: n/n installed` summary
-# counting only the hooks IT installed, and the suites corroborate the named set
-# against that number. A hook some other module splices must therefore not be in here,
-# or the corroboration compares two things that were never meant to be equal.
-# Get-ScPluginExpectedHooks below is the union, for the by-NAME comparison against the
-# log, which sees every module's lines.
+# counting only the hooks IT installed, and the suites corroborate the named set against
+# that number, so a hook another module splices must not be in here. The union, for the
+# by-NAME comparison against a log that sees every module, is Get-ScPluginExpectedHooks.
 function Get-ScFanoutExpectedHooks {
     param([bool]$Circles, [bool]$HudRow, [bool]$QueueInd)
     $names = @('queueCommand', 'CMDACT_Select', 'sortOverflowHandler', 'SortAllUnits',
@@ -3092,12 +2793,11 @@ function Get-ScFanoutExpectedHooks {
 # summary, but which every non-observe run does splice and which therefore DO appear in
 # the log the by-name comparison reads.
 #
-# Task 054's GAME-SESSION EPOCH (sc_session.cpp): `gameStartClear+7` is the epoch bump
-# and `loadSavedGame` is the load witness. Neither is optional and neither has a config
-# flag -- the epoch is what stops every module's records following the player into a
-# game they do not belong to (issues #63 and #67), so a run missing either one is a run
-# whose whole cross-game defence is off, and naming them here is what makes that
-# visible rather than silent.
+# The GAME-SESSION EPOCH (sc_session.cpp): one hook is the epoch bump, the other the load
+# witness. Neither is optional and neither has a config flag -- the epoch is what stops
+# every module's records following the player into a game they do not belong to -- so a
+# run missing either one is a run whose whole cross-game defence is off, and naming them
+# here is what makes that visible rather than silent.
 function Get-ScSessionExpectedHooks {
     @('gameStartClear+7', 'loadSavedGame')
 }

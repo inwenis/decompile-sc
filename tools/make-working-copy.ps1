@@ -3,37 +3,14 @@
 .SYNOPSIS
     Creates a patchable working copy of a StarCraft 1.16.1 install, verifying
     integrity against known-good fingerprints before and after the copy.
-
 .DESCRIPTION
-    Copies -Source (a pristine, read-only StarCraft install) to -Destination
-    (a scratch area OUTSIDE any git repo), then verifies:
-      - sha256 of StarCraft.exe and storm.dll in the SOURCE match the known
-        fingerprint (catches a corrupted/tampered source before we trust it)
-      - sha256 of StarCraft.exe and storm.dll in the DESTINATION match the
-        same fingerprint (catches a corrupted copy)
-      - battle.snp size matches in both source and destination
-      - recursive file count and total size match between source and
-        destination exactly (excluding preserved extras, see below), and are
-        close to the documented whole-install baseline (242 files, ~1068 MB)
-
-    Refuses to run if -Destination already exists, unless -Force is passed
-    (in which case the destination is re-synced -- safe to re-run any time).
-    Never writes to -Source.
-
-    Re-syncing an existing -Destination PRESERVES anything in the
-    destination that isn't part of the pristine install (a robocopy /MIR
-    mirror does not) as long as it lives under characters\ or Maps\ --
-    player profiles, replays, and generated test maps all land there and are
-    not game files, so keeping them does not weaken the integrity checks
-    above. Extras outside those two paths, and everything if -PurgeExtras is
-    passed, are still removed -- always printed before deletion, never
-    buried in a copy transcript.
-
+    -Source is a pristine install; -Destination is scratch space OUTSIDE any
+    git repo. Both trees are checked against the known-good fingerprint, so a
+    tampered source or a corrupted copy is caught before anything is patched.
+    Never writes to -Source; an existing -Destination needs -Force.
 .EXAMPLE
     ./tools/make-working-copy.ps1
     ./tools/make-working-copy.ps1 -Force
-    # Re-sync, but wipe player profile/replays/test maps too -- a true
-    # byte-for-byte mirror of -Source, like this script used to do always:
     ./tools/make-working-copy.ps1 -Force -PurgeExtras
     ./tools/make-working-copy.ps1 -Source D:\sc-install\Starcraft -Destination D:\sc-work\1161-base
 #>
@@ -43,11 +20,8 @@ param(
     [string]$Source = 'C:\sc-install\Starcraft',
     [string]$Destination = 'C:\sc-work\1161-base',
     [switch]$Force,
-    # Task 010: without this, a re-sync preserves anything under
-    # characters\ or Maps\ that isn't part of the pristine install (player
-    # profiles, replays, generated test maps). With it, the re-sync is a
-    # true mirror again -- everything not in -Source is removed, same as
-    # this script's behaviour before task 010.
+    # Re-sync as a true mirror: also delete the destination-only files a
+    # re-sync keeps by default (see $PreservedExtraPrefixes).
     [switch]$PurgeExtras
 )
 
@@ -62,17 +36,14 @@ $ExpectedSnpSize = 557310
 $ExpectedFileCountApprox = 242
 $ExpectedTotalBytesApprox = 1068MB
 
-# A mirroring reset deletes anything in -Destination not present in -Source.
-# A mistyped -Destination combined with -Force would silently wipe whatever
-# lives there. Only allow it against a destination that is empty, already
-# looks like a StarCraft install, or sits under a known scratch root.
+# Guards a mistyped -Destination: a reset deletes whatever lives there, so
+# only an empty, StarCraft-looking, or known-scratch path may be reset.
 $KnownScratchRoots = @('C:\sc-work')
 
-# Task 010: destination-only paths under these prefixes survive a reset by
-# default (not part of the pristine install, so keeping them does not affect
-# whether the copy is a faithful reproduction of the binary). Player
-# profiles live in characters\; replays (Maps\replays\) and generated test
-# maps (tools/README-test-map.md) live under Maps\.
+# Destination-only paths under these prefixes survive a reset by default: they
+# are not part of the pristine install (player profiles in characters\; replays
+# and generated test maps from tools/README-test-map.md under Maps\), so keeping
+# them cannot affect whether the copy faithfully reproduces the binary.
 $PreservedExtraPrefixes = @('characters', 'Maps')
 
 function Test-SafeMirrorDestination {
@@ -131,10 +102,8 @@ function Test-KeyBinaries {
     return $ok
 }
 
-# Enumerates $Root once and returns files/dirs keyed by relative path
-# (lowercased, for case-insensitive lookups -- NTFS is case-insensitive) so
-# source/destination trees can be diffed for extras and totalled for the
-# size/count comparison from the same scan.
+# Keys are lowercased: NTFS is case-insensitive, so a source and destination
+# path that differ only in case are the same file and must compare equal.
 function Get-RelativeInventory {
     param([string]$Root)
     $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
@@ -171,8 +140,7 @@ if (-not $sourceOk) {
 }
 $sourceInventory = Get-RelativeInventory -Root $Source
 
-# Computed only when re-syncing an existing destination; a fresh destination
-# has no prior content, so there is nothing to preserve or purge.
+# Stay empty for a fresh destination: no prior content, nothing to purge.
 $purgeFiles = @()
 $purgeDirs = @()
 
@@ -228,16 +196,14 @@ if (Test-Path $Destination) {
 Write-Host "== Copying $Source -> $Destination =="
 $robocopyArgs = @(
     $Source, $Destination,
-    '/E',        # copy all subdirs including empty ones; NOT /MIR -- purging
-                 # extras is handled ourselves below so preserved paths and
-                 # the report above are guaranteed to match what actually
-                 # gets deleted
-    '/COPY:DAT', # data, attributes, timestamps (no ACLs/owner - avoids needing elevated perms)
+    '/E',        # not /MIR: extras are purged below instead, so what gets
+                 # deleted is exactly what the report above listed
+    '/COPY:DAT', # no ACLs/owner: copying those would require elevation
     '/R:2', '/W:2',
     '/NFL', '/NDL', '/NP'
 )
 & robocopy @robocopyArgs | Out-Host
-# robocopy exit codes 0-7 are success (see docs); >=8 is a real failure.
+# robocopy exit codes 0-7 are success; >=8 is a real failure.
 if ($LASTEXITCODE -ge 8) {
     throw "robocopy failed with exit code $LASTEXITCODE"
 }

@@ -155,7 +155,7 @@ Write-Host "COUNTED=`$failures"
 Describe 'a suite that keeps its OWN Step defines it after the dot-source' {
 
     It 'so the library cannot silently override the two that are different' {
-        # test-production-queue.ps1 keeps a Step with -SweepPerturbed (task 041). If the
+        # test-production-queue.ps1 keeps a Step with -SweepPerturbed. If the
         # dot-source ever moves below that definition, the library's plain Step wins and
         # every -HoldSweepClicks run starts asserting on perturbed state without saying so.
         $dir = (Resolve-Path (Join-Path $PSScriptRoot '..' 'tools' 'plugin')).Path

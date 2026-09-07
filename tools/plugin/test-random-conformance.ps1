@@ -1,99 +1,41 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-RANDOMIZED conformance testing of the shipped features, in a real game, against the
-ENGINE'S OWN state. Seeded, replayable from the seed alone, and built to fail on a bug
-nobody thought to look for.
+Randomized conformance test of the shipped features in a real game, asserted against the
+engine's own state. Seeded; a failing run prints the command line that replays it.
 
 .DESCRIPTION
-The user asked for this in their own words (2026-08-11): "we list all the actions like
-'building x' then 'scheduled unit a' then '12 times' and we verify that it build 12 units
-and charged for 12. and we do this for all our features".
+The selection size is the parameter randomised hardest. `activePlayerSelection` (0x006284B8)
+and `playersSelections` (0x006284E8) abut and agree whenever exactly ONE building is
+selected, so a plugin reading the wrong one passes every single-building test and fails
+only when a multi-building selection is pushed past the engine's five slots.
 
-WHY IT EXISTS. Six bugs were reported fixed on 2026-08-11; the user played the build and
-found four still broken. Two root causes, and NEITHER was exotic:
+Invariants, each with the engine-side ground truth it is read from
+(AGENTS.md § Assert the ENGINE'S OWN RESULT, not your bookkeeping):
+  INV-W  every Train press reaches the wire: `CMD id=0x1F` logged inside the detour on
+         `queueCommand` (0x00485BD0). The client stops offering the button once a ring
+         holds five, so without the plugin presses six onward never become commands.
+  INV-R  each selected building's ring stays inside five slots and holds only the trained
+         type: its own `CUnit+0x98` buildQueue, head at `+0xA4`, printed per building.
+  INV-M  delta-minerals == accepted items x cost, and a cancel refunds exactly one: the
+         engine's per-player mineral/gas globals (`minerals=`/`gas=` on PRODFAN).
+  INV-B  what left the queue got built: the engine's per-player unit lists (WORLD scan).
+  INV-S  the selection the plugin acts on is the one the engine gates on: `playersSelections`
+         via `simSlots`, beside the client's own count at 0x0059723D.
+  INV-Q  the indicator reached the screen, asserted as a DIFFERENCE: `QIND boxDiff=` counts
+         bytes inside its live bounds that differ from a baseline of the same rect, taken
+         by the game thread while the indicator was hidden. Never `ink`: the pane's own art
+         shares the 8-bit surface, so ink reads 448 of 448 before anything of ours is drawn
+         and `ink > 0` passes with the box invisible; our glyphs change WHICH bytes are set,
+         not how many. Two states differing only in our string ("+1" vs "+10") must differ,
+         the longer must widen the box (width is strlen-derived in the indicator's PlaceOn),
+         and boxDiff > 0 in both. `surfInk` over the whole dialog is the blindness control;
+         `refInk` is legitimately -1 with no reference control visible, so it is not one.
+         Legibility is not proved; both states are saved as frames under -ShotDir.
 
-  * task 037 -- `AnchorFor` had no case for the upgrade mode, so the queue indicator was
-    composed and never anchored. Invisible in every real game, on every building, while
-    its test asked the composer directly and passed.
-  * task 038 -- `sc_prodqueue` read `activePlayerSelection` (0x006284B8) where the engine
-    gates on `playersSelections` (0x006284E8). The two arrays ABUT and agree whenever
-    exactly ONE building is selected -- which was every case in both suites.
-
-Both die instantly against a randomized sequence that VARIES THE SELECTION SIZE and counts
-what the ENGINE did. That is the whole design, and it is why the selection size is the
-parameter randomised hardest.
-
-WHAT IT ASSERTS, AND WHERE EACH INVARIANT'S GROUND TRUTH COMES FROM
-(AGENTS.md, "Assert the ENGINE'S OWN RESULT, not your bookkeeping")
-
-  INV-W  every Train press reaches the wire.
-         GROUND TRUTH: `CMD id=0x1F` logged INSIDE the detour on `queueCommand`
-         (0x00485BD0) -- the engine's own outgoing-command funnel. This is the one that
-         fails on task 038's parent: the client stops offering the button once a ring
-         holds five, so presses six onward never become commands at all.
-
-  INV-R  every selected building's ring stays inside the engine's five slots and holds
-         only the type that was trained.
-         GROUND TRUTH: that building's own `CUnit+0x98` buildQueue with head at `+0xA4`,
-         read out of its memory and printed per building by PRODFAN/PRODQ.
-
-  INV-M  the money. delta-minerals == (items the engine accepted) x cost, and a cancel
-         refunds exactly one item's cost.
-         GROUND TRUTH: the engine's per-player mineral/gas globals (`minerals=`/`gas=` on
-         the PRODFAN summary, read through the engine's own per-player accessor).
-
-  INV-B  what left the queue actually got built.
-         GROUND TRUTH: the engine's per-player unit lists, walked by the WORLD scan --
-         the count of the trained type owned by the player. This is the "and it built 12"
-         half of the user's sentence; INV-M is the "charged for 12" half.
-
-  INV-S  the selection the plugin acts on is the selection the ENGINE gates on.
-         GROUND TRUTH: `playersSelections` via the fan-out's `simSlots`, beside the
-         client's own count at 0x0059723D. Task 038's exact seam.
-
-  INV-Q  the queue indicator actually REACHED THE SCREEN, expressed as a DIFFERENCE.
-         GROUND TRUTH: `QIND ... boxDiff=` -- task 039's count of bytes inside the
-         indicator's live bounds that differ from a baseline copy of that same rect, taken
-         by the GAME THREAD on frames where the indicator was hidden. Plus the control's
-         own `text=` and `bounds=`, read out of the live dialog.
-         NOT `ink`, and this is measured rather than supposed: 039 read `ink=448 of 448`
-         inside the box BEFORE anything of ours was drawn, because the pane's own art is in
-         the same 8-bit surface. That number can neither fail (task 033 shipped `ink > 0`
-         and it passed while the box was invisible) nor pass a difference test (our glyph
-         changes WHICH bytes are set, not how many). It is printed here as a diagnostic and
-         asserted on nowhere.
-         The episode reads two states that differ only in our own string -- a logical queue
-         of 6 against one of 15, i.e. "+1" against "+10" -- and asserts three things: the
-         strings differ, the LONGER string widened the box (its width is a function of
-         strlen in the indicator's own PlaceOn, so this is guaranteed by construction
-         rather than by what a font happens to look like), and boxDiff > 0 in both states.
-         `surfInk` over the whole dialog surface is the blindness control; `refInk` is not
-         one, because it is legitimately -1 when neither reference control is visible.
-         WHAT IT DOES NOT PROVE, so nobody has to infer it: that the text is legible. It
-         proves the engine drew OUR string into the pixels we asked for, and that the box
-         is sized from that string. Legibility is a human's judgement and stays one --
-         which is why both states are also captured as frames, named for the state, under
-         -ShotDir for the user to open.
-
-  INV-P  RETIRED by task 055 (issue #66). It asserted "the plugin spent none of its own
-         money" from the plugin's own `mineralsSpent=0` counter, and said so honestly --
-         "SELF-CHECK, NOT AN ORACLE". It was worse than that: NOTHING in the plugin ever
-         incremented that counter, so the check read its answer out of a zero-initialised
-         array. Measured, not inferred: a build with a real spend added left it at 0 while
-         28 balance assertions failed.
-         The claim is INV-M's and always was -- the engine charged for the N items and no
-         more, read off the engine's per-player mineral global, once per episode. That is
-         the assertion a plugin spend breaks. A run-level restatement of the plugin's own
-         bookkeeping is not a second opinion, so there is no replacement id.
-
-REPRODUCIBILITY. The plan is a pure function of (seed, params) and is generated BEFORE the
-game launches -- see random-conformance-plan.ps1, which has its own PRNG for the reason
-given there. It is printed, hashed and written to disk next to the log. A failing run ends
-by printing the exact command line that replays it.
-
-WHAT A RUN DOES NOT COVER is printed at the end of every run, pass or fail. A green result
-that quietly skipped a feature is the failure mode this whole task exists to prevent.
+The plan is a pure function of (seed, params), generated before the game launches by
+random-conformance-plan.ps1, printed, hashed and written next to the log. Every run ends
+with its coverage: which invariants were asserted and how often the seam was reached.
 
 .EXAMPLE
 # the gate run: one game, six episodes
@@ -115,10 +57,9 @@ that quietly skipped a feature is the failure mode this whole task exists to pre
 param(
     [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
     [string]$LogPath = 'C:\sc-work\logs\041\random-conformance.log',
-    # One folder per task, and every frame NAMED FOR THE STATE IT IS (user's standing rule,
-    # 2026-08-12: "when you tell me about ui elements you show me with screenshots"). The
-    # frames never enter the repo or a PR -- a game frame reproduces game artwork, which
-    # hard rule 1 forbids -- so what ships is the PATH, and the read-back stays the oracle.
+    # Frames are named for the state they show. They never enter the repo or a PR (a game
+    # frame reproduces game artwork, hard rule 1): what ships is the PATH, and the read-back
+    # stays the oracle.
     [string]$ShotDir = 'C:\sc-work\logs\041-frames',
     [string]$FixtureDir,
     # 0 means "choose one and PRINT it" -- an unseeded run still has a seed, it just has
@@ -128,17 +69,15 @@ param(
     [int]$Episodes = 6,
     [ValidateSet('production', 'upgrades', 'hudrow')][string]$Profile = 'production',
     # THREE Command Centers: 3 is the smallest block whose reachable drag rectangles cover
-    # sizes 1, 2 AND 3 (a 2x2 grid with the last cell empty), so one fixture exercises the
-    # single-building path task 025 shipped and the group path task 038 broke.
+    # sizes 1, 2 AND 3 (a 2x2 grid with the last cell empty), so one fixture exercises both
+    # the single-building path and the group path.
     [int]$Buildings = 3,
     [int]$QueueMax = 16,
-    # 6 GAME SECONDS per SCV (task 031's -UnitBuildTime), and both directions of this
-    # number matter:
+    # 6 GAME SECONDS per SCV (the generator's -UnitBuildTime). Both directions matter:
     #   * the stock 20 s makes a drain episode cost a minute per building;
-    #   * 1 s DESTROYS THE TEST -- the ring drains DURING a press burst, so it never fills,
-    #     the client never greys the Train button, and task 038's bug cannot reproduce at
-    #     all. A fixture speed-up that removes the state under test is worse than a slow
-    #     fixture.
+    #   * 1 s DESTROYS THE TEST: the ring drains DURING a press burst, so it never fills,
+    #     the client never greys the Train button, and the multi-selection overflow bug
+    #     cannot reproduce. A speed-up that removes the state under test is worse than slow.
     # 6 s is above the longest burst this generator emits (12 presses x 250 ms = 3 s) and
     # far below anything that costs real time to drain.
     [int]$BuildTimeSec = 6,
@@ -156,8 +95,8 @@ param(
     # -Depots both move that number, and a caller who changes them needs the knob.
     [int]$DepotOffsetX = 640,
     [int]$ClickDelayMs = 250,
-    # Point the launch at a plugin built somewhere else -- the teeth test builds task 038's
-    # PARENT into a scratch directory and runs this same suite, same seed, against it.
+    # Point the launch at a plugin built somewhere else: the teeth test runs this same plan,
+    # same seed, against a build known to carry the bug.
     [string]$BuildDir,
     # The machine runs ONE game at a time behind the launch lock and other workers are
     # using it. Wait rather than fail.
@@ -178,8 +117,7 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 # The plan comes first, and it comes before anything that could fail.
 # ---------------------------------------------------------------------------
 if ($Seed -eq 0) {
-    # Not Get-Random: the seed has to be printable, and a seed nobody can read off the
-    # console is the failure this whole file is against.
+    # Not Get-Random: the seed has to be printable.
     $Seed = [int]((Get-Date).Ticks % 2147483647)
 }
 $plan = New-ScConformancePlan -Seed $Seed -Episodes $Episodes -Profile $Profile `
@@ -204,19 +142,13 @@ if ($DryRun) {
 }
 
 # ---------------------------------------------------------------------------
-# WHAT THIS RUNNER CAN ACTUALLY DRIVE -- one list, used by the refusal below AND by the
-# dispatch in the episode loop, so the two cannot drift apart (issue #68).
-#
-# They HAD drifted. random-conformance-plan.ps1 defines -Profile upgrades (upgrade-burst /
-# -cancel / -drain) and -Profile hudrow (row-select / row-page); the dispatch had cases for
-# `indicator` and a `default` that fell through to Invoke-QueueEpisode. So every upgrade-*
-# episode pressed the TRAIN button and asserted production-queue invariants, and a green
-# `-Profile upgrades` run exercised no line of sc_upgrades. A run that tests something other
-# than what it says is worse than a run that refuses: the refusal costs a launch, the green
-# lie costs whatever is built on it.
-#
-# The plan generator keeps both profiles -- they generate valid plans and -DryRun still
-# prints them, which is where the implementations will start. It is the RUN that refuses.
+# WHAT THIS RUNNER CAN DRIVE: one list, used by the refusal below AND by the dispatch in
+# the episode loop, so the two cannot drift apart. random-conformance-plan.ps1 also emits
+# upgrade-* (-Profile upgrades) and row-* (-Profile hudrow) kinds with no driver here; a
+# `default` that fell through to Invoke-QueueEpisode would press the TRAIN button and report
+# a green upgrades run that exercised no line of sc_upgrades. A refusal costs a launch; a
+# green lie costs whatever is built on it. -DryRun still prints those plans, which is where
+# an implementation starts.
 $QUEUE_EPISODE_KINDS = @('queue-burst', 'group-recall', 'queue-cancel', 'cancel-slot', 'queue-drain')
 $IMPLEMENTED_KINDS = $QUEUE_EPISODE_KINDS + @('indicator')
 $unimplemented = @($plan.episodes | ForEach-Object { $_.kind } | Sort-Object -Unique |
@@ -267,8 +199,8 @@ $TRAIN_ACTION  = '004234b0'   # the 0x1F emitter
 $CANCEL_ACTION = '00423490'   # the 0x20 emitter; actionParam 0xFE is "cancel the last"
 
 # ---------------------------------------------------------------------------
-# Findings. A failure carries the seed, the episode and the invariant, because a
-# random test's report is worthless without the coordinates to replay it.
+# Findings. A failure carries the seed, the episode and the invariant: a random test's
+# report is worthless without the coordinates to replay it.
 # ---------------------------------------------------------------------------
 $script:failures = @()
 $script:checks = 0
@@ -276,42 +208,25 @@ $script:episodeNo = 0
 $script:covered = @{}
 $script:skipped = @()
 $script:frames = @()
-# A RUN THAT DIED IS NOT A RUN THAT PASSED, and this harness proved it needs saying: an
-# incomplete rename threw immediately after the fixture step, the finally below printed the
-# result of the 13 checks that had run, and the whole thing reported `PASS 13 checks, 0
-# failures` having executed NOT ONE episode -- while `| Tee-Object` swallowed the exit code
-# that would have given it away. A green verdict for a run that asserted nothing is precisely
-# the failure this task exists to catch, so the verdict now depends on reaching the end of the
-# episode loop, and the exception is caught and reported as a failure rather than unwinding
-# past the summary.
-#
-# ...AND NEITHER IS A RUN THAT SKIPPED EVERY EPISODE (issue #68). `episodesRun` used to be
-# incremented at the TOP of the loop, before the four `continue` paths below it (SELECT,
-# empty selection, SUPPLY, QUEUE). So a run in which every episode bailed before acting
-# still printed `episodes run: 6 of 6` and `PASS N checks, 0 failures, 6 episode(s)` --
-# the task-041 disease exactly, reached without an exception and therefore invisible to
-# the `finished` flag above. Two counters now, because one cannot tell those apart:
+# A run that died is not a run that passed, and neither is one that skipped every episode.
+# The verdict therefore depends on `finished` (the episode loop reached its end; the catch
+# below says why an exception must not be the signal) and on `acted`, not `entered`:
 #   entered = the loop began an episode
-#   acted   = the episode got past every skip and dispatched
-# The verdict depends on `acted`; `entered - acted` is printed as the skip count.
+#   acted   = the episode got past every `continue` (SELECT, empty selection, SUPPLY,
+#             QUEUE) and dispatched
+# One counter cannot tell "6 of 6 ran" from "6 of 6 bailed before asserting anything";
+# `entered - acted` prints as the skip count.
 $script:episodesEntered = 0
 $script:episodesActed = 0
 $script:finished = $false
-# DID THIS RUN ACTUALLY REACH THE SEAM IT EXISTS FOR? A burst only tests task 038's bug if it
-# pushes a MULTI-BUILDING selection past the engine's five slots; below that the rings never
-# fill, the client never greys the button, and a buggy plugin behaves exactly like a correct
-# one. Seed 20260812 did that to itself -- its indicator episode filled a building to the cap,
-# every later group burst was clamped to two or three presses by the headroom check, and the
-# whole run came out GREEN against the very build whose bug it was written to find. Nothing in
-# the output said so. This counter is what says so.
-#
-# TWO counters, because the original counted the wrong thing (issue #68). It was incremented
-# from the PLANNED numbers before the burst ran -- selCount and the capped press count -- which
-# is an INTENT, not a reach. The presses can still be refused, the ring can still fail to fill,
-# and the counter would say the seam was covered anyway. The fact is measured on the other side
-# of the burst, in random-conformance-episodes.ps1: a building whose LOGICAL queue came out past
-# the engine's five, with more than one building selected. `Reached` is that; `Planned` is kept
-# beside it because the two disagreeing is itself worth seeing.
+# Did this run reach the seam it exists for? A burst tests the selection-array bug only if
+# it pushes a MULTI-BUILDING selection past the engine's five slots; below that the rings
+# never fill, the client never greys the button, and a buggy plugin behaves like a correct
+# one, so a run can come out green against the build it was written to catch (a seed whose
+# indicator episode fills a building to the cap clamps every later group burst to 2-3
+# presses). `Planned` is intent, counted before the burst; `Reached` is measured after it in
+# random-conformance-episodes.ps1 (logical queue past five with >1 building selected). Only
+# `Reached` is coverage: presses can be refused and rings can fail to fill.
 $script:groupOverflowPlanned = 0
 $script:groupOverflowReached = 0
 # DEFAULTS TO FAILURE. The verdict block sets this from Get-ScConformanceVerdict; a run that
@@ -348,10 +263,10 @@ function Write-Skip {
 }
 
 # ---------------------------------------------------------------------------
-# THE LOG TAIL. Every earlier suite re-reads the whole log for every oracle read; over a
-# forty-episode sweep that is quadratic and it is the reason a long run "hangs". This
-# keeps a byte position and a residue for the partial last line, so each read costs only
-# the bytes the plugin has written since the previous one.
+# THE LOG TAIL. A byte position plus a residue for the partial last line, so each oracle
+# read costs only the bytes the plugin has written since the previous one. Re-reading the
+# whole log per read is quadratic over a forty-episode sweep and is what makes a long run
+# "hang".
 # ---------------------------------------------------------------------------
 $script:logPos = 0
 $script:logResidue = ''
@@ -395,15 +310,12 @@ function Get-ScLogSince {
 
 # ---------------------------------------------------------------------------
 # THE ORACLE. One marker, every read-only dump the plugin is configured for, ONE instant.
-#
 # The plugin answers a marker change by writing every subsystem's state (scplugin.cpp
-# PollMarker), so a single handshake returns the building memory, the engine's unit lists,
-# the card, the status strip and the indicator for the same moment -- rather than five
-# reads of five different moments that a test would then have to pretend were one.
-#
-# It waits for the SUMMARY line of each subsystem it needs. Each of those is written LAST
-# and written unconditionally, so waiting for it means the whole answer has landed AND an
-# empty answer is still an answer (AGENTS.md, absence assertions).
+# PollMarker), so one handshake returns the building memory, the unit lists, the card, the
+# status strip and the indicator for the same moment rather than five moments a test would
+# have to pretend were one. It waits for each subsystem's SUMMARY line, which is written
+# LAST and unconditionally: the whole answer has landed, and an empty answer is still an
+# answer (AGENTS.md § Absence assertions must first be proved positive).
 # ---------------------------------------------------------------------------
 $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
 $script:oracleSeq = 0
@@ -567,18 +479,12 @@ function ConvertFrom-EngineLines {
         }
         $m = [regex]::Match($t, 'QIND \[[^\]]+\] mode=(\d+) linked=(\d+) visible=(\d+) text="([^"]*)" bounds=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\) ink=(-?\d+) refInk=(-?\d+)')
         if ($m.Success) {
-            # boxDiff is task 039's number and it is read SEPARATELY and OPTIONALLY on purpose:
-            # it is being added to sc_queueind.cpp by that task while this one is being written,
-            # so a plugin without it must make INV-Q SKIP with the reason printed rather than
-            # silently parse as 0 -- 0 is the failing value ("our pixels equal the baseline"),
-            # and a missing field that reads as a failure is how a harness reports someone
-            # else's feature broken on the strength of a probe that never ran. $null here means
-            # "the plugin never said", which is a different thing from every number.
-            # BY NAME, never by position. 039 is inserting `surfInk` between `refId` and
-            # `slotDiff` in the same commit that adds boxDiff, and both suites there parse this
-            # line with one positional regex and both broke on the insertion. A named match
-            # cannot break that way -- and it is also why the fields below are read as their
-            # own matches rather than appended to the big one above.
+            # boxDiff and surfInk are read SEPARATELY, BY NAME, and OPTIONALLY. A plugin
+            # without them must make INV-Q SKIP with the reason printed rather than parse as
+            # 0: 0 is the failing value ("our pixels equal the baseline"), and a missing field
+            # that reads as a failure reports someone else's feature broken on a probe that
+            # never ran. $null means "the plugin never said". A positional regex breaks when a
+            # field is inserted mid-line, which is why these are not groups in the match above.
             $bd = [regex]::Match($t, ' boxDiff=(-?\d+)')
             $si = [regex]::Match($t, ' surfInk=(-?\d+)')
             $o.Qind = [pscustomobject]@{
@@ -588,8 +494,7 @@ function ConvertFrom-EngineLines {
                 Text = $m.Groups[4].Value
                 Bounds = @([int]$m.Groups[5].Value, [int]$m.Groups[6].Value,
                            [int]$m.Groups[7].Value, [int]$m.Groups[8].Value)
-                # DIAGNOSTIC ONLY, never asserted on -- see Invoke-IndicatorEpisode for the
-                # measurement that says why.
+                # Diagnostic only, never asserted on: INV-Q in the header says why.
                 Ink = [int]$m.Groups[9].Value
                 RefInk = [int]$m.Groups[10].Value
                 BoxDiff = $(if ($bd.Success) { [int]$bd.Groups[1].Value } else { $null })
@@ -602,15 +507,11 @@ function ConvertFrom-EngineLines {
     $o
 }
 
-# HOW MANY OF A TYPE THIS PLAYER HAS ACTUALLY BUILT.
-#
-# -Completed is not a refinement, it is the whole point. The engine LINKS a unit into its
-# player's list the moment production starts and sets `SC_UNIT_FLAG_COMPLETED` (0x01) only when
-# it finishes, so "how many SCVs exist" is not "how many have been built" (sc_addresses.h 175).
-# Counting the raw list made this harness report 2 units built during a burst in which nothing
-# had finished -- it was seeing the two under construction -- and that is task 031's bug
-# exactly, which the header above that constant was written to prevent. Read it before
-# changing this.
+# How many of a type this player has actually BUILT. The engine links a unit into its
+# player's list the moment production starts and sets SC_UNIT_FLAG_COMPLETED (0x01) only
+# when it finishes (sc_addresses.h 175). Do not count the raw list: it reports units under
+# construction as built -- measured as 2 "built" during a burst in which nothing had
+# finished.
 function Get-OwnedCount {
     param(
         [Parameter(Mandatory)]$Eng,
@@ -626,7 +527,7 @@ function Get-OwnedCount {
 
 # The LOGICAL queue of one building: the engine's own occupied slots (its memory) plus what
 # the plugin is holding for it. The ring half is the oracle; the overflow half is the
-# plugin's own bookkeeping and is only ever used to compute HEADROOM and to explain a
+# plugin's own bookkeeping and only ever serves to compute HEADROOM and to explain a
 # number, never to evidence one.
 function Get-Logical {
     param([Parameter(Mandatory)]$Eng, [Parameter(Mandatory)][string]$Unit)
@@ -647,7 +548,7 @@ function Get-Logical {
 }
 
 # ---------------------------------------------------------------------------
-# Fixture. ONE FOLDER PER TASK, ONE NAME PER SUITE (AGENTS.md hard rule).
+# Fixture (AGENTS.md § Test fixtures: one folder per task, one NAME per suite).
 # ---------------------------------------------------------------------------
 if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t041' -Suite 'random-conformance' }
 $mapName = 'random-conformance.scx'
@@ -670,10 +571,9 @@ $launchLock = $null
 $shotN = 0
 $runStart = Get-Date
 
-# A frame of whatever is on screen, named for the STATE it is rather than for its position in
-# the run -- `frame-007.png` is not a thing anyone can ask for. The path is PRINTED, because the
-# frame itself can never leave this machine (hard rule 1) and the path is therefore the whole
-# deliverable: the conductor hands it to the user, who opens it locally.
+# A frame of whatever is on screen, named for the STATE it shows rather than its position in
+# the run: `frame-007.png` is not a thing anyone can ask for. The path is PRINTED because the
+# frame can never leave this machine (hard rule 1), so the path is the whole deliverable.
 function Shot([string]$tag) {
     if ($script:hwnd -eq [IntPtr]::Zero) { return $null }
     $script:shotN++
@@ -692,9 +592,9 @@ function Step {
 }
 
 # ---------------------------------------------------------------------------
-# Selecting things. Positions come from the engine's own unit list, never from a
-# screenshot (AGENTS.md, task 026) -- client = map - viewport is the arithmetic the
-# engine's own click handler at 0x0046FB40 does.
+# Selecting things. Positions come from the engine's own unit list, never from a screenshot
+# (AGENTS.md § Read a dialog's CONTENT from memory; never hash its pixels). client = map -
+# viewport is the arithmetic the engine's own click handler at 0x0046FB40 does.
 # ---------------------------------------------------------------------------
 function Move-CameraTo {
     param([Parameter(Mandatory)]$Units, [int]$MapW = 128, [int]$MapH = 96)
@@ -705,11 +605,10 @@ function Move-CameraTo {
     Start-Sleep -Milliseconds 700
 }
 
-# Drag a rectangle around exactly these units, and REFUSE if anything else falls inside it.
-# Task 025's first run boxed the play area and the engine handed back a neutral mineral
-# field; here the hazard is the suite's own SCVs, which appear next to a Command Center the
-# moment one finishes. Returning $false is a legitimate outcome the caller reports, not an
-# error to swallow.
+# Drag a rectangle around exactly these units, and REFUSE if anything else falls inside it:
+# a box over the play area also hands back neutral mineral fields, and this suite's own SCVs
+# appear next to a Command Center the moment one finishes. Returning $false is a legitimate
+# outcome the caller reports, not an error to swallow.
 function Select-ByBox {
     param([Parameter(Mandatory)]$Targets, [Parameter(Mandatory)]$World, [int]$Margin = 24)
     if (-not $World.Screen) { throw 'test: the plugin did not report the viewport origin.' }
@@ -846,11 +745,9 @@ try {
         $mine = @($w.Units | Where-Object { $_.Player -eq 0 })
         $ccs = @($mine | Where-Object { $_.Type -eq $CC_TYPE } | Sort-Object Y, X)
         # $depotUnits, NOT $depots: PowerShell variable names are CASE-INSENSITIVE, so a local
-        # `$depots` IS the `-Depots` parameter. The first version of this line wrote the unit
-        # list over the count and then compared the count against it -- the assertion failed on
-        # a fixture that was perfectly correct, and printed "and <twelve blanks> supply depots
-        # (12)", which is the sort of diagnostic that costs an hour (AGENTS.md, task 030: your
-        # diagnostics are under the same rule as your assertions).
+        # `$depots` IS the -Depots parameter. Writing the unit list over the count fails the
+        # assertion on a correct fixture and prints "<twelve blanks> supply depots (12)"
+        # (AGENTS.md § Your DIAGNOSTICS are under the same rule as your assertions).
         $depotUnits = @($mine | Where-Object { $_.Type -eq $DEPOT_TYPE })
         Assert-Inv -Id 'FIXTURE' -What "player 0 owns exactly $Buildings Command Centers ($($ccs.Count))" -Ok ($ccs.Count -eq $Buildings)
         Assert-Inv -Id 'FIXTURE' -What "and $Depots supply depots ($($depotUnits.Count))" -Ok ($depotUnits.Count -eq $Depots)
@@ -869,12 +766,10 @@ try {
     }
 
     # -----------------------------------------------------------------------
-    # CONTROL GROUPS, assigned once, before a single SCV exists.
-    #
-    # This is not only coverage of task 036's feature -- it is what makes the rest of the
-    # run possible. A drag box catches whatever is standing in the rectangle, and from the
-    # first completed SCV onward that includes SCVs. A recall selects exactly the units
-    # that were stored, whatever has since parked next to them.
+    # CONTROL GROUPS, assigned once, before a single SCV exists. Not only coverage of the
+    # feature: a drag box catches whatever stands in the rectangle, and from the first
+    # completed SCV onward that includes SCVs. A recall selects exactly the units that were
+    # stored, whatever has since parked next to them.
     # -----------------------------------------------------------------------
     Step 'assign a control group to every subset the plan uses' {
         $w = Read-Engine -Tag 'groups' -Need @('world')
@@ -906,7 +801,7 @@ try {
     foreach ($ep in $plan.episodes) {
         $script:episodeNo = $ep.index
         # ENTERED, not run. The four `continue` paths below can all fire before this episode
-        # asserts anything; `episodesActed` is incremented at the dispatch (issue #68).
+        # asserts anything; `episodesActed` is incremented at the dispatch.
         $script:episodesEntered++
         Write-Host ''
         Write-Host ("---- episode {0}/{1}: {2}  select={3} members=[{4}] presses={5} ----" -f `
@@ -957,9 +852,9 @@ try {
             continue
         }
 
-        # INV-S -- the two selection arrays, on task 038's exact seam. The simulation holds
-        # ONE building at a time (that is what makes the receive handlers' single-unit gate
-        # accept at all) while the client holds the whole group; a plugin that reads the
+        # INV-S: the two selection arrays, on the seam this harness exists for. The simulation
+        # holds ONE building at a time (that is what makes the receive handlers' single-unit
+        # gate accept at all) while the client holds the whole group; a plugin that reads the
         # wrong one is right only while those two agree.
         Assert-Inv -Id 'INV-S' -What "the engine's client selection count matches the selection ($($before.ClientCount) vs $selCount)" `
             -Ok ($before.ClientCount -eq $selCount)
@@ -994,22 +889,19 @@ try {
             continue
         }
 
-        # The INTENT: what this episode is about to try. Kept, and printed beside the reach,
-        # because "it meant to and did not" is a different diagnosis from "it never meant to"
-        # -- but it is not the coverage number and no longer pretends to be (issue #68).
+        # The INTENT, printed beside the reach: "it meant to and did not" is a different
+        # diagnosis from "it never meant to". It is not the coverage number.
         if ($selCount -gt 1 -and $capped -gt $ENGINE_SLOTS) { $script:groupOverflowPlanned++ }
 
         # --- ACT + ASSERT ---------------------------------------------------
         # PAST EVERY SKIP. Anything above this line can `continue`; nothing below can, so this
         # is the first point at which the episode is certain to assert something.
         $script:episodesActed++
-        # No silent default. A kind with no driver used to land in Invoke-QueueEpisode and be
-        # reported as a pass for whatever profile asked for it (issue #68). The refusal before
-        # the launch catches this for a whole plan; this catches a plan mutated after that
-        # check, and it throws into the RUN catch, which records it as a failure rather than
-        # letting it unwind past the verdict.
-        # (PowerShell's switch has no fall-through, so the queue kinds are one condition
-        # rather than five stacked labels.)
+        # No silent default: a kind with no driver must not land in Invoke-QueueEpisode and
+        # pass for whatever profile asked for it. The refusal before the launch catches a whole
+        # plan; this catches a plan mutated after that check, and throws into the RUN catch,
+        # which records a failure rather than unwinding past the verdict. (PowerShell's switch
+        # has no fall-through, so the queue kinds are one condition rather than five labels.)
         switch ($ep.kind) {
             'indicator' { Invoke-IndicatorEpisode -Ep $ep -Unit $units[0] -Before $before }
             { $QUEUE_EPISODE_KINDS -contains $_ } {
@@ -1025,11 +917,10 @@ try {
     $script:finished = $true
 }
 catch {
-    # CAUGHT, not left to unwind. An exception that propagates past this point terminates the
-    # script before its own `exit`, and under `| Tee-Object` (which every run of this uses, to
-    # keep a transcript) the pipeline then reports success -- so a crashed run looked green
-    # from the outside. Recording it as a failure keeps the verdict, the exit code and the
-    # transcript telling the same story.
+    # CAUGHT, not left to unwind. An exception that propagates past this point ends the script
+    # before its own `exit`, and under `| Tee-Object` (which every run uses, for a transcript)
+    # the pipeline then reports success, so a crashed run looks green from the outside.
+    # Recording it as a failure keeps the verdict, the exit code and the transcript agreeing.
     $script:failures += [pscustomobject]@{
         Id = 'RUN'; Episode = $script:episodeNo
         What = 'the run threw and did not finish its episodes'
@@ -1049,19 +940,11 @@ finally {
         Start-Sleep -Seconds 2
     }
 
-    # INV-P USED TO BE ASSERTED HERE, off the plugin's own mineralsSpent/gasSpent counters,
-    # and it was labelled a self-check because that is what it was. Task 055 deleted those
-    # counters (issue #66) after measuring that a build which really did spend the player's
-    # money left both of them reading 0 while 28 balance assertions failed.
-    #
-    # The claim did not go with them. It is INV-M's, asserted once per episode against the
-    # ENGINE's own per-player mineral global -- `the engine charged for every one of the N
-    # items and no more` -- which is exactly the assertion a plugin spend breaks, and the
-    # only one that can. A run-level duplicate that could only ever restate the plugin's own
-    # bookkeeping is the defect this harness exists to find, so it is not replaced in kind.
-    #
-    # The ledger line is still PRINTED, because its live fields (captured/promoted/refunded/
-    # mineralsRefunded) are how a double refund or a swallowed item is read afterwards.
+    # Printed, not asserted. The plugin's ledger is its own bookkeeping, not an oracle: a build
+    # that really spent the player's money left its spend counters at 0 while 28 balance
+    # assertions failed. The money claim is INV-M's, once per episode, off the engine's own
+    # mineral global. The live fields (captured/promoted/refunded/mineralsRefunded) are how a
+    # double refund or a swallowed item is read afterwards.
     $script:episodeNo = 0
     $tail = @(Get-ScLogSince -Mark 0)
     $stats = @($tail | Select-String -Pattern 'PRODQSTATS ') | Select-Object -Last 1
@@ -1079,8 +962,8 @@ finally {
     Write-Host ("profile     : {0}   episodes: {1}   buildings: {2}" -f $Profile, $Episodes, $Buildings)
     Write-Host ("checks      : {0}" -f $script:checks)
     # ACTED, then entered. The first number is the one that means anything: an episode that
-    # skipped before acting asserted nothing, and printing only "6 of 6" is how a run with
-    # six skips read as a full one (issue #68).
+    # skipped before acting asserted nothing, and printing only "6 of 6" reads a run with six
+    # skips as a full one.
     Write-Host ("episodes    : {0} acted, {1} entered, {2} planned{3}" -f `
                 $script:episodesActed, $script:episodesEntered, $plan.episodes.Count,
                 $(if ($script:finished) { '' } else { '   <-- THE RUN DID NOT FINISH' }))
@@ -1095,18 +978,14 @@ finally {
         $script:skipped | ForEach-Object { Write-Host "  $_" }
     }
 
-    # The frames, listed by PATH. They are the user's standing rule (2026-08-12) and they can
-    # never be attached to anything -- a game frame reproduces game artwork (hard rule 1) -- so
-    # the path IS the delivery: it goes in the PR body and the conductor hands it on.
     if ($script:frames.Count -gt 0) {
         Write-Host ''
         Write-Host "FRAMES ($($script:frames.Count)) -- open locally; never committed, never attached (hard rule 1):"
         $script:frames | ForEach-Object { Write-Host "  $_" }
     }
 
-    # WHAT THIS RUN DID NOT COVER. Printed on every run, pass or fail: a green result that
-    # quietly skipped a feature is the exact failure this task exists to prevent.
-    # INV-P was retired with the counter it read (issue #66); INV-M carries its claim.
+    # WHAT THIS RUN DID NOT COVER, printed on every run, pass or fail: a green result that
+    # quietly skipped a feature is the exact failure this harness exists to prevent.
     $allInv = @('INV-W', 'INV-R', 'INV-M', 'INV-B', 'INV-S', 'INV-Q')
     $missing = @($allInv | Where-Object { -not $script:covered.ContainsKey($_) })
     Write-Host ''
@@ -1125,16 +1004,15 @@ finally {
                     ($script:groupOverflowPlanned - $script:groupOverflowReached))
     }
     # Only `production` can reach this line: the other two profiles are refused before the
-    # launch, because nothing implements their episode kinds (issue #68).
+    # launch because nothing implements their episode kinds.
     Write-Host '          features NOT reached by this profile: sc_upgrades, sc_hudrow paging -- neither has an episode driver (issue #76)'
 
     Write-Host ''
-    # THE VERDICT IS DECIDED IN ONE PLACE, conformance-verdict.ps1, and this block only
-    # PRINTS what it returned. It used to be these four inline elseifs, which nothing could
-    # exercise without launching StarCraft -- which is how two of its clauses came to be
-    # missing for a whole task (issue #68): a run could skip every episode, or reach its
-    # seam zero times, and still print PASS and exit 0 with the COVERAGE warning directly
-    # above it. A warning nobody has to act on is a comment.
+    # THE VERDICT IS DECIDED IN ONE PLACE, conformance-verdict.ps1, which is testable without
+    # launching StarCraft; this block only PRINTS what it returned. Inline elseifs here are
+    # exercised by nothing, which is how a run can skip every episode, or reach its seam zero
+    # times, and still print PASS beside the COVERAGE warning above. A warning nobody has to
+    # act on is a comment.
     $verdict = Get-ScConformanceVerdict -Finished $script:finished `
         -EpisodesEntered $script:episodesEntered -EpisodesActed $script:episodesActed `
         -SeamReached $script:groupOverflowReached -FailureCount $script:failures.Count `
@@ -1194,8 +1072,6 @@ finally {
     }
 }
 
-# THE SAME DECISION that printed the word above -- not a second copy of the rule. These were
-# two independent expressions before, which is exactly how the exit code and the verdict word
-# come to disagree. `$script:exitCode` defaults to 1 so a run that never reached the verdict
-# block at all (the finally did not run, the process was killed inside it) cannot exit 0.
+# THE SAME DECISION that printed the word above, not a second copy of the rule: two
+# independent expressions are how the exit code and the verdict word come to disagree.
 exit $script:exitCode

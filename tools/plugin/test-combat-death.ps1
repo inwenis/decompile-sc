@@ -1,67 +1,28 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-End-to-end, UNATTENDED proof that a generated map can kill the player's units on
-demand, that when one of a >12 selection DIES the task-017 HUD row drops it (task
-019), and that the fan-out's COMMAND path drops it too rather than replaying its tag
-into a Select the engine will follow a freed sprite pointer through (task 020).
+Unattended proof that a generated map kills the player's units on demand, that the
+HUD row drops a member of a >12 selection when it dies, and that the fan-out's command
+path withholds the dead unit's tag instead of replaying it into a Select the engine
+would follow through a freed sprite pointer.
 
 .DESCRIPTION
-Every fixture up to task 018 was combat-less by design, so every died-while-displayed
-code path (the circles module's staleness guards, the HUD row's liveness term and
-click gate) was proved OFFLINE only, in hooktest. This test closes that gap with the
-combat variant of the map generator: a second, COMPUTER-owned block of Hydralisks
-14 tiles east of the player's Lurkers, no triggers, no AI script.
+Fixture: the combat variant of the map generator -- a COMPUTER-owned block of
+Hydralisks 14 tiles east of the player's Lurkers, no triggers, no AI script.
 
-THE ORACLE IS THE GAP BETWEEN TWO IN-PROCESS NUMBERS, read from one line.
+The oracle is the gap between two in-process numbers on one UNITSTATE line: after a
+death `uniqOnly` (CUnit+0xA5 alone) still accepts every captured unit and `live` (the
+hitpoint gate) does not, while `HUDROW show n=` agrees with `live` on its own HP term.
+A damage death does not recycle the slot, so uniqueness still matches -- the case the
+0xA5-only test misses (research/selection-circles.md 4.5).
 
-  UNITSTATE n=36 live=35 ... uniqOnly=36 hp0=1
-                             the shadow list still holds all 36 captured units;
-                             CUnit+0xA5 alone (`uniqOnly`) still accepts every one of
-                             them, and the task-020 gate (`live`) does not, because
-                             one of them reads hitpoints == 0
-  HUDROW    show n=35        the row's display list agrees, on its own HP term
+Phase A proves both slots spawn exactly what the file places (the enemy block via the
+same map with --enemy-owner player). Phase B is the combat run. -Liveness 0 runs the
+same assertions against the uniqueness-only gate and FAILS; that arm is how they were
+shown capable of failing (research/fanout-liveness.md).
 
-A damage death does not recycle the slot, so uniqueness still matches -- that is
-exactly the case the 0xA5-only test misses (research/selection-circles.md 4.5, and
-the task-017 review that put the HP term in). Those lines are a unit that died, a row
-that noticed, and -- since task 020 -- a command path that noticed too.
-
-WHAT TASK 020 ADDED. One more step, on the keypress the fixture already used to break
-off the engagement: the first fanned order after a death is read back off the plugin's
-own emit path (`FANOUT select:` carries every tag written, `FANOUT stale drop:` every
-unit refused and why), and the dead unit's tag must be in none of them. -Liveness 0
-runs that same step against the pre-task-020 gate, where it fails -- which is how the
-assertion was shown to be capable of failing (research/fanout-liveness.md).
-
-They are NOT one atomic read. The HUDROW line is found by a log poll (500 ms) and the
-UNITSTATE line is then requested with a fresh marker, so the second is written between
-half a second and a couple of seconds after the first. The conclusion survives because
-the gap can only run one way: uniqueness at CUnit+0xA5 changes only when the slot is
-RECYCLED, so a live=n read taken LATE is a stronger claim than one taken at the
-instant of the drop, not a weaker one. Reading it early is what would be unsound, and
-that ordering cannot happen -- the row's drop is what triggers the read.
-
-WHY LURKERS, TWICE OVER. An unburrowed Lurker has no weapon at all, so the enemy
-force survives the engagement and the deaths arrive as a trickle instead of being
-decided by who wins a fight. The block stays over the 12-unit cap throughout, which is
-what keeps the row in its paged mode where the assertion means something.
-
-And a burrowed one cannot be targeted by a Hydralisk, which is not a detector -- so
-one keypress ENDS the fight on the spot, without moving anybody. That matters: walking
-away does not work (the enemy pursues, the Lurkers keep dying all the way home, and a
-page walk over a population that is still moving compares two different lists), and
-the row's tag set can only be compared with itself once the population has stopped.
-
-Phase A proves the fixture's two slots spawn EXACTLY what the file places, in
-process: the human's 36 Lurkers by drag box, and the enemy block by generating the
-same map with --enemy-owner player (identical unit type, count and coordinates,
-owned by the human instead), centring the view on it with a minimap click, and
-boxing it. Phase B is the combat run.
-
-Frame captures corroborate; they are diagnostics, never the oracle, and never
-committed. The maps are generated for the run and deleted afterwards -- generated
-maps are game content (AGENTS.md hard rule 1).
+Frame captures are diagnostics, never the oracle, never committed. Generated maps are
+game content (AGENTS.md hard rule 1) and are deleted afterwards.
 
 .EXAMPLE
 ./tools/plugin/test-combat-death.ps1
@@ -74,22 +35,17 @@ param(
     [string]$GameDir = 'C:\sc-work\1161-base',
     [string]$LogPath = 'C:\sc-work\logs\019-combat-death.log',
     [string]$ShotDir = 'C:\sc-work\logs\019-combat-death-frames',
-    # Which folder under Maps\ the two fixtures are generated into.
-    #
-    # MORE THAN ONE TASK RUNS THIS SUITE, so it cannot be nailed to one task's folder the
-    # way a single-owner suite can. A worker points it at its own
-    # (`-FixtureDir <GameDir>\Maps\BroodWar\00-t023`) and no other run's browser click can
-    # land on its map, nor its own on theirs. The default is what this suite has always
-    # used, so running it by hand is unchanged.
+    # Which folder under Maps\ the two fixtures are generated into. More than one worker
+    # runs this suite, so each points it at its own folder and no other run's browser
+    # click can land on its map, nor its own on theirs.
     [string]$FixtureDir,
     [int]$UnitCount = 36,
     [int]$EnemyCount = 6,
     # Hit points for the victims, as a percentage of a Lurker's 125. At 100 the first
-    # death took roughly two minutes of shooting and the whole run took about eleven;
-    # the units absorb about twenty Hydralisk shots each. Lowering it is the one knob
-    # that speeds the fixture up without changing anything that matters -- same unit
-    # type, same inability to shoot back, same evidence -- so the deaths stay a
-    # trickle a test can attribute rather than a volley that wipes the group.
+    # death takes roughly two minutes of shooting and the whole run about eleven (about
+    # twenty Hydralisk shots per unit). Lowering it is the one knob that speeds the
+    # fixture up without changing anything that matters -- same unit type, same
+    # inability to shoot back -- so the deaths stay a trickle rather than a volley.
     [ValidateRange(1, 100)]
     [int]$UnitHp = 30,
     # The first death must arrive inside this. It is also the assertion that --unit-hp
@@ -98,43 +54,31 @@ param(
     # How long the mission is watched after the losses before it counts as "did not
     # end". Nothing in an empty-TRIG Use Map Settings game can call Victory or Defeat,
     # so this is a soak, not a race; 45s is long enough to catch an end that takes
-    # effect after a wait-and-pause action chain (task 016 saw one land nine seconds in).
+    # effect after a wait-and-pause action chain (one has been seen landing nine seconds in).
     [int]$HoldSec = 45,
     # How many disengage-and-regroup attempts may be spent getting the fight to
     # actually stop before the row is compared with itself. One is usually enough; a
-    # second is needed when a unit was still walking home, or still dying, when the
-    # first pair of boxes was taken. Some runs the enemy pursues rather than holding
-    # its post, and then it takes a few.
+    # second when a unit was still walking home, or still dying, at the first pair of
+    # boxes. Some runs the enemy pursues rather than holding its post, and then it takes a few.
     [int]$MaxRounds = 5,
-    # Task 021's PHASE C: which control group the >12 selection is stored into before
-    # the fight and recalled from after it. Any of the ten Ctrl+N groups behaves the
-    # same; 1 is the one the user's own report used.
+    # Which control group the >12 selection is stored into before the fight and
+    # recalled from after it. Any of the ten Ctrl+N groups behaves the same.
     [ValidateRange(0, 9)]
     [int]$ControlGroup = 1,
-    # Task 020's emit-side liveness gate. '1' is the shipped behaviour and what this
-    # test asserts. '0' deliberately restores the pre-020 gate (uniqueness alone) --
-    # the assertions are NOT inverted for it, so the run FAILS, which is the point:
-    # it is how "this assertion can fail" was demonstrated, and it is the A/B arm that
-    # showed what the engine does when it is handed a dead unit's tag
-    # (research/fanout-liveness.md 4). Never a green-run configuration.
+    # The emit-side liveness gate. '1' is the shipped behaviour and what this test
+    # asserts. '0' restores the uniqueness-only gate -- the assertions are NOT inverted
+    # for it, so the run FAILS, which is the point: it is how "this assertion can fail"
+    # was demonstrated, and the A/B arm that showed what the engine does when handed a
+    # dead unit's tag (research/fanout-liveness.md 4). Never a green-run configuration.
     [ValidateSet('0', '1')][string]$Liveness = '1',
-    # Seconds to wait after the death before issuing the fanned order under test.
-    #
-    # A dead unit passes through TWO states, and they are not the same experiment.
-    # For a second or two it is dead-but-still-there: hitpoints 0, still linked, still
-    # holding a sprite, still in the engine's own selection while its death animation
-    # plays. Then the removal path 0x004A0740 runs and it becomes dead-and-gone:
-    # unlinked, and CUnit+0x0C reads 0. Both are inside the window where CUnit+0xA5
-    # still matches, so the pre-020 gate would replay it in either -- but only the
-    # second one has the receive path dereferencing a null sprite pointer.
-    #
-    # 0 (the default) fires as soon as the death is seen, which is the state a player
-    # actually hits -- and which of the two states that lands in is NOT under this
-    # script's control, since it depends on how long the row's poll took to notice.
-    # Both recorded -Liveness 0 runs used delay 0; one landed in each state, by luck.
-    # A value around 8-10 should put the order in the second state on this fixture
-    # deliberately, but that has not been run -- it exists so the "sprite reads 0"
-    # landing can be aimed at rather than waited for (research/fanout-liveness.md 4.2).
+    # Seconds between the death and the fanned order under test. A dead unit passes
+    # through two states: dead-but-still-there (hp 0, still linked, still holding a
+    # sprite) and, once removal 0x004A0740 has run, dead-and-gone (unlinked, CUnit+0x0C
+    # reads 0). CUnit+0xA5 still matches in both, so a uniqueness-only gate replays
+    # either; only the second dereferences a null sprite pointer on receive. 0 fires as
+    # soon as the death is seen -- which state that lands in depends on the row's poll,
+    # not on this script. Around 8-10 should land the second state on purpose; untested
+    # (research/fanout-liveness.md 4.2).
     [int]$OrderDelaySec = 0,
     [switch]$KeepOpen
 )
@@ -166,9 +110,8 @@ $WALK_Y = 240
 # uses. Burrowing is how this test ends the engagement; see the note there.
 $BURROW_KEY = 0x55
 
-# Not a bare default any more: with $env:AGENT_TASK set this resolves to THIS
-# agent's own folder, so two concurrent runs of this same suite cannot land in one
-# folder and overwrite each other's identically-named fixture (task 023 review).
+# With $env:AGENT_TASK set this resolves to THIS agent's own folder, so two concurrent
+# runs of this suite cannot overwrite each other's identically-named fixture.
 if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-testmap' -Suite 'combat-death' }
 $mapDir = $FixtureDir
 $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
@@ -178,26 +121,14 @@ function Get-ScState {
     Get-ScUnitState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -TimeoutSec $TimeoutSec
 }
 
-# Get-ScFanoutExpectedHooks / Compare-ScHookNames (task 047) now live in
-# drive-game.ps1 (task 050) so test-hud-row.ps1 can share them instead of growing
-# its own hardcoded total -- the exact defect 047 removed here. This suite always
-# launches in fanout mode, so the base five names are never conditional here;
-# circles/hudrow/queueind are, which is why the caller passes what the RUN'S OWN
-# config line reported rather than a source-level default -- see part [5] below.
-
 # --- the fixture ---------------------------------------------------------------
 
-# THE TWO FIXTURES THIS SUITE CREATES, declared to drive-game.ps1 UP FRONT.
-#
-# This suite is the reason ownership is a RUN and not a filename. It creates a placement
-# probe, then the combat map; the old "refuse to start if an .scx you did not create is
-# present" rule tested ONE name, so on the second fixture it counted this suite's own
-# phase-A probe as somebody else's and waited for the run to finish itself (task 022,
-# 2026-08-09). A self-deadlock manufactured by the safety rule, not by a collision.
-#
-# Nothing is softened by declaring them: the set is fixed here, and every file outside it
-# is still foreign. The names are the SUITE's rather than a task number, because more than
-# one task runs this file -- which is also why the folder is a parameter now.
+# THE TWO FIXTURES THIS SUITE CREATES, declared to drive-game.ps1 UP FRONT. Ownership
+# is per RUN, not per filename: this suite creates a probe and then the combat map, and
+# a one-name "refuse if an .scx you did not create is present" rule would count its own
+# phase-A probe as foreign and block itself. Nothing is softened by declaring them: the
+# set is fixed here and every file outside it is still foreign. The names are the
+# suite's, not a task's, because more than one worker runs this file.
 $fixtures = New-ScFixtureRun -Dir $mapDir -Names @('combat-death-probe.scx', 'combat-death.scx')
 $script:myFixtures = $fixtures.Names
 
@@ -209,15 +140,11 @@ function Assert-FixtureFolderIsOurs { Assert-ScFixtureFolderMine -Run $fixtures 
 # from a constant that could drift away from it.
 function New-Fixture {
     param([string]$Name, [string]$EnemyOwner)
-    # SHARED-FOLDER GUARD (2026-08-09). The folder may be shared between workers, and this
-    # used to be a recursive delete of the whole thing.
-    #
-    # A live-process check alone was NOT enough, and this is what it cost: with no foreign
-    # game running the guard passed, this suite wrote its fixture, task 022 then dropped
-    # `022-ghosts.scx` in beside it -- and because the map browser opens a ROW and
-    # `022-ghosts.scx` sorted before this suite's map, THIS TEST LOADED THEIR MAP and boxed
-    # 36 Ghosts. So the rule is the stronger one: refuse on any fixture we did not create,
-    # whether or not a game is running, and never delete the folder.
+    # SHARED-FOLDER GUARD. The folder may be shared between workers, so refuse on any
+    # fixture we did not create, whether or not a game is running, and never delete the
+    # folder. A live-process check alone is NOT enough: with no foreign game running, a
+    # foreign map dropped in beside ours sorts ahead of it in the map browser -- which
+    # opens a ROW -- and this test loaded THEIR map and boxed 36 of their units.
     #
     # Only THIS fixture is cleared, not both: phase B must not delete phase A's probe out
     # from under a comparison that is still using it.
@@ -271,36 +198,29 @@ function Shot([string]$tag) {
     $p
 }
 
-# EVERY process claim in this file is PID-SCOPED, deliberately. Another worker may be
-# driving its own StarCraft on this machine at the same time (it happened while this
-# test was being written): a by-name "is the game running" check sees theirs, a
-# by-name cleanup CLOSES theirs, and a launch that fails because their game holds the
-# single-instance claim looks like a broken fixture. So this test only ever asks about
-# pids scinject handed IT, and only ever closes those.
+# EVERY process claim in this file is PID-SCOPED. Another worker may be driving its
+# own StarCraft on this machine at the same time: a by-name "is the game running"
+# check sees theirs, a by-name cleanup CLOSES theirs, and a launch that fails because
+# their game holds the single-instance claim looks like a broken fixture. So this test
+# only ever asks about pids scinject handed IT, and only ever closes those.
 $script:launchedPids = @()
 
 # CROSS-WORKER LAUNCH SERIALISATION IS NOT THIS FILE'S JOB. run-with-plugin.ps1 takes
 # an exclusive OS handle on C:\sc-work\logs\sc-launch.lock for the launch sequence
-# whenever $env:AGENT_TASK is set (task 018, tools/plugin/sc-launch-lock.ps1), which
-# covers every launch this test makes.
-#
-# An earlier version of this file carried its own content-based claim on that same
-# path, written before task 018 merged. It does not survive alongside the handle
-# version and was removed rather than adapted: while another worker holds the handle
-# with FileShare.None, `Get-Content` on the file THROWS, which the claim code read as
-# "nobody holds it", and the `Set-Content` that followed threw for the same reason and
-# killed the run. Two mechanisms on one path is the bug; the OS handle is the one that
-# has no check-then-write window, so it is the one that stays.
+# whenever $env:AGENT_TASK is set (tools/plugin/sc-launch-lock.ps1), which covers
+# every launch this test makes. Do not add a content-based claim on that path beside
+# it: while another worker holds the handle with FileShare.None, `Get-Content` THROWS,
+# which a claim reads as "nobody holds it", and its `Set-Content` then throws too and
+# kills the run. The OS handle has no check-then-write window, so it is the one that stays.
 
 # $true when the launch produced a live, injected game. run-with-plugin.ps1 throws on
 # a failed injection, and the pid it printed before failing belongs to a process that
 # is already gone, so neither the exception nor the pid alone is the answer -- both
 # are checked.
 function Invoke-Launch {
-    # -LogCommands 0: the game emits a sync command (0x37) every frame, and with
-    # command logging on it is ~19 log lines a second of noise this test never reads.
-    # It also makes the log big enough that the poll loops below spend their time in
-    # Get-Content. Nothing here asserts on a CMD line.
+    # -LogCommands 0: the game emits a sync command (0x37) every frame, ~19 log lines a
+    # second of noise this test never reads, and enough bulk that the poll loops below
+    # would spend their time in Get-Content. Nothing here asserts on a CMD line.
     $script:gamePid = 0
     try {
         & (Join-Path $scriptDir 'run-with-plugin.ps1') `
@@ -316,14 +236,12 @@ function Invoke-Launch {
     }
     catch {
         Write-Host "       (launch failed: $($_.Exception.Message))"
-        # run-with-plugin.ps1 throws in two different shapes, and one of them leaves a
-        # LIVE game behind. "injection failed" means the process was already gone --
-        # nothing to close. But its health check throws "the game has an error dialog
-        # open" with the process STILL RUNNING, and by then `scinject: PID=` has
-        # already streamed past, so that pid is ours. Zeroing it here without closing
-        # it would strand a game sitting on a modal dialog, holding the
-        # single-instance claim, on a machine other workers share -- and every retry
-        # below would then fail against our own leftover.
+        # run-with-plugin.ps1 throws in two shapes, and one leaves a LIVE game behind.
+        # "injection failed" means the process is already gone. But its health check
+        # throws "the game has an error dialog open" with the process STILL RUNNING,
+        # and by then `scinject: PID=` has already streamed past, so that pid is ours.
+        # Zeroing it without closing would strand a game on a modal dialog, holding the
+        # single-instance claim, and every retry below would fail against our own leftover.
         Close-LaunchedGame -Reason 'a failed launch' | Out-Null
         return $false
     }
@@ -335,21 +253,15 @@ function Invoke-Launch {
 
 function Start-Mission {
     <#
-    Launch, inject, and walk the menus to -MapPath. Every browser row is computed from
-    the filesystem and every folder verified on screen (Select-ScBrowserMap) -- so this
-    no longer needs "exactly one map file is in that folder", which is just as well:
-    phase B runs with phase A's probe still beside it, and the old row-2 click would
-    have loaded whichever of the two sorted first.
+    Launch, inject, and walk the menus to -MapPath. Browser rows are computed from the
+    filesystem and the folder verified on screen (Select-ScBrowserMap), so phase A's
+    probe may sit beside phase B's map.
 
-    THE LAUNCH RETRY. A launch can fail with "process exited before injection (code
-    0)" / scinject exit 3: the process is gone a moment after being resumed, so there
-    is nothing to inject into. On this machine that means another StarCraft already
-    holds the game's single-instance claim -- most likely another worker's run, since
-    this repo runs its in-game suites in parallel tabs. THAT game is not ours and is
-    never touched; the launch is simply retried after a pause, which is enough when
-    the collision is a run that is about to finish. What IS cleaned up between
-    attempts is our own half-started game, if the failure left one alive -- see the
-    catch in Invoke-Launch.
+    THE LAUNCH RETRY. "process exited before injection (code 0)" / scinject exit 3
+    means another StarCraft holds the single-instance claim -- most likely another
+    worker's run (in-game suites run in parallel tabs). THAT game is never touched; the
+    launch is retried after a pause, enough when the collision is a run about to finish.
+    Only our own half-started game is cleaned up between attempts (catch in Invoke-Launch).
     #>
     param([Parameter(Mandatory)][string]$MapPath)
     if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPath -Force }
@@ -384,15 +296,14 @@ function Start-Mission {
     Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
     Start-Sleep -Seconds 10
     # The tips dialog is found in the engine's own dialog list and dismissed by ITS OWN
-    # OK button, then asserted gone (task 027) -- never a fixed point, never the registry.
+    # OK button, then asserted gone -- never a fixed point, never the registry.
     Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
     Start-Sleep -Seconds 2
 }
 
 # Shut down the game THIS test launched, if it is still up, and forget it. Returns
-# whether the pid is actually gone. One place does this, so every exit -- a clean
-# phase end, a step that threw, a launch that failed half-way -- leaves the same
-# state behind.
+# whether the pid is actually gone. One place does this, so every exit -- a clean phase
+# end, a step that threw, a launch that failed half-way -- leaves the same state behind.
 function Close-LaunchedGame {
     param([string]$Reason = '')
     $target = $script:gamePid
@@ -472,26 +383,18 @@ function Get-BtnCenter {
 }
 
 # Walk every page of the row with right-clicks and collect the unit tags the plugin
-# reads back out of the live dialog.
-#
-# Every page is read BY FLIPPING TO IT, never by looking back in the log. The row
-# only writes a `show` line when it actually re-fills the twelve buttons -- a flip,
-# or a change in what a displayed unit is -- so a row sitting still on an idle map
-# writes nothing at all, and "the newest show line" can be a minute old and describe
-# a selection that no longer exists. A flip always produces a fresh one.
-#
-# A flip cycle of `pages` clicks from page 1 visits every page and lands back on
-# page 1, which is where every other step expects the row to be.
-#
-# Stable=$false means the row's own reported population or page count moved while
-# walking (another unit died mid-enumeration), so the caller can retry rather than
-# compare a tag set against the wrong total.
+# reads back out of the live dialog. Every page is read BY FLIPPING TO IT, never by
+# looking back in the log: the row only writes a `show` line when it re-fills the
+# twelve buttons, so on an idle map "the newest show line" can be a minute old and
+# describe a selection that is gone. A flip cycle of `pages` clicks from page 1 visits
+# every page and lands back on page 1, where every other step expects the row.
+# Stable=$false means the population or page count moved mid-walk (a unit died), so
+# the caller can retry rather than compare a tag set against the wrong total.
 function Read-RowPages {
-    # The per-flip wait is short on purpose. A flip that produces no `show` line means
-    # the row is not paging any more (a death among the engine's visible twelve
-    # latched it to stock mid-walk), and the caller's answer to that is to re-box and
-    # walk again -- so failing in seconds beats waiting out a long timeout while the
-    # fixture loses more units.
+    # The per-flip wait is short on purpose: a flip with no `show` line means the row
+    # is not paging any more (a death among the engine's visible twelve latched it to
+    # stock mid-walk), and the caller's answer is to re-box and walk again -- failing
+    # in seconds beats waiting out a long timeout while the fixture loses more units.
     param($Rects, [int]$TimeoutSec = 8)
     # Button ONE, not a middle one. The last page fills only as many buttons as it has
     # units left, and a right-click on a button the row is not showing a unit in is not
@@ -567,9 +470,8 @@ function Get-RowLastN {
 }
 
 # Block until the row's reported population has held still for $QuietSec. Page walks
-# and tag-set comparisons are only meaningful on a settled row: mid-engagement the
-# population moves under the walk and the two halves of a comparison describe
-# different selections.
+# and tag-set comparisons only mean something on a settled row: mid-engagement the
+# population moves under the walk and the two halves describe different selections.
 function Wait-RowSettled {
     param([int]$QuietSec = 15, [int]$TimeoutSec = 150)
     $last = Get-RowLastN
@@ -674,25 +576,14 @@ try {
 
     Step 'PHASE B: the installed hook SET matches this run''s own composition' {
         <#
-        Task 047. The old assertion here was `-eq 6` -- a total that task 036 outgrew
-        (it bumped the shadow-mode base from 4 to 5 for `unit_IsStandardAndMovable`)
-        without anyone bumping this literal too. A total also fails in the least
-        useful way: "expected 6, got 7" names no hook (AGENTS.md's diagnostics rule).
-
-        So this reads WHICH hooks sc_fanout.cpp actually spliced, by name, off the
-        per-hook `HOOK <name>: installed at ...` lines every ScHookInstall call
-        writes (sc_hook.cpp), and compares that set against the composition the SAME
-        run's own `FANOUT config: ... circles=%d hudrow=%d queueind=%d` line reports
-        -- not against source-level defaults, so the check stays right even if a
-        default changes.
-
-        The five-name base (queueCommand, CMDACT_Select, sortOverflowHandler,
-        SortAllUnits, unit_IsStandardAndMovable) is this arm's mode-invariant kernel
-        -- always fanout here -- and is the one part of the expected set that is
-        still a literal. That is by design, not a gap: it is the fact about the
-        plugin AGENTS.md says a hardcoded count silently rots on, so when it moves
-        again this assertion is meant to FAIL, naming exactly which name is missing
-        or extra, rather than pass on a stale total or die vaguely on "expected N".
+        By NAME, not by total: a hardcoded hook count rots silently when a module adds
+        a hook, and "expected 6, got 7" names no hook (AGENTS.md's diagnostics rule).
+        The set is read off the per-hook `HOOK <name>: installed at` lines (sc_hook.cpp)
+        and compared against what the SAME run's `FANOUT config: ... circles=%d hudrow=%d
+        queueind=%d` line reports, not source-level defaults. The five-name fanout base
+        (queueCommand, CMDACT_Select, sortOverflowHandler, SortAllUnits,
+        unit_IsStandardAndMovable) is the one literal left on purpose: when it moves,
+        this assertion is meant to FAIL naming the missing or extra hook.
         #>
         $cfg = @(Wait-ScLogMatch -LogPath $LogPath -Pattern 'FANOUT config: .*hudrow=1' -TimeoutSec 20)
         Assert-That 'the config line says hudrow=1' ($cfg.Count -gt 0)
@@ -702,9 +593,9 @@ try {
         $hudrowOn = $cm.Groups[2].Value -eq '1'
         $queueindOn = $cm.Groups[3].Value -eq '1'
 
-        # TWO SETS, different on purpose (task 054): the log carries EVERY module's
-        # `HOOK <name>: installed at` lines, while `HOOK: n/n installed` is sc_fanout's
-        # own summary of its own installs. See Get-ScPluginExpectedHooks in drive-game.ps1.
+        # TWO SETS, different on purpose: the log carries EVERY module's `HOOK <name>:
+        # installed at` lines, while `HOOK: n/n installed` is sc_fanout's own summary of
+        # its own installs. See Get-ScPluginExpectedHooks in drive-game.ps1.
         $expectedNames = Get-ScFanoutExpectedHooks -Circles $circlesOn -HudRow $hudrowOn -QueueInd $queueindOn
         $expectedAll = Get-ScPluginExpectedHooks -Circles $circlesOn -HudRow $hudrowOn -QueueInd $queueindOn
 
@@ -741,9 +632,8 @@ try {
         Assert-That 'the enumeration was stable (no unit died while reading the pages)' ([bool]$before.Stable)
         $script:beforeRow = $before
 
-        # Nothing may start on its own: the enemy is 10 tiles away and has to be
-        # walked into. Twenty more seconds of nothing happening is the fixture's
-        # "still idles indefinitely" property, kept from task 016.
+        # Nothing may start on its own: the enemy is 10 tiles away and has to be walked
+        # into. Twenty more seconds of nothing is the fixture's "idles indefinitely" property.
         $mark = Get-ScLogLineCount -LogPath $LogPath
         Start-Sleep -Seconds 20
         $drop = Wait-RowDrop -Baseline $UnitCount -FromLine $mark -TimeoutSec 1
@@ -758,9 +648,8 @@ try {
     $script:samePassProof = $null
 
     Step "PHASE C (task 021): Ctrl+$ControlGroup stores all $UnitCount into a control group, BEFORE anyone dies" {
-        # Task 021's death interaction needs a >12 control group that predates the
-        # fight, so the recall in PHASE C below is asked to return a group whose
-        # membership the combat has since invalidated.
+        # The recall in PHASE C below must be asked for a >12 group whose membership
+        # the combat has since invalidated, so the group is stored before the fight.
         #
         # Ctrl+N is posted as a WM_COMMAND carrying the accelerator's own command id:
         # StarCraft resolves Ctrl through TranslateAcceleratorA, which reads the thread
@@ -771,11 +660,9 @@ try {
         Send-ScControlGroupAssign -Hwnd $hwnd -Group $ControlGroup
         Start-Sleep -Seconds 2
         $since = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
-        # No `CMD id=0x13` assertion here: this suite launches with -LogCommands 0 (the
-        # game emits a sync command every frame and the noise swamps the log). It is not
-        # a gap -- sc_fanout writes `GROUP assign:` only from its 0x13 handler, so the
-        # line existing at all IS the command having arrived and been decoded as an
-        # assign for this group. test-control-groups.ps1 asserts the raw bytes.
+        # No `CMD id=0x13` assertion: -LogCommands 0 (see Invoke-Launch). Not a gap --
+        # sc_fanout writes `GROUP assign:` only from its 0x13 handler, so the line
+        # existing IS the command having arrived. test-control-groups.ps1 asserts the raw bytes.
         $g = @($since | Select-String -Pattern 'GROUP assign: group=\d+ now holds (\d+)')
         Assert-That 'the plugin stored a group' ($g.Count -gt 0)
         if ($g.Count -gt 0) {
@@ -784,10 +671,9 @@ try {
             Assert-That "it stored all $UnitCount, not the engine's twelve ($script:groupStored)" `
                 ($script:groupStored -eq $UnitCount)
             # Everything in the group is alive at this instant, which is what makes the
-            # drop count in PHASE C attributable to the combat and to nothing else.
-            #
-            # The NUMBER is captured, not substring-matched: `'0 skipped as not live'` as
-            # a bare substring also matches "10 skipped as not live" -- it would pass on
+            # drop count in PHASE C attributable to the combat and nothing else. The
+            # NUMBER is captured, not substring-matched: `'0 skipped as not live'` as a
+            # bare substring also matches "10 skipped as not live" -- it would pass on
             # exactly the input it exists to rule out.
             $skipM = [regex]::Match($g[-1].Line, '(\d+) skipped as not live')
             Assert-That 'nothing was skipped as not-live at store time' `
@@ -813,13 +699,11 @@ try {
         if ($null -eq $drop) { return }
         Write-Host "       DEATH: $($drop.Line)"
 
-        # THE ORACLE. The row lost a unit; the shadow list did not. Both liveness
-        # numbers come off the SAME read of that list: `uniqOnly` is CUnit+0xA5 alone
-        # -- the engine's own stale-tag test, and the whole of what the fan-out
-        # checked before task 020 -- and it still accepts every one of them. `live`
-        # is the task-020 gate, and it does not. Their difference is a unit that is
-        # dead and whose slot has not been recycled: the case CUnit+0xA5 cannot see,
-        # the case that used to be replayed into a Select.
+        # THE ORACLE. The row lost a unit; the shadow list did not. Both liveness numbers
+        # come off the SAME read of that list: `uniqOnly` is CUnit+0xA5 alone -- the
+        # engine's own stale-tag test -- and it still accepts every one of them; `live`
+        # is the hitpoint gate, and it does not. Their difference is a unit that is dead
+        # and whose slot has not been recycled: the case CUnit+0xA5 cannot see.
         $now = Get-ScState 'at-the-death'
         Assert-That "a unit of the boxed selection DIED in combat -- the row's display list is down to $($drop.N) of $baseline" `
             ($drop.N -lt $baseline)
@@ -829,10 +713,12 @@ try {
             ($now.UniqOnly -eq $baseline)
         Assert-That "but the task-020 gate does not (live=$($now.Live), hp0=$($now.Hp0)) -- it dropped on HITPOINTS, exactly what the row did" `
             ($now.Live -lt $baseline -and $now.Hp0 -ge 1)
-        # `-le`, not `-eq`, for the same reason the header gives for the two reads not
-        # being atomic: this one is taken AFTER the row's line, and the population can
-        # only fall. A gate that counted MORE survivors than the row did a moment
-        # earlier would be the real failure, and that is what this rules out.
+        # `-le`, not `-eq`: the two reads are not atomic. The HUDROW line is found by a
+        # 500 ms log poll and the UNITSTATE line requested afterwards, so this read is
+        # LATER and the population can only fall -- uniqueness at CUnit+0xA5 changes only
+        # when the slot is RECYCLED, so a late live=n read is the stronger claim, and the
+        # row's drop is what triggers it, so it can never be early. A gate that counted
+        # MORE survivors than the row did a moment earlier would be the real failure.
         Assert-That "the gate counts no more survivors than the row did (row $($drop.N), gate $($now.Live))" `
             ($now.Live -le $drop.N)
         Write-Host "       $($now.Line)"
@@ -840,9 +726,9 @@ try {
 
         if ($drop.Kind -eq 'stock') {
             # The dead unit was one of the ENGINE's own visible twelve, so the engine's
-            # selection stopped matching our visible tail, the divergence latch fired
-            # and the row handed itself back to stock. That is task-017's designed
-            # behaviour, and the n it hands back with is already short of the dead unit.
+            # selection stopped matching our visible tail, the divergence latch fired and
+            # the row handed itself back to stock -- by design, and the n it hands back
+            # with is already short of the dead unit.
             Write-Host '       (the dead unit was one of the engine''s visible twelve: divergence latch -> stock)'
         }
         else {
@@ -865,36 +751,24 @@ try {
 
     Step 'PHASE B: THE 020 FIX -- the first fanned order after a death does NOT replay the dead unit' {
         <#
-        THE ASSERTION THIS TASK EXISTS FOR.
+        THE REGRESSION ASSERTION. The shadow list now holds a dead unit whose slot has
+        not been recycled, so its CUnit+0xA5 still matches. A uniqueness-only emit gate
+        replays that tag; the receive path accepts it (CMDRECV_Select 0x004C2750 checks
+        count/decode/uniqueness/dedup/id!=14 and nothing more) and addUnitToSelectionSlot
+        0x0049AF80 dereferences its sprite pointer.
 
-        Right now the shadow list holds a unit that is dead and whose slot has not
-        been recycled, so its CUnit+0xA5 still matches what we captured. Before task
-        020 the emit gate compared nothing else, so that unit's tag went into the
-        replayed Select, the engine's receive path accepted it (CMDRECV_Select
-        0x004C2750 validates count/decode/uniqueness/dedup/id!=14 and nothing more)
-        and addUnitToSelectionSlot 0x0049AF80 dereferenced its sprite pointer.
+        BURROW is the fanned order under test, not a retreat. Unburrowed Lurkers have no
+        weapon, so deaths arrive as a trickle with the block over the 12-unit cap
+        throughout; burrowed ones cannot be targeted by Hydralisks (not detectors), so one
+        keypress ENDS the fight in place. Walking away fails: the enemy pursues, Lurkers
+        die all the way home, and a page walk over a moving population compares two
+        different lists. Same untargeted-ability fan-out as test-burrow-fanout.ps1.
 
-        One keypress is all it takes -- and it is the same keypress the fixture
-        already needed to break off the engagement, so this costs the run nothing.
-        BURROW, not retreat: walking away does not work (the Hydralisks pursue, the
-        Lurkers keep dying all the way home, and a page walk over a population that is
-        still moving compares two different lists). Burrowing ends the fight where it
-        stands -- a Hydralisk is not a detector and cannot target a burrowed unit --
-        and it moves nobody, so the survivors stay in one boxable clump. It is the
-        same untargeted-ability fan-out test-burrow-fanout.ps1 proves reaches all 36
-        units from one keypress.
-
-        THE ORACLE IS THE WIRE, read back from the plugin's own emit path: every tag
-        that goes into a Select is logged by `FANOUT select:` as it is written, and
-        every unit refused a place is logged by `FANOUT stale drop:` with the reason
-        and the fields the receive path would have used. The claim is a set
-        difference over those two lines, corroborated against the row's own
-        independently-read tag set from before the fight.
-
-        It CAN fail, and that has been shown both ways: offline, hooktest part [7]
-        runs the identical case with the gate at its pre-020 shape and asserts the
-        dead tag DOES reach the wire; in game, -Liveness 0 runs this very step
-        against the pre-020 gate, where it fails (research/fanout-liveness.md 4).
+        THE ORACLE IS THE WIRE: `FANOUT select:` logs every tag written, `FANOUT stale
+        drop:` every unit refused and why; the claim is a set difference over the two,
+        corroborated by the row's own pre-fight tag set. It CAN fail: hooktest part [7]
+        runs the identical case with the uniqueness-only gate and asserts the dead tag
+        DOES reach the wire; -Liveness 0 does the same in game (research/fanout-liveness.md 4).
         #>
         if ($OrderDelaySec -gt 0) {
             Write-Host "       waiting ${OrderDelaySec}s first, so the dead unit is past REMOVAL (0x004A0740) and not merely dead"
@@ -916,21 +790,14 @@ try {
             $m = [regex]::Match($l.Line, 'tags=\[([0-9A-F ]*)\]')
             $emitted += @($m.Groups[1].Value -split ' ' | Where-Object { $_ })
         }
-        # THE VERDICT LINES, BOTH KINDS. sc_fanout writes one forensics line per unit
-        # its liveness test rejects, and it writes it WHETHER OR NOT the gate then
-        # refuses the unit: `FANOUT stale drop` when the gate is on and the tag is
-        # withheld, `FANOUT REPLAYING A STALE UNIT (gate off)` when the pre-020 gate
-        # lets it through anyway. Same fields, same `why=`.
-        #
-        # Scraping BOTH is what makes the assertion below mean anything. An earlier
-        # version of this step read only `stale drop` lines -- which sc_fanout writes
-        # exclusively on the branch that ALSO skips writing the tag -- so the set of
-        # "dead tags" was by construction a set of tags that had not been emitted, and
-        # "none of them reached the wire" was a tautology. Worse, under -Liveness 0 no
-        # `stale drop` line exists at all, the set came out empty, and the assertion
-        # PASSED while the dead unit's tag was demonstrably on the wire. The union is
-        # the same set of units in both arms; only the outcome differs, which is
-        # exactly what a regression assertion needs.
+        # THE VERDICT LINES, BOTH KINDS. sc_fanout writes one forensics line per unit its
+        # liveness test rejects WHETHER OR NOT the gate then refuses it: `FANOUT stale
+        # drop` when the tag is withheld, `FANOUT REPLAYING A STALE UNIT (gate off)` when
+        # the uniqueness-only gate lets it through. Same fields, same `why=`. Scraping
+        # BOTH is what makes the assertion below mean anything: `stale drop` alone is
+        # written only on the branch that ALSO skips the tag, so a dead set built from it
+        # cannot intersect the emitted set (tautology), and under -Liveness 0 it is empty
+        # -- the assertion would PASS with the dead tag demonstrably on the wire.
         $verdicts = @()
         foreach ($l in ($since | Select-String -Pattern 'FANOUT (?:stale drop|REPLAYING A STALE UNIT \(gate off\)): unit=0x[0-9A-F]{8}')) {
             $m = [regex]::Match($l.Line,
@@ -949,12 +816,10 @@ try {
 
         Assert-That 'the emit path wrote at least one Select we can read back' `
             ($emitted.Count -gt 0)
-        # (1) something was judged not-live, and (2) it was judged so for BEING DEAD --
-        # not for a recycled slot, which is the case the pre-020 gate already caught.
-        #
-        # Every list below is projected with ForEach-Object rather than read as
-        # `$collection.Property`. Member enumeration over a collection that may be
-        # empty is exactly the kind of thing that turns a PASSING assertion into a
+        # (1) something was judged not-live, and (2) for BEING DEAD -- not for a recycled
+        # slot, which uniqueness alone already catches. Every list below is projected
+        # with ForEach-Object rather than read as `$collection.Property`: member
+        # enumeration over a possibly-empty collection turns a PASSING assertion into a
         # thrown step, and the passing case is the common one here.
         $deadVerdicts = @($verdicts | Where-Object { $_.Why -eq 'hp0' })
         $reasons = @($verdicts | ForEach-Object { $_.Why } | Sort-Object -Unique)
@@ -964,24 +829,15 @@ try {
         Assert-That 'every hp0 verdict really did read zero hit points' `
             (@($deadVerdicts | Where-Object { $_.Hp -ne 0 }).Count -eq 0)
         $script:deadTags = $deadTags
-        # THE REGRESSION ASSERTION, and the one this whole task turns on: not one of
-        # those tags is in any emitted Select. It FAILS under -Liveness 0, where the
-        # very same units are judged the very same way and their tags go out anyway.
-        #
-        # IN THE SHIPPED ARM IT CANNOT FAIL, AND THAT NEEDED SAYING (issue #70). A unit the
-        # gate DROPS never reaches the FANOUT select: tag list at all -- sc_fanout.cpp:759
-        # continues before the tag append -- and a unit the gate WRONGLY PASSES produces no
-        # drop verdict, so it is never in $deadTags either. The two lists are populated from
-        # disjoint branches of the same `if`, so their intersection is empty whatever the
-        # gate does. The -Liveness 0 defect arm is where this assertion earns its keep; here
-        # its green is structural, and a green that means nothing must not look like one
-        # that does.
-        #
-        # So it is now paired with the POSITIVE CONTROL its absence-claim needs: the LIVE
-        # tags, judged by the same gate in the same run, MUST appear in $emitted. If they do
-        # not, the comparison is not measuring membership -- the two lists are drawn from
-        # vocabularies that never meet (a tag-format change on either side would do it) --
-        # and its zero is worth nothing. AGENTS.md: prove the pattern positive where it
+        # THE REGRESSION ASSERTION: none of those tags is in any emitted Select. It FAILS
+        # under -Liveness 0, where the same units get the same verdicts and go out anyway.
+        # IN THE SHIPPED ARM IT CANNOT FAIL: a unit the gate DROPS never reaches the
+        # `FANOUT select:` tag list, and a unit it WRONGLY PASSES gets no drop verdict, so
+        # is never in $deadTags -- disjoint branches of one `if`, empty intersection
+        # whatever the gate does. Hence the POSITIVE CONTROL: the LIVE tags, judged by the
+        # same gate in the same run, MUST appear in $emitted, or the two lists come from
+        # vocabularies that never meet (a tag-format change on either side would do it)
+        # and the zero is worth nothing. AGENTS.md: prove the pattern positive where it
         # should match, then require it absent where it should not.
         $liveTags = @($verdicts | Where-Object { $_.Why -ne 'hp0' } | ForEach-Object { $_.Tag } | Sort-Object -Unique)
         $liveEmitted = Get-ScOverlap -Set $liveTags -Against $emitted
@@ -997,11 +853,10 @@ try {
         $notWithheld = @($deadVerdicts | Where-Object { -not $_.Withheld } | ForEach-Object { $_.Tag })
         Assert-That "and the gate is what withheld them ($($deadVerdicts.Count) of $($deadVerdicts.Count) withheld)" `
             ($notWithheld.Count -eq 0) "(let through: $($notWithheld -join ' '))"
-        # INDEPENDENT CORROBORATION. Every tag the fan-out calls dead must be one the
-        # HUD ROW listed before the fight -- read out of the live dialog controls by a
-        # different module, on a different path, before any of this happened. All of
-        # them, not just one: a tag the row never showed would mean the fan-out is
-        # talking about a unit that was never in this selection.
+        # INDEPENDENT CORROBORATION. Every tag the fan-out calls dead must be one the HUD
+        # ROW listed before the fight -- read out of the live dialog by a different
+        # module, on a different path. All of them: a tag the row never showed would mean
+        # the fan-out is talking about a unit that was never in this selection.
         $unknownBefore = @($deadTags | Where-Object { $script:beforeRow.Tags -notcontains $_ })
         Assert-That "every unit the gate called dead is one the row itself listed before the fight ($($deadTags.Count) of $($deadTags.Count))" `
             ($unknownBefore.Count -eq 0) "(not in the row's pre-fight tag set: $($unknownBefore -join ' '))"
@@ -1030,9 +885,7 @@ try {
 
         $dug = Get-ScState 'burrowed-out-of-the-fight'
         # More than a full page of them, so the row still has something to page over.
-        # Since task 020 `live` is the FULL liveness count, so the dead are already
-        # out of it and every unit it counts should have burrowed -- the gap that
-        # used to sit between Burrowed and BurrowedOf has moved to n vs live.
+        # `live` excludes the dead, so Burrowed == BurrowedOf and the dead show up as n > live.
         Assert-That "the survivors burrowed and are out of the fight ($($dug.Burrowed) of the $($dug.BurrowedOf) still live)" `
             ($dug.Burrowed -gt $HUD_SLOTS -and $dug.Burrowed -eq $dug.BurrowedOf)
         Assert-That "and the shadow list is still bigger than the live count, because it still holds the dead (n=$($dug.N) live=$($dug.Live))" `
@@ -1043,12 +896,11 @@ try {
 
     Step 'PHASE B: THE 017 CONSEQUENCE -- the dead units are gone from the row, and the row is otherwise coherent' {
         # Let the fight actually end before comparing tag sets: a page walk over a
-        # selection that is still losing units compares two different lists. The
-        # engagement was already broken off by the burrow in the previous step. Then
-        # take a fresh box -- required, not cosmetic, because a death among the
-        # engine's visible twelve latches the row to stock and only a new commit (a
-        # version bump, sc_hudrow RefreshShadow) clears that latch; a fan-out of a
-        # move order does not rebuild the shadow list and so does not.
+        # selection still losing units compares two different lists (the burrow in the
+        # previous step broke off the engagement). Then take a fresh box -- required, not
+        # cosmetic: a death among the engine's visible twelve latches the row to stock,
+        # and only a new commit (a version bump, sc_hudrow RefreshShadow) clears that
+        # latch; a fanned move order does not rebuild the shadow list and so does not.
         Wait-RowSettled -QuietSec 6 -TimeoutSec 90 | Out-Null
 
         for ($attempt = 1; $attempt -le $MaxRounds; $attempt++) {
@@ -1064,11 +916,10 @@ try {
             # "still on its way back".
             if ($a.N -ne $b.N -or $b.N -le $HUD_SLOTS) { continue }
 
-            # One more box immediately before the page walk. It is the commit that
-            # clears any divergence latch left by a death among the engine's visible
-            # twelve -- without it the row can be sitting in stock mode and answer
-            # nothing at all -- and it starts the walk with as much of the gap to the
-            # next death as the fixture can offer.
+            # One more box immediately before the page walk: it is the commit that clears
+            # any divergence latch left by a death among the engine's visible twelve --
+            # without it the row can sit in stock mode and answer nothing -- and it starts
+            # the walk with as much gap to the next death as the fixture can offer.
             Invoke-BoxSelect
             $c = Get-ScState "regroup$attempt-final"
             if ($c.N -ne $b.N) {
@@ -1104,19 +955,13 @@ try {
             ($extra.Count -eq 0)
         # WHAT THIS DOES AND DOES NOT SAY. `$after` is a fresh drag box, so strictly
         # these tags are "in the row before the fight, not in it now" -- a survivor
-        # shoved outside the box rectangle would read the same way. Burrowing first
-        # makes that unlikely (nobody is moving, and two boxes five seconds apart
-        # agreed before the walk), and the population drop is corroborated by the
-        # HITPOINTS reading taken at the death itself, which needs no box at all. The
-        # count identity that used to sit here -- missing == before.N - after.N --
-        # was dropped: with `extra` empty and both tag counts equal to their own n, it
-        # follows by set algebra and could not fail while its neighbours passed.
-        # ...AND IT IS INTERSECTED WITH THE DEAD LIST (issue #70, issue #45's shape). The
-        # paragraph above already names the hole: $missing comes from a fresh drag box, so a
-        # SURVIVOR shoved outside the box rectangle is "missing" too, and `$missing.Count -ge
-        # 1` passed on it. "Burrowing makes that unlikely" is a reason to expect the right
-        # answer, not an oracle for it. The gate's own hp0 verdicts say which tags actually
-        # died; the claim is about those.
+        # shoved outside the box rectangle reads the same way. Burrowing (nobody moving,
+        # two boxes five seconds apart agreeing) makes that unlikely, but unlikely is not
+        # an oracle: `$missing.Count -ge 1` passes on a wandered survivor. So $missing is
+        # INTERSECTED WITH THE DEAD LIST -- the gate's own hp0 verdicts say which tags
+        # actually died, and the claim is about those. No missing == before.N - after.N
+        # check: with `extra` empty and both tag counts equal to their own n, it follows
+        # by set algebra and cannot fail while its neighbours pass.
         $confirmedGone = Get-ScOverlap -Set $missing -Against $script:deadTags
         $vanishedButAlive = @($missing | Where-Object { $script:deadTags -notcontains $_ })
         Assert-That ("units the row showed before the fight are gone from it now AND the gate called them dead: " +
@@ -1151,34 +996,23 @@ try {
 
     Step "PHASE C (task 021): recalling group $ControlGroup returns the SURVIVORS and never a corpse" {
         <#
-        ACCEPTANCE CRITERION 4. The group stored in PHASE C above held all $UnitCount
-        while every one of them was alive. Some are dead now. This presses the group key
-        and asserts that what comes back is the survivors -- and that the dead members'
-        tags reach no emitted Select.
+        The group stored above held all $UnitCount while every one was alive; some are
+        dead now. Pressing the group key must return the survivors, with the dead
+        members' tags in no emitted Select. The gate is the fan-out's own PassesGate
+        (research/fanout-liveness.md 3): sc_fanout runs it over every stored member at
+        recall, logs one `GROUP recall drop` forensics line per refusal, and never puts a
+        refused unit into the rebuilt shadow list.
 
-        The gate doing the work is task 020's, unchanged and reused rather than
-        reinvented (research/fanout-liveness.md 3): sc_fanout runs PassesGate over every
-        stored member at recall, logs one `GROUP recall drop` forensics line per refusal
-        with the fields the receive path would have used, and never puts a refused unit
-        into the rebuilt shadow list.
-
-        RECALL NEEDS NO ACCELERATOR. Plain digits are not accelerators (they reach the
-        key dispatcher through the window procedure), so this half is an ordinary posted
-        keystroke -- the real key, on the real path.
-
-        `$script:afterRow` from the previous step is the row's own independently-read
-        survivor set, so the recalled population can be cross-checked against a number
-        this module did not produce.
+        RECALL NEEDS NO ACCELERATOR. Plain digits reach the key dispatcher through the
+        window procedure, so this half is an ordinary posted keystroke -- the real key on
+        the real path. `$script:afterRow` is the row's own independently-read survivor
+        set, a number this module did not produce.
         #>
         $survivors = if ($null -ne $script:afterRow) { $script:afterRow.N } else { 0 }
         $mark = Get-ScLogLineCount -LogPath $LogPath
         Send-ScControlGroupRecall -Hwnd $hwnd -Group $ControlGroup
         Start-Sleep -Seconds 3
         $since = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
-
-        # As in PHASE C's store step: -LogCommands 0 means there are no `CMD id=` lines
-        # to read, and `GROUP recall:` existing at all is the recall command having
-        # arrived and been decoded. The raw bytes are asserted in test-control-groups.ps1.
 
         # Every unit the recall refused, with the reason the gate gave.
         $drops = @()
@@ -1202,9 +1036,8 @@ try {
         $total = [int]$m.Groups[1].Value
         $dropped = [int]$m.Groups[4].Value
 
-        # (1) The recall really did have to refuse someone, and (2) it refused them for
-        # BEING DEAD or REMOVED -- not for a recycled slot, the only case the pre-020
-        # test could already see.
+        # (1) The recall really did have to refuse someone, and (2) for BEING DEAD or
+        # REMOVED -- not for a recycled slot, the only case uniqueness alone can see.
         Assert-That "the recall dropped at least one stored member ($dropped)" ($dropped -ge 1)
         $reasons = @($drops | ForEach-Object { $_.Why } | Sort-Object -Unique)
         Assert-That "and it dropped them for being dead or removed (reasons: $($reasons -join ','))" `
@@ -1219,16 +1052,12 @@ try {
         Assert-That "  and the shortfall is exactly what the gate refused ($($script:groupStored) - $dropped = $total)" `
             ($script:groupStored - $dropped -eq $total)
         # Corroborated against a number this module did not produce: the HUD row's own
-        # survivor count from the previous step, read out of the live dialog.
-        #
-        # `-ge`, not `-eq`, and the asymmetry is real rather than slack. The row's number
-        # comes from a fresh DRAG BOX, so it counts survivors inside a rectangle -- the
-        # previous step says as much ("a survivor shoved outside the box rectangle would
-        # read the same way"). A control-group recall is not box-limited: it returns every
-        # stored member that is still alive, wherever it wandered to. So the recall may
-        # legitimately find MORE than the re-box did, and one green run had exactly that
-        # (recall 33, row 32). What would be a real failure is the recall finding FEWER
-        # than a box could see, and that is what this rules out.
+        # survivor count from the previous step. `-ge`, not `-eq`, and the asymmetry is
+        # real: the row's number comes from a fresh DRAG BOX and counts survivors inside a
+        # rectangle, while a control-group recall returns every stored member still alive
+        # wherever it wandered -- so the recall may legitimately find MORE (one green
+        # run: recall 33, row 32). A recall finding FEWER than a box could see is the
+        # real failure, and that is what this rules out.
         if ($survivors -gt 0) {
             Assert-That "  and it finds at least as many as the row's independently-read box (recall $total, row $survivors)" `
                 ($total -ge $survivors) "(a recall finding fewer than a box can see would be the failure)"
@@ -1240,29 +1069,24 @@ try {
         Assert-That "  every one of them is live (live=$($st.Live))" ($st.Live -eq $st.N)
         Assert-That "  and the corpses are NOT in it (n=$($st.N) live=$($st.Live), hp0=$($st.Hp0) removed=$($st.Removed))" `
             ($st.Hp0 -eq 0 -and $st.Removed -eq 0)
-        # Still a >12 recall, and the plugin really did restore units past whatever the
-        # engine kept. `visible` is NOT asserted to be 12: the engine's own stored twelve
-        # lose members to the fight too, and its recall compacts them out (0x00496940
-        # step 3), so it can legitimately hand back fewer than twelve. What matters is
-        # that the group came back bigger than the cap and bigger than the engine's share.
+        # `visible` is NOT asserted to be 12: the engine's own stored twelve lose members
+        # to the fight too, and its recall compacts them out (0x00496940 step 3), so it
+        # can legitimately hand back fewer. What matters is that the group came back
+        # bigger than the cap and bigger than the engine's share.
         Assert-That "  it is still over the cap, so this is a >12 group recall (n=$($st.N))" `
             ($st.N -gt $HUD_SLOTS)
         Assert-That "  and the plugin restored units past what the engine kept (n=$($st.N) > visible=$($st.Visible))" `
             ($st.N -gt $st.Visible -and $st.Visible -le $HUD_SLOTS)
 
-        # THE CORPSE IS NOT IN THE SELECTION AT ALL, which is a stronger statement than
-        # "its tag was withheld from a Select": the assertions above show the rebuilt
-        # shadow list contains zero units with hp0 or removed, so there is nothing for a
-        # later order to replay. That is the whole of criterion 4 for this fixture.
+        # THE CORPSE IS NOT IN THE SELECTION AT ALL -- stronger than "its tag was withheld
+        # from a Select": the rebuilt shadow list has zero hp0/removed units, so there is
+        # nothing for a later order to replay.
         #
         # THIS STEP DELIBERATELY ISSUES NO ORDER. Burrow is a TOGGLE and the survivors are
-        # dug in at this point; pressing it here would surface them and leave the next
-        # step -- which presses it to unburrow and then asserts they are above ground --
-        # re-burrowing them instead. That is not a hypothetical, it is what the first run
-        # of this phase did. The wire-level form of the claim ("no dead unit's tag reached
-        # the wire") is already asserted twice over, on the fanned order in PHASE B above
-        # and byte-exactly offline in hooktest part [11], so nothing is lost by not
-        # disturbing this fixture's unit state a second time.
+        # dug in; pressing it here surfaces them and leaves the next step -- which presses
+        # it to unburrow and asserts they are above ground -- re-burrowing them instead
+        # (observed, not hypothetical). The wire-level claim is already asserted on the
+        # fanned order in PHASE B and byte-exactly offline in hooktest part [11].
         $deadTags = @($drops | ForEach-Object { $_.Tag } | Sort-Object -Unique)
         Write-Host "       corpses refused by the recall, none of them in the list above: $($deadTags -join ' ')"
         Shot 'after-group-recall' | Out-Null
@@ -1339,24 +1163,21 @@ finally {
     if (-not $KeepOpen) { Remove-MyFixtures }
     # And the FOLDER itself, only when it is provably empty. AGENTS.md "one folder per
     # task": an empty folder left behind becomes the first row for everyone else's
-    # positional click, which is the same bug with the roles swapped -- it broke
+    # positional click -- the same bug with the roles swapped; it broke
     # test-selection-circles' route to Maps\campaign twice, deterministically.
-    # Remove-ScOwnFixtureDir refuses if anything at all is still in it, so it can never
-    # become the recursive delete this whole rule exists to prevent.
+    # Remove-ScOwnFixtureDir refuses if anything at all is still in it.
     if (-not $KeepOpen) { Remove-ScOwnFixtureDir -Dir $mapDir }
 }
 
 Write-Host ''
 Write-Host '[final] the run must balance'
-# Pid-scoped, both halves: every pid scinject handed THIS test, and nothing else.
-# Another worker's game running right now is not this test's business and must not
-# make it fail.
-#
-# POLLED, and NAME-CHECKED. A pid that WM_CLOSE has already retired can still
-# enumerate for a moment (close-game reported "exited cleanly" and this check saw it
-# a second later), and a pid the OS has recycled belongs to somebody else entirely.
-# One sample of `Get-Process -Id` cannot tell either of those from a stranded game --
-# so wait for it to go, and only believe a survivor that is still a StarCraft.
+# Pid-scoped, both halves: every pid scinject handed THIS test, and nothing else --
+# another worker's game running right now must not make this fail. POLLED, and
+# NAME-CHECKED: a pid that WM_CLOSE has already retired can still enumerate for a
+# moment (close-game reported "exited cleanly" and this check saw it a second later),
+# and a pid the OS has recycled belongs to somebody else. One sample of `Get-Process
+# -Id` cannot tell either from a stranded game -- so wait for it to go, and only
+# believe a survivor that is still a StarCraft.
 $stillUp = @()
 foreach ($id in $script:launchedPids) {
     $alive = $null

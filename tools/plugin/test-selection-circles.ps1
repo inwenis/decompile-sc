@@ -1,35 +1,18 @@
 ﻿#Requires -Version 7
 <#
 .SYNOPSIS
-End-to-end, UNATTENDED test of task 014's selection circles: launches the game, walks
-the menus, loads a stock map, drives a drag box and an order with posted window
-messages, and asserts on the plugin's own log.
-
+Unattended end-to-end test of the selection circles: launch, menus, stock map, drag box
+and order -- asserted on the plugin's own log.
 .DESCRIPTION
-Everything here is task 012's D1 recipe (research/automated-testing-options.md §4.1)
-via tools/plugin/drive-game.ps1: PostMessage with CLIENT coordinates in lParam, no
-synthetic OS input anywhere, no screen coordinates, focus not required. The window must
-not be minimised.
-
-THE ORACLE IS THE PLUGIN LOG, not the picture (research/automated-testing-options.md
-O1/O2). The log is written from inside the process, so it reports what the engine
-actually did. Frames are captured at every step as a DIAGNOSTIC only -- they land
-outside the repo because they reproduce game artwork (AGENTS.md hard rule 1) and must
-never be committed.
-
-WHAT IT CANNOT PROVE. That the attached image is actually DRAWN. `CIRCLES show: N/N`
-means the engine accepted the attach and returned an image; only an eye on the frames
-in -ShotDir can confirm pixels. That is the one question this script hands back to a
-human.
-
-ASSUMPTIONS, all of which fail loudly rather than silently:
-  * the working copy is at -GameDir and has Maps\campaign\(1)Enslavers02b.scm;
-  * a player profile already exists (the Registry screen's first list entry is picked);
-  * the menu layout is stock 1.16.1 at 640x480.
-
+Input is PostMessage with CLIENT coordinates in lParam via drive-game.ps1
+(research/automated-testing-options.md §4.1): no synthetic OS input, no screen
+coordinates, focus not required, the window not minimised. THE ORACLE IS THE PLUGIN LOG,
+not the picture (O1/O2 in that doc): written inside the process, it reports what the
+engine actually did. `CIRCLES show: N/N`
+proves only that the engine accepted the attach and returned an image; whether the pixels
+are DRAWN is the one question the frames in -ShotDir hand back to a human.
 .EXAMPLE
 ./tools/plugin/test-selection-circles.ps1
-
 .EXAMPLE
 ./tools/plugin/test-selection-circles.ps1 -ShotDir C:\temp\sc-frames -KeepOpen
 #>
@@ -52,15 +35,9 @@ $scriptDir = $PSScriptRoot
 $failures = 0
 $step = 0
 
-# The windowed-mode helper leaves its caption inside the reported client rectangle, so
-# a coordinate read off a captured frame is 5 px right and 32 px down from the client
-# coordinate a message must carry. Every constant below is already a CLIENT coordinate;
-# this note is here so the next person reading a frame does not re-derive it.
-
 # --- on-disk binary, BEFORE anything runs ------------------------------------
-# Project hard rule 3: "Patch memory in-process only -- StarCraft.exe on disk must stay
-# byte-identical to pristine. Hash it and show the result." An attestation in a PR body
-# is not that; this is.
+# AGENTS.md § "Hard rules": patching is in-process only, so StarCraft.exe on disk must
+# stay byte-identical to pristine -- hashed and shown, not attested.
 $exePath = Join-Path $GameDir 'StarCraft.exe'
 if (-not (Test-Path -LiteralPath $exePath)) { throw "test: $exePath not found." }
 $hashBefore = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
@@ -85,16 +62,14 @@ function Shot([string]$tag) {
     Save-ScWindowImage -Hwnd $script:hwnd -Path (Join-Path $ShotDir ("{0:d2}-{1}.png" -f $script:shotN, $tag)) -FullWindow | Out-Null
 }
 
-# The launch itself is INSIDE the try. run-with-plugin.ps1 throws on an error dialog
+# The launch itself is INSIDE the try: run-with-plugin.ps1 throws on an error dialog
 # after the process is already alive, and Get-ScGameWindow throws on a 30 s timeout --
-# either would strand a StarCraft process if they ran ahead of the finally that closes
-# it, which is the one thing hard rule "never leave a game process running" forbids.
+# either would strand a StarCraft process if it ran ahead of the finally that closes it.
 try {
     $circles = if ($NoCircles) { '0' } else { '1' }
-    # The pid is parsed AS THE LINE STREAMS BY, not from a collected result. If the
-    # launcher throws after the process is alive -- which is exactly what its
-    # error-dialog check does -- a collected variable would never be assigned and the
-    # finally below would have no pid to close.
+    # The pid is parsed AS THE LINE STREAMS BY, not from a collected result: the
+    # launcher's error-dialog check throws after the process is alive, and a collected
+    # variable would never be assigned, leaving the finally below no pid to close.
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
         -Mode fanout -Circles $circles -HudRow 0 -InjectWindowedHelper WMode `
         -GameDir $GameDir -LogPath $LogPath 6>&1 | ForEach-Object {
@@ -107,7 +82,10 @@ try {
     $hwnd = Get-ScGameWindow -ProcessId $gamePid
 
     # --- menus ---------------------------------------------------------------
-    # Client coordinates, read off captured frames once and stable for stock 1.16.1.
+    # Every constant below is a CLIENT coordinate, read off captured frames once and
+    # stable for stock 1.16.1 at 640x480. The windowed-mode helper leaves its caption
+    # inside the reported client rectangle, so a coordinate read off a frame sits 5 px
+    # right and 32 px down from the client coordinate a message must carry.
     Step 'menu: Single Player -> Expansion' {
         Start-Sleep -Seconds 2
         Shot 'main-menu'
@@ -118,6 +96,7 @@ try {
     }
 
     Step 'menu: pick the first profile' {
+        # A player profile must already exist on the working copy: nothing here creates one.
         Send-ScClick -Hwnd $hwnd -X 75  -Y 111        # first entry in the Registry list
         Send-ScClick -Hwnd $hwnd -X 516 -Y 392        # Ok
         Start-Sleep -Seconds 2
@@ -128,16 +107,11 @@ try {
         Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom
         Start-Sleep -Seconds 2
         # Up out of BroodWar, into campaign, onto the map -- every row computed from the
-        # filesystem and every folder verified on screen before the next click.
-        #
-        # THE RUN THAT MADE THIS NECESSARY WAS THIS SUITE'S. The three fixed-row clicks
-        # that used to be here worked until another task created its own fixture folder
-        # under Maps\BroodWar: `[Up One Level]` sorts alphabetically among the folders, so
-        # it moved off row 3, this walk opened a folder, the map never loaded, and the
-        # suite timed out looking exactly like menu flake (task 022, 2026-08-09). This
-        # suite generates nothing and shares nothing -- and was broken anyway, which is
-        # why every browser click in this repo is computed now, not just the ones next to
-        # a fixture.
+        # filesystem, every folder verified on screen before the next click (AGENTS.md
+        # § "Map browser"). Fixed row numbers break even in a suite that creates no
+        # fixtures: `[Up One Level]` sorts alphabetically among the folders, so a folder
+        # another suite leaves under Maps\BroodWar shifts it, the walk opens a folder
+        # instead, and the run times out looking exactly like menu flake.
         Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir `
             -MapPath (Join-Path $GameDir 'Maps\campaign\(1)Enslavers02b.scm') | Out-Null
         Shot 'map-selected'
@@ -146,15 +120,15 @@ try {
         Shot 'briefing'
         Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
         Start-Sleep -Seconds 8
-        # The tips dialog is found in the engine's own dialog list and dismissed by ITS OWN
-        # OK button, then asserted gone (task 027) -- never a fixed point, never the registry.
+        # The tips dialog is found in the engine's own dialog list and dismissed by ITS
+        # OWN OK button, then asserted gone -- never a fixed point, never the registry
+        # (AGENTS.md § "Tips dialog").
         Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
         Start-Sleep -Seconds 2
         Shot 'in-game'
     }
 
     # --- the deterministic shift-click test, before anything has moved --------
-    #
     # Ordered FIRST on purpose: the map starts with its units in fixed positions, so
     # these coordinates are reproducible. After an order they are not.
     Step 'shift-click removes exactly the clicked unit (small selection)' {
@@ -176,7 +150,7 @@ try {
             $n1 = [int]([regex]::Match($sel[-1].Line, 'SEL count=(\d+)').Groups[1].Value)
             # THE selectionIndex HAZARD, tested rather than assumed
             # (research/selection-circles.md §4): the engine computes a memmove offset
-            # from CSprite::selectionIndex here. Exactly one unit must leave.
+            # from CSprite::selectionIndex here, so exactly one unit must leave.
             Assert-That "shift-click removed exactly one unit ($n0 -> $n1)" ($n1 -eq $n0 - 1)
         }
         Shot 'after-shift-click'
@@ -189,11 +163,10 @@ try {
         Start-Sleep -Seconds 2
         $lines = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
 
-        # task 036 (#42, building groups) inserted `clicked=0x%08X -> engine=%u ` between
-        # `candidates=` and `selected=` in the plugin's format string; this suite's regex
-        # was never updated to match and so stopped matching ANY line, not just the wrong
-        # one (task 046). test-building-parity.ps1's Get-ScSortLines already carries the
-        # post-036 shape -- mirrored here rather than re-derived.
+        # The plugin's SORT line carries `clicked=0x%08X -> engine=%u ` between
+        # `candidates=` and `selected=`; a regex that omits it matches NO line at all
+        # rather than the wrong one, so the shape is mirrored from
+        # test-building-parity.ps1's Get-ScSortLines instead of re-derived here.
         $sort = @($lines | Select-String -Pattern 'SORT candidates=(\d+) clicked=0x([0-9A-Fa-f]+) -> engine=(\d+) selected=(\d+)')
         Assert-That 'the box contained more than 12 units' ($sort.Count -gt 0 -and
             [int]([regex]::Match($sort[-1].Line, 'candidates=(\d+)').Groups[1].Value) -gt 12)
@@ -218,8 +191,8 @@ try {
             }
         }
         # Where the circled units are on screen, so the next step can aim at a KNOWN
-        # shadow unit instead of clicking hopefully. The plugin logs this because
-        # nothing outside the process can work it out.
+        # shadow unit instead of clicking hopefully: nothing outside the process can
+        # work this out, which is why the plugin logs it.
         $pos = @($lines | Select-String -Pattern 'CIRCLES pos: \d+ on screen of \d+: (.+)$')
         if (-not $NoCircles) {
             Assert-That 'the plugin reported where its circles are on screen' ($pos.Count -gt 0)
@@ -235,13 +208,12 @@ try {
     Step 'a shift-click on a KNOWN shadow-circled unit changes nothing' {
         # THIS is the configuration research/selection-circles.md §4 says a naive
         # implementation smashes a 48-byte stack array in: 12 engine-selected units, 12
-        # more carrying our circles, and a shift-click landing on one of ours.
-        #
-        # Because the plugin logs its circles' screen positions, the click can be AIMED
-        # at one of them, and the assertion is the exact predicted behaviour rather than
-        # "either branch is fine": our sprites never carry flag 0x08, so the engine
-        # takes its add-to-selection branch, finds the selection already holds 12, and
-        # returns -- no selection change, and no selection command on the wire.
+        # more carrying our circles, and a shift-click landing on one of ours. The plugin
+        # logs its circles' screen positions, so the click can be AIMED and the assertion
+        # is the exact predicted behaviour rather than "either branch is fine": our
+        # sprites never carry flag 0x08, so the engine takes its add-to-selection branch,
+        # finds the selection already holds 12, and returns -- no selection change, and
+        # no selection command on the wire.
         if ($NoCircles) {
             Write-Host '       (skipped: circles are off in this run)'
             return
@@ -250,10 +222,10 @@ try {
             Assert-That 'shadow circle positions were available to aim at' $false
             return
         }
-        # Must be clear of the HUD, which starts around y=350 at 640x480. There is no
-        # fallback to "aim at it anyway": a click behind the HUD hits nothing, and
-        # "nothing happened" is exactly what this step asserts -- so the fallback would
-        # be a guaranteed vacuous pass. No usable target is a FAILURE, not a shrug.
+        # Must be clear of the HUD, which starts around y=350 at 640x480. A click behind
+        # the HUD hits nothing, and "nothing happened" is exactly what this step asserts,
+        # so aiming at it anyway would be a guaranteed vacuous pass: no usable target is
+        # a FAILURE, not a shrug.
         $target = $script:shadowXY | Where-Object { $_.Y -lt 340 -and $_.Y -gt 10 } | Select-Object -First 1
         if (-not $target) {
             Assert-That 'at least one shadow circle is on the battlefield, not behind the HUD' $false `
@@ -277,8 +249,8 @@ try {
         $n1 = if ($sel.Count) { [int]([regex]::Match($sel[-1].Line, 'SEL count=(\d+)').Groups[1].Value) } else { $n0 }
         Assert-That "the engine's selection is unchanged ($n0 -> $n1)" ($n1 -eq $n0)
 
-        # No Select / SelectAdd / SelectRemove was emitted: the engine did not treat our
-        # unit as something it could add to or remove from the selection.
+        # Select / SelectAdd / SelectRemove: none of them may go out, because the engine
+        # must not treat our unit as something it can add to or remove from the selection.
         $cmds = @($after | Select-String -Pattern 'CMD id=0x0(9|A|B) ')
         Assert-That 'no selection command was emitted' ($cmds.Count -eq 0) `
             ($cmds.Count -gt 0 ? "($($cmds[0].Line.Trim()))" : '')
@@ -287,11 +259,10 @@ try {
 
     Step 'an un-aimed shift-click inside the >12 selection is still legal' {
         # The complement of the step above: a click that may land on one of the ENGINE's
-        # 12. Those sprites are ones this plugin never touches, so the expected result is
-        # stock behaviour -- but the position of an engine-selected unit is not something
-        # the plugin can report (it only knows its own), so this one cannot be aimed and
-        # both outcomes are accepted. It is here for the crash/corruption check, not as a
-        # behavioural assertion; see research/selection-circles.md §7.
+        # 12, sprites this plugin never touches, so stock behaviour is what is expected.
+        # The plugin can only report its own circles' positions, so this one cannot be
+        # aimed and both outcomes are accepted -- it is here for the crash/corruption
+        # check, not as a behavioural assertion (research/selection-circles.md §7).
         $selBefore = @(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'SEL count=(\d+)')
         $n0 = if ($selBefore.Count) { [int]([regex]::Match($selBefore[-1].Line, 'SEL count=(\d+)').Groups[1].Value) } else { 12 }
         $mark = Get-ScLogLineCount -LogPath $LogPath
@@ -308,9 +279,8 @@ try {
     }
 
     Step 'one order still reaches every unit (fan-out is not broken)' {
-        # Re-select first. The step above may have removed a unit, and a fan-out test
-        # run against an 11-unit selection would "fail" for a reason that has nothing
-        # to do with the fan-out.
+        # Re-select first: the step above may have removed a unit, and a fan-out run
+        # against an 11-unit selection would "fail" for a reason unrelated to fan-out.
         Send-ScDrag -Hwnd $hwnd -X1 115 -Y1 25 -X2 515 -Y2 355 -Steps 20
         Start-Sleep -Seconds 2
         $mark = Get-ScLogLineCount -LogPath $LogPath
@@ -329,25 +299,23 @@ try {
     }
 }
 catch {
-    # A step that throws is a failed run, not an aborted one. Recording it here instead
-    # of letting it propagate is what keeps the post-mortem below reachable -- the
-    # after-close hash, the stranded-process check and the circle accounting are the
-    # assertions for hard rule 3 and "never leave a game running", and those matter MOST
-    # on the runs that went wrong.
+    # A step that throws is a failed run, not an aborted one: recording it here instead
+    # of letting it propagate keeps the post-mortem reachable, and the after-close hash,
+    # the stranded-process check and the circle accounting matter MOST on a bad run.
     Write-Host "  FAIL a test step threw: $($_.Exception.Message)"
     Write-Host "       $($_.ScriptStackTrace)"
     $failures++
 }
 finally {
-    # -ProcessId, always. close-game.ps1 resolving the game by NAME throws whenever any
-    # other StarCraft is running -- including the user's own playable install -- and it
+    # -ProcessId, always: close-game.ps1 resolving the game by NAME throws whenever any
+    # other StarCraft is running -- including the user's own playable install -- and
     # would close the wrong game.
     if (-not $KeepOpen -and $gamePid -gt 0) {
         try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | Write-Host }
         catch {
             # close-game escalates to Stop-Process and throws only when the game is
-            # STILL alive afterwards. That is a stranded game process -- the one thing
-            # the hard rule forbids -- so it fails the run rather than warning about it.
+            # STILL alive afterwards: a stranded game process fails the run rather than
+            # warning about it (AGENTS.md § "Stopping a run / orphaned games").
             Write-Host "  FAIL close-game could not shut the game down: $($_.Exception.Message)"
             $failures++
         }
@@ -377,16 +345,15 @@ else {
     $lost  = [int]$m.Groups[6].Value
     Write-Host "  $($stats[-1].Line.Trim())"
 
-    # The books must balance: every circle ever attached was either detached again or
-    # is still held at the moment the process died. `held > 0` is NORMAL here -- the
-    # test quits with a live selection on screen, and scplugin.cpp deliberately does
-    # not un-splice on the process-exit path (walking the thread list from DllMain
-    # under the loader lock is the unsafe thing, and the address space is going away
-    # anyway). What would be a bug is a circle that is neither.
+    # The books must balance: every circle attached was either detached again or is still
+    # held when the process died. `held > 0` is NORMAL -- the test quits with a live
+    # selection, and scplugin.cpp deliberately does not un-splice on the process-exit path
+    # (walking the thread list from DllMain under the loader lock is unsafe, and the
+    # address space is going away anyway). A circle that is neither is the bug.
     Assert-That "the circle accounting balances ($shown = $hidden detached + $held held)" ($shown -eq $hidden + $held)
-    # A `lost` circle is one whose unit or sprite changed underneath us, so it was
-    # never taken off. Not a crash -- a circle left on screen under a unit nobody
-    # selected, which is exactly the symptom this task exists to remove.
+    # A `lost` circle is one whose unit or sprite changed underneath us, so it was never
+    # taken off: not a crash, but a circle left on screen under a unit nobody selected --
+    # the symptom the feature exists to remove.
     Assert-That 'no circle was lost to a stale unit or sprite' ($lost -eq 0)
     Assert-That 'the image free list never ran out' ($noImg -eq 0)
 
@@ -401,15 +368,15 @@ else {
 }
 
 # Check OUR pid, not the name: an unrelated StarCraft (the user's own install) is a
-# scenario this repo's tooling explicitly expects, and failing on it would be a false
-# alarm about the one rule that must never produce noise.
+# scenario this repo's tooling expects, and failing on it would be a false alarm about
+# the one rule that must never produce noise.
 $left = if ($gamePid -gt 0) { Get-Process -Id $gamePid -ErrorAction SilentlyContinue } else { $null }
 Assert-That 'the game process this test started is gone' ($KeepOpen -or $null -eq $left)
 
 # --- on-disk binary, AFTER the run -------------------------------------------
-# The other half of hard rule 3. If any code path had written to StarCraft.exe -- a
-# stray patch, a botched working-copy refresh -- this is where it shows up, and it is
-# an assertion rather than a claim in a report.
+# The other half of the on-disk invariant: a code path that wrote to StarCraft.exe -- a
+# stray patch, a botched working-copy refresh -- shows up here as a failed assertion
+# rather than as a claim in a report.
 $hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
 Write-Host "  StarCraft.exe SHA-256 after:  $hashAfter"
 Assert-That 'StarCraft.exe on disk is byte-identical to before the run' ($hashAfter -eq $hashBefore)

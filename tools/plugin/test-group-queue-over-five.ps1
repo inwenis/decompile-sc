@@ -1,68 +1,17 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-End-to-end, UNATTENDED proof that a player can keep queueing PAST FIVE at EVERY building
-of a multi-building selection -- the over-cap queueing task 025 shipped for one building,
-measured for a group, with every building's queue read out of that building's own memory
-and the money accounted to the last mineral.
-
-Task 038, from the user's words (2026-08-11): "can't queue more than 5 units per building
-when multiple buildings are selected".
+UNATTENDED proof that a player can keep queueing PAST FIVE at EVERY building of a
+multi-building selection, each queue read out of that building's own memory.
 
 .DESCRIPTION
-Two shipped features meet here and this suite is the instrument that says whether they
-meet correctly:
-
-  * task 025 (`sc_prodqueue.cpp`) keeps the ENGINE's five-slot ring one item BELOW its cap
-    so the client keeps offering the Train button and keeps sending 0x1F. The over-cap
-    items live in the plugin's own per-building list. The whole design is inverted on
-    purpose: the client never sends a sixth Train, so nothing can be caught on receipt
-    (AGENTS.md, "A player-input feature is unproven until the wire has been watched").
-  * task 030 (`sc_prodfan.cpp`) lights the Train button for a same-type building group and
-    fans ONE press out into one Select+Train pair per building.
-
-So the measurement this suite exists to make is the one the seam decides:
-
-  1. HOW MANY OF $Clicks PRESSES REACH THE WIRE with the group selected. `queueCommand`
-     (0x00485BD0) is hooked, so every command this game sends is logged. If the client
-     stops offering the button once a building's ring is full, the count stops at five and
-     THAT is the bug the user is reporting. This is the headline number, and it is the
-     evidence AGENTS.md demands for anything that starts with a player input.
-  2. WHAT EACH BUILDING ACTUALLY HOLDS. The `PRODQ` oracle prints, per tracked building,
-     the ENGINE's own five slots read straight out of CUnit+0x98 plus the plugin's
-     overflow -- and `PRODFAN` prints the engine's slots for every SELECTED building,
-     tracked or not. Both are reads of the building's memory, never of the screen.
-  3. WHAT IT COST. The player's minerals come from the engine's own resource globals. The
-     identity that has to hold is "queued x cost, once each" -- a queue that grows without
-     charging would be a worse bug than the one being fixed (task file, Context).
-
-WHY THE RESULT CANNOT BE FAKED
-
-  * THE BEFORE-STATE IS READ AND ASSERTED, per building, from the same oracles -- so a
-    queue that was already full cannot read as a success and an oracle that always says
-    yes cannot pass unnoticed (AGENTS.md: an absence has to be proved positive somewhere).
-  * THE ENGINE'S OWN NUMBERS CARRY EVERY CLAIM. "N are queued" is asserted as the ring
-    contents plus the money the engine deducted, not as the plugin's counters; the plugin's
-    stats line is read only to assert it spent NOTHING of its own.
-  * THE CANCEL PATH IS EXERCISED WITH REAL MONEY ON IT: an item the plugin is holding is
-    cancelled and the refund is read back out of the resource globals.
-  * THE SINGLE-BUILDING CASE IS RE-MEASURED IN THE SAME RUN, through the same oracles, so
-    a regression to task 025 cannot hide behind a group that happens to work.
-  * The map has no hostiles and one unit-less computer slot, and its only trigger sets
-    resources once -- nothing but this test can move a mineral or queue an item.
-
-WHAT THE NUMBERS SHOULD BE, with the defaults ($Buildings 3, $Clicks 9):
-
-    presses                              9
-    0x1F at the funnel                   9      (each one fanned into 3 Select+order pairs)
-    per building, engine ring         <= 5      (the plugin holds it at 4 while it has more)
-    per building, logical queue          9      (ring + the plugin's overflow)
-    units queued across the group       27
-    minerals spent                    1350      (27 x 50, by the ENGINE, once each)
-
+`sc_prodqueue.cpp` keeps the ENGINE's five-slot ring one item BELOW its cap so the client
+keeps offering Train and keeps sending 0x1F, with the over-cap items held in the plugin's
+own per-building list; `sc_prodfan.cpp` fans ONE press into one Select+Train pair per
+building. This suite measures the seam: presses that reach the wire, what each building
+holds, what the engine charged.
 .EXAMPLE
 ./tools/plugin/test-group-queue-over-five.ps1
-
 .EXAMPLE
 ./tools/plugin/test-group-queue-over-five.ps1 -Buildings 3 -Clicks 9 -KeepOpen
 #>
@@ -72,17 +21,15 @@ param(
     [string]$LogPath = 'C:\sc-work\logs\038\group-queue-over-five.log',
     [string]$ShotDir = 'C:\sc-work\logs\038\group-queue-frames',
     [string]$FixtureDir,
-    # THREE buildings and NINE presses, and both numbers are chosen against the fixture's
-    # own limits rather than for roundness:
+    # Both numbers are chosen against the fixture's own limits, not for roundness:
     #   * 9 > 5, so every building has to go past the engine's ring for this to pass at all;
-    #   * 3 x 9 = 27 SCVs, and three Command Centers supply 30 -- so "the queue stopped
-    #     because the player was supply-blocked" is removed as an explanation of a short
-    #     count rather than argued about afterwards (the same reason task 030 used CCs);
+    #   * 3 x 9 = 27 SCVs and three Command Centers supply 30, so "the queue stopped because
+    #     the player was supply-blocked" cannot explain a short count;
     #   * 27 x 50 = 1350 minerals, comfortably inside the 3000 the trigger grants.
     [int]$Buildings = 3,
     [int]$Clicks = 9,
-    # The plugin's logical maximum per building. Left at the default 16 so $Clicks is well
-    # clear of it: this suite measures "past five", not "at the cap".
+    # The plugin's logical maximum per building. Kept well clear of $Clicks: this suite
+    # measures "past five", not "at the cap".
     [int]$QueueMax = 16,
     [int]$StartingMinerals = 3000,
     [int]$StartingGas = 0,
@@ -126,8 +73,8 @@ if ($Clicks -ge $QueueMax) {
     throw "test: -Clicks ($Clicks) must stay below -QueueMax ($QueueMax); this measures past five, not the cap."
 }
 
-# ONE FOLDER PER TASK, ONE NAME PER SUITE (AGENTS.md, hard rule): the fixture is named
-# after this suite, declared up front, and deleted only by this run.
+# The fixture is named after this suite, declared up front, and deleted only by this run,
+# so two concurrent runs cannot delete each other's map (AGENTS.md § "Test fixtures").
 if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t038' -Suite 'group-queue-over-five' }
 $mapDir = $FixtureDir
 $mapName = 'group-queue-over-five.scx'
@@ -140,18 +87,14 @@ function Get-World { param([string]$Tag, [int]$TimeoutSec = 20)
 
 # THE ORACLE. One marker drives every read-only oracle in the plugin, so a single handshake
 # returns all three layers of the answer for ONE instant:
-#
-#   PRODQ    one line per building the plugin is TRACKING: the engine's five slots out of
-#            CUnit+0x98, the plugin's overflow, and the player's minerals.
-#   PRODFAN  one line per SELECTED building, tracked or not, carrying that building's own
-#            five slots -- so a building that gained nothing still appears, and "it is not
-#            in the reading" and "it holds nothing" stay different findings.
+#   PRODQ    per TRACKED building: the engine's five slots out of CUnit+0x98, the plugin's
+#            overflow, and the player's minerals.
+#   PRODFAN  per SELECTED building, tracked or not, that building's own five slots -- so
+#            "it is not in the reading" and "it holds nothing" stay different findings.
 #   CARD     the command card walked out of memory, so "the Train button is dark" is a read
-#            of the dialog rather than a look at a frame (AGENTS.md, task 026).
-#
-# It waits for BOTH summary lines, each of which its subsystem writes LAST and writes
-# unconditionally -- so waiting for them means the whole answer has landed and an empty
-# answer is still an answer.
+#            of the dialog, not of a frame (AGENTS.md § "Oracles: what counts as a read-back").
+# Both summary lines are written LAST and unconditionally, so waiting for them means the
+# whole answer has landed and an empty answer is still an answer.
 $script:oracleSeq = 0
 function Get-Prod {
     param([string]$Tag, [int]$TimeoutSec = 25)
@@ -169,11 +112,9 @@ function Get-Prod {
         if ($qSummary.Count -gt 0 -and $fSummary.Count -gt 0) {
             $out = [pscustomobject]@{
                 Label = $label
-                # PRODQ: the plugin's tracked buildings (ring + overflow), keyed by unit.
                 Tracked = @{}
                 TrackedCount = 0; Max = 0; Captured = 0; Promoted = 0
                 Cancelled = 0; Refunded = 0; RefusedFull = 0
-                # PRODFAN: every selected building's own ring.
                 Rows = @(); Buildings = 0; SimSlots = 0; ClientCount = 0
                 TotalQueued = 0; Minerals = 0; Gas = 0; Fanned = 0; Reached = 0
                 Card = $null; Cancel = $null; CardLines = @()
@@ -243,8 +184,8 @@ function Get-Prod {
                     $out.Reached = [int]$s.Groups[12].Value
                 }
             }
-            # The card, from the SAME marker, so "the button was dark" and "nothing queued"
-            # are two readings of one instant.
+            # From the SAME marker, so "the button was dark" and "nothing queued" are two
+            # readings of one instant.
             $cardLines = @($all | Select-String -Pattern "CARD \[$esc\] slot=")
             $out.CardLines = @($cardLines | ForEach-Object { $_.Line })
             foreach ($c in $cardLines) {
@@ -266,10 +207,9 @@ function Get-Prod {
     throw "test: no PRODQ+PRODFAN answer for marker '$label' within ${TimeoutSec}s (log: $LogPath). Was the game launched with -ProdQueue 1 -ProdFan 1?"
 }
 
-# The LOGICAL queue of one building: the engine's own occupied slots plus whatever the
-# plugin is holding for it. The ring half comes from PRODFAN (every selected building) or
-# PRODQ (every tracked one); they read the same memory, and where both are present this
-# asserts they agree rather than preferring one.
+# The LOGICAL queue of one building: the engine's occupied slots plus whatever the plugin
+# holds for it. The ring half comes from PRODFAN (selected) or PRODQ (tracked); they read
+# the same memory, so where both are present this asserts they agree rather than picking one.
 function Get-Logical {
     param([Parameter(Mandatory)]$Prod, [Parameter(Mandatory)][string]$Unit)
     $row = @($Prod.Rows | Where-Object { $_.Unit -eq $Unit }) | Select-Object -First 1
@@ -304,9 +244,9 @@ function Assert-Ring {
     }
 }
 
-# Box a set of units EXACTLY, by map position, camera moved to them first. Same function as
-# test-group-production.ps1's, and it exists for the same reason: a full-screen drag boxes
-# whatever else is on the map, and this fixture's buildings must be named, not hoped for.
+# Box a set of units EXACTLY, by map position, camera moved to them first: a full-screen
+# drag boxes whatever else is on the map, and this fixture's buildings must be named rather
+# than hoped for.
 function Select-ScUnitsByMap {
     param(
         [Parameter(Mandatory)][object[]]$Units,
@@ -329,10 +269,10 @@ function Select-ScUnitsByMap {
         Write-Host "       (block at client [$x1,$y1]-[$x2,$y2] is not fully on the battlefield)"
         return $false
     }
-    # WHAT ELSE IS IN THIS BOX. Task 025's first run boxed the play area and the engine
-    # handed back a neutral MINERAL FIELD sharing the box with the building -- and a
-    # mineral field is a non-movable type too, so a building group would happily grow one
-    # of THOSE. Naming any foreign unit inside the rect turns that into a finding.
+    # WHAT ELSE IS IN THIS BOX. A box over the play area can catch a neutral MINERAL FIELD
+    # sharing it with the building, and a mineral field is a non-movable type too, so a
+    # building group grows one of THOSE. Naming any foreign unit in the rect makes it a
+    # finding instead of a mystery.
     $mineSet = @{}
     foreach ($u in $Units) { $mineSet[$u.Unit] = $true }
     $intruders = @($w.Units | Where-Object {
@@ -380,7 +320,9 @@ try {
         Wait-ScFixtureFolderFree -Run $fixtures
         # 160 px (5 tiles) apart: a Command Center is 4x3 tiles, so this clears it with a
         # tile to spare and all $Buildings still fit inside one screen's battlefield, which
-        # is what makes a single drag box able to hold them.
+        # is what makes a single drag box able to hold them. The map has no hostiles and one
+        # unit-less computer slot, and its only trigger sets resources once, so nothing but
+        # this suite can move a mineral or queue an item.
         $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
             -UnitCount $Buildings -UnitType command-center -Player 0 -ClearPlayerUnits `
             -GridSpacing 160 -StartingMinerals $StartingMinerals -StartingGas $StartingGas `
@@ -397,13 +339,11 @@ try {
     Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
     Wait-ScNoGameRunning
     $launchLock = Enter-ScLaunchLock -TaskId '038-group-queue-over-five'
-    # BOTH features on, which is the entire point: this is the first suite in the repo to
-    # run task 025's over-cap queueing and task 030's group fan-out in one game. Task 030's
-    # own suite runs with -ProdQueue 0 deliberately, so the seam between them has never
-    # been measured until now.
-    #
-    # -CardScan 1 because "is the Train button still lit after five" is a claim about a
-    # dialog and is answered by walking it (AGENTS.md, task 026).
+    # BOTH features on, which is the entire point: over-cap queueing and the group fan-out
+    # only meet when one game runs them together, and the fan-out's own suite runs with
+    # -ProdQueue 0. -CardScan 1 because "is the Train button still lit after five" is a
+    # claim about a dialog, answered by walking it (AGENTS.md § "Oracles: what counts as a
+    # read-back").
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
         -Mode fanout -LogCommands 1 -Circles 0 -HudRow 0 -WorldScan 1 -CardScan 1 `
         -BuildingGroups 1 -ProdQueue 1 -ProdQueueMax $QueueMax -ProdFan 1 -QueueIndicator 1 `
@@ -422,7 +362,8 @@ try {
         Assert-That 'the group fan-out reports itself ENABLED' `
             (@($log | Select-String -Pattern 'PRODFAN: ENABLED').Count -gt 0)
         # 'HOOK <name>: installed at' is the plugin's real wording, and these positives are
-        # what license the absence checks later (AGENTS.md, 2026-08-09).
+        # what license the absence checks later (AGENTS.md § "Oracles: absence and
+        # defect-era checks").
         $prodq = @($log | Select-String -Pattern 'HOOK (cmdrecvTrain|cmdrecvCancelTrain|productionTick): installed at')
         Assert-That "all three production detours are spliced ($($prodq.Count))" ($prodq.Count -eq 3)
         Assert-That 'and none of them rolled back' `
@@ -485,17 +426,17 @@ try {
         $wrong = @($p.Rows | Where-Object { $_.Type -ne $CC_TYPE -or $_.Player -ne 0 })
         Assert-That 'every selected unit is a Command Center owned by player 0' ($wrong.Count -eq 0)
 
-        # THE NEGATIVE HALF OF EVERY PAIR BELOW. Read and asserted empty per building, so a
-        # later reading of nine cannot be something that was already there -- and the two
-        # oracles are shown answering ZERO before either is trusted to answer nine.
+        # THE NEGATIVE HALF OF EVERY PAIR BELOW. Asserted empty per building, so a later
+        # reading of nine cannot be something that was already there -- and both oracles are
+        # seen answering ZERO before either is trusted to answer nine.
         foreach ($r in $p.Rows) { Assert-Ring "building 0x$($r.Unit) (before)" $r 0 }
         Assert-That "nothing is queued anywhere yet (totalQueued=$($p.TotalQueued))" ($p.TotalQueued -eq 0)
         Assert-That 'and the plugin is holding nothing for anybody' `
             ($p.TrackedCount -eq 0 -and $p.Captured -eq 0 -and $p.Promoted -eq 0)
         Assert-That "the player still has all $StartingMinerals minerals ($($p.Minerals))" `
             ($p.Minerals -eq $StartingMinerals)
-        # The button, read out of the card's own memory. Without it there is no command to
-        # fan out and the run would be measuring the client, not the feature.
+        # Read out of the card's own memory: without a lit button there is no command to fan
+        # out, and the run would be measuring the client rather than the feature.
         Assert-That 'the Train button is DRAWN and enabled for the group' `
             ($null -ne $p.Card -and $p.Card.State -eq 'enabled') `
             "(card slots seen: $($p.CardLines.Count))"
@@ -508,12 +449,12 @@ try {
     }
 
     # ------------------------------------------------------------------------------
-    # THE MEASUREMENT THE TASK IS ABOUT. $Clicks presses, group selected.
-    #
+    # THE MEASUREMENT THIS SUITE EXISTS TO MAKE: $Clicks presses, group selected.
     # WHAT THE COUNTS MEAN, because they are easy to misread: `CMD id=` is logged inside the
-    # queueCommand DETOUR and the fan-out emits its pairs through the TRAMPOLINE, so the
-    # replayed Select+Train pairs deliberately do not pass the logger again. One press is
-    # therefore exactly ONE `CMD id=0x1F` (the player's own, then suppressed) plus one
+    # DETOUR on the engine's command funnel `queueCommand` (0x00485BD0), which every command
+    # this game sends passes through, and the fan-out emits its pairs through the TRAMPOLINE,
+    # so the replayed Select+Train pairs deliberately do not pass the logger again. One press
+    # is therefore exactly ONE `CMD id=0x1F` (the player's own, then suppressed) plus one
     # `FANOUT start` naming the pairs that went out in its place.
     # ------------------------------------------------------------------------------
     Step "press Train x$Clicks with the whole group selected -- WATCH THE WIRE" {
@@ -530,9 +471,9 @@ try {
         $cmds | ForEach-Object { Write-Host "         $($_.Line)" }
         $starts | ForEach-Object { Write-Host "         $($_.Line)" }
 
-        # THE HEADLINE ASSERTION, and the one that fails on current main: if the client
-        # stops offering the Train button once a building's ring holds five, the count
-        # stops at five and the player cannot queue past it -- which is the user's report.
+        # THE HEADLINE ASSERTION: if the client stops offering the Train button once a
+        # building's ring holds five, the count stops at five and the player cannot queue
+        # past it with a group selected.
         Assert-That "all $Clicks presses reached the wire, not $ENGINE_SLOTS ($($cmds.Count))" `
             ($cmds.Count -eq $Clicks)
         Assert-That "and every one was fanned out across the group ($($starts.Count))" `
@@ -554,10 +495,10 @@ try {
         Assert-That "all $Buildings buildings are still in the reading ($($p.Buildings))" `
             ($p.Buildings -eq $Buildings)
         # THE ASSUMPTION THE EXACT NUMBERS REST ON, checked rather than commented: an SCV
-        # finishing frees a slot, the plugin promotes into it, and the logical queue this
-        # step is asserting would legitimately be one short. An SCV takes ~20 s and the
-        # burst takes ~3 s, so this should be zero -- and if it is not, the step says which
-        # assertions to stop believing instead of failing with nothing to say.
+        # finishing frees a slot, the plugin promotes into it, and the logical queue would
+        # legitimately be one short. An SCV takes ~20 s against a ~3 s burst, so this reads
+        # zero -- and when it does not, the step says which assertions to stop believing
+        # instead of failing with nothing to say.
         $quiet = ($p.Promoted -eq 0)
         Assert-That "no queue slot freed while the burst was going out (promoted=$($p.Promoted))" $quiet
 
@@ -587,9 +528,6 @@ try {
             ($paid -eq $expectUnits * $SCV_COST)
         Assert-That 'and nothing was paid for that did not queue' `
             ($paid -le $expectUnits * $SCV_COST)
-        # The `cost=` half of this was read from refusedCost, which nothing incremented
-        # (issue #66); the ring half is live and stays. What the cost half claimed is
-        # asserted for real by the exact-charge assertion above.
         Assert-That "no Train command was refused for a full ring (full=$($p.RefusedFull))" `
             ($p.RefusedFull -eq 0)
         $script:mineralsAfterBurst = $p.Minerals
@@ -598,10 +536,9 @@ try {
     }
 
     Step 'the Train button is STILL lit after the burst -- the client can go on' {
-        # The card, walked out of memory at the end of the burst. This is the client half of
-        # the feature: the whole design of task 025 is that the button never goes dark, and
-        # for a group it is task 030's detour that has to keep answering. A dark button here
-        # would mean the next press produces nothing, whatever the queues say.
+        # The client half of the feature: the design turns on the button never going dark,
+        # and for a group it is the fan-out's condition detour that has to keep answering. A
+        # dark button here means the next press produces nothing, whatever the queues say.
         $p = Get-Prod 'card-after'
         Assert-That 'the Train button is still on the card and enabled' `
             ($null -ne $p.Card -and $p.Card.State -eq 'enabled') `
@@ -611,7 +548,7 @@ try {
     # ------------------------------------------------------------------------------
     # CANCEL, with real money on it. The plugin owns the tail of each logical queue, so a
     # "cancel the last queued item" is refunded by the PLUGIN out of the same two cost
-    # tables the engine's own refund reads (task 028). Asserted from the resource globals.
+    # tables the engine's own refund reads. Asserted from the resource globals.
     # ------------------------------------------------------------------------------
     Step 'cancel an item the plugin is holding, and read the refund out of the globals' {
         # One building, selected alone: the cancel path is single-gated in the engine and in
@@ -664,10 +601,10 @@ try {
     }
 
     # ------------------------------------------------------------------------------
-    # THE SINGLE-BUILDING CONTROL (acceptance criterion 3). Same oracles, same run, one
-    # building selected: this is task 025's own case, and it is exactly where a regression
-    # to it would hide. Its full suite is test-production-queue.ps1; this is the in-run
-    # positive control that says the single path still queues past five here too.
+    # THE SINGLE-BUILDING CONTROL. Same oracles, same run, one building selected: this is
+    # where a regression to the single-building path would hide behind a group that happens
+    # to work. Its full suite is test-production-queue.ps1; this is the in-run positive
+    # control that the single path queues past five in this game too.
     # ------------------------------------------------------------------------------
     Step 'the SINGLE-building case still queues past five, in this same game' {
         $before = Get-Prod 'single-before'
@@ -750,12 +687,10 @@ Assert-That 'the generated map was cleaned up' ($KeepOpen -or -not (Test-Path -L
 # the engine's addToBuildQueue; the plugin's only resource write is the refund. That is an
 # assertion, not a coincidence (sc_prodqueue.h, THE RESOURCE RULE).
 #
-# It used to be asserted HERE, off mineralsSpent/gasSpent -- two counters nothing ever
-# incremented (issue #66). Measured before deleting them: a build that really did spend
-# left both reading 0 while the balance assertions failed. So the claim is asserted where
-# it can fail, against the engine's own globals: the exact-charge assertion during the
-# burst, and the unchanged-balance assertion after it. What is left on this line is the
-# REFUND counter, which Refund() increments for real.
+# Do not assert it off the plugin's own mineralsSpent/gasSpent: a build that really did
+# spend leaves both reading 0. It is asserted where it can fail instead -- the exact-charge
+# assertion during the burst and the unchanged-balance one after it, both against the
+# engine's globals. The counter read here is the REFUND one, which Refund() increments.
 $stats = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
            Select-String -Pattern 'PRODQSTATS ')
 if ($stats.Count -gt 0) {

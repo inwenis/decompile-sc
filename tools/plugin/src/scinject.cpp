@@ -1,44 +1,18 @@
-// scinject.cpp -- 32-bit launcher + LoadLibrary injector for task 008.
+// scinject.cpp -- 32-bit launcher + LoadLibrary injector. Starts the game from its
+// own directory and loads our DLL via LoadLibraryA on a remote thread; nothing is
+// copied into the game directory -- see tools/plugin/README.md for why that vector
+// beats proxying ddraw.dll. "scinject: PID=<n>" on stdout lets a caller tie its
+// post-launch checks to this exact process, not to whatever is called StarCraft.
 //
-// Usage:
-//   scinject.exe <game-exe> <plugin-dll> [options]
-//     --early-dll <path>   inject this DLL BEFORE the process is resumed
-//                          (repeatable; order preserved)
-//     --early              inject <plugin-dll> early too, instead of after init
-//     --no-plugin          launch, but do NOT inject <plugin-dll> (A/B control)
-//     --wait-ms N          settle wait after WaitForInputIdle (default 4000)
-//     --no-wait-exit       return instead of waiting for the game to exit
+// Late injection (after ResumeThread + WaitForInputIdle + settle) suits a passive
+// observer: the game's own modules are up and nothing is racing. Early injection
+// (into the suspended process, so DllMain runs before the entry point) is required
+// for a DLL that must hook during startup: the windowed-mode helper has to be up
+// before DirectDraw initialises, and has no export table, so it cannot be a proxy.
 //
-// Prints "scinject: PID=<n>" on stdout so a caller can tie its own post-launch
-// checks to this exact process rather than to whatever is called StarCraft.
-//
-// FAILURE POLICY: every exit path after CreateProcess goes through Bail(), which
-// terminates the game if it is still alive and always closes both handles. A
-// launch that could not deliver what was asked for must not leave a process
-// behind -- least of all a suspended one holding the working copy open.
-//
-// Starts the game from its own directory and makes it load our DLL by running
-// LoadLibraryA in a remote thread. Nothing is copied into the game directory --
-// see tools/plugin/README.md for why that vector was chosen over proxying
-// ddraw.dll.
-//
-// TWO INJECTION POINTS, because they are for different jobs:
-//
-//   late (default)  -- after ResumeThread + WaitForInputIdle + a settle wait.
-//                      Correct for a passive observer: the loader has run, the
-//                      game's own modules are up, and nothing is racing.
-//   early           -- into the still-suspended process, before ResumeThread, so
-//                      DllMain runs before the game's entry point. Required for a
-//                      DLL that must hook something during startup -- e.g. the
-//                      windowed-mode helper, which has to be in place before
-//                      DirectDraw initialises. This is the shape those helper DLLs
-//                      are built for (no export table, so they cannot be a ddraw
-//                      proxy; a launcher injects them and their DllMain hooks).
-//
-// Must be built 32-bit: CreateRemoteThread with a LoadLibraryA address taken from
-// this process's own kernel32 is only valid when injector and target are the same
-// bitness (kernel32 is mapped at the same base in every process of a given
-// bitness within a session).
+// Must be built 32-bit: a LoadLibraryA address from this process's own kernel32 is
+// valid in the target only at equal bitness (kernel32 maps at the same base in
+// every process of a given bitness within a session).
 
 #include <windows.h>
 #include <stdio.h>
@@ -46,9 +20,8 @@
 
 #define MAX_EARLY 8
 
-// What this process returns, and what each number MEANS. The values are a
-// contract -- drive-game.ps1, run-with-plugin.ps1 and test-combat-death.ps1 all
-// branch on the number -- so they are named here rather than renumbered.
+// These numbers are a contract: drive-game.ps1, run-with-plugin.ps1 and
+// test-combat-death.ps1 branch on them, so a value never changes meaning.
 enum ScInjectExit {
     SCINJECT_OK             = 0,
     SCINJECT_BAD_ARGS       = 1,   // usage, unknown flag, or a path that is not there
@@ -60,23 +33,23 @@ enum ScInjectExit {
 };
 
 // MinGW's CRT expands wildcards in argv by default. '?' is a wildcard, so
-// '\\?\C:\sc-install\...' arrived at main() already mangled -- which silently
-// defeated the pristine-install guard below, since it never saw the real path.
-// Every argument here is a filesystem path supplied by a caller that already
-// knows what it means; there is nothing to glob.
+// '\\?\C:\sc-install\...' would reach main() mangled and silently defeat the
+// pristine-install guard below, which would never see the real path. Every
+// argument here is a filesystem path from a caller that already knows what it
+// means; there is nothing to glob.
 extern "C" { int _CRT_glob = 0; }
 
-// Prints why a Win32 call failed and hands back the exit code for it. It does NOT
-// terminate anything and it does NOT end the run -- five of its callers deliberately
-// carry on and clean up first. (Bail(), below, is the one that ends things.)
+// Does NOT terminate anything and does NOT end the run: a caller that already
+// allocated inside the target frees it before returning. (Bail(), below, is the
+// one that ends things.)
 static int ReportWin32Error(const char* what) {
     fprintf(stderr, "scinject: %s failed, GetLastError=%lu\n", what, GetLastError());
     return SCINJECT_WIN32;
 }
 
-// Runs LoadLibraryA(dllPath) on a remote thread. Returns the resulting HMODULE
-// (0 on failure). Works on a suspended process too: the remote thread drives
-// LdrInitializeThunk, so the loader is up by the time LoadLibraryA runs.
+// Returns the loaded HMODULE, 0 on failure. Works on a suspended process too: the
+// remote thread drives LdrInitializeThunk, so the loader is up by the time
+// LoadLibraryA runs.
 static DWORD InjectDll(HANDLE hProc, const char* dllPath) {
     size_t bytes = strlen(dllPath) + 1;
     LPVOID remote = VirtualAllocEx(hProc, NULL, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
@@ -137,8 +110,8 @@ static void StripDevicePrefix(const char* in, char* out, size_t outLen) {
     lstrcpynA(out, in, (int)outLen);
 }
 
-// Canonical form of a path, as far as the filesystem will tell us: absolute,
-// backslashed, 8.3 components expanded. Used only by the guard below.
+// Absolute, backslashed, 8.3 components expanded: the guard below can only compare
+// prefixes once two spellings of the same path have collapsed into one.
 static void CanonicalPath(const char* in, char* out, size_t outLen) {
     char src[MAX_PATH];
     StripDevicePrefix(in, src, sizeof(src));
@@ -151,10 +124,10 @@ static void CanonicalPath(const char* in, char* out, size_t outLen) {
     while (n > 3 && out[n - 1] == '\\') out[--n] = '\0';
 }
 
-// Hard rule 1 of task 008: C:\sc-install\Starcraft is the user's playable
-// install and is never touched -- not even launched, which reads it. The wrapper
-// script guards this too; this is the same check one layer down, so calling
-// scinject.exe by hand cannot get past it.
+// AGENTS.md § "Hard rules": C:\sc-install\Starcraft is the user's playable install
+// and is never touched -- not even launched, which reads it. The wrapper script
+// guards this too; this is the same check one layer down, so calling scinject.exe
+// by hand cannot get past it.
 static bool IsUnderPristineInstall(const char* path, char* canonOut, size_t canonLen) {
     static const char* kRoot = "C:\\sc-install";
     CanonicalPath(path, canonOut, canonLen);
@@ -166,8 +139,8 @@ static bool IsUnderPristineInstall(const char* path, char* canonOut, size_t cano
 
 // Single exit point for every failure after CreateProcess: never leave a game
 // process behind, and never leak a handle. Terminating a still-running game is
-// deliberate -- the alternative (used to be the late-injection path) was an
-// unobserved process the caller had no handle on.
+// deliberate -- the alternative is an unobserved process nobody holds a handle
+// on, at worst a suspended one holding the working copy open.
 static int Bail(PROCESS_INFORMATION* pi, int rc) {
     if (WaitForSingleObject(pi->hProcess, 0) != WAIT_OBJECT_0) {
         TerminateProcess(pi->hProcess, 1);
@@ -198,12 +171,10 @@ int main(int argc, char** argv) {
     bool noPlugin = false;   // A/B control: launch through the same path, our code absent
     char early[MAX_EARLY][MAX_PATH];
     int  earlyCount = 0;
-    // task 040: name the target desktop explicitly rather than relying on
-    // inheritance from the calling thread's current desktop -- measured that the
-    // inheritance chain does not reliably hold through PowerShell's own
-    // process-launch path. NULL (unset) keeps the default behaviour for every
-    // other caller: STARTUPINFO.lpDesktop stays NULL, so CreateProcess inherits
-    // the caller's desktop as it always did.
+    // Names the target desktop explicitly: measured that inheritance of the calling
+    // thread's desktop does not reliably hold through PowerShell's process-launch
+    // path. Unset leaves STARTUPINFO.lpDesktop NULL, so every other caller keeps
+    // CreateProcess's inherit-the-caller default.
     const char* desktopName = NULL;
 
     for (int i = 3; i < argc; ++i) {
@@ -250,19 +221,17 @@ int main(int argc, char** argv) {
     if (desktopName) si.lpDesktop = (char*)desktopName;
 
     // CREATE_SUSPENDED always, for two reasons: the pid is known before a single
-    // instruction runs, and it is the window in which --early-dll injection has
-    // to happen (see the header -- the windowed-mode helper must hook before
-    // DirectDraw initialises). With no early DLLs the process is resumed straight
-    // away and the plugin goes in after init instead.
+    // instruction runs, and it is the only window in which --early-dll injection
+    // can happen. With no early DLLs the process is resumed straight away and the
+    // plugin goes in after init instead.
     if (!CreateProcessA(gameExe, NULL, NULL, NULL, FALSE, CREATE_SUSPENDED,
                         NULL, workDir, &si, &pi)) {
         return ReportWin32Error("CreateProcess");
     }
     printf("scinject: launched pid=%lu  %s\n", pi.dwProcessId, gameExe);
-    printf("scinject: PID=%lu\n", pi.dwProcessId);   // machine-readable, for callers
+    printf("scinject: PID=%lu\n", pi.dwProcessId);
     fflush(stdout);
 
-    // --- early injection, while the process is still suspended ---------------
     for (int i = 0; i < earlyCount; ++i) {
         DWORD m = InjectDll(pi.hProcess, early[i]);
         if (m == 0) {

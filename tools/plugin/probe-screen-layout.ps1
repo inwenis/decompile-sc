@@ -1,32 +1,17 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Task 032. Reads the RENDERER'S OWN LAYOUT out of a running StarCraft and prints it, so
-`research/renderer-viewport.md` rests on a measurement and not only on a disassembly.
-
+Reads the renderer's own layout out of a running StarCraft, so research/renderer-viewport.md
+rests on a measurement and not only on a disassembly.
 .DESCRIPTION
-The renderer had never been mapped before task 032 and, unlike every other subsystem this
-project has touched, it has no public prior art to check against (research/prior-art.md 9).
-A static map with nothing to corroborate it is exactly the kind of claim AGENTS.md says to
-distrust -- "measure rather than reason", and "read a dialog's CONTENT from memory". So this
-probe reads the three things the document asserts about the live layout:
-
-  1. the screen Bitmap 0x006CEFF0 -- width, height, and the pointer to the 640*480 buffer;
-  2. all eight graphic layers 0x006CEF50 in DRAW ORDER, with their rectangles and the draw
-     callback each one carries, printed as static VAs so they can be compared straight
-     against sc_addresses.h;
-  3. the viewport origin and the scroll maxima, beside the value the document's reading of
-     0x0049BB90 PREDICTS them to be -- so a wrong reading of that function shows up here as
-     a mismatch instead of surviving into research/.
-
-It reads TWICE: once at the main menu and once in a loaded game. That is the point, not a
-convenience. At the menu the playfield layer is not installed; in a game it is. A single
-in-game reading cannot tell "layer 5 is the playfield" from "layer 5 is always like that",
-and the pair can.
-
-READ-ONLY, END TO END. The plugin runs in -Mode observe (no hooks, no writes to game
-memory) and the SCREEN scan installs nothing. StarCraft.exe on disk is untouched; the map
-fixture is generated into this task's own folder and deleted on every exit path.
+The renderer has no public prior art a static map could be checked against
+(research/prior-art.md 9), so this probe reads the live screen Bitmap 0x006CEFF0, the eight
+graphic layers 0x006CEF50 in draw order as static VAs comparable against sc_addresses.h, and
+the viewport origin and scroll maxima beside what the document's reading of 0x0049BB90
+predicts, so a wrong reading is a mismatch here rather than surviving into research/.
+It reads twice because one in-game reading cannot tell "layer 5 is the playfield" from
+"layer 5 is always like that", and the menu/in-game pair can. -Mode observe keeps the whole
+probe read-only: no hooks, no writes to game memory, no patch to StarCraft.exe on disk.
 
 .EXAMPLE
 ./tools/plugin/probe-screen-layout.ps1
@@ -38,7 +23,7 @@ fixture is generated into this task's own folder and deleted on every exit path.
 param(
     [string]$GameDir = 'C:\sc-work\1161-base',
     [string]$LogDir = 'C:\sc-work\logs',
-    # This task's OWN fixture folder, per the one-folder-per-task hard rule.
+    # This run's own fixture folder, one folder per run (AGENTS.md § "Test fixtures").
     [string]$FixtureDir,
     [switch]$KeepOpen
 )
@@ -50,8 +35,8 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
 
 if (-not $FixtureDir) { $FixtureDir = Join-Path $GameDir 'Maps\BroodWar\00-t032' }
-# Named for this SUITE, not for the task: two suites generating the same filename is what
-# made "delete only your own file" undecidable in the 2026-08-09 incident.
+# Named for the suite: two suites generating the same filename make "delete only your own
+# file" undecidable.
 $mapName = 'screen-layout.scx'
 $mapPath = Join-Path $FixtureDir $mapName
 $logPath = Join-Path $LogDir '032-screen-layout.log'
@@ -69,22 +54,20 @@ $fixtures = $null
 $readings = @{}
 
 # What sc_addresses.h says each layer's draw callback is, from the writer of its +0x10 slot.
-# Printed beside the live value so a reader sees agreement or disagreement rather than a
-# number they have to go and look up.
+# Printed beside the live value so agreement or disagreement is visible without a lookup.
 $EXPECTED_DRAW = @{
     0 = '0x004BDFA0'; 1 = '0x004810F0'; 2 = '0x0041CB50'; 3 = '0x0048D5C0'
     4 = '0x0048D5C0'; 5 = '0x004BD580'; 6 = '(none)';     7 = '(none)'
 }
 
-# One reading: write a marker, wait for the plugin's SCREEN lines carrying that exact tag,
-# parse them. The marker is how every oracle in this repo is synchronised -- the driver says
-# "look now" and waits for the line with its own tag, so there is no polling race.
+# The marker is how a reading is synchronised: the driver says "look now" and waits for the
+# log line carrying its own tag, so there is no polling race.
 function Read-ScreenLayout {
     param([Parameter(Mandatory)][string]$Tag)
 
     $from = Get-ScLogLineCount -LogPath $logPath
-    # Set-ScMarker, not Set-Content: the latter opens the marker with FileShare.None and
-    # therefore throws whenever the plugin's observer happens to have it open (issue #37).
+    # Set-ScMarker, not Set-Content: Set-Content opens the marker with FileShare.None and
+    # therefore throws whenever the plugin's observer has it open.
     Set-ScMarker -MarkerPath $markerPath -Label $Tag
     # Ten lines land per marker (bitmap + 8 layers + viewport); wait for the LAST of them,
     # the viewport line, so a partially-written set is never parsed.
@@ -131,9 +114,9 @@ function Show-ScreenLayout {
     } else { Write-Host '       screen Bitmap: NOT READ' }
     foreach ($l in $R.Layers) {
         $exp = $EXPECTED_DRAW[$l.Index]
-        # A null callback is only a MISMATCH where the layer is in use. At the main menu the
-        # playfield and placement layers are legitimately not installed yet -- that contrast
-        # is the reason this probe reads twice, so it must not print as a failure.
+        # A null callback is a MISMATCH only where the layer is in use: at the main menu the
+        # playfield and placement layers are legitimately absent, so that must not print as
+        # a failure.
         $agree = if ($l.Draw -eq '0x00000000') {
                      if ($exp -eq '(none)') { 'unused, as documented' }
                      elseif ($l.Used -eq 0) { "not installed in this state (doc $exp)" }
@@ -163,10 +146,9 @@ function Assert-True {
 $step = 0
 
 try {
-    # Wait for the machine and take the lock BEFORE generating anything. Five tasks share
-    # this machine and a fixture folder of mine, even an empty one, pushes every entry below
-    # it down a row in everyone else's map browser -- so the folder should exist for as
-    # little of the run as possible, not for however long another worker's game lasts.
+    # Take the lock BEFORE generating anything: a fixture folder of mine, even an empty one,
+    # pushes every entry below it down a row in every other worker's map browser, so it must
+    # exist for as little of the run as possible (AGENTS.md § "Test fixtures").
     Write-Host 'probe-screen-layout: waiting for the machine'
     Wait-ScNoGameRunning
     $launchLock = Enter-ScLaunchLock -TaskId '032-screen-layout'
@@ -188,13 +170,13 @@ try {
     $h = Get-ScGameWindow -ProcessId $gamePid
     Start-Sleep -Seconds 3
 
-    # READING 1: the main menu. The video init has run, so the screen Bitmap and the layer
-    # block exist; the playfield layer has not been installed yet.
+    # At the main menu the video init has run, so the screen Bitmap and the layer block
+    # exist, but the playfield layer is not installed.
     $readings['menu'] = Read-ScreenLayout -Tag 'menu'
     Show-ScreenLayout $readings['menu']
 
-    # The menu walk, exactly the sequence probe-ghost-cloak.ps1 uses. Every browser click is
-    # computed from the filesystem by Select-ScBrowserMap -- no fixed rows in this file.
+    # The clicks below are menu buttons; the map-browser row itself is computed from the
+    # filesystem by Select-ScBrowserMap, never a fixed row (AGENTS.md § "Map browser").
     Write-Host ''
     Write-Host 'probe-screen-layout: walking to a loaded game'
     Send-ScClick -Hwnd $h -X 215 -Y 119
@@ -215,7 +197,6 @@ try {
     Dismiss-ScTipsDialog -Hwnd $h -LogPath $logPath | Out-Null
     Start-Sleep -Seconds 3
 
-    # READING 2: in game.
     $readings['ingame'] = Read-ScreenLayout -Tag 'ingame'
     Show-ScreenLayout $readings['ingame']
 
@@ -247,7 +228,7 @@ try {
     # The positive half of the menu/in-game pair: the claim is not just "layer 5 is the
     # playfield in game", it is "layer 5 is the playfield BECAUSE it appears when a game
     # loads". An absence is only worth something next to the presence it contrasts with
-    # (AGENTS.md, 2026-08-09).
+    # (AGENTS.md § "Oracles: absence and defect-era checks").
     $m5 = $m.Layers | Where-Object Index -eq 5
     Assert-True 'layer 5 is NOT installed at the main menu, and IS in game' `
         ($null -ne $m5 -and $null -ne $l5 -and $m5.Used -eq 0 -and $l5.Used -ne 0) `
@@ -264,9 +245,9 @@ try {
         ($null -ne $v -and $v.TileX -eq [math]::Floor($v.OriginX / 32) -and $v.TileY -eq [math]::Floor($v.OriginY / 32)) `
         "(origin=($($v.OriginX),$($v.OriginY)) tile=($($v.TileX),$($v.TileY)))"
 
-    # The plugin must have stayed passive: this whole probe runs in observe mode, and observe
-    # mode installing a hook would invalidate every "read-only" claim in the document. Proved
-    # POSITIVE first -- the log must show the mode line at all -- then absent.
+    # Observe mode installing a hook would invalidate every "read-only" claim in the
+    # document. Proved POSITIVE first -- the log must show the mode line at all -- then
+    # absent.
     $modeLines = @(Get-Content -LiteralPath $logPath | Where-Object { $_ -match 'mode\s+:\s+observe' })
     Assert-True 'the log positively reports observe mode' ($modeLines.Count -gt 0)
     $hookLines = @(Get-Content -LiteralPath $logPath | Where-Object { $_ -match 'HOOK .*installed' })
@@ -282,13 +263,11 @@ finally {
         catch { Write-Host "  FAIL close-game: $($_.Exception.Message)"; $failures++ }
         Start-Sleep -Seconds 2
     }
-    # Only this run's own declared fixture, on every path (AGENTS.md fixture rules).
+    # Only this run's own declared fixture, on every path (AGENTS.md § "Test fixtures").
     if ($fixtures) {
         try { Remove-ScOwnFixture -Run $fixtures | Out-Null } catch { Write-Host "  warn: $($_.Exception.Message)" }
         # -Dir, not -Run: it deletes the folder only if it is EMPTY, which is why it takes a
-        # path rather than the run record. Getting this wrong left an empty 00-t032 behind on
-        # the first run of this probe, and an empty folder of mine still pushes every entry
-        # below it down a row in every other worker's map browser.
+        # path rather than the run record.
         try { Remove-ScOwnFixtureDir -Dir $fixtures.Dir | Out-Null } catch { Write-Host "  warn: $($_.Exception.Message)" }
     }
     if ($launchLock) { try { Exit-ScLaunchLock -Lock $launchLock } catch { } }

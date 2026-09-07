@@ -1,47 +1,28 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Task 063. Answers: can we see the engine's FULL composed frame without presenting
-it and without touching the user's display? Positive control first, on a stock
-640-wide game, then the 800-wide stage-1 build.
+Reads the engine's FULL composed frame without presenting it and without
+touching the user's display: a stock 640-wide positive control first, then the
+wide build.
 
 .DESCRIPTION
-Task 034 judged stage 2 undevelopable because "every frame this task has ever
-captured shows only the left 640 columns" -- but those frames went through the
-PRESENTED window, and WMode.dll presents columns 0..639 whatever it is asked
-(research/renderer-viewport.md 12.6/12.10). The engine's own framebuffer is a
-flat 8-bit surface described at 0x006CEFF0 and at stage 1 it is demonstrably
-800 wide. This probe reads THAT, via the plugin's FRAMEDUMP (scplugin.cpp,
-task 063), and validates the instrument before believing it:
+A frame captured through the PRESENTED window can only ever show columns 0..639
+-- WMode.dll presents that width whatever it is asked, see
+research/renderer-viewport.md 12.6/12.10. The engine's own framebuffer is a flat
+8-bit surface described at 0x006CEFF0, at the patched width, and the plugin's
+FRAMEDUMP reads THAT. Consistency is the check the whole probe rests on: the
+dump holds palette indices and the window holds the RGB those indices were
+painted as, at 1:1 (12.6), so over the pixels the window shows UNCHANGED across
+the two captures bracketing the dump, every occurrence of index i must land on
+ONE RGB. The stock arm is the instrument's positive control and is not optional;
+the wide arms repeat that check over the 640 columns the window can vouch for,
+which holds only if rows were extracted at the TRUE pitch -- the proof that
+full-width geometry is read, not just more bytes.
 
-  ARM 1 -- stock (the positive control, and it is not optional). The dump must
-  reproduce a KNOWN-GOOD 640x480 frame. "Reproduce" is measured, not eyeballed:
-  the dump holds palette indices and the presented window holds the RGB those
-  indices were painted as, at 1:1 (12.6) -- so over pixels the window shows
-  UNCHANGED across two captures bracketing the dump, every occurrence of index
-  i must land on ONE RGB. frame-capture.py `check` builds that mapping and
-  reports its consistency; a torn, misaligned or wrong-pitch dump collapses it
-  (proved offline against synthetic dumps: a 160-byte row shift scores 0.58).
-  The mapping doubles as the scene's palette, which renders the dump into a
-  PNG a human can open next to the window capture.
-
-  ARM 2 -- stage 1 (-Widescreen 1 -WidescreenStage 1, the known-good 800-pitch
-  build). Same consistency check over the 640 columns the window can vouch for:
-  it can only hold if the dump's rows were extracted at the TRUE pitch of 800,
-  so it is also the proof that the instrument reads the full-width geometry
-  correctly. The dump's right 160 columns are then the columns NO instrument
-  in this repo has ever seen; they are reported (band stats) and rendered.
-
-  CROSS-CHECK -- the two arms' in-game dumps compare index-for-index over the
-  playfield they share (same fixture, same start), with frame-diff's row-span
-  discriminator: stage 1's left 640 columns must match stock (wide_rows=0),
-  which re-proves 034's stage-1 verdict through the new instrument.
-
-READ-ONLY toward the game in the stock arm (-Mode observe); the stage-1 arm
-patches geometry in-process exactly as test-widescreen.ps1 does. StarCraft.exe
-on disk is untouched in both. Dumps and PNGs reproduce game artwork: they stay
-on the gitignored diagnostic path and are never committed (hard rule 1); what
-this suite prints is counts and fractions.
+Read-only toward the game in the stock arm (-Mode observe); the wide arms patch
+geometry in-process as test-widescreen.ps1 does, leaving StarCraft.exe on disk
+untouched. Dumps and PNGs reproduce game artwork: they stay on the gitignored
+diagnostic path and are never committed (AGENTS.md § "Hard rules").
 
 .EXAMPLE
 ./tools/plugin/probe-framebuffer-capture.ps1
@@ -59,14 +40,9 @@ param(
     # instrument's positive control, the stage-1 arm is the question.
     [switch]$StockOnly,
     [switch]$Stage1Only,
-    # Task 064: run stock + STAGE 2 instead of stock + stage 1. The stage-2 arm
-    # is captured TWICE in game a few seconds apart -- a single capture cannot
-    # tell "changes nothing" from "changes something intermittently" (061's
-    # denominator lesson, relayed by the conductor 2026-08-13). The fixture is
-    # a 36-marine grid at 64px spacing so the units' own sight explores the
-    # terrain under the right 160 columns: with 063's single marine that band
-    # is legitimately SHROUD-black even in a correct build, and the success
-    # metric would be vacuously failable.
+    # Run stock + STAGE 2 instead of stock + stage 1. The stage-2 arm is
+    # captured TWICE in game a few seconds apart -- a single capture cannot
+    # tell "changes nothing" from "changes something intermittently".
     [switch]$Stage2,
     [switch]$KeepOpen
 )
@@ -82,11 +58,11 @@ $ws = Get-ScWideGeometry
 $SCREEN_W = $ws.W; $SCREEN_H = $ws.H; $STOCK_W = $ws.StockW
 $BAND_W = $SCREEN_W - $STOCK_W          # the columns nothing presented before widescreen
 # The 36-marine fixture's sight explores the terrain to map x ~1332 (measured at
-# three origins and a sub-tile scroll, research/renderer-viewport.md 16.4; the same
-# constant probe-widescreen-drive.ps1 carries). At origin O the explored part of the
-# right band is screen x 640..(1332-O), and everything past it is LEGITIMATE shroud
-# -- so the band's expected map fraction is derived from that edge, not fixed: at
-# 800 wide it is 148/160 = 0.925 (16.4 read 0.9251), at 1280 wide 148/640 = 0.231.
+# three origins and a sub-tile scroll, research/renderer-viewport.md 16.4). At
+# origin O the explored part of the right band is screen x 640..(1332-O), and
+# everything past it is LEGITIMATE shroud -- so the band's expected map fraction
+# is derived from that edge, not fixed: at 800 wide 148/160 = 0.925, at 1280
+# wide 148/640 = 0.231.
 $EXPLORED_EDGE_X = 1332
 
 if (-not $FixtureDir) {
@@ -119,7 +95,6 @@ function Report-Finding {
     Write-Host "  ---- FINDING: $What"
 }
 
-# Run frame-capture.py, echo its lines, hand back the key=value map.
 function Invoke-FrameTool {
     param([Parameter(Mandatory)][string[]]$ToolArgs)
     $out = & $py $tool @ToolArgs 2>&1
@@ -131,10 +106,9 @@ function Invoke-FrameTool {
     $m
 }
 
-# One captured point: window PNG, marker-driven dump, window PNG again. The two
-# window captures BRACKET the dump so `check` can restrict its mapping to pixels
-# stable across the whole interval -- that is what makes menu/doodad animation
-# noise instead of poison.
+# The two window captures BRACKET the dump so `check` can restrict its mapping
+# to pixels stable across the whole interval -- that is what makes menu/doodad
+# animation noise instead of poison.
 function Get-CapturePoint {
     param(
         [Parameter(Mandatory)][IntPtr]$Hwnd,
@@ -172,21 +146,20 @@ function Get-CapturePoint {
     $r
 }
 
-# One arm: launch, capture at the menu, walk to a game, capture in game, close.
 function Invoke-Arm {
     param(
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][string]$Widescreen,
         [string]$Stage = '1',
-        # Task 064 run 3: after the in-game capture, move the camera by minimap
-        # click and capture at each stop -- scrolled (+4 tiles right), mid (back
-        # near start), scrolled2 (same click as scrolled, so a same-origin pair
+        # After the in-game capture, move the camera by minimap click and
+        # capture at each stop -- scrolled (+4 tiles right), mid (back near
+        # start), scrolled2 (same click as scrolled, so a same-origin pair
         # exists). The seam's zeroruns across these discriminate a screen-space
         # defect (stays at the same x) from a map-space one (moves with the map).
         [switch]$ScrollCaptures,
         # Deliberately incoherent %SCPLUGIN_WS_ONLY% subset -- the DEFECT arm,
-        # dense_rows' live positive control (a new oracle must be seen failing
-        # on real damage before its green is trusted; conductor 2026-08-13).
+        # dense_rows' live positive control: a new oracle must be seen failing
+        # on real damage before its green is trusted.
         [string]$WsOnly = ''
     )
 
@@ -204,10 +177,9 @@ function Invoke-Arm {
     Write-Host "probe-framecap: ARM '$Name' (-Widescreen $Widescreen)"
     try {
         # Stock arm: -Mode observe -- the plugin's off switch, read-only end to
-        # end, same as every observe-mode oracle. Stage-1 arm: hooktest, the
-        # least invasive mode that is not the off switch, because the widescreen
-        # patch is ignored outright in observe (exactly test-widescreen's choice
-        # and reasoning).
+        # end. Wide arm: hooktest, the least invasive mode that is not the off
+        # switch, because the widescreen patch is ignored outright in observe
+        # (test-widescreen.ps1 chooses it for the same reason).
         $mode = ($Widescreen -eq '1') ? 'hooktest' : 'observe'
         # The defect arm's filter travels by environment; set it for THIS arm
         # only and clear it in finally -- an unannounced leftover subset is the
@@ -254,15 +226,14 @@ function Invoke-Arm {
             $result.InGame = Get-CapturePoint -Hwnd $h -Tag "$Name-ingame" -LogPath $log
             $result.Walked = ($null -ne $result.InGame.Dump)
             if ($ScrollCaptures) {
-                # Camera stops, pre-registered before the run: the fixture map
-                # is 128x96 tiles, the game centres the start location at origin
-                # (544,416) = tile (17,13). Minimap click-to-centre (stock
-                # 20/13-tile arithmetic, stage 3 untouched) puts a click at tile
-                # (31,19) at origin x = (31-10)*32 = 672 (+4 tiles right), and a
-                # click at (27,19) back at x = 544 (y lands at 400, not 416 --
-                # the 13-tile half-extent is 6.5 tiles, so the exact start
-                # origin is unreachable by minimap; the same-origin pair is
-                # therefore scrolled vs scrolled2, two identical clicks).
+                # The fixture map is 128x96 tiles and the game centres the start
+                # location at origin (544,416) = tile (17,13). Minimap
+                # click-to-centre (stock 20/13-tile arithmetic) puts a click at
+                # tile (31,19) at origin x = (31-10)*32 = 672 (+4 tiles right),
+                # and a click at (27,19) back at x = 544. y lands at 400, not
+                # 416 -- the 13-tile half-extent is 6.5 tiles, so the exact
+                # start origin is unreachable by minimap; the same-origin pair
+                # is therefore scrolled vs scrolled2, two identical clicks.
                 $right = Get-ScMinimapPoint -MapTilesW 128 -MapTilesH 96 -TileX 31 -TileY 19
                 $back = Get-ScMinimapPoint -MapTilesW 128 -MapTilesH 96 -TileX 27 -TileY 19
                 Send-ScClick -Hwnd $h -X $right.X -Y $right.Y
@@ -275,31 +246,28 @@ function Invoke-Arm {
                 Start-Sleep -Seconds 3
                 $result.Scrolled2 = Get-CapturePoint -Hwnd $h -Tag "$Name-scrolled2" -LogPath $log
 
-                # Task 068 (064's residue 4): every capture above rests at a
-                # TILE-ALIGNED origin -- minimap click-to-centre lands on
-                # multiples of 32 -- so the fog cell pipeline's sub-tile
-                # alignment terms ((origin>>3)&3 in the renderer, &0x1F in the
-                # change detector) have never been exercised at 800. A held
+                # Every minimap capture rests at a TILE-ALIGNED origin --
+                # click-to-centre lands on multiples of 32 -- leaving the fog
+                # cell pipeline's sub-tile alignment terms ((origin>>3)&3 in the
+                # renderer, &0x1F in the change detector) unexercised. A held
                 # arrow key drives the smooth stepper scroll and can stop
-                # between tile boundaries. Posted WM_KEYDOWN reaching the
-                # engine's scroll is an empirical question (drive-game.ps1's
-                # KNOWN LIMIT note); the origin assertion downstream decides,
-                # and a failure means "scroll it another way", not "done".
-                # VK_RIGHT, short hold: measured 2026-08-13 run 1, a 420ms held
-                # arrow moved the camera >= 704 px (into the left clamp, which
-                # is tile-aligned and defeats the capture's purpose) -- the
-                # scroll runs >= 850 px/s. 100ms from origin (704,416) stops
-                # mid-map ~80-90 px right, almost never on a multiple of 32.
+                # between tile boundaries; whether a posted WM_KEYDOWN reaches
+                # the engine's scroll is empirical (drive-game.ps1's KNOWN LIMIT
+                # note), so the origin assertion downstream decides and a
+                # failure means "scroll it another way", not "done". The scroll
+                # runs >= 850 px/s: a 420ms hold reaches the tile-aligned left
+                # clamp, so VK_RIGHT for 100ms from origin (704,416) stops
+                # ~80-90 px right, almost never on a multiple of 32.
                 Send-ScKey -Hwnd $h -VirtualKey 0x27 -HoldMs 100 -SettleMs 500
                 $result.ScrollMid = Get-CapturePoint -Hwnd $h -Tag "$Name-scrollmid" -LogPath $log
             }
             # The WIDESCREEN install verdict, read from the plugin's own log --
             # an arm whose table was REFUSED runs a stock geometry and every
             # downstream diff would pass vacuously (absence must be proved
-            # positive; the ACTIVE line is the positive). The filter line is
-            # the same proof for the SUBSET question, in both directions: the
-            # full arm must say "(unset, whole stage applied)" and the defect
-            # arm must name its subset with a non-zero skip count.
+            # positive; the ACTIVE line is the positive). The filter line is the
+            # same proof for the SUBSET question: the full arm must say
+            # "(unset, whole stage applied)", the defect arm must name its
+            # subset with a non-zero skip count.
             $wsLines = @(Get-Content -LiteralPath $log |
                          Where-Object { $_ -match 'WIDESCREEN (ACTIVE|INCOMPLETE|REFUSED)' })
             if ($wsLines.Count) { $result.WsVerdict = $wsLines[0] }
@@ -334,6 +302,8 @@ try {
     # Stage-2 runs spread 36 marines on a 64px grid: their combined sight
     # (~7 tiles beyond a ~384px block) explores the terrain under screen
     # x=640..799, so the right band holds MAP rather than legitimate shroud.
+    # With a single marine that band is legitimately SHROUD-black even in a
+    # correct build, and the band assertions would be vacuously failable.
     $unitCount = $Stage2 ? 36 : 1
     $spacing = 64
     $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
@@ -342,19 +312,18 @@ try {
     @($gen | Where-Object { "$_" -notmatch 'WARNING:StormLibFinder' }) | ForEach-Object { Write-Host "       $_" }
     # A generation that failed leaves no file, and the browser walk's re-check
     # then reports the map "gone between generation and launch -- another
-    # worker's cleanup took it": a wrong CULPRIT asserted from no evidence
-    # (this run, task 064: the real cause was a worktree with no .venv). Refuse
-    # here, where the generator's own traceback is still on the screen.
+    # worker's cleanup took it": a wrong CULPRIT asserted from no evidence.
+    # Refuse here, where the generator's own traceback is still on the screen.
     if (-not (Test-Path -LiteralPath $mapPath)) {
         throw "probe-framecap: the fixture was never generated ($mapPath does not exist) -- read the generator output above; nothing was launched."
     }
 
     if ($Stage2) {
         $arms['stock'] = Invoke-Arm -Name 'stock' -Widescreen '0'
-        # The DEFECT arm: stage 2 filtered to the terrain group alone. 12.5's
-        # coupling makes this incoherent BY CONSTRUCTION -- the blitter walks
-        # 50 columns of a 40-stride grid -- so its frame is known-damaged, and
-        # dense_rows must read RED on it before its green on the full arm is
+        # The DEFECT arm: stage 2 filtered to the terrain group alone. The
+        # coupling in 12.5 makes this incoherent BY CONSTRUCTION -- the blitter
+        # walks 50 columns of a 40-stride grid -- so its frame is known-damaged,
+        # and dense_rows must read RED on it before its green on the full arm is
         # worth anything. All writes stay bounded (terrain.alloc is in the
         # subset), so the damage renders rather than corrupts.
         $arms['s2defect'] = Invoke-Arm -Name 's2defect' -Widescreen '1' -Stage '2' -WsOnly 'terrain'
@@ -369,8 +338,7 @@ try {
     Write-Host 'probe-framecap: assertions'
 
     # ---- ARM 1: the positive control --------------------------------------
-    # What the screen Bitmap holds, measured by this suite's first run
-    # (2026-08-13) and asserted to stay that way:
+    # What the screen Bitmap holds, measured and asserted to stay that way:
     #   * at the MAIN MENU the buffer is ALL INDEX 0 in both arms -- the glue
     #     screens do not compose into 0x006CEFF0 at all. A menu consistency
     #     check is aimed at a scene that is not there, so the menu point only
@@ -406,18 +374,15 @@ try {
 
         if ($st.InGame -and $st.InGame.Dump) {
             $pt = $st.InGame
-            # Align pinned here too (task 064): the auto-search mislocked on the
-            # 36-marine fixture twice -- run 2 on the s2 arm, run 3 on THIS arm
-            # (0.33867 auto vs 0.98477 pinned, same brackets). The render pass
-            # below keeps auto-search as the disagreement detector.
+            # Alignment is pinned: auto-search mislocks on the 36-marine fixture
+            # (0.33867 auto vs 0.98477 pinned over the same brackets).
             Write-Host "       [stock/$($pt.Tag)] index->RGB consistency vs the window, pure playfield, align pinned (5,32):"
             $m = Invoke-FrameTool -ToolArgs (@('check', '--dump', $pt.Dump,
                     '--before', $pt.Before, '--after', $pt.After,
                     '--align-dx', '5', '--align-dy', '32') + $PF)
             # The window must hold a PICTURE before its vote counts: a dead
             # capture maps every index to black, each one perfectly
-            # consistently, and the consistency figure goes vacuous (this
-            # repo's house defect).
+            # consistently, and the consistency figure goes vacuous.
             Assert-True "[stock/$($pt.Tag)] the window capture holds a picture (>= 32 distinct colours)" `
                 ([int]($m['window_distinct_rgb'] ?? 0) -ge 32) "(got $($m['window_distinct_rgb']))"
             Assert-True "[stock/$($pt.Tag)] the dump reproduces the presented playfield (consistency >= 0.97)" `
@@ -445,11 +410,10 @@ try {
                 ($pt.W -eq $SCREEN_W -and $pt.H -eq $SCREEN_H) "(got $($pt.W)x$($pt.H))"
             Assert-True "[s1/$($pt.Tag)] the copy settled" ($pt.Stable -eq 1) "(reads=$($pt.Reads))"
 
-            # The columns nothing has ever presented. At stage 1 the engine
-            # still COMPOSES 640 wide, so the extra columns hold whatever the
-            # (patched, width-aware) screen clear left there -- the point is
-            # that the instrument now SEES them at all, and what it sees is
-            # reported rather than guessed.
+            # At stage 1 the engine still COMPOSES 640 wide, so the extra
+            # columns hold whatever the (patched, width-aware) screen clear
+            # left there: nothing presents them, so what the dump holds there
+            # is reported rather than guessed.
             Write-Host "       [s1/$($pt.Tag)] the right $BAND_W columns (x=$STOCK_W..$($SCREEN_W - 1)), never presented by anything:"
             $b = Invoke-FrameTool -ToolArgs @('band', '--dump', $pt.Dump, '--x0', "$STOCK_W")
             Assert-True "[s1/$($pt.Tag)] the band was readable end to end" `
@@ -461,9 +425,8 @@ try {
             # The consistency check over the window-vouched playfield can only
             # hold if rows were extracted at the TRUE pitch of 800 -- a
             # 640-pitch misread shifts row y by 160*y bytes and lands on 0.58
-            # against the synthetic control. So this line is the proof that
-            # the instrument reads the full-width geometry, not just more
-            # bytes. Same region and threshold as the stock arm, same reasons.
+            # against the synthetic control. Same region and threshold as the
+            # stock arm, same reasons.
             Write-Host "       [s1/$($pt.Tag)] consistency vs the window, pure playfield, at pitch ${SCREEN_W}:"
             $m = Invoke-FrameTool -ToolArgs (@('check', '--dump', $pt.Dump,
                     '--before', $pt.Before, '--after', $pt.After) + $PF)
@@ -498,7 +461,7 @@ try {
         }
     }
 
-    # ---- ARM 3 (task 064): the defect arm, dense_rows' live positive control
+    # ---- ARM 3: the defect arm, dense_rows' live positive control ----------
     if ($arms['s2defect']) {
         $sd = $arms['s2defect']
         Assert-True '[s2defect] the (filtered) table is ACTIVE with 0 refused' `
@@ -526,12 +489,9 @@ try {
         }
     }
 
-    # ---- ARM 4 (task 064): stage 2, full table ----------------------------
+    # ---- ARM 4: stage 2, full table ---------------------------------------
     if ($arms['s2']) {
         $s2 = $arms['s2']
-        # A REFUSED/INCOMPLETE table runs a STOCK geometry, and every diff
-        # below would then pass vacuously -- the ACTIVE line is the positive
-        # that proves the absence checks mean something.
         Assert-True '[s2] the widescreen table is ACTIVE with 0 refused' `
             ($null -ne $s2.WsVerdict -and $s2.WsVerdict -match 'WIDESCREEN ACTIVE' -and
              $s2.WsVerdict -match ', 0 refused') "($($s2.WsVerdict))"
@@ -546,20 +506,18 @@ try {
             Assert-True "[s2/$($pt.Tag)] the dump is the full $($SCREEN_W)x$($SCREEN_H)" `
                 ($pt.W -eq $SCREEN_W -and $pt.H -eq $SCREEN_H) "(got $($pt.W)x$($pt.H))"
             Assert-True "[s2/$($pt.Tag)] the copy settled" ($pt.Stable -eq 1) "(reads=$($pt.Reads))"
-            # The seam tracker, every in-game capture: a screen-space defect
-            # keeps its zero-column run at one x; a map-space defect's run
-            # moves with the camera. Reported, not asserted -- the positions
-            # ARE the experiment's reading.
+            # The seam tracker: reported, not asserted -- the zero-run
+            # positions ARE the experiment's reading.
             if ($pt.Tag -ne "$($s2.Name)-menu") {
                 Write-Host "       [s2/$($pt.Tag)] zero-column runs (seam tracker), origin=$($pt.Origin):"
                 $zr = Invoke-FrameTool -ToolArgs @('zeroruns', '--dump', $pt.Dump,
                         '--x0', '0', '--x1', "$SCREEN_W", '--y0', '20', '--y1', '320')
-                # Task 068 regression tooth: the 25-px seam lived at 672..695
-                # at EVERY origin (screen-anchored). At the start origin the
-                # fixture's explored edge is map x 1332 = screen x 788, so any
-                # zero run touching 660..700 there is the seam class coming
-                # back, never legitimate shroud. (Proved able to fail: the
-                # pre-fix build reads 671-695 here, run 3 of 15.4.)
+                # Regression tooth for the 25-px seam class, which sits at
+                # 672..695 at EVERY origin (screen-anchored). At the start
+                # origin the fixture's explored edge is map x 1332 = screen x
+                # 788, so a zero run touching 660..700 there is that class,
+                # never legitimate shroud. (Proved able to fail: the defect
+                # build reads 671-695 here, research/renderer-viewport.md 15.4.)
                 if ($pt.Tag -eq "$($s2.Name)-ingame") {
                     $seam = @()
                     foreach ($run in ("$($zr['zeroruns'])" -split ';')) {
@@ -576,11 +534,10 @@ try {
             if ($null -eq $pt -or $null -eq $pt.Dump) { continue }
             # WMode still presents columns 0..639 at 1:1 under stage 2 (12.6),
             # so the window-vouched mapping can only hold at true pitch 800.
-            # ALIGNMENT IS PINNED at the measured (5,32) for the asserted pass
-            # (run 2's one mislock -- (8,36) on sprite noise -- read a perfect
-            # dump as 0.34); the render pass below keeps the auto-search, and a
-            # disagreement between the two is REPORTED as a finding rather than
-            # smoothed away.
+            # ALIGNMENT IS PINNED at the measured (5,32) for the asserted pass:
+            # a mislock on sprite noise at (8,36) reads a perfect dump as 0.34.
+            # The render pass below keeps the auto-search, and a disagreement
+            # between the two is REPORTED as a finding rather than smoothed away.
             Write-Host "       [s2/$($pt.Tag)] consistency vs the window, pure playfield, pitch $SCREEN_W, align pinned (5,32):"
             $m = Invoke-FrameTool -ToolArgs (@('check', '--dump', $pt.Dump,
                     '--before', $pt.Before, '--after', $pt.After,
@@ -589,25 +546,22 @@ try {
                 ([int]($m['window_distinct_rgb'] ?? 0) -ge 32) "(got $($m['window_distinct_rgb']))"
             Assert-True "[s2/$($pt.Tag)] the dump reproduces the presented playfield at pitch $SCREEN_W (>= 0.97)" `
                 ([double]($m['consist_frac'] ?? 0) -ge 0.97) "(got $($m['consist_frac']))"
-            # THE question of this task: the right 160 columns over playfield
-            # rows. y=20..320 keeps clear of the top strip and the console
-            # region; the fixture's marine grid has explored the terrain there,
-            # so index 0 is damage rather than legitimate shroud.
+            # The right 160 columns over playfield rows: y=20..320 keeps clear
+            # of the top strip and the console region, and the fixture's marine
+            # grid has explored the terrain there, so index 0 is damage rather
+            # than legitimate shroud.
             Write-Host "       [s2/$($pt.Tag)] the right band x=$STOCK_W..$($SCREEN_W - 1), playfield rows y=20..320:"
             $b = Invoke-FrameTool -ToolArgs @('band', '--dump', $pt.Dump,
                     '--x0', "$STOCK_W", '--x1', "$SCREEN_W", '--y0', '20', '--y1', '320')
             Assert-True "[s2/$($pt.Tag)] the right band was readable end to end" `
                 ([int]($b['band_px'] ?? 0) -eq $BAND_W * 300) "(got $($b['band_px']) px)"
-            # Task 068: the band assertion is ORIGIN-DEPENDENT now that fog is
-            # correct. At the start origin (544,416) the marines' sight has
-            # explored most of the band, so it must hold MAP. At the scrolled
-            # origin (704,416) the band is map x 1400..1503 -- provably beyond
-            # the fixture's exploration (explored edge measured at map x 1332,
-            # runs 15.4 and 16.4; 064 checked the CHK's unit records) -- so a
-            # CORRECT fog paints it black. 064's original ">= 0.30 everywhere"
-            # form was calibrated ON the leak: at (704,416) it asserted the
-            # defect's own signature, and the first fixed run failed it with
-            # 0.0000 -- the reading that confirmed prediction 2.
+            # The band assertion is ORIGIN-DEPENDENT. At the start origin
+            # (544,416) the marines' sight has explored most of the band, so it
+            # must hold MAP. At the scrolled origin (704,416) the band is map x
+            # 1400..1503, provably beyond the fixture's exploration (explored
+            # edge measured at map x 1332, research/renderer-viewport.md 15.4
+            # and 16.4, against the CHK's unit records), so a CORRECT fog paints
+            # it black.
             if ($pt.Tag -eq "$($s2.Name)-scrolled2") {
                 Assert-True "[s2/$($pt.Tag)] fog HIDES the unexplored right band (nonzero frac <= 0.02)" `
                     ([double]($b['band_nonzero_frac'] ?? 1) -le 0.02) `
@@ -615,10 +569,11 @@ try {
             }
             else {
                 # Two-sided, derived from the exploration edge (see $EXPLORED_EDGE_X):
-                # too little map is the 15.4 black-seam class, too MUCH is the 16.3
-                # leak (raw terrain over unexplored map). The 800-era ">= 0.30" was
-                # only ever satisfiable because the 160-px band was 92% explored;
-                # at 1280 the same edge explores 23% of a 640-px band.
+                # too little map is the black-seam class (15.4), too MUCH is the fog
+                # leak (16.3, raw terrain over unexplored map). Do not flatten it to
+                # ">= 0.30": that holds only while the 160-px band is 92% explored,
+                # it demands the leak's own signature past the edge, and at 1280 the
+                # same edge explores 23% of a 640-px band.
                 $originX = if ($pt.Origin -match '^(\d+),') { [int]$Matches[1] } else { -1 }
                 $explored = ($originX -ge 0) ? ([Math]::Max(0, [Math]::Min($SCREEN_W, $EXPLORED_EDGE_X - $originX) - $STOCK_W) / $BAND_W) : -1
                 $frac = [double]($b['band_nonzero_frac'] ?? -1)
@@ -626,8 +581,6 @@ try {
                     ($explored -ge 0 -and $frac -ge 0.8 * $explored -and $frac -le $explored + 0.05) `
                     "(got $frac, predicted $explored from edge $EXPLORED_EDGE_X at origin $originX; distinct=$($b['band_distinct']), top=$($b['band_top']))"
             }
-            # Render pass: auto-search alignment. If it disagrees with the pin,
-            # that is a finding a reader must see.
             $r = Invoke-FrameTool -ToolArgs @('check', '--dump', $pt.Dump,
                     '--before', $pt.Before, '--after', $pt.After, '--map-w', '640',
                     '--render', (Join-Path $FrameDir "$($pt.Tag)-render.png"),
@@ -660,7 +613,7 @@ try {
         }
         # Same-origin stability: two captures at the SAME minimap click,
         # separated by a scroll away and back. Sprite-pose diffs expected;
-        # a densely differing row is damage (061's denominator lesson).
+        # a densely differing row is damage.
         if ($s2.Scrolled -and $s2.Scrolled.Dump -and $s2.Scrolled2 -and $s2.Scrolled2.Dump) {
             $sameO = ($null -ne $s2.Scrolled.Origin -and $s2.Scrolled.Origin -eq $s2.Scrolled2.Origin)
             Assert-True '[s2] the two identical minimap clicks landed the camera at one origin' `
@@ -683,12 +636,9 @@ try {
                 ($null -ne $s2.Scrolled.Origin -and $s2.Scrolled.Origin -ne $s2.InGame.Origin) `
                 "(ingame=$($s2.InGame.Origin) scrolled=$($s2.Scrolled.Origin))"
         }
-        # Task 068: the held-arrow-key capture exists to reach a NON-tile-
-        # aligned origin (the fog pipeline's (origin>>3)&3 / &0x1F alignment
-        # terms; every minimap origin is a multiple of 32). Whether a posted
-        # key drives the scroll at all is empirical -- so the event the
-        # capture exists for is counted (coverage rule), and the alignment
-        # is printed beside it either way.
+        # Whether a posted key drives the engine's scroll at all is empirical,
+        # so the event this capture exists for (a NON-tile-aligned origin) is
+        # counted, and the alignment is printed beside it either way.
         if ($s2.Scrolled2 -and $s2.ScrollMid) {
             $moved = ($null -ne $s2.ScrollMid.Origin -and
                       $s2.ScrollMid.Origin -ne $s2.Scrolled2.Origin)

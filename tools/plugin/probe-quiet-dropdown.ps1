@@ -1,33 +1,15 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-The one input the no-raise harness could not do: pick an entry from a menu DROPDOWN.
-Measures whether it needs the window raised, or only the input queues attached.
+Measures whether picking a menu DROPDOWN entry -- the one posted input a no-raise
+harness cannot do -- needs the window raised, or only the input queues attached.
 
 .DESCRIPTION
-Task 027. Removing the foreground raise (see probe-quiet-input.ps1) left eight of nine
-suites green and broke exactly one thing, in the three suites that call `Set-ScGameType`:
-the Game Type combo's pick stopped taking, the map-information panel never changed, and
-the suite refused to continue -- loudly, which is the design working.
-
-That is a real difference from every other posted input, so it gets measured rather than
-guessed at. The candidate mechanism: the dropdown is a PRESS-AND-HOLD control, and the
-game calls `SetCapture` on button-down (`0x004d1a76`). Windows only grants the mouse
-capture to the FOREGROUND window; a background window's SetCapture does not take. If the
-list-walk handler consults the capture, the held-button MOVE down the list is ignored even
-though a plain move is not (a world drag-box, also a held-button move, works in the
-background -- measured -- so this is specific to the dialog control, not to held buttons).
-
-Three arms on the Create Game screen, one launch, using `Set-ScGameType`'s own verdict
-(it fingerprints the map-information panel and requires it to CHANGE) as the oracle:
-
-  A  background, no raise            -- expected to fail if the theory holds
-  B  background + AttachThreadInput(us <-> game thread) + SetActiveWindow, NO raise
-                                     -- the cheap fix if it works: it shares the input
-                                        state without taking the user's foreground
-  C  foreground (the old behaviour)  -- the positive control
-
-Arm B is the one worth knowing about: if it passes, the harness never has to raise.
+Candidate mechanism: the dropdown is a PRESS-AND-HOLD control and the game calls
+`SetCapture` on button-down (`0x004d1a76`); Windows grants the mouse capture only to the
+FOREGROUND window. A world drag-box is also a held-button move and works in the background
+(measured), so capture dependence is specific to this dialog control. Three arms on the
+Create Game screen: A background; B background + attach; C foreground, the positive control.
 
 .EXAMPLE
 ./tools/plugin/probe-quiet-dropdown.ps1
@@ -53,9 +35,9 @@ function Restore-Victim {
     Fg
 }
 
-# AttachThreadInput to the GAME's thread (not, as Set-ScWindowActive does, to whatever
-# holds the foreground) and then SetActiveWindow/SetFocus inside that shared queue. This
-# is the "attach without raise" the task file asked about, done against the right thread.
+# Attach to the GAME's thread -- not, as Set-ScWindowActive does, to whatever holds the
+# foreground -- then SetActiveWindow/SetFocus inside that shared input queue: an attach
+# without a raise only means anything against the thread that owns the dropdown.
 if (-not ('ScProbe.Attach' -as [type])) {
     Add-Type @"
 using System;
@@ -92,15 +74,13 @@ $hwnd = [IntPtr]::Zero
 if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPath -Force }
 
 function Try-Pick([string]$arm) {
-    # Set-ScGameType is the oracle. It no longer fingerprints the map-information panel:
-    # since issue #29 it READS the selected entry out of the engine's dialog list and
-    # requires the pick to have produced the wanted one by name, which is a strictly
-    # sharper verdict for this probe than "some pixels changed" ever was.
+    # Set-ScGameType is the oracle: it READS the selected entry out of the engine's dialog
+    # list and requires the pick to have produced the wanted one by name, a sharper verdict
+    # than "some pixels changed".
     #
-    # -Force because this probe's whole question is whether a pick TAKES under three
-    # foreground arms. Without it the sticky remembered value would let Set-ScGameType
-    # skip the pick and report success having driven nothing -- the experiment measuring
-    # its own shortcut.
+    # -Force because the whole question is whether a pick TAKES under three foreground
+    # arms. Without it the sticky remembered value lets Set-ScGameType skip the pick and
+    # report success having driven nothing -- the experiment measuring its own shortcut.
     try {
         Set-ScGameType -Hwnd $hwnd -LogPath $LogPath -Tries 1 -Force
         Write-Host "       ARM ${arm}: PICK TOOK"
@@ -135,11 +115,10 @@ try {
     Start-Sleep -Seconds 2
     Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir `
         -MapPath (Join-Path $GameDir 'Maps\campaign\(1)Enslavers02b.scm') | Out-Null
-    # NO "Ok" click here. The Game Type combo lives on THIS screen, and every suite calls
-    # Set-ScGameType here, before Ok. An earlier version of this probe clicked Ok first and
-    # then ran its arms on the briefing screen, where the fingerprint changes for unrelated
-    # reasons -- all three arms "passed" and the probe proved nothing. Left as a comment
-    # because it is exactly the kind of oracle that lies without failing.
+    # NO "Ok" click here: the Game Type combo lives on THIS screen and every suite calls
+    # Set-ScGameType before Ok. Past Ok the 'Create' dialog is out of the engine's dialog
+    # list, so all three arms score the same whatever the foreground did -- arms that cannot
+    # disagree measure nothing.
     Start-Sleep -Seconds 2
 
     Write-Host ''

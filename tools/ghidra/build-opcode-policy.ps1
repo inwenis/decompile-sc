@@ -6,49 +6,16 @@ ACCEPTS, with the length the engine reads for it, the handler it dispatches to, 
 handler uses the receiving player's selection, and the fan-out policy that follows.
 
 .DESCRIPTION
-research/data/command-ids.tsv (task 011) is the SEND side: which ids the binary emits and
-how long each buffer is. This is the RECEIVE side, which is what a fan-out policy has to
-be decided from -- "may this command be replayed against another twelve units?" is a
-question about what the engine DOES with it, not about how it was built.
+research/data/command-ids.tsv is the SEND side: which ids the binary emits and how long each
+buffer is. This is the RECEIVE side, which is what a fan-out policy has to be decided from --
+"may this command be replayed against another twelve units?" is a question about what the
+engine DOES with a command, not about how it was built.
 
-Four inputs, all derived here from the binary:
+Selection shapes: LOOP applies the command to EVERY unit the player holds; SINGLE only does
+anything when EXACTLY ONE unit is selected; NONE never touches the selection iterator; LOOP*
+forwards to an applier that loops.
 
- 1. The command-length table at 0x005005F8 -- one dword per opcode id, 0xFFFFFFFF for an
-    id the engine does not accept, the MAXIMUM length for a variable-length one. Read
-    straight out of the PE's .rdata by this script (VA -> file offset through the section
-    headers), so it needs no Ghidra pass of its own.
-
- 2. The dispatcher at 0x004865D0 -- the receive loop. Decompiled, then parsed: each
-    `case N:` gives the length the engine consumes for that opcode and the handler it
-    calls. This is the authority; the length table is only consulted by the dispatcher's
-    SKIP path, so the two can legitimately disagree (they do, for 0x37) and both are
-    reported rather than one being silently preferred.
-
- 3. Each handler, decompiled and classified by how it walks the selection:
-      LOOP    `selectionIterator = 0; u = getActivePlayerNextSelection();
-               while (u) { ...per unit...; u = getActivePlayerNextSelection(); }`
-              -- the engine applies this command to EVERY unit it holds.
-      SINGLE  the second iterator call is tested against 0 and the body sits inside that
-              test -- the command only does anything when EXACTLY ONE unit is selected.
-      NONE    the handler never touches the selection iterator.
-      LOOP*   the handler forwards to an applier that loops (0x14 and 0x15 only).
-
- 4. Whether the handler CALLS DIRECTLY, AT ONE LEVEL, a function that moves the player's
-    resources. 0x00467250 subtracts from the two per-player resource arrays 0x0057F0F0 and
-    0x0057F120; 0x00468280 is the cancel/refund path. Either one makes the command
-    resource-costed.
-
-    THE SCAN IS DEPTH 1 -- a text match over the handler's own decompiled body, not a
-    transitive closure over its call graph. Two indirect chains are known and are NOT found
-    by it: the 0x20 handler reaches 0x00468280 through 0x00466A70, and the 0x34 handler
-    reaches it through a tail jump in 0x004E66E0. Neither changes any policy in the current
-    table, because both opcodes are SINGLE-gated and therefore passthrough on the shape rule
-    alone -- but a FUTURE opcode that loops the selection and spends indirectly would be
-    mis-cleared by this scan. Anything added to the fan-out set on the strength of an empty
-    `resourceFns` column must have its call graph checked by hand until this is a real
-    closure.
-
-The policy falls out of 3 and 4 and nothing else:
+The policy falls out of the shape and the resource check and nothing else:
 
     fan-out  <=>  the handler applies the command to every selected unit (LOOP/LOOP*)
                   AND it does not move the player's resources.
@@ -81,19 +48,26 @@ $LEN_TABLE_VA = 0x005005F8
 $LEN_TABLE_N  = 0x76      # entries before the table gives way to unrelated .rdata data
 $ITER         = 'FUN_0049a850'    # getActivePlayerNextSelection
 
-# Functions that move the player's minerals/gas. Both were read in this binary:
+# Functions that move the player's minerals/gas, both read out of this binary:
 #   0x00467250  `(&DAT_0057f0f0)[player] -= ...; (&DAT_0057f120)[player] -= ...`
 #   0x00468280  the cancel path, which refunds through 0x0042CEC0 / 0x0042CE70
-# Matched at ONE LEVEL only -- see the .DESCRIPTION note on the two known indirect chains.
+# THE MATCH IS DEPTH 1: a text scan of the handler's own decompiled body, not a closure over
+# its call graph. Two indirect chains escape it -- 0x20 reaches 0x00468280 through 0x00466A70,
+# 0x34 through a tail jump in 0x004E66E0 -- and are harmless only because both opcodes are
+# SINGLE-gated. An opcode that loops the selection and spends indirectly is mis-cleared here,
+# so check the call graph by hand before trusting an empty `resourceFns` column for fan-out.
 $RESOURCE_FNS = @('FUN_00467250', 'FUN_00468280')
 
-# 0x14 and 0x15 do not touch the selection iterator themselves -- they forward to an
-# applier that does. Recorded explicitly rather than left to look like NONE.
+# These two handlers never touch the selection iterator themselves; naming the applier they
+# forward to is what keeps them classified LOOP* instead of reading as NONE.
 $APPLIERS = @{ 0x14 = '0x004560D0'; 0x15 = '0x0049AB00' }
 
 New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null
 
 # --- 1. the length table, straight out of the PE ------------------------------
+# 0x005005F8 holds one dword per opcode id: 0xFFFFFFFF for an id the engine does not accept,
+# the MAXIMUM length for a variable-length one. Reading .rdata here (VA -> file offset through
+# the section headers) keeps this input off the Ghidra pass entirely.
 if (-not (Test-Path -LiteralPath $InputPE)) { throw "build-opcode-policy: $InputPE not found." }
 $pe = [IO.File]::ReadAllBytes($InputPE)
 $peOff     = [BitConverter]::ToInt32($pe, 0x3C)
@@ -119,6 +93,9 @@ for ($i = 0; $i -lt $LEN_TABLE_N; $i++) {
 Write-Host ("build-opcode-policy: length table 0x{0:X8}, {1} entries read from {2}" -f $LEN_TABLE_VA, $LEN_TABLE_N, $InputPE)
 
 # --- 2. the dispatcher ---------------------------------------------------------
+# The receive loop is the authority on length; the table above is consulted only by the
+# dispatcher's SKIP path, so the two can legitimately disagree (0x37 does) and both columns
+# are emitted rather than one being silently preferred.
 $dispSpec = Join-Path $WorkDir 'dispatcher.spec'
 "dispatcher,$($DISPATCHER.Substring(2))" | Set-Content -LiteralPath $dispSpec
 if (-not $SkipSweep) {
@@ -130,10 +107,9 @@ $dispC = Get-ChildItem (Join-Path $WorkDir 'dispatcher.*.c') | Select-Object -Fi
 if (-not $dispC) { throw "build-opcode-policy: the dispatcher decompile is missing from $WorkDir." }
 $lines = Get-Content $dispC.FullName
 
-# Parse the switch. A case runs until the next `case`/`default`, and inside it:
-#   `local_8 = N;`                    the length the engine consumes (an immediate), or
-#   `local_8 = (uint)in_EAX[1] * 2 + 2;` / `local_8 = local_8 + 5;`  a computed length;
-#   the first FUN_ call that is not the string-length helper is the handler.
+# A case runs until the next `case`/`default`. Inside it `local_8 = N;` is the length the
+# engine consumes, an assignment over `in_EAX[1]` or `local_8 + N` is a computed length, and
+# the first FUN_ call that is not the string-length helper is the handler.
 $cases = @{}
 $cur = $null
 foreach ($ln in $lines) {
@@ -190,7 +166,7 @@ function Get-HandlerFacts([string]$fn) {
     if ($n -ge 2) {
         # Decided by CONTROL FLOW, not by a text pattern near the second call: either a
         # variable the iterator assigns is a `while (x != 0)` condition, or the last
-        # iterator call is the tail of a do/while body.
+        # iterator call sits at the tail of a do/while body.
         $vars = @([regex]::Matches($src, '(\w+) = FUN_0049a850\(\);') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
         $isLoop = $false
         foreach ($v in $vars) { if ($src -match ('while\s*\(\s*' + [regex]::Escape($v) + '\s*!=\s*0\s*\)')) { $isLoop = $true } }

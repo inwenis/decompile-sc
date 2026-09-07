@@ -139,20 +139,16 @@ def cmd_check(a):
     print("check_region=%d,%d-%d,%d" % (a.x0, a.y0, map_w, a.y1 if a.y1 else d["h"]))
 
     # Alignment: where does the frame's (0,0) sit inside the capture? The
-    # windowed helper is measured to present 1:1 (12.6), but the capture may
-    # include a caption strip above the client pixels (drive-game.ps1 warns
-    # about exactly this). Search a small offset range on a sampled grid and
-    # keep the offset that maximises mapping consistency; (0,0) is in range,
-    # so a capture that needs no offset costs nothing.
+    # windowed helper presents 1:1 (research/renderer-viewport.md 12.6), but a
+    # capture may include a caption strip above the client pixels. Search a
+    # small offset range on a sampled grid and keep the offset that maximises
+    # consistency; (0,0) is in range, so needing no offset costs nothing.
     if a.align_dx is not None and a.align_dy is not None:
-        # Task 064: a pinned offset for callers who KNOW their capture path's
-        # geometry. The search below mislocked once -- (8,36) on a 36-marine
-        # scene whose sprite noise rewarded a wrong offset at step=4, while
-        # every other check in the same run locked the true (5,32) -- and a
-        # 3,4-px mislock reads as consistency 0.34 over a perfect dump. The
-        # search stays the default; the pin makes the asserted checks
-        # deterministic, and a WRONG pin shows up as a consistency collapse,
-        # never as a silent pass.
+        # A pinned offset for callers who KNOW their capture geometry. The
+        # search can mislock: sprite noise at step=4 rewards (8,36) on a
+        # 36-marine scene whose true offset is (5,32), and a 3,4-px mislock
+        # reads as consistency 0.34 over a perfect dump. A wrong pin collapses
+        # consistency just as loudly, so it can never pass silently.
         best = (a.align_dx, a.align_dy)
     else:
         best = (0, 0)
@@ -171,21 +167,19 @@ def cmd_check(a):
     print("align_dx=%d" % dx)
     print("align_dy=%d" % dy)
 
-    # The real pass, full resolution, at the chosen offset, restricted to the
-    # caller's region. The region matters because the screen Bitmap does NOT
-    # hold the whole presented frame (task 063, measured): the console/HUD
-    # dialogs live in their own surfaces and the cursor is absent, so a
-    # whole-frame comparison fails structurally, not because the dump is wrong.
-    # Callers pass the pure-playfield region for the trust check.
+    # The region matters: the screen Bitmap does NOT hold the whole presented
+    # frame -- the console/HUD dialogs live in their own surfaces and the cursor
+    # is absent -- so a whole-frame comparison fails structurally, not because
+    # the dump is wrong. Callers pass the pure-playfield region.
     mapping, stable_px, total = build_mapping(d, before, after, dx, dy, map_w,
                                               step=1, x0=a.x0, y0=a.y0, map_h=a.y1)
     consist, mapped = score_mapping(mapping)
     clean = sum(1 for c in mapping.values() if len(c) == 1)
 
-    # The consistency figure is VACUOUS over a dead capture: a black window maps
-    # every index to (0,0,0), each one perfectly consistently. So the window has
-    # to prove it holds a picture at all before its vote counts -- the caller
-    # asserts on these two beside consist_frac, never on consist_frac alone.
+    # Consistency is VACUOUS over a dead capture: a black window maps every
+    # index to (0,0,0), each one perfectly consistently. The window must prove
+    # it holds a picture at all, so callers assert on these two beside
+    # consist_frac, never on consist_frac alone.
     pb = before.load()
     rgbs = set()
     nonblack = win_n = 0
@@ -341,11 +335,11 @@ def cmd_diff(a):
             span_max = max(span_max, span)
             if span > width // 2:
                 wide_rows.append(y)
-            # Task 064. Span conflates "a row OF sprites" with "a damaged row":
-            # six idle marines in a fixture row span 337px of diffs at 3-8% row
-            # coverage and read as wide. A pitch/stride error FILLS rows (12.9's
-            # damage ran ~70% of the row), so the COUNT separates cleanly where
-            # the span cannot. dense is the assertable one; wide stays reported.
+            # Span conflates "a row OF sprites" with "a damaged row": six idle
+            # marines span 337px of diffs at 3-8% row coverage and read as wide.
+            # A pitch/stride error FILLS rows (~70% of the row, measured in
+            # research/renderer-viewport.md 12.9), so the COUNT separates where
+            # the span cannot. dense is the assertable one.
             if row_n > width // 2:
                 dense_rows.append(y)
 
@@ -376,8 +370,7 @@ def main():
     # 640-wide presentation, the columns the window can vouch for.
     p.add_argument("--map-w", type=int, default=0)
     # Region top-left / bottom (dump coordinates). The alignment search always
-    # runs over the full window-vouched area; only the consistency pass is
-    # restricted, so a region cannot hide a misalignment.
+    # runs over the full window-vouched area, so a region cannot hide a misalignment.
     p.add_argument("--x0", type=int, default=0)
     p.add_argument("--y0", type=int, default=0)
     p.add_argument("--y1", type=int, default=0)
@@ -385,7 +378,7 @@ def main():
     p.add_argument("--save-palette", default=None)
     p.add_argument("--search-dy", type=int, default=48)
     p.add_argument("--search-dx", type=int, default=8)
-    # Pin the alignment instead of searching (task 064; both required together).
+    # Pin the alignment instead of searching; both are required together.
     p.add_argument("--align-dx", type=int, default=None)
     p.add_argument("--align-dy", type=int, default=None)
 

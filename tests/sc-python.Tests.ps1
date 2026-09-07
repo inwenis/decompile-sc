@@ -1,14 +1,12 @@
 #Requires -Version 7
 <#
-Pester cases for tools/sc-python.ps1 (task 069, issue #97).
+Pester cases for tools/sc-python.ps1.
 
-WHY THESE EXIST. Worktrees are cut without a .venv; the old interpreter fallback ended
-at `python` on PATH, which on the dev machine has no richchk -- so map generation failed
-silently and drive-game invented a culprit for the missing file. Resolve-ScPython is
-the fix's seam: a worktree must resolve the MAIN checkout's .venv, and an interpreter
-that cannot import the required module must be REJECTED WITH A RECORDED REASON rather
-than used. The worktree case fails without the fix by construction (the function did
-not exist; the old chain never looked outside the calling checkout).
+Worktrees are cut without a .venv, and `python` on PATH here has no richchk: an
+unguarded fallback to it generates no map and leaves drive-game blaming the wrong
+thing. The contract pinned here: a worktree with no .venv of its own resolves the
+MAIN checkout's .venv, and an interpreter that cannot import the required module is
+rejected with a recorded reason, never used silently.
 #>
 
 BeforeAll {
@@ -24,8 +22,9 @@ BeforeAll {
     git -C $script:main -c user.email=t@t -c user.name=t commit -q --allow-empty -m init 2>&1 | Out-Null
     git -C $script:main worktree add -q $script:wt 2>&1 | Out-Null
 
-    # The main checkout's "venv": a placeholder file where python.exe would be. These
-    # cases test RESOLUTION (which path is chosen), not execution -- no -RequireModule.
+    # The main checkout's "venv": a placeholder file where python.exe would be. A
+    # candidate is only Test-Path'd unless -RequireModule is given, so a placeholder is
+    # enough to pin which path resolution picks.
     $script:mainVenvPy = Join-Path $script:main '.venv/Scripts/python.exe'
     New-Item -ItemType Directory -Path (Split-Path $script:mainVenvPy -Parent) -Force | Out-Null
     Set-Content -LiteralPath $script:mainVenvPy -Value 'placeholder'
@@ -41,6 +40,8 @@ AfterAll {
 Describe 'Resolve-ScPython closes the worktree .venv gap' {
 
     It 'resolves the MAIN checkout .venv from a worktree that has none (the issue #97 gap)' {
+        # Discriminating by construction: a resolver that searches only the calling
+        # checkout cannot pass this, because the worktree holds no .venv of its own.
         $r = Resolve-ScPython -RepoRoot $script:wt
         $r.Path | Should -Be $script:mainVenvPy
         $r.Source | Should -Match 'main checkout'
@@ -59,9 +60,8 @@ Describe 'Resolve-ScPython closes the worktree .venv gap' {
     }
 
     It 'records every rejected candidate with its reason instead of silently using one' {
-        # A module no interpreter has: every candidate must be rejected, the result must
-        # say Path=$null, and Probed must name what was tried -- the honest counterpart
-        # of the old silent PATH fallback.
+        # A module name no interpreter can satisfy, so every candidate must be rejected
+        # and named in Probed rather than one being used anyway.
         $r = Resolve-ScPython -RepoRoot $script:wt -RequireModule 'no_such_module_task069_zzz'
         $r.Path | Should -BeNullOrEmpty
         @($r.Probed).Count | Should -BeGreaterThan 0
@@ -69,8 +69,7 @@ Describe 'Resolve-ScPython closes the worktree .venv gap' {
     }
 
     It 'still resolves PATH python for a checkout with no venv anywhere (the CI runner shape)' {
-        # Strip the main venv so neither checkout has one; PATH python (present on dev
-        # machines and CI runners alike) is then the last candidate.
+        # With neither checkout holding a .venv, PATH python is the last candidate left.
         if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
             Set-ItResult -Skipped -Because 'no python on PATH on this machine'
         }

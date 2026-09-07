@@ -1,16 +1,14 @@
 #Requires -Version 7
 <#
-Pester cases for tools/plugin/sc-launch-lock.ps1 (task 069, issue #103).
+Pester cases for tools/plugin/sc-launch-lock.ps1. See AGENTS.md § "Launch lock".
 
-WHY THESE EXIST. The exclusive OS handle is the lock; the file only carries diagnostic
-content. Until task 069 Exit-ScLaunchLock closed the handle and left the file behind, so
-EVERY finished run -- exit 0 or not -- left a lock file naming its own dead pid, and
-`Exit-ScLaunchLock: released` printed while it did. Two workers in one hour (tasks 066
-and 068) read that file as "the machine is held" and had to retract their own "machine
-is free" messages. These cases assert the half the log line used to lie about: the file
-is gone after a release, a leftover file is REPORTED at the next acquire rather than
-silently absorbed, and the release message never claims a removal that did not happen.
-They fail against the pre-069 implementation by construction.
+The exclusive OS handle is the lock; the file only carries diagnostic content, so a
+release that closes the handle but leaves the file behind still reads to the next
+worker as a held machine while the releasing run prints success. These cases pin what
+a bare "released" line cannot prove: the file is gone after a release, a leftover file
+is REPORTED at the next acquire rather than silently absorbed, and no message claims
+a removal that did not happen. Each case fails against a release path that closes the
+handle and leaves the file, so a green run here is not vacuous.
 #>
 
 BeforeAll {
@@ -45,13 +43,11 @@ Describe 'Exit-ScLaunchLock removes the file it stops needing' {
         $p = Join-Path $script:dir 'contended.lock'
         $s1 = Enter-ScLaunchLock -LockPath $p -TaskId 't-first' 6>$null
         Exit-ScLaunchLock -Lock $s1 6>$null
-        # Simulate the next worker winning the re-acquire race: a second exclusive
-        # handle on the same path (share semantics are per-handle, so one process
-        # exercises the same OS behaviour two processes would).
+        # The next worker winning the re-acquire race: share semantics are per-handle,
+        # so one process exercises the same OS behaviour two processes would.
         $s2 = Enter-ScLaunchLock -LockPath $p -TaskId 't-second' 6>$null
-        # A third release object pointing at the same path (stale stream shape):
-        # closing an already-released stream is not constructible here, so instead
-        # assert the delete-refusal path directly: the file survives s2's handle.
+        # Closing an already-released stream is not constructible here, so assert the
+        # delete-refusal path directly: a live handle keeps the file undeletable.
         { [IO.File]::Delete($p) } | Should -Throw
         Exit-ScLaunchLock -Lock $s2 6>$null
         Test-Path -LiteralPath $p | Should -BeFalse
@@ -79,8 +75,7 @@ Describe 'Enter-ScLaunchLock reports a leftover file instead of silently absorbi
             ($warnings -join "`n") | Should -Match 'already existed'
             ($warnings -join "`n") | Should -Match "pid $deadPid"
             ($warnings -join "`n") | Should -Match 'not running'
-            # It reports what it OBSERVED (file present, handle free, pid state), never
-            # a culprit or a cause it cannot know.
+            # It reports what it OBSERVED, never a culprit or cause it cannot know.
             ($warnings -join "`n") | Should -Not -Match 'another worker'
         }
         finally { if ($stream) { Exit-ScLaunchLock -Lock $stream 6>$null } }
@@ -101,10 +96,9 @@ Describe 'Enter-ScLaunchLock reports a leftover file instead of silently absorbi
     }
 
     It 'names a SELF-deadlock immediately instead of timing out against its own handle (070, -RemoveWindowed)' {
-        # The lock is not re-entrant, and a holder that Enters again used to wait
-        # on ITSELF for the whole timeout -- a five-minute stall whose eventual
-        # message blamed "another launch/deploy". The process knows what it
-        # holds; the wait must not happen and the message must say who.
+        # The lock is not re-entrant: a holder that Enters again would wait on ITSELF
+        # for the whole timeout and then blame "another launch/deploy". A process knows
+        # what it holds, so it must fail fast and name itself.
         $p = Join-Path $script:dir 'self.lock'
         $s = Enter-ScLaunchLock -LockPath $p -TaskId 't-self' 6>$null
         try {
@@ -118,7 +112,6 @@ Describe 'Enter-ScLaunchLock reports a leftover file instead of silently absorbi
             $thrown | Should -Match 'NoLaunchLock'
             # Fail-fast, not a timeout: no retry loop was entered.
             $sw.ElapsedMilliseconds | Should -BeLessThan 2000
-            # And it must not blame a foreign holder -- that was the wrong reason.
             $thrown | Should -Not -Match 'another launch/deploy'
         }
         finally { Exit-ScLaunchLock -Lock $s 6>$null }

@@ -1,70 +1,16 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Task 051. Does a game SAVED with the plugin active LOAD BACK into a correct, playable
-state -- and does a save written by the plugin-free game still load under the plugin?
-Drives the engine's own Save/Load dialogs in a real game and compares the ENGINE'S OWN
-state across the round trip.
-
+Does a game saved with the plugin active load back correct, and does a plugin-free save still
+load under the plugin? Drives the engine's own Save/Load dialogs and compares ENGINE state.
 .DESCRIPTION
-The user asked it directly (2026-08-12): *"btw - does saving and reading games work?
-with our mods?"* Nobody had ever tested it in `fanout` mode -- the two save-test logs
-that existed (2026-08-08) both ran `-Mode observe`, which writes nothing to game memory,
-so they covered the one configuration that could not have broken anything.
-
-## The oracle, and why the same one works in every arm
-
-Both scans this suite reads are READ-ONLY and install no hook, so they exist in
-`-Mode observe` exactly as they do in `-Mode fanout` (scplugin.cpp `ScanWorld`,
-sc_card.cpp `STATQ`). That is what makes the no-plugin control arm and the fanout arms
-comparable at all: it is the SAME oracle on both sides, not two different ones.
-
-  * `STATQ` -- the producing building's own five ring slots at `CUnit+0x98` and the ring
-    head. THIS IS THE VERDICT. It is the engine's array, read out of the building's
-    memory, not the plugin's bookkeeping (AGENTS.md § "Assert the ENGINE'S OWN RESULT").
-  * `WORLD` -- the engine's per-player unit lists: count, types, hp, position.
-  * `PRODQSEL` -- the plugin's OWN overflow table and the resource globals. Reported,
-    never asserted as the verdict: it exists to localise a failure to the save side or
-    the load side, and it does not exist at all in the control arm.
-
-## What the engine writes, from its own instructions
-
-`FUN_004eaaf0` (the function carrying the two `Starcraft\SWAR\lang\CUnitSave.cpp`
-asserts, lines 0xA0 and 0xB7) walks all 1700 `CUnit` slots of the static table at
-`0x0059CCA8`, stride `0x150`, and for every live unit writes a 4-byte index followed by
-a `rep movsd` of `0x54` dwords -- the WHOLE 336-byte CUnit, verbatim. `CUnit+0x98` (the
-five-slot ring) and the ring head are inside that copy, so the engine's own five queued
-items are serialised by construction. The plugin's over-cap items are NOT in any CUnit:
-they live in `g_rec[]` in sc_prodqueue.cpp, keyed by the `CUnit*` address, so nothing in
-the file can carry them. This suite exists to find out what that actually does to a
-player's game.
-
-## The seam
-
-The state this suite exists to reach is A SAVE TAKEN WHILE THE PLUGIN IS HOLDING ITEMS
-ABOVE THE ENGINE'S FIVE. An arm whose overflow was zero at save time cannot detect that
-class of bug whatever its verdict says, so every arm prints its own COVERAGE line with
-the overflow it actually had at save time (AGENTS.md § task 041).
-
-## The phases
-
-One phase per launch, because the plugin mode is fixed at launch and StarCraft is
-single-instance per machine. Snapshots are written to -StateDir as JSON so a later
-phase can compare against a state an earlier phase saved.
-
+One phase per launch: the plugin mode is fixed at launch and StarCraft is single-instance.
     control    -Mode observe   arm 1              (also writes the save arm 5 loads)
     fanout     -Mode fanout    arms 2, 3, 5, 6
     crossload  -Mode observe   arm 4              (loads the save arm 3 wrote)
-
-## The user's real saves are never touched
-
-Everything happens in -GameDir (`C:\sc-work\1161-base`), which has its own
-`save\asdf\`. `C:\sc-deploy\starcraft-modded\game\save\` and `…\characters\` are hashed
-by the task around this suite and are never opened by it.
-
+Only -GameDir's own save\asdf\ is ever opened; the user's real saves are never touched.
 .EXAMPLE
 ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/test-save-load.ps1 -SuiteArgs @{ Phase = 'control' }
-
 .EXAMPLE
 ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/test-save-load.ps1 -SuiteArgs @{ Phase = 'fanout' }
 #>
@@ -82,17 +28,15 @@ param(
     # Nexuses provide, so no Pylon has to be placed for the run to mean anything.
     [int]$QueueMax = 8,
     # The ordinary-queue arm: below the hold, so the plugin holds NOTHING and the ring
-    # carries the lot. That is the arm that says "fanout with nothing above the cap".
+    # carries the lot -- "fanout with nothing above the cap".
     [int]$OrdinaryQueue = 4,
-    # Vanilla Probe build time is 20 game seconds, and this run measures across a window
-    # in which a COMPLETION would change the ring for reasons that have nothing to do with
-    # save/load. 90s was NOT enough and the run said so rather than averaging it away: the
-    # over-cap arm went INCONCLUSIVE with `completed units (player 0) 2 -> 3`, because the
-    # window from the queueing clicks to the post-load read is ~75 s of real time (8
-    # clicks, snapshot, save + confirm, witness, load, re-select, snapshot) and the head
-    # item had already been building for part of its 90 before the save was taken. 240
-    # leaves the whole window inside one item's build, and the run still asserts it
-    # instead of assuming it.
+    # Vanilla Probe build time is 20 game seconds. A COMPLETION inside the measurement window
+    # changes the ring for reasons that have nothing to do with save/load. Do not lower this
+    # to 90: measured, the over-cap arm went INCONCLUSIVE with `completed units (player 0)
+    # 2 -> 3`, because the queueing clicks to the post-load read span ~75 s of real time (8
+    # clicks, snapshot, save + confirm, witness, load, re-select, snapshot) and the head item
+    # was already part-built at the save. 240 keeps the whole window inside one item's build;
+    # each arm still asserts that rather than assuming it.
     [int]$ProbeBuildSeconds = 240,
     [int]$StartingMinerals = 3000,
     [int]$StartingGas = 1000,
@@ -112,7 +56,7 @@ if (-not $LogPath) { $LogPath = "C:\sc-work\logs\051\save-load-$Phase.log" }
 # --- fixture ------------------------------------------------------------------
 if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t051' -Suite 'save-load' }
 $mapDir = $FixtureDir
-$mapName = 'save-load.scx'                    # named for the SUITE (hard rule, task 021/022)
+$mapName = 'save-load.scx'                    # named for the SUITE (AGENTS.md § "Test fixtures: one folder per task, one NAME per suite")
 $mapPath = Join-Path $mapDir $mapName
 $fixtures = New-ScFixtureRun -Dir $mapDir -Names @($mapName)
 
@@ -138,18 +82,18 @@ $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
 # =============================================================================
 # READS
 # =============================================================================
+# Both scans are READ-ONLY and install no hook (scplugin.cpp ScanWorld, sc_card.cpp STATQ), so
+# they exist in -Mode observe exactly as in -Mode fanout: the no-plugin control arm and the
+# fanout arms are read by the SAME oracle, which is what makes them comparable at all.
 
 function Get-World { param([string]$Tag) Get-ScWorldState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath }
 function Get-Statq { param([string]$Tag) Get-ScStatusQueue -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath }
 function Get-Card  { param([string]$Tag) Get-ScCardState   -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath }
 
-# The plugin's OWN table, for THE MARKER THIS READ WROTE -- matched on the tag, not
-# "the newest PRODQSEL line in the log", so it cannot silently report a different
-# instant's state than the STATQ read it is printed beside.
-#
-# $null when this arm has no production queue at all (the control and crossload phases),
-# which is a normal answer here and never a failure -- what it must not do is read as
-# "the plugin holds nothing", which is why every caller prints it as -1 rather than 0.
+# The plugin's OWN table, for THE MARKER THIS READ WROTE -- matched on the tag, not "the
+# newest PRODQSEL line", so it cannot report a different instant than the STATQ read beside it.
+# $null when this arm has no production queue at all (the observe phases): a normal answer,
+# never a failure, and never to be read as "the plugin holds nothing" -- callers print -1, not 0.
 function Get-Prodq {
     param([string]$Tag)
     $esc = [regex]::Escape($Tag)
@@ -168,10 +112,9 @@ function Get-Prodq {
     $promoted = -1
     if ($sum.Count -gt 0) {
         $buildings = [int][regex]::Match($sum[0].Line, 'buildings=(\d+)').Groups[1].Value
-        # promoted counts, for the whole run, the times the plugin moved an item into a
-        # ring slot that FREED -- i.e. the times an item finished building. It is the
-        # plugin's own counter and it is used here only as corroboration for the window
-        # check, whose primary evidence is the engine's own completed-unit count.
+        # promoted = times, over the whole run, the plugin moved an item into a ring slot that
+        # FREED, i.e. items that finished building. Corroboration only for the window check,
+        # whose primary evidence is the engine's own completed-unit count.
         $pm = [regex]::Match($sum[0].Line, 'promoted=(\d+)')
         if ($pm.Success) { $promoted = [int]$pm.Groups[1].Value }
     }
@@ -217,14 +160,11 @@ function Get-Snapshot {
         Logical  = $(if ($prodq) { $prodq.Logical } else { -1 })
         Minerals = $(if ($prodq) { $prodq.Minerals } else { -1 })
         Gas      = $(if ($prodq) { $prodq.Gas } else { -1 })
-        # How many buildings the plugin's own table is tracking. -1 = this arm has no
-        # production queue, which is NOT the same as zero (AGENTS.md, absence rule).
         Buildings = $(if ($prodq) { $prodq.Buildings } else { -1 })
         Promoted  = $(if ($prodq) { $prodq.Promoted } else { -1 })
-        # THE WINDOW EVIDENCE, and it is the ENGINE's: how many of player 0's units carry
-        # the completed flag. A queued item that merely STARTS building is already in the
-        # unit list with that flag CLEAR, so this number moves only when something
-        # actually finishes -- which is the event that would invalidate the comparison.
+        # THE WINDOW EVIDENCE, and it is the ENGINE's: a queued item that merely STARTS building
+        # is already in the unit list with the completed flag CLEAR, so this count moves only
+        # when something actually finishes -- the event that would invalidate the comparison.
         CompletedP0 = @($units | Where-Object { $_.Player -eq 0 -and $_.Complete }).Count
         ProdqLine = $(if ($prodq) { $prodq.Line } else { '(no PRODQSEL line -- this arm has no production queue)' })
         StatqLine = ($statq.Lines | Select-Object -First 1)
@@ -255,16 +195,16 @@ function Read-Snapshot {
 }
 
 # =============================================================================
-# THE COMPARISON -- section 4.1 of the report, one function
+# THE COMPARISON -- one function, every arm
 # =============================================================================
 
 function Compare-RoundTrip {
     param(
         [string]$Arm,
         $Before, $After,
-        # The over-cap items the plugin was holding when the save was taken. Printed as
-        # the arm's COVERAGE line, because an arm with 0 of them cannot see the class of
-        # bug this suite exists to find.
+        # The over-cap items the plugin was holding when the save was taken, printed as the
+        # arm's COVERAGE line: an arm with 0 of them cannot see the class of bug this suite
+        # exists to find (AGENTS.md § "A random suite must report the coverage of its SEAM").
         [int]$OverflowAtSave
     )
     Write-Host ''
@@ -272,15 +212,12 @@ function Compare-RoundTrip {
     Show-Snapshot 'at save ' $Before
     Show-Snapshot 'at load ' $After
 
-    # THE MEASUREMENT WINDOW COMES FIRST, because it decides whether the verdict below can
-    # be read at all. Two windows exist -- between the S1 read and the file being written,
-    # and between the load finishing and the S2 read -- and a queued item COMPLETING in
-    # either one changes the ring for a reason that has nothing to do with save/load.
-    #
-    # It is not inferred from "the queue is still N deep": an item can finish while another
-    # is promoted behind it and leave the depth looking untouched. The evidence is the
-    # ENGINE'S OWN completed-unit count, with the plugin's promotion counter beside it as
-    # corroboration where it exists.
+    # THE MEASUREMENT WINDOW COMES FIRST: it decides whether the verdict below can be read at
+    # all. A queued item COMPLETING between the S1 read and the file being written, or between
+    # the load finishing and the S2 read, changes the ring for a reason that is not save/load.
+    # Not inferred from "the queue is still N deep": an item can finish while another is
+    # promoted behind it and leave the depth untouched. The evidence is the ENGINE'S OWN
+    # completed-unit count, with the plugin's promotion counter as corroboration where it exists.
     $windowClean = ($Before.CompletedP0 -eq $After.CompletedP0)
     $promoNote = if ($Before.Promoted -ge 0 -and $After.Promoted -ge 0) {
         ", plugin promotions $($Before.Promoted) -> $($After.Promoted)"
@@ -297,7 +234,12 @@ function Compare-RoundTrip {
     Assert-That "$Arm W: nothing completed inside the measurement window" $windowClean `
         "(completed p0 $($Before.CompletedP0) -> $($After.CompletedP0) -- see INCONCLUSIVE above)"
 
-    # A1/A2/A3 -- THE VERDICT. The engine's own ring, out of the building's memory.
+    # A1/A2/A3 -- THE VERDICT: the engine's own ring, out of the building's memory (AGENTS.md §
+    # "Assert the ENGINE'S OWN RESULT"). The engine's save, FUN_004eaaf0 (the function carrying
+    # the two CUnitSave.cpp asserts), walks the 1700-slot CUnit table at 0x0059CCA8, stride
+    # 0x150, and `rep movsd`s 0x54 dwords per live unit -- the whole CUnit -- so the ring at
+    # +0x98 and its head are in the file by construction. The plugin's over-cap items (g_rec[]
+    # in sc_prodqueue.cpp, keyed by CUnit*) are in no file: that is what arms 3, 4 and 6 probe.
     $engBefore = ($Before.Engine | ForEach-Object { '0x{0:X3}' -f $_ }) -join ','
     $engAfter  = ($After.Engine  | ForEach-Object { '0x{0:X3}' -f $_ }) -join ','
     Assert-That "$Arm A2: the five ring slots at CUnit+0x98 survive the round trip" `
@@ -306,8 +248,8 @@ function Compare-RoundTrip {
         ($Before.Head -eq $After.Head)
     Assert-That "$Arm A3: the occupied-slot count survives ($($Before.EngineLen) -> $($After.EngineLen))" `
         ($Before.EngineLen -eq $After.EngineLen)
-    # A4 -- task 039: a reading taken while the pane holds a different unit is a reading
-    # about the wrong building.
+    # A4 -- a reading taken while the pane holds a different unit is a reading about the wrong
+    # building (AGENTS.md § "A CARD SLOT CHANGES MEANING UNDER YOU").
     Assert-That "$Arm A4: the status pane still holds the same building type/owner" `
         ($Before.PortraitType -eq $After.PortraitType -and $Before.PortraitOwner -eq $After.PortraitOwner) `
         "(save=0x$('{0:X}' -f $Before.PortraitType)/$($Before.PortraitOwner) load=0x$('{0:X}' -f $After.PortraitType)/$($After.PortraitOwner))"
@@ -350,13 +292,11 @@ function Compare-RoundTrip {
 # =============================================================================
 # DRIVING THE ENGINE'S OWN SAVE / LOAD DIALOGS
 # =============================================================================
-#
-# Nothing here clicks a fixed point or a row by number. Every click is computed from the
+# Nothing here clicks a fixed point or a row by number: every click is computed from the
 # control's OWN bounds in the engine's dialog list (the plugin's DIALOGS line), and every
-# failure prints the full inventory of what WAS on screen. The primitives themselves live
-# in drive-game.ps1 (Show-ScDialogInventory / Find-ScDialogControl / Invoke-ScDialogControl
-# / Open-ScGameMenu / Send-ScText) so this suite and probe-save-load-dialogs.ps1 drive the
-# same dialogs through exactly one implementation.
+# failure prints the full inventory of what WAS on screen. The primitives live in
+# drive-game.ps1 so this suite and probe-save-load-dialogs.ps1 drive the same dialogs
+# through exactly one implementation.
 
 function Get-SaveFiles {
     if (-not (Test-Path -LiteralPath $saveRoot)) { return @() }
@@ -367,11 +307,10 @@ function Get-SaveFiles {
 # going away. Returns the FileInfo of the new save.
 function Save-ScGame {
     param([Parameter(Mandatory)][IntPtr]$Hwnd, [Parameter(Mandatory)][string]$Name)
-    # The evidence that a save happened is THE FILE, and on the overwrite path -- which
-    # every re-run of this suite takes -- no NEW file appears: an existing one is
-    # rewritten. So the record kept here is name -> last-write time, and "saved" means the
-    # file called $Name either did not exist before or has a newer timestamp than it did.
-    # Counting files would report a successful overwrite as a failure.
+    # The evidence that a save happened is THE FILE, and on the overwrite path -- the one every
+    # re-run of this suite takes -- no NEW file appears, an existing one is rewritten. So the
+    # record is name -> last-write time, and "saved" means $Name did not exist before or has a
+    # newer stamp than it did. Counting files would report a successful overwrite as a failure.
     $beforeStamp = @{}
     foreach ($f in (Get-SaveFiles)) { $beforeStamp[$f.FullName] = $f.LastWriteTimeUtc }
     $before = @($beforeStamp.Keys)
@@ -387,23 +326,19 @@ function Save-ScGame {
     Start-Sleep -Seconds 1
     Show-ScDialogInventory -LogPath $LogPath -What 'save dialog'
 
-    # Type the name. The dialog opens with its edit box focused and the engine reads
-    # typed text through WM_CHAR (drive-game.ps1 Send-ScKey -Char). Backspaces first, in
-    # case the box opens pre-filled with a previous name -- typing into a filled box
-    # would otherwise produce a name this run cannot predict. NOTHING is concluded from
-    # having typed it: the file the engine writes is the evidence (task 033).
+    # The dialog opens with its edit box focused and the engine reads typed text through
+    # WM_CHAR (drive-game.ps1 Send-ScKey -Char). Backspaces first: the box can open pre-filled
+    # with a previous name, and typing into it would produce a name this run cannot predict.
+    # NOTHING is concluded from having typed it: the file the engine writes is the evidence.
     Send-ScText -Hwnd $Hwnd -Text $Name -ClearCount 24
     Start-Sleep -Milliseconds 500
     Show-ScDialogInventory -LogPath $LogPath -What 'save dialog, name typed'
 
-    # THE BOX IS READ BACK, EVERY TIME, AND ITS CONTENT IS THE ENGINE'S. This dialog opens
-    # PRE-FILLED with the previous save's name, so a run that types without clearing --
-    # or whose clear fell short -- silently saves over the file an earlier phase wrote,
-    # and the load that follows reads a file that is not the one this arm means. That
-    # would produce a confident, wrong verdict rather than an error, so it throws.
-    #
-    # Compared against the control's RAW text (not the letter-stripped form the matcher
-    # uses), so a name with digits in it would still be checked exactly.
+    # THE BOX IS READ BACK, EVERY TIME, and its content is the engine's. This dialog opens
+    # PRE-FILLED with the previous save's name, so a clear that fell short silently saves over
+    # the file an earlier phase wrote and the load that follows reads a file this arm did not
+    # mean -- a confident, wrong verdict rather than an error, so it throws. Compared against
+    # the control's RAW text (not the letter-stripped form the matcher uses): digits count too.
     $box = @(Get-ScDialogs -LogPath $LogPath |
              Where-Object { $_.Name -match 'SaveGame' } |
              ForEach-Object { $_.Controls } | Where-Object { $_.Type -eq 8 }) | Select-Object -First 1
@@ -418,27 +353,20 @@ function Save-ScGame {
     Write-Host "       the name box reads '$($box.Text)' -- exactly what this arm meant to save"
 
     # 'Save$', not '^Save$': the engine keeps the hotkey inside the string, so the button
-    # reads 's.S.ave' and its LETTERS are 'sSave' (measured, task 051's dialog probe).
+    # reads 's.S.ave' and its LETTERS are 'sSave' (measured, probe-save-load-dialogs.ps1).
     # Anchoring at the END separates the button from the dialog TITLE, 'SaveGame'.
     Invoke-ScDialogControl -Hwnd $Hwnd -LogPath $LogPath -Pattern '(OK$|Save$)' `
         -What 'the save dialog Save button' | Out-Null
     Start-Sleep -Seconds 3
 
-    # THE SAVE IS A STATE MACHINE, NOT ONE CLICK, and both of its facts were measured
-    # rather than assumed (task 051):
-    #
-    #   * A POSTED CLICK ON THIS ENGINE'S DEFAULT DIALOG BUTTON DOES NOT FIRE IT. The
-    #     save dialog's own 's.S.ave' (type=1) was clicked at the centre computed from
-    #     its own bounds and the dialog just sat there with the name intact; Return wrote
-    #     the file. So every step here is click-then-Return, never click alone.
-    #   * SAVING OVER AN EXISTING NAME OPENS A SECOND DIALOG: `OkCancel`, reading
-    #     "Replace the contents of game .slctl.?" with its own default `o.O.K`. It appears
-    #     only on the overwrite path -- which is the path a player takes constantly and
-    #     the path every re-run of this suite takes.
-    #
-    # So: loop over the states the engine can be in, name the branch taken each time
-    # (AGENTS.md § task 030 -- print WHICH branch, not that a branch happened), and stop
-    # the moment the FILE exists, which is the only evidence that counts.
+    # THE SAVE IS A STATE MACHINE, NOT ONE CLICK; both facts measured, not assumed:
+    #   * A POSTED CLICK ON THIS ENGINE'S DEFAULT DIALOG BUTTON DOES NOT FIRE IT. 's.S.ave'
+    #     (type=1) clicked at the centre of its own bounds left the dialog sitting with the
+    #     name intact; Return wrote the file. So every step is click-then-Return, never click alone.
+    #   * SAVING OVER AN EXISTING NAME OPENS A SECOND DIALOG, `OkCancel` ("Replace the contents
+    #     of game .slctl.?", default `o.O.K`) -- only on the overwrite path, which every re-run takes.
+    # So: loop over the states the engine can be in, print WHICH branch was taken (AGENTS.md §
+    # "Your DIAGNOSTICS are under the same rule"), and stop the moment the FILE exists.
     $how = 'the Save button'
     for ($round = 1; $round -le 5; $round++) {
         if (& $savedFile) { break }
@@ -487,13 +415,10 @@ function Save-ScGame {
     $new[0]
 }
 
-# Load a save. The target is made unambiguous BY THE FILESYSTEM -- every other .snx is
-# moved out of the save folder first -- so this never clicks a list row by number
-# (the map-browser hard rule, task 023, in its other costume).
-# A run that died between the stash and the restore leaves other people's saves sitting
-# in the stash directory. Put anything found there back BEFORE this run stashes again --
-# otherwise the second run's restore would overwrite the first run's rescue with its own
-# empty idea of what was moved.
+# A run that died between the stash and the restore leaves other people's saves sitting in
+# the stash directory. Put anything found there back BEFORE this run stashes again, otherwise
+# the second run's restore overwrites the first run's rescue with its own empty idea of what
+# was moved.
 function Restore-StashedSaves {
     if (-not (Test-Path -LiteralPath $stashDir)) { return }
     $left = @(Get-ChildItem -LiteralPath $stashDir -File -Filter '*.snx' -ErrorAction SilentlyContinue)
@@ -508,6 +433,9 @@ function Restore-StashedSaves {
     Write-Host "       recovered $($left.Count) save(s) left in the stash by an earlier run"
 }
 
+# Load a save. The target is made unambiguous BY THE FILESYSTEM -- every other .snx is moved
+# out of the save folder first -- so this never clicks a list row by number (AGENTS.md §
+# "Never click a map-browser row by number", in its other costume).
 function Load-ScGame {
     param([Parameter(Mandatory)][IntPtr]$Hwnd, [Parameter(Mandatory)][System.IO.FileInfo]$File)
     New-Item -ItemType Directory -Path $stashDir -Force | Out-Null
@@ -539,11 +467,9 @@ function Load-ScGame {
         Invoke-ScDialogControl -Hwnd $Hwnd -LogPath $LogPath -Pattern '(OK$|Load$)' `
             -What 'the load dialog Load button' | Out-Null
         Start-Sleep -Seconds 4
-        # Same two-ways-in as the save, and for the same measured reason: a posted click on
-        # this engine's DEFAULT dialog button does not fire it (task 051 -- the save
-        # dialog's own 's.S.ave' was clicked at its centre and wrote nothing, while Return
-        # wrote the file). If the dialog is still up, press the key the default button
-        # answers to, and say which branch got us out.
+        # Same two-ways-in as Save-ScGame, for the same measured reason: a posted click on this
+        # engine's DEFAULT dialog button does not fire it. If the dialog is still up, press the
+        # key the default button answers to, and say which branch got us out.
         if (@(Find-ScDialogControl -LogPath $LogPath -Pattern 'Load$').Count -gt 0) {
             Write-Host '       the load dialog is still up after the click; pressing Return'
             Send-ScKey -Hwnd $Hwnd -VirtualKey 0x0D
@@ -587,9 +513,9 @@ function Select-Nexus {
     $st
 }
 
-# Click Train N times. THE CARD IS RE-READ BEFORE EVERY CLICK (task 039): a slot's
-# meaning changes under you, and a loop that reads once and clicks N times is how a
-# Command Center ends up in the air.
+# Click Train N times. THE CARD IS RE-READ BEFORE EVERY CLICK: a slot's meaning changes under
+# you, and a loop that reads once and clicks N times is how a Command Center ends up in the
+# air (AGENTS.md § "A CARD SLOT CHANGES MEANING UNDER YOU").
 function Add-ToQueue {
     param([Parameter(Mandatory)][IntPtr]$Hwnd, [Parameter(Mandatory)][int]$Count, [string]$Tag)
     $sent = 0
@@ -653,10 +579,7 @@ try {
 
     Step "generate the fixture: two Nexuses, Probe build time ${ProbeBuildSeconds}s" {
         Wait-ScFixtureFolderFree -Run $fixtures
-        # Two Nexuses: 18 psi between them, so a queue of $QueueMax Probes needs no Pylon
-        # on buildable ground for the run to mean anything. Only the first is ever
-        # selected. The long Probe build time is what keeps a COMPLETION out of both
-        # measurement windows -- asserted, not assumed, at the end of each arm.
+        # The second Nexus is touched only as the load witness (Invoke-RoundTrip).
         $genArgs = @{
             UnitCount = 2; UnitType = 'nexus'; Player = 0; ClearPlayerUnits = $true
             Race = 'protoss'; GridSpacing = 160
@@ -703,15 +626,13 @@ try {
     }
 
     Step 'the arm is the arm it says it is -- hooks present, or positively absent' {
-        # AGENTS.md § "Absence assertions must first be proved positive": the pattern
-        # asserted absent in the observe arms is the plugin's REAL wording, and the fanout
-        # arm asserts the same pattern PRESENT in the same run of the same suite.
-        #
-        # `\S+` rather than `[A-Za-z]+` (task 054). A hook name is whatever ScHookInstall
-        # was handed, and the epoch's is `gameStartClear+7` -- a `+` and a digit, so the
-        # letters-only class could not match it. That is a hole in an ABSENCE assertion
-        # specifically: a hook this pattern cannot spell would have been reported as
-        # "NOT ONE hook is installed" in the observe control while being spliced.
+        # AGENTS.md § "Absence assertions must first be proved positive": the pattern asserted
+        # absent in the observe arms is the plugin's REAL wording, and the fanout arm asserts
+        # the same pattern PRESENT in the same run of the same suite.
+        # `\S+`, not `[A-Za-z]+`: a hook name is whatever ScHookInstall was handed, and the
+        # epoch hook's is `gameStartClear+7` -- a `+` and a digit the letters-only class cannot
+        # spell. In an ABSENCE assertion that hole reports "NOT ONE hook is installed" while
+        # one is spliced.
         $hooks = @(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'HOOK \S+: installed at')
         if ($Phase -eq 'fanout') {
             Assert-That "fanout: the plugin's detours are spliced ($($hooks.Count) HOOK line(s))" ($hooks.Count -gt 0)
@@ -750,30 +671,23 @@ try {
         Shot 'in-game'
     }
 
-    # -------------------------------------------------------------------------
-    # One round trip, parameterised. Used by every arm that saves in this phase.
-    # -------------------------------------------------------------------------
+    # One round trip, parameterised: every arm that saves in this phase.
     function Invoke-RoundTrip {
         param([string]$Arm, [int]$Queue, [string]$SaveName)
         Select-Nexus -Hwnd $hwnd -Tag $Arm | Out-Null
         $sent = Add-ToQueue -Hwnd $hwnd -Count $Queue -Tag $Arm
-        # The wire count is REPORTED, not asserted, and here is why: `CMD id=` lines are
-        # written by the command-funnel hook, which exists in fanout/hooktest and NOT in
-        # observe. The control arm therefore reports 0 commands however well the clicks
-        # worked -- an assertion on it fails the arm for the arm's own configuration
-        # (measured: the control run's first pass said "0 Train commands" while the
-        # engine's ring read [0x040,0x040,0x040,0x040,0x0E4]).
-        #
-        # What IS asserted is the ENGINE'S OWN RING, which exists in every arm.
+        # The wire count is REPORTED, not asserted: `CMD id=` lines come from the command-funnel
+        # hook, which exists in fanout/hooktest and NOT in observe, so the control arm reports 0
+        # commands however well the clicks worked (measured: "0 Train commands" while the
+        # engine's ring read [0x040,0x040,0x040,0x040,0x0E4]). What IS asserted is the ENGINE'S
+        # OWN RING, which exists in every arm.
         Write-Host "       Train commands seen on the funnel: $sent (absent by design in -Mode observe)"
         $q = Get-Statq "$Arm-queued"
         $qLen = @($q.Engine | Where-Object { $_ -ne $QUEUE_EMPTY -and $_ -ne 0 }).Count
-        # min(Queue, 5), in EVERY arm. An earlier version expected the ring to sit at
-        # SC_PRODQ_ENGINE_HOLD (4) whenever the plugin was holding anything, and the run
-        # said 5 -- the plugin was right and the expectation was wrong. HoldRoom() measures
-        # room against the engine's FIVE, not against the hold: once the plugin stops taking
-        # items back the ring fills to five and STAYS there, and leaving it full IS the cap
-        # (sc_prodqueue.cpp, "Leaving the ring full IS the cap"). Measured: 8 clicks ->
+        # min(Queue, 5) in EVERY arm. Do not expect the ring to sit at SC_PRODQ_ENGINE_HOLD (4)
+        # while the plugin holds items: HoldRoom() measures room against the engine's FIVE, not
+        # the hold, so once the plugin stops taking items back the ring fills to five and STAYS
+        # there -- leaving it full IS the cap (sc_prodqueue.cpp). Measured: 8 clicks ->
         # engine=[0x040 x5], overflow=3, logical=8, minerals 3000-8*50=2600.
         $wantRing = [math]::Min($Queue, $ENGINE_SLOTS)
         Assert-That "$Arm`: the engine's ring holds $wantRing item(s) after $Queue click(s) ($qLen)" `
@@ -784,23 +698,15 @@ try {
         Shot "$Arm-before-save"
         $file = Save-ScGame -Hwnd $hwnd -Name $SaveName
 
-        # ---------------------------------------------------------------------
-        # THE LOAD WITNESS. Without it this whole suite is un-failable.
-        #
-        # Every assertion below compares the world at the save with the world after the
-        # load and passes when they MATCH -- and a load that never happened produces
-        # exactly that match, because the game simply carried on with the state it
-        # already had. Task 051's first control run passed all nine of them without any
-        # evidence a load occurred at all, on the same run that proved a posted click on
-        # this engine's default dialog button does nothing.
-        #
-        # So: change the world AFTER the save, in a way the saved file cannot contain,
-        # and require the load to undo it. One Train click at the SECOND Nexus -- a
-        # building this suite never measures and which the save recorded with an EMPTY
-        # ring. The mutation is asserted POSITIVE first (its ring really did go to 1),
-        # because a witness that never landed would make the after-check pass for the
-        # wrong reason (AGENTS.md § "Absence assertions must first be proved positive").
-        # ---------------------------------------------------------------------
+        # THE LOAD WITNESS. Without it this suite is un-failable: every assertion below passes
+        # when the world at the save MATCHES the world after the load, and a load that never
+        # happened produces exactly that match (measured: a control run passed all nine with no
+        # evidence a load occurred, on the run that proved a posted click on the default dialog
+        # button does nothing). So: change the world AFTER the save in a way the file cannot
+        # contain -- one Train click at the SECOND Nexus, which the save recorded with an EMPTY
+        # ring -- and require the load to undo it. The mutation is asserted POSITIVE first, or
+        # the after-check passes for the wrong reason (AGENTS.md § "Absence assertions must
+        # first be proved positive").
         Select-Nexus -Hwnd $hwnd -Tag "$Arm-witness" -Which 1 | Out-Null
         $wq = Add-ToQueue -Hwnd $hwnd -Count 1 -Tag "$Arm-witness"
         $wBefore = Get-Statq "$Arm-witness-set"
@@ -872,26 +778,19 @@ try {
                         -OverflowAtSave 0
                     $script:episodes++
                 }
-                # ARM 6 -- the phantom-promotion check, and it is only meaningful HERE:
-                # this game was loaded into a process whose plugin still holds g_rec[]
-                # records from arms 2 and 3, keyed by addresses in the STATIC unit table
-                # the load has just refilled. If a stale record still matches, the plugin
-                # promotes items into a building that never queued them.
+                # ARM 6 -- the phantom-promotion check, meaningful only HERE: this process's
+                # plugin still holds g_rec[] records from arms 2 and 3, keyed by addresses in
+                # the STATIC unit table the load has just refilled.
                 Assert-That ("arm6: the loaded vanilla game's ring holds ONLY what the vanilla save had " +
                              "($($after.EngineLen) occupied)") `
                     ($null -ne $before -and $after.EngineLen -le $before.EngineLen) `
                     "(save=[$(($before.Engine | ForEach-Object { '0x{0:X3}' -f $_ }) -join ',')] load=[$(($after.Engine | ForEach-Object { '0x{0:X3}' -f $_ }) -join ',')])"
-                # THE HALF THE RING CANNOT SHOW, and the one that matters. The ring being
-                # right proves only that the ENGINE restored its own array. The plugin's
-                # table is not in the save file and is not reset by a load, so it can walk
-                # into the loaded game still holding items queued in a DIFFERENT one --
-                # bound to a CUnit address the static unit table has just refilled. Those
-                # items were paid for in the other game, and the moment a ring slot frees
-                # here the plugin promotes one into a building that never queued it.
-                #
-                # Measured on the first run of this arm: `overflow=3 logical=7` against
-                # unit=0x00623E58 in a game whose own save contained a queue of four and no
-                # overflow at all.
+                # THE HALF THE RING CANNOT SHOW. A right ring proves only that the ENGINE restored
+                # its own array. The plugin's table is in no save file and no load resets it, so
+                # it can walk into the loaded game still holding items queued -- and paid for --
+                # in a DIFFERENT one; the moment a ring slot frees here it promotes one into a
+                # building that never queued it. Measured: `overflow=3 logical=7` against
+                # unit=0x00623E58 in a game whose own save held a queue of four and no overflow.
                 Assert-That ("arm6: the plugin holds NOTHING for a game it never queued in " +
                              "(overflow=$($after.Overflow), tracked buildings=$($after.Buildings))") `
                     ($after.Overflow -eq 0) `
@@ -935,9 +834,8 @@ finally {
         catch { Write-Host "  FAIL close-game could not shut the game down: $($_.Exception.Message)"; $failures++ }
         Start-Sleep -Seconds 2
     }
-    # The fixture is left in place for the phases that follow; only the LAST phase
-    # removes it. Deleting it earlier would leave the saves pointing at a map that is
-    # no longer there.
+    # The fixture is left in place for the phases that follow; only the LAST phase removes it.
+    # Deleting it earlier would leave the saves pointing at a missing map.
     if ($Phase -eq 'crossload') {
         try { Remove-ScOwnFixture -Run $fixtures; Remove-ScOwnFixtureDir -Dir $mapDir }
         catch { Write-Host "       (fixture cleanup: $($_.Exception.Message))" }
@@ -952,9 +850,9 @@ Assert-That 'the game process this test started is gone' ($KeepOpen -or $null -e
 $hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
 Assert-That 'StarCraft.exe on disk is byte-identical to before the run' ($hashAfter -eq $hashBefore)
 
-# AGENTS.md § task 041: a verdict that does not depend on reaching the end of the work is
-# not a verdict. If no arm ran to a comparison, this run says INCOMPLETE -- its own word,
-# never PASS -- however few assertions happened to fail.
+# AGENTS.md § "A random suite must report the coverage of its SEAM": a verdict that does not
+# depend on reaching the end of the work is not a verdict. If no arm ran to a comparison, this
+# run says INCOMPLETE -- its own word, never PASS -- however few assertions happened to fail.
 Write-Host ''
 if ($episodes -eq 0) {
     Write-Host "test-save-load [$Phase]: INCOMPLETE -- 0 arms reached a verdict, $failures failure(s)."

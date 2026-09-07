@@ -20,7 +20,7 @@ WHAT IS DELIBERATELY NOT HERE. Two suites have a `Step` that is genuinely differ
 they keep their own:
 
   test-production-queue.ps1   takes -SweepPerturbed, and skips the step loudly when the
-                              hold sweep has consumed its preconditions (task 041)
+                              hold sweep has consumed its preconditions
   test-random-conformance.ps1 prints "== <name>" and does not number its steps
 
 The `finally` half of each suite's epilogue is NOT here and should not be: it reads

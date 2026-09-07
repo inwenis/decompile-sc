@@ -7,7 +7,7 @@
 
 #include "sc_engine.h"
 #include "sc_log.h"
-#include "sc_queueind.h"   // ScQueueIndRingGen -- the phantom window's seqlock (task 066)
+#include "sc_queueind.h"   // ScQueueIndRingGen -- the phantom window's seqlock
 
 static bool         g_enabled = false;
 static ScCardReadFn g_read    = NULL;
@@ -21,21 +21,13 @@ static bool RdU8(DWORD addr, BYTE* out)   { return Rd(addr, out, 1); }
 static bool RdU16(DWORD addr, WORD* out)  { return Rd(addr, out, 2); }
 static bool RdU32(DWORD addr, DWORD* out) { return Rd(addr, out, 4); }
 
-// ---------------------------------------------------------------------------
-// The walk
-// ---------------------------------------------------------------------------
-
 // Reproduces the layout function's own child walk (0x004591D0):
-//
 //     root = cardDialog;
 //     if (*(s16*)(root + 0x22) != 0) root = *(BinDlg**)(root + 0x32);   // climb to parent
 //     ctrl = *(BinDlg**)(root + 0x42);                                  // first child
 //     while (ctrl->index != 1) ctrl = ctrl->next;                       // find slot 1
-//     ... slots are the children with 1 <= index < 10 ...
-//
-// with two differences, both because this is an observer and not the engine: the
-// walk is bounded (never trust a game list read from another thread to terminate)
-// and it collects rather than assigns.
+// This is an observer, not the engine: the walk is bounded (never trust a game list
+// read from another thread to terminate) and it collects rather than assigns.
 int ScCardSnapshot(ScCardHeader* hdr, ScCardSlot* out, int max) {
     if (!hdr) return 0;
     memset(hdr, 0, sizeof(*hdr));
@@ -63,7 +55,6 @@ int ScCardSnapshot(ScCardHeader* hdr, ScCardSlot* out, int max) {
         RdU32(e + SC_BUTTONSET_OFF_PTR, &hdr->setButtons);
     }
 
-    // Climb to the dialog record the children hang off, exactly as the layout does.
     hdr->root = hdr->dialog;
     WORD type = 0;
     if (RdU16(hdr->dialog + SC_BINDLG_OFF_TYPE, &type) && (short)type != 0) {
@@ -127,20 +118,14 @@ int ScCardSnapshot(ScCardHeader* hdr, ScCardSlot* out, int max) {
     return found;
 }
 
-// ---------------------------------------------------------------------------
-// The status pane's production-queue strip (task 028)
-//
 // Reproduces queueLayout's own walk (0x004268D0), quoted in sc_addresses.h:
-//
 //     root = statdataDialog;
 //     if (*(s16*)(root + 0x22) != 0) root = *(BinDlg**)(root + 0x32);
 //     for (ctrl = root->firstChild; ctrl; ctrl = ctrl->next) if (ctrl->index == 2) break;
 //     for (k = 0; ctrl && k < 5; ++k, ctrl = ctrl->next) { ... buildQueue[(head + k) % 5] ... }
-//
-// The engine takes the DISPLAY INDEX from the walk position and the click payload
-// from `index - 2` (statusCtrlActivate 0x004573A0). Those are two different numbers
-// that the engine assumes are equal, so both are reported and the caller asserts it.
-// ---------------------------------------------------------------------------
+// The engine takes the DISPLAY INDEX from the walk position and the click payload from
+// `index - 2` (statusCtrlActivate 0x004573A0). Those are two different numbers the engine
+// assumes are equal, so both are reported and the caller asserts it.
 
 int ScStatusSnapshot(ScStatusHeader* hdr, ScStatusSlot* out, int max) {
     if (!hdr) return 0;
@@ -163,11 +148,10 @@ int ScStatusSnapshot(ScStatusHeader* hdr, ScStatusSlot* out, int max) {
     if (RdU32(ScRuntimeVa(SC_VA_ACTIVE_PORTRAIT_UNIT), &hdr->portrait) && hdr->portrait) {
         RdU16(hdr->portrait + SC_CUNIT_OFF_UNIT_ID, &hdr->portraitType);
         RdU8(hdr->portrait + SC_CUNIT_OFF_PLAYER, &hdr->portraitOwner);
-        // COHERENT against the phantom bracket (task 066, sc_queueind.h): this walk runs
-        // on the observer thread, and the game thread makes owned ring slots non-empty
-        // for the length of each queueLayout call. A qtype read mid-window would report
-        // a phantom item as the engine's, which is exactly what the suites assert
-        // against ("the ring slot behind it is EMPTY -- the item is the plugin's").
+        // COHERENT against the phantom bracket (sc_queueind.h): this walk runs on the
+        // observer thread, and the game thread makes owned ring slots non-empty for the
+        // length of each queueLayout call. A qtype read mid-window would report a phantom
+        // item as the engine's, the one thing these snapshots exist to tell apart.
         bool ok = false;
         hdr->ringStable = false;
         for (int attempt = 0; attempt < 32 && !hdr->ringStable; ++attempt) {
@@ -187,8 +171,7 @@ int ScStatusSnapshot(ScStatusHeader* hdr, ScStatusSlot* out, int max) {
     if (!RdU32(hdr->root + SC_BINDLG_OFF_FIRST_CHILD, &ctrl)) return 0;
 
     // Find the strip's first icon the way the layout does -- by index, not by position.
-    // Bounded because this runs on the observer thread against a list the game thread
-    // owns; a torn `next` must end the walk, not spin it.
+    // Bounded: a torn `next` read off the game thread's list must end the walk, not spin.
     DWORD first = 0;
     for (int guard = 0; ctrl && guard < SC_MAX_CTRLS_WALK; ++guard) {
         WORD idxW = 0;
@@ -219,16 +202,15 @@ int ScStatusSnapshot(ScStatusHeader* hdr, ScStatusSlot* out, int max) {
         Rd(ctrl + SC_BINDLG_OFF_BOUNDS, s->rect, sizeof(s->rect));
 
         if (s->user) {
-            // All three fields or none, same rule as the card's Button record: a
-            // half-read statUser reads as an icon drawing a wrong unit type.
+            // All three fields or none: a half-read statUser reads as an icon
+            // drawing a wrong unit type.
             s->userOk = RdU16(s->user + SC_STATUSER_OFF_ICON, &s->userIcon) &&
                         RdU16(s->user + SC_STATUSER_OFF_MODE, &s->userMode) &&
                         RdU16(s->user + SC_STATUSER_OFF_TYPE, &s->userType);
         }
 
-        // The building's own slot for this display index -- the engine's arithmetic,
-        // (head + k) % 5, so the icon and the ring can be compared without the caller
-        // having to redo it.
+        // The building's own slot for this display index, in the engine's arithmetic, so
+        // the icon and the ring can be compared without the caller redoing it.
         s->queueType = SC_BUILD_QUEUE_EMPTY;
         if (hdr->queueOk) {
             s->queueType = hdr->queue[((unsigned)hdr->head + (unsigned)k) % SC_BUILD_QUEUE_SLOTS];
@@ -294,13 +276,9 @@ void ScStatusScan(const char* tag) {
 
     // Written LAST and unconditionally, like the card's: a reader waits for this line,
     // and "the strip is up but nothing is clickable" has to be a positive answer rather
-    // than a missing one (AGENTS.md, absence assertions).
+    // than a missing one (AGENTS.md § "Oracles: absence and defect-era checks").
     ScLog("STATQ [%s] slots=%d shown=%d clickable=%d", t, hdr.slots, hdr.shown, hdr.clickable);
 }
-
-// ---------------------------------------------------------------------------
-// The tech state behind the buttons
-// ---------------------------------------------------------------------------
 
 bool ScCardReadTechState(int player, ScCardTechState* out) {
     if (!out) return false;
@@ -344,12 +322,7 @@ static void FormatTechList(const BYTE* bits, char* out, size_t outLen) {
     if (n == 0) lstrcpynA(out, "(none)", (int)outLen);
 }
 
-// ---------------------------------------------------------------------------
-// Plumbing
-// ---------------------------------------------------------------------------
-
-// The reader this module uses when nobody installed a test seam. It takes a VA
-// because ScCardReadFn does; sc_engine owns the probe behind it.
+// The reader used when no test seam is installed; sc_engine owns the probe behind it.
 static bool DefaultRead(DWORD addr, void* out, size_t n) {
     return ScSafeRead((const void*)(DWORD_PTR)addr, out, n);
 }

@@ -11,31 +11,22 @@
 
 // Written by the game thread from inside a detour, read by the observer thread and by
 // every module's SessionSync. A LONG through the Interlocked* API rather than a plain
-// unsigned: the bump is a read-modify-write and the reader must never see a torn or
-// stale value on a machine that reorders.
+// unsigned: the bump is a read-modify-write, and no reader may see a torn or stale value.
 static volatile LONG g_epoch = 1;
 
 static volatile LONG g_stat[SC_SESSION_STAT__COUNT] = { 0, 0 };
 static volatile LONG g_epochAtLastLoad = 0;
 
-// A PLAIN ALIGNED LOAD, deliberately, and this is the one function in the plugin where
-// that choice is worth measuring rather than assuming: it is on the fast path of every
-// adopting module's SessionSync, and those sit inside the status dispatcher, which runs
-// hundreds of thousands of times a second.
-//
-// The first version used `InterlockedCompareExchange(&g_epoch, 0, 0)` as a "safe read".
-// It is not safer here and it is not free: measured over 200,000,000 calls against an
-// empty control loop (work/scratch/054/bench-session.cpp), the interlocked form costs
-// 7.67 ns/call, because a LOCK CMPXCHG is a locked read-modify-write of a line the game
-// thread is also writing.
-//
-// The plain load is correct on this target for two reasons that are properties of the
-// platform, not of this code. This is a 32-bit x86 process, so an aligned 4-byte load
-// cannot tear -- there is no interleaving in which a reader sees half of an epoch. And
-// the only writer is InterlockedIncrement, which is a full barrier, so a reader either
-// sees the old value or the new one and never anything else. `volatile` stops the
-// compiler from hoisting the load out of a caller's loop, which is the only reordering
-// that would matter.
+// A PLAIN ALIGNED LOAD, deliberately: this is on the fast path of every adopting
+// module's SessionSync, and those sit inside the status dispatcher, which runs hundreds
+// of thousands of times a second. Do NOT "make it safe" with
+// `InterlockedCompareExchange(&g_epoch, 0, 0)`: it is not safer here and it is not free
+// -- measured at 7.67 ns/call over 200,000,000 calls against an empty control loop,
+// because a LOCK CMPXCHG is a locked read-modify-write of a line the game thread writes.
+// The plain load is correct as a property of the platform: in a 32-bit x86 process an
+// aligned 4-byte load cannot tear, and the only writer is InterlockedIncrement, a full
+// barrier, so a reader sees the old value or the new one and nothing else. `volatile`
+// stops the compiler hoisting the load out of a caller's loop.
 unsigned ScSessionEpoch(void) {
     const LONG e = g_epoch;
     return (unsigned)(e > 0 ? e : 1);
@@ -50,15 +41,13 @@ unsigned ScSessionEpochAtLastLoad(void) {
     return (unsigned)InterlockedCompareExchange(&g_epochAtLastLoad, 0, 0);
 }
 
-// ---------------------------------------------------------------------------
-// The two events
-// ---------------------------------------------------------------------------
+// --- the two events --------------------------------------------------------
 
-// Is the engine about to deserialise a save? `pendingSaveName` (0x006D1218) is the
-// heap buffer the Load Game path allocates and `startGame`'s caller frees on the way
-// out (0x004E07D5: `MOV EAX,[0x006D1218]; TEST EAX,EAX; JE ...; CALL free; MOV
-// dword ptr [0x006D1218],0`). Read here PURELY so the log line can say which kind of
-// game start this was -- nothing branches on it, because the epoch must move for both.
+// Is the engine about to deserialise a save? `pendingSaveName` (0x006D1218) is the heap
+// buffer the Load Game path allocates and `startGame`'s caller frees on the way out
+// (0x004E07D5: `MOV EAX,[0x006D1218]; TEST EAX,EAX; JE ...; CALL free; MOV dword ptr
+// [0x006D1218],0`). Read PURELY so the log line can say which kind of game start this
+// was -- nothing branches on it, because the epoch must move for both.
 static bool LoadPending(void) {
     if (!ScEngineModuleBase()) return false;
     return *(DWORD*)ScRuntimeAddr(SC_VA_PENDING_SAVE_NAME) != 0;
@@ -67,11 +56,11 @@ static bool LoadPending(void) {
 static void OnGameStart(void) {
     const LONG now = InterlockedIncrement(&g_epoch);
     InterlockedIncrement(&g_stat[SC_SESSION_STAT_STARTS]);
-    // ENTRY as well as outcome (AGENTS.md, task 030): this line is the only evidence
-    // that the clock ticked at all, so it names the kind of start rather than merely
-    // recording that one happened. A run whose load produces no `load=1` line here is
-    // a run whose epoch did not cover the load, and that is the failure mode the whole
-    // mechanism has to be checked against.
+    // ENTRY as well as outcome (AGENTS.md § "Diagnostics and reporting"): this line is
+    // the only evidence that the clock ticked at all, so it names the kind of start
+    // rather than merely recording that one happened. A run whose load produces no
+    // `load=1` line here is a run whose epoch did not cover the load, and that is the
+    // failure mode the whole mechanism has to be checked against.
     ScLog("SESSION start: epoch %u -> %u (load=%d) -- every record stamped with an "
           "earlier epoch now belongs to a game that no longer exists",
           (unsigned)(now - 1), (unsigned)now, LoadPending() ? 1 : 0);
@@ -86,14 +75,10 @@ static void OnLoadSavedGame(void) {
           "about to restore", e, ScSessionStat(SC_SESSION_STAT_STARTS));
 }
 
-// ---------------------------------------------------------------------------
-// The detours
-//
+// --- the detours -----------------------------------------------------------
 // Both are spliced into the middle of the engine's own straight-line code with live
-// registers, so neither may disturb anything: an explicit thunk saves everything,
-// calls a C function that takes no arguments at all, restores, and jumps to the
-// trampoline. Same shape (and same reasons) as sc_circles.cpp's.
-// ---------------------------------------------------------------------------
+// registers, so neither may disturb anything: an explicit thunk saves everything, calls
+// a C function that takes no arguments at all, restores, and jumps to the trampoline.
 
 extern "C" void ScSessionOnGameStartThunk(void);
 extern "C" void ScSessionOnLoadThunk(void);
@@ -125,9 +110,8 @@ asm(
     "  jmp *_g_sessionLoadTramp\n"
 );
 
-// force_align_arg_pointer for the same reason every other entry point the game calls
-// carries it: GCC at -O2 assumes a 16-byte-aligned incoming stack, StarCraft is a
-// VC6-class build that guarantees 4.
+// force_align_arg_pointer: GCC at -O2 assumes a 16-byte-aligned incoming stack, and
+// StarCraft is a VC6-class build that guarantees 4.
 extern "C" void __attribute__((force_align_arg_pointer)) ScSessionOnGameStartC(void) {
     OnGameStart();
 }
@@ -141,8 +125,7 @@ static ScHook g_hkLoad;
 // Verified prologues -- ScHookInstall refuses to patch if memory disagrees.
 //
 // gameStartClear + 7 (0x004EEC37): ONE whole instruction, exactly five bytes, no
-// PC-relative operand. See sc_session.h for why the function's own entry cannot be
-// used and for the four instructions either side of this one.
+// PC-relative operand. See sc_session.h for why the function's own entry cannot be used.
 static const BYTE kSiteGameStart[] = { 0xB8, 0xFF, 0xFF, 0x00, 0x00 };
 
 // loadSavedGame (0x004CFEF0), the function that reads the save file:
@@ -168,9 +151,8 @@ int ScSessionInstall(BYTE* moduleBase, bool enabled) {
         g_sessionStartTramp = g_hkStart.trampoline;
         ++n;
     }
-    // The witness. Its absence does NOT disable the epoch: it costs nothing at runtime
-    // and buys nothing but evidence, so a failure here is logged and the feature carries
-    // on with one hook.
+    // The witness. It buys evidence and nothing else, so its absence does NOT disable
+    // the epoch: a failure here is logged and the feature carries on with one hook.
     if (ScHookInstall(&g_hkLoad, "loadSavedGame", ScRuntimeAddr(SC_VA_LOAD_SAVED_GAME),
                       (void*)&ScSessionOnLoadThunk, 6,
                       kSiteLoad, (int)sizeof(kSiteLoad))) {
@@ -180,7 +162,7 @@ int ScSessionInstall(BYTE* moduleBase, bool enabled) {
 
     if (!g_hkStart.installed) {
         // Say it in the terms the consequence has, not as "a hook failed": with no bump
-        // every module's SessionSync becomes a no-op and issue #67's whole class is back.
+        // every module's SessionSync is a no-op and records from dead games survive.
         ScLog("SESSION: the game-start splice did NOT go in -- the epoch will never "
               "move, so cross-game records will NOT be dropped. Every #67 survivor is "
               "live again in this process.");
@@ -200,18 +182,15 @@ void ScSessionLogState(const char* tag) {
           ScSessionStat(SC_SESSION_STAT_STARTS), ScSessionStat(SC_SESSION_STAT_LOADS),
           ScSessionEpochAtLastLoad(),
           (g_hkStart.installed ? 1 : 0) + (g_hkLoad.installed ? 1 : 0),
-          // The one comparison a reader should not have to make by hand. A load seen in
-          // an epoch older than the current one would mean a save was deserialised
-          // before the bump that is supposed to precede it.
+          // A load seen in an epoch older than the current one would mean a save was
+          // deserialised before the bump that is supposed to precede it.
           (ScSessionStat(SC_SESSION_STAT_LOADS) > 0 &&
            ScSessionEpochAtLastLoad() != ScSessionEpoch())
               ? "  WARNING: the last load was seen in an epoch that is no longer current"
               : "");
 }
 
-// ---------------------------------------------------------------------------
-// Test seam
-// ---------------------------------------------------------------------------
+// --- test seam -------------------------------------------------------------
 
 void ScSessionTestBegin(void) {
     InterlockedExchange(&g_epoch, 1);

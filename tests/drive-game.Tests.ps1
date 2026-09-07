@@ -1,15 +1,11 @@
 #Requires -Version 7
 <#
-Pester coverage for the two pieces of tools/plugin/drive-game.ps1 that are PURE LOGIC:
-the map-browser listing model and the fixture-ownership registry.
-
-Why these two and not the rest: every in-game defect this repo lost runs to on
-2026-08-09 was one of them getting a row number or an owner wrong, and both are decidable
-from a directory tree alone -- no game, no window, no GDI+. So they can be regression
-tested here, in CI, instead of being re-discovered by whoever is bleeding next.
-
-The listing expectations below are not invented: each mirrors a captured frame, cited in
-the test name, so a change to the model has to argue with a photograph.
+Pester coverage for the parts of tools/plugin/drive-game.ps1 that are PURE LOGIC: the
+map-browser listing model, the log parsers and the fixture-ownership registry. Each
+decides from a directory tree or a log file alone -- no game, no window, no GDI+ -- so a
+wrong row number or a wrong owner is caught in CI instead of costing an in-game run.
+The listing expectations are not invented: each mirrors a captured frame, cited in the
+test name, so a change to the model has to argue with a photograph.
 #>
 
 BeforeAll {
@@ -49,7 +45,7 @@ BeforeAll {
 Describe 'map-browser listing model' {
 
     It 'sorts [Up One Level] AMONG the directories, not above them (016-frames\05-browse.png)' {
-        # THE level-3 fact. The frame reads: [Allied] [Ladder] [Up One Level] [WebMaps].
+        # The captured frame reads: [Allied] [Ladder] [Up One Level] [WebMaps].
         $t = New-TestMapsTree
         try {
             $l = Get-ScBrowserListing -Dir (Join-Path $t.Maps 'BroodWar') -MapsRoot $t.Maps
@@ -60,8 +56,8 @@ Describe 'map-browser listing model' {
     }
 
     It 'moves [Up One Level] down a row for every fixture folder that sorts before it' {
-        # This IS the bug: an extra directory nobody else uses shifts the parent entry,
-        # and test-selection-circles opened a folder instead of leaving BroodWar.
+        # A fixture directory nobody else has shifts the parent entry down, so a caller
+        # holding a hardcoded row opens a folder instead of leaving BroodWar.
         $t = New-TestMapsTree -BroodWarDirs @('00-t021', '00-t022')
         try {
             $l = Get-ScBrowserListing -Dir (Join-Path $t.Maps 'BroodWar') -MapsRoot $t.Maps
@@ -71,11 +67,10 @@ Describe 'map-browser listing model' {
     }
 
     It 'gives the maps root no parent entry, and does list BroodWar' {
-        # A frame of this listing starts at [campaign], which was first read as "BroodWar
-        # is excluded". It was a SCROLLED view -- the live probe that established
-        # Sync-ScBrowserToTop showed entry 1 sitting above the visible window. A model
-        # that silently drops a directory puts every row below it off by one, which is
-        # the bug this file exists to catch, so it is pinned here.
+        # A frame of this listing that starts at [campaign] is a SCROLLED view, not
+        # BroodWar being excluded: the probe behind Sync-ScBrowserToTop shows entry 1
+        # sitting above the visible window. A model that silently drops a directory puts
+        # every row below it off by one.
         $t = New-TestMapsTree
         try {
             $l = Get-ScBrowserListing -Dir $t.Maps -MapsRoot $t.Maps
@@ -87,7 +82,7 @@ Describe 'map-browser listing model' {
     }
 
     It 'puts (1)Enslavers02b.scm on row 4 (015-probe-scroll\02-campaign-listing.png)' {
-        # The row the two campaign suites have always clicked, now derived rather than typed.
+        # The row the campaign suites click: derived from the listing, never typed in.
         $t = New-TestMapsTree
         try {
             $l = Get-ScBrowserListing -Dir (Join-Path $t.Maps 'campaign') -MapsRoot $t.Maps
@@ -131,11 +126,9 @@ Describe 'map-browser listing model' {
 Describe 'log parsing' {
 
     It 'returns the engine twelve as twelve, not as one array holding twelve' {
-        # The regression: Get-ScSelectionGroup ended in `,@(...)` and its caller wrapped
-        # the call in `@(...)`, so $engine.Count read 1 and `-contains` matched nothing.
-        # test-stim-fanout then failed two assertions about the engine's own selection
-        # while the log in front of it held all twelve pointers -- a harness bug wearing
-        # the costume of a finding.
+        # Do not emit the pointers as one nested array: a caller's own `@(...)` then reads
+        # Count 1 and `-contains` matches nothing, so a suite fails assertions about the
+        # engine's selection while the log in front of it holds all twelve pointers.
         $log = Join-Path ([IO.Path]::GetTempPath()) ("sc-sel-" + [Guid]::NewGuid().ToString('n') + ".log")
         $ptrs = 0..11 | ForEach-Object { "[$_]=0x0062{0:X4}" -f (0x1000 + $_ * 0x150) }
         try {
@@ -174,9 +167,8 @@ Describe 'fixture ownership registry' {
     AfterEach { Remove-Item -LiteralPath $script:tree.Root -Recurse -Force -ErrorAction SilentlyContinue }
 
     It 'does not call a suite OWN earlier fixture foreign (the 2026-08-09 self-deadlock)' {
-        # test-combat-death creates a placement probe, then the combat map. The old
-        # one-filename rule counted the probe as somebody else's and the suite waited
-        # for itself.
+        # A suite writes several fixtures into one folder (a placement probe, then the
+        # map), so ownership keyed on a single filename deadlocks it against itself.
         $run = New-ScFixtureRun -Dir $script:dir -Names @('combat-death-probe.scx', 'combat-death.scx')
         Set-Content -LiteralPath (Join-Path $script:dir 'combat-death-probe.scx') -Value 'x'
         Get-ScForeignFixture -Run $run | Should -BeNullOrEmpty
@@ -220,12 +212,9 @@ Describe 'fixture ownership registry' {
     }
 
     It 'never asserts a culprit for a missing fixture (task 069, issue #97)' {
-        # The old message concluded "another worker's cleanup took it" from nothing but
-        # the file's absence; the day it mattered, the file had never been generated
-        # (worktree without .venv) and the accusation pointed every reader at a
-        # fleet-coordination race that did not exist. The message must state what was
-        # observed -- absent file, cause unknowable from here -- and both known ways
-        # this happens, never a named culprit.
+        # An absent file names no culprit: it may never have been generated (a worktree
+        # without .venv) or have been removed after generation. Blaming "another worker's
+        # cleanup" sends readers hunting a fleet-coordination race that need not exist.
         $run = New-ScFixtureRun -Dir $script:dir -Names @('a.scx')
         $thrown = $null
         try { Assert-ScFixtureStillMine -Run $run -MapPath (Join-Path $script:dir 'a.scx') }
@@ -245,10 +234,9 @@ Describe 'fixture ownership registry' {
 
 Describe 'fixture folder default' {
 
-    # THE HOLE THE REVIEW FOUND. Ownership keys on the declared NAME set, which separates
-    # this suite from every other suite -- and not at all from ANOTHER RUN OF ITSELF. Two
-    # concurrent runs of one suite with no -FixtureDir declare the same names in the same
-    # folder, so neither sees the other as foreign and one overwrites the other's fixture.
+    # Ownership keys on the declared NAME set: that separates this suite from every other
+    # suite, but not from ANOTHER RUN OF ITSELF -- two runs with no -FixtureDir declare
+    # the same names in the same folder, so neither sees the other as foreign.
 
     It 'keeps the suite historical folder when no agent is running (the by-hand case)' {
         Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-testmap' -Suite 'hud-row' -AgentTask '' |
@@ -270,8 +258,8 @@ Describe 'fixture folder default' {
     }
 
     It 'never leaves a worker in ANOTHER task finished folder' {
-        # test-control-groups defaulted to 00-t021 and three suites to 00-t022 -- the
-        # folders of the tasks that wrote them, not of the task running them.
+        # A hardcoded fallback names the folder of the task that WROTE the suite, never
+        # of the task running it.
         foreach ($stale in @('00-t021', '00-t022')) {
             Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback $stale -Suite 'hud-row' -AgentTask '023' |
                 Should -Be 'C:\g\Maps\BroodWar\00-t023-hud-row'
@@ -283,8 +271,7 @@ Describe 'fixture folder default' {
             Should -Be 'C:\g\Maps\BroodWar\00-tprobex-hud-row'
     }
 
-    # THE SECOND HOLE (task 059 / issue #80): two DIFFERENT suites of one task used to
-    # collide, because the folder was keyed on task alone.
+    # A folder keyed on the task alone collides two DIFFERENT suites of the same task.
     It 'gives two suites of the SAME task two DIFFERENT folders, so they cannot collide' {
         $saveLoad = Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-t051' -Suite 'save-load' -AgentTask '054'
         $hudRow   = Resolve-ScFixtureDir -GameDir 'C:\g' -Fallback '00-testmap' -Suite 'hud-row' -AgentTask '054'
@@ -302,10 +289,9 @@ Describe 'fixture folder default' {
 
 Describe 'fixture folder owner note (task 059 / issue #80)' {
 
-    # The refusal/wait messages used to assert "another run" as fact, which sent two
-    # readers hunting for a colliding worker that did not exist -- the file belonged to
-    # the same task's OTHER suite. Now the folder is exclusive to one task+suite, so the
-    # note can say precisely what the path proves and nothing it does not know.
+    # The folder is exclusive to one task+suite, so the note states only what the path
+    # proves. Asserting "another run" as fact sends readers hunting a colliding worker
+    # that need not exist: the file may belong to the same task's OTHER suite.
 
     It 'names the owning task and suite for a task+suite-scoped folder' {
         $note = Get-ScFixtureFolderOwnerNote -Dir 'C:\g\Maps\BroodWar\00-t054-save-load'
@@ -334,16 +320,12 @@ Describe 'fixture folder owner note (task 059 / issue #80)' {
     }
 }
 
-# ---------------------------------------------------------------------------
-# Get-ScCardState -- the command-card read-back parser (task 026)
-#
-# This one is here for a specific reason: an in-game run is the scarcest thing in this
-# repo (they serialise on a machine-wide lock and, on 2026-08-09, on the user's own
-# screen), and a parser that silently matches nothing turns a launch into a timeout and
-# a wasted slot. The lines below are the exact printf shapes in sc_card.cpp, including
+# Get-ScCardState -- the command-card read-back parser (AGENTS.md § "Oracles: what counts
+# as a read-back"). In-game runs serialise on a machine-wide lock and on the user's own
+# screen, so a parser that silently matches nothing turns a launch into a timeout and a
+# wasted slot. The fixtures below are the exact printf shapes in sc_card.cpp, including
 # the `%-7s` state padding and the ScLog timestamp prefix, so a change to either side
-# has to break a test here rather than a run there.
-# ---------------------------------------------------------------------------
+# breaks a test here rather than a run there.
 
 Describe 'Get-ScCardState' {
     BeforeAll {
@@ -359,7 +341,7 @@ Describe 'Get-ScCardState' {
             $path
         }
 
-        # A Ghost card, verbatim in shape from the 2026-08-09 read-back.
+        # A Ghost card, verbatim in shape from a live read-back.
         $script:GhostCardBody = @(
             'CARD [<L>] dialog=0x0068C148 root=0x0068C148 cardId=1 ovrSel=228 ovrSub=228 portrait=0x0059CE18 ptype=0x001 pset=1 penergy=51200 powner=0 set=(n=9 buttons=0x00517AB8) reason=8 rootrect=(500,358,639,479)'
             'CARD [<L>] slot=1 enabled ctrl=0x0AB10100 flags=0x00000009 icon=0x00E4 rect=(3,6,35,38) button=0x00517AB8 bslot=1 bicon=0x00E4 cond=0x004282D0 act=0x00424440 cparam=0 aparam=0 name=0x0298 dis=0x0000'
@@ -399,8 +381,7 @@ Describe 'Get-ScCardState' {
             $s.Flags     | Should -Be 0xB
             $s.HasButton | Should -BeTrue
             $s.BSlot     | Should -Be 7
-            # The two fields the whole task turns on: the action names the ability, the
-            # conditionParam names the tech.
+            # The action names the ability, the conditionParam names the tech.
             $s.Action    | Should -Be '00423730'
             $s.CondParam | Should -Be 10
         } finally { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }

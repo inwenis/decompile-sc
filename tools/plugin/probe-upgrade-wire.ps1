@@ -1,48 +1,28 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-THE FIRST QUESTION of task 029, answered on the wire: with an upgrade ALREADY RUNNING at
-a building, does the client put a second Upgrade command on the wire, or does it refuse?
+Measures on the wire whether the client sends a second Upgrade command while an upgrade is
+already running at a building, or refuses to.
 
 .DESCRIPTION
-AGENTS.md, "A player-input feature is unproven until the wire has been watched": task 025
-built over-cap production queueing against a receive-side handler for a command the client
-never sends, every offline test passed, and the feature was inert in game. So task 029
-starts here, before any design exists, and it starts with a MEASUREMENT.
+The measurement comes before any design because a player-input feature is unproven until
+the wire has been watched: a receive-side handler for a command the client never sends
+passes every offline test and is still inert in game (AGENTS.md § "Oracles: what counts as
+a read-back").
 
-The fixture is one Terran Engineering Bay (units.dat 122) owned by player 0, with enough
-minerals and gas for several upgrades. An Engineering Bay is the cheapest building that
-RESEARCHES and it offers two INDEPENDENT level-1 upgrades -- Terran Infantry Armor
+The answer is the count of `CMD id=0x32` (Upgrade) and `CMD id=0x30` (Tech) lines that the
+outgoing-command funnel queueCommand (0x00485BD0) logs between two markers; nothing is
+inferred from a frame (research/data/command-opcodes.tsv). -CardScan 1 reads the card
+dialog at 0x0068C148 out of memory both before and after the press, because a read taken
+only afterwards can be a false negative manufactured by the act itself (AGENTS.md §
+"Oracles: what counts as a read-back"). Click points come from the live dialog, never from
+a hardcoded coordinate, so a zero cannot be a missed click (AGENTS.md § "Command card
+clicks").
+
+The fixture is one Terran Engineering Bay (units.dat 122): the cheapest building that
+RESEARCHES, and it offers two INDEPENDENT level-1 upgrades -- Terran Infantry Armor
 (upgrades.dat 0) and Terran Infantry Weapons (upgrades.dat 7) -- so "queue a second
 upgrade" can be asked without dragging in the level-N/level-N+1 case.
-
-WHAT IS MEASURED, and how each half is read:
-
-  * THE WIRE. The plugin hooks the engine's outgoing-command funnel queueCommand
-    (0x00485BD0) and logs every command the game sends. `CMD id=0x32` is Upgrade,
-    `CMD id=0x30` is Tech (research/data/command-opcodes.tsv). The count of those lines
-    between two markers IS the answer to the question. Nothing is inferred from a frame.
-
-  * THE CARD, out of memory, before AND after (AGENTS.md, task 026: read a dialog's
-    CONTENT, never hash its pixels -- and take the read BEFORE the acting as well as
-    after, because a read taken only afterwards can be a false negative manufactured by
-    the act itself). -CardScan 1 walks the card dialog at 0x0068C148 and reports, per
-    slot, the control's visible/greyed bits and the Button record behind it. So this run
-    can say WHICH slot, in WHICH state, and whether the buttonset itself changed --
-    which a "the button looked dark" observation cannot.
-
-  * THE BUILDING'S ORDER, out of memory. -WorldScan 1 reports each unit's primary and
-    secondary order. A research that really started shows up there, so the precondition
-    of the whole question ("with an upgrade already running") is checked rather than
-    assumed.
-
-CLICKS, NOT HOTKEYS. Every card click point is computed from the LIVE dialog by
-Get-ScCardSlotPoint (rootRect + the control's own rect, halved) -- never a hardcoded
-coordinate, which is the ambiguity that cost task 022 the whole Ghost question: a probe
-that clicks a guessed centre cannot tell "the button refused" from "the click missed".
-
-This probe writes nothing into the game and installs no hook of its own; it runs in
--Mode hooktest, which is the one queueCommand hook and nothing else.
 
 .EXAMPLE
 ./tools/plugin/probe-upgrade-wire.ps1
@@ -58,9 +38,9 @@ param(
     [string]$FixtureDir,
     [int]$StartingMinerals = 3000,
     [int]$StartingGas = 3000,
-    # How long to give the research to visibly start before the second press. One
-    # Engineering Bay upgrade is 4000 game frames-ish; a couple of seconds is plenty to
-    # be unambiguously "already running" without waiting for it to finish.
+    # Time for the research to visibly start before the second press. An Engineering Bay
+    # upgrade runs ~4000 game frames, so a few seconds is unambiguously "already running"
+    # yet nowhere near finished.
     [int]$SettleSec = 4,
     [switch]$KeepOpen
 )
@@ -80,10 +60,9 @@ $step = 0
 $EBAY_TYPE = 122            # units.dat 122, richchk UnitId 'Terran Engineering Bay'
 $UPGRADE_CMD = '0x32'       # research/data/command-opcodes.tsv
 $TECH_CMD = '0x30'          # ditto
-# The two emitters research/data/command-ids.tsv lists for each of those ids. The one in
-# the 0x423xxx range is the build-menu button table's ACTION function -- which is what a
-# card Button record points at, so it is how an upgrade button is recognised without
-# guessing at icons or strings.
+# The emitters research/data/command-ids.tsv lists for those ids. The 0x423xxx one is the
+# build-menu button table's ACTION function, which is what a card Button record points at,
+# so it identifies an upgrade button without guessing at icons or strings.
 $UPGRADE_ACTION = '00423310'
 $TECH_ACTION = '00423350'
 
@@ -99,8 +78,7 @@ function Get-World { param([string]$Tag, [int]$TimeoutSec = 20)
 function Get-Card { param([string]$Tag, [int]$TimeoutSec = 20)
     Get-ScCardState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -TimeoutSec $TimeoutSec }
 
-# One line per slot, so the run's own transcript carries the card rather than a summary
-# of it. This is the evidence the design will be quoted against.
+# One line per slot, so the transcript carries the card itself rather than a summary of it.
 function Show-Card {
     param($Card, [string]$Tag)
     Write-Host ("       CARD[$Tag] cardId={0} portraitType=0x{1:x} portraitSet={2} setCount={3} shown={4} greyed={5} reason={6}" -f `
@@ -111,10 +89,11 @@ function Show-Card {
     }
 }
 
-# Every card slot whose Button ACTION is one of the two research/upgrade emitters.
-# `,@(...)` and not `@(...)`: a PowerShell function returning an empty array unrolls it
-# to $null at the call site, and `$null.Count` is an error -- which is exactly how the
-# first run of this probe died, at the one moment the answer was "none".
+# `,@(...)` and not `@(...)`: a PowerShell function returning an empty array unrolls it to
+# $null at the call site, and `$null.Count` throws -- precisely in the case this probe asks
+# about, where the answer is "no buttons". Callers must not re-wrap the result in @(): the
+# pipeline unrolls the comma wrapper exactly once, and a second wrapper nests the array
+# inside a one-element array that counts as one button however many the card holds.
 function Get-ResearchSlots {
     param($Card)
     ,@($Card.Slots | Where-Object { $_.HasButton -and ($_.Action -eq $UPGRADE_ACTION.ToUpperInvariant() -or $_.Action -eq $TECH_ACTION.ToUpperInvariant()) })
@@ -164,9 +143,8 @@ try {
     Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
     Wait-ScNoGameRunning
     $launchLock = Enter-ScLaunchLock -TaskId '029-upgrade-wire'
-    # hooktest mode: the ONE queueCommand hook, so `CMD id=` lines exist, and nothing
-    # else. No production-queue feature, no fan-out -- this run must measure VANILLA
-    # client behaviour, so the only thing in the picture is the logger.
+    # hooktest mode is the ONE queueCommand hook and nothing else: no feature code, no
+    # fan-out, so what reaches the wire is VANILLA client behaviour plus a logger.
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
         -Mode hooktest -LogCommands 1 -Circles 0 -HudRow 0 -WorldScan 1 -CardScan 1 `
         -InjectWindowedHelper WMode -NoLaunchLock `
@@ -242,10 +220,6 @@ try {
             ($card.PortraitType -eq $EBAY_TYPE)
         $script:idleCard = $card
         $script:idleSet = $card.PortraitSet
-        # NOT @(...) here: Get-ResearchSlots already comma-wraps, and the pipeline unrolls
-        # that outer wrapper exactly once. Wrapping again nests the array inside a
-        # one-element array, which the first fix did -- and it read as "1 button" for a
-        # card that had two.
         $rs = Get-ResearchSlots -Card $card
         Note ("idle card: cardId=$($card.CardId) buttonset=$($card.PortraitSet) shown=$($card.Shown) greyed=$($card.Greyed); research/upgrade buttons: " +
               (($rs | ForEach-Object { "slot$($_.Index)/$($_.State)/act=0x$($_.Action)/aparam=$($_.ActParam)" }) -join ' '))
@@ -296,10 +270,6 @@ try {
         Assert-That 'the card dialog was resolved' ($card.Ok)
         Show-Card -Card $card 'busy'
         $script:busyCard = $card
-        # NOT @(...) here: Get-ResearchSlots already comma-wraps, and the pipeline unrolls
-        # that outer wrapper exactly once. Wrapping again nests the array inside a
-        # one-element array, which the first fix did -- and it read as "1 button" for a
-        # card that had two.
         $rs = Get-ResearchSlots -Card $card
         Note ("busy card: cardId=$($card.CardId) buttonset=$($card.PortraitSet) shown=$($card.Shown) greyed=$($card.Greyed); research/upgrade buttons: " +
               (($rs | ForEach-Object { "slot$($_.Index)/$($_.State)/act=0x$($_.Action)/aparam=$($_.ActParam)" }) -join ' '))
@@ -310,11 +280,10 @@ try {
         Shot 'busy'
     }
 
-    # THE HEADLINE. Both presses aim at the point the IDLE card put the button at -- the
-    # same arithmetic, on the same dialog, that step 6 used to send a command
-    # successfully. That pairing is what makes a zero here mean "refused" rather than
-    # "missed": the identical click at the identical point demonstrably reached the wire
-    # four seconds earlier, so the only thing that changed is the building's state.
+    # Both presses aim at the point the IDLE card put the button at -- the same arithmetic,
+    # on the same dialog, that put a command on the wire seconds earlier. That pairing is
+    # what makes a zero here mean "refused" rather than "missed": the only difference
+    # between the two clicks is the building's state.
     function Press-WhereTheButtonWas {
         param([string]$Which, $IdleSlot, [int]$Times = 3)
         $mark = Get-ScLogLineCount -LogPath $LogPath
@@ -323,8 +292,8 @@ try {
         $nowState = if ($now) { $now.State } else { 'absent' }
         $nowAct = if ($now -and $now.HasButton) { "act=0x$($now.Action) aparam=$($now.ActParam)" } else { 'no button record' }
         Write-Host "       clicking slot $($IdleSlot.Index) at client ($($pt.X),$($pt.Y)) -- idle it was $($IdleSlot.State)/aparam=$($IdleSlot.ActParam), busy it is $nowState/$nowAct"
-        # Pressed $Times times, 300 ms apart. One press could in principle be lost to a
-        # frame boundary; three cannot all be.
+        # Repeat presses 300 ms apart: a single press could be lost to a frame boundary,
+        # a handful cannot all be.
         for ($i = 1; $i -le $Times; $i++) { Send-ScClick -Hwnd $hwnd -X $pt.X -Y $pt.Y -SettleMs 300 }
         Start-Sleep -Seconds 2
         $lines = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
@@ -346,12 +315,10 @@ try {
         $script:sameCount = Press-WhereTheButtonWas -Which 'the SAME upgrade again, while it runs' -IdleSlot $script:upgA
     }
 
-    # THE CONTROL FOR THE WHOLE MEASUREMENT. If pressing the cancel button takes the
-    # building out of the researching state and the upgrade buttons COME BACK, then the
-    # hide is caused by the in-progress upgrade and by nothing else -- and a second run
-    # of the same clicks, at the same points, on the same dialog, sends again. Without
-    # this step "the client sent nothing" would be compatible with "the clicks stopped
-    # working", which is the ambiguity task 022 lost a whole question to.
+    # THE CONTROL FOR THE WHOLE MEASUREMENT. If cancelling takes the building out of the
+    # researching state and the upgrade buttons come back, the hide is caused by the
+    # in-progress upgrade and by nothing else. Without this step "the client sent nothing"
+    # stays compatible with "the clicks stopped working".
     Step 'CANCEL the running upgrade, then press again -- does the refusal lift?' {
         $mark = Get-ScLogLineCount -LogPath $LogPath
         $cancelSlot = @($script:busyCard.Slots | Where-Object { $_.HasButton -and $_.Visible -and -not $_.Disabled }) |
@@ -379,10 +346,6 @@ try {
 
         $card = Get-Card 'idle-again'
         Show-Card -Card $card 'idle-again'
-        # NOT @(...) here: Get-ResearchSlots already comma-wraps, and the pipeline unrolls
-        # that outer wrapper exactly once. Wrapping again nests the array inside a
-        # one-element array, which the first fix did -- and it read as "1 button" for a
-        # card that had two.
         $rs = Get-ResearchSlots -Card $card
         $enabled = @($rs | Where-Object { $_.Visible -and -not $_.Disabled })
         Note ("after cancel the card offers $($enabled.Count) enabled upgrade button(s) again (busy card offered 0)")
@@ -442,8 +405,8 @@ $script:findings | ForEach-Object { Write-Host "  - $_" }
 
 Write-Host ''
 # close-game posts WM_CLOSE and waits for the DLL detach, but the kernel can still be
-# tearing the process down a moment later -- so give it a bounded wait rather than
-# sampling once and reporting a stranded process that is merely still exiting.
+# tearing the process down a moment later, so a single sample would report a stranded
+# process that is merely still exiting.
 $left = $null
 if ($gamePid -gt 0 -and -not $KeepOpen) {
     $deadline = (Get-Date).AddSeconds(15)

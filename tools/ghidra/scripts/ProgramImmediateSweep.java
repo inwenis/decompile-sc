@@ -1,27 +1,19 @@
-// PROGRAM-WIDE immediate-constant sweep: every instruction in the program, not a named
-// function list.
+// PROGRAM-WIDE immediate-constant sweep: every instruction, not a named function list.
+// ImmediateSweep.java asks "where does constant X appear inside functions I already know";
+// this asks the question before it -- "which functions mention X at all" -- for the case where
+// no function list exists yet and the constant is the only handle on the target.
 //
-// ImmediateSweep.java answers "where does constant X appear INSIDE these functions I already
-// know about". This script answers the question that comes before that one: "which functions
-// mention X at all", when nothing is known yet. Task 032 needed it because the renderer had
-// never been located -- there was no function list to sweep, and the only handle on the
-// viewport was the number 640 itself.
+// The `opKind` column matters: in `MOV EAX,[EDX + 0x280]` the 0x280 is a structure
+// displacement, in `CMP EAX,0x280` a screen width, and instruction text alone cannot tell them
+// apart. No companion body dump: program-wide that is the whole disassembly listing, derived
+// game content at a size nobody reads. Decompile hits with DecompileMany/analyze.ps1 instead.
 //
-// Output is one row per (instruction, operand, matched scalar), carrying the same `opKind`
-// column ImmediateSweep records and for the same reason: in `MOV EAX,[EDX + 0x280]` the 0x280
-// is a structure displacement, while in `CMP EAX,0x280` it is a screen width. A classifier
-// that only sees the instruction text cannot tell those apart.
-//
-// No companion body dump: program-wide, that would be the whole disassembly listing, which is
-// derived game content at a size nobody reads. Decompile the interesting hits individually
-// with DecompileMany/analyze.ps1 instead.
-//
-// Script args:
-//   1: output TSV path. <path>.manifest is the run's success signal.
-//   2: '+'-separated hex watch values (commas also accepted -- see the note in ImmediateSweep
-//      about cmd.exe splitting .bat arguments on commas).
-//   3: optional -- 'immediate' to emit only true immediate operands (drops the structure
-//      displacements, which for a value like 0x280 are the bulk of the noise). Default: all.
+// Args: <outTsv> <hexWatchList> [immediate]
+//   <path>.manifest is the run's success signal. Separate watch values with '+': analyzeHeadless
+//   is a .bat, so cmd.exe re-splits a comma-separated list into several arguments and the sweep
+//   then watches only the first value while still reporting success; ',' is accepted only for a
+//   list built outside cmd. 'immediate' drops the structure displacements, which for a value
+//   like 0x280 are the bulk of the noise.
 //
 //@category Headless
 
@@ -118,7 +110,7 @@ public class ProgramImmediateSweep extends GhidraScript {
         SweepUtil.writeManifest(outPath, rows, List.of("instructionsScanned=" + scanned));
     }
 
-    /** Same classification ImmediateSweep uses; see its comment for why the kind is recorded. */
+    /** Same classification ImmediateSweep uses, so the two sweeps' opKind columns compare. */
     private static String operandKind(int type) {
         if (OperandType.isDynamic(type) || OperandType.isAddress(type)) {
             return "mem-operand";

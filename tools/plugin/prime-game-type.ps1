@@ -6,33 +6,12 @@ No fixture, no gameplay, no assertions about a map: launch, one pick, verify, qu
 
 .DESCRIPTION
 'Custom Type' in HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft is ONE machine-wide
-value shared with the user's real play (task 050 -- its own 'Recent Maps' entries held
-real user map paths, read-only, which is what proves the key is live and shared rather
-than something this harness owns). Every suite that wants Use Map Settings reads this
-value first (Set-ScGameType, issue #29) and skips the pick when it already matches -- but
-the pick itself needs the foreground (task 027 half 2, `Send-ScDropdownPick`'s own
-SetCapture requirement), and the only sanctioned writer of the value is the game's own
-UI: hard rule 5 forbids writing the key directly, and there is no keyboard-only path
-around the capture requirement (probed, task 050 -- see AGENTS.md).
-
-So when the user's own play has left 'Custom Type' on something else, ONE visible pick
-is the only way to clear it -- and it clears it for every suite, not just whichever one
-happens to run next. Spending a WHOLE suite's fixture-generate-play-teardown cycle on
-that one pick is a bad trade (three minutes of the user's screen to buy two seconds of
-foreground); this script is only the pick. It launches VISIBLE (unavoidable -- the pick
-needs the foreground), walks to Create Game against a STOCK map already shipped with the
-working copy (nothing generated, nothing to declare, nothing to clean up -- this run owns
-no file), calls Set-ScGameType once, reads the combo back out of the engine's own dialog
-list to prove it landed, and quits without ever pressing Start -- no game is played.
-
-Per Send-ScDropdownPick's own docstring the raise lasts exactly one pick and the
-foreground is handed straight back afterwards (task 035 / issue #30), so the user's
-KEYBOARD FOCUS is theirs again within a couple of seconds; what they see for those few
-seconds is a StarCraft window, not their own input going somewhere else.
-
-Re-run this any time an off-screen suite throws the 'Custom Type' mismatch Set-ScGameType
-now names explicitly -- expected to keep happening, because the user's own games write
-this value too.
+value shared with the user's real play -- its 'Recent Maps' siblings hold real user map
+paths. Only the game's own UI may write it and the pick needs the foreground
+(Send-ScDropdownPick's SetCapture, no keyboard-only path around it), so one visible
+launch here clears it for every suite -- see AGENTS.md § "Game Type / `Custom Type`".
+That raise lasts exactly one pick and the foreground is handed straight back, so the
+user's keyboard focus is theirs again in a couple of seconds (AGENTS.md § "Foreground").
 
 .EXAMPLE
 ./tools/plugin/prime-game-type.ps1
@@ -51,10 +30,9 @@ $scriptDir = $PSScriptRoot
 
 $failures = 0
 
-# A STOCK map already shipped with the working copy -- nothing generated, no fixture-
-# folder bookkeeping (hard rule, 2026-08-09): this run owns no file, so none of that
-# machinery applies. Deterministic pick (sorted, first) rather than a hardcoded name, so
-# this does not depend on exactly which stock maps a given working copy carries.
+# A stock map ships with the working copy, so this run generates nothing and owns no
+# file -- no fixture-folder bookkeeping applies. Sorted-first rather than a hardcoded
+# name: which stock maps a working copy carries varies.
 $stock = @(Get-ChildItem -LiteralPath (Join-Path $GameDir 'Maps\BroodWar') -File `
     -Include '*.scm', '*.scx' -ErrorAction SilentlyContinue | Sort-Object Name)
 if ($stock.Count -eq 0) { throw "prime-game-type: no stock map found under $GameDir\Maps\BroodWar." }
@@ -89,14 +67,14 @@ try {
     Set-ScGameType -Hwnd $hwnd -LogPath $LogPath -Index 2
 
     # The oracle is the engine's own dialog list, not "Set-ScGameType returned without
-    # throwing" -- AGENTS.md "read a dialog's CONTENT from memory; never trust a return".
+    # throwing" -- AGENTS.md § "Oracles: what counts as a read-back".
     $now = Get-ScGameTypeControl -LogPath $LogPath
     Assert-That "the engine's own combo now reads 'Use Map Settings'" `
         ($now -and $now.Value -eq 'Use Map Settings') "(got '$(if ($now) { $now.Value } else { '<no dialog>' })')"
 }
 finally {
-    # Never started a game -- Start was never clicked -- so this always closes from the
-    # lobby screen. WM_CLOSE to every top-level window of the pid, same as every suite.
+    # Start is never pressed, so this always closes from the lobby screen: WM_CLOSE to
+    # every top-level window of the pid, same as every suite.
     if ($gamePid) {
         try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | Write-Host }
         catch { Write-Warning "prime-game-type: close-game.ps1 failed: $_" }

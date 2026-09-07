@@ -1,29 +1,16 @@
 // Immediate-constant sweep across a named set of functions.
 //
-// Answers "where is 12 (and 12*4, and 11, and 18) actually baked into the selection code, and
-// in what ROLE" -- a comparison is a policy check, an index scale is structural, and the two
-// need completely different treatment when raising the cap. This script finds and locates the
-// constants; the role is assigned by reading the surrounding instructions, which is why it also
-// dumps each target function's instruction stream to a companion file.
+// Answers where 12 (and 12*4, 11, 18) is baked into the selection code and in what ROLE: a
+// comparison is a policy check, an index scale is structural, and the two need different
+// treatment when raising the cap. The script locates the constants; the role is read off the
+// surrounding instructions, so each target function's instruction stream is dumped alongside.
 //
-// That companion dump is DERIVED GAME CONTENT (it is a disassembly listing of real functions).
-// It exists to be read during analysis and must stay under a gitignored scratch path -- see
-// AGENTS.md hard rule 1. Only the distilled constant table belongs in research/.
+// That companion dump is DERIVED GAME CONTENT -- a disassembly listing of real functions -- so
+// it must never be committed and must stay under a gitignored scratch path; see AGENTS.md
+// § "Hard rules". Only the distilled constant table belongs in research/.
 //
-// Each row carries `opKind`, which is what makes the role assignment downstream possible at
-// all. An x86 instruction can carry a memory displacement AND an immediate at once, and the two
-// mean opposite things for this analysis: in `CMP byte ptr [ESI + 0x1],0xc` the 0xc is the
-// SELECTION CAP being checked against a packet field, while the 0x1 is a structure offset. A
-// classifier that only sees the instruction text cannot tell which scalar it matched -- round 1
-// of task 005 classified that very instruction as a struct offset and dropped the single most
-// load-bearing cap site out of its cap-relevant set. So the operand kind is taken from Ghidra's
-// operand type here, at the point where the match is made, and carried through.
-//
-// Script args:
-//   1: output TSV path. Companion dump goes to <path>.body.txt. <path>.manifest is the run's
-//      success signal.
-//   2: spec file -- one function per line: label,functionAddrHex
-//   3: optional -- '+'-separated hex watch values. Default: c,b,30,2c,12,180,1b00
+// Args: 1 output TSV (companion dump <path>.body.txt, success signal <path>.manifest),
+//       2 spec file of label,functionAddrHex lines, 3 optional '+'-separated hex watch values.
 //
 //@category Headless
 
@@ -46,9 +33,8 @@ import java.util.Set;
 
 public class ImmediateSweep extends GhidraScript {
 
-    // 180 = 384 = sizeof(playersSelections). Added in round 2: it is pushed as a byte length
-    // beside a materialisation of 0x6284E8, which is the same class of value as the 0x30 and
-    // 0x6C0 already watched, and it is a relocation site.
+    // 0x180 = 384 = sizeof(playersSelections): pushed as a byte length beside a materialisation
+    // of 0x6284E8, the same class of array-size value as 0x30 and 0x6C0, and a relocation site.
     private static final String DEFAULT_WATCH = "c,b,30,2c,12,180,1b00";
 
     @Override
@@ -64,9 +50,8 @@ public class ImmediateSweep extends GhidraScript {
 
         // Split on '+' as well as ',': analyzeHeadless is a .bat, so cmd.exe splits the command
         // line on commas as well as spaces. A comma-separated watch list passed as ONE argument
-        // arrives as several, and the script silently watches only the first value -- which is
-        // exactly how an earlier run of this sweep came back watching [12] alone. Callers should
-        // use '+'; ',' is still accepted for a list built in a non-cmd context.
+        // arrives as several and the script then silently watches only the first value. Callers
+        // should use '+'; ',' stays accepted for a list built outside cmd.
         Set<Long> watch = new LinkedHashSet<>();
         for (String t : watchCsvRaw.split("[,+]")) {
             String s = t.trim();
@@ -161,7 +146,11 @@ public class ImmediateSweep extends GhidraScript {
     }
 
     /**
-     * What the matched scalar IS within its operand.
+     * What the matched scalar IS within its operand. An x86 instruction can carry a memory
+     * displacement AND an immediate at once, and they mean opposite things here: in
+     * `CMP byte ptr [ESI + 0x1],0xc` the 0xc is the selection cap checked against a packet field
+     * and the 0x1 is a structure offset. Instruction text cannot tell them apart, so the kind
+     * comes from Ghidra's operand type at the point where the match is made.
      *
      *   immediate    a literal operand in its own right -- CMP DL,0xc / PUSH 0x180 / RET 0xc.
      *   mem-operand  part of a memory reference -- the displacement in [ECX + 0xc], or a scale

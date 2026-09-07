@@ -1,33 +1,26 @@
 #Requires -Version 7
 <#
-Pester coverage for Get-ScConformanceVerdict (tools/plugin/conformance-verdict.ps1) --
-issue #68.
+Pester coverage for Get-ScConformanceVerdict (tools/plugin/conformance-verdict.ps1).
+A conformance run can print `PASS` and exit 0 having tested nothing, in two shapes:
 
-THE BUGS THIS PINS. test-random-conformance.ps1 could print `PASS` and exit 0 for two
-kinds of run that had tested nothing:
+  a) EVERY EPISODE SKIPPED BEFORE ACTING. Episodes count on entry, above the four
+     `continue` paths (SELECT, empty selection, SUPPLY, QUEUE), so six episodes that
+     all bail still count as six run, and nothing throws -- a verdict keyed on the
+     loop finishing cannot see it.
 
-  a) EVERY EPISODE SKIPPED BEFORE ACTING. `$script:episodesRun++` sat at the top of the
-     loop, above the four `continue` paths (SELECT, empty selection, SUPPLY, QUEUE), so a
-     run in which all six episodes bailed still printed `episodes run: 6 of 6` and
-     `PASS N checks, 0 failures, 6 episode(s)`. No exception was involved, so task 041's
-     INCOMPLETE protection -- which keys off the loop finishing -- never saw it.
+  b) THE SEAM NEVER REACHED. A burst exercises the multi-building selection bug only
+     when it drives a selection past the engine's five slots; below that a plugin
+     with the bug behaves identically to one without.
 
-  b) THE SEAM NEVER REACHED. A burst only tests task 038's bug if it drives a
-     MULTI-BUILDING selection past the engine's five slots; below that a plugin with the
-     bug behaves identically to one without it. The harness knew this and printed a loud
-     COVERAGE warning for it -- with PASS and exit 0 printed underneath, so nothing had to
-     act on it.
-
-Each test below states the OLD rule beside the new one and asserts they disagree, so the
-file records what was broken rather than only what is expected now. `Test-OldVerdict` is
-the pre-fix logic, transcribed from the four inline elseifs it replaced.
+The verdict therefore keys on episodes ACTED and on seam reaches, not on finishing.
 #>
 
 BeforeAll {
     . (Join-Path $PSScriptRoot '..' 'tools' 'plugin' 'conformance-verdict.ps1')
 
-    # The rule as it stood before issue #68, verbatim in behaviour: the only way to be
-    # anything other than PASS/FAIL was for the episode loop not to finish.
+    # The rejected rule: nothing but an unfinished loop could make a run anything other
+    # than PASS/FAIL. The tests assert the current verdict disagrees with it, so a
+    # regression back to it fails here.
     function Test-OldVerdict {
         param([bool]$Finished, [int]$EpisodesRun, [int]$SeamCounter, [int]$FailureCount)
         if (-not $Finished)          { return 'INCOMPLETE' }
@@ -39,8 +32,6 @@ BeforeAll {
 Describe 'Get-ScConformanceVerdict' {
 
     Context 'issue #68 (a): a run in which every episode skipped before acting' {
-        # Six episodes entered, none dispatched, nothing thrown, no failures recorded --
-        # because nothing ran to record one.
         BeforeAll {
             $script:v = Get-ScConformanceVerdict -Finished $true -EpisodesEntered 6 `
                 -EpisodesActed 0 -SeamReached 0 -FailureCount 0 -EpisodesPlanned 6
@@ -61,6 +52,8 @@ Describe 'Get-ScConformanceVerdict' {
     }
 
     Context 'issue #68 (b): a full run that never reached its seam' {
+        # A coverage warning gates nothing and gets ignored while the verdict printed
+        # beside it still says PASS, so a missed seam has to move the verdict itself.
         BeforeAll {
             $script:v = Get-ScConformanceVerdict -Finished $true -EpisodesEntered 6 `
                 -EpisodesActed 6 -SeamReached 0 -FailureCount 0 -EpisodesPlanned 6
@@ -76,8 +69,8 @@ Describe 'Get-ScConformanceVerdict' {
     }
 
     Context 'the same run with ONE seam reach' {
-        # The positive control for the clause above. Without this, a rule that returned
-        # INCOMPLETE for everything would pass both tests above and be useless.
+        # Positive control for the clause above: without it, a rule that returned
+        # INCOMPLETE for everything would pass both contexts above and be useless.
         BeforeAll {
             $script:v = Get-ScConformanceVerdict -Finished $true -EpisodesEntered 6 `
                 -EpisodesActed 6 -SeamReached 1 -FailureCount 0 -EpisodesPlanned 6
@@ -102,9 +95,8 @@ Describe 'Get-ScConformanceVerdict' {
     }
 
     Context 'real failures outrank the coverage clauses' {
-        # Deliberate ordering. A run with findings is a FAIL: reporting INCOMPLETE would
-        # bury the findings behind a complaint about coverage, and the findings are the
-        # more actionable half.
+        # Reporting INCOMPLETE for a run with findings would bury them behind a complaint
+        # about coverage, and the findings are the more actionable half.
         BeforeAll {
             $script:v = Get-ScConformanceVerdict -Finished $true -EpisodesEntered 6 `
                 -EpisodesActed 6 -SeamReached 0 -FailureCount 3 -EpisodesPlanned 6
@@ -122,8 +114,8 @@ Describe 'Get-ScConformanceVerdict' {
     }
 
     It 'refuses a caller whose counters cannot both be true' {
-        # acted > entered means the two increments have drifted apart in the runner, which
-        # would silently weaken every clause above. Fail loudly instead.
+        # acted > entered means the runner's two counters have drifted apart, which would
+        # silently weaken every clause above. Fail loudly instead.
         { Get-ScConformanceVerdict -Finished $true -EpisodesEntered 2 -EpisodesActed 5 `
             -SeamReached 1 -FailureCount 0 } | Should -Throw -ExpectedMessage '*exceeds entered*'
     }

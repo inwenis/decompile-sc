@@ -41,22 +41,16 @@ from richchk.util.fileutils import CrossPlatformSafeTemporaryNamedFile
 # CHK sections, as raw bytes
 # ---------------------------------------------------------------------------
 # A CHK file is a flat sequence of `<4-byte name><i32 size><size bytes>` chunks.
-# This generator reads the template's chunks, replaces the payload of the two or
-# three it must change, and writes the rest back BYTE FOR BYTE.
+# This generator replaces the payload of the few chunks it must change and writes
+# every other chunk back BYTE FOR BYTE.
 #
-# It deliberately does NOT decode-and-re-encode the CHK through richchk, which
-# is what task 009-015's generator did. Task 016 diffed both sides of that
-# round-trip section by section and found richchk 0.3.0 rewrites sections it was
-# never asked to touch:
-#   * UNIS/UNIx (unit settings): 4-18 bytes differ inside the base-weapon-damage
-#     array, on every map tried;
-#   * MRGN (locations): a 64-location vanilla-StarCraft section is re-emitted
-#     padded to the 255-location Brood War size (1280 -> 5100 bytes);
-#   * SWNM (switch names): a 1024-byte section is ADDED to maps that had none.
-# None of those is asked for by this tool, and a generator whose output differs
-# from its template in ways nobody chose is a generator whose failures cannot be
-# reasoned about. Reading the CHK out of the MPQ, and writing it back in, still
-# goes through richchk's StormLib binding -- that half was never the problem.
+# Do NOT decode-and-re-encode the CHK through richchk: diffed section by section,
+# richchk 0.3.0 rewrites sections it was never asked to touch -- UNIS/UNIx
+# base-weapon-damage bytes differ on every map; a 64-location MRGN is re-emitted
+# padded to the 255-location Brood War size (1280 -> 5100 bytes); a 1024-byte SWNM
+# is ADDED to maps that had none. Output that differs from its template in ways
+# nobody chose has failures nobody can reason about. Reading the CHK out of the MPQ
+# and writing it back still goes through richchk's StormLib binding; that half is fine.
 _CHK_MPQ_PATH = "staredit\\scenario.chk"
 
 ChkSection = collections.namedtuple("ChkSection", "name payload")
@@ -196,26 +190,15 @@ START_LOCATION_UNIT_ID = 214
 _VALID_OWNER_HP_SHIELD_ENERGY = 0x01 | 0x02 | 0x04 | 0x08
 
 # The `hp` byte is a PERCENTAGE of the unit type's maximum, 1-100 (staredit.net CHK
-# spec, the same source as the rest of this record layout), and it only applies
-# because bit 0x02 of the valid-properties mask above is set -- which it has been
-# since task 009, with every generated fixture written at 100.
+# spec); it applies only because bit 0x02 of the valid-properties mask above is set.
+# Offset 0x11 of the 36-byte record, right after the owner byte at 0x10 -- checked by
+# packing hp=30 through _UNIT_RECORD_FMT rather than counted by eye.
 #
-# It sits at offset 0x11 of the 36-byte record, right after the owner byte at 0x10.
-# Checked rather than counted by eye: packing a record through _UNIT_RECORD_FMT with
-# hp=30 puts 30 at byte 0x11, and 0x19 -- which an earlier draft of this comment
-# named -- is the high byte of the `units in hangar` u16 at 0x18, which this tool
-# always writes as zero. Nothing in the generator ever addresses the field by a
-# literal offset (it packs the named struct field), so no map was ever wrong; the
-# offset is documentation, and in this repo documentation of an offset is the
-# deliverable.
-#
-# Task 019 exposed it as --unit-hp because a full-health 125-point Lurker takes
-# roughly twenty Hydralisk shots to kill, and the combat test spent minutes waiting
-# for the first one. It is the cheapest speed-up available that keeps every property
-# the fixture needs: same unit type, same evidence, same inability to shoot back --
-# only the number of shots each victim absorbs changes. The effect is asserted in
-# game rather than assumed: tools/plugin/test-combat-death.ps1 fails if the first
-# death takes longer than its deadline.
+# --unit-hp exists because a full-health 125-point Lurker absorbs ~20 Hydralisk shots;
+# lowering it gets the combat fixture's first death in seconds instead of minutes while
+# changing nothing else about the victims (same type, same inability to shoot back).
+# Asserted in game, not assumed: tools/plugin/test-combat-death.ps1 fails if the first
+# death misses its deadline.
 MIN_HP_PERCENT = 1
 MAX_HP_PERCENT = 100
 
@@ -261,83 +244,70 @@ FORC_SHARED_VISION = 0x08
 # else can be passed as a raw units.dat integer id.
 #
 # Every id here is read off richchk's own units.dat enum
-# (.venv/Lib/site-packages/richchk/model/richchk/unis/unit_id.py, `UnitId`), which
-# is the source that caught task 013's zealot=64 mistake (64 is Protoss Probe;
-# Zealot is 65). Printed straight out of that enum:
+# (.venv/Lib/site-packages/richchk/model/richchk/unis/unit_id.py, `UnitId`), never
+# from memory: 64 is the Probe, not the Zealot. Printed straight out of that enum:
 #     0 Terran Marine        3 Terran Goliath      5 Terran Siege Tank (Tank Mode)
 #    37 Zerg Zergling       38 Zerg Hydralisk     39 Zerg Ultralisk
 #    65 Protoss Zealot      66 Protoss Dragoon   103 Zerg Lurker
 UNIT_TYPE_IDS = {
     "marine": 0,
-    # Ghost (task 022): the only vanilla unit with an UNTARGETED, ENERGY-costed ability
-    # (Personnel Cloaking, command 0x21) that a generated map can switch on -- which is
-    # what makes the energy half of "does every unit pay its own cost" testable in game
-    # at all. It is also the unit in the user's own report ("a cloaked ghost did not
-    # attack enemies at some point").
+    # Ghost: the only vanilla unit with an UNTARGETED, ENERGY-costed ability (Personnel
+    # Cloaking, command 0x21) that a generated map can switch on -- what makes the
+    # energy half of "does every unit pay its own cost" testable in game at all.
     "ghost": 1,
     "medic": 34,
     "goliath": 3,
     "siege-tank": 5,
     "zergling": 37,
-    # Hydralisk is the default ENEMY (task 019): a ranged ground attacker, so it can
-    # hurt a block of units standing next to it without having to path into the
-    # middle of them, and it is cheap enough that a handful of them kill a Lurker
-    # slowly rather than wiping the boxed selection below the 12-unit cap.
+    # Hydralisk is the default ENEMY: a ranged ground attacker, so it can hurt a block
+    # of units standing next to it without pathing into the middle of them, and cheap
+    # enough that a handful kill a Lurker slowly rather than wiping the boxed selection
+    # below the 12-unit cap.
     "hydralisk": 38,
     "ultralisk": 39,
     "zealot": 65,
     "dragoon": 66,
-    # Lurker is the fan-out fixture for untargeted ABILITIES (task 015/016): Burrow is
-    # innate for lurkers -- no research, so it works on a map with no tech set at all --
-    # it takes no target, and it leaves a per-unit state a plugin can read back and
-    # assert on (CUnit+0xDC bit 0x10, SC_UNIT_FLAG_BURROWED).
-    #
-    # It is ALSO the task-019 combat fixture's player unit, for a second reason: an
-    # UNBURROWED Lurker has no weapon at all (its only attack, the subterranean
-    # spines, is a burrowed-only weapon). A block of them walked into an enemy
-    # therefore takes fire without killing the enemy back, so the enemy force
-    # survives and the death trickle is steady instead of being decided by which
-    # side wins a fight. Confirmed in game rather than assumed -- see
-    # tools/README-test-map.md "Combat variant".
+    # Lurker is the fan-out fixture for untargeted ABILITIES: Burrow is innate (no
+    # research, so it works with no tech set at all), takes no target, and leaves a
+    # per-unit state a plugin can assert on (CUnit+0xDC bit 0x10, SC_UNIT_FLAG_BURROWED).
+    # It is ALSO the combat fixture's player unit: an UNBURROWED Lurker has no weapon
+    # (its spines are burrowed-only), so a block walked into an enemy takes fire without
+    # killing the enemy back, and the death trickle is steady instead of being decided
+    # by which side wins. Confirmed in game: tools/README-test-map.md "Combat variant".
     "lurker": 103,
-    # Neither of these is ever PLACED by this tool. They are named because they are what
-    # the production fixtures TRAIN, and `--unit-build-time probe=8` is the fixture
-    # speed-up task 031 exists for -- a flag needs a name for its target even when the
-    # target only ever comes out of a building. Both cross-checked against the template's
-    # own UNIx entry rather than taken from a table: SCV 60 hit points / build 300 (20 game
-    # seconds) / 50 minerals, Probe 20 hit points / build 300 / 50 minerals.
+    # Neither is ever PLACED by this tool; they are named because the production
+    # fixtures TRAIN them and `--unit-build-time probe=8` needs a name for its target.
+    # Both cross-checked against the template's own UNIx entry rather than a table: SCV
+    # 60 hit points / build 300 (20 game seconds) / 50 minerals, Probe 20 / 300 / 50.
     "scv": 7,
     "probe": 64,
-    # Task 025's production fixture. A Command Center is the cheapest way to get a
-    # building that TRAINS -- it produces SCVs (50 minerals, 1 supply) and it supplies
-    # 10 of its own, so a fixture needs it plus a couple of depots and nothing else.
+    # The production fixture. A Command Center is the cheapest building that TRAINS --
+    # it produces SCVs (50 minerals, 1 supply) and supplies 10 of its own, so a fixture
+    # needs it plus a couple of depots and nothing else.
     "command-center": 106,
     "supply-depot": 109,
     "barracks": 111,
-    # Task 029's upgrade-queue fixture. An Engineering Bay is the cheapest building
-    # that RESEARCHES: it offers two independent level-1 upgrades -- Terran Infantry
-    # Armor (upgrades.dat 0) and Terran Infantry Weapons (upgrades.dat 7) -- so two
-    # distinct items can be queued at one building without touching the messy
-    # level-N/level-N+1 case, and it needs no prerequisite building of its own.
-    # An Academy is the companion fixture for the OTHER opcode: it carries techs
-    # (0x30 Tech) as well as an upgrade (0x32), so a mixed queue is expressible.
+    # The upgrade-queue fixture. An Engineering Bay is the cheapest building that
+    # RESEARCHES: two independent level-1 upgrades -- Terran Infantry Armor
+    # (upgrades.dat 0) and Terran Infantry Weapons (upgrades.dat 7) -- so two distinct
+    # items queue at one building without the messy level-N/level-N+1 case, and it
+    # needs no prerequisite building. An Academy is the companion for the OTHER opcode:
+    # it carries techs (0x30 Tech) as well as an upgrade (0x32), so a mixed queue is
+    # expressible.
     "engineering-bay": 122,
     "academy": 112,
-    # Task 028's cancel fixture. Its command card carries the Cancel button -- the
-    # one that emits "cancel the last queued item" (actionParam 0xFE), the only wire
-    # form a plugin holding queue overflow can be asked to serve -- at slot 9 with
-    # no other button sharing that slot, needs no Pylon to produce (a Gateway
-    # would), and supplies 9 psi of its own, so a queue of Probes needs no second
-    # building to be legal.
-    #
-    # A Terran producer would in fact have done: slot 9 there is shared with Land and
-    # Lift Off, but their conditions are complementary to Cancel's, so the control
-    # shows Cancel exactly while something is queued (research/production-queue.md
-    # 8.3, measured in game after the button table suggested otherwise).
+    # The cancel fixture. Its command card carries the Cancel button -- the one that
+    # emits "cancel the last queued item" (actionParam 0xFE), the only wire form a
+    # plugin holding queue overflow can be asked to serve -- at slot 9 with no other
+    # button sharing that slot, needs no Pylon to produce (a Gateway would), and
+    # supplies 9 psi of its own, so a queue of Probes needs no second building.
+    # A Terran producer would also do: its slot 9 is shared with Land and Lift Off, but
+    # their conditions are complementary to Cancel's, so Cancel shows exactly while
+    # something is queued (research/production-queue.md 8.3, measured in game).
     "nexus": 154,
 }
 
-# Which race each named unit type belongs to. Only used to pick a sensible default
+# Which race each named unit type belongs to. Only consulted to pick a sensible default
 # for the placed units' owner; a Terran player can own Lurkers perfectly well under
 # Use Map Settings. Anything passed as a raw id defaults to Terran and can be
 # overridden with --race.
@@ -353,26 +323,23 @@ UNIT_TYPE_RACES = {
 }
 
 # ---------------------------------------------------------------------------
-# STARTING RESOURCES (task 025)
+# STARTING RESOURCES
 # ---------------------------------------------------------------------------
-# A CHK has no "starting minerals" field. Under every game type but Use Map Settings the
-# engine hands out its own melee default (50 ore, no gas); under Use Map Settings -- the
-# type every suite in this repo plays its fixtures under -- a map gets whatever its own
-# TRIGGERS give it. So a fixture that has to afford more than one unit needs exactly one
-# trigger: "Always -> Set Resources".
+# A CHK has no "starting minerals" field. Under Use Map Settings -- the type every suite
+# here plays its fixtures under -- a map gets only what its own TRIGGERS give it (every
+# other game type hands out the melee default: 50 ore, no gas). So a fixture that has to
+# afford more than one unit needs exactly one trigger: "Always -> Set Resources".
 #
-# That is the ONLY trigger this tool will write, and it carries no Victory, Defeat or End
-# Scenario action, so the property the TRIG note in generate_map() protects -- the mission
-# must not be able to end itself -- still holds. validate_map re-derives that from the
-# bytes rather than trusting this comment.
+# That is the ONLY trigger this tool writes. It carries no Victory, Defeat or End
+# Scenario action, so the mission still cannot end itself (TRIG note in generate_map());
+# validate_map re-derives that from the bytes rather than trusting this comment.
 #
-# Layout, from the same source as the rest of this file: richchk's own decoded models
+# Layout from richchk's own decoded models
 # (.venv/Lib/site-packages/richchk/model/chk/trig/decoded_trigger{,_action,_condition}.py
 # and .../richchk/transcoder/richchk/transcoders/trig/actions/set_resources_action_transcoder.py),
-# which name every field of the 20-byte condition and 32-byte action and say exactly which
-# of them Set Resources fills. CONFIRMED BY ARITHMETIC against the size the rest of this
-# file already assumes for a trigger: 16*20 + 64*32 + 4 + 27 + 1 == 2400, which is the
-# divisor validate_map has used since task 016.
+# which name every field of the 20-byte condition and 32-byte action and say which of
+# them Set Resources fills. CONFIRMED BY ARITHMETIC: 16*20 + 64*32 + 4 + 27 + 1 == 2400,
+# the per-trigger size validate_map divides by.
 TRIG_CONDITIONS = 16
 TRIG_CONDITION_BYTES = 20
 TRIG_ACTIONS = 64
@@ -491,32 +458,28 @@ def trigger_action_ids(trig_payload: bytes) -> set[int]:
 
 
 # ---------------------------------------------------------------------------
-# TECH STATE (task 022)
+# TECH STATE
 # ---------------------------------------------------------------------------
-# Every untargeted ability in vanilla that COSTS the acting unit something needs
-# research: Stim Packs (HP), Cloaking Field / Personnel Cloaking (energy). Burrow is
-# the one exception, and only for Lurkers -- which is why task 016's fixture used
-# Lurkers and why no fixture before this one could test a per-unit COST at all.
+# Every untargeted vanilla ability that COSTS the acting unit something needs research:
+# Stim Packs (HP), Cloaking Field / Personnel Cloaking (energy). Burrow is the one
+# exception, and only for Lurkers -- without tech state a fixture cannot test a
+# per-unit COST at all.
 #
-# A Use Map Settings map carries the tech state in PTEx (Brood War, 44 techs). Layout,
-# from the staredit.net CHK spec, and CONFIRMED BY ARITHMETIC against the template on
-# disk: 44*12 + 44*12 + 44 + 44 + 44*12 == 1672, which is exactly the section's size in
-# (2)Fading Realm.scx. A layout that reproduces the real section size to the byte, for a
-# section this tool did not write, is not a guess.
+# A Use Map Settings map carries the tech state in PTEx (Brood War, 44 techs). Layout
+# from the staredit.net CHK spec, CONFIRMED BY ARITHMETIC against the template on disk:
+# 44*12 + 44*12 + 44 + 44 + 44*12 == 1672, exactly the section's size in (2)Fading
+# Realm.scx -- a layout that reproduces a section this tool did not write, to the byte.
 #
-# THE PER-PLAYER ARRAYS ARE PLAYER-MAJOR: index = player * 44 + tech (task 026).
+# THE PER-PLAYER ARRAYS ARE PLAYER-MAJOR: index = player * 44 + tech. Do not write them
+# TECH-major: `tech * 12 + player` and `player * 44 + tech` agree at exactly one point,
+# tech 0 for player 0 (Stim Packs for the human slot), so a tech-major write passes
+# every Stim-only test and silently lands another player's tech for anything else --
+# `personnel-cloaking` (tech 10) written tech-major is byte 120, which the engine reads
+# as player 2's tech 32; player 0's tech 10 stays 0 and the Ghost's Cloak button comes
+# up GREYED, with nothing in this file able to catch it.
 #
-# This tool had it TECH-major, and that was wrong in a way nothing here could catch:
-# `tech * 12 + player` and `player * 44 + tech` agree at exactly one point, tech 0 for
-# player 0 -- which is Stim Packs for the human slot, the only tech any fixture had ever
-# proved worked. `--tech-researched personnel-cloaking` (tech 10) wrote byte 120, which
-# the engine reads as player 2's tech 32; player 0's tech 10 stayed 0, the Ghost's Cloak
-# button came up GREYED, and task 022's whole "the ability row is inert" reading was that
-# and nothing else. The user spotted it from the screen before we spotted it from the
-# code: "the ghosts didn't have the cloak ability unlocked".
-#
-# The indexing is now read out of THIS BINARY rather than out of prose. The PTEx applier
-# 0x004CB7D0 (research/command-card.md 6) walks the section like this:
+# The staredit.net prose is ambiguous; the PTEx applier 0x004CB7D0 in THIS BINARY
+# (research/command-card.md 6) is not. It walks the section like this:
 #
 #     0x004CB870  SUB EBX,0x2c            ; EBX = player * 44  -- the OUTER step
 #     0x004CB873  SUB ESI,0x18            ; ESI = player * 24  -- the destination array
@@ -528,10 +491,9 @@ def trigger_action_ids(trig_payload: bytes) -> set[int]:
 #     0x004CB8EE  MOV DL,byte ptr [EBP + EDX + -0x478]  ; playerAlreadyResearched[that]
 #     0x004CB8FB  MOV byte ptr [ESI + ECX + 0x58cf44],DL ; -> techResearched[player][tech]
 #
-# and the five stack bases it uses are 0x688 / 0x478 / 0x268 / 0x23C / 0x210 below EBP,
-# whose successive differences are 0x210, 0x210, 0x2C, 0x2C -- i.e. exactly the five
-# sub-arrays below, in order. PTEC (the 24-tech vanilla section, applier 0x004CB670) has
-# the same shape with 24 in place of 44.
+# and its five stack bases 0x688 / 0x478 / 0x268 / 0x23C / 0x210 below EBP differ by
+# 0x210, 0x210, 0x2C, 0x2C -- exactly the five sub-arrays below, in order. PTEC (the
+# 24-tech vanilla section, applier 0x004CB670) has the same shape with 24 in place of 44.
 PTEX_TECHS = 44
 PTEX_PLAYERS = 12
 PTEX_OFF_PLAYER_AVAILABLE = 0                                        # [player][tech]
@@ -618,50 +580,46 @@ def read_techs_researched(payload: bytes, player: int) -> list[int]:
 
 
 # ---------------------------------------------------------------------------
-# UNIT SETTINGS (task 031)
+# UNIT SETTINGS
 # ---------------------------------------------------------------------------
 # A Use Map Settings map may override, per unit type, its hit points, shield points,
-# armor, BUILD TIME, mineral cost and gas cost. Task 031 wanted the build time: a suite
-# that trains nine SCVs spends 153 of its 224 seconds waiting for them at 20 game seconds
-# each, which measured out at 68% of that whole run. Set the build time to one second and
-# that term goes away without changing a single thing the suite asserts on.
+# armor, BUILD TIME, mineral cost and gas cost. Build time is the fixture speed-up: a
+# suite that trains nine SCVs at 20 game seconds each spends about two thirds of its
+# wall time waiting for them; at one second that term goes away without changing a
+# single thing the suite asserts on.
 #
-# THE SECTION THE ENGINE READS IS UNIx, NOT UNIS. The task said not to assume it, and
-# there are four independent reasons, the last of which is the one that counts:
-#
+# THE SECTION THE ENGINE READS IS UNIx, NOT UNIS. Four independent reasons, the last of
+# which is the one that counts:
 #  1. The Brood War template carries no UNIS AT ALL. (2)Fading Realm.scx holds UNIx (4168
 #     bytes), PTEx, UPGx and TECx, and none of UNIS/PTEC/UPGS/TECS/UPGR.
 #  2. StarCraft.exe holds three CHK section-application plans at .rdata 0x500560,
 #     0x500588 and 0x5005B0, each a run of {section table, count} pairs. The third --
 #     the Brood War one -- points at the table at 0x5004A8, whose fifteen entries are
-#     STR MTXM THG2 MASK UNIx UPGx TECx PUNI PUPx PTEx UNIT UPRP MRGN TRIG COLR. There is
-#     no UNIS entry in it, so on a Brood War map a UNIS section is never applied at all.
-#     The other two plans list both, with UNIx AFTER UNIS, so it wins there as well.
-#  3. That same table gives `PTEx -> 0x004CB7D0`, which is the exact applier address task
-#     026 verified independently against the running game (research/command-card.md 6).
-#     A table that is right about the one entry we already proved is a table worth
-#     reading, and this is what makes 1 and 2 evidence rather than a plausible story.
-#  4. AND IT WAS READ BACK OUT OF A RUNNING GAME, which is the only one of the four that
-#     could have contradicted the others. tools/plugin/probe-unit-settings.ps1 builds ONE
-#     map whose UNIx says a Marine has 25 hit points and whose (added) UNIS says 12, loads
-#     it, and reads hp out of CUnit -- so the answer distinguishes UNIx from UNIS from
-#     neither, instead of merely confirming what was expected. See that script's header
-#     for the reading.
+#     STR MTXM THG2 MASK UNIx UPGx TECx PUNI PUPx PTEx UNIT UPRP MRGN TRIG COLR. No UNIS
+#     entry, so on a Brood War map a UNIS section is never applied at all. The other two
+#     plans list both, with UNIx AFTER UNIS, so it wins there as well.
+#  3. That same table gives `PTEx -> 0x004CB7D0`, the applier address verified
+#     independently against the running game (research/command-card.md 6) -- what makes
+#     1 and 2 evidence rather than a plausible story.
+#  4. READ BACK OUT OF A RUNNING GAME, the only one of the four that could contradict
+#     the others: tools/plugin/probe-unit-settings.ps1 builds ONE map whose UNIx says a
+#     Marine has 25 hit points and whose (added) UNIS says 12, loads it, and reads hp out
+#     of CUnit -- so the answer distinguishes UNIx from UNIS from neither. See that
+#     script's header for the reading.
 #
-# THE LAYOUT, verified the same way the PTEx layout was: it reproduces, to the byte, the
-# real stats of every unit anyone here can check by hand, out of a section this tool did
-# not write. Marine 40hp / build 360 / 50 minerals; SCV 60 / 300 / 50; Command Center
-# 1500 / 1800 / 400; Supply Depot 500 / 600 / 100; Barracks 1000 / 1200 / 150; Lurker
-# 125 hp / 50 minerals / 100 gas. And the sizes: 228 + 912 + 456 + 228 + 456 + 456 + 456
-# + 456 + 260 + 260 == 4168, which is exactly the section's size on disk.
+# THE LAYOUT reproduces, to the byte, the real stats of every unit checked by hand, out
+# of a section this tool did not write: Marine 40hp / build 360 / 50 minerals; SCV 60 /
+# 300 / 50; Command Center 1500 / 1800 / 400; Supply Depot 500 / 600 / 100; Barracks
+# 1000 / 1200 / 150; Lurker 125 hp / 50 minerals / 100 gas. Sizes: 228 + 912 + 456 + 228
+# + 456 + 456 + 456 + 456 + 260 + 260 == 4168, exactly the section's size on disk.
 #
 # BUILD TIME IS IN GAME SECONDS x 15 -- 300 for the SCV's 20, 360 for the Marine's 24,
 # 600 for the Supply Depot's 40, 1200 for the Barracks' 80, 1800 for the Command Center's
-# 120. Five units agreeing on one divisor is what makes it a unit and not a coincidence,
-# and the flags below take game seconds so nobody has to remember it.
+# 120. Five units agreeing on one divisor makes it a unit and not a coincidence; the
+# flags below take game seconds so nobody has to remember it.
 #
-# HIT POINTS ARE STORED x256, the same fixed point CUnit+0x08 uses, which is what makes
-# the in-game read-back a direct comparison rather than a conversion.
+# HIT POINTS ARE STORED x256, the same fixed point CUnit+0x08 uses, so the in-game
+# read-back is a direct comparison rather than a conversion.
 UNIX_UNITS = 228
 UNIX_WEAPONS = 130                 # UNIS, the vanilla section, has 100 here
 UNIX_OFF_USE_DEFAULT = 0                                             # u8  [unit]
@@ -751,11 +709,9 @@ def set_unit_settings(payload: bytes, settings: dict[str, list[tuple[int, int]]]
         for unit_id, amount in pairs:
             if amount < 0:
                 raise ValueError(f"--unit-{field} {unit_id}={amount}: must not be negative")
-            # A build time of ZERO is refused rather than written. Nothing here knows what
-            # the engine's production tick does when the remaining time starts at 0 -- it
-            # may complete instantly, it may divide by it to draw the progress bar -- and
-            # a fixture whose behaviour nobody has looked at is worse than a slow one. One
-            # game second is ~0.7 real seconds, which is as fast as any suite has needed.
+            # ZERO is refused rather than written: nothing here knows what the production
+            # tick does when the remaining time starts at 0 (instant completion? a divide
+            # for the progress bar?), and an unobserved fixture is worse than a slow one.
             if field == "build-time" and amount == 0:
                 raise ValueError(
                     f"--unit-build-time {unit_id}=0: refusing. Nothing in this repo has "
@@ -804,28 +760,24 @@ DEFAULT_UNIT_COUNT = 36
 GRID_SPACING_PX = 32
 
 # ---------------------------------------------------------------------------
-# The COMBAT variant (task 019)
+# The COMBAT variant
 # ---------------------------------------------------------------------------
-# Everything above produces a fixture with nothing hostile in it, which is exactly
-# what tasks 015-017 needed and exactly why none of them could prove what happens
-# when a selected unit DIES. --enemy-count turns on a second, COMPUTER-owned block
-# of units, so a test can walk the player's group into it and get one killed.
+# A fixture with nothing hostile in it cannot prove what happens when a selected unit
+# DIES. --enemy-count turns on a second, COMPUTER-owned block of units, so a test can
+# walk the player's group into it and get one killed.
 #
-# No AI script and no trigger is involved: a preplaced unit on a computer slot sits
-# on its default order and shoots what walks into its range. That is option (c) of
-# the three this task listed, and the only one that needs no new CHK section at all.
-# What makes it a claim rather than a guess is the in-game run --
-# tools/plugin/test-combat-death.ps1 boxes the player's units, walks them east and
-# asserts FROM INSIDE THE PROCESS that they start dying while the mission carries on.
-# See tools/README-test-map.md "Combat variant" for the evidence.
+# No AI script and no trigger is involved: a preplaced unit on a computer slot sits on
+# its default order and shoots what walks into its range, so no new CHK section is
+# needed. The claim is proved in game -- tools/plugin/test-combat-death.ps1 boxes the
+# player's units, walks them east and asserts FROM INSIDE THE PROCESS that they start
+# dying while the mission carries on (tools/README-test-map.md "Combat variant").
 #
-# The block goes DUE EAST of the player's start location by default: far enough that
-# nothing is in anyone's acquisition range when the mission starts (the map must
-# still idle until the test decides otherwise), and close enough that ONE right-click
-# at the right-hand edge of a 640x480 screen orders the player's units into it. The
-# camera opens centred on the start location and never moves on its own, so a
-# destination further out than about +310px cannot be clicked at all without
-# scrolling the view first.
+# The block goes DUE EAST of the start location by default: far enough that nothing is
+# in anyone's acquisition range when the mission starts (the map must still idle until
+# the test decides otherwise), and close enough that ONE right-click at the right-hand
+# edge of a 640x480 screen orders the player's units into it. The camera opens centred
+# on the start location and never moves on its own, so a destination further out than
+# about +310px cannot be clicked at all without scrolling the view first.
 ENEMY_OFFSET_X_PX = 448          # 14 tiles east of the start location
 ENEMY_OFFSET_Y_PX = 0
 ENEMY_SPACING_PX = 48
@@ -1169,9 +1121,9 @@ def generate_map(
         damaged_energy_percent=damaged_energy_percent,
     )
 
-    # THE ENEMY FORCE (task 019). Placed relative to the SAME start location the
-    # player's block is centred on, so the two are a documented, fixed distance apart
-    # whatever template supplied the coordinates.
+    # THE ENEMY FORCE. Placed relative to the SAME start location the player's block is
+    # centred on, so the two are a documented, fixed distance apart whatever template
+    # supplied the coordinates.
     enemy_records: list[UnitRecord] = []
     if enemy_count:
         enemy_slot = player if enemy_owner == ENEMY_OWNER_PLAYER else pick_opponent_slot(player)
@@ -1185,7 +1137,7 @@ def generate_map(
         )
         # Off the map is not "somewhere awkward", it is a record the engine cannot
         # place at all -- and a silently dropped enemy force is a fixture that looks
-        # like a combat map and behaves like the old idle one.
+        # like a combat map and behaves like the idle one.
         bx0, by0, bx1, by1 = block_bounds(enemy_records)
         if bx0 < 0 or by0 < 0 or bx1 >= map_w * 32 or by1 >= map_h * 32:
             raise ValueError(
@@ -1212,15 +1164,14 @@ def generate_map(
     # Single player, no hostile pressure: the chosen slot becomes a human slot, every
     # other slot goes inactive (no computer players) bar one unit-less computer.
     #
-    # OWNR 0x06 ("Human (Open Slot)"), NOT 0x02 (HUMAN_OCCUPIED). An earlier version
-    # wrote 0x02 and the Play Custom dialog refused every map this generator produced
-    # with "This map does not have a slot for a human participant" (Human Slots: 0).
-    # 0x02 is what the game writes at RUNTIME for a slot a human has already taken;
-    # what makes a slot available in the lobby is 0x06, which is what every stock
-    # playable map carries for its human slots.
+    # OWNR 0x06 ("Human (Open Slot)"), NOT 0x02 (HUMAN_OCCUPIED). 0x02 is what the game
+    # writes at RUNTIME for a slot a human has already taken; a map carrying it makes the
+    # Play Custom dialog refuse with "This map does not have a slot for a human
+    # participant" (Human Slots: 0). 0x06 is what makes a slot available in the lobby,
+    # and what every stock playable map carries for its human slots.
     # keep_ownr is for a template that is ALREADY a playable single-player scenario -- a
     # stock campaign mission, say. Rewriting its slots would delete the mission's own
-    # actors and leave a map whose triggers reference players that no longer exist.
+    # actors and leave a map whose triggers reference players that do not exist.
     if not keep_ownr:
         ownr_idx = require_section(sections, "OWNR", template)
         old = sections[ownr_idx].payload
@@ -1231,19 +1182,17 @@ def generate_map(
         slots[pick_opponent_slot(player)] = OWNR_COMPUTER
         sections = replace_section(sections, "OWNR", bytes(slots), template)
 
-        # THE SLOT'S RACE MUST BE AN EXPLICIT ONE, NOT "User Selectable" (task 016).
+        # THE SLOT'S RACE MUST BE AN EXPLICIT ONE, NOT "User Selectable".
         #
-        # This is what made every melee-template map play as a melee game no matter what
-        # the lobby's Game Type said. A Blizzard LADDER map carries SIDE = 0x05 "User
-        # Selectable" for its human slots, because a ladder player picks a race in the
-        # lobby. Load such a map under Use Map Settings and StarCraft still hands that
-        # slot the standard melee starting units for whichever race got picked -- proved
-        # in-process on 2026-08-08: the plugin's UNITSTATE reported
+        # A Blizzard LADDER map carries SIDE = 0x05 "User Selectable" for its human slots,
+        # because a ladder player picks a race in the lobby. Load such a map under Use Map
+        # Settings and StarCraft still hands that slot the standard melee starting units
+        # for whichever race got picked, so the map plays as melee whatever the lobby's
+        # Game Type says -- proved in-process: the plugin's UNITSTATE reported
         # types=[0x29:4 0x23:3 0x2A:1] (four Drones, three Larva, one Overlord) on a
-        # 36-Lurker map, with the Game Type combo explicitly set to Use Map Settings from
-        # its list. A stock campaign map, which plays correctly under exactly the same
-        # menu path, carries a FIXED race for its human slot (Enslavers02b: 0x02 Protoss).
-        # Writing a fixed race here is the difference.
+        # 36-Lurker map with the Game Type combo explicitly set to Use Map Settings. A
+        # stock campaign map, which plays correctly under the same menu path, carries a
+        # FIXED race for its human slot (Enslavers02b: 0x02 Protoss).
         side_idx = require_section(sections, "SIDE", template)
         old_side = sections[side_idx].payload
         if len(old_side) != 12:
@@ -1265,22 +1214,18 @@ def generate_map(
         )
         sections = replace_section(sections, "SIDE", bytes(sides), template)
 
-        # AND THE HUMAN MUST LAND ON THE SLOT THAT OWNS THE UNITS (task 016).
+        # AND THE HUMAN MUST LAND ON THE SLOT THAT OWNS THE UNITS.
         #
         # FORC's last four bytes are per-force property flags; bit 0x01 is "randomize
         # start location" (staredit.net CHK spec). A Blizzard ladder map sets it --
         # (2)Fading Realm.scx carries 0x01 on Force 1, which every slot belongs to.
-        #
-        # What was OBSERVED, not what the engine is assumed to do internally: across
-        # three in-game loads of an otherwise-finished fixture, one came up with the
-        # plugin logging `player=1/1/1` and `UNITSTATE n=0` on a black screen, while the
-        # other two logged player 0 and the expected 36 units -- same map file, same menu
-        # path, same lobby. So with this bit set the human's own player id is not fixed,
-        # and when it is not slot 0 they own none of the placed units. Three runs since
-        # clearing it, all `player=0/0/0`; that is a small sample, and the reason to
-        # clear the bit is that a fixture must not depend on which slot the engine picks
-        # at all. The other three bits (allied, allied victory, shared vision) are left
-        # alone.
+        # OBSERVED, not assumed: across three in-game loads of an otherwise-finished
+        # fixture, one came up with the plugin logging `player=1/1/1` and `UNITSTATE n=0`
+        # on a black screen while the other two logged player 0 and the expected 36
+        # units -- same map file, same menu path, same lobby. With this bit set the
+        # human's player id is not fixed, and on any slot but 0 they own none of the
+        # placed units; a fixture must not depend on which slot the engine picks at all.
+        # The other three bits (allied, allied victory, shared vision) are left alone.
         forc_idx = require_section(sections, "FORC", template)
         forc = bytearray(sections[forc_idx].payload)
         if len(forc) != 20:
@@ -1291,14 +1236,12 @@ def generate_map(
         # AND, FOR A COMBAT MAP, THE TWO SLOTS MUST NOT BE ALLIES.
         #
         # FORC's first eight bytes are the per-slot force assignment; bit 0x02 of a
-        # force's flag byte is "allied" (staredit.net CHK spec, same source as the
-        # 0x01 above). Two slots in the SAME force with that bit set start the game
-        # allied, and allied units do not shoot each other -- the map would load, the
-        # enemy would sit there politely, and the test would time out waiting for a
-        # death with nothing to point at. Refused rather than rewritten: clearing
-        # another map's alliance settings is an edit nobody asked for, and every
-        # template this tool is documented against (the ladder map, whose Force 1
-        # flag byte is 0x01 and becomes 0x00 above) already passes.
+        # force's flag byte is "allied" (staredit.net CHK spec). Two slots in the SAME
+        # force with that bit set start the game allied, and allied units do not shoot
+        # each other -- the map would load, the enemy would sit there politely, and the
+        # test would time out waiting for a death. Refused rather than rewritten:
+        # clearing another map's alliance settings is an edit nobody asked for, and the
+        # ladder template (Force 1 flag byte 0x01, cleared to 0x00 above) already passes.
         if enemy_count and enemy_owner == ENEMY_OWNER_COMPUTER:
             opponent = pick_opponent_slot(player)
             f_player, f_enemy = forc[player], forc[opponent]
@@ -1313,7 +1256,7 @@ def generate_map(
                 )
         sections = replace_section(sections, "FORC", bytes(forc), template)
 
-    # THE MISSION MUST NOT BE ABLE TO END ITSELF (task 016).
+    # THE MISSION MUST NOT BE ABLE TO END ITSELF.
     #
     # Under Use Map Settings the engine runs no melee win/lose logic of its own: a game
     # ends when a trigger says Victory, Defeat or End Scenario, and otherwise never. Stock
@@ -1325,10 +1268,9 @@ def generate_map(
     #   (1)Enslavers02b.scm (CAMPAIGN) carries 30 triggers, six of which end the game --
     #   "Force 1: current player commands at most 0 [Men] -> Defeat" and five more on
     #   specific unit ids the mission requires.
-    # The campaign case was also confirmed in game (task 016, 2026-08-08): with triggers
-    # kept, "Congratulations! You are victorious!" about nine seconds in. None of it has
-    # anything to do with the CHK round-trip that was previously suspected -- task 016
-    # diffed a campaign template's TRIG across that round-trip and it is byte-identical.
+    # Confirmed in game: with the campaign triggers kept, "Congratulations! You are
+    # victorious!" about nine seconds in. The CHK round-trip is NOT the cause: a campaign
+    # template's TRIG is byte-identical across the richchk round-trip.
     #
     # An empty TRIG section is a legal, common thing for a CHK to hold -- (2)Fading
     # Realm.scx ships a zero-length MBRF -- and it is what makes a generated map sit
@@ -1338,10 +1280,10 @@ def generate_map(
             if find_section(sections, name) >= 0:
                 sections = replace_section(sections, name, b"", template)
 
-        # STARTING RESOURCES (task 025). The template's own triggers have just been
-        # dropped, so the ONE trigger written back here is the only trigger the fixture
-        # carries -- see the STARTING RESOURCES block at the top of this file for why a
-        # UMS fixture needs it at all and why it cannot end the game.
+        # STARTING RESOURCES. The template's own triggers have just been dropped, so the
+        # ONE trigger written back here is the only trigger the fixture carries -- see
+        # the STARTING RESOURCES block at the top of this file for why a UMS fixture
+        # needs it at all and why it cannot end the game.
         if starting_minerals is not None or starting_gas is not None:
             sections = replace_section(
                 sections, "TRIG",
@@ -1356,8 +1298,8 @@ def generate_map(
             "victory/defeat triggers as well."
         )
 
-    # TECH STATE (task 022). Without it a fixture cannot test any ability with a
-    # per-unit COST -- see the PTEx block at the top of this file.
+    # TECH STATE. Without it a fixture cannot test any ability with a per-unit COST --
+    # see the PTEx block at the top of this file.
     if tech_researched:
         ptex_idx = find_section(sections, "PTEx")
         if ptex_idx < 0:
@@ -1371,18 +1313,15 @@ def generate_map(
             template,
         )
 
-    # UNIT SETTINGS (task 031). Opt-in and additive: with no --unit-* flag this block does
-    # not run, no section is touched, and the file this tool writes is byte-for-byte what
-    # it wrote before. That property is not decoration -- three other tasks were mid-run
-    # against this generator when it was added.
+    # UNIT SETTINGS. Opt-in and additive: with no --unit-* flag this block does not run,
+    # no section is touched, and the output is byte-for-byte identical to a run without
+    # the flag -- diff_against_template and every flag-less caller rely on that.
     if unit_settings:
         unix_idx = find_section(sections, "UNIx")
         if unix_idx < 0:
-            # NOT quietly falling back to UNIS. The Brood War section-application table at
-            # 0x5004A8 has no UNIS entry, so on a map the engine treats as Brood War a
-            # UNIS override is never applied -- a fallback here would write bytes that
-            # look right in the file and do nothing in the game, which is precisely the
-            # class of failure the PTEx bug was.
+            # NOT quietly falling back to UNIS: on a Brood War map a UNIS section is never
+            # applied (UNIT SETTINGS block above), so a fallback would write bytes that
+            # look right in the file and do nothing in the game.
             raise ValueError(
                 f"Template {template} has no UNIx section, so this tool cannot override "
                 f"unit settings on it. Use a Brood War template: the engine's Brood War "
@@ -1461,11 +1400,10 @@ def validate_map(
     # seconds rather than minutes, so a run that silently kept the default would look
     # like a slow map rather than a broken flag.
     #
-    # With a pre-damaged tail (task 022) the check is on the COUNT AT EACH VALUE, not
-    # on the set of values: the whole point of that fixture is that some units can
-    # afford an ability's cost and some cannot, and "10 healthy + 26 damaged" would
-    # satisfy a set-based check while testing something entirely different from
-    # "24 healthy + 12 damaged".
+    # With a pre-damaged tail the check is on the COUNT AT EACH VALUE, not on the set of
+    # values: the point of that fixture is that some units can afford an ability's cost
+    # and some cannot, and "10 healthy + 26 damaged" would satisfy a set-based check
+    # while testing something entirely different from "24 healthy + 12 damaged".
     healthy_wanted = unit_count - damaged_count
     got = collections.Counter(r.hp for r in matching)
     want = collections.Counter()
@@ -1615,7 +1553,7 @@ def validate_map(
                 f"placed units"
             )
 
-    # --- the enemy force (task 019) -------------------------------------------
+    # --- the enemy force ------------------------------------------------------
     # Everything asserted here is STRUCTURE, read back out of the finished file: the
     # right number of the right unit type on the right slot, far enough from the
     # player's block that neither side is in the other's lap on the first frame, and
@@ -1661,10 +1599,10 @@ def validate_map(
                     f"(0x02). Allied units do not fight."
                 )
 
-    # THE TECH STATE IS THE FIXTURE, NOT A DETAIL (task 022). Every ability with a
-    # per-unit cost needs research, so a map that quietly lost this byte produces a
-    # command card with no ability button on it -- a run that fails on "the key emitted
-    # nothing", minutes later and several steps away from the cause.
+    # THE TECH STATE IS THE FIXTURE, NOT A DETAIL. Every ability with a per-unit cost
+    # needs research, so a map that quietly lost this byte produces a command card with
+    # no ability button on it -- a run that fails on "the key emitted nothing", minutes
+    # later and several steps away from the cause.
     if tech_researched:
         ptex_idx = find_section(sections, "PTEx")
         if ptex_idx < 0:
@@ -1678,11 +1616,10 @@ def validate_map(
                 f"{player}; it lists {have}"
             )
 
-    # THE UNIT SETTINGS ARE READ BACK OUT OF THE FILE (task 031), never replayed from
-    # what the caller asked for. That distinction is the whole of the PTEx lesson: a tool
-    # that verifies its own write with its own intent verifies nothing. It is still only
-    # the FILE's word -- what the ENGINE does with these bytes is proved in a running game
-    # by tools/plugin/probe-unit-settings.ps1, and nowhere here.
+    # THE UNIT SETTINGS ARE READ BACK OUT OF THE FILE, never replayed from what the
+    # caller asked for: a tool that verifies its own write with its own intent verifies
+    # nothing (the PTEx lesson). It is still only the FILE's word -- what the ENGINE does
+    # with these bytes is proved in a running game by tools/plugin/probe-unit-settings.ps1.
     unix_read: dict[int, dict] = {}
     if unit_settings:
         unix_idx = find_section(sections, "UNIx")
@@ -1836,7 +1773,7 @@ def main() -> int:
              "stock map ships triggers that end the game, and they fire within seconds "
              "of loading a generated map (see the TRIG note in generate_map).",
     )
-    # --- the combat variant (task 019) ---------------------------------------
+    # --- the combat variant --------------------------------------------------
     parser.add_argument(
         "--enemy-count", type=int, default=0,
         help="Place this many COMPUTER-owned units near the player's block, so the "
@@ -1929,11 +1866,11 @@ def main() -> int:
         "--starting-gas", type=int, default=None,
         help="The vespene counterpart of --starting-minerals; same single trigger.",
     )
-    # --- unit settings, the map's own UNIx override (task 031) ---------------
-    # One flag per field rather than one --unit-setting FIELD:TYPE=VALUE, because the
-    # fields are NOT interchangeable in the way that matters: build time is setup and is
-    # safe almost everywhere, while hit points are frequently the thing a suite measures.
-    # Separate flags let each carry its own warning, and make a risky one greppable.
+    # --- unit settings, the map's own UNIx override ---------------------------
+    # One flag per field rather than one --unit-setting FIELD:TYPE=VALUE: the fields are
+    # NOT interchangeable in the way that matters -- build time is setup and safe almost
+    # everywhere, while hit points are frequently the thing a suite measures. Separate
+    # flags let each carry its own warning, and make a risky one greppable.
     parser.add_argument(
         "--unit-build-time", type=str, action="append", default=None, metavar="TYPE=SECONDS",
         help="Override a unit type's BUILD TIME, in GAME seconds, for this map only "
@@ -1986,8 +1923,7 @@ def main() -> int:
 
     try:
         techs = [resolve_tech_id(t) for t in (args.tech_researched or [])]
-        # Field name -> [(unit id, value)]. Empty when no --unit-* flag was passed, which
-        # is what keeps the generator's output byte-identical for every existing caller.
+        # Field name -> [(unit id, value)]; empty when no --unit-* flag was passed.
         unit_settings = {
             field: [parse_unit_setting(s) for s in specs]
             for field, specs in (

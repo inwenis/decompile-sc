@@ -1,38 +1,17 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Task 071. Proves stage 3 lets mouse input REACH x=640..799 at 800 wide -- the
-window-proc mouse clamps no longer pin every x to 639 -- while everything at
-640 (flag off) is byte-for-byte stock, and the CONSOLE is deliberately NOT
-moved (renderer-viewport.md 18: relocating its bounds moved the hit-test, not
-the pixels, so the move was dropped from what ships).
+Proves stage 3 lets mouse input reach x=640..799 at 800 wide (the window-proc
+clamps stop pinning every x to 639) while everything at 640 (flag off) stays
+byte-for-byte stock and the console keeps its stock rect.
 
 .DESCRIPTION
-Two arms, one oracle each -- the engine's own world scan and portrait, never
-pixels.
-
-  stock  -Widescreen 0, observe. The geometry the user plays today. A click on
-         the aimed unit selects it; the minimap steers; no WIDESCREEN verdict,
-         no stage-3 clamp. This is acceptance-criterion "at 640 everything is
-         exactly as it was" measured, and the POSITIVE control for the s3 arm's
-         absence checks.
-  s3     -Widescreen 1 -WidescreenStage 3, hooktest. Asserts: the patch table
-         ACTIVE with the 8 mouse-clamp sites in; the camera steered until the
-         Nexus sits PAST x=639, then a click AT it selects THAT Nexus (the
-         thing no run before stage 3 could do -- a click past the seam); a
-         seam-crossing drag selects it; the minimap still steers; and -- the
-         honest negative -- the console is STILL at its stock 640 rect
-         (StatBtn 496..639), because stage 3 widens input, not the console.
-
-THE SEAM, counted (AGENTS.md task 041): the whole point is a click at x>639.
-The suite asserts the click point is past the stock edge BEFORE it clicks and
-FAILS if the steer did not put it there -- a run that never crosses the seam
-cannot detect the clamp regression, whatever its verdict.
-
-Presentation: WMode drives the input (posted clicks reach every engine path);
-its window crops to 640 but that does not matter here -- selection is engine
-arithmetic on stored coordinates, presentation-independent. The cnc-ddraw
-picture of the wide window is task 070's; this suite is the input proof.
+Two arms, one oracle each: the engine's own world scan and portrait, never pixels.
+The stock arm is the POSITIVE control for the s3 arm's absence checks. The s3 arm
+asserts the click point is PAST the stock edge before it clicks -- a run that never
+crosses the seam cannot detect a clamp regression (AGENTS.md § "Oracles: what
+counts as a read-back"). WMode drives input: posted clicks reach every engine path,
+and its 640 crop cannot skew selection, which is arithmetic on stored coordinates.
 
 .EXAMPLE
 ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/test-widescreen-input-800.ps1
@@ -62,7 +41,7 @@ function Get-WsDefine([string]$Name) {
     if (-not $m) { throw "test-widescreen-input-800: $Name not found in $patchHeader" }
     [int]$m.Matches[0].Groups[1].Value
 }
-$STOCK_W = Get-WsDefine 'SC_WS_STOCK_W'        # 640
+$STOCK_W = Get-WsDefine 'SC_WS_STOCK_W'
 $SCREEN_W = Get-WsDefine 'SC_WS_SCREEN_W'             # the width the table was generated for
 # The stage-3 patch bytes this suite expects in the log, derived from $SCREEN_W so the
 # assertions move with the geometry: le32 of a value, and the imm8 tile count.
@@ -70,10 +49,16 @@ function Hex32([int]$v) { ([BitConverter]::GetBytes([uint32]$v) | ForEach-Object
 $CLIP_HEX    = "C745F880020000 -> C745F8$(Hex32 $SCREEN_W)"          # cursor.clip.right: mov [ebp-8],640 -> W
 $CLAMP_HEX   = "83E914 -> 83E9$(($SCREEN_W / 32).ToString('X2'))"    # scroll.clamp.x.tiles: sub ecx,20 -> W/32
 $TRIGGER_HEX = "3D7E020000 -> 3D$(Hex32 ($SCREEN_W - 2))"            # scroll.right.trigger: cmp eax,638 -> W-2
+# console.hittest.xguard: the cave body the plugin logs after the window's runtime
+# `jmp`. The 0x280 is the console.pcx WIDTH (stock 640, whatever the screen is), so it
+# is a constant here, not derived from $SCREEN_W: cmp ecx,640 / jl +3 / xor eax,eax
+# / ret / cmp [0x6D6430],ecx (the displaced memo probe).
+$XGUARD_HEX  = "[81F9800200007C0333C0C3390D30646D00 + jmp back]"
 
 $NEXUS_TYPE = 154
-# 070's measured stock console rects -- asserted UNCHANGED in both arms (stage 3
-# does not move the console).
+# Stock console rects, asserted UNCHANGED in both arms: moving the console's bounds
+# moves the hit-test, not the pixels (renderer-viewport.md 18), so stage 3 widens
+# input and leaves the console where it is.
 $STATBTN_STOCK = @(496, 354, 639, 479)
 $MINIMAP_STOCK = @(0, 315, 137, 479)
 
@@ -94,15 +79,13 @@ function Step([string]$What, [scriptblock]$Body) {
 }
 
 # A behavioural claim the OFF-SCREEN HARNESS CANNOT FEED is REPORTED, never
-# asserted (070's Assert-Input, and AGENTS.md task 041's seam-coverage rule).
-# A posted playfield click past x=639 does not reach the engine off-screen:
-# WMode remaps posted input to its 640-wide window (070 §17.2: out of the
-# shim's contract past x=640), and cnc-ddraw off-screen registers no posted
-# playfield click at all (070 measured 0/8). So x>639 SELECTION is provable
-# only with a real mouse on a real desktop; here it is measured and REPORTED,
-# and it does NOT move the verdict. What the verdict rests on is what the
-# harness CAN prove: the patches are present and correct, the console is
-# unmoved, and x<640 selection is unbroken.
+# asserted (AGENTS.md § "Diagnostics and reporting"). A posted playfield click
+# past x=639 does not reach the engine off-screen: WMode remaps posted input to
+# its 640-wide window (out of the shim's contract past x=640), and cnc-ddraw
+# off-screen registers no posted playfield click at all (measured 0/8). x>639
+# SELECTION is provable only with a real mouse on a real desktop, so it does NOT
+# move the verdict, which rests on what the harness CAN prove: the patches
+# present and correct, the console unmoved, x<640 selection unbroken.
 $script:reported = @()
 function Report-Input {
     param([string]$What, [bool]$Selected, [string]$Detail = '')
@@ -138,19 +121,24 @@ function Invoke-Arm {
             $ws = @(Get-Content -LiteralPath $logPath | Select-String -Pattern 'WIDESCREEN (ACTIVE|INCOMPLETE|REFUSED)')
             $clamps = @(Get-Content -LiteralPath $logPath | Select-String -Pattern 'WIDESCREEN patch stage=3 mouse\.clamp')
             $rects = @(Get-Content -LiteralPath $logPath | Select-String -Pattern 'WIDESCREEN patch stage=3 click\.searchrect')
-            # issue #113 follow-up: the edge-scroll-right trigger moves with the
-            # clamp (638 -> screenW-2), or the whole widened band scrolls the camera.
+            # The edge-scroll-right trigger moves with the clamp (638 -> screenW-2),
+            # or the whole widened band scrolls the camera.
             $scroll = @(Get-Content -LiteralPath $logPath | Select-String -Pattern 'WIDESCREEN patch stage=3 scroll\.right\.trigger')
-            # issue #113 crash: the relocated grid must carry a committed guard on
-            # each side, or an off-edge dialog rect reads grid_base-1 and faults.
+            # The relocated dirty grid must carry a committed guard on each side, or
+            # an off-edge dialog rect reads grid_base-1 and faults.
             $guard = @(Get-Content -LiteralPath $logPath | Select-String -Pattern 'WIDESCREEN: grid guard OK')
-            # issue #113 follow-up: the physical cursor clip (ClipCursor rect reset at
-            # 0x004215E0) must widen with the clamp, or the real mouse is pinned to
-            # x<640 and can never reach the moved scroll trigger.
+            # The physical cursor clip (ClipCursor rect reset at 0x004215E0) widens with
+            # the clamp, or the real mouse is pinned to x<640 and can never reach the
+            # widened scroll trigger.
             $clip = @(Get-Content -LiteralPath $logPath | Select-String -Pattern 'WIDESCREEN patch stage=3 cursor\.clip\.right')
-            # issue #113 follow-up: the camera's scroll clamp moves from 20 to 25 tiles
-            # (0x0049BBE6), or the right map edge shows a stale band past the map.
+            # The camera's scroll clamp moves from the stock 20 tiles to W/32 (0x0049BBE6),
+            # or the right map edge shows a stale band past the map.
             $clampSite = @(Get-Content -LiteralPath $logPath | Select-String -Pattern 'WIDESCREEN patch stage=3 scroll\.clamp\.x\.tiles')
+            # Unguarded, the console hit-test 0x004D1140 asks the 640-wide console
+            # region about x>=640, answers "console", and right-click dies in the band
+            # beside it; the stage-3 cave guards it by x. A cave line carries its
+            # runtime address ("cave@") and the body; assert both were written.
+            $xguard = @(Get-Content -LiteralPath $logPath | Select-String -Pattern 'WIDESCREEN patch stage=3 console\.hittest\.xguard')
             if ($Widescreen -eq '1') {
                 Assert-That 'the stage-3 physical cursor clip was widened to the new screen' `
                     ($clip.Count -eq 1 -and $clip[0].Line.Contains($CLIP_HEX)) "($(($clip|ForEach-Object Line) -join ' | '); want '$CLIP_HEX')"
@@ -164,12 +152,15 @@ function Invoke-Arm {
                     ($scroll.Count -eq 1 -and $scroll[0].Line.Contains($TRIGGER_HEX)) "($(($scroll|ForEach-Object Line) -join ' | '); want '$TRIGGER_HEX')"
                 Assert-That 'the relocated dirty grid has a committed guard on both sides' `
                     ($guard.Count -eq 1) "($(($guard|ForEach-Object Line) -join ' | '))"
+                Assert-That 'the stage-3 console hit-test x guard was caved (right-click beside the console)' `
+                    ($xguard.Count -eq 1 -and $xguard[0].Line.Contains('cave@') -and $xguard[0].Line.Contains($XGUARD_HEX)) "($(($xguard|ForEach-Object Line) -join ' | '); want '$XGUARD_HEX')"
             }
             else {
                 Assert-That 'no widescreen verdict exists at stock' ($ws.Count -eq 0)
                 Assert-That 'no stage-3 clamp was written at stock' ($clamps.Count -eq 0)
                 Assert-That 'no stage-3 click-rect was written at stock' ($rects.Count -eq 0)
                 Assert-That 'no edge-scroll trigger was moved at stock' ($scroll.Count -eq 0)
+                Assert-That 'no console hit-test guard was caved at stock' ($xguard.Count -eq 0)
                 Assert-That 'no relocated grid guard at stock' ($guard.Count -eq 0)
             }
         }
@@ -217,9 +208,10 @@ function Invoke-Arm {
                 $nx = @($w0.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $NEXUS_TYPE })[0]
                 Assert-That 'the world scan found the Nexus' ($null -ne $nx)
                 if ($null -eq $nx) { return }
-                # want client x ~64px past the stock edge: origin.Left = nexus.X - 704;
-                # minimap click-to-centre bakes the stock 320/208px half-extents (item 17),
-                # so a wider screen only moves where the seam is, not this arithmetic.
+                # want client x ~64px past the stock edge: origin.Left = nexus.X - 704.
+                # Minimap click-to-centre bakes the stock 320/208px half-extents
+                # (renderer-viewport.md item 17), so a wider screen only moves where the
+                # seam is, not this arithmetic.
                 $tileX = [int][math]::Round(($nx.X - 704 + 320) / 32)
                 $tileY = [int][math]::Round(($nx.Y - 240 + 208) / 32)
                 $p = Get-ScMinimapPoint -MapTilesW 128 -MapTilesH 96 -TileX $tileX -TileY $tileY
@@ -241,8 +233,7 @@ function Invoke-Arm {
                     Start-Sleep -Milliseconds 600
                     $sel = Get-StatQ "seam-sel-$t"
                 }
-                # REPORTED, not asserted (see Report-Input): the off-screen
-                # harness cannot feed a playfield click past x=639.
+                # REPORTED, not asserted -- see Report-Input.
                 Report-Input "click at ($cx,$cy), x>639" ($sel.PortraitType -eq $NEXUS_TYPE) "(ptype $($sel.PortraitType))"
                 Shot 'seam-selected'
 
@@ -323,11 +314,9 @@ finally {
     }
 }
 
-# The seam this suite exists to exercise -- a playfield click PAST x=639 -- is
-# the one thing the off-screen harness cannot feed (see Report-Input). Name it
-# beside the verdict every run so a PASS is never mistaken for "x>639 input was
-# proven" (AGENTS.md task 041). The behavioural proof is a real mouse on a real
-# desktop.
+# Name the unfeedable seam beside the verdict every run so a PASS is never mistaken
+# for "x>639 input was proven" (AGENTS.md § "Diagnostics and reporting"); the
+# behavioural proof is a real mouse on a real desktop.
 Write-Host ''
 Write-Host 'COVERAGE  the x>639 playfield-SELECT seam was REPORTED, not asserted:'
 foreach ($r in $script:reported) { Write-Host "          $r" }

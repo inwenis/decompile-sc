@@ -1,31 +1,17 @@
 // Cross-reference sweep over ADDRESS RANGES, not single addresses.
 //
-// Why ranges: the selection globals are arrays. An instruction that touches
-// playersSelections[3][7] references 0x00628634, not the array base 0x006284E8, so a
-// getReferencesTo(base) sweep would miss most of the work. Every byte of every array is swept.
+// The selection globals are arrays: an instruction touching playersSelections[3][7] references
+// 0x00628634, not the array base 0x006284E8, so a getReferencesTo(base) sweep misses most of the
+// work -- hence every byte of every swept range is queried.
 //
-// Two independent passes, because neither alone is complete:
+// Two passes, because neither alone is complete. Pass 1 (GHIDRA-REF) knows the containing
+// function and the reference type, but is only as complete as the auto-analysis: code Ghidra
+// never disassembled contributes nothing. Pass 2 (RAW-DWORD) finds the encoded absolute address
+// even there; classifying each hit COVERED / UNCOVERED against pass 1 makes the UNCOVERED rows
+// exactly pass 1's blind spots -- a completeness claim that is measured, not assumed.
 //
-//   pass 1 (GHIDRA-REF)  every Reference Ghidra's analysis recorded into the range. Rich --
-//                        knows the containing function and the reference type -- but only as
-//                        complete as the auto-analysis: code Ghidra never disassembled
-//                        contributes nothing.
-//
-//   pass 2 (RAW-DWORD)   a byte scan of every initialized memory block for a little-endian
-//                        dword whose VALUE lands inside a swept range, at every offset,
-//                        including unaligned ones. This finds the encoded absolute address
-//                        regardless of whether Ghidra understood the surrounding bytes. Each
-//                        hit is then classified COVERED (the code unit containing it already
-//                        produced a pass-1 reference) or UNCOVERED (it did not) -- the
-//                        UNCOVERED rows are exactly the blind spots in pass 1, which is what
-//                        makes a completeness claim about the xref table honest instead of
-//                        assumed.
-//
-// Script args:
-//   1: output TSV path (pass 1). Pass 2 goes to <path>.rawhits.tsv. <path>.manifest is the
-//      run's success signal.
-//   2: spec file -- one range per line: label,startHex,byteLength
-//
+// Args: 1 = output TSV (pass 2 -> <path>.rawhits.tsv, <path>.manifest signals success),
+//       2 = spec file, one range per line: label,startHex,byteLength
 //@category Headless
 
 import ghidra.app.script.GhidraScript;
@@ -68,8 +54,7 @@ public class XrefSweep extends GhidraScript {
         Listing listing = currentProgram.getListing();
         ReferenceManager refs = currentProgram.getReferenceManager();
 
-        // Code-unit addresses that produced at least one reference into ANY swept range.
-        // Used to classify pass-2 hits.
+        // Code-unit addresses that referenced a swept range: a pass-2 hit here is COVERED.
         Set<Address> refProducers = new HashSet<>();
         long rows = 0;
 
@@ -120,9 +105,8 @@ public class XrefSweep extends GhidraScript {
     }
 
     /**
-     * Pass 2: scan every initialized memory block for a little-endian dword whose value falls
-     * inside one of the swept ranges, at EVERY byte offset (unaligned included -- an x86
-     * absolute displacement is rarely 4-byte aligned within its instruction).
+     * Scans at EVERY byte offset, unaligned included: an x86 absolute displacement is rarely
+     * 4-byte aligned within its instruction.
      */
     private long rawScan(String rawPath, List<SweepUtil.Spec> specs, Set<Address> refProducers)
             throws Exception {

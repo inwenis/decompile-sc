@@ -1,49 +1,18 @@
 // sc_screen.cpp -- see sc_screen.h.
 //
-// WHY THIS SHAPE
-//
-// research/renderer-viewport.md's central finding is that the playfield's size
-// is not stored anywhere: it is an immediate in every function that clips to it.
-// So there is no variable to set and no hook to install -- widening the screen
-// is a few dozen instruction-operand rewrites, and the only interesting
-// engineering question is how to make a few dozen hand-derived byte writes into
-// game code something a reviewer can trust.
-//
-// Three things do that, and they are the design:
-//
-//   1. THE TABLE IS GENERATED, NOT WRITTEN. tools/renderer_patch_sites.py reads
-//      the same StarCraft.exe, disassembles each declared site, LOCATES the old
-//      value inside the instruction rather than trusting a hand-counted offset,
-//      and refuses to emit a site whose bytes are not what the map says. The
-//      header it produces carries the original and patched disassembly as
-//      comments beside every record.
-//
-//   2. EVERY SITE IS RE-VERIFIED IN THE LIVE PROCESS, and the whole table is
-//      refused on the first mismatch. This is the detour engine's rule
-//      (sc_hook.cpp: "is the code at `target` the code we disassembled?")
-//      applied to data-sized patches. A half-applied geometry is far worse than
-//      none: it does not fail, it corrupts.
-//
-//   3. IT REFUSES TO RUN LATE. Every patch here is only correct if it lands
-//      BEFORE the video init allocates the framebuffer -- patching the pitch of
-//      a buffer that has already been allocated at the old size is a heap
-//      overrun in someone else's process. The install checks the framebuffer
-//      pointer (0x006CEFF4, zero until the init runs) and refuses if the game
-//      is already up. That is why the launcher passes scinject --early for a
-//      widescreen run.
-//
-// THE ONE RELOCATION. The dirty-block grid at 0x006CEFF8 is a fixed u8[30][40]
-// with a live global 0x4B0 bytes later (the render-target pointer, named by 126
-// instructions), so it cannot grow in place. It moves to plugin-owned memory and
-// all 21 instructions that name it absolutely are re-pointed (12 rebase records
-// plus 9 code rewrites whose fixup dword names the grid; the 21st -- 0x0048CBC7,
-// found by 034's scan and lost between scan and table -- was restored by task
-// 064, which is what closes the named-ref accounting). The row addressing
-// that turns a row index into a byte offset is a `lea r,[c+c*4]` feeding a SIB
-// scale of 8 -- x5 then x8 == the stock stride of 40 -- and the stride is
-// reachable only because x25 fits `imul r32,r/m32,imm8` in the same three bytes
-// and the scale can drop to 2. That coincidence is what makes stage 1 possible
-// at all; see the generator for the full argument.
+// The playfield's size is stored nowhere: it is an immediate in every function
+// that clips to it (research/renderer-viewport.md), so widening the screen is a
+// few dozen operand rewrites -- no variable to set, no hook to install. Three
+// rules make hand-derived writes into game code trustworthy:
+//   1. tools/renderer_patch_sites.py generates the table from the same
+//      StarCraft.exe: it locates the old value inside the disassembled
+//      instruction and refuses any site whose bytes disagree with the map.
+//   2. Every site is re-verified in the live process and the whole table is
+//      refused on the first mismatch: a half-applied geometry does not fail, it
+//      corrupts.
+//   3. The install refuses once the framebuffer pointer (0x006CEFF4) is non-zero
+//      -- repitching a buffer already allocated at the old size is a heap
+//      overrun, so a widescreen run must inject early.
 
 #include <windows.h>
 #include <stdio.h>
@@ -65,31 +34,29 @@ static int    g_stage = 1;
 static BYTE*  g_grid = NULL;          // the relocated dirty grid (data start)
 static BYTE*  g_gridRegion = NULL;    // the guarded allocation base (g_grid - GUARD)
 static int    g_applied = 0;
-// Two different refusals, which used to share one `g_refused`. The install veto is
-// set by the pre-flight checks, each of which RETURNS -- so it and the per-patch
-// failure count are never both non-zero, which is how one variable got away with it.
+// Two different refusals, kept apart because they mean different things to a
+// reader of the stats line. Each pre-flight check RETURNS, so the install veto
+// and the per-patch failure count are never both non-zero.
 static bool   g_installRefused = false;   // a pre-flight check said no; nothing written
 static int    g_writeFailures = 0;        // patches that failed their own write
 
-// Guard padding around the relocated grid. The stock grid at 0x006CEFF8 sits in
-// .data with live globals on both sides (research/renderer-viewport.md 5, "boxed
-// in by the linker's data layout"), so the engine's UNCLAMPED grid consumers --
-// 0x0041DE20 tests a dialog rect's cells with a SIGNED column (x1>>4) and never
-// clamps x1<0 the way the WRITE path 0x0041E0D0 does -- read a neighbouring
-// mapped byte when a control sits a few pixels off an edge, and the stock game
-// never faults. Relocating the grid to a bare VirtualAlloc page removed that
-// padding: a dialog at x=-1..-16 makes 0x0041DE84 `mov dl,[ebx]` read grid-1,
-// which is the unmapped guard page -> the "0x0041DE84 referenced 0x...DFFFF"
-// crash (issue #113 follow-up; the faulting address was exactly the grid base
-// minus one). Re-create the box: commit GUARD bytes on each side so a small
-// out-of-range index reads harmless zeroed scratch, exactly as stock read a
-// harmless neighbour. ponytail: fixed 64KB each side covers any near-screen
+// Guard padding around the relocated grid. The engine's UNCLAMPED grid consumers
+// -- 0x0041DE20 tests a dialog rect's cells with a SIGNED column (x1>>4) and
+// never clamps x1<0 the way the WRITE path 0x0041E0D0 does -- read a neighbouring
+// byte when a control sits a few pixels off an edge, which faults nowhere only
+// because the stock grid at 0x006CEFF8 is boxed in by live globals on both sides
+// (research/renderer-viewport.md 5). On a bare page a dialog at x=-1..-16 makes
+// 0x0041DE84 `mov dl,[ebx]` read grid-1 and hit unmapped memory, so re-create the
+// box: committed GUARD bytes each side turn a small out-of-range index into
+// harmless zeroed scratch.
+// ponytail: fixed 64KB each side covers any near-screen
 // dialog coordinate (col +/-, row*stride); a wildly out-of-range coord would
 // have faulted stock too. If a real consumer ever needs more, clamp it instead.
 #define SC_WS_GRID_GUARD 0x10000
 
 // Saved originals, so a FreeLibrary detach can put the process back. Sized by
-// the table: a fixed 128 silently stopped saving at the 129th of 257 writes.
+// the table, never a fixed cap: a cap below the patch count stops saving
+// mid-table in silence and leaves detach unable to restore the rest.
 #define SC_WS_MAX_SAVED SC_WS_PATCH_COUNT
 static struct {
     void* addr;
@@ -99,14 +66,14 @@ static struct {
 static int g_savedCount = 0;
 
 // CODE CAVES. A value that fits no encoding of the instruction's own length --
-// the fog cell stride at 1280 wide is 168, and every one of its six sites is a
-// sign-extended imm8/disp8 -- gets a WINDOW of whole instructions replaced by
-// `jmp cave` + NOPs, the cave holding the same instructions re-encoded with
-// 32-bit fields and a `jmp` back to the window's end. The generator chose the
-// windows (>= 5 bytes, no PC-relative operand, nothing branches into them) and
-// carries the cave code; this side owns only the two rel32s, which need the
-// cave's runtime address. One RWX page, bump-allocated, leaked on remove like
-// a trampoline (a game thread may be executing inside it).
+// the fog cell stride at 1280 wide is 168, and all six of its sites are
+// sign-extended imm8/disp8 -- needs a WINDOW of whole instructions replaced by
+// `jmp cave` + NOPs, the cave holding those instructions re-encoded with 32-bit
+// fields and a `jmp` back. The generator picks the windows (>= 5 bytes, no
+// PC-relative operand, nothing branches into them) and carries the cave code;
+// this side owns only the two rel32s, which need the cave's runtime address.
+// One RWX page, bump-allocated, leaked on remove like a trampoline: a game
+// thread may be executing inside it.
 #define SC_WS_CAVE_POOL 4096
 static BYTE*  g_cavePool = NULL;
 static SIZE_T g_caveUsed = 0;
@@ -166,20 +133,19 @@ int ScScreenStageWanted(void) {
     return ScEnvInt("SCPLUGIN_WS_STAGE", 1, 0, SC_WS_STAGE_MAX);
 }
 
-// %SCPLUGIN_WS_ONLY% -- comma-separated NAME PREFIXES. When set, a patch at the
-// TOP stage is written only if its name starts with one of them; every lower
-// stage is written in full, because a stage is the base the selection sits on.
-// Stage 2 is 121 sites in one lump and its damage cannot be attributed from
-// outside the process, so this exists to bisect it.
+// %SCPLUGIN_WS_ONLY% -- comma-separated NAME PREFIXES, a bisector for stage 2: it
+// lands as one lump of hundreds of sites whose damage cannot be attributed from
+// outside the process. A patch at the TOP stage is written only if its name starts
+// with one of them; every lower stage is written in full, because a stage is the
+// base a selection sits on.
 //
-// COUPLING WARNING, and it is not a footnote. These groups are NOT independent.
-// research/renderer-viewport.md 12.5: the terrain blitter walks the dirty grid
-// LINEARLY, one byte per column, never re-basing per row -- so the grid's stride
-// and the blitter's column count must move TOGETHER or they desynchronise by
-// (stride - columns) bytes every row. Selecting `terrain` without `grid`
-// produces a DIFFERENTLY broken picture, not a partial fix, and reading it as
-// "terrain is the culprit" would be a wrong finding manufactured by the tool.
-// Only coherent subsets mean anything: {grid, terrain, dirty} move as one.
+// COUPLING WARNING. research/renderer-viewport.md 12.5: the terrain blitter walks
+// the dirty grid LINEARLY, one byte per column, never re-basing per row -- so the
+// grid's stride and the blitter's column count must move TOGETHER or they
+// desynchronise by (stride - columns) bytes every row. Selecting `terrain`
+// without `grid` gives a DIFFERENTLY broken picture, not a partial fix, and
+// reading it as "terrain is the culprit" is a wrong finding manufactured by the
+// tool. Only coherent subsets mean anything: {grid, terrain, dirty} move as one.
 static char g_only[256];
 static bool g_onlySet = false;
 
@@ -217,17 +183,12 @@ int ScScreenViewportTilesX(void) {
 }
 
 // ---------------------------------------------------------------------------
-// Safe reads -- a wrong static address must produce a refusal, never a fault
-// inside the game.
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// The gate: has the video init already run?
-//
-// 0x006CEFF4 is the framebuffer pointer. It lives in BSS and is zero until
-// FUN_004DB060 (or one of its two twins) calls SMemAlloc. A non-zero value means
-// the buffer exists at the OLD size, and every pitch this table rewrites would
-// then be a promise the allocation cannot keep.
+// The gate: has the video init already run? 0x006CEFF4 is the framebuffer
+// pointer; it lives in BSS and is zero until FUN_004DB060 (or one of its two
+// twins) calls SMemAlloc. A non-zero value means the buffer exists at the OLD
+// size, and every pitch this table rewrites would then be a promise the
+// allocation cannot keep. Read it defensively: a wrong static address must
+// produce a refusal, never a fault inside the game.
 // ---------------------------------------------------------------------------
 
 static bool VideoAlreadyUp(DWORD* dataOut, unsigned* wOut, unsigned* hOut) {
@@ -279,10 +240,10 @@ static bool WriteOne(const ScScreenPatch* p) {
     memcpy(bytes, p->patch, p->len);
     void* at = ScRuntimeAddr(p->va);
 
-    // Relocation fixups: the record carries a zeroed dword that only the running
+    // Relocation fixups: the record carries a zeroed dword only the running
     // process can fill, because the relocated grid's address comes from
     // VirtualAlloc. The addend is the offset INTO the new grid the instruction
-    // should name -- recomputed by the generator for the new stride, not copied.
+    // should name -- computed by the generator for the new stride, not copied.
     if (p->fixupOff != SC_WS_NO_FIXUP) {
         if (!g_grid) return false;
         DWORD target = (DWORD)(DWORD_PTR)(g_grid + p->fixupAddend);
@@ -346,9 +307,8 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
         return;
     }
 
-    // Observe is the whole plugin's off switch and must stay byte-for-byte the
-    // task-008 read-only observer, whatever else the environment asks for --
-    // the same gate task 025 and 029 are under.
+    // Observe is the whole plugin's off switch: it stays a read-only observer
+    // whatever else the environment asks for.
     if (mode == SC_MODE_OBSERVE) {
         ScLog("WIDESCREEN: %%SCPLUGIN_WIDESCREEN%% is set but the mode is observe -- "
               "IGNORED. Observe writes nothing to game memory.");
@@ -387,15 +347,19 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
     ScLog("WIDESCREEN: %d site(s) verified against the live image", checked);
 
     // --- relocate the dirty grid -------------------------------------------
-    // Only stage 1 and above needs it; stage 0 touches the display mode alone.
+    // The stock grid at 0x006CEFF8 is a fixed u8[30][40] with a live global 0x4B0
+    // bytes later, so it cannot grow in place: it moves to plugin-owned memory and
+    // every instruction naming it absolutely is re-pointed. A wider stride is
+    // encodable in place at all only because the stock row multiply -- a three-byte
+    // `lea r,[c+c*4]` feeding a SIB scale of 8, x5 then x8 == the stock stride of 40
+    // -- has an equally three-byte replacement: `imul r32,r/m32,imm8` with the scale
+    // dropped to 2; see the generator. Stage 0 touches the display mode alone.
     if (g_stage >= SC_WS_STAGE_GRID) {
-        // GUARD + grid + GUARD, all committed, grid pointer into the middle
-        // (see SC_WS_GRID_GUARD above). VirtualAlloc zeroes it, which is the
-        // state the BSS array it replaces starts in -- stated rather than
-        // assumed: a grid that came up full of 1s would mark the whole screen
+        // GUARD + grid + GUARD, all committed, grid pointer into the middle.
+        // VirtualAlloc zeroes it, which is the state the BSS array it replaces
+        // starts in: a grid coming up full of 1s would mark the whole screen
         // dirty on frame one, which looks like a working feature and hides a
-        // real bug. The guard pages are zeroed too, so an out-of-range TEST
-        // reads "not dirty" and is harmless.
+        // real bug. Zeroed guards make an out-of-range TEST read "not dirty".
         const SIZE_T total = (SIZE_T)SC_WS_GRID_GUARD + SC_WS_GRID_BYTES + SC_WS_GRID_GUARD;
         g_gridRegion = (BYTE*)VirtualAlloc(NULL, total, MEM_COMMIT | MEM_RESERVE,
                                            PAGE_READWRITE);
@@ -416,10 +380,10 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
               (unsigned)SC_WS_STOCK_GRID_VA, g_grid, SC_WS_GRID_BYTES,
               SC_WS_GRID_COLS, SC_WS_GRID_ROWS, refs);
 
-        // Oracle: prove the guard actually protects the OUT-OF-RANGE index that
-        // crashed. grid-1 is where 0x0041DE84 faulted; grid+BYTES+GUARD-1 is the
-        // far side. Both must read as committed, or the box is not there. This
-        // line would say MISSING on the pre-fix bare allocation.
+        // Oracle: prove the guard covers the OUT-OF-RANGE index that faults.
+        // grid-1 is where 0x0041DE84 reads; grid+BYTES+GUARD-1 is the far side.
+        // Both must read as committed, or the box is not there -- a bare
+        // allocation makes this line say MISSING.
         const bool lo = ScReadableAt(g_grid - 1, 1);
         const bool hi = ScReadableAt(g_grid + SC_WS_GRID_BYTES + SC_WS_GRID_GUARD - 1, 1);
         ScLog("WIDESCREEN: grid guard %s -- region %p..%p, %d bytes each side; "
@@ -450,8 +414,7 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
     ScLog("WIDESCREEN %s: %d patch(es) applied, %d refused, stage<=%d",
           g_active ? "ACTIVE" : "INCOMPLETE", g_applied, g_writeFailures, g_stage);
     // Announced even when nothing is filtered, so a run that FORGOT to clear the
-    // variable cannot be read as a full-stage result. An unannounced subset is
-    // the same class of mistake as an assertion that cannot fail.
+    // variable cannot be read as a full-stage result.
     ScLog("WIDESCREEN filter: %%SCPLUGIN_WS_ONLY%%=%s -- %d stage-%d site(s) skipped",
           g_onlySet ? g_only : "(unset, whole stage applied)", skipped, g_stage);
 }
@@ -471,8 +434,6 @@ void ScScreenRemove(void) {
     }
     g_savedCount = 0;
     g_active = false;
-    // The relocated grid is deliberately LEAKED, exactly like a trampoline: the
-    // game thread may be inside a loop holding a pointer into it right now.
     ScLog("WIDESCREEN removed: %d site(s) restored (the relocated grid region %p is "
           "left allocated on purpose -- a live loop may still hold a pointer into it)",
           n, g_gridRegion);

@@ -251,9 +251,18 @@ Hard rule 4 applies to every line of `research/`.
 - The global rules in `~/.codex/AGENTS.md` apply here too.
 - Worktrees under `C:/git/wt/decompile-sc/<branch>` are disposable and pruned after merge. NEVER let anything deployed or persistent point at a worktree path (the deployed launcher copies `run-with-plugin.ps1` + `check-game-windows.ps1` into the deploy tree for this reason).
   -> tools/deploy.ps1; tools/README-deploy.md
-- Code comments and research docs cite the old rulebook as `AGENTS.md § "<heading>"` or "task NNN"; both resolve in `research/rulebook-history.md` (headings verbatim, archive line = old line + 15). NEVER reuse an old heading for different content.
+- `research/` docs cite the old rulebook as `AGENTS.md § "<heading>"` or "task NNN"; both resolve in `research/rulebook-history.md` (headings verbatim, archive line = old line + 15). NEVER reuse an old heading for different content. Code comments cite by topic instead (see "Comments").
 -> research/rulebook-history.md § "Conventions"
 
+## Comments
+
+**A comment states a timeless WHY: it must read the same written today or in five years.**
+- DO keep the why that only a comment can carry: invariants, engine facts, how an address was derived, a measured number that bounds a value, and a refuted approach as a prohibition with its evidence ("do not restore PRESSED here: 110,381 restores in one click, zero commands").
+- NEVER narrate history in a comment: task ids, dates, PR/issue numbers, commit hashes, who changed what, "previously / originally / used to / no longer", refactor notes, tombstones for deleted code. That goes in the PR body, `git log`, or `research/<topic>.md` behind a one-line pointer.
+- Budget: file header at most 15 lines, an inline block at most 8 unless every line is evidence a reader needs. One home per why, nearest the code it governs; a comment that restates its code is deleted, and a stale one is fixed or deleted, never left.
+- DO cite a rule by TOPIC (`AGENTS.md § "Oracles: pixel counts and instruments"`), never by task id; PowerShell help keeps .SYNOPSIS/.PARAMETER/.EXAMPLE and trims .DESCRIPTION.
+- CI runs `tools/check-comment-narration.py` (comment lines only). For a comment-only sweep, `tools/check-comment-only-diff.py <ref> <file>...` proves no code token moved.
+-> tools/check-comment-narration.py header
 ## Adding a rule
 
 - Format: imperative first (DO/NEVER), at most 3 lines; then at most ONE line of why; then a pointer (`-> research/rulebook-history.md § ` + the old heading in quotes, a `research/` doc, or a tool's block comment). No incident retelling, no tables.

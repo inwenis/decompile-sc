@@ -1,42 +1,16 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Task 034. Answers the one question a read-back cannot: does the windowed-mode
-helper actually PRESENT the extra columns the engine composes, or only the
-left 640 of them?
+Does the windowed-mode helper PRESENT the engine's extra columns, or only the left 640?
 
 .DESCRIPTION
-tools/plugin/test-widescreen.ps1 proves the ENGINE composes an 800x480 frame and
-draws an 800x400 playfield into it -- read straight out of the running process.
-It cannot prove anybody sees that, because what reaches the monitor goes through
-`WMode.dll`, which is packed (research/launch-baseline.md) and whose behaviour at
-a non-640x480 mode research/renderer-viewport.md 10 item 2 records as UNMEASURED.
-
-There are two ways this repo runs that helper and they are NOT the same vector:
-
-  inject   scinject --early-dll WMode.dll   (what every suite uses)
-  ddraw    WMode.dll copied in as ddraw.dll (research/launch-baseline.md's recipe)
-
-This probe measures both, in a widescreen arm and a stock arm, and decides
-between three outcomes STRUCTURALLY -- by comparing frames, never by looking at
-one:
-
-  CROP    the helper shows columns 0..639 of an 800-wide frame. Then the HUD band
-          is pixel-identical between the arms, because the console really is at
-          the same place in both framebuffers, and the extra columns are composed
-          and thrown away.
-  SCALE   the helper shows all 800 columns squeezed into its window. Then the HUD
-          band is NOT identical -- every HUD pixel has moved to 0.8x its x -- and
-          the frame's rightmost non-black column tells the ratio.
-  FOLLOW  the helper's client area is itself 800 wide. Then the feature is simply
-          visible, and there is nothing to decide.
-
-WHY THIS IS ALLOWED TO TOUCH FRAMES AT ALL. It never commits one and never puts
-one through `pr-image` -- a game frame reproduces game artwork and hard rule 1
-forbids that (AGENTS.md "Screenshots vs hard rule 1"). It writes to the
-gitignored diagnostic path, and what it REPORTS is a count of matching pixels and
-a column index, which reproduce nothing. Save-ScWindowImage refuses to write
-inside the repo, so that is enforced rather than remembered.
+An engine read-back cannot answer that: what reaches the monitor goes through the packed
+WMode.dll, whose behaviour off 640x480 can only be established by running it
+(research/renderer-viewport.md 10 item 2; the WMode answer is 12.6).
+inject (scinject --early-dll) and ddraw (copied in as ddraw.dll, research/launch-baseline.md)
+are distinct vectors, so both run in a widescreen and a stock arm. The verdict is structural:
+CROP = arms identical, so the extra columns are composed and thrown away; SCALE = arms differ,
+and the rightmost non-black column gives the ratio; FOLLOW = the client area is the new width.
 
 .EXAMPLE
 ./tools/plugin/probe-widescreen-present.ps1
@@ -47,19 +21,16 @@ param(
     [string]$LogDir = 'C:\sc-work\logs',
     [string]$FrameDir = 'C:\sc-work\logs\034-frames',
     [ValidateSet('inject', 'ddraw', 'both')][string]$Vector = 'both',
-    # Task 065: which DLL the ddraw vector installs. Empty = WMode.dll (the 034
-    # measurement, unchanged). Point it at cnc-ddraw's ddraw.dll
-    # (fetch-cnc-ddraw.ps1) and -Vector both becomes exactly the 065 experiment:
-    # inject arm = WMode CROP control, ddraw arm = the candidate replacement,
-    # one run, same instrument, verdicts printed control-first.
+    # Which DLL the ddraw vector installs. Empty = WMode.dll. Point it at cnc-ddraw's
+    # ddraw.dll (fetch-cnc-ddraw.ps1) and -Vector both weighs a candidate replacement
+    # against the WMode control in one run, on one instrument.
     [string]$WindowedHelperDll = '',
-    # Task 065: >0 takes a SECOND capture of the same window N seconds after the
-    # first and prints the same-arm band match. The main menu ANIMATES, so the
-    # cross-arm CROP threshold (95%) carries animation noise inside it; the
-    # same-arm delta MEASURES that noise instead of assuming it. Conductor
-    # instruction 2026-08-13: test the animation theory, do not conclude it.
+    # >0 takes a SECOND capture of the same window N seconds after the first and prints
+    # the same-arm band match. The main menu ANIMATES, so the cross-arm CROP threshold
+    # (95%) carries animation noise inside it; the same-arm delta measures that noise
+    # instead of assuming it.
     [int]$BracketSeconds = 0,
-    # Which 9.3 stage to run under. Stage 0 is the interesting one for THIS
+    # Which widescreen stage to run under. Stage 0 is the interesting one for THIS
     # question: it changes the display mode and nothing else, so a failure is
     # unambiguously the presentation half rather than anything the engine draws.
     [ValidateSet('0', '1', '2')][string]$Stage = '2',
@@ -153,21 +124,23 @@ function Invoke-PresentArm {
             if ("$_" -match 'scinject:\s*PID=(\d+)') { $gamePid = [int]$Matches[1] }
         }
         if (-not $gamePid) { throw "probe-present: no pid for $name" }
-        # research/launch-baseline.md: as a ddraw proxy the window comes up MINIMISED
-        # at the off-screen sentinel. Restoring it is the documented recipe, and it is
-        # the one place this probe raises anything -- a minimised window has no client
-        # area to capture at all.
+        # research/launch-baseline.md: as a ddraw proxy the window comes up MINIMISED at
+        # the off-screen sentinel, and a minimised window has no client area to capture.
+        # Restoring it is the documented recipe.
         $h = Get-ScGameWindow -ProcessId $gamePid
         Set-ScWindowActive -Hwnd $h -ErrorAction SilentlyContinue | Out-Null
         Start-Sleep -Seconds 4
 
-        # The CLIENT area, not the window: the client is what the helper actually
-        # presents into, and the window's border would only add pixels that are not
-        # the game's (drive-game.ps1 warns about exactly this confusion).
+        # The CLIENT area, not the window: the client is what the helper presents into,
+        # and the border would add pixels that are not the game's.
         $c = [ScDrive.Native]::ClientSize($h)
         $winW = $c[0]; $winH = $c[1]
         Write-Host "       client $winW x $winH"
 
+        # A game frame reproduces game artwork (AGENTS.md § "Screenshots"), so no frame
+        # is ever committed or put through `pr-image`; only pixel counts and column
+        # indices are reported. Save-ScWindowImage refuses to write inside the repo, so
+        # the gitignored diagnostic path is enforced rather than remembered.
         $png = Join-Path $FrameDir "present-$name-menu.png"
         Save-ScWindowImage -Hwnd $h -Path $png | Out-Null
         $b = [System.Drawing.Bitmap]::new($png)
@@ -222,6 +195,10 @@ try {
             }
             continue
         }
+        # The widescreen frame keeps the 480-row height and every HUD dialog's stock
+        # coordinates (research/renderer-viewport.md 12.1), so pixels identical across the
+        # whole client can only mean columns 0..639 presented 1:1 with the rest discarded --
+        # a squeeze into the same window would move every HUD pixel to 0.8x its x.
         $band = Get-BandMatch -A $ctl -B $ws -Y0 0 -Y1 480
         $edgeWs = Get-ContentRightEdge -Path $ws
         $edgeCtl = Get-ContentRightEdge -Path $ctl
@@ -238,9 +215,9 @@ try {
     foreach ($k in $frames.Keys | Sort-Object) { Write-Host "       $k : $($frames[$k])" }
 }
 finally {
-    # -Windowed COPIES WMode.dll into the shared working copy as ddraw.dll. Leaving it
-    # there would silently put every other worker's launch into windowed mode, so it
-    # comes out on every path, inside the lock that serialises the shared game dir.
+    # -Windowed COPIES WMode.dll into the shared working copy as ddraw.dll. Left there it
+    # would silently put every other worker's launch into windowed mode, so it comes out
+    # on every path, inside the lock that serialises the shared game dir.
     if ($Vector -ne 'inject') {
         try {
             & (Join-Path $scriptDir 'run-with-plugin.ps1') -RemoveWindowed -NoLaunch `

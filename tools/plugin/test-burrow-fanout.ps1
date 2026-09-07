@@ -6,44 +6,30 @@ selection cap in the live game: generates a playable Use Map Settings map holdin
 Lurkers, boxes all of them, presses Burrow ONCE, and asserts that every one of the 36
 is burrowed -- read out of each unit's own flags from inside the process.
 
-This closes the half of task 015's acceptance criterion 3 that was waived for want of a
-fixture (research/command-opcodes.md §8). Task 015 proved the untargeted-COMMAND path
-live (Stop, Hold Position at 24 units) and the whole 19-id set byte-exact offline; the
-untargeted-ability half needed a map no stock file could supply.
-
 .DESCRIPTION
-The fixture is generated at run time by tools/make_test_map.py and DELETED afterwards --
-generated maps are game content and are never committed (AGENTS.md hard rule 1). Two
-properties of that generator are what make this test possible at all, both root-caused by
-task 016 and documented in tools/README-test-map.md:
+The fixture is generated at run time by tools/make_test_map.py: generated maps are game
+content and are never committed (AGENTS.md § "Hard rules"). Two properties of that
+generator are what make this test possible at all (tools/README-test-map.md):
 
-  * the human slot's SIDE must be an explicit race, not the ladder template's
-    "User Selectable" -- otherwise StarCraft hands that slot the standard MELEE starting
-    units even under Use Map Settings and never creates the map's own units;
-  * TRIG must be empty -- otherwise the template's own triggers (a ladder map's three
-    standard melee triggers, a campaign map's mission objectives) end the game within
-    seconds of loading.
+  * the human slot's SIDE must be an explicit race, not "User Selectable" -- otherwise
+    StarCraft hands that slot the standard MELEE starting units even under Use Map
+    Settings and never creates the map's own units;
+  * TRIG must be empty -- otherwise the template's own triggers (a ladder map's melee
+    triggers, a campaign map's mission objectives) end the game within seconds of loading.
 
-WHY THE RESULT CANNOT BE FAKED:
+Why the result cannot be faked: `burrowed` is counted over the plugin's SHADOW list --
+all 36 units, not the 12 the engine holds -- from each unit's own CUnit+0xDC bit 0x10, so
+36/36 is a claim about every unit's state and not about the picture or the largest bucket;
+the map has no triggers, no enemy units and one unit-less computer slot, so nothing in the
+game can burrow a Lurker except the command this test issues; and Burrow is innate to
+Lurkers, so the map needs no tech state.
 
-  1. `burrowed` is counted over the plugin's SHADOW list -- all 36 units, not the 12 the
-     engine holds -- from each unit's own CUnit+0xDC bit 0x10. 36/36 is a claim about
-     every unit's state, not about the picture and not about the largest bucket.
-  2. The engine holds twelve (`visible=12`, `overflow=24` is asserted). Twenty-four of
-     the thirty-six are past the cap, so a burrow count above twelve is not reachable
-     without the fan-out.
-  3. The map has NO triggers, NO enemy units and one unit-less computer slot, so nothing
-     in the game can burrow a Lurker except the command this test issues. The idle step
-     demonstrates that directly: after 120 s of nothing happening the count is still 0/36.
-  4. Burrow is innate to Lurkers -- no research -- so the map needs no tech state, and
-     the before-state is asserted to be 0/36 rather than assumed.
+Driving recipe as in test-fanout-orders.ps1 (research/automated-testing-options.md §4.1):
+posted Win32 messages in client coordinates, no synthetic OS input, focus not required,
+window must not be minimised.
 
-Same driving recipe as test-fanout-orders.ps1 (task 012's D1,
-research/automated-testing-options.md §4.1): posted Win32 messages in client
-coordinates, no synthetic OS input, focus not required, window must not be minimised.
-
-Frames are captured as a DIAGNOSTIC only and land outside the repo -- they reproduce game
-artwork and must never be committed.
+Frames are a DIAGNOSTIC only and land outside the repo -- they reproduce game artwork and
+must never be committed.
 
 .EXAMPLE
 ./tools/plugin/test-burrow-fanout.ps1
@@ -56,13 +42,12 @@ param(
     [string]$GameDir = 'C:\sc-work\1161-base',
     [string]$LogPath = 'C:\sc-work\logs\016-burrow-fanout.log',
     [string]$ShotDir = 'C:\sc-work\logs\016-burrow-frames',
-    # Which folder under Maps\ the fixture is generated into. More than one task runs
-    # this suite, so it cannot be nailed to one task's folder -- a worker points it at
-    # its own (`-FixtureDir <GameDir>\Maps\BroodWar\00-t023`) and nobody's row click can
-    # land on anybody else's map. The default is what this suite has always used.
+    # Which folder under Maps\ the fixture is generated into. Concurrent workers share
+    # this suite, so each points it at its own folder and nobody's row click can land on
+    # anybody else's map.
     [string]$FixtureDir,
     # How long the map must sit there doing nothing. The failure this guards against
-    # (a template's own victory/defeat triggers) fired within about seven seconds, so
+    # (a template's own victory/defeat triggers) fires within about seven seconds, so
     # two minutes is well past it; raise it to watch for a slower one.
     [int]$IdleSeconds = 120,
     [int]$UnitCount = 36,
@@ -80,31 +65,23 @@ $failures = 0
 $step = 0
 
 # Pinned ids, asserted rather than reported.
-#   $LURKER_TYPE  units.dat 103. The fixture is all one type on purpose: a MIXED
-#                 selection is offered only the basic command card in game, with no
-#                 ability button to press at all (research/command-opcodes.md §8).
-#   $BURROW_CMD   the command id the Burrow button emits. Already in the fan-out set
-#                 (research/data/command-opcodes.tsv: 0x2C, len 2, handler 0x004C1FA0,
-#                 LOOP selection shape, policy fanout).
-#   $BURROW_KEY   'U', the Lurker command card's Burrow hotkey. If it were the wrong
-#                 key the run fails on "the key emitted 0x2C", not silently.
+#   $LURKER_TYPE  units.dat 103. All one type on purpose: a MIXED selection is offered
+#                 only the basic command card in game, with no ability button to press
+#                 at all (research/command-opcodes.md §8).
+#   $BURROW_CMD   the command id the Burrow button emits (research/data/command-opcodes.tsv:
+#                 0x2C, len 2, handler 0x004C1FA0, LOOP selection shape, policy fanout).
+#   $BURROW_KEY   'U', the Lurker command card's Burrow hotkey; a wrong key fails the run
+#                 on "the key emitted 0x2C" rather than silently.
 $LURKER_TYPE = '0x67'
 $BURROW_CMD = '0x2C'
 $BURROW_KEY = 0x55
 $IDLE_ORDER = '0x03'
 
-# The generated fixture.
-#
-# THE NAME IS THE SUITE'S OWN, and that is not cosmetic: this suite and test-hud-row.ps1
-# both used to generate `lurkers.scx`, which made "delete only your own file" undecidable
-# between them and blocked a run outright when one held the other's file open (task 022,
-# 2026-08-09). One suite, one name, so ownership is readable off the filename.
-#
-# No row is assumed from the folder name any more -- Select-ScBrowserMap computes every
-# click from the filesystem and checks what opened (drive-game.ps1).
-# Not a bare default any more: with $env:AGENT_TASK set this resolves to THIS
-# agent's own folder, so two concurrent runs of this same suite cannot land in one
-# folder and overwrite each other's identically-named fixture (task 023 review).
+# The generated fixture. The map name is the suite's own: one suite, one name, so
+# ownership is readable off the filename and "delete only your own file" stays decidable
+# when two suites share a folder. With $env:AGENT_TASK set the folder resolves to THIS
+# agent's own, so two concurrent runs of this suite cannot overwrite each other's fixture
+# (AGENTS.md § "Test fixtures").
 if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-testmap' -Suite 'burrow-fanout' }
 $mapDir = $FixtureDir
 $mapName = 'burrow-fanout.scx'
@@ -117,9 +94,8 @@ function Get-ScState {
     Get-ScUnitState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -TimeoutSec $TimeoutSec
 }
 
-# "Every live unit is of exactly one type, and it is this one." Single-bucket, like the
-# order assertions in test-fanout-orders.ps1: a histogram whose largest bucket is 20 of
-# 36 would say nothing about the other sixteen.
+# "Every live unit is of exactly one type, and it is this one." Single-bucket on purpose:
+# a histogram whose largest bucket is 20 of 36 says nothing about the other sixteen.
 function Assert-ScAllOneType {
     param([string]$What, $State, [string]$ExpectedType)
     $only = @($State.Types.Keys)
@@ -128,7 +104,6 @@ function Assert-ScAllOneType {
     Assert-That "$What`: all $($State.Live) units are $ExpectedType" $ok "(got $($State.TypesText))"
 }
 
-# --- on-disk binary, BEFORE anything runs --------------------------------------
 $exePath = Join-Path $GameDir 'StarCraft.exe'
 if (-not (Test-Path -LiteralPath $exePath)) { throw "test: $exePath not found." }
 $hashBefore = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
@@ -152,20 +127,20 @@ function Shot([string]$tag) {
 
 try {
     Step "generate the fixture: $UnitCount Lurkers, Use Map Settings, no triggers" {
-        # AGENTS.md rule 4 (task 022): the fixture folder may be SHARED between workers and
-        # the map browser opens a ROW, so a foreign .scx moves which map loads -- and a
-        # recursive delete here takes another worker's fixture out from under its running
-        # game. Ownership is the declared set above, so this waits for THEIRS to go and
-        # clears only OURS.
+        # The fixture folder may be SHARED between workers and the map browser opens a ROW,
+        # so a foreign .scx moves which map loads -- and a recursive delete here takes
+        # another worker's fixture out from under its running game. Ownership is the
+        # declared set above: wait for THEIRS to go, clear only OURS
+        # (AGENTS.md § "Test fixtures").
         Wait-ScFixtureFolderFree -Run $fixtures
         $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
             -UnitCount $UnitCount -UnitType lurker -Player 0 -OutputPath $mapPath 2>&1
         $gen | ForEach-Object { Write-Host "       $_" }
         Assert-That 'the generator succeeded' ($LASTEXITCODE -eq 0) "(exit $LASTEXITCODE)"
         Assert-That 'it wrote the map' (Test-Path -LiteralPath $mapPath)
-        # The generator's own structural validation is part of the contract, not decoration:
-        # it is what asserts the human slot is 0x06, the race is not "User Selectable", TRIG
-        # is empty, and every other CHK section came across byte-for-byte from the template.
+        # The generator's own structural validation is part of the contract: it is what
+        # asserts the human slot is 0x06, the race is not "User Selectable", TRIG is empty,
+        # and every other CHK section came across byte-for-byte from the template.
         Assert-That 'its structural validation passed' `
             (@($gen | Select-String -Pattern '^OK: ').Count -gt 0)
         Assert-That 'nothing can end the game on its own (TRIG is empty)' `
@@ -173,9 +148,9 @@ try {
         Assert-That 'the map differs from its template only where this tool meant it to' `
             (@($gen | Select-String -Pattern 'differs from the template ONLY in: OWNR SIDE UNIT TRIG FORC').Count -gt 0)
         # With the FORC "randomize start location" bit set, the human's player id is not
-        # fixed: one of three otherwise-identical in-game loads came up as player 1,
-        # owning none of the placed units. An intermittent failure is worse than a
-        # reliable one, so the fixture must not leave the choice open.
+        # fixed: one of three otherwise-identical loads comes up as player 1, owning none
+        # of the placed units. An intermittent failure is worse than a reliable one, so
+        # the fixture must not leave the choice open.
         Assert-That "the human's player id is not left to the engine to pick" `
             (@($gen | Select-String -Pattern 'no force randomises start locations').Count -gt 0)
     }
@@ -204,13 +179,11 @@ try {
         Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
         Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
 
-        # Set the Game Type EXPLICITLY rather than trusting what the box shows. The combo
+        # Set the Game Type EXPLICITLY rather than trusting what the box shows: the combo
         # comes up carrying whatever this machine's profile last used, and a stale "Melee"
-        # would make the map play as a melee game -- which is the failure task 015 hit and
-        # spent a whole task chasing. Entry 2 of {Melee, Free For All, Use Map Settings};
-        # picking the wrong one fails the unit-type assertion below rather than passing
-        # quietly. Set-ScGameType reads the combo first and skips the pick (and the
-        # foreground raise) when it already reads 'Use Map Settings' (task 050).
+        # makes the map play as a melee game. Entry 2 of {Melee, Free For All, Use Map
+        # Settings}; picking the wrong one fails the unit-type assertion below rather than
+        # passing quietly (AGENTS.md § "Game Type / `Custom Type`").
         Set-ScGameType -Hwnd $hwnd -LogPath $LogPath -Index 2      # Use Map Settings, verified
         Shot 'lobby'
 
@@ -218,8 +191,8 @@ try {
         Start-Sleep -Seconds 6
         Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
         Start-Sleep -Seconds 10
-        # The tips dialog is found in the engine's own dialog list and dismissed by ITS OWN
-        # OK button, then asserted gone (task 027) -- never a fixed point, never the registry.
+        # Found in the engine's own dialog list and dismissed by ITS OWN OK button, then
+        # asserted gone -- never a fixed point, never the registry (AGENTS.md § "Tips dialog").
         Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
         Start-Sleep -Seconds 2
         Shot 'in-game'
@@ -234,9 +207,8 @@ try {
             (@($lines | Select-String -Pattern 'SHADOW captured: (\d+) units').Count -gt 0)
 
         $script:boxed = Get-ScState 'boxed'
-        # This is acceptance criterion 2 read from inside the process: the units in the
-        # FILE are the units in the GAME. A melee start would report Drones, Larva and an
-        # Overlord here -- which is exactly what it did report before the SIDE fix.
+        # Read from inside the process: the units in the FILE are the units in the GAME.
+        # A melee start reports Drones, Larva and an Overlord here instead.
         Assert-That "the box holds all $UnitCount placed units ($($boxed.N))" ($boxed.N -eq $UnitCount)
         Assert-ScAllOneType 'the spawned units' $boxed $LURKER_TYPE
         Assert-That "the engine itself still holds only twelve ($($boxed.Visible))" ($boxed.Visible -eq 12)
@@ -249,10 +221,9 @@ try {
     }
 
     Step "the mission does not end itself: ${IdleSeconds}s of nothing" {
-        # The other half of criterion 2. A generated map used to end within about seven
-        # seconds on its template's own victory/defeat triggers; this waits well past that
-        # and then proves the game is still there by BOXING again -- a stale shadow list
-        # would not survive that, and a game that had ended reports n=0.
+        # A template's own victory/defeat triggers end a generated map within seconds, so
+        # this waits well past that and then proves the game is still there by BOXING
+        # again -- a stale shadow list does not survive that, and an ended game reports n=0.
         Start-Sleep -Seconds $IdleSeconds
         Assert-That 'the game process is still alive' `
             ($null -ne (Get-Process -Id $gamePid -ErrorAction SilentlyContinue))
@@ -272,9 +243,9 @@ try {
     }
 
     Step "Burrow ($BURROW_CMD), an UNTARGETED ABILITY, reaches every unit" {
-        # Precondition, asserted not assumed: one shared order across every live unit, and
-        # nobody burrowed. There is no arrival to confuse this with -- the units have been
-        # standing still for two minutes and burrowing is not something a unit drifts into.
+        # Precondition, asserted not assumed: one shared order across every live unit. No
+        # arrival to confuse it with -- burrowing is not something a standing unit drifts
+        # into.
         $only = @($before.Orders.Keys)
         Assert-That "every unit shares ONE order before the keypress (must be $IDLE_ORDER)" `
             ($only.Count -eq 1 -and $only[0] -eq $IDLE_ORDER -and $before.Orders[$only[0]] -eq $before.Live) `
@@ -304,6 +275,8 @@ try {
         # burrowed, counted one unit at a time out of the engine's own flags.
         Assert-That "burrowed went $($before.Burrowed)/$($before.BurrowedOf) -> $($after.Burrowed)/$($after.BurrowedOf)" `
             ($after.Burrowed -eq $after.BurrowedOf -and $after.BurrowedOf -eq $UnitCount)
+        # The engine holds twelve and the other twenty-four sit past the cap, so a burrowed
+        # count above twelve is not reachable without the fan-out.
         Assert-That "and that is more than the twelve the engine holds ($($after.Burrowed))" `
             ($after.Burrowed -gt 12)
         Write-Host "       $($after.Line)"
@@ -341,11 +314,10 @@ finally {
     # The fixture is game content: it is generated for the run and never survives it.
     if (-not $KeepOpen -and (Test-Path -LiteralPath $mapDir)) {
         Remove-ScOwnFixture -Run $fixtures
-        # And take the FOLDER away too when it is empty. Leaving an empty one behind is
-        # not harmless even now that rows are computed: an extra directory pushes the
-        # entries below it down, and with six visible rows a pile of abandoned folders
-        # eventually pushes a target off the visible list entirely.
-        # Remove-ScOwnFixtureDir refuses if anything at all is still in it.
+        # Take the FOLDER away too when it is empty: an extra directory pushes the entries
+        # below it down, and with six visible rows a pile of abandoned folders pushes a
+        # target off the visible list entirely. Remove-ScOwnFixtureDir refuses a folder
+        # with anything at all still in it.
         Remove-ScOwnFixtureDir -Dir $mapDir
     }
 }
@@ -354,8 +326,8 @@ Write-Host ''
 Write-Host '[final] the run must balance'
 $left = if ($gamePid -gt 0) { Get-Process -Id $gamePid -ErrorAction SilentlyContinue } else { $null }
 Assert-That 'the game process this test started is gone' ($KeepOpen -or $null -eq $left)
-# This test's own fixture, not the folder: the folder is shared with other workers and
-# this suite no longer removes it (AGENTS.md rule 4 -- see the note at the generation step).
+# This test's own fixture, not the folder: the folder is shared with other workers (see
+# the note at the generation step).
 Assert-That 'the generated map was cleaned up' ($KeepOpen -or -not (Test-Path -LiteralPath $mapPath))
 
 $hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash

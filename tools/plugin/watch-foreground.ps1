@@ -5,16 +5,11 @@ Sample the foreground window while something else runs, and report whether the g
 took it. This is how "the test run did not steal focus" is measured rather than claimed.
 
 .DESCRIPTION
-Task 027. The acceptance bar for that task is "an in-game test run completes WITHOUT the
-game window taking foreground or input focus from the user's active window", and the only
-honest way to say that is to watch GetForegroundWindow() for the whole run.
-
-Run this in one shell, the suite in another. It prints one line per CHANGE of foreground
-window (not per sample), so a quiet run prints one baseline line and nothing else, and any
-steal is a line naming the process that took it.
-
-Exit code: 0 if no window belonging to a StarCraft process was ever foreground, 1 if one
-was -- so it can be used as a gate and not only as a log.
+Run this in one shell, the suite in another. Watching GetForegroundWindow() for the whole
+run is the only honest evidence for AGENTS.md § "Foreground": a run must complete without
+the game taking foreground or input focus from the user's active window. Output is one line
+per CHANGE, so a quiet run is a single baseline line; exit 1 if a StarCraft window was ever
+foreground, so this gates a run rather than only logging it.
 
 .EXAMPLE
 ./tools/plugin/watch-foreground.ps1 -Seconds 900

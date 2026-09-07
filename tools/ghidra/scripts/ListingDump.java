@@ -3,16 +3,13 @@
 // Exists because ExportListingAndDecompile needs a function selector and DecompileMany
 // resolves through the function manager -- neither can show code that Ghidra defined as
 // instructions but never attributed to any function body (e.g. switch-case tails reached
-// only through a jump table). Task 017 hit exactly that at 0x004583DC-0x004584A0, between
-// the end of statusScreenButton's body and the next function entry.
+// only through a jump table). 0x004583DC-0x004584A0 is such a range: instructions between
+// the end of statusScreenButton's body and the next function entry, inside no function.
 //
 // Output rows are raw disassembly of a game binary -- DERIVED GAME CONTENT, scratch only
 // (same rule as DecompileMany's .c files).
 //
-// Script args:
-//   1: output TSV path (<path>.manifest is the run's success signal)
-//   2: start address hex (no 0x)
-//   3: end address hex (exclusive, no 0x)
+// <outTsv>.manifest is the run's success signal.
 //
 //@category Headless
 

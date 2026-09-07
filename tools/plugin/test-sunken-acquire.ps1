@@ -2,32 +2,19 @@
 <#
 .SYNOPSIS
 PLUGIN-vs-STOCK: does a Sunken Colony attack a Medic that walks into its range? Same map,
-same positions, same order, run once with the plugin active and once with `-Mode observe`,
-which installs no hook at all -- and once more with Marines in the Medics' place as the
-control that says whether the Sunken can shoot ANYTHING there.
-
-This is task 022's question 2, from the user: "there was a moment where sunken didn't
-attack my medic and I'm not sure if it's a bug that we introduced or I just saw something
-wrong."
+positions and order, once with the plugin active and once with `-Mode observe`, which
+installs no hook at all, plus a Marine arm as the control.
 
 .DESCRIPTION
-The prior is strongly "not ours" -- the plugin hooks selection commit, command emission,
-the HUD row dispatcher, and draws circles; it has no AI or targeting code in it at all.
-The point of this test is not to restate the prior, it is to try to break it.
-
-  * The MEDIC arm walks a block of Medics into a lone Sunken Colony and watches, from the
-    engine's own unit lists, whether anything takes damage and what the Sunken's order id
-    does. Run in `fanout` and in `observe`.
-  * The MARINE arm is the same map with Marines in the Medics' place. It is the control
-    that separates "the Sunken does not shoot a Medic" from "the Sunken cannot shoot from
-    there at all" -- without it, a quiet Sunken proves nothing about Medics.
+The plugin hooks selection commit, command emission and the HUD row dispatcher and draws
+circles, and carries no AI or targeting code at all, so any difference between the arms is
+a finding about us rather than an expected one.
 
 A Medic has no weapon, so it cannot provoke a Sunken by shooting it; a Marine can and
-does. That difference is the whole point of running both.
+does. That difference is why both arms run.
 
 .EXAMPLE
 ./tools/plugin/test-sunken-acquire.ps1
-
 .EXAMPLE
 ./tools/plugin/test-sunken-acquire.ps1 -Modes fanout -UnitTypes medic
 #>
@@ -36,19 +23,17 @@ param(
     [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
     [string]$LogDir = 'C:\sc-work\logs\022',
     # Which folder under Maps\ the fixture is generated into; see test-burrow-fanout.ps1.
-    # Default is what this suite has always used.
     [string]$FixtureDir,
     # MORE THAN TWELVE, on purpose. At six units the fan-out never fires, the overflow
     # circles have nothing to draw and the HUD row never pages -- so the "fanout" arm would
     # be stock plus four pass-through hooks, and the comparison would answer "does LOADING
-    # the plugin change acquisition" rather than "does our FAN-OUT change it". The user's
-    # report came from a session with more than twelve units selected, so the fixture has
-    # to be in that regime too. Asserted in game below, not just intended here.
+    # the plugin change acquisition" rather than "does our FAN-OUT change it". Asserted in
+    # game below, not just intended here.
     [int]$UnitCount = 18,
     [ValidateSet('medic', 'marine')][string[]]$UnitTypes = @('medic', 'marine'),
     [ValidateSet('fanout', 'observe')][string[]]$Modes = @('fanout', 'observe'),
     # How long to stand next to the Sunken before deciding it is not going to attack.
-    # A Sunken's attack cooldown is well under a second; thirty is not a close call.
+    # A Sunken's attack cooldown is well under a second, so this window is not a close call.
     [int]$WatchSeconds = 45,
     [switch]$KeepOpen
 )
@@ -69,14 +54,13 @@ $script:armLock = $null
 $TYPE_ID = @{ medic = 34; marine = 0 }     # richchk UnitId; asserted in game, not trusted
 $SUNKEN_TYPE = 146                          # Zerg Sunken Colony
 # Sunken Colony weapon range is 7 tiles = 224 map pixels. The block is walked to about
-# +220px east of the start location and the Sunken sits at +448, so the near edge of the
-# block ends up well inside that range -- and the test does not take that on trust, it
-# reports the measured distance from the engine's own sprite positions.
+# +220px east of the start location and the Sunken sits at +448, so the near edge ends up
+# well inside range -- reported as a distance measured from the engine's sprite positions.
 $SUNKEN_RANGE_PX = 224
-# The Sunken's own order id, read out of this run rather than assumed: it sits on 0x12
-# with nothing in range and moves to 0x13 the moment the block arrives, in every arm.
-# That is a much sharper "did it acquire a target" signal than hit points, which Medics
-# heal back -- so both are reported and both are compared across the arms.
+# The Sunken's own order id, read out of the run rather than assumed: 0x12 with nothing in
+# range, 0x13 the moment the block arrives, in every arm. A sharper "did it acquire a
+# target" signal than hit points, which Medics heal back -- so both are reported and
+# compared across the arms.
 $SUNKEN_IDLE_ORDER = 0x12
 $SUNKEN_ATTACK_ORDER = 0x13
 $WALK_X = 540
@@ -84,22 +68,19 @@ $WALK_Y = 240
 $ENEMY_OFFSET_X = 448
 
 $PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C6A46'
-# A FIXTURE FOLDER OF ITS OWN, not the shared 00-testmap: sharing one means two workers
-# can pick each other's maps, which happened twice during task 022, once in each
-# direction. No row is assumed from the name -- Select-ScBrowserMap computes every click
-# from the filesystem and verifies what opened.
-# Not a bare default any more: with $env:AGENT_TASK set this resolves to THIS
-# agent's own folder, so two concurrent runs of this same suite cannot land in one
-# folder and overwrite each other's identically-named fixture (task 023 review).
+# A FIXTURE FOLDER OF ITS OWN, not the shared 00-testmap: sharing one means two workers can
+# pick each other's maps. With $env:AGENT_TASK set this resolves to THIS agent's own folder,
+# so two concurrent runs of this suite cannot land in one folder and overwrite each other's
+# identically-named fixture. No row is assumed from the name -- Select-ScBrowserMap computes
+# every click from the filesystem and verifies what opened.
 if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t022' -Suite 'sunken-acquire' }
 $mapDir = $FixtureDir
 $mapName = 'sunken-acquire.scx'
 $fixtures = New-ScFixtureRun -Dir $mapDir -Names @($mapName)
 
-# The leading comma keeps the ARRAY an array on the way out. Without it PowerShell
-# unrolls a function's array return, so a group that has been wiped comes back as $null
-# and `.Count` throws under StrictMode -- which is exactly what happens in the Marine arm,
-# where a Sunken one-shots a Marine and the whole block can be gone before the next scan.
+# The leading comma keeps the ARRAY an array on the way out. Without it PowerShell unrolls
+# a function's array return, so a wiped group comes back as $null and `.Count` throws under
+# StrictMode -- which is what happens when a Sunken one-shots the last Marine in the block.
 function Get-Mine { param($Scan, [int]$Type) ,@($Scan.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $Type }) }
 function Get-Sunken { param($Scan) ,@($Scan.Units | Where-Object { $_.Type -eq $SUNKEN_TYPE }) }
 function Get-TotalHp { param($Units) $t = 0; foreach ($u in $Units) { $t += $u.Hp }; $t }
@@ -114,7 +95,6 @@ function Get-MinDistance {
     $best
 }
 
-# One arm: one unit type, one plugin mode.
 function Invoke-Arm {
     param([Parameter(Mandatory)][string]$UnitType, [Parameter(Mandatory)][string]$Mode)
 
@@ -169,8 +149,8 @@ function Invoke-Arm {
         Send-ScClick -Hwnd $hwnd -X 327 -Y 415
         Start-Sleep -Seconds 2
         # Every row from the filesystem, and the opened folder verified before the map row
-        # is clicked. Task 022 computed the FOLDER row here and left the MAP row hardcoded
-        # at 159; that half was the original incident (a foreign .scx sorting before ours).
+        # is clicked: a hardcoded row picks whatever foreign .scx happens to sort before
+        # ours (AGENTS.md § "Map browser").
         Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
         Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
         Set-ScGameType -Hwnd $hwnd -LogPath $logPath -Index 2
@@ -179,8 +159,8 @@ function Invoke-Arm {
         Start-Sleep -Seconds 6
         Send-ScClick -Hwnd $hwnd -X 544 -Y 387
         Start-Sleep -Seconds 10
-        # The tips dialog is found in the engine's own dialog list and dismissed by ITS OWN
-        # OK button, then asserted gone (task 027) -- never a fixed point, never the registry.
+        # Found in the engine's own dialog list and dismissed by ITS OWN OK button, then
+        # asserted gone -- never a fixed point, never the registry (AGENTS.md § "Tips dialog").
         Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $logPath | Out-Null
         Start-Sleep -Seconds 2
 
@@ -195,20 +175,17 @@ function Invoke-Arm {
         ArmShot 'arrived'
 
         # SAMPLE REPEATEDLY, AND KEEP THE MINIMUM. Medics heal each other, so a single
-        # sample taken after the fact can show a group at full health that has in fact
-        # been shot several times -- which would turn "the Sunken attacked" into "the
-        # Sunken did nothing" for the one unit type this question is about. The Marine
-        # arm does not need this; running the same measurement on both is what keeps the
-        # two arms comparable.
+        # sample taken after the fact can show a group at full health that has in fact been
+        # shot several times -- turning "the Sunken attacked" into "the Sunken did nothing"
+        # for the one unit type this question is about. The Marine arm does not need this;
+        # running the same measurement on both is what keeps the two arms comparable.
         $minHp = Get-TotalHp (Get-Mine $result.Arrived $TYPE_ID[$UnitType])
         $samples = [math]::Max(1, [int]($WatchSeconds / 5))
-        # THE SUNKEN'S ORDER IS SAMPLED THE SAME WAY THE HIT POINTS ARE (issue #70). It used
-        # to be read once, off the LAST scan, while the HP reading correctly took the minimum
-        # over every scan -- and the comment at the top of this loop already explains why one
-        # sample is unsafe for HP. It is unsafe here for the same reason and worse: a Sunken
-        # that acquired mid-window and returned to idle before the last scan reads "never
-        # acquired", and it reads that way in BOTH arms, so the two agree on a non-event.
-        # AcquiredAny is "at any point in the window", which is what "did it acquire" means.
+        # THE SUNKEN'S ORDER IS SAMPLED THE SAME WAY THE HIT POINTS ARE. One reading off the
+        # last scan is unsafe for the same reason and worse: a Sunken that acquired
+        # mid-window and returned to idle before that scan reads "never acquired", and it
+        # reads that way in BOTH arms, so the two agree on a non-event. AcquiredAny is "at
+        # any point in the window", which is what "did it acquire" means.
         $acquiredAny = $false
         $ordersSeen = @()
         $scans = 0
@@ -263,13 +240,12 @@ try {
                 $mine0 = Get-Mine $arm.Boxed $type
                 $sunk0 = Get-Sunken $arm.Boxed
                 # Loud, and named: a melee start looks like a normal game and every number
-                # after it is nonsense (task 021).
+                # after it is nonsense (AGENTS.md § "Game Type / `Custom Type`").
                 $melee = @($arm.Boxed.Units | Where-Object { $_.Player -eq 0 -and $_.Type -in 7, 0x40, 0x29, 0x23, 0x2A })
                 Assert-That "[$($arm.Tag)] the fixture spawned $UnitCount $ut(s)" ($mine0.Count -eq $UnitCount) `
                     ($melee.Count -gt 0 ? "(got $($mine0.Count); player 0 owns SCV/Drone-shaped units -- THIS IS A MELEE START, the Game Type pick did not take)" : "(got $($mine0.Count))")
-                # A Zerg structure placed off creep is the one thing about this fixture
-                # that could quietly not happen, so it is asserted before anything else is
-                # concluded from the Sunken's silence.
+                # A Zerg structure placed off creep is the one thing about this fixture that
+                # could quietly not happen; assert it before reading the Sunken's silence.
                 Assert-That "[$($arm.Tag)] the Sunken Colony exists in game" ($sunk0.Count -eq 1) `
                     "(found $($sunk0.Count) unit(s) of type $SUNKEN_TYPE)"
                 if ($mine0.Count -ne $UnitCount -or $sunk0.Count -ne 1) { return }
@@ -308,14 +284,14 @@ try {
                 # -1 means the block is gone, which is itself proof it got in range.
                 # Recorded on the arm as well as asserted, because the plugin-vs-stock
                 # comparison downstream needs it as its witness: two arms whose blocks never
-                # arrived agree that nothing happened (issue #70).
+                # arrived agree that nothing happened.
                 $arm.InRange = (($arm.DistWatched -ge 0 -and $arm.DistWatched -le $SUNKEN_RANGE_PX) -or
                                 ($arm.DistArrived -ge 0 -and $arm.DistArrived -le $SUNKEN_RANGE_PX) -or
                                 $arm.Survivors -lt $UnitCount)
                 Assert-That "[$($arm.Tag)] the block really did walk inside the Sunken's weapon range (closest $($arm.DistWatched)px, arrival $($arm.DistArrived)px, range ${SUNKEN_RANGE_PX}px)" `
                     $arm.InRange
-                # The plugin arm must actually be exercising the feature, or it is not a
-                # test of the feature. Only meaningful in the fanout arm; the stock arm is
+                # The plugin arm must actually be exercising the feature, or it is not a test
+                # of the feature. Only meaningful in the fanout arm; the stock arm is
                 # supposed to hold twelve and cap.
                 if ($arm.Mode -eq 'fanout') {
                     $fan = @(Get-Content -LiteralPath $arm.LogPath |
@@ -337,10 +313,10 @@ try {
     }
 
     Step 'THE COMPARISON: is the Sunken behaving differently with our plugin in the process?' {
-        # HOW MANY PAIRS ACTUALLY REACHED THIS COMPARISON (issue #70). The `continue` below
-        # is legitimate -- `-Modes fanout` alone leaves no stock arm to compare against --
-        # but nothing counted it, so a run that compared NOTHING printed no assertions here
-        # and exited 0, indistinguishable from a run in which everything agreed.
+        # HOW MANY PAIRS ACTUALLY REACHED THIS COMPARISON. The `continue` below is
+        # legitimate -- `-Modes fanout` alone leaves no stock arm to compare against -- but
+        # uncounted it lets a run that compared NOTHING print no assertions here and exit 0,
+        # indistinguishable from a run in which everything agreed.
         $pairsCompared = 0
         foreach ($ut in $UnitTypes) {
             $f = $arms["$ut-fanout"]; $o = $arms["$ut-observe"]
@@ -352,16 +328,14 @@ try {
             # THE WITNESS both of the assertions below need: each arm's block has to have
             # got within the Sunken's reach. Without it, two arms that never arrived are
             # both "not attacked", the comparison passes, and the run reports parity between
-            # two no-ops (issue #70). It is asserted per arm above; here it GATES.
+            # two no-ops. Asserted per arm above; here it GATES.
             $bothProvoked = ($f.InRange -eq $true -and $o.InRange -eq $true)
             # THE QUESTION. Whatever the Sunken does, stock and plugin must do the same
             # thing -- that is what makes the answer "ours" or "vanilla".
             Assert-That "$ut`: the plugin arm and the stock arm agree on whether the Sunken attacked (both $($f.Attacked))" `
                 (Test-ScWitnessed -Claim ($f.Attacked -eq $o.Attacked) -Witness $bothProvoked) `
                 "(fanout=$($f.Attacked) inRange=$($f.InRange); observe=$($o.Attacked) inRange=$($o.InRange) -- a DIFFERENCE HERE IS OURS AND MUST BE REPORTED BEFORE ANYTHING ELSE; two arms that never reached the Sunken agree about nothing)"
-            # ACQUIRED AT ANY POINT IN THE WINDOW, not in the last scan (issue #70).
-            # SunkenAcquired was one sample from the final watch, so a Sunken that acquired
-            # mid-window and went idle again read "never acquired" -- in both arms, agreeing.
+            # ACQUIRED AT ANY POINT IN THE WINDOW, not in the last scan.
             Assert-That "$ut`: and on whether it ACQUIRED at any point in the window (fanout orders [$($f.OrdersSeen)] vs observe [$($o.OrdersSeen)])" `
                 (Test-ScWitnessed -Claim ($f.AcquiredAny -eq $o.AcquiredAny) -Witness $bothProvoked) `
                 "(fanout=$($f.AcquiredAny) over $($f.WatchSamples) sample(s); observe=$($o.AcquiredAny) over $($o.WatchSamples) sample(s))"
@@ -388,11 +362,11 @@ try {
             $fanLog = Get-Content -LiteralPath $f.LogPath
 
             # AN ABSENCE ASSERTION IS WORTH NOTHING UNLESS THE SAME PATTERN IS SHOWN TO
-            # MATCH SOMETHING. The first version of this looked for 'HOOK install', a
-            # string the plugin never writes (the real ones are `HOOK %s: installed at %p`
-            # and `HOOK: %d/%d installed`), so it passed on any log at all -- including a
-            # fanout one. Each pattern below is therefore checked POSITIVE against the
-            # plugin arm's log first, and only then required absent from the stock arm's.
+            # MATCH SOMETHING. Do not probe for a string the plugin never writes: 'HOOK
+            # install' matches no log at all (the real lines are `HOOK %s: installed at %p`
+            # and `HOOK: %d/%d installed`), so it passes on a fanout log too. Each pattern
+            # below is checked POSITIVE against the plugin arm's log first, and only then
+            # required absent from the stock arm's.
             foreach ($probe in @(
                 @{ What = 'a hook installation line'; Pattern = 'HOOK .*installed' },
                 @{ What = 'an intercepted command';   Pattern = 'CMD id=' },

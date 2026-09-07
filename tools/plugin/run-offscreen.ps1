@@ -5,73 +5,28 @@ Run a test suite on a Windows desktop that is never shown on the monitor. Same s
 arguments, same assertions -- the only difference is which desktop the process is born on.
 
 .DESCRIPTION
-Task 043. The user's ask, in their words: *"can we setup a vm so you can run tests there so
-my screen doesn't get messed up?"* Task 040 found the mechanism that needs no VM at all (an
-invisible Windows desktop, `work/reports/040-test-host-isolation.md`); this is the thing
-that makes it how the suite actually runs.
+A process is BORN on the desktop named in `STARTUPINFO.lpDesktop` and every thread of it is
+on that desktop by default -- the same mechanism scinject.exe's `--desktop` uses for the
+game. Window enumeration (`EnumWindows`, under drive-game.ps1's Get-ScGameWindow,
+check-game-windows.ps1 and close-game.ps1) is scoped to the calling thread's desktop, so the
+whole harness follows the game across with no per-primitive change. A running shell cannot
+move itself instead: `SetThreadDesktop` refuses for a thread that already has a window or a
+hook, which PowerShell's main thread does before any script runs (in a plain
+`pwsh -NoProfile`: main thread -> False, err=170 ERROR_BUSY; a fresh thread -> OK).
 
-    ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/test-selection-circles.ps1
-    ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/test-selection-circles.ps1 -Visible
+The suites are unmodified, byte for byte the scripts that run on the visible desktop: a
+suite that "passes" off-screen while silently doing less is the failure mode to guard
+against, and the cheapest guard is that no off-screen variant of it exists. Launches stay
+serialised by sc-launch-lock.ps1 either way -- StarCraft is single-instance PER MACHINE
+regardless of desktops (research/automated-testing-options.md §6, AGENTS.md § "Launch
+lock"), so N invisible desktops still mean one game at a time.
 
-The second is the debugging run a human wants to watch. It is ONE FLAG and it is the SAME
-CODE PATH -- the same generated child script, the same CreateProcess call, the same suite
-with the same arguments; only the desktop name differs. A separate "watch mode" that
-diverged from how tests really run is how you get a bug that only exists when nobody is
-looking, so there is not one here.
-
-## Why a child process rather than "just call SetThreadDesktop"
-
-Measured, task 043, in a plain `pwsh -NoProfile`:
-
-    main thread  : SetThreadDesktop -> False, err=170 (ERROR_BUSY)
-    fresh thread : SetThreadDesktop -> OK
-
-`SetThreadDesktop` refuses for a thread that already has a window or a hook, and
-PowerShell's main thread has one before any script runs. So a running shell cannot move
-itself onto the desktop, and the "make every drive-game.ps1 primitive desktop-aware"
-approach has nowhere to stand.
-
-A process is instead BORN on a desktop, named in `STARTUPINFO.lpDesktop` -- exactly what
-scinject.exe's `--desktop` (task 040, PR #49) does for the game. Every thread of that
-process is on that desktop by default. That is also the property worth having: window
-enumeration (`EnumWindows`, used by drive-game.ps1's Get-ScGameWindow, by
-check-game-windows.ps1 and by close-game.ps1) is scoped to the calling thread's desktop, so
-the entire existing harness follows the game across with NO per-primitive changes and no
-list of primitives to be one item short of.
-
-Consequently the suites are unmodified. `test-selection-circles.ps1` run through this is
-byte-for-byte the script that runs on the visible desktop -- which is the point: a suite
-that "passes" off-screen while silently doing less is the failure mode this task has to
-guard against, and the cheapest guard is that there is no off-screen variant of it.
-
-## What this does not change
-
-* `sc-launch-lock.ps1` still serialises launches. StarCraft is single-instance PER MACHINE
-  regardless of desktops (research/automated-testing-options.md §6, re-confirmed by task
-  040), so N invisible desktops still means one game at a time. Nothing here touches that.
-* The game's own frames stay a diagnostic on the gitignored path. Off-screen or not, a
-  frame reproduces game artwork (AGENTS.md hard rule 1 / "Screenshots vs hard rule 1").
-
-## Output
-
-The child's stdout and stderr are redirected to a transcript file and tailed here live, so
-this behaves like running the suite directly. The transcript stays afterwards. The child's
-exit code is this script's exit code.
+The child's stdout and stderr are redirected to a transcript file and tailed here live; the
+transcript stays afterwards, and the child's exit code is this script's exit code.
 
 .PARAMETER Visible
-Run on the desktop that IS on the monitor -- the debugging path. Everything else is
-identical.
-
-THE CURSOR CLIP (issue #135). ClipCursor confines the PHYSICAL cursor for the whole
-session, whatever desktop the calling window sits on: a game on the invisible desktop
-that clips (cnc-ddraw's mouse lock re-arms on every button-up, i.e. on every posted
-click; the engine's own clip reset 0x004215E0 on activation, which the menu walk's
-WM_ACTIVATEAPP nudges fake) pinned the user's real mouse to a rectangle nobody could
-see, until an Alt-Tab reset it. This parent process sits on the user's desktop, so it
-watches GetClipCursor every tick of its transcript loop, releases any clip smaller than
-the virtual screen (ClipCursor(NULL)), prints each one it found with its rect, and
-prints the count at the end -- a 0 is only believable because clipping runs print
-their rects. Same loop in -Visible, on purpose (same code path).
+Run on the desktop that IS on the monitor -- the debugging run a human watches. Identical
+in every other respect, cursor-clip watch included.
 
 .PARAMETER Desktop
 Name the desktop explicitly instead of generating one per run. Mostly for a second process
@@ -79,7 +34,9 @@ that needs to join a run already in progress.
 
 .EXAMPLE
 ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/test-selection-circles.ps1 `
-    -SuiteArgs @{ ShotDir = 'C:\sc-work\logs\043-frames' }
+    -SuiteArgs @{ ShotDir = 'C:\sc-work\logs\frames' }
+A frame reproduces game artwork, so a suite's frames stay a diagnostic on a gitignored path
+under C:\sc-work\ whatever desktop the run is on (AGENTS.md § "Screenshots").
 
 .EXAMPLE
 # Anything, not only a suite -- used by probe-cross-desktop-input.ps1:
@@ -89,8 +46,8 @@ that needs to join a run already in progress.
 param(
     [Parameter(ParameterSetName = 'Suite', Mandatory, Position = 0)]
     [string]$Suite,
-    # Splatted into the suite -- a hashtable, spelled exactly as the suite spells its
-    # parameters. Same convention as time-suite.ps1.
+    # Splatted into the suite, so the keys are spelled exactly as the suite spells its
+    # parameters (the convention time-suite.ps1 uses too).
     [Parameter(ParameterSetName = 'Suite')]
     [hashtable]$SuiteArgs = @{},
 
@@ -230,8 +187,8 @@ namespace ScSpawn {
 }
 
 # --- where the run happens ----------------------------------------------------
-# Outside the repo, like every other artifact of a run: transcripts of a game test are
-# scratch, and the shared scratch root is the one place every launch already uses.
+# Outside the repo, like every other artifact of a run: a transcript is scratch, and the
+# shared scratch root is the one place every launch already uses.
 $runRoot = 'C:\sc-work\logs\offscreen'
 New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
 $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
@@ -242,8 +199,7 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 
 # --- the child script ---------------------------------------------------------
 # Generated as a real file rather than an -EncodedCommand so that a failed run leaves
-# something a human can open and re-run by hand. It does three things: prove where it is,
-# splat the caller's arguments into the suite unchanged, and propagate the exit code.
+# something a human can open and re-run by hand.
 $childScript = Join-Path $runRoot "$stamp-$tag-child.ps1"
 $argsFile = Join-Path $runRoot "$stamp-$tag-args.clixml"
 
@@ -251,7 +207,7 @@ if ($PSCmdlet.ParameterSetName -eq 'Suite') {
     if (-not (Test-Path -LiteralPath $Suite)) { throw "run-offscreen: no such suite: $Suite" }
     $suiteFull = (Resolve-Path -LiteralPath $Suite).Path
     # Clixml rather than a command line: a suite's arguments include hashtables, switches
-    # and paths with spaces, and quoting them through two layers of shell is how a run ends
+    # and paths with spaces, and quoting those through two layers of shell is how a run ends
     # up silently testing something else.
     $SuiteArgs | Export-Clixml -LiteralPath $argsFile -Depth 8
     $payload = @"
@@ -290,8 +246,9 @@ $desktopName = $null
 $owned = $false
 try {
     if ($Visible) {
-        # THE SAME CODE PATH. Not a branch that skips the spawn -- the same CreateProcess
-        # with the same redirection, named at the desktop the monitor is showing.
+        # THE SAME CODE PATH: not a branch that skips the spawn, but the same CreateProcess
+        # with the same redirection, named at the desktop the monitor is showing. A watch
+        # mode that diverged here would hide bugs that only exist when nobody is looking.
         $desktopName = Get-ScInputDesktopName
         if (-not $desktopName) { $desktopName = 'Default' }
         Write-Host "run-offscreen: -Visible — running on '$desktopName', the desktop on the monitor. You will see this run."
@@ -321,11 +278,13 @@ try {
     $pos = 0L
     $exit = $null
     # The virtual screen is what an UNCLIPPED cursor reads back (SM_XVIRTUALSCREEN 76,
-    # SM_YVIRTUALSCREEN 77, SM_CXVIRTUALSCREEN 78, SM_CYVIRTUALSCREEN 79). Anything
-    # smaller during the run is a clip some window of the run placed on the user's real
-    # mouse (issue #135); this loop releases it within one tick and counts it, so the
-    # summary line at the end is a measurement, not a hope -- a run that never clipped
-    # prints 0, and 0 is only believable because runs that did clip print their rects.
+    # SM_YVIRTUALSCREEN 77, SM_CXVIRTUALSCREEN 78, SM_CYVIRTUALSCREEN 79). Anything smaller
+    # is a clip a window of the run placed on the user's real mouse: cnc-ddraw re-arms its
+    # mouse lock on every button-up, i.e. on every posted click, and the engine's own clip
+    # reset at 0x004215E0 runs on activation, which the menu walk's WM_ACTIVATEAPP nudges
+    # fake -- pinning a physical cursor to a rectangle on a desktop nobody can see. Counting
+    # what it releases makes the summary a measurement: a 0 is believable only because runs
+    # that did clip print their rects.
     $vs = [ScSpawn.Native]::GetSystemMetrics(76), [ScSpawn.Native]::GetSystemMetrics(77),
           [ScSpawn.Native]::GetSystemMetrics(78), [ScSpawn.Native]::GetSystemMetrics(79)
     $vsRect = @{ left = $vs[0]; top = $vs[1]; right = $vs[0] + $vs[2]; bottom = $vs[1] + $vs[3] }
@@ -369,8 +328,7 @@ try {
         if (-not $running) { break }
         if ((Get-Date) -ge $deadline) {
             Write-Warning "run-offscreen: the run exceeded -TimeoutMinutes $TimeoutMinutes; terminating child pid $childPid."
-            # The child's own `finally` closes the game; killing it skips that, so say so
-            # loudly rather than leaving a reader to assume a clean teardown happened.
+            # The child's own `finally` closes the game, and killing it skips that teardown.
             Write-Warning 'run-offscreen: the suite''s teardown did NOT run — check for a surviving StarCraft process before starting another run.'
             [void][ScSpawn.Native]::TerminateProcess($hProc, 258)
             break
@@ -379,31 +337,26 @@ try {
 
     $code = 0
     [void][ScSpawn.Native]::GetExitCodeProcess($hProc, [ref]$code)
-    # GetExitCodeProcess returns a DWORD. A checked `[int]` cast throws OverflowException
-    # for anything above Int32.MaxValue -- which is exactly what a host FailFast exit code
-    # is (task 039 saw 2148734499 / 0x80131623 from a PowerShell host crash; reproduced
-    # live here, task 045, by forcing `[Environment]::FailFast()` as the child's payload --
-    # same overflow, same throw). That uncaught throw used to escape this script without
-    # ever reaching `exit`, so $LASTEXITCODE was left holding whatever ran before this call
-    # -- often a stale 0 that read as a pass. Reinterpret the bits instead of range-checking
-    # them; this is a no-op for any exit code that fits in Int32 (every ordinary suite exit).
+    # GetExitCodeProcess returns a DWORD, and a checked `[int]` cast throws OverflowException
+    # above Int32.MaxValue -- exactly what a host FailFast exit code is (a PowerShell host
+    # crash, or `[Environment]::FailFast()`, exits 2148734499 / 0x80131623). That throw would
+    # escape this script without reaching `exit`, leaving $LASTEXITCODE holding whatever ran
+    # before -- often a stale 0 that reads as a pass. Reinterpreting the bits cannot throw and
+    # is a no-op for any code that fits in Int32 (every ordinary suite exit).
     $exit = [BitConverter]::ToInt32([BitConverter]::GetBytes($code), 0)
-    # One last release: a clip placed between the final tick and the child's exit would
-    # otherwise outlive the run (the user's Alt-Tab was what used to clear it).
+    # A clip placed between the final tick and the child's exit outlives the run otherwise,
+    # leaving the user to free their own mouse with an Alt-Tab.
     [void][ScSpawn.Native]::ClipCursor([IntPtr]::Zero)
     Write-Host ('-' * 70)
     Write-Host "run-offscreen: cursor clip: $clipsFound clip(s) of the real mouse found and released during the run (issue #135; 0 = never confined)"
     Write-Host "run-offscreen: child pid $childPid exited $exit (desktop '$desktopName')"
     Write-Host "run-offscreen: transcript $TranscriptPath"
 
-    # The child's very first act (before any suite/command payload runs) is to print its
-    # own "run-offscreen(child):" header line. If that line is missing, the child process
-    # died at HOST STARTUP -- before one line of the suite ran -- and NOTHING it was asked
-    # to test was ever exercised. Task 039 hit this when the child raced a desktop still
-    # being torn down by the previous step of a chain (the New-ScTestDesktopName race,
-    # fixed above): PowerShell FailFasts at console-buffer setup with Win32 error 0xE9
-    # ("No process is on the other end of the pipe."). That is a FAILURE, never a silent
-    # zero -- whatever kills the child before its first line runs.
+    # The child's very first act, before any suite or command payload, is to print its own
+    # "run-offscreen(child):" header line. A missing line means the child died at HOST
+    # STARTUP -- e.g. racing a desktop still being torn down makes PowerShell FailFast at
+    # console-buffer setup with Win32 0xE9, "No process is on the other end of the pipe."
+    # Nothing it was asked to test ran, so that is a FAILURE, never a silent zero.
     $transcriptText = if (Test-Path -LiteralPath $TranscriptPath) { Get-Content -LiteralPath $TranscriptPath -Raw -ErrorAction SilentlyContinue } else { $null }
     $childStarted = $transcriptText -and ($transcriptText -match 'run-offscreen\(child\):')
     if (-not $childStarted) {

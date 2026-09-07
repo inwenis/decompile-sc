@@ -1,37 +1,21 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Task 073. THE experiment for both blockers of the console move at 800 wide, in
-one driven cnc-ddraw session:
-
-  BLOCKER 1 (pixels): -ConsoleEdge 1 translates StatRes + StatBtn +160 on the
-  game thread once their surfaces exist, marking old AND new rects dirty. The
-  static reading this task took (layer-2 composite 0x0041C810 -> 0x004EF440 ->
-  0x004172F0: blit dest = the dirty rect, src = rect - the dialog's LIVE +0x04
-  bounds) predicts the pixels FOLLOW the bounds wherever a dirty rect covers
-  them -- 071's unmoving picture was a repaint-scheduling fact, not a separate
-  position source. The proof is a cnc-ddraw window capture (the only honest
-  visual instrument -- WMode crops x>=640) plus a pixel count over the new and
-  old regions, with the unmoved minimap as the instrument's positive control.
-
-  BLOCKER 2 (clicks): with the card drawn at (656,354)-(799,479), a posted
-  click on its Train button must put wire command 0x1F through queueCommand and
-  an item in the building's OWN ring. 071 measured "0 commands at (682,374)"
-  under WMode -- where a posted x>639 is out of the shim's contract (070
-  17.2) -- so whether a stock router drops x>=640 console clicks, or the
-  harness dropped them, is exactly what this run separates: under cnc-ddraw the
-  window IS 800 wide and console-dialog clicks demonstrably register off-screen
-  (probe-widescreen-drive's minimap clicks). -ConsoleTrace 1 wraps every root
-  dialog's interact, so whatever happens, the CTRACE lines name the dialog that
-  claimed (or none claimed) the click.
-
-Selection uses the plugin's marker-driven aid ('conedge-select': the engine's
-own 0x0049AE40 + CMDACT_Select pair on the game thread), because a posted
-PLAYFIELD click does not register under off-screen cnc-ddraw (070: 0/8). The
-clean-slate rule holds: the selection read starts from a verified-empty
-selection (fresh game), and the measured act -- the card click -- is a real
-posted click.
-
+Drive one cnc-ddraw session to test both halves of the console move at 800 wide:
+the pixels and the clicks. -ConsoleEdge 1 translates StatRes + StatBtn +160 on
+the game thread once their surfaces exist, marking old AND new rects dirty; the
+layer-2 composite (0x0041C810 -> 0x004EF440 -> 0x004172F0) blits dest = the
+dirty rect, src = rect minus the dialog's LIVE +0x04 bounds, so the pixels
+follow the bounds wherever a dirty rect covers them. A cnc-ddraw window capture
+is the only honest visual instrument: WMode crops x>=640. The clicks need it too:
+a posted click at x>639 is outside WMode's shim contract, so a zero-command
+reading there measures the harness rather than the router, while under cnc-ddraw
+the window really is 800 wide and console-dialog clicks register off-screen.
+Selection uses the plugin's marker-driven aid ('conedge-select': the engine's own
+0x0049AE40 + CMDACT_Select pair on the game thread) because a posted PLAYFIELD
+click does not register under off-screen cnc-ddraw (0 of 8 registered); the aid
+only stages the selection -- read from a verified-empty one -- while the measured
+act stays a real posted click on the card.
 .EXAMPLE
 ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-console-edge.ps1
 #>
@@ -43,10 +27,10 @@ param(
     [string]$FrameDir = 'C:\sc-work\logs\073-frames',
     [string]$WindowedHelperDll = 'C:\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll',
     [switch]$KeepOpen,
-    # Task 074: the storm-side present. '0' = off (073's behaviour), 'probe' =
-    # read-only storm geometry/clip/region log, 'widen' = coerce storm's virtual
-    # screen wide so the buffer->glass present carries x>648. The moved resource
-    # bar (ConsoleEdge) is the bright oracle at x>648 this reads on GLASS.
+    # The storm-side present arm. '0' = off, 'probe' = read-only storm
+    # geometry/clip/region log, 'widen' = coerce storm's virtual screen wide so
+    # the buffer->glass present carries x>648. The moved resource bar
+    # (ConsoleEdge) is the bright oracle at x>648 this reads on GLASS.
     [ValidateSet('0', 'probe', 'widen')][string]$StormPresent = '0'
 )
 
@@ -57,7 +41,7 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
 
 $NEXUS_TYPE = 154
-# The moved rects the plugin's +160 predicts from 070's measured stock ones.
+# The moved rects the plugin's +160 predicts from the measured stock ones.
 $STATRES_MOVED = @(380, 0, 799, 19)
 $STATBTN_MOVED = @(656, 354, 799, 479)
 $MINIMAP_STOCK = @(0, 315, 137, 479)
@@ -91,10 +75,9 @@ function Report-Finding {
     Write-Host "  ---- FINDING: $What"
 }
 
-# Count non-black pixels of a saved window PNG inside a client-coordinate rect.
 # The window capture is the ONE honest instrument for "what the user sees"
-# through cnc-ddraw (renderer-viewport.md 18's oracle rule); this quantifies it
-# so the claim is a number beside the picture, not an adjective.
+# through cnc-ddraw (renderer-viewport.md 18's oracle rule); counting non-black
+# pixels in a rect makes the claim a number beside the picture, not an adjective.
 Add-Type -AssemblyName System.Drawing
 function Get-PngRectNonzero {
     param([Parameter(Mandatory)][string]$Path,
@@ -181,8 +164,8 @@ try {
     if (Test-Path -LiteralPath $markerPath) { Remove-Item -LiteralPath $markerPath -Force }
 
     # Glue-screen posted input is activation-gated under off-screen cnc-ddraw
-    # (AGENTS.md; probe-widescreen-drive measured the fix) -- nudge before every
-    # posted input during the menu walk, and turn it OFF in game.
+    # (AGENTS.md § "Glue-screen (menu) input under cnc-ddraw") -- nudge before
+    # every posted input during the menu walk, and turn it OFF in game.
     $env:SCDRIVE_POST_ACTIVATE = '1'
 
     Write-Host 'probe-conedge: launching (stage 3 + ConsoleEdge + ConsoleTrace, cnc-ddraw)'
@@ -208,7 +191,7 @@ try {
     Assert-True 'cnc-ddraw presents an 800x480 client area' `
         ($client.Width -eq 800 -and $client.Height -eq 480) "(got $($client.Width)x$($client.Height))"
 
-    # ---- the dialog-gated menu walk (probe-widescreen-drive's, verbatim) ----
+    # ---- the dialog-gated menu walk ----------------------------------------
     function Click-UntilDialog {
         param([int]$X, [int]$Y, [string]$Name, [int]$Tries = 3, [int]$WaitSec = 10)
         for ($i = 1; $i -le $Tries; $i++) {
@@ -277,9 +260,9 @@ try {
     Save-ScWindowImage -Hwnd $h -Path $shot | Out-Null
     Write-Host "       capture: $shot (the AFTER; 071's console-800-ingame.png is the before)"
 
-    # Pixel counts over the capture. Positive control first (the unmoved
-    # minimap), then the moved regions, then a known-empty region so the
-    # instrument is seen reading both high and low in the same frame.
+    # Positive control first (the unmoved minimap), then the moved regions, then
+    # a known-empty region: the instrument must be seen reading both high and low
+    # in the same frame.
     $ctrl = Get-PngRectNonzero -Path $shot -X0 4 -Y0 350 -X1 135 -Y1 476
     Assert-True 'instrument positive control: the (unmoved) minimap region reads mostly non-black' `
         ($ctrl -ge 0.30) "(nonzero=$ctrl)"
@@ -310,12 +293,12 @@ try {
     Save-ScWindowImage -Hwnd $h -Path $shotSel | Out-Null
     Write-Host "       capture: $shotSel (Nexus selected -- the card with its buttons)"
 
-    # The StatRes question, measured from the BUFFER (run 2's lesson: the window
-    # PNG includes the shim's caption INSIDE the client rect, and a band probe
-    # over it reads the gray caption -- see Save-ScWindowImage's own warning).
+    # The StatRes question is measured from the BUFFER, not the window PNG: the
+    # PNG includes the shim's caption INSIDE the client rect, so a band probe
+    # over it reads the gray caption (see Save-ScWindowImage's own warning).
     # StatRes is the one flag-0x10000000 dialog: its composite target is the
-    # 800-wide buffer, so the buffer says whether its digits were ever
-    # composited at the new position, independent of presentation.
+    # 800-wide buffer, so the buffer says whether its digits were composited at
+    # the moved position, independent of presentation.
     $dump = Get-BufferDump -Tag 'edge-postsel'
     if ($dump) {
         $bNew = Get-DumpBand -Dump $dump -X0 700 -X1 796 -Y0 2 -Y1 17
@@ -324,10 +307,8 @@ try {
     }
     else { Report-Finding 'BUFFER band: no FRAMEDUMP arrived -- the StatRes diagnosis is missing from this run' }
 
-    # The moved bar ON GLASS -- run 3 proved it composited into the buffer at
-    # the new rect while the window stayed black there (the present clip,
-    # renderer-viewport.md 19.8); the sliver image node is the repair. Selected
-    # Nexus supplies 9, so the supply counter is up and the digits are lit.
+    # The moved bar ON GLASS. A selected Nexus supplies 9, so the supply counter
+    # is up and its digits are lit.
     $shotSel2 = Join-Path $FrameDir 'console-800-edge-selected.png'
     # REPORTED, not asserted: both readings are the STRUCTURAL present wall
     # (renderer-viewport.md 19.8) -- the storm buffer->screen present never
@@ -357,17 +338,16 @@ try {
         ($cmd1 -gt $cmd0) "(0x1F count $cmd0 -> $cmd1)"
     $stat2 = Get-ScStatusQueue -LogPath $log -Tag 'postclick-statq' -MarkerPath $markerPath
     # A ring value is only a queued item if it is a REAL unit-type id (< 228, the
-    # engine's empty sentinel). The first run of this probe passed this assert on
-    # a walk full of 4095s taken with no portrait at all -- a vacuous green
-    # (AGENTS.md, task 041's class) -- so the portrait precondition is part of
-    # the assert now.
+    # engine's empty sentinel): a walk full of 4095s taken with no portrait at
+    # all passes a bare count assert vacuously (AGENTS.md § "Oracles: what counts
+    # as a read-back"), so the portrait is part of the precondition.
     $engineQ = @($stat2.Engine | Where-Object { $_ -ge 0 -and $_ -lt 228 })
     Assert-True "the ENGINE's own ring holds the queued item (portrait still the Nexus)" `
         ($stat2.PortraitType -eq $NEXUS_TYPE -and $engineQ.Count -ge 1) `
         "(ptype=$($stat2.PortraitType) engine=[$($stat2.Engine -join ',')] head=$($stat2.Head))"
 
-    # The trace's answer, whatever it was: every non-MOUSEMOVE root-interact
-    # event since just before the click.
+    # The trace's answer: every non-MOUSEMOVE root-interact event since just
+    # before the click.
     $trace = @(Get-Content -LiteralPath $log | Select-Object -Skip $traceFrom |
                Where-Object { $_ -match 'CTRACE dlg=' } | Select-Object -First 40)
     Write-Host '       CTRACE around the Train click:'
@@ -390,13 +370,12 @@ try {
     Save-ScWindowImage -Hwnd $h -Path $shot2 | Out-Null
     Write-Host "       capture: $shot2 (after the Train click + minimap steer)"
 
-    # ---- TASK 074: the storm-side present, buffer vs glass ------------------
-    # Fire a dedicated marker so ScStormPresentLog dumps storm's live geometry,
-    # the flip clip, the fallback lock pointer and the present region -- the
-    # instrument that says which buffer->glass path is live (renderer-viewport.md
-    # 19.8). Then read the two numbers over the MOVED resource bar's right end:
-    # the buffer band (composited, from the FRAMEDUMP) beside the glass band (the
-    # window). 073: buffer>0 & glass=0 -- the structural present wall.
+    # ---- the storm-side present, buffer vs glass ----------------------------
+    # A dedicated marker makes ScStormPresentLog dump storm's live geometry, the
+    # flip clip, the fallback lock pointer and the present region -- the
+    # instrument that says which buffer->glass path is live. Then read the two
+    # numbers over the MOVED resource bar's right end: the buffer band
+    # (composited, from the FRAMEDUMP) beside the glass band (the window).
     if ($StormPresent -ne '0') {
         $sfrom = Get-ScLogLineCount -LogPath $log
         Set-ScMarker -MarkerPath $markerPath -Label 'storm-probe'

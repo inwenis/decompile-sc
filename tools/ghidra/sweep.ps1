@@ -1,32 +1,18 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Persistent-project Ghidra headless driver: import+analyze a PE ONCE, then run many cheap
-query scripts against the already-analyzed program.
+Ghidra headless driver: analyze a PE once into a persistent project, then run many cheap query
+scripts against it.
 
 .DESCRIPTION
-Companion to tools/ghidra/analyze.ps1 (task 001), which imports and re-analyzes on EVERY
-invocation. That is the right shape for "decompile one function"; it is the wrong shape for a
-cross-reference sweep, where a dozen different queries must all see the SAME analyzed program
-and re-analysis would cost minutes each time.
+A cross-reference sweep needs a dozen queries to see the SAME analyzed program, and analyze.ps1
+re-imports and re-analyzes on every invocation -- minutes per query. Prepare analyzes once and
+writes the full analyzeHeadless log to -LogFile, so the "Using Language/Compiler" line, image
+base and entry point are evidence rather than assumption; Run queries that program with
+-noanalysis, in seconds.
 
-Two modes:
-
-  -Mode Prepare  imports -InputPE into a PERSISTENT Ghidra project and runs auto-analysis once.
-                 Writes the full analyzeHeadless log to -LogFile so the "Using Language/Compiler"
-                 line, image base and entry point can be read back as evidence rather than assumed.
-
-  -Mode Run      runs -Script (a GhidraScript under -ScriptPath) against the already-imported
-                 program with -noanalysis, passing -ScriptArgs through. Seconds, not minutes.
-
-Freshness: every query script in scripts/ writes a `<out>.manifest` file as its LAST action and
-this driver deletes any stale manifest before the run and requires a fresh one with status=OK
-afterwards. analyzeHeadless exits 0 even when a post-script throws (it logs "REPORT SCRIPT
-ERROR" and carries on), and query output files are reused across runs -- same failure mode
-tools/ghidra/README.md documents for analyze.ps1, same defence.
-
-The project directory and all output are expected to live under work/scratch/ (gitignored).
-Never commit a Ghidra project analyzing a game binary -- it embeds the binary.
+Project directory and output belong under work/scratch/ (gitignored): a Ghidra project analyzing
+a game binary embeds that binary and must never be committed.
 
 .EXAMPLE
 ./tools/ghidra/sweep.ps1 -Mode Prepare -InputPE C:\sc-work\1161-base\StarCraft.exe `
@@ -55,11 +41,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# Resolution order matches analyze.ps1: explicit -GhidraInstallDir, then $env:GHIDRA_INSTALL_DIR,
-# then a single ghidra_* install next to this script. Deliberately NO hardcoded path into another
-# agent's worktree: task 005 had the install disappear mid-run when task 001's worktree was
-# pruned after its merge (the install is gitignored, so pruning deleted the only copy on the
-# machine). A tool that lives inside a worktree is only as durable as that worktree.
+# Resolution order matches analyze.ps1. Never hardcode a path into another worktree: the install
+# is gitignored, so pruning that worktree deletes the only copy on the machine mid-run.
 if (-not $GhidraInstallDir) {
     if ($env:GHIDRA_INSTALL_DIR) {
         $GhidraInstallDir = $env:GHIDRA_INSTALL_DIR
@@ -96,14 +79,14 @@ else {
     if (-not $ProgramName) { throw '-Mode Run requires -ProgramName.' }
     if (-not $Script) { throw '-Mode Run requires -Script.' }
 
-    # Every query script's first arg is its output path; its manifest is that path + ".manifest".
-    # Delete the stale manifest up front so a post-script that dies cannot leave a prior run's OK.
+    # Contract with every query script in scripts/: its first arg is its output path, and it
+    # writes <that path>.manifest with status=OK as its LAST action. Deleting a stale manifest up
+    # front stops a post-script that dies from leaving an earlier run's OK standing.
     if ($ScriptArgs.Count -lt 1) { throw '-Mode Run requires at least one -ScriptArgs (the output path).' }
 
     # analyzeHeadless is a .bat, so cmd.exe re-splits the command line on COMMAS as well as
-    # spaces. A single argument containing a comma silently arrives at the GhidraScript as
-    # several arguments -- which produced a sweep that watched one constant instead of nine and
-    # still reported success. Fail loudly instead.
+    # spaces: one argument containing a comma silently reaches the GhidraScript as several, so a
+    # nine-constant sweep can watch one constant and still report success.
     foreach ($a in $ScriptArgs) {
         if ($a -match ',') {
             throw "sweep.ps1: script argument '$a' contains a comma. cmd.exe splits .bat arguments on commas, so this would reach the script as multiple arguments. Use '+' as a list separator instead."
@@ -124,7 +107,7 @@ else {
 Write-Host "sweep.ps1: $analyzeHeadless $($headlessArgs -join ' ')"
 
 # Ghidra's launch.bat runs `pause` on a non-zero exit; feed it empty stdin so a launch failure
-# fails fast instead of blocking on a keypress (same foot-gun analyze.ps1 documents).
+# fails fast instead of blocking on a keypress.
 if ($LogFile) {
     New-Item -ItemType Directory -Path (Split-Path $LogFile -Parent) -Force | Out-Null
     '' | & $analyzeHeadless @headlessArgs 2>&1 | Tee-Object -FilePath $LogFile
