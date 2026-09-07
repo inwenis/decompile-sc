@@ -2591,7 +2591,7 @@ Predictions were registered before each run; misses are recorded as such.
 ### 21.7 How to reproduce
 
 ```powershell
-python tools/renderer_patch_sites.py --check                 # 274 sites, 5 caves, 0 errors at 1280x480
+python tools/renderer_patch_sites.py --check                 # 275 sites, 6 caves, 0 errors at 1280x480
 python tools/renderer_patch_sites.py --check --width 960     # refused: 992 is not a 3-term pitch
 ./tools/plugin/build.ps1 -Test                               # hooktest part [23] executes a caved window
 $env:AGENT_TASK = '1280'
@@ -2603,3 +2603,191 @@ $env:AGENT_TASK = '1280'
 ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/test-widescreen-input-800.ps1
 #   stage-3 sites at 1280 (hexes derived from the header), stock arm unchanged
 ```
+
+### 21.8 The right-click dead band beside the console: one 640-wide predicate (2026-09-07)
+
+First real play at 1280 (the user, real mouse, the deployed build): *"in the area to
+the right of the bottom bar ... I can select units from there, but I cannot tell
+units to go there"* -- right-click orders dead on the VISIBLE map at x>=640 in the
+rows level with the console (y ~302..399), fine above that band and fine everywhere
+at x<640. Six independent reads of the binary (forward from the window procedure,
+backward from the 0x14 packet, the console-mask hypothesis, the cursor path, an
+immediate sweep, the dialog layer) converged on one function; two adversarial
+verifiers then re-derived every byte. What follows is the chain, each link with the
+bytes it was read from.
+
+**The path.** `WM_RBUTTONDOWN` (0x204) lands at 0x004D241E through the wndproc's
+jump table at 0x004D2684 (`edi=[0x005968BC]; push 7; call 0x004D19C0`); 0x004D19C0
+is the shared BUTTON-DOWN builder (x clamp 0x004D19EC/19F9 -- stage 3 -- then the
+record {+0x0C type, +0x0E x, +0x10 y}), which calls the dialog dispatcher 0x00419FD0
+and, when no dialog claims the event, the game's own handler through `edi`.
+`[0x005968BC]` = 0x00484620 (installed at 0x00484CDF): a cursor-state guard,
+`PtInRect(0x005136CC = (496,354,639,479))` for the command card, `PtInRect(0x005993B0)`
+against the playfield rect -- already widened to (0,0,1279,399) by
+`playfield.setrect.right` -- then `jmp [0x006556F0]` = 0x004564E0 for ordinary play
+(0x00484D80). And 0x004564E0's FIRST act:
+
+```
+004564E7  0f bf 47 10        movsx eax,[edi+0x10]     ; event.y
+004564EB  0f bf 4f 0e        movsx ecx,[edi+0x0e]     ; event.x
+004564EF  e8 4c ac 07 00     call  0x004D1140         ; isPointOverUi(x, y)
+004564F4  85 c0              test  eax,eax
+004564F6  0f 85 2b 01 00 00  jne   0x00456627         ; -> return, no order built
+```
+
+Only past that gate does it resolve the unit under the cursor (0x0046F3A0), add the
+camera (`x + [0x0062848C]`, `y + [0x006284A8]`) and build the 10-byte Right Click
+(0x004C0380 at 0x0045660C). Nothing after the gate is screen-x sensitive.
+
+**The predicate.** 0x004D1140, `isPointOverUi(ecx = screen x, eax = screen y) -> 1 =
+the console covers this point`, three tiers:
+
+```
+004D1140  3b 05 6c 6b 59 00  cmp eax,[0x596B6C]  ; y < the console art's first row -> 0
+004D1146  7d 03 / 33 c0 / c3
+004D114B  3b 05 74 6b 59 00  cmp eax,[0x596B74]  ; y >= its first fully opaque row -> 1
+004D1151  7c 06 / b8 01 00 00 00 / c3
+004D1159  39 0d 30 64 6d 00  cmp [0x6D6430],ecx  ; memo cache on (x,y): 0x6D6430/34, result 0x6D642C
+004D115F  75 0e ...
+004D116F  push eax; mov [0x6D6434],eax; mov eax,[0x6D5E14]; push ecx; push eax
+004D117C  mov [0x6D6430],ecx; call 0x00410166     ; storm ord442 point-in-region
+004D1187  f7 d8 / 1b c0 / 40                       ; neg/sbb/inc: (in region) ? 0 : 1
+```
+
+The two row thresholds are computed once at load by 0x004D11A0 (single caller
+0x004C39F5, `eax = 0x00597240` = the console.pcx descriptor `{u16 w, u16 h, u8* bits}`):
+the first row holding any opaque byte (302) and the first row with no transparent byte
+(400) -- there is no `cmp ..,302` in .text, the 302 is the art. Tier 3 asks storm
+ordinal 442 whether the point is inside the region at `[0x006D5E14]`, the console's
+TRANSPARENCY region, and INVERTS the answer: outside the region = over the console.
+That region is built by 0x0041D470 from the screen-image list, whose only node is the
+console (imgCreate 0x0041D640 has exactly one caller, 0x004C3A03, with the 640x480
+descriptor at (0,0)); storm ord442 (RVA 0x1A490: `mov esi,[ebp+0xc]` = x; `cmp
+esi,[ecx+0x18]; jge -> return 0`) rejects any x at or past the region's width before
+walking a row. So at x>=640 the region says "not inside", the inversion says "console",
+and for every y in [302,400) -- the map beside the console -- the right-click bails.
+Above 302 tier 1 answers by y alone (works), at/below 400 tier 2 answers by y alone
+(the black rectangle, correctly non-playfield). The band's two edges are exactly the two
+thresholds this function reads.
+
+**Five callers, one defect.** `grep 'call 0x4d1140'`: 0x004564EF (right-click order),
+0x0046FF7B (the ordinary left-button-down 0x0046FF70: no drag anchor, no button-up
+handler installed), 0x0048E5E9 and 0x004BD50B (the targeting and building-placement
+left handlers), and 0x004D1493 (the per-frame cursor chooser 0x004D1460 -> cursor index
+0, the plain arrow, in the band; the contextual cursor one row above it). The cursor
+half of the user's *"when the mouse is over the extended space it flickers"* is this:
+crossing y~302 at x>=640 swaps the cursor GRP (0x004BE120) both ways, and there is no
+such seam at x<640 because there the art really is there. (The picture half is a
+separate present-path mechanism, 21.9.) Why the user could still SELECT in the band:
+the left path's gate refuses the DOWN, but the button-UP handler (0x0046FEA0 at
+0x005968B4) stays installed from the last accepted click, and it is the up that runs the
+click/drag select (0x0046FF5C -> 0x0046FB40) -- so a unit under the cursor still got
+selected while the down-side anchor and the right-click order were refused.
+
+**The fix: `console.hittest.xguard`, stage 3, a code cave (21.3's tool used for logic
+rather than an operand width).** The window is the 6-byte memo probe at 0x004D1159
+(tier 2's `jl` targets the window's START, which the generator allows); the cave:
+
+```
+81 f9 80 02 00 00   cmp ecx,0x280        ; x >= 640, the console.pcx WIDTH
+7c 03               jl  +3               ; x < 640 (or negative): the stock path
+33 c0 / c3          xor eax,eax ; ret    ; past the console image: bare playfield
+39 0d 30 64 6d 00   cmp [0x6D6430],ecx   ; the displaced probe, then jmp 0x004D115F
+```
+
+Tiers 1 and 2 keep their bytes (y>=400 stays "console", so the black rectangle stays
+non-playfield exactly as stock's console rows are); the cave's last instruction is the
+same `cmp`, so the `jne` at 0x004D115F reads the flags it always read (the generator's
+flags check flags it as a warning to be read by hand, like `grid.rowaddr.fog.b2`).
+The `jl` is SIGNED on purpose: x arrives by `movsx` and can be negative, and stock
+answers "console" there. The 0x280 is the console art's width, not the screen's -- the
+engine reads the same width dynamically at 0x004D11B2 when it computes the thresholds,
+and the HUD stays in the left 640 columns whatever the screen is; if the art were ever
+widened this constant would need to follow. The memo cache (referenced only inside
+0x004D1159..0x004D118C) is neither read nor written on the early return, so no x>=640
+query can plant a stale entry. Nothing else names the window: a byte scan for
+0x004D1159/0x004D1140 as little-endian dwords finds no table or pointer, and the image
+has no relocations (`IMAGE_FILE_RELOCS_STRIPPED`, base-reloc directory empty), so
+moving the probe's absolute disp32 into the cave is safe.
+
+**Measured.** `python tools/renderer_patch_sites.py --check`: 275 sites, 6 caves, 0
+errors. hooktest part [23] now also drives a cave with an inner `ret` through both paths
+(ecx=639 falls through and comes back, 640 and 1279 return 0 straight out).
+`test-widescreen-input-800.ps1` (off-screen, 2026-09-07): both arms PASS; the s3 arm
+logs the cave line with the runtime address and the 17-byte body and the stock arm has
+none -- and the driven session (menus, minimap, camera) ran with the cave live, which
+the per-frame cursor chooser executes every frame. The behavioural half -- a right-click
+at (700,350) issuing a move -- is the standing 17.2 limit: a real mouse on a real
+desktop, the user's play.
+
+### 21.9 The cursor strobe in the far band: a mirror where the engine accumulates (2026-09-07)
+
+The user's second report, same play: *"when the mouse is over the extended space it
+flickers."* One half is 21.8's cursor-shape swap at the y=302 seam. The other half is
+the picture, and it is a property of how the far band reaches the glass.
+
+**Two different presents.** At x<640 the engine's own ord432 copy is DIRTY-DRIVEN: it
+writes only the 16x16 cells the grid marks, so the primary ACCUMULATES -- a frame that
+does not redraw the cursor simply leaves the cursor's last pixels on the glass. At
+x>=640 the plugin's strip copy (20.7) MIRRORS the framebuffer at present time, every
+present, whatever the grid says. The composer 0x0041E280 handles layer 0 (the cursor)
+like this, read at the bytes:
+
+```
+0041E357  call 0x0041DF40            ; save-under: copy the buffer under the cursor rect aside
+0041E35C  mov  bl,[esi-3]            ; layer flags
+0041E35F  test bl,0x21 / jne draw    ; 0x01 needs-redraw, 0x20 always-draw
+0041E37B  call 0x0041DE20            ; else: does the rect cover a dirty cell? -> or bl,4; draw
+0041E38C  and  ebx,2 / je skip       ; else: bit 0x02 -> draw
+0041E3A0  call [esi+0xC]             ; draw (0x004BDFA0 blits the GRP frame into the buffer)
+0041E3A3  and  byte [esi-3],0xF8     ; after a draw: clear 0x01/0x02/0x04, KEEP 0x20
+0041E3EA  call 0x0041D420            ; present (ord350 -> ord432 -> ord356)
+0041E414  call 0x0041DEB0            ; restore-under: put the saved pixels back
+```
+
+So on a frame where something else is dirty (the present runs) but the cursor is not
+redrawn -- flags & 0x23 == 0 and its rect covers no dirty cell -- save-under has run,
+the draw is skipped, and at present time the buffer holds the cursor-FREE pixels; the
+mirror paints them over the glass and the cursor vanishes for that frame. The next
+frame that redraws it brings it back. And a parked cursor is exactly the one that is
+never redrawn: 0x004BE120 (the only writer of layer 0's rect and the only path into the
+needs-redraw mark 0x0041E230) runs only when the cursor CHANGED (0x0046FEAF/FEB5
+same-id skip, 0x0046FECB same-GRP skip), and the animation tick bails for a one-frame
+GRP (0x004BE209 `cmp word [eax],1 / je`) -- the plain arrow 21.8 forced in the band is
+one. Alternating draw/skip against an unconditional mirror is a strobe, confined to
+x>=640 because the left 640 columns accumulate. And such frames are the RULE in
+game, not a corner: the game step re-issues the playfield layer's bit 0x02 every
+tick (0x004D973E `or edx,2` on 0x006CEFB5, layer 5's flags), so the terrain under the
+cursor is repainted every frame while the cursor's own cells stay clean -- fresh
+terrain, no cursor, mirrored.
+
+**Why not make the strip copy dirty-driven instead** (copy only the cells whose
+relocated-grid byte is set -- the grid is intact inside ord432; the clear at 0x0041E3EF
+runs after the present): that is the experiment 20.6/20.7 already ran and rejected. The
+save-under 0x0041DF40 and restore-under 0x0041DEB0 go through the blitter 0x0041D260
+and mark nothing; the cursor draw 0x004BDFA0 marks nothing; every layer draw paints its
+whole rect while the grid records only the cells that triggered it; the full-clear
+branch memsets the buffer and marks nothing. Any of those leaves the far band stale
+forever; the unconditional mirror is immune to all of them by construction. And it would
+UNDO the fix below (a cursor drawn every frame into cells that are not dirty, copied
+never).
+
+**The fix: layer 0's sticky always-draw bit.** Bit 0x20 of the layer flags is what
+0x0041E35F tests alongside needs-redraw, the post-draw mask 0xF8 keeps it, and every
+writer of 0x006CEF51 in the image is a read-modify-write `or 0x01` (0x0041E205,
+0x0041E24C, 0x004843B7, 0x004BE077, 0x004BE0CC, 0x004BD6C4, 0x004DE163, 0x004E4920) --
+never a plain store -- so once set it stays set and means "compose this layer every
+frame". It is the engine's own idiom: the dialog layer's setup ships layer 2 with
+`mov byte [0x6CEF79],0x20` (0x0041A071), the one plain store of the bit in the image.
+The only wipe is the layer-table init 0x0041E050 (zeroes all 160 bytes), so the bit
+is re-set per present rather than once at install. `HkOrd432` does that in WIDEN
+mode (`SC_LAYER_FLAG_ALWAYS_DRAW`, sc_addresses.h) and counts how often it found the
+bit clear (`cursorForced=` in STORMSTATS: 1 means set once and sticky as read; the
+storm probe asserts exactly that). The hook runs inside the present, after the
+frame's layer walk, so the bit takes effect from the NEXT frame -- one cursor-free
+band frame after a table init, then none. With it the cursor is composed into the buffer on every frame
+-- save-under before, restore-under after, so the buffer is left cursor-free exactly as
+before -- and the mirror always carries it. At x<640 the extra draw lands in cells that
+are not dirty and is not presented; nothing changes there. Not covered, and said so: the
+composer's full-clear branch (`[0x0051A0E9] != 0`: memset, no layer walk, no restore --
+the cinematic/video path) composes no cursor at all, flag or not.

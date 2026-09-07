@@ -246,6 +246,18 @@ finally {
         try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | Write-Host }
         catch { Write-Host "  warn close-game: $($_.Exception.Message)" }
         Start-Sleep -Seconds 2
+        # 2026-09-07 (the far-band cursor strobe, renderer-viewport.md 21.9): in WIDEN
+        # mode the ord432 hook sets the cursor layer's sticky always-draw bit and counts
+        # how often it found it clear. STORMSTATS is written at detach, so it is read
+        # here, after the close. 0 = the poke never ran (the hook did not fire);
+        # 1 = set once and sticky, the expected reading; more = something clears it
+        # (the layer-table init 0x0041E050 zeroes every flag, so a re-init would).
+        if ($completed -and (Test-Path -LiteralPath $log)) {
+            $stats = @(Get-Content -LiteralPath $log | Where-Object { $_ -match 'STORMSTATS mode=2 ' }) | Select-Object -Last 1
+            $forced = ($stats -match 'cursorForced=(\d+)') ? [int]$Matches[1] : -1
+            Assert-True 'WIDEN set the cursor layer always-draw bit exactly once (sticky, so the strip never mirrors a cursor-free frame)' `
+                ($forced -eq 1) "(cursorForced=$forced from '$stats')"
+        }
     }
     try { & (Join-Path $scriptDir 'run-with-plugin.ps1') -RemoveWindowed -NoLaunch -NoLaunchLock -GameDir $GameDir | Write-Host }
     catch { Write-Host "  warn RemoveWindowed: $($_.Exception.Message)" }

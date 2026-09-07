@@ -30,6 +30,14 @@ the map's edge, and a click on a unit there selects it (the click search rect is
 1280 wide). All four were proven at 800 in real play (issue #113) and are the
 same patch sites at 1280.
 
+Two more from the first real play at 1280 (2026-09-07): **right-click orders
+work on the map beside the console** (the strip level with the bottom bar, right
+of it -- the game used to think that strip was console and dropped the order
+while still letting you select there), and **the cursor no longer strobes or
+turns into the plain arrow over the right half**. Both were one 640-wide test
+inside the game plus one flag on the cursor layer; if either misbehaves, that
+is news.
+
 ## Known imperfections (real, not dangerous)
 
 1. **The bottom console (minimap, unit panel, command card) stays in its old

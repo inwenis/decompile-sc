@@ -5285,6 +5285,28 @@ static void CodeCaveTests(void) {
     Check("first cave still intact", ((Fn)fn)(), 0xA9);
     Check("refused: a window shorter than the jmp",
           ScScreenApplyCaveAt(fn2 + 5, 4, kCave, (int)sizeof(kCave)) ? 1 : 0, 0);
+
+    // A cave may RETURN from the caved function instead of jumping back -- the
+    // console hit-test guard (console.hittest.xguard, sc_screen_patches.h) does
+    // exactly that for x >= 640: `cmp ecx,640 / jl +3 / xor eax,eax / ret /
+    // <displaced insn>`. EmitCave must copy the body verbatim (a `ret` inside
+    // it is not special) and the appended `jmp back` must only be reached on
+    // the fall-through path. Drive both paths through ecx.
+    BYTE* fn3 = fn + 128;
+    memcpy(fn3, kBody, sizeof(kBody));
+    static const BYTE kGuard[] = {
+        0x81, 0xF9, 0x80, 0x02, 0x00, 0x00,   // cmp ecx,0x280
+        0x7C, 0x03,                           // jl +3
+        0x33, 0xC0,                           // xor eax,eax
+        0xC3,                                 // ret
+        0x83, 0xC0, 0x58                      // add eax,0x58 (the displaced window insn)
+    };
+    Check("guard cave applies (14-byte body with an inner ret)",
+          ScScreenApplyCaveAt(fn3 + 5, 5, kGuard, (int)sizeof(kGuard)) ? 1 : 0, 1);
+    typedef int (__attribute__((fastcall)) *FnEcx)(int ecx);   // fastcall: first arg in ecx
+    Check("ecx=639 falls through the guard: 1 + 0x58 via the cave and back", ((FnEcx)fn3)(639), 0x59);
+    Check("ecx=640 returns 0 straight out of the cave", ((FnEcx)fn3)(640), 0);
+    Check("ecx=1279 returns 0 too", ((FnEcx)fn3)(1279), 0);
 }
 
 // ---------------------------------------------------------------------------
