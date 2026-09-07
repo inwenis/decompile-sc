@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import struct
 import sys
 from types import SimpleNamespace
@@ -261,7 +262,10 @@ class Builder:
         hits = [i for i in range(len(raw) - width + 1) if raw[i:i + width] == enc_old]
         # A 2-byte field also matches inside a 4-byte one; require the operand
         # text to name the value so a coincidental match cannot pass.
-        if ("0x%x" % old) not in ins.op_str.lower():
+        # capstone prints values below 10 in decimal ("add eax, 8"), the rest in hex.
+        ops = ins.op_str.lower()
+        carried = ("0x%x" % old) in ops or (old < 10 and re.search(r"\b%d\b" % old, ops) is not None)
+        if not carried:
             self.errors.append("%s @0x%08X: `%s` does not carry 0x%X"
                                % (name, va, fmt(ins), old))
             return
@@ -330,6 +334,29 @@ class Builder:
         self.patches.append(Patch(va, raw, bytes(patched), name, stage, note,
                                   before=fmt(ins),
                                   after=fmt(after) if after else "??"))
+
+    # -- raw DATA rewrite ----------------------------------------------------
+    def data(self, va, expect_hex, patch_hex, name, stage, note):
+        """Rewrite bytes that are DATA, not code: a .data rect or clip box the
+        engine reads but never writes (task 073 found the dirty-mark clip box
+        {0,0,640,480} at 0x0051A16C has no writer in all of .text). Same expect
+        discipline as code(): the file's bytes must match, and the plugin
+        applier verifies them again in the live process before writing. No
+        disassembly, no flags contract -- nothing executes here."""
+        expect = bytes.fromhex(expect_hex)
+        patch = bytes.fromhex(patch_hex)
+        if len(expect) != len(patch):
+            self.errors.append("%s @0x%08X: data patch length %d != expect %d"
+                               % (name, va, len(patch), len(expect)))
+            return
+        actual = self.img.read(va, len(expect))
+        if actual != expect:
+            self.errors.append("%s @0x%08X: bytes are %s, table says %s"
+                               % (name, va, actual.hex(), expect.hex()))
+            return
+        self.patches.append(Patch(va, expect, patch, name, stage, note,
+                                  before="[data] " + expect.hex(),
+                                  after="[data] " + patch.hex()))
 
     # -- raw code rewrite ----------------------------------------------------
     def code(self, va, expect_hex, patch_hex, name, stage, note,
@@ -458,7 +485,16 @@ class Builder:
 def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     PF_W = W                       # the playfield spans the full width
     TERRAIN_PITCH = PF_W + 32      # stock: 640 + 32
-    TERRAIN_SIZE = TERRAIN_PITCH * STOCK_TERRAIN_ROWS
+    # The scratch holds one tile row above and below the playfield's ceil(PF_H/32)
+    # rows: (12.5 -> 13) + 1 = 14 rows = 448 at stock, 26 rows = 832 at PF_H=800.
+    # Every `old` below is still spelled with STOCK_TERRAIN_ROWS; only the NEW
+    # sizes follow this. The nine tile-ROW immediates (14 -> 26) are declared in
+    # the height block near the end of build().
+    TERRAIN_TILE_ROWS = (PF_H + 31) // 32 + 1
+    TERRAIN_ROWS = TERRAIN_TILE_ROWS * 32
+    TERRAIN_SIZE = TERRAIN_PITCH * TERRAIN_ROWS
+    # The console moves DOWN by however much the playfield grew (0 at PF_H=400).
+    CONSOLE_SHIFT_Y = PF_H - STOCK_PF_H
     COLS = W // STOCK_BLOCK
     # ROUNDED UP: a partial block row still needs a row and the engine's `y >> 4`
     # indexes it. 480 gives 30 exactly; 600 gives 38, not 37.
@@ -467,7 +503,8 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
 
     geom = dict(W=W, H=H, PF_W=PF_W, PF_H=PF_H, COLS=COLS, ROWS=ROWS,
                 GRID_BYTES=GRID_BYTES, TERRAIN_PITCH=TERRAIN_PITCH,
-                TERRAIN_SIZE=TERRAIN_SIZE)
+                TERRAIN_SIZE=TERRAIN_SIZE, TERRAIN_ROWS=TERRAIN_ROWS,
+                CONSOLE_SHIFT_Y=CONSOLE_SHIFT_Y)
     b = Builder(img, geom)
 
     # =====================================================================
@@ -1343,6 +1380,196 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     # 2's `jl`, which lands on the window's START and is allowed); the cave
     # returns straight out of the predicate for x >= 640 and otherwise re-runs
     # the probe and jumps back, so the `jne` at 0x004D115F still reads its flags.
+    # =====================================================================
+    # THE HEIGHT (research/renderer-viewport.md 22). Everything
+    # below is a no-op at H=480/PF_H=400 (old == new, reported as "already
+    # correct") and was read out of the exe by four independent sweeps
+    # (screen height, playfield height, terrain/fog/grid rows, the console).
+    # =====================================================================
+
+    # -- the terrain scratch's tile ROWS: 14 -> 26 (the exact row twins of the
+    #    ten declared terrain.tilecols 21s). Must ship WITH the size (TERRAIN_SIZE
+    #    above): rows without the size overrun the wrap, the size without the
+    #    rows fills 14 of 26 (12.9's wreck, vertical).
+    for va, w, what in ((0x0049B97D, 1, "cache clamp helper: clamp a request's row extent"),
+                        (0x0049B982, 4, "cache clamp helper: the clamped row extent"),
+                        (0x0049B9A2, 1, "cache clamp helper: reject a request below the cache"),
+                        (0x0049BD64, 1, "column refresh: clamp rows to the cache height"),
+                        (0x0049BD69, 4, "column refresh: the clamped row count"),
+                        (0x0049BF46, 4, "full cache refresh: rows to refresh"),
+                        (0x0049C31C, 1, "Y stepper: incoming row = top + cache height"),
+                        (0x0049C556, 1, "whole-map tile updater: is this row inside the window"),
+                        (0x0049C80F, 4, "per-frame tile updater: rows to walk")):
+        b.imm(va, STOCK_TERRAIN_ROWS // 32, TERRAIN_TILE_ROWS, w,
+              "terrain.tilerows@%08X" % va, 2, what)
+
+    # -- the camera's VERTICAL scroll clamp (the twin of scroll.clamp.x.tiles):
+    #    maxScreenTop = (mapTileH - K)*32 + C with K*32 - C = PF_H - 24 -- stock
+    #    12/8 lets the view bottom sit 24 px past the map; keep exactly that.
+    K_Y = PF_H // 32
+    C_Y = K_Y * 32 - (PF_H - 24)
+    assert 0 <= C_Y <= 127
+    b.imm(0x0049BBB2, STOCK_PF_H // 32, K_Y, 1, "scroll.clamp.y.tiles", 3,
+          "0x0049BB90: maxScreenTop = (mapTileH - 12)*32 + 8 -> (mapTileH - PF_H/32)*32 + C")
+    b.imm(0x0049BBCD, 8, C_Y, 1, "scroll.clamp.y.bias", 3,
+          "0x0049BB90: the +8 beside it, kept so the view bottom still overshoots the map by 24 px")
+
+    # -- the fog change detector's NEGATIVE y span (the twin of the declared
+    #    fogcell.change.xspan.neg), and its (row 1, col 1) base that is T_FILL+1
+    #    -- ALREADY WRONG at 1280 wide (25 for a 44-wide map): found by the
+    #    height sweep, shipped here.
+    b.simm(0x00480509, -0x1E0, -(R_SMOOTH * 32), 4, "fogcell.change.yspan.neg", 2,
+           "0x004804D0: row loop origin = yspan - R_SMOOTH*32; alone, 0x00480502 halves the rows compared")
+    b.imm(0x0048050F, 0x19, T_FILL + 1, 1, "fogcell.change.base.smooth", 2,
+          "0x004804D0: smoothed tile map -> (row 1, col 1) = stride + 1")
+    b.imm(0x00480512, 0x19, T_FILL + 1, 1, "fogcell.change.base.prev", 2,
+          "0x004804D0: previous-frame tile map -> (row 1, col 1) = stride + 1")
+
+    # -- the PLAYFIELD height 400 -> PF_H in the draw path (the y twins of
+    #    declared width sites; each named as its twin is).
+    for va, w, nm, what in (
+            (0x004BD67E, 2, "playfield.layer.height", "layer 5 record +0x08: height"),
+            (0x004D5887, 4, "image.clip.bottom", "0x004D57B0 per-image screen clip: h = min(h, PF_H - y)"),
+            (0x0045CCBC, 4, "rectclip.reject.y", "0x0045CC90 rect clipper: reject top >= PF_H"),
+            (0x0045CCE8, 4, "rectclip.cmp.bottom", "0x0045CC90 rect clipper: does the bottom need clamping"),
+            (0x0045CCF0, 4, "rectclip.clamp.bottom", "0x0045CC90 rect clipper: bottom = PF_H"),
+            (0x0048D5FC, 4, "placement.rect.bottom", "build-placement preview extent: bottom = top + PF_H"),
+            (0x0048D66D, 2, "placement.reject.y", "build placement: refuse y >= PF_H"),
+            (0x004808EB, 4, "fog.height", "0x004808E0 full-extent fog draw: y2 = PF_H"),
+            (0x00480953, 4, "fog.walk.rows", "0x004808F8 fog dirty-grid walk: outer row bound"),
+            (0x004BCE88, 4, "playfield.blit.rows", "0x004BCDC0 terrain blitter: outer y loop bound (playfield HEIGHT, not scratch geometry)"),
+            (0x0040C2A3, 4, "playfield.fullblit.rows", "0x0040C253 whole-playfield blit: row count (playfield HEIGHT; the WIDTH twin terrain.fullblit.runwidth stays terrain-named)"),
+            (0x004814F3, 2, "layer1.park.y", "0x00481480 parks the mask layer just below the playfield"),
+            (0x0047ECBC, 4, "star.clip.y.a", "starfield scrolled arm: skip y >= PF_H (cosmetic)"),
+            (0x0047EDB8, 4, "star.clip.y.b", "starfield scrolled arm: bottom clip test"),
+            (0x0047EDC0, 4, "star.clip.y.c", "starfield scrolled arm: h = PF_H - y"),
+            (0x0047EEDD, 4, "star.clip.y.d", "starfield static arm: skip y >= PF_H"),
+            (0x0047EF24, 4, "star.clip.y.e", "starfield static arm: bottom clip test"),
+            (0x0047EF2C, 4, "star.clip.y.f", "starfield static arm: h = PF_H - y")):
+        b.imm(va, STOCK_PF_H, PF_H, w, nm, 2, what)
+    b.imm(0x004BD633, STOCK_PF_H - 1, PF_H - 1, 4, "playfield.setrect.bottom", 2,
+          "SetRect(0x5993B0,0,0,W-1,399): the playfield rect's bottom (twin of playfield.setrect.right)")
+    # The star ring's vertical modulus is the SCREEN height + 8 (the x twin is
+    # W+8, declared as fog.wrap); star.spk authors positions for a 648x488 ring,
+    # so beyond that there are simply no stars (16.1 item 4, now vertical too).
+    for va in (0x0047EC9F, 0x0047ECA7, 0x0047ECB3, 0x0047EEC0, 0x0047EEC8, 0x0047EED4):
+        b.imm(va, STOCK_H + 8, H + 8, 4, "star.wrap.y@%08X" % va, 2,
+              "starfield vertical ring modulus 488 -> H+8 (cosmetic, space tilesets)")
+
+    # -- the SCREEN height 480 -> H in the input path (stage 3, beside the x twins).
+    for cmp_va, mov_va, mov_w in (
+            (0x004D1982, 0x004D198E, 2),   # 0x004D1940 button-up builder
+            (0x004D1A0E, 0x004D1A1A, 2),   # 0x004D19C0 button-down builder
+            (0x004D1A9E, 0x004D1AAA, 2),   # 0x004D1A50 double-click builder
+            (0x004D2504, 0x004D250C, 4)):  # 0x004D1D70 WM_MOUSEMOVE -> [0x6CDDC8]
+        b.imm(cmp_va, STOCK_H, H, 2, "mouse.yclamp.cmp@%08X" % cmp_va, 3,
+              "window-proc mouse y clamp: the 'y >= 480' decision")
+        b.imm(mov_va, STOCK_H - 1, H - 1, mov_w, "mouse.yclamp.y@%08X" % mov_va, 3,
+              "window-proc mouse y clamp: the replacement value 479")
+    b.imm(0x00421607, STOCK_H, H, 4, "cursor.clip.bottom", 3,
+          "0x004215E0 clip-rect reset: ClientToScreen({W,480}) -> ({W,H}); the physical mouse's floor")
+    b.imm(0x004D1332, STOCK_H - 2, H - 2, 4, "scroll.down.trigger", 3,
+          "0x004D12A0 edge-scroll: pan DOWN when mouse y >= H-2 (twin of scroll.right.trigger)")
+    for cmp_va, mov_va in ((0x0048CB97, 0x0048CB9E), (0x0048CBE8, 0x0048CBEF), (0x004B22E9, 0x004B22F0)):
+        b.imm(cmp_va, STOCK_H - 1, H - 1, 4, "chat.mark.ymax.cmp@%08X" % cmp_va, 2,
+              "chat-line dirty mark: clamp y to the last screen row before >>4")
+        b.imm(mov_va, STOCK_H - 1, H - 1, 4, "chat.mark.ymax.set@%08X" % mov_va, 2,
+              "chat-line dirty mark: the clamped value")
+    # Cursor warps to the screen centre and to the playfield centre (both axes;
+    # the x halves were never in the width table).
+    b.imm(0x004E087A, STOCK_H // 2, H // 2, 4, "cursor.warp.screen.y", 3, "SetCursorPos(320,240): y")
+    b.imm(0x004E089B, STOCK_H // 2, H // 2, 4, "cursor.warp.screen.gy", 3, "the matching [0x6CDDC8] write")
+    b.imm(0x004E0891, STOCK_W // 2, W // 2, 4, "cursor.warp.screen.gx", 3, "the matching [0x6CDDC4] write")
+    b.imm(0x004E087F, STOCK_W // 2, W // 2, 4, "cursor.warp.screen.x", 3, "SetCursorPos(320,240): x")
+    b.imm(0x004D996B, STOCK_H // 2, H // 2, 4, "cursor.warp.screen2.y", 3, "third screen-centre warp: y")
+    b.imm(0x004D9970, STOCK_W // 2, W // 2, 4, "cursor.warp.screen2.x", 3, "third screen-centre warp: x")
+    for y_va, gy_va, x_va, gx_va, tag in ((0x0047EB39, 0x0047EB5A, 0x0047EB3E, 0x0047EB50, "a"),
+                                          (0x004C58A1, 0x004C58C7, 0x004C58A6, 0x004C58BD, "b")):
+        b.imm(y_va, STOCK_PF_H // 2, PF_H // 2, 4, "cursor.warp.pf%s.y" % tag, 3, "SetCursorPos(320,200): y (playfield centre)")
+        b.imm(gy_va, STOCK_PF_H // 2, PF_H // 2, 4, "cursor.warp.pf%s.gy" % tag, 3, "the matching [0x6CDDC8] write")
+        b.imm(x_va, STOCK_W // 2, W // 2, 4, "cursor.warp.pf%s.x" % tag, 3, "SetCursorPos(320,200): x")
+        b.imm(gx_va, STOCK_W // 2, W // 2, 4, "cursor.warp.pf%s.gx" % tag, 3, "the matching [0x6CDDC4] write")
+
+    # -- the CAMERA in map pixels: the click/drag search rect's height, the
+    #    grab-scroll spans, centre-view / centre-on-group, and the off-screen
+    #    distance helper. Width halves that the 1280 table never carried ship
+    #    here too.
+    b.imm(0x0046FC87, STOCK_PF_H, PF_H, 4, "click.searchrect.bottom", 3,
+          "0x0046FB40: click search rect bottom = screenTop + PF_H")
+    b.imm(0x0046FE2A, STOCK_PF_H, PF_H, 4, "click.searchrect.bottom.drag", 3,
+          "0x0046FB40 drag-box arm: same rect")
+    b.imm(0x004844BB, STOCK_PF_H, PF_H, 4, "camera.pct.spany", 3, "0x00484460 percent->camera: mapH - PF_H")
+    b.imm(0x004844DC, STOCK_W, PF_W, 4, "camera.pct.spanx", 3, "0x00484460 percent->camera: mapW - W")
+    b.imm(0x00484545, STOCK_PF_H, PF_H, 4, "camera.pct.anchory", 3, "0x00484520 camera->percent: mapH - PF_H")
+    b.imm(0x00484532, STOCK_W, PF_W, 4, "camera.pct.anchorx", 3, "0x00484520 camera->percent: mapW - W")
+    b.imm(0x0048E90B, STOCK_PF_H, PF_H, 4, "camera.offscreen.bottom", 3, "0x0048E8D0 off-screen distance: screenTop + PF_H")
+    b.simm(0x0048E917, -STOCK_PF_H, -PF_H, 4, "camera.offscreen.bottom.neg", 3, "0x0048E8D0: the below-the-viewport arm")
+    b.imm(0x0048E8E6, STOCK_W, PF_W, 4, "camera.offscreen.right", 3, "0x0048E8D0 off-screen distance: screenLeft + W")
+    b.imm(0x0048E8F3, STOCK_W, PF_W, 4, "camera.offscreen.right.sub", 3, "0x0048E8D0: the right-of-viewport arm")
+    b.imm(0x004C6F30, STOCK_PF_H, PF_H, 4, "camera.centre.maxy", 3, "0x004C6DE0 centre-view: clamp viewTop + PF_H <= mapH")
+    b.simm(0x004C6F3A, -(STOCK_PF_H + 1), -(PF_H + 1), 4, "camera.centre.maxy.val", 3, "0x004C6DE0: the clamped mapH - (PF_H+1)")
+    b.imm(0x004C6F11, STOCK_W, PF_W, 4, "camera.centre.maxx", 3, "0x004C6DE0 centre-view: clamp viewLeft + W <= mapW")
+    b.simm(0x004C6F1B, -(STOCK_W + 1), -(PF_W + 1), 4, "camera.centre.maxx.val", 3, "0x004C6DE0: the clamped mapW - (W+1)")
+    b.imm(0x004C6EFD, STOCK_PF_H // 2, PF_H // 2, 4, "camera.centre.halfy", 3, "0x004C6DE0 centre-view: viewTop = cy - PF_H/2")
+    b.imm(0x004C6EF7, STOCK_W // 2, PF_W // 2, 4, "camera.centre.halfx", 3, "0x004C6DE0 centre-view: viewLeft = cx - W/2")
+    b.imm(0x004C6E68, STOCK_PF_H // 2, PF_H // 2, 4, "camera.centre2.halfy", 3, "0x004C6DE0 second arm: cy - PF_H/2")
+    b.imm(0x004C6E6E, STOCK_W // 2, PF_W // 2, 4, "camera.centre2.halfx", 3, "0x004C6DE0 second arm: cx - W/2")
+    b.imm(0x0049691B, STOCK_PF_H // 2, PF_H // 2, 4, "camera.group.halfy", 3, "0x004967E0 centre on a group: - PF_H/2")
+    b.imm(0x00496924, STOCK_W // 2, PF_W // 2, 4, "camera.group.halfx", 3, "0x004967E0 centre on a group: - W/2")
+
+    # -- the MINIMAP's viewport box and click-to-centre half-extents (20 x 13
+    #    tiles = 640 x ceil(400/32)). Deliberately NOT moved at 800/1280 wide
+    #    (18.1.4) because every suite's Get-ScMinimapPoint was built on the stock
+    #    value; the harness now derives it from the header.
+    b.imm(0x004A4D68, STOCK_W // 32, PF_W // 32, 4, "minimap.centre.tilesx", 3, "0x004A4D20 minimap click -> camera: half the viewport width")
+    b.imm(0x004A4D84, (STOCK_PF_H + 31) // 32, (PF_H + 31) // 32, 4, "minimap.centre.tilesy", 3, "0x004A4D20 minimap click -> camera: half the viewport height")
+    b.imm(0x004A3F7E, STOCK_W // 32, PF_W // 32, 4, "minimap.box.tilesx", 3, "0x004A3F30 minimap viewport box: width in tiles")
+    b.imm(0x004A3F6C, (STOCK_PF_H + 31) // 32, (PF_H + 31) // 32, 4, "minimap.box.tilesy", 3, "0x004A3F30 minimap viewport box: height in tiles")
+
+    # -- THE CONSOLE, moved DOWN by CONSOLE_SHIFT_Y (0 at PF_H=400: every site
+    #    below is a no-op then). The dialog BOUNDS are moved at runtime by the
+    #    plugin (sc_console.cpp); these are the absolute positions the engine
+    #    bakes outside the dialog records.
+    if CONSOLE_SHIFT_Y:
+        # isPointOverUi (21.8) compares SCREEN y against thresholds computed from
+        # the console ART's rows (302/400) and asks the art's transparency region
+        # (rows 0..479 of the art) -- all three in art coordinates. One `sub` at
+        # the entry converts screen y to art y for all of them; the memo cache
+        # keys on art y consistently (it is read and written only inside).
+        b.cave(0x004D1140, "3b056c6b5900",
+               "2d" + le32(CONSOLE_SHIFT_Y)   # sub eax, CONSOLE_SHIFT_Y
+               + "3b056c6b5900",              # cmp eax,[0x596B6C] (the displaced tier-1 probe)
+               "console.hittest.yshift", 3,
+               "0x004D1140 isPointOverUi: screen y -> console-art y before the tiers "
+               "and the region query (the console art now sits CONSOLE_SHIFT_Y lower)")
+        # The right-click router's command-card rect (496,354,639,479) in .data:
+        # no writer in the image, so the file bytes are what the game reads.
+        b.data(0x005136D0, le32(354), le32(354 + CONSOLE_SHIFT_Y), "console.cardrect.top", 3,
+               "0x00484620 right-click router: PtInRect against the card rect -- top")
+        b.data(0x005136D8, le32(479), le32(479 + CONSOLE_SHIFT_Y), "console.cardrect.bottom", 3,
+               "0x00484620 right-click router: PtInRect against the card rect -- bottom")
+        # The minimap's baked absolute top (315) -- three immediates in its own
+        # module; the .data rect at 0x00512D00 is rewritten from these at init.
+        b.imm(0x004A4539, 315, 315 + CONSOLE_SHIFT_Y, 4, "minimap.anchor.top", 3,
+              "0x004A4400 minimap rect writer: root top 315 + control inset")
+        b.imm(0x004A4565, 314, 314 + CONSOLE_SHIFT_Y, 4, "minimap.anchor.bottom", 3,
+              "0x004A4400 minimap rect writer: top + height - 1 + 315")
+        b.simm(0x004A3DB2, -315, -(315 + CONSOLE_SHIFT_Y), 2, "minimap.anchor.neg", 3,
+               "0x004A3D70 minimap point -> world: -315 (the root's absolute top)")
+    # The two .data clip boxes the dialog composite marks/clamps against: the
+    # dirty-MARK box {0,0,640,480} (0x0041C200, no writer -- 19.3's wall on both
+    # axes) and the cursor/layer-1 re-mark box {0,0,639,479} (0x0041C2C0 and
+    # 0x0041CA64 apply it in SCREEN coordinates; 0x0041C080 root-relative). The
+    # the plugin once wrote the first one's max-x at runtime; the table owns both.
+    b.data(0x0051A174, le32(STOCK_W), le32(W), "dlgclip.mark.x1", 2,
+           "dialog dirty-mark clip box max-x: a dialog rect past it is never marked")
+    b.data(0x0051A178, le32(STOCK_H), le32(H), "dlgclip.mark.y1", 2,
+           "dialog dirty-mark clip box max-y")
+    b.data(0x0051A164, le32(STOCK_W - 1), le32(W - 1), "dlgclip.remark.x1", 2,
+           "cursor/mask re-mark clip box right (screen-absolute in 0x0041C2C0/0x0041CA64)")
+    b.data(0x0051A168, le32(STOCK_H - 1), le32(H - 1), "dlgclip.remark.y1", 2,
+           "cursor/mask re-mark clip box bottom")
+
     b.cave(0x004D1159, "390d30646d00",
            "81f9" + le32(STOCK_W)      # cmp ecx, 640
            + "7c03"                    # jl  +3      (x < 640: the stock path)
@@ -1361,7 +1588,7 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
 
 HEADER_DOC = """// sc_screen_patches.h -- GENERATED by tools/renderer_patch_sites.py. DO NOT EDIT.
 //
-// Task 034. One record per instruction the widescreen patch rewrites, with the
+// One record per instruction the widescreen patch rewrites, with the
 // ORIGINAL bytes beside the replacement. sc_screen.cpp verifies every `expect`
 // against the running image before it writes anything, and refuses the whole
 // table on the first mismatch -- a table generated against a different build
@@ -1395,6 +1622,8 @@ def emit_header(b: Builder, path: str):
     out.append("#define SC_WS_GRID_BYTES      %d" % g["GRID_BYTES"])
     out.append("#define SC_WS_TERRAIN_PITCH   %d" % g["TERRAIN_PITCH"])
     out.append("#define SC_WS_TERRAIN_SIZE    %d" % g["TERRAIN_SIZE"])
+    out.append("#define SC_WS_TERRAIN_ROWS    %d" % g["TERRAIN_ROWS"])
+    out.append("#define SC_WS_CONSOLE_SHIFT_Y %d" % g["CONSOLE_SHIFT_Y"])
     out.append("#define SC_WS_STOCK_W         %d" % STOCK_W)
     out.append("#define SC_WS_STOCK_H         %d" % STOCK_H)
     out.append("#define SC_WS_STOCK_GRID_VA   0x006CEFF8u")
@@ -1404,7 +1633,7 @@ def emit_header(b: Builder, path: str):
     out.append("typedef struct {")
     out.append("    DWORD       va;          // static VA, rebased by the plugin")
     out.append("    BYTE        len;")
-    out.append("    BYTE        stage;       // 0..3 -- see research/renderer-viewport.md 9.3; 3 = console/input, task 071")
+    out.append("    BYTE        stage;       // 0..3 -- see research/renderer-viewport.md 9.3; 3 = console/input")
     out.append("    BYTE        fixupOff;    // SC_WS_NO_FIXUP, or the offset of a dword")
     out.append("    BYTE        caveLen;     // 0 = in-place rewrite; else `cave` holds the code the window jumps to")
     out.append("    DWORD       fixupAddend; // filled with (relocated grid base + this)")
@@ -1457,8 +1686,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--exe", default=DEFAULT_EXE)
     ap.add_argument("--width", type=int, default=1280)
-    ap.add_argument("--height", type=int, default=480)
-    ap.add_argument("--playfield-height", type=int, default=400)
+    ap.add_argument("--height", type=int, default=880)
+    ap.add_argument("--playfield-height", type=int, default=800)
     ap.add_argument("--check", action="store_true", help="verify only; write nothing")
     a = ap.parse_args()
 

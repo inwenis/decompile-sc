@@ -150,6 +150,17 @@ Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-
         $script:deployText.Contains('does not carry width=') | Should -BeTrue -Because 'the verify step must read the ini that actually shipped'
     }
 
+    It 'falls back to borderless full screen when 2x does not fit the primary monitor (the 2x-height step)' {
+        # 1280x880 x2 = 2560x1760 does not fit a 1920x1080 monitor, so deploy flips the
+        # ini to cnc-ddraw borderless (fullscreen=true) with the aspect kept (maintas),
+        # rather than a window bigger than the screen.
+        $script:deployText | Should -Match 'PrimaryScreen'
+        $script:deployText | Should -Match '\$fits2x'
+        $script:deployText | Should -Match "fullscreen=false', 'fullscreen=true'"
+        $script:deployText | Should -Match 'maintas=true'
+        $script:deployText | Should -Match 'must be borderless' -Because 'the verify step must confirm the fallback actually shipped'
+    }
+
     It 'a leftover Wide launcher and shortcut from an earlier deploy are removed' {
         $script:deployText.Contains("Launch-StarCraft-Modded-Wide.ps1") | Should -BeTrue
         $script:deployText.Contains("StarCraft Modded (Wide).lnk") | Should -BeTrue

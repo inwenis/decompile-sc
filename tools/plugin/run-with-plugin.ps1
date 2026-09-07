@@ -203,13 +203,6 @@ param(
     # 18). Meaningless unless -Widescreen 1.
     [ValidateSet('0', '1', '2', '3')][string]$WidescreenStage = '1',
 
-    # Move the console's StatRes (resource bar) and StatBtn (command card) root dialogs
-    # +160 to the window's right edge, once their surfaces exist, with the vacated and
-    # claimed rects both marked dirty so the layer-2 composite repaints them. Only
-    # meaningful with -Widescreen 1 (the plugin disarms it otherwise) and ignored in
-    # -Mode observe like every writer.
-    [ValidateSet('0', '1')][string]$ConsoleEdge = '0',
-
     # Wrap every root dialog's interact with a logging shim (CTRACE lines: dialog name,
     # event type, dwUser, x/y, return value). The dispatcher stops at the first non-zero
     # return, so the trace names the dialog that claims any click. Read-only in effect
@@ -451,7 +444,6 @@ try {
     } else { $env:SCPLUGIN_FRAMEDUMP = '' }
     $env:SCPLUGIN_WIDESCREEN     = $Widescreen
     $env:SCPLUGIN_WS_STAGE       = $WidescreenStage
-    $env:SCPLUGIN_CONSOLE_EDGE   = $ConsoleEdge
     $env:SCPLUGIN_CONSOLE_TRACE  = $ConsoleTrace
     # 'auto' must reach the DLL as UNSET. Remove-Item, not `$env:X = ''`: measured on
     # pwsh 7.6, the empty assignment leaves the variable present-but-empty in a child's

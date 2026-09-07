@@ -174,6 +174,8 @@ static bool NameSelected(const char* name) {
 bool ScScreenActive(void) { return g_active; }
 int  ScScreenTargetWidth(void)  { return SC_WS_SCREEN_W; }
 int  ScScreenTargetHeight(void) { return SC_WS_SCREEN_H; }
+int  ScScreenPlayfieldHeight(void) { return SC_WS_PLAYFIELD_H; }
+int  ScScreenConsoleShiftY(void)  { return SC_WS_CONSOLE_SHIFT_Y; }
 
 int ScScreenViewportTilesX(void) {
     // scroll.clamp.x.tiles is a stage-3 site; below that, or with the table

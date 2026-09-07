@@ -2791,3 +2791,163 @@ before -- and the mirror always carries it. At x<640 the extra draw lands in cel
 are not dirty and is not presented; nothing changes there. Not covered, and said so: the
 composer's full-clear branch (`[0x0051A0E9] != 0`: memset, no layer walk, no restore --
 the cinematic/video path) composes no cursor at all, flag or not.
+
+
+## 22. 1280x880 -- the height half: the console moves down and the whole frame mirrors (2026-09-08)
+
+The user's ask was "twice as big a viewport" in both axes; §21 shipped the width.
+This is the height: screen 1280x880, playfield layer 5 = 1280x800 (2x the stock
+640x400 both ways), the bottom console moved DOWN 400 so it sits at the bottom of
+the taller screen, the top resource bar kept at the top. Four independent reads of
+the binary (an understand-phase workflow: the present/console model, the console-move
+mechanics, the screen/playfield-height site inventory, the fog/terrain/grid vertical)
+produced the plan; every site below carries the bytes it was read from.
+
+### 22.1 The present: the console goes into the BUFFER, then the whole frame mirrors
+
+§20 established that in game the buffer reaches the glass only through storm ord432,
+clipped to the console.pcx TRANSPARENCY region (640x480 at the origin), and that the
+plugin's strip copy carries the far x>=640 band the region never covers. The height
+step's console lives at y 702..879, which the region never covers either -- so the
+same class of wall, on the Y axis.
+
+Three options were read at the instruction level, and two are dead:
+- **Move the console's image node to (0,400)** is INERT, and for a stronger reason
+  than §20.4 gave: 0x0041D470 turns the FIRST screen-image node into the base region
+  with `ord438(node->region, &out)` at 0x0041D4D4, which takes no offset -- the node's
+  x,y (+0x0C/+0x10) are read only at 0x0041D4E3/EA to place the SECOND and later nodes,
+  and console.pcx is the only node (imgCreate 0x0041D640 has one caller). So the node's
+  (x,y) is dead; moving it changes nothing that reaches the glass.
+- **Rebuild/add a region node** cannot grow the presentable rows: ord443 allocates its
+  result FROM arg A (storm 0x1501AE33) and overwrites only +0x08/+0x0C/+0x10/+0x14, so
+  the row count +0x1C and the bounds +0x20..0x2C are A's verbatim. §20.4 said this of
+  the width; it holds for the height.
+
+What ships is **option B: make the console buffer-resident, then mirror the whole
+frame.** The dialog composite (0x0041C810) picks its target by the dialog's flags:
+`flags & 0x10000000` -> the screen BUFFER (0x6CEFF0; StatRes ships this way, flags
+0x7000200D), else a DIRECT blit into the locked primary (StatBtn and the rest, flags
+0x4000000D). The plugin sets bit 0x10000000 on EVERY in-game root, so the whole console
+composites into the framebuffer at its live bounds -- under the cursor (layer 0 draws
+last) and the mask (layer 1) -- and the storm present widen then mirrors the WHOLE
+1280x880 buffer to the primary each present instead of only the x>=640 strip. A root
+left direct-blitting would be erased by the mirror (the layer walk precedes the present
+of the same frame, verified: the composer 0x0041E280 ends its loop at 0x0041E3A7..B3 and
+presents at 0x0041E3EA), which is why ALL roots convert, not only the moved ones. The
+mirror reads the primary's real dwHeight once (GetSurfaceDesc) and never copies past it.
+
+Ordering matters and is enforced: the composer detour runs the plugin's OnFrame BEFORE
+the engine's compose, so the flag writes and bounds moves land in the same frame; and
+a dialog is moved only once its surface exists (0x004C35F0 copies the console-art slice
+under the LIVE bounds at surface creation, and a +400 top would slice a 480-row image
+out of range -- the §19.2 rule, stricter on this axis).
+
+### 22.2 The console move: bounds down 400, plus what the engine bakes outside the records
+
+The dialog composite blits each root's surface at its live +0x04 bounds and the hit test
+(0x00418340) rebases the point by the same bounds before walking children, so ONE bounds
+write per root moves both the pixels and every child's hit region. `TryMove` translates
+the ten bottom-console roots down by `CONSOLE_SHIFT_Y = PF_H - 400 = 400`: Minimap,
+TextBox, Stat_F10, StatBtn, StatData, StatPort and the four StatFluf rails. StatRes (the
+top bar) and StatLB (the leader board, top-left) stay.
+
+What the engine bakes OUTSIDE the dialog records, and where it moves (all in the
+generated table under `console.*` / `minimap.anchor.*` / `dlgclip.*`, stage 3):
+- **isPointOverUi's tiers.** 0x004D1140 compares SCREEN y against thresholds computed
+  from the console ART's rows (302/400) and asks the art's transparency region (rows
+  0..479 of the art). All three are art coordinates; a taller screen puts the console
+  400 rows lower. One `sub eax, 400` caved at the function entry (0x004D1140,
+  `console.hittest.yshift`) converts screen y to art y once, for the tiers AND the region
+  query AND the memo cache, which keys on the biased y consistently. (This composes with
+  §21.8's x-guard cave at 0x004D1159 -- two caves in one function, non-overlapping.)
+  Read of storm ord442 (storm 0x1501A490) settled why biasing the two threshold STORES
+  alone is wrong: ord442 rejects `y >= region.height` (480) as well as `x >= width`, so a
+  raw screen y of 702..799 against a 480-row region answers "outside" -> inverted to
+  "console" across the whole band. The entry bias is the only correct site.
+- **The right-click router's card rect.** 0x005136CC = (496,354,639,479), tested by the
+  RBUTTONDOWN handler 0x00484620, has no writer in the image, so its top/bottom dwords
+  are a `data()` patch: 354 -> 754, 479 -> 879.
+- **The minimap's baked absolute top (315).** Three sites in its own module: the cursor-
+  clip rect writer 0x004A4539/0x004A4565 (315/314 -> +400) and the minimap-point-to-world
+  bias 0x004A3DB2 (`mov ax,-315` -> -715). A full signed-immediate sweep found -315 EXACTLY
+  once in the image, so this is the whole of it.
+- **The two .data clip boxes the composite marks/clamps against** (both no-writer link-time
+  constants, §19.3's wall on both axes now): the dirty-MARK box 0x0051A174/78 (640/480 ->
+  W/H) and the cursor/mask re-mark box 0x0051A164/68 (639/479 -> W-1/H-1, screen-absolute
+  in 0x0041C2C0/0x0041CA64). Without the Y widen a repaint below y=479 is never marked --
+  the console would move its hit-test and not its pixels, exactly 073's x-axis result.
+
+Three prior-inventory entries were killed as numerology: the seven "minimap band absolute
+y" pushes (`push 0x13b`/315, `push 0x15c`/348) are storm allocator SOURCE LINE NUMBERS
+beside `__FILE__` strings (repulse.cpp, glues.cpp, maphdr.cpp, net_record.cpp), settled by
+the consecutive run 0x1D8..0x1DF at 0x004BD1F1.. -- patching one corrupts an allocator tag.
+
+### 22.3 The height and playfield-height sites, and the terrain/fog/grid rows
+
+Everything below is a no-op at H=480/PF_H=400 (old == new) and was read out of the exe.
+The generator's `TERRAIN_ROWS` stops being the fixed `STOCK_TERRAIN_ROWS` and becomes
+`(ceil(PF_H/32)+1)*32` (448 at 400, 832 at 800), which re-values ~58 already-declared
+`terrain.*` size sites through `TERRAIN_SIZE` with no new declarations; the nine tile-ROW
+immediates (14 -> 26, the row twins of the declared `terrain.tilecols` 21s) ship beside
+them -- all-or-nothing (§12.9's wreck, vertical). A `data()` patch kind was added for the
+no-writer .data rects and clip boxes; the plugin applier verifies `expect` in the live
+process before writing.
+
+- **Screen height 480 -> 880** (stage 1/2): the descriptor writers, the storm region
+  height, the compose descriptor/clip, the dirty-grid y reject/clamp and ROW count
+  (ceil(880/16)=55, already parametric), the layer-2 height. Stage 3: the four wndproc
+  mouse-Y clamp pairs (twins of the x pairs), the ClipCursor bottom 0x00421607, the
+  edge-scroll-DOWN trigger 0x004D1332 (478 -> H-2, the vertical twin of scroll.right),
+  the six chat-line screen-bottom clamps, and the cursor warps to the screen/playfield
+  centre (both axes; the x halves were never in the width table).
+- **Playfield height 400 -> 800** (stage 2/3): the playfield rect bottom + layer-5 height
+  (0x004BD633/67E), the per-image sprite clip (0x004D5887), the generic rect clipper's
+  three y sites, build-placement, the full-extent fog draw + its dirty walk, the terrain
+  blitter's y loop and the full-playfield blit's row count, the layer-1 park y, the six
+  starfield y clips (cosmetic), the click/drag search-rect bottom (0x0046FC87/FE2A), the
+  grab-scroll spans, centre-view/centre-on-group, and the off-screen distance helper.
+- **The camera's vertical scroll clamp** 0x0049BBB2/BBCD (the twin of scroll.clamp.x):
+  `maxScreenTop = (mapTileH - K)*32 + C` with `K*32 - C = PF_H - 24`, so K=25/C=24 keeps
+  the base game's exact 24-px overscroll past the map's bottom.
+- **The minimap viewport box and click-to-centre half-extents** (0x004A4D68/4D84,
+  0x004A3F7E/3F6C): 20x13 tiles -> W/32 x ceil(PF_H/32) = 40x25. Deliberately left at
+  stock at 1280x480 (every suite's Get-ScMinimapPoint was built on 20/13); the height step
+  moves them and the harness derives the prediction from the header.
+- **The fog cell pipeline's vertical** is already parametric in PF_H (R_INTERP/SMOOTH/FILL);
+  the one gap was the change detector's NEGATIVE y span 0x00480509 (the twin of the declared
+  xspan.neg) and its (row 1, col 1) base 0x0048050F/12 -- the latter ALREADY WRONG in the
+  shipped 1280 build, found here and shipped.
+
+### 22.4 Measured (off-screen, 1280x880, the 068/074 instruments; 2026-09-08)
+
+`python tools/renderer_patch_sites.py --check`: 378 sites, 7 code caves, 0 errors, and a
+no-op at the stock 480/400 (byte-identical table). hooktest [23] executes a cave with an
+inner ret. The 880 game launches, runs a full loaded session (menus, minimap steer, scroll,
+3-min stability) with the console moved and the whole frame mirrored, no crash.
+
+`probe-storm-present.ps1` (cnc-ddraw, STATIC load frame, no scroll):
+
+| region | BUFFER | GLASS |
+|---|---|---|
+| MAP right band x=660..1270 y=80..300 | 0.156 | 0.134 |
+| MAP band below the stock screen x=20..620 y=500..700 | 0.430 | 0.351 |
+| the rows the console VACATED x=150..620 y=320..460 | 1.000 | 1.000 |
+| the command card at its moved rect y=758..876 | 1.000 | 0.760 |
+| the moved console band y=754..879 | consistency 0.74, distinct_rgb 218 | |
+
+`mirrorFrames == stripFrames` (the whole frame copied every present), `primaryRows=880`,
+`cursorForced=1` (§21.9's sticky cursor bit, unchanged), 10 CONSOLE moved lines. The console
+band's index->RGB consistency (0.74) is lower than the pure playfield's 0.97 by construction
+-- map bleeds through the console art's transparent gaps, and text anti-aliases -- so the
+oracle asserts a rich picture (distinct_rgb >= 32) AND a matching one (consistency >= 0.70).
+
+### 22.5 What the height step does NOT do (the polish-later list)
+
+- **Map shows faintly through the console art's transparent gaps.** The console composites
+  with its art's transparency, and the taller playfield now draws map under it, so the gaps
+  around the bronze frame show terrain instead of black. Cosmetic; a full-opaque console
+  backing or a per-gap mask is the fix, deferred.
+- **The starfield vertical ring** (space tilesets) is authored for a 648x488 extent; past it
+  there are no stars, same as the width half's §16.1 note.
+- The behavioural half -- a real right-click at (700,750) issuing an order below the taller
+  playfield -- is the standing §17.2 limit: a real mouse on a real desktop, the user's play.

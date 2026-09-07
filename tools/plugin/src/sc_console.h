@@ -1,43 +1,57 @@
-// sc_console.h -- move the console PIXELS to the right edge at 800 wide, and
-// trace which dialog claims a console-region click. Both halves are OFF by
-// default, ignored in -Mode observe, and ride one 6-byte detour on the frame
-// composer (0x0041E280, HookProbe-verified prologue) so dialog-record writes
-// land on the GAME thread between frames, never on the observer thread.
+// sc_console.h -- the bottom console on a TALLER screen (the 2x-height step),
+// and the click-route trace.
 //
-// EDGE: once the console dialogs exist AND their surfaces are allocated,
-// translate the StatRes and StatBtn root bounds +160 and dirty BOTH old and
-// new rect: the layer-2 composite blits each dialog surface at its LIVE bounds
-// (+0x04), so an undirtied rect never repaints (research/renderer-viewport.md
-// section 18). The shift is relative, so each dialog is translated exactly once
-// per game. Widescreen-active only -- at 640 there is no right edge.
+//  * THE MOVE (no flag: it is what a taller playfield means). When the generated
+//    widescreen table carries a console shift (SC_WS_CONSOLE_SHIFT_Y > 0, i.e.
+//    the playfield is taller than the stock 400) and the plugin may write, then
+//    in game, every frame from the composer detour:
+//      1. every ROOT dialog gets the composite-into-BUFFER bit (0x10000000 at
+//         +0x18 -- the bit StatRes ships with), so the dialog layer draws it
+//         into the framebuffer at its live bounds instead of blitting straight
+//         to the primary. The storm present widen then mirrors the whole frame
+//         (sc_stormpresent.cpp). A root left direct-blitting would be erased
+//         by that mirror, which is why ALL roots convert, not only the console.
+//      2. the ten bottom-console roots (Minimap, TextBox, Stat_F10, StatBtn,
+//         StatData, StatPort, StatFluf x4) have their bounds (+0x04) translated
+//         DOWN by the shift, once their surfaces exist (the art slice is copied
+//         under the live bounds at surface creation), with the vacated and the
+//         claimed rect both marked dirty. StatRes (top bar) and StatLB stay.
+//    What the engine bakes outside the dialog records (isPointOverUi's tiers,
+//    the right-click router's card rect, the minimap's absolute top, the dirty
+//    clip boxes) is in the generated table (console.*, minimap.anchor.*,
+//    dlgclip.*). Research: renderer-viewport.md 22.
 //
-// TRACE: logs ROOT dialog interact (+0x2A) calls -- mouse-move and timer floods
-// dropped -- with the interact's RETURN VALUE. The dispatcher (0x00419FD0)
-// offers an event to the roots in list order and STOPS at the first non-zero
-// return, so the trace names the click's owner.
-
+//  * %SCPLUGIN_CONSOLE_TRACE%=1 -- the TRACE. Wraps every ROOT dialog's interact
+//    (+0x2A) with a logging shim: one CTRACE line per non-MOUSEMOVE event with
+//    the dialog's name, event type, dwUser, cursor x/y and the interact's RETURN
+//    VALUE. The dispatcher (0x00419FD0) offers each event to the roots in list
+//    order and STOPS at the first non-zero return, so the trace names the dialog
+//    that claims a click at any position.
+//
+// Both ride one 6-byte detour on the frame composer (0x0041E280), so all writes
+// to dialog records happen on the GAME thread between frames -- never from the
+// observer thread. Observe mode (the plugin's off switch) installs neither.
 #ifndef SC_CONSOLE_H
 #define SC_CONSOLE_H
 
 #include <windows.h>
 
-bool ScConsoleEdgeWanted(void);   // %SCPLUGIN_CONSOLE_EDGE%  == 1
 bool ScConsoleTraceWanted(void);  // %SCPLUGIN_CONSOLE_TRACE% == 1
 
-// `edge`/`trace` are the caller's gated decisions; observe mode passes
-// false/false, which installs nothing.
-void ScConsoleInstall(BYTE* moduleBase, bool edge, bool trace);
+// True once ScConsoleInstall decided the console is buffer-resident (the move
+// is armed): the storm present widen mirrors the WHOLE frame then, and only
+// the x>=640 strip otherwise (a direct-blitted console must not be painted over).
+bool ScConsoleBufferResident(void);
+
+// Installs the frame hook when the move is armed or the trace is wanted.
+// writeAllowed is false in observe mode (nothing is installed then).
+void ScConsoleInstall(BYTE* moduleBase, bool writeAllowed, bool trace);
 void ScConsoleRemove(void);
 void ScConsoleLogStats(void);
 
-// TEST AID, marker-driven (label 'conedge-select'): on the next frame, select
-// the active player's first COMPLETED unit through the engine's own click-path
-// pair -- CreateNewUnitSelectionsFromList (0x0049AE40) then CMDACT_Select
-// (0x004C0860), the exact order the click handler uses (hud-selection-row.md
-// item 4). A posted PLAYFIELD click cannot stand in: the off-screen cnc-ddraw
-// harness lands 0 of 8 measured. Called from the observer's marker poll; the
-// selection itself runs on the GAME thread inside the frame hook. Inert unless
-// the module is installed (never in observe mode).
+// Marker channel: "conedge-select" asks the game thread to select the active
+// player's first completed unit through the engine's own funnel (19.5) -- the
+// off-screen harness cannot post a playfield click under cnc-ddraw.
 void ScConsoleOnMarker(const char* label);
 
-#endif // SC_CONSOLE_H
+#endif
