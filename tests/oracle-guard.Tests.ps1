@@ -1,15 +1,12 @@
 #Requires -Version 7
 <#
-Pester coverage for tools/plugin/sc-oracle-guard.ps1 -- issues #69 and #70.
+Pester coverage for tools/plugin/sc-oracle-guard.ps1.
 
-EVERY CONTEXT BELOW IS A FIXTURE THAT MAKES A REAL SUITE'S CLAIM FALSE, and asserts two
-things about it: that the assertion AS IT SHIPPED scored it a pass, and that the repaired
-one does not. The first half is the part that matters. This task is about checks that
-cannot fail, so a fix nobody watched fail is the same defect -- and for a suite that needs
-StarCraft, a fixture is the only place the failure can be watched at all.
-
-The `Old*` functions are the shipped expressions, transcribed from the line numbers named
-in each context. They are here to be shown passing on data where the claim is false.
+Every context is a fixture that makes a real suite's claim false, and asserts both that
+the unguarded expression scores it a pass and that the guarded predicate does not. The
+first half is the part that matters: a guard nobody has watched fail is itself a check
+that cannot fail, and for a suite that needs StarCraft a fixture is the only place that
+failure can be watched. AGENTS.md § "Oracles: what counts as a read-back".
 #>
 
 BeforeAll {
@@ -19,12 +16,11 @@ BeforeAll {
 Describe 'Test-ScReached -- a comparison that can be skipped must count what reached it' {
 
     Context 'test-sunken-acquire.ps1:329 -- the whole plugin-vs-stock comparison skipped' {
-        # `-Modes fanout` alone leaves $arms['<type>-observe'] unset, so the foreach body
-        # hits `if (-not $f -or -not $o) { continue }` for every unit type, no assertion
-        # runs, and the suite exits 0. There was no "arms compared: N" line to notice.
+        # `-Modes fanout` alone leaves $arms['<type>-observe'] unset, so `if (-not $f -or
+        # -not $o) { continue }` skips every unit type: no assertion runs, exit code 0.
         It 'the OLD arm-loop asserted nothing and the run passed -- the defect' {
-            $armsCompared = 0            # what the loop above produced
-            $failures = 0                # what the suite reported
+            $armsCompared = 0
+            $failures = 0
             $failures | Should -Be 0 -Because 'this is what a run with -Modes fanout printed'
             $armsCompared | Should -Be 0 -Because 'and nothing anywhere said so'
         }
@@ -37,9 +33,8 @@ Describe 'Test-ScReached -- a comparison that can be skipped must count what rea
     }
 
     Context 'test-upgrade-queue.ps1:508 -- "the engine never ran two at once (0 of N samples)"' {
-        # $bothAtOnce -eq 0 over an EMPTY sample list. If the drain loop never got a
-        # reading -- the oracle timed out, the building was gone -- N is 0 and the
-        # assertion passes having watched nothing.
+        # $bothAtOnce -eq 0 over an EMPTY sample list: when the drain loop gets no reading
+        # (oracle timeout, building gone) N is 0 and the claim passes having watched nothing.
         It 'the OLD expression passed with no samples at all -- the defect' {
             $seen = @(); $bothAtOnce = 0
             ($bothAtOnce -eq 0) | Should -BeTrue
@@ -50,9 +45,9 @@ Describe 'Test-ScReached -- a comparison that can be skipped must count what rea
             Test-ScReached -Count @('s1', 's2') | Should -BeTrue
         }
         It 'a single sample fails -AtLeast 2, for a min-over-samples reading' {
-            # test-sunken-acquire.ps1:284: SunkenOrderAfter is one sample from the last
-            # watch scan, while HP correctly uses min-over-samples. A Sunken that acquired
-            # mid-window and went idle again reads "never acquired" in BOTH arms.
+            # test-sunken-acquire.ps1:284: SunkenOrderAfter is one sample from the last watch
+            # scan, where HP takes min-over-samples. A Sunken that acquires mid-window and
+            # goes idle again reads "never acquired" in BOTH arms.
             Test-ScReached -Count 1 -AtLeast 2 | Should -BeFalse
             Test-ScReached -Count 2 -AtLeast 2 | Should -BeTrue
         }
@@ -65,8 +60,8 @@ Describe 'Test-ScReached -- a comparison that can be skipped must count what rea
 Describe 'Test-ScWitnessed -- a claim needs the thing that makes it meaningful to have landed' {
 
     Context 'test-sunken-acquire.ps1:334 -- two arms that both did nothing agree' {
-        # THE FIXTURE: neither arm's block ever got within the Sunken's range, so neither
-        # was attacked, so the two "agree".
+        # Neither arm's block ever gets within the Sunken's range, so neither is attacked,
+        # so the two "agree" while measuring nothing.
         BeforeAll {
             $script:fanout  = [pscustomobject]@{ Attacked = $false; InRange = $false }
             $script:observe = [pscustomobject]@{ Attacked = $false; InRange = $false }
@@ -88,8 +83,8 @@ Describe 'Test-ScWitnessed -- a claim needs the thing that makes it meaningful t
     }
 
     Context 'test-building-parity.ps1:614 -- a refusal asserted with no evidence the click landed' {
-        # after.N -eq before.N for a shift-click that was supposed to be REFUSED. A click
-        # on empty ground produces the identical reading.
+        # after.N -eq before.N for a shift-click that must be REFUSED. A click on empty
+        # ground produces the identical reading.
         It 'the OLD assertion passed for a click that hit nothing -- the defect' {
             $before = [pscustomobject]@{ N = 3 }
             $after  = [pscustomobject]@{ N = 3 }
@@ -104,9 +99,8 @@ Describe 'Test-ScWitnessed -- a claim needs the thing that makes it meaningful t
 Describe 'Test-ScChanged -- the operation has to have moved something' {
 
     Context 'test-building-parity.ps1:734 -- the rally bucket "must have MOVED"' {
-        # Its own comment says so; the assertion checked one-bucket + bucket == live.
-        # UNRALLIED buildings share the same default packed value, so they are also one
-        # bucket -- test-building-groups.ps1:613 has the guard this suite dropped.
+        # UNRALLIED buildings share the same default packed rally value, so a one-bucket
+        # reading cannot tell "all rallied to one point" from "none rallied at all".
         It 'the OLD assertion passed for buildings that were never rallied -- the defect' {
             $before = [pscustomobject]@{ RallyText = '(0,0)'; Buckets = 1 }
             $after  = [pscustomobject]@{ RallyText = '(0,0)'; Buckets = 1 }
@@ -152,8 +146,8 @@ Describe 'Test-ScExactRefund -- "the money came back" is not "refunds EXACTLY"' 
 Describe 'Get-ScOverlap -- a negative must be intersected with its positive' {
 
     Context 'test-combat-death.ps1:1098 -- "gone from the row" was never intersected with "dead"' {
-        # THE FIXTURE, issue #45's shape exactly: unit t4 did not die. It walked out of the
-        # drag box, so a fresh box does not list it, so it counts as "missing".
+        # Unit t4 did not die: it walked out of the drag box, so a fresh box does not list
+        # it, so it counts as "missing".
         BeforeAll {
             $script:beforeTags = @('t1', 't2', 't3', 't4')
             $script:afterTags  = @('t1', 't2')            # t3 died; t4 merely left the box
@@ -169,7 +163,6 @@ Describe 'Get-ScOverlap -- a negative must be intersected with its positive' {
             $confirmed | Should -Be @('t3')
         }
         It 'and a run where NOTHING that vanished had died has an empty intersection' {
-            # Which is the state the repaired assertion must fail on, and the old one passed.
             (Get-ScOverlap -Set @('t4') -Against $script:deadTags).Count | Should -Be 0
         }
         It 'survives an empty or null side without throwing' {
@@ -179,19 +172,19 @@ Describe 'Get-ScOverlap -- a negative must be intersected with its positive' {
     }
 
     Context 'test-combat-death.ps1:977 -- disjoint by construction, in BOTH directions' {
-        # A unit the gate DROPS never reaches the FANOUT select: tag list (sc_fanout.cpp:759
-        # continues before the tag append), and a unit the gate WRONGLY PASSES produces no
-        # drop verdict at all. So $deadTags and $emitted can never intersect, whatever the
-        # gate does -- the assertion is structurally unable to fail in the shipped arm.
+        # $deadTags holds only DROP verdicts, $emitted only tags of emitted Selects: a unit
+        # the gate DROPS never reaches the tag append (sc_fanout.cpp:759 continues first),
+        # and one the gate WRONGLY PASSES yields no drop verdict. The two can never
+        # intersect whatever the gate does -- the assertion is structurally unable to fail.
         It 'the OLD assertion passed with the two lists drawn from disjoint sources' {
-            $deadTags = @('t7', 't8')          # only ever populated from DROP verdicts
-            $emitted  = @('t1', 't2', 't3')    # only ever populated from emitted Selects
+            $deadTags = @('t7', 't8')
+            $emitted  = @('t1', 't2', 't3')
             @($deadTags | Where-Object { $emitted -contains $_ }).Count | Should -Be 0
         }
         It 'the repair is a POSITIVE control on the same operator and namespace' {
-            # If LIVE tags do not appear in $emitted either, the comparison is not
-            # measuring membership -- it is comparing two vocabularies that never meet, and
-            # its zero means nothing. AGENTS.md: prove the pattern positive first.
+            # If LIVE tags do not appear in $emitted either, the comparison measures two
+            # vocabularies that never meet and its zero means nothing.
+            # AGENTS.md § "Oracles: absence and defect-era checks".
             $liveTags = @('t1', 't2')
             $emitted  = @('t1', 't2', 't3')
             (Get-ScOverlap -Set $liveTags -Against $emitted).Count | Should -BeGreaterThan 0

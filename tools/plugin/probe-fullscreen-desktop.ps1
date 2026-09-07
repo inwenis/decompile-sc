@@ -1,57 +1,16 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Task 063. Measures whether a DirectDraw EXCLUSIVE|FULLSCREEN mode switch, made by
-a game on an INVISIBLE desktop, leaves the user's real desktop untouched -- the
-question research/renderer-viewport.md 12.10 and task 063's route (2).1 need
-answered before true fullscreen can even be considered as a TEST vehicle.
-
+Measures whether a DirectDraw EXCLUSIVE|FULLSCREEN mode switch made on an
+INVISIBLE desktop leaves the user's real desktop untouched -- the open question
+in research/renderer-viewport.md 12.10, and the gate on true fullscreen as a test vehicle.
 .DESCRIPTION
-Whether a fullscreen mode switch is per-desktop or per-adapter is UNKNOWN and
-this probe measures it rather than assumes it (task 063's own instruction). The
-blast radius argument: a `CreateDesktop` object is not the user's desktop, so if
-the switch is contained there, nobody sees it; if it is per-adapter, the real
-monitor changes mode -- which is why this probe WATCHES the real desktop the
-whole time and restores the registry mode the moment the run ends wrong.
-
-Two halves, running concurrently:
-
-  child   (probe-fullscreen-desktop-child.ps1, via run-offscreen.ps1) launches
-          the game with NO windowed helper on an invisible desktop -- the stock
-          DirectDraw path: SetCooperativeLevel(EXCLUSIVE|FULLSCREEN),
-          SetDisplayMode(640,480,8), engine fallback on failure. Holds ~20 s,
-          reports the game's window inventory from that desktop, closes it.
-
-  parent  (this script) samples the VISIBLE desktop's current display mode
-          (EnumDisplaySettings ENUM_CURRENT_SETTINGS + GetSystemMetrics) every
-          250 ms from before the launch to after the close, and logs every
-          change with a timestamp.
-
-Verdicts this separates, structurally:
-
-  CONTAINED  the game came up (or its window exists) and the real desktop's
-             mode never moved -- the switch (or its refusal) stayed on the
-             invisible desktop. True fullscreen might be usable as a TEST
-             vehicle; whether the game is actually presentable there is a
-             separate question the window inventory begins to answer.
-  LEAKED     the real desktop's mode changed while the child ran: the switch
-             is per-adapter. True fullscreen touches the user's screen from
-             ANY desktop and is disqualified as an unattended test vehicle.
-             The probe restores the registry mode and says so loudly.
-  REFUSED    the game never got a fullscreen surface (DirectDraw error box /
-             unhealthy launch) and the mode never moved: exclusive mode is
-             not grantable off the input desktop. Same practical consequence
-             as LEAKED for testing -- fullscreen cannot be exercised
-             invisibly -- but by refusal rather than by leak.
-
-SAFETY. This probe itself never calls SetDisplayMode / ChangeDisplaySettings to
-CHANGE anything; the one write it can ever make is ChangeDisplaySettings(NULL)
--- "re-apply the registry mode" -- and only on the path where the child's run
-demonstrably left the real desktop in a changed mode. Icon layout is live user
-state that a real leak may damage (hard rule 5's icon-rearrangement warning);
-that risk exists for the LEAKED outcome only, lasts seconds, and is the reason
-the sample loop restores the moment the child exits rather than at leisure.
-
+Per-desktop or per-adapter is unknown, so a child launches the game off-screen
+while this parent samples the VISIBLE desktop's mode every 250 ms.
+SAFETY. The only display write this probe can make is ChangeDisplaySettings(NULL)
+-- re-apply the registry mode -- and only once a sample shows the real desktop
+already changed. A leak can rearrange desktop icons, which are live user state
+(AGENTS.md § "Hard rules"), so the restore runs the instant the child exits.
 .EXAMPLE
 ./tools/plugin/probe-fullscreen-desktop.ps1
 #>
@@ -125,9 +84,8 @@ try {
     Wait-ScNoGameRunning
     $launchLock = Enter-ScLaunchLock -TaskId '063-fullscreen'
 
-    # A leftover ddraw.dll shim would put this launch in windowed mode and the
-    # probe would measure nothing. Removing it is the documented recipe and it
-    # happens under the lock that serialises the shared game dir.
+    # A leftover ddraw.dll shim forces windowed mode, leaving nothing to measure.
+    # Removal runs under the launch lock that serialises the shared game dir.
     if (Test-Path -LiteralPath (Join-Path $GameDir 'ddraw.dll')) {
         Write-Host 'probe-fullscreen: removing a leftover ddraw.dll shim (would force windowed mode)'
         & (Join-Path $scriptDir 'run-with-plugin.ps1') -RemoveWindowed -NoLaunch -NoLaunchLock -GameDir $GameDir | Write-Host
@@ -136,9 +94,8 @@ try {
     $baseline = Get-RealDesktopMode
     Write-Host "probe-fullscreen: REAL desktop baseline mode: $baseline"
 
-    # The child, via run-offscreen (which creates the invisible desktop, births
-    # the run on it, tails its transcript into $runOut and tears the desktop
-    # down afterwards). Started async so this side can sample while it runs.
+    # Started async so this side keeps sampling the real desktop while
+    # run-offscreen owns the invisible desktop's whole life cycle.
     $childArgs = @('-NoProfile', '-NoLogo', '-ExecutionPolicy', 'Bypass',
                    '-File', (Join-Path $scriptDir 'run-offscreen.ps1'),
                    '-Suite', (Join-Path $scriptDir 'probe-fullscreen-desktop-child.ps1'),
@@ -147,7 +104,6 @@ try {
         -RedirectStandardOutput $runOut -RedirectStandardError (Join-Path $LogDir '063-fullscreen-offscreen.err.txt')
     Write-Host "probe-fullscreen: off-screen run started (pid $($childProc.Id)); sampling the REAL desktop mode every 250 ms"
 
-    # ---- the measurement ---------------------------------------------------
     $last = $baseline
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes + 1)
     while (-not $childProc.HasExited -and (Get-Date) -lt $deadline) {
@@ -173,7 +129,6 @@ try {
         Write-Host "probe-fullscreen: ChangeDisplaySettings(NULL) -> $rc; mode now $(Get-RealDesktopMode)"
     }
 
-    # ---- what the child saw ------------------------------------------------
     $transcript = (Test-Path -LiteralPath $runOut) ? (Get-Content -LiteralPath $runOut) : @()
     Write-Host ''
     Write-Host 'probe-fullscreen: off-screen transcript (child lines):'
@@ -186,7 +141,6 @@ try {
     $gameCameUp = $childPid -gt 0 -and -not $unhealthy
     $childRan = ($transcript -join "`n") -match 'CHILD done=1'
 
-    # ---- verdict -----------------------------------------------------------
     Write-Host ''
     Write-Host 'probe-fullscreen: verdict'
     if (-not $childRan) {
@@ -215,10 +169,9 @@ catch {
     $failures++
 }
 finally {
-    # The one process this probe launched is the child's game. If it survived
-    # (child died mid-run), its desktop may already be gone, so WM_CLOSE from
-    # here cannot reach it -- say so and stop the process, with the pid taken
-    # from the child's own transcript, never by name alone.
+    # Stop only the pid the child recorded, never a game matched by name: the
+    # user's own play takes no launch lock and a name match would hit it
+    # (AGENTS.md § "Stopping a run / orphaned games").
     $t = (Test-Path -LiteralPath $runOut) ? (Get-Content -LiteralPath $runOut -Raw) : ''
     if ($t -match 'CHILD pid=(\d+)' -and [int]$Matches[1] -gt 0) {
         $orphan = [int]$Matches[1]

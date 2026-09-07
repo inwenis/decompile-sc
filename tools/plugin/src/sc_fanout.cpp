@@ -2,36 +2,17 @@
 //
 // HOW THE THREE PIECES FIT
 //
-//   1. sortOverflowHandler (0x0046F040) is called by the engine once for every unit
-//      that passed every selection filter but did not fit in the 12 output slots.
-//      That is the ONLY place the units the cap is about to throw away are
-//      individually visible. Our hook records them -- and, because that handler can
-//      also EVICT an already-stored unit and replace it, it snapshots the 12-slot
-//      output array on every call, before the original runs. The union of those
-//      snapshots plus the final output array is the complete pre-cap selection.
-//
-//   2. CMDACT_Select (0x004C0860) is the client's selection commit point: it is
-//      handed the engine's final (truncated) list. Our hook takes that list as the
-//      VISIBLE selection, unions it with whatever the overflow hook accumulated
-//      since the last commit, and that union is the shadow list. The accumulator is
-//      cleared on every commit, so it can only ever hold units from the input
-//      operation being committed.
-//
-//   3. queueCommand (0x00485BD0) is the single funnel every outgoing command passes
-//      through. Our hook watches the command id. For an order the shadow list is
-//      bigger than 12, it SUPPRESSES the engine's own command and emits
-//      ceil(overflow/12) + 1 Select+order pairs instead, through the trampoline.
-//      The visible chunk is emitted LAST, so the sim-side selection is left exactly
-//      as the player sees it -- the separate "restore Select" that
-//      research/selection-cap.md 7 costs is folded into the final pair.
-//
-//      ONE EXCEPTION, since task 020 put a liveness gate on the emit path: if EVERY
-//      unit of the visible chunk fails that gate, no Select is written for it and the
-//      simulation is left holding the last OVERFLOW chunk instead. It needs all twelve
-//      visible units to be inside the death/removal window at once, it self-heals on
-//      the next order or selection commit, and the pre-020 behaviour was not better --
-//      it emitted twelve tags the receive path then had to throw away. Stated here
-//      because the invariant above is load-bearing everywhere else in this file.
+//   1. sortOverflowHandler (0x0046F040) is the only place the units the 12-slot cap is
+//      about to discard are individually visible. It can also EVICT an already-stored
+//      unit, so the hook snapshots the 12-slot output array on every call before the
+//      original runs; those snapshots plus the final array are the pre-cap selection.
+//   2. CMDACT_Select (0x004C0860) is handed the engine's final (truncated) list -- the
+//      VISIBLE selection. Unioned with the overflow accumulator (cleared on every commit,
+//      so it holds only the operation being committed) that is the shadow list.
+//   3. queueCommand (0x00485BD0) is the funnel every outgoing command passes through. An
+//      order whose shadow list outgrows the sim is SUPPRESSED and re-emitted as
+//      Select+order pairs through the trampoline, VISIBLE CHUNK LAST, so the sim is left
+//      holding what the player sees -- which folds in selection-cap.md 7's restore Select.
 
 #include <windows.h>
 #include <string.h>
@@ -57,11 +38,11 @@
 
 #define SC_SHADOW_MAX       256   // wire ceiling is 255 units (count byte, unsigned)
 
-// The longest command in the fan-out set is 11 bytes (0x15, Targeted Order). That is not
-// a guess any more: research/data/command-opcodes.tsv carries the length the engine's own
-// receive dispatcher (0x004865D0) consumes for every opcode it accepts, cross-checked
-// against the command-length table at 0x005005F8, and the largest among the fan-out ids
-// is 0x0B. 32 leaves room without letting a malformed command through.
+// The longest command in the fan-out set is 11 bytes (0x15, Targeted Order):
+// research/data/command-opcodes.tsv carries the length the engine's receive dispatcher
+// (0x004865D0) consumes for every opcode it accepts, cross-checked against the
+// command-length table at 0x005005F8, and the largest fan-out id is 0x0B. 32 leaves room
+// without letting a malformed command through.
 #define SC_MAX_ORDER_BYTES   32
 
 // Default per-turn byte budget. The replay format prefixes each frame's command
@@ -84,22 +65,20 @@ static bool    g_verboseCmds = true;
 //                             unit in the receiving player's selection, AND the
 //                             handler does not move the player's resources.
 //
-// The first half is why fan-out is semantics-preserving: for such a command the engine
-// already does the thing to all twelve units it holds, so replaying it against the units
-// the cap hid is the same operation over more units, not a new one. The second half is
-// the safety margin: minerals and gas are a player-global resource, and a command that
-// spends them is one the player issued once.
+// The first half is what makes fan-out semantics-preserving: replaying such a command
+// against the units the cap hid is the same operation over more units, not a new one. The
+// second half is the safety margin: minerals and gas are a player-global resource, so a
+// command that spends them is one the player issued once.
 //
 // Both halves are read out of this binary and tabulated per opcode in
 // research/data/command-opcodes.tsv (built by tools/ghidra/build-opcode-policy.ps1) and
-// written up in research/command-opcodes.md. `kOpcodes` below is that table's fan-out and
-// length columns, transcribed; nothing here is a guess about what an id "probably means".
+// written up in research/command-opcodes.md; `kOpcodes` below is that table's fan-out and
+// length columns, transcribed, not a guess about what an id "probably means".
 //
-// The sharp case is the SINGLE-gated commands -- Train, Build, Research and friends do
-// nothing at all unless EXACTLY ONE unit is selected. They look harmless to replay
-// precisely because they are inert at twelve, but a fan-out chunk can be one unit long,
-// so replaying one would make it fire where the player's own selection never could.
-// They are passthrough.
+// SINGLE-gated commands (Train, Build, Research and friends) are the sharp case: they do
+// nothing unless EXACTLY ONE unit is selected, so they look harmless to replay -- but a
+// fan-out chunk can be one unit long, which would make one fire where the player's own
+// selection never could. They are passthrough.
 //
 // %SCPLUGIN_FANOUT_CMDS% (space/comma separated hex) replaces the set; the length check
 // below still applies to whatever it names.
@@ -111,9 +90,8 @@ struct ScOpcode {
     bool fanout;          // the policy from research/data/command-opcodes.tsv
 };
 
-// Every opcode the receive dispatcher at 0x004865D0 accepts. Ids absent from this table
-// are not commands the engine takes, and an id whose length disagrees with the one here
-// is never fanned out (see ScFanoutOnCommand).
+// Every opcode the receive dispatcher at 0x004865D0 accepts. An id absent from this table
+// is not a command the engine takes, and one whose length disagrees is never fanned out.
 static const ScOpcode kOpcodes[] = {
     { 0x05, 1, false }, { 0x06, -1, false }, { 0x07, -1, false }, { 0x08, 1, false },
     { 0x09, -1, false }, { 0x0A, -1, false }, { 0x0B, -1, false }, { 0x0C, 8, false },
@@ -206,7 +184,7 @@ static ShadowUnit g_accum[SC_SHADOW_MAX];
 static int        g_accumCount = 0;
 
 // Bumped on every selection commit and on the hotkey-recall shadow drop, so the
-// HUD row (task 017) can detect "the selection changed" without diffing lists.
+// HUD row can detect "the selection changed" without diffing lists.
 static unsigned   g_shadowVersion = 0;
 
 static CRITICAL_SECTION g_lock;
@@ -223,13 +201,10 @@ static bool ShadowContains(const ShadowUnit* arr, int n, DWORD ptr) {
 // (pointer, CUnit+0xA5), and anything that decides "is this the same unit" has to use the
 // pair or it is really asking "is this the same seat".
 //
-// This exists because the control-group code originally used ShadowContains for its
-// containment check, and review pointed out the consequence: a record left over from a
-// previous game whose slot is now occupied by a DIFFERENT live unit would compare equal,
-// so the check that is supposed to detect a cross-session stale group would pass on
-// exactly the input it exists to catch. The offline case that certified it happened to
-// use disjoint slots (40..51 against a group of 0..35), which is the one shape where the
-// two functions agree.
+// Do not use ShadowContains for a containment check: a record from a previous game whose
+// slot now holds a DIFFERENT live unit compares equal, so the check meant to catch a
+// cross-session stale group passes on exactly the input it exists to catch. The two
+// functions agree only when the two lists happen to use disjoint slots.
 static bool ShadowContainsUnit(const ShadowUnit* arr, int n, const ShadowUnit* u) {
     for (int i = 0; i < n; ++i) {
         if (arr[i].ptr == u->ptr && arr[i].uniqueness == u->uniqueness) return true;
@@ -237,7 +212,6 @@ static bool ShadowContainsUnit(const ShadowUnit* arr, int n, const ShadowUnit* u
     return false;
 }
 
-// Reads a unit's identity fields.
 static bool ReadUnit(DWORD ptr, ShadowUnit* out) {
     if (!ScUnitPtrValid(ptr)) return false;
     out->ptr        = ptr;
@@ -249,90 +223,57 @@ static bool ReadUnit(DWORD ptr, ShadowUnit* out) {
 // ---------------------------------------------------------------------------
 // LIVENESS -- why one uniqueness comparison is not enough on THIS path
 //
-// The shadow list is captured at selection time and replayed, as unit TAGS, into a
-// Select the engine's own receive path consumes. That receive path
-// (CMDRECV_Select 0x004C2750 -> addUnitToSelectionSlot 0x0049AF80,
-// binary-selection-map.md 5.1/5.2) validates a received entry with exactly:
-// count <= 12, index/uniqueness decode, CUnit+0xA5 == the tag's uniqueness, a
-// 12-bounded dedup, and `unit->id != 14`. Then it does this, unguarded:
+// The shadow list is captured at selection time and replayed, as unit TAGS, into a Select
+// the engine's own receive path consumes. That path (CMDRECV_Select 0x004C2750 ->
+// addUnitToSelectionSlot 0x0049AF80, binary-selection-map.md 5.1/5.2) validates an entry
+// with exactly: count <= 12, index/uniqueness decode, CUnit+0xA5 == the tag's uniqueness,
+// a 12-bounded dedup, and `unit->id != 14`. Then it does this, unguarded:
 //
 //     if (*(byte*)(*(int*)(unit + 0x0C) + 0x0E) & 0x20) return 0;   // sprite->flags
 //
-// -- it DEREFERENCES CUnit+0x0C, the sprite pointer. There is no null check and no
-// liveness check anywhere on that path: the engine trusts the sender, and on this
-// path WE are the sender.
+// -- it DEREFERENCES CUnit+0x0C, the sprite pointer, with no null and no liveness check
+// anywhere on that path: the engine trusts the sender, and here WE are the sender.
 //
-// CUnit+0xA5 does not cover that trust. It is written by ONE instruction in the whole
-// binary, 0x004A03FD inside the unit (re)init 0x004A0320 -- so it moves on slot REUSE
-// and NOT on death (selection-circles.md 4.5, byte-level verified by task 014). A unit
-// that died a moment ago still carries the uniqueness we captured, so the tag we would
-// replay still passes the engine's check, and the engine then follows a sprite pointer
-// belonging to a unit that has been removed from play.
+// CUnit+0xA5 does not cover that trust. ONE instruction in the whole binary writes it,
+// 0x004A03FD inside the unit (re)init 0x004A0320 -- so it moves on slot REUSE and NOT on
+// death (selection-circles.md 4.5). A unit that died a moment ago still carries the
+// uniqueness we captured, so its tag passes the engine's check and the engine follows the
+// sprite pointer of a unit removed from play.
 //
-// So the emit-side gate supplies exactly what the receive side does not check:
+// The emit-side gate therefore supplies what the receive side does not check:
 //
-//   engine checks (receive side)      |  this gate adds (send side)
-//   ---------------------------------|-------------------------------------------
-//   uniqueness  -> recycled slot      |  hitpoints != 0   -> DAMAGE DEATH
-//   id != 14, dedup, count <= 12      |  in player list   -> REMOVED FROM PLAY
-//                                     |  player unchanged -> OWNERSHIP CHANGE
-//                                     |  sprite != NULL   -> the pointer it derefs
+//   1. uniqueness (CUnit+0xA5) -- the engine's own test, kept. Catches a RECYCLED slot,
+//      and only that.
+//   2. hitpoints (CUnit+0x08) != 0 -- the DAMAGE DEATH (1) misses. The damage primitive
+//      0x004797B0 drives it to 0 on a kill (command-opcodes.md 6) and nothing resets it
+//      until the slot is re-inited, so it reads 0 for the whole dead-but-not-recycled
+//      window. sc_hudrow's UnitAlive uses the same term.
+//   3. player (CUnit+0x4C) unchanged -- a mind-controlled unit relinks under a new owner.
+//      0x0049AF80 tests `unit->playerId == ACTIVE_NATION_ID` for slot > 0 anyway, so this
+//      term is about not emitting a tag we know is wrong, not about safety.
+//   4. sprite (CUnit+0x0C) != NULL -- the exact pointer 0x0049AF80 dereferences without
+//      checking. It cannot cost a live unit: 0x004A0320 gives every unit in play a sprite.
+//   5. reachable in playerUnitList[player] -- REMOVAL FROM PLAY by ANY path with no
+//      per-path detector: trigger RemoveUnit, archon-consumed, and the tail of a death
+//      once 0x004A0740 has unlinked the unit. Terms 2 and 5 cover the two halves of a
+//      death between them: HP hits 0 while the unit is still linked and animating, the
+//      unlink follows.
 //
-// Term by term, with what each one is for and what it costs:
-//
-//   1. uniqueness (CUnit+0xA5) -- the engine's own test, kept. Catches a RECYCLED
-//      slot, and only that. One byte compare.
-//   2. hitpoints (CUnit+0x08) != 0 -- catches a DAMAGE DEATH, the case (1) misses.
-//      It is the field the engine's damage primitive 0x004797B0 drives to 0 on a
-//      kill (command-opcodes.md 6), and nothing resets it until the slot is
-//      re-inited, so it reads 0 for the whole dead-but-not-recycled window. This is
-//      the same term task 017 put in sc_hudrow's UnitAlive. One dword compare.
-//   3. player (CUnit+0x4C) unchanged -- the record says whose unit this was; a
-//      mind-controlled unit relinks under a new owner and is no longer part of the
-//      player's selection. (The engine would refuse it anyway -- 0x0049AF80 tests
-//      `unit->playerId == ACTIVE_NATION_ID` for slot > 0 -- so this term is about
-//      not emitting a tag we know is wrong, not about safety.) One byte compare.
-//   4. sprite (CUnit+0x0C) != NULL -- the exact pointer 0x0049AF80 dereferences
-//      without checking. Refusing a unit that has none costs one compare and cannot
-//      cost a live unit: the unit (re)init 0x004A0320 gives every unit in play a
-//      sprite.
-//   5. reachable in playerUnitList[player] -- catches REMOVAL FROM PLAY by ANY path,
-//      with no per-path detector: trigger RemoveUnit, archon-consumed, and the tail
-//      of a death once 0x004A0740 has actually unlinked the unit. Terms 2 and 5
-//      cover the two halves of a death between them -- HP goes to 0 first, while the
-//      unit is still linked and playing its death animation; the unlink follows.
-//
-// WHY THE LIST WALK IS HERE AND NOT ONLY IN sc_hudrow.
-//
-// task 017 deliberately kept the walk OUT of its per-frame UnitAlive and used it only
-// in the click gate (hud-selection-row.md 6.1), because the row had two structural
-// backstops for every other removal path: a divergence latch that hands the row back
-// to stock when the engine's own visible selection stops matching, and the click gate
-// itself -- and it re-runs the check every frame, where a list walk per displayed unit
-// per frame is a real cost.
-//
-// THE COMMAND PATH HAS NEITHER BACKSTOP. There is no per-frame comparison against the
-// engine's selection, and there is no gate between the shadow list and the wire: what
-// EmitSelect writes goes to the receive path. An archon merge or a trigger RemoveUnit
-// leaves hitpoints and CUnit+0xA5 both untouched, so terms 1-4 would all pass and the
-// tag would go out. The walk is what makes the gate complete rather than
-// death-shaped, and the cost argument runs the other way too: this runs ONCE PER
-// FANNED ORDER over at most ~250 units, not once per frame -- roughly the work of one
-// frame's worth of the row's own per-unit reads, on a path the player triggers by
-// hand. It is bounded by SC_MAX_UNITS_WALK and validates every link before following
-// it, so a corrupt list fails closed instead of hanging or faulting.
-//
-// %SCPLUGIN_FANOUT_LIVENESS%=0 restores the pre-task-020 behaviour (term 1 alone).
-// It exists so the same build can reproduce the defect on demand -- which is how the
-// in-game regression assertion is shown to be capable of failing, and how the
-// pre-fix receive-side behaviour was observed at all (research/fanout-liveness.md 4).
+// Term 5 is here and not only in sc_hudrow -- which keeps the walk out of its per-frame
+// UnitAlive and spends it in the click gate alone (hud-selection-row.md 6.1) -- because
+// THE COMMAND PATH HAS NO BACKSTOP: no per-frame comparison against the engine's
+// selection, nothing between the shadow list and the wire, and an archon merge or a
+// trigger RemoveUnit leaves hitpoints and CUnit+0xA5 untouched, so terms 1-4 would all
+// pass. It runs ONCE PER FANNED ORDER over at most ~250 units, bounded by
+// SC_MAX_UNITS_WALK and validating every link before following it, so a corrupt list
+// fails closed rather than hanging or faulting.
 // ---------------------------------------------------------------------------
 
 enum ScDropWhy {
     SC_LIVE_OK = 0,
     SC_DROP_RECYCLED,     // CUnit+0xA5 moved: the slot is a different unit now
     SC_DROP_DEAD,         // hitpoints == 0
-    SC_DROP_FOREIGN,      // CUnit+0x4C changed: no longer this player's unit
+    SC_DROP_FOREIGN,      // CUnit+0x4C changed: a different player owns it now
     SC_DROP_NOSPRITE,     // CUnit+0x0C == 0: nothing for the receive path to deref
     SC_DROP_REMOVED,      // not reachable from playerUnitList[player]
     SC_DROP_NOTAG         // the pointer does not encode to a wire tag
@@ -361,37 +302,34 @@ static const char* DropWhyName(int why) {
     return "?";
 }
 
-// Term 1 alone: the engine's own stale-tag test, and the whole of what this module
-// checked before task 020. Kept as its own function because it is still reported --
-// `uniqOnly=` in the UNITSTATE line is what a test compares against `live=` to show
-// the added terms firing.
+// Term 1 alone: the engine's own stale-tag test. Its own function because it is reported
+// separately -- `uniqOnly=` in the UNITSTATE line is what a test compares against `live=`
+// to show the other terms firing.
 static bool SameUnit(const ShadowUnit* u) {
     if (!u->ptr) return false;
     return ScUnitUniqueness(u->ptr) == u->uniqueness;
 }
 
 // ---------------------------------------------------------------------------
-// SAME-TYPE BUILDING GROUPS (task 024)
+// SAME-TYPE BUILDING GROUPS
 //
-// Vanilla selects ONE building per drag box, and the reason is a single predicate --
-// unit_IsStandardAndMovable (0x0047B770) -- consulted on both sides of the selection
-// path. sc_addresses.h quotes both call sites with their instruction addresses; the
-// short version is:
+// Vanilla selects ONE building per drag box because of a single predicate --
+// unit_IsStandardAndMovable (0x0047B770) -- consulted on both sides of the selection path
+// (sc_addresses.h quotes both call sites with their instruction addresses):
 //
-//   client  SortAllUnits drops every candidate that fails the predicate, then, if
-//           that emptied the list, substitutes the LAST one it dropped and returns 1.
+//   client  SortAllUnits drops every candidate that fails the predicate, then, if that
+//           emptied the list, substitutes the LAST one it dropped and returns 1.
 //   sim     addUnitToSelectionSlot refuses any slot > 0 to a unit that fails it, so
-//           playersSelections[player] -- the array every order applier iterates --
-//           can hold exactly one building no matter what arrives on the wire.
+//           playersSelections[player] -- the array every order applier iterates -- can
+//           hold exactly one building no matter what arrives on the wire.
 //
-// This module relaxes the CLIENT gate (see ScFanoutGrowBuildingGroup) and leaves the
-// SIM gate alone: its first five bytes contain a short JZ and ScHookInstall copies
-// prologue bytes verbatim with no relocation, so a detour there would corrupt the
-// trampoline. Instead the sim gate becomes a NUMBER -- how many of the current
-// selection the simulation will hold at once -- and the fan-out already knows how to
-// deliver an order to more units than the sim can hold: it chunks. For units that
-// number is 12 and nothing changes; for a building group it is 1, so a rally to six
-// Supply Depots goes out as six Select(1)+RightClick pairs.
+// This module relaxes the CLIENT gate (see ScFanoutGrowBuildingGroup) and leaves the SIM
+// gate alone: its first five bytes contain a short JZ, and ScHookInstall copies prologue
+// bytes verbatim with no relocation, so a detour there would corrupt the trampoline.
+// Instead the sim gate becomes a NUMBER -- how many of the current selection the sim holds
+// at once -- which the fan-out already knows how to deliver an order past: it chunks. That
+// number is 12 for units and 1 for a building group, so a rally to six Supply Depots goes
+// out as six Select(1)+RightClick pairs.
 // ---------------------------------------------------------------------------
 
 // The engine's own predicate, called (never patched). Test builds point it at a stub
@@ -401,15 +339,14 @@ static ScMovableFn g_movableFn = NULL;   // NULL -> call the engine
 static bool        g_buildingGroups = true;   // %SCPLUGIN_BUILDING_GROUPS%
 
 // The test default (see ScFanoutTestBegin): no engine code exists at 0x0047B770 in a
-// test process, so a test that has not said otherwise gets the pre-task-024 answer.
+// test process, so a test that has not said otherwise gets "everything is movable".
 static int __attribute__((fastcall)) ScTestAllMovable(DWORD unit) { (void)unit; return 1; }
 
-// Task 036 installs a detour on 0x0047B770 (see the EXTENDING A BUILDING GROUP block
-// below), and this is its trampoline. Everything in this plugin asks the ENGINE'S OWN
-// answer through it, never the detoured entry point: the detour exists to change what
-// four named instruction addresses in the GAME see, and letting our own reasoning read
-// the changed answer would make the override argue with itself (its very first act is to
-// ask this question about the selection's lead).
+// Trampoline for the detour on 0x0047B770 (see the EXTENDING A BUILDING GROUP block below).
+// Everything in this plugin asks the ENGINE'S OWN answer through it, never the detoured
+// entry point: the detour changes what four named instruction addresses in the GAME see,
+// and reading the changed answer would make the override argue with itself (its very first
+// act is to ask this question about the lead).
 extern "C" void* g_scMovableTrampoline;
 
 static bool UnitIsStandardAndMovable(DWORD unit) {
@@ -434,34 +371,28 @@ static DWORD UnitsDatFlags(WORD unitType) {
 // "Is this unit a BUILDING?" -- the units.dat prototype flag, bit 0x01, which is the
 // FIRST term unit_IsStandardAndMovable tests (`TEST DL,0x1 / JNZ` at 0x0047B77E).
 //
-// Task 036 asks this in addition to the predicate wherever it widens a behaviour, and
+// Asked in addition to the predicate wherever this module widens a behaviour, because
 // the two are NOT the same question: the predicate also fails for a "single entity"
 // type, for four PER-UNIT fields (CUnit+0xDC bit 0x400, +0x117, +0x119, +0x124) and for
-// a list of ids -- so an ordinary UNIT can fail it too, transiently, and a feature named
-// "building groups" has no business widening anything for those. The conductor's review
-// asked for exactly this narrowing: the sim gate exists for units as well, and its
-// refusing must not be read as "this is a building group".
+// a list of ids -- so an ordinary UNIT can fail it too, transiently. The sim gate exists
+// for units as well, and its refusing must not be read as "this is a building group".
 static bool UnitIsBuilding(DWORD unit) {
     if (!unit) return false;
     return (UnitsDatFlags(*(WORD*)(unit + SC_CUNIT_OFF_UNIT_ID))
             & SC_UNITSDAT_FLAG_BUILDING) != 0;
 }
 
-// Recompute the chunk size from the selection the engine just committed.
-//
-// The FIRST visible unit decides it, and that is not a shortcut: the sim gate lets slot
-// 0 hold anything and refuses a non-movable unit every later slot, so whether a second
-// unit of this kind can ever join is a property of the kind, and every unit of a
-// same-type group answers identically. An empty selection resets to the default rather
-// than keeping a building group's 1 -- a stale 1 would make the next 12-unit selection
-// fan out one unit at a time.
+// Recompute the chunk size from the selection the engine just committed. The FIRST visible
+// unit decides it, and that is not a shortcut: the sim gate lets slot 0 hold anything and
+// refuses a non-movable unit every later slot, so whether a second unit of this kind can
+// ever join is a property of the kind. An empty selection resets to the default -- a stale
+// 1 would make the next 12-unit selection fan out one unit at a time.
 //
 // Deliberately NOT gated on %SCPLUGIN_BUILDING_GROUPS%: this number is a fact about the
-// ENGINE (addUnitToSelectionSlot really does refuse a building every slot but the
-// first), not about our feature, and reporting it honestly in the off arm is what lets
-// that arm assert the vanilla shape rather than our absence. With the feature off the
-// shadow list never holds more than one building, so `shadowCount > simSlots` is false
-// and nothing is fanned out.
+// ENGINE (addUnitToSelectionSlot really does refuse a building every slot but the first),
+// not about the feature, and reporting it honestly in the off arm is what lets that arm
+// assert the vanilla shape rather than our absence. With the feature off the shadow list
+// never holds more than one building, so `shadowCount > simSlots` is false anyway.
 static void UpdateSimSlots(const ShadowUnit* visible, int visibleCount) {
     if (visibleCount <= 0 || !visible[0].ptr) {
         g_simSlots = SC_SELECTION_SLOTS;
@@ -472,10 +403,10 @@ static void UpdateSimSlots(const ShadowUnit* visible, int visibleCount) {
 
 static bool g_liveness = true;    // %SCPLUGIN_FANOUT_LIVENESS%
 
-// The full test. `why` (optional) gets the first term that failed, so a log line can
-// say WHICH removal this was rather than just "stale". This function does NOT consult
-// the %SCPLUGIN_FANOUT_LIVENESS% switch: the verdict is always computed, so a run with
-// the gate turned off still REPORTS what it is about to do (see PassesGate).
+// The full test. `why` (optional) gets the first term that failed, so a log line can say
+// WHICH removal this was rather than just "stale". Deliberately blind to the
+// %SCPLUGIN_FANOUT_LIVENESS% switch: the verdict is always computed, so a run with the gate
+// off still REPORTS what it is about to do (see PassesGate).
 static bool UnitLive(const ShadowUnit* u, int* why) {
     int w = SC_LIVE_OK;
     if (!u->ptr) w = SC_DROP_NOTAG;
@@ -488,15 +419,12 @@ static bool UnitLive(const ShadowUnit* u, int* why) {
     return w == SC_LIVE_OK;
 }
 
-// What actually DECIDES. Normally the full test; with the gate switched off, the
-// pre-task-020 test (uniqueness alone). Split from UnitLive on purpose: the defect
-// arm of an A/B run must still be able to say "the unit I am about to replay is dead
-// and here is its sprite pointer", which is the whole of the measurement in
-// research/fanout-liveness.md 4.
-// `why` always carries the TRUE verdict, even when the pre-020 gate is about to let
-// the unit through anyway -- that is the whole point of the split, and clobbering it
-// with SC_LIVE_OK on the allowed path is what an earlier version of this function did,
-// which silently cost the defect arm its measurement.
+// What actually DECIDES. Normally the full test; with the gate switched off, uniqueness
+// alone. Split from UnitLive on purpose: the defect arm of an A/B run must still be able
+// to say "the unit I am about to replay is dead and here is its sprite pointer", which is
+// the whole of the measurement in research/fanout-liveness.md 4. So `why` always carries
+// the TRUE verdict -- never SC_LIVE_OK -- even when the uniqueness-only gate is about to
+// let the unit through anyway; clobbering it costs the defect arm its measurement.
 static bool PassesGate(const ShadowUnit* u, int* why) {
     const bool live = UnitLive(u, why);
     if (g_liveness) return live;
@@ -507,20 +435,15 @@ static bool PassesGate(const ShadowUnit* u, int* why) {
 
 // ONE forensics line per unit per selection, not per unit per ORDER.
 //
-// The shadow list deliberately keeps corpses until the next selection commit, so the
-// same dead unit is re-judged by every fanned order until the player re-selects. Left
-// unguarded, each of those re-judgements wrote a line -- and ScLog flushes the file
-// handle synchronously, on the game thread, under our lock. After a real battle that
-// is a growing pile of identical lines on every right-click, in the SHIPPED default.
+// The shadow list deliberately keeps corpses until the next selection commit, so the same
+// dead unit is re-judged by every fanned order until the player re-selects. Unguarded,
+// each re-judgement writes a line -- and ScLog flushes the file handle synchronously, on
+// the game thread, under our lock: after a real battle that is a growing pile of identical
+// lines on every right-click, in the SHIPPED default. Keyed on the shadow VERSION, bumped
+// on every commit (and on the hotkey-recall drop), so a new selection reports afresh.
 //
-// Keyed on the shadow VERSION, which sc_fanout already bumps on every commit (and on
-// the hotkey-recall drop), so a genuinely new selection reports afresh. The list is
-// small and linear-scanned: it only ever holds units that failed the gate, and a
-// selection with hundreds of those has bigger problems than a log line.
-//
-// CONSEQUENCE FOR THE COUNTERS, stated because it is easy to misread: g_statStale and
-// g_statDrop still count drop EVENTS (every order, every unit), not distinct units.
-// They are throughput counters, not a population. `staleSkipped` is therefore also
+// CONSEQUENCE FOR THE COUNTERS, easy to misread: g_statStale and g_statDrop still count
+// drop EVENTS (every order, every unit), not distinct units. `staleSkipped` is therefore
 // sticky for the session -- once anything has been dropped it never returns to 0.
 static DWORD    g_loggedPtr[64];
 static int      g_loggedCount = 0;
@@ -544,9 +467,9 @@ static bool ShouldLogForensics(DWORD unit) {
 
 // The fields the engine's receive path would use for this unit, logged as one line.
 // The sprite pointer and its flag byte are what addUnitToSelectionSlot 0x0049AF80
-// dereferences; the flags are read only after VirtualQuery says the page is committed
-// and readable, so reporting on a freed sprite cannot itself fault. `-1` for the flags
-// means "the pointer is not readable memory" -- which is itself the answer.
+// dereferences; the flags are read only after VirtualQuery says the page is committed and
+// readable, so reporting on a freed sprite cannot itself fault, and `-1` for the flags
+// means "the pointer is not readable memory", which is itself the answer.
 static void LogUnitForensics(const char* what, const ShadowUnit* u, int why) {
     if (!ShouldLogForensics(u->ptr)) return;
     DWORD sprite = u->ptr ? ScUnitSprite(u->ptr) : 0;
@@ -584,9 +507,8 @@ typedef unsigned (__attribute__((stdcall)) *SortAllUnitsFn)(DWORD*, DWORD*, DWOR
 // buffer under test. Never the hooked entry point -- that would re-enter our detour.
 static ScQueueFn g_emit = NULL;
 
-// Verified prologues -- ScHookInstall refuses to patch if memory disagrees.
-// Bytes taken from work/scratch/hookprobe/*.asm (Ghidra, this binary); the
-// disassembly for each is quoted in research/command-path.md.
+// Verified prologues -- ScHookInstall refuses to patch if memory disagrees. Bytes taken
+// from work/scratch/hookprobe/*.asm; the disassembly is quoted in research/command-path.md.
 static const BYTE kPrologueQueue[]    = { 0x55, 0x8B, 0xEC, 0x51, 0xA1, 0xA0, 0x4A, 0x65, 0x00 };
 static const BYTE kPrologueSelect[]   = { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x5C };
 static const BYTE kPrologueSort[]     = { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x08 };
@@ -603,19 +525,17 @@ static unsigned g_statFanouts    = 0;
 static unsigned g_statPairs      = 0;
 static unsigned g_statDeferred   = 0;
 static unsigned g_statStale      = 0;   // units DROPPED from an emitted Select, all reasons
-// The same total, split by which term rejected the unit. `hp0` is the task-020
-// case -- a unit killed by damage whose slot has not been recycled, which term 1
-// alone (uniqueness) cannot see.
+// The same total, split by which term rejected the unit. `hp0` is a unit killed by damage
+// whose slot has not been recycled, which term 1 (uniqueness) alone cannot see.
 static unsigned g_statDrop[SC_DROP_NOTAG + 1] = { 0 };
-// Task 024, counted SEPARATELY from g_statDrop on purpose. These units were refused a
-// place in a building GROUP at selection time -- they never reached a plan, so folding
-// them into the emit-side counters would change what "dropped from an emitted Select"
-// means for every test that already asserts on it.
+// Counted SEPARATELY from g_statDrop on purpose: these units were refused a place in a
+// building GROUP at selection time and never reached a plan, so folding them in would
+// change what "dropped from an emitted Select" means for every test that asserts on it.
 static unsigned g_statBGroupRefused[SC_DROP_NOTAG + 1] = { 0 };
-// Task 036: the predicate override at the four extend sites. `seen` counts calls that
-// arrived at one of those sites with a BUILDING lead -- i.e. the cases vanilla was about
-// to refuse outright -- and the other two count what this plugin answered instead. Kept
-// apart from every other counter because they describe a decision, not a drop.
+// The predicate override at the four extend sites. `seen` counts calls that arrived at one
+// of those sites with a BUILDING lead -- the cases vanilla refuses outright -- and the
+// other two count what this plugin answered instead. Apart from every other counter
+// because they describe a decision, not a drop.
 static unsigned g_statExtendSeen    = 0;
 static unsigned g_statExtendAllow   = 0;
 static unsigned g_statExtendRefuse  = 0;
@@ -623,11 +543,10 @@ static unsigned g_statExtendRefuse  = 0;
 // ---------------------------------------------------------------------------
 // The deferred plan
 //
-// A fan-out that does not fit the per-turn byte budget is finished on the next
-// command the player issues. selection-cap.md 6.2 sizes this: a 100-unit intent is
-// ~350 bytes and does not fit a 255-byte replay frame block, so the pairs have to
-// spill across frames. For a 36-unit selection (3 pairs, ~141 bytes) nothing ever
-// defers.
+// A fan-out that does not fit the per-turn byte budget is finished on the next command the
+// player issues. selection-cap.md 6.2 sizes this: a 100-unit intent is ~350 bytes and does
+// not fit a 255-byte replay frame block, so the pairs have to spill across frames; a
+// 36-unit selection (3 pairs, ~141 bytes) never defers.
 // ---------------------------------------------------------------------------
 
 struct Plan {
@@ -647,11 +566,10 @@ static Plan g_plan;
 // Chunk `chunk` of the plan: overflow units first, the engine's VISIBLE units last, so
 // the simulation is left holding what the player can see.
 //
-// `slots` is the only thing that changed for task 024, and it changed from a constant
-// into a field. With slots == 12 this is byte-for-byte the previous behaviour: the
-// visible part is at most 12 units, so it is exactly one trailing chunk. With slots ==
-// 1 (a building group, which the sim will not hold two of) BOTH regions split one unit
-// per chunk, which is what makes a rally reach every building.
+// `slots` is a field, not a constant: with slots == 12 the visible part is at most 12
+// units, so it is exactly one trailing chunk; with slots == 1 (a building group, which
+// the sim will not hold two of) BOTH regions split one unit per chunk, which is what
+// makes a rally reach every building.
 static int ChunkBounds(const Plan* p, int chunk, int* start, int* len) {
     const int slots = p->slots > 0 ? p->slots : SC_SELECTION_SLOTS;
     const int overflow = p->count - p->visibleCount;
@@ -665,12 +583,10 @@ static int ChunkBounds(const Plan* p, int chunk, int* start, int* len) {
     const int visibleChunks = (p->visibleCount + slots - 1) / slots;
     if (chunk < overflowChunks + visibleChunks) {
         // The visible chunks are walked BACKWARDS, so the very last Select this plan
-        // emits carries the FIRST visible unit -- the one the engine itself put in slot
-        // 0, and the one its own Select would have left the simulation holding.
-        // With slots == 12 there is exactly one visible chunk and this is a no-op; it
-        // only bites when the sim holds fewer than the player can see, i.e. a building
-        // group, where "leave the simulation holding what the player can see" has to
-        // become "leave it holding the one the engine chose".
+        // emits carries the FIRST visible unit -- the one the engine itself put in slot 0,
+        // and the one its own Select would have left the simulation holding. A no-op at
+        // slots == 12; it bites when the sim holds fewer than the player can see, where
+        // "hold what the player sees" becomes "hold the one the engine chose".
         const int i = visibleChunks - 1 - (chunk - overflowChunks);
         *start = overflow + i * slots;
         int remain = p->visibleCount - i * slots;
@@ -689,11 +605,13 @@ static int PlanChunkCount(int count, int visibleCount, int slots) {
 // Queues one vanilla Select (0x09) for the given units. Returns bytes queued, or 0
 // if nothing survived the liveness gate.
 //
-// THIS IS THE GATE. Every tag this module ever puts on the wire is written here, so
-// a unit that fails UnitLive is a unit the engine's receive path never sees -- which
-// is the whole of the task-020 fix. The dropped ones are logged individually, with
-// the fields the receive path would have used, because "which unit, and why" is the
-// evidence an in-game run needs and a counter alone cannot give.
+// THIS IS THE GATE: every tag this module ever puts on the wire is written here, so a
+// unit that fails UnitLive is one the engine's receive path never sees. The dropped ones
+// are logged individually with the fields that path would have used -- "which unit, and
+// why" is evidence a counter alone cannot give. A 0 for the VISIBLE chunk (all twelve
+// inside the death/removal window at once) leaves the simulation holding the last OVERFLOW
+// chunk; it self-heals on the next order or selection commit, and emitting twelve tags the
+// receive path would throw away is no better.
 static int EmitSelect(const ShadowUnit* units, int n) {
     BYTE buf[2 + SC_SELECTION_SLOTS * 2];
     char tagText[SC_SELECTION_SLOTS * 5 + 4];
@@ -715,7 +633,7 @@ static int EmitSelect(const ShadowUnit* units, int n) {
             continue;
         }
         if (why != SC_LIVE_OK) {
-            // Only reachable with %SCPLUGIN_FANOUT_LIVENESS%=0: the pre-task-020 gate
+            // Only reachable with %SCPLUGIN_FANOUT_LIVENESS%=0: the uniqueness-only gate
             // is about to put a unit the full test rejects on the wire. Logged as
             // loudly as it deserves, with the pointer the receive path is about to
             // follow -- this line IS the defect-arm measurement.
@@ -727,9 +645,9 @@ static int EmitSelect(const ShadowUnit* units, int n) {
                           live ? " " : "", tag);
         ++live;
     }
-    // Logged even when nothing was dropped: this line is the wire-level read-back an
-    // in-game test asserts on ("the dead unit's tag is in no emitted Select"), and a
-    // line that only appeared on the interesting runs could not carry that claim.
+    // Logged even when nothing was dropped: this is the wire-level read-back an in-game
+    // test asserts on ("the dead unit's tag is in no emitted Select"), and a line that
+    // appeared only on the interesting runs could not carry that claim.
     ScLog("FANOUT select: in=%d out=%d dropped=%d tags=[%s]", n, live, dropped, tagText);
     if (live == 0) return 0;
     buf[0] = SC_CMD_SELECT;
@@ -743,8 +661,7 @@ static void EmitRaw(const BYTE* buf, int len) {
     if (g_emit) g_emit(buf, (unsigned)len);
 }
 
-// Emits as many of the plan's remaining chunks as the budget allows.
-// Returns how many Select+order pairs actually went out.
+// Emits as many of the plan's remaining chunks as the budget allows; returns the pairs.
 static int DrainPlan(void) {
     if (!g_plan.active) return 0;
 
@@ -788,11 +705,11 @@ static int DrainPlan(void) {
     return pairs;
 }
 
-// Returns false if NOT ONE pair went out -- the caller must then let the engine's
-// own command through instead of suppressing it. Without this, a turn buffer that
-// is already nearly full (negative budget) or a selection whose units all died
-// would turn a suppressed order into an order that reaches nobody: the player's
-// click would do nothing at all, which is worse than fanning out badly.
+// Returns false if NOT ONE pair went out -- the caller must then let the engine's own
+// command through instead of suppressing it. Otherwise a nearly full turn buffer (negative
+// budget) or a selection whose units all died turns a suppressed order into an order that
+// reaches nobody: the player's click does nothing at all, which is worse than fanning out
+// badly.
 static bool StartFanout(const BYTE* order, int orderLen) {
     if (g_plan.active) {
         ScLog("FANOUT: a previous plan was still pending (%d/%d chunks) -- dropping it",
@@ -826,76 +743,63 @@ static bool StartFanout(const BYTE* order, int orderLen) {
 }
 
 // ---------------------------------------------------------------------------
-// SHADOW CONTROL GROUPS (task 021)
+// SHADOW CONTROL GROUPS
 //
-// THE PROBLEM. Ctrl+1 on a 24-unit selection stored 12, and 1 brought 12 back --
-// and the pre-021 plugin made that worse rather than better: seeing command 0x13 it
-// DROPPED the shadow list outright (the `SHADOW dropped: hotkey command 0x13` line
-// this block replaces), because a recall rebuilds the selection without ever calling
-// CMDACT_Select, so the list would otherwise have gone stale. Correct, and it left
-// the player with 12.
+// The engine stores 12 tags per group and hands 12 back, so a Ctrl+N over a 24-unit
+// shadow selection loses everything past the cap unless the plugin keeps its own copy.
 //
-// WHAT THE ENGINE ACTUALLY DOES, read out of this binary by task 021 and written up
-// with the disassembly in research/control-groups.md:
+// WHAT THE ENGINE ACTUALLY DOES, read out of this binary and written up with the
+// disassembly in research/control-groups.md:
 //
 //   storage   selectionHotkeys 0x0057FE60, [8][18][12] u32 StoredUnit tags
-//             ((uniqueness << 11) | unitIndex). Groups 0..9 are Ctrl+N; 10..17 are
-//             the engine's own alt-click recent-selection ring. Exactly SEVEN
-//             functions touch it and NONE of them is on the save/load path, so
-//             vanilla control groups are memory-only too.
-//   command   0x13 is 3 bytes, built at 0x004C07BF:
-//                 [0] = 0x13   [1] = action   [2] = group
-//             action 0 = ASSIGN (clear the group, then fill), 1 = RECALL,
-//             2 = ADD (append at the first free slot). The key dispatcher
-//             0x004846E0 carries three families of ten sites, one family per action.
+//             ((uniqueness << 11) | unitIndex). Groups 0..9 are Ctrl+N; 10..17 are the
+//             engine's alt-click recent-selection ring. Exactly SEVEN functions touch
+//             it and NONE is on the save/load path, so vanilla groups are memory-only.
+//   command   0x13 is 3 bytes, built at 0x004C07BF: [0] = 0x13, [1] = action, [2] = group.
+//             Action 0 = ASSIGN (clear, then fill), 1 = RECALL, 2 = ADD (append at the
+//             first free slot). The key dispatcher 0x004846E0 carries three families of
+//             ten sites, one per action.
 //   capacity  12, twice over: the store loop at 0x004965D0 returns once it has
 //             written 12 tags, and its source playersSelections[player] is 12 slots.
 //
-// THE SEAM. Both halves land in the queueCommand hook we already have, because the
-// client does its own work BEFORE it queues the command:
+// THE SEAM, and why this adds NO hook and patches NO new byte of the game: the client does
+// its own work BEFORE it queues the command, so both halves land in the existing hook.
 //
-//   store   (13 00 g / 13 02 g)  the key dispatcher queues these inline and changes
-//           no selection state, so the shadow list is still the player's current
-//           selection at that instant. Snapshot (assign) or union (add) it.
-//   recall  (13 01 g)            the client handler 0x00496B40 calls
-//           CreateNewUnitSelectionsFromList (0x0049AE40) FIRST -- that is what fills
-//           activePlayerSelection (0x006284B8) with the engine's new <=12 -- and only
-//           then calls CMDACT_HotkeyUnit, whose first act is queueCommand. So by the
-//           time we see the command, the engine's post-recall visible list is sitting
-//           in activePlayerSelection, and we rebuild the shadow list around it.
-//
-// So this feature adds NO hook and patches NO new byte of the game.
+//   store   (13 00 g / 13 02 g)  queued inline by the key dispatcher, which changes no
+//           selection state -- the shadow list is still the player's current selection
+//           at that instant. Snapshot (assign) or union (add) it.
+//   recall  (13 01 g)  the client handler 0x00496B40 calls
+//           CreateNewUnitSelectionsFromList (0x0049AE40) FIRST, filling
+//           activePlayerSelection (0x006284B8) with the engine's new <=12, and only then
+//           calls CMDACT_HotkeyUnit, whose first act is queueCommand. So the post-recall
+//           visible list is already there when we see the command.
 //
 // WHERE UNITS 13..N LIVE: here, in plugin memory, as the same
-// (CUnit*, CUnit+0xA5, CUnit+0x4C) triple the shadow list already uses. They are
-// never written into selectionHotkeys, playersSelections or activePlayerSelection.
-// That is what keeps this clear of the selectionIndex hazard: all four readers of
-// CSprite+0x0B are gated on sprite flag 0x08, the engine sets 0x08 itself inside
-// 0x004E6180 for exactly the units it puts in activePlayerSelection, and units
-// 13..N are never in that array (research/selection-circles.md 4).
+// (CUnit*, CUnit+0xA5, CUnit+0x4C) triple the shadow list uses, and never in
+// selectionHotkeys, playersSelections or activePlayerSelection. That keeps them clear of
+// the selectionIndex hazard: all four readers of CSprite+0x0B are gated on sprite flag
+// 0x08, which the engine sets inside 0x004E6180 for exactly the units it puts in
+// activePlayerSelection (research/selection-circles.md 4).
 //
-// STALENESS, and why it is safe rather than merely unlikely. These groups are
-// memory-only, so a save/load can leave them describing a previous game. Two
-// independent gates, neither of them a probability argument:
+// STALENESS -- these groups are memory-only, so a save/load can leave them describing a
+// previous game -- is handled by two gates, neither a probability argument:
 //
-//   1. every entry is re-run through task 020's five-term liveness gate at recall
-//      (PassesGate) -- reused, not reinvented, so a dead or removed unit is dropped;
+//   1. every entry is re-run through the five-term liveness gate at recall (PassesGate)
+//      -- reused, not reinvented, so a dead or removed unit is dropped;
 //   2. CONTAINMENT: the engine's own post-recall list must be a subset of the plugin
-//      group. Store and add maintain that by construction (we store a superset of
-//      what the engine stores, and the engine's recall can only ever drop entries),
-//      so a violation MEANS the group is stale or foreign -- we discard it and fall
-//      back to pre-021 behaviour (shadow = the engine's 12) rather than guessing.
-//      After a load the engine's own group is either empty -- in which case
-//      0x00496B40 returns before queueing anything and this path never runs at all --
-//      or holds units of the loaded game, which cannot be contained in a group
-//      recorded in a different session.
+//      group. Store and add maintain that by construction (we store a superset of what
+//      the engine stores, and its recall can only ever drop entries), so a violation MEANS
+//      the group is stale or foreign -- discard it and fall back to the engine's own 12.
+//      After a load the engine's group is either empty, in which case 0x00496B40 returns
+//      before queueing anything and this path never runs, or holds units of the loaded
+//      game, which cannot be contained in a group recorded in a different session.
 // ---------------------------------------------------------------------------
 
-#define SC_HOTKEY_GROUPS 10   // the Ctrl+N groups. 10..17 are the engine's own
+#define SC_HOTKEY_GROUPS 10   // the Ctrl+N groups; 10..17 are the engine's own
                               // recent-selection ring and are not ours to mirror.
 
-// SC_HOTKEY_ASSIGN / _RECALL / _ADD are in sc_addresses.h with the disassembly of the
-// dispatch they come from -- they are facts about the binary, not choices made here.
+// SC_HOTKEY_ASSIGN / _RECALL / _ADD live in sc_addresses.h with the disassembly they were
+// read from.
 
 struct ShadowGroup {
     ShadowUnit units[SC_SHADOW_MAX];
@@ -911,23 +815,21 @@ static unsigned g_statGroupRecall  = 0;
 static unsigned g_statGroupWide    = 0;   // recalls that put MORE than 12 back
 static unsigned g_statGroupDiscard = 0;   // recalls that failed the containment check
 static unsigned g_statGroupReset   = 0;   // groups dropped because the engine restarted
-// Task 054: how many times the epoch test below actually threw something away. Counted
-// apart from RESET, which is the pre-existing INFERENCE ("the engine's row for this
-// group is empty, so a new game must have cleared it") -- an inference that a save/load
-// defeats outright, because the load restores a NON-EMPTY row holding the same pointers.
+// How many times the epoch test below actually threw something away. Counted apart from
+// RESET, which is an INFERENCE ("the engine's row for this group is empty, so a new game
+// must have cleared it") that a save/load defeats outright, because the load restores a
+// NON-EMPTY row holding the same pointers.
 static unsigned g_statSessionDrop  = 0;
 
 // ---------------------------------------------------------------------------
-// THE EPOCH TEST (sc_session.h) -- issue #67 items 2, 3, 4 and 5 in one place
+// THE EPOCH TEST (sc_session.h)
 //
 // Which GAME everything in this file's cross-frame state belongs to: the shadow list,
 // the overflow accumulator, the deferred plan and the ten control groups. 0 = never
-// synced; real epochs start at 1.
-//
-// Why each of the four needs it, and why none of the existing defences reaches them:
+// synced; real epochs start at 1. Why each needs it, and why no other defence reaches it:
 //
 //  * g_plan -- a fan-out deferred for the turn-buffer budget keeps RAW ORDER BYTES and
-//    captured unit records, and nothing bounded the drain to the same game. The first
+//    captured unit records, and nothing else bounds the drain to the same game: the first
 //    command after a load would replay the previous game's order.
 //  * g_shadow / g_accum -- cleared only on the next selection COMMIT, so between a load
 //    and the player's first click they are the previous game's units.
@@ -963,16 +865,11 @@ static void FanoutSessionSync(void) {
     memset(&g_plan, 0, sizeof(g_plan));
     memset(g_group, 0, sizeof(g_group));
 
-    // ISSUE #67 ITEM 4, and it is the subtle one. sc_hudrow's ONLY signal that the
-    // selection changed is this counter, and a counter cannot express "a different
-    // game": across a load it simply does not move, which the HUD row reads as "same
-    // selection" and keeps the previous game's page and list until the first commit.
-    //
-    // A version number and an epoch are DIFFERENT THINGS and this line does not
-    // conflate them -- the epoch is what decided a change happened, and the bump is
-    // only how that decision is published to a consumer whose contract is "watch this
-    // number". sc_hudrow separately runs its own epoch test, so the row is correct even
-    // if it stops reading this counter altogether.
+    // sc_hudrow's ONLY signal that the selection changed is this counter, and a counter
+    // cannot express "a different game": across a load it does not move, which the HUD row
+    // reads as "same selection" and keeps the previous game's page until the first commit.
+    // The epoch is what decided a change happened; this bump only publishes that decision
+    // to a consumer whose contract is "watch this number".
     ++g_shadowVersion;
 
     g_session = now;
@@ -983,10 +880,9 @@ static void FanoutSessionSync(void) {
 //
 // The player index is the one the STORE uses -- hotkeySaveOrAdd computes its row as
 // `group + DAT_0051267C * 0x12` (0x004965DF..0x004965E9), i.e. SC_VA_ACTIVE_PLAYER_ID.
-// binary-selection-map.md 7 note 7 warns that THREE player-id globals are in play in
-// this subsystem and conflating them produces bugs, so this reads the one that indexes
-// the array being read, and DisagreeingPlayerIds() below reports it if the three ever
-// diverge rather than letting a wrong row pass silently.
+// binary-selection-map.md 7 note 7 warns that THREE player-id globals are in play here and
+// conflating them produces bugs, so this reads the one that indexes the array being read
+// and DisagreeingPlayerIds() reports a divergence rather than letting a wrong row pass.
 static bool EngineGroupNonEmpty(int group) {
     const BYTE player = *(BYTE*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_ID);
     if (player >= SC_MAX_PLAYERS) return false;   // fail-closed, as everywhere here
@@ -1005,40 +901,30 @@ static bool DisagreeingPlayerIds(void) {
 }
 
 // AN ADD INTO AN EMPTY ENGINE ROW IS AN ASSIGN. That one rule is the whole of the
-// stale-group defence for the ADD path, and it is a MIRROR of the engine rather than a
-// guess about the player.
+// stale-group defence for the ADD path, and it MIRRORS the engine rather than guessing
+// about the player.
 //
 // What it is for. 0x004EEC30 (and 0x004965A0) zero the WHOLE hotkey array at game start,
-// so after starting a second mission in the same process our groups describe units that
-// no longer exist while the engine's own are empty. RECALL is already safe -- an empty
-// engine group makes the client handler 0x00496B40 return before it queues anything, so
-// our recall path never runs at all, and a non-empty one is covered by the containment
-// check. ADD is the exposed one: `13 02 g` into a group the player never re-assigned in
-// the new game would union fresh units into the previous game's records, and every later
-// containment check would then be maintained against a poisoned baseline.
+// so a second mission in the same process leaves our groups describing units of the first
+// while the engine's rows are empty. RECALL is already safe -- an empty engine group makes
+// 0x00496B40 return before it queues anything, so our recall path never runs, and a
+// non-empty one is covered by the containment check. ADD is the exposed one: `13 02 g`
+// into a group the player never re-assigned would union fresh units into the stale
+// records, and every later containment check would be maintained against that baseline.
 //
-// Why mirroring the engine is the right rule rather than a heuristic: hotkeySaveOrAdd's
-// ADD branch (0x004965D0 with param 0) scans for the first FREE slot, so on an empty row
-// it starts writing at index 0 -- an add into an empty group IS an assign, in the engine.
-// Doing the same thing is therefore not a policy this plugin invented; it is the engine's
-// own behaviour, applied to a bigger list.
+// Mirroring the engine is a rule, not a heuristic: hotkeySaveOrAdd's ADD branch
+// (0x004965D0 with param 0) scans for the first FREE slot, so on an empty row it starts
+// writing at index 0 -- an add into an empty group IS an assign, in the engine.
 //
-// AN EARLIER VERSION OF THIS GOT IT WRONG and the review caught it, so the trap is
-// written down here. It tried to be cleverer -- "the row is empty now AND I have
-// previously observed it non-empty" -- to avoid resetting on the legitimate sequence
-// `Ctrl+N` then shift-add before the assign has executed (the assign is queued, not
-// applied, so the row is still legitimately zero). But the store is receive-side, so on a
-// FIRST Ctrl+N the row is always still empty at that instant and the observation was
-// never recorded: a group used exactly once was permanently immune to the reset, which is
-// ordinary play, not a corner. The rule below has no memory to get wrong.
+// Do NOT give the test a memory ("the row is empty now AND I have seen it non-empty") to
+// spare the legitimate `Ctrl+N` then shift-add inside one turn: the store is receive-side,
+// so on a FIRST Ctrl+N the row is still empty at that instant and the observation is never
+// recorded -- a group used exactly once would be permanently immune to the reset.
 //
-// WHAT IT COSTS, stated because it is a real behaviour difference and not nothing: if the
-// player queues `Ctrl+N` and shift-add in the SAME turn AND changes the selection between
-// them, the engine ends up with sel1 + sel2 while this plugin keeps only sel2. Nothing is
-// corrupted -- the next recall's containment check sees the engine hand back units the
-// group does not hold, discards the group and falls back to the engine's own twelve. It
-// is a lost >12 group in a case that needs two hotkey commands inside one turn, not a
-// wrong one.
+// WHAT IT COSTS: `Ctrl+N` and shift-add in the SAME turn with the selection changed
+// between them leaves the engine holding sel1 + sel2 and this plugin only sel2. Nothing is
+// corrupted -- the next recall's containment check sees units the group does not hold,
+// discards it and falls back to the engine's own twelve.
 static bool ResetGroupIfEngineRowEmpty(int group) {
     if (EngineGroupNonEmpty(group)) return false;
     if (!g_group[group].stored) return false;
@@ -1053,10 +939,9 @@ static bool ResetGroupIfEngineRowEmpty(int group) {
     return true;
 }
 
-// The engine's own visible selection, as the recall left it. activePlayerSelection is
-// written by CreateNewUnitSelectionsFromList (0x0049AE40), which fills it densely from
-// slot 0 and whose own clear loop terminates on the first NULL -- so stopping at a NULL
-// is the engine's own termination rule, not an assumption about the array.
+// The engine's own visible selection, as the recall left it. CreateNewUnitSelectionsFromList
+// (0x0049AE40) fills activePlayerSelection densely from slot 0 and its own clear loop stops
+// at the first NULL, so stopping there is the engine's rule, not an assumption.
 static int ReadEngineVisible(ShadowUnit* out, int maxOut) {
     DWORD* arr = (DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_SELECTION);
     int n = 0;
@@ -1069,11 +954,11 @@ static int ReadEngineVisible(ShadowUnit* out, int maxOut) {
     return n;
 }
 
-// Task 014's circles over the current overflow. Factored out of ScFanoutOnSelect
-// because a recall has to do exactly the same thing at exactly the same point in the
-// sequence: after the engine has finished attaching its own graphics for the new
-// selection (0x0049AE40 has already run on both paths), and after our matching detach
-// fired from that same function's pre-hook.
+// Selection circles over the current overflow. Both a selection commit and a control-group
+// recall reach this at the same point in the sequence, which is the only point it is safe:
+// after the engine has finished attaching its own graphics for the new selection
+// (0x0049AE40 has already run on both paths), and after our matching detach fired from
+// that same function's pre-hook.
 static void ShowOverflowCircles(void) {
     const int overflow = g_shadowCount - g_visibleCount;
     if (!ScCirclesEnabled() || overflow <= 0) return;
@@ -1096,12 +981,10 @@ static void ShowOverflowCircles(void) {
 // attaches them to the list it is given, writing the (possibly subunit-substituted)
 // result back into that same array -- so `list` must be the caller's own scratch.
 //
-// The count is a MEMORY operand and the function pointer a REGISTER one, deliberately:
-// `pushl` reads its source before ESP moves, but the `calll` runs after, so an
-// ESP-relative operand there would be four bytes off.
-//
-// g_createSelFn is the test seam. In a test process 0x0049AE40 is a fake image with no
-// code in it, exactly as with the movable predicate.
+// In that shim the count is a MEMORY operand and the function pointer a REGISTER one:
+// `pushl` reads its source before ESP moves but the `calll` runs after, so an ESP-relative
+// operand there would be four bytes off. g_createSelFn is the test seam, because in a test
+// process 0x0049AE40 is a fake image with no code in it.
 typedef void (*ScCreateSelectionFn)(DWORD* list, int count);
 static ScCreateSelectionFn g_createSelFn = NULL;
 
@@ -1111,17 +994,15 @@ static void CallCreateNewUnitSelections(DWORD* list, int count) {
 
 // Ctrl+N / shift-add. `add` false = the engine's ASSIGN (replace), true = its ADD.
 //
-// Units are gated on the way IN as well as on the way out. The shadow list
-// deliberately keeps corpses until the next selection commit (see ShouldLogForensics),
-// and a group is a longer-lived thing than a selection -- there is no reason to record
-// a unit we already know is dead.
+// Units are gated on the way IN as well as on the way out: the shadow list keeps corpses
+// until the next selection commit (see ShouldLogForensics), and a group outlives a
+// selection, so there is no reason to record a unit already known to be dead.
 static void GroupStore(int group, bool add) {
     if (group < 0 || group >= SC_HOTKEY_GROUPS) return;
     ShadowGroup* g = &g_group[group];
 
-    // An ADD into an engine row that is empty is an ASSIGN -- the engine's own rule; see
-    // ResetGroupIfEngineRowEmpty. Checked before `before` is read so the log line reports
-    // what this command actually started from.
+    // An ADD into an empty engine row is an ASSIGN (see ResetGroupIfEngineRowEmpty),
+    // checked before `before` is read so the log line reports what this command started from.
     if (add) ResetGroupIfEngineRowEmpty(group);
 
     if (!add || !g->stored) { g->count = 0; }
@@ -1150,15 +1031,13 @@ static void GroupRecall(int group) {
     ShadowUnit visible[SC_SELECTION_SLOTS];
     const int visibleCount = ReadEngineVisible(visible, SC_SELECTION_SLOTS);
 
-    // THE ORDERING CLAIM, LOGGED AS A RAW OBSERVATION -- the conductor's second
-    // addition to the design, and the one thing here that is a claim about RUNTIME
-    // rather than about code. The whole design rests on 0x00496B40 having already
-    // called CreateNewUnitSelectionsFromList (0x0049AE40) by the time it queues
-    // `13 01 g`, i.e. on activePlayerSelection ALREADY holding the post-recall units at
-    // this instant. This line is what an unattended run reads back to check that: the
-    // tags below must be the group's units, not the selection the player had a moment
-    // ago. It is written unconditionally, including on the empty case, so a line that
-    // says `visible=0` is evidence rather than an absence of evidence.
+    // THE ORDERING CLAIM, LOGGED AS A RAW OBSERVATION -- the one claim here about RUNTIME
+    // rather than about code. The design rests on 0x00496B40 having already called
+    // CreateNewUnitSelectionsFromList (0x0049AE40) by the time it queues `13 01 g`, so
+    // activePlayerSelection already holds the post-recall units at this instant. An
+    // unattended run reads this line back to check that: the tags must be the group's
+    // units, not the selection the player had a moment ago. Written unconditionally, so a
+    // `visible=0` line is evidence rather than an absence of evidence.
     {
         char tags[SC_SELECTION_SLOTS * 5 + 4];
         int used = 0;
@@ -1174,17 +1053,15 @@ static void GroupRecall(int group) {
 
     ShadowGroup* g = (group >= 0 && group < SC_HOTKEY_GROUPS) ? &g_group[group] : NULL;
 
-    // CONTAINMENT (see this section's header): every unit the engine recalled must be
-    // one this group recorded. Anything else means the group does not describe this
-    // selection -- a different session after a load, or a group the engine holds and we
-    // never saw stored -- and the only safe reading of it is none.
+    // CONTAINMENT (see this section's header): every unit the engine recalled must be one
+    // this group recorded. Anything else means the group does not describe this selection
+    // -- a different session after a load, or a group stored before we were watching.
     bool contained = (g != NULL) && g->stored;
     int  foreign = 0;
     if (contained) {
         for (int i = 0; i < visibleCount; ++i) {
-            // The PAIR, not the pointer: a record from a previous game whose slot now
-            // holds a different live unit must read as foreign, which is the whole point
-            // of this check (see ShadowContainsUnit).
+            // The PAIR, not the pointer: a record from a previous game whose slot now holds
+            // a different live unit must read as foreign (see ShadowContainsUnit).
             if (!ShadowContainsUnit(g->units, g->count, &visible[i])) { ++foreign; }
         }
         contained = (foreign == 0);
@@ -1200,40 +1077,33 @@ static void GroupRecall(int group) {
         g->stored = false;
     }
 
-    // A BUILDING GROUP RECALLS AS A GROUP (task 036).
+    // A BUILDING GROUP RECALLS AS A GROUP.
     //
-    // The engine can only ever hand back ONE building here, and that is not a fault in
-    // its recall: hotkeySaveOrAdd fills the engine's group row from playersSelections,
-    // which the SIM gate has already capped at one building (research/building-groups.md
-    // 3), and the client recall keeps a predicate-failing entry only while the row holds
-    // exactly one (`CMP ESI,0x1 / JLE` at 0x00496BEE). So the row holds one, the recall
-    // returns one, and the STOCK STATUS ROW -- which draws clientSelectionGroup, copied
-    // from activePlayerSelection, and NOT this plugin's shadow list -- shows one. That is
-    // the "it only shows 1 in the row after I press the group number" the user reported:
-    // the group was there in plugin memory the whole time and no engine-visible surface
-    // was carrying it.
+    // The engine can only ever hand back ONE building here: hotkeySaveOrAdd fills its group
+    // row from playersSelections, which the SIM gate has already capped at one building
+    // (research/building-groups.md 3), and the client recall keeps a predicate-failing
+    // entry only while the row holds exactly one (`CMP ESI,0x1 / JLE` at 0x00496BEE). So
+    // the STOCK STATUS ROW -- which draws clientSelectionGroup, copied from
+    // activePlayerSelection, NOT this plugin's shadow list -- shows one, however many the
+    // plugin is holding.
     //
     // So the group is put back into the ENGINE's own client selection, with the engine's
-    // own function -- CreateNewUnitSelectionsFromList, the very call 0x00496B40 made a
-    // few instructions ago, with our list instead of its one. Everything downstream is
-    // then engine code: it attaches each unit's selection graphics itself, the status row
-    // fills from the dirty flags 0x00496B40 has ALREADY set (0x0059723C / 0x0068C1F8 and
-    // friends, written before it queued this command), and the command card sees a real
-    // multi-selection instead of a single building.
+    // own function -- CreateNewUnitSelectionsFromList, the very call 0x00496B40 made a few
+    // instructions ago, with our list instead of its one. Everything downstream is then
+    // engine code: it attaches the selection graphics, the status row fills from the dirty
+    // flags 0x00496B40 has ALREADY set (0x0059723C / 0x0068C1F8 and friends), and the
+    // command card sees a real multi-selection instead of a single building.
     //
-    // NOT done by writing selectionHotkeys instead, which looks like the tidier fix and
-    // is not: a row holding N buildings is emptied by the client recall's own gate (with
-    // N > 1 every building fails it), and the receive-side recall 0x00496940 COMPACTS the
-    // row in place as it validates -- so the injection would be destroyed permanently
-    // rather than merely ignored, and the player would lose the group entirely.
+    // Do NOT write selectionHotkeys instead, which looks tidier and is not: a row holding
+    // N buildings is emptied by the client recall's own gate (with N > 1 every building
+    // fails it), and the receive-side recall 0x00496940 COMPACTS the row in place as it
+    // validates -- so the injection is destroyed permanently rather than merely ignored,
+    // and the player loses the group entirely.
     //
     // Deliberately NOT extended to unit groups: for those the engine already hands back
-    // its own twelve and task 021's arrangement is proven at 36 units. This branch runs
-    // only when the engine's own predicate says the recalled lead is a building.
-    // Both tests, for the reason spelled out at UnitIsBuilding: the sim gate refuses a
-    // second slot to plenty of things that are not buildings (a "single entity" type, a
-    // unit with any of four per-unit fields set), and this branch must not read one of
-    // those as a building group and re-select twelve of them.
+    // its own twelve. Both tests, for the reason at UnitIsBuilding: the sim gate refuses a
+    // second slot to plenty of things that are not buildings, and this branch must not
+    // read one of those as a building group and re-select twelve of them.
     const bool buildingGroup = g_buildingGroups && g_mode == SC_MODE_FANOUT &&
                                contained && visibleCount > 0 &&
                                !UnitIsStandardAndMovable(visible[0].ptr) &&
@@ -1261,11 +1131,9 @@ static void GroupRecall(int group) {
         for (int i = 0; i < want; ++i) list[i] = kept[i].ptr;
         CallCreateNewUnitSelections(list, want);
 
-        // Read the engine BACK rather than assuming it took what it was given: the
-        // invariant this module rests on is "the tail of the shadow list is what the
-        // engine holds", and the only honest source for that is the array the engine
-        // just wrote. It also substitutes subunit parents on the way through, which a
-        // list of ours would not reflect.
+        // Read the engine BACK rather than assuming it took what it was given: the tail of
+        // the shadow list has to be what the engine holds, and it substitutes subunit
+        // parents on the way through, which a list of ours would not reflect.
         ShadowUnit now[SC_SELECTION_SLOTS];
         const int nowN = ReadEngineVisible(now, SC_SELECTION_SLOTS);
         reinstalled = nowN;
@@ -1286,9 +1154,8 @@ static void GroupRecall(int group) {
               visibleCount, g->count, reinstalled);
     }
     else {
-        // Rebuild: overflow FIRST, the engine's visible units LAST -- the invariant the
-        // whole module rests on (the final Select+order pair of a fan-out must leave the
-        // simulation holding exactly what the player can see).
+        // Rebuild: overflow FIRST, the engine's visible units LAST, the same invariant
+        // every other capture in this file keeps.
         if (contained) {
             for (int i = 0; i < g->count && g_shadowCount < g_maxUnits; ++i) {
                 if (ShadowContainsUnit(visible, visibleCount, &g->units[i])) continue;
@@ -1306,9 +1173,9 @@ static void GroupRecall(int group) {
             g_shadow[g_shadowCount++] = visible[i];
         }
         g_visibleCount = visibleCount;
-        // A recall is a selection change like any other, so the chunk size is recomputed
-        // here too. Without this a group recalled after a building group would inherit
-        // simSlots=1 and fan an ordinary 12-unit order out one unit at a time.
+        // A recall is a selection change like any other: without recomputing here, a group
+        // recalled after a building group would inherit simSlots=1 and fan an ordinary
+        // 12-unit order out one unit at a time.
         UpdateSimSlots(visible, visibleCount);
     }
     ++g_shadowVersion;
@@ -1341,10 +1208,9 @@ static void GroupRecall(int group) {
 // stays readable. Returns true if the command was one we understood.
 static bool OnHotkeyCommand(const BYTE* buf, unsigned len) {
     // The engine's dispatcher consumes exactly 3 bytes for 0x13 and its group guard is
-    // `CMP AL,0x12 / JA` (0x004C2873) -- unsigned, so it passes 0..18. We only mirror
-    // the ten Ctrl+N groups; 10..17 are the engine's own recent-selection ring, and 18
-    // is the vanilla off-by-one binary-selection-map.md 6.4 flags. Anything outside
-    // 0..9 is left entirely to the engine.
+    // `CMP AL,0x12 / JA` (0x004C2873) -- unsigned, so it passes 0..18: 10..17 are the
+    // engine's own recent-selection ring and 18 is the vanilla off-by-one
+    // binary-selection-map.md 6.4 flags. Only the ten Ctrl+N groups are mirrored here.
     if (len != 3) {
         ScLog("GROUP: hotkey command arrived with len=%u, the dispatcher consumes 3 -- "
               "ignored", len);
@@ -1391,10 +1257,9 @@ bool ScFanoutOnCommand(const BYTE* buf, unsigned len) {
     const BYTE id = buf[0];
     ++g_statCommands;
     if (g_verboseCmds) {
-        // The payload, not just the id. Two ids carry everything the command card can
-        // send -- 0x15 is Attack, Patrol and Move alike, told apart only by the order
-        // byte at offset 9 -- so an id-only log cannot say which button was pressed.
-        // research/command-opcodes.md 4 names ids from exactly these lines.
+        // The payload, not just the id: 0x15 is Attack, Patrol and Move alike, told apart
+        // only by the order byte at offset 9, so an id-only log cannot say which button
+        // was pressed. research/command-opcodes.md 4 names ids from exactly these lines.
         char hex[3 * 24 + 4];
         unsigned show = len < 24 ? len : 24;
         unsigned used = 0;
@@ -1409,18 +1274,15 @@ bool ScFanoutOnCommand(const BYTE* buf, unsigned len) {
     InterlockedExchange(&g_inFanout, 1);
     EnterCriticalSection(&g_lock);
     // FIRST, ahead of the control-group handling below: the recall path's containment
-    // check is exactly the defence a save/load defeats (#67 item 5), so the epoch has
-    // to have thrown the group away before that check is asked anything.
+    // check is exactly the defence a save/load defeats, so the epoch has to have thrown
+    // the group away before that check is asked anything.
     FanoutSessionSync();
 
-    // Control groups (task 021). A recall rebuilds the selection without ever going
-    // through CMDACT_Select, so before this task the shadow list was DROPPED here --
-    // correct at the time, and the reason Ctrl+1 on 24 units gave you 12 back. The
-    // shadow-group block above now stores and restores the whole selection instead.
-    //
-    // A command we do NOT understand (wrong length, a group outside 0..9, an action
-    // CMDRECV_Hotkey does not dispatch) falls back to exactly the old behaviour: drop
-    // the over-cap part rather than fan out a list the player is no longer holding.
+    // A recall rebuilds the selection without ever going through CMDACT_Select, so the
+    // shadow-group block above stores and restores it instead. A command we do NOT
+    // understand (wrong length, a group outside 0..9, an action CMDRECV_Hotkey does not
+    // dispatch) drops the over-cap part rather than fanning out a list the player is not
+    // holding any more.
     if (id == SC_CMD_HOTKEY) {
         if (!OnHotkeyCommand(buf, len) && g_shadowCount > g_visibleCount) {
             ScLog("SHADOW dropped: hotkey command 0x13 we did not understand rebuilds "
@@ -1435,15 +1297,14 @@ bool ScFanoutOnCommand(const BYTE* buf, unsigned len) {
 
     bool suppress = false;
 
-    // Task 030 -- the ONE opcode that becomes eligible without being in kOpcodes' fan-out
-    // column. Train (0x1F) is passthrough there for two good reasons (it is SINGLE-gated
-    // and it spends: research/command-opcodes.md 3.2, 3.3), and neither is being waved
-    // away. What changes is that for a same-type BUILDING group every chunk of the plan
-    // is exactly ONE building -- simSlots is 1 because the simulation refuses a building
-    // every slot but slot 0 -- so "one item per chunk" IS "one item per building", which
-    // is what the player asked for, and each item still enters through the engine's own
-    // cmdrecvTrain and is paid for by the engine's own addToBuildQueue. The whole
-    // argument and the refusal cases live in sc_prodfan.cpp; this is the wiring.
+    // The ONE opcode that becomes eligible without being in kOpcodes' fan-out column.
+    // Train (0x1F) is passthrough there for two good reasons (SINGLE-gated, and it spends:
+    // research/command-opcodes.md 3.2, 3.3), and neither is waved away: for a same-type
+    // BUILDING group every chunk of the plan is exactly ONE building -- simSlots is 1
+    // because the simulation refuses a building every slot but slot 0 -- so "one item per
+    // chunk" IS "one item per building", and each item still enters through the engine's
+    // own cmdrecvTrain and is paid for by its own addToBuildQueue. The argument and the
+    // refusal cases live in sc_prodfan.cpp; this is the wiring.
     bool prodFanTrain = false;
     if (id == SC_CMD_TRAIN && !IsFanoutCmd(id) && g_mode == SC_MODE_FANOUT &&
         g_visibleCount > 0 && g_shadowCount > 0) {
@@ -1468,7 +1329,7 @@ bool ScFanoutOnCommand(const BYTE* buf, unsigned len) {
 
     // `> g_simSlots`, not `> 12`: the fan-out exists because the SIMULATION cannot hold
     // the whole selection, and how many it holds is 12 for units and 1 for a same-type
-    // building group (task 024). For units this is the same condition it always was.
+    // building group.
     if (g_mode == SC_MODE_FANOUT &&
         (IsFanoutCmd(id) || prodFanTrain) &&
         g_shadowCount > g_simSlots &&
@@ -1477,15 +1338,14 @@ bool ScFanoutOnCommand(const BYTE* buf, unsigned len) {
         // The length the ENGINE will consume for this id, from its own dispatcher. A
         // command whose length disagrees is not the command this id is supposed to be:
         // replaying it would hand the receive loop a byte count it did not expect and
-        // desynchronise everything behind it in the same turn buffer. Refuse and let the
-        // engine's own command through untouched.
+        // desynchronise everything behind it in the same turn buffer.
         const ScOpcode* op = FindOpcode(id);
         if (!op || op->len < 0 || (unsigned)op->len != len) {
             ScLog("FANOUT refused: cmd 0x%02X arrived with len=%u, the dispatcher consumes "
                   "%d -- passing it through untouched", id, len, op ? op->len : -1);
         } else {
-            // Suppress only if at least one Select+order pair really went out; the
-            // first pair already carried this exact order.
+            // Suppress only if a pair really went out; that first pair already carried
+            // this exact order.
             suppress = StartFanout(buf, (int)len);
             // Counted only when a pair actually went out, so `reached` is buildings the
             // wire really carried an order to -- not buildings that were selected.
@@ -1500,10 +1360,9 @@ bool ScFanoutOnCommand(const BYTE* buf, unsigned len) {
 
 static void __attribute__((fastcall)) SC_GAME_ENTRY
 HkQueueCommand(const void* buf, unsigned len) {
-    // Re-entrancy: everything we emit goes through the TRAMPOLINE, not through the
-    // hooked entry point, so this guard only matters when the engine itself
-    // re-enters -- which it does, via the turn flush emitting a sync command from
-    // inside our own emission.
+    // Re-entrancy: everything we emit goes through the TRAMPOLINE, not the hooked entry
+    // point, so this guard only matters when the engine itself re-enters -- which it does,
+    // via the turn flush emitting a sync command from inside our own emission.
     if (InterlockedCompareExchange(&g_inFanout, 0, 0)) {
         ((ScQueueFn)g_hkQueue.trampoline)(buf, len);
         return;
@@ -1548,9 +1407,8 @@ void ScFanoutOnSelect(unsigned count, DWORD* units) {
         }
     }
     // Visible units go LAST, so the final Select+order pair of a fan-out leaves the
-    // simulation holding exactly what the player can see -- unless the liveness gate
-    // refuses all twelve of them, in which case that pair is not written at all (see
-    // the exception in this file's header comment).
+    // simulation holding exactly what the player can see (EmitSelect states the one
+    // exception, when the liveness gate refuses all twelve).
     for (int i = 0; i < visibleCount && g_shadowCount < SC_SHADOW_MAX; ++i) {
         g_shadow[g_shadowCount++] = visible[i];
     }
@@ -1563,10 +1421,9 @@ void ScFanoutOnSelect(unsigned count, DWORD* units) {
               "[accum had %d] simSlots=%d",
               g_shadowCount, visibleCount, added, g_accumCount, g_simSlots);
     } else if (g_simSlots != SC_SELECTION_SLOTS) {
-        // A building group commits with no overflow at all when it fits in twelve, so
-        // the line above would never fire for the case task 024 is about. This one
-        // reports the shape that matters: how many were selected, and how many of them
-        // the simulation will actually hold.
+        // A building group that fits in twelve commits with no overflow at all, so the
+        // line above never fires for it. This one reports the shape that matters: how
+        // many were selected, and how many of them the simulation will actually hold.
         ScLog("SHADOW captured: %d units (%d visible + 0 beyond the cap) simSlots=%d "
               "-- the sim holds %d of them at a time",
               g_shadowCount, visibleCount, g_simSlots, g_simSlots);
@@ -1576,30 +1433,15 @@ void ScFanoutOnSelect(unsigned count, DWORD* units) {
 
     g_accumCount = 0;
 
-    // Task 014: put a selection circle under the units the cap threw away.
-    //
-    // Here and not earlier, for two reasons. First, this is the moment the shadow
-    // list exists -- the overflow accumulator and the engine's final list have just
-    // been unioned. Second, the engine has ALREADY finished attaching its own
-    // graphics for this selection: CreateNewUnitSelectionsFromList (0x0049AE40) runs
-    // before CMDACT_Select on every path into here (0x0049AEF0 calls them in that
-    // order; so does the click handler 0x0046FB40). Attaching now therefore cannot
-    // collide with the engine's own attach pass, and our matching detach already ran
-    // from the 0x0049AE40 pre-hook a moment ago.
-    //
-    // The overflow units are the FRONT of g_shadow -- visible units are stored last
-    // so the final Select+order pair of a fan-out leaves the simulation holding what
-    // the player can see (with the all-twelve-dead exception in the file header).
-    //
-    // Task 021 moved the body of this into ShowOverflowCircles() because a control-group
-    // recall reaches the same point by a different route and has to do the identical
-    // thing; the timing argument above holds for both, since 0x0049AE40 has already run
-    // on each path.
+    // A selection circle under the units the cap threw away. Here and not earlier because
+    // this is the moment the shadow list exists, and because 0x0049AE40 runs before
+    // CMDACT_Select on every path into here (0x0049AEF0 calls them in that order; so does
+    // the click handler 0x0046FB40), which is the timing ShowOverflowCircles needs.
     ShowOverflowCircles();
 
-    // A new selection invalidates a pending fan-out: those pairs would command units
-    // the player has moved on from. The engine's own Select is about to be queued
-    // right behind us, so the simulation selection ends up correct either way.
+    // A new selection invalidates a pending fan-out: those pairs would command units the
+    // player has moved on from. The engine's own Select is queued right behind us, so the
+    // simulation selection ends up correct either way.
     if (g_plan.active) {
         ScLog("FANOUT: selection changed with %d/%d chunks pending -- plan dropped",
               g_plan.nextChunk, g_plan.chunkCount);
@@ -1660,9 +1502,8 @@ void ScFanoutOnOverflow(unsigned count, DWORD* outList, DWORD unit) {
     FanoutSessionSync();
     ++g_statOverflow;
 
-    // Snapshot the 12 slots BEFORE the original runs: this handler can replace an
-    // entry, and the unit it replaces would otherwise be lost from both the output
-    // array and our accumulator.
+    // Snapshot the 12 slots BEFORE the original runs: this handler can replace an entry,
+    // and the unit it replaces would otherwise be lost from the output array and from here.
     if (outList) {
         unsigned n = count < SC_SELECTION_SLOTS ? count : SC_SELECTION_SLOTS;
         for (unsigned i = 0; i < n; ++i) {
@@ -1691,44 +1532,36 @@ void ScFanoutOnOverflow(unsigned count, DWORD* outList, DWORD unit) {
 // The hook-free half: given the candidate list the engine was handed and the 12-slot
 // output it produced, grow a one-building result into the whole same-type group.
 //
-// WHEN IT DOES NOTHING, which is nearly always:
-//   * building groups are switched off (%SCPLUGIN_BUILDING_GROUPS%=0), or the mode is
-//     not fanout -- `shadow` mode's contract is "capture and log, change nothing", and
-//     this changes what the player has selected;
-//   * the engine returned anything other than exactly 1 -- more than one means the
-//     movable path found real units and no fallback was involved;
-//   * that one unit passes unit_IsStandardAndMovable -- i.e. it is an ordinary unit
-//     the engine selected on its own merits.
+// Inert, which is nearly always, unless the mode is fanout with building groups on (this
+// changes what the player has selected, which `shadow` mode's contract forbids) and the
+// engine returned exactly 1 unit that fails unit_IsStandardAndMovable -- a bigger count
+// means the movable path found real units and no fallback was involved.
 //
-// TASK 036 REMOVED THE `clicked == 0` CONDITION, and the reason it is safe to is a fact
-// about the callers rather than a judgement. SortAllUnits has three call sites:
-// 0x0046FA40 (the drag box, `clicked = 0`) and 0x0046FB40 twice, at 0x0046FCAD and
-// 0x0046FE41 -- and BOTH of those are the ctrl-click / double-click "select all of this
-// type on screen" branches, whose candidate list is a scan of the screen rect. A PLAIN
-// click and a SHIFT-click never reach this function at all: the plain click calls
-// 0x0049AE40(1) and CMDACT_Select(1) directly, and shift-click has its own inline
-// add/remove block (sc_addresses.h SC_VA_CLICK_SELECT_HANDLER, with the branch table).
-// So `clicked != 0` here means exactly "ctrl-click or double-click", which is the input
-// the user asked for, and the click paths that must stay stock cannot arrive here.
-//
-// The signature is the same on both. With `clicked != 0` the engine seeds `out[0] =
-// clicked` and starts its count at 1 (0x0046F0F5..0x0046F103) before the filter loop, so
-// a screen full of buildings still leaves `ret == 1` with the clicked building in slot 0
-// -- the identical shape the box's "last rejected candidate" fallback produces.
+// `clicked` IS DELIBERATELY NOT GATED ON, which rests on a fact about the callers.
+// SortAllUnits has three call sites: 0x0046FA40 (the drag box, `clicked = 0`) and
+// 0x0046FB40 twice, at 0x0046FCAD and 0x0046FE41 -- both of those the ctrl-click /
+// double-click "select all of this type on screen" branches. A PLAIN click and a
+// SHIFT-click never reach this function at all: the plain click calls 0x0049AE40(1) and
+// CMDACT_Select(1) directly, and shift-click has its own inline add/remove block
+// (sc_addresses.h SC_VA_CLICK_SELECT_HANDLER). So the click paths that must stay stock
+// cannot arrive here, and the shape is the same on the ones that do: with `clicked != 0`
+// the engine seeds `out[0] = clicked` and starts its count at 1
+// (0x0046F0F5..0x0046F103) before the filter loop, so a screen full of buildings still
+// leaves `ret == 1` with the clicked building in slot 0 -- the identical shape the box's
+// "last rejected candidate" fallback produces.
 //
 // WHAT IT THEN DOES. It keeps the engine's own choice of lead -- the building vanilla
-// would have selected alone -- and appends every other candidate of the SAME TYPE and
-// the SAME OWNER. Keeping vanilla's lead is deliberate: a box holding four Supply
-// Depots and three Barracks already picks one building in vanilla, and picking a
-// different one here would be a second arbitrary rule on top of the engine's. So a
-// mixed-BUILDING box selects the group of whichever type vanilla was already going to
-// select, and a mixed unit/building box is untouched (the engine returns the units).
+// would have selected alone -- and appends every other candidate of the SAME TYPE and the
+// SAME OWNER. Keeping vanilla's lead is deliberate: a box holding four Supply Depots and
+// three Barracks already picks one building in vanilla, and picking a different one here
+// would be a second arbitrary rule on top of the engine's. So a mixed-BUILDING box selects
+// the group vanilla was going to select from, and a mixed unit/building box is untouched.
 //
 // The output array belongs to the caller and holds 12 slots (`local_34[12]` in
 // 0x0046FA40), so at most 12 are written; the rest go to the overflow accumulator the
 // shadow list is built from, exactly where sortOverflowHandler would have put them.
-// Every appended unit passes task 020's liveness gate first, so a building that is
-// already dead never enters the selection or the shadow list.
+// Every appended unit passes the liveness gate first, so a building that is already dead
+// never enters the selection or the shadow list.
 unsigned ScFanoutGrowBuildingGroup(DWORD* candidates, DWORD* out, DWORD clicked,
                                    unsigned ret) {
     if (!g_buildingGroups || g_mode != SC_MODE_FANOUT) return ret;
@@ -1736,11 +1569,9 @@ unsigned ScFanoutGrowBuildingGroup(DWORD* candidates, DWORD* out, DWORD clicked,
 
     const DWORD lead = out[0];
     if (!ScUnitPtrValid(lead)) return ret;
-    // Both tests, same reason as everywhere else in task 036 (see UnitIsBuilding): the
-    // predicate failing is not by itself "this is a building". Task 024 shipped with the
-    // predicate alone, which was safe while `clicked == 0` also had to hold -- a box that
-    // selected exactly one thing that was not a building was already a vanishing case --
-    // and is not, now that every ctrl-click and double-click arrives here too.
+    // Both tests (see UnitIsBuilding): the predicate failing is not by itself "this is a
+    // building", and every ctrl-click and double-click arrives here, not just a box that
+    // selected exactly one thing.
     if (UnitIsStandardAndMovable(lead) || !UnitIsBuilding(lead)) return ret;
 
     const WORD leadType  = *(WORD*)(lead + SC_CUNIT_OFF_UNIT_ID);
@@ -1757,10 +1588,9 @@ unsigned ScFanoutGrowBuildingGroup(DWORD* candidates, DWORD* out, DWORD clicked,
         if (!ScUnitPtrValid(c)) continue;
         if (*(WORD*)(c + SC_CUNIT_OFF_UNIT_ID) != leadType) continue;
         if (ScUnitPlayer(c) != leadOwner) continue;
-        // Fail closed. Same type as a unit that failed the gate cannot pass it, but a
-        // future type whose gate verdict depends on per-unit state (0x0047B770 reads
-        // CUnit+0x117/+0x119/+0x124 as well as the type) would, and a movable unit has
-        // no business being added by THIS path.
+        // Fail closed: 0x0047B770 reads CUnit+0x117/+0x119/+0x124 as well as the type, so
+        // a same-type candidate can still answer differently, and a movable unit has no
+        // business being added by THIS path.
         if (UnitIsStandardAndMovable(c)) continue;
 
         bool dup = false;
@@ -1781,9 +1611,8 @@ unsigned ScFanoutGrowBuildingGroup(DWORD* candidates, DWORD* out, DWORD clicked,
             out[n++] = c;
         } else if (!ShadowContains(g_accum, g_accumCount, u.ptr) &&
                    g_accumCount < SC_SHADOW_MAX) {
-            // Past the engine's twelve: the same place sortOverflowHandler puts a unit,
-            // so the shadow list, the overflow circles and the fan-out all pick these
-            // up with no further special-casing.
+            // Past the engine's twelve: the same place sortOverflowHandler puts a unit, so
+            // the shadow list, the circles and the fan-out pick these up unchanged.
             g_accum[g_accumCount++] = u;
             ++beyond;
         }
@@ -1792,9 +1621,9 @@ unsigned ScFanoutGrowBuildingGroup(DWORD* candidates, DWORD* out, DWORD clicked,
     LeaveCriticalSection(&g_lock);
 
     if (n > 1 || beyond > 0 || refused > 0) {
-        // `via` names the INPUT, from SortAllUnits' own third argument -- the one fact
-        // that separates the drag box from the two type-match click paths, and the field
-        // an unattended run asserts a double click on rather than inferring it.
+        // The input is named from SortAllUnits' own third argument -- the one fact that
+        // separates the drag box from the two type-match click paths, and the field an
+        // unattended run asserts a double click on rather than inferring it.
         ScLog("BGROUP %s: lead=0x%08X type=%u owner=%u flags=0x%08X -> selected %d "
               "(+%d beyond the cap, %d refused by the liveness gate)",
               clicked ? "click" : "box",
@@ -1805,52 +1634,49 @@ unsigned ScFanoutGrowBuildingGroup(DWORD* candidates, DWORD* out, DWORD clicked,
 }
 
 // ---------------------------------------------------------------------------
-// EXTENDING A BUILDING GROUP -- shift-click, shift+box, shift+ctrl-click (task 036)
+// EXTENDING A BUILDING GROUP -- shift-click, shift+box, shift+ctrl-click
 //
 // Growing SortAllUnits' result covers the two paths that REPLACE the selection (the drag
 // box, and ctrl-click / double-click). The paths that EXTEND one do not go through it:
 //
-//   shift-click ADD  is an inline block in the click handler. It asks
-//                    unit_IsStandardAndMovable about the existing selection's lead
-//                    (CALL at 0x0046FD27) and about the clicked unit (0x0046FD44), and
-//                    returns without appending if either says no.
-//   shift+box and    go through combineSelectionsLists (0x0046F290), which asks the same
-//   shift+ctrl-click question about the incoming list's lead (0x0046F2C8) and the existing
-//                    list's lead (0x0046F2E8) and, on either failure, returns the EXISTING
-//                    count untouched -- so the merge simply does not happen.
+//   shift-click ADD  an inline block in the click handler, which asks
+//                    unit_IsStandardAndMovable about the existing selection's lead (CALL
+//                    at 0x0046FD27) and about the clicked unit (0x0046FD44) and returns
+//                    without appending if either says no.
+//   shift+box and    combineSelectionsLists (0x0046F290), which asks the same about the
+//   shift+ctrl-click incoming list's lead (0x0046F2C8) and the existing list's lead
+//                    (0x0046F2E8) and on either failure returns the EXISTING count
+//                    untouched, so the merge does not happen.
 //
-// Neither is a function this plugin can wrap: one is a basic block in the middle of a
-// 900-byte handler, the other has a register-passed destination list. So the thing that
-// is detoured is the PREDICATE, and it is scoped by the RETURN ADDRESS -- it answers
-// differently at exactly the four instruction addresses above (sc_addresses.h,
-// SC_RET_MOVABLE_*) and hands back the engine's own verdict everywhere else in the
-// binary. There is no other consumer to disturb, because there is no other call site in
-// the allowlist.
+// Neither is wrappable -- one is a basic block inside a 900-byte handler, the other has a
+// register-passed destination list -- so what is detoured is the PREDICATE, scoped by the
+// RETURN ADDRESS: it answers differently at exactly the four instruction addresses above
+// (sc_addresses.h, SC_RET_MOVABLE_*) and hands back the engine's own verdict everywhere
+// else in the binary.
 //
-// THE RULE, and why it cannot regress anything a player could see today:
+// THE RULE, and why it cannot regress anything a player could see:
 //
 //     When the LEAD of the selection being extended is a building, membership at these
 //     four sites becomes "same type and same owner as that lead". Otherwise the engine's
 //     own answer stands, unchanged.
 //
-// The lead being a building is precisely the case in which vanilla refuses the whole
-// operation -- the lead's OWN call site returns 0 and the handler bails -- so every
-// outcome under the rule replaces "nothing happens" with something. That is also why the
-// rule may safely REFUSE where vanilla would have allowed: a Marine shift-clicked onto a
-// building group is refused here, and vanilla refused it too, one call site earlier.
+// A building lead is precisely the case in which vanilla refuses the whole operation --
+// the lead's OWN call site returns 0 and the handler bails -- so every outcome under the
+// rule replaces "nothing happens" with something, and the rule may safely REFUSE where
+// vanilla would have allowed: a Marine shift-clicked onto a building group is refused
+// here, and vanilla refused it one call site earlier.
 //
 // A building group therefore stays ONE TYPE on every path: the box is same-type by
-// construction (task 024), double-click and ctrl-click are same-type by the engine's own
-// filter, and this is what makes shift agree with them. A mixed building+unit or
-// building+building selection is refused, and that is the answer to "what does a mixed
-// selection do" rather than an omission -- research/building-groups.md 9.
+// construction, double-click and ctrl-click by the engine's own filter, and this makes
+// shift agree with them. A mixed building+unit or building+building selection is refused,
+// which is the answer to "what does a mixed selection do" rather than an omission
+// (research/building-groups.md 9).
 //
-// WHERE THE LEAD COMES FROM. activePlayerSelection[0]. At the shift-click sites the
-// handler has copied that array into a local a few instructions earlier; both callers of
-// combineSelectionsLists copy it into a local too (0x0046FA40's 12-dword loop,
-// 0x0046FC9A's `LEA EDI,[EBP-0x6c]` + `MOVSD.REP`), and the merge appends to that copy
-// without touching slot 0. So one read answers all four sites and none of them needs the
-// plugin to remember anything between calls.
+// WHERE THE LEAD COMES FROM: activePlayerSelection[0]. The shift-click handler has copied
+// that array into a local a few instructions earlier; both callers of
+// combineSelectionsLists copy it too (0x0046FA40's 12-dword loop, 0x0046FC9A's `LEA
+// EDI,[EBP-0x6c]` + `MOVSD.REP`), and the merge appends to that copy without touching
+// slot 0. So one read answers all four sites and none needs state kept between calls.
 // ---------------------------------------------------------------------------
 
 extern "C" int ScFanoutMovableDecide(DWORD unit, DWORD retAddr, int verdict);
@@ -1858,11 +1684,10 @@ extern "C" void ScFanoutMovableThunk(void);
 extern "C" void* g_scMovableTrampoline;
 void* g_scMovableTrampoline = NULL;
 
-// ECX = CUnit*, no stack arguments, plain RET. The thunk keeps ECX for the original,
-// then hands (unit, returnAddress, the original's verdict) to a normal C function whose
-// return value becomes the caller's EAX. EBX/ESI/EDI are untouched by construction (GCC
-// preserves them across the C call), and the flags the game TESTs are set by its own
-// `TEST EAX,EAX` after the call, not by us.
+// ECX = CUnit*, no stack arguments, plain RET. The thunk keeps ECX for the original, then
+// hands (unit, returnAddress, the original's verdict) to a normal C function whose return
+// value becomes the caller's EAX. EBX/ESI/EDI are untouched by construction (GCC preserves
+// them across the C call), and the flags the game TESTs come from its own `TEST EAX,EAX`.
 asm(
     ".text\n"
     ".globl _ScFanoutMovableThunk\n"
@@ -1882,9 +1707,8 @@ asm(
     "  ret\n"
 );
 
-// The four allowlisted return addresses, relocated to this process's load address. A
-// static VA would be wrong under any base other than 0x00400000, and the plugin already
-// relocates every other address it uses.
+// The four allowlisted return addresses, relocated to this process's load address: a static
+// VA would be wrong under any base other than 0x00400000.
 static bool IsExtendSite(DWORD retAddr) {
     return retAddr == ScRuntimeVa(SC_RET_MOVABLE_SHIFT_LEAD)
         || retAddr == ScRuntimeVa(SC_RET_MOVABLE_SHIFT_CLICKED)
@@ -1907,13 +1731,11 @@ ScFanoutMovableDecide(DWORD unit, DWORD retAddr, int verdict) {
 
     const DWORD lead = *(DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_SELECTION);
     if (!ScUnitPtrValid(lead)) return verdict;
-    // Not a building group -> the engine decides, exactly as it does today. This is the
-    // branch every ordinary unit selection takes, so shift-clicking Marines is untouched.
-    //
-    // BOTH tests, not just the predicate. The predicate also fails for a "single entity"
-    // type and for four per-unit fields, so an ordinary UNIT can fail it -- and this
-    // feature is called building groups. Requiring the units.dat Building bit as well
-    // keeps every widening here to the thing it is named after.
+    // Not a building group -> the engine decides, which is the branch every ordinary unit
+    // selection takes, so shift-clicking Marines is untouched. BOTH tests, not just the
+    // predicate: it also fails for a "single entity" type and for four per-unit fields, so
+    // an ordinary UNIT can fail it, and requiring the units.dat Building bit keeps every
+    // widening here to the thing it is named after.
     if (UnitIsStandardAndMovable(lead) || !UnitIsBuilding(lead)) return verdict;
 
     ++g_statExtendSeen;
@@ -1933,9 +1755,9 @@ ScFanoutMovableDecide(DWORD unit, DWORD retAddr, int verdict) {
     const bool allow = (type == leadType) && (owner == leadOwner) && live;
     if (allow) ++g_statExtendAllow; else ++g_statExtendRefuse;
 
-    // One line per call, and it names WHICH test decided -- task 030's rule. Four calls
-    // per shift-click at most, and only ever when the lead is a building, so this cannot
-    // grow into the per-order pile ShouldLogForensics exists to prevent.
+    // One line per call, naming WHICH test decided. Four calls per shift-click at most,
+    // and only ever when the lead is a building, so this cannot grow into the per-order
+    // pile ShouldLogForensics exists to prevent.
     ScLog("BGROUP extend [%s]: lead=0x%08X type=%u owner=%u | unit=0x%08X type=%u owner=%u "
           "live=%d(%s) engineSaid=%d -> %s",
           ExtendSiteName(retAddr), (unsigned)lead, leadType, leadOwner,
@@ -1960,12 +1782,10 @@ HkSortAllUnits(DWORD* candidates, DWORD* out, DWORD clicked) {
     }
     unsigned ret = ((SortAllUnitsFn)g_hkSort.trampoline)(candidates, out, clicked);
     unsigned grown = ScFanoutGrowBuildingGroup(candidates, out, clicked, ret);
-    // `clicked` is the discriminator between the two input paths that reach here and it
-    // is logged, not inferred: 0x0046FA40 (the DRAG BOX) is the only caller that passes
-    // 0, and 0x0046FB40's two call sites (0x0046FCAD, 0x0046FE41) pass the unit under
-    // the cursor -- they are the ctrl-click / double-click "select all of this type on
-    // screen" paths. research/building-groups.md 2.3 and 8.1. Without this field a log
+    // `clicked` discriminates the input paths (the drag box passes 0; see
+    // ScFanoutGrowBuildingGroup) and is logged rather than inferred: without it a line
     // reading `candidates=37 -> selected=1` cannot say WHICH path refused.
+    // research/building-groups.md 2.3 and 8.1.
     ScLog("SORT candidates=%d clicked=0x%08X -> engine=%u selected=%u%s "
           "(accumulated beyond the cap: %d)",
           candCount, (unsigned)clicked, ret, grown,
@@ -1988,46 +1808,37 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     g_budget      = ScEnvInt("SCPLUGIN_FANOUT_BUDGET", SC_DEFAULT_BUDGET, 40, 480);
     g_maxUnits    = ScEnvInt("SCPLUGIN_MAX_UNITS", SC_SHADOW_MAX - 1, 12, SC_SHADOW_MAX - 1);
     g_verboseCmds = ScEnvInt("SCPLUGIN_LOG_COMMANDS", 1, 0, 1) != 0;
-    // Task 020's liveness gate, ON by default. Setting it to 0 restores the
-    // uniqueness-only test the fan-out shipped with, which is a KNOWN-BAD
-    // configuration -- it exists so an A/B run can show the defect and so the
-    // in-game regression assertion can be shown to be capable of failing.
+    // The liveness gate, ON by default. 0 leaves term 1 (uniqueness) alone in the gate, a
+    // KNOWN-BAD configuration that exists so an A/B run can reproduce the defect on demand,
+    // which is how the in-game regression assertion is shown to be capable of failing and
+    // how the unguarded receive-side behaviour is observed (research/fanout-liveness.md 4).
     g_liveness    = ScEnvInt("SCPLUGIN_FANOUT_LIVENESS", 1, 0, 1) != 0;
-    // Task 024's same-type building groups. Its own off switch on top of the mode, so
-    // a run can prove the STOCK one-building behaviour with the same binary -- an
-    // "it selected four" assertion is only worth something next to an arm where the
-    // same box selects one.
+    // Same-type building groups, with an off switch on top of the mode so a run can prove
+    // the STOCK one-building behaviour with the same binary -- an "it selected four"
+    // assertion is only worth something next to an arm where the same box selects one.
     g_buildingGroups = ScEnvInt("SCPLUGIN_BUILDING_GROUPS", 1, 0, 1) != 0;
     g_movableFn      = NULL;    // in the game, ask the engine
     g_simSlots       = SC_SELECTION_SLOTS;
     LoadFanoutCmds();
 
-    // Task 014's selection circles. Only in fanout mode -- `shadow` mode's contract is
-    // "capture and log, change nothing", and drawing a circle is a change. %SCPLUGIN_CIRCLES%
-    // is its own off switch on top of the mode, so a fan-out run can be compared with and
-    // without the visuals without rebuilding anything.
+    // Selection circles, fanout mode only -- `shadow` mode's contract is "capture and log,
+    // change nothing", and drawing a circle is a change. %SCPLUGIN_CIRCLES% is its own off
+    // switch on top of the mode, so a run can be compared with and without the visuals.
     const bool circles = (mode == SC_MODE_FANOUT) && ScEnvInt("SCPLUGIN_CIRCLES", 1, 0, 1) != 0;
     ScCirclesInit(moduleBase, circles);
 
-    // Task 017's HUD-row paging. Same shape as the circles: fanout mode only
-    // (shadow mode's contract is "capture and log, change nothing"), with
-    // %SCPLUGIN_HUDROW% as its own off switch so the row can be compared stock
-    // and paged without rebuilding anything.
+    // HUD-row paging. Same shape as the circles: fanout mode only, with %SCPLUGIN_HUDROW%
+    // as its own off switch so the row can be compared stock and paged.
     const bool hudrow = (mode == SC_MODE_FANOUT) && ScEnvInt("SCPLUGIN_HUDROW", 1, 0, 1) != 0;
     ScHudRowInit(moduleBase, hudrow);
 
-    // Task 033's queue-overflow indicator, with %SCPLUGIN_QUEUEIND% as its own off switch.
-    //
+    // The queue-overflow indicator, with %SCPLUGIN_QUEUEIND% as its own off switch. Here
+    // rather than in scplugin.cpp so its detour lands under the SAME thread suspension.
     // The mode gate is NOT "fanout only" like the two above, and the difference is the
-    // contract rather than the feature: `observe` writes nothing to game memory at all and
-    // `shadow` promises "capture and log, change nothing" -- drawing is a change, so both
-    // refuse it. `hooktest` makes no such promise (task 025's production queue, which moves
-    // a player's RESOURCES, runs in it), and it is the mode a production run wants, because
-    // it puts no selection machinery in the picture. What this indicator reports is a
-    // production queue, so it has to exist there.
-    //
-    // It goes in here rather than in scplugin.cpp so its one detour lands under the SAME
-    // thread suspension as the others.
+    // contract rather than the feature: `observe` writes nothing to game memory and
+    // `shadow` promises "capture and log, change nothing", while `hooktest` makes no such
+    // promise (the production queue, which moves a player's RESOURCES, runs in it) and is
+    // the mode a production run wants -- and a production queue is what this reports.
     const bool queueind = (mode == SC_MODE_FANOUT || mode == SC_MODE_LOGONLY) &&
                           ScQueueIndEnabled();
     ScQueueIndInit(moduleBase, queueind);
@@ -2078,7 +1889,7 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
                           (void*)&HkSortAllUnits, 6,
                           kPrologueSort, (int)sizeof(kPrologueSort))) ++installed;
 
-        // Task 036. Installed in shadow mode too, like the four above, and INERT there:
+        // Installed in shadow mode too, like the four above, and INERT there:
         // ScFanoutMovableDecide returns the engine's own verdict unless the mode is
         // fanout AND %SCPLUGIN_BUILDING_GROUPS% is on AND the call came from one of four
         // named instruction addresses. So the stock arm runs with the detour spliced and
@@ -2093,31 +1904,26 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
         }
     }
 
-    // Task 014's one extra hook. It goes in under the same suspension as the rest so
-    // a half-installed set is never observable.
+    // The circles' one extra hook, under the same suspension as the rest so a
+    // half-installed set is never observable.
     if (circles) installed += ScCirclesInstall();
 
-    // Task 017's one dispatcher detour, same suspension. ScHudRowInstall
+    // The HUD row's one dispatcher detour, same suspension. ScHudRowInstall
     // returns 0 or 1, like every Sc*Install in this set.
     if (hudrow) installed += ScHudRowInstall();
 
-    // Task 033's HUD-driver detour plus task 066's queueLayout bracket -- TWO patches
-    // inside sc_queueind, same suspension, still the 0-or-1 contract here: the module
-    // installs both or rolls its own half back and reports 0.
+    // A HUD-driver detour plus the queueLayout bracket -- TWO patches inside sc_queueind,
+    // same suspension, still the 0-or-1 contract here: the module installs both or rolls
+    // its own half back and reports 0.
     if (queueind) installed += ScQueueIndInstall();
 
     ScHookResumeThreads();
 
-    // A partial install is not a working plugin: the queueCommand hook without the
-    // selection hooks would fan out a shadow list nothing ever fills. Roll back.
-    // The circle hook counts too -- without it our circles would never come off, and
-    // stale circles under units the player has deselected is worse than none. The
-    // HUD-row dispatcher detour is one hook, and so is task 033's HUD driver.
-    //
-    // The shadow-mode count is FIVE, not four: queueCommand, CMDACT_Select,
-    // sortOverflowHandler, SortAllUnits, and task 036's unit_IsStandardAndMovable.
-    // Both halves of this expression moved at once (033 added the queueind term while
-    // 036 bumped the base), so it is spelled out rather than merged by shape.
+    // A partial install is not a working plugin: the queueCommand hook without the selection
+    // hooks would fan out a shadow list nothing ever fills, and without the circle hook our
+    // circles never come off, which is worse than none. The shadow-mode count is FIVE --
+    // queueCommand, CMDACT_Select, sortOverflowHandler, SortAllUnits,
+    // unit_IsStandardAndMovable -- plus one each for circles, the HUD row and the indicator.
     const int expected = ((mode >= SC_MODE_SHADOW) ? 5 : 1) + (circles ? 1 : 0)
                        + (hudrow ? 1 : 0) + (queueind ? 1 : 0);
     if (installed != expected) {
@@ -2135,9 +1941,8 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     return installed;
 }
 
-// Test-only: point the core at a fake module image and a capture function, with no
-// hooks anywhere. src/hooktest.cpp part [7] uses this to drive a whole 36-unit
-// fan-out and assert the emitted bytes.
+// Test-only: point the core at a fake module image and a capture function, with no hooks
+// anywhere, so a whole 36-unit fan-out can be driven and its emitted bytes asserted on.
 void ScFanoutTestBegin(BYTE* fakeModuleBase, ScQueueFn emit, int budget) {
     if (!g_lockInit) { InitializeCriticalSection(&g_lock); g_lockInit = true; }
     ScEngineSetModuleBase(fakeModuleBase);
@@ -2146,9 +1951,9 @@ void ScFanoutTestBegin(BYTE* fakeModuleBase, ScQueueFn emit, int budget) {
     g_budget = budget;
     g_maxUnits = SC_SHADOW_MAX - 1;
     g_verboseCmds = false;
-    // Circles OFF for the fan-out tests: ScFanoutOnSelect would otherwise call the
-    // engine's sprite primitives, and in a test process those addresses are a fake
-    // module image. sc_circles has its own tests, with its own fake primitives.
+    // Circles OFF for the fan-out tests: ScFanoutOnSelect would otherwise call the engine's
+    // sprite primitives, which in a test process are a fake module image. sc_circles has
+    // its own tests, with its own fake primitives.
     ScCirclesInit(fakeModuleBase, false);
     // HUD row likewise inert here; hooktest part [10] drives it with its own fakes.
     ScHudRowInit(fakeModuleBase, false);
@@ -2158,10 +1963,9 @@ void ScFanoutTestBegin(BYTE* fakeModuleBase, ScQueueFn emit, int budget) {
     g_accumCount = 0;
     g_shadowVersion = 0;
     g_liveness = true;              // the shipped default; [7] flips it explicitly
-    // Task 024. The predicate defaults to "everything is movable" in a test process:
-    // there is no engine code at 0x0047B770 in the fake image, and every pre-existing
-    // part drives the core with ordinary units, so this keeps them byte-identical.
-    // The building-group part overrides it.
+    // The predicate defaults to "everything is movable" in a test process: there is no
+    // engine code at 0x0047B770 in the fake image, and the parts that drive the core with
+    // ordinary units need that answer. The building-group part overrides it.
     g_buildingGroups = true;
     g_movableFn      = &ScTestAllMovable;
     g_simSlots       = SC_SELECTION_SLOTS;
@@ -2169,26 +1973,25 @@ void ScFanoutTestBegin(BYTE* fakeModuleBase, ScQueueFn emit, int budget) {
     memset(g_statDrop, 0, sizeof(g_statDrop));
     memset(g_statBGroupRefused, 0, sizeof(g_statBGroupRefused));
     memset(&g_plan, 0, sizeof(g_plan));
-    // Task 021: the shadow control groups are session state, so a test that begins a
-    // fresh scenario must not inherit the previous one's groups.
+    // The shadow control groups are session state, so a test that begins a fresh
+    // scenario must not inherit the previous one's groups.
     memset(g_group, 0, sizeof(g_group));
     g_statGroupAssign = g_statGroupAdd = g_statGroupRecall = 0;
     g_statGroupWide = g_statGroupDiscard = g_statGroupReset = 0;
-    // Task 054: adopt whatever epoch the test harness is currently at, so a part that
-    // begins a fresh scenario does not immediately log a drop of the state it just
-    // cleared -- and so a part that WANTS a game change asks for one explicitly.
+    // Adopt whatever epoch the test harness is at, so a part that begins a fresh scenario
+    // does not immediately log a drop of the state it just cleared -- and so a part that
+    // WANTS a game change asks for one explicitly.
     g_session = ScSessionEpoch();
     g_statSessionDrop = 0;
-    // Task 036: the extend override's counters and its engine-call seam. The seam is
-    // cleared rather than kept, so a part that forgets to set it faults loudly on the
-    // fake image instead of silently reusing the previous part's recorder.
+    // The engine-call seam is cleared rather than kept, so a part that forgets to set it
+    // faults loudly on the fake image instead of reusing the previous part's recorder.
     g_statExtendSeen = g_statExtendAllow = g_statExtendRefuse = 0;
     g_createSelFn = NULL;
 }
 
-// Test-only: how many units the plugin holds for a control group, and the module's
-// group counters. hooktest part [11] asserts on these so "the group holds 36" and
-// "the recall put 36 back" are separate claims.
+// Test-only: how many units the plugin holds for a control group, and the module's group
+// counters. Asserted on separately so "the group holds 36" and "the recall put 36 back"
+// are separate claims.
 int ScFanoutGroupCount(int group) {
     if (group < 0 || group >= SC_HOTKEY_GROUPS) return -1;
     FanoutSessionSync();
@@ -2214,13 +2017,12 @@ int ScFanoutShadowCount(void)  { FanoutSessionSync(); return g_shadowCount; }
 int ScFanoutVisibleCount(void) { FanoutSessionSync(); return g_visibleCount; }
 int ScFanoutPlanActiveForTest(void) { FanoutSessionSync(); return g_plan.active ? 1 : 0; }
 
-// Test-only: drive the %SCPLUGIN_FANOUT_LIVENESS% switch without an environment.
-// hooktest part [7] uses it to prove that the pre-task-020 gate really does replay a
-// damage-killed unit -- an assertion that cannot fail is not evidence that the fixed
-// one works.
+// Test-only: drive the %SCPLUGIN_FANOUT_LIVENESS% switch without an environment. hooktest
+// part [7] uses it to prove the uniqueness-only gate really does replay a damage-killed
+// unit -- an assertion that cannot fail is not evidence the full gate works.
 void ScFanoutTestSetLiveness(bool on) { g_liveness = on; }
 
-// Test-only: supply the movable predicate (task 024). NULL restores "call the engine".
+// Test-only: supply the movable predicate. NULL restores "call the engine".
 void ScFanoutTestSetMovable(ScMovablePredicate f) { g_movableFn = (ScMovableFn)f; }
 
 void ScFanoutTestSetBuildingGroups(bool on) { g_buildingGroups = on; }
@@ -2242,8 +2044,7 @@ int ScFanoutExtendStat(int which) {
 int ScFanoutSimSlots(void) { return g_simSlots; }
 
 // Test-only: units the building-group append refused, by reason. Separate from
-// ScFanoutDroppedFor: that one counts units kept off the WIRE, this one counts units
-// kept out of the SELECTION.
+// ScFanoutDroppedFor, which counts units kept off the WIRE rather than out of the SELECTION.
 int ScFanoutGroupRefusedFor(int why) {
     if (why < 0 || why > SC_DROP_NOTAG) return 0;
     return (int)g_statBGroupRefused[why];
@@ -2256,15 +2057,14 @@ int ScFanoutDroppedFor(int why) {
     return (int)g_statDrop[why];
 }
 
-// Task 017: snapshot for the HUD row. Same order as storage -- overflow first,
-// visible last. Under the lock so a mid-commit copy can never mix two selections.
+// Snapshot for the HUD row. Same order as storage -- overflow first, visible last.
+// Under the lock so a mid-commit copy can never mix two selections.
 int ScFanoutCopyShadow(ScShadowInfo* out, int maxOut, int* visibleCount,
                        unsigned* version) {
     if (!g_lockInit) { InitializeCriticalSection(&g_lock); g_lockInit = true; }
     EnterCriticalSection(&g_lock);
-    // The HUD row's snapshot syncs too, so the row can never be handed a list from a
-    // game that has ended -- and the `version` it reads back below is the one the sync
-    // bumps, which is what makes the change visible to a consumer that only watches it.
+    // Syncs too, so the row can never be handed a list from a game that has ended, and the
+    // `version` it reads back is the one that sync bumps.
     FanoutSessionSync();
     int n = g_shadowCount < maxOut ? g_shadowCount : maxOut;
     for (int i = 0; i < n; ++i) {
@@ -2281,22 +2081,17 @@ int ScFanoutCopyShadow(ScShadowInfo* out, int maxOut, int* visibleCount,
 void ScFanoutRemove(void) {
     if (g_mode == SC_MODE_OBSERVE && !g_hkQueue.installed) return;
 
-    // NOTE: our circles are deliberately NOT taken off here.
+    // Our circles are deliberately NOT taken off here. This runs on the FreeLibrary path,
+    // on the UNLOADER's thread: the engine being alive is a liveness answer to a
+    // concurrency question. 0x004975D0 unlinks an image from the sprite's overlay list and
+    // pushes it onto the image free list, and the game's own thread may be walking exactly
+    // those lists to render the frame -- and the 0x0049AE40 hook is still installed, so
+    // that thread can be inside ScCirclesHide() concurrently with this one.
     //
-    // This runs on the FreeLibrary path, on the UNLOADER's thread. The engine is alive
-    // -- which is why an earlier draft called ScCirclesHide() here -- but "alive" is a
-    // liveness answer to a concurrency question. 0x004975D0 unlinks an image from the
-    // sprite's overlay list and pushes it onto the image free list, and the game's own
-    // thread may be walking exactly those lists to render the frame. Worse, the
-    // 0x0049AE40 hook is still installed at this point, so the game thread can be
-    // inside ScCirclesHide() concurrently with this one.
-    //
-    // Everything in sc_circles.cpp is therefore GAME-THREAD-ONLY, and unloading the
-    // plugin mid-game is documented as unsupported (tools/plugin/README.md, off switch
-    // 3). The circles that stay behind are self-healing rather than permanent: the
-    // engine's own unit-removal path calls 0x004975D0 on death
-    // (research/selection-circles.md 4.5), and 0x00497620 takes the circle off the next
-    // time that unit is selected and deselected.
+    // Everything in sc_circles.cpp is therefore GAME-THREAD-ONLY, and unloading mid-game is
+    // documented as unsupported (tools/plugin/README.md, off switch 3). The circles left
+    // behind are self-healing: the engine calls 0x004975D0 on death
+    // (research/selection-circles.md 4.5) and 0x00497620 on the next select/deselect.
     ScLog("CIRCLES: %d circle(s) left attached -- unloading mid-game does not remove "
           "them (see tools/plugin/README.md, off switch 3)", ScCirclesCount());
 
@@ -2321,8 +2116,8 @@ void ScFanoutLogStats(void) {
           g_statDrop[SC_DROP_RECYCLED], g_statDrop[SC_DROP_DEAD],
           g_statDrop[SC_DROP_FOREIGN], g_statDrop[SC_DROP_NOSPRITE],
           g_statDrop[SC_DROP_REMOVED], g_statDrop[SC_DROP_NOTAG], g_liveness ? 1 : 0);
-    // Task 021's control groups, on their own line so the STATS line above keeps the
-    // shape every existing reader was written against.
+    // The control groups, on their own line so the STATS line above keeps the shape
+    // every reader was written against.
     {
         char held[SC_HOTKEY_GROUPS * 8 + 4];
         int used = 0;
@@ -2341,22 +2136,20 @@ void ScFanoutLogStats(void) {
     ScQueueIndLogStats();
 }
 
-// The oracle for "did the order reach every unit". Walks the shadow list -- which is the
-// whole pre-cap selection, not the twelve the engine holds -- and reports what each unit
-// is actually doing, as a histogram so one line covers any group size.
+// The oracle for "did the order reach every unit". Walks the shadow list -- the whole
+// pre-cap selection, not the twelve the engine holds -- and reports what each unit is
+// doing, as a histogram so one line covers any group size.
 //
-// READS ONLY. It runs on the observer thread, not the game thread, so it must not touch
-// anything the game could be mid-write on: the two fields it reads are single bytes/dwords
-// of unit state, and a torn read would at worst mis-bucket one unit in one line. Nothing
-// here is on the game's own code path.
+// READS ONLY, on the observer thread rather than the game thread, so it must not touch
+// anything the game could be mid-write on: every field it reads is a single byte or dword
+// of unit state, where a torn read at worst mis-buckets one unit in one line.
 void ScFanoutLogUnitStates(const char* tag) {
     if (g_mode == SC_MODE_OBSERVE) return;
     if (!g_lockInit) return;
 
     EnterCriticalSection(&g_lock);
-    // The oracle syncs too. It walks the shadow list and dereferences every entry, so
-    // a stale list here would be a read through pointers belonging to another game --
-    // and it is also the line a suite reads to decide what the plugin is holding.
+    // Syncs too: this dereferences every shadow entry, so a stale list would be a read
+    // through pointers belonging to another game.
     FanoutSessionSync();
 
     WORD     orderKey[32], order2Key[32], typeKey[32];
@@ -2364,19 +2157,18 @@ void ScFanoutLogUnitStates(const char* tag) {
     int      orderN = 0, order2N = 0, typeN = 0;
     int      live = 0, burrowed = 0, uniqOnly = 0, circled = 0;
     int      orderOverflow = 0, order2Overflow = 0, typeOverflow = 0;
-    // Task 022. A cost-bearing ability is a two-sided claim -- every unit gains the
-    // effect AND every unit pays -- so the oracle has to carry both halves per unit,
-    // over the same shadow walk. Histograms, not sums: "the group lost 240 HP" is
-    // satisfied by one unit losing 240, and that is exactly the confusion this line
-    // exists to rule out.
+    // A cost-bearing ability is a two-sided claim -- every unit gains the effect AND every
+    // unit pays -- so the oracle carries both halves per unit. Histograms, not sums: "the
+    // group lost 240 HP" is satisfied by one unit losing 240, which is the confusion this
+    // line exists to rule out.
     //   hp     CUnit+0x08, the field the damage primitive 0x004797B0 subtracts from
     //          (sc_addresses.h). 32-bit: a 2500-HP building overflows a WORD key.
-    //   stim   CUnit+0x115, set to 0x25 by the 0x36 handler 0x004C2F30 (task 022,
-    //          research/ability-semantics.md 2).
+    //   stim   CUnit+0x115, set to 0x25 by the 0x36 handler 0x004C2F30
+    //          (research/ability-semantics.md 2).
     //   energy CUnit+0xA2, the field 0x00491B30 deducts from for the 0x21 family.
-    //   rally  CUnit+0xF8/+0xFA packed (x << 16) | y -- a building's rally point, the
-    //          one order a plain right-click gives a building (task 024). 32-bit for
-    //          the same reason: two 16-bit map coordinates do not fit a WORD key.
+    //   rally  CUnit+0xF8/+0xFA packed (x << 16) | y -- a building's rally point, the one
+    //          order a plain right-click gives a building. 32-bit for the same reason:
+    //          two 16-bit map coordinates do not fit a WORD key.
     DWORD    hpKey[32], rallyKey[32];
     unsigned hpCnt[32], rallyCnt[32];
     int      hpN = 0, hpOverflow = 0;
@@ -2388,10 +2180,9 @@ void ScFanoutLogUnitStates(const char* tag) {
     int      why[SC_DROP_NOTAG + 1];
     for (int i = 0; i <= SC_DROP_NOTAG; ++i) why[i] = 0;
 
-    // Two accumulators, same shape: histogram `key` into (keys, counts, n). The 32-bit
-    // one exists only because hit points do not fit a WORD key -- a 2500-hit-point
-    // building reads 0xA0000 -- and silently truncating them would merge units that are
-    // not in the same state.
+    // Two accumulators, same shape. The 32-bit one exists only because hit points do not
+    // fit a WORD key -- a 2500-hit-point building reads 0xA0000 -- and truncating them
+    // would merge units that are not in the same state.
     struct Hist32 {
         static void Add(DWORD key, DWORD* keys, unsigned* counts, int* n, int cap, int* overflow) {
             for (int j = 0; j < *n; ++j) if (keys[j] == key) { ++counts[j]; return; }
@@ -2432,27 +2223,25 @@ void ScFanoutLogUnitStates(const char* tag) {
 
     for (int i = 0; i < g_shadowCount; ++i) {
         // BOTH numbers, from the same read of the same list: `uniqOnly` is what the
-        // pre-task-020 test (CUnit+0xA5 alone) would have said, `live` is what the
-        // gate says now. A damage death separates them, and that gap is the oracle
-        // the in-game fixture asserts on.
+        // uniqueness-only test (CUnit+0xA5 alone) says, `live` is what the full gate
+        // says. A damage death separates them, and that gap is the oracle the in-game
+        // fixture asserts on.
         //
-        // The per-reason counters below are FIRST-FAILING-TERM, not independent: a
-        // unit that is both dead and already unlinked is charged to `hp0`, because
-        // hitpoints is tested first. So `removed=0` next to `hp0=1` does NOT mean the
-        // unit is still in its player's list -- read the per-unit `FANOUT stale drop`
-        // line for that (it reports every field).
+        // The per-reason counters below are FIRST-FAILING-TERM, not independent: a unit
+        // both dead and already unlinked is charged to `hp0`, because hitpoints is tested
+        // first. So `removed=0` next to `hp0=1` does NOT mean the unit is still in its
+        // player's list -- the per-unit `FANOUT stale drop` line reports every field.
         if (SameUnit(&g_shadow[i])) ++uniqOnly;
         int w = SC_LIVE_OK;
         if (!UnitLive(&g_shadow[i], &w)) { ++why[w]; continue; }
         ++live;
         DWORD flags = *(DWORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_FLAGS);
         if (flags & SC_UNIT_FLAG_BURROWED) ++burrowed;
-        // Task 024: does this unit have a SELECTION CIRCLE right now? Sprite flag 0x01
-        // means "a circle image (0x231..0x23A) is attached to this sprite" -- the engine
-        // sets it for the units it selected and sc_circles sets it for the ones past the
-        // cap, so ONE count covers both and a >12 building group can assert that every
-        // building is circled rather than only that our own share of them is. The unit
-        // passed UnitLive above, so its sprite pointer is non-NULL.
+        // Does this unit have a SELECTION CIRCLE right now? Sprite flag 0x01 means "a
+        // circle image (0x231..0x23A) is attached" -- set by the engine for the units it
+        // selected and by sc_circles for the ones past the cap, so ONE count lets a >12
+        // building group assert that EVERY building is circled. The unit passed UnitLive
+        // above, so its sprite pointer is non-NULL.
         if (*(BYTE*)(ScUnitSprite(g_shadow[i].ptr) + SC_CSPRITE_OFF_FLAGS)
                 & SC_SPRITE_FLAG_SEL_CIRCLE) ++circled;
         BYTE stim = *(BYTE*)(g_shadow[i].ptr + SC_CUNIT_OFF_STIM_TIMER);
@@ -2468,11 +2257,10 @@ void ScFanoutLogUnitStates(const char* tag) {
                   order2Key, order2Cnt, &order2N, 32, &order2Overflow);
         Hist::Add(*(WORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_UNIT_ID),
                   typeKey, typeCnt, &typeN, 32, &typeOverflow);
-        // Task 024: the RALLY POINT, packed (x << 16) | y so one histogram bucket
-        // means "every one of these units is rallied to the same map point". That is
-        // the oracle for "a building-valid order reached all N": the Right Click
-        // applier 0x004560D0 writes CUnit+0xF8/+0xFA per building, and a fan-out that
-        // reached only some of them shows up as two buckets, not as a smaller total.
+        // The RALLY POINT, packed (x << 16) | y so one bucket means "every one of these is
+        // rallied to the same map point" -- the oracle for "a building-valid order reached
+        // all N". The Right Click applier 0x004560D0 writes CUnit+0xF8/+0xFA per building,
+        // so a fan-out that reached only some shows two buckets, not a smaller total.
         Hist32::Add(((DWORD)*(WORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_RALLY_X) << 16) |
                     (DWORD)*(WORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_RALLY_Y),
                     rallyKey, rallyCnt, &rallyN, 32, &rallyOverflow);
@@ -2496,9 +2284,9 @@ void ScFanoutLogUnitStates(const char* tag) {
     used = Hist::Format(energies, (int)sizeof(energies), energyKey, energyCnt, energyN);
     if (energyOverflow) _snprintf(energies + used, sizeof(energies) - used, " +%d-more", energyOverflow);
 
-    // The trailing fields are appended, never inserted: drive-game.ps1's parser
-    // matches the leading run of fields and is not anchored at the end, so a reader
-    // written against the task-015 line still works.
+    // The trailing fields are appended, never inserted: drive-game.ps1's parser matches
+    // the leading run of fields and is not anchored at the end, so an older reader of
+    // this line still works.
     ScLog("UNITSTATE [%s] n=%d live=%d visible=%d overflow=%d orders=[%s] orders2=[%s] "
           "types=[%s] burrowed=%d/%d uniqOnly=%d recycled=%d hp0=%d foreign=%d "
           "nosprite=%d removed=%d staleSkipped=%u liveness=%d stimmed=%d/%d "

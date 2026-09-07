@@ -1,77 +1,16 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-End-to-end, UNATTENDED measurement and proof of what ONE Train click does when SEVERAL
-production buildings are selected -- with every building's queue read out of that
-building's own memory, and the player's minerals accounted to the last one.
-
-Task 030, from the user's words: "can i also queu units when i have several building
-selected?"
-
+ONE Train press with SEVERAL production buildings selected: is Train on the card, how many
+0x1F reach the wire, which buildings' own queues (CUnit+0x98) gain an item, and what was paid.
 .DESCRIPTION
-Task 024 made a drag box select all your Barracks. Task 025 made one building hold more
-than five. Nobody joined them up, and the static read says why: Train is wire command
-0x1F, and its receive handler `cmdrecvTrain` (0x004C1C20) is SINGLE-gated -- it resets
-selectionIterator, calls getActivePlayerNextSelection twice, and does nothing at all
-unless the second call returns null. On top of that the Train button's own condition
-`0x00428E60` opens `if (clientSelectionCount > 1 && ...) return 0`, so the client may not
-even send. (research/production-queue.md 4.1, research/command-opcodes.md 5.)
-
-So this suite measures THREE numbers, in one run, and asserts on all of them:
-
-  1. IS THE BUTTON EVEN THERE. The command card is READ FROM MEMORY (task 026's `CARD`
-     oracle), not off a frame: the Train slot is identified by its Button record's own
-     action pointer (0x004234B0, the 0x1F emitter) and its enabled/greyed bit is reported.
-     AGENTS.md is explicit that a claim about what a dialog HOLDS is answered by walking
-     the dialog, never by hashing its pixels.
-  2. HOW MANY COMMANDS REACH THE FUNNEL. `queueCommand` (0x00485BD0) is hooked, so every
-     0x1F this game sends is logged. This is the headline measurement, and AGENTS.md
-     requires it: a player-input feature is unproven until the wire has been watched.
-  3. HOW MANY BUILDINGS ACTUALLY GAIN AN ITEM. The `PRODFAN` oracle prints EVERY selected
-     building's five queue slots straight out of its own CUnit+0x98, so "each gained
-     exactly one" is N separate reads of N buildings' memory -- not a count, not the UI,
-     which draws only the primary selection's queue whatever the truth is.
-
-WHY THE RESULT CANNOT BE FAKED
-
-  * THE POSITIVE CONTROL IS IN THE SAME RUN, THROUGH THE SAME ORACLES. After the group
-    case, ONE building is clicked and Train pressed once; the wire must show exactly one
-    0x1F and that building's own memory must go from 0 to 1 queued. Without it, "0
-    commands" and "my funnel watch is broken" look identical, and "0 buildings gained an
-    item" and "my queue read is broken" look identical. AGENTS.md has a hard rule about
-    exactly this: an absence assertion is worth nothing until the same pattern has been
-    shown to MATCH somewhere it should.
-  * EVERY BUILDING IS ASSERTED INDIVIDUALLY, before and after. The before-state is read
-    and asserted empty rather than assumed, so a queue that was already full cannot be
-    read as a success, and a building that never appears in the oracle cannot be silently
-    dropped from the denominator.
-  * THE MONEY IS ASSERTED IN BOTH DIRECTIONS. Exactly N x cost leaves the resource
-    globals when N items queue, and NOTHING leaves when nothing queues. "Paid for units
-    that never queued" is the failure mode the task file names, and it is the difference
-    between those two assertions.
-  * The map has no hostiles, one unit-less computer slot, and its only trigger sets
-    resources once -- so nothing but this test can move a mineral or queue an item.
-
-THE ARMS
-
-  -Arm baseline   %SCPLUGIN_PRODFAN%=0. What a stock (merged-main) game does today.
-                  The prediction under test, from the static read: 0 commands on the wire
-                  for the group click, and 0 of the N buildings gaining anything.
-  -Arm feature    %SCPLUGIN_PRODFAN%=1. One click, N buildings, each gaining exactly one,
-                  N x cost deducted by the ENGINE.
-
-Both arms run the same steps and the same assertions, differing only in what they expect
--- so the comparison is between two readings of one instrument, not two instruments.
-
-THE FIXTURE is N Command Centers. Command Centers rather than Barracks for one reason
-that decides the run: a Command Center supplies 10 of its own supply and an SCV costs 1,
-so N of them can queue N SCVs with no Supply Depot anywhere -- and "the queue refused
-because the player was supply-blocked" is removed as an explanation of a zero, rather
-than argued about afterwards. Same reason task 025 used one.
-
+Arms: baseline (SCPLUGIN_PRODFAN=0, stock: 0 commands, 0 buildings gain), feature (=1: every
+building gains one, N x cost paid by the ENGINE), cap (one building filled to the engine's five,
+then the group pressed once). All arms share steps, oracles and a positive control. Fixture: N
+Command Centers on a map with no hostiles and one resource trigger -- a Command Center supplies
+its own SCVs, so supply-block cannot explain a zero. Numbers: research/group-production.md 6.
 .EXAMPLE
 ./tools/plugin/test-group-production.ps1 -Arm baseline
-
 .EXAMPLE
 ./tools/plugin/test-group-production.ps1 -Arm feature -Buildings 4
 #>
@@ -109,9 +48,9 @@ $TRAIN_KEY  = 0x53        # 'S', the Command Center card's Train SCV hotkey
 $TRAIN_CMD  = '0x1F'      # research/data/command-opcodes.tsv
 $QUEUE_EMPTY = 0xE4       # research/production-queue.md 2.4
 $ENGINE_SLOTS = 5         # the engine's own ring, research/production-queue.md 2.3
-# The Train button's own Button record, research/production-queue.md 4.1: all three Train
-# records in the build-menu table at 0x005172C0 carry condition 0x00428E60 and action
-# 0x004234B0. The ACTION is what names the slot here -- it is the 0x1F emitter itself.
+# Build-menu button table 0x005172C0: every Train record carries condition 0x00428E60 and
+# action 0x004234B0, the 0x1F emitter itself, which is what names the slot here. The condition
+# returns 0 when clientSelectionCount > 1 -- stock's missing button (research/group-production.md 3).
 $TRAIN_ACTION = '004234b0'
 $TRAIN_COND   = '00428e60'
 
@@ -141,14 +80,11 @@ $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
 function Get-World { param([string]$Tag, [int]$TimeoutSec = 20)
     Get-ScWorldState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -TimeoutSec $TimeoutSec }
 
-# THE ORACLE for criteria 3 and 4. Same marker handshake as Get-ScWorldState, and it waits
-# for the `PRODFAN [label] buildings=` SUMMARY line, which the plugin writes LAST and
-# writes unconditionally -- so waiting for it means the whole answer has landed AND an
-# empty answer is still an answer (AGENTS.md: absence has to be positively reported).
-#
-# It returns one row per SELECTED building, each carrying that building's own five queue
-# slots, plus the card's Train slot from the same marker so "the button was dark" and
-# "nothing queued" are two readings of one instant rather than two separate looks.
+# Same marker handshake as Get-ScWorldState. Waits for the `PRODFAN [label] buildings=`
+# summary line, which the plugin writes LAST and unconditionally: the whole answer has landed,
+# and an empty answer is still an answer. Returns one row per SELECTED building with that
+# building's own five queue slots, plus the card's Train slot from the same marker -- "the
+# button was dark" and "nothing queued" are then two readings of one instant.
 $script:fanSeq = 0
 function Get-ProdFan {
     param([string]$Tag, [int]$TimeoutSec = 20)
@@ -207,8 +143,7 @@ function Get-ProdFan {
                     $out.Lit = [int]$s.Groups[13].Value
                 }
             }
-            # The card, from the SAME marker. The Train slot is named by its action
-            # pointer, so this does not depend on which slot index the layout used.
+            # The Train slot is named by its action pointer, not by the layout's slot index.
             $cardLines = @($all | Select-String -Pattern "CARD \[$esc\] slot=")
             $out.CardLines = @($cardLines | ForEach-Object { $_.Line })
             foreach ($c in $cardLines) {
@@ -230,9 +165,7 @@ function Get-ProdFan {
     throw "test: no PRODFAN answer for marker '$label' within ${TimeoutSec}s (log: $LogPath)."
 }
 
-# Assert one building's queue, from that building's OWN memory, slot by slot. A length is
-# a count and a count can be produced by the wrong things being in the wrong slots; this
-# names every occupied slot and says which one is wrong.
+# Slot by slot, not by length: a length can be right with the wrong type in the wrong slot.
 function Assert-Queue {
     param([string]$What, $Row, [int]$WantLen, [int]$WantType = 0)
     if ($null -eq $Row) { Assert-That "$What has a queue reading at all" $false; return }
@@ -248,9 +181,8 @@ function Assert-Queue {
     Assert-That "$What's shadow entry is not stale" (-not $Row.Stale)
 }
 
-# Box a set of units EXACTLY, by map position, camera moved to them first. Lifted from
-# test-building-groups.ps1 for the same reason it exists there: a full-screen drag boxes
-# whatever else is on the map, and this fixture's buildings must be named, not hoped for.
+# Box exactly these units by map position, camera centred on them first: a full-screen drag
+# boxes whatever else is on the map, and the fixture's buildings must be named, not hoped for.
 function Select-ScUnitsByMap {
     param(
         [Parameter(Mandatory)][object[]]$Units,
@@ -259,11 +191,10 @@ function Select-ScUnitsByMap {
         [string]$Tag = 'aim',
         [int]$Margin = 24,
         [int]$MapW = 128, [int]$MapH = 96,
-        # Skip the minimap centring and the fresh world scan, reusing the viewport this
-        # function last read. The camera has not moved since, and the point is SPEED: a
-        # re-box that takes a second instead of four is the difference between measuring a
-        # building that is still at its queue cap and measuring one that has finished a
-        # unit in the meantime. Only safe when nothing has moved the camera in between.
+        # Skip the minimap centring and the world scan, reusing the viewport last read. Only
+        # safe when nothing has moved the camera since. The point is SPEED: a one-second
+        # re-box instead of four can be the difference between a building still at its
+        # queue cap and one that has finished a unit in the meantime.
         [switch]$Reuse
     )
     if ($Reuse -and $script:lastScreen) {
@@ -284,11 +215,9 @@ function Select-ScUnitsByMap {
         Write-Host "       (block at client [$x1,$y1]-[$x2,$y2] is not fully on the battlefield)"
         return $false
     }
-    # WHAT ELSE IS IN THIS BOX. Task 025's first run boxed the play area and the engine
-    # handed back a neutral MINERAL FIELD (type=0x0B2 player=11) sharing the box with the
-    # building -- and a mineral field is a non-movable type too, so task 024's group would
-    # happily grow a group of THOSE. Naming any foreign unit inside the rect turns that
-    # into a failure that says what it is, instead of a wrong count three steps later.
+    # Name any foreign unit inside the rect. A neutral MINERAL FIELD (type=0x0B2 player=11)
+    # sharing the box is a non-movable type too, so the building group would happily grow a
+    # group of THOSE -- a failure that says what it is beats a wrong count three steps later.
     $mineSet = @{}
     foreach ($u in $Units) { $mineSet[$u.Unit] = $true }
     $intruders = @($w.Units | Where-Object {
@@ -335,8 +264,7 @@ try {
     Step "generate the fixture: $Buildings Command Centers, $StartingMinerals minerals" {
         Wait-ScFixtureFolderFree -Run $fixtures
         # 160 px (5 tiles) apart: a Command Center is 4x3 tiles, so this clears it with a
-        # tile to spare, and $Buildings of them still fit inside one screen's battlefield,
-        # which is what makes a single drag box able to hold them all.
+        # tile to spare, and $Buildings of them still fit one screen's battlefield for one drag box.
         $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
             -UnitCount $Buildings -UnitType command-center -Player 0 -ClearPlayerUnits `
             -GridSpacing 160 -StartingMinerals $StartingMinerals -StartingGas $StartingGas `
@@ -353,13 +281,11 @@ try {
     Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
     Wait-ScNoGameRunning
     $launchLock = Enter-ScLaunchLock -TaskId "030-group-production-$Arm"
-    # fanout mode, because the BOX has to select all $Buildings of them -- that is task
-    # 024's building group, and it lives in the fan-out. -CardScan 1 because "is the Train
-    # button lit" is one of the three numbers this run exists to report, and it is
-    # answered by reading the card, never by looking at a frame (AGENTS.md, task 026).
-    # -ProdQueue 0 deliberately: task 025's over-cap feature is a different question and
-    # its three detours would put unrelated machinery in the picture. The engine's own
-    # five slots are all this measures.
+    # -Mode fanout: the building group that lets one box select all $Buildings lives in the
+    # fan-out. -CardScan 1: "is Train lit" is answered by reading the card, never a frame
+    # (AGENTS.md § Read a dialog's CONTENT from memory; never hash its pixels). -ProdQueue 0:
+    # the over-cap feature is a different question and its detours would put unrelated
+    # machinery in the picture; the engine's own five slots are all this measures.
     $prodFan = ($Arm -eq 'baseline') ? '0' : '1'
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
         -Mode fanout -LogCommands 1 -Circles 0 -HudRow 0 -WorldScan 1 -CardScan 1 `
@@ -379,9 +305,10 @@ try {
         Assert-That "and it reports itself $want" `
             (@($cfg | Select-String -Pattern "PRODFAN: $want").Count -gt 0) `
             "(got: $(($cfg | ForEach-Object { $_.Line }) -join ' | '))"
-        # The fan-out's own hook is what puts commands on the funnel AND what would carry
-        # a fanned-out Train. Asserting it positively here is what makes 'no 0x1F reached
-        # the wire' mean something later (AGENTS.md, absence assertions).
+        # queueCommand (0x00485BD0) is the engine's outgoing-command funnel (AGENTS.md § A
+        # player-input feature is unproven until the wire has been watched). Asserted positively
+        # so that a later 'no 0x1F reached the wire' means something (AGENTS.md § Absence
+        # assertions must first be proved positive).
         $hooks = @(Get-Content -LiteralPath $LogPath |
                    Select-String -Pattern 'HOOK queueCommand: installed at')
         Assert-That 'the command funnel is hooked, so every command this game sends is logged' `
@@ -433,13 +360,11 @@ try {
         }
     }
 
-    # The `cap` arm skips everything below and runs its own short sequence further down.
-    # It has to: a Command Center finishes an SCV in about ten seconds, and a finished SCV
-    # stands among the buildings -- so any drag box taken after one completes selects the
-    # SCV instead of the group (SortAllUnits keeps movable units and discards buildings,
-    # research/building-groups.md 2.2). That is not a flaw in the feature, it is the
-    # fixture ageing, and the answer is to measure the cap case in a game where nothing
-    # has finished yet rather than to work around it afterwards.
+    # The `cap` arm skips everything below and runs its own short sequence: a Command Center
+    # finishes an SCV in about ten seconds, and a finished SCV standing among the buildings
+    # makes any later drag box select the SCV instead of the group (SortAllUnits keeps movable
+    # units and discards buildings, research/building-groups.md 2.2). So the cap case is
+    # measured in a game where nothing has finished yet.
     if ($Arm -ne 'cap') {
 
     Step "box all $Buildings of them -- one selection, $Buildings buildings" {
@@ -456,10 +381,9 @@ try {
         $wrongOwner = @($f.Rows | Where-Object { $_.Player -ne 0 })
         Assert-That 'and every one is the human player 0' ($wrongOwner.Count -eq 0)
 
-        # THE NEGATIVE HALF OF THE PAIR, per building. Every queue is read and asserted
-        # EMPTY before anything is pressed, so a later reading of 1 cannot be something
-        # that was already there, and the oracle is shown answering "0" before it is
-        # trusted to answer "1".
+        # Every queue is read and asserted EMPTY before anything is pressed, so a later 1
+        # cannot be something already there, and the oracle answers "0" before it is trusted
+        # to answer "1".
         for ($i = 0; $i -lt $f.Rows.Count; $i++) {
             Assert-Queue "building $i (before)" $f.Rows[$i] 0
         }
@@ -470,13 +394,10 @@ try {
         $script:mineralsBefore = $f.Minerals
 
         # 0x0059723D is named `clientSelectionCount` from the instruction that gates the
-        # button on it. Asserting it against a count the test already knows makes that
-        # name a reading rather than a label.
+        # button on it; asserting it against a known count makes the name a reading, not a label.
         Assert-That "the engine's own client selection count reads $Buildings ($($f.ClientCount))" `
             ($f.ClientCount -eq $Buildings)
 
-        # WHAT THE PLAYER SEES, read from the card's own memory (AGENTS.md: walk the
-        # dialog, never hash its pixels).
         if ($f.Card) {
             Write-Host "       Train button: slot=$($f.Card.Slot) state=$($f.Card.State) cond=0x$($f.Card.Cond) act=0x$($f.Card.Act)"
             Assert-That 'the Train slot found on the card is the one whose condition is 0x00428E60' `
@@ -492,10 +413,9 @@ try {
             # no button, so no command, so nothing for the fan-out to fan out.
             Assert-That 'the Train button is DRAWN and enabled for the group' `
                 ($null -ne $f.Card -and $f.Card.State -eq 'enabled') "(state: $($script:cardGroup))"
-            # AND THE ADDON BUTTONS ARE NOT. They share the same condition 0x00428E60;
-            # lighting them would be a button that looks live and does nothing, because
-            # nothing here fans 0x35 out. Asserted by their action pointer, and only
-            # meaningful because the positive half above found a button by the same means.
+            # The addon buttons share condition 0x00428E60; lit, they would look live and do
+            # nothing, because nothing fans 0x35 out. Asserted by action pointer, meaningful
+            # only because the positive half above found a button by the same means.
             $addons = @($f.CardLines | Where-Object { $_ -match 'act=0x00423d10' })
             Assert-That 'and the two addon buttons on the same condition stay off the card' `
                 ($addons.Count -eq 0) "(found $($addons.Count))"
@@ -519,13 +439,11 @@ try {
         $fan | ForEach-Object { Write-Host "         $($_.Line)" }
 
         if ($Arm -eq 'feature') {
-            # WHAT THE COUNTS MEAN HERE, because they are easy to misread and this
-            # assertion was wrong once in exactly that way. `CMD id=` is logged inside the
-            # queueCommand DETOUR, and the fan-out emits its own pairs through the
-            # TRAMPOLINE -- so the replayed commands deliberately do not pass the logger
-            # again. One press therefore shows exactly ONE `CMD id=0x1F` (the player's own,
-            # which is then suppressed) plus a FANOUT plan naming the pairs that went out
-            # in its place. Asserting $Buildings CMD lines would fail a working feature.
+            # `CMD id=` is logged inside the queueCommand DETOUR; the fan-out emits its pairs
+            # through the TRAMPOLINE, so replayed commands never pass the logger. One press
+            # shows exactly ONE `CMD id=0x1F` (the player's own, then suppressed) plus a
+            # FANOUT plan naming the pairs sent in its place. Do not assert $Buildings CMD
+            # lines: that fails a working feature.
             Assert-That "the player's ONE Train command reached the funnel ($($cmds.Count))" `
                 ($cmds.Count -eq 1)
             $start = @($fan | Select-String -Pattern 'FANOUT start: cmd=0x1F')
@@ -538,15 +456,16 @@ try {
                 if ($m.Success) {
                     Assert-That "the plan covers all $Buildings buildings ($($m.Groups[1].Value))" `
                         ([int]$m.Groups[1].Value -eq $Buildings)
+                    # cmdrecvTrain (0x004C1C20) acts only when the selection holds exactly one
+                    # unit (research/group-production.md 4), so the plan must be one per chunk.
                     Assert-That "at ONE building per chunk, which is what cmdrecvTrain's single-unit gate wants (slots=$($m.Groups[4].Value))" `
                         ([int]$m.Groups[4].Value -eq 1)
                     Assert-That "so $Buildings Select+order pairs go out ($($m.Groups[5].Value))" `
                         ([int]$m.Groups[5].Value -eq $Buildings)
                 }
             }
-            # Every pair must actually reach the wire this turn -- a deferred tail would
-            # queue the rest behind the next command, and the queue reads below would then
-            # be measuring a half-finished plan rather than the feature.
+            # A deferred tail would queue the rest behind the next command, and the queue
+            # reads below would then measure a half-finished plan rather than the feature.
             $done = @($fan | Select-String -Pattern "FANOUT done: $Buildings/$Buildings chunks")
             Assert-That "and every chunk was emitted in this turn, none deferred ($($done.Count))" `
                 ($done.Count -eq 1)
@@ -575,9 +494,8 @@ try {
         Assert-That "$expectTotal item(s) are queued across the group in total ($($f.TotalQueued))" `
             ($f.TotalQueued -eq $expectTotal)
 
-        # CRITERION 4: the money reconciles, from the resource globals, in BOTH directions.
-        # Nothing may be paid for that did not queue -- so the expected spend is derived
-        # from what the buildings' own memory says is queued, not from what was clicked.
+        # Money reconciled from the resource globals in BOTH directions: the expected spend is
+        # derived from what the buildings' own memory says queued, not from what was clicked.
         $expectMinerals = $script:mineralsBefore - $expectTotal * $SCV_COST
         Assert-That "minerals are down by exactly $expectTotal x $SCV_COST and no more ($($f.Minerals))" `
             ($f.Minerals -eq $expectMinerals) "(expected $expectMinerals)"
@@ -585,10 +503,9 @@ try {
             (($script:mineralsBefore - $f.Minerals) -eq ($f.TotalQueued * $SCV_COST)) `
             "(paid $($script:mineralsBefore - $f.Minerals) for $($f.TotalQueued) item(s))"
 
-        # WHAT THE PLAYER SEES, part two, and it is a measurement rather than a guess:
-        # a building with an incomplete unit at CUnit+0xEC is one drawing a production
-        # progress bar. If all N are producing, the group really is working even though
-        # the status area draws one queue; if only one is, the feature would be invisible.
+        # A building with an incomplete unit at CUnit+0xEC is one drawing a production
+        # progress bar. The status area draws only the primary selection's queue, so this
+        # is the measurement of whether all N are visibly working.
         $script:producing = @($f.Rows | Where-Object { $_.BuildUnit -ne '00000000' }).Count
         Write-Host "       buildings with a unit under construction (CUnit+0xEC): $($script:producing) of $($f.Buildings)"
 
@@ -604,20 +521,17 @@ try {
         $script:groupQueued = $f.TotalQueued
         $script:mineralsAfterGroup = $f.Minerals
 
-        # TASK 033, and it is the ONLY thing on screen that says the click reached more than
-        # one building. With N buildings selected the engine takes its multi-select branch:
-        # the production strip is not drawn at all, the wireframe row is, and vanilla shows
-        # ONE queue for the whole group -- so a "+N" would have nothing to sit beside. What
-        # the indicator says there instead is how many of the selected buildings are queueing
-        # and how many items they hold between them. Read back out of the live dialog through
-        # the control's own pszText pointer, never echoed from the module's buffer.
+        # The queue indicator is the ONLY thing on screen that says the click reached more
+        # than one building: with N selected the engine takes its multi-select branch -- no
+        # production strip, the wireframe row instead, ONE queue for the whole group -- so the
+        # indicator reports how many selected buildings are queueing and how many items they
+        # hold. Read back through the control's own pszText pointer, never the module's buffer.
         $qi = @(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'QIND \[') |
               Select-Object -Last 1
         if ($qi) {
             Write-Host "       $($qi.Line)"
-            # BY NAME, NOT BY POSITION: this line gained boxDiff and then surfInk inside one
-            # task, and a positional parse shifts every group after the insertion without
-            # failing -- it just starts reading bldgs out of queued.
+            # Named groups, not positional: a field inserted into the log line shifts every
+            # positional group after it without failing -- bldgs silently reads out of queued.
             $m = [regex]::Match($qi.Line,
                 'mode=(?<mode>\d+) linked=(?<linked>\d+) visible=(?<visible>\d+) ' +
                 'text="(?<text>[^"]*)" ' +
@@ -650,21 +564,16 @@ try {
                         ($m.Groups['linked'].Value -eq '1' -and $m.Groups['visible'].Value -eq '1')
                     Assert-That "its text says so in words (`"$($m.Groups['text'].Value)`")" `
                         ($m.Groups['text'].Value -eq "$Buildings bldgs  $expectTotal queued")
-                    # THE BOX HAS TO FIT THE STRING. Every assertion above passes for a
-                    # TRUNCATED line -- a clipped string is still ink -- and the first live
-                    # run of this step drew "4 bldgs  4 queued" into a box 22 pixels wide,
-                    # clamped to the one wireframe button it anchors to. 5 px/char is a
-                    # conservative floor for the small font.
+                    # Every assertion above passes for a TRUNCATED line -- a clipped string is
+                    # still ink. Measured: "4 bldgs  4 queued" in a box 22 px wide, clamped to
+                    # the wireframe button it anchors to. 5 px/char is a conservative floor.
                     $need = $m.Groups['text'].Value.Length * 5
                     Assert-That "and its box is wide enough to draw all of it ($boxW px for $need)" `
                         ($boxW -ge $need)
-                    # AND IT IS NOT ON TOP OF THE ICON ROW. The user, on the deployed build:
-                    # "there was some text printed in the spot where the 12 icons are ... but
-                    # it was behind the buildings icons so couldn't rly tell". The line now
-                    # goes in the band BELOW the row, so the check is against the row's own
-                    # rects, read out of the same dialog dump the plugin logs at attach --
-                    # never against a constant, because which buttons are up depends on how
-                    # many buildings are selected.
+                    # The line belongs in the band BELOW the icon row; over it, it draws behind
+                    # the building icons. Checked against the row's own rects from the dialog
+                    # dump the plugin logs at attach -- never a constant, because which buttons
+                    # are up depends on how many buildings are selected.
                     $rowBottom = 0
                     foreach ($d in @(Get-Content -LiteralPath $LogPath |
                                      Select-String -Pattern 'QINDDLG \[.*\] id=(3[3-9]|4[0-4]) ')) {
@@ -678,23 +587,17 @@ try {
                     Assert-That "and the line starts BELOW all of them (top=$boxT vs $rowBottom)" `
                         ($boxT -ge $rowBottom)
                     # The engine's string draw refuses outright when the box is shorter than
-                    # the font -- the defect that made task 033's first indicator invisible
-                    # for weeks -- so the band's height is checked against the font's own.
+                    # the font, and an invisible line passes every other check here.
                     Assert-That "the band is at least as tall as the font ($boxH >= $fontH)" `
                         ($boxH -ge $fontH -and $fontH -gt 0)
-                    # THE DRAW, and NOT with ink. The pane's own art is in this surface, so
-                    # every rect reads saturated and `ink > 0` is true before anything of
-                    # ours exists -- measured in this task's first live run, 1330 of 1330
-                    # bytes over a queue icon. boxDiff is the same box compared against a
-                    # copy of itself the game thread took while the indicator was HIDDEN, so
-                    # it counts the bytes this line is responsible for and zero is a real
-                    # failure.
-                    #
-                    # The two halves that keep a zero honest: surfInk says the probe can read
-                    # this surface at all, and refInk says it can read a control the ENGINE
-                    # fills -- here the wireframe row, which is up precisely because this is a
-                    # group selection. Without them, boxDiff=0 and "the probe is blind" are
-                    # the same reading.
+                    # Do not assert on ink: the pane's own art fills this surface, so every rect
+                    # reads saturated (measured 1330 of 1330 bytes over a queue icon) and
+                    # `ink > 0` holds before anything of ours exists. boxDiff compares the box
+                    # against a copy the game thread took while the indicator was HIDDEN, so it
+                    # counts the bytes this line is responsible for and zero is a real failure.
+                    # surfInk (the probe can read this surface) and refInk (it can read a control
+                    # the ENGINE fills -- the wireframe row, up because this is a group
+                    # selection) keep that zero honest: without them it reads as "probe blind".
                     Assert-That "the probe can read the dialog surface at all (surfInk=$surfInk)" `
                         ($surfInk -gt 0)
                     Assert-That "and a control the ENGINE fills (refInk=$refInk over control $($m.Groups['refId'].Value))" `
@@ -702,9 +605,8 @@ try {
                     Assert-That "and the engine DREW the line: boxDiff=$boxDiff bytes differ from the same band without it (ink=$ink, saturated)" `
                         ($boxDiff -gt 0)
                 } else {
-                    # THE CONTROL ARM. With the fan-out off, one click reaches one building,
-                    # so there is no group to report and the indicator must say nothing --
-                    # which is what makes the reading above a measurement.
+                    # With the fan-out off one click reaches one building, so the indicator must
+                    # say nothing -- which is what makes the reading above a measurement.
                     Assert-That "with the fan-out off the indicator says nothing (mode=$mode)" `
                         ($mode -eq 0)
                 }
@@ -716,15 +618,11 @@ try {
         Shot 'group-read'
     }
 
-    # ------------------------------------------------------------------------------
-    # THE POSITIVE CONTROL, in the same run and through the same two oracles.
-    #
-    # Without this the baseline arm's headline result is unfalsifiable: "0 commands on the
-    # wire" and "the funnel watch never worked" produce identical logs, and "0 buildings
-    # gained an item" and "the queue read is broken" produce identical logs. So the same
-    # key, the same funnel and the same per-building read are exercised in the case where
-    # the engine certainly DOES act -- one building selected, which is vanilla's own path.
-    # ------------------------------------------------------------------------------
+    # THE POSITIVE CONTROL, same run, same two oracles. Without it the baseline's headline is
+    # unfalsifiable: "0 commands on the wire" and "the funnel watch never worked" produce
+    # identical logs, as do "0 buildings gained an item" and "the queue read is broken". Same
+    # key, funnel and per-building read where the engine certainly DOES act: one building
+    # selected, vanilla's own path.
     Step 'POSITIVE CONTROL: click ONE building and press Train once' {
         $w = Get-World 'aim-single'
         $cc = @($w.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $CC_TYPE })[0]
@@ -762,8 +660,8 @@ try {
         Write-Host "       $($cmds.Count) Train command(s) reached the funnel:"
         $cmds | ForEach-Object { Write-Host "         $($_.Line)" }
 
-        # THE CONTROL'S OWN ASSERTIONS. These must pass in BOTH arms -- the feature does
-        # not touch the single-building path, and if it ever did, this is where it shows.
+        # Must pass in BOTH arms: the feature does not touch the single-building path, and if
+        # it ever did, this is where it shows.
         Assert-That "exactly ONE Train command reached the funnel ($($cmds.Count))" `
             ($cmds.Count -eq 1)
         $after = Get-ProdFan 'single-after'
@@ -782,25 +680,16 @@ try {
 
     }   # end: everything above is skipped for the `cap` arm
 
-    # ------------------------------------------------------------------------------
-    # ACCEPTANCE CRITERION 5, first half: A BUILDING ALREADY AT ITS QUEUE CAP.
-    #
-    # The task file is explicit that such a building must be "skipped cleanly rather than
-    # silently eating a click or a payment", and that a silent payment is not an
-    # acceptable answer. Nothing in this plugin implements that skip: it falls out of
-    # addToBuildQueue's own `CMP EAX,0x5`, which returns 0 WITHOUT touching the array or
-    # the player's resources (research/production-queue.md 4.1). This step is what turns
-    # that from a reading of the disassembly into a measurement.
-    #
-    # The building is filled by ordinary play -- selected alone, Train pressed until the
-    # client stops sending -- so the full building is full for the engine's own reasons.
-    # ------------------------------------------------------------------------------
+    # A BUILDING ALREADY AT ITS QUEUE CAP must be skipped without eating a click or a payment.
+    # Nothing in the plugin implements that skip: it falls out of addToBuildQueue's own
+    # `CMP EAX,0x5`, which returns 0 WITHOUT touching the array or the player's resources
+    # (research/production-queue.md 4.1). This step turns that reading of the disassembly
+    # into a measurement. The building is filled by ordinary play -- selected alone, Train
+    # pressed until the client stops sending -- so it is full for the engine's own reasons.
     if ($Arm -eq 'cap') {
         Step 'CRITERION 5: fill ONE building to the engine cap, then Train the group again' {
-            # SPEED IS THE POINT OF THIS ARM. Nothing has been queued yet in this game, so
-            # no SCV exists and none can for about ten seconds after the first press --
-            # which is the entire window this step needs. Click one building, fill it, box
-            # the group, press once, read. Every read is the same oracle the other arms use.
+            # Nothing has been queued yet in this game, so no SCV exists and none can for
+            # about ten seconds after the first press -- the entire window this step needs.
             $w = Get-World 'aim-cap-single'
             $cc = @($w.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $CC_TYPE })[0]
             Assert-That 'the scan reports the viewport origin and a building' `
@@ -817,11 +706,9 @@ try {
             $fillUnit = ($pre.Rows.Count -gt 0) ? $pre.Rows[0].Unit : $null
             $have = ($pre.Rows.Count -gt 0) ? $pre.Rows[0].EngineLen : 0
             Write-Host "       0x$fillUnit holds $have; topping it up to $ENGINE_SLOTS"
-            # A LOOP, not a fixed count. This building has been producing since the group
-            # click, so an SCV can pop out of its queue while the queue is being filled --
-            # pressing exactly (5 - have) times would then leave it at four and the whole
-            # step would measure nothing. Re-read and press until it is genuinely at the
-            # cap, and say so if it never gets there rather than carrying on.
+            # A loop, not (5 - have) presses: the first press starts production, so an SCV can
+            # pop out while the queue is being filled, leaving it at four and the step
+            # measuring nothing. Re-read until it is genuinely at the cap.
             $filled = $null
             for ($attempt = 1; $attempt -le 12; $attempt++) {
                 $filled = Get-ProdFan "fill-$attempt"
@@ -834,30 +721,24 @@ try {
                 ($filled.Rows.Count -gt 0 -and $filled.Rows[0].EngineLen -ge $ENGINE_SLOTS)
             $script:mineralsFilled = $filled.Minerals
 
-            # Re-box the group with a FRESH scan, deliberately, even though it costs a
-            # second inside a ten-second window. The faster reuse path skips the world
-            # scan -- and with it the check for anything else sitting in the box, which is
-            # exactly the check that would have named the completed SCV the first version
-            # of this step silently boxed instead of the buildings. A second is cheaper
-            # than a run that measures the wrong thing and says so nowhere.
+            # Do not -Reuse here, even inside a ten-second window: the reuse path skips the
+            # world scan and with it the check for anything else in the box -- exactly the
+            # check that names a completed SCV silently boxed instead of the buildings.
             $aimed = Select-ScUnitsByMap -Units $script:ccs -TileX $script:ccTile.X -TileY $script:ccTile.Y -Tag 'aim-cap'
             Assert-That 'the block is on screen and was boxed again' $aimed
             $before = Get-ProdFan 'cap-before'
             Assert-That "the group is all $Buildings again ($($before.Buildings))" `
                 ($before.Buildings -eq $Buildings)
             $wasFull = @($before.Rows | Where-Object { $_.EngineLen -ge $ENGINE_SLOTS })
-            # At least one, and not all of them -- the step needs a building that must be
-            # skipped AND buildings that must not be, or it cannot tell the two apart. The
-            # exact count is read from the group rather than assumed, because production
-            # runs while this is being set up.
+            # At least one at cap and at least one with room, or the step cannot tell skipped
+            # from not-skipped. Counted rather than assumed: production runs during setup.
             Assert-That "at least one of them is at the engine cap ($($wasFull.Count))" `
                 ($wasFull.Count -ge 1)
             Assert-That "and at least one still has room ($($Buildings - $wasFull.Count))" `
                 ($wasFull.Count -lt $Buildings)
             $roomy = @($before.Rows | Where-Object { $_.EngineLen -lt $ENGINE_SLOTS })
             $mineralsBeforeCap = $before.Minerals
-            # A snapshot per building, so the after-state is compared PER BUILDING rather
-            # than as a total -- a total can balance while the wrong building moved.
+            # Compared PER BUILDING, not as a total: a total can balance while the wrong one moved.
             $wasLen = @{}
             foreach ($r in $before.Rows) { $wasLen[$r.Unit] = $r.EngineLen }
 
@@ -867,9 +748,8 @@ try {
             $lines = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
             $cmds = @($lines | Select-String -Pattern "CMD id=$TRAIN_CMD ")
             Write-Host "       $($cmds.Count) Train command(s) reached the funnel"
-            # The fan-out still emits one per building: the plugin does not pre-judge which
-            # building can accept. The ENGINE refuses the full one, for free -- which is
-            # the point, and is why the payment assertion below is the real test.
+            # The fan-out still emits one pair per building; it does not pre-judge which can
+            # accept. The ENGINE refuses the full one, which is why the payment below is the test.
             Assert-That "the press was fanned out again, one pair per building ($($cmds.Count) command at the funnel)" `
                 ($cmds.Count -eq 1 -and
                  @($lines | Select-String -Pattern "FANOUT start: cmd=0x1F.*-> $Buildings Select\+order pairs").Count -eq 1)
@@ -879,11 +759,9 @@ try {
                 Write-Host ("         unit=0x{0} {1} -> {2}" -f $_.Unit, $wasLen[$_.Unit], $_.EngineLen)
             }
 
-            # THE ASSERTION THE TASK FILE ASKS FOR IN SO MANY WORDS, and it is FIRST
-            # because it is the one that cannot be spoiled by timing: a unit finishing
-            # inside the measurement window shortens a queue, but it never un-spends a
-            # mineral. So this is the drain-proof form of "a building at its cap must not
-            # silently eat a payment", and it is the criterion itself rather than a proxy.
+            # Payment FIRST, because timing cannot spoil it: a unit finishing inside the window
+            # shortens a queue but never un-spends a mineral. This is the drain-proof form of
+            # "a building at its cap must not silently eat a payment".
             $paid = $mineralsBeforeCap - $after.Minerals
             Assert-That "exactly $($roomy.Count) x $SCV_COST minerals left, NOT $Buildings x $SCV_COST ($paid)" `
                 ($paid -eq $roomy.Count * $SCV_COST) `
@@ -891,13 +769,10 @@ try {
             Assert-That 'so the building at its cap cost the player nothing' `
                 ($paid -lt $Buildings * $SCV_COST)
 
-            # The per-building half. A Command Center builds an SCV in about ten seconds
-            # and this step runs well after production started, so a completion CAN land
-            # between the two reads and pop an item off a queue. That is a real event, not
-            # a flaw, and it is DETECTED rather than tolerated: if the totals move by
-            # exactly the number of buildings with room, nothing completed and every
-            # building is asserted individually; if they do not, the step says so and
-            # leans on the payment assertion above instead of quietly weakening itself.
+            # An SCV completing (about ten seconds) CAN land between the two reads and pop an
+            # item off a queue. Detected, not tolerated: if the totals move by exactly the
+            # number of buildings with room, nothing completed and every building is asserted
+            # individually; otherwise the step says so and the payment assertion carries it.
             $sumBefore = ($before.Rows | Measure-Object EngineLen -Sum).Sum
             $sumAfter = ($after.Rows | Measure-Object EngineLen -Sum).Sum
             $quiet = (($sumAfter - $sumBefore) -eq $roomy.Count)
@@ -915,8 +790,7 @@ try {
             } else {
                 Write-Host "       (a unit completed inside the window: queue total moved $sumBefore -> $sumAfter, not +$($roomy.Count); the per-building growth check is skipped and the payment assertion above carries this step)"
             }
-            # True whatever the timing: the engine's ring cannot exceed five, and a
-            # plugin that wrote past it would show up here.
+            # True whatever the timing: the engine's ring cannot exceed five.
             $over = @($after.Rows | Where-Object { $_.EngineLen -gt $ENGINE_SLOTS })
             Assert-That "no building holds more than the engine's $ENGINE_SLOTS slots" ($over.Count -eq 0)
             $script:capPaid = $paid
@@ -974,9 +848,8 @@ $left = if ($gamePid -gt 0) { Get-Process -Id $gamePid -ErrorAction SilentlyCont
 Assert-That 'the game process this test started is gone' ($KeepOpen -or $null -eq $left)
 Assert-That 'the generated map was cleaned up' ($KeepOpen -or -not (Test-Path -LiteralPath $mapPath))
 
-# THE PLUGIN SPENT NOTHING OF ITS OWN. Every item that queued was accepted and paid for by
-# the engine's addToBuildQueue; this file writes no resource global on any path, and the
-# stats line is where that stops being a claim about the source and becomes a reading.
+# The plugin spends nothing of its own: every queued item is paid for by the engine's
+# addToBuildQueue. The stats line turns that from a claim about the source into a reading.
 $statLine = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
               Select-String -Pattern 'PRODFAN STATS: ')
 if ($statLine.Count -gt 0) {

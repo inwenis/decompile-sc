@@ -5,16 +5,15 @@ tell "is this path at or under that protected root" apart from "is this path *sp
 being at or under that protected root" -- the two are not the same question on Windows.
 
 .DESCRIPTION
-'\\?\C:\x' and '\\.\C:\x' are both valid Windows paths that Test-Path, Join-Path and
-CreateProcess all accept, and a plain string-prefix or [IO.Path]::GetFullPath comparison
-does not see through them, an 8.3 short name, or a symlink/junction sitting on the path.
-A guard built on any of those can be spelled around. Get-CanonicalPath resolves all of it
--- device prefix, `.`/`..`, 8.3 short names, symlinks and junctions -- via the filesystem's
-own APIs, so a guard built on its output tests the real path, not whatever spelling arrived
-in an argument.
+'\\?\C:\x' and '\\.\C:\x' are valid Windows paths that Test-Path, Join-Path and
+CreateProcess all accept, and a string-prefix or [IO.Path]::GetFullPath comparison sees
+through neither them, an 8.3 short name, nor a symlink/junction on the path -- so such a
+guard can be spelled around. Get-CanonicalPath resolves all of it through the filesystem's
+own APIs, so the guard tests the real path, not the spelling that arrived in an argument.
 
-Originally task008's guard in run-with-plugin.ps1 (never touch C:\sc-install); task018's
-deploy.ps1 reuses it verbatim rather than re-deriving a second, driftable copy.
+Callers use it to refuse writes inside the pristine install at C:\sc-install (AGENTS.md
+§ "Hard rules"), so every such guard dot-sources this single copy rather than re-deriving
+a second one that can drift.
 
 Dot-source this file; it defines Get-CanonicalPath and Test-PathUnder in the caller's scope.
 #>

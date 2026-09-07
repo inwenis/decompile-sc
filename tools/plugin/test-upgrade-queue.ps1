@@ -1,58 +1,19 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-End-to-end, UNATTENDED proof that a building can hold MORE THAN ONE queued research -- with
-the queue read out of the building's own memory, the completions read out of the engine's
-own level and researched-tech arrays, and the player's minerals accounted to the last one.
-
-Task 029, from the user's words: "enable queuing upgrades".
+UNATTENDED proof that a building can hold MORE THAN ONE queued research, with the queue read
+out of the building's own memory, the completions out of the engine's own level and
+researched-tech arrays, and the player's minerals accounted to the last one.
 
 .DESCRIPTION
-A building researches one thing at a time because it has ONE FIELD for it: CUnit+0xC9 is
-the upgrade in progress (61 = none) and CUnit+0xC8 the tech (44 = none). The plugin does
-not widen anything -- there is nothing to widen. It holds a queue of its own and hands
-items to the ENGINE one at a time (research/upgrade-queue.md 7).
-
-THE FIXTURE IS AN ACADEMY (units.dat 112), and deliberately so. It offers FIVE independent
-items across BOTH opcodes -- Stim Packs (tech 0), Restoration (tech 24), Optical Flare
-(tech 29), U-238 Shells (upgrade 16) and Caduceus Reactor (upgrade 51) -- none of which
-needs a second building, and all of which research in about a minute rather than three. So
-one building can prove a MIXED queue, which an Engineering Bay (two upgrades, both slow)
-cannot.
-
-The suite does not hardcode WHICH three: it reads the card, takes the enabled research and
-upgrade buttons in the order the engine laid them out, and presses those. That keeps it
-honest about the tech tree instead of asserting a prerequisite it has not checked.
-
-WHAT THIS RUN HAS TO SHOW, and none of it from the screen:
-
-  1. THE CLIENT SENDS AGAIN. This is the whole feature, and it is the exact reversal of
-     what probe-upgrade-wire.ps1 measured in a stock game: there, with a research running,
-     six presses put ZERO commands on the wire and the card had shown=1. Here the same
-     presses must reach `queueCommand` (0x00485BD0).
-  2. MORE THAN ONE IS QUEUED. The `UPGQSEL` oracle prints CUnit+0xC9/0xC8/0xC6/0xCD
-     verbatim beside what the plugin holds, so `logical=3` is `busy=1` (read from the
-     building) plus `queued=2` (read from the plugin).
-  3. THEY COMPLETE IN ORDER AND TAKE EFFECT. `UPGQLVL` prints the player's researched techs
-     and non-zero upgrade levels out of the engine's own arrays (0x0058CF44 / 0x0058D2B0).
-     "It finished" and "it left the queue" are different claims, and this decides the first.
-  4. EACH IS PAID EXACTLY ONCE, BY THE ENGINE. A queued item is UNPAID, so queueing two
-     must not move a mineral, and the balance may only fall when an item actually STARTS --
-     once per item, three times in all. The plugin's own spend counter is asserted ZERO.
-  5. CANCEL COSTS NOTHING AND THEN REFUNDS EXACTLY. With items queued the plugin takes the
-     cancel and drops its own newest, moving no money; with nothing queued the same press
-     falls through to vanilla, which stops the running item and gives its cost back.
-
-WHY THE RESULT CANNOT BE FAKED
-
-  * The queue is read from CUnit+0xC9/0xC8 on the game's side of the wire.
-  * The positive/negative pair is inside one run and one oracle: before the clicks,
-    `UPGQ ... buildings=0 queued=0` and `UPGQLVL ... levelCount=0 techCount=0` -- the same
-    two lines that later read `queued=2` and three finished items.
-  * THE COMMANDS ON THE WIRE ARE THE HEADLINE. A stock game sends one and then nothing.
-  * The cap is exercised on purpose, and pressing at it must send NOTHING.
-  * The map has no hostiles, one unit-less computer slot, and its only trigger sets
-    resources once -- so nothing but this test can move a mineral.
+A building researches one thing at a time because it has ONE FIELD for it: CUnit+0xC9 is the
+upgrade in progress (61 = none), CUnit+0xC8 the tech (44 = none). Nothing is widened: the
+plugin holds a queue of its own and hands items to the ENGINE one at a time
+(research/upgrade-queue.md 7). An Academy (units.dat 112) is the fixture because it offers
+five independent items across BOTH opcodes, none needing a second building and all done in
+about a minute, so one building can prove a MIXED queue that an Engineering Bay (two
+upgrades, both slow) cannot. The map has no hostiles, one unit-less computer slot and one
+trigger that sets resources once, so nothing but this suite can move a mineral.
 
 .EXAMPLE
 ./tools/plugin/test-upgrade-queue.ps1
@@ -101,9 +62,8 @@ $TECH_ACTION    = '00423350'
 $CANCEL_UPG_ACTION  = '004232F0'
 $CANCEL_TECH_ACTION = '00423330'
 $ENGINE_SLOTS = 1         # research/upgrade-queue.md 2 -- the whole reason this exists
-# NOT $HOOKS: PowerShell variable names are case-insensitive, so a constant named $HOOKS
-# and a local $hooks holding matched log lines would be ONE variable. The first version of
-# this suite did exactly that and reported a false failure.
+# NOT $HOOKS: PowerShell names are case-insensitive, so a constant $HOOKS and a local $hooks
+# holding matched log lines are ONE variable, which reads back as a false failure.
 $HOOK_COUNT = 8
 
 $expectQueued = $QueueMax - $ENGINE_SLOTS
@@ -136,9 +96,8 @@ function Get-Card { param([string]$Tag, [int]$TimeoutSec = 20)
     Get-ScCardState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -TimeoutSec $TimeoutSec }
 
 # Every enabled card slot that would issue a research or an upgrade, in the engine's own
-# layout order. `,@(...)` so an EMPTY result stays an array at the call site -- a bare
-# empty array unrolls to $null and `$null.Count` is an error, which is how the first
-# version of the wire probe died at the one moment the answer was "none".
+# layout order. `,@(...)` so an EMPTY result stays an array at the call site: a bare empty
+# array unrolls to $null and `$null.Count` throws, exactly when the answer is "none".
 function Get-ResearchSlots {
     param($Card)
     ,@($Card.Slots | Where-Object {
@@ -159,7 +118,7 @@ function Describe-Slot { param($S)
 # The upgrade-queue oracle. Same marker handshake as Get-ScWorldState, but it waits for the
 # `UPGQ [label] buildings=` SUMMARY line -- which the plugin writes LAST for a marker and
 # writes unconditionally, so waiting for it means the whole answer has landed AND an empty
-# answer is still an answer (AGENTS.md, absence assertions).
+# answer is still an answer (AGENTS.md § "Oracles: absence and defect-era checks").
 $script:upgqSeq = 0
 function Get-UpgQueue {
     param([string]$Tag, [int]$TimeoutSec = 25)
@@ -174,10 +133,9 @@ function Get-UpgQueue {
         if (@($lines | Select-String -Pattern 'buildings=').Count -gt 0) {
             $out = [pscustomobject]@{
                 Label = $label; Selected = $null
-                # QueuedTotal is the CUMULATIVE counter from the summary line; the number of
-                # items the plugin is holding RIGHT NOW is .Selected.Queued, off the
-                # per-building line. Conflating the two made the first version of this suite
-                # assert "the plugin holds one item" against a lifetime total.
+                # QueuedTotal is the CUMULATIVE counter from the summary line; what the
+                # plugin holds RIGHT NOW is .Selected.Queued, off the per-building line.
+                # Conflating them asserts "holds one item" against a lifetime total.
                 Buildings = 0; Max = 0; QueuedTotal = 0; Promoted = 0; Cancelled = 0
                 Dropped = 0; RefusedFull = 0; RefusedGate = 0; WaitingCost = 0
                 Unblocked = 0; UnblockedLevel = 0
@@ -245,7 +203,6 @@ function Get-UpgQueue {
 # levels, both out of the engine's own arrays.
 function Get-FinishedCount { param($Q) $Q.TechCount + (($Q.Levels.Values | Measure-Object -Sum).Sum) }
 
-# --- on-disk binary, BEFORE anything runs --------------------------------------
 $exePath = Join-Path $GameDir 'StarCraft.exe'
 if (-not (Test-Path -LiteralPath $exePath)) { throw "test: $exePath not found." }
 $hashBefore = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
@@ -304,8 +261,10 @@ try {
     Wait-ScNoGameRunning
     $launchLock = Enter-ScLaunchLock -TaskId '029-upgrade-queue'
     # hooktest mode: the ONE queueCommand hook, so `CMD id=` lines exist, plus this
-    # feature's own eight. No selection machinery -- research has nothing to do with
-    # fan-out, and running in `fanout` would put four unrelated hooks in the picture.
+    # feature's own eight. A `CMD id=` line is a command that reached the engine's own
+    # funnel, queueCommand 0x00485BD0 -- that is what "on the wire" means everywhere below.
+    # No selection machinery -- research has nothing to do with fan-out, and running in
+    # `fanout` would put four unrelated hooks in the picture.
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
         -Mode hooktest -LogCommands 1 -Circles 0 -HudRow 0 -WorldScan 1 -CardScan 1 `
         -UpgradeQueue 1 -UpgradeQueueMax $QueueMax `
@@ -321,8 +280,9 @@ try {
         $cfg = @(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'UPGQ config: enabled max=')
         Assert-That "the feature reports itself enabled at max=$QueueMax" `
             (@($cfg | Select-String -Pattern "max=$QueueMax ").Count -gt 0) "(lines: $($cfg.Count))"
-        # The absence check below is only worth anything because this positive one exists:
-        # 'HOOK <name>: installed at' is the plugin's real wording (AGENTS.md, 2026-08-09).
+        # 'HOOK <name>: installed at' is the plugin's real wording, and this positive control
+        # is what makes the absence check below worth anything
+        # (AGENTS.md § "Oracles: absence and defect-era checks").
         $installed = @(Get-Content -LiteralPath $LogPath |
                        Select-String -Pattern 'HOOK (btnUpgradeCondition|btnTechCondition|cmdrecvUpgrade|cmdrecvTech|upgradeTick|techTick|cmdrecvCancelUpgrade|cmdrecvCancelTech): installed at')
         Assert-That "all $HOOK_COUNT upgrade detours are spliced" ($installed.Count -eq $HOOK_COUNT) `
@@ -383,9 +343,9 @@ try {
             Assert-That "it starts with the $StartingMinerals minerals the trigger granted" `
                 ($q.Selected.Minerals -eq $StartingMinerals) "(got $($q.Selected.Minerals))"
         }
-        # $q.Selected is dereferenced here, and it is NOT inside the `if ($q.Selected)` guard
-        # above -- so a run whose oracle line was missing read $null.Queued as 0 and PASSED
-        # this (issue #69). The null check is now part of the assertion.
+        # The null check is part of the assertion: outside the `if ($q.Selected)` guard above,
+        # a run whose oracle line is missing reads $null.Queued as 0 and passes a queue check
+        # it never made.
         Assert-That 'the plugin holds nothing yet' `
             ($null -ne $q.Selected -and $q.Buildings -eq 0 -and $q.Selected.Queued -eq 0 -and $q.Promoted -eq 0) `
             "(selected=$(if ($q.Selected) { 'yes' } else { 'NO ORACLE LINE' }) buildings=$($q.Buildings) promoted=$($q.Promoted))"
@@ -405,11 +365,12 @@ try {
         Write-Host "       offered: $(($rs | ForEach-Object { Describe-Slot $_ }) -join ' ')"
         Assert-That "the idle card offers at least $QueueMax research/upgrade buttons ($($rs.Count))" `
             ($rs.Count -ge $QueueMax)
-        # Both opcodes in one queue is a stronger claim than three of a kind, and the
-        # Academy is the fixture precisely because it can make it.
+        # Both opcodes in one queue is a stronger claim than three of a kind.
         $kinds = @($rs | ForEach-Object { $_.Action } | Sort-Object -Unique)
         Assert-That "and they span BOTH opcodes ($($kinds.Count) distinct actions)" ($kinds.Count -eq 2) `
             "(actions: $($kinds -join ','))"
+        # Whatever the card offers, in the engine's own layout order: naming the items
+        # instead would assert a tech-tree prerequisite this suite has not checked.
         $script:picks = @($rs | Select-Object -First $QueueMax)
         $script:idleCard = $card
     }
@@ -456,6 +417,8 @@ try {
                 ($q.Selected.Minerals -eq $script:mineralsAfterFirst)
         }
         $q = Get-UpgQueue 'queued-all'
+        # `logical` is the building's own busy flag, read from CUnit+0xC9/0xC8, plus what the
+        # plugin holds -- so this number is never the plugin's own bookkeeping alone.
         Assert-That "so the logical queue is $QueueMax, which is MORE THAN $ENGINE_SLOTS" `
             ($q.Selected.Logical -eq $QueueMax -and $q.Selected.Logical -gt $ENGINE_SLOTS)
         Assert-That "the plugin holds $expectQueued items in press order" `
@@ -484,9 +447,9 @@ try {
         $q = Get-UpgQueue 'full'
         Assert-That "the queue is still exactly $expectQueued -- nothing was swallowed" `
             ($q.Selected.Queued -eq $expectQueued)
-        # THE END OF THE HOLDING WINDOW. Captured here, from a read of the engine's own
-        # balance, so the pay-once assertion after the drain has a second INDEPENDENT sample
-        # to compare against rather than comparing a variable with itself (issue #69).
+        # THE END OF THE HOLDING WINDOW, read off the engine's own balance, so the pay-once
+        # assertion after the drain compares two INDEPENDENT samples, not a variable with
+        # itself.
         $script:mineralsAtCap = $q.Selected.Minerals
         Assert-That 'and the plugin refused nothing itself -- the client never sent' `
             ($q.RefusedFull -eq 0)
@@ -514,13 +477,11 @@ try {
                 Start-Sleep -Seconds 5
             }
             Write-Host "       $($seen -join ' -> ')"
-            # One assertion, not one per sample: a per-sample check drowns the transcript
-            # and says nothing a count does not.
-            #
-            # WITH THE SAMPLE COUNT IN THE ASSERTION, not only in its message (issue #69).
-            # "0 of 0 samples" is trivially true, and it is the reading a drain loop produces
-            # when the oracle timed out or the building went away on the first poll -- which
-            # is the case where this claim most needs an answer.
+            # One assertion, not one per sample: a per-sample check drowns the transcript and
+            # says nothing a count does not. The sample count belongs IN the assertion and not
+            # only in its message -- "0 of 0 samples" is trivially true, and that is what a
+            # drain loop reads when the oracle timed out or the building went away on the
+            # first poll, the case where this claim most needs an answer.
             Assert-That "the engine never ran two at once (0 of $($seen.Count) samples)" `
                 ((Test-ScReached -Count $seen -AtLeast 2) -and $bothAtOnce -eq 0) `
                 "(a drain watched fewer than 2 samples has not watched a drain)"
@@ -532,10 +493,9 @@ try {
             Assert-That 'and nothing was dropped -- no item was lost on the way' ($q.Dropped -eq 0)
             Assert-That 'nor refused by the engine-s own gate' ($q.RefusedGate -eq 0)
 
-            # PER ITEM, and IN ORDER. One promote line each, naming the kind and the id, in
-            # the order the queue held them -- which the read-back printed before the drain
-            # started. A single "2 promoted" would not distinguish two promotions from one
-            # counted twice, and it would say nothing about order.
+            # PER ITEM, and IN ORDER: one promote line each, naming kind and id, in the order
+            # the read-back printed before the drain started. A single "2 promoted" cannot
+            # tell two promotions from one counted twice, and says nothing about order.
             $ev = @(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'UPGQEV promote ')
             Assert-That "exactly $expectQueued promote events ($($ev.Count))" ($ev.Count -eq $expectQueued)
             for ($i = 0; $i -lt $ev.Count -and $i -lt $script:queueAtCap.Count; $i++) {
@@ -551,32 +511,28 @@ try {
         Step 'THEY TOOK EFFECT: the engine-s own researched arrays, read back' {
             $q = Get-UpgQueue 'final'
             Write-Host "       techs=[$($q.Techs -join ',')] levels=[$(($q.Levels.GetEnumerator() | Sort-Object Key | ForEach-Object { "$($_.Key):$($_.Value)" }) -join ',')]"
-            # This is the claim that "it finished" rather than "it left the queue", and it
-            # is read out of 0x0058CF44 / 0x0058D2B0 -- the arrays the two order handlers
-            # write on completion.
+            # The claim that "it finished" rather than "it left the queue", read out of
+            # 0x0058CF44 / 0x0058D2B0 -- the arrays the two order handlers write on completion.
             Assert-That "all $QueueMax items are finished in the engine-s own arrays ($(Get-FinishedCount $q))" `
                 ((Get-FinishedCount $q) -eq $QueueMax)
             Assert-That 'the building is idle again, read from CUnit+0xC9/0xC8' `
                 ($q.Selected.Upgrade -eq 61 -and $q.Selected.Tech -eq 44 -and $q.Selected.Logical -eq 0)
 
-            # THE PAY-ONCE ASSERTION, from the resource globals. Every item that STARTED
-            # cost its price once; queueing cost nothing, and promoting cost nothing beyond
-            # the engine's own charge. So the balance fell exactly three times.
+            # THE PAY-ONCE ASSERTION, from the resource globals: every item that STARTED costs
+            # its price once, queueing costs nothing, and promoting costs nothing beyond the
+            # engine's own charge, so the balance falls once per item and no more.
             $starts = @(Get-Content -LiteralPath $LogPath |
                         Select-String -Pattern 'UPGQEV promote .* -> started')
             Assert-That "the plugin promoted $expectQueued items and each one is a single start ($($starts.Count))" `
                 ($starts.Count -eq $expectQueued)
             Assert-That "minerals fell overall ($($script:mineralsStart) -> $($q.Selected.Minerals))" `
                 ($q.Selected.Minerals -lt $script:mineralsStart)
-            # THE PAY-ONCE CLAIM, and it used to be written `$script:mineralsAfterFirst -eq
-            # $script:mineralsAfterFirst` -- a literal x -eq x (issue #69). It could not fail
-            # for any build, any fixture, any amount of money moving.
-            #
-            # The window it is about runs from the first item STARTING (paid) to the drain
-            # BEGINNING. Both ends are now separate reads of the engine's own balance:
-            # mineralsAfterFirst was taken right after the first press, mineralsAtCap at the
-            # end of the AT-THE-CAP step, with all $QueueMax items queued. A plugin that paid
-            # for a queued item moves the second and not the first.
+            # The holding window runs from the first item STARTING (paid) to the drain
+            # BEGINNING, and both ends are separate reads of the engine's own balance:
+            # mineralsAfterFirst right after the first press, mineralsAtCap at the end of the
+            # AT-THE-CAP step with all $QueueMax items queued. Comparing one end against
+            # itself cannot fail; a plugin that pays for a queued item moves the second and
+            # not the first.
             Assert-That ("and they NEVER fell while the queue was merely holding items " +
                          "(after the first start: $($script:mineralsAfterFirst); at the cap, $expectQueued items held: $($script:mineralsAtCap))") `
                 ($null -ne $script:mineralsAtCap -and $script:mineralsAtCap -eq $script:mineralsAfterFirst)
@@ -601,14 +557,10 @@ try {
             $runUpg = $q.Selected.Upgrade
             $runTech = $q.Selected.Tech
 
-            # FIRST cancel: the tail is the plugin's, so it goes and NO money moves.
-            #
-            # WITH WIRE EVIDENCE (issue #69). This arm used to assert Queued -eq 0 and
-            # Cancelled -eq 1 -- both read off the plugin's own PRODQ/UPGQ lines -- and
-            # nothing else. A cancel click that never left the client and a plugin that
-            # dropped its tail for some other reason produce identical readings there. The
-            # second arm below already marked the log and asserted the command reached the
-            # funnel; this one now does the same, so the two arms are evidenced alike.
+            # FIRST cancel: the tail is the plugin's, so it goes and NO money moves. Evidenced
+            # on the WIRE as well as off the plugin's own counters -- a click that never left
+            # the client and a plugin that dropped its tail for some other reason read
+            # identically in PRODQ/UPGQ alone.
             $card3 = Get-Card 'cancel'
             $cancelSlot = Get-CancelSlot -Card $card3
             Assert-That 'the busy card offers a Cancel button' ($null -ne $cancelSlot)
@@ -649,17 +601,13 @@ try {
             Assert-That 'the building is idle -- vanilla stopped the running item' `
                 ($q3.Selected.Upgrade -eq 61 -and $q3.Selected.Tech -eq 44) `
                 "(upg=$($q3.Selected.Upgrade) tech=$($q3.Selected.Tech))"
-            # Vanilla's refund is out of the same tables it paid from, so the money comes
-            # back EXACTLY -- and the plugin, which refunded nothing, is not involved.
-            #
-            # EXACTLY, asserted (issue #69). This was `$back -gt 0`, which passes for a
-            # refund of one mineral against a cost of a hundred and fifty, while the
-            # .DESCRIPTION claims "refunds EXACTLY". The charge is known from this suite's
-            # own readings: mineralsAfterDrain was the balance before this step's restart,
-            # $before the balance after it, and nothing else moved between them because the
-            # second press only QUEUED (asserted above, "NOT ONE MINERAL moved").
-            # Test-ScExactRefund also refuses paid == 0: a step in which the restart was
-            # never charged would make `back -eq paid` read 0 -eq 0 and pass.
+            # Vanilla's refund is out of the same tables it paid from, so the money comes back
+            # EXACTLY -- and the plugin, which refunded nothing, is not involved. `back -gt 0`
+            # would pass for one mineral against a cost of a hundred and fifty, so the charge
+            # is pinned from this suite's own readings: mineralsAfterDrain is the balance
+            # before this step's restart, $before the balance after it, and nothing moved
+            # between them because the second press only QUEUED. Test-ScExactRefund also
+            # refuses paid == 0, which would make `back -eq paid` read 0 -eq 0 and pass.
             $paid = $script:mineralsAfterDrain - $before
             $back = $q3.Selected.Minerals - $q2.Selected.Minerals
             Write-Host "       the restart cost $paid minerals; vanilla refunded $back"
@@ -719,18 +667,14 @@ if ($gamePid -gt 0 -and -not $KeepOpen) {
 Assert-That 'the game process this test started is gone' ($KeepOpen -or $null -eq $left)
 Assert-That 'the generated map was cleaned up' ($KeepOpen -or -not (Test-Path -LiteralPath $mapPath))
 
-# THE PAY-ONCE CLAIM used to be asserted here from mineralsSpent/gasSpent. Both were flat
-# zero by construction -- sc_upgrades.cpp reads resources through value-returning
-# accessors and cannot write them at all -- so the assertions read the initialiser
-# (issue #66, deleted in task 055).
+# Do NOT assert pay-once from the plugin's own mineralsSpent/gasSpent: sc_upgrades.cpp reads
+# resources through value-returning accessors and cannot write them, so those counters are
+# flat zero by construction and such an assertion only reads its initialiser. The claim is
+# made where it can fail, off the ENGINE's own balance, in the HEADLINE, THEY TOOK EFFECT and
+# CANCEL steps.
 #
-# The claim is asserted where it can fail, off the ENGINE's own balance, three times in
-# this suite: NOT ONE MINERAL was paid for queueing (step 'THE HEADLINE'), the balance was
-# unchanged across the whole holding window (step 'THEY TOOK EFFECT'), and the cancel
-# refunded exactly what the start charged (step 'CANCEL').
-#
-# The stats line is still read, because a run in which the plugin never wrote one at all
-# is a different failure and has to stay distinguishable from a quiet one.
+# The stats line is read all the same, because a run in which the plugin never wrote one is a
+# different failure and has to stay distinguishable from a quiet one.
 $statLine = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
               Select-String -Pattern 'UPGQSTATS ')
 if ($statLine.Count -gt 0) {

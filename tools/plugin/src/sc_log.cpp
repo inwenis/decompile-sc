@@ -1,10 +1,8 @@
 // sc_log.cpp -- see sc_log.h.
 //
-// Lifted verbatim (bar the rename LogLine -> ScLog) out of task 008's scplugin.cpp
-// so the fan-out hooks can log through the same file handle and the same lock. The
-// special exit-path locking is task 008's, and its reason still holds: blocking on a
-// critical section whose owner the OS has already terminated hangs the game on exit.
-// What task 023 changed is what happens when the lock cannot be had -- see ScLog.
+// Every hook logs through this one file handle under this one lock, so lines from all
+// threads interleave whole and in order. The process-exit path takes the lock on
+// different terms, because there the owner may be dead -- see ScLog.
 
 #include <windows.h>
 #include <stdio.h>
@@ -13,9 +11,8 @@
 #include "sc_engine.h"
 #include "sc_log.h"
 
-// How long the process-exit path waits for the log lock before writing without it.
-// A live owner holds it for microseconds; a dead one holds it forever, and the cap is
-// what keeps game exit from hanging on the second case. See the block in ScLog.
+// Cap on the process-exit path's wait for the log lock before it writes unlocked: a dead
+// owner never releases, so an unbounded wait there would hang game exit. See ScLog.
 #define SC_LOG_EXIT_WAIT_MS  250
 #define SC_LOG_EXIT_SLICE_MS 5
 
@@ -30,8 +27,8 @@ static void EnsureDirectoryTree(const char* filePath) {
     char* slash = strrchr(dir, '\\');
     if (!slash) return;
     *slash = '\0';
-    // Create each component in turn; CreateDirectoryA on an existing dir is a
-    // harmless ERROR_ALREADY_EXISTS.
+    // CreateDirectoryA on an existing directory fails harmlessly with
+    // ERROR_ALREADY_EXISTS, so each component can be created blind.
     for (char* p = dir; *p; ++p) {
         if (*p == '\\' && p != dir && *(p - 1) != ':') {
             *p = '\0';
@@ -91,27 +88,15 @@ void ScLog(const char* fmt, ...) {
     if (len < 0) return;
     line[sizeof(line) - 1] = '\0';
 
-    // THE EXIT PATH USED TO DROP THE LINE HERE, AND THAT COST A REAL TEST ASSERTION.
-    //
-    // What happened (task 021 found it, task 022 found the mechanism, task 023 fixed it):
-    // one run's detach produced NO log output at all -- not `STATS`, not `GROUPSTATS`, not
-    // `CIRCLES stats`, not even `DETACH`. test-selection-circles asserts on that CIRCLES
-    // line, so the suite failed against a plugin that had done nothing wrong.
-    //
-    // "No output at all" is the diagnostic detail that decides the fix. A TRANSIENT overlap
-    // with the observer thread would have lost one line and let the next one through; losing
-    // every line of the sequence means the critical section was owned and STAYED owned. On
-    // the process-exit path that is exactly what happens: Windows terminates every other
-    // thread first, and a thread killed inside WriteFile/FlushFileBuffers -- which is where
-    // the observer spends nearly all of its time under this lock -- never releases it. So
-    // the section is dead-owned, and no amount of waiting will get it.
-    //
-    // Hence: wait briefly (a LIVE owner releases in microseconds, and waiting keeps the
-    // lines ordered), then write anyway. Writing unlocked is safe on precisely this path and
-    // no other -- the try-lock flag is only ever set for lpReserved != NULL, where the OS
-    // has already terminated every thread that could race us. The alternative on offer was
-    // to soften the test's assertion, which would have thrown away a real oracle to hide a
-    // logging bug.
+    // On the exit path this lock can be DEAD-OWNED, not merely contended: Windows
+    // terminates every other thread before detach, and the observer thread spends nearly
+    // all its time inside WriteFile/FlushFileBuffers under this lock -- killed there, it
+    // never releases it. A transient overlap loses one line; a dead owner loses every line
+    // of the detach sequence, including the CIRCLES line test-selection-circles asserts on
+    // -- do not soften that assertion, it is a real oracle over a real logging bug. So wait
+    // briefly (a live owner releases in microseconds, and waiting keeps lines ordered), then
+    // write anyway: unlocked is safe here only because the plugin sets the try-lock flag
+    // solely for lpReserved != NULL, where no thread survives to race us.
     bool locked = false;
     if (InterlockedCompareExchange(&g_logTryLock, 0, 0)) {
         for (int waited = 0; waited < SC_LOG_EXIT_WAIT_MS; waited += SC_LOG_EXIT_SLICE_MS) {
@@ -128,11 +113,8 @@ void ScLog(const char* fmt, ...) {
     if (locked) LeaveCriticalSection(&g_logLock);
 }
 
-// ---------------------------------------------------------------------------
-// Test seam (hooktest part [12]) -- lets a test own the log lock from another
-// thread so the exit path above can be driven with the lock genuinely held.
-// Not called by the plugin.
-// ---------------------------------------------------------------------------
+// Test seam: lets a test own the log lock from another thread, so the exit path above can
+// be driven with the lock genuinely held. Not called by the plugin.
 bool ScLogTestTryHoldLock(void) {
     if (!g_lockInit) return false;
     return TryEnterCriticalSection(&g_logLock) != 0;

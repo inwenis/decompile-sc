@@ -4,29 +4,13 @@
 Turns the raw StrideSweep output into the committed table of ENCODED row strides.
 
 .DESCRIPTION
-These are the relocation sites that neither of the other two sweeps can see. The cross-reference
-sweep finds instructions that name an address; the immediate sweep finds instructions that carry
-a watched constant. A row step like
+Widening playersSelections past 12 slots means editing every row step, but a row step carries
+its stride only in scale factors -- invisible to the cross-reference sweep (instructions naming
+an address) and to the immediate sweep (instructions carrying a watched constant):
 
     0049AFB5   LEA EDX,[EDI + EDI*0x2]      ; player * 3
     0049AFB8   LEA EAX,[EBX + EDX*0x4]      ; slot + player * 12
     0049AFBB   MOV dword ptr [EAX*0x4 + 0x6284e8],ESI
-
-carries the 12 in nothing but the *0x2 and *0x4 scale factors. Widening playersSelections from
-12 slots to N means editing every one of these, and round 1 of task 005 shipped a "relocation
-work list" that did not contain them.
-
-StrideSweep emits every x3 addressing chain in the program with the byte multiplier it
-accumulates. This script keeps the ones that matter and says out loud what it dropped:
-
-  * `context = elsewhere` -- an x3 LEA in a function with no connection to any selection global.
-    x3 is the compiler's idiom for every 3-, 6-, 12- and 24-byte structure in the binary, so
-    these are noise by construction, not suppressed evidence. Counted, not committed.
-  * chains whose multiplier is not 48 bytes ARE committed, with their stride, because "this
-    function contains an x12 chain that is NOT a selection row step" is exactly the kind of
-    near-miss a reader should be able to check rather than take on trust.
-
-`isRowStride` is the column to filter on: 48 bytes = 12 dwords = one selection row.
 
 .PARAMETER InFile
 StrideSweep TSV (work/scratch/ghidra-sweep/strides.tsv).
@@ -44,12 +28,17 @@ $ErrorActionPreference = 'Stop'
 $all = Import-Csv -LiteralPath $InFile -Delimiter "`t"
 if ($all.Count -lt 1) { throw "stride sweep file parsed to $($all.Count) rows: $InFile" }
 
+# x3 is the compiler's idiom for every 3-, 6-, 12- and 24-byte struct in the binary, so a chain
+# with no connection to a selection global is noise by construction: counted, never committed.
 $relevant = @($all | Where-Object { $_.context -ne 'elsewhere' })
 $dropped = $all.Count - $relevant.Count
 
 $rows = $relevant | ForEach-Object {
     [pscustomobject]@{
         array          = if ($_.targetGlobal) { $_.targetGlobal } else { 'unresolved' }
+        # 48 bytes = 12 dwords = one selection row, so this is the column to filter on. Other
+        # strides stay in the table: an x12 chain that is NOT a row step is a near-miss a reader
+        # must be able to check rather than take on trust.
         isRowStride    = ($_.strideBytes -eq '48')
         strideBytes    = $_.strideBytes
         strideElements = $_.strideElements

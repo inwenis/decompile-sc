@@ -1,29 +1,18 @@
 #Requires -Version 7
 <#
-Pester coverage for Set-ScMarker (tools/plugin/drive-game.ps1) -- issue #37.
+Pester coverage for Set-ScMarker (tools/plugin/drive-game.ps1).
 
-THE BUG THIS PINS. Every marker write was `Set-Content -LiteralPath $MarkerPath`, and a
-sweep caught it throwing mid-run:
+Why these tests are DETERMINISTIC and not a timing hammer: `Set-Content` opens the file
+with FileShare.NONE, so the write fails whenever ANY reader holds it open -- including
+the plugin's observer, which polls the marker about four times a second and opens it as
+permissively as Windows allows (GENERIC_READ, FILE_SHARE_READ|WRITE|DELETE;
+scplugin.cpp PollMarker). Only the overlap is chancy; given overlap the failure is
+certain. So the reader below opens the marker with exactly PollMarker's flags and HOLDS
+it: an unshared write fails every time, Set-ScMarker succeeds every time.
 
-    FAIL a test step threw: The process cannot access the file
-    'C:\sc-work\logs\031\sweep\marker.txt' because it is being used by another process
-
-It was filed as a rare race against the plugin's observer thread, which polls that file
-about four times a second. It is neither rare nor a race in the interesting sense:
-`Set-Content` opens the file with FileShare.NONE, so the write fails whenever ANY reader
-holds it open -- including the plugin's own, which is opened as permissively as Windows
-allows (GENERIC_READ, FILE_SHARE_READ|WRITE|DELETE; scplugin.cpp PollMarker). Only the
-overlap is chancy; given overlap the failure is certain.
-
-Which is why these tests are DETERMINISTIC rather than a hammer loop: the reader below
-opens the marker with exactly PollMarker's flags and HOLDS it, and the old write fails
-every time while the new one succeeds every time. A timing probe would only be a slower
-way of asking the same question, and a flakier gate.
-
-The positive control is the first test: if `Set-Content` ever stops failing here, this
-file is no longer testing anything and should say so out loud instead of going quietly
-green (AGENTS.md: an absence assertion is worth nothing until the pattern is shown to
-match somewhere it should).
+The first test is the positive control: if `Set-Content` ever stops failing here, this
+file tests nothing and must say so out loud instead of going quietly green
+(AGENTS.md § "Oracles: absence and defect-era checks").
 #>
 
 BeforeAll {
@@ -80,9 +69,9 @@ Describe 'Set-ScMarker survives the plugin observer holding the marker open' {
     }
 
     It 'writes the label while ANOTHER DRIVER holds the same marker open for writing' {
-        # Task 031's sweep pointed eight suites at one log directory, so they shared one
-        # marker. FileShare.Read -- what [IO.File]::WriteAllText would use -- is not
-        # enough for that case; ReadWrite|Delete is.
+        # Suites aimed at one log directory share one marker, so a second driver can hold
+        # it open for writing. FileShare.Read -- what [IO.File]::WriteAllText would use --
+        # is not enough for that case; ReadWrite|Delete is.
         $p = New-MarkerFile
         $share = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
         $other = [IO.FileStream]::new($p, [IO.FileMode]::Create, [IO.FileAccess]::Write, $share)
@@ -117,26 +106,18 @@ Describe 'Set-ScMarker survives the plugin observer holding the marker open' {
 
 Describe 'No caller bypasses Set-ScMarker (issue #71 -- the #37 regression guard)' {
     <#
-    Set-ScMarker's own docstring calls itself "the ONE place any marker is written", and
-    the tests above prove why: every other writer in the .NET/PowerShell toolbox opens the
-    file with a share mode the plugin's observer breaks. That claim was true when it was
-    written and FALSE by the time task 052 read the tree -- six call sites had drifted back
-    to raw `Set-Content` (issue #71), which is issue #37 verbatim.
-
-    Prose in a docstring cannot hold a rule that six authors independently broke. This
-    scans the source instead.
-
-    AST, not grep: the tokeniser drops comments for free, so drive-game.ps1's own
-    "used to be `Set-Content`" narration and probe-screen-layout.ps1's "Set-ScMarker, not
-    Set-Content" reminder do not have to be special-cased -- and a future site cannot hide
-    from the guard by moving the cmdlet name into a string.
+    Set-ScMarker is the ONE place any marker is written: every other writer in the
+    .NET/PowerShell toolbox opens the file with a share mode the plugin's observer
+    breaks. A docstring cannot hold that rule -- six call sites broke it independently
+    -- so this scans the source instead. AST, not grep: the tokeniser drops comments for
+    free, so a comment naming `Set-Content` beside the word marker is not a false hit,
+    and a call site cannot hide from the guard by moving the cmdlet name into a string.
     #>
 
     BeforeAll {
-        # Every writer whose share mode is wrong for this file. Set-Content is FileShare.None
-        # (issue #37's measured cause); WriteAllText/Out-File are FileShare.Read, which
-        # tolerates the observer but NOT a second driver holding the same marker -- the case
-        # that made task 031's eight-suite sweep hit this at all.
+        # Every writer whose share mode is wrong for this file: Set-Content is
+        # FileShare.None; WriteAllText/Out-File are FileShare.Read, which tolerates the
+        # observer but NOT a second driver holding the same marker open.
         $script:BadWriters = @(
             'Set-Content', 'sc', 'Out-File', 'Add-Content', 'ac',
             'WriteAllText', 'WriteAllBytes', 'WriteAllLines', 'AppendAllText'
@@ -152,7 +133,6 @@ Describe 'No caller bypasses Set-ScMarker (issue #71 -- the #37 regression guard
                     $file.FullName, [ref]$tokens, [ref]$errors)
                 if ($errors.Count) { throw "guard could not parse $($file.Name): $($errors[0].Message)" }
 
-                # Bare cmdlets: Set-Content / Out-File / ...
                 $cmds = $ast.FindAll({ $args[0] -is [System.Management.Automation.Language.CommandAst] }, $true)
                 foreach ($c in $cmds) {
                     $name = $c.GetCommandName()
@@ -164,7 +144,6 @@ Describe 'No caller bypasses Set-ScMarker (issue #71 -- the #37 regression guard
                     }
                 }
 
-                # Static calls: [IO.File]::WriteAllText(...)
                 $calls = $ast.FindAll({ $args[0] -is [System.Management.Automation.Language.InvokeMemberExpressionAst] }, $true)
                 foreach ($m in $calls) {
                     if ($m.Member.Extent.Text -notin $script:BadWriters) { continue }
@@ -182,10 +161,8 @@ Describe 'No caller bypasses Set-ScMarker (issue #71 -- the #37 regression guard
     }
 
     It 'POSITIVE CONTROL: the scan finds a planted bypass' {
-        # Same rule as the file above: an absence assertion is worth nothing until the
-        # pattern has been shown to match where it should. Without this, a typo in the
-        # writer list or the AST walk would make the guard below pass by finding nothing,
-        # forever, over any tree at all.
+        # Without this, a typo in the writer list or the AST walk would make the guard
+        # below pass by finding nothing, forever, over any tree at all.
         $dir = Join-Path ([IO.Path]::GetTempPath()) ("sc-guard-" + [Guid]::NewGuid().ToString('n'))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         try {

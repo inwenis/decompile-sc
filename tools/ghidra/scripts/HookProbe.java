@@ -1,28 +1,17 @@
 // Everything an inline (detour) hook needs to know about a target function, plus its callers.
 //
-// Task 011 writes to the running game for the first time. A 5-byte JMP detour overwrites the
-// target's first instructions, so the bytes it relocates into a trampoline must be known
-// EXACTLY -- length, and whether any of them is position-dependent (a rel8/rel32 jump or call
-// moved to a different address stops pointing where it did). "Probably a standard prologue" is
-// not good enough when the failure mode is a corrupted game process.
+// A 5-byte JMP detour overwrites the target's first instructions, so the bytes relocated into a
+// trampoline must be known EXACTLY -- length, and whether any is position-dependent (a rel8/rel32
+// jump or call moved to a different address stops pointing where it did). "Probably a standard
+// prologue" is not good enough when the failure mode is a corrupted game process.
 //
-// For each spec address this emits:
-//   - a .asm file: every instruction of the containing function as `addr  rawbytes  text`,
-//     with a PC-relative flag per instruction;
-//   - a TSV row: entry point, extent, calling convention, the cumulative byte length of the
-//     first instructions up to >= 5 bytes (the detour patch size), and whether any instruction
-//     inside that patch window is PC-relative (i.e. NOT safely relocatable);
-//   - a .callers file: every reference that reaches the entry point, with the referring
-//     instruction and the function that contains it -- which is how the command-emitting
-//     CMDACT_* functions are found from the queue function they all call.
+// The .callers file lists every reference reaching an entry point with the function containing it:
+// how a shared sink's callers are enumerated -- the CMDACT_* emitters above the queue function.
 //
 // Output .asm/.callers files are DERIVED GAME CONTENT (whole disassembled functions) and must
-// stay under a gitignored scratch path (AGENTS.md hard rule 1). Only findings belong in research/.
+// stay under a gitignored scratch path (AGENTS.md § "Hard rules"). Only findings belong in research/.
 //
-// Script args:
-//   1: output TSV path (<path>.manifest is the run's success signal); side files land beside it
-//   2: spec file -- one per line: label,addrHex
-//
+// Args: 1 = output TSV (<path>.manifest signals success; side files land beside it); 2 = spec file, `label,addrHex` per line.
 //@category Headless
 
 import ghidra.app.script.GhidraScript;
@@ -84,7 +73,6 @@ public class HookProbe extends GhidraScript {
                     continue;
                 }
 
-                // ---- instruction dump + patch-window analysis -------------------------------
                 List<Instruction> instrs = new ArrayList<>();
                 InstructionIterator it =
                     currentProgram.getListing().getInstructions(f.getBody(), true);
@@ -104,7 +92,7 @@ public class HookProbe extends GhidraScript {
                     }
                 }
 
-                // Whole instructions covering the first DETOUR_BYTES bytes from the ENTRY POINT.
+                // A body can extend below its entry point; only bytes at the entry are overwritten.
                 int patchBytes = 0;
                 int patchInstrs = 0;
                 boolean relocSafe = true;
@@ -122,7 +110,6 @@ public class HookProbe extends GhidraScript {
                     }
                 }
 
-                // ---- callers ---------------------------------------------------------------
                 int callRefs = 0;
                 int jumpRefs = 0;
                 int refsTotal = 0;

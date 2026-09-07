@@ -5,51 +5,19 @@ End-to-end, UNATTENDED proof of what an ability with a PER-UNIT COST does to a >
 selection: 36 Marines, 24 healthy and 12 pre-damaged, one Stim Pack keypress, and every
 unit's effect state AND every unit's hit points read out of the process.
 
-This is task 022's question 1, in the user's words: "if I apply steam to ferdinarines
-will all of them get steam and will all of them have HP decreased".
-
 .DESCRIPTION
-Stim (command 0x36) is the sharpest available test because its cost is VISIBLE per unit
-and its affordability gate is per unit. Read off this binary (research/ability-semantics.md
-2), the handler 0x004C2F30 does, for every unit in the receiving player's selection:
+Stim (command 0x36) is the sharpest available test because its cost is VISIBLE per unit and
+its gate is per unit. Read off this binary (research/ability-semantics.md 2), the handler
+0x004C2F30 does, for every unit in the receiving player's selection:
 
-    0x004C2F68  CMP dword ptr [ESI + 0x8],0xa00   ; hit points vs 10.0
-    0x004C2F6F  JLE skip-this-unit                ; STRICTLY greater, or nothing happens
-    0x004C2FD4  MOV EAX,0xa00                     ; the cost -- the same constant
-    0x004C2FD9  MOV ECX,ESI
-    0x004C2FDB  CALL 0x004797B0                   ; the damage primitive
-    0x004C2FE0  MOV CL,byte ptr [ESI + 0x115]     ; the stim timer
-    0x004C2FEC  MOV byte ptr [ESI + 0x115],0x25   ; ... set, if it was lower
+    0x004C2F68  CMP [ESI+0x8],0xa00 / JLE skip  ; hit points STRICTLY over 10.0, or nothing
+    0x004C2FD4  MOV EAX,0xa00 ; CALL 0x004797B0 ; the same constant, charged as damage
+    0x004C2FEC  MOV [ESI+0x115],0x25            ; the stim timer, set if it was lower
 
-So the prediction this test exists to check in the live engine, at 36 units:
-
-  * all 24 units that can afford it gain the effect (CUnit+0x115 == 0x25) -- 24 > 12,
-    so the engine's own capped selection cannot account for it;
-  * all 24 of them pay, individually, 0xa00 (10 HP) each;
-  * the 12 that cannot afford it gain nothing and pay nothing -- and the split falls on
-    the HP line, not on the visible/overflow line, which is what says the ENGINE decided
-    and not us;
-  * pressing it repeatedly walks the payers down 0x2800 -> 0x1e00 -> 0x1400 -> 0xa00 and
-    then STOPS, because at exactly 0xa00 the gate is false. Stim cannot kill.
-
-WHY THE RESULT CANNOT BE FAKED
-
-  1. Effect and cost are read PER UNIT from the plugin's WORLD scan -- one line per unit
-     carrying hp and the stim timer TOGETHER, so the pairing is observed and not inferred
-     from two histograms that happen to have matching totals.
-  2. The counts are also taken over the fan-out's shadow list (all 36), and `visible=12`
-     / `overflow=24` are asserted, so any count above twelve is unreachable without the
-     fan-out.
-  3. The map has no triggers, no enemy and one unit-less computer slot, and Terran units
-     do not regenerate, so nothing in the game can move a Marine's hit points or stim
-     timer except this keypress. The idle step demonstrates that rather than assuming it.
-  4. The before-state is asserted, not assumed: 0 stimmed, and exactly two HP values.
-
-The fixture is generated at run time and DELETED afterwards (AGENTS.md hard rule 1). It
-needs two things no earlier fixture had, both added by task 022 to tools/make_test_map.py:
-`--damaged-count` (a pre-damaged tail of the same block, so payers and non-payers sit in
-ONE selection) and `--tech-researched` (PTEx; without it no unit on a generated map has
-any ability that needs research, which is every ability with a per-unit cost).
+Effect and cost come off ONE world-scan line per unit, so the pairing is observed, not
+inferred from two histograms with matching totals; and 24 payers is more than the twelve
+the engine itself holds, so any such count is unreachable without the fan-out. The fixture
+is generated at run time and deleted afterwards (AGENTS.md § "Test fixtures").
 
 .EXAMPLE
 ./tools/plugin/test-stim-fanout.ps1
@@ -63,19 +31,15 @@ param(
     [string]$LogPath = 'C:\sc-work\logs\022\stim-fanout.log',
     [string]$ShotDir = 'C:\sc-work\logs\022\stim-frames',
     # Which folder under Maps\ the fixture is generated into; see test-burrow-fanout.ps1.
-    # Default is what this suite has always used.
     [string]$FixtureDir,
-    # Long enough to show nothing drifts on its own. Shorter than the burrow test's 120s
-    # because THAT test had to prove a generated map does not end itself and this one
-    # inherits that result from the same template -- what this step has to show is only
-    # that hit points and stim timers are stationary, which they are or are not within
-    # seconds.
+    # Long enough to show nothing drifts on its own: hit points and stim timers are either
+    # stationary or not within seconds.
     [int]$IdleSeconds = 30,
     [int]$UnitCount = 36,
     [int]$DamagedCount = 12,
-    # 25% of a Marine's 40 hit points is 10 -- 0xa00, EXACTLY the gate constant. The gate
-    # is `JLE skip`, so these must be skipped; one off-by-one in the engine (or in this
-    # tool's reading of it) and they would stim instead. That is the point of choosing it.
+    # 25% of a Marine's 40 hit points is 10 -- 0xa00, EXACTLY the gate constant, so these
+    # units sit ON the gate where `JLE` and a hypothetical `JL` disagree. One off-by-one
+    # in the engine (or in this tool's reading of it) and they would stim instead.
     [int]$DamagedHpPercent = 25,
     [switch]$KeepOpen
 )
@@ -96,16 +60,13 @@ $STIM_KEY = 0x54           # 'T', the Marine command card's Stim Pack hotkey
 $IDLE_ORDER = '0x03'
 $STIM_COST = 0xa00         # research/ability-semantics.md 2 -- gate AND cost
 $STIM_TIMER = 0x25
-$MARINE_MAX_HP = 0x2800    # 40 HP in the engine's 1/256 fixed point; asserted below,
-                           # not assumed -- the before-state read is what establishes it
+$MARINE_MAX_HP = 0x2800    # 40 HP in the engine's 1/256 fixed point, asserted not assumed
 
-# A FIXTURE FOLDER OF ITS OWN, not the shared 00-testmap: sharing one means two workers
-# can pick each other's maps, which happened twice during task 022, once in each
-# direction. No row is assumed from the name -- Select-ScBrowserMap computes every click
-# from the filesystem and verifies what opened.
-# Not a bare default any more: with $env:AGENT_TASK set this resolves to THIS
-# agent's own folder, so two concurrent runs of this same suite cannot land in one
-# folder and overwrite each other's identically-named fixture (task 023 review).
+# A FIXTURE FOLDER OF ITS OWN, not the shared 00-testmap: sharing one lets two workers
+# pick each other's maps. With $env:AGENT_TASK set this resolves to THIS agent's own
+# folder, so two concurrent runs of this same suite cannot land in one folder and
+# overwrite each other's identically-named fixture. No row is assumed from the name --
+# Select-ScBrowserMap computes every click from the filesystem and verifies what opened.
 if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t022' -Suite 'stim-fanout' }
 $mapDir = $FixtureDir
 $mapName = 'stim-fanout.scx'
@@ -170,8 +131,7 @@ function Shot([string]$tag) {
 try {
     Step "generate the fixture: $UnitCount Marines, the last $DamagedCount pre-damaged, Stim researched" {
         # Possibly several workers: wait rather than delete, and never take the folder
-        # out from under a running game (see Wait-ScFixtureFolderFree -- task 022 hit
-        # exactly that collision live).
+        # out from under a running game (see Wait-ScFixtureFolderFree).
         Wait-ScFixtureFolderFree -Run $fixtures
         $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
             -UnitCount $UnitCount -UnitType marine -Player 0 `
@@ -194,9 +154,9 @@ try {
             (@($gen | Select-String -Pattern 'differs from the template ONLY in: OWNR SIDE UNIT TRIG FORC PTEx').Count -gt 0)
     }
 
-    # Single-instance game, and the launch lock is normally released as soon as the
-    # launch is done -- which does not protect a game that is still alive. Wait for the
-    # machine, then hold the lock for this run's whole lifetime.
+    # Single-instance game, and the launch lock is released as soon as the launch is done
+    # -- which does not protect a game that is still alive. Wait for the machine, then
+    # hold the lock for this run's whole lifetime (AGENTS.md § "Launch lock").
     Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
     Wait-ScNoGameRunning
     $launchLock = Enter-ScLaunchLock -TaskId '022-stim-fanout'
@@ -219,9 +179,9 @@ try {
         Start-Sleep -Seconds 2
         Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom -- opens in Maps\BroodWar
         Start-Sleep -Seconds 2
-        # Every row from the filesystem, and the opened folder verified before the map row
-        # is clicked. Task 022 computed the FOLDER row here and left the MAP row hardcoded
-        # at 159; that half was the original incident (a foreign .scx sorting before ours).
+        # Every row comes from the filesystem and the opened folder is verified before the
+        # map row is clicked: a hardcoded row picks whatever foreign .scx happens to sort
+        # ahead of ours (AGENTS.md § "Map browser").
         Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
         Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
         Set-ScGameType -Hwnd $hwnd -LogPath $logPath -Index 2      # Use Map Settings, verified (see Set-ScGameType)
@@ -231,7 +191,8 @@ try {
         Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
         Start-Sleep -Seconds 10
         # The tips dialog is found in the engine's own dialog list and dismissed by ITS OWN
-        # OK button, then asserted gone (task 027) -- never a fixed point, never the registry.
+        # OK button, then asserted gone -- never a fixed point, never the registry
+        # (AGENTS.md § "Tips dialog").
         Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
         Start-Sleep -Seconds 2
         Shot 'in-game'
@@ -258,8 +219,6 @@ try {
         Assert-That "$DamagedCount cannot ($($poor.Count))" ($poor.Count -eq $DamagedCount)
         Assert-Every 'the healthy Marines are at full hit points' $healthy `
             { param($u) $u.Hp -eq $MARINE_MAX_HP } { param($u) "hp=$($u.Hp)" }
-        # THE BOUNDARY. 25% of 40 is exactly 10, and 10 is exactly the gate constant --
-        # so these units sit ON the gate, where `JLE` and a hypothetical `JL` disagree.
         Assert-Every "the pre-damaged Marines sit exactly ON the gate (hp == 0x$('{0:x}' -f $STIM_COST))" $poor `
             { param($u) $u.Hp -eq $STIM_COST } { param($u) "hp=$($u.Hp)" }
         Assert-Every 'not one Marine is stimmed yet' $marines `
@@ -282,8 +241,9 @@ try {
         $w = Get-World 'idle'
         $marines = Get-Marines $w
         Assert-That "still $UnitCount Marines after ${IdleSeconds}s ($($marines.Count))" ($marines.Count -eq $UnitCount)
-        # Terran units do not regenerate, which is why this fixture uses Marines: a Zerg
-        # unit would drift back over the gate while the test watched.
+        # Nothing but the keypress can move a Marine's hit points or stim timer here: the
+        # fixture has no triggers and no enemy, and Terran units do not regenerate -- which
+        # is why it uses Marines; a Zerg unit would drift back over the gate while watched.
         Assert-Every 'no Marine gained or lost hit points on its own' $marines `
             { param($u) $u.Hp -eq $MARINE_MAX_HP -or $u.Hp -eq $STIM_COST } { param($u) "hp=$($u.Hp)" }
         Assert-Every 'and none stimmed on its own' $marines `
@@ -291,9 +251,8 @@ try {
         Shot 'after-idle'
     }
 
-    # The whole question, one keypress at a time. Each press must reach every unit that
-    # can pay, and each press must cost each of them exactly 0xa00 -- so the expected
-    # hit points of a payer after N presses is 0x2800 - N*0xa00, and after three presses
+    # Each press must reach every unit that can pay and cost each of them exactly 0xa00,
+    # so a payer's hit points after N presses are 0x2800 - N*0xa00: after three presses
     # they are ON the gate and a fourth press must do nothing at all.
     $script:pressN = 0
     function Invoke-Stim {
@@ -302,9 +261,8 @@ try {
         $payerCount = $UnitCount - $DamagedCount
         $mark = Get-ScLogLineCount -LogPath $LogPath
         Send-ScKey -Hwnd $hwnd -VirtualKey $STIM_KEY
-        # Short on purpose. CUnit+0x115 is a countdown, so the effect has to be read
-        # while it is still running; the cost (hit points) is permanent and could be read
-        # at any time, but both come off the same scan.
+        # Short on purpose: CUnit+0x115 is a countdown, so the effect has to be read while
+        # it is still running. The cost is permanent, but both come off the same scan.
         Start-Sleep -Seconds 2
         $lines = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark)
 
@@ -359,21 +317,13 @@ try {
             "(got $($boxed.Line))"
         Invoke-Stim -Tag 'stim-1' -PayerHpAfter ($MARINE_MAX_HP - $STIM_COST)
 
-        # THE REASON THE SPLIT IS THE ENGINE'S, measured rather than asserted by layout.
-        #
-        # An earlier version of this test claimed the pre-damaged tail landed outside the
-        # engine's twelve, so that a fan-out-side decision would have produced a different
-        # count. Cross-referencing the pointers showed that was simply untrue of the run:
-        # the engine held 8 damaged units and 4 healthy ones. The real evidence is better,
-        # and it is a set comparison rather than a story about layout:
-        #
-        #   * the set that gained the effect is EXACTLY the set that could afford it;
-        #   * that set is NOT the set beyond the cap -- they differ;
-        #   * and the engine's own twelve is itself split by the hit-point line, carrying
-        #     both units that stimmed and units that did not.
-        #
-        # No partition along the visible/overflow line can do that: it would have to take
-        # all twelve of the engine's units or none of them.
+        # THE SPLIT IS THE ENGINE'S, measured rather than argued from layout. Do not claim
+        # the pre-damaged tail lands outside the engine's twelve: cross-referencing the
+        # pointers shows it does not -- a run can hold 8 damaged and 4 healthy inside the
+        # cap. The evidence is a set comparison: the set that gained the effect is exactly
+        # the set that could afford it, that set is NOT the set beyond the cap, and the
+        # engine's own twelve is itself split by the hit-point line. No partition along the
+        # visible/overflow line can do that -- it takes all twelve or none.
         $engine = @(Get-ScSelectionGroup -LogPath $LogPath)
         Assert-That "the engine's own selection was readable ($($engine.Count) slots)" ($engine.Count -eq 12)
         $w = Get-World 'split'
@@ -401,16 +351,13 @@ try {
     }
 
     Step 'Stim a fourth time: nothing happens at all, on either side of the wire' {
-        # 0x2800 - 3*0xa00 == 0xa00, and the receive-side gate is strictly greater, so
-        # this press must be inert. This is the assertion that separates `JLE` from `JL`,
-        # and it is the one that says stim can never kill the unit that pays.
-        #
-        # It also caught something the static reading did not predict: the press emits
-        # NO COMMAND. The receive-side gate in 0x004C2F30 is not the only one -- with
-        # every selected unit sitting on 0xa00 the client's own command card refuses to
-        # issue the ability, so the fourth keypress does not even reach the wire. Both
-        # halves are asserted, because "no command" and "a command that did nothing" are
-        # different facts about the engine and only one of them is true.
+        # 0x2800 - 3*0xa00 == 0xa00, and the receive-side gate is strictly greater, so this
+        # press must be inert: the assertion that separates `JLE` from `JL`, and the one
+        # that says stim can never kill the unit that pays. The press also emits NO COMMAND
+        # -- the gate in 0x004C2F30 is not the only one, and with every selected unit on
+        # 0xa00 the client's own command card refuses to issue the ability, so the keypress
+        # never reaches the wire. Both halves are asserted, because "no command" and "a
+        # command that did nothing" are different facts about the engine.
         $mark = Get-ScLogLineCount -LogPath $LogPath
         Send-ScKey -Hwnd $hwnd -VirtualKey $STIM_KEY
         Start-Sleep -Seconds 3

@@ -1,17 +1,14 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Task 074. The SHIPPED-config proof for the storm-side buffer->glass present fix
+The SHIPPED-config proof for the storm-side buffer->glass present fix
 (renderer-viewport.md 19.8/20): widescreen stage 3, cnc-ddraw, and NO console-edge
-move -- so the map at x>648 is the PLAYFIELD, proving the present widens on its own,
-independent of 073's unshipped console experiment.
+move -- so the map at x>648 is the PLAYFIELD, proving the present widens on its own.
 
-It reads the buffer-vs-glass two numbers over the MAP right band (the instrument
-renderer-viewport.md 19.8 leaves behind; this reuses it, it does not build another),
-captures the window the user would actually see, checks the widen held (base region
-+0x18 == 800 from the STORM log), that a minimap click still steers (must-not-break),
-and -- the conductor's ask -- that the widen RE-ASSERTS across a return-to-menu +
-reload, which rebuilds the base region to 640 and must be re-widened.
+It reads the buffer-vs-glass two numbers over the MAP right band (the instrument of
+renderer-viewport.md 19.8, reused rather than rebuilt), captures the window the user
+would see, checks the widen is armed in the STORM log, and that a minimap click still
+steers (must-not-break).
 
 .EXAMPLE
 ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-storm-present.ps1
@@ -24,8 +21,7 @@ param(
     [string]$FrameDir = 'C:\sc-work\logs\074-frames',
     [string]$WindowedHelperDll = 'C:\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll',
     # 'widen' forces the fix on (what the deployed wide launcher passes). 'auto' passes
-    # nothing through to the DLL and lets its own auto-arm decide -- the arm issue #113
-    # was about: before the fix this arm read "STORM present: off", after it "WIDEN armed".
+    # nothing through to the DLL and lets its own auto-arm decide.
     [ValidateSet('widen', 'probe', 'auto')][string]$StormPresent = 'widen',
     [switch]$KeepOpen
 )
@@ -40,7 +36,7 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 $ws = Get-ScWideGeometry
 $SCREEN_W = $ws.W; $SCREEN_H = $ws.H; $STOCK_W = $ws.StockW
 # The MAP right band the two numbers are read over: 20px in from the stock edge to
-# 10px short of the new one (was the fixed 660..790 of 19.8 at 800 wide).
+# 10px short of the new one.
 $BAND_X0 = $STOCK_W + 20; $BAND_X1 = $SCREEN_W - 10
 
 if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t074' -Suite 'stormpresent' }
@@ -116,8 +112,8 @@ function Get-StormBaseW18 {
     -1
 }
 
-# The shipped-config band read: buffer (composed, always 800) beside glass (the
-# window). MAP right band x=660..790 y=80..300 -- the same rect 19.8's finding used.
+# The shipped-config band read: buffer (composed) beside glass (the window), over the
+# MAP right band above -- renderer-viewport.md 19.8's instrument, widened with the screen.
 function Read-TwoNumbers {
     param([string]$Tag, [string]$ShotName)
     $dump = Get-BufferDump -Tag "$Tag-buf"
@@ -139,7 +135,6 @@ function Click-UntilDialog {
     $null
 }
 
-# The full menu -> loaded game walk (probe-console-edge's, verbatim shape).
 function Walk-ToGame {
     $env:SCDRIVE_POST_ACTIVATE = '1'
     if (-not (Wait-ScDialog -LogPath $log -Name 'MainMenu' -TimeoutSec 30)) { throw 'probe-storm: main menu never appeared.' }
@@ -201,22 +196,19 @@ try {
     Write-Host 'probe-storm: walking to a loaded game'
     Walk-ToGame
 
-    # ---- THE STATIC LOAD FRAME (run 7's failure): the map must present without a scroll.
-    # The strip copy runs every present, so x>648 tracks the buffer on the very first
-    # frame -- no dirty mark / no scroll needed. This is exactly what the base-region
-    # widen could NOT do (run 7: base +0x18=800 yet glass map = 0 on the static frame).
+    # ---- THE STATIC LOAD FRAME: the map must present without a scroll. The strip copy runs
+    # every present, so x>648 tracks the buffer on the first frame, no dirty mark needed.
+    # Widening the base region alone cannot: +0x18=800 yet the glass map still reads 0.
     $n1 = Read-TwoNumbers -Tag 'ship-static' -ShotName 'storm-present-shipped-static.png'
     Report-Finding "SHIPPED (ConsoleEdge OFF) STATIC load frame, MAP right band x=$BAND_X0..$BAND_X1 y=80..300: BUFFER=$($n1.Buffer) GLASS=$($n1.Glass) (capture $($n1.Shot))"
-    # The oracle is AGREEMENT (20.7: "buffer and glass agree for the first time"): the
-    # glass must carry what the buffer holds, and the buffer must hold something, or
-    # the check is vacuous. An absolute floor was the 800-era form (>= 0.30), calibrated
-    # on a 160-px band the fixture's sight had mostly explored; at 1280 the same sight
-    # explores a quarter of a 640-px band (buffer 0.16 static, 0.47 after a scroll) and
-    # the ratio glass/buffer is what stays put (0.86 at 800, 0.86 here).
+    # The oracle is AGREEMENT (renderer-viewport.md 20.7): the glass must carry what the
+    # buffer holds, and the buffer must hold something, or the check is vacuous. An
+    # absolute floor does not survive the width -- the fixture's sight fills most of a
+    # 160-px band but only a quarter of a 640-px one (buffer 0.16 static, 0.47 after a
+    # scroll); the ratio glass/buffer is what stays put (0.86 at either width).
     Assert-True 'STATIC load frame: the MAP right band is PRESENTED on glass past x=648 (glass >= 0.8 x buffer, buffer >= 0.05; no scroll needed)' `
         ($n1.Buffer -ge 0.05 -and $n1.Glass -ge 0.8 * $n1.Buffer) "(buffer=$($n1.Buffer) glass=$($n1.Glass))"
 
-    # ---- HOLDS THROUGH A SCROLL, and the camera still steers (must-not-break) ----
     $a = Get-ScWorldState -LogPath $log -Tag 'mini-a' -MarkerPath $markerPath
     $p = Get-ScMinimapPoint -MapTilesW 128 -MapTilesH 96 -TileX 20 -TileY 20
     Send-ScClick -Hwnd $h -X $p.X -Y $p.Y -SettleMs 400; Start-Sleep -Milliseconds 600
@@ -229,10 +221,10 @@ try {
     Assert-True 'after a scroll: the MAP right band is still PRESENTED past x=648 (glass >= 0.8 x buffer, buffer >= 0.05)' `
         ($n2.Buffer -ge 0.05 -and $n2.Glass -ge 0.8 * $n2.Buffer) "(buffer=$($n2.Buffer) glass=$($n2.Glass))"
 
-    # The strip runs every present and holds no engine state, so a save/load or a menu
-    # return needs no re-assertion -- there is nothing to revert. (The per-frame strip
-    # counter is logged in STORMSTATS at detach; the on-glass map above is what proves
-    # the strip ran, since nothing else puts map past x=648 in this config.)
+    # A menu return + reload rebuilds the base region back to 640, so a base-region widen
+    # has to be re-asserted; the strip runs every present and holds no engine state, so a
+    # save/load or a menu return has nothing to revert. The on-glass map above is what
+    # proves the strip ran: nothing else puts map past x=648 in this config.
     $completed = $true
 }
 catch {
@@ -246,12 +238,12 @@ finally {
         try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | Write-Host }
         catch { Write-Host "  warn close-game: $($_.Exception.Message)" }
         Start-Sleep -Seconds 2
-        # 2026-09-07 (the far-band cursor strobe, renderer-viewport.md 21.9): in WIDEN
-        # mode the ord432 hook sets the cursor layer's sticky always-draw bit and counts
-        # how often it found it clear. STORMSTATS is written at detach, so it is read
-        # here, after the close. 0 = the poke never ran (the hook did not fire);
-        # 1 = set once and sticky, the expected reading; more = something clears it
-        # (the layer-table init 0x0041E050 zeroes every flag, so a re-init would).
+        # The far-band cursor strobe (renderer-viewport.md 21.9): in WIDEN mode the ord432
+        # hook sets the cursor layer's sticky always-draw bit and counts how often it found
+        # it clear. STORMSTATS is written at detach, so it is read here, after the close.
+        # 0 = the poke never ran (the hook did not fire); 1 = set once and sticky, the
+        # expected reading; more = something clears it between pokes (the layer-table init
+        # 0x0041E050 zeroes every layer flag, so a re-init would).
         if ($completed -and (Test-Path -LiteralPath $log)) {
             $stats = @(Get-Content -LiteralPath $log | Where-Object { $_ -match 'STORMSTATS mode=2 ' }) | Select-Object -Last 1
             $forced = ($stats -match 'cursorForced=(\d+)') ? [int]$Matches[1] : -1

@@ -1,18 +1,14 @@
 // Decompiles a LIST of functions in one pass against an already-analyzed program.
+// One import+analyze cycle per function (tools/ghidra/analyze.ps1) costs minutes each on a 1.2 MB
+// binary, so batching against the persistent project is what makes side-by-side comparison affordable.
 //
-// tools/ghidra/analyze.ps1 (task 001) decompiles one function per import+analyze cycle, which
-// is minutes each on a 1.2 MB binary. Calibration against GPTP needs five functions compared
-// side by side, so they are decompiled together against the persistent project instead.
-//
-// Output .c files are DERIVED GAME CONTENT -- whole decompiled functions. They exist to be read
-// during analysis and must stay under a gitignored scratch path (AGENTS.md hard rule 1). Only
-// findings about them belong in research/.
+// Output .c files are DERIVED GAME CONTENT -- whole decompiled functions -- and must stay under a
+// gitignored scratch path (AGENTS.md § "Hard rules"). Only findings about them belong in research/.
 //
 // Script args:
 //   1: index TSV path; the .c files land beside it. <path>.manifest is the run's success signal.
 //   2: spec file -- one function per line: label,addrHex
 //   3: optional -- per-function decompile timeout in seconds (default 120)
-//
 //@category Headless
 
 import ghidra.app.decompiler.DecompInterface;

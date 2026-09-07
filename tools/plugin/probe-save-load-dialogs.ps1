@@ -1,30 +1,16 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Task 051, one launch: can the engine's Save and Load dialogs be DRIVEN at all, and does a
-plain (plugin-free) save/load round trip survive? Dumps the full control inventory at every
-step, so the suite that follows never has to guess what a dialog holds.
+One launch: can the engine's Save and Load dialogs be DRIVEN at all, and does a plain
+(plugin-free) save/load round trip survive? Dumps the full control inventory at every step.
 
 .DESCRIPTION
-Nothing in this repo had ever driven these dialogs. Before building the six-arm suite on
-top of them, three things have to be facts rather than assumptions:
-
-  1. does F10 open a menu whose controls the plugin's DIALOGS walk can see;
-  2. does the save dialog's NAME BOX take posted WM_CHAR text -- and if not, what does the
-     engine name the file by itself;
-  3. do the load dialog's list rows carry text (i.e. can a row be named), or does the
-     folder have to be made unambiguous on disk first.
-
-It runs in `-Mode observe`: no hooks, nothing written to game memory. So its round-trip
-result is also the plugin-free POSITIVE CONTROL in miniature -- if a vanilla save does not
-come back, no statement about the plugin would mean anything (AGENTS.md § "Absence
-assertions must first be proved positive").
-
-THE MAP IS THE STOCK CAMPAIGN ONE test-fanout-orders.ps1 uses, loaded the same way: Play
-Custom, and NO `Set-ScGameType` call. That is deliberate -- the game-type combo is
-machine-wide state (`HKCU:\…\Starcraft\Custom Type`) which currently reads Free For All,
-and a dropdown pick cannot work on the invisible desktop (AGENTS.md § task 043). This
-probe needs no particular game type, so it touches neither the combo nor the registry.
+Runs in `-Mode observe`: no hooks, nothing written to game memory, so the round trip is
+also the plugin-free POSITIVE CONTROL -- if a vanilla save does not come back, no
+statement about the plugin means anything (AGENTS.md § "Oracles: absence and defect-era
+checks"). Play Custom with NO `Set-ScGameType` call: the game-type combo is machine-wide
+registry state a dropdown cannot set on the invisible desktop (AGENTS.md § "Game Type /
+`Custom Type`"), and no particular game type is needed here.
 
 .EXAMPLE
 ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-save-load-dialogs.ps1
@@ -79,15 +65,14 @@ function Shot([string]$tag) {
     Save-ScWindowImage -Hwnd $script:hwnd -Path (Join-Path $ShotDir ("probe-{0:d2}-{1}.png" -f $script:shotN, $tag)) -FullWindow | Out-Null
 }
 
-# Everything this probe writes is its own: ONE save file, and it is deleted at the end.
-# The saves that were already in the working copy are stashed for the load step (so the
-# list can only hold ours) and put straight back.
+# This probe may destroy only its own save; every other file in the save folder belongs
+# to someone else and has to come back byte-for-byte.
 $stashed = @()
 $mySave = $null
 
 try {
-    # A run that died between the stash and the restore would have left other people's
-    # saves in the stash directory. Put them back before doing anything else.
+    # A run that dies between the stash and the restore leaves other people's saves in
+    # the stash directory; recover them before this run can overwrite them.
     if (Test-Path -LiteralPath $StashDir) {
         $left = @(Get-ChildItem -LiteralPath $StashDir -File -Filter '*.snx' -ErrorAction SilentlyContinue)
         foreach ($f in $left) {
@@ -111,9 +96,9 @@ try {
             }
         if (-not $gamePid) { throw 'probe: could not parse the game pid from scinject output.' }
         $script:hwnd = Get-ScGameWindow -ProcessId $gamePid
-        # `\S+`, not `[A-Za-z]+` -- see the same change in test-save-load.ps1 (task 054).
-        # A hook name may hold a `+` and a digit (`gameStartClear+7`), and a letters-only
-        # class would report an installed hook it cannot spell as an absence.
+        # `\S+`, not `[A-Za-z]+`: a hook name may hold a `+` and a digit
+        # (`gameStartClear+7`), and a letters-only class reports an installed hook it
+        # cannot spell as an absence.
         $hooks = @(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'HOOK \S+: installed at')
         Assert-That 'observe installed NOT ONE hook' ($hooks.Count -eq 0) "(got $($hooks.Count))"
     }
@@ -162,10 +147,10 @@ try {
         Start-Sleep -Milliseconds 600
         Show-ScDialogInventory -LogPath $LogPath -What "the save dialog after typing '$SaveName'"
         Shot 'save-dialog-typed'
-        # THE READ THAT SETTLES IT, and it is the engine's own control text, not the
-        # variable this script typed from (AGENTS.md § task 033). The first run of this
-        # probe is exactly why it is an assertion: 'slprobe' arrived as 'ssllpprroobbee'
-        # because Send-ScKey -Char posts a key-down AND a char and the box took both.
+        # Read back the engine's own control text, never the variable this script typed
+        # from (AGENTS.md § "Oracles: what counts as a read-back"). Send-ScText posts
+        # WM_CHAR alone because the box takes BOTH the key-down and the char that
+        # Send-ScKey -Char sends, landing 'slprobe' in the box as 'ssllpprroobbee'.
         $echo = @(Find-ScDialogControl -LogPath $LogPath -Pattern ('^' + $SaveName + '$'))
         $box = @(Find-ScDialogControl -LogPath $LogPath -Pattern '.') |
                Where-Object { $_.Control.Type -eq 8 } | Select-Object -First 1
@@ -174,9 +159,9 @@ try {
             "(box reads '$(if ($box) { $box.Control.Text } else { '?' })')"
 
         # 'Save$', not '^Save$': the engine stores the hotkey in the string itself, so the
-        # button's text is 's.S.ave' and its LETTERS are 'sSave'. Anchoring at the end is
-        # what tells the BUTTON ('sSave') from the dialog's TITLE ('Save Game' ->
-        # 'SaveGame'), which an unanchored 'Save' would also match.
+        # button's text is 's.S.ave' and its LETTERS are 'sSave'. The end anchor is what
+        # tells the BUTTON from the dialog's TITLE ('Save Game' -> 'SaveGame'), which an
+        # unanchored 'Save' would also match.
         Invoke-ScDialogControl -Hwnd $hwnd -LogPath $LogPath -Pattern '(^OK$|Save$)' `
             -What 'the save dialog Save button' | Out-Null
         Start-Sleep -Seconds 4
@@ -201,8 +186,8 @@ try {
         $n1 = @($w1.Units).Count
         Write-Host "       world before the load: $n1 unit(s)"
 
-        # Make the folder unambiguous: every save that is not ours moves out for the
-        # length of the load, and moves straight back in the finally below.
+        # A row can only be identified if the list holds nothing else, so every save that
+        # is not ours moves out for the length of the load.
         New-Item -ItemType Directory -Path $StashDir -Force | Out-Null
         foreach ($f in (Get-SaveFiles)) {
             if ($f.FullName -ne $mySave.FullName) {
@@ -254,7 +239,6 @@ finally {
         if (Test-Path -LiteralPath $m.To) { Move-Item -LiteralPath $m.To -Destination $m.From -Force }
     }
     if ($stashed.Count) { Write-Host "       $($stashed.Count) stashed save(s) put back" }
-    # Our own file, and only ours.
     if ($mySave -and (Test-Path -LiteralPath $mySave.FullName)) {
         Remove-Item -LiteralPath $mySave.FullName -Force
         Write-Host "       removed this probe's own save: $($mySave.Name)"

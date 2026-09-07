@@ -3,27 +3,14 @@
 One place that answers "which python runs this repo's tools" -- honestly.
 
 .DESCRIPTION
-Task 069, issue #97. Worktrees are cut without a .venv (only the main checkout has
-one), and the old per-script fallback chain ended at whatever `python` sits on PATH.
-On this machine that interpreter has no richchk, so map generation failed AFTER the
-warning had scrolled by, the map was never written, and the first loud message the
-worker saw was drive-game blaming a concurrent worker's cleanup for the missing file.
-
 Resolution order:
-  1. the calling checkout's own `.venv` (main checkout, or a worktree someone
-     provisioned);
-  2. the MAIN checkout's `.venv`, found through `git rev-parse --git-common-dir` --
-     this is what closes the worktree gap without junctioning anything into worktrees
-     (a junctioned .venv is one recursive delete away from destroying the real one);
-  3. `python` on PATH -- kept because CI installs requirements.txt into the runner's
-     system python, but ONLY accepted after proving it can `import` the module the
-     caller needs. An interpreter that cannot is reported in Probed, never silently
-     used.
-
-Every candidate that was tried and rejected lands in .Probed with the reason, so a
-caller's failure message can say what was looked at instead of guessing.
-
-Dot-source this file; it defines Resolve-ScPython in the caller's scope.
+  1. the calling checkout's own `.venv`;
+  2. the MAIN checkout's `.venv`, via `git rev-parse --git-common-dir` -- worktrees are
+     cut without a .venv, and junctioning one in leaves the real .venv one recursive
+     delete away from destruction;
+  3. `python` on PATH -- CI installs requirements.txt into the runner's system python.
+Every rejected candidate lands in .Probed with its reason, so a caller's failure message
+can say what was looked at. Dot-source this file; it defines Resolve-ScPython.
 #>
 
 function Resolve-ScPython {
@@ -31,9 +18,10 @@ function Resolve-ScPython {
     param(
         # The checkout the calling script lives in (repo root or worktree root).
         [Parameter(Mandatory)][string]$RepoRoot,
-        # A module the interpreter must be able to import (e.g. 'richchk'). A
-        # candidate that cannot import it is rejected WITH that reason -- the exact
-        # silent failure issue #97 is about. Omit for tools with no deps beyond stdlib.
+        # A module the interpreter must be able to import (e.g. 'richchk'). A candidate
+        # that cannot import it is rejected WITH that reason: an interpreter missing the
+        # module fails far from here, in a message that blames something else. Omit for
+        # tools with no deps beyond stdlib.
         [string]$RequireModule
     )
 

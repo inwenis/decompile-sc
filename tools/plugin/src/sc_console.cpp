@@ -1,31 +1,18 @@
-// sc_console.cpp -- task 073. See sc_console.h for what the two halves are.
+// sc_console.cpp -- see sc_console.h for what the two halves are.
+// Engine facts read out of StarCraft.exe 1.16.1 (research/renderer-viewport.md):
 //
-// Mechanism notes, each read out of StarCraft.exe 1.16.1 by this task
-// (work/scratch/073/decomp + listings; the findings go to renderer-viewport.md):
+//  * Layer 2's draw (0x0041CB50) builds the dirty rect list (storm region
+//    0x006D5E2C -> count 0x006CF4B4, rects 0x006CF4C0), draws each visible
+//    dialog's controls into the DIALOG'S OWN surface (0x0041C080: render target
+//    root+0x36, positions root-relative), then per (dialog, rect) blits that
+//    surface to the screen (0x0041C810 -> 0x004EF440 -> 0x004172F0) with
+//    dest = the rect, src = rect MINUS THE DIALOG'S LIVE BOUNDS (+0x04). Surface
+//    pixel (0,0) therefore lands at (bounds.left, bounds.top): moving the bounds
+//    moves the art, and a moved-but-never-dirtied dialog keeps its stale pixels.
 //
-//  * The dialog-layer composite: layer 2's draw (0x0041CB50) builds the dirty
-//    rect list (storm region 0x006D5E2C -> count 0x006CF4B4, rects 0x006CF4C0),
-//    draws each visible dialog's controls into the DIALOG'S OWN surface
-//    (0x0041C080: render target = root+0x36, positions root-relative), then per
-//    (dialog, rect) blits that surface to the screen (0x0041C810 -> 0x004EF440
-//    -> 0x004172F0) with dest = the rect and src = rect MINUS THE DIALOG'S LIVE
-//    BOUNDS (+0x04). Surface pixel (0,0) therefore lands at (bounds.left,
-//    bounds.top) EVERY frame a rect covering it is dirty: the composite follows
-//    the live bounds, and a moved-but-never-dirtied dialog keeps its stale
-//    pixels, which is what 071's NO-GO picture showed.
-//
-//  * The console art: game\<race>console.pcx is loaded once into the
-//    descriptor at 0x00597240 (0x004C3950), and each console dialog's surface
-//    is INITIALISED with the art slice under its bounds AT SURFACE-CREATION
-//    TIME (0x004C35F0: rect = live bounds, src = the art descriptor, dest = the
-//    fresh surface at (0,0)). So a dialog moved AFTER its surface exists takes
-//    its art slice with it -- and a dialog moved BEFORE creation would slice
-//    the 640-wide art out of range. That ordering is why the move below waits
-//    for the surface.
-//
-//  * updateControl (0x0041C400, EAX = control) marks the control's CURRENT
-//    live-bounds rect into the dirty region. Calling it before AND after the
-//    bounds write is what repaints both the vacated and the new rect.
+//  * game\<race>console.pcx loads once into the descriptor at 0x00597240
+//    (0x004C3950), and each console dialog's surface is INITIALISED with the art
+//    slice under its bounds at surface-creation time (0x004C35F0).
 
 #include "sc_console.h"
 
@@ -41,9 +28,8 @@
 #include "sc_session.h"
 #include "sc_unit.h"
 
-// The widescreen geometry this repo builds, asked of sc_screen (which owns the
-// generated table): the right edge is the new screen width minus the stock 640
-// the console art was drawn for. Was a literal 160 (800 wide) until 1280.
+// How far right the console moves: the target width (sc_screen owns the
+// generated table) minus the stock 640 the console art was drawn for.
 #define SC_CONSOLE_SHIFT_X (ScScreenTargetWidth() - SC_SCREEN_W)
 
 #define SC_CONSOLE_MAX_ROOTS   16
@@ -80,23 +66,17 @@ static unsigned g_moves        = 0;
 static unsigned g_selects      = 0;
 static volatile LONG g_selectReq = 0;   // set by the observer's marker poll
 
-// The dialog dirty-mark clip (sc_addresses.h SC_VA_DLG_DIRTY_CLIP_*): stock
-// {0,0,640,480}, no writer in the binary, so one widen is stable. Original max-x
-// kept for restore.
 static bool  g_clipPatched = false;
 static DWORD g_clipOrigX1  = 0;
 
-// The PRESENT sliver (task 073, finding two). The buffer->screen present is a
-// storm region clipped against a BASE region (0x006D5E14) that 0x0041D470
-// rebuilds from the screen-image list (0x0051A338/0x0051A33C) -- and imgCreate
-// (0x0041D640) has exactly ONE caller in the whole binary: the console.pcx
-// loader, whose node is (0,0,640,480). So in game NOTHING past x=639 has ever
-// been presented through the buffer path (070's own window captures show the
-// right band black on glass while its 800-wide dumps held map). One extra node
-// covering (640,0)-(800,480), created through the engine's own imgCreate --
-// which itself triggers the 0x0041D470 rebuild -- widens the base region for
-// the whole game. Engine-owned node; the engine's console teardown frees it
-// with the list, so there is nothing to remove.
+// The PRESENT sliver. The buffer->screen present is a storm region clipped
+// against a BASE region (0x006D5E14) that 0x0041D470 rebuilds from the
+// screen-image list (0x0051A338/0x0051A33C), and imgCreate (0x0041D640) has
+// exactly ONE caller in the binary: the console.pcx loader, whose node is
+// (0,0,640,480) -- so nothing past x=639 reaches glass through the buffer path.
+// One extra node covering (640,0)-(width,height), created through the engine's
+// own imgCreate (which itself triggers the rebuild), widens the base region for
+// the whole game; the engine's console teardown frees it with the list.
 #pragma pack(push, 1)
 struct ScImgDesc { WORD w; WORD h; DWORD bits; };
 #pragma pack(pop)
@@ -134,10 +114,9 @@ static int __attribute__((fastcall)) SC_GAME_ENTRY ConsoleInteractShim(DWORD ctr
     int ret = ((ScInteractFn)w->orig)(ctrl, evt);
     if (evt) {
         const WORD type = *(WORD*)(evt + SC_EVT_OFF_TYPE);
-        // The floods that ate the first run's 600-line cap before the game even
-        // loaded (TitleDlg every ~100ms): type 13 (a timer tick carrying a raw
-        // pointer in dwUser) and the type-14 dwUser=8 sweep. Both dropped;
-        // mouse buttons (4..8) and the rest of the USER codes stay.
+        // Dropped because these two alone flood the trace cap: TitleDlg fires
+        // type 13 (a timer tick carrying a raw pointer in dwUser) every ~100ms,
+        // and type 14 with dwUser=8 is a sweep. Mouse buttons (4..8) stay.
         const bool flood = (type == 13) ||
                            (type == SC_EVT_TYPE_USER && *(DWORD*)evt == 8);
         if (type != SC_EVT_MOUSEMOVE && !flood) {
@@ -224,6 +203,8 @@ static void TryMove(DWORD dlg, const char* name) {
     m->dlg = dlg; m->l = bl[0]; m->t = bl[1]; m->r = bl[2]; m->b = bl[3];
 
     LogSurfaces(dlg, name);
+    // updateControl (0x0041C400) dirties the control's CURRENT live-bounds rect, so
+    // one call each side of the bounds write is what repaints the old rect and the new.
     ScCtrlUpdate(dlg);                    // the rect being VACATED goes dirty
     bl[0] = (short)(m->l + SC_CONSOLE_SHIFT_X);
     bl[2] = (short)(m->r + SC_CONSOLE_SHIFT_X);
@@ -290,9 +271,8 @@ static void LogRegionRects(const char* what, DWORD regionVaOfPtr) {
 // push 0 / push 0 / mov edi,0x597240 / call).
 static void AddPresentSliver(void) {
     if (g_sliverSession == g_session) return;
-    // The console node must exist first (its loader is what put the list head
-    // up), and the buffer must be allocated -- both true once the console
-    // dialogs are being drawn, which is when this is called.
+    // The console node must exist first (its loader is what puts the list head
+    // up) and the buffer must be allocated -- both true once console dialogs draw.
     DWORD bits = ScReadable(ScRuntimeVa(0x006CEFF4u), 4)
                      ? *(DWORD*)ScRuntimeAddr(0x006CEFF4u) : 0;
     if (!bits) return;
@@ -312,10 +292,9 @@ static void AddPresentSliver(void) {
     g_sliverSession = g_session;
     ++g_slivers;
     if (node && ScReadable(node, 0x20)) {
-        // The node the engine built from our descriptor, read back field by
-        // field (imgCreate stores: +8 storm handle, +0xC x, +0x10 y, +0x14
-        // x+w, +0x18 y+h). A NULL handle means Ordinal_445 rejected the
-        // descriptor and the region combine has nothing to add.
+        // imgCreate stores +8 storm handle, +0xC x, +0x10 y, +0x14 x+w,
+        // +0x18 y+h. A NULL handle means Ordinal_445 rejected the descriptor
+        // and the region combine has nothing to add.
         ScLog("CONSOLE present sliver: node=0x%08X handle=0x%08X rect=(%d,%d)-(%d,%d)",
               (unsigned)node, (unsigned)*(DWORD*)(node + 8),
               *(int*)(node + 0xC), *(int*)(node + 0x10),
@@ -425,9 +404,8 @@ static void SC_GAME_ENTRY HkFrameCompose(void) {
     if (g_hkCompose.installed) ((ComposeFn)g_hkCompose.trampoline)();
 }
 
-// HookProbe against this binary (work/scratch/073/hookprobe.tsv): 0x0041E280
-// opens PUSH EBP / MOV EBP,ESP / SUB ESP,0x14 = 6 bytes, 3 whole instructions,
-// none PC-relative.
+// 0x0041E280 opens PUSH EBP / MOV EBP,ESP / SUB ESP,0x14: 6 bytes, 3 whole
+// instructions, none PC-relative, so the detour can relocate them verbatim.
 static const BYTE kPrologueCompose[] = { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x14 };
 
 // ---------------------------------------------------------------------------

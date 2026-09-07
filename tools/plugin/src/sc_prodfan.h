@@ -1,46 +1,21 @@
 // sc_prodfan.h -- one Train click queues a unit at EVERY selected production building.
 //
-// Task 030, from the user's words: "can i also queu units when i have several building
-// selected?" Task 024 made a drag box select all your Barracks; task 025 made one
-// building hold more than five. Nobody joined them up.
+// Train is wire command 0x1F (research/command-opcodes.md). Its receive handler
+// `cmdrecvTrain` (0x004C1C20) is SINGLE-gated: it acts only when a second
+// `getActivePlayerNextSelection` returns null -- exactly one unit selected -- so a building
+// group gains nothing from a stock Train click. The simulation refuses a building every
+// selection slot but slot 0 (research/building-groups.md 3), so `simSlots` is 1 and a
+// building-group fan-out chunk is always exactly ONE unit -- precisely what that gate wants.
+// research/command-opcodes.md 3.2 keeps 0x1F off the replay list because a one-unit chunk
+// "would make it fire where the player's own selection never could": true of a >12 UNIT
+// selection, whose tail chunk of 1 trains alone; untrue of a BUILDING GROUP, whose chunks
+// are all 1. The guard below is that distinction, not a softening of the rule.
 //
-// THE MECHANISM, and why it is small
-//   Train is wire command 0x1F (research/command-opcodes.md). Its receive handler
-//   `cmdrecvTrain` (0x004C1C20) is SINGLE-gated: it resets selectionIterator, calls
-//   getActivePlayerNextSelection twice, and does nothing at all unless the SECOND call
-//   returns null -- i.e. unless exactly one unit is selected. That is why a group of
-//   buildings gains nothing today.
-//
-//   The fan-out already emits one Select+order pair per building for a building group:
-//   the simulation refuses a building every selection slot but slot 0
-//   (`addUnitToSelectionSlot`, research/building-groups.md 3), so `simSlots` is 1 and
-//   every chunk of a building-group plan is exactly ONE unit long. A chunk of one is
-//   precisely what cmdrecvTrain's gate wants. So the feature is not new machinery: it is
-//   letting 0x1F ride the plan that task 024 already builds, under a guard.
-//
-//   research/command-opcodes.md 3.2 is the reason 0x1F is passthrough today, and it is
-//   worth quoting because this file inverts it: "a fan-out chunk can be one unit long, so
-//   replaying one would make it fire where the player's own selection never could." For a
-//   >12 UNIT selection that is a real hazard -- 13 units means a chunk of 12 and a chunk
-//   of 1, and the 13th unit would train alone, which the player never asked for. For a
-//   BUILDING GROUP every chunk is 1, uniformly, so "one per chunk" is exactly "one per
-//   building", which is what the player asked for. The guard below is that distinction
-//   turned into a condition, not a softening of the rule.
-//
-// THE RESOURCE RULE, inherited from task 025 and not weakened
-//   THE ENGINE PAYS FOR EVERY ITEM AND THE PLUGIN NEVER SPENDS A MINERAL. Each replayed
-//   Train reaches the engine's own cmdrecvTrain, which runs its own tech gate and calls
-//   addToBuildQueue (0x00467250) -- the function that checks affordability and deducts the
-//   cost. The plugin writes no resource global on any path in this file; it emits
-//   commands and reads memory. So "N buildings means N x cost, paid by the engine, once
-//   each" is a property of the shape rather than of bookkeeping, and a building that
-//   cannot afford, cannot build, or is already full is refused by the engine for free.
-//
-// WHAT THIS NEVER DOES
-//   It installs no hook of its own -- the fan-out's existing queueCommand detour is the
-//   only thing involved -- and it writes no game memory at all. Off unless
-//   %SCPLUGIN_PRODFAN% asks for it; inert in `-Mode observe`, which stays the whole
-//   plugin's read-only off switch.
+// THE ENGINE PAYS FOR EVERY ITEM AND THE PLUGIN NEVER SPENDS A MINERAL: a replayed Train
+// reaches cmdrecvTrain, which runs its own tech gate and calls addToBuildQueue (0x00467250)
+// -- the affordability check and the deduction both -- and this file writes no resource
+// global on any path. A building that cannot afford, cannot build, or is already full is
+// refused by the engine for free, so nothing here counts cost or queue room per building.
 
 #ifndef SC_PRODFAN_H
 #define SC_PRODFAN_H
@@ -52,33 +27,29 @@
 bool ScProdFanEnabled(void);
 
 // Called once at attach, before anything reads game memory. `enabled` is resolved by the
-// caller so that observe mode can refuse the feature without this file having to know
-// about modes.
+// caller so observe mode can refuse the feature without this file knowing about modes.
 void ScProdFanInit(BYTE* moduleBase, bool enabled);
 
-// THE ORACLE, and it is deliberately independent of the feature.
+// THE ORACLE, deliberately independent of the feature: one line per building in the CURRENT
+// shadow selection, each carrying that building's own five queue slots read straight out of
+// its CUnit+0x98, plus a summary line carrying minerals and gas from the resource globals.
+// Every asserted number therefore comes from game memory -- never from the screen, never
+// from a counter this plugin maintains.
 //
-// One line per building in the CURRENT shadow selection, each carrying that building's
-// own five queue slots read straight out of its CUnit+0x98, plus a summary line carrying
-// the player's minerals and gas from the resource globals. This is what acceptance
-// criteria 3 and 4 are asserted from: each building's queue length comes from that
-// building's memory, and the resource reconciliation comes from the globals, neither
-// from the screen and neither from a counter this plugin maintains.
-//
-// It runs whether or not the feature is enabled and whether or not the mode is observe,
-// because the baseline measurement -- "with N buildings selected, how many gain an item
-// in a STOCK game" -- is taken with it, and an oracle that only exists in the treatment
-// arm can prove nothing about the control arm. Read-only, observer thread.
+// It runs whether or not the feature is enabled and whatever the mode, because the baseline
+// "with N buildings selected, how many gain an item in a STOCK game" is measured with it,
+// and an oracle that only exists in the treatment arm proves nothing about the control arm.
+// Read-only, observer thread.
 void ScProdFanLogState(const char* tag);
 
 // One STATS line, written on the detach paths beside the other subsystems'.
 void ScProdFanLogStats(void);
 
-// THE ONE PATCH. Installs the detour on the Train button's condition (0x00428E60) so the
-// button is DRAWN for a same-type building group -- without it there is no command to fan
-// out, because the client never emits one (measured: the button is absent from the card
-// entirely with several buildings selected). Returns 1 on success, 0 on failure, and a
-// failure DISABLES the feature rather than leaving it half-armed. No-op unless enabled.
+// THE ONE PATCH: a detour on the Train button's condition (0x00428E60), so the button is
+// DRAWN for a same-type building group -- without it there is no command to fan out,
+// because the client never emits one (measured: with several buildings selected the button
+// is absent from the card entirely). A failed install DISABLES the feature rather than
+// leaving it half-armed. No-op unless enabled.
 int  ScProdFanInstall(void);
 void ScProdFanRemove(void);
 
@@ -86,10 +57,10 @@ void ScProdFanRemove(void);
 // The policy, hook-free -- driven from hooktest.exe with no StarCraft in sight.
 // ---------------------------------------------------------------------------
 
-// Why a Train command was, or was not, fanned out across the selection. Ordered so that
-// the log line and the offline test can name the exact term that decided it, rather than
-// reporting an undifferentiated "it did not fan out" (AGENTS.md: an absence assertion has
-// to name what it is the absence of).
+// Why a Train command was, or was not, fanned out across the selection. Ordered so that the
+// log line and the offline test can name the exact term that decided it, rather than an
+// undifferentiated "it did not fan out" -- an absence assertion has to name what it is the
+// absence of (AGENTS.md § "Oracles: absence and defect-era checks").
 enum ScProdFanVerdict {
     SC_PRODFAN_OK          = 0,  // fan it out: a same-type building group, chunk size 1
     SC_PRODFAN_OFF         = 1,  // %SCPLUGIN_PRODFAN% is not set
@@ -103,15 +74,16 @@ enum ScProdFanVerdict {
 const char* ScProdFanVerdictName(int v);
 
 // The decision, given the shadow list the fan-out is holding. `types` is one unit-type id
-// per selected building, in shadow order; `simSlots` is sc_fanout's own chunk size.
-// Pure: no game memory, no globals beyond the enable flag.
+// per selected building, in shadow order; `simSlots` is sc_fanout's own chunk size. Pure:
+// no game memory, no globals beyond the enable flag.
 int ScProdFanDecide(const WORD* types, int count, int simSlots, unsigned cmdLen);
 
 // Test-only: drive the enable flag directly, so the offline suite can exercise both arms
 // without touching the environment.
 void ScProdFanTestSetEnabled(bool on);
 
-// Test-only counters.
+// The counters the STATS line and the oracle summary print; sc_fanout bumps the fan-out
+// ones from the command path.
 enum ScProdFanStat {
     SC_PRODFAN_STAT_FANNED = 0,     // Train commands fanned out across a group
     SC_PRODFAN_STAT_REFUSED = 1,    // Train commands seen with a group up, and refused

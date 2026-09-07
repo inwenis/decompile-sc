@@ -1,57 +1,35 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-The one place test-random-conformance.ps1 decides what a run WAS. Issue #68.
+The one place test-random-conformance.ps1 decides what a run WAS.
 
 .DESCRIPTION
-The verdict used to be four inline `elseif`s at the bottom of a 1,100-line script, which
-is why two of the three ways a run can fail to be a pass were missing from it for a whole
-task -- there was nowhere to test it that did not involve launching StarCraft.
-
-It is a pure function of five numbers, so it is a pure function here, and
-tests/conformance-verdict.Tests.ps1 drives it through every state issue #68 describes.
-The script prints from what this returns; there is no second copy of the rule.
-
-THE RULE, and why each clause exists:
-
-  1. The run did not finish its episode loop         -> INCOMPLETE
-     Task 041. An exception unwound past the summary, the summary printed the 13 checks
-     that had run, and `| Tee-Object` swallowed the exit code. `PASS 13 checks` for a run
-     that executed no episodes.
-
-  2. Not one episode got past a skip                 -> INCOMPLETE
-     Issue #68. `episodesRun++` sat above the four `continue` paths, so six episodes that
-     all skipped before acting printed `episodes run: 6 of 6` and `PASS ... 6 episode(s)`.
-     No exception, so clause 1 never saw it.
-
-  3. Something failed                                -> FAIL
-     Above the seam clause deliberately: a run with real failures is a FAIL, and burying
-     that under INCOMPLETE would hide the findings behind a coverage complaint.
-
-  4. The run never reached its seam                  -> INCOMPLETE
-     Issue #68 again, and task 041's own lesson turned into a gate. A burst only tests
-     task 038's bug if it drives a MULTI-BUILDING selection past the engine's five slots;
-     below that a buggy plugin and a correct one behave identically. That was already
-     printed as a loud COVERAGE warning -- and PASS/exit 0 printed underneath it, so
-     nothing had to act on it. A warning nobody must act on is a comment.
-
-  5. Otherwise                                       -> PASS
-
-Exit code agrees with the word, always. They were separate claims before and one of them
-was decorative.
+A pure function of five numbers, so the rule is testable without launching StarCraft, and
+the caller prints from what this returns rather than keeping a second copy. Clause order
+is load-bearing:
+  1. loop did not finish -> INCOMPLETE: an exception past the summary otherwise prints
+     PASS over a run that executed no episodes, and `| Tee-Object` -- which every run is
+     piped through -- swallows the non-zero exit that would have contradicted it.
+  2. nothing acted -> INCOMPLETE: episodes that all skip before acting throw nothing, so
+     clause 1 cannot catch them.
+  3. something failed -> FAIL, ahead of the seam clause: burying real failures under
+     INCOMPLETE hides them behind a coverage complaint.
+  4. seam not reached -> INCOMPLETE: a burst only exercises the plugin when it drives a
+     MULTI-BUILDING selection past the engine's five slots; below that a buggy plugin and
+     a correct one behave identically, and a coverage warning that gates nothing is ignored.
+  5. otherwise -> PASS. Exit code always agrees with the word.
 #>
 
 function Get-ScConformanceVerdict {
     [CmdletBinding()]
     param(
-        # Did the episode loop run to its end (nothing thrown past it)?
+        # False when anything unwound past the episode loop.
         [Parameter(Mandatory)][bool]$Finished,
-        # Episodes the loop began.
         [Parameter(Mandatory)][int]$EpisodesEntered,
-        # Episodes that got past every skip and dispatched to a driver.
+        # Got past every skip and dispatched to a driver: what clause 2 counts.
         [Parameter(Mandatory)][int]$EpisodesActed,
-        # Episodes that drove a multi-building selection past the engine's ring, MEASURED
-        # after the burst off the engine's own logical queue -- not the planned press count.
+        # MEASURED after the burst off the engine's own logical queue, not the planned
+        # press count: a planned burst can fall short of the ring and still look reached.
         [Parameter(Mandatory)][int]$SeamReached,
         [Parameter(Mandatory)][int]$FailureCount,
         [int]$EpisodesPlanned = 0

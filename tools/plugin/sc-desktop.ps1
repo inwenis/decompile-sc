@@ -4,70 +4,32 @@ Create a Windows desktop that is never shown on the monitor, and tell whether th
 is on it.
 
 .DESCRIPTION
-Task 043, building on task 040's finding (work/reports/040-test-host-isolation.md).
-
-`CreateDesktop` makes a second DESKTOP OBJECT inside the user's existing login session --
-the same primitive Windows itself uses for the UAC consent prompt and the screen saver. A
-process launched onto one runs completely normally (same session, same GPU, same driver
-stack) but is not the desktop currently composited to the physical screen. Nothing is
-installed and nothing persists: Windows destroys the object once the last handle is closed
-and the last process on it has exited.
-
-WHY A SEPARATE FILE and not more of drive-game.ps1: run-with-plugin.ps1 needs this too (it
-is the thing that hands `--desktop` to scinject.exe) and it must stay cheap to load -- it
-is also the user's own deployed play launcher. Same reason sc-launch-lock.ps1 and
-sc-foreground.ps1 are separate files. Dot-source it; nothing here runs on import.
-
-## The measurement that decided the design
-
-The obvious design -- "the suite's own shell calls SetThreadDesktop, and every existing
-primitive follows it across" -- DOES NOT WORK, and it fails at the first call rather than
-subtly:
-
-    pwsh -NoProfile -Command '... SetThreadDesktop(h) ...'
-      main thread   : False  err=170 (ERROR_BUSY)
-      fresh thread  : OK
-
-`SetThreadDesktop` refuses for any thread that already has a window or a hook on its
-current desktop, and PowerShell's main thread has one before a single line of script runs.
-So the desktop cannot be entered after the fact by the shell that wants it.
-
-What DOES work is the mechanism Windows intends and that scinject.exe already uses for the
-game: a process is BORN on a desktop, named in `STARTUPINFO.lpDesktop`, and every thread it
-starts is on that desktop by default. run-offscreen.ps1 launches the suite that way. That
-is also the stronger property -- there is no per-primitive list to be one item short of,
-because window enumeration (`EnumWindows` in Get-ScGameWindow, check-game-windows.ps1 and
-close-game.ps1) is scoped to the calling thread's desktop and every thread in that process
-is already there.
-
-So the split of duties is:
-
-  * the PARENT (run-offscreen.ps1) CREATES the desktop and holds the handle open --
-    New-ScTestDesktop. It never moves itself; it does not need to and it could not.
-  * the CHILD (the suite, and the game under it) is born on the desktop and can only
-    CHECK where it is -- Get-ScThreadDesktopName / Assert-ScDesktopHidden.
-
-## What this deliberately cannot do
-
-The desktop handle is opened WITHOUT DESKTOP_SWITCHDESKTOP (see $SC_DESKTOP_ACCESS), and
-`SwitchDesktop` is not imported here at all. No code path reachable from this handle can
-put the invisible desktop on the monitor, whatever it asks for. The point of the task is
-that a run puts nothing on the user's screen; making the opposite unreachable is cheaper
-than making it un-called.
+A process born on a second desktop object runs normally -- same login session, same GPU --
+but is not the desktop composited to the screen, and Windows destroys the object once the
+last handle closes and the last process on it exits. A desktop cannot be ENTERED after the
+fact: `SetThreadDesktop` fails with err=170 (ERROR_BUSY) for a thread that already owns a
+window or a hook, and PowerShell's main thread owns one before the first line of script
+runs. So the PARENT creates the desktop and holds the handle, while the CHILD is born on it
+via `STARTUPINFO.lpDesktop` and can only check where it is -- birth also scopes `EnumWindows`
+to that desktop for every thread the child starts, so no per-primitive list can fall short.
+`SwitchDesktop` is deliberately never imported and the handle is opened without
+DESKTOP_SWITCHDESKTOP (see $SC_DESKTOP_ACCESS), so nothing reachable from here can put the
+invisible desktop on the monitor. Dot-source it; nothing may run on import, because
+run-with-plugin.ps1 -- the user's own deployed play launcher -- loads this file on every
+launch.
 
 .EXAMPLE
 . ./tools/plugin/sc-desktop.ps1
 $name = New-ScTestDesktop -Name (New-ScTestDesktopName)
-# ... spawn the run onto $name (run-offscreen.ps1 does this) ...
+# ... spawn the run onto $name ...
 Close-ScTestDesktop
 #>
 
 Set-StrictMode -Version Latest
 
 if (-not ('ScDesktop.Native' -as [type])) {
-    # A LITERAL here-string (@'...'@), unlike drive-game.ps1's expandable one: the comments
-    # below mention PowerShell scope prefixes and an expandable string would try to
-    # interpolate them out of C# source.
+    # A LITERAL here-string (@'...'@): an expandable one would interpolate anything in the
+    # C# source that looks like a PowerShell variable.
     Add-Type @'
 using System;
 using System.Runtime.InteropServices;
@@ -112,13 +74,14 @@ namespace ScDesktop {
 '@ -ReferencedAssemblies System.Runtime, System.Runtime.InteropServices
 }
 
-# Every desktop right EXCEPT DESKTOP_SWITCHDESKTOP (0x0100). Enumerated rather than written
-# as GENERIC_ALL so the omission is visible:
+# Every desktop right EXCEPT DESKTOP_SWITCHDESKTOP (0x0100), enumerated rather than written
+# as GENERIC_ALL so the omission stays visible:
 #   0x0001 READOBJECTS    0x0002 CREATEWINDOW  0x0004 CREATEMENU  0x0008 HOOKCONTROL
 #   0x0010 JOURNALRECORD  0x0020 JOURNALPLAYBACK  0x0040 ENUMERATE  0x0080 WRITEOBJECTS
-# CREATEWINDOW is what a process born here needs; ENUMERATE is what makes EnumWindows work
-# for a thread on it; READOBJECTS/WRITEOBJECTS cover the message posting and the
-# PrintWindow read.
+# CREATEWINDOW is what a process born here needs; ENUMERATE makes EnumWindows work for a
+# thread on it; READOBJECTS/WRITEOBJECTS cover message posting and the PrintWindow read.
+# Without SWITCHDESKTOP -- and with `SwitchDesktop` never imported above -- no path from
+# this handle can put the invisible desktop on the monitor, whatever it asks for.
 $script:SC_DESKTOP_ACCESS = 0x00FF
 
 function New-ScTestDesktopName {
@@ -128,13 +91,12 @@ function New-ScTestDesktopName {
     two steps of one chain run from a single shell.
     .DESCRIPTION
     Desktop names live in one flat namespace per window station, so a single fixed name
-    would recreate exactly the contention the shared fixture folder used to have
-    (AGENTS.md § "Test fixtures: one folder per task"). Task id + pid was unique per
-    parallel WORKER but not per step of a chain run from one shell -- every step shares the
-    pid, so step N+1 asked for the desktop step N was still tearing down and raced its
-    destruction (2026-08-12, task 039/045). A GUID suffix makes every call unique regardless
-    of how many share a pid; the pid stays in the name so the owner is still visible to
-    anyone listing desktops.
+    recreates the contention a shared fixture folder has (AGENTS.md § "Test fixtures").
+    Tag + pid is unique per parallel WORKER but not per step of a chain run from one shell:
+    every step shares the pid, so a later step asks for the desktop an earlier one is still
+    tearing down and races its destruction. The GUID suffix makes every call unique however
+    many share a pid; the pid stays in the name so the owner is visible to anyone listing
+    desktops.
     #>
     param([string]$Tag = $(if ($env:AGENT_TASK) { $env:AGENT_TASK } else { 'sc' }))
     # Letters and digits only -- a backslash in a desktop name would name a window station.
@@ -146,7 +108,7 @@ function New-ScTestDesktopName {
 function Get-ScThreadDesktopName {
     <#
     .SYNOPSIS
-    The name of the desktop THIS THREAD is on. The diagnostic that makes every claim in
+    The name of the desktop THIS THREAD is on -- the diagnostic that makes every claim in
     this file checkable rather than asserted.
     #>
     [ScDesktop.Native]::NameOf([ScDesktop.Native]::GetThreadDesktop([ScDesktop.Native]::GetCurrentThreadId()))
@@ -157,10 +119,9 @@ function Get-ScInputDesktopName {
     .SYNOPSIS
     The name of the desktop actually being shown on the monitor right now.
     .DESCRIPTION
-    `OpenInputDesktop` is the API that names whichever desktop is receiving physical input
-    and compositing to the screen. Comparing our desktop against it is task 040's
-    structural proof turned into a live check: "invisible" is not a property to claim, it is
-    a comparison against the thing Windows itself calls visible.
+    `OpenInputDesktop` names whichever desktop is receiving physical input and compositing
+    to the screen. "Invisible" is not a property to claim, it is a comparison against the
+    thing Windows itself calls visible.
 
     Returns $null when the input desktop cannot be opened (a locked workstation, or a secure
     desktop up). A null is not evidence either way, and Assert-ScDesktopHidden treats it as
@@ -176,10 +137,9 @@ function Assert-ScDesktopHidden {
     .SYNOPSIS
     Throw if the desktop this thread is on IS the one on the monitor.
     .DESCRIPTION
-    Called by the CHILD process at the top of an off-screen run, which is the one place the
-    claim can still be acted on. "Nothing appeared on the monitor" is otherwise a thing
-    nobody can verify after the fact, and an off-screen run that quietly landed on the
-    visible desktop looks identical in its output to one that did not.
+    Called by the CHILD at the top of an off-screen run, the one point where the claim can
+    still be acted on: a run that quietly landed on the visible desktop looks identical in
+    its output to one that did not.
 
     Returns the name of the desktop this thread is on.
     #>
@@ -204,12 +164,9 @@ function New-ScTestDesktop {
     .SYNOPSIS
     Create (or open) the named invisible desktop and HOLD it open. Returns the name.
     .DESCRIPTION
-    The handle is what keeps the object alive in the window between creating it and the
-    first process actually starting on it; after that the processes on it hold it too. The
-    caller must keep this process alive for the run and call Close-ScTestDesktop at the end.
-
-    This does NOT move the calling thread -- see the .DESCRIPTION's measurement: it cannot,
-    and it does not need to. The run happens in a child process born on this desktop.
+    The handle keeps the object alive between creating it and the first process actually
+    starting on it; after that the processes on it hold it too, so the caller must keep this
+    process alive for the run and call Close-ScTestDesktop at the end.
 
     CreateDesktop opens the existing object when the name is already taken, so a second
     caller in the same process cannot fight the first over it.
@@ -234,9 +191,9 @@ function New-ScTestDesktop {
 
     $shown = Get-ScInputDesktopName
     if ($Name -eq $shown) {
-        # Cannot happen with a generated name, but a caller may pass one: opening 'Default'
-        # by name and calling a run on it invisible would be the exact silent failure this
-        # task exists to prevent.
+        # Unreachable with a generated name, but a caller may pass one: opening 'Default' by
+        # name and calling a run on it invisible is the exact silent failure this file
+        # exists to prevent.
         Close-ScTestDesktop -Quiet
         throw "sc-desktop: '$Name' is the desktop currently on the monitor. Refusing to use it as an invisible one."
     }
@@ -252,10 +209,9 @@ function Close-ScTestDesktop {
     Drop our handle to the invisible desktop.
     .DESCRIPTION
     The OBJECT outlives this call for as long as any process is still running on it, and
-    Windows destroys it after that -- there is nothing left on disk, in the registry or
-    anywhere else. NEVER FATAL: this runs in `finally` after a run that has already produced
-    its result, and a failed handle close must not replace a real test outcome with an
-    unrelated exception.
+    Windows destroys it after that -- nothing is left on disk or in the registry. NEVER
+    FATAL: this runs in `finally` after a run that has already produced its result, and a
+    failed handle close must not replace a real test outcome with an unrelated exception.
     #>
     [CmdletBinding()]
     param([switch]$Quiet)

@@ -1,42 +1,15 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Build the task-008 StarCraft observer plugin (32-bit DLL) and its injector
-(32-bit EXE), then verify both are really x86 PE32.
+Build the StarCraft observer plugin (32-bit DLL) and its injector (32-bit EXE),
+then verify both are really x86 PE32.
 
 .DESCRIPTION
-Uses the pinned MinGW-w64 toolchain documented in tools/plugin/README.md. The
-toolchain lives OUTSIDE every worktree (default C:\re-tools\...), so pruning a
-worktree can never delete it -- same rule as tools/ghidra/README.md.
-
-Resolution order for the toolchain, first hit wins:
-  1. -ToolchainBin parameter
-  2. $env:SC_MINGW32_BIN
-  3. C:\re-tools\mingw32-gcc-16.1.0-i686-msvcrt\mingw32\bin   (documented default)
-
-Output goes to -OutDir (default: <repo>/work/scratch/plugin-build, gitignored --
-the repo must never track built binaries; .gitignore blocks *.dll and *.exe).
-
-The build FAILS if either artifact is not Machine=0x014C / PE32. That check is
-the point of the step, not a formality: -m32 silently producing an x64 binary
-would only show up as a mystifying "the DLL will not load" much later.
-
-Build identity (issue #73, task 056). Every scplugin.dll this script produces
-carries the commit and the source digest it was built from, as a plain string in
-the image:
-
-    SCPLUGIN_BUILD_ID=<short sha>[+dirty] SRC=<12 hex>
-
-The plugin logs it in its ATTACH banner, run-with-plugin.ps1 refuses to launch a
-DLL whose SRC does not match the source next to it, and deploy.ps1 reads it back
-out of the deployed file -- so "which build is this" is answerable from a log,
-from a running game, or from a DLL sitting on disk, without hashing anything or
-comparing mtimes against commit timestamps. The stamp is READ BACK OUT of the
-built file before this script exits (Assert-BuildStamp): what it prints is the
-file's own bytes, never the value it passed to the compiler.
-
-The output is also byte-reproducible as of task 056 -- see the linker flags
-below for the two things that were not, and what that measurement was.
+Toolchain resolution, first hit wins: -ToolchainBin, $env:SC_MINGW32_BIN, the
+default below; it lives outside every worktree so pruning one cannot delete it
+(tools/plugin/README.md). -OutDir is gitignored: the repo never tracks binaries.
+The build FAILS unless both artifacts are Machine=0x014C / PE32 -- -m32 silently
+producing an x64 binary surfaces only as "the DLL will not load", much later.
 
 .EXAMPLE
 ./tools/plugin/build.ps1
@@ -47,10 +20,9 @@ param(
     [string]$OutDir,
     [switch]$DebugBuild,
     # Build AND RUN hooktest.exe, the offline unit test for the inline-detour
-    # engine (src/hooktest.cpp). No StarCraft file is involved. A non-zero exit
-    # from it fails this build -- the detour engine is the one piece that writes
-    # executable memory inside the game, so it is proved here before it is used
-    # there.
+    # engine (src/hooktest.cpp); no StarCraft file is involved. A non-zero exit
+    # fails this build: the detour engine is the one piece that writes executable
+    # memory inside the game, so it is proved here before it is used there.
     [switch]$Test
 )
 
@@ -87,11 +59,13 @@ Write-Host "build: $((& $gpp --version | Select-Object -First 1))"
 Write-Host "build: target triple $((& $gpp -dumpmachine))"
 Write-Host "build: outdir    $OutDir"
 
-# --- build identity (issue #73, task 056) ------------------------------------
+# --- build identity ----------------------------------------------------------
 # Stamped INTO the binary, not written beside it: a sidecar file describes
 # whatever it was last written for, and the DLL it claims to describe can be
-# replaced under it without a word. See tools/plugin/sc-build-id.ps1 for what
-# each of the two values answers and why +dirty is not cosmetic.
+# replaced under it without a word. tools/plugin/sc-build-id.ps1 says what each
+# of the two values answers and why +dirty is not cosmetic. The stamp is a gate,
+# not a label: run-with-plugin.ps1 refuses to launch a DLL whose SRC digest does
+# not match the source sitting beside it.
 $identity  = Get-ScBuildIdentity -RepoRoot $repoRoot
 $srcDigest = Get-ScSourceDigest -SrcDir $srcDir -BuildScript $PSCommandPath
 Write-Host "build: build id  $($identity.BuildId)  src=$srcDigest"
@@ -106,28 +80,25 @@ if ($identity.Dirty) {
 # -s                    : strip (smaller; no symbols we need at runtime)
 $common = @(
     '-m32'
-    # -Werror since issue #48: the warning set below was clean when this went in
-    # and the toolchain is pinned, so a new warning is a change in OUR code.
+    # -Werror: the toolchain is pinned and this warning set is clean, so a new
+    # warning is a change in OUR code.
     '-Wall', '-Wextra', '-Werror'
     '-static', '-static-libgcc', '-static-libstdc++'
     '-fno-exceptions', '-fno-rtti'
-    # Task 056. The two values sc_buildid.cpp turns into the embedded stamp.
-    # Passed as quoted -D args: PowerShell 7.3+ passes an embedded quote through
-    # to a native command correctly (measured on this machine, pwsh 7.6.4), and
-    # if a shell ever stops doing so the Assert-BuildStamp check below FAILS THE
-    # BUILD rather than shipping a DLL that says UNSTAMPED.
+    # The two values sc_buildid.cpp turns into the embedded stamp. Quoted -D args
+    # reach a native command intact under PowerShell 7.3+ (measured on this
+    # machine, pwsh 7.6.4); if a shell ever stops doing so, Assert-BuildStamp
+    # below FAILS THE BUILD rather than shipping a DLL that says UNSTAMPED.
     "-DSC_BUILD_ID=`"$($identity.BuildId)`""
     "-DSC_BUILD_SRC=`"$srcDigest`""
-    # --- reproducible output (task 056; task 048 measured the old build was not) --
-    # Two builds of one tree used to differ in 6705 bytes, from two causes:
-    #   * the PE TimeDateStamp, which the linker fills with the wall clock;
-    #   * the IMAGE BASE, which binutils picks per link for a DLL -- 0x6A980000
-    #     and 0x711C0000 on two consecutive builds here -- moving every relocated
-    #     address in the file and accounting for nearly all 6705 bytes.
-    # Pinning both makes the build byte-reproducible (measured: two builds of the
-    # same tree, identical SHA256), which is what lets a DLL hash mean anything at
-    # all. It does NOT replace the stamp -- a hash still needs a table to map it
-    # back to a tree, and the stamp needs nothing.
+    # Unpinned, two builds of one tree differ in 6705 bytes: the PE TimeDateStamp,
+    # which the linker fills with the wall clock, and the IMAGE BASE, which
+    # binutils picks per link for a DLL -- 0x6A980000 and 0x711C0000 on two
+    # consecutive builds here -- moving every relocated address and accounting for
+    # nearly all 6705 bytes. Pinning both makes the build byte-reproducible
+    # (measured: two builds of one tree, identical SHA256), which is what lets a
+    # DLL hash mean anything. It does NOT replace the stamp: a hash still needs a
+    # table to map it back to a tree, the stamp needs nothing.
     '-Wl,--no-insert-timestamp'
 )
 if ($DebugBuild) { $common += @('-O0', '-g') } else { $common += @('-O2', '-s') }
@@ -135,34 +106,23 @@ if ($DebugBuild) { $common += @('-O0', '-g') } else { $common += @('-O2', '-s') 
 # DLL only; scinject.exe keeps the standard EXE base.
 #
 # 0x71000000, NOT the conventional 0x10000000: WMode.dll is early-injected into
-# this game before the plugin on every windowed launch and it IS at 0x10000000 --
-#     scinject: early-injected C:\sc-work\1161-base\WMode.dll -> HMODULE 0x10000000
-# -- so a plugin based there would be relocated by the loader every run, and the
-# file's fixed base would be a fiction the moment it was loaded. Worse than the
-# old state, not better: two builds would hash identically while claiming a
-# determinism the running image does not have, which is the exact class of lie
-# this task exists to remove.
-#
-# 0x71xxxxxx is free by demonstration, not by assumption: every plugin base
-# binutils has picked on this machine landed in 0x71000000-0x73FFFFFF and the
-# loader honoured all of them (0x71E50000, 0x724A0000, 0x73360000 in tonight's
-# scinject lines, each stable across every run of its own build). The ATTACH
-# banner now prints where the DLL actually landed against the base in its own PE
-# header, so "the pinned base took" is a read-back rather than a hope.
+# this game before the plugin on every windowed launch and it sits AT 0x10000000
+# (scinject prints that HMODULE as it early-injects it), so a plugin based there
+# is relocated by the loader every run and the file's fixed base is a fiction the
+# moment it loads -- two builds would then hash identically while claiming a
+# determinism the running image does not have.
+# 0x71xxxxxx is free by demonstration, not assumption: every plugin base binutils
+# has picked on this machine landed in 0x71000000-0x73FFFFFF and the loader
+# honoured all of them (0x71E50000, 0x724A0000, 0x73360000, each stable across
+# every run of its own build). The ATTACH banner prints where the DLL actually
+# landed against the base in its own PE header, so "the pinned base took" is a
+# read-back rather than a hope.
 $dllLink = @('-Wl,--image-base=0x71000000')
 
 $dllOut  = Join-Path $OutDir 'scplugin.dll'
 $exeOut  = Join-Path $OutDir 'scinject.exe'
 $testOut = Join-Path $OutDir 'hooktest.exe'
 
-# The plugin is several translation units since task 011: the observer, the log,
-# the shared relocation layer (sc_engine.cpp), the detour engine, the fan-out
-# hooks, (task 014) the selection circles,
-# (task 017) the HUD selection-row paging, (task 025) the production queue,
-# (task 026) the command-card read-back, (task 029) the upgrade queue,
-# (task 030) the group production fan-out, (task 033) the queue-overflow indicator,
-# (task 034) the widescreen patch set, (task 056) the build identity,
-# (task 054) the game-session epoch and (task 073) the console edge move + trace.
 $pluginSrc = @('scplugin.cpp', 'sc_log.cpp', 'sc_engine.cpp', 'sc_hook.cpp', 'sc_fanout.cpp', 'sc_circles.cpp', 'sc_hudrow.cpp', 'sc_prodqueue.cpp', 'sc_card.cpp', 'sc_upgrades.cpp', 'sc_prodfan.cpp', 'sc_queueind.cpp', 'sc_screen.cpp', 'sc_buildid.cpp', 'sc_session.cpp', 'sc_console.cpp', 'sc_stormpresent.cpp') |
              ForEach-Object { Join-Path $srcDir $_ }
 $testSrc   = @('hooktest.cpp', 'sc_log.cpp', 'sc_engine.cpp', 'sc_hook.cpp', 'sc_fanout.cpp', 'sc_circles.cpp', 'sc_hudrow.cpp', 'sc_prodqueue.cpp', 'sc_card.cpp', 'sc_upgrades.cpp', 'sc_prodfan.cpp', 'sc_queueind.cpp', 'sc_screen.cpp', 'sc_session.cpp') |
@@ -205,13 +165,11 @@ function Assert-Pe32 {
 
 function Assert-BuildStamp {
     # READ THE STAMP BACK OUT OF THE FILE, do not report what we passed in.
-    # The whole mechanism rests on a define surviving a shell, a compiler and a
-    # linker into a string in .rdata, and every one of those is a place it can
-    # be dropped or mangled -- an earlier spelling of the -D argument reached g++
-    # as a stray backslash and produced no stamp at all. Printing $identity here
-    # instead of the file's own bytes would have reported that build as stamped.
-    # See AGENTS.md: an absence check is worth nothing until the pattern has been
-    # shown to match where it should.
+    # The mechanism rests on a define surviving a shell, a compiler and a linker
+    # into a string in .rdata, and each of those can drop or mangle it: a -D
+    # argument that reaches g++ with a stray backslash produces no stamp at all.
+    # Printing $identity here instead of the file's own bytes would report such a
+    # build as stamped. See AGENTS.md § "Oracles: absence and defect-era checks".
     param([string]$Path, [string]$ExpectId, [string]$ExpectSrc)
     $stamp = Get-ScDllBuildStamp -Path $Path
     if (-not $stamp) {

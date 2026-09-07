@@ -1,21 +1,16 @@
 #Requires -Version 7
 <#
-Pester coverage for the build identity mechanism (issue #73, task 056).
+Pester coverage for the build identity mechanism in tools/plugin/sc-build-id.ps1,
+which makes two claims falsifiable: "this DLL came from that source" and "the DLL
+that ran is the one I vetted". All three functions tested here fail in the direction
+that looks healthy -- a digest that never changes, or a stamp reader that never
+matches, both read as "nothing is stale here". So every assertion here is paired:
+the thing must MATCH where it should and CHANGE where it should; a stability-only
+digest test also passes for a function that returns a constant.
 
-WHAT THIS IS FOR. The mechanism's job is to make two claims falsifiable: "this DLL
-came from that source" and "the DLL that ran is the one I vetted". Both rest on
-three small functions in tools/plugin/sc-build-id.ps1, and all three fail in the
-direction that looks healthy -- a digest that never changes, or a stamp reader
-that never matches, both read as "nothing is stale here".
-
-So every assertion below is paired: the thing must MATCH where it should and
-CHANGE where it should. A digest test that only checks stability passes for a
-function that returns a constant.
-
-Offline: no game, no toolchain, no compiler. The one thing it cannot cover is
-whether the -D define survives the real compile -- build.ps1 covers that itself
-by reading the stamp back out of the DLL it just built (Assert-BuildStamp), which
-is a check that needs the toolchain and therefore lives there, not here.
+Offline: no game, no toolchain, no compiler. Whether the -D define survives the
+real compile needs the toolchain, so build.ps1 checks it there by reading the stamp
+back out of the DLL it just built (Assert-BuildStamp).
 #>
 
 BeforeAll {
@@ -127,8 +122,8 @@ Describe 'Get-ScSourceDigest' {
 Describe 'Get-ScDllBuildStamp' {
 
     It 'finds a stamp in a binary that has one (the reader is proved positive)' {
-        # Without this, every "no stamp" result below is indistinguishable from a
-        # reader that never matches anything -- AGENTS.md's absence rule.
+        # Positive control: without it every "no stamp" below is indistinguishable from
+        # a reader that never matches (AGENTS.md § "Oracles: absence and defect-era checks").
         $f = New-FakeDll 'SCPLUGIN_BUILD_ID=abc1234 SRC=0123456789ab'
         try {
             $s = Get-ScDllBuildStamp -Path $f
@@ -152,12 +147,10 @@ Describe 'Get-ScDllBuildStamp' {
     }
 
     It 'reads an UNSTAMPED build as its literal value, never as a match' {
-        # sc_buildid.cpp's fallback for a hand-compiled DLL. It must be visible and it
-        # must never be mistaken for a source digest.
+        # sc_buildid.cpp's fallback for a hand-compiled DLL: SRC=UNSTAMPED is not hex, so
+        # the pattern rejects it -- an unstamped DLL cannot present a src digest at all.
         $f = New-FakeDll 'SCPLUGIN_BUILD_ID=UNSTAMPED SRC=UNSTAMPED'
         try {
-            # SRC=UNSTAMPED is not hex, so the pattern does not match it at all --
-            # an unstamped DLL cannot present a src digest of any kind.
             Get-ScDllBuildStamp -Path $f | Should -BeNullOrEmpty
         }
         finally { Remove-Item -LiteralPath $f -Force }
@@ -205,14 +198,12 @@ Describe 'Test-ScPluginCurrent' {
 Describe 'run-with-plugin.ps1 -BuildDir is honoured, not "helpfully" rebuilt' {
     # A NAMED build dir is a deliberate choice: test-random-conformance.ps1 points at
     # C:\sc-work\builds\<sha> to reproduce a bug against the commit before its fix, and
-    # README-deploy.md points this script at the user's DEPLOYED plugin dir. A gate that
-    # rebuilt into either would destroy the build the caller asked for -- and in the
-    # deploy case would overwrite the user's installed binary from a test run.
-    #
+    # README-deploy.md points this script at the user's DEPLOYED plugin dir. Rebuilding
+    # into either destroys the build the caller asked for, and in the deploy case
+    # overwrites the user's installed binary from a test run.
     # Driven for real, not grepped: -NoLaunch returns after the DLL is resolved, which is
-    # where the gate lives, so this exercises the actual code path with no game and no
-    # compiler. The DLL is a fake carrying a stamp that does NOT match this worktree,
-    # which is exactly the state that triggers a rebuild in the default dir.
+    # where the gate lives; the fake DLL's stamp does NOT match this worktree, the state
+    # that triggers a rebuild in the default dir.
 
     BeforeAll {
         $script:runner  = Join-Path $script:pluginDir 'run-with-plugin.ps1'
@@ -234,7 +225,7 @@ Describe 'run-with-plugin.ps1 -BuildDir is honoured, not "helpfully" rebuilt' {
             # The bytes are the assertion. A rebuild would replace them with a real DLL.
             (Get-FileHash -LiteralPath (Join-Path $bd 'scplugin.dll') -Algorithm SHA256).Hash |
                 Should -Be $beforeHash -Because 'a named -BuildDir must never be rebuilt into'
-            # And it must not go quietly: silence here is the defect this whole task is about.
+            # And it must not go quietly: an unannounced skip reads as a build that ran.
             $out | Should -BeLike '*NOT this worktree*'
             $out | Should -BeLike '*Nothing was rebuilt*'
         }
@@ -258,9 +249,8 @@ Describe 'the pieces are actually wired together' {
     }
 
     It 'sc_buildid.cpp is in the plugin source list' {
-        # Compiles clean if it is missing -- nothing else references it -- and the DLL
-        # would simply carry no stamp. build.ps1 would then fail at Assert-BuildStamp,
-        # but only on a machine with the toolchain; this catches it everywhere.
+        # Nothing else references it: a missing entry compiles clean and yields an
+        # unstamped DLL, which build.ps1 only catches where the toolchain exists.
         $t = Get-Content -Raw -LiteralPath (Join-Path $script:pluginDir 'build.ps1')
         $t | Should -BeLike "*'sc_buildid.cpp'*"
     }

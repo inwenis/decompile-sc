@@ -1,30 +1,18 @@
-// sc_stormpresent.cpp -- task 074. See sc_stormpresent.h for the why.
+// The present pipeline (StarCraft.exe 0x0041D420, one frame): ord350 (lock) -> ord432
+// (copy framebuffer 0x6CEFF4 -> locked surface via the region 0x6D5E18) -> ord356
+// (unlock / flip). exe IAT: 0x4FE5A0=ord350, 0x4FE5A4=ord432, 0x4FE59C=ord356.
 //
-// THE PRESENT PIPELINE (StarCraft.exe 0x0041D420, one frame):
-//   ord350 (lock)  -> ord432 (copy framebuffer 0x6CEFF4 -> locked surface via the
-//                     region 0x6D5E18) -> ord356 (unlock / flip)
-// (exe IAT: 0x4FE5A0=ord350, 0x4FE5A4=ord432, 0x4FE59C=ord356; work/scratch/074/iat.py.)
-//
-// storm keeps its OWN virtual-screen geometry in .data:
-//   [storm+0x5A7C0]=8 (bpp)  [storm+0x5A7C4]=640 (WIDTH)  [storm+0x5A7C8]=480 (height)
-// proven width/height by ord342 (imul height,[+0x5A7C4] for the DIB size + BitBlt),
-// written by ord341 (the DDraw display-mode init, from its width argument) and by
-// ord344's literal reset.
-//
-// The 640 wall, and why it is CONDITIONAL:
-//   ord350 locking the primary (index 0) with a NULL rect either
-//     (a) locks it DIRECTLY -- returns the primary pointer, never reads the geometry
-//         (0x34DAB); or
-//     (b) FALLS BACK -- builds a clip rect (0,0,[width],[height]) into the clip table
-//         [storm+0x5EA74..0x5EA80], stores the fallback lock pointer at
-//         [storm+0x5EA70], and re-locks a SYSTEM-MEMORY surface (index 3, 0x34E22).
-//   ord356 unlocking the primary, if the fallback pointer [0x5EA70] is set, Blts that
-//   (0,0,640,480) clip from the sysmem surface to the visible primary (0x34827) --
-//   THAT Blt is the 640 cap. If the primary was locked directly, ord356 skips the Blt
-//   and the present is already full-width.
-//
-// So which branch cnc-ddraw takes decides the entire fix, and it is a RUNTIME fact.
-// This module's PROBE mode reads it out of the live process; it writes nothing.
+// storm keeps its OWN virtual-screen geometry in .data: [storm+0x5A7C0]=8 (bpp),
+// [storm+0x5A7C4]=640 (width), [storm+0x5A7C8]=480 (height). Width/height proven by
+// ord342 (imul height,[+0x5A7C4] for the DIB size + BitBlt); written by ord341 (the
+// DDraw display-mode init, from its width argument) and by ord344's literal reset.
+// The 640 wall is CONDITIONAL: ord350 locking the primary (index 0) with a NULL rect
+// either locks it DIRECTLY (returns the primary pointer, never reads the geometry,
+// 0x34DAB) or FALLS BACK -- clip rect (0,0,[width],[height]) into [storm+0x5EA74..0x5EA80],
+// fallback lock pointer at [storm+0x5EA70], re-lock of the sysmem surface (index 3,
+// 0x34E22) -- and ord356 then Blts that (0,0,640,480) clip to the visible primary
+// (0x34827), which IS the cap. Which branch cnc-ddraw takes is a runtime fact, read out
+// of the live process by PROBE mode, which writes nothing.
 
 #include "sc_stormpresent.h"
 
@@ -48,8 +36,7 @@
 #define STORM_RVA_SURFTABLE  0x0005EA84u   // IDirectDrawSurface*[4]; [0]=primary [3]=sysmem
 #define STORM_RVA_PRIMARY    0x0005EA90u   // the DirectDraw object / primary handle ord356 Blts to
 // Ordinal_440 (SRgnCreate) region-grid outputs: [+0]cells [+4]cells [+8]log2w
-// [+0xC]log2h [+0x10]WIDTH [+0x14]HEIGHT. The exe patches Ordinal_440's width arg
-// to 0x320 (sc_screen_patches.h storm.region.width @0x0041D531); did it take?
+// [+0xC]log2h [+0x10]WIDTH [+0x14]HEIGHT.
 #define STORM_RVA_RGNGRID    0x0005AC10u
 // IDirectDrawSurface vtable byte offsets (verified against storm: Lock=+0x64,
 // Unlock=+0x80, Blt=+0x14 all matched the exe's present calls). GetSurfaceDesc = 22.
@@ -60,18 +47,10 @@
 #define EXE_VA_REGION_FRAME  0x006D5E18u
 #define EXE_VA_REGION_BASE   0x006D5E14u
 #define EXE_VA_ORD529_THUNK  0x00411E60u
-// storm ord432 (RVA 0x1A520), THE buffer->primary copy the exe present calls every
-// frame: stdcall(dst, src, dstPitch, srcPitch, region), RET 0x14, returns 1. It
-// copies only the dirty REGION (x<640, because the presentable region is 640 wide),
-// so on a static frame the primary's x>=640 columns are never written and stay black
-// even though the 800-wide buffer holds map there. The WIDEN hooks this and, after
-// the engine's own copy, copies the x=640..799 strip straight from the buffer to the
-// primary EVERY frame -- so the far quarter tracks the buffer without depending on a
-// dirty mark. Because that mirror also carries whatever the CURSOR left in the buffer
-// at present time, the hook sets the cursor layer's sticky always-draw bit each present
-// (see HkOrd432; renderer-viewport.md 21.9) so the strip never shows a cursor-free
-// frame. Prologue: push ebp; mov ebp,esp; mov eax,[ebp+0x18] (55 8B EC 8B 45 18),
-// 6 bytes / 3 whole instructions / no PC-relative. Resolved from the LOADED storm.dll.
+// storm ord432 (RVA 0x1A520), THE buffer->primary copy the exe present calls every frame:
+// stdcall(dst, src, dstPitch, srcPitch, region), RET 0x14, returns 1. It copies only the
+// dirty REGION (x<640, the presentable region's width), so on a static frame the primary's
+// x>=640 columns stay black even though the 800-wide buffer holds map there.
 #define STORM_RVA_ORD432     0x0001A520u
 static ScStormMode g_mode = SC_STORM_OFF;
 static BYTE*  g_stormBase = NULL;
@@ -80,7 +59,7 @@ static unsigned g_logs = 0;
 
 // --- WIDEN state ---
 static ScHook   g_hkCopy;                   // hook on storm ord432 (the present copy)
-static unsigned g_stripFrames = 0;          // frames the x>=640 strip was copied (stats)
+static unsigned g_stripFrames = 0;          // presents that copied the x>=640 strip
 static unsigned g_cursorForced = 0;         // times layer 0's always-draw bit was found clear and set
 static unsigned g_stripSkipped = 0;         // present calls that did NOT meet the widescreen guard
 
@@ -108,23 +87,22 @@ static int StormEnvExplicit(void) {
     return SC_STORM_WIDEN;   // 1/y/widen
 }
 
-// The present-widen is PART of the widescreen feature: without it the engine
-// computes 800 columns and the window shows 640 (renderer-viewport.md 19.8/20). So
-// when widescreen is active at a stage whose buffer actually holds 800-wide playfield
-// (stage >= 2), the ship default is WIDEN. %SCPLUGIN_STORM_PRESENT% overrides:
-// 0 = off, probe = read-only, widen = force on.
+// Without the widen the engine computes 800 columns and the window shows 640
+// (renderer-viewport.md 19.8/20), so the default is WIDEN whenever the buffer actually
+// holds an 800-wide playfield (widescreen at stage >= 2). %SCPLUGIN_STORM_PRESENT%
+// overrides: 0 = off, probe = read-only, widen = force on.
 ScStormMode ScStormPresentModeWanted(void) {
     const int ex = StormEnvExplicit();
     if (ex == SC_STORM_OFF) return SC_STORM_OFF;
     if (ex == SC_STORM_PROBE) return SC_STORM_PROBE;
     const bool wsPlayfield = ScScreenWidescreenWanted() && ScScreenStageWanted() >= 2;
     if (ex == SC_STORM_WIDEN) return SC_STORM_WIDEN;      // forced (gated again in Install)
-    return wsPlayfield ? SC_STORM_WIDEN : SC_STORM_OFF;   // unset: widen iff widescreen playfield
+    return wsPlayfield ? SC_STORM_WIDEN : SC_STORM_OFF;
 }
 
 // ---------------------------------------------------------------------------
 // The region rect count, through the exe's own Ordinal_529 thunk (stdcall:
-// region, &count[in=cap out=written], rects). The same call sc_console used.
+// region, &count[in=cap out=written], rects).
 // ---------------------------------------------------------------------------
 static void LogRegionRects(const char* what, DWORD regionVaOfPtr) {
     bool ok = false;
@@ -143,11 +121,10 @@ static void LogRegionRects(const char* what, DWORD regionVaOfPtr) {
           what, (unsigned)region, (unsigned)cnt, line);
 }
 
-// The SRgn struct ord432 actually copies from (allocator 0x1A7E0, size 0x30;
-// builder ord436 0x1B1F0): +0x08 span-buffer base, +0x14 span rows, +0x18 left,
-// +0x1C row count, +0x20..0x2C bounding rect {l,t,r,b}. The bounding rect is the
-// Ordinal_529-independent readout of the copy extent -- (0,0,640,480) here IS the
-// 640 cap; (0,0,800,480) means the cap is elsewhere.
+// The SRgn struct ord432 copies from (allocator 0x1A7E0, size 0x30; builder ord436
+// 0x1B1F0): +0x08 span base, +0x14 span rows, +0x18 left, +0x1C row count, +0x20..0x2C
+// bounding rect {l,t,r,b}. That rect is the Ordinal_529-independent copy extent:
+// (0,0,640,480) IS the 640 cap, (0,0,800,480) puts the cap elsewhere.
 static void LogRegionStruct(const char* t, const char* what, DWORD regionVaOfPtr) {
     bool ok = false;
     DWORD r = StormReadU32(ScRuntimeAddr(regionVaOfPtr), &ok);
@@ -199,8 +176,8 @@ void ScStormPresentLog(const char* tag) {
           t, (unsigned)surf[0], (unsigned)surf[1], (unsigned)surf[2], (unsigned)surf[3],
           okP ? (unsigned)prim : 0);
 
-    // storm's region-grid dimensions (Ordinal_440 outputs). If the exe's
-    // Ordinal_440 width patch to 0x320 took, [+0x10] reads 800; if it still reads
+    // The exe patches Ordinal_440's width argument to 0x320 (sc_screen_patches.h
+    // storm.region.width @0x0041D531): if it took, [+0x10] reads 800; if it still reads
     // 640, storm builds every region on a 640-wide grid and THAT clips the copy.
     bool okG[6]; DWORD g[6];
     for (int i = 0; i < 6; ++i) g[i] = StormReadU32((BYTE*)StormRt(STORM_RVA_RGNGRID) + i * 4, &okG[i]);
@@ -208,10 +185,10 @@ void ScStormPresentLog(const char* tag) {
           t, (unsigned)g[0], (unsigned)g[1], (unsigned)g[2], (unsigned)g[3],
           okG[4] ? "" : "?", (unsigned)g[4], (unsigned)g[5]);
 
-    // The primary surface's REAL geometry, via IDirectDrawSurface::GetSurfaceDesc.
-    // A black RIGHT band with no letterbox means the primary is 800 and only 0..639
-    // were written (cap is the copy); a 640 primary would mean the surface itself is
-    // narrow. Read-only COM call, pointer-guarded.
+    // The primary surface's REAL geometry, via IDirectDrawSurface::GetSurfaceDesc: a
+    // black RIGHT band with no letterbox and an 800 primary means only 0..639 were
+    // written (the cap is the copy); a 640 primary means the surface itself is narrow.
+    // Read-only COM call, pointer-guarded.
     bool okS0; DWORD prim0 = StormReadU32(StormRt(STORM_RVA_SURFTABLE), &okS0);
     if (okS0 && prim0 && ScReadableAt((void*)(DWORD_PTR)prim0, 4)) {
         DWORD vtbl = *(DWORD*)(DWORD_PTR)prim0;
@@ -243,22 +220,20 @@ void ScStormPresentLog(const char* tag) {
 // ---------------------------------------------------------------------------
 // WIDEN: present the far quarter (x=640..799) the dirty-rect copy leaves black
 //
-// MEASURED, and why the obvious levers do NOT work on their own:
-//  * Run 5: the presentable region is 640 wide because its primary image node is the
-//    640-wide console, and the SRgn combine (ord443) does NOT raise a region's +0x18
-//    -- a genuinely solid (640,0)-(800,480) node left base +0x18 = 640. So ADDING
-//    image nodes cannot widen the present (073's node was dead at the mechanism level).
-//  * Run 6/7: widening the base region to 800 (frame region then inherits 800) makes
-//    the present carry x>640 ONLY on frames that re-mark those cells dirty. The present
-//    is dirty-rect; on a STATIC load frame the primary's x>=640 stays black even with
-//    an 800 base, because nothing re-copies it (run 7: base +0x18=800, glass map = 0).
+// Two levers do NOT widen the present, measured:
+//  * Adding image nodes: the presentable region is 640 wide because its primary image
+//    node is the 640-wide console, and the SRgn combine (ord443) does NOT raise a
+//    region's +0x18 -- a genuinely solid (640,0)-(800,480) node left base +0x18 = 640.
+//  * Widening the base region to 800 (the frame region then inherits 800): the present
+//    is dirty-rect, so it carries x>640 only on frames that re-mark those cells dirty;
+//    on a STATIC frame the primary's x>=640 stays black with an 800 base (measured:
+//    base +0x18=800, glass map = 0).
 //
-// So the robust fix intercepts THE COPY. ord432 copies the dirty region (x<640) as
-// normal; then this copies the x=640..799 strip straight from the 800-wide buffer to
-// the primary, every frame. It touches ONLY x>=640, where there is no console/HUD
-// (the console is 640 wide), so it overwrites nothing the engine draws there -- it is
-// NOT a full-frame copy. src/dst/pitches are ord432's own arguments, so the strip is
-// always consistent with the engine's own copy of the same frame.
+// So the robust fix intercepts THE COPY: after ord432's own dirty-region copy, this copies
+// the x=640..799 strip straight from the 800-wide buffer to the primary, every frame. It
+// touches ONLY x>=640, where there is no console/HUD (the console is 640 wide), so it
+// overwrites nothing the engine draws and is NOT a full-frame copy; src/dst/pitches are
+// ord432's own arguments, so the strip always matches the engine's copy of that frame.
 // ---------------------------------------------------------------------------
 
 typedef int (__attribute__((stdcall)) *ScOrd432Fn)(DWORD dst, DWORD src, DWORD dstPitch,
@@ -266,32 +241,28 @@ typedef int (__attribute__((stdcall)) *ScOrd432Fn)(DWORD dst, DWORD src, DWORD d
 
 static int __attribute__((stdcall)) SC_GAME_ENTRY
 HkOrd432(DWORD dst, DWORD src, DWORD dstPitch, DWORD srcPitch, DWORD region) {
-    // The engine's own copy first (the dirty region, x<640, unchanged).
     int ret = ((ScOrd432Fn)g_hkCopy.trampoline)(dst, src, dstPitch, srcPitch, region);
-    // Then the far band, straight from the buffer. Guarded on the widescreen
-    // geometry so a stray 640-pitch call can never write past a 640-wide surface.
+    // Guarded on the widescreen geometry so a stray 640-pitch call can never write past
+    // a 640-wide surface.
     const int W = ScScreenTargetWidth(), H = ScScreenTargetHeight();
     if (g_mode == SC_STORM_WIDEN && dst && src &&
         dstPitch >= (DWORD)W && srcPitch >= (DWORD)W) {
         const int stripW = W - SC_SCREEN_W;   // 160 at 800, 640 at 1280
-        // THE CURSOR IN THE STRIP (2026-09-07, the user's "over the extended space it
-        // flickers"). The engine's own copy is dirty-driven, so at x<640 the primary
-        // ACCUMULATES: a frame that does not redraw the cursor leaves its last pixels on
-        // the glass. This strip copy MIRRORS the buffer instead -- and the composer
-        // (0x0041E280) draws layer 0 only when its flags carry 0x01/0x02, or its rect
-        // covers a dirty cell; otherwise save-under has already run and the buffer holds
-        // the cursor-FREE pixels at present time. A parked plain arrow (one-frame GRP,
-        // the animation tick bails at 0x004BE209) is redrawn only when something else
-        // dirties a cell under it, so the strip copy blanked it on every other present:
-        // a strobe confined to x>=640. Bit 0x20 of the layer's flags is the composer's
-        // sticky "draw every frame" (sc_addresses.h SC_LAYER_FLAG_ALWAYS_DRAW): with it
-        // set the cursor is composed into the buffer on every frame (save-under before,
-        // restore-under after, so the buffer is left cursor-free exactly as before) and
-        // the mirror always carries it. Cost at x<640 is nil: pixels drawn into cells
-        // that are not dirty are not presented. Set per present, not once: it survives
-        // the composer's mask (0xF8) but this is where its absence would show, and a
-        // counter says how often it had to be set (1 = sticky as read; more = something
-        // clears it).
+        // THE CURSOR IN THE STRIP (renderer-viewport.md 21.9). The engine's copy is
+        // dirty-driven, so at x<640 the primary ACCUMULATES the cursor's last pixels; this
+        // strip copy MIRRORS the buffer instead, and the composer (0x0041E280) draws layer 0
+        // only when its flags carry 0x01/0x02 or its rect covers a dirty cell -- otherwise
+        // save-under has run and the buffer holds cursor-FREE pixels at present time. A
+        // parked plain arrow (one-frame GRP, the animation tick bails at 0x004BE209) is
+        // redrawn only when something else dirties a cell under it, so the mirror blanks it
+        // on every other present: a strobe confined to x>=640. Bit 0x20 of the layer's
+        // flags is the composer's sticky "draw every frame" (SC_LAYER_FLAG_ALWAYS_DRAW):
+        // with it set the cursor is composed every frame (save-under before, restore-under
+        // after, so the buffer is left cursor-free) and the mirror always carries it; cost at
+        // x<640 is nil, since pixels drawn into cells that are not dirty are not presented.
+        // Set per present, not once: it survives the composer's mask (0xF8), but this is
+        // where its absence would show, and g_cursorForced == 1 means sticky as read, more
+        // means something clears it.
         BYTE* layer0Flags = (BYTE*)ScRuntimeAddr(SC_VA_GRAPHIC_LAYERS + SC_LAYER_OFF_FLAGS);
         if (!(*layer0Flags & SC_LAYER_FLAG_ALWAYS_DRAW)) {
             *layer0Flags |= SC_LAYER_FLAG_ALWAYS_DRAW;
@@ -325,9 +296,9 @@ void ScStormPresentInstall(BYTE* exeBase, bool writeAllowed) {
     g_mode = ScStormPresentModeWanted();
     g_logs = 0;
     if (g_mode == SC_STORM_OFF) {
-        // Name the half that decided it. Issue #113: "unset/0" could not distinguish
-        // "the launcher exported 0" from "nothing to present", and the deployed wide
-        // game ran with the copy OFF behind exactly that line.
+        // Name the half that decided it: a bare "unset/0" cannot distinguish "the
+        // launcher exported 0" from "nothing to present", and a wide game running with
+        // the copy OFF is diagnosed from this line.
         if (StormEnvExplicit() == SC_STORM_OFF)
             ScLog("STORM present: off -- %%SCPLUGIN_STORM_PRESENT%%=0 (explicit)");
         else
@@ -357,11 +328,10 @@ void ScStormPresentInstall(BYTE* exeBase, bool writeAllowed) {
         g_mode = SC_STORM_PROBE;
     }
     if (g_mode == SC_STORM_WIDEN && ScConsoleEdgeWanted()) {
-        // Task 073's console move (merged, behind %SCPLUGIN_CONSOLE_EDGE%) direct-blits
-        // the moved resource bar and command card at x>640 (renderer-viewport.md 19.1).
-        // The strip copy would overwrite them with terrain every frame, so the two are
-        // MUTUALLY EXCLUSIVE for now: the console-edge experiment wins, the storm widen
-        // disarms. Stated so nobody turning on both discovers it as a defect.
+        // The console move (%SCPLUGIN_CONSOLE_EDGE%) direct-blits the moved resource bar
+        // and command card at x>640 (renderer-viewport.md 19.1), which the strip copy
+        // would overwrite with terrain every frame. The two are MUTUALLY EXCLUSIVE: the
+        // console-edge experiment wins, the storm widen disarms.
         ScLog("STORM present: %%SCPLUGIN_CONSOLE_EDGE%% (073's console move) is ON -- its "
               "moved card/bar are direct-blitted at x>640 and the strip copy would overwrite "
               "them. The storm present widen is DISARMED to PROBE (the two are mutually "
@@ -373,7 +343,7 @@ void ScStormPresentInstall(BYTE* exeBase, bool writeAllowed) {
         g_cursorForced = 0;
         g_stripSkipped = 0;
         memset(&g_hkCopy, 0, sizeof(g_hkCopy));
-        void* ord432 = StormRt(STORM_RVA_ORD432);   // resolved from the LOADED storm.dll
+        void* ord432 = StormRt(STORM_RVA_ORD432);
         if (!ScHookInstall(&g_hkCopy, "stormWidenCopy", ord432,
                            (void*)&HkOrd432, (int)sizeof(kPrologueOrd432),
                            kPrologueOrd432, (int)sizeof(kPrologueOrd432))) {
@@ -397,9 +367,8 @@ void ScStormPresentInstall(BYTE* exeBase, bool writeAllowed) {
 }
 
 void ScStormPresentRemove(void) {
-    // PROBE writes nothing. WIDEN: un-splice the copy hook. Nothing in game memory is
-    // left changed -- the strip copy only wrote presented pixels, which the next stock
-    // present overwrites.
+    // PROBE writes nothing; WIDEN only needs the copy hook un-spliced, because the strip
+    // copy wrote presented pixels only, which the next stock present overwrites.
     if (g_hkCopy.installed) ScHookRemove(&g_hkCopy);
 }
 

@@ -1,24 +1,21 @@
 #Requires -Version 7
 <#
-Pester cases for tools/check-cpp-reuse.py (issue #130 section 9).
-
-WHY THESE EXIST. The gate's whole value is that it FAILS on a new copy. A gate that
-cannot fail is the house defect this repo already guards against
-(tests/vacuous-assertion-guard.Tests.ps1), so the cases below plant a duplicate in a
-throwaway tree and require exit 1, then remove it and require exit 0. The last case runs
-the gate over the real tools/plugin/src, which is what CI does on every PR.
+Pester cases for tools/check-cpp-reuse.py.
+The gate's whole value is that it FAILS on a new copy, and a gate that cannot fail is
+the house defect this repo guards against (tests/vacuous-assertion-guard.Tests.ps1), so
+the cases plant a duplicate in a throwaway tree and require exit 1, then remove it and
+require exit 0. The last case runs the gate over the real tools/plugin/src, as CI does.
 #>
 
-# Discovery-time, not BeforeAll: Pester v5 evaluates -Skip while it is DISCOVERING, so a
-# $script: variable set in BeforeAll is still $null there and every case would skip.
+# Pester v5 evaluates -Skip while it is DISCOVERING, so a $script: variable set in
+# BeforeAll is still $null there and every case would skip.
 $script:HasPython = $null -ne (Get-Command python -ErrorAction SilentlyContinue)
 
 BeforeAll {
     $script:repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
     $script:checker  = Join-Path $script:repoRoot 'tools/check-cpp-reuse.py'
 
-    # A sandbox with the layout the checker expects, so a planted duplicate can never
-    # touch the real sources.
+    # The layout the checker expects, so a planted duplicate never touches real sources.
     function New-ReuseSandbox {
         $root = Join-Path ([IO.Path]::GetTempPath()) "cppreuse-$([guid]::NewGuid().ToString('N'))"
         $src = Join-Path $root 'tools/plugin/src'

@@ -1,44 +1,19 @@
 ﻿#Requires -Version 7
 <#
 .SYNOPSIS
-End-to-end, UNATTENDED test of task 015's per-opcode fan-out: launches the game, loads a
-stock map with more than twelve selectable units, issues Stop / Hold Position / Attack /
-Patrol to all of them with one keypress each, and asserts on EVERY UNIT'S OWN ORDER STATE
--- not on prose, and not on the picture.
-
+UNATTENDED end-to-end test of the per-opcode fan-out: boxes more than twelve units on a stock
+map, issues Stop / Hold Position / Attack / Patrol with one keypress each, and asserts on
+EVERY UNIT'S OWN ORDER STATE -- not on prose, and not on the picture.
 .DESCRIPTION
-Same recipe as test-selection-circles.ps1 (task 012's D1, research/automated-testing-options.md
-4.1) via tools/plugin/drive-game.ps1: PostMessage with client coordinates, no synthetic OS
-input, focus not required, window must not be minimised.
-
-THE ORACLE IS THE PLUGIN'S `UNITSTATE` LINE. The plugin walks its shadow list -- the whole
-pre-cap selection, all 24 units, not the 12 the engine holds -- reads each unit's current
-MAIN order id out of CUnit+0x4D and reports a histogram. So "every unit obeyed" is a claim
-about all 24 units' own state, made from inside the process.
-
-The shape of the proof for each command:
-
-  1. assert the precondition as ONE order shared by EVERY live unit, and that it is the
-     order this test put them on -- not merely "the most common order in the histogram",
-     which would pass with the other twelve on something else entirely;
-  2. press the key once;
-  3. assert the plugin fanned the command out to more than twelve units;
-  4. assert the result is again ONE order shared by EVERY live unit, and DIFFERENT from
-     the one they were all on. Both halves matter: "nobody is still doing the old thing"
-     alone is satisfied by units that merely finished it.
-
-THE ORDER OF THE CASES IS THE POINT. Hold Position runs FIRST, from a moving group: units
-that simply arrived at their destination go idle, and idle is not the hold order, so
-arrival cannot fake it. Stop then runs from the HOLDING group -- stationary units holding
-position have nothing to arrive at, so there is no window in which anything but Stop can
-take them off the hold order. Neither case has a "maybe they just got there" reading.
-
-Frames are captured as a DIAGNOSTIC only and land outside the repo -- they reproduce game
-artwork (AGENTS.md hard rule 1) and must never be committed.
-
+Input goes through tools/plugin/drive-game.ps1: PostMessage with CLIENT coordinates, no
+synthetic OS input, focus not required, window not minimised
+(research/automated-testing-options.md §4.1).
+The oracle is the plugin's `UNITSTATE` line: it walks the shadow list -- the whole pre-cap
+selection, not the twelve the engine holds -- and reads each unit's MAIN order id out of
+CUnit+0x4D, so "every unit obeyed" is a claim about every unit's own state. Frames reproduce
+game artwork: diagnostic only, outside the repo, never committable (AGENTS.md § "Screenshots").
 .EXAMPLE
 ./tools/plugin/test-fanout-orders.ps1
-
 .EXAMPLE
 ./tools/plugin/test-fanout-orders.ps1 -ShotDir C:\temp\sc-frames -KeepOpen
 #>
@@ -63,9 +38,8 @@ $step = 0
 # as "well, they are all on SOME one order".
 #
 #   $HOLD_ORDER  what every unit is on after Hold Position. 0x2B's handler picks the order
-#                per unit TYPE (0x39/0x3E/0x6C/0x88/0x6B), and all five Protoss types in
-#                this box map to 0x6B -- a mix here would fail the single-order assertion
-#                first, which is the honest failure.
+#                per unit TYPE (0x39/0x3E/0x6C/0x88/0x6B) and all five Protoss types in
+#                this box map to 0x6B, so a mix fails the single-order assertion first.
 #   $IDLE_ORDER  what every unit is on after Stop, and before anything has been ordered.
 $HOLD_ORDER = '0x6B'
 $IDLE_ORDER = '0x03'
@@ -85,21 +59,21 @@ function Step {
 }
 
 # --- the plugin's marker channel, used as a request/response --------------------
-# Writing a marker makes the observer thread stamp the label into the log AND dump a
-# UNITSTATE line for it. Waiting for the line carrying OUR label is what makes this a
-# synchronous read of unit state rather than a race against the 250 ms poll.
+# Writing a marker makes the observer thread dump a UNITSTATE line for that label; waiting
+# for the line carrying OUR label is a synchronous read of unit state, not a race with the
+# 250 ms poll.
 $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
 
-# The reader itself lives in drive-game.ps1 (Get-ScUnitState) so this test and
-# test-burrow-fanout.ps1 parse the plugin's line in exactly one place.
+# Parsing sits in drive-game.ps1 (Get-ScUnitState) so every suite that reads unit state
+# parses the plugin's line in exactly one place.
 function Get-ScState {
     param([string]$Tag, [int]$TimeoutSec = 10)
     Get-ScUnitState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -TimeoutSec $TimeoutSec
 }
 
 # "Every live unit is on exactly one order, and it is this one." The single-bucket half is
-# what stops a vacuous pass: a histogram whose largest bucket is 13 of 24 says nothing at
-# all about the other eleven.
+# what stops a vacuous pass: a histogram whose largest bucket is 13 of 24 says nothing
+# about the other eleven.
 function Assert-ScAllOnOneOrder {
     param([string]$What, $State, [string]$ExpectedOrder = '')
     $only = @($State.Orders.Keys)
@@ -138,11 +112,11 @@ function Assert-ScCommandReachedEveryone {
     $after = Get-ScState "$Tag-after"
     Assert-That "$What`: nobody died on the way ($($Before.Live) -> $($after.Live))" `
         ($after.Live -eq $Before.Live)
-    # The positive: every one of them is now on one shared order -- a command that reached
-    # only the engine's twelve would leave the other twelve on $FromOrder, which breaks the
-    # single-bucket assertion...
+    # A command that reached only the engine's twelve would leave the other twelve on
+    # $FromOrder, breaking the single-bucket assertion. The shared order after must also
+    # DIFFER from it: "nobody is still doing the old thing" alone is satisfied by units
+    # that merely finished it.
     $now = Assert-ScAllOnOneOrder "$What`: after" $after $ExpectedAfter
-    # ...and that shared order is not the one they came from.
     Assert-That "$What`: and it is a NEW order ($FromOrder -> $now)" `
         ($now -ne '' -and $now -ne $FromOrder)
     Write-Host "       $($after.Line)"
@@ -194,14 +168,11 @@ try {
         Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom
         Start-Sleep -Seconds 2
         # Up out of BroodWar, into campaign, onto the map -- every row computed from the
-        # filesystem and every folder verified on screen before the next click.
-        #
-        # THIS SUITE HAS NO FIXTURE OF ITS OWN AND WAS BROKEN ANYWAY. The three clicks
-        # that used to be here were fixed rows, and `[Up One Level]` sorts alphabetically
-        # AMONG the folders of Maps\BroodWar -- so one `00-*` fixture folder created by
-        # somebody else pushed it off row 3 and this walk opened a folder instead of
-        # leaving BroodWar. That is level 3 of the positional-click bug (drive-game.ps1),
-        # and it is why nothing here is per-fixture-folder.
+        # filesystem and every folder verified on screen before the next click. Fixed rows
+        # cannot survive here: `[Up One Level]` sorts alphabetically AMONG the folders of
+        # Maps\BroodWar, so any fixture folder another suite creates shifts every row below
+        # it and the walk opens a folder instead of leaving BroodWar (level 3 of the
+        # positional-click bug, drive-game.ps1).
         Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir `
             -MapPath (Join-Path $GameDir 'Maps\campaign\(1)Enslavers02b.scm') | Out-Null
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok
@@ -209,7 +180,8 @@ try {
         Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
         Start-Sleep -Seconds 8
         # The tips dialog is found in the engine's own dialog list and dismissed by ITS OWN
-        # OK button, then asserted gone (task 027) -- never a fixed point, never the registry.
+        # OK button, then asserted gone -- never a fixed point, never the registry
+        # (AGENTS.md § "Tips dialog").
         Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
         Start-Sleep -Seconds 2
         Shot 'in-game'
@@ -240,12 +212,10 @@ try {
         Start-Sleep -Seconds 3
         $moving = Get-ScState 'moving'
         Write-Host "       $($moving.Line)"
-        # The precondition that matters is NOT "they are all on the move order" -- one unit
-        # of the twenty-four is an Observer that need not accept a ground move, and a
-        # precondition that flaky would be tuned away rather than trusted. It is the exact
-        # property that makes the after-state mean something: NOT ONE of them is already
-        # holding position. If any were, the after-assertion could be satisfied by units the
-        # command never reached.
+        # The precondition that matters is NOT "they are all on the move order" -- one of
+        # the twenty-four is an Observer that need not accept a ground move. It is that NOT
+        # ONE of them is already holding: if any were, the after-assertion could be
+        # satisfied by units the command never reached.
         $preHold = $moving.Orders[$HOLD_ORDER]
         if ($null -eq $preHold) { $preHold = 0 }
         Assert-That "not one of the $($moving.Live) units is already holding ($HOLD_ORDER)" `
@@ -272,15 +242,14 @@ try {
 
     Step 'Attack and Patrol are Targeted Order (0x15), and it fans out' {
         # Both are 0x15 with a different order byte at offset 9 -- Attack 0x08, Patrol 0x98,
-        # Move 0x31 (named in game, research/command-opcodes.md 4). 0x15 has been in the
-        # fan-out set since task 011, so this step is a regression check, not new ground.
+        # Move 0x31 (named in game, research/command-opcodes.md 4).
         $seen = @{}
         foreach ($case in @(
             @{ Name = 'Attack'; Key = 0x41 },
             @{ Name = 'Patrol'; Key = 0x50 })) {
-            # The whole viewport, not the original box: the group has been ordered around
-            # since, and a box that no longer contains all of them would fail the fan-out
-            # assertion for a reason that has nothing to do with the fan-out.
+            # The whole viewport, not the original box: the group moves under the earlier
+            # orders, and a box missing some of them would fail the fan-out assertion for a
+            # reason that has nothing to do with the fan-out.
             Send-ScDrag -Hwnd $hwnd -X1 5 -Y1 5 -X2 630 -Y2 345 -Steps 20
             Start-Sleep -Seconds 2
             $reboxed = Get-ScState "rebox-$($case.Name)"
@@ -295,10 +264,10 @@ try {
             $cmd = @($lines | Select-String -Pattern 'CMD id=0x15 len=11 bytes=\[15(?: [0-9A-F]{2}){8} ([0-9A-F]{2}) ')
             Assert-That "$($case.Name) emits Targeted Order 0x15" ($cmd.Count -gt 0)
             if ($cmd.Count -gt 0) {
-                # The order byte is REPORTED, not asserted against a constant: which order
-                # a targeting click produces depends on what it landed on (ground or a
-                # unit), and this test does not control that. What it must show is that
-                # the two buttons are distinct orders and both go out as 0x15.
+                # The order byte is REPORTED, not asserted against a constant: which order a
+                # targeting click produces depends on what it landed on (ground or a unit),
+                # which this test does not control. What must hold is that the two buttons
+                # are distinct orders and both go out as 0x15.
                 $seen[$case.Name] = [regex]::Match($cmd[-1].Line,
                     'bytes=\[15(?: [0-9A-F]{2}){8} ([0-9A-F]{2}) ').Groups[1].Value
                 Write-Host "       $($case.Name) -> order byte 0x$($seen[$case.Name])"
@@ -332,11 +301,10 @@ try {
         Assert-That 'every fanned-out id is in the policy set' ($stray.Count -eq 0) `
             ($stray.Count -gt 0 ? "(stray: $($stray -join ' '))" : '')
 
-        # Every command the run saw, and whether it was fanned out. A passthrough id that
-        # appeared and was left alone is the in-game half of criterion 6; the byte-exact
-        # half, over ten passthrough ids including production and cancel, is offline in
-        # src/hooktest.cpp part [9], because no >12 selection this map can offer has a
-        # production or cancel button on its command card to press.
+        # A passthrough id that appeared and was left alone is the in-game half of the
+        # proof that non-fanout ids are untouched. The byte-exact half, over ten passthrough
+        # ids including production and cancel, is offline in src/hooktest.cpp part [9]: no
+        # >12 selection this map can offer has a production or cancel button to press.
         $all = @(Get-Content -LiteralPath $LogPath |
                  Select-String -Pattern 'CMD id=(0x[0-9A-F]{2})' |
                  ForEach-Object { [regex]::Match($_.Line, 'CMD id=(0x[0-9A-F]{2})').Groups[1].Value } |

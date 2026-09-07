@@ -1,55 +1,24 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Task 039. Queues MORE THAN FIVE units at a real Terran building, one run per unit TYPE, and
-captures a frame of the fifth queue slot for each -- the picture the user reported as garbage,
-in the buildings they reported it from.
-
+Queues MORE THAN FIVE units at a real Terran building, one run per unit TYPE, and captures a
+frame of the fifth queue slot for each.
 .DESCRIPTION
-The user, 2026-08-11, on the deployed build:
-
-  "when queuing more than 5 units to build in a single building something buggy happens with
-   the 5th units placeholder: for command center it becomes the number '2' and stays regardless
-   of queue length / for one barrack it blacked out / for another barrack somehting blue
-   flashing appeard"
-
-THREE RENDERINGS, ONE BUG, AND THE FRAME INDEX IS WHY. The plugin fills a queue slot the
-engine has just laid out EMPTY. An empty slot's statUser record points at the button-BORDER
-art (`*0x0068C1C0`, <race>cmdbtns.grp) and the draw at 0x00456C30 takes the GRP and the frame
-index out of THE SAME record -- so writing the unit type as the frame index without writing
-the GRP blits frame #unitType out of the borders. That is a different wrong picture per unit
-TYPE and a constant one per type, which is exactly the shape of the report: an SCV is type 7,
-a Marine is type 0, a Firebat 32, a Medic 34.
-
-So this probe varies THE UNIT TYPE: one map holding a Command Center and a Barracks, every
-Train button each card offers, a queue of more than five for each, a frame each. Both cases the
-user could name precisely are in one run -- the SCV that became a stuck "2" and the Marine that
-blacked out.
-
-WHY BOTH BUILDINGS ARE IN ONE MAP, and it is not tidiness: the Command Center is the only
-SUPPLY on it. A Terran player starts with no psi and the sim refuses a Train it cannot house
-while the button stays lit -- the first version of this probe put a lone Barracks and an Academy
-on the map, watched all eight Train commands reach the engine's own funnel (`trainSeen=8`) and
-read back an empty queue. The generator has two placement groups, so a Command Center is the one
-that pays for itself: 10 psi AND the user's first case.
-
-WHAT IS THE ORACLE AND WHAT IS THE PICTURE (AGENTS.md, "Read a dialog's CONTENT from memory;
-never hash its pixels"): the assertions read the live statUser records -- which GRP, which
-frame, which label -- and `boxDiff`, the indicator's own box against a copy of itself taken
-while it was hidden. The PNGs are for the human, never asserted on, and never enter the repo
-(hard rule 1).
-
+The plugin fills a fifth icon the engine laid out EMPTY: that slot's statUser record points at
+the button-BORDER art (`*0x0068C1C0`, <race>cmdbtns.grp) and the draw at 0x00456C30 reads the
+GRP AND the frame index out of the SAME record, so a frame index written without a GRP blits
+frame #unitType out of the borders -- a wrong picture per unit TYPE, hence a run per type.
+Oracle: the statUser records and `boxDiff`, not the pixels (AGENTS.md § "Oracles: what counts as a read-back").
 .EXAMPLE
 ./tools/plugin/probe-queue-indicator-frames.ps1 -Arm fixed
 .EXAMPLE
-./tools/plugin/probe-queue-indicator-frames.ps1 -Arm defect -BuildDir C:\git\decompile-sc\work\scratch\039\arms\defect
+./tools/plugin/probe-queue-indicator-frames.ps1 -Arm defect -BuildDir <the defect-arm build>
 #>
 [CmdletBinding()]
 param(
     [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
-    # DEFECT is the same tree with the three fixes reverted (work/scratch/039/defect-arm.patch).
-    # It only labels the log, the frames and the assertions' expectations -- the build itself
-    # comes from -BuildDir.
+    # The arm only labels the log, the frames and the assertions' expectations; the build itself
+    # comes from -BuildDir, and 'defect' means that tree has the fixes reverted.
     [ValidateSet('defect', 'fixed')]
     [string]$Arm = 'fixed',
     [string]$BuildDir,
@@ -57,20 +26,16 @@ param(
     [string]$FrameDir = 'C:\sc-work\logs\039-frames',
     [string]$FixtureDir,
     # More than five, so the plugin is holding at least one item the strip cannot draw and the
-    # fifth icon is the plugin's rather than the engine's.
+    # fifth icon is the plugin's rather than the engine's. Ten is the ceiling: the map's one
+    # Command Center is its whole supply and it gives 10 psi.
     [int]$Clicks = 8,
     [int]$StartingMinerals = 3000,
     [int]$StartingGas = 1000,
-    # THE GROUP PHASE IS OFF BY DEFAULT AND HERE IS WHY, because a switch with no reason on it
-    # is how dead code survives. This probe can queue at both buildings, but it cannot reliably
-    # SELECT both: a shift-click does not add (the engine reads the real key state, not the
-    # modifier in a posted message) and a world drag box computed from the buildings' own
-    # positions left the selection untouched -- `sel=1`, `engineLen=3`, the Barracks still
-    # selected from the step before, twice. test-group-production.ps1 boxes four Command
-    # Centers reliably (Select-ScUnitsByMap: minimap-centre the camera, then drag with
-    # -Steps 20), and THAT suite is where this task's group evidence comes from. This phase
-    # stays because the six-sample instrument in it is worth keeping, and it is opt-in because
-    # a step that cannot pass must not sit in the default path pretending to be a gate.
+    # Off by default: this probe can queue at both buildings but cannot reliably SELECT both (the
+    # drag box below carries the evidence). test-group-production.ps1 boxes four Command Centers
+    # reliably (Select-ScUnitsByMap: minimap-centre the camera, then drag with -Steps 20), and
+    # that suite is where group evidence belongs. The six-sample instrument here is worth
+    # keeping, but a step that cannot pass must not sit in the default path posing as a gate.
     [switch]$WithGroup,
     [switch]$KeepOpen
 )
@@ -84,9 +49,7 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 $failures = 0
 $step = 0
 
-# units.dat ids, from tools/make_test_map.py's own table (task 029). BOTH buildings are in one
-# map and both are walked, in this order: the Command Center is the user's own first case AND
-# the only supply on the map, so nothing the Barracks trains would be accepted without it.
+# units.dat ids, from tools/make_test_map.py's own table.
 $BUILDINGS = @(
     [pscustomobject]@{ Name = 'command-center'; Type = 106 },
     [pscustomobject]@{ Name = 'barracks';       Type = 111 }
@@ -134,8 +97,8 @@ function Get-Card { param([string]$Tag, [int]$TimeoutSec = 20)
 function Get-Strip { param([string]$Tag, [int]$TimeoutSec = 20)
     Get-ScStatusQueue -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -TimeoutSec $TimeoutSec }
 
-# The indicator's own line, parsed BY NAME. Positional parsing of this line has broken twice
-# in one task; a named group cannot shift when a field is inserted.
+# The indicator's own line, parsed BY NAME: this line gains fields, and a named group cannot
+# shift when one is inserted the way a positional match does.
 function ConvertFrom-QIndLine {
     param($Hit)
     $m = [regex]::Match($Hit.Line,
@@ -194,8 +157,8 @@ New-Item -ItemType Directory -Path $FrameDir -Force | Out-Null
 $gamePid = 0
 $hwnd = [IntPtr]::Zero
 $launchLock = $null
-# NAMED FOR THE STATE, NOT NUMBERED (the user's standing rule, 2026-08-12): the conductor
-# hands these paths to the user, and "frame-007.png" tells them nothing about which case it is.
+# Named for the STATE, not numbered: these paths are handed to a human, and "frame-007.png"
+# says nothing about which case it holds.
 function Shot([string]$tag) {
     if ($script:hwnd -eq [IntPtr]::Zero) { return }
     $p = Join-Path $FrameDir ("{0}-{1}.png" -f $tag, $Arm)
@@ -209,18 +172,15 @@ $script:framesWritten = @()
 try {
     Step 'generate the fixture: a Command Center and a Barracks, both the player''s' {
         Wait-ScFixtureFolderFree -Run $fixtures
-        # WHY THE COMMAND CENTER IS IN EVERY RUN AND NOT ONLY IN ITS OWN CASE: it is the
-        # SUPPLY. The generator has two placement groups, a Terran player starts with no psi,
-        # and the sim refuses a Train it cannot house -- the first run of this probe queued
-        # eight Marines at a lone Barracks, watched all eight reach the command funnel
-        # (`trainSeen=8`), and read back an empty queue, because a Barracks and an Academy
-        # between them supply nothing. A Command Center supplies 10 and trains the SCV, which
-        # is the user's own first case, so it earns its place twice.
-        #
-        # And the build times are pushed out on purpose: a unit that COMPLETES inside the
-        # measurement window frees a queue slot and takes a supply point with it, which is the
-        # confound AGENTS.md says to design out rather than tolerate (task 026). At 180 game
-        # seconds nothing finishes while this probe is looking.
+        # The Command Center is in every run because it is the SUPPLY: a Terran player starts
+        # with no psi and the sim refuses a Train it cannot house while the button stays lit --
+        # a Barracks and an Academy between them supply nothing, and eight Marine clicks then
+        # all reach the command funnel (`trainSeen=8`) against a queue that reads back empty.
+        # It also trains the SCV, so it earns one of the generator's two placement groups twice.
+        # Build times are pushed out on purpose: a unit that COMPLETES inside the measurement
+        # window frees a queue slot and takes a supply point with it, the confound AGENTS.md
+        # § "Oracles: threads, races, confounds" says to design out. At 180 game seconds
+        # nothing finishes while this probe is looking.
         $genArgs = @{
             UnitCount = 1; UnitType = 'command-center'; Player = 0; ClearPlayerUnits = $true
             GridSpacing = 160
@@ -271,10 +231,10 @@ try {
         Start-Sleep -Seconds 2
     }
 
-    # Where the twelve wireframe buttons END, read off the LIVE dialog dump the plugin writes
-    # at attach (ids 33..44, two rows of six). The GROUP line has to sit below all of them, and
-    # a constant read off one install is not a layout -- which is the whole point of task 034's
-    # rule. Returns 0 when the dump is not there yet, and the caller treats that as unknown.
+    # Where the twelve wireframe buttons END, read off the LIVE dialog dump the plugin writes at
+    # attach (ids 33..44, two rows of six). The GROUP line has to sit below all of them, and a
+    # constant read off one install is not a layout (AGENTS.md § "Oracles: what counts as a
+    # read-back"). Returns 0 when the dump is not there yet; the caller treats that as unknown.
     function Get-RowBottom {
         $bottom = 0
         foreach ($d in @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
@@ -359,8 +319,7 @@ try {
             $type = [int]$t.ActParam
             # NOT $name: `Step` takes a -Name parameter and the scriptblock runs in a scope that
             # can see it, so a variable called $name inside one silently becomes the step's own
-            # title. The first run of this probe wrote its frames to
-            # "barracks-fifth-slot-QUEUE 8 x unit type 0 and look at the FIFTH slot-defect.png".
+            # title -- and a whole step title then lands in the frame file names built from it.
             $typeTag = Get-UnitName $type
             $caseTag = "$bName-$typeTag"
 
@@ -398,11 +357,8 @@ try {
                     Assert-That "and its frame index is the unit type ($($fifth.Icon) vs $type)" `
                         ($fifth.Icon -eq $type)
                 }
-                # EACH ARM ASSERTS ITS OWN SIGNATURE, so both runs are expected to come out at
-                # ZERO failures and any failure means the world is not as this task claims. A
-                # probe that only knows what "fixed" looks like reports the defect arm as a
-                # mess of failures, and a mess is not a measurement.
-                #
+                # Each arm asserts its OWN signature: both are expected at ZERO failures, so a
+                # failure in either means the world is not as claimed.
                 # slotDiff: slots 0 and 4 hold the same unit type and the same border graphic,
                 # so once the strip has settled every differing byte is this plugin's --
                 #   fixed   tens: the same picture with our "+N" drawn on it;
@@ -437,14 +393,11 @@ try {
                 # SLOT 9 IS SHARED, AND THAT IS WHY THIS LOOP RE-READS BEFORE EVERY CLICK.
                 # The control carries Cancel while the building is training and Lift Off while
                 # it is idle -- complementary conditions on ONE control
-                # (research/production-queue.md 8.3). A loop that reads the card once and then
-                # clicks a fixed number of times is therefore clicking Lift Off the moment the
-                # queue runs out, and that is not theory: the run before this one drained eight
-                # items, clicked four more times, and PUT THE COMMAND CENTER IN THE AIR. Every
-                # later step then read a flying building's card (`cardId=230`, one button) and
-                # reported "no Train button", which looks nothing like the actual cause.
-                #
-                # So: ask the queue first, stop the moment it is empty, and never press a
+                # (research/production-queue.md 8.3). Clicking a fixed number of times therefore
+                # hits Lift Off the moment the queue runs out and PUTS THE COMMAND CENTER IN THE
+                # AIR, after which every later step reads a flying building's card (`cardId=230`,
+                # one button) and reports "no Train button" -- a symptom that looks nothing like
+                # its cause. Ask the queue first, stop the moment it is empty, and never press a
                 # button whose meaning has changed since it was read.
                 $left = -1
                 for ($i = 1; $i -le ($Clicks + 6); $i++) {
@@ -466,9 +419,8 @@ try {
                     '(a leftover item would make the NEXT case read against a stale strip)'
 
                 # AND THE BUILDING IS STILL THE ONE WE ARE MEASURING. A lift-off, a lost
-                # selection or a click that landed on the terrain all produce readings that are
-                # internally consistent and about the wrong unit -- the failure mode this
-                # project keeps meeting. One read, named, before the next case starts.
+                # selection or a click that landed on terrain all produce readings that are
+                # internally consistent and about the wrong unit.
                 $strip = Get-Strip "still-selected-$caseTag"
                 Assert-That "the pane still holds the $bName (portrait type $($strip.PortraitType))" `
                     ([int]$strip.PortraitType -eq $bType)
@@ -477,30 +429,23 @@ try {
     }
 
     # ------------------------------------------------------------------------------
-    # THE GROUP LINE -- the user's other case, and the one they watched flicker live.
-    #
-    # Their words, 2026-08-12T08:33Z, on a running test: "there is some flashing text ... but
-    # it's behind the units icons in the bottom bar so it's not really visible ... And why is it
-    # flashing I mean when I say flashing it's appearing in front and behind units."
-    #
-    # "In front AND behind" is the measurement that matters. A control spliced at the HEAD of
-    # the child list loses the z-order fight in every frame the engine repaints what is over it
-    # -- and WINS in the frames it does not, because the pane only repaints what is dirty. That
-    # is an alternation, not a constant loss, and it is exactly what a player calls flashing.
-    # So one sample cannot answer it: this phase reads the SAME state N times and reports every
-    # boxDiff, because "it drew once" and "it draws on every frame" are different claims and
-    # only the second one is the fix.
+    # THE GROUP LINE. A control spliced at the HEAD of the child list loses the z-order fight in
+    # every frame the engine repaints what is over it -- and WINS in the frames it does not,
+    # because the pane only repaints what is dirty. That alternation, not a constant loss, is
+    # what a player reports as text "appearing in front and behind units". So one sample cannot
+    # answer it: this phase reads the SAME state N times and reports every boxDiff, because "it
+    # drew once" and "it draws on every frame" are different claims and only the second is a fix.
     # ------------------------------------------------------------------------------
     if ($WithGroup) { Step 'GROUP: two producing buildings selected together' {
         Add-QueueAt -Type 106 -Name 'command-center' -Count 3 | Out-Null
         $bpt = Add-QueueAt -Type 111 -Name 'barracks' -Count 3
 
-        # A DRAG BOX, NOT A SHIFT-CLICK. The first run of this phase clicked one building and
-        # shift-clicked the other and got `sel=1` -- the engine reads the real keyboard for
-        # additive selection, and a posted click carries its modifier in the message rather
-        # than in the key state, so the shift is simply not there. A world drag box needs no
-        # modifier and no foreground (AGENTS.md § "Foreground: only ONE primitive may raise"),
-        # and it is how every other suite here selects more than one thing.
+        # A DRAG BOX, NOT A SHIFT-CLICK: the engine reads the real keyboard for additive
+        # selection, and a posted click carries its modifier in the message rather than in the
+        # key state, so a shift-click adds nothing (`sel=1`). A box computed from the buildings'
+        # own positions can still leave the selection untouched, which is why this phase is
+        # opt-in. A drag needs no modifier and no foreground (AGENTS.md § "Foreground"), and it
+        # is how every other suite here selects more than one thing.
         $w = Get-World 'aim-group-both'
         $mine = @($w.Units | Where-Object {
             $_.Player -eq 0 -and ($_.Type -eq 106 -or $_.Type -eq 111) })
@@ -513,8 +458,8 @@ try {
             $y2 = ($mine | Measure-Object Y -Maximum).Maximum - $w.Screen.Top  + $margin
             Assert-That "the box [$x1,$y1]-[$x2,$y2] is on the battlefield" `
                 ($x1 -ge 4 -and $y1 -ge 4 -and $x2 -le 636 -and $y2 -le 340)
-            # NAME ANYTHING ELSE THE BOX WOULD TAKE. Task 025's first run boxed a neutral
-            # mineral field along with its building and counted it as a selection.
+            # NAME ANYTHING ELSE THE BOX WOULD TAKE: a neutral mineral field inside the rect is
+            # selected along with the buildings, and then a selection count means nothing.
             $intruders = @($w.Units | Where-Object {
                 $_.Player -ne 0 -and
                 ($_.X - $w.Screen.Left) -ge $x1 -and ($_.X - $w.Screen.Left) -le $x2 -and

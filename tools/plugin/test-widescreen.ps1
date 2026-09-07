@@ -1,48 +1,18 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Task 034. Runs the wider-playfield patch set in a real game and READS THE RESULT
-BACK OUT OF THE ENGINE, in two arms, so "the screen is 800 wide now" is a
-measurement rather than a claim.
+Runs the wider-playfield patch set in a real game and READS THE GEOMETRY BACK OUT
+OF THE ENGINE, in two arms, so "the screen is 800 wide" is a measurement.
 
 .DESCRIPTION
-research/renderer-viewport.md 9.3 stages a wider screen. This suite is the
-instrument for stages 0-2. It launches TWICE with the same oracle on both sides:
-
-  control      -Widescreen 0 -- the stock geometry, everything unpatched
-  widescreen   -Widescreen 1 -WidescreenStage N
-
-and asserts on the difference. A one-armed run cannot tell "the descriptor says
-800x480 because we patched it" from "the descriptor always said that", and this
-project has been burned by exactly that shape before (AGENTS.md, the frame-hash
-incident). So the control is not a formality; it is half the result.
-
-WHY A READ-BACK AND NOT A SCREENSHOT. A game frame reproduces game artwork, which
-hard rule 1 forbids committing (AGENTS.md "Screenshots vs hard rule 1"). The
-oracle is task 032's `SCREEN` scan: the framebuffer descriptor 0x006CEFF0 and all
-eight graphic-layer rectangles, read straight out of the running process.
-
-WHAT EACH STAGE IS ALLOWED TO PROVE, because they prove different things:
-
-  stage 0  the display mode alone. The engine still composes 640x480, so the
-           framebuffer descriptor MUST still read 640x480 -- a stage 0 that
-           changed it would mean a patch landed that should not have. What this
-           stage proves is only that the presentation half survives the mode
-           change at all, which is 9.3's cheapest possible falsification.
-  stage 1  the screen surface. The descriptor reads the new size at the MAIN
-           MENU, before any map is loaded, because the buffer is allocated by
-           the video init. Layer 5 does not exist yet and the playfield is still
-           640x400 -- 9.3 says so, and a stage 1 that widened the playfield would
-           mean the stages are not separable after all.
-  stage 2  the playfield. Layer 5's rectangle reads the new width IN GAME.
-
-THE MENU READING IS THE PRIMARY ORACLE for stages 0 and 1, deliberately: it needs
-no clicks. The in-game reading needs a menu walk, and a menu walk on a
-non-640x480 presentation surface is exactly what research/renderer-viewport.md
-10 item 2 records as unmeasured (the windowed-mode helpers are packed, so how
-they map a click at a different resolution can only be found out by running one).
-So a walk that fails is REPORTED AS A FINDING with its own message, not silently
-counted as a geometry failure.
+research/renderer-viewport.md 9.3 stages a wider screen; this suite instruments
+stages 0-2. The control arm (-Widescreen 0) and the widescreen arm run the same
+oracle and the assertion is on the DIFFERENCE: a one-armed run cannot tell "the
+descriptor says 800x480 because we patched it" from "it always said that", so
+the control is half the result. The oracle is the `SCREEN` scan -- framebuffer
+descriptor 0x006CEFF0 and the eight graphic-layer rectangles, read out of the
+running process -- and not a screenshot: a game frame reproduces game artwork,
+which hard rule 1 forbids committing (AGENTS.md § "Screenshots").
 
 .EXAMPLE
 ./tools/plugin/test-widescreen.ps1 -Stage 0
@@ -55,23 +25,23 @@ param(
     [ValidateSet('0', '1', '2')][string]$Stage = '1',
     [string]$GameDir = 'C:\sc-work\1161-base',
     [string]$LogDir = 'C:\sc-work\logs',
-    # This task's OWN fixture folder, per the one-folder-per-task hard rule.
+    # This suite's own fixture folder (AGENTS.md § "Test fixtures").
     [string]$FixtureDir,
-    # Menu reading only. Stages 0 and 1 are fully decided at the menu; skipping
-    # the walk halves the run and removes the one part that depends on how the
-    # windowed helper maps a click at a non-stock size.
+    # Menu reading only. Stages 0 and 1 are fully decided at the menu; skipping the
+    # walk removes the one part that depends on how the windowed helper maps a
+    # click at a non-stock size.
     [switch]$SkipInGame,
     # Widescreen arm only -- for iterating. The control is what makes the result
     # mean anything, so this is for development, not for a result.
     [switch]$NoControl,
-    # Write one in-game PNG per arm to this directory, for a HUMAN to open.
-    # The read-back cannot answer "does the windowed helper actually PRESENT the
-    # extra columns", and nothing in a log can. A frame can, and AGENTS.md
-    # "Screenshots vs hard rule 1" permits exactly this: a frame kept on the
-    # gitignored diagnostic path for the conductor or user to open locally.
-    # It is NEVER committed and never goes through pr-image -- a game frame
-    # reproduces game artwork. Save-ScWindowImage refuses to write inside the
-    # repo, so that rule is enforced rather than remembered.
+    # List the captured frames at the end, for a HUMAN to open: the read-back cannot
+    # answer "does the windowed helper actually PRESENT the extra columns", and
+    # nothing in a log can. One in-game PNG per arm is written to $FrameDir either
+    # way -- the playfield-interior comparison needs both frames. A game frame
+    # reproduces game artwork, so it stays on the gitignored diagnostic path, is
+    # never committed and never goes through pr-image (AGENTS.md § "Screenshots");
+    # Save-ScWindowImage refuses to write inside the repo, so that is enforced
+    # rather than remembered.
     [switch]$CaptureFrames,
     [string]$FrameDir = 'C:\sc-work\logs\034-frames',
     [switch]$KeepOpen
@@ -84,14 +54,14 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
 
 if (-not $FixtureDir) { $FixtureDir = Join-Path $GameDir 'Maps\BroodWar\00-t034' }
-# Named for this SUITE, not for the task (AGENTS.md fixture rules).
+# Named for the SUITE, not for the run (AGENTS.md § "Test fixtures").
 $mapName = 'widescreen.scx'
 $mapPath = Join-Path $FixtureDir $mapName
 $markerPath = Join-Path $LogDir 'marker.txt'
 
-# The geometry the patch table was generated for. Read out of the generated
-# header rather than duplicated here, so a regenerated table at a different size
-# cannot leave this suite asserting the old numbers.
+# The geometry the patch table was generated for, read out of the generated header
+# rather than duplicated here, so a regenerated table at a different size cannot
+# leave this suite asserting stale numbers.
 $patchHeader = Join-Path $scriptDir 'src/sc_screen_patches.h'
 if (-not (Test-Path -LiteralPath $patchHeader)) {
     throw "test-widescreen: $patchHeader not found -- run tools/renderer_patch_sites.py first."
@@ -137,10 +107,9 @@ function Read-ScreenLayout {
     param([Parameter(Mandatory)][string]$Tag, [Parameter(Mandatory)][string]$LogPath)
 
     $from = Get-ScLogLineCount -LogPath $LogPath
-    # Set-ScMarker, not Set-Content (issue #37/#71): the latter opens the marker
-    # FileShare.None and throws whenever the observer holds it. This site also used to
-    # write a TRAILING NEWLINE (-Encoding ascii with no -NoNewline), which PollMarker
-    # compares against the whole line -- tests/marker-write.Tests.ps1 pins the shape.
+    # Set-ScMarker, not Set-Content: the latter opens the marker FileShare.None and
+    # throws whenever the observer holds it, and the marker must carry NO trailing
+    # newline -- PollMarker compares its content against the whole line.
     Set-ScMarker -MarkerPath $markerPath -Label $Tag
     Wait-ScLogMatch -LogPath $LogPath -Pattern "SCREEN \[$Tag\] origin=" -TimeoutSec 30 -FromLine $from | Out-Null
     $lines = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $from |
@@ -168,13 +137,12 @@ function Read-ScreenLayout {
 }
 
 # The HUD's own dialogs, for the "nothing moved" comparison. Taken from the WHOLE
-# log rather than from a marker window on purpose: the DIALOGS line is emitted on
-# CHANGE, so the window around a marker frequently contains no dialog line at all
-# (and sometimes contains only the empty `n=0` of a screen transition). Two
-# filters make the line comparable between arms:
-#   * it must carry StatBtn, i.e. the in-game HUD is actually up;
-#   * it must NOT carry Tips_Dlg, whose tip string is chosen at random and so
-#     differs between two runs of the same build.
+# log rather than from a marker window: the DIALOGS line is emitted on CHANGE, so
+# the window around a marker frequently holds no dialog line at all (or only the
+# empty `n=0` of a screen transition). Two filters make the line comparable between
+# arms: it must carry StatBtn, i.e. the in-game HUD is actually up, and it must NOT
+# carry Tips_Dlg, whose tip string is chosen at random and so differs between two
+# runs of the same build.
 function Get-HudDialogLine {
     param([Parameter(Mandatory)][string]$LogPath)
     $hit = @(Get-Content -LiteralPath $LogPath |
@@ -198,8 +166,6 @@ function Show-Reading {
     }
 }
 
-# One arm: launch, read at the menu, optionally walk to a game and read again,
-# close. Returns the readings plus the WIDESCREEN lines the plugin logged.
 function Invoke-Arm {
     param(
         [Parameter(Mandatory)][string]$Name,
@@ -218,11 +184,10 @@ function Invoke-Arm {
     Write-Host ''
     Write-Host "test-widescreen: ARM '$Name' (-Widescreen $Widescreen, stage $Stage)"
     try {
-        # -Mode hooktest, not observe: observe is the plugin's off switch and
-        # ignores every feature that writes game memory, this one included. It is
-        # the LEAST invasive mode that is not the off switch -- one logging-only
-        # detour on queueCommand, no behaviour change -- so the geometry is the
-        # only thing that differs between the arms.
+        # -Mode hooktest, not observe: observe is the plugin's off switch and ignores
+        # every feature that writes game memory, this one included. hooktest is the
+        # LEAST invasive mode that is not the off switch -- one logging-only detour on
+        # queueCommand -- so the geometry is the only thing differing between the arms.
         & (Join-Path $scriptDir 'run-with-plugin.ps1') `
             -Mode hooktest -ScreenScan 1 -InjectWindowedHelper WMode -NoLaunchLock `
             -Widescreen $Widescreen -WidescreenStage $Stage `
@@ -230,11 +195,10 @@ function Invoke-Arm {
                 Write-Host "       $_"
                 if ("$_" -match 'scinject:\s*PID=(\d+)') { $gamePid = [int]$Matches[1] }
                 # The PRESENTED size, which the read-back cannot see. The engine
-                # composing a wider frame into its own buffer and the windowed
-                # helper still showing a 640-wide window are DIFFERENT OUTCOMES,
-                # and only this line separates them. research/renderer-viewport.md
-                # 10 item 2 records how the packed helper behaves at a non-stock
-                # mode as unmeasured; this is that measurement.
+                # composing a wider frame into its own buffer and the windowed helper
+                # still showing a 640-wide window are DIFFERENT OUTCOMES, and only this
+                # line separates them -- research/renderer-viewport.md 10 item 2 records
+                # the packed helper's behaviour at a non-stock mode as unmeasured.
                 if ("$_" -match "class='SWarClass'.*rect=(-?\d+),(-?\d+)-(-?\d+),(-?\d+)") {
                     $result.WindowW = [int]$Matches[3] - [int]$Matches[1]
                     $result.WindowH = [int]$Matches[4] - [int]$Matches[2]
@@ -245,8 +209,8 @@ function Invoke-Arm {
         $h = Get-ScGameWindow -ProcessId $gamePid
         Start-Sleep -Seconds 3
 
-        # READING 1 -- the main menu. The framebuffer is allocated and described
-        # by the video init, so stages 0 and 1 are already decided here.
+        # The framebuffer is allocated and described by the video init, so stages 0
+        # and 1 are already decided at the menu, before any map is loaded.
         $result.Menu = Read-ScreenLayout -Tag "$Name-menu" -LogPath $LogPath
         Show-Reading $result.Menu $Name
 
@@ -271,8 +235,8 @@ function Invoke-Arm {
                 Dismiss-ScTipsDialog -Hwnd $h -LogPath $LogPath | Out-Null
                 Start-Sleep -Seconds 3
                 $result.InGame = Read-ScreenLayout -Tag "$Name-ingame" -LogPath $LogPath
-                # A reading is only "in game" if the playfield layer is there. The
-                # walk can complete every click and still be sitting in a menu.
+                # A reading is only "in game" if the playfield layer is there: the walk
+                # can complete every click and still be sitting in a menu.
                 $l5 = $result.InGame.Layers | Where-Object Index -eq 5
                 $result.Walked = ($null -ne $l5 -and $l5.Used -ne 0)
                 if (-not $result.Walked) { $result.WalkError = 'every click was sent but the playfield layer is still not installed' }
@@ -281,8 +245,7 @@ function Invoke-Arm {
                     New-Item -ItemType Directory -Path $FrameDir -Force | Out-Null
                     $png = Join-Path $FrameDir "s$Stage-$Name-ingame.png"
                     # Client area, not -FullWindow: the question is what the game
-                    # PRESENTS, and the border would only add pixels that are not
-                    # the game's.
+                    # PRESENTS, and the border adds pixels that are not the game's.
                     Save-ScWindowImage -Hwnd $h -Path $png | Out-Null
                     $result.Frame = $png
                     Write-Host "       frame captured: $png"
@@ -331,8 +294,9 @@ try {
 
     # --- the patch set itself ------------------------------------------------
     # Proved POSITIVE before anything is asserted absent: the log must show the
-    # install line at all, then show it succeeding. "No WIDESCREEN line appeared"
-    # and "the install refused" look identical in a quiet log (AGENTS.md, task 030).
+    # install line at all, then show it succeeding, because "no WIDESCREEN line
+    # appeared" and "the install refused" look identical in a quiet log
+    # (AGENTS.md § "Oracles: absence and defect-era checks").
     $installLines = @($wsLog | Where-Object { $_ -match 'WIDESCREEN install:' })
     Assert-True 'the widescreen arm logged an install attempt' ($installLines.Count -eq 1) `
         "(found $($installLines.Count))"
@@ -380,7 +344,7 @@ try {
         # framebuffer's PITCH and nothing else: every rectangle, clip and dirty
         # bound stays stock, so the engine keeps composing a 640-wide picture into
         # an 800-wide buffer. That separation is what makes stage 1 checkable at
-        # all -- its frame must be pixel-identical to the control's.
+        # all -- its frame must match the control's down to the animation noise floor.
         $l2 = $wsMenu.Layers | Where-Object Index -eq 2
         if ($Stage -eq '2') {
             Assert-True "the dialog layer covers the whole new screen (${WS_W}x${WS_H})" `
@@ -394,9 +358,8 @@ try {
         }
     }
 
-    # What the helper PRESENTS, beside what the engine composed. Two different
-    # claims, and this task turns on the difference: a wider frame that is never
-    # shown wider is not the feature.
+    # What the helper PRESENTS, beside what the engine composed: two different
+    # claims, and a wider frame that is never shown wider is not the feature.
     $ctlWin = $NoControl ? '(no control arm)' : "$($arms['control'].WindowW)x$($arms['control'].WindowH)"
     Write-Host "       presented window: widescreen arm $($ws.WindowW)x$($ws.WindowH), control arm $ctlWin"
     if (-not $NoControl -and $Stage -ne '0' -and $ws.WindowW -eq $arms['control'].WindowW) {
@@ -422,7 +385,7 @@ try {
     }
     elseif (-not $ws.Walked) {
         # A walk that did not land is a measurement about the WINDOWED HELPER, not
-        # about the geometry -- record it as such rather than as a geometry failure.
+        # about the geometry -- report it as a finding, not as a geometry failure.
         Report-Finding ("the widescreen arm could not be driven into a game: $($ws.WalkError). " +
                         "research/renderer-viewport.md 10 item 2 records how the packed windowed " +
                         "helper maps input at a non-stock size as UNMEASURED; this run is evidence " +
@@ -453,23 +416,18 @@ try {
         }
 
         # ---- THE PLAYFIELD INTERIOR ----------------------------------------
-        # This block exists because its absence shipped a broken frame. The first
-        # version of this suite proved the framebuffer descriptor and the layer
-        # rectangles carried the new size, and concluded the picture was right.
-        # It was not: the playfield between the sampled regions was shredded, and
-        # the read-back could not see it because a layer rect is the plugin's
-        # bookkeeping, not the engine's result (AGENTS.md, task 029).
-        #
-        # Both arms load the same fixture at the same start location, so the
-        # camera origin is the same and the LEFT 640 COLUMNS SHOW THE SAME MAP in
-        # either arm -- at stage 2 the widescreen frame simply draws more to the
-        # right, which the windowed helper crops. So the control frame is a
-        # per-pixel expectation for the region both frames share, and any
-        # disagreement is damage.
+        # A layer rect is the plugin's bookkeeping, not the engine's result: the
+        # descriptor and every rectangle can read the new size while the playfield
+        # between them is shredded, so the geometry read-back alone cannot pass a
+        # frame (AGENTS.md § "Oracles: what counts as a read-back").
+        # Both arms load the same fixture at the same start location, so the camera
+        # origin matches and the LEFT 640 COLUMNS SHOW THE SAME MAP in either arm --
+        # at stage 2 the widescreen frame simply draws more to the right, which the
+        # windowed helper crops. The control frame is therefore a per-pixel
+        # expectation for the shared region, and any disagreement is damage.
         if (-not $NoControl -and $arms['control'].Walked -and $ws.Frame -and $arms['control'].Frame) {
-            # Positive first: the comparison is only meaningful if both arms are
-            # looking at the same place. An identical origin is what makes the
-            # control frame an expectation rather than a coincidence.
+            # Positive first: an identical camera origin is what makes the control
+            # frame an expectation rather than a coincidence.
             Assert-True 'both arms have the camera at the same origin (so the frames are comparable)' `
                 ($null -ne $g.Origin -and $g.Origin -eq $arms['control'].InGame.Origin) `
                 "(ws=$($g.Origin) control=$($arms['control'].InGame.Origin))"
@@ -503,20 +461,15 @@ try {
                 ($badRows -le [math]::Ceiling($rows * 0.05)) "($badRows of $rows rows bad)"
 
             # THE DAMAGE SIGNATURE, at full resolution. "Pixel-identical" is not
-            # available as a pass condition and this suite used to imply it was:
-            # two runs of the SAME build differ by a few hundred pixels because
-            # animated map doodads are caught at different phases (measured at
-            # stage 0, where both arms compose the identical picture: 586 of
-            # 307200 pixels, 7 isolated 32x32 blocks). The earlier "stage 0 is
-            # pixel-identical" reading came from sampling every second pixel,
-            # which those few hundred cannot move.
-            #
-            # What separates the two is SHAPE, not count. A wrong pitch damages
-            # whole ROWS across the whole width -- the broken stage-1 build
-            # disagreed on 163 of 190 rows, each spanning x=5..639. Animation
-            # differs in isolated blobs and spans no row. So the assertion is on
-            # the row span, and the pixel count is REPORTED beside the measured
-            # noise floor rather than asserted against zero.
+            # available as a pass condition: two runs of the SAME build differ by a
+            # few hundred pixels because animated map doodads are caught at different
+            # phases (measured at stage 0, where both arms compose the identical
+            # picture: 586 of 307200 pixels, 7 isolated 32x32 blocks). What separates
+            # damage from animation is SHAPE, not count -- a wrong pitch damages whole
+            # ROWS across the whole width (a broken stage-1 build disagreed on 163 of
+            # 190 rows, each spanning x=5..639) while animation spans no row. So the
+            # assertion is on the row span, and the pixel count is REPORTED beside the
+            # measured noise floor rather than asserted against zero.
             Assert-True 'no row of the playfield is damaged across its width (the stride-error signature)' `
                 ($wideRows -eq 0) "($wideRows row(s) with a diff span over half the width; span max ${spanMax}px)"
             if ($diffPx -gt 3000) {
@@ -525,16 +478,14 @@ try {
             }
         }
 
-        # The HUD must not have moved. Its dialogs carry absolute coordinates
-        # (research/hud-selection-row.md, research/command-card.md) and the whole
-        # premise of this task is that they stay where they are, with the extra
-        # screen left blank beside them.
+        # The HUD must not move. Its dialogs carry absolute coordinates
+        # (research/hud-selection-row.md, research/command-card.md) and the premise of
+        # the wider screen is that they stay put, with the extra screen blank beside.
         if (-not $NoControl -and $arms['control'].Walked) {
             $wsDlg = Get-HudDialogLine -LogPath $ws.Log
             $ctlDlg = Get-HudDialogLine -LogPath $arms['control'].Log
-            # Positive first: the line has to exist at all in both arms before its
-            # equality is worth anything (AGENTS.md, "absence assertions must first
-            # be proved positive").
+            # Positive first: the line has to exist in both arms before its equality
+            # is worth anything (AGENTS.md § "Oracles: absence and defect-era checks").
             Assert-True 'both arms logged the in-game HUD dialog set' `
                 ($null -ne $wsDlg -and $null -ne $ctlDlg)
             Assert-True 'the HUD dialogs are at identical coordinates in both arms' `

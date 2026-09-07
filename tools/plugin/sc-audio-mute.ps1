@@ -1,50 +1,17 @@
 <#
 .SYNOPSIS
-Process-scoped audio mute via Windows Core Audio (WASAPI) session volume -- no registry,
-no file, no state intended to outlive the target process.
-
+Process-scoped audio mute via Windows Core Audio (WASAPI) session volume, so unattended
+launches are silent by default -- no registry, no file, no state outliving the target
+process. Dot-source this file; it defines Set-ScProcessMuted in the caller's scope.
 .DESCRIPTION
-task018: unattended test launches must be silent by default; the first attempt at this
-used the game's own HKCU registry volume settings (mute before launch, restore after) and
-that went badly -- see tools/plugin/README.md "Sound" and the 2026-08-08 incident it
-references. This is the replacement: mute the game's own per-application audio session
-directly, the same mechanism the Windows Volume Mixer uses per-app.
-
-Enumerates EVERY ACTIVE render endpoint (EnumAudioEndpoints, DEVICE_STATE_ACTIVE), not
-just the default one. First version of this checked the default endpoint only and never
-found StarCraft's session across several real attempts; a verifier found Windows' own
-per-app audio policy store showing StarCraft with sessions on THREE distinct render
-endpoints on the machine this was built on (onboard line-out, an HDMI output, a USB
-device) -- the session was very likely live the whole time, on an endpoint this code
-never looked at. Checking every active endpoint is the actual fix; a longer timeout on
-the wrong endpoint would still have found nothing.
-
-Session identification matches by process id (IAudioSessionControl2::GetProcessId), the
-same approach check-game-windows.ps1 and close-game.ps1 use for windows -- resolving "the
-game" by name would hit whichever StarCraft happens to be running.
-
-Scope, stated exactly rather than aspirationally: Set-ScProcessMuted polls for up to
--TimeoutSec at launch and then STOPS. An earlier version additionally started a
-Register-ObjectEvent background timer meant to keep re-affirming the mute for the whole
-game session; measured live, that timer does not fire while the calling script is inside
-a Start-Sleep call (0 ticks observed across a 3s sleep -- PowerShell does not appear to
-service the event queue during a plain sleep), which is most of what this script and
-every test suite spend their time doing, and the timer dies with the calling pwsh process
-regardless. That mechanism did not do what its own comments claimed and has been removed
-rather than left in place as a false guarantee. If a session does not exist yet within
--TimeoutSec of launch (all endpoints checked, still nothing), the launch continues
-audible -- there is currently no ongoing re-check after that point.
-
-No registry key or file is written by SetMute as far as this was checked (searched both
-HKCU:\...\MMDevices\Audio\Render\*\Applications\* and the modern per-app policy store at
-HKCU:\Software\Microsoft\Internet Explorer\LowRegistry\Audio\PolicyConfig\PropertyStore
-for anything referencing StarCraft after muting/unmuting a real session -- found nothing
-in either, across 286 policy-store entries). That is not an exhaustive proof, so
-Set-ScProcessMuted is called with -Mute $false explicitly wherever an audible launch is
-requested (see run-with-plugin.ps1's -Sound handling) rather than simply skipped -- cheap
-insurance against a persistence path this search did not find.
-
-Dot-source this file; it defines Set-ScProcessMuted in the caller's scope.
+Never mute through the game's own HKCU registry volume settings: that state outlives the
+process and overwrites the user's real audio settings.
+Enumerate EVERY active render endpoint (EnumAudioEndpoints, DEVICE_STATE_ACTIVE), not just the
+default: StarCraft has been seen holding sessions on three distinct endpoints of one machine
+(line-out, HDMI, USB), so a default-only search finds nothing while a live session sits elsewhere.
+Match sessions by process id, not by name: by name resolves to whichever StarCraft is running.
+A search of both per-app audio policy stores (286 entries) found nothing SetMute writes; that is
+not exhaustive proof, so an audible launch passes -Mute $false explicitly (run-with-plugin.ps1).
 #>
 
 if (-not ('ScAudio.Interop' -as [type])) {
@@ -193,15 +160,12 @@ function Set-ScProcessMuted {
     active render endpoint. Polls for -TimeoutSec because the session does not
     necessarily exist the instant the process does.
     .DESCRIPTION
-    Returns $true once a session for -ProcessId was found (on any active endpoint) and
-    set to -Mute, $false if none appeared within -TimeoutSec. A $false is NOT treated as
-    a fatal error by the caller -- some launches may take longer than the default timeout
-    to create a session, or in principle never create one; the launch itself must not
-    fail just because muting could not be confirmed.
-
-    Does NOT keep checking after -TimeoutSec elapses -- see this file's top-of-file
-    .DESCRIPTION for why an earlier background-re-check design was removed rather than
-    kept as a mechanism that did not actually run.
+    Returns $true once a session for -ProcessId was found and set to -Mute, $false if none
+    appeared within -TimeoutSec. $false is not fatal to the caller: a launch must not fail
+    because muting could not be confirmed, so past the timeout the launch continues audible.
+    Do not add a background timer to keep re-affirming the mute: a Register-ObjectEvent timer
+    does not fire while the caller sits inside Start-Sleep (0 ticks measured across a 3s
+    sleep), which is most of what scripts and suites do, and it dies with the calling pwsh.
     #>
     [CmdletBinding()]
     param(

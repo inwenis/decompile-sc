@@ -5,40 +5,22 @@ Turns the raw ImmediateSweep output into the committed constant inventory, assig
 occurrence a ROLE.
 
 .DESCRIPTION
-The point of the inventory is the role, not the count. `research/selection-cap.md` §7 candidate
-5 proposes byte-patching "the immediates 12, 0xC, 0x30" and expects that to fail; whether it
-fails depends entirely on what each occurrence DOES. A `MOV ECX,0xc` feeding a REP STOSD is a
-buffer length and moving it corrupts memory; a `CMP DL,0xc` on an incoming packet field is a
-policy check with no array write behind it. Same number, opposite consequences.
+The role, not the count, is the point: a `MOV ECX,0xc` feeding a REP STOSD is a buffer length
+whose patching corrupts memory, while a `CMP DL,0xc` on an incoming packet field is a policy
+check with no array write behind it. Same number, opposite consequences, so the byte-patch of
+"the immediates 12, 0xC, 0x30" proposed in `research/selection-cap.md` §7 candidate 5 can only
+be judged per occurrence. Roles are assigned mechanically from the mnemonic and the OPERAND KIND
+ImmediateSweep recorded at the point of match, so the classification is reproducible rather than
+an opinion; `capRelevant` is the column to filter on, marking the occurrences that encode the
+12-unit selection limit or an array's extent.
 
-Roles are assigned mechanically from the mnemonic and the OPERAND KIND that ImmediateSweep
-recorded at the point of match, so the classification is reproducible rather than an opinion.
-
-The operand kind is not a detail. An x86 instruction can carry a memory displacement and an
-immediate at the same time, and round 1 of this task classified on instruction text alone:
-
-    CMP byte ptr [ESI + 0x1],0xc        0x004C275A, in CMDRECV_Select
-
-matched the "has a [reg + 0x..] displacement" rule and was filed as struct-or-stack-offset,
-capRelevant=False -- when the watched value here is the 0xc, the cap the received packet count
-is checked against, and the 0x1 is just where the count byte sits in the packet. The most
-load-bearing site in the inventory was therefore missing from exactly the filter
-(capRelevant=True) that a reader would use to find it. The rule now keys off `opKind`: a value
-is a displacement only when the sweep says the scalar it matched WAS the displacement.
-
-  loop-bound     value loaded into a register that then drives a counted loop (MOV/LEA form)
-  comparison     value is the right-hand side of a CMP/TEST -- a check, not a length
-  index-scale    value multiplies or steps an index (IMUL / SUB-stride / SHL on an address)
-  array-size     a real buffer extent: a REP STOS element count, or a byte length pushed as a
-                 call argument (0x180 = 384 = sizeof(playersSelections))
-  and the non-cap roles below, which exist because the same byte values appear constantly in
-  code that has nothing to do with selection and must not be mistaken for cap sites:
-  struct-or-stack-offset, abi-stack-cleanup (RET 0xc / ADD ESP,0xc / SUB ESP,0xc -- calling
-  convention and frame arithmetic), unit-tag-shift, command-id, unrelated-constant
-
-`note` carries what was confirmed by reading the surrounding code; rows without one were
-classified by form alone. `capRelevant` is the column to filter on: it marks the occurrences
-that actually encode the 12-unit selection limit or an array's extent.
+Classifying on instruction text alone is wrong: an x86 instruction can carry a memory
+displacement and an immediate at the same time, so `CMP byte ptr [ESI + 0x1],0xc` (0x004C275A,
+in CMDRECV_Select) matches a "has a [reg + 0x..] displacement" rule and files the most
+load-bearing site in the inventory as struct-or-stack-offset, capRelevant=False -- invisible to
+exactly the filter a reader would use to find it, when the watched value there is the 0xc the
+received packet count is checked against and the 0x1 is just where that count byte sits. A value
+is a displacement only when `opKind` says the scalar the sweep matched WAS the displacement.
 
 .PARAMETER InFile
 ImmediateSweep TSV (work/scratch/ghidra-sweep/immediates.tsv).
@@ -48,10 +30,10 @@ Destination TSV (research/data/selection-immediates.tsv).
 
 .PARAMETER Watch
 The values ImmediateSweep was told to watch, so this script can report the ones that produced
-ZERO rows. An absent constant is a finding -- "0x2C never appears as an immediate" is why the
-last element of a 12-pointer array is known to be reached by pointer walking rather than by a
-+44 displacement -- and an absence is invisible in the output file by construction. Must match
-the sweep's watch list.
+ZERO rows. An absence is invisible in the output file by construction, yet it is a finding:
+"0x2C never appears as an immediate" is why the last element of a 12-pointer array is known to
+be reached by pointer walking rather than by a +44 displacement. Must match the sweep's watch
+list.
 #>
 param(
     [Parameter(Mandatory)][string]$InFile,
@@ -61,8 +43,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# Per-instruction notes recorded while reading the surrounding disassembly. Anything not listed
-# here is classified by form only; that difference is visible in the output.
+# What was confirmed by reading the surrounding disassembly; anything not listed here is
+# classified by form alone, and the empty `note` column is what says so.
 $notes = @{
     '0x0046F206' = 'SortAllUnits list-full check; JL (SIGNED) at 0x0046F209 -> overflow handler 0x0046F040. GPTP annotates this site as 0x0046F208, which is the address of the 0x0C IMMEDIATE BYTE inside this 3-byte instruction, not of the instruction.'
     '0x0049A857' = 'getActivePlayerNextSelection iterator bound; JC (UNSIGNED) -> returns NULL once selection_iterator reaches 12. selection-cap.md §4.4 calls this loop bound-agnostic; it is not.'
@@ -108,11 +90,12 @@ $rows = $sweep | ForEach-Object {
     elseif ($val -eq 11 -and $mn -in @('SAR', 'SHL')) { 'unit-tag-shift' }
     elseif ($_.insAddr -eq '0x004C0A9B') { 'command-id' }
     elseif ($_.insAddr -in @('0x0047B7E7', '0x0046F596')) { 'unrelated-constant' }
-    # ADD/SUB of a watched value into a register is a STRIDE STEP, not arithmetic on data:
-    # `ADD EDI,0x30` / `SUB EDI,0x30` walks one 12-pointer row. ADD ESP / SUB ESP are already
-    # taken above, so this cannot swallow frame arithmetic.
+    # ADD/SUB of a watched value into a register is a STRIDE STEP: `ADD EDI,0x30` walks one
+    # 12-pointer row. ADD ESP / SUB ESP are taken above, so frame arithmetic cannot land here.
     elseif ($mn -in @('IMUL', 'SUB', 'ADD')) { 'index-scale' }
     elseif ($mn -in @('CMP', 'TEST')) { 'comparison' }
+    # PUSH is here because an extent also appears as a byte length pushed as a call argument
+    # (0x180 = 384 = sizeof(playersSelections)), not only as a REP STOS element count.
     elseif ($mn -in @('MOV', 'LEA', 'PUSH') -and $val -in @(96, 384, 1728, 6912)) { 'array-size' }
     elseif ($mn -in @('MOV', 'LEA')) { 'loop-bound' }
     else { 'unclassified-review' }

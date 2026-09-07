@@ -1,55 +1,34 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-The PLAN half of the randomized conformance harness (task 041): a seeded, pure,
-game-free generator of action sequences, and the deterministic PRNG behind it.
+The PLAN half of the randomized conformance harness: a seeded, pure, game-free
+generator of action sequences, and the deterministic PRNG behind it.
 
 .DESCRIPTION
-Split out of the runner on purpose. A random test whose failures cannot be replayed is a
-rumour (task file, Context), and the only way to be sure a seed replays is for the plan to
-be produced by something that touches nothing -- no game, no clock, no filesystem, no
-ambient state. Everything in this file is a pure function of its arguments, so
-`New-ScConformancePlan -Seed 12345` returns the same object on any machine, in any order,
-before or after a game has run.
-
-THE PRNG IS OURS ON PURPOSE. `System.Random` is seeded-deterministic today, but its
-contract is "the sequence may change between .NET versions" for the parameterless form and
-its seeded form has already been reimplemented once. A seed printed in a bug report has to
-mean the same thing next year, so this uses SplitMix32 written out in full: eight lines,
-no dependency, and the plan hash proves a replay matched.
-
-WHAT AN EPISODE IS. One selection of buildings, some things done to it, and a read of the
-engine afterwards. The parameter randomised hardest is the SIZE OF THE SELECTION, because
-that is the axis both of this week's escaped bugs lived on:
-
-  * task 038 -- `sc_prodqueue` read the client's `activePlayerSelection` where the engine
-    gates on `playersSelections`. The two arrays agree whenever exactly ONE building is
-    selected, which was every case in both suites.
-  * task 037 -- `AnchorFor` had no case for the upgrade mode, so the indicator was composed
-    and never anchored, while its test asked the composer directly.
-
-A generator that always selected one building, or always selected all of them, would have
-missed 038 exactly as the hand-written suites did.
+A random failure that cannot be replayed is a rumour: the plan touches no game, clock or
+filesystem, so a seed replays the same object anywhere, and the PRNG is ours because
+`System.Random`'s seeded sequence is not contract-stable across .NET versions and has
+already been reimplemented once. Selection SIZE is randomised hardest: the engine gates on
+`playersSelections[activePlayerId]` while the client's `activePlayerSelection` is a
+different list, and the two agree in every single-building case -- so a handler reading the
+wrong one passes every suite that only ever selects one building.
 
 .EXAMPLE
 . ./tools/plugin/random-conformance-plan.ps1
 New-ScConformancePlan -Seed 12345 -Episodes 6 -Profile production | ConvertTo-Json -Depth 8
 #>
 
-# ---------------------------------------------------------------------------
-# SplitMix32. Deterministic, self-contained, and reproducible across runtimes.
-# ---------------------------------------------------------------------------
+# --- SplitMix32: eight lines, no dependency, same sequence on every runtime ---
 class ScRng {
     [uint32]$State
 
-    # WHY EVERY CONSTANT CARRIES AN `L`. PowerShell parses `0xFFFFFFFF` as the Int32 -1
-    # and `0x9E3779B9` as a negative Int32 too, so the unsuffixed version of this code
-    # silently computes something else entirely (and throws on the cast, which is the
-    # lucky outcome). The `L` forces Int64 and the masks then mean what they say.
+    # EVERY CONSTANT CARRIES AN `L`. PowerShell parses `0xFFFFFFFF` as the Int32 -1 and
+    # `0x9E3779B9` as a negative Int32, so unsuffixed constants silently compute something
+    # else (throwing on the cast is the lucky outcome). `L` forces Int64 and the masks
+    # then mean what they say.
     ScRng([int]$seed) {
-        # A seed of 0 is a legitimate seed and must not be special-cased into
-        # something else, or `-Seed 0` in a bug report would replay a different plan
-        # than the run that produced it.
+        # 0 is a legitimate seed: special-casing it would make `-Seed 0` in a bug
+        # report replay a different plan than the run that produced it.
         $this.State = [uint32]([uint64]([uint32]$seed) -band 0xFFFFFFFFL)
     }
 
@@ -93,18 +72,13 @@ function New-ScRng {
     [ScRng]::new($Seed)
 }
 
-# ---------------------------------------------------------------------------
-# WHICH SUBSETS OF THE BLOCK A DRAG BOX CAN ACTUALLY REACH
-# ---------------------------------------------------------------------------
+# --- WHICH SUBSETS OF THE BLOCK A DRAG BOX CAN ACTUALLY REACH ---
 # The map generator lays a block out row-major on a grid `per_row = ceil(sqrt(n))`
-# (tools/make_test_map.py, place_units), and a drag box selects everything inside a
-# RECTANGLE. So the reachable subsets are exactly the axis-aligned sub-rectangles of that
-# grid -- {0,2} of a 2x2 (a diagonal) is NOT reachable, and a suite that pretended it was
-# would be boxing four buildings while asserting about two.
-#
-# Shift-click cannot rescue it either: Windows never updates the key-state table for a
-# POSTED message, so a posted Shift+click carries no Shift at all (drive-game.ps1,
-# Send-ScCommand). Enumerating the rectangles is the honest version.
+# (tools/make_test_map.py, place_units) and a drag box selects a RECTANGLE, so the
+# reachable subsets are exactly the axis-aligned sub-rectangles: {0,2} of a 2x2 is NOT
+# reachable, and a suite pretending it is boxes four buildings while asserting about two.
+# Shift-click cannot widen this -- Windows never updates the key-state table for a POSTED
+# message, so a posted Shift+click carries no Shift (drive-game.ps1, Send-ScCommand).
 function Get-ScGridSubsets {
     [CmdletBinding()]
     param([Parameter(Mandatory)][int]$Count)
@@ -130,9 +104,9 @@ function Get-ScGridSubsets {
                 if ($cell.ContainsKey($k)) { $members += $cell[$k] } else { $full = $false }
               }
             }
-            # A rectangle with a HOLE in it (the ragged last row of a non-square block) is
-            # still a perfectly good box to drag -- the hole is empty ground. What it must
-            # not do is claim a member that is not there.
+            # A rectangle with a HOLE (the ragged last row of a non-square block) is still
+            # a good box to drag -- the hole is empty ground; it must only never claim a
+            # member that is not there.
             if ($members.Count -eq 0) { continue }
             $key = ($members -join ',')
             if ($seen.ContainsKey($key)) { continue }
@@ -148,41 +122,31 @@ function Get-ScGridSubsets {
         }
       }
     }
-    # Sorted by size then by first member, so the group numbers a plan hands out are a
-    # function of the block size alone and two runs of the same seed assign the same
-    # control group to the same subset.
+    # Sorted by size then first member, so group numbers are a function of the block size
+    # alone and two runs of one seed give the same control group to the same subset.
     @($out | Sort-Object Size, { $_.Members[0] })
 }
 
-# ---------------------------------------------------------------------------
-# THE PLAN
-# ---------------------------------------------------------------------------
+# --- THE PLAN ---
 function New-ScConformancePlan {
     <#
     .SYNOPSIS
     A whole run's worth of random actions, as data. Pure: same arguments -> same object.
     .DESCRIPTION
-    Episode kinds, and what each is for. Weights are per profile.
+    Episode kinds and the seam each one exists to reach; weights are per profile.
 
-      queue-burst   select a subset, press Train N times, read everything back. The core
-                    case and the user's own example ("building x, scheduled unit a, 12
-                    times, verify it built 12 and charged for 12").
-      group-recall  recall a control group instead of dragging a box, then burst. The
-                    same measurement reached through the OTHER input path -- task 036
-                    shipped building groups on every path, and a bug in one of them is
-                    invisible to a suite that only ever drags.
-      queue-cancel  burst, then cancel some of it. Cancel is the only path on which the
-                    PLUGIN moves a resource, so the refund is asserted from the engine's
-                    globals.
-      cancel-slot   cancel by clicking a queue ICON in the status strip -- a different
-                    control sending a different payload ({0x20,k} vs {0x20,0xFE}).
-      queue-drain   press a small number and WAIT for the units to appear. The "and it
-                    built 12" half, read out of the engine's own unit list. Rare, because
-                    it is the only episode whose cost is a build time rather than a click.
-      indicator     the queue indicator read in two states that differ only in our own
-                    string -- a DIFFERENCE, which is the only shape of that assertion
-                    worth making, and measured on task 039's boxDiff rather than on ink
-                    (see Invoke-IndicatorEpisode for why ink can neither fail nor pass).
+      queue-burst   subset, press Train N times, read everything back: the core case.
+      group-recall  the same measurement through the OTHER input path, since a bug in
+                    control-group recall is invisible to a suite that only ever drags.
+      queue-cancel  burst then cancel: the only path on which the PLUGIN moves a
+                    resource, so the refund is asserted from the engine's globals.
+      cancel-slot   cancel by clicking a queue ICON -- a different control sending a
+                    different payload ({0x20,k} vs {0x20,0xFE}).
+      queue-drain   press a few and WAIT for the units: the "and it built 12" half, read
+                    from the engine's unit list. Rare -- its cost is a build time.
+      indicator     the indicator read in two states that differ only in our own string,
+                    as a DIFFERENCE measured on boxDiff rather than on ink (see
+                    Invoke-IndicatorEpisode for why ink can neither fail nor pass).
     #>
     [CmdletBinding()]
     param(
@@ -190,10 +154,9 @@ function New-ScConformancePlan {
         [int]$Episodes = 6,
         [ValidateSet('production', 'upgrades', 'hudrow')][string]$Profile = 'production',
         [int]$Buildings = 3,
-        # The plugin's logical cap per building. The plan keeps its own model of each
-        # building's queue so it does not generate a burst that would be refused for a full
-        # ring -- a refusal is a legitimate engine answer and would make the charge
-        # assertion expect money that was correctly never spent.
+        # The plugin's logical cap per building; bursts stay under it, since a refusal for
+        # a full queue is a legitimate engine answer and would make the charge assertion
+        # expect money that was correctly never spent.
         [int]$QueueMax = 16,
         # The engine's own ring size. Bursts are biased to exceed it, because a burst that
         # does not is not testing this feature at all.
@@ -203,7 +166,7 @@ function New-ScConformancePlan {
     $rng = [ScRng]::new($Seed)
     $subsets = Get-ScGridSubsets -Count $Buildings
     # Control groups 1..9. More reachable subsets than that (a 4x4 block has 100) are
-    # sampled rather than truncated silently -- the runner prints which ones got a group.
+    # sampled, not truncated silently -- the runner prints which ones got a group.
     $grouped = @()
     if ($subsets.Count -le 9) {
         $grouped = @($subsets)
@@ -218,19 +181,14 @@ function New-ScConformancePlan {
     $groupOf = @{}
     for ($i = 0; $i -lt $grouped.Count; $i++) { $groupOf[($grouped[$i].Members -join ',')] = $i + 1 }
 
-    # THERE IS DELIBERATELY NO MODEL OF THE QUEUES HERE.
-    #
-    # The first version of this file kept one, so it would not generate a burst the engine
-    # would refuse for a full ring. It made the plans WORSE: two big bursts saturated the
-    # model, every later episode came out as `presses=1`, and the interesting part of the
-    # run was over by episode three -- while the real game had been quietly draining those
-    # queues the whole time, so the caution was against a state that did not exist.
-    #
-    # The headroom is a fact about the RUNNING GAME, so the RUNNER reads it from the
-    # engine (each selected building's own ring plus what the plugin holds for it) and
-    # clamps the burst just before it presses, printing `presses=<planned> -> <actual>`.
-    # The plan stays a pure function of the seed; what the run did to honour it is
-    # reported rather than pre-guessed.
+    # DELIBERATELY NO MODEL OF THE QUEUES HERE. Modelling them to avoid bursts the engine
+    # would refuse makes plans worse: two big bursts saturate the model, every later
+    # episode comes out `presses=1`, and the run is over by episode three -- while the real
+    # game has been draining those queues all along, so the caution guards a state that
+    # does not exist. Headroom is a fact about the RUNNING GAME: the runner reads it from
+    # the engine (each building's ring plus what the plugin holds) and clamps just before
+    # pressing, printing `presses=<planned> -> <actual>`. The plan stays a pure function of
+    # the seed and what the run did to honour it is reported, not pre-guessed.
 
     $kinds = switch ($Profile) {
         'production' { @(
@@ -253,12 +211,11 @@ function New-ScConformancePlan {
     }
 
     # RESERVED SLOTS, so a gate run cannot come out green having never asserted an
-    # invariant. Weighted sampling alone leaves whole invariants unexercised at six
-    # episodes -- seed 20260812 drew no drain and no indicator episode at all, which the
-    # coverage report would have said honestly and which would still have been a weak gate.
-    # Two slots are reserved for the two episode kinds that are the SOLE source of an
-    # invariant (queue-drain owns INV-B, indicator owns INV-Q). Everything else stays
+    # invariant: at six episodes weighted sampling alone draws seeds with no drain and no
+    # indicator episode at all. One slot each for the two kinds that are the SOLE source of
+    # an invariant (queue-drain owns INV-B, indicator owns INV-Q). Everything else stays
     # random, and the reservation itself comes out of the same seeded stream.
+    #   -> AGENTS.md § "Generated suites (random, fuzzed, property-based)"
     $reserved = @{}
     if ($Profile -eq 'production' -and $Episodes -ge 5) {
         $a = $rng.Range(1, $Episodes)
@@ -293,25 +250,18 @@ function New-ScConformancePlan {
                 elseif ($subset.Size -eq 1 -and $rng.Range(0, 1) -eq 1) { $ep.selectMode = 'click' }
 
                 if ($kind -eq 'indicator') {
-                    # Fixed by construction, and the GAP between the two numbers is the whole
-                    # argument. The strip lights the same icons in both states, so the only
-                    # thing that changes is our own string -- and the gap of 9 guarantees the
-                    # two strings differ in LENGTH ("+1" against "+10"), not merely in which
-                    # digit they draw.
-                    #
-                    # Length rather than digit, on 039's correction (2026-08-12): the box's
-                    # width is a function of strlen in the indicator's own PlaceOn, so "the
-                    # box grew" is guaranteed by construction. A test that instead compared
-                    # two SAME-LENGTH strings would be resting on two digits happening to set
-                    # a different number of pixels, and two that did not would fail a CORRECT
-                    # build at random -- which AGENTS.md rates no better than a check that
-                    # cannot fail.
-                    #
-                    # The numbers stay below -QueueMax: at the default 16, low 6 and high 15
-                    # both fit, and the runner skips rather than truncates if a caller lowers
-                    # it. Note the episode does not PREDICT "+1"/"+10" -- it reads whatever
-                    # the plugin says and asserts the second is longer, because how many icons
-                    # the strip shows is the plugin's business and not this file's.
+                    # The GAP between the two numbers is the whole argument. The strip lights
+                    # the same icons in both states, so only our own string changes, and a
+                    # gap of 9 makes the two strings differ in LENGTH ("+1" against "+10").
+                    # Length, not digit: box width is a function of strlen in the indicator's
+                    # own PlaceOn, so "the box grew" holds by construction, while comparing
+                    # two SAME-LENGTH strings rests on two digits happening to set a different
+                    # number of pixels -- and two that do not fail a CORRECT build at random.
+                    #   -> AGENTS.md § "Oracles: what counts as a read-back"
+                    # The numbers stay below -QueueMax (at the default 16, 6 and 15 both fit;
+                    # the runner skips rather than truncates if a caller lowers it), and the
+                    # episode reads whatever string the plugin gives rather than predicting
+                    # it, because how many icons the strip shows is the plugin's business.
                     $ep.selectMode = 'click'
                     $ep.members = @($subset.Members[0])
                     $ep.size = 1
@@ -320,17 +270,16 @@ function New-ScConformancePlan {
                     $ep.qHigh = $EngineSlots + 10
                     $ep.presses = 0
                 } else {
-                    # Biased ABOVE the engine's ring: a burst of three proves nothing about
-                    # a feature whose whole subject is what happens after five. A quarter of
-                    # them stay below it anyway, so "the ordinary case still works" is also
-                    # covered and a regression there cannot hide.
+                    # Biased ABOVE the engine's ring: a burst of three proves nothing about a
+                    # feature whose subject is what happens once the ring is full. A quarter
+                    # stay below it, so a regression in the ordinary case cannot hide either.
                     $lo = if ($rng.Range(1, 4) -eq 1) { 1 } else { $EngineSlots + 1 }
                     $ep.presses = $rng.Range($lo, [math]::Min($EngineSlots + 7, $QueueMax - 1))
                 }
 
                 if ($kind -eq 'queue-cancel') {
-                    # Cancel is single-building in the engine and in the plugin alike, so
-                    # it acts on ONE member of whatever was selected.
+                    # Cancel is single-building in engine and plugin alike, so it acts on
+                    # ONE member of whatever was selected.
                     $ep.cancelUnit = $subset.Members[0]
                     $ep.cancels = $rng.Range(1, [math]::Min(3, [math]::Max(1, $ep.presses)))
                 }
@@ -341,9 +290,9 @@ function New-ScConformancePlan {
                 }
             }
             'queue-drain' {
-                # Small on purpose: this is the only episode whose cost is a BUILD TIME,
-                # and the claim ("what left the queue appeared in the engine's unit list")
-                # is as true of two units as of twelve.
+                # Small on purpose: the only episode whose cost is a BUILD TIME, and its
+                # claim ("what left the queue appeared in the engine's unit list") is as
+                # true of two units as of twelve.
                 $ep.selectMode = if ($subset.Size -eq 1) { 'click' } else { 'box' }
                 $ep.presses = $rng.Range(1, 3)
                 $ep.drain = $ep.presses
@@ -355,8 +304,8 @@ function New-ScConformancePlan {
                 if ($kind -eq 'upgrade-drain') { $ep.drain = 1 }
             }
             'row-select|row-page' {
-                # The hudrow profile selects UNITS, not buildings, so its "size" is a
-                # count out of the block rather than a subset of it.
+                # The hudrow profile selects UNITS, not buildings, so its "size" is a count
+                # out of the block rather than a subset of it.
                 $ep.members = @()
                 $ep.size = $rng.Range(1, 2)
                 $ep.selectMode = 'box'
@@ -366,8 +315,7 @@ function New-ScConformancePlan {
         }
 
         # A settle between episodes, so consecutive bursts are not one long burst and the
-        # engine gets a turn boundary. Randomised, because "it only works at 250ms" would
-        # itself be a finding.
+        # engine gets a turn boundary. Randomised: "it only works at 250ms" is a finding.
         $ep.settleMs = $rng.Range(400, 1600)
         $planned += [pscustomobject]$ep
     }
@@ -399,8 +347,8 @@ function Get-ScPlanJson {
 function Get-ScPlanHash {
     <#
     .SYNOPSIS
-    SHA-256 of the canonical JSON. This is what makes "the same seed replayed the same
-    plan" a checkable claim rather than an assurance.
+    SHA-256 of the canonical JSON: what makes "the same seed replayed the same plan" a
+    checkable claim rather than an assurance.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Plan)

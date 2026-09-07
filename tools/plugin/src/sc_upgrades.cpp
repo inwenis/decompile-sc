@@ -3,7 +3,7 @@
 // Read sc_upgrades.h first: it states the mechanism and the resource rule. The evidence
 // for every address and every constant is research/upgrade-queue.md.
 //
-// Everything in this file runs on the GAME THREAD, from one of six detours. The only
+// Everything in this file runs on the GAME THREAD, from one of eight detours. The only
 // exception is ScUpgQueueLogState, which the observer thread calls from the marker channel
 // and which never writes game memory.
 
@@ -22,9 +22,7 @@
 #include "sc_upgrades.h"
 #include "sc_unit.h"
 
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
+// --- State -------------------------------------------------------------------
 
 struct UpgItem {
     BYTE kind;   // SC_UPGQ_KIND_UPGRADE / SC_UPGQ_KIND_TECH
@@ -54,20 +52,19 @@ static unsigned g_session = 0;
 
 static int g_stat[SC_UPGQ_STAT__COUNT] = { 0 };
 
-// The deep garbage collection (the player-unit-list walk) is O(units) per record and the
-// tick detours run for every researching building on every frame, so the tick does the
-// cheap terms only and the walk runs on the rare, player-driven detours. Same split, and
-// the same stated cost, as sc_prodqueue: a building that dies while the player is idle is
-// forgotten on their next click rather than on the next frame. Nothing is at stake in that
-// latency here -- a forgotten queue owes nobody any money.
+// The deep collection (the player-unit-list walk) is O(units) per record and the tick
+// detours run for every researching building on every frame, so the tick does the cheap
+// terms only and the walk runs on the rare, player-driven detours. A building that dies
+// while the player is idle is then forgotten on their next click rather than on the next
+// frame, and nothing is at stake in that latency: a forgotten queue owes nobody money.
 static bool g_deepGc = false;
 
 // The promotion seam. Real in the game, faked by hooktest.
 static int  EngineStartItem(DWORD unit, int kind, unsigned id);
 static ScUpgStartFn g_start = &EngineStartItem;
 
-// Is this pointer still the building we wrote down? Same question sc_prodqueue asks,
-// and now literally the same test -- see ScUnitRecordLive in sc_unit.h.
+// Is this pointer still the building we wrote down? The same test sc_prodqueue applies --
+// see ScUnitRecordLive in sc_unit.h.
 static bool RecordStillLive(const UpgRecord* r, bool deep) {
     return ScUnitRecordLive(r->unit, r->uniqueness, r->player, deep);
 }
@@ -103,11 +100,10 @@ static bool EngineBusy(DWORD unit) {
 // ---------------------------------------------------------------------------
 // Costs -- READ ONLY, and only to decide whether to offer an item to the engine
 //
-// Nothing in this file writes 0x0057F0F0 or 0x0057F120. The engine's own start functions
-// do that, once, when the item actually begins. These readers exist so a queue waiting on
-// income does not make the engine play its "insufficient minerals" error once a frame; the
-// engine re-checks affordability itself either way, so a stale read here can only delay an
-// item by a frame, never spend anything.
+// Nothing in this file writes 0x0057F0F0 or 0x0057F120; the engine's own start functions do
+// that, once, when the item begins. These readers exist so a queue waiting on income does
+// not make the engine play its "insufficient minerals" error once a frame. The engine
+// re-checks affordability itself, so a stale read here delays an item by a frame at worst.
 // ---------------------------------------------------------------------------
 
 static DWORD CurrentUpgradeLevel(BYTE player, unsigned id) {
@@ -147,24 +143,14 @@ static bool CanAfford(BYTE player, int kind, unsigned id) {
     return *ScPlayerMinerals(player) >= m && *ScPlayerGas(player) >= g;
 }
 
-// ---------------------------------------------------------------------------
-// Records
-// ---------------------------------------------------------------------------
+// --- Records -----------------------------------------------------------------
 
-// A record whose building has gone is simply forgotten. There is deliberately no refund
-// here and no counterpart to sc_prodqueue's RefundRecord: a held item was never paid for,
-// so there is nothing to give back. Vanilla still refunds the item that was actually
-// RUNNING, on its own death path (0x0049FD00), which this module does not touch.
-// THE EPOCH TEST (sc_session.h), at the top of every entry point in this file --
-// issue #67 item 1, and the file's RecordStillLive is BYTE-IDENTICAL to the one #63
-// was measured against: unit pointer, uniqueness, player, hitpoints, list walk. Every
-// one of those five is restored verbatim by a load, so a record from another game
-// passes all five and the stale upgrade it holds gets promoted into a game that never
-// queued it. This test is the only one of the six that a save cannot satisfy.
-//
-// Unlike sc_prodqueue there is nothing to refund here either way -- a held upgrade was
-// never paid for (see CollectGarbage) -- so the only thing the epoch changes is which
-// counter says why the record went.
+// THE EPOCH TEST (sc_session.h), at the top of every entry point in this file. All five
+// terms RecordStillLive checks -- unit pointer, uniqueness, player, hitpoints, list walk --
+// are restored verbatim by a save load, so a record made in an earlier game passes every
+// one of them and the stale upgrade it holds would be promoted into a game that never
+// queued it. The epoch is the only test a load cannot satisfy. Nothing is refunded either
+// way (a held item is unpaid), so all it changes is which counter says why a record went.
 static void UpgSessionSync(void) {
     const unsigned now = ScSessionEpoch();
     if (g_session == now) return;
@@ -178,6 +164,9 @@ static void UpgSessionSync(void) {
     g_session  = now;
 }
 
+// A record whose building has gone is simply forgotten: a held item was never paid for, so
+// there is nothing to give back. Vanilla still refunds the item that was actually RUNNING,
+// on its own death path (0x0049FD00), which this module does not touch.
 static void CollectGarbage(bool deep) {
     for (int i = g_recCount - 1; i >= 0; --i) {
         if (RecordStillLive(&g_rec[i], deep) && g_rec[i].count > 0) continue;
@@ -193,11 +182,10 @@ static void CollectGarbage(bool deep) {
 }
 
 // ASK FOR THE CARD TO BE REBUILT, the way the engine's own accept tail does
-// (0x004C1B78..0x004C1B8F). Setting SC_VA_STAT_DIRTY alone is NOT enough and the first
-// in-game run proved it: the status area redrew but the command card did not, so after the
-// second and third queueing press the card still held the buttons it had been laid out with
-// one press earlier -- and at the cap it went on offering an upgrade the plugin would then
-// have to refuse. The card is relaid on 0x0068C1B0, not on 0x0068C1F8.
+// (0x004C1B78..0x004C1B8F). SC_VA_STAT_DIRTY alone is NOT enough, measured in game: the
+// status area redraws but the card keeps the buttons it was laid out with one press
+// earlier, and at the cap goes on offering an upgrade the plugin must then refuse. The card
+// is relaid on 0x0068C1B0, not on 0x0068C1F8.
 static void RequestRedraw(void) {
     if (g_testing) return;
     *(DWORD*)ScRuntimeAddr(SC_VA_REDRAW_CARD)    = 1;
@@ -220,24 +208,16 @@ static int QueueRoom(DWORD unit, const UpgRecord* r) {
     return room > 0 ? room : 0;
 }
 
-// ---------------------------------------------------------------------------
-// Promotion -- the ENGINE's own accept path, with the unit supplied by the plugin
-// ---------------------------------------------------------------------------
-
-// Declared above the asm helpers so the file reads top-down; defined after them.
 static int PromoteOldest(UpgRecord* r);
 
-// ---------------------------------------------------------------------------
-// Core entry points
-// ---------------------------------------------------------------------------
+// --- Core entry points -------------------------------------------------------
 
 bool ScUpgQueueShouldUnblock(DWORD unit) {
     if (!g_enabled || !unit) return false;
     UpgSessionSync();
     if (!IsResearchableBuilding(unit)) return false;
-    // Only lie when the engine's one slot is actually taken. An idle building needs no
-    // help, and lying about it would make the card offer buttons vanilla also offers --
-    // pointless, and it would put a second answer in play for a state that already works.
+    // Only lie when the engine's one slot is actually taken: an idle building needs no help,
+    // and lying about it puts a second answer in play for a state vanilla already handles.
     if (!EngineBusy(unit)) return false;
     UpgRecord* r = ScLedgerFind(g_rec, g_recCount, unit);
     return QueueRoom(unit, r) > 0;
@@ -248,26 +228,21 @@ bool ScUpgQueueShouldUnblock(DWORD unit) {
 //
 // The card refuses the running upgrade's OWN button through a second, independent test:
 // the gate calls upgradeBusy (0x004281B0), which reads a PER-PLAYER, PER-UPGRADE
-// in-progress bitfield at 0x0058F3E0. Suppressing that test naively would break a real
-// engine rule -- it is also what stops TWO BUILDINGS researching the same upgrade at once,
-// and the consequence of breaking it is not cosmetic. Both buildings would set
-// `CUnit+0xCD = currentLevel + 1`, i.e. the SAME target level; when the first finished,
-// upgradeTick's guard `currentLevel < unit->0xCD` would already be false at the second, so
-// it would end immediately, raise nothing, and the player would have paid twice for one
-// level (upgradeTick 0x004546A0, quoted in research/upgrade-queue.md 6).
+// in-progress bitfield at 0x0058F3E0. Suppressing that test naively breaks a real engine
+// rule -- it is also what stops TWO BUILDINGS researching the same upgrade at once, and the
+// consequence is not cosmetic: both set `CUnit+0xCD = currentLevel + 1`, the SAME target
+// level, so when the first finishes upgradeTick's guard `currentLevel < unit->0xCD` is
+// already false at the second, which ends immediately, raises nothing, and the player has
+// paid twice for one level (upgradeTick 0x004546A0, research/upgrade-queue.md 6).
 //
-// So the suppression is scoped by a condition a second building CANNOT satisfy:
+// So the suppression is scoped by a condition a second building CANNOT satisfy: this
+// building's own 0xC9 already holds this very upgrade id. A second Engineering Bay's 0xC9
+// holds 61, or a different id, so its button stays hidden and the rule is untouched.
 //
-//     this building's own 0xC9 already holds this very upgrade id.
-//
-// A second Engineering Bay's 0xC9 holds 61, or a different id, so its button stays hidden
-// and the two-buildings rule is untouched. Only the building that already owns the upgrade
-// is allowed to be asked about it again.
-//
-// The LEVEL is not a problem either, and this was verified rather than assumed:
-// startUpgrade (0x00454A80) computes `0xCD = currentLevel + 1` from the level array AT THE
-// MOMENT IT RUNS, and the plugin promotes through that same function. So a queued Weapons
-// is not "level 2" when it is queued -- it is "the next level", resolved when it starts.
+// The LEVEL is not a problem either: startUpgrade (0x00454A80) computes
+// `0xCD = currentLevel + 1` from the level array AT THE MOMENT IT RUNS, and the plugin
+// promotes through that same function, so a queued Weapons is not "level 2" when it is
+// queued -- it is "the next level", resolved when it starts.
 // ---------------------------------------------------------------------------
 
 static DWORD MaxUpgradeLevel(BYTE player, unsigned id) {
@@ -308,10 +283,10 @@ static BYTE* UpgradeLevelByte(BYTE player, unsigned id) {
 }
 
 // True when the card may be shown THIS upgrade's own button at THIS building: the building
-// is the one researching it, and there is a level left over after everything already
-// running or queued. The headroom term keeps the card honest -- without it a player could
-// stack five Weapons presses behind a 3-level upgrade and watch two of them be dropped at
-// promotion, which is safe (no money moves) but reads as the feature losing them.
+// is the one researching it, and a level is left over after everything already running or
+// queued. The headroom term keeps the card honest -- without it five Weapons presses stack
+// behind a 3-level upgrade and two are dropped at promotion, which is safe (no money moves)
+// but reads as the feature losing them.
 bool ScUpgQueueMaySuppressBusyBit(DWORD unit, int kind, unsigned id) {
     if (!g_enabled || !unit || !IsResearchableBuilding(unit)) return false;
     UpgSessionSync();
@@ -344,8 +319,7 @@ bool ScUpgQueueOnCommand(DWORD unit, int kind, unsigned id) {
         if (QueueRoom(unit, r) <= 0) {
             // Reachable only from a replay or a peer: at the cap the card conditions stop
             // being unblocked, so the client hides the button and never sends. Counted
-            // rather than silently swallowed, and the item is refused, not lost -- nothing
-            // was paid for it.
+            // rather than silently swallowed; nothing was paid, so nothing is lost.
             ++g_stat[SC_UPGQ_STAT_REFUSED_FULL];
             ScLog("UPGQEV refuse-full unit=0x%08X kind=%d id=%u logical=%d max=%d",
                   (unsigned)unit, kind, id, LogicalLength(unit, r), g_maxTotal);
@@ -380,8 +354,8 @@ bool ScUpgQueueOnCommand(DWORD unit, int kind, unsigned id) {
 }
 
 void ScUpgQueueOnTick(DWORD unit) {
-    // Same short-circuit-before-sync note as sc_prodqueue's tick: no records means
-    // nothing a stale epoch could be holding, and this runs every frame per building.
+    // Short-circuit before the sync: no records means nothing a stale epoch could be
+    // holding, and this runs every frame for every researching building.
     if (!g_enabled || !unit || g_recCount == 0) return;
     EnterCriticalSection(&g_lock);
     UpgSessionSync();
@@ -405,11 +379,10 @@ bool ScUpgQueueOnCancel(DWORD unit) {
     UpgSessionSync();
     CollectGarbage(true);
 
-    // TAIL FIRST, matching task 025's 0xFE rule: the last item of the logical queue really
-    // is the plugin's, so the plugin is its correct owner. Press again to keep unwinding;
-    // once the plugin holds nothing the cancel falls through to vanilla, which stops the
-    // RUNNING item and refunds it exactly. Nothing is refunded here because a held item
-    // was never paid for.
+    // TAIL FIRST: the last item of the logical queue really is the plugin's, so the plugin
+    // is its correct owner. Press again to keep unwinding; once the plugin holds nothing the
+    // cancel falls through to vanilla, which stops the RUNNING item and refunds it exactly.
+    // Nothing is refunded here because a held item was never paid for.
     UpgRecord* r = ScLedgerFind(g_rec, g_recCount, unit);
     if (r && r->count > 0) {
         UpgItem it = r->items[--r->count];
@@ -427,9 +400,7 @@ bool ScUpgQueueOnCancel(DWORD unit) {
     return consumed;
 }
 
-// ---------------------------------------------------------------------------
-// Oracles
-// ---------------------------------------------------------------------------
+// --- Oracles -----------------------------------------------------------------
 
 static void FormatQueue(const UpgRecord* r, char* out, int outLen) {
     int used = 0;
@@ -443,9 +414,8 @@ static void FormatQueue(const UpgRecord* r, char* out, int outLen) {
     }
 }
 
-// One line naming the building's OWN research state, read out of its CUnit. This is what
-// an unattended run asserts on: "upg=7 lvl=1 time=3117" is the engine's memory, not the
-// status area's pixels.
+// One line naming the building's OWN research state, read out of its CUnit -- what an
+// unattended run asserts on: "upg=7 lvl=1 time=3117" is memory, not the status area pixels.
 static void LogUnitLine(const char* what, const char* tag, DWORD unit, const UpgRecord* r) {
     char q[192];
     FormatQueue(r, q, (int)sizeof(q));
@@ -463,12 +433,11 @@ static void LogUnitLine(const char* what, const char* tag, DWORD unit, const Upg
 }
 
 // THE "IT TOOK EFFECT" ORACLE. An item that finished is not the same claim as an item that
-// left the queue, and the difference is in two arrays the engine writes on completion:
+// left the queue; the difference is in two arrays the engine writes on completion:
 // upgradeTick raises upgradeLevel[player][id] (0x0058D2B0) and techTick sets
-// techResearched[player][tech] (0x0058CF44 / 0x0058F128, the pair task 026 evidenced from
-// the other direction). Only the NON-ZERO entries are listed, with an explicit count, so
-// an empty answer is still an answer -- the before/after pair a test needs is
-// `levels=[] techs=[]` first and `levels=[7:1] techs=[]` later, from the same line.
+// techResearched[player][tech] (0x0058CF44 / 0x0058F128). Only NON-ZERO entries are listed,
+// with an explicit count, so an empty answer is still an answer: a test reads
+// `levels=[] techs=[]` first and `levels=[7:1] techs=[]` later, off the same line.
 static void LogPlayerProgress(const char* tag, BYTE player) {
     if (player >= SC_MAX_PLAYERS) return;
     char lv[192]; int lvUsed = 0; int lvN = 0; lv[0] = '\0';
@@ -501,14 +470,13 @@ static void LogPlayerProgress(const char* tag, BYTE player) {
 void ScUpgQueueLogState(const char* tag) {
     if (!g_enabled || !g_lockReady) return;
     EnterCriticalSection(&g_lock);
-    // The oracle syncs too -- a read-back that answered out of the previous game would
-    // be the reason a suite could not see this bug (sc_prodqueue has the same note).
+    // The oracle syncs too: a read-back answering out of the previous game is exactly how a
+    // suite fails to see a stale record.
     UpgSessionSync();
 
-    // The SOLE SELECTED building, tracked or not. Without this the oracle is silent
-    // exactly when the plugin is holding nothing -- and "holding nothing" and "the oracle
-    // did not run" would be the same observation, which is the failure mode AGENTS.md's
-    // absence-assertion rule exists to stop.
+    // The SOLE SELECTED building, tracked or not. Without this the oracle is silent exactly
+    // when the plugin holds nothing, making "holds nothing" and "the oracle did not run" the
+    // same observation (AGENTS.md § "Oracles: absence and defect-era checks").
     {
         DWORD* sel = (DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_SELECTION);
         DWORD u = sel[0];
@@ -525,7 +493,6 @@ void ScUpgQueueLogState(const char* tag) {
         else ScLog("UPGQ [%s] unit=0x%08X (gone) queued=%d",
                    tag ? tag : "-", (unsigned)g_rec[i].unit, g_rec[i].count);
     }
-    // ALWAYS a summary line, even with zero records.
     ScLog("UPGQ [%s] session=%u buildings=%d max=%d queued=%d promoted=%d cancelled=%d dropped=%d "
           "staleSession=%d refusedFull=%d refusedGate=%d waitingCost=%d unblocked=%d unblockedLevel=%d",
           tag ? tag : "-", g_session, g_recCount, g_maxTotal,
@@ -540,9 +507,8 @@ void ScUpgQueueLogState(const char* tag) {
 
 void ScUpgQueueLogStats(void) {
     if (!g_enabled) return;
-    // mineralsSpent= and gasSpent= were dropped from this line by task 055 (issue #66) --
-    // two printed zeros this module has no way to move. staleSession= is added on the
-    // opposite footing: UpgSessionSync increments it and hooktest asserts it non-zero.
+    // staleSession= earns its place on this line: UpgSessionSync is its only writer and
+    // hooktest asserts it non-zero, so a zero says the epoch test never fired.
     ScLog("UPGQSTATS queued=%d promoted=%d cancelled=%d dropped=%d staleSession=%d "
           "refusedFull=%d "
           "refusedGate=%d waitingCost=%d unblocked=%d unblockedLevel=%d tracked=%d session=%u",
@@ -581,8 +547,8 @@ int ScUpgQueueStat(int which) {
 // ---------------------------------------------------------------------------
 // Calling the engine
 //
-// None of these four conventions is expressible in C, and every one of them was read off
-// cmdrecvUpgrade's / cmdrecvTech's own listing rather than guessed:
+// None of these four conventions is expressible in C; each is read off cmdrecvUpgrade's /
+// cmdrecvTech's own listing:
 //
 //   0x004C1B43  MOVZX BX,byte ptr [EAX+1]      the id, into BX
 //   0x004C1B49  MOV EDI,[0x00512678]           the player, into EDI
@@ -592,9 +558,8 @@ int ScUpgQueueStat(int which) {
 //   0x004C1BE1  MOV AL,[ECX+1]  / MOV EDX,ESI  startTech:    AL = id, EDX = unit
 //   0x004C1B6F  MOV CL,0x4C     / (ESI = unit) afterAccept:  CL = order, ESI = unit
 //
-// Written as whole asm stubs rather than as inline-asm register constraints because a
-// constraint list that has to pin EBX, ECX, EDX, ESI and EDI at once is exactly where a
-// compiler quietly picks a register you also needed.
+// Whole asm stubs rather than inline-asm constraints: a constraint list pinning EBX, ECX,
+// EDX, ESI and EDI at once is where a compiler quietly picks a register you also needed.
 // ---------------------------------------------------------------------------
 
 extern "C" DWORD ScUpgCallGate(void* fn, DWORD unit, DWORD id, DWORD player);
@@ -696,15 +661,12 @@ asm(".text\n"
     "  popl  %ebp\n"
     "  ret\n");
 
-// ---------------------------------------------------------------------------
-// Promotion
-// ---------------------------------------------------------------------------
+// --- Promotion ---------------------------------------------------------------
 
 // cmdrecvUpgrade's own body, with the unit supplied by the plugin instead of by the
-// selection. The gate runs first -- so requirements, ownership, the per-player
-// in-progress bit and the level ceiling are all re-checked by the ENGINE at the moment
-// the item starts, not at the moment it was queued -- and then the engine's own start
-// pays for it and sets the field.
+// selection. The gate runs first, so requirements, ownership, the per-player in-progress
+// bit and the level ceiling are re-checked by the ENGINE at the moment the item starts, not
+// at the moment it was queued; the engine's own start then pays for it and sets the field.
 static int EngineStartItem(DWORD unit, int kind, unsigned id) {
     BYTE player = ScUnitPlayer(unit);
     bool tech = (kind == SC_UPGQ_KIND_TECH);
@@ -731,8 +693,6 @@ static int PromoteOldest(UpgRecord* r) {
     UpgItem it = r->items[0];
     const char* kindName = it.kind == SC_UPGQ_KIND_TECH ? "tech" : "upgrade";
 
-    // Ask before offering, so a queue waiting on income does not make the engine play its
-    // "insufficient minerals" error once a frame. The engine checks again itself.
     if (!CanAfford(r->player, it.kind, it.id)) {
         ++g_stat[SC_UPGQ_STAT_WAITING_COST];
         return 0;
@@ -762,9 +722,7 @@ static int PromoteOldest(UpgRecord* r) {
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// Detours
-// ---------------------------------------------------------------------------
+// --- Detours -----------------------------------------------------------------
 
 static ScHook g_hkCondUpg;
 static ScHook g_hkCondTech;
@@ -777,16 +735,13 @@ static ScHook g_hkCancelTech;
 
 typedef void (__attribute__((stdcall)) *CmdFn)(DWORD);
 
-// WHICH SELECTION ARRAY THIS READS, and it is task 038's fix (sc_prodqueue.cpp), same
-// shape here: both receive handlers reset selectionIterator (0x006284B6) and then require
-// getActivePlayerNextSelection to yield exactly one unit. That function (0x0049A850) walks
-// playersSelections (0x006284E8), indexed by the ACTIVE PLAYER -- not activePlayerSelection
-// (0x006284B8), which is the CLIENT's own list. The two arrays ABUT
-// (0x006284B8 + 12*4 == 0x006284E8) and hold the same thing whenever exactly one building
-// is selected, which is every case this module's own suite exercised until now -- latent,
-// per task 042, because no upgrade command is fanned out today and the client will not
-// offer an upgrade button for a multi-building selection. The index arithmetic, quoted
-// rather than guessed (research/production-queue.md 2.2):
+// WHICH SELECTION ARRAY THIS READS. Both receive handlers reset selectionIterator
+// (0x006284B6) and then require getActivePlayerNextSelection to yield exactly one unit.
+// That function (0x0049A850) walks playersSelections (0x006284E8), indexed by the ACTIVE
+// PLAYER -- not activePlayerSelection (0x006284B8), the CLIENT's own list. The two arrays
+// ABUT (0x006284B8 + 12*4 == 0x006284E8) and hold the same thing whenever exactly one
+// building is selected, so reading the wrong one stays latent until a command is fanned out.
+// The index arithmetic (research/production-queue.md 2.2):
 //
 //   0049a860  MOV  EAX,dword ptr [0x0051267C]          ; activePlayerId
 //   0049a869  LEA  EAX,[EAX + EAX*2]                   ; player * 3
@@ -798,8 +753,8 @@ DWORD ScUpgQueueSoleSelectedUnitForTest(void) { return ScSoleSelectedUnit(); }
 //
 // Evaluate the ORIGINAL condition with the two in-progress bytes momentarily at their idle
 // sentinels, then put them straight back. The clear/call/restore runs inside the same
-// critical section the oracle takes, so the observer thread can never sample a building
-// mid-lie and report it idle.
+// critical section the oracle takes, so the observer thread never samples a building
+// mid-lie and reports it idle.
 static DWORD CondCommon(ScHook* hook, int kind, DWORD unit, DWORD id, DWORD player) {
     if (!g_enabled || !unit) return ScUpgCallCond(hook->trampoline, unit, id, player);
 
@@ -825,18 +780,13 @@ static DWORD CondCommon(ScHook* hook, int kind, DWORD unit, DWORD id, DWORD play
         savedBits = *bitByte;
         *bitByte = (BYTE)(savedBits & ~(1u << (id & 7)));
         // AND ASK ABOUT THE RIGHT LEVEL. An upgrade's requirements are per LEVEL: the
-        // requirement interpreter's opcode 0xFF1F reads the player's current level and
-        // jumps to that level's own requirement block, so evaluating the condition with
-        // the level still at its present value asks "may level N+1 be researched?" and
-        // gets level N's answer. The first in-game run paid for that: with Infantry
-        // Weapons level 1 running, the card offered level 2 -- and the engine's own gate
-        // then refused it at promotion, because level 2 needs a prerequisite building the
-        // fixture did not have. Nothing was lost (a queued item is unpaid, and the drop is
-        // logged), but the card had promised something it could not deliver.
-        //
-        // So the level array is raised to the level this press would be asking FOR, minus
-        // one, for the length of the call. The engine then evaluates the requirement block
-        // that will actually apply, and answers -1 (greyed) or 0 by itself.
+        // requirement interpreter's opcode 0xFF1F reads the player's current level and jumps
+        // to that level's own requirement block, so evaluating the condition at the present
+        // level asks "may level N+1 be researched?" and gets level N's answer -- measured in
+        // game, the card offered Infantry Weapons 2 whose prerequisite building the player
+        // did not have, and the engine's gate refused it at promotion. So the level array is
+        // raised to the wanted level minus one for the length of the call, and the engine
+        // answers -1 (greyed) or 0 out of the block that will actually apply.
         levelByte = UpgradeLevelByte(owner, id);
         savedLevel = *levelByte;
         DWORD want = WantedLevel(unit, ScLedgerFind(g_rec, g_recCount, unit), kind, id);
@@ -845,9 +795,9 @@ static DWORD CondCommon(ScHook* hook, int kind, DWORD unit, DWORD id, DWORD play
     }
     DWORD r = ScUpgCallCond(hook->trampoline, unit, id, player);
     if (levelByte) *levelByte = savedLevel;
-    // Restored unconditionally and in the reverse order, before anything else on this
-    // thread can look. Nothing between the two writes can yield: the game is
-    // single-threaded here, and the observer thread's oracle takes this same lock.
+    // Restored unconditionally and in reverse order, before anything else on this thread can
+    // look. Nothing between the writes yields: the game is single-threaded here, and the
+    // observer thread's oracle takes this same lock.
     if (bitByte) *bitByte = savedBits;
     if (lie) {
         *(BYTE*)(unit + SC_CUNIT_OFF_UPGRADE_PROGRESS) = savedUpg;
@@ -934,12 +884,6 @@ static void __attribute__((stdcall)) SC_GAME_ENTRY HkCmdrecvTech(DWORD cmd) {
 // 0x33 Cancel Upgrade (0x004BFFC0) and 0x31 Cancel Tech (0x004C0070) both take NO
 // arguments -- they resolve the building through the selection exactly as their positive
 // counterparts do -- and both end in a bare RET, so the detour is a plain `void(void)`.
-//
-// TAIL FIRST. While the plugin holds anything, a cancel is the plugin's: the last item of
-// the logical queue is the one the plugin is holding, so it is the correct owner. Once the
-// plugin holds nothing the press falls through to vanilla, which stops the RUNNING item
-// and refunds it exactly, out of the same tables it paid from. This module refunds
-// nothing, ever, because it never paid for anything.
 typedef void (*CancelFn)(void);
 
 static void SC_GAME_ENTRY HkCmdrecvCancelUpgrade(void) {
@@ -1023,9 +967,7 @@ static const BYTE kPrologueTick[]  = { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x08 };
 //   window, which is why HookProbe still reports the patch relocation-safe.)
 static const BYTE kPrologueCancel[] = { 0x56, 0xC6, 0x05, 0xB6, 0x84, 0x62, 0x00, 0x00 };
 
-// ---------------------------------------------------------------------------
-// Lifecycle
-// ---------------------------------------------------------------------------
+// --- Lifecycle ---------------------------------------------------------------
 
 bool ScUpgQueueEnabled(void) {
     char buf[16];
@@ -1104,7 +1046,7 @@ int ScUpgQueueInstall(BYTE* moduleBase) {
 
 void ScUpgQueueRemove(void) {
     // Nothing to give back: every held item is unpaid, so unloading mid-game costs the
-    // player exactly nothing. This is the whole refund path, and it is the absence of one.
+    // player exactly nothing.
     if (g_lockReady) {
         EnterCriticalSection(&g_lock);
         g_recCount = 0;

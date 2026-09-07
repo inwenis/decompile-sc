@@ -3,45 +3,15 @@
 .SYNOPSIS
 Decide, from a RUNNING GAME, which unit-settings section a Brood War map's engine reads --
 and whether an overridden BUILD TIME actually reaches it.
-
 .DESCRIPTION
-Task 031 needs a map to be able to say "an SCV takes one second, not twenty". Everything
-pointing at UNIx as the section that carries that is inference:
-
-  * the Brood War template carries no UNIS section at all;
-  * StarCraft.exe's Brood War CHK section-application table (.rdata 0x5004A8) lists
-    UNIx / UPGx / TECx / PUNI / PUPx / PTEx and has NO UNIS entry;
-  * that same table gives PTEx -> 0x004CB7D0, the applier address task 026 verified
-    independently against a running game, so the table means what it appears to mean.
-
-Inference of exactly this shape is what cost tasks 022 and 023 the Ghost question:
-`make_test_map.py` wrote PTEx with a tech-major index, read it back with the same index,
-and its own validator confirmed its own mistake. AGENTS.md: check a fixture in the
-ENGINE's memory, not in the generator's read-back.
-
-So this probe puts the two candidate sections in DISAGREEMENT inside one map and lets the
-game break the tie:
-
-    units.dat says a Marine has 40 hit points
-    UNIx      says 25
-    UNIS      says 12   (a decoy, added by tools/add_unis_decoy.py)
-
-The Marines are placed at 100% hit points, so `hp` read out of CUnit+0x08 is a THREE-WAY
-answer -- 10240 means neither section was applied, 6400 means UNIx, 3072 means UNIS. An
-outcome nobody predicted is reachable, which is the difference between an experiment and a
-confirmation. The decoy is appended as the LAST chunk in the file, so UNIS holds the
-file-order advantage over UNIx and still has to win it on its own.
-
-THE SECOND HALF, and the one the speed-up actually rests on: the same map sets the SCV's
-build time to 1 game second (vanilla 20). The probe selects the Command Center, presses
-Train ONCE, and times how long the engine takes to produce the unit -- measured by the SCV
-appearing in the engine's own unit list, not by a progress bar. A build time that is
-merely written into the file is worth nothing; this is what makes it a fact about the game.
-
-NOTE ON WHAT THIS DOES NOT PROVE. `hp` reads the CURRENT hit points, and a unit placed at
-100% starts at its maximum -- so this measures the maximum by reading a unit that is at it.
-Nothing in the probe damages anything, and the read is taken before any order is given.
-
+UNIx as the carrier of per-map unit stats is inference: the Brood War template has no UNIS
+section, and the CHK section-application table at .rdata 0x5004A8 lists UNIx UPGx TECx PUNI
+PUPx PTEx with no UNIS entry (the same table gives the PTEx applier 0x004CB7D0, confirmed
+independently against a running game, so the table means what it appears to). One map
+therefore disagrees with itself -- units.dat gives a
+Marine 40 hit points, UNIx 25, a UNIS decoy 12 appended LAST so UNIS keeps the file-order
+advantage -- and hp at CUnit+0x08 names the winner. The map also cuts the SCV build time to
+1 game second against vanilla's 20, timed by the SCV appearing in the engine's unit list.
 .EXAMPLE
 ./tools/plugin/probe-unit-settings.ps1
 #>
@@ -51,16 +21,10 @@ param(
     [string]$LogPath = 'C:\sc-work\logs\031\unit-settings-probe.log',
     [string]$ShotDir = 'C:\sc-work\logs\031\probe-frames',
     [string]$FixtureDir,
-    # FOUR, not twelve, and the reason is a defect this probe already hit. A lone Command
-    # Center supplies 10 and every placed Marine eats 1, so twelve of them put the player
-    # at 12/10 before the probe presses anything. The Train command still went out --
-    # `CMD id=0x1F len=3 bytes=[1F 07 00]` is in the log of that run -- and the SCV simply
-    # never appeared, which reads exactly like "the build time override did not work".
-    # Four Marines leave six supply of headroom, which is plenty for the one SCV this
-    # probe trains and still more than enough units to show they all agree on their hit
-    # points.
+    # FOUR, not twelve: a lone Command Center supplies 10 and every placed Marine eats 1,
+    # so a dozen Marines put the player over the cap before the probe presses anything.
+    # Four leave six supply for the SCV this probe trains and still show agreement on hp.
     [int]$UnitCount = 4,
-    # The three numbers that have to differ from each other for the read to discriminate.
     [int]$UnixMarineHp = 25,
     [int]$UnisMarineHp = 12,
     [int]$VanillaMarineHp = 40,
@@ -123,9 +87,9 @@ try {
         }
         $py = Join-Path $repoRoot '.venv/Scripts/python.exe'
         if (-not (Test-Path -LiteralPath $py)) { $py = 'python' }
-        # The Command Center rides in on --enemy-owner player: it is the generator's
-        # existing way to put a SECOND block of a DIFFERENT type on the human's own slot,
-        # so one map carries both the units to read and the building to train from.
+        # --enemy-owner player is the generator's way to put a SECOND block of a DIFFERENT
+        # type on the human's own slot: one map carries both the units to read and the
+        # building to train from.
         $gen = & $py (Join-Path $repoRoot 'tools/make_test_map.py') `
             --unit-count $UnitCount --unit-type marine --player 0 --clear-player-units `
             --grid-spacing 48 --enemy-count 1 --enemy-type command-center --enemy-owner player `
@@ -133,6 +97,9 @@ try {
             --unit-max-hp "marine=$UnixMarineHp" --unit-build-time "scv=$ScvBuildSeconds" `
             --output $mapPath 2>&1
         $gen | Where-Object { $_ -notmatch 'StormLibFinder' } | ForEach-Object { Write-Host "       $_" }
+        # These read the generator's own report, so they prove intent only -- a tool that
+        # verifies its own write with its own indexing verifies nothing -- which is why the
+        # verdict is taken from the engine's memory (AGENTS.md § "Test fixtures").
         Assert-That 'the generator succeeded' ($LASTEXITCODE -eq 0) "(exit $LASTEXITCODE)"
         Assert-That 'it wrote UNIx and nothing it was not asked to' `
             (@($gen | Select-String -Pattern 'differs from the template ONLY in: OWNR SIDE UNIT TRIG FORC UNIx').Count -gt 0)
@@ -186,6 +153,8 @@ try {
         Assert-That 'the world scan was not taken mid-edit' `
             ($w.Counts[0].Units -eq $w.Counts[0].Recount -and $w.Counts[0].Complete -eq 1)
 
+        # hp is CURRENT hit points; these Marines are placed at 100%, so the read is the
+        # maximum, and it is taken before any order is given.
         $hpValues = @($marines | ForEach-Object { $_.Hp } | Sort-Object -Unique)
         Write-Host "       hp values seen: $($hpValues -join ', ') (CUnit+0x08 is hp x 256)"
         Assert-That 'every Marine agrees on its hit points' ($hpValues.Count -eq 1) `
@@ -203,9 +172,8 @@ try {
             $UnixMarineHp, ($UnixMarineHp * 256), $UnisMarineHp, ($UnisMarineHp * 256),
             $VanillaMarineHp, ($VanillaMarineHp * 256))
         Write-Host ''
-        # The claim under test is UNIx. It is asserted rather than reported, so this probe
-        # FAILS if the engine ever stops agreeing -- a probe that only prints cannot
-        # regress.
+        # The UNIx claim is asserted rather than reported, so the probe FAILS when the
+        # engine stops agreeing -- a probe that only prints cannot regress.
         Assert-That "the engine read UNIx: a Marine has $UnixMarineHp hit points, not $VanillaMarineHp and not $UnisMarineHp" `
             ($got -eq $UnixMarineHp * 256) "(hp=$got)"
         # THE NEGATIVE HALF, stated separately so a pass cannot be read as vacuous: the
@@ -222,15 +190,16 @@ try {
         # The NEGATIVE half of the pair: no SCV exists before the press, so the one below
         # is attributable to it.
         Assert-That "no SCV exists yet ($scvsBefore)" ($scvsBefore -eq 0)
-        # SUPPLY HEADROOM, asserted rather than assumed -- the first run of this probe was
-        # lost to it. A Command Center supplies 10 and each placed Marine eats 1; over the
-        # cap, the Train command still reaches the wire and the unit simply never appears,
-        # which is indistinguishable from a build-time override that did not take.
+        # SUPPLY HEADROOM, asserted rather than assumed. A Command Center supplies 10 and
+        # each placed Marine eats 1; over the cap, the Train command still reaches the wire
+        # and the unit simply never appears, which is indistinguishable from a build-time
+        # override that did not take.
         $mine = @($w.Units | Where-Object { $_.Player -eq 0 })
         Assert-That "the placed units leave supply headroom for an SCV ($($mine.Count - 1) of 10 used)" `
             (($mine.Count - 1) -lt 10) '(a lone Command Center supplies 10)'
 
-        # Click point derived from memory, never off a frame (AGENTS.md, task 026).
+        # Click point derived from memory, never off a frame
+        # (AGENTS.md § "Oracles: what counts as a read-back").
         $cx = $cc.X - $w.Screen.Left
         $cy = $cc.Y - $w.Screen.Top
         Write-Host "       CC at map ($($cc.X),$($cc.Y)), viewport ($($w.Screen.Left),$($w.Screen.Top)) -> client ($cx,$cy)"
@@ -238,8 +207,7 @@ try {
             # The Command Center sits +448px east of the start location, which is off the
             # opening viewport. Scroll to it with the minimap rather than guessing.
             Write-Host '       CC is off the opening viewport; centring the view on it via the minimap'
-            # The fixture's terrain is the template's: 128x96 tiles, printed by the
-            # generator's own validation above. Map pixels -> tiles is /32.
+            # The fixture keeps the template's terrain: 128x96 tiles. Map pixels -> tiles is /32.
             $mm = Get-ScMinimapPoint -MapTilesW 128 -MapTilesH 96 `
                 -TileX ([int]($cc.X / 32)) -TileY ([int]($cc.Y / 32))
             Send-ScClick -Hwnd $hwnd -X $mm.X -Y $mm.Y
@@ -266,10 +234,10 @@ try {
         }
         Write-Host ("       first SCV existed {0:n1}s after the keypress" -f $elapsed)
         Assert-That 'an SCV was produced at all' ($elapsed -ge 0)
-        # The bound is deliberately loose. What is being proved is that the override
-        # REACHED THE ENGINE, and vanilla's 20 game seconds measured 14.4 real seconds in
-        # this repo's own production suite -- so anything under 8 seconds cannot be the
-        # vanilla build time however the marker round trip and the poll interval fall.
+        # The bound is deliberately loose: what is proved is that the override REACHED THE
+        # ENGINE. Vanilla's 20 game seconds measure 14.4 real seconds in this repo's
+        # production suite, so under 8 seconds cannot be the vanilla build time however the
+        # marker round trip and the poll interval fall.
         if ($elapsed -ge 0) {
             Assert-That "and in under 8s, which vanilla's $VanillaScvBuildSeconds game seconds (~14.4s real) cannot do" `
                 ($elapsed -lt 8.0) ("(took {0:n1}s)" -f $elapsed)

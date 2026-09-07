@@ -1,29 +1,22 @@
 #Requires -Version 7
 <#
-Pester coverage for the Game Type read (tools/plugin/drive-game.ps1) -- issue #29.
+Pester coverage for the Game Type read (tools/plugin/drive-game.ps1).
+AGENTS.md § "Game Type / `Custom Type`".
 
-WHAT THIS REPLACES. Set-ScGameType used to prove a pick by fingerprinting the
-map-information panel: pick a known OTHER entry, hash, pick the wanted one, require the
-hash to differ. That oracle cannot separate "the pick did not take" from "the value was
-already right" -- both leave the hashes equal -- and the combo remembers the last value
-used on the machine, so "already right" is the common case. It was also the last reason
-the harness raised the game window at all.
-
-The value was readable the whole time. Task 027's active-dialog scan already walks the
-engine's list and logs every control that carries text, and the Game Type combo's text IS
-the selected entry's label.
-
-The fixture below is a REAL DIALOGS line, copied verbatim out of
-C:\sc-work\logs\034-widescreen-s2-ws.log, not one written to make these tests pass. It is
-also the awkward case rather than the easy one: the Create screen carries THREE type-13
-combos (game type, player name, race), so "find the combo" has to mean "find the one on
-the Game Type label's row" and nothing weaker.
+The Game Type combo's text IS the selected entry's label, and the active-dialog scan
+logs every control that carries text, so the value reads out of the log: no pixel hash,
+and no raised window unless the read shows a pick is needed -- a pick must take the
+foreground, so proving a pick by hashing pays that cost on every run.
+The fixture below is a REAL DIALOGS line copied verbatim out of a run log, not one
+written to make these tests pass, and it is the awkward case: the Create screen carries
+THREE type-13 combos (game type, player name, race), so "find the combo" must mean
+"find the one on the Game Type label's row" and nothing weaker.
 #>
 
 BeforeAll {
     . (Join-Path $PSScriptRoot '..' 'tools' 'plugin' 'drive-game.ps1')
 
-    # Verbatim from a live run, 2026-08-11 09:40:36. Wrapped for width only.
+    # Verbatim from a live run log; wrapped for width only.
     $script:CREATE_LINE = @(
         "[2026-08-11 09:40:36.054] DIALOGS n=1  dlg='Create' rect=0,0,639,479",
         "ctrl='glue\create\pListMap2.pcx' rect=0,0,363,292 type=5 flags=0x60008",
@@ -63,8 +56,10 @@ Describe 'Get-ScGameTypeControl reads the combo out of the dialog list' {
     }
 
     It 'TRACKS THE VALUE -- a different selection reads differently' {
-        # The whole point. A read that returned the same string whatever the engine held
-        # would be the pixel fingerprint's failure in a new costume.
+        # Positive control: a read that returns the same string whatever the engine holds
+        # is a vacuous oracle. Do not hash the map-information panel instead -- that hash
+        # cannot separate "the pick did not take" from "the value was already right", and
+        # the combo keeps the last value used, so "already right" is the common case.
         $p = New-Log -GameType 'Melee'
         try { (Get-ScGameTypeControl -LogPath $p).Value | Should -Be 'Melee' }
         finally { Remove-Item $p -Force }
@@ -82,9 +77,9 @@ Describe 'Get-ScGameTypeControl reads the combo out of the dialog list' {
     }
 
     It "computes the click point from the control's own rect, not a fixed (265,268)" {
-        # rect=180,261,351,277 on a dialog at origin 0,0 -> centre (266,269). The fixed
-        # point this replaces was (265,268): one pixel out on both axes, inside a box 171
-        # wide and 16 tall, which is exactly why nobody ever noticed it was a fixed point.
+        # rect=180,261,351,277 on a dialog at origin 0,0 -> centre (266,269). A hard-coded
+        # point hides its own error: (265,268) is off by one on both axes yet still lands
+        # inside a box 171 wide and 16 tall, so it reads as correct until the rect moves.
         $p = New-Log
         try {
             $c = Get-ScGameTypeControl -LogPath $p
@@ -95,9 +90,8 @@ Describe 'Get-ScGameTypeControl reads the combo out of the dialog list' {
     }
 
     It 'reports the map-information panel lines the engine is SHOWING, as corroboration' {
-        # Under Use Map Settings the engine shows Human/Computer Slots (flag 0x8) and hides
-        # Number of Players (0x0) -- the very difference the old fingerprint was hashing,
-        # here as a fact rather than a digest.
+        # Engine fact: under Use Map Settings the panel shows Human/Computer Slots
+        # (flag 0x8) and hides Number of Players (0x0).
         $p = New-Log
         try {
             $c = Get-ScGameTypeControl -LogPath $p
@@ -117,7 +111,7 @@ Describe 'Get-ScGameTypeControl reads the combo out of the dialog list' {
     }
 
     It 'reads the NEWEST line, so a pick that changed the value is not read as stale' {
-        # Get-ScDialogs takes the last DIALOGS line; the older one here says Melee.
+        # Get-ScDialogs takes the last DIALOGS line, so an earlier one must not win.
         $stale = $script:CREATE_LINE -f 'Melee'
         $p = New-Log -GameType 'Use Map Settings' -Extra @($stale)
         try { (Get-ScGameTypeControl -LogPath $p).Value | Should -Be 'Use Map Settings' }
@@ -127,9 +121,8 @@ Describe 'Get-ScGameTypeControl reads the combo out of the dialog list' {
 
 Describe 'Set-ScGameType index/name table' {
     It 'maps the indices this harness picks to the entries it expects' {
-        # -Index 2 has meant "Use Map Settings" in eleven call sites for months, on the
-        # strength of a frame read once in task 016. Now it is checked against what the
-        # engine reports after the pick, so this table is load-bearing rather than a note.
+        # Call sites pass an index and depend on which entry it selects, so this mapping
+        # is an invariant checked against what the engine reports after the pick.
         $script:ScGameTypeByIndex[0] | Should -Be 'Melee'
         $script:ScGameTypeByIndex[2] | Should -Be 'Use Map Settings'
     }
