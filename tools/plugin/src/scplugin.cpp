@@ -388,7 +388,13 @@ static void DumpFrame(const char* tag) {
     bool readOk = CopyFrameRows(data, w, h, cur);
     if (readOk) {
         ++reads;
-        for (int i = 0; i < 7 && !stable; ++i) {
+        // The pair must straddle a settled frame, so the bigger the buffer the more
+        // tries it takes: a 1280x880 copy is ~3.7x a stock 640x480 one, so more
+        // compose frames land between two reads on an animating menu, and 8 tries
+        // (the stock budget) started missing at the taller geometry. Scale the cap
+        // with the read cost so a wide/tall frame gets proportionally more attempts.
+        const int kBudget = 7 + (int)(n / (640u * 480u)) * 8;
+        for (int i = 0; i < kBudget && !stable; ++i) {
             if (!CopyFrameRows(data, w, h, next)) { readOk = false; break; }
             ++reads;
             if (memcmp(cur, next, n) == 0) stable = true;
@@ -963,15 +969,13 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         // game thread, so observe -- the whole plugin's off switch -- ignores them
         // like every other writer.
         {
-            bool consoleEdge  = ScConsoleEdgeWanted();
             bool consoleTrace = ScConsoleTraceWanted();
-            if (g_mode == SC_MODE_OBSERVE && (consoleEdge || consoleTrace)) {
-                ScLog("CONSOLE: %%SCPLUGIN_CONSOLE_EDGE%%/%%SCPLUGIN_CONSOLE_TRACE%% "
-                      "set but the mode is observe -- IGNORED. Observe writes nothing "
-                      "to game memory.");
-                consoleEdge = consoleTrace = false;
+            if (g_mode == SC_MODE_OBSERVE && consoleTrace) {
+                ScLog("CONSOLE: %%SCPLUGIN_CONSOLE_TRACE%% set but the mode is observe "
+                      "-- IGNORED. Observe writes nothing to game memory.");
+                consoleTrace = false;
             }
-            ScConsoleInstall(ScEngineModuleBase(), consoleEdge, consoleTrace);
+            ScConsoleInstall(ScEngineModuleBase(), g_mode != SC_MODE_OBSERVE, consoleTrace);
         }
         // The storm-side buffer->glass present. PROBE is read-only and runs in any
         // mode; WIDEN writes storm's geometry and is gated out of observe like every

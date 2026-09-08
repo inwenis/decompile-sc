@@ -49,6 +49,11 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 # The geometry under test comes from the generated table, never from this file.
 $ws = Get-ScWideGeometry
 $SCREEN_W = $ws.W; $SCREEN_H = $ws.H
+# Stage 3 moves the minimap click-to-centre half-extents with the geometry
+# (a click centres W/32 x ceil(PF_H/32) tiles) and the console DOWN by ConsoleShiftY;
+# stage 2 keeps the stock 20/13 and the stock console rows.
+$HALF_TILES_X = ($WidescreenStage -eq '3') ? [int]($SCREEN_W / 64) : 10
+$SHIFT_Y = ($WidescreenStage -eq '3') ? $ws.ConsoleShiftY : 0
 
 if (-not $FixtureDir) {
     $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t070-wsdrive' -Suite 'wsdrive'
@@ -411,12 +416,12 @@ try {
     # Aim the camera so the rightmost marine columns land near screen x ~736
     # and ~672 -- the 64px fixture grid then puts one column in each of the
     # first two >640 click bands. The minimap centres a click's tile:
-    # origin = (tile - 10) * 32 horizontally.
+    # origin = (tile - HALF_TILES_X) * 32 horizontally.
     $targetOriginX = [Math]::Max(0, $maxX - 736)
-    $tileX = [int][Math]::Round($targetOriginX / 32) + 10
+    $tileX = [int][Math]::Round($targetOriginX / 32) + $HALF_TILES_X
     $tileY = [Math]::Min(($MAP_TILES_H - 7), [Math]::Max(6, [int]($meanY / 32)))
-    $mm = Get-ScMinimapPoint -MapTilesW $MAP_TILES_W -MapTilesH $MAP_TILES_H -TileX $tileX -TileY $tileY
-    $expectedOriginX = ($tileX - 10) * 32
+    $mm = Get-ScMinimapPoint -MapTilesW $MAP_TILES_W -MapTilesH $MAP_TILES_H -TileX $tileX -TileY $tileY -ConsoleShiftY $SHIFT_Y
+    $expectedOriginX = ($tileX - $HALF_TILES_X) * 32
     $w1 = Click-MinimapVerified -Point $mm -ExpectedOriginX $expectedOriginX -Tag 'aim1'
     Assert-True 'the minimap click moved the camera to the commanded origin (stock minimap geometry works at 800)' `
         ($null -ne $w1.Screen -and [Math]::Abs($w1.Screen.Left - $expectedOriginX) -le 32) `
@@ -535,9 +540,9 @@ try {
     # scrollMax=(x,y)), not this script's arithmetic; the minimap click must then
     # land the camera exactly there. Against a stock clamp this assertion reads
     # scrollMax.x=3456 where it wants 3296, and FAILS.
-    $viewportTiles = if ($WidescreenStage -eq '3') { 25 } else { 20 }
+    $viewportTiles = if ($WidescreenStage -eq '3') { [int]($SCREEN_W / 32) } else { 20 }
     $clampOriginX = ($MAP_TILES_W - $viewportTiles) * 32
-    $mmEdge = Get-ScMinimapPoint -MapTilesW $MAP_TILES_W -MapTilesH $MAP_TILES_H -TileX ($MAP_TILES_W - 1) -TileY $tileY
+    $mmEdge = Get-ScMinimapPoint -MapTilesW $MAP_TILES_W -MapTilesH $MAP_TILES_H -TileX ($MAP_TILES_W - 1) -TileY $tileY -ConsoleShiftY $SHIFT_Y
     [void](Click-MinimapVerified -Point $mmEdge -ExpectedOriginX $clampOriginX -Tag 'mapedge')
     $ptEdge = Get-CapturePoint -Hwnd $h -Tag 'drive-mapedge'
     Assert-WideCapture -Pt $ptEdge -SkipSeam
@@ -555,7 +560,7 @@ try {
         Report-Finding "right-band content at the clamped edge: nonzero_frac=$($eb['band_nonzero_frac']) distinct=$($eb['band_distinct']) (this fixture's right map edge is unexplored, so black shroud is the CORRECT post-fix reading; the pre-fix band held stale cells)"
     }
     # back toward the fixture
-    $mmBack = Get-ScMinimapPoint -MapTilesW $MAP_TILES_W -MapTilesH $MAP_TILES_H -TileX $tileX -TileY $tileY
+    $mmBack = Get-ScMinimapPoint -MapTilesW $MAP_TILES_W -MapTilesH $MAP_TILES_H -TileX $tileX -TileY $tileY -ConsoleShiftY $SHIFT_Y
     [void](Click-MinimapVerified -Point $mmBack -ExpectedOriginX $expectedOriginX -Tag 'mapback')
     $script:completedPhases += 'mapedge'
 

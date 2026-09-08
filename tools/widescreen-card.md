@@ -1,62 +1,50 @@
-# Widescreen (1280 wide, shown at 2x) -- quick card
+# Widescreen (1280x880, twice the base viewport) -- quick card
 
 One action: double-click **StarCraft Modded** on the desktop. That is the only
-shortcut now: it launches the modded game with the extended viewport, in a
-window twice the size (2560x960 on screen for the 1280x480 the game renders),
-mouse locked to the window after your first click inside it (hold Ctrl or
-Right Alt to free it). The old "(Wide)" shortcut is gone; this one is it.
+shortcut: it launches the modded game with the extended viewport. The game
+renders 1280x800 of playfield (twice the base 640x400, both across and down)
+with the console below it, in a 1280x880 screen. The window fills your monitor:
+if a 2x window (2560x1760) fits your screen it uses that, otherwise it fills the
+screen borderless, keeping the shape (black bars top/bottom or sides as needed).
+The mouse is locked to the window (hold Ctrl or Right Alt to free it).
 
 ## What you should see
 
-1. A game window 2560x960: the playfield is 1280 game pixels wide -- twice the
-   stock width -- shown at 2x. Height is unchanged for now (the 2x height is the
-   next step).
-2. **The menus look the same as always**, with a black band filling the extra
-   width on the right. That is normal -- menu screens are fixed-size art; only
-   the game itself is wider.
-3. **In a game, the right HALF shows MORE MAP.** The playfield fills the full
-   1280-wide window -- twice the world across, with correct fog, from the first
-   frame (you do not have to scroll to make it appear).
+1. **Twice the map, both ways.** In a game the playfield is 1280x800 game pixels
+   -- twice the base width AND twice the base height -- so you see four times the
+   map area, with correct fog, from the first frame (no need to scroll to make it
+   appear).
+2. **The bottom console moved DOWN to the bottom of the taller screen.** The
+   minimap, unit panel, command card, chat line, F10 menu button and the bronze
+   rails all sit along the bottom as they always did, now below the taller map.
+   The top resource bar stays at the top.
+3. **The menus look the same as always**, with a black band filling the extra
+   space. That is normal -- menu screens are fixed-size art; only the game itself
+   is bigger.
 4. All the usual mod features are on and unchanged: select-past-12, selection
    circles, the paging bottom row, the over-cap production queue with its `+N`
-   badge, group production.
+   badge, group production. Right-click orders and the cursor behave normally
+   across the whole map, including beside the console (fixed 2026-09-07).
 
-## Clicks on the right half
+## Clicks anywhere on the bigger map
 
-The map there is visible and the mouse behaves normally in it: the cursor can
-enter the whole window, the edge-scroll-right zone sits at the true right edge
-(the last couple of pixels), the camera stops where the 1280-wide screen meets
-the map's edge, and a click on a unit there selects it (the click search rect is
-1280 wide). All four were proven at 800 in real play (issue #113) and are the
-same patch sites at 1280.
-
-Two more from the first real play at 1280 (2026-09-07): **right-click orders
-work on the map beside the console** (the strip level with the bottom bar, right
-of it -- the game used to think that strip was console and dropped the order
-while still letting you select there), and **the cursor no longer strobes or
-turns into the plain arrow over the right half**. Both were one 640-wide test
-inside the game plus one flag on the cursor layer; if either misbehaves, that
-is news.
+The mouse reaches the whole window: the cursor can rest anywhere, the edge-scroll
+zones sit at the true edges, the camera stops where the 1280x800 screen meets the
+map's edge, and a click selects the unit under it wherever it is (the click
+search rect is the full 1280x800). The minimap centres the camera on the tile you
+click, scaled for the bigger viewport.
 
 ## Known imperfections (real, not dangerous)
 
-1. **The bottom console (minimap, unit panel, command card) stays in its old
-   place** -- it hugs the left 640 pixels, so the game reads as a normal
-   console sitting in the left of a wider window. The command card is NOT at
-   the window's bottom-right corner and the resource counters are NOT at the
-   top-right; both end where the old screen used to. Everything on it works;
-   it just does not stretch.
-2. **The rectangle at the bottom-right** (right of the console, below the
-   extended map: 640 wide, 80 tall in game pixels) is plain black and is NOT
-   playfield: the game's playfield is 400 tall, so nothing can be selected or
-   ordered there. The height step (2x tall) removes it.
-3. **A minimap click centres the camera as if the screen were still 640 wide**:
-   the clicked spot lands 320 game pixels left of the window's centre. The
-   camera still goes where you click; it is just not centred on it. On the list
-   for the height step.
-4. **On space-platform maps** the starfield backdrop has a star-free band on
-   the far right (the stars' positions come from a file that only covers the
-   old width). Cosmetic, off-map only.
+1. **Map shows faintly through the console's edges.** The console art has
+   see-through gaps around its frame; now that map is drawn under the console,
+   those gaps show terrain instead of black. Subtle, cosmetic, polish-later.
+2. **On very tall maps the camera stops a little short of the very bottom row**,
+   the same 24-pixel overscroll margin the base game has, scaled. You can still
+   reach the whole map by minimap.
+3. **On space-platform maps** the starfield backdrop has a star-free band past
+   the base extent (the stars' positions come from a file that only covers the
+   old size). Cosmetic, off-map only.
 
 ## If something goes wrong
 

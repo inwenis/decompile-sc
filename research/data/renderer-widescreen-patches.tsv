@@ -1,36 +1,36 @@
 stage	va	len	changed	name	before	after	expect	patch	cave	note
-0	0x0041DA3D	5	0	displaymode.height	push 0x1e0	push 0x1e0	68E0010000	68E0010000		IDirectDraw::SetDisplayMode height
+0	0x0041DA3D	5	1	displaymode.height	push 0x1e0	push 0x370	68E0010000	6870030000		IDirectDraw::SetDisplayMode height
 0	0x0041DA42	5	1	displaymode.width	push 0x280	push 0x500	6880020000	6800050000		IDirectDraw::SetDisplayMode width
 0	0x0041DB9C	7	1	fallbacksurface.width	mov dword ptr [ebp - 0x60], 0x280	mov dword ptr [ebp - 0x60], 0x500	C745A080020000	C745A000050000		offscreen fallback surface dwWidth (used when the primary will not lock)
-0	0x0041DBA3	7	0	fallbacksurface.height	mov dword ptr [ebp - 0x64], 0x1e0	mov dword ptr [ebp - 0x64], 0x1e0	C7459CE0010000	C7459CE0010000		offscreen fallback surface dwHeight
-1	0x004DB077	5	1	screenbuffer.alloc	push 0x4b000	push 0x96000	6800B00400	6800600900		SMemAlloc size for the single 8-bit framebuffer
+0	0x0041DBA3	7	1	fallbacksurface.height	mov dword ptr [ebp - 0x64], 0x1e0	mov dword ptr [ebp - 0x64], 0x370	C7459CE0010000	C7459C70030000		offscreen fallback surface dwHeight
+1	0x004DB077	5	1	screenbuffer.alloc	push 0x4b000	push 0x113000	6800B00400	6800301100		SMemAlloc size for the single 8-bit framebuffer
 1	0x004DB07C	9	1	screenbitmap.width.vidinimo	mov word ptr [0x6ceff0], 0x280	mov word ptr [0x6ceff0], 0x500	66C705F0EF6C008002	66C705F0EF6C000005		screenBitmap.width, written by the video init
-1	0x004DB085	9	0	screenbitmap.height.vidinimo	mov word ptr [0x6ceff2], 0x1e0	mov word ptr [0x6ceff2], 0x1e0	66C705F2EF6C00E001	66C705F2EF6C00E001		screenBitmap.height, written by the video init
+1	0x004DB085	9	1	screenbitmap.height.vidinimo	mov word ptr [0x6ceff2], 0x1e0	mov word ptr [0x6ceff2], 0x370	66C705F2EF6C00E001	66C705F2EF6C007003		screenBitmap.height, written by the video init
 1	0x0041E07B	9	1	screenbitmap.width.image	mov word ptr [0x6ceff0], 0x280	mov word ptr [0x6ceff0], 0x500	66C705F0EF6C008002	66C705F0EF6C000005		screenBitmap.width, second writer (gds\image.cpp 0x0041E050)
-1	0x0041E084	9	0	screenbitmap.height.image	mov word ptr [0x6ceff2], 0x1e0	mov word ptr [0x6ceff2], 0x1e0	66C705F2EF6C00E001	66C705F2EF6C00E001		screenBitmap.height, second writer
-1	0x0041DDD9	5	1	screenbuffer.alloc.third	push 0x4b000	push 0x96000	6800B00400	6800600900		SMemAlloc size, THIRD copy of the video init (new in task 034)
+1	0x0041E084	9	1	screenbitmap.height.image	mov word ptr [0x6ceff2], 0x1e0	mov word ptr [0x6ceff2], 0x370	66C705F2EF6C00E001	66C705F2EF6C007003		screenBitmap.height, second writer
+1	0x0041DDD9	5	1	screenbuffer.alloc.third	push 0x4b000	push 0x113000	6800B00400	6800301100		SMemAlloc size, THIRD copy of the video init (new in task 034)
 1	0x0041DDDE	9	1	screenbitmap.width.third	mov word ptr [0x6ceff0], 0x280	mov word ptr [0x6ceff0], 0x500	66C705F0EF6C008002	66C705F0EF6C000005		screenBitmap.width, third writer at 0x0041DDDE (new in task 034)
-1	0x0041DDE7	9	0	screenbitmap.height.third	mov word ptr [0x6ceff2], 0x1e0	mov word ptr [0x6ceff2], 0x1e0	66C705F2EF6C00E001	66C705F2EF6C00E001		screenBitmap.height, third writer
+1	0x0041DDE7	9	1	screenbitmap.height.third	mov word ptr [0x6ceff2], 0x1e0	mov word ptr [0x6ceff2], 0x370	66C705F2EF6C00E001	66C705F2EF6C007003		screenBitmap.height, third writer
 1	0x0041D450	5	1	blit.sourcepitch	push 0x280	push 0x500	6880020000	6800050000		SOURCE pitch of the one blit that presents the frame
-2	0x0041D52C	5	0	storm.region.height	push 0x1e0	push 0x1e0	68E0010000	68E0010000		Ordinal_440 height (Storm's dirty-region geometry)
+2	0x0041D52C	5	1	storm.region.height	push 0x1e0	push 0x370	68E0010000	6870030000		Ordinal_440 height (Storm's dirty-region geometry)
 2	0x0041D531	5	1	storm.region.width	push 0x280	push 0x500	6880020000	6800050000		Ordinal_440 width; the same call passes the 16x16 block size
 1	0x0041D3D9	5	1	fillscreen.pitch.imm	push 0x280	push 0x500	6880020000	6800050000		0x0041D3A0: destination pitch passed to the fill
 1	0x0041D3E6	3	1	fillscreen.rowmul	lea edi, [eax + eax*4]	imul edi, eax, 0x28	8D3C80	6BF828		0x0041D3A0: edi = y * 40 (was y * 5, feeding a shift of 7)
 1	0x0041D3EF	3	1	fillscreen.rowshift	shl edi, 7	shl edi, 5	C1E707	C1E705		0x0041D3A0: shl edi,7 -> shl edi,5, so y*40<<5 == y*1280
 1	0x0041E2D5	7	1	compose.clearrect.width	mov dword ptr [ebp - 0xc], 0x280	mov dword ptr [ebp - 0xc], 0x500	C745F480020000	C745F400050000		whole-screen-clear branch: full-screen rect width
-1	0x0041E2DC	7	0	compose.clearrect.height	mov dword ptr [ebp - 8], 0x1e0	mov dword ptr [ebp - 8], 0x1e0	C745F8E0010000	C745F8E0010000		whole-screen-clear branch: full-screen rect height
-1	0x0041E2F2	5	0	compose.descriptor.height	mov edi, 0x1e0	mov edi, 0x1e0	BFE0010000	BFE0010000		MOV EDI,480 -- the height every layer descriptor gets
+1	0x0041E2DC	7	1	compose.clearrect.height	mov dword ptr [ebp - 8], 0x1e0	mov dword ptr [ebp - 8], 0x370	C745F8E0010000	C745F870030000		whole-screen-clear branch: full-screen rect height
+1	0x0041E2F2	5	1	compose.descriptor.height	mov edi, 0x1e0	mov edi, 0x370	BFE0010000	BF70030000		MOV EDI,480 -- the height every layer descriptor gets
 2	0x0041E323	5	1	compose.clip.x2	add eax, 0x27f	add eax, 0x4ff	057F020000	05FF040000		x2 = -left + 639
-2	0x0041E32F	6	0	compose.clip.y2	add ecx, 0x1df	add ecx, 0x1df	81C1DF010000	81C1DF010000		y2 = -top + 479
+2	0x0041E32F	6	1	compose.clip.y2	add ecx, 0x1df	add ecx, 0x36f	81C1DF010000	81C16F030000		y2 = -top + 479
 1	0x0041E33E	6	1	compose.descriptor.width	mov word ptr [ebp - 8], 0x280	mov word ptr [ebp - 8], 0x500	66C745F88002	66C745F80005		width field of every layer descriptor
 2	0x0041E0E2	5	1	dirty.reject.x	cmp eax, 0x280	cmp eax, 0x500	3D80020000	3D00050000		return early if x1 >= 640 (new in task 034; not in 032's table)
 2	0x0041E0F5	6	1	dirty.clamp.x2.cmp	cmp ebx, 0x27f	cmp ebx, 0x4ff	81FB7F020000	81FBFF040000		x2 upper bound
 2	0x0041E0FD	5	1	dirty.clamp.x2.set	mov ebx, 0x27f	mov ebx, 0x4ff	BB7F020000	BBFF040000		x2 = 639
-2	0x0041E10A	6	0	dirty.reject.y	cmp ecx, 0x1e0	cmp ecx, 0x1e0	81F9E0010000	81F9E0010000		return early if y1 >= 480 (new in task 034)
-2	0x0041E11A	6	0	dirty.clamp.y2.cmp	cmp esi, 0x1df	cmp esi, 0x1df	81FEDF010000	81FEDF010000		y2 upper bound
-2	0x0041E122	5	0	dirty.clamp.y2.set	mov esi, 0x1df	mov esi, 0x1df	BEDF010000	BEDF010000		y2 = 479
+2	0x0041E10A	6	1	dirty.reject.y	cmp ecx, 0x1e0	cmp ecx, 0x370	81F9E0010000	81F970030000		return early if y1 >= 480 (new in task 034)
+2	0x0041E11A	6	1	dirty.clamp.y2.cmp	cmp esi, 0x1df	cmp esi, 0x36f	81FEDF010000	81FE6F030000		y2 upper bound
+2	0x0041E122	5	1	dirty.clamp.y2.set	mov esi, 0x1df	mov esi, 0x36f	BEDF010000	BE6F030000		y2 = 479
 2	0x0041A049	9	1	layer2.width	mov word ptr [0x6cef7e], 0x280	mov word ptr [0x6cef7e], 0x500	66C7057EEF6C008002	66C7057EEF6C000005		dialog layer width
-2	0x0041A052	9	0	layer2.height	mov word ptr [0x6cef80], 0x1e0	mov word ptr [0x6cef80], 0x1e0	66C70580EF6C00E001	66C70580EF6C00E001		dialog layer height
+2	0x0041A052	9	1	layer2.height	mov word ptr [0x6cef80], 0x1e0	mov word ptr [0x6cef80], 0x370	66C70580EF6C00E001	66C70580EF6C007003		dialog layer height
 1	0x0040C247	6	1	copyrun.destpitch	add edi, 0x280	add edi, 0x500	81C780020000	81C700050000		row step of the scratch->screen copy loop (new in task 034)
 1	0x0047EDD3	3	1	fog.rowmul@0047EDD3	lea ecx, [ecx + ecx*4]	imul ecx, ecx, 0x28	8D0C89	6BC928		fog: ecx = y * 40 (was y * 5, feeding a shift of 7) -- FRAMEBUFFER row
 1	0x0047EDD6	3	1	fog.rowshift@0047EDD6	shl ecx, 7	shl ecx, 5	C1E107	C1E105		fog: shl ecx,7 -> shl ecx,5, so y*40<<5 == y*1280
@@ -90,12 +90,12 @@ stage	va	len	changed	name	before	after	expect	patch	cave	note
 2	0x0047ED62	3	1	grid.strideshift.fog.c	shl eax, 3	shl eax, 1	C1E003	C1E001		0x0047EBF0: shl eax,3 -> shl eax,1
 2	0x0047ED65	7	1	grid.rowaddr.fog.c1	mov bl, byte ptr [eax + edi + 0x6ceff8]	mov bl, byte ptr [eax + edi]	8A9C38F8EF6C00	8A9C3800000000		0x0047EBF0: [eax + edi + grid]
 2	0x0047ED70	7	1	grid.rowaddr.fog.c2	mov bl, byte ptr [eax + edx + 0x6ceff8]	mov bl, byte ptr [eax + edx]	8A9C10F8EF6C00	8A9C1000000000		0x0047EBF0: [eax + edx + grid]
-2	0x0041D750	5	1	grid.clearcount@0041D750	mov ecx, 0x12c	mov ecx, 0x258	B92C010000	B958020000		drawing gate 0x0041D710: rep stosd count
-2	0x0041E035	5	1	grid.clearcount@0041E035	mov ecx, 0x12c	mov ecx, 0x258	B92C010000	B958020000		0x0041DF80: rep stosd count
-2	0x0041E06A	5	1	grid.clearcount@0041E06A	mov ecx, 0x12c	mov ecx, 0x258	B92C010000	B958020000		video init 0x0041E050: rep stosd count
-2	0x0041E3EF	5	1	grid.clearcount@0041E3EF	mov ecx, 0x12c	mov ecx, 0x258	B92C010000	B958020000		composer 0x0041E280: rep stosd count
-2	0x004BD64C	5	1	grid.clearcount@004BD64C	mov ecx, 0x12c	mov ecx, 0x258	B92C010000	B958020000		console init 0x004BD630: rep stosd count
-2	0x004BD745	5	1	terrain.alloc	push 0x49800	push 0x8f800	6800980400	6800F80800		SMemAlloc size of the terrain scratch surface
+2	0x0041D750	5	1	grid.clearcount@0041D750	mov ecx, 0x12c	mov ecx, 0x44c	B92C010000	B94C040000		drawing gate 0x0041D710: rep stosd count
+2	0x0041E035	5	1	grid.clearcount@0041E035	mov ecx, 0x12c	mov ecx, 0x44c	B92C010000	B94C040000		0x0041DF80: rep stosd count
+2	0x0041E06A	5	1	grid.clearcount@0041E06A	mov ecx, 0x12c	mov ecx, 0x44c	B92C010000	B94C040000		video init 0x0041E050: rep stosd count
+2	0x0041E3EF	5	1	grid.clearcount@0041E3EF	mov ecx, 0x12c	mov ecx, 0x44c	B92C010000	B94C040000		composer 0x0041E280: rep stosd count
+2	0x004BD64C	5	1	grid.clearcount@004BD64C	mov ecx, 0x12c	mov ecx, 0x44c	B92C010000	B94C040000		console init 0x004BD630: rep stosd count
+2	0x004BD745	5	1	terrain.alloc	push 0x49800	push 0x10a800	6800980400	6800A81000		SMemAlloc size of the terrain scratch surface
 2	0x0040AAFE	5	1	terrain.pitch@0040AAFE	mov ebx, 0x2a0	mov ebx, 0x520	BBA0020000	BB20050000		terrain WRITER 0x0040AAE0: row stride
 2	0x0040C23A	6	1	terrain.pitch@0040C23A	add esi, 0x2a0	add esi, 0x520	81C6A0020000	81C620050000		scratch->screen copy: source row step
 2	0x0040C240	5	1	terrain.pitch@0040C240	add eax, 0x2a0	add eax, 0x520	05A0020000	0520050000		scratch->screen copy: source offset row step
@@ -111,71 +111,71 @@ stage	va	len	changed	name	before	after	expect	patch	cave	note
 2	0x0040C275	3	1	terrain.pitch.shift.a	shl eax, 9	shl eax, 0xa	C1E009	C1E00A		0x0040C253: shl by 9 -> 10 (the 512 term becomes 1024)
 2	0x0040C27E	3	1	terrain.pitch.shift.b	shl ebx, 7	shl ebx, 8	C1E307	C1E308		0x0040C253: shl by 7 -> 8 (the 128 term becomes 256)
 2	0x0040C281	3	0	terrain.pitch.shift.c	shl ecx, 5	shl ecx, 5	C1E105	C1E105		0x0040C253: shl by 5 -> 5 (the 32 term becomes 32)
-2	0x0040AAF0	6	1	terrain.wrap@0040AAF0	add esi, 0x49800	add esi, 0x8f800	81C600980400	81C600F80800		terrain writer: end-of-surface pointer
-2	0x0040AB19	6	1	terrain.wrap@0040AB19	sub edi, 0x49800	sub edi, 0x8f800	81EF00980400	81EF00F80800		terrain writer: wrap
-2	0x0040ABAA	6	1	terrain.wrap@0040ABAA	sub edi, 0x49800	sub edi, 0x8f800	81EF00980400	81EF00F80800		terrain writer: wrap
-2	0x0040C20C	6	1	terrain.wrap@0040C20C	cmp ebx, 0x49800	cmp ebx, 0x8f800	81FB00980400	81FB00F80800		copy loop: wrap test
-2	0x0040C214	5	1	terrain.wrap@0040C214	cmp eax, 0x49800	cmp eax, 0x8f800	3D00980400	3D00F80800		copy loop: wrap test
-2	0x0040C21B	6	1	terrain.wrap@0040C21B	sub ebx, 0x49800	sub ebx, 0x8f800	81EB00980400	81EB00F80800		copy loop: wrap
-2	0x0040C22A	6	1	terrain.wrap@0040C22A	sub esi, 0x49800	sub esi, 0x8f800	81EE00980400	81EE00F80800		copy loop: wrap source
-2	0x0040C230	5	1	terrain.wrap@0040C230	sub eax, 0x49800	sub eax, 0x8f800	2D00980400	2D00F80800		copy loop: wrap offset
-2	0x0040C290	5	1	terrain.wrap@0040C290	cmp eax, 0x49800	cmp eax, 0x8f800	3D00980400	3D00F80800		full-playfield blit: wrap test
-2	0x0040C297	5	1	terrain.wrap@0040C297	sub eax, 0x49800	sub eax, 0x8f800	2D00980400	2D00F80800		full-playfield blit: wrap
-2	0x0040C29C	5	1	terrain.wrap@0040C29C	cmp eax, 0x49800	cmp eax, 0x8f800	3D00980400	3D00F80800		full-playfield blit: wrap test
-2	0x0040C3E2	6	1	terrain.wrap@0040C3E2	cmp edx, 0x49800	cmp edx, 0x8f800	81FA00980400	81FA00F80800		scratch writer: wrap test
-2	0x0040C3EA	6	1	terrain.wrap@0040C3EA	sub edx, 0x49800	sub edx, 0x8f800	81EA00980400	81EA00F80800		scratch writer: wrap
-2	0x0040C42C	6	1	terrain.wrap@0040C42C	cmp edx, 0x49800	cmp edx, 0x8f800	81FA00980400	81FA00F80800		scratch writer: wrap test
-2	0x0040C434	6	1	terrain.wrap@0040C434	sub edx, 0x49800	sub edx, 0x8f800	81EA00980400	81EA00F80800		scratch writer: wrap
-2	0x0040C476	6	1	terrain.wrap@0040C476	cmp edx, 0x49800	cmp edx, 0x8f800	81FA00980400	81FA00F80800		scratch writer: wrap test
-2	0x0040C47E	6	1	terrain.wrap@0040C47E	sub edx, 0x49800	sub edx, 0x8f800	81EA00980400	81EA00F80800		scratch writer: wrap
-2	0x0040C4A5	6	1	terrain.wrap@0040C4A5	cmp edx, 0x49800	cmp edx, 0x8f800	81FA00980400	81FA00F80800		scratch writer: wrap test
-2	0x0040C4AD	6	1	terrain.wrap@0040C4AD	sub edx, 0x49800	sub edx, 0x8f800	81EA00980400	81EA00F80800		scratch writer: wrap
-2	0x0049BEF0	6	1	terrain.wrap@0049BEF0	cmp edi, 0x49800	cmp edi, 0x8f800	81FF00980400	81FF00F80800		scroll: wrap test
-2	0x0049BEF8	6	1	terrain.wrap@0049BEF8	sub edi, 0x49800	sub edi, 0x8f800	81EF00980400	81EF00F80800		scroll: wrap
-2	0x004BCDDD	5	1	terrain.wrap@004BCDDD	mov esi, 0x49800	mov esi, 0x8f800	BE00980400	BE00F80800		terrain blitter: the modulus of the initial offset
-2	0x004BCDF8	6	1	terrain.wrap@004BCDF8	cmp edi, 0x49800	cmp edi, 0x8f800	81FF00980400	81FF00F80800		terrain blitter: wrap test
-2	0x004BCE00	6	1	terrain.wrap@004BCE00	sub edi, 0x49800	sub edi, 0x8f800	81EF00980400	81EF00F80800		terrain blitter: wrap
-2	0x004BCE4F	6	1	terrain.wrap@004BCE4F	cmp edi, 0x49800	cmp edi, 0x8f800	81FF00980400	81FF00F80800		terrain blitter: wrap test
-2	0x004BCE5B	6	1	terrain.wrap@004BCE5B	sub edi, 0x49800	sub edi, 0x8f800	81EF00980400	81EF00F80800		terrain blitter: wrap
-2	0x004BCE74	6	1	terrain.wrap@004BCE74	cmp edi, 0x49800	cmp edi, 0x8f800	81FF00980400	81FF00F80800		terrain blitter: wrap test
-2	0x004BCE7C	6	1	terrain.wrap@004BCE7C	sub edi, 0x49800	sub edi, 0x8f800	81EF00980400	81EF00F80800		terrain blitter: wrap
+2	0x0040AAF0	6	1	terrain.wrap@0040AAF0	add esi, 0x49800	add esi, 0x10a800	81C600980400	81C600A81000		terrain writer: end-of-surface pointer
+2	0x0040AB19	6	1	terrain.wrap@0040AB19	sub edi, 0x49800	sub edi, 0x10a800	81EF00980400	81EF00A81000		terrain writer: wrap
+2	0x0040ABAA	6	1	terrain.wrap@0040ABAA	sub edi, 0x49800	sub edi, 0x10a800	81EF00980400	81EF00A81000		terrain writer: wrap
+2	0x0040C20C	6	1	terrain.wrap@0040C20C	cmp ebx, 0x49800	cmp ebx, 0x10a800	81FB00980400	81FB00A81000		copy loop: wrap test
+2	0x0040C214	5	1	terrain.wrap@0040C214	cmp eax, 0x49800	cmp eax, 0x10a800	3D00980400	3D00A81000		copy loop: wrap test
+2	0x0040C21B	6	1	terrain.wrap@0040C21B	sub ebx, 0x49800	sub ebx, 0x10a800	81EB00980400	81EB00A81000		copy loop: wrap
+2	0x0040C22A	6	1	terrain.wrap@0040C22A	sub esi, 0x49800	sub esi, 0x10a800	81EE00980400	81EE00A81000		copy loop: wrap source
+2	0x0040C230	5	1	terrain.wrap@0040C230	sub eax, 0x49800	sub eax, 0x10a800	2D00980400	2D00A81000		copy loop: wrap offset
+2	0x0040C290	5	1	terrain.wrap@0040C290	cmp eax, 0x49800	cmp eax, 0x10a800	3D00980400	3D00A81000		full-playfield blit: wrap test
+2	0x0040C297	5	1	terrain.wrap@0040C297	sub eax, 0x49800	sub eax, 0x10a800	2D00980400	2D00A81000		full-playfield blit: wrap
+2	0x0040C29C	5	1	terrain.wrap@0040C29C	cmp eax, 0x49800	cmp eax, 0x10a800	3D00980400	3D00A81000		full-playfield blit: wrap test
+2	0x0040C3E2	6	1	terrain.wrap@0040C3E2	cmp edx, 0x49800	cmp edx, 0x10a800	81FA00980400	81FA00A81000		scratch writer: wrap test
+2	0x0040C3EA	6	1	terrain.wrap@0040C3EA	sub edx, 0x49800	sub edx, 0x10a800	81EA00980400	81EA00A81000		scratch writer: wrap
+2	0x0040C42C	6	1	terrain.wrap@0040C42C	cmp edx, 0x49800	cmp edx, 0x10a800	81FA00980400	81FA00A81000		scratch writer: wrap test
+2	0x0040C434	6	1	terrain.wrap@0040C434	sub edx, 0x49800	sub edx, 0x10a800	81EA00980400	81EA00A81000		scratch writer: wrap
+2	0x0040C476	6	1	terrain.wrap@0040C476	cmp edx, 0x49800	cmp edx, 0x10a800	81FA00980400	81FA00A81000		scratch writer: wrap test
+2	0x0040C47E	6	1	terrain.wrap@0040C47E	sub edx, 0x49800	sub edx, 0x10a800	81EA00980400	81EA00A81000		scratch writer: wrap
+2	0x0040C4A5	6	1	terrain.wrap@0040C4A5	cmp edx, 0x49800	cmp edx, 0x10a800	81FA00980400	81FA00A81000		scratch writer: wrap test
+2	0x0040C4AD	6	1	terrain.wrap@0040C4AD	sub edx, 0x49800	sub edx, 0x10a800	81EA00980400	81EA00A81000		scratch writer: wrap
+2	0x0049BEF0	6	1	terrain.wrap@0049BEF0	cmp edi, 0x49800	cmp edi, 0x10a800	81FF00980400	81FF00A81000		scroll: wrap test
+2	0x0049BEF8	6	1	terrain.wrap@0049BEF8	sub edi, 0x49800	sub edi, 0x10a800	81EF00980400	81EF00A81000		scroll: wrap
+2	0x004BCDDD	5	1	terrain.wrap@004BCDDD	mov esi, 0x49800	mov esi, 0x10a800	BE00980400	BE00A81000		terrain blitter: the modulus of the initial offset
+2	0x004BCDF8	6	1	terrain.wrap@004BCDF8	cmp edi, 0x49800	cmp edi, 0x10a800	81FF00980400	81FF00A81000		terrain blitter: wrap test
+2	0x004BCE00	6	1	terrain.wrap@004BCE00	sub edi, 0x49800	sub edi, 0x10a800	81EF00980400	81EF00A81000		terrain blitter: wrap
+2	0x004BCE4F	6	1	terrain.wrap@004BCE4F	cmp edi, 0x49800	cmp edi, 0x10a800	81FF00980400	81FF00A81000		terrain blitter: wrap test
+2	0x004BCE5B	6	1	terrain.wrap@004BCE5B	sub edi, 0x49800	sub edi, 0x10a800	81EF00980400	81EF00A81000		terrain blitter: wrap
+2	0x004BCE74	6	1	terrain.wrap@004BCE74	cmp edi, 0x49800	cmp edi, 0x10a800	81FF00980400	81FF00A81000		terrain blitter: wrap test
+2	0x004BCE7C	6	1	terrain.wrap@004BCE7C	sub edi, 0x49800	sub edi, 0x10a800	81EF00980400	81EF00A81000		terrain blitter: wrap
 2	0x004BCE0E	3	1	terrain.cols@004BCE0E	cmp eax, 0x28	cmp eax, 0x50	83F828	83F850		terrain blitter: columns per row
 2	0x004BCE28	3	1	terrain.cols@004BCE28	cmp eax, 0x28	cmp eax, 0x50	83F828	83F850		terrain blitter: columns per row
 2	0x004BCE66	3	1	terrain.cols@004BCE66	cmp ebx, 0x28	cmp ebx, 0x50	83FB28	83FB50		terrain blitter: columns per row
 2	0x004BCE6E	6	1	terrain.rowstep	add edi, 0x2780	add edi, 0x4d00	81C780270000	81C7004D0000		terrain blitter: advance to the next 16 scanlines
 2	0x0040C25A	10	1	terrain.fullblit.runwidth	mov dword ptr [0x50cef0], 0x280	mov dword ptr [0x50cef0], 0x500	C705F0CE500080020000	C705F0CE500000050000		0x0040C253: the run width of the whole-playfield blit
-2	0x0049BC65	6	1	terrain.modchain@0049BC65	lea ecx, [eax - 0x498000]	lea ecx, [eax - 0x8f8000]	8D880080B6FF	8D88008070FF		0x49BC20: mod-reduce a scratch offset by 16*size (negative lea displacement)
-2	0x0049BC74	6	1	terrain.modchain@0049BC74	lea ecx, [eax - 0x24c000]	lea ecx, [eax - 0x47c000]	8D880040DBFF	8D880040B8FF		0x49BC20: mod-reduce a scratch offset by 8*size (negative lea displacement)
-2	0x0049BC80	6	1	terrain.modchain@0049BC80	lea ecx, [eax - 0x126000]	lea ecx, [eax - 0x23e000]	8D8800A0EDFF	8D880020DCFF		0x49BC20: mod-reduce a scratch offset by 4*size (negative lea displacement)
-2	0x0049BC8C	6	1	terrain.modchain@0049BC8C	lea ecx, [eax - 0x93000]	lea ecx, [eax - 0x11f000]	8D8800D0F6FF	8D880010EEFF		0x49BC20: mod-reduce a scratch offset by 2*size (negative lea displacement)
-2	0x0049BC98	6	1	terrain.modchain@0049BC98	lea ecx, [eax - 0x49800]	lea ecx, [eax - 0x8f800]	8D880068FBFF	8D880008F7FF		0x49BC20: mod-reduce a scratch offset by 1*size (negative lea displacement)
-2	0x0049BD7B	6	1	terrain.modchain@0049BD7B	lea edx, [eax - 0x498000]	lea edx, [eax - 0x8f8000]	8D900080B6FF	8D90008070FF		0x49BD40: mod-reduce a scratch offset by 16*size (negative lea displacement)
-2	0x0049BD87	6	1	terrain.modchain@0049BD87	lea edx, [eax - 0x24c000]	lea edx, [eax - 0x47c000]	8D900040DBFF	8D900040B8FF		0x49BD40: mod-reduce a scratch offset by 8*size (negative lea displacement)
-2	0x0049BD93	6	1	terrain.modchain@0049BD93	lea edx, [eax - 0x126000]	lea edx, [eax - 0x23e000]	8D9000A0EDFF	8D900020DCFF		0x49BD40: mod-reduce a scratch offset by 4*size (negative lea displacement)
-2	0x0049BD9F	6	1	terrain.modchain@0049BD9F	lea edx, [eax - 0x93000]	lea edx, [eax - 0x11f000]	8D9000D0F6FF	8D900010EEFF		0x49BD40: mod-reduce a scratch offset by 2*size (negative lea displacement)
-2	0x0049BDAB	6	1	terrain.modchain@0049BDAB	lea edx, [eax - 0x49800]	lea edx, [eax - 0x8f800]	8D900068FBFF	8D900008F7FF		0x49BD40: mod-reduce a scratch offset by 1*size (negative lea displacement)
-2	0x0049BE39	6	1	terrain.modchain@0049BE39	lea eax, [edi - 0x498000]	lea eax, [edi - 0x8f8000]	8D870080B6FF	8D87008070FF		0x49BE20: mod-reduce a scratch offset by 16*size (negative lea displacement)
-2	0x0049BE45	6	1	terrain.modchain@0049BE45	lea eax, [edi - 0x24c000]	lea eax, [edi - 0x47c000]	8D870040DBFF	8D870040B8FF		0x49BE20: mod-reduce a scratch offset by 8*size (negative lea displacement)
-2	0x0049BE51	6	1	terrain.modchain@0049BE51	lea eax, [edi - 0x126000]	lea eax, [edi - 0x23e000]	8D8700A0EDFF	8D870020DCFF		0x49BE20: mod-reduce a scratch offset by 4*size (negative lea displacement)
-2	0x0049BE5D	6	1	terrain.modchain@0049BE5D	lea eax, [edi - 0x93000]	lea eax, [edi - 0x11f000]	8D8700D0F6FF	8D870010EEFF		0x49BE20: mod-reduce a scratch offset by 2*size (negative lea displacement)
-2	0x0049BE69	6	1	terrain.modchain@0049BE69	lea eax, [edi - 0x49800]	lea eax, [edi - 0x8f800]	8D870068FBFF	8D870008F7FF		0x49BE20: mod-reduce a scratch offset by 1*size (negative lea displacement)
-2	0x0049C7D1	6	1	terrain.modchain@0049C7D1	lea ecx, [eax - 0x498000]	lea ecx, [eax - 0x8f8000]	8D880080B6FF	8D88008070FF		0x49C780: mod-reduce a scratch offset by 16*size (negative lea displacement)
-2	0x0049C7DD	6	1	terrain.modchain@0049C7DD	lea ecx, [eax - 0x24c000]	lea ecx, [eax - 0x47c000]	8D880040DBFF	8D880040B8FF		0x49C780: mod-reduce a scratch offset by 8*size (negative lea displacement)
-2	0x0049C7E9	6	1	terrain.modchain@0049C7E9	lea ecx, [eax - 0x126000]	lea ecx, [eax - 0x23e000]	8D8800A0EDFF	8D880020DCFF		0x49C780: mod-reduce a scratch offset by 4*size (negative lea displacement)
-2	0x0049C7F5	6	1	terrain.modchain@0049C7F5	lea ecx, [eax - 0x93000]	lea ecx, [eax - 0x11f000]	8D8800D0F6FF	8D880010EEFF		0x49C780: mod-reduce a scratch offset by 2*size (negative lea displacement)
-2	0x0049C801	6	1	terrain.modchain@0049C801	lea ecx, [eax - 0x49800]	lea ecx, [eax - 0x8f800]	8D880068FBFF	8D880008F7FF		0x49C780: mod-reduce a scratch offset by 1*size (negative lea displacement)
-2	0x0049BCD7	6	1	terrain.colwrap@0049BCD7	lea eax, [edi - 0x49800]	lea eax, [edi - 0x8f800]	8D870068FBFF	8D870008F7FF		0x49BC20: wrap after a 32-byte column step
-2	0x0049BE9C	6	1	terrain.colwrap@0049BE9C	lea eax, [edi - 0x49800]	lea eax, [edi - 0x8f800]	8D870068FBFF	8D870008F7FF		0x49BE20: wrap after a 32-byte column step
+2	0x0049BC65	6	1	terrain.modchain@0049BC65	lea ecx, [eax - 0x498000]	lea ecx, [eax - 0x10a8000]	8D880080B6FF	8D880080F5FE		0x49BC20: mod-reduce a scratch offset by 16*size (negative lea displacement)
+2	0x0049BC74	6	1	terrain.modchain@0049BC74	lea ecx, [eax - 0x24c000]	lea ecx, [eax - 0x854000]	8D880040DBFF	8D8800C07AFF		0x49BC20: mod-reduce a scratch offset by 8*size (negative lea displacement)
+2	0x0049BC80	6	1	terrain.modchain@0049BC80	lea ecx, [eax - 0x126000]	lea ecx, [eax - 0x42a000]	8D8800A0EDFF	8D880060BDFF		0x49BC20: mod-reduce a scratch offset by 4*size (negative lea displacement)
+2	0x0049BC8C	6	1	terrain.modchain@0049BC8C	lea ecx, [eax - 0x93000]	lea ecx, [eax - 0x215000]	8D8800D0F6FF	8D8800B0DEFF		0x49BC20: mod-reduce a scratch offset by 2*size (negative lea displacement)
+2	0x0049BC98	6	1	terrain.modchain@0049BC98	lea ecx, [eax - 0x49800]	lea ecx, [eax - 0x10a800]	8D880068FBFF	8D880058EFFF		0x49BC20: mod-reduce a scratch offset by 1*size (negative lea displacement)
+2	0x0049BD7B	6	1	terrain.modchain@0049BD7B	lea edx, [eax - 0x498000]	lea edx, [eax - 0x10a8000]	8D900080B6FF	8D900080F5FE		0x49BD40: mod-reduce a scratch offset by 16*size (negative lea displacement)
+2	0x0049BD87	6	1	terrain.modchain@0049BD87	lea edx, [eax - 0x24c000]	lea edx, [eax - 0x854000]	8D900040DBFF	8D9000C07AFF		0x49BD40: mod-reduce a scratch offset by 8*size (negative lea displacement)
+2	0x0049BD93	6	1	terrain.modchain@0049BD93	lea edx, [eax - 0x126000]	lea edx, [eax - 0x42a000]	8D9000A0EDFF	8D900060BDFF		0x49BD40: mod-reduce a scratch offset by 4*size (negative lea displacement)
+2	0x0049BD9F	6	1	terrain.modchain@0049BD9F	lea edx, [eax - 0x93000]	lea edx, [eax - 0x215000]	8D9000D0F6FF	8D9000B0DEFF		0x49BD40: mod-reduce a scratch offset by 2*size (negative lea displacement)
+2	0x0049BDAB	6	1	terrain.modchain@0049BDAB	lea edx, [eax - 0x49800]	lea edx, [eax - 0x10a800]	8D900068FBFF	8D900058EFFF		0x49BD40: mod-reduce a scratch offset by 1*size (negative lea displacement)
+2	0x0049BE39	6	1	terrain.modchain@0049BE39	lea eax, [edi - 0x498000]	lea eax, [edi - 0x10a8000]	8D870080B6FF	8D870080F5FE		0x49BE20: mod-reduce a scratch offset by 16*size (negative lea displacement)
+2	0x0049BE45	6	1	terrain.modchain@0049BE45	lea eax, [edi - 0x24c000]	lea eax, [edi - 0x854000]	8D870040DBFF	8D8700C07AFF		0x49BE20: mod-reduce a scratch offset by 8*size (negative lea displacement)
+2	0x0049BE51	6	1	terrain.modchain@0049BE51	lea eax, [edi - 0x126000]	lea eax, [edi - 0x42a000]	8D8700A0EDFF	8D870060BDFF		0x49BE20: mod-reduce a scratch offset by 4*size (negative lea displacement)
+2	0x0049BE5D	6	1	terrain.modchain@0049BE5D	lea eax, [edi - 0x93000]	lea eax, [edi - 0x215000]	8D8700D0F6FF	8D8700B0DEFF		0x49BE20: mod-reduce a scratch offset by 2*size (negative lea displacement)
+2	0x0049BE69	6	1	terrain.modchain@0049BE69	lea eax, [edi - 0x49800]	lea eax, [edi - 0x10a800]	8D870068FBFF	8D870058EFFF		0x49BE20: mod-reduce a scratch offset by 1*size (negative lea displacement)
+2	0x0049C7D1	6	1	terrain.modchain@0049C7D1	lea ecx, [eax - 0x498000]	lea ecx, [eax - 0x10a8000]	8D880080B6FF	8D880080F5FE		0x49C780: mod-reduce a scratch offset by 16*size (negative lea displacement)
+2	0x0049C7DD	6	1	terrain.modchain@0049C7DD	lea ecx, [eax - 0x24c000]	lea ecx, [eax - 0x854000]	8D880040DBFF	8D8800C07AFF		0x49C780: mod-reduce a scratch offset by 8*size (negative lea displacement)
+2	0x0049C7E9	6	1	terrain.modchain@0049C7E9	lea ecx, [eax - 0x126000]	lea ecx, [eax - 0x42a000]	8D8800A0EDFF	8D880060BDFF		0x49C780: mod-reduce a scratch offset by 4*size (negative lea displacement)
+2	0x0049C7F5	6	1	terrain.modchain@0049C7F5	lea ecx, [eax - 0x93000]	lea ecx, [eax - 0x215000]	8D8800D0F6FF	8D8800B0DEFF		0x49C780: mod-reduce a scratch offset by 2*size (negative lea displacement)
+2	0x0049C801	6	1	terrain.modchain@0049C801	lea ecx, [eax - 0x49800]	lea ecx, [eax - 0x10a800]	8D880068FBFF	8D880058EFFF		0x49C780: mod-reduce a scratch offset by 1*size (negative lea displacement)
+2	0x0049BCD7	6	1	terrain.colwrap@0049BCD7	lea eax, [edi - 0x49800]	lea eax, [edi - 0x10a800]	8D870068FBFF	8D870058EFFF		0x49BC20: wrap after a 32-byte column step
+2	0x0049BE9C	6	1	terrain.colwrap@0049BE9C	lea eax, [edi - 0x49800]	lea eax, [edi - 0x10a800]	8D870068FBFF	8D870058EFFF		0x49BE20: wrap after a 32-byte column step
 2	0x0049BCFC	6	1	terrain.tilerow@0049BCFC	add ecx, 0x5400	add ecx, 0xa400	81C100540000	81C100A40000		0x49BC20: advance one 32px tile row of the scratch surface
 2	0x0049BE04	5	1	terrain.tilerow@0049BE04	add eax, 0x5400	add eax, 0xa400	0500540000	0500A40000		0x49BD40: advance one 32px tile row of the scratch surface
 2	0x0049C839	5	1	terrain.tilerow@0049C839	add eax, 0x5400	add eax, 0xa400	0500540000	0500A40000		0x49C780: advance one 32px tile row of the scratch surface
-2	0x0049BD05	6	1	terrain.rowwrap.49BC20	add ecx, 0xfffb6800	add ecx, 0xfff70800	81C10068FBFF	81C10008F7FF		0x49BC20: wrap after the tile-row step (add of -size)
-2	0x0049BDF2	6	1	terrain.lastrow@0049BDF2	cmp edi, 0x44400	cmp edi, 0x85400	81FF00440400	81FF00540800		0x49BD40: is this the last tile row (start of row 13)
-2	0x0049C82A	6	1	terrain.lastrow@0049C82A	cmp esi, 0x44400	cmp esi, 0x85400	81FE00440400	81FE00540800		0x49C780: is this the last tile row (start of row 13)
-2	0x0049BDFF	5	1	terrain.wrapmask@0049BDFF	and eax, 0xfffb6800	and eax, 0xfff70800	250068FBFF	250008F7FF		0x49BD40: -size as an AND mask (branchless conditional wrap)
-2	0x0049C74B	6	1	terrain.wrapmask@0049C74B	and edx, 0xfffb6800	and edx, 0xfff70800	81E20068FBFF	81E20008F7FF		0x49C620: -size as an AND mask (branchless conditional wrap)
-2	0x0049C834	5	1	terrain.wrapmask@0049C834	and eax, 0xfffb6800	and eax, 0xfff70800	250068FBFF	250008F7FF		0x49C780: -size as an AND mask (branchless conditional wrap)
-2	0x0049C73F	5	1	terrain.endcol.49C620	cmp eax, 0x497e0	cmp eax, 0x8f7e0	3DE0970400	3DE0F70800		0x49C620: size minus one 32-byte tile column (column-step wrap test)
+2	0x0049BD05	6	1	terrain.rowwrap.49BC20	add ecx, 0xfffb6800	add ecx, 0xffef5800	81C10068FBFF	81C10058EFFF		0x49BC20: wrap after the tile-row step (add of -size)
+2	0x0049BDF2	6	1	terrain.lastrow@0049BDF2	cmp edi, 0x44400	cmp edi, 0x100400	81FF00440400	81FF00041000		0x49BD40: is this the last tile row (start of row 13)
+2	0x0049C82A	6	1	terrain.lastrow@0049C82A	cmp esi, 0x44400	cmp esi, 0x100400	81FE00440400	81FE00041000		0x49C780: is this the last tile row (start of row 13)
+2	0x0049BDFF	5	1	terrain.wrapmask@0049BDFF	and eax, 0xfffb6800	and eax, 0xffef5800	250068FBFF	250058EFFF		0x49BD40: -size as an AND mask (branchless conditional wrap)
+2	0x0049C74B	6	1	terrain.wrapmask@0049C74B	and edx, 0xfffb6800	and edx, 0xffef5800	81E20068FBFF	81E20058EFFF		0x49C620: -size as an AND mask (branchless conditional wrap)
+2	0x0049C834	5	1	terrain.wrapmask@0049C834	and eax, 0xfffb6800	and eax, 0xffef5800	250068FBFF	250058EFFF		0x49C780: -size as an AND mask (branchless conditional wrap)
+2	0x0049C73F	5	1	terrain.endcol.49C620	cmp eax, 0x497e0	cmp eax, 0x10a7e0	3DE0970400	3DE0A71000		0x49C620: size minus one 32-byte tile column (column-step wrap test)
 2	0x0049BA45	6	1	terrain.mt.r1c0	lea edx, [edi + 0x1500]	lea edx, [edi + 0x2900]	8D9700150000	8D9700290000		0x49B9F0 (per-megatile writer): minitile row 1 col 0 of the unrolled 4x4
 2	0x0049BA57	6	1	terrain.mt.r1c1	lea edx, [edi + 0x1508]	lea edx, [edi + 0x2908]	8D9708150000	8D9708290000		0x49B9F0 (per-megatile writer): minitile row 1 col 1 of the unrolled 4x4
 2	0x0049BA69	6	1	terrain.mt.r1c2	lea edx, [edi + 0x1510]	lea edx, [edi + 0x2910]	8D9710150000	8D9710290000		0x49B9F0 (per-megatile writer): minitile row 1 col 2 of the unrolled 4x4
@@ -219,20 +219,20 @@ stage	va	len	changed	name	before	after	expect	patch	cave	note
 2	0x0047EE83	5	1	fog.wrap@0047EE83	cmp eax, 0x288	cmp eax, 0x508	3D88020000	3D08050000		fog coordinate wrap at (playfield width + 8), inferred from shape
 2	0x0047EE8D	5	1	fog.wrap@0047EE8D	sub eax, 0x288	sub eax, 0x508	2D88020000	2D08050000		fog coordinate wrap at (playfield width + 8), inferred from shape
 2	0x0047EE98	5	1	fog.wrap@0047EE98	add eax, 0x288	add eax, 0x508	0588020000	0508050000		fog coordinate wrap at (playfield width + 8), inferred from shape
-2	0x004809A5	5	1	fogcell.tmap.alloc@004809A5	push 0x198	push 0x2ec	6898010000	68EC020000		SMemAlloc size of one 44-col x 17-row tile visibility map
-2	0x004809D0	5	1	fogcell.tmap.alloc@004809D0	push 0x198	push 0x2ec	6898010000	68EC020000		SMemAlloc size of one 44-col x 17-row tile visibility map
-2	0x004809F6	5	1	fogcell.tmap.alloc@004809F6	push 0x198	push 0x2ec	6898010000	68EC020000		SMemAlloc size of one 44-col x 17-row tile visibility map
-2	0x004809CB	5	1	fogcell.tmap.clear@004809CB	mov ecx, 0x66	mov ecx, 0xbb	B966000000	B9BB000000		rep stosd count clearing that tile map
-2	0x004809F1	5	1	fogcell.tmap.clear@004809F1	mov ecx, 0x66	mov ecx, 0xbb	B966000000	B9BB000000		rep stosd count clearing that tile map
-2	0x00480A17	5	1	fogcell.tmap.clear@00480A17	mov ecx, 0x66	mov ecx, 0xbb	B966000000	B9BB000000		rep stosd count clearing that tile map
-2	0x00480A1C	5	1	fogcell.cells.alloc	push 0x14a0	push 0x2760	68A0140000	6860270000		SMemAlloc size of the 8px cell buffer [0x006D5C18], 168 stride x 60 rows
-2	0x00480A30	5	1	fogcell.cells.clear	mov ecx, 0x528	mov ecx, 0x9d8	B928050000	B9D8090000		rep stosd count clearing the cell buffer
-2	0x0047FCA6	7	0	fogcell.fill.rows	mov dword ptr [ebp - 0x18], 0x11	mov dword ptr [ebp - 0x18], 0x11	C745E811000000	C745E811000000		tile rows filled from the map visibility array
+2	0x004809A5	5	1	fogcell.tmap.alloc@004809A5	push 0x198	push 0x4fc	6898010000	68FC040000		SMemAlloc size of one 44-col x 29-row tile visibility map
+2	0x004809D0	5	1	fogcell.tmap.alloc@004809D0	push 0x198	push 0x4fc	6898010000	68FC040000		SMemAlloc size of one 44-col x 29-row tile visibility map
+2	0x004809F6	5	1	fogcell.tmap.alloc@004809F6	push 0x198	push 0x4fc	6898010000	68FC040000		SMemAlloc size of one 44-col x 29-row tile visibility map
+2	0x004809CB	5	1	fogcell.tmap.clear@004809CB	mov ecx, 0x66	mov ecx, 0x13f	B966000000	B93F010000		rep stosd count clearing that tile map
+2	0x004809F1	5	1	fogcell.tmap.clear@004809F1	mov ecx, 0x66	mov ecx, 0x13f	B966000000	B93F010000		rep stosd count clearing that tile map
+2	0x00480A17	5	1	fogcell.tmap.clear@00480A17	mov ecx, 0x66	mov ecx, 0x13f	B966000000	B93F010000		rep stosd count clearing that tile map
+2	0x00480A1C	5	1	fogcell.cells.alloc	push 0x14a0	push 0x46e0	68A0140000	68E0460000		SMemAlloc size of the 8px cell buffer [0x006D5C18], 168 stride x 108 rows
+2	0x00480A30	5	1	fogcell.cells.clear	mov ecx, 0x528	mov ecx, 0x11b8	B928050000	B9B8110000		rep stosd count clearing the cell buffer
+2	0x0047FCA6	7	1	fogcell.fill.rows	mov dword ptr [ebp - 0x18], 0x11	mov dword ptr [ebp - 0x18], 0x1d	C745E811000000	C745E81D000000		tile rows filled from the map visibility array
 2	0x0047FCC3	7	1	fogcell.fill.cols	mov dword ptr [ebp - 0x10], 0x18	mov dword ptr [ebp - 0x10], 0x2c	C745F018000000	C745F02C000000		tile cols filled per row (writes the whole stride)
 2	0x0047FD80	3	1	fogcell.fill.rowstep	add ecx, 0x18	add ecx, 0x2c	83C118	83C12C		advance the raw map's dest pointer one row (= stride)
 2	0x0047FD9B	3	1	fogcell.smooth.base.src	add eax, 0x19	add eax, 0x2d	83C019	83C02D		raw map + stride + 1: start at row 1, col 1
 2	0x0047FD9E	3	1	fogcell.smooth.base.dst	add ecx, 0x19	add ecx, 0x2d	83C119	83C12D		smoothed map + stride + 1
-2	0x0047FDA1	5	0	fogcell.smooth.rows	mov edi, 0xf	mov edi, 0xf	BF0F000000	BF0F000000		interior tile rows smoothed
+2	0x0047FDA1	5	1	fogcell.smooth.rows	mov edi, 0xf	mov edi, 0x1b	BF0F000000	BF1B000000		interior tile rows smoothed
 2	0x0047FDB0	5	1	fogcell.smooth.cols	mov esi, 0x16	mov esi, 0x2a	BE16000000	BE2A000000		interior tile cols smoothed
 2	0x0047FDB5	4	1	fogcell.smooth.k.up	movzx ebx, byte ptr [eax - 0x18]	movzx ebx, byte ptr [eax - 0x2c]	0FB658E8	0FB658D4		3x3 kernel: one row up
 2	0x0047FDBF	4	1	fogcell.smooth.k.down	movzx ebx, byte ptr [eax + 0x18]	movzx ebx, byte ptr [eax + 0x2c]	0FB65818	0FB6582C		3x3 kernel: one row down
@@ -241,7 +241,7 @@ stage	va	len	changed	name	before	after	expect	patch	cave	note
 2	0x0047FDDE	4	1	fogcell.smooth.k.upright	movzx ebx, byte ptr [eax - 0x17]	movzx ebx, byte ptr [eax - 0x2b]	0FB658E9	0FB658D5		3x3 kernel: up-right
 2	0x0047FDE4	4	1	fogcell.smooth.k.downleft	movzx ebx, byte ptr [eax + 0x17]	movzx ebx, byte ptr [eax + 0x2b]	0FB65817	0FB6582B		3x3 kernel: down-left
 2	0x0047FE23	3	1	fogcell.interp.base	add ebx, 0x19	add ebx, 0x2d	83C319	83C32D		smoothed map + stride + 1: read from row 1, col 1
-2	0x0047FE2D	7	0	fogcell.interp.rows	mov dword ptr [ebp - 0x14], 0xe	mov dword ptr [ebp - 0x14], 0xe	C745EC0E000000	C745EC0E000000		tile rows interpolated into the cell buffer
+2	0x0047FE2D	7	1	fogcell.interp.rows	mov dword ptr [ebp - 0x14], 0xe	mov dword ptr [ebp - 0x14], 0x1a	C745EC0E000000	C745EC1A000000		tile rows interpolated into the cell buffer
 2	0x0047FE40	7	1	fogcell.interp.cols	mov dword ptr [ebp - 0x10], 0x15	mov dword ptr [ebp - 0x10], 0x29	C745F015000000	C745F029000000		tile cols interpolated (the playfield-covering band)
 2	0x0047FE53	4	1	fogcell.interp.k.down	movzx eax, byte ptr [ebx + 0x18]	movzx eax, byte ptr [ebx + 0x2c]	0FB64318	0FB6432C		bilinear: the tile one row down
 2	0x0047FE6B	4	1	fogcell.interp.k.downright	movzx eax, byte ptr [ebx + 0x19]	movzx eax, byte ptr [ebx + 0x2d]	0FB64319	0FB6432D		bilinear: the tile down-right
@@ -249,10 +249,10 @@ stage	va	len	changed	name	before	after	expect	patch	cave	note
 2	0x0047FEC7	6	1	fogcell.interp.colback	sub ecx, 0x15c	sub ecx, 0x29c	81E95C010000	81E99C020000		after 4 sub-rows: back up 4 cell rows, advance one dword of cells
 2	0x0047FEE4	6	1	fogcell.interp.rowadv	add ecx, 0x10c	add ecx, 0x1fc	81C10C010000	81C1FC010000		after a tile row: cell dest to the next 4-row band's start
 2	0x004804F8	5	1	fogcell.change.xspan	mov ebx, 0x2c0	mov ebx, 0x540	BBC0020000	BB40050000		compared screen span in px: T_SMOOTH tiles of 32
-2	0x00480502	5	0	fogcell.change.yspan	mov eax, 0x1e0	mov eax, 0x1e0	B8E0010000	B8E0010000		compared screen span in px, vertical
+2	0x00480502	5	1	fogcell.change.yspan	mov eax, 0x1e0	mov eax, 0x360	B8E0010000	B860030000		compared screen span in px, vertical
 2	0x00480523	6	1	fogcell.change.xspan.neg	lea ecx, [ebx - 0x2c0]	lea ecx, [ebx - 0x540]	8D8B40FDFFFF	8D8BC0FAFFFF		the same span as the loop cursor's negative origin
-2	0x004805E3	5	1	fogcell.sync.copy.a	mov ecx, 0x66	mov ecx, 0xbb	B966000000	B9BB000000		rep movsd count, game-start sync in 0x004805D0
-2	0x004BD5A8	5	1	fogcell.sync.copy.b	mov ecx, 0x66	mov ecx, 0xbb	B966000000	B9BB000000		rep movsd count, full-redraw path in layer 5's draw 0x004BD580
+2	0x004805E3	5	1	fogcell.sync.copy.a	mov ecx, 0x66	mov ecx, 0x13f	B966000000	B93F010000		rep movsd count, game-start sync in 0x004805D0
+2	0x004BD5A8	5	1	fogcell.sync.copy.b	mov ecx, 0x66	mov ecx, 0x13f	B966000000	B93F010000		rep movsd count, full-redraw path in layer 5's draw 0x004BD580
 2	0x00480617	6	1	fogcell.render.rowmul	imul ecx, ecx, 0x58 ; shr ebx, 3	[cave] imul ecx, ecx, 0xa8 ; shr ebx, 3	6BC958C1EB03	E90000000090	69C9A8000000C1EB03	cell row base = cellRow * stride (imul ecx,ecx,stride; shr ebx,3 rides along)
 2	0x0048064C	7	1	fogcell.render.rowadv.pre	add esi, 0x58 ; dec eax ; shr eax, 3	[cave] add esi, 0xa8 ; dec eax ; shr eax, 3	83C65848C1E803	E9000000009090	81C6A800000048C1E803	pre-loop advance so [esi-stride] is the current row (dec eax; shr eax,3 ride along)
 2	0x00480671	8	1	fogcell.render.k.up	movzx edx, byte ptr [esi - 0x58] ; movzx eax, byte ptr [esi - 0x57]	[cave] movzx edx, byte ptr [esi - 0xa8] ; movzx eax, byte ptr [esi - 0xa7]	0FB656A80FB646A9	E900000000909090	0FB69658FFFFFF0FB68659FFFFFF	neighborhood read: this column and the next, current row ([esi-stride], [esi-stride+1] as disp32)
@@ -273,4 +273,107 @@ stage	va	len	changed	name	before	after	expect	patch	cave	note
 3	0x0049BBE6	3	1	scroll.clamp.x.tiles	sub ecx, 0x14	sub ecx, 0x28	83E914	83E928		0x0049BB90: maxScreenLeft = (mapTileW - 20) * 32 -> (mapTileW - W/32) * 32, so the playfield never extends past the map's right edge
 3	0x0046FC75	5	1	click.searchrect.right	add eax, 0x280	add eax, 0x500	0580020000	0500050000		0x0046FB40: click search rect right = screenLeft + 640 -> + 800
 3	0x0046FE18	5	1	click.searchrect.right.drag	add eax, 0x280	add eax, 0x500	0580020000	0500050000		0x0046FB40 drag-box arm: same rect, same widen
+2	0x0049B97D	3	1	terrain.tilerows@0049B97D	cmp esi, 0xe	cmp esi, 0x1a	83FE0E	83FE1A		cache clamp helper: clamp a request's row extent
+2	0x0049B982	5	1	terrain.tilerows@0049B982	mov esi, 0xe	mov esi, 0x1a	BE0E000000	BE1A000000		cache clamp helper: the clamped row extent
+2	0x0049B9A2	3	1	terrain.tilerows@0049B9A2	cmp dword ptr [ecx], 0xe	cmp dword ptr [ecx], 0x1a	83390E	83391A		cache clamp helper: reject a request below the cache
+2	0x0049BD64	3	1	terrain.tilerows@0049BD64	cmp ecx, 0xe	cmp ecx, 0x1a	83F90E	83F91A		column refresh: clamp rows to the cache height
+2	0x0049BD69	5	1	terrain.tilerows@0049BD69	mov ecx, 0xe	mov ecx, 0x1a	B90E000000	B91A000000		column refresh: the clamped row count
+2	0x0049BF46	5	1	terrain.tilerows@0049BF46	mov ebx, 0xe	mov ebx, 0x1a	BB0E000000	BB1A000000		full cache refresh: rows to refresh
+2	0x0049C31C	3	1	terrain.tilerows@0049C31C	add eax, 0xe	add eax, 0x1a	83C00E	83C01A		Y stepper: incoming row = top + cache height
+2	0x0049C556	3	1	terrain.tilerows@0049C556	cmp ebx, 0xe	cmp ebx, 0x1a	83FB0E	83FB1A		whole-map tile updater: is this row inside the window
+2	0x0049C80F	7	1	terrain.tilerows@0049C80F	mov dword ptr [ebp - 0xc], 0xe	mov dword ptr [ebp - 0xc], 0x1a	C745F40E000000	C745F41A000000		per-frame tile updater: rows to walk
+3	0x0049BBB2	3	1	scroll.clamp.y.tiles	sub eax, 0xc	sub eax, 0x19	83E80C	83E819		0x0049BB90: maxScreenTop = (mapTileH - 12)*32 + 8 -> (mapTileH - PF_H/32)*32 + C
+3	0x0049BBCD	3	1	scroll.clamp.y.bias	add eax, 8	add eax, 0x18	83C008	83C018		0x0049BB90: the +8 beside it, kept so the view bottom still overshoots the map by 24 px
+2	0x00480509	6	1	fogcell.change.yspan.neg	lea edx, [eax - 0x1e0]	lea edx, [eax - 0x360]	8D9020FEFFFF	8D90A0FCFFFF		0x004804D0: row loop origin = yspan - R_SMOOTH*32; alone, 0x00480502 halves the rows compared
+2	0x0048050F	3	1	fogcell.change.base.smooth	add edi, 0x19	add edi, 0x2d	83C719	83C72D		0x004804D0: smoothed tile map -> (row 1, col 1) = stride + 1
+2	0x00480512	3	1	fogcell.change.base.prev	add esi, 0x19	add esi, 0x2d	83C619	83C62D		0x004804D0: previous-frame tile map -> (row 1, col 1) = stride + 1
+2	0x004BD67E	9	1	playfield.layer.height	mov word ptr [0x6cefbc], 0x190	mov word ptr [0x6cefbc], 0x320	66C705BCEF6C009001	66C705BCEF6C002003		layer 5 record +0x08: height
+2	0x004D5887	5	1	image.clip.bottom	mov ecx, 0x190	mov ecx, 0x320	B990010000	B920030000		0x004D57B0 per-image screen clip: h = min(h, PF_H - y)
+2	0x0045CCBC	6	1	rectclip.reject.y	cmp edx, 0x190	cmp edx, 0x320	81FA90010000	81FA20030000		0x0045CC90 rect clipper: reject top >= PF_H
+2	0x0045CCE8	6	1	rectclip.cmp.bottom	cmp edi, 0x190	cmp edi, 0x320	81FF90010000	81FF20030000		0x0045CC90 rect clipper: does the bottom need clamping
+2	0x0045CCF0	7	1	rectclip.clamp.bottom	mov dword ptr [eax + 0xc], 0x190	mov dword ptr [eax + 0xc], 0x320	C7400C90010000	C7400C20030000		0x0045CC90 rect clipper: bottom = PF_H
+2	0x0048D5FC	6	1	placement.rect.bottom	lea edi, [eax + 0x190]	lea edi, [eax + 0x320]	8DB890010000	8DB820030000		build-placement preview extent: bottom = top + PF_H
+2	0x0048D66D	5	1	placement.reject.y	cmp cx, 0x190	cmp cx, 0x320	6681F99001	6681F92003		build placement: refuse y >= PF_H
+2	0x004808EB	5	1	fog.height	mov eax, 0x190	mov eax, 0x320	B890010000	B820030000		0x004808E0 full-extent fog draw: y2 = PF_H
+2	0x00480953	6	1	fog.walk.rows	cmp ebx, 0x190	cmp ebx, 0x320	81FB90010000	81FB20030000		0x004808F8 fog dirty-grid walk: outer row bound
+2	0x004BCE88	5	1	playfield.blit.rows	cmp eax, 0x190	cmp eax, 0x320	3D90010000	3D20030000		0x004BCDC0 terrain blitter: outer y loop bound (playfield HEIGHT, not scratch geometry)
+2	0x0040C2A3	5	1	playfield.fullblit.rows	mov edx, 0x190	mov edx, 0x320	BA90010000	BA20030000		0x0040C253 whole-playfield blit: row count (playfield HEIGHT; the WIDTH twin terrain.fullblit.runwidth stays terrain-named)
+2	0x004814F3	9	1	layer1.park.y	mov word ptr [0x6cef68], 0x190	mov word ptr [0x6cef68], 0x320	66C70568EF6C009001	66C70568EF6C002003		0x00481480 parks the mask layer just below the playfield
+2	0x0047ECBC	6	1	star.clip.y.a	cmp ecx, 0x190	cmp ecx, 0x320	81F990010000	81F920030000		starfield scrolled arm: skip y >= PF_H (cosmetic)
+2	0x0047EDB8	6	1	star.clip.y.b	cmp ebx, 0x190	cmp ebx, 0x320	81FB90010000	81FB20030000		starfield scrolled arm: bottom clip test
+2	0x0047EDC0	5	1	star.clip.y.c	mov eax, 0x190	mov eax, 0x320	B890010000	B820030000		starfield scrolled arm: h = PF_H - y
+2	0x0047EEDD	6	1	star.clip.y.d	cmp esi, 0x190	cmp esi, 0x320	81FE90010000	81FE20030000		starfield static arm: skip y >= PF_H
+2	0x0047EF24	6	1	star.clip.y.e	cmp edi, 0x190	cmp edi, 0x320	81FF90010000	81FF20030000		starfield static arm: bottom clip test
+2	0x0047EF2C	5	1	star.clip.y.f	mov ecx, 0x190	mov ecx, 0x320	B990010000	B920030000		starfield static arm: h = PF_H - y
+2	0x004BD633	5	1	playfield.setrect.bottom	push 0x18f	push 0x31f	688F010000	681F030000		SetRect(0x5993B0,0,0,W-1,399): the playfield rect's bottom (twin of playfield.setrect.right)
+2	0x0047EC9F	6	1	star.wrap.y@0047EC9F	cmp ecx, 0x1e8	cmp ecx, 0x378	81F9E8010000	81F978030000		starfield vertical ring modulus 488 -> H+8 (cosmetic, space tilesets)
+2	0x0047ECA7	6	1	star.wrap.y@0047ECA7	sub ecx, 0x1e8	sub ecx, 0x378	81E9E8010000	81E978030000		starfield vertical ring modulus 488 -> H+8 (cosmetic, space tilesets)
+2	0x0047ECB3	6	1	star.wrap.y@0047ECB3	add ecx, 0x1e8	add ecx, 0x378	81C1E8010000	81C178030000		starfield vertical ring modulus 488 -> H+8 (cosmetic, space tilesets)
+2	0x0047EEC0	6	1	star.wrap.y@0047EEC0	cmp esi, 0x1e8	cmp esi, 0x378	81FEE8010000	81FE78030000		starfield vertical ring modulus 488 -> H+8 (cosmetic, space tilesets)
+2	0x0047EEC8	6	1	star.wrap.y@0047EEC8	sub esi, 0x1e8	sub esi, 0x378	81EEE8010000	81EE78030000		starfield vertical ring modulus 488 -> H+8 (cosmetic, space tilesets)
+2	0x0047EED4	6	1	star.wrap.y@0047EED4	add esi, 0x1e8	add esi, 0x378	81C6E8010000	81C678030000		starfield vertical ring modulus 488 -> H+8 (cosmetic, space tilesets)
+3	0x004D1982	4	1	mouse.yclamp.cmp@004D1982	cmp ax, 0x1e0	cmp ax, 0x370	663DE001	663D7003		window-proc mouse y clamp: the 'y >= 480' decision
+3	0x004D198E	4	1	mouse.yclamp.y@004D198E	mov ax, 0x1df	mov ax, 0x36f	66B8DF01	66B86F03		window-proc mouse y clamp: the replacement value 479
+3	0x004D1A0E	4	1	mouse.yclamp.cmp@004D1A0E	cmp ax, 0x1e0	cmp ax, 0x370	663DE001	663D7003		window-proc mouse y clamp: the 'y >= 480' decision
+3	0x004D1A1A	4	1	mouse.yclamp.y@004D1A1A	mov ax, 0x1df	mov ax, 0x36f	66B8DF01	66B86F03		window-proc mouse y clamp: the replacement value 479
+3	0x004D1A9E	4	1	mouse.yclamp.cmp@004D1A9E	cmp ax, 0x1e0	cmp ax, 0x370	663DE001	663D7003		window-proc mouse y clamp: the 'y >= 480' decision
+3	0x004D1AAA	4	1	mouse.yclamp.y@004D1AAA	mov ax, 0x1df	mov ax, 0x36f	66B8DF01	66B86F03		window-proc mouse y clamp: the replacement value 479
+3	0x004D2504	4	1	mouse.yclamp.cmp@004D2504	cmp ax, 0x1e0	cmp ax, 0x370	663DE001	663D7003		window-proc mouse y clamp: the 'y >= 480' decision
+3	0x004D250C	10	1	mouse.yclamp.y@004D250C	mov dword ptr [0x6cddc8], 0x1df	mov dword ptr [0x6cddc8], 0x36f	C705C8DD6C00DF010000	C705C8DD6C006F030000		window-proc mouse y clamp: the replacement value 479
+3	0x00421607	7	1	cursor.clip.bottom	mov dword ptr [ebp - 4], 0x1e0	mov dword ptr [ebp - 4], 0x370	C745FCE0010000	C745FC70030000		0x004215E0 clip-rect reset: ClientToScreen({W,480}) -> ({W,H}); the physical mouse's floor
+3	0x004D1332	6	1	scroll.down.trigger	cmp ecx, 0x1de	cmp ecx, 0x36e	81F9DE010000	81F96E030000		0x004D12A0 edge-scroll: pan DOWN when mouse y >= H-2 (twin of scroll.right.trigger)
+2	0x0048CB97	5	1	chat.mark.ymax.cmp@0048CB97	cmp eax, 0x1df	cmp eax, 0x36f	3DDF010000	3D6F030000		chat-line dirty mark: clamp y to the last screen row before >>4
+2	0x0048CB9E	5	1	chat.mark.ymax.set@0048CB9E	mov eax, 0x1df	mov eax, 0x36f	B8DF010000	B86F030000		chat-line dirty mark: the clamped value
+2	0x0048CBE8	5	1	chat.mark.ymax.cmp@0048CBE8	cmp eax, 0x1df	cmp eax, 0x36f	3DDF010000	3D6F030000		chat-line dirty mark: clamp y to the last screen row before >>4
+2	0x0048CBEF	5	1	chat.mark.ymax.set@0048CBEF	mov eax, 0x1df	mov eax, 0x36f	B8DF010000	B86F030000		chat-line dirty mark: the clamped value
+2	0x004B22E9	5	1	chat.mark.ymax.cmp@004B22E9	cmp eax, 0x1df	cmp eax, 0x36f	3DDF010000	3D6F030000		chat-line dirty mark: clamp y to the last screen row before >>4
+2	0x004B22F0	5	1	chat.mark.ymax.set@004B22F0	mov eax, 0x1df	mov eax, 0x36f	B8DF010000	B86F030000		chat-line dirty mark: the clamped value
+3	0x004E087A	5	1	cursor.warp.screen.y	push 0xf0	push 0x1b8	68F0000000	68B8010000		SetCursorPos(320,240): y
+3	0x004E089B	10	1	cursor.warp.screen.gy	mov dword ptr [0x6cddc8], 0xf0	mov dword ptr [0x6cddc8], 0x1b8	C705C8DD6C00F0000000	C705C8DD6C00B8010000		the matching [0x6CDDC8] write
+3	0x004E0891	10	1	cursor.warp.screen.gx	mov dword ptr [0x6cddc4], 0x140	mov dword ptr [0x6cddc4], 0x280	C705C4DD6C0040010000	C705C4DD6C0080020000		the matching [0x6CDDC4] write
+3	0x004E087F	5	1	cursor.warp.screen.x	push 0x140	push 0x280	6840010000	6880020000		SetCursorPos(320,240): x
+3	0x004D996B	5	1	cursor.warp.screen2.y	mov esi, 0xf0	mov esi, 0x1b8	BEF0000000	BEB8010000		third screen-centre warp: y
+3	0x004D9970	5	1	cursor.warp.screen2.x	mov edi, 0x140	mov edi, 0x280	BF40010000	BF80020000		third screen-centre warp: x
+3	0x0047EB39	5	1	cursor.warp.pfa.y	push 0xc8	push 0x190	68C8000000	6890010000		SetCursorPos(320,200): y (playfield centre)
+3	0x0047EB5A	10	1	cursor.warp.pfa.gy	mov dword ptr [0x6cddc8], 0xc8	mov dword ptr [0x6cddc8], 0x190	C705C8DD6C00C8000000	C705C8DD6C0090010000		the matching [0x6CDDC8] write
+3	0x0047EB3E	5	1	cursor.warp.pfa.x	push 0x140	push 0x280	6840010000	6880020000		SetCursorPos(320,200): x
+3	0x0047EB50	10	1	cursor.warp.pfa.gx	mov dword ptr [0x6cddc4], 0x140	mov dword ptr [0x6cddc4], 0x280	C705C4DD6C0040010000	C705C4DD6C0080020000		the matching [0x6CDDC4] write
+3	0x004C58A1	5	1	cursor.warp.pfb.y	push 0xc8	push 0x190	68C8000000	6890010000		SetCursorPos(320,200): y (playfield centre)
+3	0x004C58C7	10	1	cursor.warp.pfb.gy	mov dword ptr [0x6cddc8], 0xc8	mov dword ptr [0x6cddc8], 0x190	C705C8DD6C00C8000000	C705C8DD6C0090010000		the matching [0x6CDDC8] write
+3	0x004C58A6	5	1	cursor.warp.pfb.x	push 0x140	push 0x280	6840010000	6880020000		SetCursorPos(320,200): x
+3	0x004C58BD	10	1	cursor.warp.pfb.gx	mov dword ptr [0x6cddc4], 0x140	mov dword ptr [0x6cddc4], 0x280	C705C4DD6C0040010000	C705C4DD6C0080020000		the matching [0x6CDDC4] write
+3	0x0046FC87	5	1	click.searchrect.bottom	add eax, 0x190	add eax, 0x320	0590010000	0520030000		0x0046FB40: click search rect bottom = screenTop + PF_H
+3	0x0046FE2A	5	1	click.searchrect.bottom.drag	add eax, 0x190	add eax, 0x320	0590010000	0520030000		0x0046FB40 drag-box arm: same rect
+3	0x004844BB	6	1	camera.pct.spany	sub ecx, 0x190	sub ecx, 0x320	81E990010000	81E920030000		0x00484460 percent->camera: mapH - PF_H
+3	0x004844DC	6	1	camera.pct.spanx	sub edx, 0x280	sub edx, 0x500	81EA80020000	81EA00050000		0x00484460 percent->camera: mapW - W
+3	0x00484545	6	1	camera.pct.anchory	sub esi, 0x190	sub esi, 0x320	81EE90010000	81EE20030000		0x00484520 camera->percent: mapH - PF_H
+3	0x00484532	6	1	camera.pct.anchorx	sub esi, 0x280	sub esi, 0x500	81EE80020000	81EE00050000		0x00484520 camera->percent: mapW - W
+3	0x0048E90B	6	1	camera.offscreen.bottom	lea edx, [ecx + 0x190]	lea edx, [ecx + 0x320]	8D9190010000	8D9120030000		0x0048E8D0 off-screen distance: screenTop + PF_H
+3	0x0048E917	7	1	camera.offscreen.bottom.neg	lea eax, [eax + esi - 0x190]	lea eax, [eax + esi - 0x320]	8D843070FEFFFF	8D8430E0FCFFFF		0x0048E8D0: the below-the-viewport arm
+3	0x0048E8E6	6	1	camera.offscreen.right	lea edi, [edx + 0x280]	lea edi, [edx + 0x500]	8DBA80020000	8DBA00050000		0x0048E8D0 off-screen distance: screenLeft + W
+3	0x0048E8F3	6	1	camera.offscreen.right.sub	sub ecx, 0x280	sub ecx, 0x500	81E980020000	81E900050000		0x0048E8D0: the right-of-viewport arm
+3	0x004C6F30	6	1	camera.centre.maxy	lea esi, [eax + 0x190]	lea esi, [eax + 0x320]	8DB090010000	8DB020030000		0x004C6DE0 centre-view: clamp viewTop + PF_H <= mapH
+3	0x004C6F3A	6	1	camera.centre.maxy.val	lea eax, [edx - 0x191]	lea eax, [edx - 0x321]	8D826FFEFFFF	8D82DFFCFFFF		0x004C6DE0: the clamped mapH - (PF_H+1)
+3	0x004C6F11	6	1	camera.centre.maxx	lea esi, [ecx + 0x280]	lea esi, [ecx + 0x500]	8DB180020000	8DB100050000		0x004C6DE0 centre-view: clamp viewLeft + W <= mapW
+3	0x004C6F1B	6	1	camera.centre.maxx.val	lea ecx, [edx - 0x281]	lea ecx, [edx - 0x501]	8D8A7FFDFFFF	8D8AFFFAFFFF		0x004C6DE0: the clamped mapW - (W+1)
+3	0x004C6EFD	5	1	camera.centre.halfy	sub eax, 0xc8	sub eax, 0x190	2DC8000000	2D90010000		0x004C6DE0 centre-view: viewTop = cy - PF_H/2
+3	0x004C6EF7	6	1	camera.centre.halfx	sub ecx, 0x140	sub ecx, 0x280	81E940010000	81E980020000		0x004C6DE0 centre-view: viewLeft = cx - W/2
+3	0x004C6E68	6	1	camera.centre2.halfy	sub ecx, 0xc8	sub ecx, 0x190	81E9C8000000	81E990010000		0x004C6DE0 second arm: cy - PF_H/2
+3	0x004C6E6E	5	1	camera.centre2.halfx	sub eax, 0x140	sub eax, 0x280	2D40010000	2D80020000		0x004C6DE0 second arm: cx - W/2
+3	0x0049691B	6	1	camera.group.halfy	sub ecx, 0xc8	sub ecx, 0x190	81E9C8000000	81E990010000		0x004967E0 centre on a group: - PF_H/2
+3	0x00496924	5	1	camera.group.halfx	sub eax, 0x140	sub eax, 0x280	2D40010000	2D80020000		0x004967E0 centre on a group: - W/2
+3	0x004A4D68	5	1	minimap.centre.tilesx	mov eax, 0x14	mov eax, 0x28	B814000000	B828000000		0x004A4D20 minimap click -> camera: half the viewport width
+3	0x004A4D84	5	1	minimap.centre.tilesy	mov eax, 0xd	mov eax, 0x19	B80D000000	B819000000		0x004A4D20 minimap click -> camera: half the viewport height
+3	0x004A3F7E	5	1	minimap.box.tilesx	mov eax, 0x14	mov eax, 0x28	B814000000	B828000000		0x004A3F30 minimap viewport box: width in tiles
+3	0x004A3F6C	5	1	minimap.box.tilesy	mov eax, 0xd	mov eax, 0x19	B80D000000	B819000000		0x004A3F30 minimap viewport box: height in tiles
+3	0x004D1140	6	1	console.hittest.yshift	cmp eax, dword ptr [0x596b6c]	[cave] sub eax, 0x190 ; cmp eax, dword ptr [0x596b6c]	3B056C6B5900	E90000000090	2D900100003B056C6B5900	0x004D1140 isPointOverUi: screen y -> console-art y before the tiers and the region query (the console art now sits CONSOLE_SHIFT_Y lower)
+3	0x005136D0	4	1	console.cardrect.top	[data] 62010000	[data] f2020000	62010000	F2020000		0x00484620 right-click router: PtInRect against the card rect -- top
+3	0x005136D8	4	1	console.cardrect.bottom	[data] df010000	[data] 6f030000	DF010000	6F030000		0x00484620 right-click router: PtInRect against the card rect -- bottom
+3	0x004A4539	6	1	minimap.anchor.top	add edx, 0x13b	add edx, 0x2cb	81C23B010000	81C2CB020000		0x004A4400 minimap rect writer: root top 315 + control inset
+3	0x004A4565	7	1	minimap.anchor.bottom	lea ecx, [edx + eax + 0x13a]	lea ecx, [edx + eax + 0x2ca]	8D8C023A010000	8D8C02CA020000		0x004A4400 minimap rect writer: top + height - 1 + 315
+3	0x004A3DB2	4	1	minimap.anchor.neg	mov ax, 0xfec5	mov ax, 0xfd35	66B8C5FE	66B835FD		0x004A3D70 minimap point -> world: -315 (the root's absolute top)
+2	0x0051A174	4	1	dlgclip.mark.x1	[data] 80020000	[data] 00050000	80020000	00050000		dialog dirty-mark clip box max-x: a dialog rect past it is never marked
+2	0x0051A178	4	1	dlgclip.mark.y1	[data] e0010000	[data] 70030000	E0010000	70030000		dialog dirty-mark clip box max-y
+2	0x0051A164	4	1	dlgclip.remark.x1	[data] 7f020000	[data] ff040000	7F020000	FF040000		cursor/mask re-mark clip box right (screen-absolute in 0x0041C2C0/0x0041CA64)
+2	0x0051A168	4	1	dlgclip.remark.y1	[data] df010000	[data] 6f030000	DF010000	6F030000		cursor/mask re-mark clip box bottom
 3	0x004D1159	6	1	console.hittest.xguard	cmp dword ptr [0x6d6430], ecx	[cave] cmp ecx, 0x280 ; jl 0x4d1164 ; xor eax, eax ; ret  ; cmp dword ptr [0x6d6430], ecx	390D30646D00	E90000000090	81F9800200007C0333C0C3390D30646D00	0x004D1140 isPointOverUi: x >= 640 (the console.pcx width) is bare playfield -- never ask the 640-wide console region about it (right-click orders and the contextual cursor beside the console)

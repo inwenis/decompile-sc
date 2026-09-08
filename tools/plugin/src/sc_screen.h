@@ -60,6 +60,10 @@ int ScScreenViewportTilesX(void);
 // pull the whole generated table into their own object file.
 int ScScreenTargetWidth(void);
 int ScScreenTargetHeight(void);
+// The playfield height and how far the bottom console moves DOWN (PF_H - 400;
+// 0 at the stock playfield height). Both from the generated table.
+int ScScreenPlayfieldHeight(void);
+int ScScreenConsoleShiftY(void);
 
 // The code-cave writer, exposed for hooktest: overwrite the `len`-byte window at
 // `at` with `jmp cave` + NOPs, the cave holding `code` then `jmp at+len`. Both

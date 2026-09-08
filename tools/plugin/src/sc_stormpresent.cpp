@@ -62,6 +62,8 @@ static ScHook   g_hkCopy;                   // hook on storm ord432 (the present
 static unsigned g_stripFrames = 0;          // presents that copied the x>=640 strip
 static unsigned g_cursorForced = 0;         // times layer 0's always-draw bit was found clear and set
 static unsigned g_stripSkipped = 0;         // present calls that did NOT meet the widescreen guard
+static int      g_primaryRows  = -1;        // the primary's dwHeight (GetSurfaceDesc), read once; -1 = unread
+static unsigned g_mirrorFrames = 0;         // presents that mirrored the WHOLE frame (console buffer-resident)
 
 static void* StormRt(DWORD rva) {
     return (void*)(g_stormBase + rva);
@@ -239,6 +241,26 @@ void ScStormPresentLog(const char* tag) {
 typedef int (__attribute__((stdcall)) *ScOrd432Fn)(DWORD dst, DWORD src, DWORD dstPitch,
                                                     DWORD srcPitch, DWORD region);
 
+// The primary's real row count, via IDirectDrawSurface::GetSurfaceDesc on storm's surface
+// table entry 0. Read once; an unreadable table or a failed call returns 0 and the mirror
+// falls back to the table's H. This keeps a whole-frame mirror inside the surface if a
+// display-mode change ever leaves the primary shorter than the table says.
+static int ReadPrimaryRows(void) {
+    if (!g_stormBase) return 0;
+    bool ok; DWORD prim0 = StormReadU32(StormRt(STORM_RVA_SURFTABLE), &ok);
+    if (!ok || !prim0 || !ScReadableAt((void*)(DWORD_PTR)prim0, 4)) return 0;
+    DWORD vtbl = *(DWORD*)(DWORD_PTR)prim0;
+    if (!ScReadableAt((void*)(DWORD_PTR)(vtbl + DDS_VTBL_GETSURFACEDESC), 4)) return 0;
+    DWORD fn = *(DWORD*)(DWORD_PTR)(vtbl + DDS_VTBL_GETSURFACEDESC);
+    BYTE ddsd[0x6C];
+    memset(ddsd, 0, sizeof(ddsd));
+    *(DWORD*)ddsd = 0x6C;
+    typedef long (__attribute__((stdcall)) *GetDescFn)(DWORD, void*);
+    long hr = ((GetDescFn)(DWORD_PTR)fn)(prim0, ddsd);
+    if (hr != 0) return 0;
+    return (int)*(DWORD*)(ddsd + 0x08);   // dwHeight
+}
+
 static int __attribute__((stdcall)) SC_GAME_ENTRY
 HkOrd432(DWORD dst, DWORD src, DWORD dstPitch, DWORD srcPitch, DWORD region) {
     int ret = ((ScOrd432Fn)g_hkCopy.trampoline)(dst, src, dstPitch, srcPitch, region);
@@ -248,6 +270,16 @@ HkOrd432(DWORD dst, DWORD src, DWORD dstPitch, DWORD srcPitch, DWORD region) {
     if (g_mode == SC_STORM_WIDEN && dst && src &&
         dstPitch >= (DWORD)W && srcPitch >= (DWORD)W) {
         const int stripW = W - SC_SCREEN_W;   // 160 at 800, 640 at 1280
+        // The primary's real row count, read once. The mirror never copies past it, so a
+        // display-mode change that leaves the primary shorter than the table says cannot
+        // overrun it.
+        if (g_primaryRows < 0) {
+            g_primaryRows = ReadPrimaryRows();
+            ScLog("STORM present: primary dwHeight=%d (table H=%d) -- the mirror covers "
+                  "min(H, dwHeight) rows%s", g_primaryRows, H,
+                  g_primaryRows == 0 ? " (unreadable: assuming H)" : "");
+        }
+        const int rows = (g_primaryRows > 0 && g_primaryRows < H) ? g_primaryRows : H;
         // THE CURSOR IN THE STRIP (renderer-viewport.md 21.9). The engine's copy is
         // dirty-driven, so at x<640 the primary ACCUMULATES the cursor's last pixels; this
         // strip copy MIRRORS the buffer instead, and the composer (0x0041E280) draws layer 0
@@ -268,12 +300,31 @@ HkOrd432(DWORD dst, DWORD src, DWORD dstPitch, DWORD srcPitch, DWORD region) {
             *layer0Flags |= SC_LAYER_FLAG_ALWAYS_DRAW;
             ++g_cursorForced;
         }
-        BYTE* d = (BYTE*)(DWORD_PTR)dst + SC_SCREEN_W;
-        BYTE* s = (BYTE*)(DWORD_PTR)src + SC_SCREEN_W;
-        for (int y = 0; y < H; ++y) {
-            memcpy(d, s, (size_t)stripW);
-            d += dstPitch;
-            s += srcPitch;
+        if (ScConsoleBufferResident()) {
+            // The 2x-HEIGHT build (renderer-viewport.md 22): every in-game root composites
+            // into the buffer (sc_console.cpp), so the buffer IS the whole picture --
+            // console, cursor, mask -- and the engine's own region-clipped copy is a subset
+            // of this one, from the same buffer in the same frame. Mirroring after it, this
+            // wins. A direct-blitted console (the width-only shape) would be erased by a full
+            // mirror, which is why that shape only mirrors the far strip below.
+            BYTE* d = (BYTE*)(DWORD_PTR)dst;
+            BYTE* s = (BYTE*)(DWORD_PTR)src;
+            for (int y = 0; y < rows; ++y) {
+                memcpy(d, s, (size_t)W);
+                d += dstPitch;
+                s += srcPitch;
+            }
+            ++g_mirrorFrames;
+        } else {
+            // Width-only: the console direct-blits at x<640, so only the far band mirrors and
+            // the console is never painted over.
+            BYTE* d = (BYTE*)(DWORD_PTR)dst + SC_SCREEN_W;
+            BYTE* s = (BYTE*)(DWORD_PTR)src + SC_SCREEN_W;
+            for (int y = 0; y < rows; ++y) {
+                memcpy(d, s, (size_t)stripW);
+                d += dstPitch;
+                s += srcPitch;
+            }
         }
         ++g_stripFrames;
     } else if (g_mode == SC_STORM_WIDEN) {
@@ -327,21 +378,12 @@ void ScStormPresentInstall(BYTE* exeBase, bool writeAllowed) {
               ScScreenWidescreenWanted() ? 1 : 0, ScScreenStageWanted());
         g_mode = SC_STORM_PROBE;
     }
-    if (g_mode == SC_STORM_WIDEN && ScConsoleEdgeWanted()) {
-        // The console move (%SCPLUGIN_CONSOLE_EDGE%) direct-blits the moved resource bar
-        // and command card at x>640 (renderer-viewport.md 19.1), which the strip copy
-        // would overwrite with terrain every frame. The two are MUTUALLY EXCLUSIVE: the
-        // console-edge experiment wins, the storm widen disarms.
-        ScLog("STORM present: %%SCPLUGIN_CONSOLE_EDGE%% (073's console move) is ON -- its "
-              "moved card/bar are direct-blitted at x>640 and the strip copy would overwrite "
-              "them. The storm present widen is DISARMED to PROBE (the two are mutually "
-              "exclusive for now).");
-        g_mode = SC_STORM_PROBE;
-    }
     if (g_mode == SC_STORM_WIDEN) {
         g_stripFrames = 0;
         g_cursorForced = 0;
         g_stripSkipped = 0;
+        g_mirrorFrames = 0;
+        g_primaryRows = -1;
         memset(&g_hkCopy, 0, sizeof(g_hkCopy));
         void* ord432 = StormRt(STORM_RVA_ORD432);
         if (!ScHookInstall(&g_hkCopy, "stormWidenCopy", ord432,
@@ -374,7 +416,7 @@ void ScStormPresentRemove(void) {
 
 void ScStormPresentLogStats(void) {
     if (g_mode == SC_STORM_OFF) return;
-    ScLog("STORMSTATS mode=%d logs=%u stripFrames=%u stripSkipped=%u cursorForced=%u stormBase=0x%08X",
-          (int)g_mode, g_logs, g_stripFrames, g_stripSkipped, g_cursorForced,
+    ScLog("STORMSTATS mode=%d logs=%u stripFrames=%u mirrorFrames=%u stripSkipped=%u cursorForced=%u primaryRows=%d stormBase=0x%08X",
+          (int)g_mode, g_logs, g_stripFrames, g_mirrorFrames, g_stripSkipped, g_cursorForced, g_primaryRows,
           (unsigned)(DWORD_PTR)g_stormBase);
 }

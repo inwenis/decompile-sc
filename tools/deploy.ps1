@@ -318,8 +318,21 @@ if ($wsW -lt 640 -or $wsH -lt 480) { throw "deploy: could not read SC_WS_SCREEN_
 $cnc2xIniDeployPath = Join-Path $pluginDeployDir 'cnc-ddraw-2x.ini'
 $cnc2x = Get-Content -Raw -LiteralPath (Join-Path $pluginDir 'cnc-ddraw-2x.ini')
 $cnc2x = $cnc2x -replace '(?m)^width=\d+', "width=$($wsW * 2)" -replace '(?m)^height=\d+', "height=$($wsH * 2)"
+# A 2x window only if it FITS the primary screen -- 1280x880 x2 = 2560x1760 does not fit a
+# 1920x1080 monitor. Otherwise cnc-ddraw's borderless mode (fullscreen=true + windowed=true)
+# stretches the game to the desktop with the aspect ratio kept (maintas), letterboxed as
+# needed; its cursor lock engages on activation there. The width/height lines stay at 2x for
+# the verify below (cnc-ddraw ignores them under fullscreen=true).
+Add-Type -AssemblyName System.Windows.Forms
+$screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+$fits2x = ($wsW * 2 -le $screen.Width) -and ($wsH * 2 -le $screen.Height - 48)
+if (-not $fits2x) {
+    $cnc2x = $cnc2x -replace '(?m)^fullscreen=false', 'fullscreen=true'
+    $cnc2x = $cnc2x -replace '(?m)^(renderer=gdi\r?\n)', "`$1maintas=true`n"
+}
 Set-Content -LiteralPath $cnc2xIniDeployPath -Value $cnc2x -Encoding ascii -NoNewline
-Write-Host "cnc-ddraw staged: $cncDeployDir\ddraw.dll (sha256 verified) + plugin\cnc-ddraw.ini + plugin\cnc-ddraw-2x.ini (window $($wsW * 2)x$($wsH * 2) = 2x the ${wsW}x${wsH} the plugin renders)"
+$present = $fits2x ? "window $($wsW * 2)x$($wsH * 2) = 2x the ${wsW}x${wsH} the plugin renders" : "borderless full screen on the $($screen.Width)x$($screen.Height) monitor, aspect kept (2x = $($wsW * 2)x$($wsH * 2) does not fit)"
+Write-Host "cnc-ddraw staged: $cncDeployDir\ddraw.dll (sha256 verified) + plugin\cnc-ddraw.ini + plugin\cnc-ddraw-2x.ini ($present)"
 
 # --- 4. write the zero-argument launcher --------------------------------------
 $launcherPath = Join-Path $deployRootFull 'Launch-StarCraft-Modded.ps1'
@@ -555,6 +568,7 @@ $iniText = Get-Content -Raw -LiteralPath $cnc2xIniDeployPath
 # \r?$ : the ini inherits CRLF from the committed file, and under (?m) .NET's $ matches
 # before \n only -- without the \r? this check rejects its own correct output.
 if ($iniText -notmatch "(?m)^width=$($wsW * 2)\r?$" -or $iniText -notmatch "(?m)^height=$($wsH * 2)\r?$") { throw "deploy: plugin\cnc-ddraw-2x.ini does not carry width=$($wsW * 2)/height=$($wsH * 2) (2x the plugin's ${wsW}x${wsH})." }
+if (-not $fits2x -and ($iniText -notmatch "(?m)^fullscreen=true\r?$" -or $iniText -notmatch "(?m)^maintas=true\r?$")) { throw "deploy: plugin\cnc-ddraw-2x.ini must be borderless (fullscreen=true + maintas=true): 2x does not fit the $($screen.Width)x$($screen.Height) screen." }
 if (-not (Test-Path -LiteralPath (Join-Path $deployRootFull 'widescreen-card.md'))) { throw 'deploy: widescreen-card.md missing from the deploy root.' }
 Write-Host "verify: launcher, pinned cnc-ddraw, both inis (2x ini at $($wsW * 2)x$($wsH * 2)) + card all present"
 

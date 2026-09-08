@@ -1729,6 +1729,9 @@ function Get-ScWideGeometry {
         PfH    = & $read 'SC_WS_PLAYFIELD_H'
         StockW = & $read 'SC_WS_STOCK_W'
         StockH = & $read 'SC_WS_STOCK_H'
+        # How far the bottom console sits below its stock place (PF_H - 400; 0 at
+        # the stock playfield height). A WIDE arm passes this to Get-ScMinimapPoint.
+        ConsoleShiftY = & $read 'SC_WS_CONSOLE_SHIFT_Y'
     }
 }
 
@@ -1762,7 +1765,10 @@ function Get-ScMinimapPoint {
         [Parameter(Mandatory)][int]$MapTilesH,
         [Parameter(Mandatory)][int]$TileX,
         [Parameter(Mandatory)][int]$TileY,
-        [int]$BoxLeft = 7, [int]$BoxTop = 348, [int]$BoxSize = 128
+        [int]$BoxLeft = 7, [int]$BoxTop = 348, [int]$BoxSize = 128,
+        # The 2x-height build moves the whole console down (Get-ScWideGeometry's
+        # ConsoleShiftY); a STOCK arm passes nothing and gets the 640x480 box.
+        [int]$ConsoleShiftY = 0
     )
     if ($MapTilesW -gt $BoxSize -or $MapTilesH -gt $BoxSize) {
         throw "drive-game: Get-ScMinimapPoint is calibrated for maps up to ${BoxSize}x${BoxSize} tiles; got ${MapTilesW}x${MapTilesH}. A bigger map is drawn at a smaller scale and this 1px-per-tile mapping does not hold."
@@ -1772,7 +1778,7 @@ function Get-ScMinimapPoint {
     }
     [pscustomobject]@{
         X = $BoxLeft + [int](($BoxSize - $MapTilesW) / 2) + $TileX
-        Y = $BoxTop  + [int](($BoxSize - $MapTilesH) / 2) + $TileY
+        Y = $BoxTop + $ConsoleShiftY + [int](($BoxSize - $MapTilesH) / 2) + $TileY
     }
 }
 
