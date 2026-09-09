@@ -131,6 +131,17 @@ jobs:
           python tools/check-cpp-reuse.py
           exit $LASTEXITCODE
 
+      - name: Comments state a why, not history (AGENTS.md "Comments")
+        shell: pwsh
+        run: |
+          # Comment lines only: task ids, dates, PR/issue refs and change-narration
+          # words belong in the PR body and git log, not in the source. --selftest
+          # runs the checker's own negative control first, so a checker that stopped
+          # matching anything cannot pass this step by finding nothing.
+          python tools/check-comment-narration.py --selftest
+          python tools/check-comment-narration.py
+          exit $LASTEXITCODE
+
       - name: Lint (ruff, only if pulled in via requirements.txt)
         shell: pwsh
         run: |
