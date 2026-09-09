@@ -22,6 +22,7 @@
 #include "sc_addresses.h"
 #include "sc_console.h"
 #include "sc_engine.h"
+#include "sc_env.h"
 #include "sc_hook.h"
 #include "sc_log.h"
 #include "sc_screen.h"
@@ -61,6 +62,8 @@ static unsigned g_logs = 0;
 static ScHook   g_hkCopy;                   // hook on storm ord432 (the present copy)
 static unsigned g_stripFrames = 0;          // presents that copied the x>=640 strip
 static unsigned g_cursorForced = 0;         // times layer 0's always-draw bit was found clear and set
+static unsigned g_tipForced    = 0;         // the same for layer 1, the tooltip
+static bool     g_tipFix       = true;      // %SCPLUGIN_TIPFIX%: 0 leaves layer 1 dirty-driven
 static unsigned g_stripSkipped = 0;         // present calls that did NOT meet the widescreen guard
 static int      g_primaryRows  = -1;        // the primary's dwHeight (GetSurfaceDesc), read once; -1 = unread
 static unsigned g_mirrorFrames = 0;         // presents that mirrored the WHOLE frame (console buffer-resident)
@@ -93,6 +96,24 @@ static unsigned g_totLogMaxUs = 0, g_totLogLines = 0, g_totLogSumUs = 0;
 static unsigned g_logLinesAtPrev = 0, g_logUsAtPrev = 0;   // ScLogWriteCostSoFar at the previous present
 static LONGLONG g_hookUsPrev = 0;
 static unsigned g_stallLines = 0;
+// Process CPU (kernel + user, GetProcessTimes, 100 ns units) at the window's start, and
+// the closed windows' totals, so a play log prices the per-frame full redraw as a
+// percent of one core over the same wall clock the present intervals use.
+static ULONGLONG g_cpuWinStart = 0, g_totCpu100ns = 0;
+static LONGLONG  g_totWallUs = 0;
+
+static ULONGLONG CpuNow100ns(void) {
+    FILETIME c, e, k, u;
+    if (!GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u)) return 0;
+    ULARGE_INTEGER kk, uu;
+    kk.LowPart = k.dwLowDateTime; kk.HighPart = k.dwHighDateTime;
+    uu.LowPart = u.dwLowDateTime; uu.HighPart = u.dwHighDateTime;
+    return kk.QuadPart + uu.QuadPart;
+}
+
+static unsigned CpuPct(ULONGLONG cpu100ns, LONGLONG wallUs) {
+    return wallUs > 0 ? (unsigned)((cpu100ns / 10) * 100 / (ULONGLONG)wallUs) : 0;
+}
 
 static void* StormRt(DWORD rva) {
     return (void*)(g_stormBase + rva);
@@ -306,20 +327,25 @@ static LONGLONG TicksToUs(LONGLONG d) { return (d > 0 && g_qpf) ? (d * 1000000) 
 #define SC_MS_WHOLE(us)  ((unsigned)((us) / 1000))
 #define SC_MS_FRAC(us)   ((unsigned)(((us) % 1000) / 10))
 
-static void TimeEmitWindow(void) {
+static void TimeEmitWindow(LONGLONG wallUs) {
     const LONGLONG avgUs  = g_winSamples  ? g_winSumUs     / g_winSamples  : 0;
     const LONGLONG hAvgUs = g_winPresents ? g_winHookSumUs / g_winPresents : 0;
     unsigned logLines = 0, logSumUs = 0, logMaxUs = 0;
     ScLogWriteCostTake(&logLines, &logSumUs, &logMaxUs);
+    const ULONGLONG cpuNow = CpuNow100ns();
+    const ULONGLONG cpu = cpuNow - g_cpuWinStart;
+    g_cpuWinStart = cpuNow;
     ScLog("STORMTIME window=%ds presents=%u avg_ms=%u.%02u max_ms=%u.%02u stalls100=%u "
           "hook_avg_us=%u hook_max_us=%u log_lines=%u log_avg_us=%u log_max_us=%u "
-          "samples=%u ingame=%d",
+          "samples=%u ingame=%d cpu_pct=%u",
           SC_STORMTIME_WINDOW_S, g_winPresents,
           SC_MS_WHOLE(avgUs), SC_MS_FRAC(avgUs),
           SC_MS_WHOLE(g_winMaxUs), SC_MS_FRAC(g_winMaxUs),
           g_winStalls, (unsigned)hAvgUs, (unsigned)g_winHookMaxUs,
           logLines, logLines ? logSumUs / logLines : 0, logMaxUs,
-          g_winSamples, g_winIngameKnown ? (int)g_winIngame : -1);
+          g_winSamples, g_winIngameKnown ? (int)g_winIngame : -1, CpuPct(cpu, wallUs));
+    g_totCpu100ns += cpu;
+    g_totWallUs   += wallUs;
     if (logMaxUs > g_totLogMaxUs) g_totLogMaxUs = logMaxUs;
     g_totLogLines += logLines;
     g_totLogSumUs += logSumUs;
@@ -374,11 +400,23 @@ static void TimeSample(LONGLONG tEnter, LONGLONG tWork) {
     g_logUsAtPrev = logUs;
     g_hookUsPrev = hookUs;
 
-    if (!g_tWinStart) g_tWinStart = now;
+    if (!g_tWinStart) { g_tWinStart = now; g_cpuWinStart = CpuNow100ns(); }
     else if (now - g_tWinStart >= g_qpf * SC_STORMTIME_WINDOW_S) {
-        TimeEmitWindow();
+        TimeEmitWindow(TicksToUs(now - g_tWinStart));
         g_tWinStart = now;
     }
+}
+
+// Bit 0x20 of a layer's flags is the composer's sticky "draw every frame"
+// (SC_LAYER_FLAG_ALWAYS_DRAW: survives the 0xF8 mask, wiped only by the table init).
+// Set per present, not once: this is where its absence would show, and a count of 1
+// means sticky as read, more means something re-initialised the table.
+static void ForceAlwaysDraw(int layer, unsigned* forced) {
+    BYTE* flags = (BYTE*)ScRuntimeAddr(SC_VA_GRAPHIC_LAYERS + (DWORD)layer * SC_LAYER_STRIDE +
+                                       SC_LAYER_OFF_FLAGS);
+    if (*flags & SC_LAYER_FLAG_ALWAYS_DRAW) return;
+    *flags |= SC_LAYER_FLAG_ALWAYS_DRAW;
+    ++*forced;
 }
 
 static int __attribute__((stdcall)) SC_GAME_ENTRY
@@ -409,20 +447,23 @@ HkOrd432(DWORD dst, DWORD src, DWORD dstPitch, DWORD srcPitch, DWORD region) {
         // save-under has run and the buffer holds cursor-FREE pixels at present time. A
         // parked plain arrow (one-frame GRP, the animation tick bails at 0x004BE209) is
         // redrawn only when something else dirties a cell under it, so the mirror blanks it
-        // on every other present: a strobe confined to x>=640. Bit 0x20 of the layer's
-        // flags is the composer's sticky "draw every frame" (SC_LAYER_FLAG_ALWAYS_DRAW):
-        // with it set the cursor is composed every frame (save-under before, restore-under
-        // after, so the buffer is left cursor-free) and the mirror always carries it; cost at
-        // x<640 is nil, since pixels drawn into cells that are not dirty are not presented.
-        // Set per present, not once: it survives the composer's mask (0xF8), but this is
-        // where its absence would show, and g_cursorForced == 1 means sticky as read, more
-        // means something clears it.
-        BYTE* layer0Flags = (BYTE*)ScRuntimeAddr(SC_VA_GRAPHIC_LAYERS + SC_LAYER_OFF_FLAGS);
-        if (!(*layer0Flags & SC_LAYER_FLAG_ALWAYS_DRAW)) {
-            *layer0Flags |= SC_LAYER_FLAG_ALWAYS_DRAW;
-            ++g_cursorForced;
-        }
+        // on every other present: a strobe confined to x>=640. With always-draw set the
+        // cursor is composed every frame (save-under before, restore-under after, so the
+        // buffer is left cursor-free) and the mirror always carries it; cost at x<640 is
+        // nil, since pixels drawn into cells that are not dirty are not presented.
+        ForceAlwaysDraw(SC_LAYER_CURSOR, &g_cursorForced);
         if (ScConsoleBufferResident()) {
+            // THE TOOLTIP OVER A BUFFER-RESIDENT DIALOG. Layer 1 (the context-help tooltip)
+            // is drawn only on its show frame (0x004813D0 sets needs-redraw once) or when a
+            // dirty cell lies under it. In stock the dialog composite's DIRECT branch
+            // (0x0041C939..) re-paints the tooltip onto the dialog surface itself; the BUFFER
+            // branch (0x0041C859.., every converted root) does not, and the frame driver
+            // 0x0041CA00 re-composites the tooltip-free dialog surface over the box every
+            // frame. The engine's present never showed it (dirty cells only); the whole-frame
+            // mirror does, as a tooltip that strobes or vanishes after one present. The
+            // draw is a no-op while hidden (0x004810F3 tests SC_VA_TOOLTIP_VISIBLE), so
+            // always-draw costs one <=160x92 blit per frame while a tooltip is up.
+            if (g_tipFix) ForceAlwaysDraw(SC_LAYER_TOOLTIP, &g_tipForced);
             // The 2x-HEIGHT build (renderer-viewport.md 22): every in-game root composites
             // into the buffer (sc_console.cpp), so the buffer IS the whole picture --
             // console, cursor, mask -- and the engine's own region-clipped copy is a subset
@@ -504,6 +545,8 @@ void ScStormPresentInstall(BYTE* exeBase, bool writeAllowed) {
     if (g_mode == SC_STORM_WIDEN) {
         g_stripFrames = 0;
         g_cursorForced = 0;
+        g_tipForced = 0;
+        g_tipFix = ScEnvFlag("SCPLUGIN_TIPFIX", true);
         g_stripSkipped = 0;
         g_mirrorFrames = 0;
         g_primaryRows = -1;
@@ -516,6 +559,8 @@ void ScStormPresentInstall(BYTE* exeBase, bool writeAllowed) {
         g_winSumUs = g_winMaxUs = g_winHookSumUs = g_winHookMaxUs = 0;
         g_totPresents = g_totSamples = g_totStalls = g_totWindows = 0;
         g_totSumUs = g_totMaxUs = g_totHookMaxUs = 0;
+        g_cpuWinStart = g_totCpu100ns = 0;
+        g_totWallUs = 0;
         memset(&g_hkCopy, 0, sizeof(g_hkCopy));
         void* ord432 = StormRt(STORM_RVA_ORD432);
         if (!ScHookInstall(&g_hkCopy, "stormWidenCopy", ord432,
@@ -531,6 +576,8 @@ void ScStormPresentInstall(BYTE* exeBase, bool writeAllowed) {
                   "The read-only geometry log also runs on the marker channel.",
                   (unsigned)(DWORD_PTR)g_stormBase, (unsigned)(DWORD_PTR)ord432,
                   SC_SCREEN_W, ScScreenTargetWidth() - 1, ScScreenTargetWidth(), ScScreenTargetWidth());
+            ScLog("STORM present: tooltip layer always-draw %s (%%SCPLUGIN_TIPFIX%%; applies "
+                  "while the console is buffer-resident)", g_tipFix ? "ON" : "off");
             // Said out loud at arm time so "no STORMTIME line in the log" is readable as
             // "the game never presented" and never as "the clock was unusable".
             ScLog("STORMTIME: %s -- one line per %d s of presents (qpf=%u Hz). ingame=-1 on a "
@@ -568,13 +615,17 @@ void ScStormPresentLogStats(void) {
     if (logMaxUs > g_totLogMaxUs) g_totLogMaxUs = logMaxUs;
     g_totLogLines += logLines;
     g_totLogSumUs += logSumUs;
-    ScLog("STORMSTATS mode=%d logs=%u stripFrames=%u mirrorFrames=%u stripSkipped=%u cursorForced=%u primaryRows=%d stormBase=0x%08X "
+    // The window in flight joins the closed ones; a QPC start of 0 means no present yet.
+    const ULONGLONG cpu = g_totCpu100ns + (g_tWinStart ? CpuNow100ns() - g_cpuWinStart : 0);
+    const LONGLONG  wallUs = g_totWallUs + (g_tWinStart ? TicksToUs(QpcNow() - g_tWinStart) : 0);
+    ScLog("STORMSTATS mode=%d logs=%u stripFrames=%u mirrorFrames=%u stripSkipped=%u cursorForced=%u tipForced=%u primaryRows=%d stormBase=0x%08X "
           "windows=%u presents=%u samples=%u avgMs=%u.%02u maxMs=%u.%02u stalls100=%u hookMaxUs=%u "
-          "logLines=%u logAvgUs=%u logMaxUs=%u",
-          (int)g_mode, g_logs, g_stripFrames, g_mirrorFrames, g_stripSkipped, g_cursorForced, g_primaryRows,
-          (unsigned)(DWORD_PTR)g_stormBase,
+          "logLines=%u logAvgUs=%u logMaxUs=%u cpuPct=%u",
+          (int)g_mode, g_logs, g_stripFrames, g_mirrorFrames, g_stripSkipped, g_cursorForced, g_tipForced,
+          g_primaryRows, (unsigned)(DWORD_PTR)g_stormBase,
           g_totWindows, presents, samples,
           SC_MS_WHOLE(avgUs), SC_MS_FRAC(avgUs), SC_MS_WHOLE(maxUs), SC_MS_FRAC(maxUs),
           g_totStalls + g_winStalls, (unsigned)hMaxUs,
-          g_totLogLines, g_totLogLines ? g_totLogSumUs / g_totLogLines : 0, g_totLogMaxUs);
+          g_totLogLines, g_totLogLines ? g_totLogSumUs / g_totLogLines : 0, g_totLogMaxUs,
+          CpuPct(cpu, wallUs));
 }

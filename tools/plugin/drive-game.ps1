@@ -2354,7 +2354,14 @@ function Save-ScWindowImage {
         # leaves its caption inside the reported client rectangle, so a client-only
         # grab is shifted down by the caption height and loses that many rows off the
         # bottom -- which is exactly where the HUD is.
-        [switch]$FullWindow
+        [switch]$FullWindow,
+        # The client area cut out of a WHOLE-window capture by geometry: the frame's
+        # side borders are equal and everything else sits above the client rect, so
+        # (windowW - clientW) / 2 and windowH - clientH - that are the client's offsets.
+        # Immune to the caption's colour, which the strip detector below depends on
+        # (a dark caption is never a light strip, and the game then lands shifted down
+        # by the caption height with as many rows lost off the bottom).
+        [switch]$ClientByGeometry
     )
     Assert-ScDrivable -Hwnd $Hwnd
     Assert-ScDrawing
@@ -2366,8 +2373,9 @@ function Save-ScWindowImage {
     }
     New-Item -ItemType Directory -Path (Split-Path $full -Parent) -Force | Out-Null
 
-    $sz = if ($FullWindow) { Get-ScWindowSize -Hwnd $Hwnd } else { Get-ScClientSize -Hwnd $Hwnd }
-    $flags = if ($FullWindow) { 0 } else { 2 }
+    $whole = $FullWindow -or $ClientByGeometry
+    $sz = if ($whole) { Get-ScWindowSize -Hwnd $Hwnd } else { Get-ScClientSize -Hwnd $Hwnd }
+    $flags = if ($whole) { 0 } else { 2 }
     if ($sz.Width -le 0 -or $sz.Height -le 0) { throw 'drive-game: the window has no client area.' }
 
     # PW_CLIENTONLY == 2. PrintWindow reads one window and the live game survives it --
@@ -2394,7 +2402,16 @@ function Save-ScWindowImage {
         # (NearestNeighbor inverts the shim's own downscale, it invents no pixels).
         # WMode skins its caption outside the client area and dark game rows never
         # match the detector, so those captures pass through untouched (h=0).
-        if (-not $FullWindow) {
+        if ($ClientByGeometry) {
+            $cli = Get-ScClientSize -Hwnd $Hwnd
+            $bx = [int][Math]::Floor(($bmp.Width - $cli.Width) / 2)
+            $by = $bmp.Height - $cli.Height - $bx
+            if ($bx -lt 0 -or $by -lt 0) { throw "drive-game: the window ($($bmp.Width)x$($bmp.Height)) is smaller than its client area ($($cli.Width)x$($cli.Height))." }
+            $crop = $bmp.Clone([System.Drawing.Rectangle]::new($bx, $by, $cli.Width, $cli.Height), $bmp.PixelFormat)
+            try { $crop.Save($full, [System.Drawing.Imaging.ImageFormat]::Png) } finally { $crop.Dispose() }
+            Write-Verbose "drive-game: client rect cut out of the whole-window capture at ($bx,$by)"
+        }
+        elseif (-not $FullWindow) {
             $capH = 0
             for ($y = 0; $y -lt [Math]::Min(40, $bmp.Height); $y++) {
                 $light = 0; $n = 0

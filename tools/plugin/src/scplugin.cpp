@@ -622,6 +622,7 @@ static void PollMarker(void) {
     // unless the module is installed, which observe never does.
     ScConsoleOnMarker(g_lastMarker);
     ScMarkTraceOnMarker(g_lastMarker);
+    ScCursorPostedPoll();
 
     ScanScreen(g_lastMarker);
 
@@ -980,6 +981,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             ScConsoleInstall(ScEngineModuleBase(), g_mode != SC_MODE_OBSERVE, consoleTrace);
         }
         ScMarkTraceInstall(ScEngineModuleBase(), g_mode != SC_MODE_OBSERVE);
+        ScCursorPostedInstall(ScEngineModuleBase(), g_mode != SC_MODE_OBSERVE);
         // The storm-side buffer->glass present. PROBE is read-only and runs in any
         // mode; WIDEN writes storm's geometry and is gated out of observe like every
         // other writer (the module enforces this itself).
@@ -1081,6 +1083,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             // geometry (which the move's +160 only makes sense on) comes out below.
             ScConsoleRemove();
             ScMarkTraceRemove();
+            ScCursorPostedRemove();
             // Storm present: PROBE has nothing to restore, WIDEN restores storm's
             // geometry. Comes out before the exe geometry below.
             ScStormPresentRemove();

@@ -1884,7 +1884,28 @@ static const ScScreenPatch SC_WS_PATCHES[] = {
       { 0x66, 0xC7, 0x05, 0x66, 0xEF, 0x6C, 0x00, 0x80, 0x02 },
       { 0x66, 0xC7, 0x05, 0x66, 0xEF, 0x6C, 0x00, 0x00, 0x05 },
       { 0x00 },
-      "layer1.park.x", "parks the mask layer just off the right edge of the playfield" },
+      "layer1.park.x", "parks the tooltip layer just off the right edge of the playfield" },
+    // 0x004815E6  mov ecx, 0x27f
+    //             -> mov ecx, 0x4ff
+    { 0x004815E6u,  5, 2, SC_WS_NO_FIXUP, 0, 0x0u,
+      { 0xB9, 0x7F, 0x02, 0x00, 0x00 },
+      { 0xB9, 0xFF, 0x04, 0x00, 0x00 },
+      { 0x00 },
+      "tooltip.clamp.x1", "0x00481510 context-help show: shift the box left so right <= W-1" },
+    // 0x00481620  mov ecx, 0x1df
+    //             -> mov ecx, 0x36f
+    { 0x00481620u,  5, 2, SC_WS_NO_FIXUP, 0, 0x0u,
+      { 0xB9, 0xDF, 0x01, 0x00, 0x00 },
+      { 0xB9, 0x6F, 0x03, 0x00, 0x00 },
+      { 0x00 },
+      "tooltip.clamp.y1", "0x00481510 context-help show: shift the box up so bottom <= H-1 (every non-card tooltip goes through here)" },
+    // 0x00458889  mov ecx, 0x27f
+    //             -> mov ecx, 0x4ff
+    { 0x00458889u,  5, 2, SC_WS_NO_FIXUP, 0, 0x0u,
+      { 0xB9, 0x7F, 0x02, 0x00, 0x00 },
+      { 0xB9, 0xFF, 0x04, 0x00, 0x00 },
+      { 0x00 },
+      "tooltip.card.clamp.x1", "0x00458850 card-button tooltip placement: shift left so right <= W-1" },
     // 0x004D1960  cmp si, 0x280
     //             -> cmp si, 0x500
     { 0x004D1960u,  5, 3, SC_WS_NO_FIXUP, 0, 0x0u,
@@ -2157,7 +2178,7 @@ static const ScScreenPatch SC_WS_PATCHES[] = {
       { 0x66, 0xC7, 0x05, 0x68, 0xEF, 0x6C, 0x00, 0x90, 0x01 },
       { 0x66, 0xC7, 0x05, 0x68, 0xEF, 0x6C, 0x00, 0x20, 0x03 },
       { 0x00 },
-      "layer1.park.y", "0x00481480 parks the mask layer just below the playfield" },
+      "layer1.park.y", "0x00481480 parks the tooltip layer just below the playfield" },
     // 0x0047ECBC  cmp ecx, 0x190
     //             -> cmp ecx, 0x320
     { 0x0047ECBCu,  6, 2, SC_WS_NO_FIXUP, 0, 0x0u,
@@ -2689,14 +2710,14 @@ static const ScScreenPatch SC_WS_PATCHES[] = {
       { 0x7F, 0x02, 0x00, 0x00 },
       { 0xFF, 0x04, 0x00, 0x00 },
       { 0x00 },
-      "dlgclip.remark.x1", "cursor/mask re-mark clip box right (screen-absolute in 0x0041C2C0/0x0041CA64)" },
+      "dlgclip.remark.x1", "cursor/tooltip re-mark clip box right (screen-absolute in 0x0041C2C0/0x0041CA64)" },
     // 0x0051A168  [data] df010000
     //             -> [data] 6f030000
     { 0x0051A168u,  4, 2, SC_WS_NO_FIXUP, 0, 0x0u,
       { 0xDF, 0x01, 0x00, 0x00 },
       { 0x6F, 0x03, 0x00, 0x00 },
       { 0x00 },
-      "dlgclip.remark.y1", "cursor/mask re-mark clip box bottom" },
+      "dlgclip.remark.y1", "cursor/tooltip re-mark clip box bottom" },
     // 0x004D1159  cmp dword ptr [0x6d6430], ecx
     //             -> [cave] cmp ecx, 0x280 ; jl 0x4d1164 ; xor eax, eax ; ret  ; cmp dword ptr [0x6d6430], ecx
     { 0x004D1159u,  6, 3, SC_WS_NO_FIXUP, 17, 0x0u,

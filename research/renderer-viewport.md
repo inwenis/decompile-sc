@@ -3049,3 +3049,116 @@ three regression suites (storm present, framebuffer capture, input) unchanged.
   `log_lines= log_avg_us= log_max_us=` and each stall gets a `STORMSTALL dt_ms= log_lines=
   log_us= hook_us=` line that charges the interval to the mod's own work.
 
+
+## 24. Tooltips in the wrong place, tooltips that flicker, minerals that flicker (2026-09-09)
+
+The user's third play at 1280x880: *"when I hover over items in the bottom bar there
+are help tooltips but some of them display in the wrong place, above the bottom bar,
+and some of them flicker; the flickering also seems to be visible in some elements of
+the map."* Three mechanisms, all read at the bytes; two are the whole-frame mirror
+(22.1) presenting a buffer state the stock present never shows, one is a plain stock
+constant.
+
+### 24.1 Layer 1 is the tooltip layer, not a mask
+
+The layer table's entry 1 (0x006CEF64; flags 0x006CEF65, rect 0x006CEF66..6C) was
+catalogued as a "screen mask / fade" layer. It is the context-help TOOLTIP: its init
+0x00481330 allocates a 160x92 image surface 0x00655C40 and a same-size save-under
+surface 0x006D5C04, installs draw 0x004810F0 with param 0x00655C40, and the allocator's
+`__FILE__` string 0x005044F0 reads `Starcraft\SWAR\lang\CtxtHelp.cpp`. Visible flag
+0x00655C48. Show = 0x004813D0 (stores the rect, ORs needs-redraw 0x01 into the flags,
+marks the old and new rects through 0x0041E0D0); hide = 0x00481480 (parks the layer at
+the stock (640,400): the `layer1.park.*` rows). The generator's descriptions and
+`sc_addresses.h` now say so.
+
+Two placers feed it:
+
+- **Card buttons**: 0x00459770 -> 0x004593A0 -> 0x00459150 -> 0x00459030 -> 0x00458850:
+  `x = StatBtn.left + btn.left`, `bottom = StatBtn.top + btn.top - 1` from LIVE bounds,
+  right clamped to 639 (`mov ecx,0x27f` @0x00458889). No y constant, so the card
+  tooltips followed the console down.
+- **Everything else** (selection row, portrait, minimap, the F10 button, dialog
+  controls; eight callers, all `call 0x00481510`): the box goes at
+  `(ctrl.right + parent.left, ctrl.top + parent.top)`, then `right <= 639`
+  (`mov ecx,0x27f` @0x004815E6) and `bottom <= 479` (`mov ecx,0x1df` @0x00481620).
+
+### 24.2 "Above the bottom bar": the 479 clamp
+
+With the console at y 702..879 every generic tooltip computes a bottom past 479 and is
+lifted to `y = 479 - h`: mid-playfield, some 300 px above its control. That is the whole
+misplacement. Three stage-2 immediates make the clamps the screen's:
+`tooltip.clamp.x1` (0x004815E6, 639 -> W-1), `tooltip.clamp.y1` (0x00481620, 479 -> H-1),
+`tooltip.card.clamp.x1` (0x00458889, 639 -> W-1). An immediate scan over the tooltip
+module, its eight callers, the card path, the blitter 0x0041D260, the text drawer
+0x004202B0 and the border drawer 0x004E1C70 found no other stock constant; the two
+already-patched park immediates are the only others in the module.
+
+### 24.3 The tooltip strobe: a per-frame region feed meets a buffer-resident console
+
+The frame driver 0x0041CA00 (the composer's only caller) adds the tooltip's current rect
+and the previous frame's rect to the dialog REGION 0x006D5E2C on every frame
+(0x0041C200: region ops only, no grid mark). In stock that is how the box survives over a
+direct-blit dialog: the composite 0x0041C810's DIRECT branch (0x0041C939..) tests the
+dialog rect against layer 1 (0x0041BE70), saves the dialog surface under the box
+(0x00481260), draws the box into the surface (0x004811E0), blits, restores (0x00481160).
+The BUFFER branch (flags & 0x10000000, the one 22.1 puts every in-game root on) does
+none of that: it blits the raw dialog surface into the buffer. So every frame the
+tooltip-free console art is re-composited OVER the box in the buffer, and the composer
+redraws layer 1 only on the show frame (flag 0x01, cleared by the 0xF8 mask after the
+draw), on a frame where a dirty cell lies under it (0x0041DE20), or with bit 0x02. The
+buffer holds the box on some presents and the console on others; the mirror shows the
+alternation. The card tooltips sit over StatFluf/StatBtn, exactly the roots that
+re-composite.
+
+Fix: the layer-0 idiom of 21.9, on layer 1. Bit 0x20 (always-draw) of 0x006CEF65 has no
+plain non-zero store in the image (writers: the init's `mov [0x6cef65],bl` with bl=0,
+two `or ...,1`, and the table wipe 0x0041E050 that runs before 0x00481330 in the same
+init), the composer tests it at 0x0041E35F and keeps it at 0x0041E3A3. `HkOrd432` sets it
+whenever the console is buffer-resident (`tipForced=` on STORMSTATS; 1 = set once, sticky
+as read; `SCPLUGIN_TIPFIX=0` leaves it alone). Layer 1 draws after layer 2 and before
+layer 0, so the box is composed over the fresh console art every frame; the draw is a
+no-op while hidden (0x004810F3 tests 0x00655C48).
+
+### 24.4 The mineral flicker: a whole-rect repaint over partial cells
+
+Per compose the frame driver rebuilds the visible-sprite heap (0x004BD3A0 -> 0x004982D0,
+buckets [tileY-4, tileY+0x194] of 0x00629688[], vision-masked by sprite+0x0C) and layer
+5's draw 0x004BD580 draws it in ascending key order (0x0042D4C0:
+`elevation<<27 | y<<14 | (flags&0x10)<<9 | slotIndex`; heapsort 0x0042D460, drawn from the
+smallest key up via 0x00498C50). The key is a total order: the draw order between two
+overlapping sprites is deterministic frame to frame, so the user's guess (varying order)
+is not the mechanism.
+
+The mechanism is the PARTIAL path. An image is drawn iff it touches a set grid cell (or
+carries redraw flag 0x01, 0x00497000), and then over its WHOLE screen-clipped rect
+(0x00497CE0 -> [image+0x34], no per-cell clipping), while the grid holds only the cells
+that triggered it. A dirty cell (the cursor, a mining worker, a fog change, the console's
+per-frame re-marks) under a LOWER-key sprite A but not under a HIGHER-key overlapping
+sprite B repaints A over B in cells that are not dirty; B comes back on top only when
+something marks one of B's cells. Stock never presents those cells (20.6); the mirror
+does, and a worker walking the mineral line flips the overlaps continuously. The same
+shape covers the fog: the fog walk 0x004808F8 re-fogs dirty cells only.
+
+Fix: the engine's own full-redraw request, every frame, when the console is buffer-resident
+(`SCPLUGIN_FULLREDRAW=0` turns it off; `fullFrames=` counts). The scroll path
+0x0049C077..0x0049C0B2 does `or byte [0x006CEFB5],1` and marks the whole playfield through
+0x0041E0D0; with layer 5's bit 0 set 0x004BD580 takes the path 22.4's scroll steps already
+exercised at 880: every image rect recomputed (0x00498CF0), the full terrain blit
+(0x0040C253), every on-screen sprite in heap order, the full fog (0x004808E4/EB). The
+buffer is then a complete ordered composition at every present, which is what an
+unconditional mirror needs. Every other reader of layer-5 bit 0 is a "skip the redundant
+per-image mark" guard (0x004D4E82/4F12/4FA2/5032 and the image show/hide paths). The cost
+is measured, not assumed: STORMTIME now carries `cpu_pct=` (GetProcessTimes over the
+window) -- MEASURED_BEFORE / MEASURED_AFTER.
+
+### 24.5 Measured
+
+PROBE_RESULTS
+
+### 24.6 Reproduce
+
+- `tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-tooltips.ps1` (add
+  `-SuiteArgs @{ TipFix = 0 }` to watch the presence oracle fail; the F10 arm fails
+  without the three `tooltip.*` rows).
+- `tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-sprite-flip.ps1` (add
+  `-SuiteArgs @{ FullRedraw = 0 }` to watch `unmarked_changed` go positive).

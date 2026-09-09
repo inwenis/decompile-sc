@@ -16,6 +16,10 @@
 //         DOWN by the shift, once their surfaces exist (the art slice is copied
 //         under the live bounds at surface creation), with the vacated and the
 //         claimed rect both marked dirty. StatRes (top bar) and StatLB stay.
+//      3. the engine's own FULL playfield redraw is requested before every compose
+//         (%SCPLUGIN_FULLREDRAW%, default on): the partial path repaints whole
+//         sprite rects over cells that are not dirty, which the stock present
+//         never shows and the whole-frame mirror does. sc_console.cpp has the read.
 //    What the engine bakes outside the dialog records (isPointOverUi's tiers,
 //    the right-click router's card rect, the minimap's absolute top, the dirty
 //    clip boxes) is in the generated table (console.*, minimap.anchor.*,

@@ -19,7 +19,7 @@
 #define SC_MARKTRACE_MAX_LINES 80000u
 #define SC_MARKTRACE_CALLERS 32
 
-static ScHook g_hk, g_hkFog, g_hkTerr;
+static ScHook g_hk, g_hkFog, g_hkTerr, g_hkImg;
 static bool g_installed = false;
 static volatile LONG g_on = 0;
 static unsigned g_lines = 0, g_dropped = 0, g_total = 0;
@@ -32,19 +32,50 @@ extern "C" void* g_fogTraceTrampoline;
 void* g_fogTraceTrampoline = NULL;
 extern "C" void* g_terrTraceTrampoline;
 void* g_terrTraceTrampoline = NULL;
+extern "C" void* g_imgTraceTrampoline;
+void* g_imgTraceTrampoline = NULL;
 
-extern "C" void SC_GAME_ENTRY ScMarkTraceObserve(int x1, int y1, int y2, int x2, DWORD ret) {
-    if (!g_on) return;
+// One line of the trace, counted per caller and capped: the cap is what keeps a
+// runaway trace from becoming the stall it is meant to find.
+static bool TraceLine(DWORD ret) {
     ++g_total;
     int i = 0;
     for (; i < g_callersN; ++i) if (g_byCaller[i].ret == ret) { ++g_byCaller[i].n; break; }
     if (i == g_callersN && g_callersN < SC_MARKTRACE_CALLERS) {
         g_byCaller[g_callersN].ret = ret; g_byCaller[g_callersN].n = 1; ++g_callersN;
     }
-    if (g_lines >= SC_MARKTRACE_MAX_LINES) { ++g_dropped; return; }
+    if (g_lines >= SC_MARKTRACE_MAX_LINES) { ++g_dropped; return false; }
     ++g_lines;
+    return true;
+}
+
+extern "C" void SC_GAME_ENTRY ScMarkTraceObserve(int x1, int y1, int y2, int x2, DWORD ret) {
+    if (!g_on || !TraceLine(ret)) return;
     ScLog("MARK rect=(%d,%d)-(%d,%d) from=0x%08X", x1, y1, x2, y2, (unsigned)ret);
 }
+
+// The image-rect mark: ESI = a pixel rect {s32 x1, y1, x2, y2} that the function
+// overwrites with cell indices, so it is read at entry.
+extern "C" void SC_GAME_ENTRY ScImgMarkObserve(const int* r, DWORD ret) {
+    if (!g_on || !ScReadableAt(r, 16) || !TraceLine(ret)) return;
+    ScLog("IMRK rect=(%d,%d)-(%d,%d) from=0x%08X", r[0], r[1], r[2], r[3], (unsigned)ret);
+}
+
+extern "C" void ScImgTraceThunk(void);
+asm(
+    ".text\n"
+    ".globl _ScImgTraceThunk\n"
+"_ScImgTraceThunk:\n"
+    "  pushal\n"                    // ESI at esp+4
+    "  pushfl\n"                    // ESI at esp+8; ret at esp+36
+    "  pushl 36(%esp)\n"            // ret
+    "  pushl 12(%esp)\n"            // rect = saved ESI (esp moved -4)
+    "  call _ScImgMarkObserve\n"
+    "  addl $8, %esp\n"
+    "  popfl\n"
+    "  popal\n"
+    "  jmp *_g_imgTraceTrampoline\n"
+);
 
 extern "C" void ScMarkTraceThunk(void);
 asm(
@@ -127,12 +158,16 @@ static const BYTE kPrologueTerr[] = { 0x55, 0x8B, 0xEC, 0x53, 0x51 };
 
 // push ebp / mov ebp,esp / test eax,eax -- 5 bytes, 3 whole instructions, none PC-relative.
 static const BYTE kPrologueMarker[] = { 0x55, 0x8B, 0xEC, 0x85, 0xC0 };
+// push ebp / mov ebp,esp / push ecx / mov eax,[esi] -- 6 bytes, 4 whole instructions,
+// none PC-relative.
+static const BYTE kPrologueImg[] = { 0x55, 0x8B, 0xEC, 0x51, 0x8B, 0x06 };
 
 bool ScMarkTraceWanted(void) { return ScEnvOptIn("SCPLUGIN_MARKTRACE"); }
 
 void ScMarkTraceInstall(BYTE* moduleBase, bool writeAllowed) {
     ScEngineSetModuleBase(moduleBase);
     memset(&g_hk, 0, sizeof(g_hk)); memset(&g_hkFog, 0, sizeof(g_hkFog)); memset(&g_hkTerr, 0, sizeof(g_hkTerr));
+    memset(&g_hkImg, 0, sizeof(g_hkImg));
     g_installed = false; g_on = 0; g_lines = g_dropped = g_total = 0; g_callersN = 0;
     if (!ScMarkTraceWanted()) return;
     if (!writeAllowed) {
@@ -152,6 +187,9 @@ void ScMarkTraceInstall(BYTE* moduleBase, bool writeAllowed) {
     if (ScHookInstall(&g_hkTerr, "terrainRun", ScRuntimeAddr(SC_VA_TERRAIN_RUN), (void*)&ScTerrTraceThunk,
                       (int)sizeof(kPrologueTerr), kPrologueTerr, (int)sizeof(kPrologueTerr)))
         g_terrTraceTrampoline = g_hkTerr.trampoline;
+    if (ScHookInstall(&g_hkImg, "imageMark", ScRuntimeAddr(SC_VA_IMAGE_MARK), (void*)&ScImgTraceThunk,
+                      (int)sizeof(kPrologueImg), kPrologueImg, (int)sizeof(kPrologueImg)))
+        g_imgTraceTrampoline = g_hkImg.trampoline;
     g_installed = true;
     ScLog("MARKTRACE: armed (hook at 0x%08X); a 'marktrace-on' marker starts the MARK lines, "
           "'marktrace-off' stops them and prints the per-caller totals", SC_VA_DIRTY_MARKER);
@@ -163,6 +201,7 @@ void ScMarkTraceRemove(void) {
     ScHookRemove(&g_hk);
     if (g_hkFog.installed) ScHookRemove(&g_hkFog);
     if (g_hkTerr.installed) ScHookRemove(&g_hkTerr);
+    if (g_hkImg.installed) ScHookRemove(&g_hkImg);
     g_installed = false;
 }
 
@@ -178,4 +217,65 @@ void ScMarkTraceOnMarker(const char* label) {
         for (int i = 0; i < g_callersN; ++i)
             ScLog("MARKTRACE caller 0x%08X marks=%u", (unsigned)g_byCaller[i].ret, g_byCaller[i].n);
     }
+}
+
+// ---------------------------------------------------------------------------
+// The posted cursor: the GetCursorPos import answers from the cursor layer
+// ---------------------------------------------------------------------------
+
+static DWORD* g_cursorSlot   = NULL;   // the import slot, once installed
+static DWORD  g_cursorStock  = 0;      // what the slot held before the first write
+static DWORD  g_cursorSeen   = 0;      // the last foreign value the poll replaced
+static unsigned g_cursorReasserts = 0;
+
+// The cursor layer's rect (layer 0, s16 left/top at +2/+4) is written by the engine's
+// own cursor path from the position the window procedure stored for the last mouse
+// message, so it is the posted cursor in the coordinates the edge-scroll compares.
+static BOOL WINAPI HkGetCursorPos(POINT* p) {
+    if (!p) return FALSE;
+    const short* r = (const short*)ScRuntimeAddr(SC_VA_GRAPHIC_LAYERS + SC_LAYER_OFF_LEFT);
+    p->x = r[0];
+    p->y = r[1];
+    return TRUE;
+}
+
+static bool CursorSlotWrite(DWORD value) {
+    DWORD old = 0;
+    if (!VirtualProtect(g_cursorSlot, sizeof(DWORD), PAGE_READWRITE, &old)) return false;
+    *g_cursorSlot = value;
+    VirtualProtect(g_cursorSlot, sizeof(DWORD), old, &old);
+    return true;
+}
+
+void ScCursorPostedInstall(BYTE* moduleBase, bool writeAllowed) {
+    if (!writeAllowed || !ScEnvOptIn("SCPLUGIN_CURSOR_POSTED")) return;
+    g_cursorSlot = (DWORD*)(moduleBase + (SC_VA_IMPORT_GETCURSORPOS - SC_PREFERRED_IMAGE_BASE));
+    if (!ScReadableAt(g_cursorSlot, sizeof(DWORD))) { g_cursorSlot = NULL; return; }
+    g_cursorStock = *g_cursorSlot;
+    if (!CursorSlotWrite((DWORD)(DWORD_PTR)&HkGetCursorPos)) { g_cursorSlot = NULL; return; }
+    ScLog("CURSOR posted: GetCursorPos import at 0x%08X answers from the cursor layer (was 0x%08X)",
+          (unsigned)(DWORD_PTR)g_cursorSlot, (unsigned)g_cursorStock);
+}
+
+void ScCursorPostedPoll(void) {
+    if (!g_cursorSlot) return;
+    const DWORD cur = *g_cursorSlot;
+    if (cur == (DWORD)(DWORD_PTR)&HkGetCursorPos) return;
+    if (cur != g_cursorSeen) {
+        ScLog("CURSOR posted: the import was rewritten to 0x%08X (a windowed helper's hook); re-asserted",
+              (unsigned)cur);
+        g_cursorSeen = cur;
+    }
+    if (CursorSlotWrite((DWORD)(DWORD_PTR)&HkGetCursorPos)) ++g_cursorReasserts;
+}
+
+void ScCursorPostedRemove(void) {
+    if (!g_cursorSlot) return;
+    // The helper's value, when it took the slot after us, is the one to leave behind:
+    // restoring the stock import under a still-loaded cnc-ddraw would bypass its
+    // translation for the rest of the process.
+    CursorSlotWrite(g_cursorSeen ? g_cursorSeen : g_cursorStock);
+    ScLog("CURSOR posted: import restored to 0x%08X after %u re-assert(s)",
+          (unsigned)(g_cursorSeen ? g_cursorSeen : g_cursorStock), g_cursorReasserts);
+    g_cursorSlot = NULL;
 }

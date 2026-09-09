@@ -69,6 +69,14 @@ int ScScreenTargetHeight(void);
 int ScScreenPlayfieldHeight(void);
 int ScScreenConsoleShiftY(void);
 
+// Marks every dirty-grid cell under the playfield: what the engine's own full-redraw
+// request does through the marker 0x0041E0D0 over (0,0)-(W-1,PF_H-1). The marker
+// clamps, divides by 16 and fills grid rows with 0x01 and keeps no other state (read
+// end to end: its only stores are the rep stos into the grid), so a memset over the
+// relocated grid is the same write without the register-argument call. False when no
+// grid is relocated (below the grid stage, or the table refused): nothing was marked.
+bool ScScreenMarkPlayfieldDirty(void);
+
 // The code-cave writer, exposed for hooktest: overwrite the `len`-byte window at
 // `at` with `jmp cave` + NOPs, the cave holding `code` then `jmp at+len`. Both
 // rel32s are computed here and a wrong one crashes the game, so the offline test

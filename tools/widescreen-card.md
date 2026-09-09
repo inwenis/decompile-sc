@@ -32,6 +32,16 @@ The mouse is locked to the window (hold Ctrl or Right Alt to free it).
    line on the game's own thread; a busy minute of micro (a 47-unit group recalled,
    moved, production queued) wrote enough lines that the disk's slow moments became
    100-185 ms hitches (fixed 2026-09-09: the log no longer waits for the disk).
+7. **Help tooltips sit next to what you hover.** The game clamps every tooltip to
+   the old 640x480 screen, so a tooltip for the moved bottom bar was pushed 300 px
+   up into the map (fixed 2026-09-09: three clamps now know the bigger screen).
+8. **Tooltips and overlapping map sprites no longer flicker.** Two base-game
+   shortcuts that the old dirty-cell present never showed: the console art was
+   repainted over the tooltip every frame, and a repainted sprite overwrote its
+   neighbours in cells the game never re-showed. The bigger screen shows the whole
+   frame, so both became visible (fixed 2026-09-09: the tooltip layer draws every
+   frame and the map takes the game's own full-redraw path every frame; the cost
+   shows as `cpu_pct` on the `STORMTIME` line).
 
 ## Clicks anywhere on the bigger map
 

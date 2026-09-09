@@ -41,6 +41,12 @@ Commands (all output is `key=value` lines, one per metric, like frame-diff.py):
   diff    --a FD.bin --b FD.bin [--x0 N] [--x1 N] [--y0 N] [--y1 N]
   mapdiff --a FD.bin --ax N --ay N --b FD.bin --bx N --by N --x0 N --y0 N --x1 N --y1 N
           (A's screen rect compared in MAP space: each dump's camera is its --ax/--ay)
+  diffbox --a BASE.bin --b HOVER.bin [--x0 N] [--y0 N] [--x1 N] [--y1 N]
+          (bounding box of what B shows that A does not, and how solid a BOX it is)
+  unmarked-diff --a A.bin --b B.bin --marks MARKS.txt [--pad N] [--x0 N] [--y0 N] [--x1 N] [--y1 N]
+          (pixels that changed OUTSIDE every rect the engine marked dirty between the dumps)
+  selftest
+          (synthetic frames through diffbox and unmarked-diff; exit 1 when a detector lies)
 
 Hard rule 1: dumps and rendered PNGs reproduce game artwork. They live on the
 gitignored diagnostic path and are never committed; what this tool PRINTS is
@@ -398,6 +404,178 @@ def cmd_mapdiff(a):
     return 0
 
 
+def clip_window(a, da, db):
+    """The --x0/--y0/--x1/--y1 window clamped to what BOTH dumps hold."""
+    x1 = min(a.x1 if a.x1 else min(da["w"], db["w"]), da["w"], db["w"])
+    y1 = min(a.y1 if a.y1 else min(da["h"], db["h"]), da["h"], db["h"])
+    return a.x0, a.y0, x1, y1
+
+
+def changed_pixels(da, db, x0, y0, x1, y1):
+    """Yield (x, y) for every pixel that differs between the dumps inside the window."""
+    pa, pb = da["px"], db["px"]
+    wa, wb = da["w"], db["w"]
+    for y in range(y0, y1):
+        ra, rb = y * wa, y * wb
+        if pa[ra + x0:ra + x1] == pb[rb + x0:rb + x1]:
+            continue
+        for x in range(x0, x1):
+            if pa[ra + x] != pb[rb + x]:
+                yield x, y
+
+
+class BBox(object):
+    """Running bounding box; .n counts the points, .text is 'none' or 'l,t-r,b'."""
+    def __init__(self):
+        self.n = 0
+        self.l = self.t = 1 << 30
+        self.r = self.b = -1
+
+    def add(self, x, y):
+        self.n += 1
+        if x < self.l: self.l = x
+        if x > self.r: self.r = x
+        if y < self.t: self.t = y
+        if y > self.b: self.b = y
+
+    @property
+    def text(self):
+        return "none" if self.n == 0 else "%d,%d-%d,%d" % (self.l, self.t, self.r, self.b)
+
+
+def diffbox(da, db, x0, y0, x1, y1):
+    """Where B differs from A inside a rect, and whether that patch is a BOX.
+
+    A tooltip is a solid fill of one palette index (0x00459030 / 0x00481510
+    both `rep stos` the box with the byte at 0x006CEB2F, then draw a 1-px
+    border from 0x006CEB30 and the text on top), so the diff's bounding box
+    is dominated by ONE index in B. Sprite animation is not: it is many
+    indices with no dominant one. mode_frac is what separates the two.
+    """
+    box = BBox()
+    for x, y in changed_pixels(da, db, x0, y0, x1, y1):
+        box.add(x, y)
+    r = {"diffbox_region": "%d,%d-%d,%d" % (x0, y0, x1, y1), "diffbox_px": box.n,
+         "diffbox": box.text, "diffbox_w": 0, "diffbox_h": 0, "diffbox_mode_idx": -1,
+         "diffbox_mode_frac": 0, "diffbox_border_frac": 0}
+    if box.n == 0:
+        return r
+    pb, wb = db["px"], db["w"]
+    l, t, rr, b = box.l, box.t, box.r, box.b
+    w, h = rr - l + 1, b - t + 1
+    hist = Counter()
+    for y in range(t, b + 1):
+        row = y * wb
+        hist.update(pb[row + l:row + rr + 1])
+    idx, cnt = hist.most_common(1)[0]
+    # The 1-px frame: how much of the bbox's perimeter in B is one single index.
+    edge = Counter()
+    for x in range(l, rr + 1):
+        edge[pb[t * wb + x]] += 1
+        edge[pb[b * wb + x]] += 1
+    for y in range(t + 1, b):
+        edge[pb[y * wb + l]] += 1
+        edge[pb[y * wb + rr]] += 1
+    eidx, ecnt = edge.most_common(1)[0]
+    r.update({"diffbox_w": w, "diffbox_h": h, "diffbox_fill_frac": "%.4f" % (box.n / float(w * h)),
+              "diffbox_mode_idx": idx, "diffbox_mode_frac": "%.4f" % (cnt / float(w * h)),
+              "diffbox_border_idx": eidx,
+              "diffbox_border_frac": "%.4f" % (ecnt / float(sum(edge.values())))})
+    return r
+
+
+def print_kv(r):
+    for k, v in r.items():
+        print("%s=%s" % (k, v))
+
+
+def cmd_diffbox(a):
+    da, db = load_dump(a.a), load_dump(a.b)
+    print_kv(diffbox(da, db, *clip_window(a, da, db)))
+    return 0
+
+
+def read_marks(path):
+    """One `x1,y1,x2,y2` rect per line (inclusive screen px); blank and # lines skipped."""
+    marks = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            marks.append(tuple(int(v) for v in line.split(",")))
+    return marks
+
+
+def unmarked_diff(da, db, marks, pad, x0, y0, x1, y1):
+    """Changed pixels split by whether a (padded) mark rect covers them.
+
+    The oracle for the partial-redraw sprite flip: the engine repaints every
+    sprite that touches a dirty cell over its WHOLE rect (0x00497CE0 draws the
+    clipped rect after 0x00497000 finds one set cell), so a lower-order sprite
+    lands on top of a higher one in cells nothing marked. In a correct frame
+    every changed pixel lies inside a mark; a change outside every mark is the
+    flip, and its bbox says where.
+    """
+    w = db["w"]
+    covered = bytearray(len(db["px"]))
+    for mx1, my1, mx2, my2 in marks:
+        l, t = max(x0, mx1 - pad), max(y0, my1 - pad)
+        r, b = min(x1 - 1, mx2 + pad), min(y1 - 1, my2 + pad)
+        for y in range(t, b + 1):
+            covered[y * w + l:y * w + r + 1] = b"\x01" * (r - l + 1)
+    marked, box = 0, BBox()
+    for x, y in changed_pixels(da, db, x0, y0, x1, y1):
+        if covered[y * w + x]:
+            marked += 1
+        else:
+            box.add(x, y)
+    return {"unmarked_region": "%d,%d-%d,%d" % (x0, y0, x1, y1), "marks_n": len(marks),
+            "pad": pad, "changed_total": marked + box.n, "marked_changed": marked,
+            "unmarked_changed": box.n, "unmarked_bbox": box.text}
+
+
+def cmd_unmarked_diff(a):
+    da, db = load_dump(a.a), load_dump(a.b)
+    print_kv(unmarked_diff(da, db, read_marks(a.marks), a.pad, *clip_window(a, da, db)))
+    return 0
+
+
+def cmd_selftest(a):
+    """Synthetic 64x64 frames: a box (fill 3, border 5) at (10,20)-(29,29) and a
+    stray pixel at (60,60) that the window excludes. Each detector must find the
+    box, and unmarked-diff must attribute the stray to 'unmarked' exactly when
+    no mark covers it."""
+    base = {"w": 64, "h": 64, "px": bytes([7] * 4096)}
+    hov = bytearray(base["px"])
+    for y in range(20, 30):
+        for x in range(10, 30):
+            hov[y * 64 + x] = 5 if (y in (20, 29) or x in (10, 29)) else 3
+    hov[60 * 64 + 60] = 9
+    hov = {"w": 64, "h": 64, "px": bytes(hov)}
+    r = diffbox(base, hov, 0, 0, 40, 40)
+    checks = [
+        ("diffbox bbox", r["diffbox"] == "10,20-29,29"),
+        ("diffbox mode idx", r["diffbox_mode_idx"] == 3),
+        ("diffbox border idx", r["diffbox_border_idx"] == 5),
+        ("diffbox border frac", r["diffbox_border_frac"] == "1.0000"),
+        ("diffbox none", diffbox(base, base, 0, 0, 64, 64)["diffbox"] == "none"),
+    ]
+    u = unmarked_diff(base, hov, [(12, 22, 27, 27)], 2, 0, 0, 64, 64)
+    # The box is 200 px; the mark alone covers its inner 16x6 = 96, with pad 2 all of it.
+    checks += [
+        ("unmarked-diff pad reaches the border", u["marked_changed"] == 200),
+        ("unmarked-diff stray is unmarked", u["unmarked_changed"] == 1 and u["unmarked_bbox"] == "60,60-60,60"),
+        ("unmarked-diff total", u["changed_total"] == 201),
+        ("unmarked-diff no pad leaves the rim", unmarked_diff(base, hov, [(12, 22, 27, 27)], 0, 0, 0, 64, 64)["unmarked_changed"] == 200 - 96 + 1),
+        ("unmarked-diff identical frames", unmarked_diff(base, base, [], 0, 0, 0, 64, 64)["changed_total"] == 0),
+    ]
+    bad = [name for name, ok in checks if not ok]
+    print("selftest_checks=%d" % len(checks))
+    print("selftest_failed=%s" % (",".join(bad) if bad else "none"))
+    return 1 if bad else 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -455,6 +633,26 @@ def main():
     p.add_argument("--y0", type=int, default=0)
     p.add_argument("--y1", type=int, default=0)
 
+    p = sub.add_parser("diffbox")
+    p.add_argument("--a", required=True)
+    p.add_argument("--b", required=True)
+    p.add_argument("--x0", type=int, default=0)
+    p.add_argument("--x1", type=int, default=0)
+    p.add_argument("--y0", type=int, default=0)
+    p.add_argument("--y1", type=int, default=0)
+
+    p = sub.add_parser("unmarked-diff")
+    p.add_argument("--a", required=True)
+    p.add_argument("--b", required=True)
+    p.add_argument("--marks", required=True)
+    p.add_argument("--pad", type=int, default=0)
+    p.add_argument("--x0", type=int, default=0)
+    p.add_argument("--x1", type=int, default=0)
+    p.add_argument("--y0", type=int, default=0)
+    p.add_argument("--y1", type=int, default=0)
+
+    sub.add_parser("selftest")
+
     p = sub.add_parser("zeroruns")
     p.add_argument("--dump", required=True)
     p.add_argument("--x0", type=int, default=0)
@@ -465,7 +663,8 @@ def main():
     a = ap.parse_args()
     return {"info": cmd_info, "check": cmd_check, "render": cmd_render,
             "band": cmd_band, "diff": cmd_diff, "zeroruns": cmd_zeroruns,
-            "mapdiff": cmd_mapdiff}[a.cmd](a)
+            "mapdiff": cmd_mapdiff, "diffbox": cmd_diffbox,
+            "unmarked-diff": cmd_unmarked_diff, "selftest": cmd_selftest}[a.cmd](a)
 
 
 if __name__ == "__main__":

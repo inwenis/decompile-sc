@@ -1279,11 +1279,27 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     b.imm(0x0048D5F2, STOCK_W, PF_W, 4, "placement.rect.right", 2,
           "0x0048D5C0's extent: right = left + 640 (new in task 034)")
 
-    # -- the mask layer's parking spot -------------------------------------
-    # 0x00481480 hides layer 1 by moving it to (640,400) -- off the bottom-right
-    # of the playfield. At 800 wide, (640,400) is ON screen.
+    # -- the tooltip layer (graphic layer 1) --------------------------------
+    # Layer 1 is the context-help TOOLTIP: 0x00481330 installs it, and that
+    # function's allocator calls carry the __FILE__ string 0x005044F0
+    # "Starcraft\SWAR\lang\CtxtHelp.cpp". 0x00481480 hides it by parking the
+    # layer at (640,400) -- off the bottom-right of the playfield. At 800 wide,
+    # (640,400) is ON screen.
     b.imm(0x004814EA, STOCK_W, PF_W, 2, "layer1.park.x", 2,
-          "parks the mask layer just off the right edge of the playfield")
+          "parks the tooltip layer just off the right edge of the playfield")
+    # The two placers clamp the box to the STOCK screen from live control
+    # bounds: the generic show 0x00481510 (selection row, portrait, minimap,
+    # dialog buttons; 8 callers) shifts the box so right <= 639 and bottom <=
+    # 479, and the card-button placer 0x00458850 shifts right <= 639 (its y
+    # anchors above the button, no constant). With the console at y >= 702 the
+    # 479 clamp lifts every generic tooltip into the playfield.
+    b.imm(0x004815E6, STOCK_W - 1, W - 1, 4, "tooltip.clamp.x1", 2,
+          "0x00481510 context-help show: shift the box left so right <= W-1")
+    b.imm(0x00481620, STOCK_H - 1, H - 1, 4, "tooltip.clamp.y1", 2,
+          "0x00481510 context-help show: shift the box up so bottom <= H-1 "
+          "(every non-card tooltip goes through here)")
+    b.imm(0x00458889, STOCK_W - 1, W - 1, 4, "tooltip.card.clamp.x1", 2,
+          "0x00458850 card-button tooltip placement: shift left so right <= W-1")
 
     # ------------------------------------------------------------------
     # STAGE 3 -- input reaches the full width
@@ -1456,7 +1472,7 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
             (0x00480953, 4, "fog.walk.rows", "0x004808F8 fog dirty-grid walk: outer row bound"),
             (0x004BCE88, 4, "playfield.blit.rows", "0x004BCDC0 terrain blitter: outer y loop bound (playfield HEIGHT, not scratch geometry)"),
             (0x0040C2A3, 4, "playfield.fullblit.rows", "0x0040C253 whole-playfield blit: row count (playfield HEIGHT; the WIDTH twin terrain.fullblit.runwidth stays terrain-named)"),
-            (0x004814F3, 2, "layer1.park.y", "0x00481480 parks the mask layer just below the playfield"),
+            (0x004814F3, 2, "layer1.park.y", "0x00481480 parks the tooltip layer just below the playfield"),
             (0x0047ECBC, 4, "star.clip.y.a", "starfield scrolled arm: skip y >= PF_H (cosmetic)"),
             (0x0047EDB8, 4, "star.clip.y.b", "starfield scrolled arm: bottom clip test"),
             (0x0047EDC0, 4, "star.clip.y.c", "starfield scrolled arm: h = PF_H - y"),
@@ -1583,9 +1599,9 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     b.data(0x0051A178, le32(STOCK_H), le32(H), "dlgclip.mark.y1", 2,
            "dialog dirty-mark clip box max-y")
     b.data(0x0051A164, le32(STOCK_W - 1), le32(W - 1), "dlgclip.remark.x1", 2,
-           "cursor/mask re-mark clip box right (screen-absolute in 0x0041C2C0/0x0041CA64)")
+           "cursor/tooltip re-mark clip box right (screen-absolute in 0x0041C2C0/0x0041CA64)")
     b.data(0x0051A168, le32(STOCK_H - 1), le32(H - 1), "dlgclip.remark.y1", 2,
-           "cursor/mask re-mark clip box bottom")
+           "cursor/tooltip re-mark clip box bottom")
 
     b.cave(0x004D1159, "390d30646d00",
            "81f9" + le32(STOCK_W)      # cmp ecx, 640

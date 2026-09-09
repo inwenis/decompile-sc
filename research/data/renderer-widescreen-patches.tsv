@@ -261,7 +261,10 @@ stage	va	len	changed	name	before	after	expect	patch	cave	note
 2	0x004806C7	9	1	fogcell.render.rowadv	mov esi, dword ptr [ebp - 8] ; mov eax, dword ptr [ebp - 0x10] ; add esi, 0x58	[cave] mov esi, dword ptr [ebp - 8] ; mov eax, dword ptr [ebp - 0x10] ; add esi, 0xa8	8B75F88B45F083C658	E90000000090909090	8B75F88B45F081C6A8000000	advance one cell row per 8px block row (the two reloads ride along)
 2	0x0048D663	4	1	placement.reject.x	cmp ax, 0x280	cmp ax, 0x500	663D8002	663D0005		0x0048D660: refuse a placement at x >= 640 (a 16-bit compare)
 2	0x0048D5F2	6	1	placement.rect.right	lea edi, [ecx + 0x280]	lea edi, [ecx + 0x500]	8DB980020000	8DB900050000		0x0048D5C0's extent: right = left + 640 (new in task 034)
-2	0x004814EA	9	1	layer1.park.x	mov word ptr [0x6cef66], 0x280	mov word ptr [0x6cef66], 0x500	66C70566EF6C008002	66C70566EF6C000005		parks the mask layer just off the right edge of the playfield
+2	0x004814EA	9	1	layer1.park.x	mov word ptr [0x6cef66], 0x280	mov word ptr [0x6cef66], 0x500	66C70566EF6C008002	66C70566EF6C000005		parks the tooltip layer just off the right edge of the playfield
+2	0x004815E6	5	1	tooltip.clamp.x1	mov ecx, 0x27f	mov ecx, 0x4ff	B97F020000	B9FF040000		0x00481510 context-help show: shift the box left so right <= W-1
+2	0x00481620	5	1	tooltip.clamp.y1	mov ecx, 0x1df	mov ecx, 0x36f	B9DF010000	B96F030000		0x00481510 context-help show: shift the box up so bottom <= H-1 (every non-card tooltip goes through here)
+2	0x00458889	5	1	tooltip.card.clamp.x1	mov ecx, 0x27f	mov ecx, 0x4ff	B97F020000	B9FF040000		0x00458850 card-button tooltip placement: shift left so right <= W-1
 3	0x004D1960	5	1	mouse.clamp.cmp@004D1960	cmp si, 0x280	cmp si, 0x500	6681FE8002	6681FE0005		window-proc mouse x clamp: the 'x >= 640' decision
 3	0x004D196D	4	1	mouse.clamp.x@004D196D	mov ax, 0x27f	mov ax, 0x4ff	66B87F02	66B8FF04		window-proc mouse x clamp: the replacement value 639
 3	0x004D19EC	5	1	mouse.clamp.cmp@004D19EC	cmp si, 0x280	cmp si, 0x500	6681FE8002	6681FE0005		window-proc mouse x clamp: the 'x >= 640' decision
@@ -300,7 +303,7 @@ stage	va	len	changed	name	before	after	expect	patch	cave	note
 2	0x00480953	6	1	fog.walk.rows	cmp ebx, 0x190	cmp ebx, 0x320	81FB90010000	81FB20030000		0x004808F8 fog dirty-grid walk: outer row bound
 2	0x004BCE88	5	1	playfield.blit.rows	cmp eax, 0x190	cmp eax, 0x320	3D90010000	3D20030000		0x004BCDC0 terrain blitter: outer y loop bound (playfield HEIGHT, not scratch geometry)
 2	0x0040C2A3	5	1	playfield.fullblit.rows	mov edx, 0x190	mov edx, 0x320	BA90010000	BA20030000		0x0040C253 whole-playfield blit: row count (playfield HEIGHT; the WIDTH twin terrain.fullblit.runwidth stays terrain-named)
-2	0x004814F3	9	1	layer1.park.y	mov word ptr [0x6cef68], 0x190	mov word ptr [0x6cef68], 0x320	66C70568EF6C009001	66C70568EF6C002003		0x00481480 parks the mask layer just below the playfield
+2	0x004814F3	9	1	layer1.park.y	mov word ptr [0x6cef68], 0x190	mov word ptr [0x6cef68], 0x320	66C70568EF6C009001	66C70568EF6C002003		0x00481480 parks the tooltip layer just below the playfield
 2	0x0047ECBC	6	1	star.clip.y.a	cmp ecx, 0x190	cmp ecx, 0x320	81F990010000	81F920030000		starfield scrolled arm: skip y >= PF_H (cosmetic)
 2	0x0047EDB8	6	1	star.clip.y.b	cmp ebx, 0x190	cmp ebx, 0x320	81FB90010000	81FB20030000		starfield scrolled arm: bottom clip test
 2	0x0047EDC0	5	1	star.clip.y.c	mov eax, 0x190	mov eax, 0x320	B890010000	B820030000		starfield scrolled arm: h = PF_H - y
@@ -376,6 +379,6 @@ stage	va	len	changed	name	before	after	expect	patch	cave	note
 3	0x004A3DB2	4	1	minimap.anchor.neg	mov ax, 0xfec5	mov ax, 0xfd35	66B8C5FE	66B835FD		0x004A3D70 minimap point -> world: -315 (the root's absolute top)
 2	0x0051A174	4	1	dlgclip.mark.x1	[data] 80020000	[data] 00050000	80020000	00050000		dialog dirty-mark clip box max-x: a dialog rect past it is never marked
 2	0x0051A178	4	1	dlgclip.mark.y1	[data] e0010000	[data] 70030000	E0010000	70030000		dialog dirty-mark clip box max-y
-2	0x0051A164	4	1	dlgclip.remark.x1	[data] 7f020000	[data] ff040000	7F020000	FF040000		cursor/mask re-mark clip box right (screen-absolute in 0x0041C2C0/0x0041CA64)
-2	0x0051A168	4	1	dlgclip.remark.y1	[data] df010000	[data] 6f030000	DF010000	6F030000		cursor/mask re-mark clip box bottom
+2	0x0051A164	4	1	dlgclip.remark.x1	[data] 7f020000	[data] ff040000	7F020000	FF040000		cursor/tooltip re-mark clip box right (screen-absolute in 0x0041C2C0/0x0041CA64)
+2	0x0051A168	4	1	dlgclip.remark.y1	[data] df010000	[data] 6f030000	DF010000	6F030000		cursor/tooltip re-mark clip box bottom
 3	0x004D1159	6	1	console.hittest.xguard	cmp dword ptr [0x6d6430], ecx	[cave] cmp ecx, 0x280 ; jl 0x4d1164 ; xor eax, eax ; ret  ; cmp dword ptr [0x6d6430], ecx	390D30646D00	E90000000090	81F9800200007C0333C0C3390D30646D00	0x004D1140 isPointOverUi: x >= 640 (the console.pcx width) is bare playfield -- never ask the 640-wide console region about it (right-click orders and the contextual cursor beside the console)
