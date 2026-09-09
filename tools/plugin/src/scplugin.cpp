@@ -702,13 +702,29 @@ static void ReadDlgRect(DWORD dlg, int* r) {
     }
 }
 
+// Appends one formatted fragment; false once the buffer is full.
+static bool DlgAppend(char* buf, size_t cap, size_t* used, const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int w = _vsnprintf(buf + *used, cap - *used, fmt, ap);
+    va_end(ap);
+    if (w < 0 || (size_t)w >= cap - *used) return false;
+    *used += (size_t)w;
+    return true;
+}
+
 static void ScanDialogs(void) {
     if (!g_dialogScan) return;
 
+    // The line carries everything; the CHANGE test runs on a key that leaves out the
+    // control text of the in-game status dialogs (Stat*): hit points, supplies and
+    // minerals change on nearly every poll, and one line per poll is most of a
+    // session's log. Every other dialog keeps its text in the key, because a menu's
+    // game-type combo changes text without changing a rect.
     static char prev[2048] = { 0 };
-    char line[2048];
-    size_t used = 0;
-    line[0] = '\0';
+    char line[2048], key[2048];
+    size_t used = 0, kused = 0;
+    line[0] = key[0] = '\0';
 
     DWORD dlg = 0;
     int n = 0;
@@ -721,10 +737,11 @@ static void ScanDialogs(void) {
             int r[4];
             ReadDlgRect(dlg, r);
 
-            int w = _snprintf(line + used, sizeof(line) - used, "%s dlg='%s' rect=%d,%d,%d,%d",
-                              used ? " |" : "", name, r[0], r[1], r[2], r[3]);
-            if (w < 0 || (size_t)w >= sizeof(line) - used) break;
-            used += (size_t)w;
+            if (!DlgAppend(line, sizeof(line), &used, "%s dlg='%s' rect=%d,%d,%d,%d",
+                           used ? " |" : "", name, r[0], r[1], r[2], r[3])) break;
+            DlgAppend(key, sizeof(key), &kused, "%s dlg='%s' rect=%d,%d,%d,%d",
+                      kused ? " |" : "", name, r[0], r[1], r[2], r[3]);
+            const bool liveText = strncmp(name, "Stat", 4) == 0;
 
             // The controls, so a caller can aim at the real OK button. Only the ones
             // that carry text -- the artwork children are noise for that job.
@@ -742,11 +759,13 @@ static void ScanDialogs(void) {
                     unsigned flags = 0, type = 0;
                     ReadU32(ctrl + SC_BINDLG_OFF_FLAGS, (DWORD*)&flags);
                     ReadU16(ctrl + SC_BINDLG_OFF_TYPE, &type);
-                    int cw = _snprintf(line + used, sizeof(line) - used,
-                                       " ctrl='%s' rect=%d,%d,%d,%d type=%u flags=0x%X",
-                                       ctext, cr[0], cr[1], cr[2], cr[3], type, flags);
-                    if (cw < 0 || (size_t)cw >= sizeof(line) - used) break;
-                    used += (size_t)cw;
+                    if (!DlgAppend(line, sizeof(line), &used,
+                                   " ctrl='%s' rect=%d,%d,%d,%d type=%u flags=0x%X",
+                                   ctext, cr[0], cr[1], cr[2], cr[3], type, flags)) break;
+                    if (!liveText)
+                        DlgAppend(key, sizeof(key), &kused,
+                                  " ctrl='%s' rect=%d,%d,%d,%d type=%u flags=0x%X",
+                                  ctext, cr[0], cr[1], cr[2], cr[3], type, flags);
                 }
                 DWORD next = 0;
                 if (!ReadU32(ctrl + SC_BINDLG_OFF_NEXT, &next)) break;
@@ -761,8 +780,8 @@ static void ScanDialogs(void) {
         }
     }
 
-    if (strcmp(line, prev) == 0) return;
-    lstrcpynA(prev, line, (int)sizeof(prev));
+    if (strcmp(key, prev) == 0) return;
+    lstrcpynA(prev, key, (int)sizeof(prev));
     ScLog("DIALOGS n=%d%s%s", n, n ? " " : "", line);
 }
 

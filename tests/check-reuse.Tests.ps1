@@ -5,8 +5,8 @@ The gate's whole value is that it FAILS on a new copy, and a gate that cannot fa
 the house defect this repo guards against (tests/vacuous-assertion-guard.Tests.ps1), so
 the cases plant a duplicate in a throwaway tree and require exit 1, then remove it and
 require exit 0 -- once for the C++ target and once for the PowerShell one. A copy that
-is re-indented and re-commented must still fail: that is what the token scan buys over
-a line scan. The last case runs the gate over the real tree, as CI does.
+is re-indented and re-commented must still fail: the scan compares tokens, not text.
+The last case runs the gate over the real tree, as CI does.
 #>
 
 # Pester v5 evaluates -Skip while it is DISCOVERING, so a $script: variable set in
@@ -119,7 +119,7 @@ Describe 'check-reuse [cpp] fails on a NEW copy and passes without one' -Skip:(-
         $r.Out | Should -Match 'sc_beta.cpp'
     }
 
-    It 'reports the copy ONCE, at its full length, not as overlapping windows' {
+    It 'reports the copy ONCE, at its full length' {
         $r = Invoke-Checker -Root $script:box.Root -CheckerArgs @('--list')
         @($r.Out -split "`n" | Where-Object { $_ -match '^block' }).Count | Should -Be 1
         $r.Out | Should -Match '7 identical lines'

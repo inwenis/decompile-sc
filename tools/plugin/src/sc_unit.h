@@ -72,16 +72,26 @@ static inline BYTE  ScUnitPlayer(DWORD unit)     { return *(BYTE*)(unit + SC_CUN
 static inline DWORD ScUnitHitPoints(DWORD unit)  { return *(DWORD*)(unit + SC_CUNIT_OFF_HITPOINTS); }
 static inline DWORD ScUnitSprite(DWORD unit)     { return *(DWORD*)(unit + SC_CUNIT_OFF_SPRITE); }
 
-// The one unit this player has selected, or 0 -- 0 for an empty selection AND for a
-// selection of two or more, because every caller asks "is there exactly one building to
-// talk about".
-static inline DWORD ScSoleSelectedUnit(void) {
-    DWORD player = *(DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_ID);
-    if (player >= SC_MAX_PLAYERS) return 0;
-    DWORD* sel = (DWORD*)ScRuntimeAddr(SC_VA_PLAYERS_SELECTIONS) + player * SC_SELECTION_SLOTS;
+// The one unit in a selection list, or 0 -- 0 for an empty list AND for two or more,
+// because every caller asks "is there exactly one building to talk about".
+static inline DWORD ScSoleUnitOf(const DWORD* sel) {
     DWORD u = sel[0];
     if (!u || sel[1]) return 0;
     return ScUnitPtrValid(u) ? u : 0;
+}
+
+// ...in the active player's row of the per-player selection table.
+static inline DWORD ScSoleSelectedUnit(void) {
+    DWORD player = *(DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_ID);
+    if (player >= SC_MAX_PLAYERS) return 0;
+    return ScSoleUnitOf((const DWORD*)ScRuntimeAddr(SC_VA_PLAYERS_SELECTIONS)
+                        + player * SC_SELECTION_SLOTS);
+}
+
+// ...in the client selection (SC_VA_ACTIVE_PLAYER_SELECTION), the list the PRODQSEL and
+// UPGQSEL oracles report on.
+static inline DWORD ScClientSoleSelectedUnit(void) {
+    return ScSoleUnitOf((const DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_SELECTION));
 }
 
 // Is the building a plugin record was written against still THAT building, alive?
@@ -120,6 +130,21 @@ static inline int ScUnitQueueLength(DWORD unit) {
         if (ScUnitQueueSlot(unit, i) != SC_BUILD_QUEUE_EMPTY) ++n;
     }
     return n;
+}
+
+// The slot the engine's own addToBuildQueue fills next: findFreeBuildQueueSlot
+// (0x004669B0), quoted instruction by instruction in research/production-queue.md 3.1 --
+// start at the head, wrap past slot 4, five tries, and SC_BUILD_QUEUE_SLOTS means "there
+// is no free slot". Re-implemented because the engine's version takes its CUnit* in EDX,
+// and because hooktest models the engine's half of a Train press with it.
+static inline int ScUnitFreeQueueSlot(DWORD unit) {
+    unsigned slot = *(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
+    for (int tries = SC_BUILD_QUEUE_SLOTS; tries > 0; --tries) {
+        if (slot >= SC_BUILD_QUEUE_SLOTS) slot = 0;
+        if (ScUnitQueueSlot(unit, (int)slot) == SC_BUILD_QUEUE_EMPTY) return (int)slot;
+        ++slot;
+    }
+    return SC_BUILD_QUEUE_SLOTS;
 }
 
 // ---------------------------------------------------------------------------
