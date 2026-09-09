@@ -144,6 +144,8 @@ stage	va	len	changed	name	before	after	expect	patch	cave	note
 2	0x004BCE66	3	1	terrain.cols@004BCE66	cmp ebx, 0x28	cmp ebx, 0x50	83FB28	83FB50		terrain blitter: columns per row
 2	0x004BCE6E	6	1	terrain.rowstep	add edi, 0x2780	add edi, 0x4d00	81C780270000	81C7004D0000		terrain blitter: advance to the next 16 scanlines
 2	0x0040C25A	10	1	terrain.fullblit.runwidth	mov dword ptr [0x50cef0], 0x280	mov dword ptr [0x50cef0], 0x500	C705F0CE500080020000	C705F0CE500000050000		0x0040C253: the run width of the whole-playfield blit
+2	0x004BCE1B	5	1	terrain.run.nextcell	jmp 0x4bce20 ; lea ecx, [ecx]	inc ecx ; nop  ; nop  ; nop  ; nop 	EB038D4900	4190909090		0x004BCDC0 run extension: test the NEXT cell first (inc ecx over the jmp + alignment nop)
+2	0x004BCE2D	6	1	terrain.run.lastcell	mov dword ptr [ebp - 8], esi ; mov dword ptr [ebp - 4], ecx	[cave] mov dword ptr [ebp - 8], esi ; dec ecx ; mov dword ptr [ebp - 4], ecx	8975F8894DFC	E90000000090	8975F849894DFC	0x004BCDC0 after a run: ecx back to the run's last cell before the shared advance (dec ecx between the two stores)
 2	0x0049BC65	6	1	terrain.modchain@0049BC65	lea ecx, [eax - 0x498000]	lea ecx, [eax - 0x10a8000]	8D880080B6FF	8D880080F5FE		0x49BC20: mod-reduce a scratch offset by 16*size (negative lea displacement)
 2	0x0049BC74	6	1	terrain.modchain@0049BC74	lea ecx, [eax - 0x24c000]	lea ecx, [eax - 0x854000]	8D880040DBFF	8D8800C07AFF		0x49BC20: mod-reduce a scratch offset by 8*size (negative lea displacement)
 2	0x0049BC80	6	1	terrain.modchain@0049BC80	lea ecx, [eax - 0x126000]	lea ecx, [eax - 0x42a000]	8D8800A0EDFF	8D880060BDFF		0x49BC20: mod-reduce a scratch offset by 4*size (negative lea displacement)

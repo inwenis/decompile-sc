@@ -65,6 +65,30 @@ static unsigned g_stripSkipped = 0;         // present calls that did NOT meet t
 static int      g_primaryRows  = -1;        // the primary's dwHeight (GetSurfaceDesc), read once; -1 = unread
 static unsigned g_mirrorFrames = 0;         // presents that mirrored the WHOLE frame (console buffer-resident)
 
+// --- present timing ---------------------------------------------------------
+// "Did the game stall, or did the machine?" needs two numbers the same clock produced:
+// the interval the ENGINE left between consecutive presents, and this hook's own cost
+// inside one (the mirror memcpy). Everything is integer microseconds from
+// QueryPerformanceCounter, so the game thread's x87 state is never touched, and ONE
+// ScLog per window is the whole log budget -- a per-frame line would itself be the stall.
+//
+// Only intervals whose BOTH ends were in game are sampled, because the interval that
+// spans a menu, a map load or an alt-tab is not the game hitching; when the console walk
+// cannot say (it is gated on the console move being armed) every interval is sampled and
+// the line reports ingame=-1 so a zero is never mistaken for "no time was spent in game".
+#define SC_STORMTIME_WINDOW_S  60
+#define SC_STORMTIME_STALL_US  100000   // an interval this long is a hitch a player sees
+
+static LONGLONG g_qpf        = 0;   // counter frequency; 0 = no usable clock, timing off
+static LONGLONG g_tPrev      = 0;   // previous present's stamp; 0 = no predecessor yet
+static LONGLONG g_tWinStart  = 0;
+static int      g_prevInGame = -1;
+static unsigned g_winPresents = 0, g_winIngame = 0, g_winSamples = 0, g_winStalls = 0;
+static bool     g_winIngameKnown = false;
+static LONGLONG g_winSumUs = 0, g_winMaxUs = 0, g_winHookSumUs = 0, g_winHookMaxUs = 0;
+static unsigned g_totPresents = 0, g_totSamples = 0, g_totStalls = 0, g_totWindows = 0;
+static LONGLONG g_totSumUs = 0, g_totMaxUs = 0, g_totHookMaxUs = 0;
+
 static void* StormRt(DWORD rva) {
     return (void*)(g_stormBase + rva);
 }
@@ -261,9 +285,79 @@ static int ReadPrimaryRows(void) {
     return (int)*(DWORD*)(ddsd + 0x08);   // dwHeight
 }
 
+static LONGLONG QpcNow(void) {
+    if (!g_qpf) return 0;
+    LARGE_INTEGER v;
+    QueryPerformanceCounter(&v);
+    return v.QuadPart;
+}
+
+// Ticks -> microseconds. Only ever handed a DELTA: multiplying a raw counter by a
+// million overflows 64 bits, a delta of a whole day does not.
+static LONGLONG TicksToUs(LONGLONG d) { return (d > 0 && g_qpf) ? (d * 1000000) / g_qpf : 0; }
+
+// `x.yz ms` out of microseconds without touching the FPU. Truncates, so a stall reads
+// slightly short rather than slightly long.
+#define SC_MS_WHOLE(us)  ((unsigned)((us) / 1000))
+#define SC_MS_FRAC(us)   ((unsigned)(((us) % 1000) / 10))
+
+static void TimeEmitWindow(void) {
+    const LONGLONG avgUs  = g_winSamples  ? g_winSumUs     / g_winSamples  : 0;
+    const LONGLONG hAvgUs = g_winPresents ? g_winHookSumUs / g_winPresents : 0;
+    ScLog("STORMTIME window=%ds presents=%u avg_ms=%u.%02u max_ms=%u.%02u stalls100=%u "
+          "hook_avg_us=%u hook_max_us=%u samples=%u ingame=%d",
+          SC_STORMTIME_WINDOW_S, g_winPresents,
+          SC_MS_WHOLE(avgUs), SC_MS_FRAC(avgUs),
+          SC_MS_WHOLE(g_winMaxUs), SC_MS_FRAC(g_winMaxUs),
+          g_winStalls, (unsigned)hAvgUs, (unsigned)g_winHookMaxUs,
+          g_winSamples, g_winIngameKnown ? (int)g_winIngame : -1);
+    ++g_totWindows;
+    g_totPresents += g_winPresents;
+    g_totSamples  += g_winSamples;
+    g_totStalls   += g_winStalls;
+    g_totSumUs    += g_winSumUs;
+    if (g_winMaxUs > g_totMaxUs) g_totMaxUs = g_winMaxUs;
+    if (g_winHookMaxUs > g_totHookMaxUs) g_totHookMaxUs = g_winHookMaxUs;
+    g_winPresents = g_winIngame = g_winSamples = g_winStalls = 0;
+    g_winIngameKnown = false;
+    g_winSumUs = g_winMaxUs = g_winHookSumUs = g_winHookMaxUs = 0;
+}
+
+// tEnter: the hook's entry stamp, which is the present's own arrival time.
+// tWork:  taken after the engine's copy returned, so the hook cost is OURS alone.
+static void TimeSample(LONGLONG tEnter, LONGLONG tWork) {
+    if (!g_qpf || !tEnter) return;
+    const LONGLONG now = QpcNow();
+    const int inGame = ScConsoleInGame();
+
+    ++g_winPresents;
+    if (inGame >= 0) { g_winIngameKnown = true; if (inGame) ++g_winIngame; }
+    const LONGLONG hookUs = TicksToUs(now - tWork);
+    g_winHookSumUs += hookUs;
+    if (hookUs > g_winHookMaxUs) g_winHookMaxUs = hookUs;
+
+    if (g_tPrev && (inGame < 0 || (inGame == 1 && g_prevInGame == 1))) {
+        const LONGLONG dtUs = TicksToUs(tEnter - g_tPrev);
+        ++g_winSamples;
+        g_winSumUs += dtUs;
+        if (dtUs > g_winMaxUs) g_winMaxUs = dtUs;
+        if (dtUs > SC_STORMTIME_STALL_US) ++g_winStalls;
+    }
+    g_tPrev = tEnter;
+    g_prevInGame = inGame;
+
+    if (!g_tWinStart) g_tWinStart = now;
+    else if (now - g_tWinStart >= g_qpf * SC_STORMTIME_WINDOW_S) {
+        TimeEmitWindow();
+        g_tWinStart = now;
+    }
+}
+
 static int __attribute__((stdcall)) SC_GAME_ENTRY
 HkOrd432(DWORD dst, DWORD src, DWORD dstPitch, DWORD srcPitch, DWORD region) {
+    const LONGLONG tEnter = QpcNow();
     int ret = ((ScOrd432Fn)g_hkCopy.trampoline)(dst, src, dstPitch, srcPitch, region);
+    const LONGLONG tWork = QpcNow();
     // Guarded on the widescreen geometry so a stray 640-pitch call can never write past
     // a 640-wide surface.
     const int W = ScScreenTargetWidth(), H = ScScreenTargetHeight();
@@ -330,6 +424,7 @@ HkOrd432(DWORD dst, DWORD src, DWORD dstPitch, DWORD srcPitch, DWORD region) {
     } else if (g_mode == SC_STORM_WIDEN) {
         ++g_stripSkipped;
     }
+    TimeSample(tEnter, tWork);
     return ret;
 }
 
@@ -384,6 +479,15 @@ void ScStormPresentInstall(BYTE* exeBase, bool writeAllowed) {
         g_stripSkipped = 0;
         g_mirrorFrames = 0;
         g_primaryRows = -1;
+        LARGE_INTEGER f;
+        g_qpf = QueryPerformanceFrequency(&f) ? f.QuadPart : 0;
+        g_tPrev = g_tWinStart = 0;
+        g_prevInGame = -1;
+        g_winPresents = g_winIngame = g_winSamples = g_winStalls = 0;
+        g_winIngameKnown = false;
+        g_winSumUs = g_winMaxUs = g_winHookSumUs = g_winHookMaxUs = 0;
+        g_totPresents = g_totSamples = g_totStalls = g_totWindows = 0;
+        g_totSumUs = g_totMaxUs = g_totHookMaxUs = 0;
         memset(&g_hkCopy, 0, sizeof(g_hkCopy));
         void* ord432 = StormRt(STORM_RVA_ORD432);
         if (!ScHookInstall(&g_hkCopy, "stormWidenCopy", ord432,
@@ -399,6 +503,13 @@ void ScStormPresentInstall(BYTE* exeBase, bool writeAllowed) {
                   "The read-only geometry log also runs on the marker channel.",
                   (unsigned)(DWORD_PTR)g_stormBase, (unsigned)(DWORD_PTR)ord432,
                   SC_SCREEN_W, ScScreenTargetWidth() - 1, ScScreenTargetWidth(), ScScreenTargetWidth());
+            // Said out loud at arm time so "no STORMTIME line in the log" is readable as
+            // "the game never presented" and never as "the clock was unusable".
+            ScLog("STORMTIME: %s -- one line per %d s of presents (qpf=%u Hz). ingame=-1 on a "
+                  "line means the console walk could not tell menu from game, so every "
+                  "interval was sampled.",
+                  g_qpf ? "armed" : "DISABLED: QueryPerformanceFrequency failed",
+                  SC_STORMTIME_WINDOW_S, (unsigned)g_qpf);
         }
     }
     if (g_mode == SC_STORM_PROBE) {
@@ -416,7 +527,19 @@ void ScStormPresentRemove(void) {
 
 void ScStormPresentLogStats(void) {
     if (g_mode == SC_STORM_OFF) return;
-    ScLog("STORMSTATS mode=%d logs=%u stripFrames=%u mirrorFrames=%u stripSkipped=%u cursorForced=%u primaryRows=%d stormBase=0x%08X",
+    // The cumulative half of STORMTIME: the window totals plus whatever the window in
+    // flight has collected, so a session shorter than one window still reports numbers.
+    const unsigned presents = g_totPresents + g_winPresents;
+    const unsigned samples  = g_totSamples + g_winSamples;
+    const LONGLONG sumUs    = g_totSumUs + g_winSumUs;
+    const LONGLONG avgUs    = samples ? sumUs / samples : 0;
+    const LONGLONG maxUs    = g_winMaxUs > g_totMaxUs ? g_winMaxUs : g_totMaxUs;
+    const LONGLONG hMaxUs   = g_winHookMaxUs > g_totHookMaxUs ? g_winHookMaxUs : g_totHookMaxUs;
+    ScLog("STORMSTATS mode=%d logs=%u stripFrames=%u mirrorFrames=%u stripSkipped=%u cursorForced=%u primaryRows=%d stormBase=0x%08X "
+          "windows=%u presents=%u samples=%u avgMs=%u.%02u maxMs=%u.%02u stalls100=%u hookMaxUs=%u",
           (int)g_mode, g_logs, g_stripFrames, g_mirrorFrames, g_stripSkipped, g_cursorForced, g_primaryRows,
-          (unsigned)(DWORD_PTR)g_stormBase);
+          (unsigned)(DWORD_PTR)g_stormBase,
+          g_totWindows, presents, samples,
+          SC_MS_WHOLE(avgUs), SC_MS_FRAC(avgUs), SC_MS_WHOLE(maxUs), SC_MS_FRAC(maxUs),
+          g_totStalls + g_winStalls, (unsigned)hMaxUs);
 }

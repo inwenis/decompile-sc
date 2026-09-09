@@ -60,7 +60,8 @@ suite break, not a cleanup.
 | `sc_queueind.cpp` | the indicator for queue items the strip cannot draw | `ScQueueInd*` | `QIND` `QINDDLG` `QINDSTATS` `QINDCLICK` `QINDCLICKSTATS` | `SCPLUGIN_QUEUEIND`, `SCPLUGIN_QIND_CLICKTRACE` |
 | `sc_card.cpp` | reading the command card back out of the process | `ScCard*` | `CARD` | `SCPLUGIN_CARDSCAN` |
 | `sc_screen.cpp` | the widescreen patch table (`sc_screen_patches.h` is **generated**) | `ScScreen*`, `SC_WS_*` | `WIDESCREEN` | `SCPLUGIN_WIDESCREEN`, `SCPLUGIN_WS_STAGE`, `SCPLUGIN_WS_ONLY` |
-| `sc_stormpresent.cpp` | copying the widened strip to the primary every frame | `ScStormPresent*` | `STORM` `STORMSTATS` | `SCPLUGIN_STORM_PRESENT` |
+| `sc_stormpresent.cpp` | copying the widened strip to the primary every frame | `ScStormPresent*` | `STORM` `STORMTIME` `STORMSTATS` | `SCPLUGIN_STORM_PRESENT` |
+| `sc_marktrace.cpp` | diagnostic trace of the dirty marker, the fog cell renderer and the terrain run blit, armed by `marktrace-on`/`marktrace-off` markers | `ScMarkTrace*` | `MARKTRACE` `MARK` `FOGR` `TERR` | `SCPLUGIN_MARKTRACE` |
 | `sc_console.cpp` | moving the console to the right edge, and the click trace | `ScConsole*` | `CONSOLE` `CONSOLESTATS` `CTRACE` | `SCPLUGIN_CONSOLE_EDGE`, `SCPLUGIN_CONSOLE_TRACE` |
 | `scinject.cpp` | the launcher and injector — its own program, links none of the above | `SCINJECT_*` | *(stdout/stderr)* | *(command line)* |
 | `hooktest.cpp` | the offline unit test — its own program, no game anywhere near it | — | *(stdout)* | — |

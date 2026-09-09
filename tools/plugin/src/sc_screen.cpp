@@ -184,6 +184,19 @@ int ScScreenViewportTilesX(void) {
         ? (SC_WS_SCREEN_W / 32) : SC_VIEWPORT_TILES_X;
 }
 
+// The console is 80 rows of the stock screen; the playfield is the rest.
+#define SC_STOCK_PLAYFIELD_H (SC_WS_STOCK_H - 80)
+
+int ScScreenViewportTilesY(void) {
+    return (g_active && g_stage >= SC_WS_STAGE_SCROLL_CLAMP)
+        ? (SC_WS_PLAYFIELD_H / 32) : SC_VIEWPORT_TILES_Y;
+}
+
+int ScScreenScrollBiasY(void) {
+    const int pfH = (g_active && g_stage >= SC_WS_STAGE_SCROLL_CLAMP) ? SC_WS_PLAYFIELD_H : SC_STOCK_PLAYFIELD_H;
+    return ScScreenViewportTilesY() * 32 - (pfH - 24);
+}
+
 // ---------------------------------------------------------------------------
 // The gate: has the video init already run? 0x006CEFF4 is the framebuffer
 // pointer; it lives in BSS and is zero until FUN_004DB060 (or one of its two

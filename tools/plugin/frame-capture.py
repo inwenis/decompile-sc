@@ -39,6 +39,8 @@ Commands (all output is `key=value` lines, one per metric, like frame-diff.py):
   render  --dump FD.bin --palette PAL.json --out OUT.png
   band    --dump FD.bin --x0 N [--x1 N] [--y0 N] [--y1 N]
   diff    --a FD.bin --b FD.bin [--x0 N] [--x1 N] [--y0 N] [--y1 N]
+  mapdiff --a FD.bin --ax N --ay N --b FD.bin --bx N --by N --x0 N --y0 N --x1 N --y1 N
+          (A's screen rect compared in MAP space: each dump's camera is its --ax/--ay)
 
 Hard rule 1: dumps and rendered PNGs reproduce game artwork. They live on the
 gitignored diagnostic path and are never committed; what this tool PRINTS is
@@ -355,6 +357,47 @@ def cmd_diff(a):
     return 0
 
 
+def cmd_mapdiff(a):
+    """Compare a rect across two dumps taken at DIFFERENT camera positions.
+
+    The rect is given in A's screen space; a pixel's map position is its screen
+    position plus A's camera, and it is looked up in B through B's camera. Only
+    pixels inside both frames count. `gained` is black (index 0) in A and not in
+    B -- what a fog defect that reveals map leaves behind; `lost` is the reverse.
+    """
+    da, db = load_dump(a.a), load_dump(a.b)
+    pa, pb = da["px"], db["px"]
+    wa, ha, wb, hb = da["w"], da["h"], db["w"], db["h"]
+    dx, dy = a.ax - a.bx, a.ay - a.by
+    x1 = a.x1 if a.x1 else wa
+    y1 = a.y1 if a.y1 else ha
+    overlap = gained = lost = changed = 0
+    for y in range(a.y0, min(y1, ha)):
+        yb = y + dy
+        if yb < 0 or yb >= hb:
+            continue
+        ra, rb = y * wa, yb * wb
+        for x in range(a.x0, min(x1, wa)):
+            xb = x + dx
+            if xb < 0 or xb >= wb:
+                continue
+            va, vb = pa[ra + x], pb[rb + xb]
+            overlap += 1
+            if va != vb:
+                changed += 1
+                if va == 0:
+                    gained += 1
+                elif vb == 0:
+                    lost += 1
+    print("mapdiff_region=%d,%d-%d,%d" % (a.x0, a.y0, x1, y1))
+    print("mapdiff_shift=%d,%d" % (dx, dy))
+    print("mapdiff_overlap=%d" % overlap)
+    print("mapdiff_changed=%d" % changed)
+    print("mapdiff_gained=%d" % gained)
+    print("mapdiff_lost=%d" % lost)
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -402,6 +445,16 @@ def main():
     p.add_argument("--y0", type=int, default=0)
     p.add_argument("--y1", type=int, default=0)
 
+    p = sub.add_parser("mapdiff")
+    p.add_argument("--a", required=True)
+    p.add_argument("--b", required=True)
+    for k in ("ax", "ay", "bx", "by"):
+        p.add_argument("--" + k, type=int, required=True)
+    p.add_argument("--x0", type=int, default=0)
+    p.add_argument("--x1", type=int, default=0)
+    p.add_argument("--y0", type=int, default=0)
+    p.add_argument("--y1", type=int, default=0)
+
     p = sub.add_parser("zeroruns")
     p.add_argument("--dump", required=True)
     p.add_argument("--x0", type=int, default=0)
@@ -411,7 +464,8 @@ def main():
 
     a = ap.parse_args()
     return {"info": cmd_info, "check": cmd_check, "render": cmd_render,
-            "band": cmd_band, "diff": cmd_diff, "zeroruns": cmd_zeroruns}[a.cmd](a)
+            "band": cmd_band, "diff": cmd_diff, "zeroruns": cmd_zeroruns,
+            "mapdiff": cmd_mapdiff}[a.cmd](a)
 
 
 if __name__ == "__main__":

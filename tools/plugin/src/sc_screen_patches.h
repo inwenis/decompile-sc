@@ -1059,6 +1059,20 @@ static const ScScreenPatch SC_WS_PATCHES[] = {
       { 0xC7, 0x05, 0xF0, 0xCE, 0x50, 0x00, 0x00, 0x05, 0x00, 0x00 },
       { 0x00 },
       "terrain.fullblit.runwidth", "0x0040C253: the run width of the whole-playfield blit" },
+    // 0x004BCE1B  jmp 0x4bce20 ; lea ecx, [ecx]
+    //             -> inc ecx ; nop  ; nop  ; nop  ; nop 
+    { 0x004BCE1Bu,  5, 2, SC_WS_NO_FIXUP, 0, 0x0u,
+      { 0xEB, 0x03, 0x8D, 0x49, 0x00 },
+      { 0x41, 0x90, 0x90, 0x90, 0x90 },
+      { 0x00 },
+      "terrain.run.nextcell", "0x004BCDC0 run extension: test the NEXT cell first (inc ecx over the jmp + alignment nop)" },
+    // 0x004BCE2D  mov dword ptr [ebp - 8], esi ; mov dword ptr [ebp - 4], ecx
+    //             -> [cave] mov dword ptr [ebp - 8], esi ; dec ecx ; mov dword ptr [ebp - 4], ecx
+    { 0x004BCE2Du,  6, 2, SC_WS_NO_FIXUP, 7, 0x0u,
+      { 0x89, 0x75, 0xF8, 0x89, 0x4D, 0xFC },
+      { 0xE9, 0x00, 0x00, 0x00, 0x00, 0x90 },
+      { 0x89, 0x75, 0xF8, 0x49, 0x89, 0x4D, 0xFC },
+      "terrain.run.lastcell", "0x004BCDC0 after a run: ecx back to the run's last cell before the shared advance (dec ecx between the two stores)" },
     // 0x0049BC65  lea ecx, [eax - 0x498000]
     //             -> lea ecx, [eax - 0x10a8000]
     { 0x0049BC65u,  6, 2, SC_WS_NO_FIXUP, 0, 0x0u,

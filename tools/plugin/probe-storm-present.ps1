@@ -35,6 +35,8 @@ $scriptDir = $PSScriptRoot
 $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'drive-game.ps1')
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
+. (Join-Path $scriptDir 'sc-suite.ps1')
+. (Join-Path $scriptDir 'sc-wsprobe.ps1')
 
 # The geometry under test comes from the generated table, never from this file.
 $ws = Get-ScWideGeometry
@@ -50,24 +52,7 @@ $mapPath = Join-Path $FixtureDir $mapName
 $markerPath = Join-Path $LogDir 'marker.txt'
 $log = Join-Path $LogDir '074-stormpresent.log'
 
-New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
-New-Item -ItemType Directory -Path $FrameDir -Force | Out-Null
-
-$script:failures = 0
-$script:step = 0
-$script:findings = @()
-$launchLock = $null
-$fixtures = $null
-$gamePid = 0
-$completed = $false
-
-function Assert-True {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    $script:step++
-    if ($Ok) { Write-Host "  [$script:step] OK   $What $Detail" }
-    else { Write-Host "  [$script:step] FAIL $What $Detail"; $script:failures++ }
-}
-function Report-Finding { param([string]$What) $script:findings += $What; Write-Host "  ---- FINDING: $What" }
+Initialize-ScWsProbe -LogDir $LogDir -FrameDir $FrameDir
 
 Add-Type -AssemblyName System.Drawing
 function Get-PngRectNonzero {
@@ -89,13 +74,7 @@ function Get-PngRectNonzero {
 
 function Get-BufferDump {
     param([string]$Tag)
-    $from = Get-ScLogLineCount -LogPath $log
-    Set-ScMarker -MarkerPath $markerPath -Label $Tag
-    $lines = Wait-ScLogMatch -LogPath $log -Pattern "FRAMEDUMP \[$([regex]::Escape($Tag))\] " -TimeoutSec 20 -FromLine $from
-    foreach ($l in $lines) {
-        if ($l -match 'FRAMEDUMP \[[^\]]+\] w=\d+ h=\d+ bytes=\d+ reads=\d+ stable=\d path=(.+)$') { return $Matches[1].Trim() }
-    }
-    $null
+    (Get-ScBufferDump -LogPath $log -MarkerPath $markerPath -Tag $Tag).Path
 }
 function Get-DumpBand {
     param([string]$Dump, [int]$X0, [int]$X1, [int]$Y0, [int]$Y1)
@@ -129,78 +108,26 @@ function Read-TwoNumbers {
     [pscustomobject]@{ Buffer = $buf; Glass = $glass; Shot = $shot }
 }
 
-function Click-UntilDialog {
-    param([int]$X, [int]$Y, [string]$Name, [int]$Tries = 3, [int]$WaitSec = 12)
-    for ($i = 1; $i -le $Tries; $i++) {
-        Send-ScClick -Hwnd $h -X $X -Y $Y
-        $d = Wait-ScDialog -LogPath $log -Name $Name -TimeoutSec $WaitSec
-        if ($d) { return $d }
-        Write-Host "       walk: '$Name' not up after click $i/$Tries at ($X,$Y); retrying"
-    }
-    $null
-}
-
-# The full menu -> loaded game walk (probe-console-edge's, verbatim shape).
-function Walk-ToGame {
-    $env:SCDRIVE_POST_ACTIVATE = '1'
-    if (-not (Wait-ScDialog -LogPath $log -Name 'MainMenu' -TimeoutSec 30)) { throw 'probe-storm: main menu never appeared.' }
-    Start-Sleep -Seconds 3
-    if (-not (Click-UntilDialog -X 215 -Y 119 -Name 'Delete')) { throw 'probe-storm: Original/Expansion chooser never appeared.' }
-    Send-ScClick -Hwnd $h -X 373 -Y 300; Start-Sleep -Seconds 1
-    Send-ScClick -Hwnd $h -X 75 -Y 111
-    if (-not (Click-UntilDialog -X 516 -Y 392 -Name 'RaceSelection' -WaitSec 15)) { throw 'probe-storm: RaceSelection never appeared.' }
-    if (-not (Click-UntilDialog -X 327 -Y 415 -Name 'Create' -WaitSec 15)) { throw 'probe-storm: map browser never appeared.' }
-    Start-Sleep -Seconds 2
-    Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
-    Select-ScBrowserMap -Hwnd $h -GameDir $GameDir -MapPath $mapPath | Out-Null
-    Set-ScGameType -Hwnd $h -LogPath $log -Index 2
-    Send-ScClick -Hwnd $h -X 516 -Y 393; Start-Sleep -Seconds 6
-    Send-ScClick -Hwnd $h -X 544 -Y 387; Start-Sleep -Seconds 10
-    Dismiss-ScTipsDialog -Hwnd $h -LogPath $log | Out-Null
-    Start-Sleep -Seconds 3
-    $env:SCDRIVE_POST_ACTIVATE = '0'
-}
-
 try {
     Write-Host 'probe-storm: waiting for the machine'
     Wait-ScNoGameRunning
     $launchLock = Enter-ScLaunchLock -TaskId '074-stormpresent'
-    if (-not (Test-Path -LiteralPath $WindowedHelperDll)) { throw "probe-storm: $WindowedHelperDll not found; run fetch-cnc-ddraw.ps1." }
 
     Write-Host 'probe-storm: generating the fixture (one Nexus, explored start -- map at the right band)'
-    $fixtures = New-ScFixtureRun -Dir $FixtureDir -Names @($mapName)
-    $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
-        -UnitCount 1 -UnitType 'nexus' -Player 0 -ClearPlayerUnits -Race 'protoss' `
-        -StartingMinerals 500 -StartingGas 0 -OutputPath $mapPath 2>&1
-    @($gen | Where-Object { "$_" -notmatch 'WARNING:StormLibFinder' }) | ForEach-Object { Write-Host "       $_" }
-    if (-not (Test-Path -LiteralPath $mapPath)) { throw 'probe-storm: the fixture was never generated.' }
+    $fixtures = New-ScNexusFixture -RepoRoot $repoRoot -FixtureDir $FixtureDir -MapName $mapName -Noun 'probe-storm'
 
     if (Test-Path -LiteralPath $log) { Remove-Item -LiteralPath $log -Force }
     if (Test-Path -LiteralPath $markerPath) { Remove-Item -LiteralPath $markerPath -Force }
 
     Write-Host "probe-storm: launching (stage 3, cnc-ddraw, StormPresent=$StormPresent)"
-    & (Join-Path $scriptDir 'run-with-plugin.ps1') `
-        -Mode hooktest -LogCommands 1 -WorldScan 1 -NoLaunchLock `
-        -Widescreen 1 -WidescreenStage 3 -StormPresent $StormPresent `
-        -FrameDump $FrameDir `
-        -Windowed -WindowedHelperDll $WindowedHelperDll `
-        -GameDir $GameDir -LogPath $log 6>&1 | ForEach-Object {
-            Write-Host "       $_"
-            if ("$_" -match 'scinject:\s*PID=(\d+)') { $gamePid = [int]$Matches[1] }
-        }
-    if (-not $gamePid) { throw 'probe-storm: could not parse the game pid.' }
-    $h = Get-ScGameWindow -ProcessId $gamePid
-    Start-Sleep -Seconds 3
-
-    Assert-True 'the widescreen table is ACTIVE with 0 refused' `
-        (@(Get-Content -LiteralPath $log | Where-Object { $_ -match 'WIDESCREEN ACTIVE' -and $_ -match ', 0 refused' }).Count -gt 0)
+    $gamePid = Start-ScWideGame -ScriptDir $scriptDir -GameDir $GameDir -LogPath $log -FrameDir $FrameDir `
+        -WindowedHelperDll $WindowedHelperDll -StormPresent $StormPresent -Noun 'probe-storm'
+    $h = Connect-ScWideGame -GamePid $gamePid -LogPath $log -ScreenW $SCREEN_W -ScreenH $SCREEN_H
     Assert-True 'storm present is armed as WIDEN' `
         (@(Get-Content -LiteralPath $log | Where-Object { $_ -match 'STORM present: WIDEN armed' }).Count -gt 0)
-    $client = Get-ScClientSize -Hwnd $h
-    Assert-True "cnc-ddraw presents a $($SCREEN_W)x$($SCREEN_H) client area" ($client.Width -eq $SCREEN_W -and $client.Height -eq $SCREEN_H) "(got $($client.Width)x$($client.Height))"
 
     Write-Host 'probe-storm: walking to a loaded game'
-    Walk-ToGame
+    Walk-ToScGame -Hwnd $h -LogPath $log -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -Noun 'probe-storm'
 
     # ---- THE STATIC LOAD FRAME (run 7's failure): the map must present without a scroll.
     # The strip copy runs every present, so x>648 tracks the buffer on the very first
@@ -302,16 +229,12 @@ try {
     $completed = $true
 }
 catch {
-    $script:failures++
-    Write-Host "  FAIL a step threw: $($_.Exception.Message)"
-    Write-Host $_.ScriptStackTrace
+    Write-ScStepFailure -Err $_ -What 'a probe step'
 }
 finally {
-    Remove-Item Env:SCDRIVE_POST_ACTIVATE -ErrorAction SilentlyContinue
     if (-not $KeepOpen -and $gamePid -gt 0) {
-        try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | Write-Host }
-        catch { Write-Host "  warn close-game: $($_.Exception.Message)" }
-        Start-Sleep -Seconds 2
+        Stop-ScWideGame -ScriptDir $scriptDir -GameDir $GameDir -GamePid $gamePid
+        $gamePid = 0
         # The far-band cursor strobe (renderer-viewport.md 21.9): in WIDEN
         # mode the ord432 hook sets the cursor layer's sticky always-draw bit and counts
         # how often it found it clear. STORMSTATS is written at detach, so it is read
@@ -325,13 +248,7 @@ finally {
                 ($forced -eq 1) "(cursorForced=$forced from '$stats')"
         }
     }
-    try { & (Join-Path $scriptDir 'run-with-plugin.ps1') -RemoveWindowed -NoLaunch -NoLaunchLock -GameDir $GameDir | Write-Host }
-    catch { Write-Host "  warn RemoveWindowed: $($_.Exception.Message)" }
-    if ($fixtures) {
-        try { Remove-ScOwnFixture -Run $fixtures | Out-Null } catch { Write-Host "  warn fixture: $($_.Exception.Message)" }
-        try { Remove-ScOwnFixtureDir -Dir $fixtures.Dir | Out-Null } catch { Write-Host "  warn fixture: $($_.Exception.Message)" }
-    }
-    if ($launchLock) { Exit-ScLaunchLock -Lock $launchLock }
+    Stop-ScWideGame -ScriptDir $scriptDir -GameDir $GameDir -GamePid $gamePid -KeepOpen:$KeepOpen -Fixtures $fixtures -LaunchLock $launchLock
 }
 
 Write-Host ''

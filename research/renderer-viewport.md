@@ -2951,3 +2951,90 @@ oracle asserts a rich picture (distinct_rgb >= 32) AND a matching one (consisten
   there are no stars, same as the width half's §16.1 note.
 - The behavioural half -- a real right-click at (700,750) issuing an order below the taller
   playfield -- is the standing §17.2 limit: a real mouse on a real desktop, the user's play.
+
+## 23. The cursor "unhides" fog: a stock blitter quirk the whole-frame mirror presents (2026-09-09)
+
+The user's first play at 1280x880: *"moving the mouse around seems to unhide terrain in
+the fog of war."* Off-screen the report reproduced as 16-px-wide columns of raw terrain
+beside a RESTING cursor over unexplored map (2-7 grid cells per park, 512-1792 px in the
+buffer dump), gone again on the next full redraw (a scroll), and left behind by the
+console's per-frame dirty rects as well (a permanent column at x=240..255 above the
+moved TextBox). Static reading of the fog pipeline at 880 (§16's four buffers, the
+change detector, the dirty walk 0x004808F8, the renderer 0x004805F0, the marker
+0x0041E0D0, the composer 0x0041E280) found every declared row/height site consistent;
+the mechanism only showed under instrumentation.
+
+### 23.1 The instrument: a dirty-marker trace, then the two dirty-path walkers
+
+`sc_marktrace.cpp` (%SCPLUGIN_MARKTRACE%, armed by a `marktrace-on` marker) detours
+three engine functions with register-argument thunks and logs each call with its return
+address: the marker 0x0041E0D0 (`MARK rect from=`), the fog cell renderer 0x004805F0
+(`FOGR (x1,y1)-(x2,y2) from=`: 0x004808F7 is the full draw, 0x00480942 the dirty walk)
+and the terrain run blit 0x0040C2BD (`TERR x y w off`). `probe-fog-cursor.ps1` parks
+the cursor over black map three times, dumps the buffer while parked and 0/1/3 s after
+leaving, and compares each dump with the baseline in MAP space (each dump's camera from
+its WORLD line; `frame-capture.py mapdiff`), so the physical-mouse edge scroll (23.4)
+cannot fake or hide a change.
+
+Grouped per compose frame, every dirty run read the same way (run 7, park 1):
+
+| terrain run (0x0040C2BD) | fog run (0x004805F0 from the walk) |
+|---|---|
+| (368,96)-(448,112), 80 px | (368,96)-(432,112), 64 px |
+| (160,704)-(256,720), 96 px | (160,704)-(240,720), 80 px |
+| (0,752)-(160,768), 160 px | (0,752)-(144,768), 144 px |
+
+271 frames, and in each one the terrain blit paints exactly one 16-px cell more than
+the fog walk fogs, at the right end of every run.
+
+### 23.2 The mechanism: the terrain blitter's run is one cell too wide, in stock
+
+0x004BCDC0 walks the dirty grid per 16-px row; a run starts on a marked cell and is
+extended by the loop at 0x004BCE20, `cmp byte [ecx],0 / je done / inc ecx / inc esi /
+inc eax / cmp eax,cols / jl` -- with `ecx` still pointing at the run's FIRST cell on the
+first pass (the `jmp` at 0x004BCE1B only skips an alignment `lea ecx,[ecx]`). The first
+test therefore re-reads the marked cell, always extends, and the blit width `esi*16`
+covers one clean cell past the run. The fog walk 0x004808F8 increments its grid pointer
+BEFORE testing the next cell (`mov al,[edi] / inc edi ... cmp byte [edi],0`) and covers
+the run exactly. The terrain cache (§6) holds raw terrain for every tile -- the megatile
+writer 0x0049B9F0 draws 16 minitiles with no visibility test; black is painted by the fog
+renderer's block writer at draw time -- so the extra cell shows terrain with no fog.
+
+Why the stock game never shows it: the engine's own buffer->glass copy (storm ord432,
+§20.6) presents the grid's marked cells only, and the extra cell is not marked. The
+artifact has always been in the buffer and never on the glass. The whole-frame mirror
+(§22.2) presents the buffer verbatim, so at 1280x880 (and, in the far band, since
+§20.7's strip at 1280x480) the latent cell reaches the screen: beside every rested
+cursor over black map, beside the console's per-frame rects, until a full redraw.
+
+### 23.3 The fix: two sites make the run exact (stage 2, `terrain.run.*`)
+
+- `terrain.run.nextcell` 0x004BCE1B: `jmp 0x4BCE20 ; lea ecx,[ecx]` (5 bytes) ->
+  `inc ecx ; nop x4`, so the extension loop's first test reads the NEXT cell. The `inc`
+  writes EFLAGS, and the next instruction is the loop's own `cmp` (the generator's
+  flags walk passes).
+- `terrain.run.lastcell` 0x004BCE2D: cave over `mov [ebp-8],esi ; mov [ebp-4],ecx` ->
+  the same two stores with `dec ecx` between, so the run path leaves `ecx` on the run's
+  last cell as the shared column advance at 0x004BCE61 expects (the clean-cell path
+  reaches it with `ecx` on the current cell, unchanged).
+
+Measured (run 8, same probe, same physical-mouse drift): `gained=0` at every park in
+every dump (was 512-1792), 271 traced frames with zero terrain-not-fog cells, and the
+three regression suites (storm present, framebuffer capture, input) unchanged.
+`renderer_patch_sites.py`: 380 sites, 8 caves, no new warnings.
+
+### 23.4 Two findings on the side
+
+- **The edge-scroll reads the PHYSICAL mouse.** 0x004D12A0 calls `GetCursorPos`
+  (import 0x004FE2DC) and compares the raw point with `W-2` / `H-2`: the user's real mouse
+  resting near the bottom or right of the monitor scrolls an off-screen game, and the
+  chooser shows the scroll chevron while the posted position draws the arrow. Every
+  buffer comparison in this probe is therefore done in map space; a screen-space diff
+  across such a run measured 79% "changed" pixels that were only the scroll.
+- **Frame timing for "the game seems to start lagging".** `sc_stormpresent.cpp` now
+  stamps every present (QueryPerformanceCounter): `STORMTIME window=60s presents= avg_ms=
+  max_ms= stalls100= hook_avg_us= hook_max_us= samples= ingame=` once a minute, intervals
+  sampled only when both ends were in game, plus cumulative fields on STORMSTATS at
+  detach. The next play session answers whether the engine hitched (long intervals) or
+  the mirror cost anything (hook_max_us).
+

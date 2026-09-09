@@ -43,6 +43,12 @@ bool ScConsoleTraceWanted(void);  // %SCPLUGIN_CONSOLE_TRACE% == 1
 // the x>=640 strip otherwise (a direct-blitted console must not be painted over).
 bool ScConsoleBufferResident(void);
 
+// The per-frame walk's own answer to "is a game being played": 1 in game, 0 in the
+// menus, -1 when nothing determined it (the walk is gated on the move being armed
+// and the screen active, so a width-only build never answers). Costs nothing to
+// read: the walk already computes it for its own decision.
+int ScConsoleInGame(void);
+
 // Installs the frame hook when the move is armed or the trace is wanted.
 // writeAllowed is false in observe mode (nothing is installed then).
 void ScConsoleInstall(BYTE* moduleBase, bool writeAllowed, bool trace);

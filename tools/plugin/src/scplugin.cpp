@@ -23,6 +23,7 @@
 #include "sc_buildid.h"
 #include "sc_card.h"
 #include "sc_console.h"
+#include "sc_marktrace.h"
 #include "sc_engine.h"
 #include "sc_env.h"
 #include "sc_fanout.h"
@@ -287,15 +288,15 @@ static void ScanScreen(const char* tag) {
         ReadU32(ScRuntimeVa(SC_VA_SCROLL_MAX_Y), &maxY);
 
         // The prediction, stated in the log rather than only in the document: the clamp is
-        // built as (mapTiles - viewportTiles) * 32, with +8 on the vertical axis
-        // (0x0049BB90). Printing what it SHOULD be beside what it IS makes a wrong reading
-        // of that function visible in the run instead of surviving into research/.
-        // The viewport width has to come from the live geometry (20 tiles stock,
-        // SC_WS_SCREEN_W/32 when widescreen is patched in): a prediction pinned at 20
-        // prints match=0 against a correct widened clamp.
+        // built as (mapTiles - viewportTiles) * 32, plus a vertical bias that keeps the
+        // stock 24 px overscroll (0x0049BB90). Printing what it SHOULD be beside what it IS
+        // makes a wrong reading of that function visible in the run instead of surviving
+        // into research/. Both axes come from the live geometry (20x12 tiles and +8 stock;
+        // the table's playfield when widescreen is patched in): a prediction pinned at the
+        // stock values prints match=0 against a correct widened clamp.
         const int vpTilesX = ScScreenViewportTilesX();
         long predX = ((long)mapTw - vpTilesX) * 32;
-        long predY = ((long)mapTh - SC_VIEWPORT_TILES_Y) * 32 + 8;
+        long predY = ((long)mapTh - ScScreenViewportTilesY()) * 32 + ScScreenScrollBiasY();
         ScLog("SCREEN [%s] origin=(%u,%u) tile=(%u,%u) map=%ux%u tiles (%ux%u px) "
               "scrollMax=(%d,%d) predicted=(%ld,%ld) vpTilesX=%d match=%d",
               t, left, top, tx, ty, mapTw, mapTh, mapPw, mapPh,
@@ -620,6 +621,7 @@ static void PollMarker(void) {
     // GAME thread to select the first completed own unit on its next frame). A no-op
     // unless the module is installed, which observe never does.
     ScConsoleOnMarker(g_lastMarker);
+    ScMarkTraceOnMarker(g_lastMarker);
 
     ScanScreen(g_lastMarker);
 
@@ -977,6 +979,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             }
             ScConsoleInstall(ScEngineModuleBase(), g_mode != SC_MODE_OBSERVE, consoleTrace);
         }
+        ScMarkTraceInstall(ScEngineModuleBase(), g_mode != SC_MODE_OBSERVE);
         // The storm-side buffer->glass present. PROBE is read-only and runs in any
         // mode; WIDEN writes storm's geometry and is gated out of observe like every
         // other writer (the module enforces this itself).
@@ -1077,6 +1080,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             // Console bounds restored and interacts unwrapped before the widescreen
             // geometry (which the move's +160 only makes sense on) comes out below.
             ScConsoleRemove();
+            ScMarkTraceRemove();
             // Storm present: PROBE has nothing to restore, WIDEN restores storm's
             // geometry. Comes out before the exe geometry below.
             ScStormPresentRemove();
