@@ -21,6 +21,13 @@ static CRITICAL_SECTION g_logLock;
 static volatile LONG g_logTryLock = 0;
 static bool g_lockInit = false;
 
+// What a line costs the thread that writes it (lock wait included), so the frame-timing
+// line can say how much of a stall was the log itself. Updated under the lock; the
+// present hook reads the totals lock-free, which 32-bit counters make safe.
+static LONGLONG g_logQpf = 0;
+static unsigned g_logLines = 0, g_logSumUs = 0, g_logMaxUs = 0;   // since the last Take
+static unsigned g_logTotalLines = 0, g_logTotalUs = 0;           // since open
+
 static void EnsureDirectoryTree(const char* filePath) {
     char dir[MAX_PATH];
     lstrcpynA(dir, filePath, MAX_PATH);
@@ -51,6 +58,8 @@ void ScLogOpen(void) {
         InitializeCriticalSection(&g_logLock);
         g_lockInit = true;
     }
+    LARGE_INTEGER f;
+    g_logQpf = QueryPerformanceFrequency(&f) ? f.QuadPart : 0;
     char path[MAX_PATH];
     ScLogResolvePath(path, sizeof(path));
     EnsureDirectoryTree(path);
@@ -90,13 +99,15 @@ void ScLog(const char* fmt, ...) {
 
     // On the exit path this lock can be DEAD-OWNED, not merely contended: Windows
     // terminates every other thread before detach, and the observer thread spends nearly
-    // all its time inside WriteFile/FlushFileBuffers under this lock -- killed there, it
+    // all its time inside WriteFile under this lock -- killed there, it
     // never releases it. A transient overlap loses one line; a dead owner loses every line
     // of the detach sequence, including the CIRCLES line test-selection-circles asserts on
     // -- do not soften that assertion, it is a real oracle over a real logging bug. So wait
     // briefly (a live owner releases in microseconds, and waiting keeps lines ordered), then
     // write anyway: unlocked is safe here only because the plugin sets the try-lock flag
     // solely for lpReserved != NULL, where no thread survives to race us.
+    LARGE_INTEGER t0, t1;
+    QueryPerformanceCounter(&t0);
     bool locked = false;
     if (InterlockedCompareExchange(&g_logTryLock, 0, 0)) {
         for (int waited = 0; waited < SC_LOG_EXIT_WAIT_MS; waited += SC_LOG_EXIT_SLICE_MS) {
@@ -109,8 +120,34 @@ void ScLog(const char* fmt, ...) {
     }
     DWORD written = 0;
     WriteFile(g_log, line, (DWORD)len, &written, NULL);
-    FlushFileBuffers(g_log);  // so the log is readable live while the game runs
+    // Not flushed: the OS cache serves every other reader the moment WriteFile returns,
+    // and a crash of the game does not lose cached data. A FlushFileBuffers per line
+    // puts the game thread behind the disk for every line -- a millisecond each, with a
+    // tail of a tenth of a second and more -- which is a hitch a player feels.
+    QueryPerformanceCounter(&t1);
+    if (g_logQpf) {
+        const unsigned us = (unsigned)(((t1.QuadPart - t0.QuadPart) * 1000000) / g_logQpf);
+        ++g_logLines;
+        g_logSumUs += us;
+        if (us > g_logMaxUs) g_logMaxUs = us;
+        ++g_logTotalLines;
+        g_logTotalUs += us;
+    }
     if (locked) LeaveCriticalSection(&g_logLock);
+}
+
+void ScLogWriteCostTake(unsigned* lines, unsigned* sumUs, unsigned* maxUs) {
+    if (g_lockInit) EnterCriticalSection(&g_logLock);
+    *lines = g_logLines;
+    *sumUs = g_logSumUs;
+    *maxUs = g_logMaxUs;
+    g_logLines = g_logSumUs = g_logMaxUs = 0;
+    if (g_lockInit) LeaveCriticalSection(&g_logLock);
+}
+
+void ScLogWriteCostSoFar(unsigned* lines, unsigned* sumUs) {
+    *lines = g_logTotalLines;
+    *sumUs = g_logTotalUs;
 }
 
 // Test seam: lets a test own the log lock from another thread, so the exit path above can

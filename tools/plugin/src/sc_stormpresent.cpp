@@ -78,6 +78,7 @@ static unsigned g_mirrorFrames = 0;         // presents that mirrored the WHOLE 
 // the line reports ingame=-1 so a zero is never mistaken for "no time was spent in game".
 #define SC_STORMTIME_WINDOW_S  60
 #define SC_STORMTIME_STALL_US  100000   // an interval this long is a hitch a player sees
+#define SC_STORMTIME_STALL_LINES 64     // STORMSTALL lines per session: a stall storm must not become one
 
 static LONGLONG g_qpf        = 0;   // counter frequency; 0 = no usable clock, timing off
 static LONGLONG g_tPrev      = 0;   // previous present's stamp; 0 = no predecessor yet
@@ -88,6 +89,10 @@ static bool     g_winIngameKnown = false;
 static LONGLONG g_winSumUs = 0, g_winMaxUs = 0, g_winHookSumUs = 0, g_winHookMaxUs = 0;
 static unsigned g_totPresents = 0, g_totSamples = 0, g_totStalls = 0, g_totWindows = 0;
 static LONGLONG g_totSumUs = 0, g_totMaxUs = 0, g_totHookMaxUs = 0;
+static unsigned g_totLogMaxUs = 0, g_totLogLines = 0, g_totLogSumUs = 0;
+static unsigned g_logLinesAtPrev = 0, g_logUsAtPrev = 0;   // ScLogWriteCostSoFar at the previous present
+static LONGLONG g_hookUsPrev = 0;
+static unsigned g_stallLines = 0;
 
 static void* StormRt(DWORD rva) {
     return (void*)(g_stormBase + rva);
@@ -304,13 +309,20 @@ static LONGLONG TicksToUs(LONGLONG d) { return (d > 0 && g_qpf) ? (d * 1000000) 
 static void TimeEmitWindow(void) {
     const LONGLONG avgUs  = g_winSamples  ? g_winSumUs     / g_winSamples  : 0;
     const LONGLONG hAvgUs = g_winPresents ? g_winHookSumUs / g_winPresents : 0;
+    unsigned logLines = 0, logSumUs = 0, logMaxUs = 0;
+    ScLogWriteCostTake(&logLines, &logSumUs, &logMaxUs);
     ScLog("STORMTIME window=%ds presents=%u avg_ms=%u.%02u max_ms=%u.%02u stalls100=%u "
-          "hook_avg_us=%u hook_max_us=%u samples=%u ingame=%d",
+          "hook_avg_us=%u hook_max_us=%u log_lines=%u log_avg_us=%u log_max_us=%u "
+          "samples=%u ingame=%d",
           SC_STORMTIME_WINDOW_S, g_winPresents,
           SC_MS_WHOLE(avgUs), SC_MS_FRAC(avgUs),
           SC_MS_WHOLE(g_winMaxUs), SC_MS_FRAC(g_winMaxUs),
           g_winStalls, (unsigned)hAvgUs, (unsigned)g_winHookMaxUs,
+          logLines, logLines ? logSumUs / logLines : 0, logMaxUs,
           g_winSamples, g_winIngameKnown ? (int)g_winIngame : -1);
+    if (logMaxUs > g_totLogMaxUs) g_totLogMaxUs = logMaxUs;
+    g_totLogLines += logLines;
+    g_totLogSumUs += logSumUs;
     ++g_totWindows;
     g_totPresents += g_winPresents;
     g_totSamples  += g_winSamples;
@@ -335,16 +347,32 @@ static void TimeSample(LONGLONG tEnter, LONGLONG tWork) {
     const LONGLONG hookUs = TicksToUs(now - tWork);
     g_winHookSumUs += hookUs;
     if (hookUs > g_winHookMaxUs) g_winHookMaxUs = hookUs;
+    unsigned logLines = 0, logUs = 0;
+    ScLogWriteCostSoFar(&logLines, &logUs);
 
     if (g_tPrev && (inGame < 0 || (inGame == 1 && g_prevInGame == 1))) {
         const LONGLONG dtUs = TicksToUs(tEnter - g_tPrev);
         ++g_winSamples;
         g_winSumUs += dtUs;
         if (dtUs > g_winMaxUs) g_winMaxUs = dtUs;
-        if (dtUs > SC_STORMTIME_STALL_US) ++g_winStalls;
+        if (dtUs > SC_STORMTIME_STALL_US) {
+            ++g_winStalls;
+            // One line per hitch, charging the interval to the log lines written inside
+            // it and to the previous present's mirror; what is left is the engine or
+            // the machine.
+            if (g_stallLines < SC_STORMTIME_STALL_LINES) {
+                ++g_stallLines;
+                ScLog("STORMSTALL dt_ms=%u.%02u log_lines=%u log_us=%u hook_us=%u",
+                      SC_MS_WHOLE(dtUs), SC_MS_FRAC(dtUs),
+                      logLines - g_logLinesAtPrev, logUs - g_logUsAtPrev, (unsigned)g_hookUsPrev);
+            }
+        }
     }
     g_tPrev = tEnter;
     g_prevInGame = inGame;
+    g_logLinesAtPrev = logLines;
+    g_logUsAtPrev = logUs;
+    g_hookUsPrev = hookUs;
 
     if (!g_tWinStart) g_tWinStart = now;
     else if (now - g_tWinStart >= g_qpf * SC_STORMTIME_WINDOW_S) {
@@ -535,11 +563,18 @@ void ScStormPresentLogStats(void) {
     const LONGLONG avgUs    = samples ? sumUs / samples : 0;
     const LONGLONG maxUs    = g_winMaxUs > g_totMaxUs ? g_winMaxUs : g_totMaxUs;
     const LONGLONG hMaxUs   = g_winHookMaxUs > g_totHookMaxUs ? g_winHookMaxUs : g_totHookMaxUs;
+    unsigned logLines = 0, logSumUs = 0, logMaxUs = 0;
+    ScLogWriteCostTake(&logLines, &logSumUs, &logMaxUs);
+    if (logMaxUs > g_totLogMaxUs) g_totLogMaxUs = logMaxUs;
+    g_totLogLines += logLines;
+    g_totLogSumUs += logSumUs;
     ScLog("STORMSTATS mode=%d logs=%u stripFrames=%u mirrorFrames=%u stripSkipped=%u cursorForced=%u primaryRows=%d stormBase=0x%08X "
-          "windows=%u presents=%u samples=%u avgMs=%u.%02u maxMs=%u.%02u stalls100=%u hookMaxUs=%u",
+          "windows=%u presents=%u samples=%u avgMs=%u.%02u maxMs=%u.%02u stalls100=%u hookMaxUs=%u "
+          "logLines=%u logAvgUs=%u logMaxUs=%u",
           (int)g_mode, g_logs, g_stripFrames, g_mirrorFrames, g_stripSkipped, g_cursorForced, g_primaryRows,
           (unsigned)(DWORD_PTR)g_stormBase,
           g_totWindows, presents, samples,
           SC_MS_WHOLE(avgUs), SC_MS_FRAC(avgUs), SC_MS_WHOLE(maxUs), SC_MS_FRAC(maxUs),
-          g_totStalls + g_winStalls, (unsigned)hMaxUs);
+          g_totStalls + g_winStalls, (unsigned)hMaxUs,
+          g_totLogLines, g_totLogLines ? g_totLogSumUs / g_totLogLines : 0, g_totLogMaxUs);
 }

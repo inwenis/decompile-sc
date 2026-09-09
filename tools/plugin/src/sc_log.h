@@ -23,6 +23,14 @@ void ScLogSetTryLock(void);
 
 void ScLog(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 
+// The write cost, for the frame-timing line: lines written, their summed and largest
+// cost in microseconds (lock wait included) since the previous call, which resets them.
+void ScLogWriteCostTake(unsigned* lines, unsigned* sumUs, unsigned* maxUs);
+
+// The same two counters since open, never reset: the present hook reads them at every
+// present, so a stall can be charged to the lines written inside it.
+void ScLogWriteCostSoFar(unsigned* lines, unsigned* sumUs);
+
 // Copy a NUL-terminated string out of GAME memory into a log line, one guarded byte at
 // a time, replacing anything a parser could trip over ('|', a quote, a control
 // character) with '.'. Dialog text is game data: a stray newline in it would corrupt the
