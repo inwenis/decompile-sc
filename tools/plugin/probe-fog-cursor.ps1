@@ -2,10 +2,11 @@
 <#
 .SYNOPSIS
 Does a resting cursor over UNEXPLORED map paint terrain into the buffer? Three
-parks; around each the dirty-marker trace is armed (MARK lines: every rect the
-engine marks, with its caller), the buffer is dumped while parked and at 0 s,
-1 s and 3 s after the cursor leaves, and each dump is compared with the
-baseline in MAP space over the cursor's footprint.
+parks; around each the dirty-marker trace is armed (MARK/FOGR/TERR lines: every
+rect the engine marks, every fog run it renders, every terrain run it blits),
+the buffer is dumped while parked and at 0 s, 1 s and 3 s after the cursor
+leaves, and each dump is compared with the baseline in MAP space over the
+cursor's footprint.
 
 The edge-scroll reads the PHYSICAL mouse (GetCursorPos at 0x004D12A0), so a real
 mouse resting near the monitor's bottom or right edge scrolls this off-screen
@@ -30,53 +31,20 @@ $scriptDir = $PSScriptRoot
 $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'drive-game.ps1')
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
+. (Join-Path $scriptDir 'sc-suite.ps1')
+. (Join-Path $scriptDir 'sc-wsprobe.ps1')
 
 $ws = Get-ScWideGeometry
-$SCREEN_W = $ws.W; $SCREEN_H = $ws.H; $STOCK_W = $ws.StockW; $STOCK_H = $ws.StockH
-$SHIFT_Y = $ws.ConsoleShiftY
-$PF_H = $STOCK_H - 80 + $SHIFT_Y
+$SCREEN_W = $ws.W; $SCREEN_H = $ws.H; $STOCK_H = $ws.StockH
+$PF_H = $STOCK_H - 80 + $ws.ConsoleShiftY
 
 if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t145' -Suite 'fogcursor' }
 $mapName = 'fogcursor.scx'
 $mapPath = Join-Path $FixtureDir $mapName
 $markerPath = Join-Path $LogDir 'marker.txt'
 $log = Join-Path $LogDir '145-fogcursor.log'
+Initialize-ScWsProbe -LogDir $LogDir -FrameDir $FrameDir
 
-New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
-New-Item -ItemType Directory -Path $FrameDir -Force | Out-Null
-
-$script:failures = 0
-$script:step = 0
-$script:findings = @()
-$launchLock = $null
-$fixtures = $null
-$gamePid = 0
-$completed = $false
-
-function Assert-True {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    $script:step++
-    if ($Ok) { Write-Host "  [$script:step] OK   $What $Detail" }
-    else { Write-Host "  [$script:step] FAIL $What $Detail"; $script:failures++ }
-}
-function Report-Finding { param([string]$What) $script:findings += $What; Write-Host "  ---- FINDING: $What" }
-
-# One buffer dump plus the camera position the same marker's WORLD scan reports.
-function Get-BufferDump {
-    param([string]$Tag)
-    $from = Get-ScLogLineCount -LogPath $log
-    Set-ScMarker -MarkerPath $markerPath -Label $Tag
-    $lines = Wait-ScLogMatch -LogPath $log -Pattern "FRAMEDUMP \[$([regex]::Escape($Tag))\] " -TimeoutSec 20 -FromLine $from
-    $path = $null
-    foreach ($l in $lines) {
-        if ($l -match 'FRAMEDUMP \[[^\]]+\] w=\d+ h=\d+ bytes=\d+ reads=\d+ stable=\d path=(.+)$') { $path = $Matches[1].Trim() }
-    }
-    $cam = $null
-    $w = @(Get-Content -LiteralPath $log | Select-Object -Skip $from | Where-Object { $_ -match "WORLD \[$([regex]::Escape($Tag))\] screen=\((-?\d+),(-?\d+)\)" }) | Select-Object -First 1
-    if ($w -and $w -match 'screen=\((-?\d+),(-?\d+)\)') { $cam = [pscustomobject]@{ X = [int]$Matches[1]; Y = [int]$Matches[2] } }
-    if (-not $path -or -not $cam) { throw "probe-fog: dump '$Tag' came back without a path or a camera (path=$path)." }
-    [pscustomobject]@{ Tag = $Tag; Path = $path; Cam = $cam }
-}
 function Get-DumpBand {
     param([string]$Dump, [int]$X0, [int]$X1, [int]$Y0, [int]$Y1)
     $out = & python (Join-Path $scriptDir 'frame-capture.py') band --dump $Dump --x0 $X0 --x1 $X1 --y0 $Y0 --y1 $Y1 2>&1
@@ -105,36 +73,12 @@ function Get-MapDiff {
     }
     [pscustomobject]$r
 }
-
-function Click-UntilDialog {
-    param([int]$X, [int]$Y, [string]$Name, [int]$Tries = 3, [int]$WaitSec = 12)
-    for ($i = 1; $i -le $Tries; $i++) {
-        Send-ScClick -Hwnd $h -X $X -Y $Y
-        $d = Wait-ScDialog -LogPath $log -Name $Name -TimeoutSec $WaitSec
-        if ($d) { return $d }
-        Write-Host "       walk: '$Name' not up after click $i/$Tries at ($X,$Y); retrying"
-    }
-    $null
-}
-
-function Walk-ToGame {
-    $env:SCDRIVE_POST_ACTIVATE = '1'
-    if (-not (Wait-ScDialog -LogPath $log -Name 'MainMenu' -TimeoutSec 30)) { throw 'probe-fog: main menu never appeared.' }
-    Start-Sleep -Seconds 3
-    if (-not (Click-UntilDialog -X 215 -Y 119 -Name 'Delete')) { throw 'probe-fog: Original/Expansion chooser never appeared.' }
-    Send-ScClick -Hwnd $h -X 373 -Y 300; Start-Sleep -Seconds 1
-    Send-ScClick -Hwnd $h -X 75 -Y 111
-    if (-not (Click-UntilDialog -X 516 -Y 392 -Name 'RaceSelection' -WaitSec 15)) { throw 'probe-fog: RaceSelection never appeared.' }
-    if (-not (Click-UntilDialog -X 327 -Y 415 -Name 'Create' -WaitSec 15)) { throw 'probe-fog: map browser never appeared.' }
-    Start-Sleep -Seconds 2
-    Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
-    Select-ScBrowserMap -Hwnd $h -GameDir $GameDir -MapPath $mapPath | Out-Null
-    Set-ScGameType -Hwnd $h -LogPath $log -Index 2
-    Send-ScClick -Hwnd $h -X 516 -Y 393; Start-Sleep -Seconds 6
-    Send-ScClick -Hwnd $h -X 544 -Y 387; Start-Sleep -Seconds 10
-    Dismiss-ScTipsDialog -Hwnd $h -LogPath $log | Out-Null
-    Start-Sleep -Seconds 3
-    $env:SCDRIVE_POST_ACTIVATE = '0'
+# A dump that must come back with both halves, or the probe cannot judge it.
+function Get-Dump {
+    param([string]$Tag)
+    $d = Get-ScBufferDump -LogPath $log -MarkerPath $markerPath -Tag $Tag
+    if (-not $d.Path -or -not $d.Cam) { throw "probe-fog: dump '$Tag' came back without a path or a camera (path=$($d.Path))." }
+    $d
 }
 
 # The cursor's footprint plus room: three cell columns right of the hotspot's
@@ -157,47 +101,27 @@ try {
     Write-Host 'probe-fog: waiting for the machine'
     Wait-ScNoGameRunning
     $launchLock = Enter-ScLaunchLock -TaskId '145-fogcursor'
-    if (-not (Test-Path -LiteralPath $WindowedHelperDll)) { throw "probe-fog: $WindowedHelperDll not found; run fetch-cnc-ddraw.ps1." }
 
     Write-Host 'probe-fog: generating the fixture (one Nexus, explored start, black beyond its sight)'
-    $fixtures = New-ScFixtureRun -Dir $FixtureDir -Names @($mapName)
-    $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
-        -UnitCount 1 -UnitType 'nexus' -Player 0 -ClearPlayerUnits -Race 'protoss' `
-        -StartingMinerals 500 -StartingGas 0 -OutputPath $mapPath 2>&1
-    @($gen | Where-Object { "$_" -notmatch 'WARNING:StormLibFinder' }) | ForEach-Object { Write-Host "       $_" }
-    if (-not (Test-Path -LiteralPath $mapPath)) { throw 'probe-fog: the fixture was never generated.' }
+    $fixtures = New-ScNexusFixture -RepoRoot $repoRoot -FixtureDir $FixtureDir -MapName $mapName -Noun 'probe-fog'
 
     if (Test-Path -LiteralPath $log) { Remove-Item -LiteralPath $log -Force }
     if (Test-Path -LiteralPath $markerPath) { Remove-Item -LiteralPath $markerPath -Force }
 
     Write-Host 'probe-fog: launching (stage 3, cnc-ddraw, widen, marker trace armed)'
     $env:SCPLUGIN_MARKTRACE = '1'
-    & (Join-Path $scriptDir 'run-with-plugin.ps1') `
-        -Mode hooktest -LogCommands 1 -WorldScan 1 -NoLaunchLock `
-        -Widescreen 1 -WidescreenStage 3 -StormPresent widen `
-        -FrameDump $FrameDir `
-        -Windowed -WindowedHelperDll $WindowedHelperDll `
-        -GameDir $GameDir -LogPath $log 6>&1 | ForEach-Object {
-            Write-Host "       $_"
-            if ("$_" -match 'scinject:\s*PID=(\d+)') { $gamePid = [int]$Matches[1] }
-        }
-    if (-not $gamePid) { throw 'probe-fog: could not parse the game pid.' }
-    $h = Get-ScGameWindow -ProcessId $gamePid
-    Start-Sleep -Seconds 3
-
-    Assert-True 'the widescreen table is ACTIVE with 0 refused' `
-        (@(Get-Content -LiteralPath $log | Where-Object { $_ -match 'WIDESCREEN ACTIVE' -and $_ -match ', 0 refused' }).Count -gt 0)
+    $gamePid = Start-ScWideGame -ScriptDir $scriptDir -GameDir $GameDir -LogPath $log -FrameDir $FrameDir `
+        -WindowedHelperDll $WindowedHelperDll -Noun 'probe-fog'
+    $h = Connect-ScWideGame -GamePid $gamePid -LogPath $log -ScreenW $SCREEN_W -ScreenH $SCREEN_H
     Assert-True 'the dirty-marker trace hook is armed' `
         (@(Get-Content -LiteralPath $log | Where-Object { $_ -match 'MARKTRACE: armed' }).Count -gt 0)
-    $client = Get-ScClientSize -Hwnd $h
-    Assert-True "cnc-ddraw presents a $($SCREEN_W)x$($SCREEN_H) client area" ($client.Width -eq $SCREEN_W -and $client.Height -eq $SCREEN_H) "(got $($client.Width)x$($client.Height))"
 
     Write-Host 'probe-fog: walking to a loaded game'
-    Walk-ToGame
+    Walk-ToScGame -Hwnd $h -LogPath $log -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -Noun 'probe-fog'
 
     Send-ScMouseMove -Hwnd $h -X $AWAY.X -Y $AWAY.Y -DelayMs 300
     Start-Sleep -Milliseconds 700
-    $base = Get-BufferDump -Tag 'fog-base'
+    $base = Get-Dump -Tag 'fog-base'
     Assert-True 'baseline buffer dump with its camera position' ($null -ne $base.Path) "($($base.Path) cam=$($base.Cam.X),$($base.Cam.Y))"
 
     $i = 0
@@ -209,14 +133,14 @@ try {
         Set-ScMarker -MarkerPath $markerPath -Label 'marktrace-on'
         Start-Sleep -Milliseconds 400
         Send-ScMouseMove -Hwnd $h -X $p.X -Y $p.Y -DelayMs 400
-        $in = Get-BufferDump -Tag "p$i-in"
+        $in = Get-Dump -Tag "p$i-in"
         Start-Sleep -Milliseconds 300
         Send-ScMouseMove -Hwnd $h -X $AWAY.X -Y $AWAY.Y -DelayMs 0
-        $out0 = Get-BufferDump -Tag "p$i-out0"
+        $out0 = Get-Dump -Tag "p$i-out0"
         Start-Sleep -Milliseconds 1000
-        $out1 = Get-BufferDump -Tag "p$i-out1"
+        $out1 = Get-Dump -Tag "p$i-out1"
         Start-Sleep -Milliseconds 3000
-        $out3 = Get-BufferDump -Tag "p$i-out3"
+        $out3 = Get-Dump -Tag "p$i-out3"
         Set-ScMarker -MarkerPath $markerPath -Label 'marktrace-off'
         Start-Sleep -Milliseconds 400
         $line = "park $i at ($($p.X),$($p.Y)) black-before=${blackBefore}:"
@@ -234,25 +158,11 @@ try {
     $completed = $true
 }
 catch {
-    $script:failures++
-    Write-Host "  FAIL a step threw: $($_.Exception.Message)"
-    Write-Host $_.ScriptStackTrace
+    Write-ScStepFailure -Err $_ -What 'a probe step'
 }
 finally {
-    Remove-Item Env:SCDRIVE_POST_ACTIVATE -ErrorAction SilentlyContinue
     Remove-Item Env:SCPLUGIN_MARKTRACE -ErrorAction SilentlyContinue
-    if (-not $KeepOpen -and $gamePid -gt 0) {
-        try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | Write-Host }
-        catch { Write-Host "  warn close-game: $($_.Exception.Message)" }
-        Start-Sleep -Seconds 2
-    }
-    try { & (Join-Path $scriptDir 'run-with-plugin.ps1') -RemoveWindowed -NoLaunch -NoLaunchLock -GameDir $GameDir | Write-Host }
-    catch { Write-Host "  warn RemoveWindowed: $($_.Exception.Message)" }
-    if ($fixtures) {
-        try { Remove-ScOwnFixture -Run $fixtures | Out-Null } catch { Write-Host "  warn fixture: $($_.Exception.Message)" }
-        try { Remove-ScOwnFixtureDir -Dir $fixtures.Dir | Out-Null } catch { Write-Host "  warn fixture: $($_.Exception.Message)" }
-    }
-    if ($launchLock) { Exit-ScLaunchLock -Lock $launchLock }
+    Stop-ScWideGame -ScriptDir $scriptDir -GameDir $GameDir -GamePid $gamePid -KeepOpen:$KeepOpen -Fixtures $fixtures -LaunchLock $launchLock
 }
 
 Write-Host ''

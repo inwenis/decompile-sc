@@ -55,6 +55,10 @@ bool ScScreenActive(void);
 // SC_WS_SCREEN_W/32 once stage 3's scroll.clamp.x.tiles (0x0049BBE6) is live.
 // Observers that PREDICT the clamp must ask this, or their "match" column lies.
 int ScScreenViewportTilesX(void);
+// The vertical twin, and the clamp's constant term: K*32 - C == PF_H - 24 keeps
+// the stock 24 px overscroll at every playfield height (8 at stock, 24 at 800).
+int ScScreenViewportTilesY(void);
+int ScScreenScrollBiasY(void);
 
 // The geometry the table targets (SC_WS_SCREEN_W/H), for modules that must not
 // pull the whole generated table into their own object file.

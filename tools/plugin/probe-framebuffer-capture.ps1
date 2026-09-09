@@ -52,6 +52,7 @@ $scriptDir = $PSScriptRoot
 $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'drive-game.ps1')
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
+. (Join-Path $scriptDir 'sc-wsprobe.ps1')
 
 # The geometry under test comes from the generated table, never from this file.
 $ws = Get-ScWideGeometry
@@ -74,26 +75,10 @@ $markerPath = Join-Path $LogDir 'marker.txt'
 $py = 'python'
 $tool = Join-Path $scriptDir 'frame-capture.py'
 
-New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
-New-Item -ItemType Directory -Path $FrameDir -Force | Out-Null
-
-$script:failures = 0
-$script:step = 0
+Initialize-ScWsProbe -LogDir $LogDir -FrameDir $FrameDir
 $launchLock = $null
 $fixtures = $null
 $arms = @{}
-
-function Assert-True {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    $script:step++
-    if ($Ok) { Write-Host "  [$script:step] OK   $What $Detail" }
-    else { Write-Host "  [$script:step] FAIL $What $Detail"; $script:failures++ }
-}
-
-function Report-Finding {
-    param([string]$What)
-    Write-Host "  ---- FINDING: $What"
-}
 
 function Invoke-FrameTool {
     param([Parameter(Mandatory)][string[]]$ToolArgs)

@@ -52,6 +52,7 @@ $scriptDir = $PSScriptRoot
 $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'drive-game.ps1')
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
+. (Join-Path $scriptDir 'sc-wsprobe.ps1')
 
 if (-not $FixtureDir) { $FixtureDir = Join-Path $GameDir 'Maps\BroodWar\00-t034' }
 # Named for the SUITE, not for the run (AGENTS.md § "Test fixtures").
@@ -88,13 +89,6 @@ $script:step = 0
 $launchLock = $null
 $fixtures = $null
 $arms = @{}
-
-function Assert-True {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    $script:step++
-    if ($Ok) { Write-Host "  [$script:step] OK   $What $Detail" }
-    else { Write-Host "  [$script:step] FAIL $What $Detail"; $script:failures++ }
-}
 
 function Report-Finding {
     param([string]$What)

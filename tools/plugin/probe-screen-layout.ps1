@@ -33,6 +33,7 @@ $scriptDir = $PSScriptRoot
 $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'drive-game.ps1')
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
+. (Join-Path $scriptDir 'sc-wsprobe.ps1')
 
 if (-not $FixtureDir) { $FixtureDir = Join-Path $GameDir 'Maps\BroodWar\00-t032' }
 # Named for the suite: two suites generating the same filename make "delete only your own
@@ -137,12 +138,6 @@ function Show-ScreenLayout {
     }
 }
 
-function Assert-True {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    $script:step++
-    if ($Ok) { Write-Host "  [$script:step] OK   $What $Detail" }
-    else { Write-Host "  [$script:step] FAIL $What $Detail"; $script:failures++ }
-}
 $step = 0
 
 try {

@@ -45,6 +45,8 @@ $scriptDir = $PSScriptRoot
 $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'drive-game.ps1')
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
+. (Join-Path $scriptDir 'sc-suite.ps1')
+. (Join-Path $scriptDir 'sc-wsprobe.ps1')
 
 # The geometry under test comes from the generated table, never from this file.
 $ws = Get-ScWideGeometry
@@ -65,12 +67,7 @@ $py = 'python'
 $tool = Join-Path $scriptDir 'frame-capture.py'
 $log = Join-Path $LogDir '070-wsdrive.log'
 
-New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
-New-Item -ItemType Directory -Path $FrameDir -Force | Out-Null
-
-$script:failures = 0
-$script:step = 0
-$script:findings = @()
+Initialize-ScWsProbe -LogDir $LogDir -FrameDir $FrameDir
 $script:completedPhases = @()
 $script:stripSamples = @()
 $launchLock = $null
@@ -86,18 +83,6 @@ $MAP_TILES_W = 128
 $MAP_TILES_H = 96
 $EXPLORED_EDGE_X = 1332
 
-function Assert-True {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    $script:step++
-    if ($Ok) { Write-Host "  [$script:step] OK   $What $Detail" }
-    else { Write-Host "  [$script:step] FAIL $What $Detail"; $script:failures++ }
-}
-
-function Report-Finding {
-    param([string]$What)
-    $script:findings += $What
-    Write-Host "  ---- FINDING: $What"
-}
 
 # Playfield-input steps assert only where posted input REACHES the playfield.
 # Under cnc-ddraw on the invisible desktop it does not (measured 0/8 across
@@ -376,8 +361,12 @@ try {
     if ($ptIngame.Dump) {
         $b = Invoke-FrameTool -ToolArgs @('band', '--dump', $ptIngame.Dump,
                 '--x0', '640', '--x1', "$SCREEN_W", '--y0', '20', '--y1', '320')
-        Assert-True 'the right band holds MAP at the start origin (explored; nonzero >= 0.30)' `
-            ([double]($b['band_nonzero_frac'] ?? 0) -ge 0.30) "(got $($b['band_nonzero_frac']))"
+        # The fixture's sight explores the band to map x EXPLORED_EDGE_X, so at origin
+        # O the explored share of the band is (EDGE - O - 640)/(W - 640): 0.925 at 800
+        # wide, 0.231 at 1280. The floor follows that share instead of a fixed number.
+        $bandShare = [Math]::Max(0.05, ($EXPLORED_EDGE_X - $ptIngame.OriginX - 640) / ($SCREEN_W - 640))
+        Assert-True "the right band holds MAP at the start origin (explored; nonzero >= 0.8 x $([Math]::Round($bandShare, 3)))" `
+            ([double]($b['band_nonzero_frac'] ?? 0) -ge 0.8 * $bandShare) "(got $($b['band_nonzero_frac']))"
         # No console art exists for the bottom-right ($SCREEN_W-640)x80 strip
         # (renderer-viewport.md 15.5), so what fills it is reported, not asserted.
         $strip = Invoke-FrameTool -ToolArgs @('band', '--dump', $ptIngame.Dump,
@@ -621,31 +610,10 @@ try {
     $completedDrive = $true
 }
 catch {
-    $script:failures++
-    Write-Host "  FAIL a test step threw: $($_.Exception.Message)"
-    Write-Host $_.ScriptStackTrace
+    Write-ScStepFailure -Err $_ -What 'a test step'
 }
 finally {
-    Remove-Item Env:SCDRIVE_POST_ACTIVATE -ErrorAction SilentlyContinue
-    if (-not $KeepOpen -and $gamePid -gt 0) {
-        try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | Write-Host }
-        catch { Write-Host "  warn close-game: $($_.Exception.Message)" }
-        Start-Sleep -Seconds 2
-    }
-    # Leave the shared game dir as found: -Windowed copied ddraw.dll/.ini in.
-    # -NoLaunchLock is REQUIRED here: this suite still holds the launch lock, and
-    # run-with-plugin takes the same lock for -RemoveWindowed (it mutates the shared
-    # game dir) -- without the flag this finally deadlocks on its own suite's lock
-    # for the lock's whole 5-minute timeout (measured).
-    try {
-        & (Join-Path $scriptDir 'run-with-plugin.ps1') -RemoveWindowed -NoLaunch -NoLaunchLock -GameDir $GameDir | Write-Host
-    }
-    catch { Write-Host "  warn RemoveWindowed: $($_.Exception.Message)" }
-    if ($fixtures) {
-        try { Remove-ScOwnFixture -Run $fixtures | Out-Null } catch { Write-Host "  warn fixture cleanup: $($_.Exception.Message)" }
-        try { Remove-ScOwnFixtureDir -Dir $fixtures.Dir | Out-Null } catch { Write-Host "  warn fixture cleanup: $($_.Exception.Message)" }
-    }
-    if ($launchLock) { Exit-ScLaunchLock -Lock $launchLock }
+    Stop-ScWideGame -ScriptDir $scriptDir -GameDir $GameDir -GamePid $gamePid -KeepOpen:$KeepOpen -Fixtures $fixtures -LaunchLock $launchLock
 }
 
 Write-Host ''
