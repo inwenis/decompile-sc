@@ -192,6 +192,12 @@ int ScScreenViewportTilesY(void) {
         ? (SC_WS_PLAYFIELD_H / 32) : SC_VIEWPORT_TILES_Y;
 }
 
+bool ScScreenMarkPlayfieldDirty(void) {
+    if (!g_active || !g_grid) return false;
+    memset(g_grid, 1, (size_t)SC_WS_GRID_COLS * (SC_WS_PLAYFIELD_H / SC_DIRTY_BLOCK));
+    return true;
+}
+
 int ScScreenScrollBiasY(void) {
     const int pfH = (g_active && g_stage >= SC_WS_STAGE_SCROLL_CLAMP) ? SC_WS_PLAYFIELD_H : SC_STOCK_PLAYFIELD_H;
     return ScScreenViewportTilesY() * 32 - (pfH - 24);

@@ -20,7 +20,7 @@
 //  * So a console moved DOWN needs the buffer path, not the direct one: set the
 //    0x10000000 bit on every in-game root, and every dialog composites into the
 //    buffer at its live bounds, under the cursor (layer 0 draws last) and the
-//    mask (layer 1); the storm present widen (sc_stormpresent.cpp) then mirrors
+//    tooltip (layer 1); the storm present widen (sc_stormpresent.cpp) then mirrors
 //    the WHOLE buffer to the glass each present. Moving the console art's image
 //    node instead is provably inert (the first node's x,y are never read), and a
 //    full mirror with direct-blit dialogs left in place erases them (the layer
@@ -67,6 +67,7 @@
 
 static bool  g_move    = false;   // the down-move: widescreen ACTIVE with a taller playfield
 static bool  g_trace   = false;
+static bool  g_fullRedraw = false;   // request the engine's full playfield redraw every frame
 static ScHook g_hkCompose;
 
 static unsigned g_session = 0;
@@ -93,6 +94,7 @@ static unsigned g_traceDropped = 0;
 static unsigned g_frames       = 0;
 static unsigned g_moves        = 0;
 static unsigned g_converted    = 0;   // roots given the buffer-composite bit
+static unsigned g_fullFrames   = 0;   // frames that took the engine's full-redraw path on request
 static unsigned g_selects      = 0;
 static volatile LONG g_selectReq = 0;   // set by the observer's marker poll
 static int      g_inGame       = -1;  // last walk's verdict; -1 = no walk has run
@@ -326,6 +328,31 @@ static void DoRequestedSelect(void) {
 }
 
 // ---------------------------------------------------------------------------
+// The per-frame full redraw
+// ---------------------------------------------------------------------------
+
+// The partial path of the playfield draw (0x004BD580) repaints every sprite image
+// touching ANY dirty cell over its WHOLE rect, so a lower-order sprite under a dirty
+// cell is painted over a higher-order neighbour in cells that are not dirty. The
+// engine's present copies dirty cells only and never shows it; the whole-frame mirror
+// presents the buffer verbatim, so overlapping sprites swap "who is on top" between
+// presents. The engine's own full-redraw request -- the scroll steppers
+// 0x0049C077..0x0049C0B2 (twins 0x004BD350, 0x00480840): `or byte [0x006CEFB5],1`
+// then the marker 0x0041E0D0 over layer 5's whole rect -- makes the compose take the
+// full path (whole terrain blit, every on-screen sprite in heap order, full fog).
+// Per frame because the composer masks bit 0 away after each draw (0x0041E3A3).
+// Every other reader of bit 0 (0x00401106, 0x0047D977, 0x004974B0, 0x00497540,
+// 0x004976F3, 0x004977A3, 0x00480893, 0x004D4CE0/4E80/4F10/4FA0/5030) is a
+// `test [0x6CEFB5],1 / jne` that skips one redundant image-rect mark (0x004970A0).
+static void RequestFullRedraw(void) {
+    if (!ScScreenMarkPlayfieldDirty()) return;
+    BYTE* layer5Flags = (BYTE*)ScRuntimeAddr(SC_VA_GRAPHIC_LAYERS +
+                                             SC_LAYER_PLAYFIELD * SC_LAYER_STRIDE + SC_LAYER_OFF_FLAGS);
+    *layer5Flags |= SC_LAYER_FLAG_NEEDS_REDRAW;
+    ++g_fullFrames;
+}
+
+// ---------------------------------------------------------------------------
 // The per-frame walk (game thread, from the composer detour)
 // ---------------------------------------------------------------------------
 
@@ -363,6 +390,7 @@ static void OnFrame(void) {
         }
         g_inGame = inGame ? 1 : 0;
     }
+    if (inGame && g_fullRedraw) RequestFullRedraw();
 
     DWORD dlg = head;
     int n = 0;
@@ -418,10 +446,13 @@ void ScConsoleInstall(BYTE* moduleBase, bool writeAllowed, bool trace) {
     // follow the console are stage-3 sites; a move at stage 2 would be half done.
     g_move = writeAllowed && ScScreenWidescreenWanted() && ScScreenStageWanted() >= SC_WS_STAGE_MAX
              && ScScreenConsoleShiftY() > 0;
+    // The full redraw belongs to the buffer-resident shape (the mirror presents the
+    // whole buffer); %SCPLUGIN_FULLREDRAW%=0 is the A/B switch for its cost.
+    g_fullRedraw = g_move && ScEnvFlag("SCPLUGIN_FULLREDRAW", true);
     memset(&g_hkCompose, 0, sizeof(g_hkCompose));
     g_wrapN = 0;  memset(g_wrap, 0, sizeof(g_wrap));
     g_movedN = 0; memset(g_moved, 0, sizeof(g_moved));
-    g_traceLines = g_traceDropped = g_frames = g_moves = g_converted = 0;
+    g_traceLines = g_traceDropped = g_frames = g_moves = g_converted = g_fullFrames = 0;
     g_session = 0;
     g_inGame = -1;
     if (!g_move && !g_trace) {
@@ -435,10 +466,11 @@ void ScConsoleInstall(BYTE* moduleBase, bool writeAllowed, bool trace) {
         g_move = g_trace = false;
         return;
     }
-    ScLog("CONSOLE: ON move=%d trace=%d (frame hook at 0x0041E280; in game every root "
+    ScLog("CONSOLE: ON move=%d trace=%d fullredraw=%d (frame hook at 0x0041E280; in game every root "
           "composites into the buffer, and the bottom console moves DOWN %d once its "
-          "surfaces exist, old+new rects marked dirty)",
-          g_move ? 1 : 0, g_trace ? 1 : 0, ScScreenConsoleShiftY());
+          "surfaces exist, old+new rects marked dirty; fullredraw requests the engine's "
+          "full playfield path before every compose)",
+          g_move ? 1 : 0, g_trace ? 1 : 0, g_fullRedraw ? 1 : 0, ScScreenConsoleShiftY());
 }
 
 void ScConsoleRemove(void) {
@@ -449,7 +481,8 @@ void ScConsoleRemove(void) {
 
 void ScConsoleLogStats(void) {
     if (!g_move && !g_trace && g_frames == 0) return;
-    ScLog("CONSOLESTATS frames=%u moves=%u converted=%u wrapped=%d traceLines=%u "
+    ScLog("CONSOLESTATS frames=%u moves=%u converted=%u fullFrames=%u wrapped=%d traceLines=%u "
           "traceDropped=%u selects=%u",
-          g_frames, g_moves, g_converted, g_wrapN, g_traceLines, g_traceDropped, g_selects);
+          g_frames, g_moves, g_converted, g_fullFrames, g_wrapN, g_traceLines, g_traceDropped,
+          g_selects);
 }

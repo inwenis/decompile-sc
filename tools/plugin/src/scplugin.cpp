@@ -622,6 +622,7 @@ static void PollMarker(void) {
     // unless the module is installed, which observe never does.
     ScConsoleOnMarker(g_lastMarker);
     ScMarkTraceOnMarker(g_lastMarker);
+    ScCursorPostedPoll();
 
     ScanScreen(g_lastMarker);
 
@@ -716,10 +717,12 @@ static void ScanDialogs(void) {
     if (!g_dialogScan) return;
 
     // The line carries everything; the CHANGE test runs on a key that leaves out the
-    // control text of the in-game status dialogs (Stat*): hit points, supplies and
+    // control TEXT of the in-game status dialogs (Stat*): hit points, supplies and
     // minerals change on nearly every poll, and one line per poll is most of a
-    // session's log. Every other dialog keeps its text in the key, because a menu's
-    // game-type combo changes text without changing a rect.
+    // session's log. Their controls' rects stay in the key, so a child that appears
+    // with a selection (an armour icon, a queue slot) still logs a fresh line. Every
+    // other dialog keeps its text in the key, because a menu's game-type combo changes
+    // text without changing a rect.
     static char prev[2048] = { 0 };
     char line[2048], key[2048];
     size_t used = 0, kused = 0;
@@ -761,10 +764,9 @@ static void ScanDialogs(void) {
                     if (!DlgAppend(line, sizeof(line), &used,
                                    " ctrl='%s' rect=%d,%d,%d,%d type=%u flags=0x%X",
                                    ctext, cr[0], cr[1], cr[2], cr[3], type, flags)) break;
-                    if (!liveText)
-                        DlgAppend(key, sizeof(key), &kused,
-                                  " ctrl='%s' rect=%d,%d,%d,%d type=%u flags=0x%X",
-                                  ctext, cr[0], cr[1], cr[2], cr[3], type, flags);
+                    DlgAppend(key, sizeof(key), &kused,
+                              " ctrl='%s' rect=%d,%d,%d,%d type=%u flags=0x%X",
+                              liveText ? "" : ctext, cr[0], cr[1], cr[2], cr[3], type, flags);
                 }
                 DWORD next = 0;
                 if (!ReadU32(ctrl + SC_BINDLG_OFF_NEXT, &next)) break;
@@ -999,6 +1001,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             ScConsoleInstall(ScEngineModuleBase(), g_mode != SC_MODE_OBSERVE, consoleTrace);
         }
         ScMarkTraceInstall(ScEngineModuleBase(), g_mode != SC_MODE_OBSERVE);
+        ScCursorPostedInstall(ScEngineModuleBase(), g_mode != SC_MODE_OBSERVE);
         // The storm-side buffer->glass present. PROBE is read-only and runs in any
         // mode; WIDEN writes storm's geometry and is gated out of observe like every
         // other writer (the module enforces this itself).
@@ -1100,6 +1103,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             // geometry (which the move's +160 only makes sense on) comes out below.
             ScConsoleRemove();
             ScMarkTraceRemove();
+            ScCursorPostedRemove();
             // Storm present: PROBE has nothing to restore, WIDEN restores storm's
             // geometry. Comes out before the exe geometry below.
             ScStormPresentRemove();

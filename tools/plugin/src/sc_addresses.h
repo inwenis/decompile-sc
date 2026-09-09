@@ -1065,18 +1065,29 @@
 
 // Which layer is which, read off the writer of each layer's +0x10 draw slot:
 //   0  0x004BDFA0, installed by 0x004D1560 (cur.cpp)          -- cursor, drawn last
-//   1  0x004810F0, installed by 0x00481330 (mask.cpp band)    -- full-screen mask/fade
+//   1  0x004810F0, installed by 0x00481330 (CtxtHelp.cpp)     -- the context-help TOOLTIP
+//      (the installer's allocator calls carry the __FILE__ string 0x005044F0
+//      "Starcraft\SWAR\lang\CtxtHelp.cpp"; the draw blits the 160x92 tooltip surface
+//      0x00655C40 at the layer's rect; show 0x004813D0, hide 0x00481480)
 //   2  0x0041CB50, installed by 0x0041A030, 640x480  -- DIALOGS (walks SC_VA_DIALOG_LIST)
 //   3  0x0048D5C0, installed by 0x0048D700                    -- build-placement preview
 //   4  0x0048D5C0, same installer                             -- second placement slot
 //   5  0x004BD580, installed by 0x004BD630, 640x400           -- THE PLAYFIELD
 //   6, 7  no writer of either draw slot anywhere in the binary -- unused
 #define SC_LAYER_CURSOR       0
-#define SC_LAYER_MASK         1
+#define SC_LAYER_TOOLTIP      1
 #define SC_LAYER_DIALOGS      2
 #define SC_LAYER_PLACEMENT_A  3
 #define SC_LAYER_PLACEMENT_B  4
 #define SC_LAYER_PLAYFIELD    5
+
+// The tooltip's own state beside its layer record: the draw 0x004810F0 blits only while
+// this u32 is non-zero (set 1 by the show 0x004813D0, 0 by the hide 0x00481480).
+#define SC_VA_TOOLTIP_VISIBLE      0x00655C48u
+// Layer 1's rect {s16 left, top, width, height} = SC_VA_GRAPHIC_LAYERS + stride + LEFT;
+// named because the frame driver 0x0041CA00 and the hit test 0x0041BE70 read it as a
+// rect, and a probe following the tooltip needs the same four words.
+#define SC_VA_TOOLTIP_LAYER_RECT   0x006CEF66u
 
 // THE PLAYFIELD SIZE, and it is not stored anywhere -- it is an immediate in every function
 // that clips to it. 640x400 out of the 640x480 screen; the console art and the HUD dialogs
@@ -1341,3 +1352,18 @@
 
 
 #endif // SC_ADDRESSES_H
+
+// --- the GetCursorPos import -------------------------------------------------------
+// The edge-scroll 0x004D12A0 reads the OS cursor through this import slot and compares
+// the raw point with the screen's edges (scroll.*.trigger sites). Off-screen the OS
+// cursor is the user's real mouse, or wherever the game's own ClipCursor pushed it, and
+// under cnc-ddraw the slot already points at that helper's translation of it; a run
+// driven by posted moves needs the engine to see its own cursor instead (sc_marktrace).
+#define SC_VA_IMPORT_GETCURSORPOS  0x004FE2DCu
+
+// --- the image-rect mark ----------------------------------------------------------
+// 0x0042D280 marks the dirty cells under a pixel rect {s32 x1, y1, x2, y2} at ESI --
+// the image module's own writer (animation, movement, show/hide) -- by filling the
+// grid rows itself, never through the marker 0x0041E0D0. A trace of the marker alone
+// therefore misses every sprite mark; sc_marktrace hooks this one beside it.
+#define SC_VA_IMAGE_MARK           0x0042D280u

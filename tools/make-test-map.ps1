@@ -31,6 +31,9 @@ param(
     # Drop the target player's existing units first, so the placed group is all one type.
     # A mixed selection is offered only the basic command card in game -- no ability buttons.
     [switch]$ClearPlayerUnits,
+    # Drop the template's critters, the one kind of neutral unit that moves on its own;
+    # a probe that judges buffer changes against the engine's marks cannot have them.
+    [switch]$ClearCritters,
     # Keep the template's TRIG/MBRF sections. NOT for a test fixture: stock triggers end
     # the game seconds after a generated map loads (tools/README-test-map.md).
     [switch]$KeepTriggers,
@@ -133,6 +136,7 @@ $pyArgs = @(
 )
 if ($KeepOwnr) { $pyArgs += '--keep-ownr' }
 if ($ClearPlayerUnits) { $pyArgs += '--clear-player-units' }
+if ($ClearCritters) { $pyArgs += '--clear-critters' }
 if ($KeepTriggers) { $pyArgs += '--keep-triggers' }
 if ($Race) { $pyArgs += @('--race', $Race) }
 if ($EnemyCount -gt 0) { $pyArgs += @('--enemy-count', $EnemyCount) }

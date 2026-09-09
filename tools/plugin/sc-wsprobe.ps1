@@ -47,11 +47,14 @@ function Initialize-ScWsProbe {
 # The one-Nexus fixture: an explored start with black map beyond its sight.
 function New-ScNexusFixture {
     param([Parameter(Mandatory)][string]$RepoRoot, [Parameter(Mandatory)][string]$FixtureDir,
-          [Parameter(Mandatory)][string]$MapName, [string]$Noun = 'probe')
+          [Parameter(Mandatory)][string]$MapName, [string]$Noun = 'probe',
+          # The template's wandering critters are the only sprites that move on their own;
+          # a probe that judges buffer changes against marks leaves them out.
+          [switch]$ClearCritters)
     $run = New-ScFixtureRun -Dir $FixtureDir -Names @($MapName)
     $mapPath = Join-Path $FixtureDir $MapName
     $gen = & (Join-Path $RepoRoot 'tools/make-test-map.ps1') `
-        -UnitCount 1 -UnitType 'nexus' -Player 0 -ClearPlayerUnits -Race 'protoss' `
+        -UnitCount 1 -UnitType 'nexus' -Player 0 -ClearPlayerUnits -ClearCritters:$ClearCritters -Race 'protoss' `
         -StartingMinerals 500 -StartingGas 0 -OutputPath $mapPath 2>&1
     @($gen | Where-Object { "$_" -notmatch 'WARNING:StormLibFinder' }) | ForEach-Object { Write-Host "       $_" }
     if (-not (Test-Path -LiteralPath $mapPath)) { throw "${Noun}: the fixture was never generated." }
@@ -136,12 +139,17 @@ function Start-ScWideGame {
     param([Parameter(Mandatory)][string]$ScriptDir, [Parameter(Mandatory)][string]$GameDir,
           [Parameter(Mandatory)][string]$LogPath, [Parameter(Mandatory)][string]$FrameDir,
           [Parameter(Mandatory)][string]$WindowedHelperDll, [string]$StormPresent = 'widen',
+          # Passed through to run-with-plugin.ps1 unchanged. CARD lines (the live
+          # card root and slot rects) exist only under -CardScan 1; a marker
+          # cadence faster than the 250 ms default poll needs a smaller -PollMs.
+          [string]$CardScan = '0', [int]$PollMs = 250,
           [string]$Noun = 'probe')
     if (-not (Test-Path -LiteralPath $WindowedHelperDll)) { throw "${Noun}: $WindowedHelperDll not found; run fetch-cnc-ddraw.ps1." }
     $gamePid = 0
     & (Join-Path $ScriptDir 'run-with-plugin.ps1') `
         -Mode hooktest -LogCommands 1 -WorldScan 1 -NoLaunchLock `
         -Widescreen 1 -WidescreenStage 3 -StormPresent $StormPresent `
+        -CardScan $CardScan -PollMs $PollMs `
         -FrameDump $FrameDir `
         -Windowed -WindowedHelperDll $WindowedHelperDll `
         -GameDir $GameDir -LogPath $LogPath 6>&1 | ForEach-Object {
