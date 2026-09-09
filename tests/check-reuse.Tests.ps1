@@ -1,10 +1,11 @@
 #Requires -Version 7
 <#
-Pester cases for tools/check-cpp-reuse.py.
+Pester cases for tools/check-reuse.py.
 The gate's whole value is that it FAILS on a new copy, and a gate that cannot fail is
 the house defect this repo guards against (tests/vacuous-assertion-guard.Tests.ps1), so
 the cases plant a duplicate in a throwaway tree and require exit 1, then remove it and
-require exit 0. The last case runs the gate over the real tools/plugin/src, as CI does.
+require exit 0 -- once for the C++ target and once for the PowerShell one. The last
+case runs the gate over the real tree, as CI does.
 #>
 
 # Pester v5 evaluates -Skip while it is DISCOVERING, so a $script: variable set in
@@ -13,22 +14,22 @@ $script:HasPython = $null -ne (Get-Command python -ErrorAction SilentlyContinue)
 
 BeforeAll {
     $script:repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-    $script:checker  = Join-Path $script:repoRoot 'tools/check-cpp-reuse.py'
+    $script:checker  = Join-Path $script:repoRoot 'tools/check-reuse.py'
 
     # The layout the checker expects, so a planted duplicate never touches real sources.
     function New-ReuseSandbox {
-        $root = Join-Path ([IO.Path]::GetTempPath()) "cppreuse-$([guid]::NewGuid().ToString('N'))"
+        $root = Join-Path ([IO.Path]::GetTempPath()) "reuse-$([guid]::NewGuid().ToString('N'))"
         $src = Join-Path $root 'tools/plugin/src'
         New-Item -ItemType Directory -Path $src -Force | Out-Null
         Copy-Item -LiteralPath $script:checker -Destination (Join-Path $root 'tools')
-        @{ Root = $root; Src = $src }
+        @{ Root = $root; Src = $src; Suites = (Join-Path $root 'tools/plugin') }
     }
 
     function Invoke-Checker {
         param([string]$Root, [string[]]$CheckerArgs = @())
         Push-Location $Root
         try {
-            $out = & python 'tools/check-cpp-reuse.py' @CheckerArgs 2>&1 | Out-String
+            $out = & python 'tools/check-reuse.py' @CheckerArgs 2>&1 | Out-String
             [pscustomobject]@{ Exit = $LASTEXITCODE; Out = $out }
         } finally { Pop-Location }
     }
@@ -43,9 +44,20 @@ static int Twin(int a, int b) {
     return total;
 }
 '@
+
+    $script:dupSuite = @'
+function Get-Twin {
+    param([int]$A, [int]$B)
+    $total = 0
+    for ($i = $A; $i -lt $B; $i++) {
+        $total += $i * 3
+    }
+    $total
+}
+'@
 }
 
-Describe 'check-cpp-reuse fails on a NEW copy and passes without one' -Skip:(-not $script:HasPython) {
+Describe 'check-reuse [cpp] fails on a NEW copy and passes without one' -Skip:(-not $script:HasPython) {
 
     BeforeAll {
         $script:box = New-ReuseSandbox
@@ -67,7 +79,7 @@ Describe 'check-cpp-reuse fails on a NEW copy and passes without one' -Skip:(-no
         Set-Content -LiteralPath (Join-Path $script:box.Src 'sc_beta.cpp') -Value $script:dupBody
         $r = Invoke-Checker -Root $script:box.Root
         $r.Exit | Should -Be 1 -Because $r.Out
-        $r.Out | Should -Match 'NEW block'
+        $r.Out | Should -Match '\[cpp\]: NEW block'
         $r.Out | Should -Match 'sc_alpha.cpp'
         $r.Out | Should -Match 'sc_beta.cpp'
     }
@@ -82,7 +94,7 @@ Describe 'check-cpp-reuse fails on a NEW copy and passes without one' -Skip:(-no
         (Invoke-Checker -Root $script:box.Root -CheckerArgs @('--update-baseline')).Exit | Should -Be 0
         $r = Invoke-Checker -Root $script:box.Root
         $r.Exit | Should -Be 0 -Because $r.Out
-        $r.Out | Should -Match 'all in the baseline'
+        $r.Out | Should -Match '\[cpp\]: \d+ finding\(s\), all in the baseline'
     }
 
     It 'notices when a baselined copy is finally removed' {
@@ -107,10 +119,60 @@ Describe 'check-cpp-reuse fails on a NEW copy and passes without one' -Skip:(-no
     }
 }
 
-Describe 'the real tools/plugin/src is at or under its baseline' -Skip:(-not $script:HasPython) {
+Describe 'check-reuse [ps1] polices the suites the same way' -Skip:(-not $script:HasPython) {
 
-    It 'has no duplication outside tools/check-cpp-reuse.baseline' {
+    BeforeAll {
+        $script:box = New-ReuseSandbox
+        Set-Content -LiteralPath (Join-Path $script:box.Suites 'suite-alpha.ps1') -Value $script:dupSuite
+    }
+
+    AfterAll {
+        if ($script:box) {
+            Remove-Item -LiteralPath $script:box.Root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'is quiet when nothing is duplicated' {
+        $r = Invoke-Checker -Root $script:box.Root
+        $r.Exit | Should -Be 0 -Because $r.Out
+    }
+
+    It 'FAILS once the same block exists in a second suite' {
+        Set-Content -LiteralPath (Join-Path $script:box.Suites 'suite-beta.ps1') -Value $script:dupSuite
+        $r = Invoke-Checker -Root $script:box.Root
+        $r.Exit | Should -Be 1 -Because $r.Out
+        $r.Out | Should -Match '\[ps1\]: NEW block'
+        $r.Out | Should -Match 'suite-alpha.ps1'
+        $r.Out | Should -Match 'suite-beta.ps1'
+    }
+
+    It 'ignores the same text inside a block comment or behind a comment marker' {
+        $commented = ($script:dupSuite -split "`n" | ForEach-Object { "# $_" }) -join "`n"
+        Set-Content -LiteralPath (Join-Path $script:box.Suites 'suite-gamma.ps1') -Value $commented
+        Set-Content -LiteralPath (Join-Path $script:box.Suites 'suite-delta.ps1') `
+            -Value ("<#`n" + $script:dupSuite + "`n#>")
+        $r = Invoke-Checker -Root $script:box.Root -CheckerArgs @('--list')
+        $r.Out | Should -Not -Match 'suite-gamma'
+        $r.Out | Should -Not -Match 'suite-delta'
+    }
+
+    It 'keeps its baseline in its own file' {
+        (Invoke-Checker -Root $script:box.Root -CheckerArgs @('--update-baseline')).Exit | Should -Be 0
+        Get-Content -LiteralPath (Join-Path $script:box.Root 'tools/check-reuse.ps1.baseline') -Raw |
+            Should -Match '(?m)^block [0-9a-f]{16}' -Because 'the ps1 copy belongs in the ps1 baseline'
+        Get-Content -LiteralPath (Join-Path $script:box.Root 'tools/check-reuse.cpp.baseline') -Raw |
+            Should -Not -Match '(?m)^block' -Because 'nothing in this sandbox is C++'
+        $r = Invoke-Checker -Root $script:box.Root
+        $r.Exit | Should -Be 0 -Because $r.Out
+    }
+}
+
+Describe 'the real tree is at or under its baselines' -Skip:(-not $script:HasPython) {
+
+    It 'has no duplication outside tools/check-reuse.*.baseline, in either target' {
         $r = Invoke-Checker -Root $script:repoRoot
         $r.Exit | Should -Be 0 -Because $r.Out
+        $r.Out | Should -Match '\[cpp\]: \d+ finding\(s\), all in the baseline'
+        $r.Out | Should -Match '\[ps1\]: \d+ finding\(s\), all in the baseline'
     }
 }

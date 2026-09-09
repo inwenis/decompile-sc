@@ -122,13 +122,13 @@ jobs:
               Write-Host 'No tools/ directory -- skipping'
           }
 
-      - name: C++ reuse gate (tools/plugin/src)
+      - name: Reuse gate (tools/plugin/src and tools/plugin/*.ps1)
         shell: pwsh
         run: |
-          # Issue #130 section 9. Fails only on duplication that is NOT already in
-          # tools/check-cpp-reuse.baseline, so this is "no new copies" rather than a
-          # wall of red. tests/check-cpp-reuse.Tests.ps1 covers the checker itself.
-          python tools/check-cpp-reuse.py
+          # Fails only on duplication that is NOT already in a tools/check-reuse.*.baseline,
+          # so this is "no new copies" rather than a wall of red.
+          # tests/check-reuse.Tests.ps1 covers the checker itself.
+          python tools/check-reuse.py
           exit $LASTEXITCODE
 
       - name: Comments state a why, not history (AGENTS.md "Comments")

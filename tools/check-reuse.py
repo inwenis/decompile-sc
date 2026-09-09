@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""check-cpp-reuse -- fail a PR that adds a new copy of code we already have.
+"""check-reuse -- fail a PR that adds a new copy of code we already have.
 
 WHY A BLOCK SCAN AND NOT A NAME SCAN. Issue #130's cleanup found twelve copies of one
 three-line function by reading, and then walked straight past three more copies of the
@@ -7,9 +7,13 @@ memory probe because their signatures differed: `SafeRead(const void*, void*, si
 `RangeReadable(const void*, size_t)` and `DefaultRead(DWORD, void*, size_t)` are the same
 VirtualQuery three ways. Names are what the eye already catches. Identical BLOCKS are
 what it does not, and two of those three copies had drifted apart on the low-end bounds
-check by the time anyone looked.
+check by the time anyone looked. The same scan over the PowerShell suites found
+Assert-That copied 26 times.
 
-WHAT IT REPORTS, in tools/plugin/src only:
+WHAT IT REPORTS, per target:
+
+  cpp   tools/plugin/src/*.cpp, *.h     block, name, define, va
+  ps1   tools/plugin/*.ps1              block
 
   block   MIN_BLOCK or more consecutive identical lines in two different files
   name    one `static` function name defined in two different files
@@ -17,18 +21,18 @@ WHAT IT REPORTS, in tools/plugin/src only:
   va      a bare engine address literal in code outside sc_addresses.h
 
 Comments, blank lines and #include lines are ignored: a copied comment is a different
-problem (see the trim-comments branch) and a shared include list is not duplication.
+problem (tools/check-comment-narration.py) and a shared include list is not duplication.
 
 THE BASELINE. This starts life with findings already in the tree -- some are deliberate
 (a two-line test seam each module must own) and some are real but too big for the commit
-that adds this tool. tools/check-cpp-reuse.baseline lists what was already there, by a
-hash of the finding, so the gate is "no NEW duplication" from day one instead of a wall
-of red nobody can act on. Shrinking the baseline is the job; growing it needs a reason
-in the PR.
+that adds this tool. tools/check-reuse.<target>.baseline lists what was already there,
+by a hash of the finding, so the gate is "no NEW duplication" from day one instead of a
+wall of red nobody can act on. Shrinking the baseline is the job; growing it needs a
+reason in the PR.
 
-    python tools/check-cpp-reuse.py                    # check, exit 1 on a new finding
-    python tools/check-cpp-reuse.py --list             # print every finding, exit 0
-    python tools/check-cpp-reuse.py --update-baseline  # accept what is there now
+    python tools/check-reuse.py                    # check, exit 1 on a new finding
+    python tools/check-reuse.py --list             # print every finding, exit 0
+    python tools/check-reuse.py --update-baseline  # accept what is there now
 """
 
 import argparse
@@ -37,15 +41,9 @@ import pathlib
 import re
 import sys
 
-SRC = pathlib.Path("tools/plugin/src")
-BASELINE = pathlib.Path("tools/check-cpp-reuse.baseline")
-
 # Five lines is the shortest run that is a copied idea rather than a shared idiom: a
 # for-loop header plus a body reaches it, `return false; }` does not.
 MIN_BLOCK = 5
-
-# Generated, or a table of evidence rather than code.
-SKIP = {"sc_screen_patches.h", "sc_addresses.h"}
 
 VA = re.compile(r"\b0x00(4[0-9A-Fa-f]{5}|5[0-9A-Fa-f]{5}|6[0-9A-Fa-f]{5})\b")
 # An address inside a log line is evidence being quoted, not an address being used.
@@ -60,10 +58,11 @@ DEFINE = re.compile(r"^#define\s+([A-Za-z_][A-Za-z0-9_]*)(?:\([^)]*\))?\s+(.+?)\
 
 
 class Finding:
-    def __init__(self, kind, summary, where):
+    def __init__(self, kind, summary, where, span=()):
         self.kind = kind
         self.summary = summary
         self.where = where            # list of "file:line"
+        self.span = span              # list of (file, index into significant(), length)
 
     @property
     def key(self):
@@ -74,12 +73,19 @@ class Finding:
         return "%-6s %s\n         %s" % (self.kind, self.summary, "  ".join(self.where))
 
 
-def significant(path):
+def significant(path, target):
     """(line_number, stripped_text) for lines worth comparing."""
-    out = []
+    out, in_block = [], False
+    open_, close = target["block"]
     for n, raw in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
         s = raw.strip()
-        if not s or s.startswith("//") or s.startswith("#include"):
+        if in_block:
+            in_block = close not in s
+            continue
+        if s.startswith(open_):
+            in_block = close not in s[len(open_):]
+            continue
+        if not s or s.startswith(target["comment"]) or s.startswith(target["ignore"]):
             continue
         out.append((n, s))
     return out
@@ -122,7 +128,8 @@ def collect_blocks(files):
         findings.append(Finding(
             "block",
             "%d identical lines: %s" % (grown, text.split("\n")[0][:70]),
-            sorted("%s:%d" % (n, ln) for n, ln, _ in hits)))
+            sorted("%s:%d" % (n, ln) for n, ln, _ in hits),
+            [(n, idx, grown) for n, _, idx in hits]))
     return findings
 
 
@@ -190,44 +197,56 @@ def collect_vas(files):
     return out
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--list", action="store_true", help="print every finding and exit 0")
-    ap.add_argument("--update-baseline", action="store_true",
-                    help="rewrite the baseline from what is in the tree now")
-    args = ap.parse_args()
+TARGETS = [
+    dict(name="cpp", root=pathlib.Path("tools/plugin/src"), globs=("*.cpp", "*.h"),
+         comment="//", block=("/*", "*/"), ignore=("#include",),
+         # Generated, or a table of evidence rather than code.
+         skip={"sc_screen_patches.h", "sc_addresses.h"},
+         collectors=(collect_blocks, collect_names, collect_defines, collect_vas)),
+    dict(name="ps1", root=pathlib.Path("tools/plugin"), globs=("*.ps1",),
+         comment="#", block=("<#", "#>"), ignore=(), skip=set(),
+         collectors=(collect_blocks,)),
+]
 
-    if not SRC.is_dir():
-        print("check-cpp-reuse: %s not found -- run me from the repo root" % SRC)
-        return 2
 
-    files = {p: significant(p) for p in sorted(SRC.glob("*.cpp")) + sorted(SRC.glob("*.h"))
-             if p.name not in SKIP}
+def copied(files, findings):
+    """How much of the tree sits inside a reported block: the number a reuse PR moves."""
+    total = sum(len(lines) for lines in files.values())
+    inside = {(name, i) for f in findings for name, idx, length in f.span
+              for i in range(idx, idx + length)}
+    return "%d of %d lines (%d%%) inside a copied block" % (
+        len(inside), total, 100 * len(inside) // max(total, 1))
 
-    findings = (collect_blocks(files) + collect_names(files)
-                + collect_defines(files) + collect_vas(files))
+
+def check(target, args):
+    tag = "check-reuse [%s]" % target["name"]
+    files = {p: significant(p, target)
+             for g in target["globs"] for p in sorted(target["root"].glob(g))
+             if p.name not in target["skip"]}
+    findings = [f for collect in target["collectors"] for f in collect(files)]
     findings.sort(key=lambda f: (f.kind, f.summary))
+    baseline = pathlib.Path("tools/check-reuse.%s.baseline" % target["name"])
 
     if args.list:
         for f in findings:
             print(f)
-        print("\n%d finding(s) in %d files" % (len(findings), len(files)))
+        print("\n%s: %d finding(s) in %d files; %s\n" % (
+            tag, len(findings), len(files), copied(files, findings)))
         return 0
 
     if args.update_baseline:
-        BASELINE.write_text(
-            "# check-cpp-reuse baseline -- what was already duplicated when the gate\n"
+        baseline.write_text(
+            "# check-reuse baseline for %s -- what was already duplicated when the gate\n"
             "# went in. One line per accepted finding. SHRINKING this file is the job;\n"
-            "# growing it needs a reason in the PR that grows it.\n"
+            "# growing it needs a reason in the PR that grows it.\n" % target["name"]
             + "".join("%s  # %s\n" % (f.key, f.summary) for f in findings),
             encoding="utf-8")
-        print("check-cpp-reuse: baseline written with %d finding(s)" % len(findings))
+        print("%s: baseline written with %d finding(s)" % (tag, len(findings)))
         return 0
 
     accepted = set()
-    if BASELINE.exists():
-        for line in BASELINE.read_text(encoding="utf-8").splitlines():
+    if baseline.exists():
+        for line in baseline.read_text(encoding="utf-8").splitlines():
             line = line.split("#")[0].strip() if not line.startswith("#") else ""
             if line:
                 accepted.add(line)
@@ -236,18 +255,33 @@ def main():
     stale = accepted - {f.key for f in findings}
 
     for f in new:
-        print("check-cpp-reuse: NEW %s" % f)
+        print("%s: NEW %s" % (tag, f))
     if new:
         print("\n%d new finding(s). Share the code, or -- if this copy is deliberate --\n"
-              "run `python tools/check-cpp-reuse.py --update-baseline` and say why in the PR."
+              "run `python tools/check-reuse.py --update-baseline` and say why in the PR."
               % len(new))
         return 1
 
-    print("check-cpp-reuse: %d finding(s), all in the baseline" % len(findings))
+    print("%s: %d finding(s), all in the baseline; %s"
+          % (tag, len(findings), copied(files, findings)))
     if stale:
-        print("check-cpp-reuse: %d baseline entr%s no longer found -- run --update-baseline "
-              "to shrink it" % (len(stale), "y" if len(stale) == 1 else "ies"))
+        print("%s: %d baseline entr%s no longer found -- run --update-baseline to shrink it"
+              % (tag, len(stale), "y" if len(stale) == 1 else "ies"))
     return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--list", action="store_true", help="print every finding and exit 0")
+    ap.add_argument("--update-baseline", action="store_true",
+                    help="rewrite the baselines from what is in the tree now")
+    args = ap.parse_args()
+
+    if not TARGETS[0]["root"].is_dir():
+        print("check-reuse: %s not found -- run me from the repo root" % TARGETS[0]["root"])
+        return 2
+    return max(check(t, args) for t in TARGETS)
 
 
 if __name__ == "__main__":

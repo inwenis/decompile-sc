@@ -233,10 +233,10 @@ Hard rule 4 applies to every line of `research/`.
 
 ## Plugin code reuse
 
-- NEVER copy a helper into a second `tools/plugin/src` file. Shared code goes in `sc_engine.h` (relocation, memory probe), `sc_unit.h` (CUnit and dialog reads), `sc_env.h` (`%SCPLUGIN_*%`), `sc_ledger.h` (per-building records) or `sc_log.h`.
-- `python tools/check-cpp-reuse.py` is the gate and CI runs it; a copy that must stay goes in `tools/check-cpp-reuse.baseline` with the reason in the PR that adds it.
+- NEVER copy a helper into a second `tools/plugin/src` file or a second `tools/plugin/*.ps1` suite. Shared C++ goes in `sc_engine.h` (relocation, memory probe), `sc_unit.h` (CUnit and dialog reads), `sc_env.h` (`%SCPLUGIN_*%`), `sc_ledger.h` (per-building records) or `sc_log.h`; shared suite code goes in `sc-suite.ps1` (asserts, steps) or `drive-game.ps1` (game input).
+- `python tools/check-reuse.py` is the gate and CI runs it over both; a copy that must stay goes in `tools/check-reuse.cpp.baseline` or `tools/check-reuse.ps1.baseline` with the reason in the PR that adds it.
 - Copies drift silently: four copies of one memory probe had stopped agreeing about the low-end bounds check by the time anyone compared them.
--> tools/check-cpp-reuse.py
+-> tools/check-reuse.py
 
 ## Layout
 
