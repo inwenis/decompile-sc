@@ -3547,6 +3547,23 @@ static void ExitLogTests(void) {
     ScLog("EXITLOGTEST normal-mode line");
     after = CountLines(path, "EXITLOGTEST");
     Check("normal mode still writes", (long long)(after - before), 1);
+
+    // The write-cost counters the frame-timing line reads: every line is counted once,
+    // the window resets on Take, and the running total never does.
+    unsigned lines = 0, sumUs = 0, maxUs = 0;
+    ScLogWriteCostTake(&lines, &sumUs, &maxUs);
+    unsigned linesBefore = 0, usBefore = 0;
+    ScLogWriteCostSoFar(&linesBefore, &usBefore);
+    ScLog("EXITLOGTEST cost line one");
+    ScLog("EXITLOGTEST cost line two");
+    ScLogWriteCostTake(&lines, &sumUs, &maxUs);
+    Check("two lines were costed", lines, 2);
+    Check("their max fits inside their sum", (long long)(maxUs <= sumUs ? 1 : 0), 1);
+    ScLogWriteCostTake(&lines, &sumUs, &maxUs);
+    Check("the window is empty once taken", lines, 0);
+    unsigned linesAfter = 0, usAfter = 0;
+    ScLogWriteCostSoFar(&linesAfter, &usAfter);
+    Check("the running total advanced by the same two", (long long)(linesAfter - linesBefore), 2);
 }
 
 // ---------------------------------------------------------------------------

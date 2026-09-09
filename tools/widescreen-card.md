@@ -28,6 +28,10 @@ The mouse is locked to the window (hold Ctrl or Right Alt to free it).
 5. **The fog of war stays put under the mouse.** Resting or moving the cursor over
    unexplored map no longer leaves 16-pixel slivers of terrain beside it (fixed
    2026-09-09: a base-game blitter quirk the bigger screen had started to show).
+6. **No hitch while ordering a big group.** The mod wrote its log to disk line by
+   line on the game's own thread; a busy minute of micro (a 47-unit group recalled,
+   moved, production queued) wrote enough lines that the disk's slow moments became
+   100-185 ms hitches (fixed 2026-09-09: the log no longer waits for the disk).
 
 ## Clicks anywhere on the bigger map
 
@@ -51,11 +55,14 @@ click, scaled for the bigger viewport.
 
 ## If the game seems to lag
 
-The plugin log (`logs\sc-plugin.log` next to the launcher) now writes one
-`STORMTIME` line per minute of play: `avg_ms`/`max_ms` are the gaps between the
-game's own frame presents, `stalls100` counts gaps over a tenth of a second, and
-`hook_max_us` is the most the mod's own frame copy ever cost. Long gaps with a
-tiny hook cost mean the engine or the machine stalled, not the mod.
+The plugin log (`logs\sc-plugin.log` next to the launcher) writes one `STORMTIME`
+line per minute of play: `avg_ms`/`max_ms` are the gaps between the game's own
+frame presents, `stalls100` counts gaps over a tenth of a second, `hook_max_us` is
+the most the mod's frame copy ever cost, and `log_max_us` the most one log line
+ever cost the game thread. Every gap over a tenth of a second also gets its own
+`STORMSTALL` line saying how much of it (`log_us`, `hook_us`) was the mod's own
+work. A long `dt_ms` with small numbers beside it means the engine or the machine
+stalled, not the mod.
 
 ## If something goes wrong
 

@@ -3037,4 +3037,15 @@ three regression suites (storm present, framebuffer capture, input) unchanged.
   sampled only when both ends were in game, plus cumulative fields on STORMSTATS at
   detach. The next play session answers whether the engine hitched (long intervals) or
   the mirror cost anything (hook_max_us).
+- **It was the log.** The first play with the timing showed one minute of 8 stalls over
+  100 ms (max 185 ms) while a 47-unit group was recalled and ordered; every other minute
+  stayed under 35 ms and the mirror never cost more than 10 ms. The 170 ms gap sat
+  BETWEEN two consecutive `ScLog` calls of `LogSnapshot` (all buffers pre-formatted, no
+  engine work between), so the cost was the logger's own `WriteFile` +
+  `FlushFileBuffers` per line: about 1 ms typical on this NVMe (line-to-line inside such
+  blocks; 0.6 ms p50 in a standalone benchmark), 35-43 ms routinely in that minute and
+  168 ms once. The flush bought nothing (the OS cache serves other readers after
+  `WriteFile`, and a game crash keeps cached data), so it is gone; `STORMTIME` now carries
+  `log_lines= log_avg_us= log_max_us=` and each stall gets a `STORMSTALL dt_ms= log_lines=
+  log_us= hook_us=` line that charges the interval to the mod's own work.
 
