@@ -88,8 +88,9 @@ suite break, not a cleanup.
    readable-memory probe and the CUnit bounds check — up to twelve copies of one three-line
    function — because each was written on its own branch and sharing a header would have made
    a sibling task rebase. That reason is gone; the copies are gone with it, and
-   `python tools/check-reuse.py` (which CI runs) fails a PR that adds a new one, and it
-   scans the `.ps1` suites the same way.
+   `python tools/check-reuse.py` (which CI runs) fails a PR that adds a new one, in the
+   `.ps1` suites too. The scan is token-based (jscpd, through `npx`), so re-indenting a
+   copy or re-wording its comments does not make it a different block.
 2. **The log line is an API.** `ScLog("TAG ...")` format strings, `%SCPLUGIN_*%` names and
    `run-with-plugin.ps1` flags are read by the suites in `tools/plugin/*.ps1`. Change one and
    the oracle that was watching it goes quiet without failing — see the `CIRCLES stats:` line,

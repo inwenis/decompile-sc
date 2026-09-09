@@ -4,13 +4,15 @@ Pester cases for tools/check-reuse.py.
 The gate's whole value is that it FAILS on a new copy, and a gate that cannot fail is
 the house defect this repo guards against (tests/vacuous-assertion-guard.Tests.ps1), so
 the cases plant a duplicate in a throwaway tree and require exit 1, then remove it and
-require exit 0 -- once for the C++ target and once for the PowerShell one. The last
-case runs the gate over the real tree, as CI does.
+require exit 0 -- once for the C++ target and once for the PowerShell one. A copy that
+is re-indented and re-commented must still fail: that is what the token scan buys over
+a line scan. The last case runs the gate over the real tree, as CI does.
 #>
 
 # Pester v5 evaluates -Skip while it is DISCOVERING, so a $script: variable set in
 # BeforeAll is still $null there and every case would skip.
-$script:HasPython = $null -ne (Get-Command python -ErrorAction SilentlyContinue)
+$script:HasTools = ($null -ne (Get-Command python -ErrorAction SilentlyContinue)) -and
+                   ($null -ne (Get-Command npx -ErrorAction SilentlyContinue))
 
 BeforeAll {
     $script:repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -34,7 +36,7 @@ BeforeAll {
         } finally { Pop-Location }
     }
 
-    # Seven lines, two over MIN_BLOCK, so it is a finding wherever it lands.
+    # Seven lines, two over MIN_LINES, so it is a finding wherever it lands.
     $script:dupBody = @'
 static int Twin(int a, int b) {
     int total = 0;
@@ -45,6 +47,21 @@ static int Twin(int a, int b) {
 }
 '@
 
+    # The same tokens, laid out and commented differently.
+    $script:dupBodyReformatted = @'
+static int Twin(int a,
+                int b)
+{
+  /* summing helper */
+  int total = 0;
+  for (int i = a; i < b; ++i)
+  {
+      total += i * 3;   // triple
+  }
+  return total;
+}
+'@
+
     $script:dupSuite = @'
 function Get-Twin {
     param([int]$A, [int]$B)
@@ -52,12 +69,30 @@ function Get-Twin {
     for ($i = $A; $i -lt $B; $i++) {
         $total += $i * 3
     }
+    Write-Host "twin $total"
     $total
+}
+'@
+
+    $script:dupSuiteReformatted = @'
+function Get-Twin
+{
+  # summing helper
+  param([int]$A,
+        [int]$B)
+
+  $total = 0
+  for ($i = $A; $i -lt $B; $i++)
+  {
+      $total += $i * 3   # triple
+  }
+  Write-Host "twin $total"
+  $total
 }
 '@
 }
 
-Describe 'check-reuse [cpp] fails on a NEW copy and passes without one' -Skip:(-not $script:HasPython) {
+Describe 'check-reuse [cpp] fails on a NEW copy and passes without one' -Skip:(-not $script:HasTools) {
 
     BeforeAll {
         $script:box = New-ReuseSandbox
@@ -90,6 +125,14 @@ Describe 'check-reuse [cpp] fails on a NEW copy and passes without one' -Skip:(-
         $r.Out | Should -Match '7 identical lines'
     }
 
+    It 'still FAILS when the copy is re-indented and re-commented' {
+        Set-Content -LiteralPath (Join-Path $script:box.Src 'sc_beta.cpp') -Value $script:dupBodyReformatted
+        $r = Invoke-Checker -Root $script:box.Root
+        $r.Exit | Should -Be 1 -Because $r.Out
+        $r.Out | Should -Match '\[cpp\]: NEW block'
+        $r.Out | Should -Match 'sc_beta.cpp'
+    }
+
     It 'accepts the copy once it is in the baseline, and says so' {
         (Invoke-Checker -Root $script:box.Root -CheckerArgs @('--update-baseline')).Exit | Should -Be 0
         $r = Invoke-Checker -Root $script:box.Root
@@ -119,7 +162,7 @@ Describe 'check-reuse [cpp] fails on a NEW copy and passes without one' -Skip:(-
     }
 }
 
-Describe 'check-reuse [ps1] polices the suites the same way' -Skip:(-not $script:HasPython) {
+Describe 'check-reuse [ps1] polices the suites the same way' -Skip:(-not $script:HasTools) {
 
     BeforeAll {
         $script:box = New-ReuseSandbox
@@ -146,6 +189,14 @@ Describe 'check-reuse [ps1] polices the suites the same way' -Skip:(-not $script
         $r.Out | Should -Match 'suite-beta.ps1'
     }
 
+    It 'still FAILS when the copy is re-indented and re-commented' {
+        Set-Content -LiteralPath (Join-Path $script:box.Suites 'suite-beta.ps1') -Value $script:dupSuiteReformatted
+        $r = Invoke-Checker -Root $script:box.Root
+        $r.Exit | Should -Be 1 -Because $r.Out
+        $r.Out | Should -Match '\[ps1\]: NEW block'
+        $r.Out | Should -Match 'suite-beta.ps1'
+    }
+
     It 'ignores the same text inside a block comment or behind a comment marker' {
         $commented = ($script:dupSuite -split "`n" | ForEach-Object { "# $_" }) -join "`n"
         Set-Content -LiteralPath (Join-Path $script:box.Suites 'suite-gamma.ps1') -Value $commented
@@ -167,7 +218,7 @@ Describe 'check-reuse [ps1] polices the suites the same way' -Skip:(-not $script
     }
 }
 
-Describe 'the real tree is at or under its baselines' -Skip:(-not $script:HasPython) {
+Describe 'the real tree is at or under its baselines' -Skip:(-not $script:HasTools) {
 
     It 'has no duplication outside tools/check-reuse.*.baseline, in either target' {
         $r = Invoke-Checker -Root $script:repoRoot

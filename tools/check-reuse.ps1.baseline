@@ -1,158 +1,228 @@
 # check-reuse baseline for ps1 -- what was already duplicated when the gate
 # went in. One line per accepted finding. SHRINKING this file is the job;
 # growing it needs a reason in the PR that grows it.
-block 29c689d56f8feac5  # 10 identical lines: $out.Max = [int]$s.Groups[2].Value
-block 2ac4fafa3d722d62  # 10 identical lines: catch {
-block 319fd4681a4135f9  # 10 identical lines: try {
+block 185f5b8064b318b9  # 10 identical lines: $left = $null
+block 6a1f26bc71ca3a91  # 10 identical lines: $out.Lit = [int]$s.Groups[13].Value
+block 60934a9b931539fd  # 10 identical lines: $x1 = ($Units | Measure-Object X -Minimum).Minimum - $w.Screen.Left - 
+block edac1afdc714b99d  # 10 identical lines: & (Join-Path $scriptDir 'run-with-plugin.ps1') `
+block b777f11ac58d039f  # 10 identical lines: -BuildingGroups 1 -ProdQueue 0 -ProdFan $prodFan -QueueIndicator 1 `
+block e81e97cc48ca12bc  # 10 identical lines: . (Join-Path $scriptDir 'sc-launch-lock.ps1')
+block 553638cec6156be5  # 10 identical lines: Assert-That 'the game process this probe started is gone' ($KeepOpen -
+block a34791d9899cced8  # 10 identical lines: BuildUnit = $m.Groups[10].Value
+block 891f5ecc37b63654  # 10 identical lines: Ink = [int]$m.Groups['ink'].Value; RefInk = [int]$m.Groups['refInk'].V
+block 49c9e906f8516223  # 10 identical lines: Set-ScGameType -Hwnd $hwnd -LogPath $logPath -Index 2           # Use 
+block 8e5d0985c7ffbcfd  # 10 identical lines: Start-Sleep -Seconds 2
+block 40b8b0635d39b609  # 10 identical lines: [int]$Margin = 24,
+block 9780e3abd90b000c  # 10 identical lines: [string]$ShotDir = 'C:\sc-work\logs\043\probe-frames',
+block 9b2fd93e9f28d9f8  # 10 identical lines: if ($fixtures) {
 block 6ef9e11470f47cc1  # 10 identical lines: }
+block ce6f1aa4df0da592  # 10 identical lines: } }
+block 5424e1123b108e43  # 11 identical lines: $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') @genArgs 2>&1
+block 38ec9e9705b586cf  # 11 identical lines: $left = if ($gamePid -gt 0) { Get-Process -Id $gamePid -ErrorAction Si
+block aec20d0962258943  # 11 identical lines: $out.TrackedCount = [int]$s.Groups[1].Value
+block 17e9575bfad0321a  # 11 identical lines: ([int]$m.Groups[1].Value -eq $wantFanned)
+block 19275a25a198fca4  # 11 identical lines: -OutputPath $mapPath 2>&1
 block 932704ed6eaa27d4  # 11 identical lines: ArmShot 'lobby'
-block 8027ebf4dbe45431  # 11 identical lines: [int]$UnitCount = 36,
+block 70656ad881c26ddc  # 11 identical lines: Assert-That 'the image free list never ran out' ([int]$m.Groups[5].Val
+block 9693b6954d7df1ef  # 11 identical lines: Select-ScBrowserMap -Hwnd $h -GameDir $GameDir -MapPath $MapPath | Out
+block b36abfd6f0efd9e3  # 11 identical lines: Send-ScClick -Hwnd $h -X 215 -Y 119
+block 93f2d31a73337a94  # 11 identical lines: Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
+block ff5a7b67230d4c8c  # 11 identical lines: Step "generate the fixture: two Nexuses + one Command Center, $Startin
+block 0e0dff1611246d04  # 11 identical lines: [Parameter(Mandatory)][int]$Seed,
+block d1cca791031acdb5  # 11 identical lines: [int]$OrderDelaySec = 0,
+block 861776c109a412fd  # 11 identical lines: [string]$DecoyFolder = '00-t000',
 block f29a0e1cc559591e  # 11 identical lines: }
 block 61bf11c51036cd7a  # 12 identical lines: $hwnd = Get-ScGameWindow -ProcessId $gamePid
-block 90a5ab71dae578f6  # 12 identical lines: Overflow = [int]$t.Groups[6].Value
-block a4536ba63e5e11e9  # 12 identical lines: try {
-block 539c9bbb83ff4f0b  # 12 identical lines: uint tMe = GetCurrentThreadId();
-block bfc4eaa9aee6d9c2  # 13 identical lines: finally {
-block 6a7e15c8852c7443  # 13 identical lines: }
-block 0c3c8270d5b42f44  # 14 identical lines: $PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61
+block 0ebf7ddcfd4ce7f9  # 12 identical lines: -UnitCount 1 -UnitType $UnitType -Player 0 -ClearPlayerUnits `
+block c1ccda285f827329  # 12 identical lines: Dump = $null; W = 0; H = 0; Reads = 0; Stable = 0; Refused = $null }
+block 5d1dda8d37352208  # 12 identical lines: OutputPath = $mapPath
+block b74ad40dc6360b74  # 12 identical lines: }
+block 5cf01b94c8a07313  # 13 identical lines: $hookLines = @(Wait-ScLogMatch -LogPath $LogPath -Pattern 'HOOK (\S+):
+block f27e43aeeca177a4  # 13 identical lines: $out.Rows += [pscustomobject]@{
+block 9b5862d54ab3639d  # 13 identical lines: -UnitCount 1 -UnitType $UnitType -Player 0 -ClearPlayerUnits `
+block dcaaeb3fd47af89e  # 13 identical lines: Assert-That "$What`: all $($State.Live) are $ExpectedType" $ok "(got $
+block dab717cd2c390433  # 13 identical lines: Assert-That 'nothing was refunded for a building that went away' ($ref
+block fb06c2d6030e7914  # 13 identical lines: New-Item -ItemType Directory -Path (Split-Path $LogPath -Parent) -Forc
+block 6fd0b155909ecf6d  # 13 identical lines: Overflow = [int]$t.Groups[6].Value
+block 29e522c3f40df613  # 13 identical lines: Step "menus: Single Player -> Expansion -> Play Custom -> $mapName" {
+block 91154f2227f7a749  # 13 identical lines: Write-Host "       $($_.ScriptStackTrace)"
+block d423dc9c8398f3b6  # 13 identical lines: [ValidateSet('2', '3')][string]$WidescreenStage = '3',
+block 2dbd314419cb3cd4  # 13 identical lines: function Assert-True {
+block 1e0f88d016df4c54  # 13 identical lines: return list;
+block 71a3aed55e95fc72  # 13 identical lines: try {
+block 82fcc797d1e3f71c  # 13 identical lines: uint tFg = GetWindowThreadProcessId(fg, IntPtr.Zero);
+block 937921217fcef21d  # 14 identical lines: $mapPath = Join-Path $mapDir $mapName
+block 7dc46b4b2be0d2b3  # 14 identical lines: )
+block 4059ce2a152c725d  # 14 identical lines: . (Join-Path $scriptDir 'drive-game.ps1')
+block c9b0c2421b0b2c44  # 14 identical lines: if (-not $gamePid) { throw 'prime-game-type: could not parse the game 
 block 4754b8eae487ab70  # 14 identical lines: }
-block 4754b8eae487ab70  # 14 identical lines: }
-block 825cbce81f09c175  # 15 identical lines: $script:failures = 0
-block 3c54a21e996bdd2f  # 15 identical lines: -InjectWindowedHelper WMode -NoLaunchLock -BuildDir $BuildDir `
+block 67be64e45550d8b9  # 15 identical lines: $PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61
+block cbb60ab8ae5ad554  # 15 identical lines: $failures = 0
+block b23d759e24e5d0cf  # 15 identical lines: New-Item -ItemType Directory -Path (Split-Path $LogPath -Parent) -Forc
+block ed91904f01205bb4  # 15 identical lines: Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | 
+block a417f1b645e75733  # 15 identical lines: Write-Host $_.ScriptStackTrace
+block c0f7858bd129a58a  # 15 identical lines: [string]$DecoyFolder = '00-t000',
 block 9d599aabf8f26ff1  # 15 identical lines: function Get-QInd {
-block a9c5fe18cee9ea6a  # 15 identical lines: }
+block bb5c40339097b1bc  # 15 identical lines: if (-not $m.Success) { throw "probe: unparseable QIND line: $($Hit.Lin
+block a61e2eecad42ff1d  # 15 identical lines: try {
+block 29f1b1b2ac8be460  # 16 identical lines: . (Join-Path $scriptDir 'drive-game.ps1')
+block 1cebd70f54fde23a  # 16 identical lines: Get-ScCardState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -T
+block 3101f2d13fba94a0  # 16 identical lines: Step 'menus: Single Player -> Expansion -> Play Custom -> Maps\campaig
+block 90899140b51fbdc1  # 16 identical lines: [string]$DecoyFolder = '00-t000',
+block fce4047ef93b88ab  # 16 identical lines: } }
+block 888ac9db211fc637  # 17 identical lines: $PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61
+block 484f03f0fc0b6949  # 17 identical lines: ($stray.Count -gt 0 ? "(stray: $($stray -join ' '))" : '')
+block b83b77acade77b5a  # 17 identical lines: }
+block decd6d2587ecfa61  # 18 identical lines: Shot 'lobby'
+block 4e455110e9a53dff  # 18 identical lines: [string]$DecoyFolder = '00-t000',
+block 67e146a5fe0ac3e0  # 18 identical lines: function ConvertFrom-QIndLine {
+block beac9646227126ca  # 18 identical lines: if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPa
+block 291da2cdf195c491  # 18 identical lines: try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | 
 block c2df6b37c8be8b84  # 18 identical lines: }
+block 9a7a3cbd2ca90300  # 19 identical lines: ($stray.Count -gt 0 ? "(stray: $($stray -join ' '))" : '')
+block c97c95db695e4018  # 19 identical lines: Indicator = $m.Groups[6].Value
+block 651d3cc79bdd38f7  # 19 identical lines: Set-ScGameType -Hwnd $hwnd -LogPath $LogPath -Index 2      # Use Map S
+block 9780f9427db18299  # 19 identical lines: }
+block d8f7f058166da71d  # 20 identical lines: if (Test-Path -LiteralPath $markerPath) { Remove-Item -LiteralPath $ma
+block 4c6eec6c6b20344a  # 20 identical lines: try {
+block c3e7b23fe46ee3fe  # 20 identical lines: }
+block 75053f55082b0265  # 21 identical lines: New-Item -ItemType Directory -Path $FrameDir -Force | Out-Null
+block a8723cd37ad42e48  # 21 identical lines: }
 block fe1c7b4e9599183f  # 22 identical lines: $obsLog = Get-Content -LiteralPath $o.LogPath
-block 15d5db4f762bd621  # 27 identical lines: Write-Host ''
-block 6cf2ef91683ed20f  # 29 identical lines: -InjectWindowedHelper WMode -GameDir $GameDir -LogPath $LogPath 6>&1 |
-block 58221b0f5aa4aef4  # 5 identical lines: $cc = @($w.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $CC
-block c3c2cc0eff2a95e2  # 5 identical lines: $failures++
-block f451012ccf7c9a4a  # 5 identical lines: $gamePid = 0
-block bad04cf43d6158bb  # 5 identical lines: $gen | ForEach-Object { Write-Host "       $_" }
-block 2e1737d68ba42a1e  # 5 identical lines: $hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Ha
-block 42f59abef8e2b41c  # 5 identical lines: $hashBefore = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).H
-block 1a3c652f95af67dd  # 5 identical lines: $mapPath = Join-Path $mapDir $mapName
-block 63d8d5775a808ec9  # 5 identical lines: $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
-block 63d8d5775a808ec9  # 5 identical lines: $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
-block 8cc5e1068bf6676e  # 5 identical lines: $out.SimSlots = [int]$s.Groups[4].Value
-block 90ea306d92530352  # 5 identical lines: $p = Get-ScMinimapPoint -MapTilesW $MapW -MapTilesH $MapH -TileX $Tile
-block 095995a7b2b10a05  # 5 identical lines: $script:qindSeq++
-block ad137e087ee8bb73  # 5 identical lines: )
-block ad137e087ee8bb73  # 5 identical lines: )
-block ad137e087ee8bb73  # 5 identical lines: )
-block 308bed7e5dba9409  # 5 identical lines: -GameDir $GameDir -LogPath $LogPath 6>&1 | ForEach-Object {
-block 38f138af3cfccaea  # 5 identical lines: -GameDir $GameDir -LogPath $logPath 6>&1 | ForEach-Object {
-block 626316b7ca1f11a7  # 5 identical lines: -GridSpacing 160 -StartingMinerals $StartingMinerals -StartingGas $Sta
-block 3950be7bc2c1a063  # 5 identical lines: -InjectWindowedHelper WMode -NoLaunchLock `
-block c72ec7ec9c2b588f  # 5 identical lines: . (Join-Path $scriptDir 'drive-game.ps1')
-block 10e662ac2e37500f  # 5 identical lines: Add-Type @"
-block 6d4b125d6de0413f  # 5 identical lines: Assert-That 'nothing can end the game on its own (TRIG is empty)' `
-block a6d1c268f8cce286  # 5 identical lines: BuildUnit = $m.Groups[10].Value
-block 06348c2b686f62dc  # 5 identical lines: Index = [int]$m.Groups[1].Value
-block 66d56679988adafc  # 5 identical lines: New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
-block 2e276313f90484f6  # 5 identical lines: New-Item -ItemType Directory -Path $ShotDir -Force | Out-Null
-block fb78940fe6343490  # 5 identical lines: Set-ScMarker -MarkerPath $markerPath -Label $label
-block fb78940fe6343490  # 5 identical lines: Set-ScMarker -MarkerPath $markerPath -Label $label
-block f41cd9518b1b1f3b  # 5 identical lines: Slot = [int]$cm.Groups[1].Value
-block 7f0a0fde5a02903c  # 5 identical lines: Start-Sleep -Seconds 10
-block c3cbe18f65b6a014  # 5 identical lines: Start-Sleep -Seconds 2
-block 093fb1683089ecdd  # 5 identical lines: Start-Sleep -Seconds 6
-block 2845b7ec9a2124db  # 5 identical lines: Step "menus: Single Player -> Expansion -> Play Custom -> $mapName" {
-block ef570cb2d2125cb3  # 5 identical lines: Write-Host $_
-block f0784dc1446d37b1  # 5 identical lines: [CmdletBinding()]
-block bafcd5f02d3a242b  # 5 identical lines: [DllImport("user32.dll")] private static extern bool SetForegroundWind
-block 446c1a5a6fa6b759  # 5 identical lines: [switch]$KeepOpen
-block 446c1a5a6fa6b759  # 5 identical lines: [switch]$KeepOpen
-block 7fc3d436e3b3993d  # 5 identical lines: foreach ($l in $lines) {
-block 07ccccc85caa01af  # 5 identical lines: function Assert-That {
-block 41d6671c282aaab7  # 5 identical lines: function Restore-Victim {
-block 3c8090922799191a  # 5 identical lines: function Shot([string]$tag) {
-block 8d389e89f41c0220  # 5 identical lines: if ($m.Success) {
-block ffaed4d83f4a94a3  # 5 identical lines: if (-not $KeepOpen -and $gamePid -gt 0) {
-block d74275e02a119500  # 5 identical lines: if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPa
-block 75b8bbc40d67bd04  # 5 identical lines: }
-block 75b8bbc40d67bd04  # 5 identical lines: }
-block 75b8bbc40d67bd04  # 5 identical lines: }
-block 75b8bbc40d67bd04  # 5 identical lines: }
-block 75b8bbc40d67bd04  # 5 identical lines: }
-block 75b8bbc40d67bd04  # 5 identical lines: }
-block 75b8bbc40d67bd04  # 5 identical lines: }
-block 75b8bbc40d67bd04  # 5 identical lines: }
-block 75b8bbc40d67bd04  # 5 identical lines: }
-block 75b8bbc40d67bd04  # 5 identical lines: }
-block 75b8bbc40d67bd04  # 5 identical lines: }
-block 75b8bbc40d67bd04  # 5 identical lines: }
+block 20c31b8c1c40432e  # 22 identical lines: -Mode observe -LogCommands 1 -WorldScan 1 -CardScan 1 `
+block 56537e5f38f45dfa  # 22 identical lines: }
+block 70075c06a668e98c  # 24 identical lines: (@($log | Select-String -Pattern 'HOOK btnTrainCondition: installed at
+block d6d3b2c73c04e0c2  # 24 identical lines: Save-ScWindowImage -Hwnd $script:hwnd -Path (Join-Path $ShotDir ("{0}-
+block a5c93012c0e466d1  # 24 identical lines: [int]$IdleSeconds = 120,
+block ce1830688fbb9860  # 24 identical lines: }
+block 9972b972143b18da  # 25 identical lines: Assert-That 'at least one command id passed through untouched' ($passe
+block 9c18282aa4336681  # 25 identical lines: }
+block d8514ff145a937c3  # 26 identical lines: (@(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'PRODQ: 
+block 89758ae58c9869ef  # 26 identical lines: ,@($Card.Slots | Where-Object { $_.HasButton -and ($_.Action -eq $UPGR
+block 00855d63f8cbd6fd  # 26 identical lines: . (Join-Path $scriptDir 'drive-game.ps1')
+block e60a7e57ef9a3778  # 27 identical lines: (@($log | Select-String -Pattern 'HOOK btnTrainCondition: installed at
+block f0af7ca49e215845  # 27 identical lines: }
+block ad3071a57187aa5a  # 28 identical lines: }
+block b90ec864130999f1  # 29 identical lines: -Mode observe -InjectWindowedHelper WMode `
+block 5902a4bde84ae924  # 29 identical lines: if (-not $gamePid) { throw 'probe: could not parse the game pid from s
+block 0f545f967bf45724  # 29 identical lines: }
+block 48834d35618158db  # 31 identical lines: $result = [ordered]@{ Mode = $Mode; LogPath = $logPath; Pid = $gamePid
+block 352e3a335524d646  # 31 identical lines: -InjectWindowedHelper WMode -NoLaunchLock `
+block d44c6185faf0ad8e  # 32 identical lines: -Mode observe -LogCommands 1 -WorldScan 1 -CardScan 1 `
+block a2421524e8b79a58  # 32 identical lines: Write-Host ''
+block 05158c8e8c967ec0  # 32 identical lines: try {
+block 4619200df8f7b0eb  # 35 identical lines: -ProdQueue 1 -ProdQueueMax 16 -QueueIndicator 1 `
+block 7bf8a724736d2023  # 36 identical lines: }
+block 5d358f10be3a92ac  # 37 identical lines: }
+block c099816363774559  # 39 identical lines: }
+block 1cb9a496c3229b8b  # 44 identical lines: }
+block 6f5175676d0c17f9  # 53 identical lines: }
+block ed62c39016f30308  # 58 identical lines: -Mode fanout -Circles 1 -HudRow 0 -WorldScan 1 -BuildingGroups $groups
+block 44e174b5a11631be  # 58 identical lines: }
+block 4d3ebc7ee82a5a9b  # 6 identical lines: $UPGRADE_CMD = '0x32'
+block 3cfd91573d1c207e  # 6 identical lines: $failures++
 block f6e173e26764f1e3  # 6 identical lines: $gamePid = 0
-block 9e0c0f9dac5768a6  # 6 identical lines: $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') @genArgs 2>&1
-block cdac2f105ae648e7  # 6 identical lines: $gen | ForEach-Object { Write-Host "       $_" }
+block 2eee37c6206a06f6  # 6 identical lines: $mapPath = Join-Path $FixtureDir $mapName
+block 3a5236b83fface80  # 6 identical lines: $mark = Get-ScLogLineCount -LogPath $LogPath
+block 6a46de056a173881  # 6 identical lines: $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
+block d64874ceb88c457e  # 6 identical lines: $out.Card = [pscustomobject]@{
 block 62456dbd3dc12ab4  # 6 identical lines: $script:ccs = $ccs
-block fedec389f945adc3  # 6 identical lines: $scriptDir = $PSScriptRoot
-block 00ba24782acc80d6  # 6 identical lines: & (Join-Path $scriptDir 'run-with-plugin.ps1') @runArgs 6>&1 | ForEach
-block 692f7ae302bf6532  # 6 identical lines: -GameDir $GameDir -LogPath $LogPath 6>&1 | ForEach-Object {
-block c09e34f12e6756d5  # 6 identical lines: Assert-That "the key emitted $BURROW_CMD" `
-block 68ba302592d9fc87  # 6 identical lines: New-Item -ItemType Directory -Path (Split-Path $LogPath -Parent) -Forc
-block 4a8aff97fd7c59a8  # 6 identical lines: OutputPath = $mapPath
-block 373b682e6ca8626b  # 6 identical lines: Send-ScClick -Hwnd $hwnd -X 516 -Y 392
-block 126d3c1e56e34aeb  # 6 identical lines: Send-ScClick -Hwnd $hwnd -X 516 -Y 392        # Ok
-block edfd231e9f1b3404  # 6 identical lines: Send-ScClick -Hwnd $hwnd -X 516 -Y 393
-block edfd231e9f1b3404  # 6 identical lines: Send-ScClick -Hwnd $hwnd -X 516 -Y 393
-block d22b9ad89e6eba68  # 6 identical lines: Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing
-block c4593c4ba4190a63  # 6 identical lines: Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
-block 2b28cbeb356a7cca  # 6 identical lines: Start-Sleep -Seconds 1
-block 410a363243982573  # 6 identical lines: Write-Host "       $($_.ScriptStackTrace)"
-block 02a21bb03ae2b34c  # 6 identical lines: finally {
-block 02a21bb03ae2b34c  # 6 identical lines: finally {
-block c26686c46384e58b  # 6 identical lines: function Assert-True {
-block 9302281c2740519d  # 6 identical lines: if ($fixtures) {
-block d8a1589f84f4e124  # 6 identical lines: return [pscustomobject]@{
+block b449eaf3d3686017  # 6 identical lines: $shotN = 0
+block 3f6a96062ef1eff7  # 6 identical lines: & (Join-Path $scriptDir 'run-with-plugin.ps1') `
+block 5e9f370d43a2b5cc  # 6 identical lines: 'PRODQSEL \[[^\]]+\] unit=0x([0-9A-Fa-f]+) type=0x([0-9A-Fa-f]+) playe
+block 198e08b2579f919b  # 6 identical lines: (@($decoy | Select-String -Pattern 'as the LAST chunk').Count -gt 0)
+block 4a000fb4f542078e  # 6 identical lines: (@($gen | Select-String -Pattern 'no force randomises start locations'
+block ef9c759f02100b66  # 6 identical lines: )
+block 02b83efc80cc1295  # 6 identical lines: -InjectWindowedHelper WMode -GameDir $GameDir -LogPath $LogPath 6>&1 |
+block 303efd8baff646a7  # 6 identical lines: -Mode observe -WorldScan 1 -InjectWindowedHelper WMode -NoLaunchLock `
+block 9d7c261563ef2d0d  # 6 identical lines: -NoLaunchLock -Widescreen $Widescreen -WidescreenStage $Stage `
+block 5a82fad841b26ce5  # 6 identical lines: -UnitCount 1 -UnitType $UnitType -Player 0 -ClearPlayerUnits `
+block 98b0aff3eb91cbff  # 6 identical lines: Assert-That "every placed unit was commanded ($u of $UnitCount)" ($u -
+block 1921f721ea07a333  # 6 identical lines: Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
+block eac885b72963b609  # 6 identical lines: Index  = [int]$m.Groups[2].Value
+block 703e00b5283aa72a  # 6 identical lines: New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+block a23d8ee7882de8db  # 6 identical lines: Send-ScDrag -Hwnd $script:hwnd -X1 $x1 -Y1 $y1 -X2 $x2 -Y2 $y2 -Steps 
+block e5526c0ba77600fe  # 6 identical lines: Set-ScGameType -Hwnd $h -LogPath $log -Index 2
+block a9fa24ff1de21804  # 6 identical lines: Set-ScMarker -MarkerPath $markerPath -Label $label
+block 11392f0b7da1c73b  # 6 identical lines: Step "the map spawned exactly the $UnitCount placed Lurkers, and nothi
+block 80f7800b1a82019e  # 6 identical lines: Step 'a drag box captures more units than the engine can hold' {
+block 4c8c7489ff934fa2  # 6 identical lines: [CmdletBinding()]
+block fa8b1ea2c949b4d6  # 6 identical lines: catch { Write-Host "  FAIL close-game failed for arm '$Mode': $($_.Exc
+block 31ee088ab3c520b7  # 6 identical lines: if (-not (Test-Path -LiteralPath $exePath)) { throw "probe: $exePath n
+block 407951547581d33f  # 6 identical lines: param([int]$X, [int]$Y, [string]$Name, [int]$Tries = 3, [int]$WaitSec 
+block 5c54564a788f9fca  # 6 identical lines: public static class Enum {
+block 43531a002d8ffa80  # 6 identical lines: try { Remove-ScOwnFixtureDir -Dir $fixtures.Dir | Out-Null } catch { W
 block 53cd00724a2229b7  # 6 identical lines: }
-block 53cd00724a2229b7  # 6 identical lines: }
-block 53cd00724a2229b7  # 6 identical lines: }
-block 53cd00724a2229b7  # 6 identical lines: }
-block 53cd00724a2229b7  # 6 identical lines: }
-block 53cd00724a2229b7  # 6 identical lines: }
-block 53cd00724a2229b7  # 6 identical lines: }
-block 53cd00724a2229b7  # 6 identical lines: }
-block 53cd00724a2229b7  # 6 identical lines: }
-block 53cd00724a2229b7  # 6 identical lines: }
-block 53cd00724a2229b7  # 6 identical lines: }
-block 53cd00724a2229b7  # 6 identical lines: }
-block 53cd00724a2229b7  # 6 identical lines: }
-block 6d9ef7c1e7a051fc  # 7 identical lines: $exePath = Join-Path $GameDir 'StarCraft.exe'
-block 9bb5f1c26a9c0ba8  # 7 identical lines: $left = if ($gamePid -gt 0) { Get-Process -Id $gamePid -ErrorAction Si
+block 60cb90ad4c95b059  # 7 identical lines: $gamePid = 0
+block 0ea18bf6114f76cb  # 7 identical lines: $hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Ha
 block 11b6f73015c314ef  # 7 identical lines: $mapPath = Join-Path $mapDir $mapName
-block 79884f8bb649ea44  # 7 identical lines: $scriptDir = $PSScriptRoot
-block a93e3ed5dd2c31a1  # 7 identical lines: ForEach-Object { [Convert]::ToInt32(($_ -replace '^0x'), 16) })
-block 9fe65cf8712b512f  # 7 identical lines: New-Item -ItemType Directory -Path $ShotDir -Force | Out-Null
+block 503120ee01e08f3f  # 7 identical lines: $out.Visible = [int]$s.Groups[3].Value
+block ab6ba48cc5a1a0b7  # 7 identical lines: $r = @{ Tag = $Tag; Layers = @(); Bitmap = $null; Viewport = $null; Li
+block 6cfd4cb825be1e54  # 7 identical lines: $seam = @()
+block 524e3ca305b95999  # 7 identical lines: )
+block 9c4ee129f6f82278  # 7 identical lines: -InjectWindowedHelper WMode -NoLaunchLock -BuildDir $BuildDir `
+block e22c71a46f856a95  # 7 identical lines: -Mode observe -WorldScan 1 -InjectWindowedHelper WMode -NoLaunchLock `
+block 007390454501f8cd  # 7 identical lines: Assert-That "the key emitted $BURROW_CMD" `
+block 739a8093dc9e4953  # 7 identical lines: New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 block 98e931be28bbc56d  # 7 identical lines: Set-ScGameType -Hwnd $h -LogPath $log -Index 2
-block 76855aa2851225ca  # 7 identical lines: Set-ScGameType -Hwnd $h -LogPath $logPath -Index 2
-block f48c707997d4ca17  # 7 identical lines: Start-Sleep -Seconds 2
-block f48c707997d4ca17  # 7 identical lines: Start-Sleep -Seconds 2
+block 1a65fb829e0726a9  # 7 identical lines: Step 'POSITIVE CONTROL: click ONE building and press Train once' {
+block 7f61ac760cc04cb5  # 7 identical lines: Write-Host ("[0] foreground before launch: 0x{0:X}" -f [int64]$victim)
+block 9d9ed85112a622ee  # 7 identical lines: [CmdletBinding()]
+block c53a3545d5be8304  # 7 identical lines: [DllImport("user32.dll")] public static extern IntPtr GetForegroundWin
+block 491377f4693b6265  # 7 identical lines: [string]$ShotDir = 'C:\sc-work\logs\043\probe-frames',
+block 4c30d46ced7cee02  # 7 identical lines: if (-not $LogPath) { $LogPath = "C:\sc-work\logs\024-building-groups-$
+block 670c1e8295456468  # 7 identical lines: if (-not ('ScDrive.Native' -as [type])) {
+block d855bbf7108e7e29  # 7 identical lines: if (-not ('ScSpawn.Native' -as [type])) {
 block cd35980922b59abd  # 7 identical lines: if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPa
 block 550d28aabe41bf58  # 7 identical lines: }
-block 550d28aabe41bf58  # 7 identical lines: }
+block e34f395e0537b50e  # 7 identical lines: } }
+block 577232fd0ffc5255  # 8 identical lines: $arms = @{}
+block c65ac5dcbd033e20  # 8 identical lines: $hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Ha
 block d075c8279b76a103  # 8 identical lines: $left = if ($gamePid -gt 0) { Get-Process -Id $gamePid -ErrorAction Si
-block 681d3f27bdeefbcd  # 8 identical lines: $m = [regex]::Match($l.Line,
-block b6f1f6bbc93e3b37  # 8 identical lines: $x1 = ($Units | Measure-Object X -Minimum).Minimum - $w.Screen.Left - 
-block 8b5bfbed86f61575  # 8 identical lines: & (Join-Path $scriptDir 'run-with-plugin.ps1') `
-block 837944a5d9a9f3f8  # 8 identical lines: Send-ScClick -Hwnd $h -X 215 -Y 119
-block 8080da2214efcb40  # 8 identical lines: Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> briefing
-block ac23252f65d354b1  # 8 identical lines: Set-ScGameType -Hwnd $hwnd -LogPath $LogPath -Index 2      # Use Map S
-block e100394dc08eb379  # 8 identical lines: Step "menus: Single Player -> Expansion -> Play Custom -> $mapName" {
-block 966f1fcfa837f8d9  # 8 identical lines: Write-Host $_.ScriptStackTrace
-block 8b2d00d94cda9d60  # 8 identical lines: foreach ($l in $lines) {
-block 707fbddd08fed9bb  # 8 identical lines: function ConvertFrom-QIndLine {
+block e3d6e0d917d7973e  # 8 identical lines: $mapPath = Join-Path $mapDir $mapName
+block 2f958e0e081ae6dc  # 8 identical lines: $p = Get-ScMinimapPoint -MapTilesW $MapW -MapTilesH $MapH -TileX $Tile
+block 8b08bf454957df1d  # 8 identical lines: $y2 = ($Units | Measure-Object Y -Maximum).Maximum - $w.Screen.Top  + 
+block c107e2f34ea33ea6  # 8 identical lines: (@($gen | Select-String -Pattern '^OK: ').Count -gt 0)
+block a20115a4c668e3c7  # 8 identical lines: -InjectWindowedHelper WMode -GameDir $GameDir -LogPath $LogPath 6>&1 |
+block 75cb2df21f2d1687  # 8 identical lines: -Mode observe -LogCommands 1 -WorldScan 1 -CardScan 1 `
+block bd607dc0adef7872  # 8 identical lines: . (Join-Path $scriptDir 'drive-game.ps1')
+block b169254cdfdb48eb  # 8 identical lines: @{ Rects = $rects; Line = $line }
+block ca58e8917595cb1b  # 8 identical lines: Assert-That "$What`: all $($State.Live) are $ExpectedType" $ok "(got $
+block c3e33152c31ddfb2  # 8 identical lines: Energy = [int]$m.Groups[10].Value
+block 5442be84f10a60df  # 8 identical lines: Engine = if ($row) { $row.Engine } elseif ($trk) { $trk.Engine } else 
+block 6a779eab59863ac5  # 8 identical lines: Get-ScWorldState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -
+block d2cf0cd5ac458f3e  # 8 identical lines: New-Item -ItemType Directory -Path (Split-Path $LogPath -Parent) -Forc
+block ef27592b3e708f92  # 8 identical lines: Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing
+block 7a1cf7df06d1807f  # 8 identical lines: Send-ScDrag -Hwnd $hwnd -X1 10 -Y1 10 -X2 630 -Y2 340 -Steps 20
+block 39d9c09b32b3b111  # 8 identical lines: Set-ScGameType -Hwnd $hwnd -LogPath $logPath -Index 2           # Use 
+block aa8a26be6a56cc2f  # 8 identical lines: [CmdletBinding()]
+block a1fbe42c62503caa  # 8 identical lines: [string]$DecoyFolder = '00-t000',
+block 871a0535b2f9a6f5  # 8 identical lines: [string]$ShotDir = 'C:\sc-work\logs\043\probe-frames',
+block d88814f1c3b054ba  # 8 identical lines: if (-not $gamePid) { throw "probe-framecap: could not parse the game p
+block 14c70206a22edb8e  # 8 identical lines: if (-not ('SCWin.Enum' -as [type])) {
+block 8c7ec4976f9a729c  # 8 identical lines: param([string]$What, [bool]$Ok, [string]$Detail = '')
+block 7c71d527131dd26b  # 8 identical lines: try {
 block 5eaf1dd5dc44a2fe  # 8 identical lines: }
-block 5eaf1dd5dc44a2fe  # 8 identical lines: }
-block 5eaf1dd5dc44a2fe  # 8 identical lines: }
-block 5eaf1dd5dc44a2fe  # 8 identical lines: }
-block 794bf554e0457f20  # 9 identical lines: $PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61
-block 4b17ba7b00dd37d5  # 9 identical lines: $hookLines = @(Wait-ScLogMatch -LogPath $LogPath -Pattern 'HOOK (\S+):
-block 60fa3f7e905a43e1  # 9 identical lines: $hwnd = Get-ScGameWindow -ProcessId $gamePid
-block 4d960f94d135e018  # 9 identical lines: $left = $null
+block edebdd6561a1b467  # 8 identical lines: } else { Assert-That 'the plugin wrote its group-production stats line
+block 8537b8b29c690c3f  # 9 identical lines: $cy = $b.Y - $w.Screen.Top
+block 7a54afa1906e2e92  # 9 identical lines: $exePath = Join-Path $GameDir 'StarCraft.exe'
+block 78d78cf86e622f15  # 9 identical lines: $failures++
+block af3647ffb24929a7  # 9 identical lines: $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') @genArgs 2>&1
+block 6e6a00b7fb2dfc0b  # 9 identical lines: $launchLock = $null
+block cea392b73e2788d2  # 9 identical lines: $mapPath = Join-Path $mapDir $mapName
+block 629045b6c9e0445d  # 9 identical lines: $mark = Get-ScLogLineCount -LogPath $LogPath
+block 15bbe358f4d31689  # 9 identical lines: $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
 block af9a16a4d23e7de3  # 9 identical lines: $script:failures++
-block 52751e26afa6734c  # 9 identical lines: $script:qindSeq = 0
-block f5e93b32cd2f912c  # 9 identical lines: Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | 
-block 799a96d74f7d1af5  # 9 identical lines: Shot 'lobby'
-block 2ac655bc565f278b  # 9 identical lines: [Parameter(Mandatory)][int]$TileY,
+block 9b207e9a4c0ff900  # 9 identical lines: -InjectWindowedHelper WMode -NoLaunchLock -BuildDir $BuildDir `
+block ad2164813a75fdb7  # 9 identical lines: -Mode fanout -Circles 0 -HudRow 0 -InjectWindowedHelper WMode `
+block 67ba04c2c333099e  # 9 identical lines: -Mode observe -InjectWindowedHelper WMode `
+block 0cfb6afa2bae558e  # 9 identical lines: -UnitCount $unitCount -GridSpacing $spacing -UnitType 'marine' `
+block 3e83b7977e872ba0  # 9 identical lines: Assert-That 'this run left no fixture behind' (-not (Test-Path -Litera
+block cd581beefa569992  # 9 identical lines: Send-ScClick -Hwnd $h -X 215 -Y 119
+block 3dfc9f58e260e848  # 9 identical lines: Start-Sleep -Seconds 2
+block 3feca71dae282647  # 9 identical lines: [string]$DecoyFolder = '00-t000',
+block 4c96aa92e8d9bf92  # 9 identical lines: foreach ($l in $lines) {
+block 2838ea8b20aaf11f  # 9 identical lines: function Assert-True {
+block 164dd993a9efad89  # 9 identical lines: if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPa
+block 45d01ef796e3dadf  # 9 identical lines: try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | 
 block 889a59fea5ad1c4b  # 9 identical lines: }
