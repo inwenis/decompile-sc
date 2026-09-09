@@ -23,6 +23,7 @@
 #include "sc_buildid.h"
 #include "sc_card.h"
 #include "sc_console.h"
+#include "sc_marktrace.h"
 #include "sc_engine.h"
 #include "sc_env.h"
 #include "sc_fanout.h"
@@ -620,6 +621,7 @@ static void PollMarker(void) {
     // GAME thread to select the first completed own unit on its next frame). A no-op
     // unless the module is installed, which observe never does.
     ScConsoleOnMarker(g_lastMarker);
+    ScMarkTraceOnMarker(g_lastMarker);
 
     ScanScreen(g_lastMarker);
 
@@ -977,6 +979,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             }
             ScConsoleInstall(ScEngineModuleBase(), g_mode != SC_MODE_OBSERVE, consoleTrace);
         }
+        ScMarkTraceInstall(ScEngineModuleBase(), g_mode != SC_MODE_OBSERVE);
         // The storm-side buffer->glass present. PROBE is read-only and runs in any
         // mode; WIDEN writes storm's geometry and is gated out of observe like every
         // other writer (the module enforces this itself).
@@ -1077,6 +1080,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             // Console bounds restored and interacts unwrapped before the widescreen
             // geometry (which the move's +160 only makes sense on) comes out below.
             ScConsoleRemove();
+            ScMarkTraceRemove();
             // Storm present: PROBE has nothing to restore, WIDEN restores storm's
             // geometry. Comes out before the exe geometry below.
             ScStormPresentRemove();

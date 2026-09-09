@@ -95,6 +95,7 @@ static unsigned g_moves        = 0;
 static unsigned g_converted    = 0;   // roots given the buffer-composite bit
 static unsigned g_selects      = 0;
 static volatile LONG g_selectReq = 0;   // set by the observer's marker poll
+static int      g_inGame       = -1;  // last walk's verdict; -1 = no walk has run
 
 // The ten roots that ARE the bottom console (research 19.6's inventory, the
 // loaders re-read for 22): they move down by the playfield's growth. StatRes
@@ -360,6 +361,7 @@ static void OnFrame(void) {
             d = *(DWORD*)(d + SC_BINDLG_OFF_NEXT);
             ++k;
         }
+        g_inGame = inGame ? 1 : 0;
     }
 
     DWORD dlg = head;
@@ -404,6 +406,7 @@ static const BYTE kPrologueCompose[] = { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x14 };
 
 bool ScConsoleTraceWanted(void) { return ScEnvOptIn("SCPLUGIN_CONSOLE_TRACE"); }
 bool ScConsoleBufferResident(void) { return g_move; }
+int  ScConsoleInGame(void) { return g_inGame; }
 
 void ScConsoleInstall(BYTE* moduleBase, bool writeAllowed, bool trace) {
     ScEngineSetModuleBase(moduleBase);
@@ -420,6 +423,7 @@ void ScConsoleInstall(BYTE* moduleBase, bool writeAllowed, bool trace) {
     g_movedN = 0; memset(g_moved, 0, sizeof(g_moved));
     g_traceLines = g_traceDropped = g_frames = g_moves = g_converted = 0;
     g_session = 0;
+    g_inGame = -1;
     if (!g_move && !g_trace) {
         ScLog("CONSOLE: off (no console shift in the table; %%SCPLUGIN_CONSOLE_TRACE%% unset)");
         return;

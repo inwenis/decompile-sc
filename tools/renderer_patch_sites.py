@@ -937,6 +937,23 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     b.imm(0x0040C25A, STOCK_W, PF_W, 4, "terrain.fullblit.runwidth", 2,
           "0x0040C253: the run width of the whole-playfield blit")
 
+    # The terrain blitter's dirty RUN is one cell too wide: its extension loop
+    # tests the cell it is already on (`cmp byte [ecx],0` at 0x004BCE20 with ecx
+    # still at the run's first cell) before advancing, so every run blits one
+    # clean cell past its end. The fog walk 0x004808F8 covers exactly the run,
+    # and the engine's buffer->glass copy presents only marked cells, so the
+    # stock game never shows that cell. The whole-frame mirror presents it: a
+    # 16 px column of unfogged terrain right of every dirty run over unexplored
+    # map (beside a resting cursor, beside the console's per-frame rects).
+    # Two sites make the run exact: enter the extension loop on the NEXT cell
+    # (an `inc ecx` where a jmp only skipped an alignment nop), and leave ecx on
+    # the run's last cell for the column advance both paths share.
+    b.code(0x004BCE1B, "eb03" "8d4900", "41" "90909090", "terrain.run.nextcell", 2,
+           "0x004BCDC0 run extension: test the NEXT cell first (inc ecx over the jmp + alignment nop)")
+    b.cave(0x004BCE2D, "8975f8" "894dfc", "8975f8" "49" "894dfc", "terrain.run.lastcell", 2,
+           "0x004BCDC0 after a run: ecx back to the run's last cell before the shared advance "
+           "(dec ecx between the two stores)")
+
     # -- the terrain REFRESH band, 0x49B8D0..0x49C8xx ----------------------
     # The functions that FILL the scratch surface: the per-megatile writer
     # 0x49B9F0, the jump-scroll refresh 0x49BC20, the column/row refreshes

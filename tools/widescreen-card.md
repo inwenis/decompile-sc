@@ -25,6 +25,9 @@ The mouse is locked to the window (hold Ctrl or Right Alt to free it).
    circles, the paging bottom row, the over-cap production queue with its `+N`
    badge, group production. Right-click orders and the cursor behave normally
    across the whole map, including beside the console (fixed 2026-09-07).
+5. **The fog of war stays put under the mouse.** Resting or moving the cursor over
+   unexplored map no longer leaves 16-pixel slivers of terrain beside it (fixed
+   2026-09-09: a base-game blitter quirk the bigger screen had started to show).
 
 ## Clicks anywhere on the bigger map
 
@@ -45,6 +48,14 @@ click, scaled for the bigger viewport.
 3. **On space-platform maps** the starfield backdrop has a star-free band past
    the base extent (the stars' positions come from a file that only covers the
    old size). Cosmetic, off-map only.
+
+## If the game seems to lag
+
+The plugin log (`logs\sc-plugin.log` next to the launcher) now writes one
+`STORMTIME` line per minute of play: `avg_ms`/`max_ms` are the gaps between the
+game's own frame presents, `stalls100` counts gaps over a tenth of a second, and
+`hook_max_us` is the most the mod's own frame copy ever cost. Long gaps with a
+tiny hook cost mean the engine or the machine stalled, not the mod.
 
 ## If something goes wrong
 
