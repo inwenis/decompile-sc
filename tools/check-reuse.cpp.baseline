@@ -1,4 +1,4 @@
-# check-cpp-reuse baseline -- what was already duplicated when the gate
+# check-reuse baseline for cpp -- what was already duplicated when the gate
 # went in. One line per accepted finding. SHRINKING this file is the job;
 # growing it needs a reason in the PR that grows it.
 block 7f2c402513ec0f64  # 7 identical lines: ScEnsureLock(&g_lock, &g_lockReady);
