@@ -7,13 +7,11 @@ memory probe because their signatures differed: `SafeRead(const void*, void*, si
 `RangeReadable(const void*, size_t)` and `DefaultRead(DWORD, void*, size_t)` are the same
 VirtualQuery three ways. Names are what the eye already catches. Identical BLOCKS are
 what it does not, and two of those three copies had drifted apart on the low-end bounds
-check by the time anyone looked. The same scan over the PowerShell suites found
-Assert-That copied 26 times.
+check by the time anyone looked. The PowerShell suites had Assert-That 26 times over.
 
-WHY TOKENS AND NOT LINES. The block scan is jscpd (https://github.com/kucherenko/jscpd),
-run through npx, in its comment-skipping mode. A line scan calls two copies different as
-soon as one of them re-words a trailing comment; on this tree that hid a 37-line copy of
-the shutdown block and a 53-line copy of a screen-bounds check. Tokens do not care.
+THE SCAN is jscpd (https://github.com/kucherenko/jscpd), run through npx in its
+comment-skipping mode: two copies are one block when their TOKENS agree, so re-indenting
+a copy or re-wording its trailing comments does not make it a different block.
 
 WHAT IT REPORTS, per target:
 
