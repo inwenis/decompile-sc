@@ -1,11 +1,6 @@
 # check-reuse baseline for cpp -- what was already duplicated when the gate
 # went in. One line per accepted finding. SHRINKING this file is the job;
 # growing it needs a reason in the PR that grows it.
-block da3888209ec95150  # 10 identical lines: ProdQSessionSync();
-block 61327a23b842ed85  # 10 identical lines: g_stat[SC_PRODQ_STAT_STALE_SESSION] += items;
-block 6607e856b08a450b  # 12 identical lines: if (PqEngineSlot((int)slot) == SC_BUILD_QUEUE_EMPTY) return (int)slot;
-block 8f65009ea43a609b  # 14 identical lines: const int top  = rowBottom + SC_QIND_BAND_GAP;
 block 54dce077933441ae  # 6 identical lines: ScLog("PRODQSEL [%s] (no single building selected)", tag ? tag : "-");
-block 32a5d7db81ed9812  # 6 identical lines: static void ProdQSessionSync(void) {
-block 50c6b2603edf4471  # 7 identical lines: DWORD n = GetEnvironmentVariableA("SCPLUGIN_FANOUT_CMDS", buf, sizeof(
+block 63267be2adffd373  # 7 identical lines: "were spent in that game, not this one)");
 block ec6c1aa3ad342725  # 9 identical lines: void ScProdQueueTestBegin(BYTE* fakeModuleBase, int maxTotal) {

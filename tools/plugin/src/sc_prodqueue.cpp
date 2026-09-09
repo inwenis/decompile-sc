@@ -66,24 +66,6 @@ static bool RecordStillLive(const ProdRecord* r, bool deep) {
 }
 
 // ---------------------------------------------------------------------------
-// The engine's queue, read and written exactly the way the engine does
-// ---------------------------------------------------------------------------
-
-// A faithful re-implementation of findFreeBuildQueueSlot (0x004669B0), quoted instruction
-// by instruction in research/production-queue.md 3.1: start at the head, wrap past slot 4,
-// five tries, and 5 means "there is no free slot". Re-implemented because the engine's
-// version takes its CUnit* in EDX and this one is also wanted offline in hooktest.
-static int FindFreeSlot(DWORD unit) {
-    unsigned slot = *(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
-    for (int tries = SC_BUILD_QUEUE_SLOTS; tries > 0; --tries) {
-        if (slot >= SC_BUILD_QUEUE_SLOTS) slot = 0;
-        if (ScUnitQueueSlot(unit, (int)slot) == SC_BUILD_QUEUE_EMPTY) return (int)slot;
-        ++slot;
-    }
-    return SC_BUILD_QUEUE_SLOTS;
-}
-
-// ---------------------------------------------------------------------------
 // Money -- ONE DIRECTION ONLY
 //
 // The plugin never pays for anything: addToBuildQueue (0x00467250) checked the player
@@ -146,18 +128,11 @@ static void RefundRecord(ProdRecord* r, const char* why) {
 // different game whose player state is gone, and paying them into the loaded game hands
 // out three free Probes' worth on every cross-load.
 static void ProdQSessionSync(void) {
-    const unsigned now = ScSessionEpoch();
-    if (g_session == now) return;
-    const int items = ScLedgerItemCount(g_rec, g_recCount);
-    if (g_recCount > 0) {
-        ScLog("PRODQEV session %u -> %u: dropping %d building record(s) holding %d "
-              "item(s) queued in a game that has ended -- NOT refunded (those minerals "
-              "were spent in that game, not this one)",
-              g_session, now, g_recCount, items);
-        g_stat[SC_PRODQ_STAT_STALE_SESSION] += items;
-    }
-    g_recCount = 0;
-    g_session  = now;
+    g_stat[SC_PRODQ_STAT_STALE_SESSION] += ScLedgerSessionSync(
+        g_rec, &g_recCount, &g_session,
+        "PRODQEV session %u -> %u: dropping %d building record(s) holding %d "
+        "item(s) queued in a game that has ended -- NOT refunded (those minerals "
+        "were spent in that game, not this one)");
 }
 
 static void CollectGarbage(bool deep) {
@@ -205,7 +180,7 @@ static int HoldRoom(const ProdRecord* r) {
 static int PromoteInto(ProdRecord* r) {
     int promoted = 0;
     while (r->count > 0 && ScUnitQueueLength(r->unit) < SC_PRODQ_ENGINE_HOLD) {
-        int slot = FindFreeSlot(r->unit);
+        int slot = ScUnitFreeQueueSlot(r->unit);
         if (slot >= SC_BUILD_QUEUE_SLOTS) break;
         WORD type = r->types[0];
         ScUnitSetQueueSlot(r->unit, slot, type);
@@ -449,9 +424,8 @@ void ScProdQueueLogState(const char* tag) {
     // one observation (AGENTS.md § "Oracles: absence and defect-era checks"). It also gives
     // a test the engine's own five slots to watch drain, read from unit memory.
     {
-        DWORD* sel = (DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_SELECTION);
-        DWORD u = sel[0];
-        if (u && !sel[1] && ScUnitPtrValid(u)) {
+        DWORD u = ScClientSoleSelectedUnit();
+        if (u) {
             char eng[96];
             BYTE head = 0;
             int engineLen = 0;
@@ -610,7 +584,7 @@ extern "C" void SC_GAME_ENTRY ScProdTrainDetour(DWORD cmd) {
     if (unit) {
         // Sampled BEFORE the engine runs: afterwards, a queue that was full and a queue
         // the engine has just filled its last slot of look exactly the same.
-        wasFull = FindFreeSlot(unit) >= SC_BUILD_QUEUE_SLOTS;
+        wasFull = ScUnitFreeQueueSlot(unit) >= SC_BUILD_QUEUE_SLOTS;
         if (cmd) type = *(WORD*)(cmd + 1);
     }
     CallEax(g_hkTrain.trampoline, cmd);

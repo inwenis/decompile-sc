@@ -140,8 +140,7 @@ static void SetDefaultFanoutCmds(void) {
 
 static void LoadFanoutCmds(void) {
     char buf[256];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_FANOUT_CMDS", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) { SetDefaultFanoutCmds(); return; }
+    if (!ScEnvRead("SCPLUGIN_FANOUT_CMDS", buf, sizeof(buf))) { SetDefaultFanoutCmds(); return; }
 
     g_fanoutCmdCount = 0;
     const char* p = buf;

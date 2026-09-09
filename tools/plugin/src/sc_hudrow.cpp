@@ -554,33 +554,20 @@ static bool PlaceIndicator(short* box, DWORD root, DWORD firstBtn, int textLen) 
 
     int want = textLen * SC_QIND_CHAR_W;
     if (want < SC_QIND_BOX_W) want = SC_QIND_BOX_W;
-    const int left = rowLeft;
-    const int top  = rowBottom + SC_QIND_BAND_GAP;
-    int right  = left + want;
-    if (right > surfW - 1) right = surfW - 1;
-    int bottom = top + SC_QIND_BOX_H;
-    if (bottom > surfH) bottom = surfH;
-
-    // The rule the engine's own draw applies (SC_VA_DRAW_STRING refuses OUTRIGHT when
-    // `top + fontHeight > clip.bottom`, and the clip box is these bounds -- research/
-    // status-pane-text.md 3), checked against the FONT'S own height rather than a constant.
-    // A band shorter than the font draws nothing while every field read-back says the
-    // indicator is fine -- a nine-pixel box passes every non-pixel check. A box narrower
-    // than the string draws a TRUNCATION, worse than nothing because it reads as a working
-    // feature. Refuse both here, loudly and once, rather than let a player meet them.
-    const int fontH = ScQueueIndSmallFontHeight();
-    if (bottom - top < (fontH > 0 ? fontH : SC_QIND_BAND_MIN_H) || right - left < want) {
+    // Refused loudly and once when the band cannot hold the string (ScQueueIndPlaceBand
+    // says why): a nine-pixel box passes every non-pixel check while drawing nothing.
+    int fontH = 0;
+    if (!ScQueueIndPlaceBand(rowLeft, rowBottom + SC_QIND_BAND_GAP, want, surfW, surfH,
+                             box, &fontH)) {
         if (!g_bandTooSmall) {
             ScLog("HUDROW: the band below the row is (%d,%d,%d,%d) on a %dx%d surface -- too "
                   "small for %d chars at fontH=%d, so the page indicator is SUPPRESSED "
                   "(never drawn back onto the buttons)",
-                  left, top, right, bottom, surfW, surfH, textLen, fontH);
+                  box[0], box[1], box[2], box[3], surfW, surfH, textLen, fontH);
             g_bandTooSmall = true;
         }
         return false;
     }
-    box[0] = (short)left;  box[1] = (short)top;
-    box[2] = (short)right; box[3] = (short)bottom;
     return true;
 }
 

@@ -152,16 +152,10 @@ static bool CanAfford(BYTE player, int kind, unsigned id) {
 // queued it. The epoch is the only test a load cannot satisfy. Nothing is refunded either
 // way (a held item is unpaid), so all it changes is which counter says why a record went.
 static void UpgSessionSync(void) {
-    const unsigned now = ScSessionEpoch();
-    if (g_session == now) return;
-    const int items = ScLedgerItemCount(g_rec, g_recCount);
-    if (g_recCount > 0) {
-        ScLog("UPGQEV session %u -> %u: dropping %d building record(s) holding %d "
-              "item(s) queued in a game that has ended", g_session, now, g_recCount, items);
-        g_stat[SC_UPGQ_STAT_STALE_SESSION] += items;
-    }
-    g_recCount = 0;
-    g_session  = now;
+    g_stat[SC_UPGQ_STAT_STALE_SESSION] += ScLedgerSessionSync(
+        g_rec, &g_recCount, &g_session,
+        "UPGQEV session %u -> %u: dropping %d building record(s) holding %d "
+        "item(s) queued in a game that has ended");
 }
 
 // A record whose building has gone is simply forgotten: a held item was never paid for, so
@@ -478,9 +472,8 @@ void ScUpgQueueLogState(const char* tag) {
     // when the plugin holds nothing, making "holds nothing" and "the oracle did not run" the
     // same observation (AGENTS.md § "Oracles: absence and defect-era checks").
     {
-        DWORD* sel = (DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_SELECTION);
-        DWORD u = sel[0];
-        if (u && !sel[1] && ScUnitPtrValid(u)) {
+        DWORD u = ScClientSoleSelectedUnit();
+        if (u) {
             LogUnitLine("UPGQSEL", tag, u, ScLedgerFind(g_rec, g_recCount, u));
             LogPlayerProgress(tag, ScUnitPlayer(u));
         } else {
@@ -969,12 +962,7 @@ static const BYTE kPrologueCancel[] = { 0x56, 0xC6, 0x05, 0xB6, 0x84, 0x62, 0x00
 
 // --- Lifecycle ---------------------------------------------------------------
 
-bool ScUpgQueueEnabled(void) {
-    char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_UPGQ", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return false;
-    return buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y';
-}
+bool ScUpgQueueEnabled(void) { return ScEnvOptIn("SCPLUGIN_UPGQ"); }
 
 static int ResolveMax(void) {
     return ScEnvInt("SCPLUGIN_UPGQ_MAX", SC_UPGQ_DEFAULT_MAX,

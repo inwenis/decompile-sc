@@ -2750,28 +2750,9 @@ static void PqSetEngineQueue(int n, WORD type) {
             (i < n) ? type : (WORD)SC_BUILD_QUEUE_EMPTY;
     }
 }
-static WORD PqEngineSlot(int i) {
-    return *(WORD*)(PqBuilding() + SC_CUNIT_OFF_BUILD_QUEUE + i * 2);
-}
-static int PqEngineLen(void) {
-    int n = 0;
-    for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) {
-        if (PqEngineSlot(i) != SC_BUILD_QUEUE_EMPTY) ++n;
-    }
-    return n;
-}
-
-// findFreeBuildQueueSlot (0x004669B0), modelled: from the head, wrapping, five tries.
-static int PqFreeSlot(void) {
-    DWORD u = PqBuilding();
-    unsigned slot = *(BYTE*)(u + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
-    for (int tries = SC_BUILD_QUEUE_SLOTS; tries > 0; --tries) {
-        if (slot >= SC_BUILD_QUEUE_SLOTS) slot = 0;
-        if (PqEngineSlot((int)slot) == SC_BUILD_QUEUE_EMPTY) return (int)slot;
-        ++slot;
-    }
-    return SC_BUILD_QUEUE_SLOTS;
-}
+static WORD PqEngineSlot(int i) { return ScUnitQueueSlot(PqBuilding(), i); }
+static int  PqEngineLen(void)   { return ScUnitQueueLength(PqBuilding()); }
+static int  PqFreeSlot(void)    { return ScUnitFreeQueueSlot(PqBuilding()); }
 
 // ONE PRESS OF TRAIN, with the ENGINE's half modelled first: the engine is the only thing that
 // ever pays, and a test that let the plugin pay would be testing a different program.
