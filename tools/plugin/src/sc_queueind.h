@@ -160,6 +160,17 @@ int ScQueueIndSurfaceSize(DWORD root, int* w, int* h);
 // header. 0 means "no answer" (the handle is not up yet), never "zero pixels tall".
 int ScQueueIndSmallFontHeight(void);
 
+// The band `want` pixels wide and SC_QIND_BOX_H tall at (left, top), clamped to a
+// surfW x surfH surface, written to `box` -- and whether the engine's own draw would
+// still draw ALL of a string in it. SC_VA_DRAW_STRING refuses outright when
+// `top + fontHeight > clip.bottom` (research/status-pane-text.md 3), so the band is
+// measured against the FONT'S own height rather than a constant: a band shorter than the
+// font draws nothing while every field read-back says the indicator is fine. A box
+// narrower than the string draws a TRUNCATION, worse than nothing because it reads as a
+// working feature. `fontH` gets the height that decided, for the caller's own log line.
+bool ScQueueIndPlaceBand(int left, int top, int want, int surfW, int surfH,
+                         short* box, int* fontH);
+
 // INK: non-background bytes of the dialog's own 8-bit surface inside a rect. That surface is
 // BinDlg+0x10 with {u16 w, u16 h} at +0x0C/+0x0E, read off the allocator 0x004C35F0 itself
 // (research/status-pane-text.md 4). Answers "did anything get drawn there" from in-process

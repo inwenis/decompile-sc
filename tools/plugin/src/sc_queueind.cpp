@@ -174,6 +174,18 @@ int ScQueueIndSmallFontHeight(void) {
 
 static int SmallFontHeight(void) { return ScQueueIndSmallFontHeight(); }
 
+bool ScQueueIndPlaceBand(int left, int top, int want, int surfW, int surfH,
+                         short* box, int* fontH) {
+    int right  = left + want;
+    if (right > surfW - 1) right = surfW - 1;
+    int bottom = top + SC_QIND_BOX_H;
+    if (bottom > surfH) bottom = surfH;
+    box[0] = (short)left;  box[1] = (short)top;
+    box[2] = (short)right; box[3] = (short)bottom;
+    *fontH = SmallFontHeight();
+    return bottom - top >= (*fontH > 0 ? *fontH : SC_QIND_BAND_MIN_H) && right - left >= want;
+}
+
 static int OverflowOf(DWORD unit) {
     int n = ScProdQueueOverflowCount(unit);   // -1 when the building is not tracked
     return n > 0 ? n : 0;
@@ -503,32 +515,17 @@ static bool PlaceOn(short* b, DWORD anchor, DWORD root, int mode, int textLen) {
         }
         if (surfW <= 0 || surfH <= 0) return false;
 
-        top  = (short)(rowBottom + SC_QIND_BAND_GAP);
-        left = (short)rowLeft;
-        int right  = left + want;
-        if (right > surfW - 1) right = surfW - 1;
-        int bottom = top + SC_QIND_BOX_H;
-        if (bottom > surfH) bottom = surfH;
-
-        // The rule the engine's own draw applies (SC_VA_DRAW_STRING refuses outright when
-        // `top + fontHeight > clip.bottom`, and the clip box is these bounds), checked
-        // against the FONT'S OWN height rather than a constant. A band too short draws
-        // nothing while every other read-back says the indicator is fine, so it is refused
-        // here, loudly, instead of being discovered by a player.
-        const int fontH = SmallFontHeight();
-        if (bottom - top < (fontH > 0 ? fontH : SC_QIND_BAND_MIN_H) ||
-            right - left < want) {
+        int fontH = 0;
+        if (!ScQueueIndPlaceBand(rowLeft, rowBottom + SC_QIND_BAND_GAP, want, surfW, surfH,
+                                 b, &fontH)) {
             if (!g_bandLogged) {
                 ScLog("QIND: the band below the row is (%d,%d,%d,%d) on a %dx%d surface -- "
                       "too small for \"%d chars\" at fontH=%d; the group line is suppressed",
-                      left, top, right, bottom, surfW, surfH, textLen, fontH);
+                      b[0], b[1], b[2], b[3], surfW, surfH, textLen, fontH);
                 g_bandLogged = true;
             }
             return false;
         }
-        b[0] = left; b[1] = top;
-        b[2] = (short)right;
-        b[3] = (short)bottom;
     } else if (mode == SC_QIND_UPGRADE) {
         // "+N upg" runs longer than STRIP's "+N" (up to "+16 upg", 7 chars), and the icon
         // it starts on (id 6) is only ~38px wide -- clamping to it the way STRIP does
