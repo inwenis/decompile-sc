@@ -126,8 +126,9 @@ jobs:
         shell: pwsh
         run: |
           # Fails only on duplication that is NOT already in a tools/check-reuse.*.baseline,
-          # so this is "no new copies" rather than a wall of red.
-          # tests/check-reuse.Tests.ps1 covers the checker itself.
+          # so this is "no new copies" rather than a wall of red. The block scan is jscpd,
+          # fetched through npx (Node is on the runner). tests/check-reuse.Tests.ps1 covers
+          # the checker itself.
           python tools/check-reuse.py
           exit $LASTEXITCODE
 

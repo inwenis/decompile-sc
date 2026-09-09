@@ -10,18 +10,24 @@ what it does not, and two of those three copies had drifted apart on the low-end
 check by the time anyone looked. The same scan over the PowerShell suites found
 Assert-That copied 26 times.
 
+WHY TOKENS AND NOT LINES. The block scan is jscpd (https://github.com/kucherenko/jscpd),
+run through npx, in its comment-skipping mode. A line scan calls two copies different as
+soon as one of them re-words a trailing comment; on this tree that hid a 37-line copy of
+the shutdown block and a 53-line copy of a screen-bounds check. Tokens do not care.
+
 WHAT IT REPORTS, per target:
 
   cpp   tools/plugin/src/*.cpp, *.h     block, name, define, va
   ps1   tools/plugin/*.ps1              block
 
-  block   MIN_BLOCK or more consecutive identical lines in two different files
+  block   MIN_LINES or more lines, MIN_TOKENS or more tokens, the same in two files
   name    one `static` function name defined in two different files
   define  one #define, name and body, in two different files
   va      a bare engine address literal in code outside sc_addresses.h
 
-Comments, blank lines and #include lines are ignored: a copied comment is a different
-problem (tools/check-comment-narration.py) and a shared include list is not duplication.
+A block copied inside ONE file is not reported: hooktest.cpp builds a fake engine image
+the same way in every part on purpose, and the rule this enforces is "never copy a helper
+into a SECOND file".
 
 THE BASELINE. This starts life with findings already in the tree -- some are deliberate
 (a two-line test seam each module must own) and some are real but too big for the commit
@@ -33,17 +39,26 @@ reason in the PR.
     python tools/check-reuse.py                    # check, exit 1 on a new finding
     python tools/check-reuse.py --list             # print every finding, exit 0
     python tools/check-reuse.py --update-baseline  # accept what is there now
+
+Needs Node.js on PATH for npx; the first run downloads jscpd into npx's cache.
 """
 
 import argparse
 import hashlib
+import json
 import pathlib
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 
+JSCPD = "jscpd@5.2.0"
 # Five lines is the shortest run that is a copied idea rather than a shared idiom: a
-# for-loop header plus a body reaches it, `return false; }` does not.
-MIN_BLOCK = 5
+# for-loop header plus a body reaches it, `return false; }` does not. 25 tokens keeps a
+# five-line run of closing braces from counting.
+MIN_LINES = 5
+MIN_TOKENS = 25
 
 VA = re.compile(r"\b0x00(4[0-9A-Fa-f]{5}|5[0-9A-Fa-f]{5}|6[0-9A-Fa-f]{5})\b")
 # An address inside a log line is evidence being quoted, not an address being used.
@@ -62,7 +77,7 @@ class Finding:
         self.kind = kind
         self.summary = summary
         self.where = where            # list of "file:line"
-        self.span = span              # list of (file, index into significant(), length)
+        self.span = span              # list of (file, first line, last line)
 
     @property
     def key(self):
@@ -91,55 +106,57 @@ def significant(path, target):
     return out
 
 
-def collect_blocks(files):
-    """Every run of >= MIN_BLOCK identical consecutive lines shared by two files."""
-    # index every window by its text, then keep the longest run per (file, start).
-    windows = {}
-    for path, lines in files.items():
-        for i in range(len(lines) - MIN_BLOCK + 1):
-            text = "\n".join(t for _, t in lines[i:i + MIN_BLOCK])
-            windows.setdefault(text, []).append((path.name, lines[i][0], i))
+def collect_blocks(files, target):
+    """Every cross-file clone jscpd reports. A block in N files comes back as N-1 pairs
+    with the same summary, which the baseline sees as one key."""
+    if not files:
+        return []
+    npx = shutil.which("npx")
+    if not npx:
+        sys.exit("check-reuse: npx not found -- the block scan needs Node.js on PATH")
+    out = pathlib.Path(tempfile.mkdtemp(prefix="check-reuse-"))
+    cmd = [npx, "--yes", JSCPD, str(target["root"]), "--pattern", target["pattern"],
+           "--reporters", "json", "--output", str(out), "--mode", "weak", "--silent",
+           "--min-lines", str(MIN_LINES), "--min-tokens", str(MIN_TOKENS)]
+    if target["skip"]:
+        cmd += ["--ignore", ",".join("**/" + s for s in target["skip"])]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
+    report = json.loads((out / "jscpd-report.json").read_text(encoding="utf-8"))
+    shutil.rmtree(out, ignore_errors=True)
 
-    by_name = {p.name: lines for p, lines in files.items()}
+    sig = {p.name: dict(lines) for p, lines in files.items()}
 
-    def agrees(hits, offset):
-        """Do all hits still hold the same line `offset` lines from their start?"""
-        seen = set()
-        for name, _, idx in hits:
-            lines = by_name[name]
-            j = idx + offset
-            if j < 0 or j >= len(lines):
-                return False
-            seen.add(lines[j][1])
-        return len(seen) == 1
+    def code_lines(name, f):
+        """The significant lines a clone covers: jscpd skipped `//` and `#` comment
+        tokens, but not a `<# #>` block, and it cannot know that a shared include list
+        is not duplication. A copy has to be MIN_LINES of code on BOTH sides."""
+        span = range(f["startLoc"]["line"], f["endLoc"]["line"] + 1)
+        return [l for l in (sig.get(name, {}).get(n) for n in span) if l]
 
     findings = []
-    for text, hits in windows.items():
-        if len({n for n, _, _ in hits}) < 2:
+    for d in report["duplicates"]:
+        a, b = d["firstFile"], d["secondFile"]
+        an, bn = pathlib.Path(a["name"]).name, pathlib.Path(b["name"]).name
+        if an == bn:
             continue
-        # Report a run ONCE, at its start. A window whose preceding line also agrees is
-        # the middle of a longer run somebody else already reported; a 12-line copy
-        # should be one finding, not eight overlapping five-line ones.
-        if agrees(hits, -1):
+        sides = [code_lines(an, a), code_lines(bn, b)]
+        if min(map(len, sides)) < MIN_LINES:
             continue
-        grown = MIN_BLOCK
-        while agrees(hits, grown):
-            grown += 1
         findings.append(Finding(
             "block",
-            "%d identical lines: %s" % (grown, text.split("\n")[0][:70]),
-            sorted("%s:%d" % (n, ln) for n, ln, _ in hits),
-            [(n, idx, grown) for n, _, idx in hits]))
+            "%d identical lines: %s" % (d["lines"], sides[0][0][:70]),
+            sorted("%s:%d" % (n, f["startLoc"]["line"]) for n, f in ((an, a), (bn, b))),
+            [(n, f["startLoc"]["line"], f["endLoc"]["line"]) for n, f in ((an, a), (bn, b))]))
     return findings
 
 
-def collect_names(files):
+def collect_names(files, target):
     """One `static` name whose BODY is also the same, in two files.
 
     Name alone is not a finding: `static` is file-local, so two modules may each have a
     private CollectGarbage doing genuinely different things -- sc_prodqueue refunds and
     sc_upgrades must not. What is a finding is the same name over the same body, which
-    is a copy that the block scan misses when the copy is shorter than MIN_BLOCK.
+    is a copy that the block scan misses when the copy is shorter than MIN_LINES.
     """
     defs = {}
     for path, lines in files.items():
@@ -157,7 +174,7 @@ def collect_names(files):
     return out
 
 
-def collect_defines(files):
+def collect_defines(files, target):
     defs = {}
     for path, lines in files.items():
         for n, text in lines:
@@ -173,7 +190,7 @@ def collect_defines(files):
     return out
 
 
-def collect_vas(files):
+def collect_vas(files, target):
     """A bare engine address the plugin USES. Three things that look like one are not:
 
       * an address in a trailing comment or a log line -- that is evidence, quoted;
@@ -199,21 +216,23 @@ def collect_vas(files):
 
 TARGETS = [
     dict(name="cpp", root=pathlib.Path("tools/plugin/src"), globs=("*.cpp", "*.h"),
-         comment="//", block=("/*", "*/"), ignore=("#include",),
+         pattern="*.{cpp,h}", comment="//", block=("/*", "*/"), ignore=("#include",),
          # Generated, or a table of evidence rather than code.
          skip={"sc_screen_patches.h", "sc_addresses.h"},
          collectors=(collect_blocks, collect_names, collect_defines, collect_vas)),
-    dict(name="ps1", root=pathlib.Path("tools/plugin"), globs=("*.ps1",),
+    dict(name="ps1", root=pathlib.Path("tools/plugin"), globs=("*.ps1",), pattern="*.ps1",
          comment="#", block=("<#", "#>"), ignore=(), skip=set(),
          collectors=(collect_blocks,)),
 ]
 
 
 def copied(files, findings):
-    """How much of the tree sits inside a reported block: the number a reuse PR moves."""
-    total = sum(len(lines) for lines in files.values())
-    inside = {(name, i) for f in findings for name, idx, length in f.span
-              for i in range(idx, idx + length)}
+    """How much of the tree sits inside a reported block: the number a reuse PR moves.
+    Counted over significant lines, so a copied comment or blank line is not credit."""
+    sig = {p.name: {n for n, _ in lines} for p, lines in files.items()}
+    total = sum(len(s) for s in sig.values())
+    inside = {(name, n) for f in findings for name, first, last in f.span
+              for n in range(first, last + 1) if n in sig.get(name, ())}
     return "%d of %d lines (%d%%) inside a copied block" % (
         len(inside), total, 100 * len(inside) // max(total, 1))
 
@@ -223,8 +242,8 @@ def check(target, args):
     files = {p: significant(p, target)
              for g in target["globs"] for p in sorted(target["root"].glob(g))
              if p.name not in target["skip"]}
-    findings = [f for collect in target["collectors"] for f in collect(files)]
-    findings.sort(key=lambda f: (f.kind, f.summary))
+    findings = [f for collect in target["collectors"] for f in collect(files, target)]
+    findings.sort(key=lambda f: (f.kind, f.summary, f.where))
     baseline = pathlib.Path("tools/check-reuse.%s.baseline" % target["name"])
 
     if args.list:
@@ -235,13 +254,17 @@ def check(target, args):
         return 0
 
     if args.update_baseline:
+        seen, entries = set(), []
+        for f in findings:
+            if f.key not in seen:
+                seen.add(f.key)
+                entries.append("%s  # %s\n" % (f.key, f.summary))
         baseline.write_text(
             "# check-reuse baseline for %s -- what was already duplicated when the gate\n"
             "# went in. One line per accepted finding. SHRINKING this file is the job;\n"
             "# growing it needs a reason in the PR that grows it.\n" % target["name"]
-            + "".join("%s  # %s\n" % (f.key, f.summary) for f in findings),
-            encoding="utf-8")
-        print("%s: baseline written with %d finding(s)" % (tag, len(findings)))
+            + "".join(entries), encoding="utf-8")
+        print("%s: baseline written with %d finding(s)" % (tag, len(entries)))
         return 0
 
     accepted = set()
