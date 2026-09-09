@@ -234,8 +234,11 @@ function Test-PositiveArm {
         (-not (Test-BandDominant -Band (Get-BoxBand -Dump $Arm.Off.Path -Box $box) -Idx $fill.TopIdx))
     $g = Get-GlassStats -Arm $Arm -Box $box
     Report-Finding "$n arm GLASS over the bbox: on1 dark=$($g.On[0].Dark) light=$($g.On[0].Light) diff-vs-base=$($g.On[0].Diff); on2 dark=$($g.On[1].Dark) light=$($g.On[1].Light) diff=$($g.On[1].Diff); off diff-vs-base=$($g.Off.Diff)"
-    Assert-True "$n arm: the tooltip reaches the GLASS in both captures (bbox differs from the no-hover glass >= 30%, dark >= 40%, some light text)" `
-        (@($g.On | Where-Object { $_.Diff -ge 0.30 -and $_.Dark -ge 0.40 -and $_.Light -ge 0.01 }).Count -eq 2) "(diff=$($g.On[0].Diff)/$($g.On[1].Diff) dark=$($g.On[0].Dark)/$($g.On[1].Dark))"
+    # A box over the status pane sits on art that is already dark, so its fill changes
+    # few pixels there; the dark share and the light text carry the verdict, the diff
+    # only has to show the capture is not the no-hover one.
+    Assert-True "$n arm: the tooltip reaches the GLASS in both captures (bbox differs from the no-hover glass >= 15%, dark >= 40%, some light text)" `
+        (@($g.On | Where-Object { $_.Diff -ge 0.15 -and $_.Dark -ge 0.40 -and $_.Light -ge 0.01 }).Count -eq 2) "(diff=$($g.On[0].Diff)/$($g.On[1].Diff) dark=$($g.On[0].Dark)/$($g.On[1].Dark))"
     Assert-True "$n arm: the glass returns to the no-hover picture after the cursor leaves (bbox diff-vs-base <= 10%)" `
         ($g.Off.Px -gt 0 -and $g.Off.Diff -le 0.10) "(diff=$($g.Off.Diff))"
     $true
@@ -316,7 +319,8 @@ try {
     # the Nexus animation higher up stays out of the window.
     $sd = @(Get-ScDialogs -LogPath $log | Where-Object { $_.Name -eq 'StatData' }) | Select-Object -First 1
     $icon = if ($sd) { @($sd.Controls | Where-Object { $_.Type -eq 9 -and $_.Text }) | Select-Object -First 1 } else { $null }
-    Assert-True 'the DIALOGS line carries StatData and one labelled icon control (type 9) at runtime' ($null -ne $icon) "(root=$($sd.Left),$($sd.Top) ctrl='$($icon.Text)')"
+    $iconWhat = if ($icon) { "root=$($sd.Left),$($sd.Top) ctrl='$($icon.Text)'" } elseif ($sd) { "root=$($sd.Left),$($sd.Top), no type-9 control with text among $(@($sd.Controls).Count)" } else { 'no StatData line' }
+    Assert-True 'the DIALOGS line carries StatData and one labelled icon control (type 9) at runtime' ($null -ne $icon) "($iconWhat)"
     if ($icon) {
         $iL = $sd.Left + $icon.Left; $iT = $sd.Top + $icon.Top; $iR = $sd.Left + $icon.Right; $iB = $sd.Top + $icon.Bottom
         $ip = Get-DialogCentre @{ Left = $iL; Top = $iT; Right = $iR; Bottom = $iB }

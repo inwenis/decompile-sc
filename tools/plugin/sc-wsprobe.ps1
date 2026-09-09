@@ -47,11 +47,14 @@ function Initialize-ScWsProbe {
 # The one-Nexus fixture: an explored start with black map beyond its sight.
 function New-ScNexusFixture {
     param([Parameter(Mandatory)][string]$RepoRoot, [Parameter(Mandatory)][string]$FixtureDir,
-          [Parameter(Mandatory)][string]$MapName, [string]$Noun = 'probe')
+          [Parameter(Mandatory)][string]$MapName, [string]$Noun = 'probe',
+          # The template's wandering critters are the only sprites that move on their own;
+          # a probe that judges buffer changes against marks leaves them out.
+          [switch]$ClearCritters)
     $run = New-ScFixtureRun -Dir $FixtureDir -Names @($MapName)
     $mapPath = Join-Path $FixtureDir $MapName
     $gen = & (Join-Path $RepoRoot 'tools/make-test-map.ps1') `
-        -UnitCount 1 -UnitType 'nexus' -Player 0 -ClearPlayerUnits -Race 'protoss' `
+        -UnitCount 1 -UnitType 'nexus' -Player 0 -ClearPlayerUnits -ClearCritters:$ClearCritters -Race 'protoss' `
         -StartingMinerals 500 -StartingGas 0 -OutputPath $mapPath 2>&1
     @($gen | Where-Object { "$_" -notmatch 'WARNING:StormLibFinder' }) | ForEach-Object { Write-Host "       $_" }
     if (-not (Test-Path -LiteralPath $mapPath)) { throw "${Noun}: the fixture was never generated." }

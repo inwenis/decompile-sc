@@ -184,6 +184,8 @@ _UNIT_FIELDS = (
 UnitRecord = collections.namedtuple("UnitRecord", _UNIT_FIELDS)
 
 START_LOCATION_UNIT_ID = 214
+# units.dat 89, 90, 94, 95, 96, 97: the map critters, the only neutral units that move.
+CRITTER_UNIT_IDS = frozenset((89, 90, 94, 95, 96, 97))
 
 # "Changeable properties valid" bitmask (offset 0x0E in a UNIT record):
 # bit0 owner, bit1 hp, bit2 shield, bit3 energy, bit4 resource, bit5 hangar.
@@ -1037,6 +1039,7 @@ def generate_map(
     starting_minerals: int | None = None,
     starting_gas: int | None = None,
     unit_settings: dict[str, list[tuple[int, int]]] | None = None,
+    clear_critters: bool = False,
 ) -> None:
     unit_id = resolve_unit_id(unit_type)
     if not 0 <= player <= 7:
@@ -1113,6 +1116,8 @@ def generate_map(
             r for r in existing_records
             if r.player != player or r.unit_id == START_LOCATION_UNIT_ID
         ]
+    if clear_critters:
+        kept_records = [r for r in kept_records if r.unit_id not in CRITTER_UNIT_IDS]
 
     next_instance = max((r.instance for r in existing_records), default=0) + 1
     new_records = build_new_unit_records(
@@ -1767,6 +1772,12 @@ def main() -> int:
              "all one type (a mixed selection gets no ability buttons in game).",
     )
     parser.add_argument(
+        "--clear-critters",
+        action="store_true",
+        help="Remove the template's critters, the one kind of neutral unit that moves "
+             "on its own (a probe judging buffer changes against marks cannot have them).",
+    )
+    parser.add_argument(
         "--keep-triggers",
         action="store_true",
         help="Keep the template's TRIG/MBRF sections. NOT for a test fixture: every "
@@ -1957,6 +1968,7 @@ def main() -> int:
             args.enemy_owner, args.min_enemy_gap, args.unit_hp,
             args.damaged_count, args.damaged_hp, techs, args.damaged_energy,
             args.starting_minerals, args.starting_gas, unit_settings,
+            clear_critters=args.clear_critters,
         )
         print(f"wrote {args.output}")
         if not args.no_validate:

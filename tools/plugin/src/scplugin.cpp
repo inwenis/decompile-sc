@@ -717,10 +717,12 @@ static void ScanDialogs(void) {
     if (!g_dialogScan) return;
 
     // The line carries everything; the CHANGE test runs on a key that leaves out the
-    // control text of the in-game status dialogs (Stat*): hit points, supplies and
+    // control TEXT of the in-game status dialogs (Stat*): hit points, supplies and
     // minerals change on nearly every poll, and one line per poll is most of a
-    // session's log. Every other dialog keeps its text in the key, because a menu's
-    // game-type combo changes text without changing a rect.
+    // session's log. Their controls' rects stay in the key, so a child that appears
+    // with a selection (an armour icon, a queue slot) still logs a fresh line. Every
+    // other dialog keeps its text in the key, because a menu's game-type combo changes
+    // text without changing a rect.
     static char prev[2048] = { 0 };
     char line[2048], key[2048];
     size_t used = 0, kused = 0;
@@ -762,10 +764,9 @@ static void ScanDialogs(void) {
                     if (!DlgAppend(line, sizeof(line), &used,
                                    " ctrl='%s' rect=%d,%d,%d,%d type=%u flags=0x%X",
                                    ctext, cr[0], cr[1], cr[2], cr[3], type, flags)) break;
-                    if (!liveText)
-                        DlgAppend(key, sizeof(key), &kused,
-                                  " ctrl='%s' rect=%d,%d,%d,%d type=%u flags=0x%X",
-                                  ctext, cr[0], cr[1], cr[2], cr[3], type, flags);
+                    DlgAppend(key, sizeof(key), &kused,
+                              " ctrl='%s' rect=%d,%d,%d,%d type=%u flags=0x%X",
+                              liveText ? "" : ctext, cr[0], cr[1], cr[2], cr[3], type, flags);
                 }
                 DWORD next = 0;
                 if (!ReadU32(ctrl + SC_BINDLG_OFF_NEXT, &next)) break;

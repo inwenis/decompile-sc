@@ -3149,11 +3149,37 @@ buffer is then a complete ordered composition at every present, which is what an
 unconditional mirror needs. Every other reader of layer-5 bit 0 is a "skip the redundant
 per-image mark" guard (0x004D4E82/4F12/4FA2/5032 and the image show/hide paths). The cost
 is measured, not assumed: STORMTIME now carries `cpu_pct=` (GetProcessTimes over the
-window) -- MEASURED_BEFORE / MEASURED_AFTER.
+window): 92% of one core without the full redraw, 94% with it, over the same probe (the
+engine's own loop already spins a core: `CONSOLESTATS frames=` counts five million
+compose calls a minute), presents 15.4 ms average either way, `fullFrames=` equal to the
+presents.
 
 ### 24.5 Measured
 
-PROBE_RESULTS
+Off-screen, 1280x880, run through `run-offscreen.ps1` (2026-09-09):
+
+| | unfixed engine (main) | fix, layer-1 draw off | fix |
+|---|---|---|---|
+| card tooltip (Build Probe) in the buffer, first hover dump | gone: a 60x1 row at y=732 | present, bottom 757 = button top - 1 | present, bottom 757 |
+| card tooltip present in 12 burst dumps | -- | 12 of 12 (its rows lie in the playfield the full redraw marks) | 12 of 12 |
+| armour-icon tooltip (StatData, generic path) placement | (278,458)-(396,479): bottom AT the 479 clamp, 360 px above its icon | beside the icon, top 839 | beside the icon, top 839 |
+| armour-icon tooltip present in 12 burst dumps | 12 of 12 (over unexplored map, nothing recomposites under it) | **3 of 12** (the strobe) | 12 of 12 |
+| glass over the box (client-rect capture) | -- | -- | card diff 0.86 / dark 0.62 / light 0.18; icon diff 0.23 / dark 0.80 / light 0.10 |
+| minimap, resource bar hovers | no box | no box | no box |
+
+Sprites (`probe-sprite-flip.ps1`: cursor sweeps over the base with MARK + IMRK traced,
+the posted-cursor override holding the camera at (544,416) throughout):
+
+| | full redraw off | full redraw on |
+|---|---|---|
+| pixels changed in cells no mark covers, line 1 -> line 2 | **1247 / 1285 / 1504** px over three runs, bbox (31..36,80)-(141,255..276): the left mineral cluster | 0 |
+| other pairs | 0 | 0 |
+
+Two probe lessons paid for on the way: the engine's `ClipCursor` pushes the real mouse to
+its box's far corner, where the edge-scroll then pans the camera on every posted move
+(issue #156; the override above), and the image module skips its own rect marks while a
+full redraw is pending (the bit-0 guards), so an animated image (a geyser's smoke) reads
+as an unmarked change unless the run-wide image marks mask it.
 
 ### 24.6 Reproduce
 

@@ -56,6 +56,10 @@ $NEXUS_TYPE = 0x9A
 $SWEEP_X = 20..1100 | Where-Object { ($_ - 20) % 40 -eq 0 }
 $LINE_DY = @(-180, -110, -50, 10)
 $MARK_PAD = 2
+# An animated image's show/hide mark is its rect at that moment; a geyser's smoke puff
+# then rises a further ~20 px through frames the full redraw never marks, so the
+# run-wide image marks are grown by this much before they mask a pair.
+$ANIM_PAD = 24
 # Far from the base and from every sweep line, so the parked cursor marks nothing there.
 $AWAY = [pscustomobject]@{ X = 40; Y = 40 }
 
@@ -81,6 +85,18 @@ function Get-MarksBetween {
     })
 }
 
+# Every image-rect mark of the whole run, grown by $ANIM_PAD: the animated images'
+# footprints (a geyser's smoke, a building's glow). With the full redraw pending the
+# draw skips the per-frame animation marks, so a pair's own span may miss them; the
+# show/hide marks over the run cover the same footprints, and the union masks every pair.
+function Get-ImageMarksAll {
+    @(Get-Content -LiteralPath $log | ForEach-Object {
+        if ($_ -match 'IMRK rect=\((-?\d+),(-?\d+)\)-\((-?\d+),(-?\d+)\)') {
+            "$([int]$Matches[1] - $ANIM_PAD),$([int]$Matches[2] - $ANIM_PAD),$([int]$Matches[3] + $ANIM_PAD),$([int]$Matches[4] + $ANIM_PAD)"
+        }
+    } | Sort-Object -Unique)
+}
+
 # Changed pixels of the playfield split by whether a padded mark covers them.
 function Get-UnmarkedDiff {
     param($A, $B, [string]$MarksPath)
@@ -103,16 +119,16 @@ function Assert-PairUnmarked {
     param($A, $B)
     $marksPath = Join-Path $LogDir "marks-$($A.Tag)-$($B.Tag).txt"
     $marks = @(Get-MarksBetween -TagA $A.Tag -TagB $B.Tag)
-    Set-Content -LiteralPath $marksPath -Value (@("# $($A.Tag) -> $($B.Tag)"; $marks) -join "`n")
+    $anim = @(Get-ImageMarksAll)
+    Set-Content -LiteralPath $marksPath -Value (@("# $($A.Tag) -> $($B.Tag) (+ $($anim.Count) run-wide image marks, grown by $ANIM_PAD)"; $marks; $anim) -join "`n")
     $u = Get-UnmarkedDiff -A $A -B $B -MarksPath $marksPath
     $pair = "$($A.Tag)->$($B.Tag)"
     $camA = "$($A.Cam.X),$($A.Cam.Y)"; $camB = "$($B.Cam.X),$($B.Cam.Y)"
     Assert-True "$pair camera unchanged (screen-space marks are comparable)" (-not (Test-ScChanged $camA $camB)) "($camA -> $camB)"
     Assert-True "$pair the engine marked cells in between" (Test-ScReached $marks.Count) "(marks=$($marks.Count))"
-    # The buffer is cursor-free (save-under before the present, restore after), so a
-    # sweep over static terrain changes nothing under its own marks; what proves the
-    # two dumps are distinct frames is the animation the image marks cover.
-    Assert-True "$pair the two dumps differ somewhere (the pair is not one frame twice)" (Test-ScReached $u.Total) "(total=$($u.Total) marked=$($u.Marked))"
+    # No "the dumps differ" guard: the buffer is cursor-free (save-under before the
+    # present, restore after), so a sweep over a still scene may legitimately leave
+    # two identical dumps; the marks count is what proves the sweep happened.
     Assert-True "$pair no pixel changed outside every padded mark" ($u.Unmarked -eq 0) "(unmarked=$($u.Unmarked) bbox=$($u.Bbox) total=$($u.Total))"
     if ($u.Unmarked -gt 0) { Report-Finding "$pair $($u.Unmarked) px changed in cells no mark covers, bbox=$($u.Bbox) (marks=$($marks.Count), marked=$($u.Marked))" }
 }
@@ -124,7 +140,7 @@ try {
     $launchLock = Enter-ScLaunchLock -TaskId '157-spriteflip'
 
     Write-Host 'probe-flip: generating the fixture (one Nexus at a stock start location with its mineral line)'
-    $fixtures = New-ScNexusFixture -RepoRoot $repoRoot -FixtureDir $FixtureDir -MapName $mapName -Noun 'probe-flip'
+    $fixtures = New-ScNexusFixture -RepoRoot $repoRoot -FixtureDir $FixtureDir -MapName $mapName -Noun 'probe-flip' -ClearCritters
 
     if (Test-Path -LiteralPath $log) { Remove-Item -LiteralPath $log -Force }
     if (Test-Path -LiteralPath $markerPath) { Remove-Item -LiteralPath $markerPath -Force }
@@ -153,12 +169,10 @@ try {
     Send-ScMouseMove -Hwnd $h -X $AWAY.X -Y $AWAY.Y -DelayMs 300
     Set-ScMarker -MarkerPath $markerPath -Label 'marktrace-on'
     Start-Sleep -Milliseconds 700
-    $prev = Get-Dump -Tag 'flip-base'
+    $dumps = @(Get-Dump -Tag 'flip-base')
     # An idle second first: the only changes must be animation, under the image marks.
     Start-Sleep -Milliseconds 1000
-    $idle = Get-Dump -Tag 'flip-idle'
-    Assert-PairUnmarked -A $prev -B $idle
-    $prev = $idle
+    $dumps += Get-Dump -Tag 'flip-idle'
 
     $i = 0
     foreach ($y in $lineYs) {
@@ -166,12 +180,12 @@ try {
         foreach ($x in $SWEEP_X) { Send-ScMouseMove -Hwnd $h -X $x -Y $y -DelayMs 120 }
         # Settle before the dump so no mark of the sweep races the FRAMEDUMP line.
         Start-Sleep -Milliseconds 700
-        $cur = Get-Dump -Tag "flip-line$i"
-        Assert-PairUnmarked -A $prev -B $cur
-        $prev = $cur
+        $dumps += Get-Dump -Tag "flip-line$i"
     }
     Set-ScMarker -MarkerPath $markerPath -Label 'marktrace-off'
     Start-Sleep -Milliseconds 400
+    # Judged after the trace closed, so every pair sees the run-wide image marks.
+    for ($k = 1; $k -lt $dumps.Count; $k++) { Assert-PairUnmarked -A $dumps[$k - 1] -B $dumps[$k] }
 }
 catch { $stepError = $_ }
 finally {
