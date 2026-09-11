@@ -23,17 +23,6 @@ Report $true 'pwsh' "v$($PSVersionTable.PSVersion)"
 $git = Get-Command git -ErrorAction SilentlyContinue
 Report ($null -ne $git) 'git' ($git ? (git --version) : 'not found on PATH') -Fatal
 
-# --- gh + auth ---
-$gh = Get-Command gh -ErrorAction SilentlyContinue
-if ($gh) {
-    gh auth status 2>&1 | Out-Null
-    $authed = ($LASTEXITCODE -eq 0)
-    Report $authed 'gh auth' ($authed ? 'authenticated' : 'gh found but not authenticated — run: gh auth login') -Fatal
-}
-else {
-    Report $false 'gh' 'not found on PATH' -Fatal
-}
-
 # --- python 3.11+ ---
 $python = Get-Command python -ErrorAction SilentlyContinue
 $pyOk = $false
