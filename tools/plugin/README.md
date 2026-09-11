@@ -28,7 +28,7 @@ engine's five as slots free. Design evidence:
 | Detour test | `hooktest.exe` — offline unit test for the hook engine; no game involved |
 | Files added to the game directory | **none** by the injection path — the deprecated [`-Windowed`](#windowed-mode-injected-not-proxied) switch is the one exception, and it writes `ddraw.dll` |
 | Writes to `StarCraft.exe` on disk | **never**, in any mode |
-| Writes to game *memory* | **only** in `-Mode hooktest/shadow/fanout`; never in the default `observe`. The production queue additionally needs `-ProdQueue 1` and is ignored outright in `observe` |
+| Writes to game *memory* | **only** in `-Mode hooktest/fanout`; never in the default `observe`. The production queue additionally needs `-ProdQueue 1` and is ignored outright in `observe` |
 
 ---
 
@@ -62,7 +62,7 @@ suite break, not a cleanup.
 | `sc_screen.cpp` | the widescreen patch table (`sc_screen_patches.h` is **generated**) | `ScScreen*`, `SC_WS_*` | `WIDESCREEN` | `SCPLUGIN_WIDESCREEN`, `SCPLUGIN_WS_STAGE`, `SCPLUGIN_WS_ONLY` |
 | `sc_stormpresent.cpp` | copying the widened strip to the primary every frame; the tooltip layer composed every frame while the console is buffer-resident (`tipForced=` on `STORMSTATS`); process CPU per present window (`cpu_pct=` on `STORMTIME`, `cpuPct=` on `STORMSTATS`) | `ScStormPresent*` | `STORM` `STORMTIME` `STORMSTALL` `STORMSTATS` | `SCPLUGIN_STORM_PRESENT`, `SCPLUGIN_TIPFIX` (default on; `0` leaves layer 1 dirty-driven) |
 | `sc_marktrace.cpp` | diagnostic trace of the dirty marker, the fog cell renderer and the terrain run blit, armed by `marktrace-on`/`marktrace-off` markers; the posted-cursor import override for off-screen runs (`run-offscreen.ps1` sets it: the engine's `GetCursorPos` answers from its own cursor layer, so the real mouse cannot pan the camera) | `ScMarkTrace*` `ScCursorPosted*` | `MARKTRACE` `MARK` `IMRK` `FOGR` `TERR` `CURSOR` | `SCPLUGIN_MARKTRACE`, `SCPLUGIN_CURSOR_POSTED` |
-| `sc_console.cpp` | moving the console to the right edge, the per-frame full playfield redraw while it is buffer-resident (`fullFrames=` on `CONSOLESTATS`), and the click trace | `ScConsole*` | `CONSOLE` `CONSOLESTATS` `CTRACE` | `SCPLUGIN_CONSOLE_EDGE`, `SCPLUGIN_CONSOLE_TRACE`, `SCPLUGIN_FULLREDRAW` (default on; `0` leaves the playfield dirty-driven) |
+| `sc_console.cpp` | moving the console down under the taller playfield, the per-frame full playfield redraw while it is buffer-resident (`fullFrames=` on `CONSOLESTATS`), and the click trace | `ScConsole*` | `CONSOLE` `CONSOLESTATS` `CTRACE` | `SCPLUGIN_CONSOLE_TRACE`, `SCPLUGIN_FULLREDRAW` (default on; `0` leaves the playfield dirty-driven) |
 | `scinject.cpp` | the launcher and injector — its own program, links none of the above | `SCINJECT_*` | *(stdout/stderr)* | *(command line)* |
 | `hooktest.cpp` | the offline unit test — its own program, no game anywhere near it | — | *(stdout)* | — |
 
@@ -111,8 +111,7 @@ explicitly asks for more.
 |---|---|---|---|
 | `observe` **(default)** | none | none — no byte of game memory is written | the task-008 observer, and the **off switch** |
 | `hooktest` | 1 (`queueCommand`) | none; logs `CMD id=0xNN len=N` for every outgoing command | proves a hook fires, and names command ids |
-| `shadow` | 4 | none; logs the pre-cap selection | proves the >12 capture without touching gameplay |
-| `fanout` | 5 (4 with `-Circles 0`) | orders reach every captured unit, **and every captured unit gets a selection circle** | the feature |
+| `fanout` | 5, plus one each for `-Circles`, `-HudRow`, `-QueueIndicator` | orders reach every captured unit, **and every captured unit gets a selection circle** | the feature |
 
 **Three independent off switches**, in increasing order of bluntness:
 
@@ -927,7 +926,7 @@ file in the game folder.
 
 | flag | what |
 |---|---|
-| `-Mode observe\|hooktest\|shadow\|fanout` | what the plugin may do. **Default `observe` — read-only, the off switch.** See "Modes" above |
+| `-Mode observe\|hooktest\|fanout` | what the plugin may do. **Default `observe` — read-only, the off switch.** See "Modes" above |
 | `-InjectWindowedHelper WMode\|WMode_Fix\|both` | early-inject the windowed-mode helper (see above) |
 | `-NoPlugin` | launch through this exact path with our observer **not** injected — the control that tells you whether a symptom is ours, and the demonstration of the uninstalled game |
 | `-PollMs`, `-LogPath` | observer poll interval and log destination |
