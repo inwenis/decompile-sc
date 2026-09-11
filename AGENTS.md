@@ -25,8 +25,8 @@ Personal, private reverse-engineering research on StarCraft; primary target the 
 
 ## Before any suite run: arm `$env:AGENT_TASK`
 
-- DO set `$env:AGENT_TASK` to a few digits (your PR or issue number, e.g. `$env:AGENT_TASK = '125'`) before ANY suite run, until orchestration is reinstalled.
-  Why: nothing sets it since PR #121, and while it is empty `run-with-plugin.ps1` takes NO launch lock (`$takeLock`), does NO foreground hand-back (`$restoreForeground`), and `Resolve-ScFixtureDir` (drive-game.ps1) falls back to the forbidden shared `00-testmap` folder.
+- DO set `$env:AGENT_TASK` to a few digits (your PR or issue number, e.g. `$env:AGENT_TASK = '125'`) before ANY suite run.
+  Why: nothing sets it for you, and while it is empty `run-with-plugin.ps1` takes NO launch lock (`$takeLock`), does NO foreground hand-back (`$restoreForeground`), and `Resolve-ScFixtureDir` (drive-game.ps1) falls back to the forbidden shared `00-testmap` folder.
   The same digits become your fixture folder leaf, lock holder id, desktop tag and frame folder name.
   -> tools/plugin/run-with-plugin.ps1; tools/plugin/drive-game.ps1; tools/plugin/sc-launch-lock.ps1; tools/plugin/sc-desktop.ps1
 
@@ -88,7 +88,7 @@ Off-screen, the engine gates menu input on its activation state, and a window on
 
 Your folder is `Maps\BroodWar\00-t<NNN>-<suite>\` (`<NNN>` = the digits in `$env:AGENT_TASK`), resolved by `Resolve-ScFixtureDir -Suite`.
 - DO generate into your own per-run, per-suite folder; NEVER the shared `00-testmap`. Suites take `-FixtureDir` because the folder is the caller's choice; a multi-phase suite keeps the SAME folder across its own phases.
-- DO name every fixture after its SUITE (`burrow-fanout.scx`), never the task, so "mine" is decidable from the filename alone; two suites generating `lurkers.scx` blocked a run outright.
+- DO name every fixture after its SUITE (`burrow-fanout.scx`), never the run id, so "mine" is decidable from the filename alone; two suites generating `lurkers.scx` blocked a run outright.
 - DO declare every fixture the run will create up front with `New-ScFixtureRun -Dir -Names`. Ownership is per-run, not per-file; anything outside the declared set is foreign, and refusing is still the answer.
 - DO refuse to start if any `.scx` you did not declare is present, whether or not a game is running. Process liveness is NOT a sufficient test: playing someone else's map produces internally consistent nonsense.
 - DO re-check the folder immediately before the browser walk, not only at generate time, and throw with the cause named rather than playing whatever is there.
@@ -225,7 +225,7 @@ Hard rule 4 applies to every line of `research/`.
 ## Stopping a run / orphaned games
 
 **Killing a driver's process tree does NOT kill the StarCraft it launched.** The game outlives its driver, keeps the launch lock, and blocks every later launch until someone notices.
-- Before killing any agent or test driver, DO run `Get-Process StarCraft` in the same breath as the kill, not minutes earlier. A run that has reported done may have started a verification run since; confirm it is idle first.
+- Before killing a test driver, DO run `Get-Process StarCraft` in the same breath as the kill, not minutes earlier. A run that has reported done may have started a verification run since; confirm it is idle first.
 - After stopping anything, and after ANY driver death (including a harness kill at the launch step after scinject has handed the game off), DO re-check for a surviving game and for `C:\sc-work\logs\sc-launch.lock` naming a dead pid.
 - A game is orphaned only when ALL THREE hold: the pid the launch printed is still running, the driver/suite process that launched it is gone, and that driver's own transcript has stopped advancing STEPS (`[7] click Train x12`).
   A dead parent is NOT evidence (the launcher exits once scinject hands off, so every harness game is parentless within seconds). A growing plugin log is NOT evidence (the plugin writes it, and the plugin is alive in an orphan by definition).
@@ -252,7 +252,7 @@ Hard rule 4 applies to every line of `research/`.
 - The global rules in `~/.codex/AGENTS.md` apply here too.
 - Worktrees under `C:/git/wt/decompile-sc/<branch>` are disposable and pruned after merge. NEVER let anything deployed or persistent point at a worktree path (the deployed launcher copies `run-with-plugin.ps1` + `check-game-windows.ps1` into the deploy tree for this reason).
   -> tools/deploy.ps1; tools/README-deploy.md
-- `research/` docs cite the old rulebook as `AGENTS.md § "<heading>"` or "task NNN"; both resolve in `research/rulebook-history.md` (headings verbatim, archive line = old line + 15). NEVER reuse an old heading for different content. Code comments cite by topic instead (see "Comments").
+- `research/` docs cite the old rulebook as `AGENTS.md § "<heading>"`; it resolves in `research/rulebook-history.md` (headings verbatim, archive line = old line + 15). NEVER reuse an old heading for different content. Code comments cite by topic instead (see "Comments").
 -> research/rulebook-history.md § "Conventions"
 
 ## Comments
