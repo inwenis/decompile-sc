@@ -1,4 +1,4 @@
-# Test map generator (task009)
+﻿# Test map generator (task009)
 
 Generates a single-player StarCraft 1.16.1 map with many units already
 placed for one player. It's the test fixture for the project's north star --
@@ -91,7 +91,7 @@ Steps, in order:
 ## How to run
 
 ```powershell
-./setup.ps1                 # once, if you haven't -- creates .venv, installs requirements.txt
+./setup-worktree.ps1                 # once, if you haven't -- creates .venv, installs requirements.txt
 ./tools/make-test-map.ps1   # bare invocation: 36 Marines for Player 1
 ```
 

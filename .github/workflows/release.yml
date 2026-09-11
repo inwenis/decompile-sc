@@ -1,8 +1,8 @@
 name: Release
 
-# A pushed tag v* builds scplugin.dll + scinject.exe with the pinned toolchain, runs
-# hooktest, and attaches both as one zip to the GitHub release for that tag. Built
-# binaries never enter the repo (AGENTS.md "Hard rules"); a release is not the repo.
+# A pushed tag v* installs the pinned toolchain and cnc-ddraw, builds the plugin, runs
+# hooktest, stages the player zip and attaches it to the GitHub release for that tag.
+# Built binaries never enter the repo (AGENTS.md "Hard rules"); a release is not the repo.
 
 on:
   push:
@@ -17,25 +17,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Pinned 32-bit toolchain (tools/plugin/README.md "Toolchain (pinned)")
+      - name: Pinned toolchain and cnc-ddraw
         shell: pwsh
-        run: |
-          $ProgressPreference = 'SilentlyContinue'
-          $zip = Join-Path $env:RUNNER_TEMP 'winlibs.zip'
-          Invoke-WebRequest -Uri 'https://github.com/brechtsanders/winlibs_mingw/releases/download/16.1.0posix-14.0.0-msvcrt-r4/winlibs-i686-posix-dwarf-gcc-16.1.0-mingw-w64msvcrt-14.0.0-r4.zip' -OutFile $zip
-          $h = (Get-FileHash $zip -Algorithm SHA256).Hash
-          if ($h -ne 'A5817469F554314B03CD5298C0B247057D7A7DA5B85A01D89D9FC9FEB7ADBC19') { throw "hash mismatch: $h" }
-          7z x $zip -oC:\re-tools\mingw32-gcc-16.1.0-i686-msvcrt -y
+        run: ./setup-onetime.ps1
 
       - name: Build and run hooktest
         shell: pwsh
-        run: ./tools/plugin/build.ps1 -Test
+        run: ./build.ps1 -Test
+
+      - name: Stage the player zip
+        shell: pwsh
+        run: ./tools/package-release.ps1 -Version $env:GITHUB_REF_NAME
 
       - name: Attach the zip to the release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $zip = "scplugin-$env:GITHUB_REF_NAME.zip"
-          Compress-Archive -Path work/scratch/plugin-build/scplugin.dll, work/scratch/plugin-build/scinject.exe -DestinationPath $zip
+          $zip = (Get-ChildItem work/scratch/release/*.zip).FullName
           gh release create $env:GITHUB_REF_NAME $zip --generate-notes || gh release upload $env:GITHUB_REF_NAME $zip --clobber
