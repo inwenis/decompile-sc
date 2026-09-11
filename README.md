@@ -9,19 +9,13 @@ change is applied in memory. Offline and single-player only.
 
 ![63 units selected, mixed Zerg army, widescreen viewport](docs/screenshot-63-units.png)
 
-## What the mod changes in the game
+## New features
 
-1. **Select more than 12 units.** A drag box keeps every unit it covers, and an order reaches all of them.
-2. **A selection circle under every selected unit**, not only the first 12.
-3. **The bottom HUD row pages through the whole selection** (`70 units 1-12 (1/6)`; right-click the row to flip pages).
-4. **Control groups hold more than 12 units.** Ctrl+1 on a 70-unit army recalls all 70.
-5. **Abilities reach every unit in the selection** (Stim, Burrow), each unit paying its own cost.
-6. **Box-select several buildings of one type.** Stock selects one building per box.
-7. **One Train click queues a unit at every selected production building.**
-8. **Production queue past 5 per building** (16 by default, up to 24). A `+N` badge on the fifth slot shows the overflow; clicking it cancels one and refunds.
-9. **More than one upgrade or research queued at a building.**
-10. **Widescreen.** 1280x880 screen with a 1280x800 playfield (twice the stock 640x400 in both axes), console at the bottom, fog and tooltips corrected for the bigger frame. Presented through [cnc-ddraw](https://github.com/FunkyFr3sh/cnc-ddraw) at 2x window scale with the cursor locked to the window (Ctrl or Right Alt frees it).
-11. **Save and load work with everything above on.**
+1. select more than 12 units, right click to page through
+2. select buildings of one type, queue units for all at once
+3. queue more than 5 units in a building
+4. queue upgrades
+5. widescreen (ctrl or alt to free mouse)
 
 Every feature has its own off switch (`tools/plugin/run-with-plugin.ps1` parameters); the
 deployed desktop shortcut turns all of them on. How each one works, with the addresses and
