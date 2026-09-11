@@ -26,6 +26,22 @@ launcher.
 
 Offline and single-player only.
 
+100 marines selected; the bottom row pages them twelve at a time and reads `100 units 1-12 (1/9)`:
+
+![100 marines selected on the 1280x800 playfield; the bottom row reads 100 units 1-12 (1/9)](docs/screenshot-100-units-page-1-of-9.png)
+
+The same row at the stock 640x480 size, 36 units, page 1 of 3:
+
+![36 units selected at 640x480; the bottom row reads 36 units 1-12 (1/3)](docs/screenshot-36-units-page-1-of-3.png)
+
+Three Command Centers selected as one group; nine presses of Train queued nine SCVs at each of them (`3 bldgs 27 queued`):
+
+![Three Command Centers selected together after nine Train presses; the bottom row reads 3 bldgs 27 queued](docs/screenshot-3-command-centers-27-queued.png)
+
+The same base at the stock 640x480 (left) and at 1280x880 (right):
+
+![The same base at 640x480 on the left and at 1280x880 on the right](docs/screenshot-stock-vs-widescreen.png)
+
 ![70 units selected on the 1280x800 playfield; the bottom row reads 70 units 1-12 (1/6)](docs/screenshot-70-units.png)
 
 ![63 units selected, mixed Zerg army, widescreen viewport](docs/screenshot-63-units.png)
