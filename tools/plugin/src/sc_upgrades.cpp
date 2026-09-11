@@ -394,6 +394,30 @@ bool ScUpgQueueOnCancel(DWORD unit) {
     return consumed;
 }
 
+bool ScUpgQueueCancelAt(DWORD unit, int index) {
+    if (!g_enabled || !unit || index < 0) return false;
+    bool consumed = false;
+    EnterCriticalSection(&g_lock);
+    UpgSessionSync();
+    CollectGarbage(true);
+    UpgRecord* r = ScLedgerFind(g_rec, g_recCount, unit);
+    if (r && index < r->count) {
+        UpgItem it = r->items[index];
+        for (int i = index + 1; i < r->count; ++i) r->items[i - 1] = r->items[i];
+        --r->count;
+        ++g_stat[SC_UPGQ_STAT_CANCELLED];
+        ScLog("UPGQEV cancel-icon unit=0x%08X index=%d kind=%s id=%u queuedLeft=%d "
+              "(no refund -- it was never paid for)",
+              (unsigned)unit, index, it.kind == SC_UPGQ_KIND_TECH ? "tech" : "upgrade",
+              (unsigned)it.id, r->count);
+        if (r->count == 0) ScLedgerDropAt(g_rec, &g_recCount, (int)(r - g_rec));
+        RequestRedraw();
+        consumed = true;
+    }
+    LeaveCriticalSection(&g_lock);
+    return consumed;
+}
+
 // --- Oracles -----------------------------------------------------------------
 
 static void FormatQueue(const UpgRecord* r, char* out, int outLen) {

@@ -44,6 +44,7 @@ static ScHook g_hkLayout;   // queueLayout 0x004268D0 -- the phantom bracket
 static ScQueueIndCtlFn    g_show          = NULL;
 static ScQueueIndCtlFn    g_hide          = NULL;
 static ScQueueIndCtlFn    g_update        = NULL;
+static ScQueueIndCtlFn    g_enable        = NULL;
 static ScQueueIndDriverFn g_testOrigDriver = NULL;
 static bool           g_testing       = false;
 
@@ -116,6 +117,8 @@ static bool  g_baseValid = false;
 // ORACLE that can lie (AGENTS.md § "Oracles: pixel counts and instruments").
 static unsigned g_session = 0;
 
+static void ForgetUpgradeIcons(void);
+
 static void QIndSessionSync(void) {
     const unsigned now = ScSessionEpoch();
     if (g_session == now) return;
@@ -136,6 +139,7 @@ static void QIndSessionSync(void) {
     g_iconsN       = 0;
     g_baseValid    = false;
     g_baseRect[0] = g_baseRect[1] = g_baseRect[2] = g_baseRect[3] = 0;
+    ForgetUpgradeIcons();
     g_session = now;
 }
 
@@ -286,6 +290,107 @@ void ScQueueIndPhantomRestore(void) {
 }
 
 // ---------------------------------------------------------------------------
+// QUEUED RESEARCH AS ICONS
+// ---------------------------------------------------------------------------
+//
+// A researching building's pane is laid out by the two research layouts (0x00426500
+// upgrade, 0x004266F0 tech), which the per-unit-type act 0x00427890 dispatches to when the
+// building is not training (0x00401E70 == 0) and CUnit+0xC8/0xC9 is off its sentinel. Each
+// fills ITS OWN icon control (id 15, sitting where queue slot 0 sits) the way queueLayout
+// fills a queue slot -- grp = cmdicons, frame = the id's icon out of the dat table, mode 5
+// (upgrade) / 4 (tech), type = the id, enableControl -- and leaves the four small queue
+// icons (ids 3..6) HIDDEN: neither layout touches them, and the only thing that does is
+// the hide-all sweep 0x00457310 run when the pane's layout KIND (SC_VA_STAT_ALL_HIDDEN)
+// changes, not per call. So the frame path fills ids 3..6 with the held items using those
+// same fields, shows them with the engine's own showControl, and leaves the engine's own
+// icon handler (0x00457480) to draw and hit-test them. Nothing is written every frame:
+// fields are rewritten only when the item behind a slot changes, and show/enable early-out
+// on their own bit (AGENTS.md § "Engine-owned flags").
+//
+// A click on one of them emits {0x20, k} through the engine's own activate (0x004573A0,
+// cases 2..6) exactly as a queued unit's icon does. cancelBuildQueueSlot (0x00466A70) is a
+// no-op for a ring slot holding 0xE4, so an unrouted click costs nothing; sc_prodqueue's
+// cancel-train detour routes it to ScUpgQueueCancelAt.
+//
+// Only in a research layout. Any other layout owns icons 3..6 itself (queueLayout re-lays
+// them out on every call), so held items are drawn only while SC_VA_STAT_ALL_HIDDEN reads 7
+// or 8, and the composer's "+N" covers them the rest of the time.
+struct UpgIconSnap { DWORD unit; int kind; int id; bool shown; };
+static UpgIconSnap g_upgIcon[SC_QIND_UPGRADE_ICONS];
+static char        g_upgLabel[SC_QIND_UPGRADE_ICONS][4];   // "2 ".."5 ", queueLayout's format
+
+static void ForgetUpgradeIcons(void) {
+    for (int i = 0; i < SC_QIND_UPGRADE_ICONS; ++i) {
+        g_upgIcon[i].unit = 0; g_upgIcon[i].kind = -1; g_upgIcon[i].id = -1;
+        g_upgIcon[i].shown = false;
+    }
+}
+
+int ScQueueIndUpgradeIcons(int held) {
+    if (held <= 0) return 0;
+    if (held <= SC_QIND_UPGRADE_ICONS) return held;
+    return SC_QIND_UPGRADE_ICONS - 1;
+}
+
+// The cmdicons.grp frame for a held item, out of the same table the research layout reads
+// for the running one. -1 for an id the table does not cover.
+static int UpgIconFrame(int kind, int id) {
+    if (kind == SC_UPGQ_KIND_TECH) {
+        if (id < 0 || id >= SC_TECH_COUNT) return -1;
+        return (int)*(WORD*)((DWORD)ScRuntimeAddr(SC_VA_TECH_ICON) + (DWORD)id * 2);
+    }
+    if (kind != SC_UPGQ_KIND_UPGRADE || id < 0 || id >= SC_UPGRADE_COUNT) return -1;
+    return (int)*(WORD*)((DWORD)ScRuntimeAddr(SC_VA_UPGRADE_ICON) + (DWORD)id * 2);
+}
+
+// Light icons 3..(3+want-1) with `unit`'s first `want` held items and take down any this
+// module lit past that. `want` 0 (no research layout, nothing held, no unit) takes them
+// all down. Every write is compared first, so a settled pane costs four reads.
+static void FillUpgradeIcons(DWORD root, DWORD unit, int want) {
+    DWORD c = ScDlgFindChild(root, (short)(SC_STATQ_FIRST_CONTROL + 1));   // id 3
+    for (int i = 0; i < SC_QIND_UPGRADE_ICONS && c; ++i, c = ScDlgNext(c)) {
+        UpgIconSnap* s = &g_upgIcon[i];
+        DWORD* flags = (DWORD*)(c + SC_BINDLG_OFF_FLAGS);
+        const bool visible = (*flags & SC_CTRL_FLAG_VISIBLE) != 0;
+        const int  kind  = i < want ? ScUpgQueueKindAt(unit, i) : -1;
+        const int  id    = i < want ? ScUpgQueueIdAt(unit, i) : -1;
+        const int  frame = kind < 0 ? -1 : UpgIconFrame(kind, id);
+        DWORD su = *(DWORD*)(c + SC_BINDLG_OFF_USER);
+        if (frame < 0 || !su) {
+            if (s->shown) {
+                if (visible) { ScCtrlHideVia(g_hide, c); ScCtrlUpdateVia(g_update, c); }
+                ++g_stat[SC_QIND_STAT_UPG_ICON_HIDES];
+            }
+            s->unit = 0; s->kind = -1; s->id = -1; s->shown = false;
+            continue;
+        }
+        const bool changed = !(s->shown && s->unit == unit && s->kind == kind && s->id == id);
+        if (changed) {
+            // The five fields queueLayout's occupied branch writes (sc_addresses.h at
+            // SC_VA_GRP_CMDICONS), with the research layout's own mode. The border graphic
+            // is queueLayout's too: 4 for the three middle slots, 2 for the last.
+            *(DWORD*)(su + SC_STATUSER_OFF_GRP)  = *(DWORD*)ScRuntimeAddr(SC_VA_GRP_CMDICONS);
+            *(short*)(su + SC_STATUSER_OFF_ICON) = (short)frame;
+            *(WORD*) (su + SC_STATUSER_OFF_MODE) = (WORD)(kind == SC_UPGQ_KIND_TECH
+                                                          ? SC_STATUSER_MODE_TECH
+                                                          : SC_STATUSER_MODE_UPGRADE);
+            *(short*)(su + SC_STATUSER_OFF_TYPE) = (short)id;
+            *(DWORD*)(c + SC_BINDLG_OFF_TEXT)    = (DWORD)g_upgLabel[i];
+            *(WORD*) (c + SC_BINDLG_OFF_GRAPHIC) = (WORD)(i + 1 < SC_QIND_UPGRADE_ICONS ? 4 : 2);
+            s->unit = unit; s->kind = kind; s->id = id;
+        }
+        if (*flags & SC_CTRL_FLAG_DISABLED) ScCtrlEnableVia(g_enable, c);
+        if (!visible || changed) {
+            ScCtrlShowVia(g_show, c);
+            *flags |= SC_CTRL_FLAG_DRAWN;
+            ScCtrlUpdateVia(g_update, c);
+            if (!s->shown) ++g_stat[SC_QIND_STAT_UPG_ICON_SHOWS];
+            s->shown = true;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The composer -- pure, so hooktest drives exactly this
 // ---------------------------------------------------------------------------
 
@@ -313,7 +418,8 @@ int ScQueueIndCompose(char* out, int outLen, const ScQueueIndView* v) {
         // sits where slot 0 would be), so what is left UNDRAWN is the queue past those four.
         // It takes precedence because a building researching is not also training.
         if (v->upgrades > 0) {
-            const int hidden = v->upgrades - SC_QIND_UPGRADE_ICONS;
+            const int drawn  = v->research ? ScQueueIndUpgradeIcons(v->upgrades) : 0;
+            const int hidden = v->upgrades - drawn;
             if (hidden <= 0) return SC_QIND_NONE;
             _snprintf(out, (size_t)outLen - 1, "+%d", hidden);
             out[outLen - 1] = '\0';
@@ -373,6 +479,8 @@ static int ReadView(ScQueueIndView* v) {
         v->overflow  = OverflowOf(unit);
         int upg = ScUpgQueueCount(unit);          // -1 when the building is not tracked
         v->upgrades = upg > 0 ? upg : 0;
+        const int layout = (int)*(BYTE*)ScRuntimeAddr(SC_VA_STAT_ALL_HIDDEN);
+        v->research = (layout == SC_STAT_LAYOUT_UPGRADE || layout == SC_STAT_LAYOUT_TECH) ? 1 : 0;
         return stable;
     }
 
@@ -529,35 +637,11 @@ static bool PlaceOn(short* b, DWORD anchor, DWORD root, int mode, int textLen) {
             }
             return false;
         }
-    } else if (mode == SC_QIND_UPGRADE) {
-        // "+N upg" runs longer than STRIP's "+N" (up to "+16 upg", 7 chars), and the icon
-        // it starts on (id 6) is only ~38px wide -- clamping to it the way STRIP does
-        // TRUNCATES the string. A researching building's five queue icons are all idle
-        // placeholders (nothing is in its production ring), so running the box past icon
-        // 6's own bounds clips nothing the engine actually drew there; RepaintUnder repaints
-        // the whole strip for this mode for the same reason.
-        int right = left + want;
-        int surfW = 0;
-        DWORD d = SurfaceOf(root);
-        if (d) surfW = (int)*(WORD*)(d + SC_SURFACE_OFF_W);
-        // SLIDE IT LEFT rather than clamp the right edge. Icon 6 starts at x=231 on the
-        // live 270-wide pane, so "+2 upg" (42px at SC_QIND_CHAR_W) already runs 4px past
-        // the surface and a clamp would TRUNCATE it -- the failure this file warns about
-        // twice above, because a cut string reads as a working feature.
-        if (surfW > 0 && right > surfW - 1) {
-            int shift = right - (surfW - 1);
-            if (left - shift < 0) shift = left;
-            left  -= (short)shift;
-            right -= shift;
-        }
-        if (right - left < want) return false;
-        b[0] = left; b[1] = top;
-        b[2] = (short)right;
-        b[3] = (short)(top + SC_QIND_BOX_H);
     } else {
         // A "+N" is short and belongs inside the icon it annotates: staying within a
         // control the engine repaints is what guarantees our pixels are painted over when
-        // the indicator goes away.
+        // the indicator goes away. UPGRADE's "+N" is the same shape: the frame path leaves
+        // icon 6 empty whenever there is a count to draw (ScQueueIndUpgradeIcons).
         b[0] = left; b[1] = top;
         b[2] = (short)(left + want > a[2] ? a[2] : left + want);
         b[3] = (short)(top + SC_QIND_BOX_H > a[3] ? a[3] : top + SC_QIND_BOX_H);
@@ -571,9 +655,8 @@ static bool PlaceOn(short* b, DWORD anchor, DWORD root, int mode, int textLen) {
 // SC_QIND_NONE before ever attempting a splice.
 //   STRIP   -- the LAST queue icon (id 6). While the plugin holds overflow it keeps the
 //              engine's ring at four, so that icon is precisely the one drawn empty.
-//   UPGRADE -- the SAME icon (id 6). A researching building's ring is not producing units
-//              at all, so all five queue icons sit idle and greyed -- the last one is free
-//              for exactly the reason it is free in the STRIP case.
+//   UPGRADE -- the SAME icon (id 6). The frame path draws held research into icons 3..5
+//              and leaves 6 free whenever there is a count to put on it.
 //   GROUP   -- the first wireframe button (id 0x21). The line does not sit ON that button
 //              (see PlaceOn) -- the button is where the ROW's geometry is read from, and it
 //              is what RepaintUnder asks the engine to redraw.
@@ -628,8 +711,10 @@ static void PublishOwnedIcons(DWORD root, const ScQueueIndView* v, DWORD unit) {
     }
     for (int i = 0; i < ownedN; ++i) g_ownedIcon[i] = owned[i];
     g_ownedIconN = ownedN;
+}
 
-    // The snapshot, taken after the fill, by the thread that did it.
+// The snapshot, taken after every fill, by the thread that did it.
+static void SnapshotIcons(DWORD root) {
     g_iconsN = 0;
     DWORD sc = ScDlgFindChild(root, SC_STATQ_FIRST_CONTROL);
     for (int k = 0; k < SC_STATQ_SLOTS && sc; ++k, sc = ScDlgNext(sc)) {
@@ -1064,7 +1149,8 @@ void ScQueueIndLogState(const char* tag) {
           "refInk=%d refId=%d surfInk=%d slotDiff=%d boxDiff=%d fontH=%d icons=[%s] "
           "sel=%d engineLen=%d overflow=%d upg=%d bldgs=%d queued=%d hudPages=%d "
           "anchor=0x%08X owned=%d disableOnOwned=%u disableWithPress=%u pressKept=%u "
-          "phantom=%u phantomDirty=%u ringGen=%u ringStable=%d",
+          "phantom=%u phantomDirty=%u ringGen=%u ringStable=%d layout=%d research=%d "
+          "upgIconShows=%u upgIconHides=%u",
           t, g_mode, linked ? 1 : 0,
           (flags & SC_CTRL_FLAG_VISIBLE) ? 1 : 0, live,
           linked ? b[0] : 0, linked ? b[1] : 0, linked ? b[2] : 0, linked ? b[3] : 0, ink,
@@ -1077,7 +1163,9 @@ void ScQueueIndLogState(const char* tag) {
           g_stat[SC_QIND_STAT_DISABLE_OWNED], g_stat[SC_QIND_STAT_DISABLE_PRESSED],
           g_stat[SC_QIND_STAT_PRESSKEPT],
           g_stat[SC_QIND_STAT_PHANTOM], g_stat[SC_QIND_STAT_PHANTOM_DIRTY],
-          ScQueueIndRingGen(), ringStable);
+          ScQueueIndRingGen(), ringStable,
+          (int)*(BYTE*)ScRuntimeAddr(SC_VA_STAT_ALL_HIDDEN), v.research,
+          g_stat[SC_QIND_STAT_UPG_ICON_SHOWS], g_stat[SC_QIND_STAT_UPG_ICON_HIDES]);
 }
 
 // One line per child of the statdata dialog: which controls in this pane are engine-drawn
@@ -1168,6 +1256,7 @@ void ScQueueIndOnFrame(void) {
         // WrapIconInteracts rebuilds it against the new dialog on this same frame.
         g_iconWrapN    = 0;
         g_ownedIconN   = 0;
+        ForgetUpgradeIcons();
         g_dialog       = root;
         g_spliced      = false;
         g_shown        = false;
@@ -1205,6 +1294,18 @@ void ScQueueIndOnFrame(void) {
         // with the state that created it, not outlive it.
         g_ownedIconN = 0;
     }
+    {
+        // Held research into icons 3..6 -- or all of them back down, which is what any
+        // other state of the pane asks for (the sweep may already have hidden them; the
+        // fill compares before it writes).
+        DWORD unit = ScPortraitUnit();
+        int want = 0;
+        if (v.selection <= 1 && v.research && v.hudPages <= 1 && ScUnitPtrValid(unit)) {
+            want = ScQueueIndUpgradeIcons(v.upgrades);
+        }
+        FillUpgradeIcons(root, unit, want);
+    }
+    SnapshotIcons(root);
 
     char want[sizeof(g_text)];
     int mode = ScQueueIndCompose(want, (int)sizeof(want), &v);
@@ -1371,7 +1472,7 @@ bool ScQueueIndEnabled(void) {
 void ScQueueIndInit(BYTE* moduleBase, bool enabled) {
     ScEngineSetModuleBase(moduleBase);
     g_enabled = enabled;
-    g_show = g_hide = g_update = NULL;
+    g_show = g_hide = g_update = g_enable = NULL;
     g_testOrigDriver = NULL;
     g_testing  = false;
     g_dialog   = 0;
@@ -1385,6 +1486,11 @@ void ScQueueIndInit(BYTE* moduleBase, bool enabled) {
     g_iconsN = 0;
     g_iconWrapN = 0;
     g_ownedIconN = 0;
+    ForgetUpgradeIcons();
+    for (int i = 0; i < SC_QIND_UPGRADE_ICONS; ++i) {
+        _snprintf(g_upgLabel[i], sizeof(g_upgLabel[i]), "%d ", i + 2);
+        g_upgLabel[i][sizeof(g_upgLabel[i]) - 1] = '\0';
+    }
     g_iconOrigFn = 0;
     g_phantomN = 0;
     g_phantomUnit = 0;
@@ -1398,8 +1504,9 @@ void ScQueueIndInit(BYTE* moduleBase, bool enabled) {
     }
     memset(g_ctrl, 0, sizeof(g_ctrl));
     ScLog("QIND: %s (%%SCPLUGIN_QUEUEIND%%). Draws a \"+N\" over the last queue icon when "
-          "the logical queue is longer than the strip can show, and a \"N bldgs M queued\" "
-          "line for a group; engine-drawn text, no new art.",
+          "the logical queue is longer than the strip can show, a \"N bldgs M queued\" "
+          "line for a group, and held research into queue icons 3..6; engine-drawn text "
+          "and icons, no new art.",
           enabled ? "ON" : "off");
 }
 
@@ -1451,13 +1558,15 @@ void ScQueueIndLogStats(void) {
     if (!g_enabled) return;
     ScLog("QINDSTATS frames=%u shows=%u hides=%u splices=%u refused=%u "
           "phantom=%u phantomDirty=%u "
-          "disableOnOwned=%u disableWithPress=%u pressKept=%u",
+          "disableOnOwned=%u disableWithPress=%u pressKept=%u "
+          "upgIconShows=%u upgIconHides=%u",
           g_stat[SC_QIND_STAT_FRAMES], g_stat[SC_QIND_STAT_SHOWS],
           g_stat[SC_QIND_STAT_HIDES], g_stat[SC_QIND_STAT_SPLICES],
           g_stat[SC_QIND_STAT_REFUSED],
           g_stat[SC_QIND_STAT_PHANTOM], g_stat[SC_QIND_STAT_PHANTOM_DIRTY],
           g_stat[SC_QIND_STAT_DISABLE_OWNED], g_stat[SC_QIND_STAT_DISABLE_PRESSED],
-          g_stat[SC_QIND_STAT_PRESSKEPT]);
+          g_stat[SC_QIND_STAT_PRESSKEPT],
+          g_stat[SC_QIND_STAT_UPG_ICON_SHOWS], g_stat[SC_QIND_STAT_UPG_ICON_HIDES]);
     // The trace's own denominator: what it saw and what it dropped, so "no click event was
     // ever logged" and "the filter ate it" are different readings rather than one silence.
     if (g_clickTrace) {
@@ -1474,11 +1583,12 @@ void ScQueueIndLogStats(void) {
 
 void ScQueueIndTestBegin(BYTE* fakeModuleBase,
                          ScQueueIndCtlFn show, ScQueueIndCtlFn hide, ScQueueIndCtlFn update,
-                         ScQueueIndDriverFn origDriver) {
+                         ScQueueIndCtlFn enable, ScQueueIndDriverFn origDriver) {
     ScQueueIndInit(fakeModuleBase, fakeModuleBase != NULL);
     g_show           = show;
     g_hide           = hide;
     g_update         = update;
+    g_enable         = enable;
     g_testOrigDriver = origDriver;
     g_testing        = true;
     g_dialogLogged   = true;         // the fake tree's dump is not the evidence
