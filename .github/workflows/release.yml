@@ -1,0 +1,46 @@
+name: Release
+
+# A tag v* builds the plugin with the pinned toolchain, runs hooktest, packs the player
+# zip (tools/package-release.ps1) and attaches it to a GitHub release. workflow_dispatch
+# does everything but the release, and keeps the zip as a run artifact for a look.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Build, test and package
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # git describe needs the tags
+
+      - name: Pinned 32-bit toolchain
+        shell: pwsh
+        run: ./tools/plugin/install-toolchain.ps1
+
+      - name: Pinned cnc-ddraw
+        shell: pwsh
+        run: ./tools/plugin/fetch-cnc-ddraw.ps1
+
+      - name: Build, hooktest, package
+        shell: pwsh
+        run: ./tools/package-release.ps1 -OutDir dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: starcraft-modded
+          path: dist/*.zip
+
+      - name: Attach to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create $env:GITHUB_REF_NAME (Get-ChildItem dist/*.zip).FullName --title $env:GITHUB_REF_NAME --generate-notes

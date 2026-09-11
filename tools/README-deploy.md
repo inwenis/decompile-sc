@@ -33,16 +33,19 @@ arguments.
    survives every future redeploy -- see "What survives a redeploy, and what does not"
    below. A tripwire hashes those directories before and after the mirror and throws if
    anything preserved actually changed.
-7. Copies the freshly built plugin binaries, plus `run-with-plugin.ps1` and its
-   `check-game-windows.ps1` / `sc-canonical-path.ps1` / `sc-audio-mute.ps1` /
-   `sc-launch-lock.ps1` dependencies, into `<DeployRoot>\plugin`.
-8. Writes `<DeployRoot>\Launch-StarCraft-Modded.ps1`, a zero-argument launcher with the
-   feature set baked in (`-Mode fanout -InjectWindowedHelper WMode -Circles 1 -HudRow 1
-   -Sound -NoLaunchLock` -- fan-out select-past-12, selection circles, HUD row paging,
-   windowed, audible, structurally unable to take the worker launch lock). The launcher
-   also wraps the launch in try/catch: on failure it logs to
-   `<DeployRoot>\logs\launch-error.log` and shows a message box, since it runs
-   `pwsh -WindowStyle Hidden` with no console for any failure to otherwise show up in.
+7. Stages the plugin runtime through `tools/plugin/sc-stage-runtime.ps1` (shared with
+   `tools/package-release.ps1`, so the release zip and this install carry the same files):
+   the freshly built plugin binaries, `run-with-plugin.ps1` and every helper it
+   dot-sources, into `<DeployRoot>\plugin`; the pinned cnc-ddraw and its two inis (the 2x
+   ini borderless when 2x does not fit this monitor).
+8. Copies `<DeployRoot>\Launch-StarCraft-Modded.ps1` (the file in `tools/plugin`) and its
+   `.cmd` shim: a zero-argument launcher with the feature set baked in (fan-out
+   select-past-12, circles, HUD row paging, production and upgrade queues, group
+   production, widescreen; audible; structurally unable to take the worker launch lock).
+   It refuses a `game\StarCraft.exe` that is not the 1.16.1 build, and wraps the launch in
+   try/catch: on failure it logs to `<DeployRoot>\logs\launch-error.log` and shows a
+   message box, since it runs `pwsh -WindowStyle Hidden` with no console for any failure
+   to otherwise show up in.
 9. Creates/updates the desktop shortcut **`StarCraft Modded.lnk`**, target
    `pwsh -WindowStyle Hidden -File <launcher>` -- double-click, the game appears, no
    console window.

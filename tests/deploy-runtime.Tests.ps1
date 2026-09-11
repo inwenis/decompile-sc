@@ -1,14 +1,16 @@
 #Requires -Version 7
 <#
-Pester coverage for the contracts between tools/deploy.ps1 and the rest of the repo:
-every helper run-with-plugin.ps1 dot-sources is also copied into the deploy tree, a
-redeploy leaves the feature-test map in place, and the one launcher ships the wide
+Pester coverage for the contracts between tools/deploy.ps1, tools/package-release.ps1,
+tools/plugin/sc-stage-runtime.ps1 and the rest of the repo: every helper
+run-with-plugin.ps1 dot-sources is also staged, a redeploy leaves the feature-test map in
+place, both installs stage through the one function, and the one launcher ships the wide
 geometry. Offline: no game, no toolchain.
 
-The deployed install is self-contained -- deploy.ps1 copies run-with-plugin.ps1 and each
-of its helpers into <DeployRoot>\plugin so the user's game keeps working after every
-worktree on the machine has been pruned. The copy list is therefore a hand-maintained
-mirror of a dot-source list in another file, with nothing tying the two together.
+The staged install is self-contained -- sc-stage-runtime.ps1 copies run-with-plugin.ps1
+and each of its helpers into <Dest>\plugin so the user's game keeps working after every
+worktree on the machine has been pruned, and a player with only the zip has no repo at
+all. The copy list is therefore a hand-maintained mirror of a dot-source list in another
+file, with nothing tying the two together.
 
 A helper missing from that mirror is invisible in this repo (every file is present),
 invisible in CI (which never deploys), and lands on the user, whose double-clicked
@@ -16,9 +18,13 @@ shortcut runs `pwsh -WindowStyle Hidden` and so fails with no console to fail in
 #>
 
 BeforeAll {
-    $script:pluginDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'tools/plugin'
+    $script:root      = Split-Path $PSScriptRoot -Parent
+    $script:pluginDir = Join-Path $script:root 'tools/plugin'
     $script:runner    = Join-Path $script:pluginDir 'run-with-plugin.ps1'
-    $script:deploy    = Join-Path (Split-Path $PSScriptRoot -Parent) 'tools/deploy.ps1'
+    $script:deploy    = Join-Path $script:root 'tools/deploy.ps1'
+    $script:package   = Join-Path $script:root 'tools/package-release.ps1'
+    $script:stage     = Join-Path $script:pluginDir 'sc-stage-runtime.ps1'
+    $script:launcherFile = Join-Path $script:pluginDir 'Launch-StarCraft-Modded.ps1'
 
     # `. (Join-Path $scriptDir 'sc-thing.ps1')` -> 'sc-thing.ps1'
     function Get-DotSourcedHelper {
@@ -27,9 +33,17 @@ BeforeAll {
         [regex]::Matches($text, "(?m)^\s*\.\s*\(Join-Path\s+\`$scriptDir\s+'([^']+)'\)") |
             ForEach-Object { $_.Groups[1].Value }
     }
+
+    # The `$SC_RUNTIME_SCRIPTS = @( ... )` list in sc-stage-runtime.ps1, as names.
+    function Get-StagedScript {
+        $text = Get-Content -Raw -LiteralPath $script:stage
+        $m = [regex]::Match($text, '(?s)\$SC_RUNTIME_SCRIPTS\s*=\s*@\((.*?)\)')
+        if (-not $m.Success) { return @() }
+        [regex]::Matches($m.Groups[1].Value, "'([^']+\.ps1)'") | ForEach-Object { $_.Groups[1].Value }
+    }
 }
 
-Describe 'the deployed plugin runtime carries every dependency it dot-sources' {
+Describe 'the staged plugin runtime carries every dependency it dot-sources' {
 
     It 'finds the dot-sourced helpers at all (the parse itself is proved positive)' {
         # An empty match list makes every assertion below vacuously true -- AGENTS.md
@@ -37,13 +51,15 @@ Describe 'the deployed plugin runtime carries every dependency it dot-sources' {
         $helpers = @(Get-DotSourcedHelper -Path $script:runner)
         $helpers.Count | Should -BeGreaterThan 2
         $helpers | Should -Contain 'sc-canonical-path.ps1'
+        $staged = @(Get-StagedScript)
+        $staged.Count | Should -BeGreaterThan 2
+        $staged | Should -Contain 'run-with-plugin.ps1'
     }
 
-    It 'copies every helper run-with-plugin.ps1 dot-sources into <DeployRoot>\plugin' {
-        $deployText = Get-Content -Raw -LiteralPath $script:deploy
+    It 'stages every helper run-with-plugin.ps1 dot-sources into <Dest>\plugin' {
+        $staged = @(Get-StagedScript)
         foreach ($h in @(Get-DotSourcedHelper -Path $script:runner)) {
-            $copied = $deployText -match [regex]::Escape("Join-Path `$pluginDir '$h'")
-            $copied | Should -BeTrue -Because "deploy.ps1 must Copy-Item $h, or the deployed launcher throws on a machine with no repo"
+            $staged | Should -Contain $h -Because "sc-stage-runtime.ps1 must copy $h, or the launcher throws on a machine with no repo"
         }
     }
 
@@ -53,9 +69,22 @@ Describe 'the deployed plugin runtime carries every dependency it dot-sources' {
                 Should -BeTrue -Because "run-with-plugin.ps1 dot-sources $h"
         }
     }
+
+    It 'deploy.ps1 and package-release.ps1 both stage and verify through the one function' {
+        foreach ($f in $script:deploy, $script:package) {
+            $t = Get-Content -Raw -LiteralPath $f
+            $t | Should -Match "sc-stage-runtime\.ps1" -Because "$f must dot-source the stage file"
+            $t | Should -Match 'Publish-ScPluginRuntime -Dest' -Because "$f must stage through the shared function"
+            $t | Should -Match 'Test-ScPluginRuntime -Dest' -Because "$f must re-check what it staged"
+        }
+        # Two copies of the staging steps would drift; the deploy has none of its own left.
+        $d = Get-Content -Raw -LiteralPath $script:deploy
+        $d | Should -Not -Match 'launcherBody'
+        $d | Should -Not -Match 'CNC_DDRAW_DLL_SHA256\s*='
+    }
 }
 
-Describe 'a redeploy leaves the feature-test map in place (task 067)' {
+Describe 'a redeploy leaves the feature-test map in place' {
     # tools/deploy.ps1 mirrors -SourceGameDir with /MIR and !feature-test.scx is a
     # destination-only file, so every redeploy purges it unless deploy.ps1 regenerates
     # the map as its last assembly step. These are static checks on the script text;
@@ -102,25 +131,27 @@ Describe 'a redeploy leaves the feature-test map in place (task 067)' {
     }
 }
 
-Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-06)' {
-    # The deploy ships ONE launcher and one shortcut, and it carries the extended
-    # viewport; a separate "Wide" launcher off by default is the shape these checks
-    # forbid, and each fails against a two-launcher deploy.ps1, so none is vacuous.
+Describe 'the one launcher ships the wide geometry at 2x' {
+    # ONE launcher and one shortcut, carrying the extended viewport; a separate "Wide"
+    # launcher off by default is the shape these checks forbid, and each fails against a
+    # two-launcher tree, so none is vacuous.
 
     BeforeAll {
         $script:deployText = Get-Content -Raw -LiteralPath $script:deploy
-        $lb = [regex]::Match($script:deployText, "(?s)\`$launcherBody = @'(.*?)'@")
-        $script:launcher = $lb.Success ? $lb.Groups[1].Value : ''
+        $script:stageText  = Get-Content -Raw -LiteralPath $script:stage
+        $script:launcher   = (Test-Path -LiteralPath $script:launcherFile) ? (Get-Content -Raw -LiteralPath $script:launcherFile) : ''
     }
 
-    It 'the launcher body is findable (the parse itself is proved positive)' {
+    It 'the launcher file exists and is staged (the parse itself is proved positive)' {
         $script:launcher.Length | Should -BeGreaterThan 100
+        $script:stageText | Should -Match "'Launch-StarCraft-Modded\.ps1', 'Launch-StarCraft-Modded\.cmd'"
+        Test-Path -LiteralPath (Join-Path $script:pluginDir 'Launch-StarCraft-Modded.cmd') | Should -BeTrue
     }
 
-    It 'there is exactly ONE launcher body and no wide launcher left' {
-        ([regex]::Matches($script:deployText, "(?m)^\`$\w*[lL]auncherBody = @'")).Count | Should -Be 1
+    It 'there is exactly ONE launcher and no wide launcher left' {
         $script:deployText | Should -Not -Match 'wideLauncherBody'
         $script:deployText | Should -Not -Match 'WideShortcutName'
+        Test-Path -LiteralPath (Join-Path $script:pluginDir 'Launch-StarCraft-Modded-Wide.ps1') | Should -BeFalse
     }
 
     It 'the launcher turns the assembled widescreen on: stage 3 + storm widen + cnc-ddraw' {
@@ -129,7 +160,7 @@ Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-
         # The ARGUMENT lines -- stage and storm, each backtick-continued -- not the
         # launcher's own header comment, which also says "-StormPresent widen" and so
         # satisfies a plain substring match.
-        $script:launcher | Should -Match '-WidescreenStage 3 `\s*\r?\n\s*-StormPresent widen `' -Because 'issue #113: run-with-plugin.ps1 exported its old default 0 verbatim, so the DLL auto-arm never fired and the deployed wide game showed a black right band; the launcher must pass the buffer->glass copy as an argument'
+        $script:launcher | Should -Match '-WidescreenStage 3 `\s*\r?\n\s*-StormPresent widen `' -Because 'run-with-plugin.ps1 exports its default 0 verbatim, so the DLL auto-arm never fires and the wide game shows a black right band; the launcher must pass the buffer->glass copy as an argument'
         $script:launcher | Should -Match 'cnc-ddraw\\ddraw\.dll'
         $script:launcher | Should -Not -Match 'InjectWindowedHelper' -Because 'WMode presents 640 columns whatever it is asked; the wide path must use the cnc-ddraw proxy'
     }
@@ -142,23 +173,33 @@ Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-
         }
     }
 
+    It 'the launcher refuses a game that is not the 1.16.1 the plugin was derived from' {
+        # The pin is make-working-copy.ps1's; the launcher must carry the same bytes.
+        $wc = Get-Content -Raw -LiteralPath (Join-Path $script:root 'tools/make-working-copy.ps1')
+        $m = [regex]::Match($wc, "'StarCraft\.exe'\s*=\s*'([0-9A-F]{64})'")
+        $m.Success | Should -BeTrue -Because 'the working-copy fingerprint is the reference'
+        $script:launcher.Contains($m.Groups[1].Value) | Should -BeTrue -Because 'a wrong build would be patched in the wrong places'
+        $script:launcher | Should -Match 'Get-FileHash -LiteralPath \$exe'
+    }
+
     It 'the launcher presents through cnc-ddraw with the 2x/lock ini, generated at 2x the plugin geometry' {
         $script:launcher | Should -Match 'cnc-ddraw-2x\.ini'
         # The ini is the committed file with width/height rewritten to 2x SC_WS_SCREEN_W/H.
-        $script:deployText | Should -Match 'SC_WS_SCREEN_W'
-        $script:deployText | Should -Match '\^width=\\d\+'
-        $script:deployText.Contains('does not carry width=') | Should -BeTrue -Because 'the verify step must read the ini that actually shipped'
+        $script:stageText | Should -Match 'SC_WS_SCREEN_W'
+        $script:stageText | Should -Match '\^width=\\d\+'
+        $script:stageText.Contains('does not carry width=') | Should -BeTrue -Because 'the verify step must read the ini that actually shipped'
     }
 
-    It 'falls back to borderless full screen when 2x does not fit the primary monitor (the 2x-height step)' {
-        # 1280x880 x2 = 2560x1760 does not fit a 1920x1080 monitor, so deploy flips the
-        # ini to cnc-ddraw borderless (fullscreen=true) with the aspect kept (maintas),
-        # rather than a window bigger than the screen.
+    It 'deploy falls back to borderless when 2x does not fit the primary monitor; the zip is always borderless' {
+        # 1280x880 x2 = 2560x1760 does not fit a 1920x1080 monitor, so deploy asks for
+        # cnc-ddraw borderless (fullscreen=true) with the aspect kept (maintas), rather
+        # than a window bigger than the screen. The zip cannot know the player's monitor.
         $script:deployText | Should -Match 'PrimaryScreen'
-        $script:deployText | Should -Match '\$fits2x'
-        $script:deployText | Should -Match "fullscreen=false', 'fullscreen=true'"
-        $script:deployText | Should -Match 'maintas=true'
-        $script:deployText | Should -Match 'must be borderless' -Because 'the verify step must confirm the fallback actually shipped'
+        $script:deployText | Should -Match '-Borderless \(-not \$fits2x\)'
+        $script:stageText | Should -Match "fullscreen=false', 'fullscreen=true'"
+        $script:stageText | Should -Match 'maintas=true'
+        $script:stageText | Should -Match 'must be borderless' -Because 'the verify step must confirm the fallback actually shipped'
+        (Get-Content -Raw -LiteralPath $script:package) | Should -Match '-Borderless \$true'
     }
 
     It 'a leftover Wide launcher and shortcut from an earlier deploy are removed' {
@@ -167,23 +208,23 @@ Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-
         $script:deployText | Should -Match 'Remove-Item -LiteralPath \$staleWideShortcut'
     }
 
-    It 'deploy stages cnc-ddraw only through its own sha256 pin' {
-        $script:deployText | Should -Match '\$CNC_DDRAW_DLL_SHA256\s*=\s*''[0-9a-f]{64}'''
-        $script:deployText.Contains('cnc-ddraw ddraw.dll SHA256 MISMATCH') |
+    It 'cnc-ddraw is staged only through its own sha256 pin' {
+        $script:stageText | Should -Match '\$CNC_DDRAW_DLL_SHA256\s*=\s*''[0-9a-f]{64}'''
+        $script:stageText.Contains('cnc-ddraw ddraw.dll SHA256 MISMATCH') |
             Should -BeTrue -Because 'an unvouched helper DLL must be a hard stop, not a warning'
-        $script:deployText.Contains('staged cnc-ddraw hash mismatch after copy') |
+        $script:stageText.Contains('staged cnc-ddraw hash mismatch after copy') |
             Should -BeTrue -Because 'the verify step must re-check the copy that actually shipped'
     }
 
-    It 'deploy copies cnc-ddraw.ini beside the deployed run-with-plugin.ps1' {
-        # run-with-plugin.ps1 reads cnc-ddraw.ini from ITS OWN directory; in the
-        # deploy tree that is plugin\, or the helper runs unconfigured.
-        $script:deployText.Contains("Join-Path `$pluginDeployDir 'cnc-ddraw.ini'") | Should -BeTrue
+    It 'cnc-ddraw.ini is staged beside the staged run-with-plugin.ps1' {
+        # run-with-plugin.ps1 reads cnc-ddraw.ini from ITS OWN directory; in the staged
+        # tree that is plugin\, or the helper runs unconfigured.
+        $script:stageText.Contains("Join-Path `$pluginDest 'cnc-ddraw.ini'") | Should -BeTrue
         Test-Path -LiteralPath (Join-Path $script:pluginDir 'cnc-ddraw.ini') |
-            Should -BeTrue -Because 'deploy copies it from tools/plugin at deploy time'
+            Should -BeTrue -Because 'it is copied from tools/plugin at stage time'
     }
 
-    It 'the card deploy copies exists on disk and mentions the one action' {
+    It 'the card the stage copies exists on disk and mentions the one action' {
         $card = Join-Path (Split-Path $script:deploy -Parent) 'widescreen-card.md'
         Test-Path -LiteralPath $card | Should -BeTrue
         (Get-Content -Raw -LiteralPath $card) | Should -Match 'double-click \*\*StarCraft Modded\*\*'

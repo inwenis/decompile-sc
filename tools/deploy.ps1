@@ -31,8 +31,8 @@ File name of the desktop shortcut.
 
 .PARAMETER CncDdrawDir
 Where the pinned cnc-ddraw release lives (fetch-cnc-ddraw.ps1's output). The
-ddraw.dll found there is sha256-verified against the pin recorded in this
-script before it is staged into the deploy tree.
+ddraw.dll found there is sha256-verified against the pin recorded in
+tools/plugin/sc-stage-runtime.ps1 before it is staged into the deploy tree.
 
 .PARAMETER NoShortcut
 Skip writing (and verifying) the desktop shortcut. A deploy to a throwaway root must not
@@ -50,11 +50,6 @@ param(
     [switch]$NoShortcut
 )
 
-# Pinned sha256 of cnc-ddraw v7.1.0.0's ddraw.dll -- provenance in
-# tools/plugin/fetch-cnc-ddraw.ps1 (zip pin) and research/renderer-viewport.md 14.1
-# (dll pin). A mismatch is a hard stop, never a re-pin.
-$CNC_DDRAW_DLL_SHA256 = '85e0f7d530dfda134793a57cb3e76b0287dcc96892ee57162dd68f47283b03a9'
-
 $ErrorActionPreference = 'Stop'
 $deployStart = Get-Date
 
@@ -69,6 +64,9 @@ $pluginDir = Join-Path $scriptDir 'plugin'
 . (Join-Path $pluginDir 'sc-canonical-path.ps1')
 . (Join-Path $pluginDir 'sc-launch-lock.ps1')
 . (Join-Path $pluginDir 'sc-build-id.ps1')
+# What the deploy tree and the release zip both get: the plugin runtime, the pinned
+# cnc-ddraw, the launcher and its shim, staged by one function so the two cannot drift.
+. (Join-Path $pluginDir 'sc-stage-runtime.ps1')
 
 # --- guard: refuse a dangerous -DeployRoot ----------------------------------
 $deployRootFull = Get-CanonicalPath $DeployRoot
@@ -256,176 +254,31 @@ if ($lost.Count -gt 0) {
 }
 Write-Host "verify: preserved-data tripwire OK ($(($preSnapshot.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum) file(s) checked across all five preserved classes)"
 
-# --- 3. copy the plugin runtime ----------------------------------------------
+# --- 3. plugin runtime, cnc-ddraw, launcher, shim, card -----------------------
 # The deploy tree gets its OWN copy of run-with-plugin.ps1 and its dependencies instead of
 # a launcher pointing back into the repo: worktrees are disposable and get pruned, so a
 # baked repo path breaks the day its worktree is cleaned up. Cost: a deployed install goes
 # stale until the next deploy -- the same staleness the plugin binaries already have.
-Write-Host ''
-Write-Host "== Assembling plugin runtime -> $deployRootFull\plugin =="
-$pluginDeployDir = Join-Path $deployRootFull 'plugin'
-New-Item -ItemType Directory -Path $pluginDeployDir -Force | Out-Null
-Copy-Item -LiteralPath $builtDll -Destination (Join-Path $pluginDeployDir 'scplugin.dll') -Force
-Copy-Item -LiteralPath $builtExe -Destination (Join-Path $pluginDeployDir 'scinject.exe') -Force
-Copy-Item -LiteralPath (Join-Path $pluginDir 'run-with-plugin.ps1')     -Destination (Join-Path $pluginDeployDir 'run-with-plugin.ps1')     -Force
-Copy-Item -LiteralPath (Join-Path $pluginDir 'check-game-windows.ps1') -Destination (Join-Path $pluginDeployDir 'check-game-windows.ps1') -Force
-Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-canonical-path.ps1')  -Destination (Join-Path $pluginDeployDir 'sc-canonical-path.ps1')  -Force
-Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-audio-mute.ps1')      -Destination (Join-Path $pluginDeployDir 'sc-audio-mute.ps1')      -Force
-Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-launch-lock.ps1')     -Destination (Join-Path $pluginDeployDir 'sc-launch-lock.ps1')     -Force
-Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-foreground.ps1')      -Destination (Join-Path $pluginDeployDir 'sc-foreground.ps1')      -Force
-# run-with-plugin.ps1 asks it "am I on the desktop the monitor is showing?" before every
-# launch, so the file has to be THERE for the question to be asked -- even though the
-# answer is always yes for a user who double-clicked their game.
-Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-desktop.ps1')         -Destination (Join-Path $pluginDeployDir 'sc-desktop.ps1')         -Force
-# run-with-plugin.ps1 dot-sources it on EVERY launch, the user's included, to read the
-# build identity out of the DLL it is about to inject. Missing here breaks the deployed
-# launcher outright, rather than degrading it.
-Copy-Item -LiteralPath (Join-Path $pluginDir 'sc-build-id.ps1')        -Destination (Join-Path $pluginDeployDir 'sc-build-id.ps1')        -Force
-Write-Host 'plugin runtime copied: scplugin.dll, scinject.exe, run-with-plugin.ps1, check-game-windows.ps1, sc-canonical-path.ps1, sc-audio-mute.ps1, sc-launch-lock.ps1, sc-foreground.ps1, sc-desktop.ps1, sc-build-id.ps1'
-
-# --- 3b. stage cnc-ddraw for the launcher ------------------------------------
-# The launcher presents through cnc-ddraw, not WMode: WMode.dll has no export table and no
-# config (tools/plugin/README.md "Windowed mode: injected, not proxied"), so it cannot
-# scale a window or clip the cursor and it crops to 640 columns whatever it is asked,
-# while cnc-ddraw FOLLOWs the full widened width (research/renderer-viewport.md 12.6, 14).
-# The DLL is a third-party game-adjacent binary: staged from the pinned fetch, never
-# committed (AGENTS.md § "Hard rules"), sha256-verified HERE so a deploy cannot ship a DLL
-# the pin does not vouch for. run-with-plugin.ps1 -WindowedHelperDll copies it into the
-# game dir per launch and -WindowedHelperIni picks which ini travels with it: unscaled
-# cnc-ddraw.ini (width=0/height=0) or cnc-ddraw-2x.ini (2x scale, cursor locked). Both are
-# staged unconditionally so either can be run standalone.
-$cncSrcDll = Join-Path $CncDdrawDir 'ddraw.dll'
-if (-not (Test-Path -LiteralPath $cncSrcDll)) {
-    throw ("deploy: cnc-ddraw not found at $cncSrcDll. Run tools/plugin/fetch-cnc-ddraw.ps1 " +
-           'first (downloads + pin-verifies v7.1.0.0), then re-run the deploy.')
-}
-$cncHash = (Get-FileHash -LiteralPath $cncSrcDll -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($cncHash -ne $CNC_DDRAW_DLL_SHA256) {
-    throw "deploy: cnc-ddraw ddraw.dll SHA256 MISMATCH at $cncSrcDll`n  expected $CNC_DDRAW_DLL_SHA256`n  got      $cncHash`nDo not deploy an unvouched helper; re-run fetch-cnc-ddraw.ps1 and re-review."
-}
-$cncDeployDir = Join-Path $pluginDeployDir 'cnc-ddraw'
-New-Item -ItemType Directory -Path $cncDeployDir -Force | Out-Null
-Copy-Item -LiteralPath $cncSrcDll -Destination (Join-Path $cncDeployDir 'ddraw.dll') -Force
-Copy-Item -LiteralPath (Join-Path $pluginDir 'cnc-ddraw.ini') -Destination (Join-Path $pluginDeployDir 'cnc-ddraw.ini') -Force
-# The 2x ini is GENERATED from tools/plugin/cnc-ddraw-2x.ini with width/height set to
-# twice the geometry the plugin was actually built for (SC_WS_SCREEN_W/H in the generated
-# sc_screen_patches.h), so the window always matches the binary it presents. The committed
-# file keeps the stock 1280x960 (2x of 640x480) as its documented example.
-$patchHeader = Join-Path $pluginDir 'src\sc_screen_patches.h'
-$wsW = [int]((Select-String -LiteralPath $patchHeader -Pattern '^#define\s+SC_WS_SCREEN_W\s+(\d+)' | Select-Object -First 1).Matches[0].Groups[1].Value)
-$wsH = [int]((Select-String -LiteralPath $patchHeader -Pattern '^#define\s+SC_WS_SCREEN_H\s+(\d+)' | Select-Object -First 1).Matches[0].Groups[1].Value)
-if ($wsW -lt 640 -or $wsH -lt 480) { throw "deploy: could not read SC_WS_SCREEN_W/H from $patchHeader (got ${wsW}x${wsH})" }
-$cnc2xIniDeployPath = Join-Path $pluginDeployDir 'cnc-ddraw-2x.ini'
-$cnc2x = Get-Content -Raw -LiteralPath (Join-Path $pluginDir 'cnc-ddraw-2x.ini')
-$cnc2x = $cnc2x -replace '(?m)^width=\d+', "width=$($wsW * 2)" -replace '(?m)^height=\d+', "height=$($wsH * 2)"
+# What is copied, and how the 2x ini is generated, lives in tools/plugin/sc-stage-runtime.ps1,
+# shared with tools/package-release.ps1 so the release zip and this install cannot drift.
+#
 # A 2x window only if it FITS the primary screen -- 1280x880 x2 = 2560x1760 does not fit a
-# 1920x1080 monitor. Otherwise cnc-ddraw's borderless mode (fullscreen=true + windowed=true)
-# stretches the game to the desktop with the aspect ratio kept (maintas), letterboxed as
-# needed; its cursor lock engages on activation there. The width/height lines stay at 2x for
-# the verify below (cnc-ddraw ignores them under fullscreen=true).
+# 1920x1080 monitor. Otherwise borderless (fullscreen=true + maintas), which the stage
+# function writes. Decided here, not in the stage file: this machine is the one that plays.
+Write-Host ''
+Write-Host "== Assembling plugin runtime -> $deployRootFull =="
+$geom = Get-ScWidescreenGeometry
+$wsW = $geom.Width
+$wsH = $geom.Height
 Add-Type -AssemblyName System.Windows.Forms
 $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 $fits2x = ($wsW * 2 -le $screen.Width) -and ($wsH * 2 -le $screen.Height - 48)
-if (-not $fits2x) {
-    $cnc2x = $cnc2x -replace '(?m)^fullscreen=false', 'fullscreen=true'
-    $cnc2x = $cnc2x -replace '(?m)^(renderer=gdi\r?\n)', "`$1maintas=true`n"
-}
-Set-Content -LiteralPath $cnc2xIniDeployPath -Value $cnc2x -Encoding ascii -NoNewline
-$present = $fits2x ? "window $($wsW * 2)x$($wsH * 2) = 2x the ${wsW}x${wsH} the plugin renders" : "borderless full screen on the $($screen.Width)x$($screen.Height) monitor, aspect kept (2x = $($wsW * 2)x$($wsH * 2) does not fit)"
-Write-Host "cnc-ddraw staged: $cncDeployDir\ddraw.dll (sha256 verified) + plugin\cnc-ddraw.ini + plugin\cnc-ddraw-2x.ini ($present)"
+$staged = Publish-ScPluginRuntime -Dest $deployRootFull -BuiltDll $builtDll -BuiltExe $builtExe -CncDdrawDir $CncDdrawDir -Borderless (-not $fits2x)
+$pluginDeployDir = $staged.PluginDir
+$launcherPath    = $staged.LauncherPath
+if (-not $fits2x) { Write-Host "presenter: borderless full screen on the $($screen.Width)x$($screen.Height) monitor, aspect kept (2x = $($wsW * 2)x$($wsH * 2) does not fit)" }
 
-# --- 4. write the zero-argument launcher --------------------------------------
-$launcherPath = Join-Path $deployRootFull 'Launch-StarCraft-Modded.ps1'
-$launcherBody = @'
-#Requires -Version 7
-<#
-Deployed launcher -- no arguments. Generated by tools/deploy.ps1; re-run that to refresh
-this file rather than editing it by hand. Baked feature set: fan-out + selection circles
-+ HUD row paging + over-cap production queue + group production fan-out, windowed,
-sound ON (run-with-plugin.ps1 mutes by default for unattended
-test suites -- -Sound here is what keeps the user's own play audible; see
-tools/README-deploy.md "Sound").
-
-Geometry: WIDESCREEN, on by default since 2026-09-06 (the user asked for ONE shortcut
-with the extended viewport): -Widescreen 1 -WidescreenStage 3 patch the engine to the
-width in tools/plugin/src/sc_screen_patches.h (1280x480 = 2x the stock width; stage 2
-playfield + fog + stage 3 input, tasks 064/068/071) in-process at launch -- the exe on
-disk is byte-identical -- and -StormPresent widen is the buffer->glass copy of the new
-columns (task 074; named on purpose, issue #113: the DLL's auto-arm was unreachable
-through this script's exported default). Known imperfections: widescreen-card.md.
-
-Presenter: cnc-ddraw, not WMode (task 075, issue #114 -- window scale + mouse lock had
-disappeared). WMode.dll has no export table and no config (README "Windowed mode:
-injected, not proxied"), so it cannot scale a window or clip the cursor; cnc-ddraw can.
-cnc-ddraw-2x.ini (plugin\cnc-ddraw-2x.ini, generated by deploy.ps1 at 2x the plugin's
-geometry: 2560x960) sets the window size and locks the cursor to the window on the
-first click inside it -- per-session: hold Ctrl or Right Alt to free the cursor.
-
--NoForegroundRestore is baked in for the same class of reason (issue #30): a worker
-launch hands the foreground back to whatever window had it before, because an unattended
-suite must not own the user's screen. THIS launcher is the user asking for the game, so
-the game keeps the foreground it takes. run-with-plugin.ps1's own $env:AGENT_TASK check
-would already cover it; this makes it structural.
-
--NoLaunchLock is baked in deliberately, on top of run-with-plugin.ps1's own
-$env:AGENT_TASK check (never true here, since nothing sets that variable for the user's
-own desktop shortcut): the worker launch lock must be structurally unreachable from this
-path, not just conditionally skipped, because this launcher runs
-`pwsh -WindowStyle Hidden` with no console -- a held or wedged lock would otherwise mean
-double-clicking the game produces nothing on screen for however long the wait budget is,
-with no error visible anywhere. That regression shipped once during this task's own
-review and was caught before merge; this comment (and the try/catch below) are why it
-should not need catching twice.
-
-The try/catch below exists for the same reason, generalised: ANY failure in a hidden
-process is otherwise invisible. On failure this writes the error to
-<here>\logs\launch-error.log and shows a message box -- something on screen, rather than
-a double-click that silently does nothing.
-#>
-$ErrorActionPreference = 'Stop'
-$here = $PSScriptRoot
-try {
-    & (Join-Path $here 'plugin\run-with-plugin.ps1') `
-        -GameDir  (Join-Path $here 'game') `
-        -BuildDir (Join-Path $here 'plugin') `
-        -LogPath  (Join-Path $here 'logs\sc-plugin.log') `
-        -Mode fanout `
-        -Windowed `
-        -WindowedHelperDll (Join-Path $here 'plugin\cnc-ddraw\ddraw.dll') `
-        -WindowedHelperIni (Join-Path $here 'plugin\cnc-ddraw-2x.ini') `
-        -Widescreen 1 `
-        -WidescreenStage 3 `
-        -StormPresent widen `
-        -Sound `
-        -NoLaunchLock `
-        -NoForegroundRestore `
-        -Circles 1 `
-        -HudRow 1 `
-        -ProdQueue 1 `
-        -ProdFan 1 `
-        -UpgradeQueue 1 `
-        -QueueIndicator 1
-}
-catch {
-    $errLog = Join-Path $here 'logs\launch-error.log'
-    New-Item -ItemType Directory -Path (Split-Path $errLog -Parent) -Force | Out-Null
-    "$([DateTime]::Now.ToString('o'))`r`n$($_ | Out-String)" | Out-File -LiteralPath $errLog -Append -Encoding utf8
-    Add-Type -AssemblyName System.Windows.Forms
-    [System.Windows.Forms.MessageBox]::Show(
-        "StarCraft Modded failed to launch:`r`n`r`n$($_.Exception.Message)`r`n`r`nDetails logged to:`r`n$errLog",
-        'StarCraft Modded', 'OK', 'Error') | Out-Null
-}
-'@
-Set-Content -LiteralPath $launcherPath -Value $launcherBody -Encoding utf8NoBOM
-Write-Host ''
-Write-Host "launcher written: $launcherPath"
-
-
-# The one-page card travels with the install, next to the launcher it describes.
-Copy-Item -LiteralPath (Join-Path $scriptDir 'widescreen-card.md') -Destination (Join-Path $deployRootFull 'widescreen-card.md') -Force
-Write-Host "widescreen card copied: $deployRootFull\widescreen-card.md"
-
-# --- 5. desktop shortcut -------------------------------------------------------
+# --- 4. desktop shortcut -------------------------------------------------------
 $desktop = [Environment]::GetFolderPath('Desktop')
 $shortcutPath = Join-Path $desktop $ShortcutName
 # A .lnk stores an ABSOLUTE path, so it must be a VERSION-STABLE one. The Store build of
@@ -472,7 +325,7 @@ else {
     if (Test-Path -LiteralPath $staleWideShortcut) { Remove-Item -LiteralPath $staleWideShortcut -Force; Write-Host "removed the stale wide shortcut: $staleWideShortcut (one shortcut carries the wide geometry now)" }
 }
 
-# --- 6. regenerate the feature-test map ---------------------------------------
+# --- 5. regenerate the feature-test map ---------------------------------------
 # Maps\BroodWar\!feature-test.scx is a destination-only file (never in -SourceGameDir,
 # never in the repo -- AGENTS.md § "Hard rules"), so the true mirror in step 2 correctly
 # purges it every run. Regenerate rather than /XF-preserve: an exclusion only protects a
@@ -489,7 +342,7 @@ $featureMapPath = Join-Path $gameDeployDir 'Maps\BroodWar\!feature-test.scx'
 & (Join-Path $scriptDir 'make-feature-test-map.ps1') -OutputPath $featureMapPath | Write-Host
 if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "deploy: feature-test map generation failed (exit $LASTEXITCODE) -- the deployed game works, but $featureMapPath is missing. Fix the toolchain (./setup.ps1) and re-run the deploy, or run tools/make-feature-test-map.ps1 -OutputPath '$featureMapPath' by hand." }
 
-# --- 7. verify -------------------------------------------------------------
+# --- 6. verify -------------------------------------------------------------
 Write-Host ''
 Write-Host '== Verifying =='
 
@@ -518,7 +371,7 @@ if ((Get-Item -LiteralPath $featureMapPath).LastWriteTime -lt $deployStart) {
 }
 Write-Host "verify: feature-test map regenerated this run ($featureMapPath)"
 
-# --- 7b. the deployed plugin's IDENTITY, not its freshness --------------------
+# --- 6b. the deployed plugin's IDENTITY, not its freshness --------------------
 # The check above is a TIMESTAMP: it says a file was written during this run, which is
 # exactly what a redeploy of an old checkout also looks like. That gap leaves a deployed
 # build untraceable to a commit, answerable only by hashing DLLs and comparing mtimes
@@ -556,21 +409,9 @@ $buildIdPath = Join-Path $deployRootFull 'BUILD-ID.txt'
 ) | Set-Content -LiteralPath $buildIdPath -Encoding utf8
 Write-Host "verify: build receipt written -> $buildIdPath"
 
-# Launcher + staged helper + card must exist, shortcut or not, and the staged DLL must
-# still match the pin: a copy that half-took otherwise surfaces as a user-facing
-# DirectDraw error rather than a deploy error.
-$stagedCnc = Join-Path $cncDeployDir 'ddraw.dll'
-$stagedHash = (Get-FileHash -LiteralPath $stagedCnc -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($stagedHash -ne $CNC_DDRAW_DLL_SHA256) { throw "deploy: staged cnc-ddraw hash mismatch after copy: $stagedCnc" }
-if (-not (Test-Path -LiteralPath (Join-Path $pluginDeployDir 'cnc-ddraw.ini'))) { throw 'deploy: plugin\cnc-ddraw.ini missing -- the wide launcher would run cnc-ddraw unconfigured (fullscreen-shaped).' }
-if (-not (Test-Path -LiteralPath $cnc2xIniDeployPath)) { throw 'deploy: plugin\cnc-ddraw-2x.ini missing -- the launcher would run cnc-ddraw unconfigured (fullscreen-shaped), losing the 2x scale + mouse lock task 075 added.' }
-$iniText = Get-Content -Raw -LiteralPath $cnc2xIniDeployPath
-# \r?$ : the ini inherits CRLF from the committed file, and under (?m) .NET's $ matches
-# before \n only -- without the \r? this check rejects its own correct output.
-if ($iniText -notmatch "(?m)^width=$($wsW * 2)\r?$" -or $iniText -notmatch "(?m)^height=$($wsH * 2)\r?$") { throw "deploy: plugin\cnc-ddraw-2x.ini does not carry width=$($wsW * 2)/height=$($wsH * 2) (2x the plugin's ${wsW}x${wsH})." }
-if (-not $fits2x -and ($iniText -notmatch "(?m)^fullscreen=true\r?$" -or $iniText -notmatch "(?m)^maintas=true\r?$")) { throw "deploy: plugin\cnc-ddraw-2x.ini must be borderless (fullscreen=true + maintas=true): 2x does not fit the $($screen.Width)x$($screen.Height) screen." }
-if (-not (Test-Path -LiteralPath (Join-Path $deployRootFull 'widescreen-card.md'))) { throw 'deploy: widescreen-card.md missing from the deploy root.' }
-Write-Host "verify: launcher, pinned cnc-ddraw, both inis (2x ini at $($wsW * 2)x$($wsH * 2)) + card all present"
+# Launcher, shim, staged helper, both inis and the card must exist, shortcut or not, and
+# the staged DLL must still match the pin -- re-read from what shipped, by the stage file.
+Test-ScPluginRuntime -Dest $deployRootFull -Borderless (-not $fits2x)
 
 if ($NoShortcut) {
     Write-Host 'verify: shortcuts skipped (-NoShortcut)'
