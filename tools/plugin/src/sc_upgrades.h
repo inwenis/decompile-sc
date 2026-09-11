@@ -103,6 +103,12 @@ void ScUpgQueueOnTick(DWORD unit);
 // engine's handler. Nothing is refunded because nothing was paid.
 bool ScUpgQueueOnCancel(DWORD unit);
 
+// A click on the queue icon drawing held item `index` (0 = promoted next) has arrived as a
+// {0x20, k} Cancel Train whose ring slot is empty. Drops that one item and returns true;
+// false when the building holds no such item, so the caller can say so. Nothing is
+// refunded because nothing was paid.
+bool ScUpgQueueCancelAt(DWORD unit, int index);
+
 // Should the card offer research buttons at `unit` even though it is busy? True only when the
 // feature is on, the unit is a completed building that is researching, and the logical queue
 // is below the maximum. At the cap this simply answers false: the condition then tells the
