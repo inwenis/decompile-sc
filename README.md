@@ -3,18 +3,20 @@
 ## How to play it?
 
 1. You need your own StarCraft: Brood War 1.16.1
-   ([installer](http://staredit.net/topic/17625/)). Nothing from the game is in this repo.
+   ([installer here](http://staredit.net/topic/17625/)).
 2. Press Win+R, paste this, press Enter:
 
    ```
    powershell -c "irm https://raw.githubusercontent.com/inwenis/decompile-sc/main/play.ps1 | iex"
    ```
 
-It downloads the latest release into `%LOCALAPPDATA%\StarCraft-Modded` and starts the game
-from your own install. Run the same line again to update, or `Launch-StarCraft-Modded.cmd`
-in that folder to just play. Rather not paste a one-liner? Unzip
-[the release](https://github.com/inwenis/decompile-sc/releases) anywhere and double-click the
-launcher.
+It downloads the latest release into `%LOCALAPPDATA%\StarCraft-Modded` and starts the game with the mod.
+
+Run the same line again to update, or `Launch-StarCraft-Modded.cmd` in that folder to just play.
+
+Rather not paste a one-liner?
+
+Unzip [the release](https://github.com/inwenis/decompile-sc/releases) anywhere and double-click the launcher.
 
 ## New features
 
