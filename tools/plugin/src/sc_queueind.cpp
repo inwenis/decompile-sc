@@ -308,11 +308,14 @@ int ScQueueIndCompose(char* out, int outLen, const ScQueueIndView* v) {
     if (v->hudPages > 1) return SC_QIND_NONE;
 
     if (v->selection <= 1) {
-        // Queued UPGRADES have no icons at all -- they are not in the building's ring --
-        // so for them the whole logical queue is invisible, not just its tail. One line,
-        // and it takes precedence because a building researching is not also training.
+        // Queued UPGRADES are drawn by the frame path into the four small queue icons the
+        // research layout leaves hidden (ids 3..6; the engine's own research icon, id 15,
+        // sits where slot 0 would be), so what is left UNDRAWN is the queue past those four.
+        // It takes precedence because a building researching is not also training.
         if (v->upgrades > 0) {
-            _snprintf(out, (size_t)outLen - 1, "+%d upg", v->upgrades);
+            const int hidden = v->upgrades - SC_QIND_UPGRADE_ICONS;
+            if (hidden <= 0) return SC_QIND_NONE;
+            _snprintf(out, (size_t)outLen - 1, "+%d", hidden);
             out[outLen - 1] = '\0';
             return SC_QIND_UPGRADE;
         }

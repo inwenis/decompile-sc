@@ -4173,9 +4173,13 @@ static void QueueIndTests(void) {
         Check("  and only five icons are drawable", ScQueueIndDrawableSlots(&v), 5);
 
         memset(&v, 0, sizeof(v)); v.selection = 1; v.upgrades = 3;
-        Check("queued upgrades -> \"+3 upg\"", ScQueueIndCompose(t, sizeof(t), &v),
-              SC_QIND_UPGRADE);
-        Check("  the string is exactly that", (long long)(strcmp(t, "+3 upg") == 0), 1);
+        Check("three queued upgrades fit the four small icons -> nothing said",
+              ScQueueIndCompose(t, sizeof(t), &v), SC_QIND_NONE);
+
+        memset(&v, 0, sizeof(v)); v.selection = 1; v.upgrades = 7;
+        Check("seven queued upgrades -> \"+3\" past the four icons",
+              ScQueueIndCompose(t, sizeof(t), &v), SC_QIND_UPGRADE);
+        Check("  the string is exactly that", (long long)(strcmp(t, "+3") == 0), 1);
 
         memset(&v, 0, sizeof(v)); v.selection = 4; v.buildings = 4; v.queued = 12;
         Check("a group -> the group line", ScQueueIndCompose(t, sizeof(t), &v), SC_QIND_GROUP);

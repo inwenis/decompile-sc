@@ -46,6 +46,11 @@
 // that measured too short.
 #define SC_QIND_BAND_MIN_H 10
 
+// How many queued upgrades the strip can show as ICONS: the four small queue icons (ids
+// 3..6). Slot 0's position is taken by the research layout's own icon (id 15), which
+// draws the RUNNING item with its progress bar.
+#define SC_QIND_UPGRADE_ICONS 4
+
 // An enum so the log line and the offline test name the case instead of matching a string.
 enum ScQueueIndMode {
     SC_QIND_NONE   = 0,   // nothing to say -- the control is hidden
