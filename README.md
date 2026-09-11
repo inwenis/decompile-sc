@@ -10,7 +10,7 @@ put link here to 1.16.1
 1. select more than 12 units, right click to page through
 2. select buildings of one type, queue units for all at once
 3. queue more than 5 units in a building
-4. queue upgrades
+4. queue upgrades, shown as icons in the building's queue like units
 5. widescreen (ctrl or alt to free mouse)
 
 Offline and single-player only.
