@@ -303,6 +303,12 @@ static inline void ScCtrlUpdate(DWORD ctrl) {
         : "+a"(inout) : [fn] "r"(fn) : "ecx", "edx", "cc", "memory");
 }
 
+static inline void ScCtrlEnable(DWORD ctrl) {
+    void* fn = ScRuntimeAddr(SC_VA_ENABLE_CONTROL);
+    __asm__ __volatile__("calll *%[fn]"
+        : : "S"(ctrl), [fn] "r"(fn) : "eax", "ecx", "edx", "cc", "memory");
+}
+
 // The same three, through `seam` when a test installed one. NULL means "call the
 // engine", which is what the shipped plugin always passes.
 static inline void ScCtrlShowVia(ScCtrlFn seam, DWORD ctrl) {
@@ -313,6 +319,9 @@ static inline void ScCtrlHideVia(ScCtrlFn seam, DWORD ctrl) {
 }
 static inline void ScCtrlUpdateVia(ScCtrlFn seam, DWORD ctrl) {
     if (seam) seam(ctrl); else ScCtrlUpdate(ctrl);
+}
+static inline void ScCtrlEnableVia(ScCtrlFn seam, DWORD ctrl) {
+    if (seam) seam(ctrl); else ScCtrlEnable(ctrl);
 }
 
 #endif // SC_UNIT_H
