@@ -15,8 +15,7 @@ enum ScMode {
     // %SCPLUGIN_MODE% spelling is "hooktest" -- a frozen launcher flag across the .ps1
     // suites, unrelated to hooktest.exe, the OFFLINE unit test that runs with no game.
     SC_MODE_LOGONLY  = 1,
-    SC_MODE_SHADOW   = 2,  // stage B: capture the untruncated selection, log it
-    SC_MODE_FANOUT   = 3   // stage C: fan orders out across the whole shadow list
+    SC_MODE_FANOUT   = 3   // capture the untruncated selection, fan orders out across it
 };
 
 // The name this mode goes into the log under. FROZEN: run-with-plugin.ps1 validates the
@@ -25,7 +24,6 @@ static inline const char* ScModeName(ScMode m) {
     switch (m) {
         case SC_MODE_OBSERVE:  return "observe";
         case SC_MODE_LOGONLY:  return "hooktest";
-        case SC_MODE_SHADOW:   return "shadow";
         case SC_MODE_FANOUT:   return "fanout";
     }
     return "?";
@@ -38,7 +36,6 @@ static inline ScMode ScModeResolve(void) {
     if (!ScEnvRead("SCPLUGIN_MODE", buf, sizeof(buf))) return SC_MODE_OBSERVE;
     if (lstrcmpiA(buf, "hooktest") == 0) return SC_MODE_LOGONLY;
     if (lstrcmpiA(buf, "logonly")  == 0) return SC_MODE_LOGONLY;
-    if (lstrcmpiA(buf, "shadow")   == 0) return SC_MODE_SHADOW;
     if (lstrcmpiA(buf, "fanout")   == 0) return SC_MODE_FANOUT;
     return SC_MODE_OBSERVE;
 }

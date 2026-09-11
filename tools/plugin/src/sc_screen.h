@@ -34,7 +34,7 @@ bool ScScreenWidescreenWanted(void);
 // posted/real input can REACH x=640..799 -- without it every mouse x past 639 is
 // clamped to 639 and the right 160 columns are unclickable. Stage 3 buys input
 // reach only: pixels in that band repaint only when something marks the rect
-// dirty (sc_console.h, %SCPLUGIN_CONSOLE_EDGE%).
+// dirty (sc_console.h).
 int ScScreenStageWanted(void);
 
 // Must run BEFORE the game's video init, so the plugin has to be injected early

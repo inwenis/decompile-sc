@@ -62,7 +62,7 @@ param(
     [switch]$NoPlugin,
     # What the plugin is allowed to do. 'observe' is the DEFAULT and the off switch:
     # read-only, no hooks, nothing written to game memory. See tools/plugin/README.md "Modes".
-    [ValidateSet('observe', 'hooktest', 'shadow', 'fanout')]
+    [ValidateSet('observe', 'hooktest', 'fanout')]
     [string]$Mode = 'observe',
     # Log every outgoing command id (default on; noisy but it is what makes a single
     # hand-driven test run diagnosable without a second run).

@@ -1,9 +1,13 @@
-StarCraft: Brood War 1.16.1 mod
+# StarCraft: Brood War 1.16.1 mod
 
 ## How to play it?
-super ez instruciton here
-You need your own StarCraft 1.16.1 install; nothing from the game is in this repo.
-put link here to 1.16.1
+
+1. You need your own StarCraft: Brood War 1.16.1
+   ([installer](http://staredit.net/topic/17625/)). Nothing from the game is in this repo.
+2. Download `starcraft-modded-<version>.zip` from
+   [releases](https://github.com/inwenis/decompile-sc/releases) and unzip it.
+3. Copy the contents of your StarCraft folder into `game\`.
+4. Double-click `Launch-StarCraft-Modded.cmd`.
 
 ## New features
 
@@ -11,7 +15,7 @@ put link here to 1.16.1
 2. select buildings of one type, queue units for all at once
 3. queue more than 5 units in a building
 4. queue upgrades, shown as icons in the building's queue like units
-5. widescreen (ctrl or alt to free mouse)
+5. widescreen (hold Ctrl or Right Alt to free the mouse)
 
 Offline and single-player only.
 
@@ -19,47 +23,42 @@ Offline and single-player only.
 
 ![63 units selected, mixed Zerg army, widescreen viewport](docs/screenshot-63-units.png)
 
-# How does it work?
-1. Start process from shortcut
-2. shortcut starts starcraft suspended
-3. it loads the mod.dll into memory
-3. it let's mod.dll attach itself to relevant funcitons
-4. sc.exe is resumed
-5. enoj sc.exe with extra features
+## How does it work?
+
+1. You start the game from `Launch-StarCraft-Modded.cmd`.
+2. It starts StarCraft suspended.
+3. It loads `scplugin.dll` into the game's memory.
+4. It lets `scplugin.dll` attach itself to the game functions it changes.
+5. StarCraft is resumed.
+6. Enjoy StarCraft with the extra features.
+
+Your game files stay untouched. The launcher only puts cnc-ddraw's `ddraw.dll` (the window
+presenter) next to them. Open the launcher in Notepad to see everything it does.
 
 ## Developing
-setup-onetime.ps1
-setup-worktree.ps1
-build.ps1
 
-run.ps1
-edit
+Windows, PowerShell 7, git, Python 3.11+.
 
-build.ps1
-deploy.ps1
+1. `./setup-onetime.ps1 -StarCraftDir '<your StarCraft folder>'`, once per machine: toolchain,
+   cnc-ddraw, a working copy of your game.
+2. `./setup-worktree.ps1`, once per checkout: the Python venv.
+3. `./build.ps1 -Test` builds the plugin and runs the offline hook test.
+4. `./run.ps1 -Mode fanout -Windowed -WindowedHelperDll C:\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll`
+   launches the working copy with the plugin, rebuilding it when stale.
+5. `./deploy.ps1` installs the modded game with a desktop shortcut.
 
-play it
-
-Every feature has its own off switch (`tools/plugin/run-with-plugin.ps1` parameters); the
-deployed desktop shortcut turns all of them on. How each one works, with the addresses and
-how they were verified, is in `research/` and `tools/plugin/README.md`.
-
-1. Windows, PowerShell 7, git. `./setup.ps1` checks these and creates the Python venv (Python 3.11+, only for the map tooling).
-2. The pinned 32-bit MinGW-w64 toolchain: `tools/plugin/README.md` "Toolchain (pinned)". Or skip it: every [release](https://github.com/inwenis/decompile-sc/releases) carries `scplugin.dll` + `scinject.exe` built by CI from that tag; unzip and pass `-BuildDir <that folder>` to `./run.ps1`.
-3. `./tools/make-working-copy.ps1` copies your install to `C:\sc-work\1161-base` and checks its hashes.
-4. `./tools/plugin/fetch-cnc-ddraw.ps1` downloads the pinned presenter DLL.
-5. `./tools/deploy.ps1` builds the plugin, assembles a self-contained modded copy under `C:\sc-deploy`, and puts a **StarCraft Modded** shortcut on the desktop.
-
-`./run.ps1` launches the game from the current checkout instead (dev loop).
+Release: `git tag v1.0 && git push origin v1.0`; CI builds the zip and attaches it. Tests:
+`Invoke-Pester -Path tests`. How each feature works and how it was verified: `research/` and
+`tools/plugin/README.md`. Read [AGENTS.md](AGENTS.md) before running an in-game suite.
 
 ## Layout
 
 ```
 research/   per-subsystem findings -- the product of this repo
-tools/      plugin, Ghidra automation, map + deploy tooling
+tools/      plugin, Ghidra automation, map + deploy + release tooling
 tests/      Pester tests for the tooling
 docs/       README screenshots
 work/       scratch/ (ignored build output + logs), defects/ (patches for build-defect-arm.ps1)
 ```
 
-
+Hard rule: no game binaries or assets in this repo.

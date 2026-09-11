@@ -120,7 +120,7 @@ else {
     if (-not $resolved.Path) {
         throw ("make-test-map: no python that can import richchk was found -- map generation CANNOT run. " +
                "Probed: $($resolved.Probed -join '; '). " +
-               'This is the worktree-without-.venv gap (issue #97): run ./setup.ps1 in the main checkout, or pass -Python <exe>.')
+               'This is the worktree-without-.venv gap (issue #97): run ./setup-worktree.ps1 in the main checkout, or pass -Python <exe>.')
     }
 }
 $python = $resolved.Path
