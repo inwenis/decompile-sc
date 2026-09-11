@@ -53,7 +53,7 @@
 
 static ScMode  g_mode = SC_MODE_OBSERVE;
 static int     g_budget = SC_DEFAULT_BUDGET;
-static int     g_maxUnits = SC_SHADOW_MAX - 1;
+static const int g_maxUnits = SC_SHADOW_MAX - 1;
 static bool    g_verboseCmds = true;
 
 // ---------------------------------------------------------------------------
@@ -1531,8 +1531,7 @@ void ScFanoutOnOverflow(unsigned count, DWORD* outList, DWORD unit) {
 // The hook-free half: given the candidate list the engine was handed and the 12-slot
 // output it produced, grow a one-building result into the whole same-type group.
 //
-// Inert, which is nearly always, unless the mode is fanout with building groups on (this
-// changes what the player has selected, which `shadow` mode's contract forbids) and the
+// Inert, which is nearly always, unless the mode is fanout with building groups on and the
 // engine returned exactly 1 unit that fails unit_IsStandardAndMovable -- a bigger count
 // means the movable path found real units and no fallback was involved.
 //
@@ -1805,7 +1804,6 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
 
     g_session = ScSessionEpoch();
     g_budget      = ScEnvInt("SCPLUGIN_FANOUT_BUDGET", SC_DEFAULT_BUDGET, 40, 480);
-    g_maxUnits    = ScEnvInt("SCPLUGIN_MAX_UNITS", SC_SHADOW_MAX - 1, 12, SC_SHADOW_MAX - 1);
     g_verboseCmds = ScEnvInt("SCPLUGIN_LOG_COMMANDS", 1, 0, 1) != 0;
     // The liveness gate, ON by default. 0 leaves term 1 (uniqueness) alone in the gate, a
     // KNOWN-BAD configuration that exists so an A/B run can reproduce the defect on demand,
@@ -1820,9 +1818,8 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     g_simSlots       = SC_SELECTION_SLOTS;
     LoadFanoutCmds();
 
-    // Selection circles, fanout mode only -- `shadow` mode's contract is "capture and log,
-    // change nothing", and drawing a circle is a change. %SCPLUGIN_CIRCLES% is its own off
-    // switch on top of the mode, so a run can be compared with and without the visuals.
+    // Selection circles, fanout mode only. %SCPLUGIN_CIRCLES% is its own off switch on top
+    // of the mode, so a run can be compared with and without the visuals.
     const bool circles = (mode == SC_MODE_FANOUT) && ScEnvInt("SCPLUGIN_CIRCLES", 1, 0, 1) != 0;
     ScCirclesInit(moduleBase, circles);
 
@@ -1833,11 +1830,9 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
 
     // The queue-overflow indicator, with %SCPLUGIN_QUEUEIND% as its own off switch. Here
     // rather than in scplugin.cpp so its detour lands under the SAME thread suspension.
-    // The mode gate is NOT "fanout only" like the two above, and the difference is the
-    // contract rather than the feature: `observe` writes nothing to game memory and
-    // `shadow` promises "capture and log, change nothing", while `hooktest` makes no such
-    // promise (the production queue, which moves a player's RESOURCES, runs in it) and is
-    // the mode a production run wants -- and a production queue is what this reports.
+    // The mode gate is NOT "fanout only" like the two above: `hooktest` is the mode the
+    // production-queue suites run in (it moves a player's RESOURCES without the fan-out
+    // hooks in the picture), and a production queue is what this reports.
     const bool queueind = (mode == SC_MODE_FANOUT || mode == SC_MODE_LOGONLY) &&
                           ScQueueIndEnabled();
     ScQueueIndInit(moduleBase, queueind);
@@ -1872,7 +1867,7 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
                       (void*)&HkQueueCommand, 9,
                       kPrologueQueue, (int)sizeof(kPrologueQueue))) ++installed;
 
-    if (mode >= SC_MODE_SHADOW) {
+    if (mode == SC_MODE_FANOUT) {
         if (ScHookInstall(&g_hkSelect, "CMDACT_Select", ScRuntimeAddr(SC_VA_CMDACT_SELECT),
                           (void*)&HkCmdactSelect, 6,
                           kPrologueSelect, (int)sizeof(kPrologueSelect))) ++installed;
@@ -1888,9 +1883,8 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
                           (void*)&HkSortAllUnits, 6,
                           kPrologueSort, (int)sizeof(kPrologueSort))) ++installed;
 
-        // Installed in shadow mode too, like the four above, and INERT there:
-        // ScFanoutMovableDecide returns the engine's own verdict unless the mode is
-        // fanout AND %SCPLUGIN_BUILDING_GROUPS% is on AND the call came from one of four
+        // INERT unless asked: ScFanoutMovableDecide returns the engine's own verdict
+        // unless %SCPLUGIN_BUILDING_GROUPS% is on AND the call came from one of four
         // named instruction addresses. So the stock arm runs with the detour spliced and
         // still behaves exactly like vanilla, which is what makes that arm's "one
         // building" mean something about the FEATURE rather than about the hooks.
@@ -1920,10 +1914,10 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
 
     // A partial install is not a working plugin: the queueCommand hook without the selection
     // hooks would fan out a shadow list nothing ever fills, and without the circle hook our
-    // circles never come off, which is worse than none. The shadow-mode count is FIVE --
+    // circles never come off, which is worse than none. The fanout count is FIVE --
     // queueCommand, CMDACT_Select, sortOverflowHandler, SortAllUnits,
     // unit_IsStandardAndMovable -- plus one each for circles, the HUD row and the indicator.
-    const int expected = ((mode >= SC_MODE_SHADOW) ? 5 : 1) + (circles ? 1 : 0)
+    const int expected = ((mode == SC_MODE_FANOUT) ? 5 : 1) + (circles ? 1 : 0)
                        + (hudrow ? 1 : 0) + (queueind ? 1 : 0);
     if (installed != expected) {
         ScLog("HOOK: only %d of %d hooks installed -- ROLLING BACK, the plugin is "
@@ -1948,7 +1942,6 @@ void ScFanoutTestBegin(BYTE* fakeModuleBase, ScQueueFn emit, int budget) {
     g_emit   = emit;
     g_mode   = emit ? SC_MODE_FANOUT : SC_MODE_OBSERVE;
     g_budget = budget;
-    g_maxUnits = SC_SHADOW_MAX - 1;
     g_verboseCmds = false;
     // Circles OFF for the fan-out tests: ScFanoutOnSelect would otherwise call the engine's
     // sprite primitives, which in a test process are a fake module image. sc_circles has

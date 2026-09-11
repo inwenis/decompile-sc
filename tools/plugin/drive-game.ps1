@@ -2791,7 +2791,7 @@ function Send-ScText {
 
 # --- hook-set composition, by NAME rather than a hardcoded total ---------------
 
-# The five hooks sc_fanout.cpp installs unconditionally at mode >= shadow plus the three
+# The five hooks sc_fanout.cpp installs unconditionally in fanout mode plus the three
 # optional single-hook features, named exactly as ScHookInstall logs them
 # (sc_circles.cpp:340, sc_hudrow.cpp:828, sc_queueind.cpp:788). Callers pass what the
 # RUN'S OWN `FANOUT config:` line reported, never a source-level default, so this stays

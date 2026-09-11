@@ -4,8 +4,7 @@
 // writes to game memory is gated out of observe:
 //   observe   (DEFAULT)  read-only: no hooks, no writes. THIS IS THE OFF SWITCH.
 //   hooktest             one hook (queueCommand), logging only
-//   shadow               + log the pre-cap selection, still no behaviour change
-//   fanout               + fan orders out over the whole captured selection
+//   fanout               + capture the pre-cap selection and fan orders out over it
 // Unset or unrecognised -> observe: the plugin is passive unless asked for more.
 //
 // It never patches StarCraft.exe on disk; every modification lives in this process's
