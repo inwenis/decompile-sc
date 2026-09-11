@@ -45,7 +45,7 @@ deployed desktop shortcut turns all of them on. How each one works, with the add
 how they were verified, is in `research/` and `tools/plugin/README.md`.
 
 1. Windows, PowerShell 7, git. `./setup.ps1` checks these and creates the Python venv (Python 3.11+, only for the map tooling).
-2. The pinned 32-bit MinGW-w64 toolchain: `tools/plugin/README.md` "Toolchain (pinned)".
+2. The pinned 32-bit MinGW-w64 toolchain: `tools/plugin/README.md` "Toolchain (pinned)". Or skip it: every [release](https://github.com/inwenis/decompile-sc/releases) carries `scplugin.dll` + `scinject.exe` built by CI from that tag; unzip and pass `-BuildDir <that folder>` to `./run.ps1`.
 3. `./tools/make-working-copy.ps1` copies your install to `C:\sc-work\1161-base` and checks its hashes.
 4. `./tools/plugin/fetch-cnc-ddraw.ps1` downloads the pinned presenter DLL.
 5. `./tools/deploy.ps1` builds the plugin, assembles a self-contained modded copy under `C:\sc-deploy`, and puts a **StarCraft Modded** shortcut on the desktop.
