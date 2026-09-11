@@ -11,6 +11,7 @@ Personal, private reverse-engineering research on StarCraft; primary target the 
 
 1. NEVER commit game binaries, MPQ archives, extracted assets, generated `.scm`/`.scx` fixtures, game frames/PNGs, or anything derived from them that reproduces game content. The repo tracks findings and tooling only; `.gitignore` is a backstop, not the rule.
    Frame writers throw on any in-repo path outside `work/scratch/`; put frames under `C:\sc-work\`.
+   The one exception: the owner's hand-picked README screenshots under `docs/`. An agent or a suite still never commits a frame.
    -> tools/plugin/drive-game.ps1; tools/plugin/run-with-plugin.ps1; tools/make-feature-test-map.ps1
 2. `game/` (gitignored local install copy) is READ-ONLY. To patch a binary, copy it into your worktree or `work/scratch/` first.
 3. NEVER point a modified binary at Battle.net or any online service. Offline and single-player only.
@@ -215,7 +216,7 @@ Hard rule 4 applies to every line of `research/`.
 ## Screenshots
 
 **Hard rule 1 wins over the global "visual change -> screenshot -> pr-image" rule, always, without asking.**
-- NEVER `pr-image` or commit a game frame. Prove visual claims with the in-process read-back oracles (`CIRCLES show:`, `HUDROW show n=... page=...`, `UNITSTATE`), describe the appearance in the PR body, and keep frames on the gitignored diagnostic path.
+- NEVER `pr-image` or commit a game frame (the owner-picked README screenshots under `docs/` are hard rule 1's one exception, not an agent's call). Prove visual claims with the in-process read-back oracles (`CIRCLES show:`, `HUDROW show n=... page=...`, `UNITSTATE`), describe the appearance in the PR body, and keep frames on the gitignored diagnostic path.
 - User standing rule, verbatim: "when you tell me about ui elements you show me with screenshots - like `page i/j` - show me a screen shot of this. same with all other features you're telling me about - show me with screenshots"
 - So every visual claim (PR body or message) carries a PNG of that exact state on disk under `C:\sc-work\logs\<NNN>-frames\` (via the suite's `-CaptureFrames` path where one exists), named for the STATE not a counter, before and after for anything claimed fixed, one pair per distinct case. The PATH travels, never the image.
 - The read-back oracle stays the oracle: a frame is never asserted on, an oracle with no frame is not reportable, a frame with no oracle is not evidence.
