@@ -4,10 +4,17 @@
 
 1. You need your own StarCraft: Brood War 1.16.1
    ([installer](http://staredit.net/topic/17625/)). Nothing from the game is in this repo.
-2. Download `starcraft-modded-<version>.zip` from
-   [releases](https://github.com/inwenis/decompile-sc/releases) and unzip it.
-3. Copy the contents of your StarCraft folder into `game\`.
-4. Double-click `Launch-StarCraft-Modded.cmd`.
+2. Press Win+R, paste this, press Enter:
+
+   ```
+   powershell -c "irm https://raw.githubusercontent.com/inwenis/decompile-sc/main/play.ps1 | iex"
+   ```
+
+It downloads the latest release into `%LOCALAPPDATA%\StarCraft-Modded` and starts the game
+from your own install. Run the same line again to update, or `Launch-StarCraft-Modded.cmd`
+in that folder to just play. Rather not paste a one-liner? Unzip
+[the release](https://github.com/inwenis/decompile-sc/releases) anywhere and double-click the
+launcher.
 
 ## New features
 
@@ -32,8 +39,9 @@ Offline and single-player only.
 5. StarCraft is resumed.
 6. Enjoy StarCraft with the extra features.
 
-Your game files stay untouched. The launcher only puts cnc-ddraw's `ddraw.dll` (the window
-presenter) next to them. Open the launcher in Notepad to see everything it does.
+Your game files stay untouched. While you play, cnc-ddraw's `ddraw.dll` (the window
+presenter) sits in your StarCraft folder; the launcher removes it when you quit. Open the
+launcher in Notepad to see everything it does.
 
 ## Developing
 
