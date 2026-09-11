@@ -491,7 +491,7 @@ run the engine's own accept path on it — `gate(unit, id, player) == 1` then
 |---|---|
 | paid **twice** | Only the engine ever pays, in `startUpgrade`/`startTech`, at the moment the item actually starts (§5.3). Holding an item costs nothing because a held item is one id and no money. There is no second payer, so "exactly once" is the shape of the design and not a discipline. |
 | a **wrong refund** | There is nothing to refund. A held item is unpaid, so dropping one — cancel, building destroyed, plugin unloaded mid-game — strands nothing. A cancel that reaches the running item is vanilla's own `0x33`/`0x31` path, untouched. |
-| the **UI disagreeing** | The status area draws the running item's progress bar, which is true, and the held items as icons in queue slots 2..5 (§10). The plugin's `UPGQ` log line and the engine's own strip walk (`STATQ`) are the read-back oracles. |
+| the **UI disagreeing** | The status area draws the running item's progress bar, which is true. Held items are not drawn — incomplete, not wrong. The plugin's `UPGQ` log line is the read-back oracle instead, and is what §8's run asserts on. |
 | **negative resources** | Not reachable: the plugin never spends, and before promoting it compares the engine's own cost tables against `0x0057F0F0`/`0x0057F120` and simply waits when the player is short. A comparison, not a transaction. |
 
 This is a deliberate divergence from vanilla unit training, which charges at *queue* time.
@@ -608,10 +608,10 @@ not a fact about this feature.
 
 ## 8. Known limitations
 
-1. **Held items past four are a count.** The strip's four small icons draw the first four
-   held items (§10); the rest are a `+N` on the empty fourth slot. A building that went idle
-   with items held (waiting for money) is in the idle layout, which owns the strip, so the
-   icons return when the next item starts.
+1. **Held items are not drawn.** The status area shows the running item's progress bar,
+   which is true; the queue behind it is not on screen. The plugin's `UPGQ` line is the
+   read-back oracle instead, and is what the in-game suite asserts on. Extending the status
+   area would mean a dialog splice, a larger and riskier change than this feature.
 2. **`0x32` Upgrade and `0x30` Tech only.** Unit training, morphs and addons keep vanilla's
    behaviour (`research/production-queue.md` is the other half).
 3. **One building.** Not cross-building, and no auto-repeat.
@@ -624,7 +624,7 @@ not a fact about this feature.
 
 ---
 
-## 9. Reproducing this (the queue)
+## 9. Reproducing this
 
 ```powershell
 # once: import + analyse into a persistent project (~4 min)
@@ -650,97 +650,3 @@ foreach ($d in '0xC6','0xC8','0xC9','0xCD') {
 
 The `.c` outputs are whole decompiled functions — derived game content. They stay under
 `work/scratch/` (gitignored) and only the findings above are committed (hard rule 1).
-
----
-
-## 10. Drawing the held items: the research layouts, and the four icons they leave hidden
-
-Derived with the same pipeline (§9), decompiles under `work/scratch/` (hard rule 1), and the
-live child dump of the status pane (`QINDDLG`, `tools/plugin/probe-upgrade-queue-indicator.ps1`).
-
-### 10.1 Which layout a researching building gets
-
-Every building row of the per-unit-type status table `0x005193A0` (3 dwords per type, read
-out of the binary for types 106, 111, 112, 113, 120, 122) carries the same pair: cond
-`0x00425180`, act `0x00427890`. Neither is reached by a CALL — the dispatcher `0x00458120`
-takes them out of the table — so auto-analysis never made them functions; `DisassembleAt.java`
-recovered both. The act's dispatch, in order, for the local player's completed building:
-
-```c
-if (isTraining(unit))              /* 0x00401E70 */  queueLayout(ctrl);   /* 0x004268D0 */
-else if (!lifting && !landing) {
-    if (unit->0xC8 != 44)          techLayout(ctrl);      /* 0x004266F0 */
-    else if (unit->0xC9 != 61)     upgradeLayout(ctrl);   /* 0x00426500 */
-    else ...                       /* hangar, addon, the default single-unit layout (kind 3) */
-}
-```
-
-So a researching building never runs `queueLayout`, and the two research layouts are the
-whole picture of its strip.
-
-### 10.2 What the research layouts write, and what they leave alone
-
-`upgradeLayout` `0x00426500`, decompiled:
-
-```c
-if (layoutKind != 8) { hideAll(); showThrough(15); layoutKind = 8; }   /* 0x0068C1E5 */
-setProgress(((upgradeTime(unit) - unit->0xC6) * 100) / upgradeTime(unit));
-ctrl15 = child with index 15;
-ctrl15->graphic = 2;
-ctrl15->statUser->grp  = [0x0068C1E0];                    /* cmdicons.grp            */
-ctrl15->statUser->icon = u16[0x00655AC0 + unit->0xC9*2]; /* upgrades.dat icon table */
-ctrl15->statUser->mode = 5;
-ctrl15->statUser->type = unit->0xC9;
-enableControl(ctrl15);                                    /* 0x00418E00 */
-if (!(ctrl15->flags & 1)) { ctrl15->flags |= 1; updateControl(ctrl15); }
-... the "Upgrading" label out of the string table ...
-```
-
-`techLayout` `0x004266F0` is the same function with kind **7**, `u16[0x00656430 +
-unit->0xC8*2]` (the `techdata.dat` icon table) and mode **4**. Three things follow:
-
-1. **The icon tables.** `0x00655AC0` and `0x00656430` are named off these two reads and
-   nothing else; both feed the same `statUser->icon` the queue strip's blit `0x00456C30`
-   reads for a queued unit, out of the same `cmdicons.grp`. Both tables are filled from the
-   MPQ at load (zero in the file image), so the cross-check is live: the probe compares the
-   strip's frame for a held upgrade against the card button's own icon for it (§10.5).
-2. **The four small queue icons are never touched.** Neither layout names ids 3..6. The
-   live dump of a researching Engineering Bay's pane shows them `vis=0 flags=0x410` — hidden
-   and NOT disabled, because `queueLayout` never ran for this building — with their rects
-   exactly where the producing layout puts them (`(104,53,142,88)`, `(143,53,181,88)`,
-   `(182,53,220,88)`, `(221,53,259,88)`), and id 15 visible at slot 0's own rect
-   `(104,14,142,49)`.
-3. **The hide-all runs on a KIND change, not per call.** `0x0068C1E5` is compared first and
-   `hideAll` `0x00457310` (every child after id -7) runs only when it differs. The dispatcher
-   zeroes the byte when the pane empties; the default single-unit layout writes 3, a foreign
-   player's 4. So a control shown into a research layout stays shown until the kind changes.
-
-### 10.3 What the plugin does with that
-
-`sc_queueind.cpp`, after the HUD driver it already detours: while `0x0068C1E5` reads 7 or 8
-and the portrait building holds items, fill ids 3..6 with the first held items using the five
-fields above (mode 5 or 4 by kind, the border graphic `queueLayout` gives those slots, the slot
-label) and `showControl` them; compare before every write, so a settled pane costs four reads;
-take them down through `hideControl` when the item behind a slot goes. Past four held, three
-icons and the existing `+N` on the empty fourth. Outside a research layout the icons are the
-engine's and the count covers everything held.
-
-### 10.4 The click
-
-`statusCtrlActivate` `0x004573A0` switches on the control's own index: cases 2..6 emit
-`{0x20, index-2}` (Cancel Train), case 15 emits `0x31` or `0x33` by layout kind. So a click on
-a lit icon 3..6 is a Cancel Train for display 1..4 whose ring slot holds `0xE4`.
-`cancelBuildQueueSlot` `0x00466A70`, decompiled, opens with `if (ring[(head+k)%5] != 0xE4)`
-and otherwise returns — an empty slot is a no-op in the engine, not an out-of-bounds refund
-as `research/production-queue.md` §8 feared. `sc_prodqueue`'s detour on `cmdrecvCancelTrain`
-already owns the empty-slot case; it now hands display *k* to `ScUpgQueueCancelAt(k-1)`
-before swallowing.
-
-### 10.5 The oracle
-
-`STATQ` (`Get-ScStatusQueue`) walks the five icons out of the statdata dialog: visible bit,
-`statUser` frame/mode/type, rect. The probe asserts on that walk — one enabled icon per held
-item, mode 4/5, a frame past the placeholder range, display 1's frame equal to the card
-button's own icon for that upgrade — then clicks display 1 through `Get-ScStatusSlotPoint`
-and requires `UPGQEV cancel-icon index=0`, one fewer held, and display 2 dark.
-

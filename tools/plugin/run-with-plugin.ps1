@@ -202,6 +202,11 @@ param(
     # window-proc mouse clamps widen so clicks can reach x=640..799, renderer-viewport.md
     # 18). Meaningless unless -Widescreen 1.
     [ValidateSet('0', '1', '2', '3')][string]$WidescreenStage = '1',
+    # Which geometry PRESET the widescreen table targets, by name (sc_screen_presets.h:
+    # 1280x880 by default, 1280x720, 1536x864). Empty leaves %SCPLUGIN_WS_GEOMETRY% as
+    # inherited, so a suite can set the variable once for a whole run. The DLL refuses
+    # the whole widescreen install on an unknown name and logs the list.
+    [string]$Geometry = '',
 
     # Wrap every root dialog's interact with a logging shim (CTRACE lines: dialog name,
     # event type, dwUser, x/y, return value). The dispatcher stops at the first non-zero
@@ -444,6 +449,7 @@ try {
     } else { $env:SCPLUGIN_FRAMEDUMP = '' }
     $env:SCPLUGIN_WIDESCREEN     = $Widescreen
     $env:SCPLUGIN_WS_STAGE       = $WidescreenStage
+    if ($Geometry) { $env:SCPLUGIN_WS_GEOMETRY = $Geometry }
     $env:SCPLUGIN_CONSOLE_TRACE  = $ConsoleTrace
     # 'auto' must reach the DLL as UNSET. Remove-Item, not `$env:X = ''`: measured on
     # pwsh 7.6, the empty assignment leaves the variable present-but-empty in a child's

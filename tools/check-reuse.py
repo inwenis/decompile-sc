@@ -41,6 +41,7 @@ reason in the PR.
 Needs Node.js on PATH for npx; the first run downloads jscpd into npx's cache.
 """
 
+import fnmatch
 import argparse
 import hashlib
 import json
@@ -216,7 +217,7 @@ TARGETS = [
     dict(name="cpp", root=pathlib.Path("tools/plugin/src"), globs=("*.cpp", "*.h"),
          pattern="*.{cpp,h}", comment="//", block=("/*", "*/"), ignore=("#include",),
          # Generated, or a table of evidence rather than code.
-         skip={"sc_screen_patches.h", "sc_addresses.h"},
+         skip={"sc_screen_patches_*.h", "sc_addresses.h"},   # generated tables: same instructions, different immediates
          collectors=(collect_blocks, collect_names, collect_defines, collect_vas)),
     dict(name="ps1", root=pathlib.Path("tools/plugin"), globs=("*.ps1",), pattern="*.ps1",
          comment="#", block=("<#", "#>"), ignore=(), skip=set(),
@@ -239,7 +240,7 @@ def check(target, args):
     tag = "check-reuse [%s]" % target["name"]
     files = {p: significant(p, target)
              for g in target["globs"] for p in sorted(target["root"].glob(g))
-             if p.name not in target["skip"]}
+             if not any(fnmatch.fnmatch(p.name, s) for s in target["skip"])}
     findings = [f for collect in target["collectors"] for f in collect(files, target)]
     findings.sort(key=lambda f: (f.kind, f.summary, f.where))
     baseline = pathlib.Path("tools/check-reuse.%s.baseline" % target["name"])

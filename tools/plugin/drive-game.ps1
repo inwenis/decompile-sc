@@ -1709,13 +1709,23 @@ function Get-ScWideGeometry {
     .SYNOPSIS
     The widescreen geometry the plugin was built for, read from the generated table header.
     .DESCRIPTION
-    tools/plugin/src/sc_screen_patches.h is GENERATED (tools/renderer_patch_sites.py) and is
-    the one place the target width/height live. Every probe that asserts a client size, a
-    dump size or a band extent reads them here: a literal width copied into a probe goes
-    stale, silently, the moment the target size moves.
+    tools/plugin/src/sc_screen_patches_<WxH>.h is GENERATED (tools/renderer_patch_sites.py),
+    one per geometry preset, and is the one place a preset's width/height live. Every probe
+    that asserts a client size, a dump size or a band extent reads them here: a literal
+    width copied into a probe goes stale, silently, the moment the target size moves.
+    The preset is the one the DLL will read from %SCPLUGIN_WS_GEOMETRY% (unset = default),
+    so a suite and its game agree by construction.
     #>
     [CmdletBinding()]
-    param([string]$Header = (Join-Path $PSScriptRoot 'src/sc_screen_patches.h'))
+    param(
+        [string]$Geometry = $(if ($env:SCPLUGIN_WS_GEOMETRY) { $env:SCPLUGIN_WS_GEOMETRY } else { '1280x880' })
+    )
+    $Header = Join-Path $PSScriptRoot "src/sc_screen_patches_$Geometry.h"
+    if (-not (Test-Path -LiteralPath $Header)) {
+        $known = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src') -Filter 'sc_screen_patches_*.h' |
+                   ForEach-Object { $_.BaseName -replace '^sc_screen_patches_', '' })
+        throw "drive-game: no geometry preset '$Geometry' (SCPLUGIN_WS_GEOMETRY); presets: $($known -join ', ')"
+    }
     $read = {
         param([string]$Name)
         $m = Select-String -LiteralPath $Header -Pattern "^#define\s+$Name\s+(\d+)" | Select-Object -First 1
@@ -1723,6 +1733,8 @@ function Get-ScWideGeometry {
         [int]$m.Matches[0].Groups[1].Value
     }
     [pscustomobject]@{
+        Name   = $Geometry
+        Header = $Header
         W      = & $read 'SC_WS_SCREEN_W'
         H      = & $read 'SC_WS_SCREEN_H'
         PfW    = & $read 'SC_WS_PLAYFIELD_W'

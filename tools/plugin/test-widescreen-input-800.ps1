@@ -54,7 +54,7 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'drive-game.ps1')
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
 
-$patchHeader = Join-Path $scriptDir 'src/sc_screen_patches.h'
+$patchHeader = (Get-ScWideGeometry).Header
 function Get-WsDefine([string]$Name) {
     $m = Select-String -LiteralPath $patchHeader -Pattern "^#define\s+$Name\s+(\d+)" | Select-Object -First 1
     if (-not $m) { throw "test-widescreen-input-800: $Name not found in $patchHeader" }

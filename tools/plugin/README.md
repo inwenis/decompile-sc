@@ -59,7 +59,7 @@ suite break, not a cleanup.
 | `sc_prodfan.cpp` | one Train click trains at every building in the group | `ScProdFan*` | `PRODFAN` | `SCPLUGIN_PRODFAN` |
 | `sc_queueind.cpp` | the indicator for queue items the strip cannot draw | `ScQueueInd*` | `QIND` `QINDDLG` `QINDSTATS` `QINDCLICK` `QINDCLICKSTATS` | `SCPLUGIN_QUEUEIND`, `SCPLUGIN_QIND_CLICKTRACE` |
 | `sc_card.cpp` | reading the command card back out of the process | `ScCard*` | `CARD` | `SCPLUGIN_CARDSCAN` |
-| `sc_screen.cpp` | the widescreen patch table (`sc_screen_patches.h` is **generated**) | `ScScreen*`, `SC_WS_*` | `WIDESCREEN` | `SCPLUGIN_WIDESCREEN`, `SCPLUGIN_WS_STAGE`, `SCPLUGIN_WS_ONLY` |
+| `sc_screen.cpp` | the widescreen patch tables (`sc_screen_patches_<WxH>.h`, **generated**, one per preset listed in `sc_screen_presets.h`) | `ScScreen*`, `SC_WS_*` | `WIDESCREEN` | `SCPLUGIN_WIDESCREEN`, `SCPLUGIN_WS_STAGE`, `SCPLUGIN_WS_GEOMETRY`, `SCPLUGIN_WS_ONLY` |
 | `sc_stormpresent.cpp` | copying the widened strip to the primary every frame; the tooltip layer composed every frame while the console is buffer-resident (`tipForced=` on `STORMSTATS`); process CPU per present window (`cpu_pct=` on `STORMTIME`, `cpuPct=` on `STORMSTATS`) | `ScStormPresent*` | `STORM` `STORMTIME` `STORMSTALL` `STORMSTATS` | `SCPLUGIN_STORM_PRESENT`, `SCPLUGIN_TIPFIX` (default on; `0` leaves layer 1 dirty-driven) |
 | `sc_marktrace.cpp` | diagnostic trace of the dirty marker, the fog cell renderer and the terrain run blit, armed by `marktrace-on`/`marktrace-off` markers; the posted-cursor import override for off-screen runs (`run-offscreen.ps1` sets it: the engine's `GetCursorPos` answers from its own cursor layer, so the real mouse cannot pan the camera) | `ScMarkTrace*` `ScCursorPosted*` | `MARKTRACE` `MARK` `IMRK` `FOGR` `TERR` `CURSOR` | `SCPLUGIN_MARKTRACE`, `SCPLUGIN_CURSOR_POSTED` |
 | `sc_console.cpp` | moving the console down under the taller playfield, the per-frame full playfield redraw while it is buffer-resident (`fullFrames=` on `CONSOLESTATS`), and the click trace | `ScConsole*` | `CONSOLE` `CONSOLESTATS` `CTRACE` | `SCPLUGIN_CONSOLE_TRACE`, `SCPLUGIN_FULLREDRAW` (default on; `0` leaves the playfield dirty-driven) |
@@ -498,7 +498,7 @@ It answers three things the user asked for after playing the deployed build:
 |---|---|
 | *"when i queue more then 5 units the 5'th slot is emtpy"* | the icons the engine leaves empty are filled from the plugin's own overflow and lit |
 | *"is the info showing that? (some +x number somewhere in tug?)"* | `+N` over the last icon, for whatever is queued past those five |
-| *"queueing upgrades … there is no queue insidcating the queu"* | the held research items as ICONS in queue slots 2..5, the same strip a training building shows; past four held, three icons and a `+N` on the empty fourth |
+| *"queueing upgrades … there is no queue insidcating the queu"* | `+N upg` for a building with queued research, which has no icons at all |
 
 and one nobody had asked for but task 030 needed: with several producing buildings selected the
 strip is not drawn at all, so it says `N bldgs  M queued` — the only thing on screen that says a
@@ -513,22 +513,9 @@ already been laid out. Off → the dialog's child list is byte-for-byte stock.
 
 **The cancel rule that comes with it.** A lit icon is a clickable icon, and clicking icon *k*
 makes the engine call `cancelBuildQueueSlot(k)`. When the ring slot behind that icon is empty the
-engine does nothing at all (`0x00466A70` returns on `0xE4` before it refunds or compacts), so the
-plugin takes any such click itself and cancels the item it actually holds: a queued unit past the
-ring, or a held research item. Vanilla cannot produce that click (an empty slot's icon is drawn
-disabled), so a stock game is unchanged.
-
-**Held research as icons.** A researching building's pane is laid out by the engine's two
-research layouts (`0x00426500` upgrade, `0x004266F0` tech), which draw the RUNNING item into
-their own icon (control id 15, where slot 0 sits, with the progress bar) and leave queue icons
-3..6 hidden; they touch those only through the hide-all sweep that runs when the pane's layout
-kind byte (`0x0068C1E5`: 7 tech, 8 upgrade) changes. So after the driver the plugin fills icons
-3..6 with the held items exactly as the research layout fills id 15 — `grp` = cmdicons, frame
-from `upgrades.dat`/`techdata.dat`'s icon table (`0x00655AC0` / `0x00656430`), mode 5 / 4, type
-= the id, the slot label — and shows them through the engine's own `showControl`. The engine's
-icon handler draws them, its hit test takes the click, and `{0x20, k}` routes to
-`ScUpgQueueCancelAt(k-1)`. Only in a research layout: any other layout owns those icons itself.
-Evidence in [`research/upgrade-queue.md`](../../research/upgrade-queue.md) §10.
+engine would refund by the sentinel type `0xE4`, reading both cost tables out of bounds — so the
+plugin takes any such click itself and cancels the item it actually holds. Vanilla cannot produce
+that click (an empty slot's icon is drawn disabled), so a stock game is unchanged.
 
 ### Known limitations
 
@@ -537,9 +524,7 @@ Evidence in [`research/upgrade-queue.md`](../../research/upgrade-queue.md) §10.
 | The strip still stops at five icons | past that it is a number, not a picture. Widening the strip means inventing control positions over Blizzard art, which the game-file rules forbid |
 | The `+N` overlays the last icon | there is no free margin in the status pane's 269×91 — the live bounds are tabulated in `research/status-pane-text.md` §8 |
 | While the unit row is PAGING, the strip indicator stands down | one indicator at a time; `sc_hudrow`'s own `page i/j` owns that corner then |
-| Held research past four is a count | four small icons is what the strip has; the fifth and later say `+N`, tail-first cancel through the card still reaches them |
-| Held research waiting for money shows nothing | a building that went idle with items held (the player cannot pay yet) is in the idle layout, which owns the strip; the icons return when the next item starts |
-| The card still lights an already-queued upgrade | marking those is a card change, not a status-pane one |
+| Upgrades are a count, not a list | it says how many are queued, not which — the card still lights an already-queued upgrade. Marking those is a card change, not a status-pane one |
 
 ---
 
@@ -1307,3 +1292,21 @@ sits inside one committed, non-guard, readable region. A wrong offset therefore
 produces a log line with a missing `ok` bit instead of an access violation inside
 the game. It only ever `memcpy`s *out* of the process — there is no code path in
 this DLL that writes to game memory.
+
+## Geometry presets
+
+The widescreen table is generated per screen size, so the DLL carries a short list of
+presets (`sc_screen_presets.h`) and `%SCPLUGIN_WS_GEOMETRY%` (launcher `-Geometry`,
+deploy.ps1 `-Geometry`) picks one at load. Unset means the first; an unknown name makes
+the DLL refuse the whole widescreen install and log the list.
+
+| preset | playfield | how it presents on a 1920x1080 screen |
+|---|---|---|
+| `1280x880` (default) | 1280x800 | borderless, aspect kept: 1571x1080 with side bars |
+| `1280x720` | 1280x640 | 16:9 -- 1.5x, fills the screen |
+| `1536x864` | 1536x784 | 16:9 -- 1.25x, fills the screen; more map, smaller UI |
+
+Adding one: `python tools/renderer_patch_sites.py --width W --height H` (playfield is
+`H - 80`; W + 32 must be a sum of exactly three powers of two or the generator refuses),
+include it in `sc_screen_presets.h`, then prove it in game with
+`$env:SCPLUGIN_WS_GEOMETRY='WxH'` and `test-widescreen.ps1` off-screen.

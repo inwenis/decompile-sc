@@ -23,7 +23,7 @@
 #include "sc_engine.h"
 #include "sc_env.h"
 #include "sc_log.h"
-#include "sc_screen_patches.h"
+#include "sc_screen_presets.h"
 
 // ---------------------------------------------------------------------------
 // State
@@ -40,6 +40,37 @@ static int    g_applied = 0;
 static bool   g_installRefused = false;   // a pre-flight check said no; nothing written
 static int    g_writeFailures = 0;        // patches that failed their own write
 
+// The preset in play. %SCPLUGIN_WS_GEOMETRY% names one of SC_WS_PRESETS; unset means
+// the first. Resolved once. An unknown name keeps the FIRST preset for the accessors,
+// so every module reads one consistent geometry, and makes ScScreenInstall refuse
+// naming the presets: a typo must never turn into "widescreen at some other size".
+static const ScScreenGeometry* g_geom = NULL;
+static bool g_geomUnknown = false;
+static char g_geomAsked[SC_ENV_MAX];
+
+static const ScScreenGeometry* FindPreset(const char* name) {
+    if (!name || !name[0]) return SC_WS_PRESETS[0];
+    for (size_t i = 0; i < SC_WS_PRESET_COUNT; ++i)
+        if (lstrcmpiA(name, SC_WS_PRESETS[i]->name) == 0) return SC_WS_PRESETS[i];
+    return NULL;
+}
+
+bool ScScreenLookupPreset(const char* name, int* w, int* h) {
+    const ScScreenGeometry* g = FindPreset(name);
+    if (!g) return false;
+    if (w) *w = g->w;
+    if (h) *h = g->h;
+    return true;
+}
+
+static const ScScreenGeometry* Geom(void) {
+    if (g_geom) return g_geom;
+    if (!ScEnvRead("SCPLUGIN_WS_GEOMETRY", g_geomAsked, sizeof(g_geomAsked))) g_geomAsked[0] = '\0';
+    g_geom = FindPreset(g_geomAsked);
+    if (!g_geom) { g_geomUnknown = true; g_geom = SC_WS_PRESETS[0]; }
+    return g_geom;
+}
+
 // Guard padding around the relocated grid. The engine's UNCLAMPED grid consumers
 // -- 0x0041DE20 tests a dialog rect's cells with a SIGNED column (x1>>4) and
 // never clamps x1<0 the way the WRITE path 0x0041E0D0 does -- read a neighbouring
@@ -55,9 +86,9 @@ static int    g_writeFailures = 0;        // patches that failed their own write
 #define SC_WS_GRID_GUARD 0x10000
 
 // Saved originals, so a FreeLibrary detach can put the process back. Sized by
-// the table, never a fixed cap: a cap below the patch count stops saving
-// mid-table in silence and leaves detach unable to restore the rest.
-#define SC_WS_MAX_SAVED SC_WS_PATCH_COUNT
+// the largest preset's table, never a fixed cap: a cap below the patch count
+// stops saving mid-table in silence and leaves detach unable to restore the rest.
+#define SC_WS_MAX_SAVED SC_WS_PATCH_COUNT_MAX
 static struct {
     void* addr;
     BYTE  len;
@@ -172,16 +203,17 @@ static bool NameSelected(const char* name) {
 }
 
 bool ScScreenActive(void) { return g_active; }
-int  ScScreenTargetWidth(void)  { return SC_WS_SCREEN_W; }
-int  ScScreenTargetHeight(void) { return SC_WS_SCREEN_H; }
-int  ScScreenPlayfieldHeight(void) { return SC_WS_PLAYFIELD_H; }
-int  ScScreenConsoleShiftY(void)  { return SC_WS_CONSOLE_SHIFT_Y; }
+int  ScScreenTargetWidth(void)  { return Geom()->w; }
+int  ScScreenTargetHeight(void) { return Geom()->h; }
+int  ScScreenPlayfieldHeight(void) { return Geom()->pfH; }
+int  ScScreenConsoleShiftY(void)  { return Geom()->consoleShiftY; }
+const char* ScScreenGeometryName(void) { return Geom()->name; }
 
 int ScScreenViewportTilesX(void) {
     // scroll.clamp.x.tiles is a stage-3 site; below that, or with the table
     // refused, the engine still clamps the camera at the stock 20 tiles.
     return (g_active && g_stage >= SC_WS_STAGE_SCROLL_CLAMP)
-        ? (SC_WS_SCREEN_W / 32) : SC_VIEWPORT_TILES_X;
+        ? (Geom()->w / 32) : SC_VIEWPORT_TILES_X;
 }
 
 // The console is 80 rows of the stock screen; the playfield is the rest.
@@ -189,17 +221,17 @@ int ScScreenViewportTilesX(void) {
 
 int ScScreenViewportTilesY(void) {
     return (g_active && g_stage >= SC_WS_STAGE_SCROLL_CLAMP)
-        ? (SC_WS_PLAYFIELD_H / 32) : SC_VIEWPORT_TILES_Y;
+        ? (Geom()->pfH / 32) : SC_VIEWPORT_TILES_Y;
 }
 
 bool ScScreenMarkPlayfieldDirty(void) {
     if (!g_active || !g_grid) return false;
-    memset(g_grid, 1, (size_t)SC_WS_GRID_COLS * (SC_WS_PLAYFIELD_H / SC_DIRTY_BLOCK));
+    memset(g_grid, 1, (size_t)Geom()->gridCols * (Geom()->pfH / SC_DIRTY_BLOCK));
     return true;
 }
 
 int ScScreenScrollBiasY(void) {
-    const int pfH = (g_active && g_stage >= SC_WS_STAGE_SCROLL_CLAMP) ? SC_WS_PLAYFIELD_H : SC_STOCK_PLAYFIELD_H;
+    const int pfH = (g_active && g_stage >= SC_WS_STAGE_SCROLL_CLAMP) ? Geom()->pfH : SC_STOCK_PLAYFIELD_H;
     return ScScreenViewportTilesY() * 32 - (pfH - 24);
 }
 
@@ -233,8 +265,9 @@ static bool VideoAlreadyUp(DWORD* dataOut, unsigned* wOut, unsigned* hOut) {
 static bool VerifyAll(int maxStage, int* checked) {
     bool ok = true;
     int n = 0;
-    for (size_t i = 0; i < SC_WS_PATCH_COUNT; ++i) {
-        const ScScreenPatch* p = &SC_WS_PATCHES[i];
+    const ScScreenGeometry* G = Geom();
+    for (size_t i = 0; i < G->patchCount; ++i) {
+        const ScScreenPatch* p = &G->patches[i];
         if (p->stage > maxStage) continue;
         ++n;
         const BYTE* at = (const BYTE*)ScRuntimeAddr(p->va);
@@ -336,6 +369,21 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
         return;
     }
 
+    const ScScreenGeometry* G = Geom();
+    if (g_geomUnknown) {
+        char list[256] = "";
+        for (size_t i = 0; i < SC_WS_PRESET_COUNT; ++i) {
+            if (i) lstrcatA(list, ", ");
+            lstrcatA(list, SC_WS_PRESETS[i]->name);
+        }
+        ScLog("WIDESCREEN REFUSED: %%SCPLUGIN_WS_GEOMETRY%%='%s' names no preset -- the "
+              "screen stays stock %dx%d. Presets: %s", g_geomAsked, SC_WS_STOCK_W,
+              SC_WS_STOCK_H, list);
+        g_installRefused = true;
+        return;
+    }
+    ScLog("WIDESCREEN preset: %s (%%SCPLUGIN_WS_GEOMETRY%%%s)", G->name,
+          g_geomAsked[0] ? "" : " unset -> the first preset");
     g_stage = ScScreenStageWanted();
     LoadOnlyFilter();
 
@@ -353,8 +401,7 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
 
     ScLog("WIDESCREEN install: target %dx%d, playfield %dx%d, stage<=%d "
           "(%%SCPLUGIN_WS_STAGE%%), grid %dx%d blocks = %d bytes",
-          SC_WS_SCREEN_W, SC_WS_SCREEN_H, SC_WS_PLAYFIELD_W, SC_WS_PLAYFIELD_H,
-          g_stage, SC_WS_GRID_COLS, SC_WS_GRID_ROWS, SC_WS_GRID_BYTES);
+          G->w, G->h, G->pfW, G->pfH, g_stage, G->gridCols, G->gridRows, G->gridBytes);
 
     // --- verify the whole table BEFORE writing a single byte ----------------
     int checked = 0;
@@ -381,7 +428,7 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
         // starts in: a grid coming up full of 1s would mark the whole screen
         // dirty on frame one, which looks like a working feature and hides a
         // real bug. Zeroed guards make an out-of-range TEST read "not dirty".
-        const SIZE_T total = (SIZE_T)SC_WS_GRID_GUARD + SC_WS_GRID_BYTES + SC_WS_GRID_GUARD;
+        const SIZE_T total = (SIZE_T)SC_WS_GRID_GUARD + G->gridBytes + SC_WS_GRID_GUARD;
         g_gridRegion = (BYTE*)VirtualAlloc(NULL, total, MEM_COMMIT | MEM_RESERVE,
                                            PAGE_READWRITE);
         if (!g_gridRegion) {
@@ -392,21 +439,21 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
         }
         g_grid = g_gridRegion + SC_WS_GRID_GUARD;
         int refs = 0;
-        for (size_t i = 0; i < SC_WS_PATCH_COUNT; ++i) {
-            if (SC_WS_PATCHES[i].fixupOff != SC_WS_NO_FIXUP &&
-                SC_WS_PATCHES[i].stage <= g_stage) ++refs;
+        for (size_t i = 0; i < G->patchCount; ++i) {
+            if (G->patches[i].fixupOff != SC_WS_NO_FIXUP &&
+                G->patches[i].stage <= g_stage) ++refs;
         }
         ScLog("WIDESCREEN: dirty grid relocated 0x%08X -> %p (%d bytes, %dx%d), "
               "%d absolute reference(s) re-pointed",
-              (unsigned)SC_WS_STOCK_GRID_VA, g_grid, SC_WS_GRID_BYTES,
-              SC_WS_GRID_COLS, SC_WS_GRID_ROWS, refs);
+              (unsigned)SC_WS_STOCK_GRID_VA, g_grid, G->gridBytes,
+              G->gridCols, G->gridRows, refs);
 
         // Oracle: prove the guard covers the OUT-OF-RANGE index that faults.
         // grid-1 is where 0x0041DE84 reads; grid+BYTES+GUARD-1 is the far side.
         // Both must read as committed, or the box is not there -- a bare
         // allocation makes this line say MISSING.
         const bool lo = ScReadableAt(g_grid - 1, 1);
-        const bool hi = ScReadableAt(g_grid + SC_WS_GRID_BYTES + SC_WS_GRID_GUARD - 1, 1);
+        const bool hi = ScReadableAt(g_grid + G->gridBytes + SC_WS_GRID_GUARD - 1, 1);
         ScLog("WIDESCREEN: grid guard %s -- region %p..%p, %d bytes each side; "
               "grid-1 %s, grid+size+guard-1 %s (issue #113 crash: 0x0041DE84 read "
               "grid_base-1 on the pre-guard allocation)",
@@ -423,8 +470,8 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
 
     // --- write ---------------------------------------------------------------
     int skipped = 0;
-    for (size_t i = 0; i < SC_WS_PATCH_COUNT; ++i) {
-        const ScScreenPatch* p = &SC_WS_PATCHES[i];
+    for (size_t i = 0; i < G->patchCount; ++i) {
+        const ScScreenPatch* p = &G->patches[i];
         if (p->stage > g_stage) continue;
         if (p->stage == g_stage && !NameSelected(p->name)) { ++skipped; continue; }
         if (WriteOne(p)) ++g_applied;
@@ -465,5 +512,5 @@ void ScScreenLogStats(void) {
     ScLog("WIDESCREEN STATS active=%d stage=%d applied=%d refused=%d grid=%p "
           "target=%dx%d", g_active ? 1 : 0, g_stage, g_applied,
           g_installRefused ? 1 : g_writeFailures,
-          g_grid, SC_WS_SCREEN_W, SC_WS_SCREEN_H);
+          g_grid, Geom()->w, Geom()->h);
 }

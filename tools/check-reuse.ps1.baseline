@@ -17,7 +17,6 @@ block 9780e3abd90b000c  # 10 identical lines: [string]$ShotDir = 'C:\sc-work\log
 block 9b2fd93e9f28d9f8  # 10 identical lines: if ($fixtures) {
 block 6ef9e11470f47cc1  # 10 identical lines: }
 block ce6f1aa4df0da592  # 10 identical lines: } }
-block cb37a6e3fa9f0ff7  # 11 identical lines: $deadline = (Get-Date).AddSeconds($TimeoutSec)
 block 5424e1123b108e43  # 11 identical lines: $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') @genArgs 2>&1
 block 38ec9e9705b586cf  # 11 identical lines: $left = if ($gamePid -gt 0) { Get-Process -Id $gamePid -ErrorAction Si
 block aec20d0962258943  # 11 identical lines: $out.TrackedCount = [int]$s.Groups[1].Value
@@ -172,6 +171,7 @@ block 670c1e8295456468  # 7 identical lines: if (-not ('ScDrive.Native' -as [typ
 block d855bbf7108e7e29  # 7 identical lines: if (-not ('ScSpawn.Native' -as [type])) {
 block cd35980922b59abd  # 7 identical lines: if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPa
 block 550d28aabe41bf58  # 7 identical lines: }
+block e34f395e0537b50e  # 7 identical lines: } }
 block c65ac5dcbd033e20  # 8 identical lines: $hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Ha
 block d075c8279b76a103  # 8 identical lines: $left = if ($gamePid -gt 0) { Get-Process -Id $gamePid -ErrorAction Si
 block e3d6e0d917d7973e  # 8 identical lines: $mapPath = Join-Path $mapDir $mapName
@@ -213,7 +213,6 @@ block 9b207e9a4c0ff900  # 9 identical lines: -InjectWindowedHelper WMode -NoLaun
 block ad2164813a75fdb7  # 9 identical lines: -Mode fanout -Circles 0 -HudRow 0 -InjectWindowedHelper WMode `
 block 67ba04c2c333099e  # 9 identical lines: -Mode observe -InjectWindowedHelper WMode `
 block 0cfb6afa2bae558e  # 9 identical lines: -UnitCount $unitCount -GridSpacing $spacing -UnitType 'marine' `
-block 03026ad0b4c5dc77  # 9 identical lines: Assert-That "display $($script:heldIcon) went dark" (@($st2.Slots | Wh
 block 3e83b7977e872ba0  # 9 identical lines: Assert-That 'this run left no fixture behind' (-not (Test-Path -Litera
 block cd581beefa569992  # 9 identical lines: Send-ScClick -Hwnd $h -X 215 -Y 119
 block 3dfc9f58e260e848  # 9 identical lines: Start-Sleep -Seconds 2
