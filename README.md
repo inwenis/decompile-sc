@@ -1,7 +1,19 @@
 # StarCraft: Brood War 1.16.1 mod
 
-A 32-bit DLL injected into the game at launch. The game files on disk stay byte-identical;
-every change is applied in memory. Offline and single-player only.
+## How to play it?
+
+1. You need your own StarCraft: Brood War 1.16.1; nothing from the game is in this repo or
+   in the download. No 1.16.1? The
+   [StarCraft Classic Installer & Downgrader](http://staredit.net/topic/17625/) on
+   staredit.net installs, or patches an install to, exactly that version.
+2. Download `starcraft-modded-<version>.zip` from the
+   [latest release](https://github.com/inwenis/decompile-sc/releases) and unzip it anywhere.
+3. Copy the contents of your StarCraft folder into the unzipped `game\` folder (a copy, not
+   your only install).
+4. Double-click `Launch-StarCraft-Modded.cmd`.
+
+Nothing to install. If Windows warns about a downloaded file, click More info, then Run
+anyway. `README.txt` in the zip has the rest.
 
 ## New features
 
@@ -11,73 +23,78 @@ every change is applied in memory. Offline and single-player only.
 4. queue upgrades
 5. widescreen (hold Ctrl or Right Alt to free the mouse)
 
+Offline and single-player only.
+
 ![70 units selected on the 1280x800 playfield; the bottom row reads 70 units 1-12 (1/6)](docs/screenshot-70-units.png)
 
 ![63 units selected, mixed Zerg army, widescreen viewport](docs/screenshot-63-units.png)
 
-## How to play it?
-
-You need your own StarCraft: Brood War 1.16.1 install; nothing from the game is in this repo.
-No 1.16.1 around? The [StarCraft Classic Installer & Downgrader](http://staredit.net/topic/17625/)
-on staredit.net installs, or patches an install to, exactly that version.
-
-Windows only. Once:
-
-1. PowerShell 7 (`winget install Microsoft.PowerShell`), git, Python 3.11+. Clone this repo.
-2. `./setup.ps1` checks those and creates the Python venv (`deploy.ps1` generates a test map with it).
-3. The pinned 32-bit MinGW-w64 toolchain, 283 MB: `tools/plugin/README.md` "Toolchain (pinned)".
-4. `./tools/make-working-copy.ps1 -Source 'C:\path\to\your\StarCraft'` copies your install to
-   `C:\sc-work\1161-base` and checks its hashes. Your own install is never written to.
-5. `./tools/plugin/fetch-cnc-ddraw.ps1` downloads the pinned presenter DLL (window, 2x scale, mouse lock).
-6. `./tools/deploy.ps1` builds the plugin, assembles a self-contained modded copy under
-   `C:\sc-deploy\starcraft-modded`, and puts a **StarCraft Modded** shortcut on the desktop.
-
-Double-click the shortcut. Saves, profiles, replays and screenshots live in the deployed copy
-and survive every redeploy.
-
 ## How does it work?
 
-1. The shortcut runs `Launch-StarCraft-Modded.ps1`, which calls `plugin\run-with-plugin.ps1`
-   with every feature switched on.
-2. `scinject.exe` starts `StarCraft.exe` suspended: no game instruction has run yet.
-3. It loads `scplugin.dll` into the still-suspended process (`LoadLibrary` on a remote thread),
-   so the DLL's `DllMain` runs before the game's entry point.
-4. The DLL patches the engine in memory: the widescreen geometry before the video init, and
-   inline detours on the functions behind each feature. The exe on disk is untouched.
-5. The main thread is resumed. StarCraft runs as usual, with the mod inside it.
-6. Play. The one file the launcher writes into the game folder is cnc-ddraw's `ddraw.dll`
-   (plus its ini), which presents the widened frame in a window.
+1. You start the game from `Launch-StarCraft-Modded.cmd`.
+2. It starts StarCraft suspended.
+3. It loads `scplugin.dll` into the game's memory.
+4. It lets `scplugin.dll` attach itself to the game functions it changes.
+5. StarCraft is resumed.
+6. Enjoy StarCraft with the extra features.
+
+The launcher is a plain batch file: open it in Notepad to see exactly what runs on your
+machine. Your game files stay untouched; every change happens in memory while the game runs.
+The one file the launcher writes into your game folder is cnc-ddraw's `ddraw.dll` (plus its
+ini), which shows the widened frame on your screen.
 
 ## Developing
 
-Same setup as above, steps 1-5. Then:
+Windows, PowerShell 7, git, Python 3.11+. The scripts at the repo root follow the same
+convention as every other repo here:
 
-1. `./run.ps1 -Mode fanout -Windowed -WindowedHelperDll C:\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll`
-   rebuilds the plugin when the DLL was not built from the current `tools/plugin/src`, and
-   launches the working copy with it. `-Mode observe` (the default) injects a read-only observer that changes nothing.
-   Every feature has its own off switch: `tools/plugin/run-with-plugin.ps1` parameters. The
-   deployed shortcut turns all of them on (`tools/deploy.ps1` has the full flag set).
-2. Edit `tools/plugin/src/*.cpp`, run again.
-3. `./tools/plugin/build.ps1 -Test` builds and runs `hooktest.exe`, the offline detour-engine
-   test. `Invoke-Pester -Path tests` runs the tooling tests (Pester 5).
-4. `./tools/deploy.ps1` refreshes the desktop install. Play it.
+1. `./setup-onetime.ps1 -StarCraftDir '<your StarCraft folder>'`, once per machine: the
+   pinned 32-bit MinGW-w64 toolchain (283 MB, sha256-checked, into `C:\re-tools`), the pinned
+   cnc-ddraw, and a hash-checked working copy of your game at `C:\sc-work\1161-base`. Your own
+   install is never written to.
+2. `./setup-worktree.ps1`, once per checkout: reports the prerequisites and creates the Python
+   venv the test-map generator needs.
+3. `./build.ps1 -Test` builds `scplugin.dll` + `scinject.exe` and runs `hooktest.exe`, the
+   offline detour-engine test.
+4. `./run.ps1 -Mode fanout -Windowed -WindowedHelperDll C:\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll`
+   launches the working copy with the plugin, rebuilding it first when the DLL was not built
+   from the current `tools/plugin/src`. `-Mode observe` (the default) injects a read-only
+   observer that changes nothing. Every feature has its own off switch:
+   `tools/plugin/run-with-plugin.ps1` parameters; the launcher turns all of them on.
+5. Edit `tools/plugin/src/*.cpp`, run again.
+6. `./deploy.ps1` installs the modded game at `C:\sc-deploy\starcraft-modded` with a
+   **StarCraft Modded** desktop shortcut. Play it.
 
-How each feature works, with the addresses and how they were verified, is in `research/` and
-`tools/plugin/README.md`. Read [AGENTS.md](AGENTS.md) before running an in-game suite; every
-rule in it was paid for.
+`Invoke-Pester -Path tests` runs the tooling tests (Pester 5). How each feature works, with
+the addresses and how they were verified, is in `research/` and `tools/plugin/README.md`.
+Read [AGENTS.md](AGENTS.md) before running an in-game suite; every rule in it was paid for.
+
+### In detail: what the launcher does
+
+1. `scinject.exe` starts `StarCraft.exe` suspended (`CREATE_SUSPENDED`): no game instruction
+   has run yet.
+2. It loads `scplugin.dll` into the still-suspended process (`LoadLibrary` on a remote
+   thread), so the DLL's `DllMain` runs before the game's entry point.
+3. The DLL patches the engine in memory: the widescreen geometry before the video init, and
+   inline detours on the functions behind each feature. The exe on disk is untouched.
+4. The main thread is resumed and StarCraft runs as usual, with the mod inside it.
+5. The feature switches are `SCPLUGIN_*` environment variables, set by
+   `tools/plugin/Launch-StarCraft-Modded.cmd` for players and by `run-with-plugin.ps1` for
+   development.
 
 ### Releases
 
-`git tag v1.0 && git push origin v1.0`: CI builds with the pinned toolchain, runs hooktest, and
-attaches `scplugin-v1.0.zip` (`scplugin.dll` + `scinject.exe`) to the
+`git tag v1.0 && git push origin v1.0`: CI installs the pinned toolchain and cnc-ddraw
+(`setup-onetime.ps1`), builds, runs hooktest, stages the player zip
+(`tools/package-release.ps1`) and attaches `starcraft-modded-v1.0.zip` to the
 [GitHub release](https://github.com/inwenis/decompile-sc/releases).
-`./run.ps1 -BuildDir <unzipped folder>` runs a prebuilt plugin without the toolchain.
+`./tools/package-release.ps1` makes the same zip locally under `work\scratch\release`.
 
 ## Layout
 
 ```
 research/   per-subsystem findings -- the product of this repo
-tools/      plugin, Ghidra automation, map + deploy tooling
+tools/      plugin, Ghidra automation, map + deploy + release tooling
 tests/      Pester tests for the tooling
 docs/       README screenshots
 work/       scratch/ (ignored build output + logs), defects/ (patches for build-defect-arm.ps1)

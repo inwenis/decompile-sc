@@ -1,7 +1,7 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Verify prerequisites for decompile-sc and set up the Python venv. Idempotent —
+Per-worktree setup: verify the prerequisites and create this checkout's Python venv. Idempotent —
 safe to re-run any time; it only reports and (re)creates .venv/installs deps.
 #>
 $ErrorActionPreference = 'Stop'

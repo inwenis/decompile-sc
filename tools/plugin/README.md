@@ -604,7 +604,7 @@ and researched-tech array (`0x0058CF44`), i.e. the difference between "it left t
 
 ## Toolchain (pinned)
 
-There was no C++ compiler on this machine at all (`setup.ps1` reports no `cl`, no
+There was no C++ compiler on this machine at all (`setup-worktree.ps1` reports no `cl`, no
 `gcc`, no `clang`). The pin below is the one this task installed.
 
 | | |

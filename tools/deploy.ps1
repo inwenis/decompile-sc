@@ -479,7 +479,7 @@ else {
 # file that already exists (a fresh deploy would ship without the map), and a preserved
 # stale map silently mismatches the build it rides along with, with no staleness signal a
 # player would ever see. Cost: the checkout deploying needs the map toolchain (.venv/
-# richchk -- ./setup.ps1). This runs LAST in assembly so a generator failure throws with
+# richchk -- ./setup-worktree.ps1). This runs LAST in assembly so a generator failure throws with
 # game + plugin + launcher + shortcut already assembled: the install still works, only the
 # map is missing, loudly. It writes exactly ONE file, ours by name, and never touches
 # anything else under the user's Maps\ tree.
@@ -487,7 +487,7 @@ Write-Host ''
 Write-Host '== Regenerating the feature-test map =='
 $featureMapPath = Join-Path $gameDeployDir 'Maps\BroodWar\!feature-test.scx'
 & (Join-Path $scriptDir 'make-feature-test-map.ps1') -OutputPath $featureMapPath | Write-Host
-if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "deploy: feature-test map generation failed (exit $LASTEXITCODE) -- the deployed game works, but $featureMapPath is missing. Fix the toolchain (./setup.ps1) and re-run the deploy, or run tools/make-feature-test-map.ps1 -OutputPath '$featureMapPath' by hand." }
+if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "deploy: feature-test map generation failed (exit $LASTEXITCODE) -- the deployed game works, but $featureMapPath is missing. Fix the toolchain (./setup-worktree.ps1) and re-run the deploy, or run tools/make-feature-test-map.ps1 -OutputPath '$featureMapPath' by hand." }
 
 # --- 7. verify -------------------------------------------------------------
 Write-Host ''
