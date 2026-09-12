@@ -41,9 +41,10 @@ Specs, so the runs are repeatable: `tools/ghidra/specs/upgrade-{functions,callee
   plugin-side queue possible without the plugin ever spending. §5.
 * What ships is: unblock the card's own button conditions, hold the extra commands, and hand
   them back to the engine's own accept path as the building frees. §7.
-* A second, narrower lie lets the levels of ONE upgrade stack, scoped so that two buildings
-  still cannot research the same upgrade — the engine rule that would otherwise be broken,
-  and what breaking it would cost. §7.5.
+* Levels do NOT stack. §7.5 records the second, narrower lie that once let Weapons 2 queue
+  behind Weapons 1; it was withdrawn when the same mechanism let a HELD upgrade be queued
+  again on every press. The rule now is one entry per id per building: a held id is hidden
+  on the card and refused on the wire. §7.7.
 
 ---
 
@@ -605,6 +606,24 @@ should draw — has to write `0x0068C1B0` as well. This is a general fact about 
 not a fact about this feature.
 
 ---
+
+### 7.7 One entry per research per building (supersedes §7.5)
+
+The unblock of §7.2(a) tells the card the building is idle, and the engine then answers for
+the running item's absence. It has no memory of what the plugin HOLDS, so a held upgrade's
+button stayed lit and every further press queued another copy of it — measured live: three
+presses of Infantry Armor with Infantry Weapons running, three Infantry Armor entries
+(`STATQ ... disp=1..3 enabled uicon=0x124`). §7.5's level stacking was the same button press,
+read as a feature. The owner asked for it to be refused.
+
+So `CondCommon` answers **0** — hidden, the value the engine itself returns for the running
+item (§4.3) — for any id the building already holds, before the trampoline runs, and
+`ScUpgQueueOnCommand` refuses a `0x32`/`0x30` for an id that is running or held here
+(`refuse-dup`, consumed so the engine's body cannot start it over the running item). The
+running item's own button needs nothing from the plugin: the per-player in-progress bit
+(§4.2) hides it, and the plugin no longer touches that bit or the level array. Two
+buildings researching the same upgrade is therefore back to being the engine's own rule,
+untouched.
 
 ## 8. Known limitations
 

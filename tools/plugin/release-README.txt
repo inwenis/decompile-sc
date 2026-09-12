@@ -13,7 +13,7 @@ Offline and single-player only: never take a modified game online.
 
 Features: select more than 12 units (right-click the bottom row to page through),
 select buildings of one type and queue units for all of them, queue more than 5
-units in a building, queue upgrades, widescreen. Hold Ctrl or Right Alt to free
+units in a building, queue upgrades, widescreen. Ctrl+Tab or Right Alt+Right Ctrl frees
 the mouse from the window.
 
 If it does not start: the launcher window says why, and logs\sc-plugin.log has the

@@ -2532,7 +2532,8 @@ circled unit in the right band from its own log). The first two now ask
 `sc_screen` for the target geometry; the circles filter reads the engine's own
 screen bitmap descriptor (0x006CEFF0, §2). The probes carried the same copies
 (`800x480` client and dump asserts, `160*480` band sizes, `--x1 800`), now read
-once from the header through `Get-ScWideGeometry` in `drive-game.ps1`.
+once from the header through `Get-ScWideGeometry` (`tools/plugin/sc-geometry.ps1`,
+which `drive-game.ps1` and `deploy.ps1` dot-source).
 
 ### 21.5 What 1280 wide does NOT do
 
@@ -3188,3 +3189,89 @@ as an unmarked change unless the run-wide image marks mask it.
   without the three `tooltip.*` rows).
 - `tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-sprite-flip.ps1` (add
   `-SuiteArgs @{ FullRedraw = 0 }` to watch `unmarked_changed` go positive).
+
+## 25. The glue screens on the wider screen: centred, on a starfield (2026-09-12)
+
+Stock draws every glue screen (menus, loading, score) as a 640x480 root at (0,0); on a
+wider screen that is a picture in the top-left corner of black. `sc_menu.h`
+(`-MenuCentre 1`, stage 3) centres every glue root and fills the rest with a starfield.
+What had to be learned first, each read from `113-starcraft.asm` and checked in a run:
+
+### 25.1 At the glue screens the engine never presents the buffer
+
+The composer `0x0041E280` presents (`0x0041D420`: ord350 lock, ord432 copy, ord356
+unlock) only while BOTH region handles `[0x006D5E14]` and `[0x006D5E18]` are non-zero
+(`0x0041E3BA..0x0041E3CB`). The base region is built by `0x0041D470` from the
+screen-image list `[0x0051A33C]`, whose only node is `console.pcx`, so outside a game
+both are 0. Measured: STORMSTATS `presents=0` over 18 s at the main menu while
+CONSOLESTATS counted `frames=322046` -- the composer runs ~18,000 times a second there,
+so anything done per compose is gated on wall time.
+
+### 25.2 The cursor is drawn only where a dialog is
+
+The layer walk still draws the cursor (layer 0) into the buffer every compose, between
+the save-under `0x0041DF40` and the restore-under `0x0041DEB0` (`0x0041E414`). What the
+screen shows is the DIRECT dialog composite `0x0041C939..`: when the dirty rect meets the
+cursor (`0x0041BED0`), it saves under, draws the cursor onto the DIALOG'S surface,
+blits, and restores (`0x0041C995..0x0041C9B2`). So at a glue screen the cursor exists on
+glass only over a dialog. (Read, not measured: the off-screen park cannot move the cursor
+outside a dialog, 25.5.)
+
+### 25.3 The present: from the restore-under
+
+`0x0041DEB0` is stdcall(Bitmap*), `ret 4`, prologue `55 8B EC 83 EC 0C`, two callers:
+`0x0041E414` (the screen Bitmap, the composer's last act) and `0x0041C9B2` (a dialog
+surface). Detoured, the first caller is the one moment the buffer holds the frame WITH
+the cursor, so the plugin copies the buffer outside the centred rect to the primary
+there, through the same ord350/ord356 thunks (`0x00411E4E`/`0x00411E48`, IAT
+`0x4FE5A0`/`0x4FE59C`), at ~60 Hz. The starfield is written into the buffer outside the
+rect before the compose, re-written only when a sentinel star is not what the live
+palette wants (every glue screen loads its own palette, read through storm's primary
+`GetPalette`/`GetEntries`). Measured: MENUSTATS `fills=13 copies=3581 lockFails=0`
+over one walk into a game; 1,024 lit px outside the menu on glass at 1280x880 against 0
+in the stock arm (`frame-capture.py glass`).
+
+### 25.4 Popups: flag 0x08000000 and the parent-relative cave
+
+The Single Player popup (root `Delete`, flags `0xE804000D`) carries `0x08000000`: the
+composite (`0x0041C8C4..`) blits it into the surface of the dialog before it in the walk
+-- `0x0041CDA9` stores every dialog WITHOUT the bit at `0x006CF4BC` -- at the dirty
+rect's SCREEN coordinates, correct only while that parent is at (0,0). Three measured
+arms, off-screen, cnc-ddraw:
+
+| popup | what happened |
+|---|---|
+| moved with its parent | ACCESS_VIOLATION within 40 ms, every time (`Errors\*.ERR`: EIP in generated blit code on the heap, `0x0041C92C` on the stack) |
+| left at its raw bounds | drawn centred (inside the moved parent's surface) but hit-tested at its raw bounds: clicking where it showed did nothing, clicking its raw place did |
+| `0x08000000` cleared and moved | clickable, but invisible: popups composite before their parent, which then painted over it |
+
+The fix keeps the bit and moves the popup, and makes the blit parent-relative: the
+stage-3 cave `glue.popup.parentorigin` at `0x0041C91D` (window `sub edx,ecx / push edx /
+add esi,0x36 / push esi / lea ecx,[ebp-0xC]`, 10 bytes, nothing branches into it)
+subtracts the parent's packed (left, top) from the rect's two corner dwords before
+`call 0x004EF440`. No borrow is possible (the rect is clipped to the popup, the popup lies
+in its parent), and it is a no-op while the parent is at (0,0), which is every stock case.
+Measured with it: the popup reads (460,340)-(819,539) at 1280x880, draws where it reads,
+and a click on its Expansion button opens the Login screen.
+
+### 25.5 Harness facts found on the way
+
+- Off-screen under cnc-ddraw, the first click after a screen change is often lost to the
+  activation gate; a walk must click by control NAME (`Invoke-ScDialogControl`) and
+  require the next screen before going on. The fixed-coordinate walk mis-clicked Exit.
+- The map browser's click and fingerprint coordinates are glue coordinates;
+  `Set-ScGlueOrigin` shifts them all for a walk through centred menus.
+- cnc-ddraw on the invisible desktop draws the frame a few percent larger than the client
+  (640 px of art spans ~648 captured), so glass measurements leave the menu out with a
+  margin.
+- A posted mouse move outside every dialog did not move the menu cursor off-screen; the
+  activation nudge the walk needs re-syncs it (AGENTS.md § "Foreground"). The mouse-move
+  handler `0x004D24DC` stores any position inside the stage-3 clamps, so a real mouse is
+  not affected; the probe reports that number and does not assert it.
+
+### 25.6 Reproduce
+
+`tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-menu-centre.ps1` (two arms,
+`-SuiteArgs @{ Geometry = '1536x864' }` for another preset). PASS at 1280x880 and
+1536x864: the MainMenu and popup records read centred, the walk by name reaches a game,
+the console still moves, stars on glass against a black stock surround.

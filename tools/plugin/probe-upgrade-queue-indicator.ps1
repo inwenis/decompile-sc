@@ -214,13 +214,22 @@ try {
         Start-Sleep -Seconds $SettleSec
     }
 
-    Step 'press the SECOND, different research -- must be QUEUED, not refused' {
+    Step 'press the SECOND, different research THREE times -- queued ONCE, then its button is gone' {
         $mark = Get-ScLogLineCount -LogPath $LogPath
         $card = Get-Card 'busy'
         $pt = Get-ScCardSlotPoint -Card $script:idleCard -Slot $script:upgB.Index
         for ($i = 1; $i -le 3; $i++) { Send-ScClick -Hwnd $hwnd -X $pt.X -Y $pt.Y -SettleMs 300 }
         Start-Sleep -Seconds 2
         Shot 'queued-2'
+        $sent = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark |
+                  Select-String -Pattern "CMD id=($UPGRADE_CMD|$TECH_CMD) ")
+        Assert-That "exactly ONE command reached the wire for three presses ($($sent.Count))" ($sent.Count -eq 1)
+        $after = Get-Card 'held'
+        $rsAfter = Get-ResearchSlots -Card $after   # assign first: the comma-wrapped array unrolls once on assignment, not in a pipe
+        $still = @($rsAfter | Where-Object { $_.Index -eq $script:upgB.Index })
+        Assert-That 'the held research is no longer offered on the card' ($still.Count -eq 0)
+        $other = @($rsAfter | Where-Object { $_.Index -ne $script:upgB.Index })
+        Write-Host "       card after: $($other.Count) other research button(s) still offered"
     }
 
     $script:heldIcon = -1

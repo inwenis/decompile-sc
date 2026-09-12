@@ -126,10 +126,12 @@ Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-
     It 'the launcher turns the assembled widescreen on: stage 3 + storm widen + cnc-ddraw' {
         $script:launcher | Should -Match '-Widescreen 1'
         $script:launcher | Should -Match '-WidescreenStage 3'
-        # The ARGUMENT lines -- stage and storm, each backtick-continued -- not the
-        # launcher's own header comment, which also says "-StormPresent widen" and so
+        # The ARGUMENT lines -- stage, geometry and storm, each backtick-continued -- not
+        # the launcher's own header comment, which also says "-StormPresent widen" and so
         # satisfies a plain substring match.
-        $script:launcher | Should -Match '-WidescreenStage 3 `\s*\r?\n\s*-StormPresent widen `' -Because 'issue #113: run-with-plugin.ps1 exported its old default 0 verbatim, so the DLL auto-arm never fired and the deployed wide game showed a black right band; the launcher must pass the buffer->glass copy as an argument'
+        $script:launcher | Should -Match '-WidescreenStage 3 `\s*\r?\n\s*-Geometry __GEOMETRY__ `\s*\r?\n\s*-StormPresent widen `' -Because 'issue #113: run-with-plugin.ps1 exported its old default 0 verbatim, so the DLL auto-arm never fired and the deployed wide game showed a black right band; the launcher must pass the buffer->glass copy as an argument'
+        # The template carries a placeholder; deploy fills it from -Geometry before writing.
+        $script:deployText.Contains('.Replace(''__GEOMETRY__'', $Geometry)') | Should -BeTrue -Because 'the launcher must name the preset the 2x ini was generated for'
         $script:launcher | Should -Match 'cnc-ddraw\\ddraw\.dll'
         $script:launcher | Should -Not -Match 'InjectWindowedHelper' -Because 'WMode presents 640 columns whatever it is asked; the wide path must use the cnc-ddraw proxy'
     }
@@ -137,17 +139,30 @@ Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-
     It 'the launcher keeps the full feature set (it is the same game, wider)' {
         foreach ($flag in '-Mode fanout', '-Sound', '-NoLaunchLock', '-NoForegroundRestore',
                           '-Circles 1', '-HudRow 1', '-ProdQueue 1', '-ProdFan 1',
-                          '-UpgradeQueue 1', '-QueueIndicator 1') {
+                          '-UpgradeQueue 1', '-QueueIndicator 1', '-MenuCentre 1') {
             $script:launcher.Contains($flag) | Should -BeTrue -Because "the launcher must not silently drop $flag"
         }
     }
 
     It 'the launcher presents through cnc-ddraw with the 2x/lock ini, generated at 2x the plugin geometry' {
         $script:launcher | Should -Match 'cnc-ddraw-2x\.ini'
-        # The ini is the committed file with width/height rewritten to 2x SC_WS_SCREEN_W/H.
-        $script:deployText | Should -Match 'SC_WS_SCREEN_W'
+        # The ini is the committed file with width/height rewritten to 2x the preset's screen.
+        $script:deployText.Contains('Get-ScWideGeometry -Geometry $Geometry') | Should -BeTrue -Because 'the ini must be sized from the preset the launcher names'
         $script:deployText | Should -Match '\^width=\\d\+'
         $script:deployText.Contains('does not carry width=') | Should -BeTrue -Because 'the verify step must read the ini that actually shipped'
+    }
+
+    It 'the geometry reader deploy and the suites share resolves every preset the DLL lists' {
+        . (Join-Path $script:pluginDir 'sc-geometry.ps1')
+        $listed = Get-Content -Raw -LiteralPath (Join-Path $script:pluginDir 'src/sc_screen_presets.h')
+        $names = @([regex]::Matches($listed, '&SC_WS_GEOM_(\d+x\d+)') | ForEach-Object { $_.Groups[1].Value })
+        $names.Count | Should -BeGreaterThan 0 -Because 'an empty list would pass every check below unexamined'
+        foreach ($n in $names) {
+            $g = Get-ScWideGeometry -Geometry $n
+            "$($g.W)x$($g.H)" | Should -Be $n -Because "the $n table's own SC_WS_SCREEN_W/H"
+            "$($g.StockW)x$($g.StockH)" | Should -Be '640x480' -Because 'the stock screen, from the hand-written record header'
+        }
+        { Get-ScWideGeometry -Geometry '1280x800' } | Should -Throw '*presets: *1280x880*'
     }
 
     It 'falls back to borderless full screen when 2x does not fit the primary monitor (the 2x-height step)' {

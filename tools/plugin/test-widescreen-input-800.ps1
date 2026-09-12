@@ -54,17 +54,12 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'drive-game.ps1')
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
 
-$patchHeader = Join-Path $scriptDir 'src/sc_screen_patches.h'
-function Get-WsDefine([string]$Name) {
-    $m = Select-String -LiteralPath $patchHeader -Pattern "^#define\s+$Name\s+(\d+)" | Select-Object -First 1
-    if (-not $m) { throw "test-widescreen-input-800: $Name not found in $patchHeader" }
-    [int]$m.Matches[0].Groups[1].Value
-}
-$STOCK_W = Get-WsDefine 'SC_WS_STOCK_W'        # 640
-$SCREEN_W = Get-WsDefine 'SC_WS_SCREEN_W'             # the width the table was generated for
-$SCREEN_H = Get-WsDefine 'SC_WS_SCREEN_H'
-$PF_H     = Get-WsDefine 'SC_WS_PLAYFIELD_H'
-$SHIFT_Y  = Get-WsDefine 'SC_WS_CONSOLE_SHIFT_Y'      # how far the console moves DOWN at stage 3 (0 at 480 tall)
+$geom = Get-ScWideGeometry
+$STOCK_W  = $geom.StockW
+$SCREEN_W = $geom.W               # the width the table was generated for
+$SCREEN_H = $geom.H
+$PF_H     = $geom.PfH
+$SHIFT_Y  = $geom.ConsoleShiftY   # how far the console moves DOWN at stage 3 (0 at 480 tall)
 # The minimap click-to-centre half-extents in px at stage 3 (minimap.centre.tiles*):
 # (W/32 tiles)*16 and (ceil(PF_H/32) tiles)*16; stock 320 and 208.
 $HALF_X = ($SCREEN_W / 32) * 16

@@ -123,7 +123,7 @@ $dllOut  = Join-Path $OutDir 'scplugin.dll'
 $exeOut  = Join-Path $OutDir 'scinject.exe'
 $testOut = Join-Path $OutDir 'hooktest.exe'
 
-$pluginSrc = @('scplugin.cpp', 'sc_log.cpp', 'sc_engine.cpp', 'sc_hook.cpp', 'sc_fanout.cpp', 'sc_circles.cpp', 'sc_hudrow.cpp', 'sc_prodqueue.cpp', 'sc_card.cpp', 'sc_upgrades.cpp', 'sc_prodfan.cpp', 'sc_queueind.cpp', 'sc_screen.cpp', 'sc_buildid.cpp', 'sc_session.cpp', 'sc_console.cpp', 'sc_stormpresent.cpp', 'sc_marktrace.cpp') |
+$pluginSrc = @('scplugin.cpp', 'sc_log.cpp', 'sc_engine.cpp', 'sc_hook.cpp', 'sc_fanout.cpp', 'sc_circles.cpp', 'sc_hudrow.cpp', 'sc_prodqueue.cpp', 'sc_card.cpp', 'sc_upgrades.cpp', 'sc_prodfan.cpp', 'sc_queueind.cpp', 'sc_screen.cpp', 'sc_buildid.cpp', 'sc_session.cpp', 'sc_console.cpp', 'sc_stormpresent.cpp', 'sc_marktrace.cpp', 'sc_menu.cpp') |
              ForEach-Object { Join-Path $srcDir $_ }
 $testSrc   = @('hooktest.cpp', 'sc_log.cpp', 'sc_engine.cpp', 'sc_hook.cpp', 'sc_fanout.cpp', 'sc_circles.cpp', 'sc_hudrow.cpp', 'sc_prodqueue.cpp', 'sc_card.cpp', 'sc_upgrades.cpp', 'sc_prodfan.cpp', 'sc_queueind.cpp', 'sc_screen.cpp', 'sc_session.cpp') |
              ForEach-Object { Join-Path $srcDir $_ }

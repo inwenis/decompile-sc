@@ -126,7 +126,7 @@ function Get-UpgQueue {
                 # Conflating them asserts "holds one item" against a lifetime total.
                 Buildings = 0; Max = 0; QueuedTotal = 0; Promoted = 0; Cancelled = 0
                 Dropped = 0; RefusedFull = 0; RefusedGate = 0; WaitingCost = 0
-                Unblocked = 0; UnblockedLevel = 0
+                Unblocked = 0; HiddenHeld = 0; RefusedDup = 0
                 Levels = @{}; LevelCount = -1; Techs = @(); TechCount = -1
                 Lines = @($lines | ForEach-Object { $_.Line })
             }
@@ -163,7 +163,7 @@ function Get-UpgQueue {
                     continue
                 }
                 $s = [regex]::Match($l.Line,
-                    'buildings=(\d+) max=(\d+) queued=(\d+) promoted=(\d+) cancelled=(\d+) dropped=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+) refusedGate=(\d+) waitingCost=(\d+) unblocked=(\d+) unblockedLevel=(\d+)')
+                    'buildings=(\d+) max=(\d+) queued=(\d+) promoted=(\d+) cancelled=(\d+) dropped=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+) refusedGate=(\d+) waitingCost=(\d+) unblocked=(\d+) hiddenHeld=(\d+) refusedDup=(\d+)')
                 if ($s.Success) {
                     $out.Buildings = [int]$s.Groups[1].Value
                     $out.Max = [int]$s.Groups[2].Value
@@ -175,7 +175,8 @@ function Get-UpgQueue {
                     $out.RefusedGate = [int]$s.Groups[8].Value
                     $out.WaitingCost = [int]$s.Groups[9].Value
                     $out.Unblocked = [int]$s.Groups[10].Value
-                    $out.UnblockedLevel = [int]$s.Groups[11].Value
+                    $out.HiddenHeld = [int]$s.Groups[11].Value
+                    $out.RefusedDup = [int]$s.Groups[12].Value
                 } elseif ($l.Line -match 'buildings=') {
                     Assert-That 'the UPGQ summary line parsed' $false "($($l.Line))"
                 }

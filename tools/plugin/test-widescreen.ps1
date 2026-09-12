@@ -63,22 +63,13 @@ $markerPath = Join-Path $LogDir 'marker.txt'
 # The geometry the patch table was generated for, read out of the generated header
 # rather than duplicated here, so a regenerated table at a different size cannot
 # leave this suite asserting stale numbers.
-$patchHeader = Join-Path $scriptDir 'src/sc_screen_patches.h'
-if (-not (Test-Path -LiteralPath $patchHeader)) {
-    throw "test-widescreen: $patchHeader not found -- run tools/renderer_patch_sites.py first."
-}
-function Get-WsDefine([string]$Name) {
-    $m = Select-String -LiteralPath $patchHeader -Pattern "^#define\s+$Name\s+(\d+)" |
-         Select-Object -First 1
-    if (-not $m) { throw "test-widescreen: $Name not found in $patchHeader" }
-    [int]$m.Matches[0].Groups[1].Value
-}
-$WS_W = Get-WsDefine 'SC_WS_SCREEN_W'
-$WS_H = Get-WsDefine 'SC_WS_SCREEN_H'
-$WS_PF_W = Get-WsDefine 'SC_WS_PLAYFIELD_W'
-$WS_PF_H = Get-WsDefine 'SC_WS_PLAYFIELD_H'
-$STOCK_W = Get-WsDefine 'SC_WS_STOCK_W'
-$STOCK_H = Get-WsDefine 'SC_WS_STOCK_H'
+$geom = Get-ScWideGeometry
+$WS_W = $geom.W
+$WS_H = $geom.H
+$WS_PF_W = $geom.PfW
+$WS_PF_H = $geom.PfH
+$STOCK_W = $geom.StockW
+$STOCK_H = $geom.StockH
 $STOCK_PF_W = 640
 $STOCK_PF_H = 400
 
@@ -221,7 +212,7 @@ function Invoke-Arm {
                 Start-Sleep -Seconds 2
                 Assert-ScFixtureStillMine -Run $script:fixtures -MapPath $mapPath
                 Select-ScBrowserMap -Hwnd $h -GameDir $GameDir -MapPath $mapPath | Out-Null
-                Set-ScGameType -Hwnd $h -Index 2
+                Set-ScGameType -Hwnd $h -Index 2 -LogPath $LogPath
                 Send-ScClick -Hwnd $h -X 516 -Y 393
                 Start-Sleep -Seconds 6
                 Send-ScClick -Hwnd $h -X 544 -Y 387

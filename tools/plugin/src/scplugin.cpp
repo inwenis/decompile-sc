@@ -22,6 +22,7 @@
 #include "sc_buildid.h"
 #include "sc_card.h"
 #include "sc_console.h"
+#include "sc_menu.h"
 #include "sc_marktrace.h"
 #include "sc_engine.h"
 #include "sc_env.h"
@@ -987,6 +988,9 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         // writes game memory; in observe the epoch stays 1, which is correct because
         // no module holds cross-frame state there.
         ScSessionInstall(ScEngineModuleBase(), g_mode != SC_MODE_OBSERVE);
+        // The centred menus: decided here (they need the widescreen verdict above) and
+        // acted on by the console's frame walk, which reads ScMenuArmed().
+        ScMenuInstall(g_mode != SC_MODE_OBSERVE);
         // The console move + click-route trace both write to dialog records on the
         // game thread, so observe -- the whole plugin's off switch -- ignores them
         // like every other writer.
@@ -1077,6 +1081,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         ScUpgQueueLogStats();
         ScScreenLogStats();
         ScConsoleLogStats();
+        ScMenuLogStats();
         ScStormPresentLogStats();
         ScSessionLogState("detach");
         if (lpReserved == NULL) {
@@ -1101,6 +1106,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             // Console bounds restored and interacts unwrapped before the widescreen
             // geometry (which the move's +160 only makes sense on) comes out below.
             ScConsoleRemove();
+            ScMenuRemove();
             ScMarkTraceRemove();
             ScCursorPostedRemove();
             // Storm present: PROBE has nothing to restore, WIDEN restores storm's

@@ -59,10 +59,11 @@ suite break, not a cleanup.
 | `sc_prodfan.cpp` | one Train click trains at every building in the group | `ScProdFan*` | `PRODFAN` | `SCPLUGIN_PRODFAN` |
 | `sc_queueind.cpp` | the indicator for queue items the strip cannot draw | `ScQueueInd*` | `QIND` `QINDDLG` `QINDSTATS` `QINDCLICK` `QINDCLICKSTATS` | `SCPLUGIN_QUEUEIND`, `SCPLUGIN_QIND_CLICKTRACE` |
 | `sc_card.cpp` | reading the command card back out of the process | `ScCard*` | `CARD` | `SCPLUGIN_CARDSCAN` |
-| `sc_screen.cpp` | the widescreen patch table (`sc_screen_patches.h` is **generated**) | `ScScreen*`, `SC_WS_*` | `WIDESCREEN` | `SCPLUGIN_WIDESCREEN`, `SCPLUGIN_WS_STAGE`, `SCPLUGIN_WS_ONLY` |
+| `sc_screen.cpp` | the widescreen patch tables (`sc_screen_patches_<WxH>.h`, **generated**, one per preset listed in `sc_screen_presets.h`; their record type is in `sc_screen_patch.h`) | `ScScreen*`, `SC_WS_*` | `WIDESCREEN` | `SCPLUGIN_WIDESCREEN`, `SCPLUGIN_WS_STAGE`, `SCPLUGIN_WS_GEOMETRY`, `SCPLUGIN_WS_ONLY` |
 | `sc_stormpresent.cpp` | copying the widened strip to the primary every frame; the tooltip layer composed every frame while the console is buffer-resident (`tipForced=` on `STORMSTATS`); process CPU per present window (`cpu_pct=` on `STORMTIME`, `cpuPct=` on `STORMSTATS`) | `ScStormPresent*` | `STORM` `STORMTIME` `STORMSTALL` `STORMSTATS` | `SCPLUGIN_STORM_PRESENT`, `SCPLUGIN_TIPFIX` (default on; `0` leaves layer 1 dirty-driven) |
 | `sc_marktrace.cpp` | diagnostic trace of the dirty marker, the fog cell renderer and the terrain run blit, armed by `marktrace-on`/`marktrace-off` markers; the posted-cursor import override for off-screen cnc-ddraw runs (`run-offscreen.ps1` exports it and `run-with-plugin.ps1` passes it to cnc-ddraw launches only: the engine's `GetCursorPos` answers from its own cursor layer, so the real mouse cannot pan the camera) | `ScMarkTrace*` `ScCursorPosted*` | `MARKTRACE` `MARK` `IMRK` `FOGR` `TERR` `CURSOR` | `SCPLUGIN_MARKTRACE`, `SCPLUGIN_CURSOR_POSTED` |
 | `sc_console.cpp` | moving the console down under the taller playfield, the per-frame full playfield redraw while it is buffer-resident (`fullFrames=` on `CONSOLESTATS`), and the click trace | `ScConsole*` | `CONSOLE` `CONSOLESTATS` `CTRACE` | `SCPLUGIN_CONSOLE_TRACE`, `SCPLUGIN_FULLREDRAW` (default on; `0` leaves the playfield dirty-driven) |
+| `sc_menu.cpp` | the glue screens centred on the wider screen, a starfield around them, presented from the cursor restore-under (the engine presents nothing there) | `ScMenu*` | `MENU` `MENUSTATS` | `SCPLUGIN_MENU_CENTRE` |
 | `scinject.cpp` | the launcher and injector — its own program, links none of the above | `SCINJECT_*` | *(stdout/stderr)* | *(command line)* |
 | `hooktest.cpp` | the offline unit test — its own program, no game anywhere near it | — | *(stdout)* | — |
 
@@ -539,7 +540,6 @@ Evidence in [`research/upgrade-queue.md`](../../research/upgrade-queue.md) §10.
 | While the unit row is PAGING, the strip indicator stands down | one indicator at a time; `sc_hudrow`'s own `page i/j` owns that corner then |
 | Held research past four is a count | four small icons is what the strip has; the fifth and later say `+N`, tail-first cancel through the card still reaches them |
 | Held research waiting for money shows nothing | a building that went idle with items held (the player cannot pay yet) is in the idle layout, which owns the strip; the icons return when the next item starts |
-| The card still lights an already-queued upgrade | marking those is a card change, not a status-pane one |
 
 ---
 
@@ -581,11 +581,12 @@ line are asserted flat ZERO by both suites.
 condition tells the truth, the layout hides the button, and the client refuses on its own —
 measured in game as three presses producing zero commands.
 
-**Levels stack, scoped.** Weapons 2 can be queued behind Weapons 1, by also suppressing the
-per-player in-progress bit at `0x0058F3E0` — but ONLY for the building whose own `0xC9`
-already holds that id. That is the condition a second building cannot satisfy, so two
-buildings still cannot research the same upgrade, which matters: they would both pay and only
-one level would land.
+**One entry per research per building.** An id the building already holds is hidden on
+the card (the condition answers 0, vanilla's own answer for the running item) and refused on
+the wire (`UPGQEV refuse-dup`); the running one is hidden by the engine's own in-progress
+bit, which the plugin leaves alone. So a press queues an upgrade once and its button goes
+away until it has started and finished. Levels do not stack: Weapons 2 is queued after
+Weapons 1 has completed, as in vanilla.
 
 `-UpgradeQueueMax N` sets the total logical length, the engine's ONE included; default 8,
 clamped `[1, 16]`. Env: `%SCPLUGIN_UPGQ%`, `%SCPLUGIN_UPGQ_MAX%`.
@@ -1307,3 +1308,21 @@ sits inside one committed, non-guard, readable region. A wrong offset therefore
 produces a log line with a missing `ok` bit instead of an access violation inside
 the game. It only ever `memcpy`s *out* of the process — there is no code path in
 this DLL that writes to game memory.
+
+## Geometry presets
+
+The widescreen table is generated per screen size, so the DLL carries a short list of
+presets (`sc_screen_presets.h`) and `%SCPLUGIN_WS_GEOMETRY%` (launcher `-Geometry`,
+deploy.ps1 `-Geometry`) picks one at load. Unset means the first; an unknown name makes
+the DLL refuse the whole widescreen install and log the list.
+
+| preset | playfield | how it presents on a 1920x1080 screen |
+|---|---|---|
+| `1280x880` (default) | 1280x800 | borderless, aspect kept: 1571x1080 with side bars |
+| `1280x720` | 1280x640 | 16:9 -- 1.5x, fills the screen |
+| `1536x864` | 1536x784 | 16:9 -- 1.25x, fills the screen; more map, smaller UI |
+
+Adding one: `python tools/renderer_patch_sites.py --width W --height H` (playfield is
+`H - 80`; W + 32 must be a sum of exactly three powers of two or the generator refuses),
+include it in `sc_screen_presets.h`, then prove it in game with
+`$env:SCPLUGIN_WS_GEOMETRY='WxH'` and `test-widescreen.ps1` off-screen.

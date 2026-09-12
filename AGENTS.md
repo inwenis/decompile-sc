@@ -4,8 +4,20 @@ Full incident narratives live in `research/rulebook-history.md` (old headings pr
 
 ## What this repo is
 
-Personal, private reverse-engineering research on StarCraft; primary target the 1.16.1-era binary (richest public prior art: BWAPI offsets, community struct maps). Deliverables are DOCUMENTATION and TOOLING, never redistributed game content.
+Reverse-engineering research on StarCraft, and the mod built on it; primary target the 1.16.1-era binary (richest public prior art: BWAPI offsets, community struct maps). Deliverables are DOCUMENTATION and TOOLING, never redistributed game content.
 -> research/rulebook-history.md § "What this repo is"
+
+## Working here
+0. Done means proven end to end
+1. Focus on the MVP for every feature
+1. When you have a PR ready to merge - spawn a fresh subagent for a review
+  1. verify each claim left by the review
+  1. act on review finds that:
+    1. simplifies code
+    2. removes code
+    3. updates outdates claims
+  2. do not act on findings that:
+    1. expose edge cases that we haven't observed in real life
 
 ## Hard rules
 
@@ -36,7 +48,7 @@ Suites run on an invisible Windows desktop; isolation costs nothing (75.0 s off-
 - DO run `./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/test-<name>.ps1` by default, never the suite directly. `-Visible` is the debugging run.
 - NEVER grow a separate watch mode and NEVER make suites or primitives desktop-aware. `-Visible` is the SAME code path (same child script, same CreateProcess, same args; only the desktop name differs).
   Why: a process inherits its desktop at creation and `EnumWindows` is desktop-scoped, so `Get-ScGameWindow`, `check-game-windows.ps1` and `close-game.ps1` follow the game untouched.
-- `ClipCursor` is session-global, not desktop-scoped: a game on the invisible desktop pins the USER'S real mouse to a rectangle nobody sees. `run-offscreen.ps1` releases every clip it finds and prints the count; DO read that line, and NEVER add a second releaser inside a suite or the plugin.
+- `ClipCursor` is session-global, not desktop-scoped: a game on the invisible desktop pins the USER'S real mouse to a rectangle nobody sees. `run-offscreen.ps1` releases every clip it finds, except one inside the user's own visible StarCraft window (their lock while they play), and prints the count; DO read that line, and NEVER add a second releaser inside a suite or the plugin.
   -> tools/plugin/run-offscreen.ps1 header ("THE CURSOR CLIP"); issue #135
 -> research/rulebook-history.md § "A test run happens on an INVISIBLE DESKTOP"; tools/plugin/run-offscreen.ps1 header
 
@@ -258,6 +270,7 @@ Hard rule 4 applies to every line of `research/`.
 ## Comments
 
 **A comment states a timeless WHY: it must read the same written today or in five years.**
+- Default to no comments
 - DO keep the why that only a comment can carry: invariants, engine facts, how an address was derived, a measured number that bounds a value, and a refuted approach as a prohibition with its evidence ("do not restore PRESSED here: 110,381 restores in one click, zero commands").
 - NEVER narrate history in a comment: task ids, dates, PR/issue numbers, commit hashes, who changed what, "previously / originally / used to / no longer", refactor notes, tombstones for deleted code. That goes in the PR body, `git log`, or `research/<topic>.md` behind a one-line pointer.
 - Budget: file header at most 15 lines, an inline block at most 8 unless every line is evidence a reader needs. One home per why, nearest the code it governs; a comment that restates its code is deleted, and a stale one is fixed or deleted, never left.

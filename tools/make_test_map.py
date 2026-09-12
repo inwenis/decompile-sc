@@ -1023,6 +1023,120 @@ def pick_opponent_slot(player: int) -> int:
     return 1 if player != 1 else 0
 
 
+def load_template_sections(template: Path) -> list[ChkSection]:
+    """The template's CHK chunks, in file order.
+
+    The parser is only trustworthy if it can put the file back together unchanged, so
+    that is asserted before anything is edited: a template this tool cannot represent
+    fails loudly here instead of producing a subtly wrong map.
+    """
+    if not template.exists():
+        raise FileNotFoundError(
+            f"Template map not found: {template}\n"
+            "Run tools/make-working-copy.ps1 first to populate the working copy."
+        )
+    template_chk = read_chk_bytes(template)
+    sections = parse_chk_sections(template_chk)
+    if serialize_chk_sections(sections) != template_chk:
+        raise ValueError(
+            f"Template {template}: this tool's CHK parser does not round-trip it "
+            "byte-for-byte; refusing to edit a file it does not fully understand."
+        )
+    require_single_chunk(sections, template)
+    return sections
+
+
+def rewrite_player_slots(
+    sections: list[ChkSection], template: Path, player: int, race: int,
+    opponent_race: int, hostile: bool,
+) -> list[ChkSection]:
+    """One HUMAN slot and one COMPUTER opponent, every other slot INACTIVE, both with a
+    fixed race, and no force that randomises start locations. `hostile` says the
+    opponent owns units that must fight, so a template whose two slots start allied is
+    refused.
+
+    OWNR 0x06 ("Human (Open Slot)"), NOT 0x02 (HUMAN_OCCUPIED). 0x02 is what the game
+    writes at RUNTIME for a slot a human has already taken; a map carrying it makes the
+    Play Custom dialog refuse with "This map does not have a slot for a human
+    participant" (Human Slots: 0). 0x06 is what makes a slot available in the lobby,
+    and what every stock playable map carries for its human slots.
+    """
+    ownr_idx = require_section(sections, "OWNR", template)
+    old = sections[ownr_idx].payload
+    if len(old) != 12:
+        raise ValueError(f"Template {template}: OWNR is {len(old)} bytes, expected 12")
+    slots = [OWNR_INACTIVE] * 12
+    slots[player] = OWNR_HUMAN
+    slots[pick_opponent_slot(player)] = OWNR_COMPUTER
+    sections = replace_section(sections, "OWNR", bytes(slots), template)
+
+    # THE SLOT'S RACE MUST BE AN EXPLICIT ONE, NOT "User Selectable".
+    #
+    # A Blizzard LADDER map carries SIDE = 0x05 "User Selectable" for its human slots,
+    # because a ladder player picks a race in the lobby. Load such a map under Use Map
+    # Settings and StarCraft still hands that slot the standard melee starting units
+    # for whichever race got picked, so the map plays as melee whatever the lobby's
+    # Game Type says -- proved in-process: the plugin's UNITSTATE reported
+    # types=[0x29:4 0x23:3 0x2A:1] (four Drones, three Larva, one Overlord) on a
+    # 36-Lurker map with the Game Type combo explicitly set to Use Map Settings. A
+    # stock campaign map, which plays correctly under the same menu path, carries a
+    # FIXED race for its human slot (Enslavers02b: 0x02 Protoss).
+    side_idx = require_section(sections, "SIDE", template)
+    old_side = sections[side_idx].payload
+    if len(old_side) != 12:
+        raise ValueError(f"Template {template}: SIDE is {len(old_side)} bytes, expected 12")
+    sides = list(old_side)
+    sides[player] = race
+    # The computer slot gets a fixed race too, for the same reason: a slot left on
+    # "User Selectable" is a slot the engine may hand a melee base to.
+    sides[pick_opponent_slot(player)] = opponent_race
+    sections = replace_section(sections, "SIDE", bytes(sides), template)
+
+    # AND THE HUMAN MUST LAND ON THE SLOT THAT OWNS THE UNITS.
+    #
+    # FORC's last four bytes are per-force property flags; bit 0x01 is "randomize
+    # start location" (staredit.net CHK spec). A Blizzard ladder map sets it --
+    # (2)Fading Realm.scx carries 0x01 on Force 1, which every slot belongs to.
+    # OBSERVED, not assumed: across three in-game loads of an otherwise-finished
+    # fixture, one came up with the plugin logging `player=1/1/1` and `UNITSTATE n=0`
+    # on a black screen while the other two logged player 0 and the expected 36
+    # units -- same map file, same menu path, same lobby. With this bit set the
+    # human's player id is not fixed, and on any slot but 0 they own none of the
+    # placed units; a fixture must not depend on which slot the engine picks at all.
+    # The other three bits (allied, allied victory, shared vision) are left alone.
+    forc_idx = require_section(sections, "FORC", template)
+    forc = bytearray(sections[forc_idx].payload)
+    if len(forc) != 20:
+        raise ValueError(f"Template {template}: FORC is {len(forc)} bytes, expected 20")
+    for i in range(16, 20):
+        forc[i] &= ~FORC_RANDOM_START & 0xFF
+
+    # AND, WHEN THE OPPONENT MUST FIGHT, THE TWO SLOTS MUST NOT BE ALLIES.
+    #
+    # FORC's first eight bytes are the per-slot force assignment; bit 0x02 of a
+    # force's flag byte is "allied" (staredit.net CHK spec). Two slots in the SAME
+    # force with that bit set start the game allied, and allied units do not shoot
+    # each other -- the map would load, the enemy would sit there politely, and the
+    # test would time out waiting for a death. Refused rather than rewritten:
+    # clearing another map's alliance settings is an edit nobody asked for, and the
+    # ladder template (Force 1 flag byte 0x01, cleared to 0x00 above) already passes.
+    if hostile:
+        opponent = pick_opponent_slot(player)
+        f_player, f_enemy = forc[player], forc[opponent]
+        if f_player == f_enemy and (forc[16 + f_player] & FORC_ALLIED):
+            raise ValueError(
+                f"Template {template}: player {player} and the computer opponent "
+                f"{opponent} are both in force {f_player + 1}, whose FORC flag byte "
+                f"0x{forc[16 + f_player]:02X} has the 'allied' bit (0x02) set. "
+                f"Allied units never fight, so an enemy force placed here would "
+                f"never attack. Refusing rather than rewriting the template's own "
+                f"alliance settings."
+            )
+    sections = replace_section(sections, "FORC", bytes(forc), template)
+
+    return sections
+
+
 def generate_map(
     template: Path, output: Path, unit_count: int, unit_type: str, player: int,
     spacing: int = GRID_SPACING_PX, keep_ownr: bool = False,
@@ -1075,23 +1189,7 @@ def generate_map(
             f"--enemy-owner player puts both blocks on player {player}, so --unit-type "
             f"and --enemy-type must differ (both resolve to unit id {unit_id})"
         )
-    if not template.exists():
-        raise FileNotFoundError(
-            f"Template map not found: {template}\n"
-            "Run tools/make-working-copy.ps1 first to populate the working copy."
-        )
-
-    template_chk = read_chk_bytes(template)
-    sections = parse_chk_sections(template_chk)
-    # The parser is only trustworthy if it can put the file back together
-    # unchanged. Assert that before editing anything, so a template this tool
-    # cannot represent fails loudly here instead of producing a subtly wrong map.
-    if serialize_chk_sections(sections) != template_chk:
-        raise ValueError(
-            f"Template {template}: this tool's CHK parser does not round-trip it "
-            "byte-for-byte; refusing to edit a file it does not fully understand."
-        )
-    require_single_chunk(sections, template)
+    sections = load_template_sections(template)
 
     unit_idx = require_section(sections, "UNIT", template)
     existing_records = parse_unit_records(sections[unit_idx].payload)
@@ -1166,100 +1264,19 @@ def generate_map(
         template,
     )
 
-    # Single player, no hostile pressure: the chosen slot becomes a human slot, every
-    # other slot goes inactive (no computer players) bar one unit-less computer.
-    #
-    # OWNR 0x06 ("Human (Open Slot)"), NOT 0x02 (HUMAN_OCCUPIED). 0x02 is what the game
-    # writes at RUNTIME for a slot a human has already taken; a map carrying it makes the
-    # Play Custom dialog refuse with "This map does not have a slot for a human
-    # participant" (Human Slots: 0). 0x06 is what makes a slot available in the lobby,
-    # and what every stock playable map carries for its human slots.
     # keep_ownr is for a template that is ALREADY a playable single-player scenario -- a
     # stock campaign mission, say. Rewriting its slots would delete the mission's own
     # actors and leave a map whose triggers reference players that do not exist.
     if not keep_ownr:
-        ownr_idx = require_section(sections, "OWNR", template)
-        old = sections[ownr_idx].payload
-        if len(old) != 12:
-            raise ValueError(f"Template {template}: OWNR is {len(old)} bytes, expected 12")
-        slots = [OWNR_INACTIVE] * 12
-        slots[player] = OWNR_HUMAN
-        slots[pick_opponent_slot(player)] = OWNR_COMPUTER
-        sections = replace_section(sections, "OWNR", bytes(slots), template)
-
-        # THE SLOT'S RACE MUST BE AN EXPLICIT ONE, NOT "User Selectable".
-        #
-        # A Blizzard LADDER map carries SIDE = 0x05 "User Selectable" for its human slots,
-        # because a ladder player picks a race in the lobby. Load such a map under Use Map
-        # Settings and StarCraft still hands that slot the standard melee starting units
-        # for whichever race got picked, so the map plays as melee whatever the lobby's
-        # Game Type says -- proved in-process: the plugin's UNITSTATE reported
-        # types=[0x29:4 0x23:3 0x2A:1] (four Drones, three Larva, one Overlord) on a
-        # 36-Lurker map with the Game Type combo explicitly set to Use Map Settings. A
-        # stock campaign map, which plays correctly under the same menu path, carries a
-        # FIXED race for its human slot (Enslavers02b: 0x02 Protoss).
-        side_idx = require_section(sections, "SIDE", template)
-        old_side = sections[side_idx].payload
-        if len(old_side) != 12:
-            raise ValueError(f"Template {template}: SIDE is {len(old_side)} bytes, expected 12")
-        sides = list(old_side)
-        sides[player] = race
-        # The computer slot gets a fixed race too, for the same reason: a slot left on
-        # "User Selectable" is a slot the engine may hand a melee base to, and a computer
-        # with a base is hostile pressure this fixture must not have.
-        #
-        # In the COMBAT variant it gets the race the ENEMY units belong to instead of the
-        # player's own. Nothing observed says a Zerg slot cannot own Terran units under
-        # Use Map Settings, but a slot whose race matches what it owns is the arrangement
-        # every stock map uses, and it costs nothing to match it.
-        sides[pick_opponent_slot(player)] = (
-            enemy_race if (enemy_count and enemy_owner == ENEMY_OWNER_COMPUTER
-                           and enemy_race is not None)
-            else race
+        # In the COMBAT variant the computer gets the race the ENEMY units belong to.
+        # Nothing observed says a Zerg slot cannot own Terran units under Use Map
+        # Settings, but a slot whose race matches what it owns is what every stock map
+        # uses, and it costs nothing to match it.
+        combat = bool(enemy_count) and enemy_owner == ENEMY_OWNER_COMPUTER
+        sections = rewrite_player_slots(
+            sections, template, player, race,
+            enemy_race if combat and enemy_race is not None else race, hostile=combat,
         )
-        sections = replace_section(sections, "SIDE", bytes(sides), template)
-
-        # AND THE HUMAN MUST LAND ON THE SLOT THAT OWNS THE UNITS.
-        #
-        # FORC's last four bytes are per-force property flags; bit 0x01 is "randomize
-        # start location" (staredit.net CHK spec). A Blizzard ladder map sets it --
-        # (2)Fading Realm.scx carries 0x01 on Force 1, which every slot belongs to.
-        # OBSERVED, not assumed: across three in-game loads of an otherwise-finished
-        # fixture, one came up with the plugin logging `player=1/1/1` and `UNITSTATE n=0`
-        # on a black screen while the other two logged player 0 and the expected 36
-        # units -- same map file, same menu path, same lobby. With this bit set the
-        # human's player id is not fixed, and on any slot but 0 they own none of the
-        # placed units; a fixture must not depend on which slot the engine picks at all.
-        # The other three bits (allied, allied victory, shared vision) are left alone.
-        forc_idx = require_section(sections, "FORC", template)
-        forc = bytearray(sections[forc_idx].payload)
-        if len(forc) != 20:
-            raise ValueError(f"Template {template}: FORC is {len(forc)} bytes, expected 20")
-        for i in range(16, 20):
-            forc[i] &= ~FORC_RANDOM_START & 0xFF
-
-        # AND, FOR A COMBAT MAP, THE TWO SLOTS MUST NOT BE ALLIES.
-        #
-        # FORC's first eight bytes are the per-slot force assignment; bit 0x02 of a
-        # force's flag byte is "allied" (staredit.net CHK spec). Two slots in the SAME
-        # force with that bit set start the game allied, and allied units do not shoot
-        # each other -- the map would load, the enemy would sit there politely, and the
-        # test would time out waiting for a death. Refused rather than rewritten:
-        # clearing another map's alliance settings is an edit nobody asked for, and the
-        # ladder template (Force 1 flag byte 0x01, cleared to 0x00 above) already passes.
-        if enemy_count and enemy_owner == ENEMY_OWNER_COMPUTER:
-            opponent = pick_opponent_slot(player)
-            f_player, f_enemy = forc[player], forc[opponent]
-            if f_player == f_enemy and (forc[16 + f_player] & FORC_ALLIED):
-                raise ValueError(
-                    f"Template {template}: player {player} and the computer opponent "
-                    f"{opponent} are both in force {f_player + 1}, whose FORC flag byte "
-                    f"0x{forc[16 + f_player]:02X} has the 'allied' bit (0x02) set. "
-                    f"Allied units never fight, so an enemy force placed here would "
-                    f"never attack. Refusing rather than rewriting the template's own "
-                    f"alliance settings."
-                )
-        sections = replace_section(sections, "FORC", bytes(forc), template)
 
     # THE MISSION MUST NOT BE ABLE TO END ITSELF.
     #

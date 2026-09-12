@@ -6,9 +6,11 @@ rem start the game with scplugin.dll loaded, and put the game folder back when i
 setlocal
 cd /d "%~dp0"
 
-rem Which StarCraft? 1) the folder dropped onto this file or given as the argument,
-rem 2) game\ next to this file, 3) the InstallPath the 1.16.1 installer registered, 4) ask.
+rem Which StarCraft? 1) the folder dropped onto this file or given as the argument, 2) the
+rem SCMOD_GAME environment variable, 3) game\ next to this file, 4) the InstallPath the
+rem 1.16.1 installer registered, 5) ask.
 set "GAME=%~1"
+if not defined GAME if defined SCMOD_GAME set "GAME=%SCMOD_GAME%"
 if not defined GAME if exist "game\StarCraft.exe" set "GAME=%~dp0game"
 if not defined GAME for /f "tokens=2,*" %%a in ('reg query "HKLM\SOFTWARE\WOW6432Node\Blizzard Entertainment\Starcraft" /v InstallPath 2^>nul ^| find "InstallPath"') do set "GAME=%%b"
 if not defined GAME set /p "GAME=Where is StarCraft: Brood War 1.16.1 installed? Paste the folder path and press Enter: "
@@ -31,7 +33,7 @@ if errorlevel 1 (
 )
 
 rem cnc-ddraw shows the widened frame: borderless full screen, aspect ratio kept, cursor
-rem locked to the window (hold Ctrl or Right Alt to free it). A ddraw proxy must sit next to
+rem locked to the window (Ctrl+Tab or Right Alt+Right Ctrl frees it). A ddraw proxy must sit next to
 rem the exe, so it goes into the game folder for this session only. A ddraw.dll or ddraw.ini
 rem already there is kept aside and put back on exit (one that is already ours is left alone).
 set "KEEP_DLL="
@@ -53,6 +55,10 @@ set SCPLUGIN_UPGQ=1
 set SCPLUGIN_QUEUEIND=1
 set SCPLUGIN_WIDESCREEN=1
 set SCPLUGIN_WS_STAGE=3
+rem Geometry preset: 1280x880 (default), 1280x720 (16:9, 1.5x on a 1080p screen),
+rem 1536x864 (16:9, 1.25x on a 1080p screen, more map, smaller UI).
+set SCPLUGIN_WS_GEOMETRY=1280x880
+set SCPLUGIN_MENU_CENTRE=1
 set SCPLUGIN_STORM_PRESENT=widen
 
 rem --early loads the DLL before the game's first instruction, where the widescreen patches
