@@ -46,11 +46,11 @@ void ScMenuLogStats(void);
 #define SC_MENU_NEB_STEP    2   // the nebula is sampled every 2 px and dithered per pixel
 
 // The nebula's layers. scale = noise cells across the long side, density lifts the
-// noise before the falloff power: a larger falloff means thinner, wispier cloud.
-struct ScMenuNebLayer { int r, g, b; float scale, density, falloff, ox, oy; unsigned seed; };
+// noise before it is raised to `falloff`: a larger power means thinner, wispier cloud.
+struct ScMenuNebLayer { int r, g, b; float scale, density; int falloff; float ox, oy; unsigned seed; };
 static const ScMenuNebLayer kScMenuNebLayers[SC_MENU_NEB_LAYERS] = {
-    {  70, 100, 185, 2.0f, 0.10f, 3.0f,  0.0f, 0.0f, 7u },   // blue-violet, broad
-    { 170,  45,  55, 3.0f, 0.02f, 4.0f, 17.3f, 5.1f, 8u },   // dim red, patchy
+    {  70, 100, 185, 2.0f, 0.10f, 3,  0.0f, 0.0f, 7u },   // blue-violet, broad
+    { 170,  45,  55, 3.0f, 0.02f, 4, 17.3f, 5.1f, 8u },   // dim red, patchy
 };
 
 // Nearest of 256 palette entries {r,g,b,flags} to an RGB.
@@ -128,9 +128,10 @@ static inline float ScMenuPerlin01(float x, float y, unsigned seed) {
         { -1.0f, 0.0f }, { -0.924f, -0.383f }, { -0.707f, -0.707f }, { -0.383f, -0.924f },
         { 0.0f, -1.0f }, { 0.383f, -0.924f }, { 0.707f, -0.707f }, { 0.924f, -0.383f },
     };
-    const float fx0 = floorf(x), fy0 = floorf(y);
-    const int ix = (int)fx0, iy = (int)fy0;
-    const float fx = x - fx0, fy = y - fy0;
+    int ix = (int)x, iy = (int)y;   // floor, without a libm call per sample
+    if (x < (float)ix) --ix;
+    if (y < (float)iy) --iy;
+    const float fx = x - (float)ix, fy = y - (float)iy;
     float dots[4];
     for (int c = 0; c < 4; ++c) {
         const int cx = c & 1, cy = c >> 1;
@@ -184,7 +185,9 @@ static inline int ScMenuBuildNebula(BYTE* levels, int w, int h, int gx, int gy) 
                 float v = ScMenuWarpedNoise((float)cx * L.scale / span + L.ox,
                                             (float)cy * L.scale / span + L.oy, L.seed) + L.density;
                 v = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
-                n[l] = powf(v, L.falloff) * fade;
+                float p = fade;
+                for (int k = 0; k < L.falloff; ++k) p *= v;
+                n[l] = p;
                 sum += n[l];
             }
             if (sum <= 0.0f) continue;
