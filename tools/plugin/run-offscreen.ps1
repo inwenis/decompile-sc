@@ -186,6 +186,32 @@ namespace ScSpawn {
 '@ -ReferencedAssemblies System.Runtime, System.Runtime.InteropServices
 }
 
+# The user's own game (see the clip watch below). A type of its own, not new members on
+# ScSpawn.Native: a shell that already compiled that class keeps it for its lifetime, and a
+# member added to the source would be missing there until the shell restarts.
+if (-not ('ScSpawn.UserGame' -as [type])) {
+    Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+namespace ScSpawn {
+  public static class UserGame {
+    [StructLayout(LayoutKind.Sequential)] struct RECT { public int left, top, right, bottom; }
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern IntPtr FindWindowW(string cls, string title);
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    // True when a visible StarCraft window on the CALLING thread's desktop holds the rect.
+    public static bool Holds(int l, int t, int r, int b) {
+      IntPtr h = FindWindowW("SWarClass", null);
+      if (h == IntPtr.Zero || !IsWindowVisible(h)) return false;
+      RECT w;
+      if (!GetWindowRect(h, out w)) return false;
+      return l >= w.left && t >= w.top && r <= w.right && b <= w.bottom;
+    }
+  }
+}
+'@
+}
+
 # --- where the run happens ----------------------------------------------------
 # Outside the repo, like every other artifact of a run: a transcript is scratch, and the
 # shared scratch root is the one place every launch already uses.
@@ -210,16 +236,19 @@ if ($PSCmdlet.ParameterSetName -eq 'Suite') {
     # and paths with spaces, and quoting those through two layers of shell is how a run ends
     # up silently testing something else.
     $SuiteArgs | Export-Clixml -LiteralPath $argsFile -Depth 8
+    # The exit line reads LASTEXITCODE through Get-Variable: sc-desktop.ps1 turns on strict
+    # mode, where a bare $LASTEXITCODE that no native command or `exit` ever set throws,
+    # and a clean run reports exit 1.
     $payload = @"
 `$a = Import-Clixml -LiteralPath '$argsFile'
 & '$suiteFull' @a
-exit `$(if (`$null -ne `$LASTEXITCODE) { `$LASTEXITCODE } else { 0 })
+exit `$((Get-Variable LASTEXITCODE -Scope Global -ValueOnly -ErrorAction Ignore) ?? 0)
 "@
 }
 else {
     $payload = @"
 $Command
-exit `$(if (`$null -ne `$LASTEXITCODE) { `$LASTEXITCODE } else { 0 })
+exit `$((Get-Variable LASTEXITCODE -Scope Global -ValueOnly -ErrorAction Ignore) ?? 0)
 "@
 }
 
@@ -295,12 +324,27 @@ try {
     $vsRect = @{ left = $vs[0]; top = $vs[1]; right = $vs[0] + $vs[2]; bottom = $vs[1] + $vs[3] }
     $clipsFound = 0
     $clipLines = 0
+    # The person PLAYING: cnc-ddraw locks their mouse to their own game on every click, and
+    # a watch that frees every clip frees theirs within 100 ms, for as long as any agent's
+    # run lasts: the mouse leaves the window and edge-scroll stops. FindWindow searches
+    # THIS process's desktop, and StarCraft is single-instance per machine, so while the run
+    # sits on another desktop a visible StarCraft here is never the run's game: a clip inside
+    # its window is theirs. A -Visible run shares this desktop, and keeps the old watch.
+    $userDesktop = ($desktopName -ne (Get-ScThreadDesktopName))
+    $userTicks = 0
     while ($true) {
         $running = ([ScSpawn.Native]::WaitForSingleObject($hProc, 100) -ne 0)   # WAIT_OBJECT_0 == 0
         $rc = New-Object 'ScSpawn.Native+RECT'
-        if ([ScSpawn.Native]::GetClipCursor([ref]$rc) -and
+        $clipped = [ScSpawn.Native]::GetClipCursor([ref]$rc) -and
             ($rc.left -gt $vsRect.left -or $rc.top -gt $vsRect.top -or
-             $rc.right -lt $vsRect.right -or $rc.bottom -lt $vsRect.bottom)) {
+             $rc.right -lt $vsRect.right -or $rc.bottom -lt $vsRect.bottom)
+        if ($clipped -and $userDesktop -and [ScSpawn.UserGame]::Holds($rc.left, $rc.top, $rc.right, $rc.bottom)) {
+            if ($userTicks++ -eq 0) {
+                Write-Host ("run-offscreen: cursor clip ({0},{1})-({2},{3}) is inside the user's own StarCraft window -- left alone" -f
+                    $rc.left, $rc.top, $rc.right, $rc.bottom)
+            }
+        }
+        elseif ($clipped) {
             $clipsFound++
             [void][ScSpawn.Native]::ClipCursor([IntPtr]::Zero)
             $after = New-Object 'ScSpawn.Native+RECT'
@@ -350,10 +394,16 @@ try {
     # is a no-op for any code that fits in Int32 (every ordinary suite exit).
     $exit = [BitConverter]::ToInt32([BitConverter]::GetBytes($code), 0)
     # A clip placed between the final tick and the child's exit outlives the run otherwise,
-    # leaving the user to free their own mouse with an Alt-Tab.
-    [void][ScSpawn.Native]::ClipCursor([IntPtr]::Zero)
+    # leaving the user to free their own mouse with an Alt-Tab. The user's own game's lock
+    # stays, as in the loop.
+    $rc = New-Object 'ScSpawn.Native+RECT'
+    if (-not ($userDesktop -and [ScSpawn.Native]::GetClipCursor([ref]$rc) -and
+              [ScSpawn.UserGame]::Holds($rc.left, $rc.top, $rc.right, $rc.bottom))) {
+        [void][ScSpawn.Native]::ClipCursor([IntPtr]::Zero)
+    }
     Write-Host ('-' * 70)
     Write-Host "run-offscreen: cursor clip: $clipsFound clip(s) of the real mouse found and released during the run (issue #135; 0 = never confined)"
+    if ($userTicks) { Write-Host "run-offscreen: cursor clip: the user's own StarCraft held its lock for $userTicks tick(s) of 100 ms; left alone" }
     Write-Host "run-offscreen: child pid $childPid exited $exit (desktop '$desktopName')"
     Write-Host "run-offscreen: transcript $TranscriptPath"
 

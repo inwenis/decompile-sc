@@ -48,7 +48,7 @@ Suites run on an invisible Windows desktop; isolation costs nothing (75.0 s off-
 - DO run `./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/test-<name>.ps1` by default, never the suite directly. `-Visible` is the debugging run.
 - NEVER grow a separate watch mode and NEVER make suites or primitives desktop-aware. `-Visible` is the SAME code path (same child script, same CreateProcess, same args; only the desktop name differs).
   Why: a process inherits its desktop at creation and `EnumWindows` is desktop-scoped, so `Get-ScGameWindow`, `check-game-windows.ps1` and `close-game.ps1` follow the game untouched.
-- `ClipCursor` is session-global, not desktop-scoped: a game on the invisible desktop pins the USER'S real mouse to a rectangle nobody sees. `run-offscreen.ps1` releases every clip it finds and prints the count; DO read that line, and NEVER add a second releaser inside a suite or the plugin.
+- `ClipCursor` is session-global, not desktop-scoped: a game on the invisible desktop pins the USER'S real mouse to a rectangle nobody sees. `run-offscreen.ps1` releases every clip it finds, except one inside the user's own visible StarCraft window (their lock while they play), and prints the count; DO read that line, and NEVER add a second releaser inside a suite or the plugin.
   -> tools/plugin/run-offscreen.ps1 header ("THE CURSOR CLIP"); issue #135
 -> research/rulebook-history.md § "A test run happens on an INVISIBLE DESKTOP"; tools/plugin/run-offscreen.ps1 header
 

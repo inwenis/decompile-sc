@@ -24,7 +24,7 @@ Unzip [the release](https://github.com/inwenis/decompile-sc/releases) anywhere a
 2. select buildings of one type, queue units for all at once
 3. queue more than 5 units in a building
 4. queue upgrades, shown as icons in the building's queue like units
-5. widescreen, three geometry presets (hold Ctrl or Right Alt to free the mouse)
+5. widescreen, three geometry presets (Ctrl+Tab or Right Alt+Right Ctrl frees the mouse; a click locks it again)
 
 Offline and single-player only.
 
