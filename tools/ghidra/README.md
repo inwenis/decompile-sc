@@ -179,8 +179,11 @@ Select-String tools/plugin/src/sc_addresses.h, research/*.md -Pattern '0041E0D0'
   no name anywhere (`FUN_`). Hard rule 4 applies: a name is a reading aid, not a finding.
 - **References.** A name grep finds direct calls and pointer stores (`DAT_006d1234 = options_menu_handler;`),
   plus the function's own file. A call through a table or a register never names its target, so
-  no hit is not "no callers" (AGENTS.md § "Claims about the binary"). A field name can belong to
-  several structs (`orderID` is also in `COrder`), and the decompiler may compare through a temp.
+  no hit is not "no callers" (AGENTS.md § "Claims about the binary"). A function that jumps into
+  another's shared tail decompiles with that tail inlined, so a hit can be code it reaches rather
+  than a call it contains: 21 of the 45 files naming `BWFXN_RefreshTarget` are such stubs, and its
+  29 call instructions sit in 24 functions (grep `listing.asm` for `call   0x41e0d0`). A field
+  name can belong to several structs (`orderID` is also in `COrder`).
 - **Register conventions.** `/* WARNING: Unknown calling convention */` marks custom storage read
   from Magnetar's inline-asm wrapper. The `storage` column in `names.tsv` spells it out:
   `left=EAX;bottom=EDX;top=ECX;right=S4` means `right` is the first stack dword above the return
