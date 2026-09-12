@@ -41,8 +41,8 @@ reason in the PR.
 Needs Node.js on PATH for npx; the first run downloads jscpd into npx's cache.
 """
 
-import fnmatch
 import argparse
+import fnmatch
 import hashlib
 import json
 import pathlib

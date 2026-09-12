@@ -44,6 +44,8 @@ catch { $script:ScHaveDrawing = $false }
 # Which desktop this thread is on: the foreground gate must be able to say WHY it cannot
 # have the foreground when a run is off-screen (see Assert-ScWindowActive).
 . (Join-Path $PSScriptRoot 'sc-desktop.ps1')
+# Get-ScWideGeometry, shared with deploy.ps1.
+. (Join-Path $PSScriptRoot 'sc-geometry.ps1')
 
 function Assert-ScDrawing {
     if (-not $script:ScHaveDrawing) {
@@ -1701,49 +1703,6 @@ function Send-ScDropdownPick {
                 Write-Warning "drive-game: handing the foreground back after the dropdown pick failed ($($_.Exception.Message)). The pick itself succeeded."
             }
         }
-    }
-}
-
-function Get-ScWideGeometry {
-    <#
-    .SYNOPSIS
-    The widescreen geometry the plugin was built for, read from the generated table header.
-    .DESCRIPTION
-    tools/plugin/src/sc_screen_patches_<WxH>.h is GENERATED (tools/renderer_patch_sites.py),
-    one per geometry preset, and is the one place a preset's width/height live. Every probe
-    that asserts a client size, a dump size or a band extent reads them here: a literal
-    width copied into a probe goes stale, silently, the moment the target size moves.
-    The preset is the one the DLL will read from %SCPLUGIN_WS_GEOMETRY% (unset = default),
-    so a suite and its game agree by construction.
-    #>
-    [CmdletBinding()]
-    param(
-        [string]$Geometry = $(if ($env:SCPLUGIN_WS_GEOMETRY) { $env:SCPLUGIN_WS_GEOMETRY } else { '1280x880' })
-    )
-    $Header = Join-Path $PSScriptRoot "src/sc_screen_patches_$Geometry.h"
-    if (-not (Test-Path -LiteralPath $Header)) {
-        $known = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src') -Filter 'sc_screen_patches_*.h' |
-                   ForEach-Object { $_.BaseName -replace '^sc_screen_patches_', '' })
-        throw "drive-game: no geometry preset '$Geometry' (SCPLUGIN_WS_GEOMETRY); presets: $($known -join ', ')"
-    }
-    $read = {
-        param([string]$Name)
-        $m = Select-String -LiteralPath $Header -Pattern "^#define\s+$Name\s+(\d+)" | Select-Object -First 1
-        if (-not $m) { throw "drive-game: $Name not found in $Header" }
-        [int]$m.Matches[0].Groups[1].Value
-    }
-    [pscustomobject]@{
-        Name   = $Geometry
-        Header = $Header
-        W      = & $read 'SC_WS_SCREEN_W'
-        H      = & $read 'SC_WS_SCREEN_H'
-        PfW    = & $read 'SC_WS_PLAYFIELD_W'
-        PfH    = & $read 'SC_WS_PLAYFIELD_H'
-        StockW = & $read 'SC_WS_STOCK_W'
-        StockH = & $read 'SC_WS_STOCK_H'
-        # How far the bottom console sits below its stock place (PF_H - 400; 0 at
-        # the stock playfield height). A WIDE arm passes this to Get-ScMinimapPoint.
-        ConsoleShiftY = & $read 'SC_WS_CONSOLE_SHIFT_Y'
     }
 }
 

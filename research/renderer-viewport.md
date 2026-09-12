@@ -2532,7 +2532,8 @@ circled unit in the right band from its own log). The first two now ask
 `sc_screen` for the target geometry; the circles filter reads the engine's own
 screen bitmap descriptor (0x006CEFF0, §2). The probes carried the same copies
 (`800x480` client and dump asserts, `160*480` band sizes, `--x1 800`), now read
-once from the header through `Get-ScWideGeometry` in `drive-game.ps1`.
+once from the header through `Get-ScWideGeometry` (`tools/plugin/sc-geometry.ps1`,
+which `drive-game.ps1` and `deploy.ps1` dot-source).
 
 ### 21.5 What 1280 wide does NOT do
 
