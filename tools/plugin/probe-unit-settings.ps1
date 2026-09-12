@@ -79,8 +79,11 @@ try {
             $UnisMarineHp -eq $VanillaMarineHp) {
             throw "probe: the three candidate hit-point values must all differ, or the read cannot discriminate."
         }
-        $py = Join-Path $repoRoot '.venv/Scripts/python.exe'
-        if (-not (Test-Path -LiteralPath $py)) { $py = 'python' }
+        # Resolve-ScPython also finds the MAIN checkout's .venv: a worktree has none, and a
+        # PATH python without richchk fails inside the generator, far from the cause.
+        . (Join-Path $repoRoot 'tools/sc-python.ps1')
+        $py = (Resolve-ScPython -RepoRoot $repoRoot -RequireModule 'richchk').Path
+        if (-not $py) { throw 'probe: no python that can import richchk (run ./setup-worktree.ps1).' }
         # --enemy-owner player is the generator's way to put a SECOND block of a DIFFERENT
         # type on the human's own slot: one map carries both the units to read and the
         # building to train from.
@@ -120,24 +123,7 @@ try {
     $hwnd = Get-ScGameWindow -ProcessId $gamePid
 
     Step "menus: Single Player -> Expansion -> Play Custom -> $mapName" {
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 215 -Y 119
-        Send-ScClick -Hwnd $hwnd -X 373 -Y 300
-        Start-Sleep -Seconds 1
-        Send-ScClick -Hwnd $hwnd -X 75  -Y 111
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 392
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 327 -Y 415
-        Start-Sleep -Seconds 2
-        Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
-        Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
-        Assert-ScGameType -LogPath $logPath      # Use Map Settings, verified
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 393
-        Start-Sleep -Seconds 6
-        Send-ScClick -Hwnd $hwnd -X 544 -Y 387
-        Start-Sleep -Seconds 10
-        Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
-        Start-Sleep -Seconds 2
+        Enter-ScCustomGame -Hwnd $hwnd -LogPath $LogPath -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -Noun 'probe'
     }
 
     Step 'THE DISCRIMINATOR: read a Marine hit points out of the running game' {

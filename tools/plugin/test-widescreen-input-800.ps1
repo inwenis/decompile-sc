@@ -206,24 +206,7 @@ function Invoke-Arm {
         }
 
         Step "[$Name] menus -> $mapName" {
-            Start-Sleep -Seconds 2
-            Send-ScClick -Hwnd $hwnd -X 215 -Y 119
-            Send-ScClick -Hwnd $hwnd -X 373 -Y 300
-            Start-Sleep -Seconds 1
-            Send-ScClick -Hwnd $hwnd -X 75 -Y 111
-            Send-ScClick -Hwnd $hwnd -X 516 -Y 392
-            Start-Sleep -Seconds 2
-            Send-ScClick -Hwnd $hwnd -X 327 -Y 415
-            Start-Sleep -Seconds 2
-            Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
-            Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
-            Assert-ScGameType -LogPath $logPath
-            Send-ScClick -Hwnd $hwnd -X 516 -Y 393
-            Start-Sleep -Seconds 6
-            Send-ScClick -Hwnd $hwnd -X 544 -Y 387
-            Start-Sleep -Seconds 10
-            Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $logPath | Out-Null
-            Start-Sleep -Seconds 2
+            Enter-ScCustomGame -Hwnd $hwnd -LogPath $logPath -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -Noun "test-widescreen-input-800[$Name]"
         }
 
         $dy = ($Widescreen -eq '1') ? $SHIFT_Y : 0

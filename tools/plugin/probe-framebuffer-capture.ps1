@@ -188,23 +188,7 @@ function Invoke-Arm {
 
         try {
             Write-Host '       walking to a loaded game'
-            Send-ScClick -Hwnd $h -X 215 -Y 119
-            Send-ScClick -Hwnd $h -X 373 -Y 300
-            Start-Sleep -Seconds 1
-            Send-ScClick -Hwnd $h -X 75  -Y 111
-            Send-ScClick -Hwnd $h -X 516 -Y 392
-            Start-Sleep -Seconds 2
-            Send-ScClick -Hwnd $h -X 327 -Y 415
-            Start-Sleep -Seconds 2
-            Assert-ScFixtureStillMine -Run $script:fixtures -MapPath $mapPath
-            Select-ScBrowserMap -Hwnd $h -GameDir $GameDir -MapPath $mapPath | Out-Null
-            Assert-ScGameType -LogPath $log
-            Send-ScClick -Hwnd $h -X 516 -Y 393
-            Start-Sleep -Seconds 6
-            Send-ScClick -Hwnd $h -X 544 -Y 387
-            Start-Sleep -Seconds 10
-            Dismiss-ScTipsDialog -Hwnd $h -LogPath $log | Out-Null
-            Start-Sleep -Seconds 3
+            Enter-ScCustomGame -Hwnd $h -LogPath $log -Fixtures $script:fixtures -MapPath $mapPath -GameDir $GameDir -Noun 'probe-framecap'
 
             # CAPTURE 2 -- in game, where the playfield layer is installed and
             # the frame carries terrain rather than menu art.

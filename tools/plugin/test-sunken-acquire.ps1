@@ -139,30 +139,7 @@ function Invoke-Arm {
 
     $result = [ordered]@{ Tag = $tag; UnitType = $UnitType; Mode = $Mode; LogPath = $logPath; Pid = $gamePid; MapPath = $mapPath }
     try {
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 215 -Y 119
-        Send-ScClick -Hwnd $hwnd -X 373 -Y 300
-        Start-Sleep -Seconds 1
-        Send-ScClick -Hwnd $hwnd -X 75  -Y 111
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 392
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 327 -Y 415
-        Start-Sleep -Seconds 2
-        # Every row from the filesystem, and the opened folder verified before the map row
-        # is clicked: a hardcoded row picks whatever foreign .scx happens to sort before
-        # ours (AGENTS.md § "Map browser").
-        Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
-        Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
-        Assert-ScGameType -LogPath $logPath
-        ArmShot 'lobby'
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 393
-        Start-Sleep -Seconds 6
-        Send-ScClick -Hwnd $hwnd -X 544 -Y 387
-        Start-Sleep -Seconds 10
-        # Found in the engine's own dialog list and dismissed by ITS OWN OK button, then
-        # asserted gone -- never a fixed point, never the registry (AGENTS.md § "Tips dialog").
-        Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $logPath | Out-Null
-        Start-Sleep -Seconds 2
+        Enter-ScCustomGame -Hwnd $hwnd -LogPath $logPath -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -BeforeStart { ArmShot 'lobby' } -Noun 'test'
 
         Send-ScDrag -Hwnd $hwnd -X1 10 -Y1 10 -X2 630 -Y2 340 -Steps 20
         Start-Sleep -Seconds 2

@@ -90,7 +90,7 @@ function Read-ScreenLayout {
                 Param = $Matches[8]; Draw = $Matches[9]; DrawStatic = $Matches[10]
             }
         }
-        elseif ($l -match 'origin=\((\d+),(\d+)\) tile=\((\d+),(\d+)\) map=(\d+)x(\d+) tiles \((\d+)x(\d+) px\) scrollMax=\((-?\d+),(-?\d+)\) predicted=\((-?\d+),(-?\d+)\) match=(\d)') {
+        elseif ($l -match 'origin=\((\d+),(\d+)\) tile=\((\d+),(\d+)\) map=(\d+)x(\d+) tiles \((\d+)x(\d+) px\) scrollMax=\((-?\d+),(-?\d+)\) predicted=\((-?\d+),(-?\d+)\)(?: \w+=\S+)* match=(\d)') {
             $r.Viewport = @{
                 OriginX = [int]$Matches[1]; OriginY = [int]$Matches[2]
                 TileX = [int]$Matches[3]; TileY = [int]$Matches[4]
@@ -174,23 +174,7 @@ try {
     # filesystem by Select-ScBrowserMap, never a fixed row (AGENTS.md § "Map browser").
     Write-Host ''
     Write-Host 'probe-screen-layout: walking to a loaded game'
-    Send-ScClick -Hwnd $h -X 215 -Y 119
-    Send-ScClick -Hwnd $h -X 373 -Y 300
-    Start-Sleep -Seconds 1
-    Send-ScClick -Hwnd $h -X 75  -Y 111
-    Send-ScClick -Hwnd $h -X 516 -Y 392
-    Start-Sleep -Seconds 2
-    Send-ScClick -Hwnd $h -X 327 -Y 415
-    Start-Sleep -Seconds 2
-    Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
-    Select-ScBrowserMap -Hwnd $h -GameDir $GameDir -MapPath $mapPath | Out-Null
-    Assert-ScGameType -LogPath $logPath
-    Send-ScClick -Hwnd $h -X 516 -Y 393
-    Start-Sleep -Seconds 6
-    Send-ScClick -Hwnd $h -X 544 -Y 387
-    Start-Sleep -Seconds 10
-    Dismiss-ScTipsDialog -Hwnd $h -LogPath $logPath | Out-Null
-    Start-Sleep -Seconds 3
+    Enter-ScCustomGame -Hwnd $h -LogPath $logPath -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -Noun 'probe-screen-layout'
 
     $readings['ingame'] = Read-ScreenLayout -Tag 'ingame'
     Show-ScreenLayout $readings['ingame']

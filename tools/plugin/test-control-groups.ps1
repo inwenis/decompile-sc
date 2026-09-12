@@ -129,34 +129,7 @@ try {
     $hwnd = Get-ScGameWindow -ProcessId $gamePid
 
     Step "menus: Single Player -> Expansion -> Play Custom -> $mapName" {
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 215 -Y 119        # Single Player
-        Send-ScClick -Hwnd $hwnd -X 373 -Y 300        # StarCraft: Brood War (Expansion)
-        Start-Sleep -Seconds 1
-        Send-ScClick -Hwnd $hwnd -X 75  -Y 111        # first entry in the Registry list
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 392        # Ok
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom
-        Start-Sleep -Seconds 2
-        # Both rows are computed from the filesystem and the opened folder is verified before
-        # the map row is clicked: no sort order holds once a second suite makes its own fixture
-        # folder (AGENTS.md § "Map browser").
-        Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
-        Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
-        # A stale "Melee" hands the slot melee starting units -- 4 Drones -- instead of the
-        # map's own 36 (AGENTS.md § "Game Type / `Custom Type`"), so the engine's own dialog
-        # list is read here rather than discovered as ten meaningless assertions downstream.
-        Assert-ScGameType -LogPath $LogPath
-        Shot 'lobby'
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing
-        Start-Sleep -Seconds 6
-        Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
-        Start-Sleep -Seconds 10
-        # The tips dialog is found in the engine's own dialog list and dismissed by ITS OWN OK
-        # button, then asserted gone -- never a fixed point, never the registry
-        # (AGENTS.md § "Tips dialog").
-        Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
-        Start-Sleep -Seconds 2
+        Enter-ScCustomGame -Hwnd $hwnd -LogPath $LogPath -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -BeforeStart { Shot 'lobby' } -Noun 'test'
         Shot 'in-game'
     }
 

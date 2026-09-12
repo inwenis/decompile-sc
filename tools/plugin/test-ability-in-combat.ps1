@@ -260,30 +260,7 @@ function Invoke-Arm {
 
     $result = [ordered]@{ Mode = $Mode; LogPath = $logPath; Pid = $gamePid }
     try {
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 215 -Y 119
-        Send-ScClick -Hwnd $hwnd -X 373 -Y 300
-        Start-Sleep -Seconds 1
-        Send-ScClick -Hwnd $hwnd -X 75  -Y 111
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 392
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 327 -Y 415
-        Start-Sleep -Seconds 2
-        # Never click a browser row by number (AGENTS.md § Never click a map-browser row by
-        # number): a foreign .scx sorting before ours shifts every row. Rows come from the
-        # filesystem and the opened folder is verified before the map row is clicked.
-        Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
-        Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
-        Assert-ScGameType -LogPath $logPath      # Use Map Settings, verified (see Assert-ScGameType)
-        ArmShot 'lobby'
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 393
-        Start-Sleep -Seconds 6
-        Send-ScClick -Hwnd $hwnd -X 544 -Y 387
-        Start-Sleep -Seconds 10
-        # Dismissed by ITS OWN OK button from the engine's dialog list, then asserted gone --
-        # never a fixed point, never the registry (AGENTS.md § The in-game tips dialog).
-        Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $logPath | Out-Null
-        Start-Sleep -Seconds 2
+        Enter-ScCustomGame -Hwnd $hwnd -LogPath $logPath -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -BeforeStart { ArmShot 'lobby' } -Noun 'test'
 
         Send-ScDrag -Hwnd $hwnd -X1 10 -Y1 10 -X2 630 -Y2 340 -Steps 20
         Start-Sleep -Seconds 2

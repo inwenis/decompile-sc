@@ -117,7 +117,7 @@ try {
         (@(Get-Content -LiteralPath $log | Where-Object { $_ -match 'MARKTRACE: armed' }).Count -gt 0)
 
     Write-Host 'probe-fog: walking to a loaded game'
-    Walk-ToScGame -Hwnd $h -LogPath $log -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -Noun 'probe-fog'
+    Enter-ScCustomGame -Hwnd $h -LogPath $log -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -ActivationNudge -Noun 'probe-fog'
 
     Send-ScMouseMove -Hwnd $h -X $AWAY.X -Y $AWAY.Y -DelayMs 300
     Start-Sleep -Milliseconds 700

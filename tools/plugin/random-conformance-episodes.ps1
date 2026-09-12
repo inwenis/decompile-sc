@@ -220,6 +220,15 @@ function Invoke-QueueEpisode {
 # path on which the PLUGIN moves a resource -- and the refund is read back out of the
 # engine's globals, not out of the plugin's counter.
 # ---------------------------------------------------------------------------
+# A unit the building FINISHES inside a cancel's window also leaves its queue. Its current
+# build (CUnit+0xEC, PRODFAN buildUnit=) then names a different unit on the two sides of
+# the window; cancelling the last item, or one the plugin holds, never changes it.
+function Get-FinishedBetween {
+    param($L0, $L1)
+    [int]($L0.BuildUnit -and $L1.BuildUnit -and $L0.BuildUnit -ne '00000000' -and
+          $L1.BuildUnit -ne '00000000' -and $L0.BuildUnit -ne $L1.BuildUnit)
+}
+
 function Invoke-CancelByCard {
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Ep, [Parameter(Mandatory)]$After)
@@ -253,8 +262,9 @@ function Invoke-CancelByCard {
         # GROUND TRUTH: the engine's mineral global. Exactly one item's cost, exactly once.
         Assert-Inv -Id 'INV-M' -What "cancelling one queued item refunded exactly $SCV_COST minerals ($back)" `
             -Ok ($back -eq $SCV_COST) -Detail "(minerals $m0 -> $($post.Minerals))"
-        Assert-Inv -Id 'INV-R' -What "and 0x$unit's queue is one shorter ($($l0.Logical) -> $($l1.Logical)) [cross-check]" `
-            -Ok ($l1.Logical -eq $l0.Logical - 1)
+        $fin = Get-FinishedBetween $l0 $l1
+        Assert-Inv -Id 'INV-R' -What "and 0x$unit's queue is one shorter$(if ($fin) { ', plus the unit it finished meanwhile' }) ($($l0.Logical) -> $($l1.Logical)) [cross-check]" `
+            -Ok ($l1.Logical -eq $l0.Logical - 1 - $fin)
         if ($l0.Overflow -gt 0) {
             Assert-Inv -Id 'INV-P' -What "the plugin cancelled one of its OWN held items ($($post.Cancelled - $cancelled0)) [self-check]" `
                 -Ok (($post.Cancelled - $cancelled0) -eq 1)
@@ -310,8 +320,10 @@ function Invoke-CancelBySlot {
     $back = $post.Minerals - $m0
     Assert-Inv -Id 'INV-M' -What "clicking queue icon $display refunded exactly $SCV_COST minerals ($back)" `
         -Ok ($back -eq $SCV_COST) -Detail "(minerals $m0 -> $($post.Minerals))"
-    Assert-Inv -Id 'INV-R' -What "and 0x$unit's queue is one shorter ($($l0.Logical) -> $($l1.Logical)) [cross-check]" `
-        -Ok ($l1.Logical -eq $l0.Logical - 1)
+    # Icon 0 is the unit in production: cancelling it changes the current build by itself.
+    $fin = if ($display -eq 0) { 0 } else { Get-FinishedBetween $l0 $l1 }
+    Assert-Inv -Id 'INV-R' -What "and 0x$unit's queue is one shorter$(if ($fin) { ', plus the unit it finished meanwhile' }) ($($l0.Logical) -> $($l1.Logical)) [cross-check]" `
+        -Ok ($l1.Logical -eq $l0.Logical - 1 - $fin)
 }
 
 # ---------------------------------------------------------------------------

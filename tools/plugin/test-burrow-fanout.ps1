@@ -164,34 +164,7 @@ try {
     $hwnd = Get-ScGameWindow -ProcessId $gamePid
 
     Step "menus: Single Player -> Expansion -> Play Custom -> $mapName" {
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 215 -Y 119        # Single Player
-        Send-ScClick -Hwnd $hwnd -X 373 -Y 300        # StarCraft: Brood War (Expansion)
-        Start-Sleep -Seconds 1
-        Send-ScClick -Hwnd $hwnd -X 75  -Y 111        # first entry in the Registry list
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 392        # Ok
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom -- opens in Maps\BroodWar
-        Start-Sleep -Seconds 2
-        # LAST CHECK BEFORE THE ROW IS CLICKED, not only at generate time: the folder can
-        # be added to in between, and every row below the addition moves.
-        Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
-        Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
-
-        # A stale "Melee" makes the map play as a melee game (AGENTS.md § "Game Type /
-        # `Custom Type`"), so the combo is read back here rather than discovered as a failed
-        # unit-type assertion below.
-        Assert-ScGameType -LogPath $LogPath      # Use Map Settings, verified
-        Shot 'lobby'
-
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing
-        Start-Sleep -Seconds 6
-        Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
-        Start-Sleep -Seconds 10
-        # Found in the engine's own dialog list and dismissed by ITS OWN OK button, then
-        # asserted gone -- never a fixed point, never the registry (AGENTS.md § "Tips dialog").
-        Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
-        Start-Sleep -Seconds 2
+        Enter-ScCustomGame -Hwnd $hwnd -LogPath $LogPath -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -BeforeStart { Shot 'lobby' } -Noun 'test'
         Shot 'in-game'
     }
 

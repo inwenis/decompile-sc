@@ -127,7 +127,7 @@ try {
         (@(Get-Content -LiteralPath $log | Where-Object { $_ -match 'STORM present: WIDEN armed' }).Count -gt 0)
 
     Write-Host 'probe-storm: walking to a loaded game'
-    Walk-ToScGame -Hwnd $h -LogPath $log -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -Noun 'probe-storm'
+    Enter-ScCustomGame -Hwnd $h -LogPath $log -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -ActivationNudge -Noun 'probe-storm'
 
     # ---- THE STATIC LOAD FRAME (run 7's failure): the map must present without a scroll.
     # The strip copy runs every present, so x>648 tracks the buffer on the very first

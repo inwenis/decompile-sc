@@ -277,28 +277,7 @@ function Start-Mission {
     }
     $script:hwnd = Get-ScGameWindow -ProcessId $script:gamePid
 
-    Start-Sleep -Seconds 2
-    Send-ScClick -Hwnd $hwnd -X 215 -Y 119        # Single Player
-    Send-ScClick -Hwnd $hwnd -X 373 -Y 300        # StarCraft: Brood War (Expansion)
-    Start-Sleep -Seconds 1
-    Send-ScClick -Hwnd $hwnd -X 75  -Y 111        # first entry in the Registry list
-    Send-ScClick -Hwnd $hwnd -X 516 -Y 392        # Ok
-    Start-Sleep -Seconds 2
-    Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom -- opens in Maps\BroodWar
-    Start-Sleep -Seconds 2
-    # Last check before the row is clicked, not only at generate time: the folder can be
-    # added to in between, and every row below the addition moves.
-    Assert-ScFixtureStillMine -Run $fixtures -MapPath $MapPath
-    Select-ScBrowserMap -Hwnd $script:hwnd -GameDir $GameDir -MapPath $MapPath | Out-Null
-    Assert-ScGameType -LogPath $LogPath      # Use Map Settings, verified
-    Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing
-    Start-Sleep -Seconds 6
-    Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
-    Start-Sleep -Seconds 10
-    # The tips dialog is found in the engine's own dialog list and dismissed by ITS OWN
-    # OK button, then asserted gone -- never a fixed point, never the registry.
-    Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
-    Start-Sleep -Seconds 2
+    Enter-ScCustomGame -Hwnd $script:hwnd -LogPath $LogPath -Fixtures $fixtures -MapPath $MapPath -GameDir $GameDir -Noun 'test'
 }
 
 # Shut down the game THIS test launched, if it is still up, and forget it. Returns
@@ -834,12 +813,12 @@ try {
         # IN THE SHIPPED ARM IT CANNOT FAIL: a unit the gate DROPS never reaches the
         # `FANOUT select:` tag list, and a unit it WRONGLY PASSES gets no drop verdict, so
         # is never in $deadTags -- disjoint branches of one `if`, empty intersection
-        # whatever the gate does. Hence the POSITIVE CONTROL: the LIVE tags, judged by the
-        # same gate in the same run, MUST appear in $emitted, or the two lists come from
-        # vocabularies that never meet (a tag-format change on either side would do it)
-        # and the zero is worth nothing. AGENTS.md: prove the pattern positive where it
-        # should match, then require it absent where it should not.
-        $liveTags = @($verdicts | Where-Object { $_.Why -ne 'hp0' } | ForEach-Object { $_.Tag } | Sort-Object -Unique)
+        # whatever the gate does. Hence the POSITIVE CONTROL: the units the gate PASSED
+        # MUST appear in $emitted, or the two lists come from vocabularies that never meet
+        # (a tag-format change on either side would do it) and the zero is worth nothing.
+        # The gate writes a verdict only for a unit it drops, so the passed units are the
+        # HUD row's pre-fight tags that drew no drop verdict -- read by a different module.
+        $liveTags = @($script:beforeRow.Tags | Where-Object { $deadTags -notcontains $_ } | Sort-Object -Unique)
         $liveEmitted = Get-ScOverlap -Set $liveTags -Against $emitted
         Assert-That ("the SAME comparison matches for units the gate passed " +
                      "($($liveEmitted.Count) of $($liveTags.Count) live tags are in the emitted Selects)") `

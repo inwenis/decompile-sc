@@ -2400,11 +2400,11 @@ function Invoke-ScClickUntilDialog {
     Click a menu point and wait for the dialog it opens, clicking again when the dialog
     does not appear. Returns the dialog, or $null after the last try.
     .DESCRIPTION
-    A glue screen still animating in swallows a click posted on schedule, and under load
-    the schedule is always early: the title screen can still be up when the plugin
-    attaches (measured: three consecutive runs stuck at the Original/Expansion chooser
-    while another process pegged the CPU, none once the walk waited). The engine's own
-    dialog list says when the screen is there; a sleep only guesses.
+    NEVER replace the wait with a sleep: a glue screen still animating in swallows a click
+    posted on a schedule, and under load any schedule is early (measured: with another
+    process pegging the CPU the title screen was still up at attach, and clicks timed by
+    sleeps stuck at the Original/Expansion chooser three runs in a row). The engine's own
+    dialog list says when the screen is there.
     #>
     [CmdletBinding()]
     param(
@@ -2429,13 +2429,16 @@ function Enter-ScCustomGame {
     <#
     .SYNOPSIS
     Main menu -> Single Player -> Expansion -> the first registry entry -> Play Custom ->
-    the fixture map -> Use Map Settings -> Ok -> Start -> tips dismissed: THE walk into a
-    loaded custom game, every screen waited for in the engine's own dialog list and its
-    click retried (Invoke-ScClickUntilDialog). The short sleeps left cover a screen's
-    slide-in after it is listed, which the list does not show as a separate state.
+    the fixture map -> Use Map Settings read back -> Ok -> Start -> tips dismissed: THE
+    walk into a loaded custom game, every screen waited for in the engine's own dialog list
+    and its click retried (Invoke-ScClickUntilDialog). The short sleeps left cover a
+    screen's slide-in after it is listed, which the list does not show as a separate state.
     .DESCRIPTION
-    -BeforeStart runs with the map and game type set, before Ok, for a suite that captures
-    the lobby. -ActivationNudge posts the activation nudge before every input, which the
+    -AtBrowser runs once the map browser is up, before the map is selected; -BeforeStart
+    runs with the map selected and the game type read back, before Ok, for a suite that
+    captures the lobby. Both run in a child scope: a value they must hand back goes through
+    $script:. -Fixtures is omitted only for a stock map this run did not generate.
+    -ActivationNudge posts the activation nudge before every input, which the
     off-screen cnc-ddraw glue screens need and WMode does not (AGENTS.md § "Glue-screen
     (menu) input under cnc-ddraw"); the walk always leaves the nudge OFF, whatever the
     shell had, because it re-syncs the cursor and is fatal before an in-game click.
@@ -2447,9 +2450,10 @@ function Enter-ScCustomGame {
     param(
         [Parameter(Mandatory)][IntPtr]$Hwnd,
         [Parameter(Mandatory)][string]$LogPath,
-        [Parameter(Mandatory)]$Fixtures,
+        $Fixtures,
         [Parameter(Mandatory)][string]$MapPath,
         [Parameter(Mandatory)][string]$GameDir,
+        [scriptblock]$AtBrowser,
         [scriptblock]$BeforeStart,
         [switch]$ActivationNudge,
         [string]$Noun = 'walk'
@@ -2474,7 +2478,8 @@ function Enter-ScCustomGame {
         Start-Sleep -Seconds 1
         if (-not (Invoke-ScClickUntilDialog -Hwnd $Hwnd -LogPath $LogPath -X 327 -Y 415 -Name '^Create$' -WaitSec 15 -Noun $Noun)) { throw "${Noun}: the map browser never appeared." }
         Start-Sleep -Seconds 2
-        Assert-ScFixtureStillMine -Run $Fixtures -MapPath $MapPath
+        if ($AtBrowser) { & $AtBrowser }
+        if ($Fixtures) { Assert-ScFixtureStillMine -Run $Fixtures -MapPath $MapPath }
         Select-ScBrowserMap -Hwnd $Hwnd -GameDir $GameDir -MapPath $MapPath | Out-Null
         Assert-ScGameType -LogPath $LogPath
         if ($BeforeStart) { & $BeforeStart }

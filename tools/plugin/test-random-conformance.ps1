@@ -332,7 +332,7 @@ function Read-Engine {
     Set-ScMarker -MarkerPath $markerPath -Label $label
     $esc = [regex]::Escape($label)
     $want = @{
-        prodq   = "PRODQ \[$esc\] buildings=\d+ max="
+        prodq   = "PRODQ \[$esc\](?:\s+\w+=\S+)*\s+buildings=\d+ max="
         prodfan = "PRODFAN \[$esc\] buildings=\d+ selected="
         world   = "WORLD \[$esc\] p=7 units="
         card    = "CARD \[$esc\] (slots=\d+ shown=|dialog=0)"
@@ -543,6 +543,7 @@ function Get-Logical {
         Unit = $Unit; Ring = $ring; Overflow = $ov; Logical = $ring + $ov
         Engine = if ($row) { $row.Engine } elseif ($trk) { $trk.Engine } else { @() }
         Tracked = ($null -ne $trk)
+        BuildUnit = if ($row) { $row.BuildUnit } else { '' }
     }
 }
 
@@ -716,24 +717,7 @@ try {
     }
 
     Step "menus: Single Player -> Expansion -> Play Custom -> $mapName" {
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 215 -Y 119        # Single Player
-        Send-ScClick -Hwnd $hwnd -X 373 -Y 300        # StarCraft: Brood War (Expansion)
-        Start-Sleep -Seconds 1
-        Send-ScClick -Hwnd $hwnd -X 75 -Y 111         # first entry in the Registry list
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 392        # Ok
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom
-        Start-Sleep -Seconds 2
-        Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
-        Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
-        Assert-ScGameType -LogPath $LogPath      # Use Map Settings
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing
-        Start-Sleep -Seconds 6
-        Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
-        Start-Sleep -Seconds 10
-        Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
-        Start-Sleep -Seconds 2
+        Enter-ScCustomGame -Hwnd $hwnd -LogPath $LogPath -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -Noun 'test'
         Shot 'in-game'
     }
 

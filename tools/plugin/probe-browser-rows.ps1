@@ -107,58 +107,39 @@ try {
     if (-not $gamePid) { throw 'probe: could not parse the game pid from scinject output.' }
     $hwnd = Get-ScGameWindow -ProcessId $gamePid
 
-    Start-Sleep -Seconds 2
-    Send-ScClick -Hwnd $hwnd -X 215 -Y 119        # Single Player
-    Send-ScClick -Hwnd $hwnd -X 373 -Y 300        # StarCraft: Brood War (Expansion)
-    Start-Sleep -Seconds 1
-    Send-ScClick -Hwnd $hwnd -X 75  -Y 111        # first entry in the Registry list
-    Send-ScClick -Hwnd $hwnd -X 516 -Y 392        # Ok
-    Start-Sleep -Seconds 2
-    Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom -- opens in Maps\BroodWar
-    Start-Sleep -Seconds 2
-    Save-ScWindowImage -Hwnd $hwnd -Path (Join-Path $shotDir '01-broodwar-listing.png') -FullWindow | Out-Null
+    Enter-ScCustomGame -Hwnd $hwnd -LogPath $logPath -Fixtures $mine -MapPath $myPath -GameDir $GameDir -Noun 'probe' -AtBrowser {
+        Save-ScWindowImage -Hwnd $hwnd -Path (Join-Path $shotDir '01-broodwar-listing.png') -FullWindow | Out-Null
 
-    # THE OPENING LIST IS SCROLLED, which is why no row is read before the list is put
-    # somewhere known: the rows before and after the scroll-to-top are different rows.
-    $fpOpen = @(Get-ScBrowserRowOccupancy -Hwnd $hwnd)
-    Sync-ScBrowserToTop -Hwnd $hwnd
-    $fpTop = @(Get-ScBrowserRowOccupancy -Hwnd $hwnd)
-    for ($i = 0; $i -lt 6; $i++) {
-        Write-Host ("         row {0}: as opened {1} | at the top {2}" -f ($i + 1), $fpOpen[$i], $fpTop[$i])
+        # THE OPENING LIST IS SCROLLED, which is why no row is read before the list is put
+        # somewhere known: the rows before and after the scroll-to-top are different rows.
+        $fpOpen = @(Get-ScBrowserRowOccupancy -Hwnd $hwnd)
+        Sync-ScBrowserToTop -Hwnd $hwnd
+        $fpTop = @(Get-ScBrowserRowOccupancy -Hwnd $hwnd)
+        for ($i = 0; $i -lt 6; $i++) {
+            Write-Host ("         row {0}: as opened {1} | at the top {2}" -f ($i + 1), $fpOpen[$i], $fpTop[$i])
+        }
+        Assert-That 'the browser did not open at the top of its own list' `
+            (@(0..5 | Where-Object { $fpOpen[$_] -ne $fpTop[$_] }).Count -gt 0)
+
+        # The negative half, measured rather than assumed: EVERY folder row leaves the SAME
+        # blank map-information panel, which is what makes "the panel changed" mean "the row
+        # I clicked was a map" when Select-ScBrowserMap checks it -- the positive-first
+        # half of the absence claim (AGENTS.md § "Oracles: absence and defect-era checks").
+        Send-ScClick -Hwnd $hwnd -X 117 -Y 140          # row 1 at the top == the decoy, a folder
+        Start-Sleep -Milliseconds 400
+        $script:panelOnFolder = Get-ScBrowserInfoPanel -Hwnd $hwnd
+        Send-ScClick -Hwnd $hwnd -X 117 -Y 178          # row 3 == [Allied], a different folder
+        Start-Sleep -Milliseconds 400
+        Assert-That 'any FOLDER row leaves the same blank map-information panel' `
+            ((Get-ScBrowserInfoPanel -Hwnd $hwnd) -eq $script:panelOnFolder) "(blank=$script:panelOnFolder)"
+    } -BeforeStart {
+        # The walk's Select-ScBrowserMap throws if the row it clicked did not select a map.
+        Save-ScWindowImage -Hwnd $hwnd -Path (Join-Path $shotDir '02-our-folder.png') -FullWindow | Out-Null
+        Assert-That 'and the map row DID change it' `
+            ((Get-ScBrowserInfoPanel -Hwnd $hwnd) -ne $script:panelOnFolder)
+        Write-Host ''
+        Write-Host '[4] start the map, and ask the PROCESS which one loaded'
     }
-    Assert-That 'the browser did not open at the top of its own list' `
-        (@(0..5 | Where-Object { $fpOpen[$_] -ne $fpTop[$_] }).Count -gt 0)
-
-    # The negative half, measured rather than assumed: EVERY folder row leaves the SAME
-    # blank map-information panel, which is what makes "the panel changed" mean "the row
-    # I clicked was a map" when Select-ScBrowserMap checks it below -- the positive-first
-    # half of the absence claim (AGENTS.md § "Oracles: absence and defect-era checks").
-    Send-ScClick -Hwnd $hwnd -X 117 -Y 140          # row 1 at the top == the decoy, a folder
-    Start-Sleep -Milliseconds 400
-    $panelOnFolder = Get-ScBrowserInfoPanel -Hwnd $hwnd
-    Send-ScClick -Hwnd $hwnd -X 117 -Y 178          # row 3 == [Allied], a different folder
-    Start-Sleep -Milliseconds 400
-    Assert-That 'any FOLDER row leaves the same blank map-information panel' `
-        ((Get-ScBrowserInfoPanel -Hwnd $hwnd) -eq $panelOnFolder) "(blank=$panelOnFolder)"
-
-    # THE WALK. Throws if the row it clicked did not select a map.
-    Assert-ScFixtureStillMine -Run $mine -MapPath $myPath
-    Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $myPath | Out-Null
-    Save-ScWindowImage -Hwnd $hwnd -Path (Join-Path $shotDir '02-our-folder.png') -FullWindow | Out-Null
-    Assert-That 'and the map row DID change it' `
-        ((Get-ScBrowserInfoPanel -Hwnd $hwnd) -ne $panelOnFolder)
-
-    Write-Host ''
-    Write-Host '[4] start the map, and ask the PROCESS which one loaded'
-    Assert-ScGameType -LogPath $logPath           # Use Map Settings, verified
-    Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing
-    Start-Sleep -Seconds 6
-    Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
-    Start-Sleep -Seconds 10
-    # Found in the engine's own dialog list and dismissed by ITS OWN OK button, then
-    # asserted gone: never a fixed point, never the registry (AGENTS.md § "Tips dialog").
-    Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $logPath | Out-Null
-    Start-Sleep -Seconds 3
     Save-ScWindowImage -Hwnd $hwnd -Path (Join-Path $shotDir '03-in-game.png') -FullWindow | Out-Null
 
     $world = Get-ScWorldState -LogPath $logPath -Tag 'probe' -MarkerPath $markerPath

@@ -156,7 +156,7 @@ try {
     @(Get-Content -LiteralPath $log | Where-Object { $_ -match 'FULLREDRAW' }) | ForEach-Object { Write-Host "       $_" }
 
     Write-Host 'probe-flip: walking to a loaded game'
-    Walk-ToScGame -Hwnd $h -LogPath $log -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -Noun 'probe-flip'
+    Enter-ScCustomGame -Hwnd $h -LogPath $log -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -ActivationNudge -Noun 'probe-flip'
 
     $world = Get-ScWorldState -LogPath $log -Tag 'aim' -MarkerPath $markerPath
     $nexus = @($world.Units | Where-Object { $_.Owner -eq 0 -and $_.Type -eq $NEXUS_TYPE }) | Select-Object -First 1

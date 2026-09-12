@@ -146,32 +146,7 @@ try {
     $hwnd = Get-ScGameWindow -ProcessId $gamePid
 
     Step 'menus: Single Player -> Expansion -> Play Custom -> Maps\campaign\(1)Enslavers02b.scm' {
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 215 -Y 119        # Single Player
-        Send-ScClick -Hwnd $hwnd -X 373 -Y 300        # StarCraft: Brood War (Expansion)
-        Start-Sleep -Seconds 1
-        Send-ScClick -Hwnd $hwnd -X 75  -Y 111        # first entry in the Registry list
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 392        # Ok
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom
-        Start-Sleep -Seconds 2
-        # Up out of BroodWar, into campaign, onto the map -- every row computed from the
-        # filesystem and every folder verified on screen before the next click. Fixed rows
-        # cannot survive here: `[Up One Level]` sorts alphabetically AMONG the folders of
-        # Maps\BroodWar, so any fixture folder another suite creates shifts every row below
-        # it and the walk opens a folder instead of leaving BroodWar (level 3 of the
-        # positional-click bug, drive-game.ps1).
-        Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir `
-            -MapPath (Join-Path $GameDir 'Maps\campaign\(1)Enslavers02b.scm') | Out-Null
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok
-        Start-Sleep -Seconds 6
-        Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
-        Start-Sleep -Seconds 8
-        # The tips dialog is found in the engine's own dialog list and dismissed by ITS OWN
-        # OK button, then asserted gone -- never a fixed point, never the registry
-        # (AGENTS.md § "Tips dialog").
-        Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
-        Start-Sleep -Seconds 2
+        Enter-ScCustomGame -Hwnd $hwnd -LogPath $LogPath -MapPath (Join-Path $GameDir 'Maps\campaign\(1)Enslavers02b.scm') -GameDir $GameDir -Noun 'test'
         Shot 'in-game'
     }
 
