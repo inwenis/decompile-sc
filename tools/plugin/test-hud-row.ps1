@@ -7,7 +7,7 @@ unit through the engine's own click path, and any selection change snaps back to
 .DESCRIPTION
 Oracle: in-process UI-state read-back (`HUDROW show` = unit tags read out of the live dialog's
 button records; `HUDROW rects` aims the clicks). Frame captures only corroborate that a flip
-changes pixels: diagnostic, never the oracle, never committed. Fixture and driving recipe as
+changes pixels: diagnostic, never the oracle. Fixture and driving recipe as
 test-burrow-fanout.ps1; the map is generated per run and deleted (game content, hard rule 1).
 .EXAMPLE
 ./tools/plugin/test-hud-row.ps1
@@ -687,5 +687,5 @@ if ($showLines -eq 0 -and $episodes -le 0) {
 
 Write-Host ''
 Write-Host "test-hud-row: $failures failure(s)"
-Write-Host "frames (diagnostic, NOT committable): $ShotDir"
+Write-Host "frames (diagnostic): $ShotDir"
 exit ($failures -eq 0 ? 0 : 1)

@@ -93,7 +93,7 @@ try {
         $gen | Where-Object { $_ -notmatch 'StormLibFinder' } | ForEach-Object { Write-Host "       $_" }
         # These read the generator's own report, so they prove intent only -- a tool that
         # verifies its own write with its own indexing verifies nothing -- which is why the
-        # verdict is taken from the engine's memory (AGENTS.md § "Test fixtures").
+        # verdict is taken from the engine's memory (AGENTS.md § "Oracles: what counts as a read-back").
         Assert-That 'the generator succeeded' ($LASTEXITCODE -eq 0) "(exit $LASTEXITCODE)"
         Assert-That 'it wrote UNIx and nothing it was not asked to' `
             (@($gen | Select-String -Pattern 'differs from the template ONLY in: OWNR SIDE UNIT TRIG FORC UNIx').Count -gt 0)

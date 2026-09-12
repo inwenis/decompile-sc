@@ -1016,8 +1016,7 @@ What still holds, unchanged:
 * `sc-launch-lock.ps1` still serialises every launch. StarCraft is single-instance
   **per machine** regardless of desktops, so N invisible desktops still means one
   game at a time.
-* Frames are still a gitignored diagnostic, off-screen or not — a frame reproduces
-  game artwork (AGENTS.md hard rule 1).
+* Frames are still written outside the repo, off-screen or not (AGENTS.md hard rule 1).
 
 **The one thing that does NOT work off-screen: a dropdown pick.** Windows has one
 foreground window and it belongs to the desktop receiving input, so a window on an
@@ -1243,9 +1242,9 @@ It drives the game with `PostMessage` and **client** coordinates in `lParam` —
 Focus is not required; the
 window must not be minimised. The oracle is the plugin's own log, because it is written from inside
 the process. Frames are captured at every step into `-ShotDir` (default `C:\sc-work\logs\014-frames`,
-outside the repo) as a **diagnostic only** — they reproduce game artwork and must never be committed.
+outside the repo) as a **diagnostic only**.
 
-It also asserts hard rule 3 rather than attesting to it: `StarCraft.exe` is SHA-256'd before launch
+It also asserts hard rule 2 rather than attesting to it: `StarCraft.exe` is SHA-256'd before launch
 and after close and compared against the pristine 1.16.1 constant from `tools/make-working-copy.ps1`
 both times.
 

@@ -980,7 +980,7 @@ finally {
 
     if ($script:frames.Count -gt 0) {
         Write-Host ''
-        Write-Host "FRAMES ($($script:frames.Count)) -- open locally; never committed, never attached (hard rule 1):"
+        Write-Host "FRAMES ($($script:frames.Count)) -- open locally:"
         $script:frames | ForEach-Object { Write-Host "  $_" }
     }
 

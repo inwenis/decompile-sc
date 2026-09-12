@@ -856,7 +856,7 @@ Assert-That 'StarCraft.exe on disk is byte-identical to before the run' ($hashAf
 Write-Host ''
 if ($episodes -eq 0) {
     Write-Host "test-save-load [$Phase]: INCOMPLETE -- 0 arms reached a verdict, $failures failure(s)."
-    Write-Host "frames (diagnostic, NOT committable): $ShotDir"
+    Write-Host "frames (diagnostic): $ShotDir"
     exit 1
 }
 if ($inconclusive -gt 0) {
@@ -864,5 +864,5 @@ if ($inconclusive -gt 0) {
     Write-Host '            their measurement window. Those arms say nothing about save/load either way.'
 }
 Write-Host "test-save-load [$Phase]: $failures failure(s) across $episodes arm(s)"
-Write-Host "frames (diagnostic, NOT committable): $ShotDir"
+Write-Host "frames (diagnostic): $ShotDir"
 exit ($failures -eq 0 ? 0 : 1)

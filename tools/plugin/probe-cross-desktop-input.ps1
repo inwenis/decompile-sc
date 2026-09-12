@@ -118,7 +118,7 @@ try {
         $png = Save-ScWindowImage -Hwnd $hwnd -Path (Join-Path $ShotDir ("{0}-after-click.png" -f $(if ($offScreen) { 'offscreen' } else { 'visible' }))) -FullWindow
         $fi = Get-Item -LiteralPath $png
         Assert-That "PrintWindow produced a frame ($([int]$fi.Length) bytes)" ($fi.Length -gt 1000)
-        Write-Host "    frame (diagnostic, NOT committable): $png"
+        Write-Host "    frame (diagnostic): $png"
     }
     catch {
         # A failed capture does not invalidate the measurement above -- the oracle is the log.

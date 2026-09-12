@@ -11,8 +11,8 @@ oracle and the assertion is on the DIFFERENCE: a one-armed run cannot tell "the
 descriptor says 800x480 because we patched it" from "it always said that", so
 the control is half the result. The oracle is the `SCREEN` scan -- framebuffer
 descriptor 0x006CEFF0 and the eight graphic-layer rectangles, read out of the
-running process -- and not a screenshot: a game frame reproduces game artwork,
-which hard rule 1 forbids committing (AGENTS.md § "Screenshots").
+running process -- and not a screenshot: a frame is never the oracle
+(AGENTS.md § "Screenshots").
 
 .EXAMPLE
 ./tools/plugin/test-widescreen.ps1 -Stage 0
@@ -37,11 +37,9 @@ param(
     # List the captured frames at the end, for a HUMAN to open: the read-back cannot
     # answer "does the windowed helper actually PRESENT the extra columns", and
     # nothing in a log can. One in-game PNG per arm is written to $FrameDir either
-    # way -- the playfield-interior comparison needs both frames. A game frame
-    # reproduces game artwork, so it stays on the gitignored diagnostic path, is
-    # never committed and never goes through pr-image (AGENTS.md § "Screenshots");
-    # Save-ScWindowImage refuses to write inside the repo, so that is enforced
-    # rather than remembered.
+    # way -- the playfield-interior comparison needs both frames. Frames are written
+    # outside the repo (Save-ScWindowImage refuses inside it); publishing one is a
+    # deliberate copy (AGENTS.md § "Screenshots").
     [switch]$CaptureFrames,
     [string]$FrameDir = 'C:\sc-work\logs\034-frames',
     [switch]$KeepOpen
@@ -497,7 +495,7 @@ finally {
 
 if ($CaptureFrames) {
     Write-Host ''
-    Write-Host 'test-widescreen: frames for a human to open (gitignored path, never committed):'
+    Write-Host 'test-widescreen: frames for a human to open (gitignored path):'
     foreach ($k in @('ws', 'control')) {
         if ($arms[$k] -and $arms[$k].Frame) { Write-Host "       $($arms[$k].Name): $($arms[$k].Frame)" }
     }

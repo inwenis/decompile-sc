@@ -534,7 +534,7 @@ static int IndicatorWidestLen(void) {
 //
 // The pane has exactly one band no control occupies: below the row's lower buttons. It is
 // measured off the LIVE row every frame rather than taken from a constant -- a constant read
-// off one install is not a layout (AGENTS.md § "Layout") -- and off ALL TWELVE button rects
+// off one install is not a layout -- and off ALL TWELVE button rects
 // rather than the visible ones. That last part is where this differs from sc_queueind's
 // PlaceOn, deliberately: the row is a fixed 12-slot grid whose rects come from statdata.bin,
 // a last page can light as few as ONE button, and a box that moved between pages would throw

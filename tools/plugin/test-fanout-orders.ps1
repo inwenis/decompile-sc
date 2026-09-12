@@ -10,8 +10,8 @@ synthetic OS input, focus not required, window not minimised
 (research/automated-testing-options.md §4.1).
 The oracle is the plugin's `UNITSTATE` line: it walks the shadow list -- the whole pre-cap
 selection, not the twelve the engine holds -- and reads each unit's MAIN order id out of
-CUnit+0x4D, so "every unit obeyed" is a claim about every unit's own state. Frames reproduce
-game artwork: diagnostic only, outside the repo, never committable (AGENTS.md § "Screenshots").
+CUnit+0x4D, so "every unit obeyed" is a claim about every unit's own state. Frames are a
+diagnostic, written outside the repo (AGENTS.md § "Screenshots").
 .EXAMPLE
 ./tools/plugin/test-fanout-orders.ps1
 .EXAMPLE
@@ -330,5 +330,5 @@ Assert-That 'and still byte-identical to pristine 1.16.1' ($hashAfter -eq $PRIST
 
 Write-Host ''
 Write-Host "test-fanout-orders: $failures failure(s)"
-Write-Host "frames (diagnostic, NOT committable): $ShotDir"
+Write-Host "frames (diagnostic): $ShotDir"
 exit ($failures -eq 0 ? 0 : 1)

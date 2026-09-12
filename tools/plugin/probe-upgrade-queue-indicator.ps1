@@ -320,5 +320,5 @@ finally {
 Write-Host ''
 Write-Host "probe ($UnitType): $failures failure(s)"
 Write-Host "log:    $LogPath"
-if ($CaptureFrames) { Write-Host "frames: $FrameDir (diagnostic, NOT committable -- AGENTS.md hard rule 1)" }
+if ($CaptureFrames) { Write-Host "frames: $FrameDir (diagnostic)" }
 exit ($failures -eq 0 ? 0 : 1)

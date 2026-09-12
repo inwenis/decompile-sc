@@ -337,5 +337,5 @@ Assert-That 'and still byte-identical to pristine 1.16.1' ($hashAfter -eq $PRIST
 
 Write-Host ''
 Write-Host "test-burrow-fanout: $failures failure(s)"
-Write-Host "frames (diagnostic, NOT committable): $ShotDir"
+Write-Host "frames (diagnostic): $ShotDir"
 exit ($failures -eq 0 ? 0 : 1)

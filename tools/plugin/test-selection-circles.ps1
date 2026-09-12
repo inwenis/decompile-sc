@@ -384,7 +384,7 @@ Assert-That 'and still byte-identical to pristine 1.16.1' ($hashAfter -eq $PRIST
 
 Write-Host ''
 Write-Host "test-selection-circles: $failures failure(s)"
-Write-Host "frames (diagnostic, NOT committable): $ShotDir"
+Write-Host "frames (diagnostic): $ShotDir"
 Write-Host 'The one thing this cannot assert is whether the circles are VISIBLE.'
 Write-Host "Look at the 'shadow-selection' frame."
 exit ($failures -eq 0 ? 0 : 1)
