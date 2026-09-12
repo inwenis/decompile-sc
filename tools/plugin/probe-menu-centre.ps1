@@ -1,14 +1,14 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-The centred menus and their starfield (sc_menu.h), off-screen, through the deployed
+The centred menus and their night sky (sc_menu.h), off-screen, through the deployed
 presenter (cnc-ddraw), against a control arm.
 
 .DESCRIPTION
 Two arms at one preset, each walking from the main menu into a one-marine game:
   centred  -MenuCentre 1. The engine's own MainMenu and popup records must read centred;
            the walk clicks every control by NAME at the centre the engine reports, so it
-           reaching a game proves input follows the move; stars must reach the glass
+           reaching a game proves input follows the move; the sky must reach the glass
            outside the menu; the console must still move in game.
   control  -MenuCentre 0. Stock placement, measured the same way: its black surround and
            its cursor that vanishes outside the menu are what the centred arm beats.
@@ -202,7 +202,8 @@ try {
           [int]$Matches[1] -ge 1 -and [int]$Matches[2] -ge 1 -and [int]$Matches[4] -eq 0
     Assert-True 'MENUSTATS: the buffer was filled and presented, no lock failed' $ok "($($stats | Select-Object -First 1))"
     # ~1100 of the 1280x880 field's 1531 lit cells lie outside the menu; the margin costs some.
-    Assert-True 'stars reached the glass outside the menu' ($c.StarsLit -gt 500) "(lit $($c.StarsLit))"
+    # Stars alone light ~1,000 px at 1280x880; the nebula lights hundreds of thousands.
+    Assert-True 'the sky (nebula and stars) reached the glass outside the menu' ($c.StarsLit -gt 50000) "(lit $($c.StarsLit))"
     if ($arms['control']) {
         $k = $arms['control']
         Assert-True 'control: the MainMenu record reads stock (0,0)' ($k.MainMenu -eq '0,0,639,479') "(got $($k.MainMenu))"

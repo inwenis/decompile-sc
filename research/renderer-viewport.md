@@ -3190,11 +3190,12 @@ as an unmarked change unless the run-wide image marks mask it.
 - `tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-sprite-flip.ps1` (add
   `-SuiteArgs @{ FullRedraw = 0 }` to watch `unmarked_changed` go positive).
 
-## 25. The glue screens on the wider screen: centred, on a starfield (2026-09-12)
+## 25. The glue screens on the wider screen: centred, on a night sky (2026-09-12)
 
 Stock draws every glue screen (menus, loading, score) as a 640x480 root at (0,0); on a
 wider screen that is a picture in the top-left corner of black. `sc_menu.h`
-(`-MenuCentre 1`, stage 3) centres every glue root and fills the rest with a starfield.
+(`-MenuCentre 1`, stage 3) centres every glue root and fills the rest with a night sky:
+stars, and (PR #197) a nebula whose noise is wwwtyro/space-2d's (Unlicense).
 What had to be learned first, each read from `113-starcraft.asm` and checked in a run:
 
 ### 25.1 At the glue screens the engine never presents the buffer
@@ -3229,7 +3230,10 @@ rect before the compose, re-written only when a sentinel star is not what the li
 palette wants (every glue screen loads its own palette, read through storm's primary
 `GetPalette`/`GetEntries`). Measured: MENUSTATS `fills=13 copies=3581 lockFails=0`
 over one walk into a game; 1,024 lit px outside the menu on glass at 1280x880 against 0
-in the stock arm (`frame-capture.py glass`).
+in the stock arm (`frame-capture.py glass`). With the nebula: 449,671 lit px at 1280x880
+(`probe-menu-centre.ps1`). The nebula is pre-quantised to 16 ink level ids at install
+(8x8 ordered dither, 78 ms at 1280x880 in hooktest), so a palette change still remaps
+one byte table and never matches a pixel against the palette.
 
 ### 25.4 Popups: flag 0x08000000 and the parent-relative cave
 
