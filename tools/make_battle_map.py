@@ -20,9 +20,10 @@ import make_test_map as m
 from make_feature_test_map import ENEMY, HUMAN, TILE, check_layout, fill_ground, unit_record
 
 JUNGLE_ERA = 4
-# Jungle tile groups 8/9 (even/odd x) with their 12 variants: the low jungle grass,
-# picked by rendering every common group of the stock jungle maps from jungle.cv5/vx4/vr4.
-JUNGLE_GRASS, JUNGLE_GRASS_VARIANTS = (8, 9), list(range(12))
+# Jungle tile groups 8/9 (even/odd x): the low jungle grass, picked by rendering every common
+# group of the stock jungle maps from jungle.cv5/vx4/vr4. Variants 6 and 13-15 of both groups
+# point at megatile 0, a black unwalkable tile on which a placed unit never spawns.
+JUNGLE_GRASS, JUNGLE_GRASS_VARIANTS = (8, 9), [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12]
 # Front line to front line. Every unit's attack reach is shorter than this plus its rank's
 # distance behind its own front, so the armies stand still until the human attacks.
 NO_MANS_LAND_TILES = 10
