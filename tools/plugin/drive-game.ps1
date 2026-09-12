@@ -83,7 +83,7 @@ namespace ScDrive {
     public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdc, uint flags);
 
     // --- activation (task 022) ---------------------------------------------
-    // Needed only when a human asks for a raise (-RaiseWindow). See Set-ScWindowActive.
+    // Used by Set-ScWindowActive (the opt-in raise) and by probes that read the foreground.
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr h);
     [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr h);
@@ -759,8 +759,9 @@ function Select-ScBrowserMap {
     THE one entry point every suite uses, so there is one model of the browser in this
     repo instead of nine copies of `-X 117 -Y 140`. Every click on the way is computed from
     the filesystem and every directory it opens is verified before the next click
-    (Assert-ScBrowserMapSelected). Selecting only: the caller still sets the Game Type and
-    presses Ok, because what happens between selecting and launching differs per suite.
+    (Assert-ScBrowserMapSelected). Selecting only: the caller checks the Game Type
+    (Assert-ScGameType) and presses Ok, because what happens between selecting and launching
+    differs per suite.
 
     -OpenDir is where the browser opens, which for Single Player -> Expansion -> Play
     Custom is `<GameDir>\Maps\BroodWar`. The route out of it is up to the common ancestor
@@ -1244,32 +1245,7 @@ function Get-ScGameTypeControl {
 
     [pscustomobject]@{
         Value  = $c.Text
-        Left   = $c.Left; Top = $c.Top; Right = $c.Right; Bottom = $c.Bottom
         PanelShows = $shown
-    }
-}
-
-function Wait-ScGameTypeControl {
-    <#
-    .SYNOPSIS
-    The Game Type combo once the Create Game screen is up, optionally waiting for a
-    specific value. $null on timeout -- the caller decides whether that is a failure.
-    .DESCRIPTION
-    The plugin logs a DIALOGS line whenever the dialog SET CHANGES (the combo's own text is
-    part of that line), so this polls the newest line rather than racing the 250 ms tick.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string]$LogPath,
-        [string]$Want,
-        [int]$TimeoutSec = 10
-    )
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    while ($true) {
-        $c = Get-ScGameTypeControl -LogPath $LogPath
-        if ($c -and (-not $Want -or $c.Value -eq $Want)) { return $c }
-        if ((Get-Date) -ge $deadline) { return $null }
-        Start-Sleep -Milliseconds 250
     }
 }
 
@@ -1292,13 +1268,18 @@ function Assert-ScGameType {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$LogPath, [int]$TimeoutSec = 15)
     $want = 'Use Map Settings'
-    $c = Wait-ScGameTypeControl -LogPath $LogPath -Want $want -TimeoutSec $TimeoutSec
-    if ($c) {
-        Write-Host ("       game type is '{0}' (read from the engine's dialog list; panel shows {1})" -f `
-            $c.Value, (($c.PanelShows -join ', ') -replace '^$', 'nothing yet'))
-        return
-    }
-    $now = Get-ScGameTypeControl -LogPath $LogPath
+    # Polls the newest DIALOGS line (logged whenever the dialog set changes) rather than
+    # racing the plugin's 250 ms tick.
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        $now = Get-ScGameTypeControl -LogPath $LogPath
+        if ($now -and $now.Value -eq $want) {
+            Write-Host ("       game type is '{0}' (read from the engine's dialog list; panel shows {1})" -f `
+                $now.Value, (($now.PanelShows -join ', ') -replace '^$', 'nothing yet'))
+            return
+        }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
     if (-not $now) {
         throw ("drive-game: the Create Game screen's Game Type combo is not in the engine's dialog " +
                "list (log: $LogPath). Either that screen is not up, or the plugin's dialog scan is " +
@@ -1348,7 +1329,8 @@ function Set-ScWindowActive {
     <#
     .SYNOPSIS
     Make the game window the foreground window. NOT needed to drive it -- see
-    Assert-ScWindowActive. Only a human passing -RaiseWindow to watch a run reaches for it.
+    Assert-ScWindowActive. Opt-in for a human watching a run ($env:SCDRIVE_RAISE=1); suites
+    and probes must not call it (AGENTS.md § "Foreground").
     .DESCRIPTION
     DO NOT RAISE THE GAME TO DELIVER INPUT. Posted moves register while the window is in
     the background, measured two ways:
@@ -1415,9 +1397,9 @@ function Assert-ScWindowActive {
     WM_MOUSEMOVE case and the live probe) -- a raise buys no input, and costs the user
     their foreground window and, through the game's own ClipCursor, their mouse.
 
-    -RaiseWindow is the opt-in escape hatch for a human who wants to watch a run. It is
-    never set by the suites; if you find yourself reaching for it to make a test pass,
-    the test is telling you something else is wrong.
+    $env:SCDRIVE_RAISE=1 is the opt-in escape hatch for a human who wants to watch a run.
+    It is never set by the suites; if you find yourself reaching for it to make a test
+    pass, the test is telling you something else is wrong.
 
     OFF-SCREEN RUNS cannot grant it at all, and the throw below names that case
     specifically. Nothing the harness drives needs it: posted moves, clicks, drags, keys
@@ -1430,13 +1412,10 @@ function Assert-ScWindowActive {
     param(
         [Parameter(Mandatory)][IntPtr]$Hwnd,
         [string]$Because = 'this input',
-        [int]$Tries = 3,
-        # Opt-in only. $env:SCDRIVE_RAISE=1 turns it on for a whole run without editing
-        # a suite -- for watching a run by hand, not for unattended ones.
-        [switch]$RaiseWindow
+        [int]$Tries = 3
     )
     Assert-ScDrivable -Hwnd $Hwnd
-    if (-not ($RaiseWindow -or $env:SCDRIVE_RAISE -eq '1')) { return }
+    if ($env:SCDRIVE_RAISE -ne '1') { return }
     if (Set-ScWindowActive -Hwnd $Hwnd -Tries $Tries) { return }
 
     # An OFF-SCREEN run can never satisfy this, and it must say so in those words. The
@@ -1449,7 +1428,7 @@ function Assert-ScWindowActive {
     $myDesktop = Get-ScThreadDesktopName
     $onScreen = Get-ScInputDesktopName
     if ($myDesktop -and $onScreen -and $myDesktop -ne $onScreen) {
-        throw ("drive-game: this input needs the game window in the FOREGROUND, and this run is " +
+        throw ("drive-game: `$env:SCDRIVE_RAISE=1 asked for the game window in the FOREGROUND, and this run is " +
                "on the invisible desktop '$myDesktop' while the monitor is showing '$onScreen'. " +
                'No window on a desktop that is not receiving input can be the foreground window, ' +
                'so this is structural rather than a race -- retrying will not help. Every input ' +
@@ -1457,10 +1436,10 @@ function Assert-ScWindowActive {
                "./tools/plugin/run-offscreen.ps1 -Visible -Suite <suite>. (The input: $Because)")
     }
 
-    throw ("drive-game: -RaiseWindow was asked for and the game window could not be " +
+    throw ("drive-game: `$env:SCDRIVE_RAISE=1 asked for a raise and the game window could not be " +
            "brought to the foreground before $Because. Close whatever is holding the " +
-           'foreground (a modal dialog, an installer, a lock screen) and re-run, or drop ' +
-           '-RaiseWindow -- the harness does not need it.')
+           'foreground (a modal dialog, an installer, a lock screen) and re-run, or unset ' +
+           'SCDRIVE_RAISE -- the harness does not need it.')
 }
 
 function Send-ScCommand {

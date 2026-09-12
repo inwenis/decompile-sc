@@ -568,7 +568,7 @@ try {
                          $mode, $ENEMY_TYPE_ID, ($ENEMY_TYPES_OK[$ENEMY_TYPE_ID] ?? 'NOT ON THE VERIFIED LIST')) `
                 ($ENEMY_TYPES_OK.ContainsKey($ENEMY_TYPE_ID))
             Assert-That "[$mode] the fixture spawned $UnitCount $($ABIL.UnitLabel)" ($spawned -eq $UnitCount) `
-                ($melee.Count -gt 0 ? "(got $spawned, and player 0 owns SCV/Drone/Larva/Overlord-shaped units -- THIS IS A MELEE START, the Game Type pick did not take)" : "(got $spawned)")
+                ($melee.Count -gt 0 ? "(got $spawned, and player 0 owns SCV/Drone/Larva/Overlord-shaped units -- THIS IS A MELEE START, the game type in effect was not Use Map Settings)" : "(got $spawned)")
             Assert-That "[$mode] and $EnemyCount enemy buildings" `
                 (@($arm.Boxed.Units | Where-Object { $_.Type -eq $ENEMY_TYPE_ID }).Count -eq $EnemyCount)
             # EVERY scan the measurement uses: a torn scan drops a unit, and a dropped unit

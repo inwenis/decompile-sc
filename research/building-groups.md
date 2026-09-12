@@ -326,8 +326,9 @@ claims above can be checked against something rather than taken:
 
 **Focus, measured rather than asserted** (`watch-foreground.ps1` alongside each run): exactly one
 borrow-and-return pair per arm, about two seconds each, around the Use-Map-Settings dropdown — the
-one raise AGENTS.md sanctions, because a dropdown is press-and-hold and Windows grants mouse capture
-only to the foreground window. Focus went back to the user's own window every time; during the
+one raise AGENTS.md then sanctioned (gone since #194, which writes `Custom Type` before launch
+instead), because a dropdown is press-and-hold and Windows grants mouse capture only to the
+foreground window. Focus went back to the user's own window every time; during the
 `-Combat` run the user was using Search and Settings on the same machine and the run did not
 disturb them.
 

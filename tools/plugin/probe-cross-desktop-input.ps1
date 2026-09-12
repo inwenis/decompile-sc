@@ -76,8 +76,8 @@ try {
 
     # Recorded, not asserted: a dropdown pick would need it -- the game calls SetCapture on
     # button-down and Windows grants capture only to the foreground window (AGENTS.md §
-    # "Foreground"). An invisible desktop has no competing application, so the game may
-    # simply hold that desktop's foreground.
+    # "Game Type / `Custom Type`"). An invisible desktop has no competing application, so
+    # the game may simply hold that desktop's foreground.
     $fg = [ScDrive.Native]::GetForegroundWindow()
     Write-Host ("    GetForegroundWindow() on this desktop = 0x{0:X}{1}" -f [int64]$fg,
         $(if ($fg -eq $hwnd) { '  <- the game itself' } elseif ($fg -eq [IntPtr]::Zero) { '  <- nothing is foreground here' } else { '  <- some other window' }))

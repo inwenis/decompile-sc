@@ -22,7 +22,7 @@ Archived incident narratives live in `research/rulebook-history.md` (old heading
 3. Offline and single-player only: NEVER open Multiplayer (Battle.net, any gateway, LAN); menu walks click Single Player only.
 4. Every claimed address, offset or struct in `research/` carries how it was found AND how it was verified. No guessed offsets.
 5. NEVER write live user state outside the repo and the working copy: registry, `%APPDATA%`, Documents, the desktop.
-   - Exception: the game's own settings, `HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft`, when that makes development simpler: `./tools/sc-registry-baseline.ps1 -Save` right before you write, `-Restore` when done. NEVER touch its sibling keys: they hold the Battle.net app's login.
+   - Exception: the game's own settings, `HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft`, when that makes development simpler: `./tools/sc-registry-baseline.ps1 -Save` right before you write, `-Restore` when done. One standing write: `run-with-plugin.ps1` sets `Custom Type` before every agent launch and leaves it set (see "Game Type"). NEVER touch its sibling keys: they hold the Battle.net app's login.
    - DO prove any state-touching mechanism against a throwaway key or path first; prefer a process-scoped mechanism over persistent user state whenever both work.
    - Deployment targets the user chose (the deploy dir, a desktop shortcut) are written too, never destructively (`deploy.ps1` excludes and tripwires player data).
 -> research/rulebook-history.md § "Project hard rules"; tools/deploy.ps1
@@ -48,7 +48,7 @@ Archived incident narratives live in `research/rulebook-history.md` (old heading
 
 Posted moves, clicks, drags and keys need no foreground; only the launch borrows it, and `run-with-plugin.ps1` hands it back.
 - NEVER raise or activate the game window to deliver input or to fix a flaky one: activation re-syncs the game cursor to the physical mouse and `ClipCursor`s the user's mouse. Off-screen a raise cannot succeed; on a `-Visible` run nothing stops it.
-- NEVER pass `-RaiseWindow`, set `$env:SCDRIVE_RAISE=1` or call `Set-ScWindowActive` from a suite or probe: they are for a human watching, and `SCDRIVE_RAISE` also switches off the launch hand-back.
+- NEVER set `$env:SCDRIVE_RAISE=1` or call `Set-ScWindowActive` from a suite or probe: they are for a human watching, and `SCDRIVE_RAISE` also switches off the launch hand-back.
 - Leave `run-with-plugin.ps1`'s launch foreground hand-back in place: off-screen it only logs 'no foreground window to record', but it protects `-Visible` runs.
 - NEVER claim a run did not steal focus without `tools/plugin/watch-foreground.ps1` running beside it. A correct off-screen run shows no game foreground; a correct `-Visible` run shows one borrow-and-return pair for the launch (~4 s); anything else is a bug.
 - DO check every trace's StarCraft pid against the pid your launch printed. A different pid is ANOTHER StarCraft (the user's own play, or a competing launch bouncing off the single-instance check), not a fabricating tool.
@@ -66,7 +66,7 @@ Off-screen, cnc-ddraw menu input is activation-gated: a harness limit, not a fea
 
 `run-with-plugin.ps1` writes `Use Map Settings` into `Custom Type` (HKCU, machine-wide, shared with the user's play) before every agent launch and leaves it set; `Assert-ScGameType` reads it back from the engine's dialog list.
 - NEVER add a dropdown pick: it needs the foreground, which an off-screen run never has. NEVER catch `Assert-ScGameType`'s throw and pass a lesser test.
--> research/rulebook-history.md § "The one input that cannot work off-screen: a dropdown pick"
+-> research/ability-semantics.md §8.1
 
 ## Test fixtures
 

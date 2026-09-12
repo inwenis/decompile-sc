@@ -243,7 +243,7 @@ try {
                 # after it is nonsense (AGENTS.md § "Game Type / `Custom Type`").
                 $melee = @($arm.Boxed.Units | Where-Object { $_.Player -eq 0 -and $_.Type -in 7, 0x40, 0x29, 0x23, 0x2A })
                 Assert-That "[$($arm.Tag)] the fixture spawned $UnitCount $ut(s)" ($mine0.Count -eq $UnitCount) `
-                    ($melee.Count -gt 0 ? "(got $($mine0.Count); player 0 owns SCV/Drone-shaped units -- THIS IS A MELEE START, the Game Type pick did not take)" : "(got $($mine0.Count))")
+                    ($melee.Count -gt 0 ? "(got $($mine0.Count); player 0 owns SCV/Drone-shaped units -- THIS IS A MELEE START, the game type in effect was not Use Map Settings)" : "(got $($mine0.Count))")
                 # A Zerg structure placed off creep is the one thing about this fixture that
                 # could quietly not happen; assert it before reading the Sunken's silence.
                 Assert-That "[$($arm.Tag)] the Sunken Colony exists in game" ($sunk0.Count -eq 1) `

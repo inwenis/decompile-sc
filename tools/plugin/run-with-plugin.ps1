@@ -11,11 +11,12 @@ StarCraft.exe directly" -- see tools/plugin/README.md. -Windowed (WMode.dll copi
 as ddraw.dll, research/launch-baseline.md) is the ONE thing that writes into the game
 directory; -RemoveWindowed undoes it, tools/make-working-copy.ps1 -Force purges it.
 
-Touches only the working copy (default C:\sc-work\1161-base), never
+On disk, touches only the working copy (default C:\sc-work\1161-base), never
 C:\sc-install\Starcraft; the log goes outside the repo (C:/sc-work/ is gitignored).
 
-Worker launches ($env:AGENT_TASK set) take the launch lock, hand the foreground back
-and run muted; the deployed shortcut passes -NoLaunchLock -NoForegroundRestore -Sound.
+Worker launches ($env:AGENT_TASK set) take the launch lock, set HKCU 'Custom Type' to
+'Use Map Settings' (left set), hand the foreground back and run muted; the deployed
+shortcut passes -NoLaunchLock -NoForegroundRestore -Sound.
 The DLL's build stamp is checked against src/ before launch and against the ATTACH
 banner after it. Each mechanism's why sits at its code site below.
 
