@@ -543,6 +543,7 @@ function Get-Logical {
         Unit = $Unit; Ring = $ring; Overflow = $ov; Logical = $ring + $ov
         Engine = if ($row) { $row.Engine } elseif ($trk) { $trk.Engine } else { @() }
         Tracked = ($null -ne $trk)
+        BuildUnit = if ($row) { $row.BuildUnit } else { '' }
     }
 }
 
