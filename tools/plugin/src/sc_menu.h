@@ -156,19 +156,31 @@ static inline float ScMenuWarpedNoise(float x, float y, unsigned seed) {
     return ScMenuPerlin01(x + d, y + d, seed);
 }
 
+// A dither threshold in 0..1: interleaved gradient noise (Jimenez 2014). Its rows and
+// columns are each balanced; a Bayer matrix's rows alternate low and high, which reads as
+// scanlines through a palette whose neighbouring entries differ a lot, and as bands once
+// the presenter scales the frame by a non-integer factor. `swap` transposes it, for a
+// second threshold that does not follow the first.
+static inline float ScMenuDither(int x, int y, bool swap) {
+    const float f = swap ? 0.00583715f * (float)x + 0.06711056f * (float)y
+                         : 0.06711056f * (float)x + 0.00583715f * (float)y;
+    const float g = 52.9829189f * (f - (float)(int)f);
+    return g - (float)(int)g;
+}
+
 // The nebula into every sky cell (level 0) of a w x h field, around the 640x480 glue rect
 // at (gx, gy): black next to the rect, full strength SC_MENU_FADE px away. Each layer's
-// strength is quantised to its inks with an 8x8 ordered dither, and a second dither
-// offset picks which layer's ink a cell shows in proportion to their strengths, so two
-// colours mix without an ink for every blend. Cells inside the rect are left alone (the
-// menu covers them). Deterministic; returns the cells it lit.
+// strength is quantised to its inks with an ordered dither, and a second threshold picks
+// which layer's ink a cell shows in proportion to their strengths, so two colours mix
+// without an ink for every blend. Cells inside the rect are left alone (the menu covers
+// them). Deterministic; returns the cells it lit.
 static inline int ScMenuBuildNebula(BYTE* levels, int w, int h, int gx, int gy) {
-    static const BYTE kBayer[64] = {
-         0, 32,  8, 40,  2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26,
-        12, 44,  4, 36, 14, 46,  6, 38, 60, 28, 52, 20, 62, 30, 54, 22,
-         3, 35, 11, 43,  1, 33,  9, 41, 51, 19, 59, 27, 49, 17, 57, 25,
-        15, 47,  7, 39, 13, 45,  5, 37, 63, 31, 55, 23, 61, 29, 53, 21,
-    };
+    // Both thresholds for a 64x64 tile, once: a float-to-int per pixel is slow on x87.
+    float dither[2][64 * 64];
+    for (int i = 0; i < 64 * 64; ++i) {
+        dither[0][i] = ScMenuDither(i & 63, i >> 6, false);
+        dither[1][i] = ScMenuDither(i & 63, i >> 6, true);
+    }
     const float span = (float)(w > h ? w : h);
     int lit = 0;
     for (int cy = 0; cy < h; cy += SC_MENU_NEB_STEP) {
@@ -196,8 +208,8 @@ static inline int ScMenuBuildNebula(BYTE* levels, int w, int h, int gx, int gy) 
                 for (int x = cx; x < cx + SC_MENU_NEB_STEP && x < w; ++x) {
                     BYTE* p = levels + (size_t)y * (size_t)w + (size_t)x;
                     if (*p) continue;
-                    const float b1 = ((float)kBayer[(y & 7) * 8 + (x & 7)] + 0.5f) / 64.0f;
-                    const float b2 = ((float)kBayer[((y + 3) & 7) * 8 + ((x + 5) & 7)] + 0.5f) / 64.0f;
+                    const float b1 = dither[0][(y & 63) * 64 + (x & 63)];
+                    const float b2 = dither[1][(y & 63) * 64 + (x & 63)];
                     int layer = 0;
                     float share = n[0] / sum;
                     while (layer < SC_MENU_NEB_LAYERS - 1 && b2 > share) share += n[++layer] / sum;

@@ -3232,8 +3232,13 @@ palette wants (every glue screen loads its own palette, read through storm's pri
 over one walk into a game; 1,024 lit px outside the menu on glass at 1280x880 against 0
 in the stock arm (`frame-capture.py glass`). With the nebula: 449,671 lit px at 1280x880
 (`probe-menu-centre.ps1`). The nebula is pre-quantised to 16 ink level ids at install
-(8x8 ordered dither, 78 ms at 1280x880 in hooktest), so a palette change still remaps
-one byte table and never matches a pixel against the palette.
+(~80-110 ms at 1280x880), so a palette change still remaps one byte table and never
+matches a pixel against the palette. The dither is interleaved gradient noise, not a
+Bayer matrix: a Bayer matrix's rows alternate low and high thresholds, and through the
+main menu's palette that became scanlines -- blue-channel mean 24.6 on even rows against
+38.1 on odd rows over one patch of the plugin's own sky (rendered offline through the
+`glue\PalMm` palette), 31.5 against 31.4 with the noise. The capture showed the same
+alternation, and cnc-ddraw's slight stretch there turned it into visible bands.
 
 ### 25.4 Popups: flag 0x08000000 and the parent-relative cave
 

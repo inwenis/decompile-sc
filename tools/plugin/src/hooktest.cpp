@@ -5398,13 +5398,20 @@ int main(void) {
         printf("    nebula: %d cells in %lu ms\n", neb, (unsigned long)(GetTickCount() - t0));
         int starsKept = 1, inside = 0, outOfRange = 0, nearN = 0, nearInk = 0, farN = 0, farInk = 0;
         int perLayer[SC_MENU_NEB_LAYERS] = { 0 };
+        double inkSum[2][2] = { { 0, 0 }, { 0, 0 } };   // [row, column parity][even, odd]
+        int inkN[2][2] = { { 0, 0 }, { 0, 0 } };
         for (int y = 0; y < H; ++y) {
             for (int x = 0; x < W; ++x) {
                 const BYTE v = sky[(size_t)y * W + x], before = again[(size_t)y * W + x];
                 if (before && v != before) starsKept = 0;
                 if (v >= SC_MENU_LEVELS) ++outOfRange;
                 const bool ink = v >= SC_MENU_STAR_LEVELS && v < SC_MENU_LEVELS;
-                if (ink) ++perLayer[(v - SC_MENU_STAR_LEVELS) / SC_MENU_NEB_INKS];
+                if (ink) {
+                    ++perLayer[(v - SC_MENU_STAR_LEVELS) / SC_MENU_NEB_INKS];
+                    const int k = (v - SC_MENU_STAR_LEVELS) % SC_MENU_NEB_INKS + 1;
+                    inkSum[0][y & 1] += k; ++inkN[0][y & 1];
+                    inkSum[1][x & 1] += k; ++inkN[1][x & 1];
+                }
                 const int ox = x < GX ? GX - x : (x > GX + 639 ? x - (GX + 639) : 0);
                 const int oy = y < GY ? GY - y : (y > GY + 479 ? y - (GY + 479) : 0);
                 if (!ox && !oy) { if (ink) ++inside; continue; }
@@ -5420,6 +5427,13 @@ int main(void) {
         Check("  over the stars, not through them", starsKept, 1);
         Check("  with both layers' inks", (perLayer[0] > 1000 && perLayer[1] > 1000) ? 1 : 0, 1);
         Check("  every level one ScMenuLevelsFor maps", outOfRange, 0);
+        // A Bayer matrix's rows alternate low and high thresholds: scanlines (renderer 25.3).
+        const double rowSkew = inkSum[0][0] / inkN[0][0] - inkSum[0][1] / inkN[0][1];
+        const double colSkew = inkSum[1][0] / inkN[1][0] - inkSum[1][1] / inkN[1][1];
+        printf("    mean ink even-odd: rows %+.3f, columns %+.3f\n", rowSkew, colSkew);
+        Check("  even and odd rows as bright as each other (no scanlines)",
+              (rowSkew < 0.05 && rowSkew > -0.05) ? 1 : 0, 1);
+        Check("  and even and odd columns", (colSkew < 0.05 && colSkew > -0.05) ? 1 : 0, 1);
         memcpy(sky, again, (size_t)W * H);
         Check("the nebula is deterministic", ScMenuBuildNebula(sky, W, H, GX, GY), neb);
         free(sky);
