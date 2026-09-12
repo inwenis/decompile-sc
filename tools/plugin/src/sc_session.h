@@ -45,7 +45,7 @@ unsigned ScSessionEpoch(void);
 // 0x004EED48 (reached through the call at 0x004EF32B), and startGame's only early returns
 // are at 0x004EF182 (before the bump) and 0x004EF305/0x004EF318 (after the load call). The
 // epoch is therefore strictly older than every unit a load restores. The engine says the
-// same in its own code: 0x004EEC62 reads pendingSaveName (0x006D1218) and skips that
+// same in its own code: 0x004EEC61 reads the load-game FILE* (0x006D1218) and skips that
 // hotkey clear when a load is pending, a branch that exists only because this function
 // runs on the load path.
 //
