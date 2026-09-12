@@ -127,15 +127,16 @@ void ScQueueIndLogDialog(const char* tag);
 
 void ScQueueIndLogStats(void);
 
-// Rows at the TOP of a queue-slot rect holding the engine's own slot NUMBER, excluded from
-// ScQueueIndSlotDiff because two slots legitimately differ there ("1 " against "5 "). Sized
-// from the small font's height plus the label's inset, and every QIND line reports the live
-// `fontH=` so the number is checkable rather than assumed.
+// Rows at the BOTTOM of a queue-slot rect holding the engine's own slot NUMBER, excluded from
+// ScQueueIndSlotDiff because two slots legitimately differ there ("1 " against "5 "). Measured:
+// compared, these rows add a constant 24 bytes to slotDiff for "+2", "+3" and "+4" alike --
+// the digits. Sized from the small font's height plus the label's inset, and every
+// QIND line reports the live `fontH=` so the number is checkable rather than assumed.
 #define SC_QIND_SLOT_LABEL_ROWS 12
 
 // TWO QUEUE SLOTS, COMPARED ON THE SURFACE. With five of one unit type queued, slot 0 and
 // slot 4 are the same picture -- same 38x35 rect, same border graphic, same icon -- so the
-// bytes differing between them below the label rows are exactly what this plugin added. A
+// bytes differing between them above the label rows are exactly what this plugin added. A
 // check that CAN fail, which an ink count over an engine-drawn icon cannot: ink reads > 0
 // whether or not anything of ours was drawn. -1 when the comparison cannot be taken
 // honestly: no surface, a missing or hidden control, or unequal rects.
@@ -152,8 +153,8 @@ int ScQueueIndSlotDiff(DWORD root, int slotA, int slotB);
 // The MODE decides what it counts. GROUP: the band belongs to no control, so every differing
 // byte is the LINE, a text oracle outright. STRIP: the "+N" box sits inside queue icon 6,
 // which the phantom bracket has the engine fill, and the baseline predates that fill -- a
-// reading is "bytes this plugin is responsible for", not "the text drew"; ScQueueIndSlotDiff
-// is the text-only oracle there.
+// reading is "bytes this plugin is responsible for", not "the badge drew"; ScQueueIndSlotDiff
+// is the badge-only oracle there.
 //
 // The baseline is taken on the GAME thread at the two moments the pane looks as it does
 // without us: frames the indicator is hidden -- but NOT the frame it hides on, whose repaint

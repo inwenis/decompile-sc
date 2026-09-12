@@ -425,8 +425,9 @@
 // thin shim and tail-calls this address -- the code itself is never patched.
 #define SC_VA_WIREFRAME_BTN_INTERACT 0x004583E0u
 
-// __fastcall(ECX = BinDlg* button), plain RET: the wireframe button's fxnUpdate, which
-// 0x0045841C writes into every button's +0x2E. It draws the border and the health colours,
+// __fastcall(ECX = BinDlg* button, EDX, two stack dwords), RET 8 (0x00457092) -- every
+// fxnUpdate's shape, as 0x0041C1E5 calls it: the wireframe button's, which 0x0045841C writes
+// into every button's +0x2E. It draws the border and the health colours,
 // then blits frame statUser->id (SC_STATUSER_OFF_ID) of the sheet at SC_VA_GRPWIRE_SHEET --
 // and for an id at or past that sheet's frame count it blits frame 0, the Marine
 // (0x00456FC1..0x00456FCF: `MOV DX,[EAX] / AND EDX,0x7FFF / CMP CX,DX / JB / XOR ECX,ECX`).

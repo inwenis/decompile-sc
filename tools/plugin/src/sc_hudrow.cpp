@@ -1053,7 +1053,7 @@ static void SC_GAME_ENTRY HkStatDispatch(void) {
 static const BYTE kPrologueDispatch[] = { 0xA1, 0x48, 0x72, 0x59, 0x00 };
 
 // ---------------------------------------------------------------------------
-// The row's pictures (see ScHudRowWireHasArt in sc_hudrow.h)
+// The row's pictures (see THE ROW'S PICTURES in sc_hudrow.h)
 // ---------------------------------------------------------------------------
 
 // Every units.dat id, so the draw's own guard never sends one to frame 0; every frame one
@@ -1077,28 +1077,29 @@ static void BuildEmptySheet(void) {
 
 const BYTE* ScHudRowEmptySheet(void) { return g_emptySheet; }
 
-bool ScHudRowWireHasArt(unsigned id) {
+static bool WireHasArt(unsigned id) {
     if (id < 106) return true;   // every unit; 106 is the first building
     return id == 106 || id == 111 || id == 113 || id == 114 || id == 116 || id == 122;
 }
 
-void ScHudRowOnWireDraw(DWORD button, DWORD edx, ScHudWireDrawFn orig) {
+void ScHudRowOnWireDraw(DWORD button, DWORD edx, DWORD a, DWORD b, ScCtrlDrawFn orig) {
     DWORD su = *(DWORD*)(button + SC_BINDLG_OFF_USER);
-    if (!su || ScHudRowWireHasArt(*(WORD*)(su + SC_STATUSER_OFF_ID))) {
-        orig(button, edx);
+    if (!su || WireHasArt(*(WORD*)(su + SC_STATUSER_OFF_ID))) {
+        orig(button, edx, a, b);
         return;
     }
     // One call, on the game thread that owns the sheet: nothing else can read it meanwhile.
     DWORD* sheet = (DWORD*)ScRuntimeAddr(SC_VA_GRPWIRE_SHEET);
     DWORD real = *sheet;
     *sheet = (DWORD)&g_emptySheet[0];
-    orig(button, edx);
+    orig(button, edx, a, b);
     *sheet = real;
     ++g_statBlank;
 }
 
-static void __attribute__((fastcall)) SC_GAME_ENTRY HkWireDraw(DWORD button, DWORD edx) {
-    ScHudRowOnWireDraw(button, edx, (ScHudWireDrawFn)g_hkWireDraw.trampoline);
+static void __attribute__((fastcall)) SC_GAME_ENTRY HkWireDraw(DWORD button, DWORD edx,
+                                                              DWORD a, DWORD b) {
+    ScHudRowOnWireDraw(button, edx, a, b, (ScCtrlDrawFn)g_hkWireDraw.trampoline);
 }
 
 static const BYTE kPrologueWireDraw[] = { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x18 };

@@ -506,8 +506,11 @@ strip is not drawn at all, so it says `N bldgs  M queued` — the only thing on 
 Train click reached more than one building.
 
 **How it draws.** One control of type LSTATIC spliced into the status dialog, `pszText` pointing
-at a plugin buffer, interact/update taken from the engine's own per-type default tables. The
-engine draws it, in the pane's own font. No art is added and no pixel is plotted by hand.
+at a plugin buffer, interact taken from the engine's own per-type default table. Its update is
+the plugin's: for the `+N` it paints the badge's box (black, framed in the icon border's own
+colour) and hands the text to the engine's centre-justified handler; for the group line it hands
+it straight to the left-justified one. The text is the engine's, in the pane's own font; no art
+is added.
 
 **One hook**, the per-frame HUD driver `0x004D93F0`, running *after* the original so the pane has
 already been laid out. Off → the dialog's child list is byte-for-byte stock.

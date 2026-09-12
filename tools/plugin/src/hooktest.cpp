@@ -1703,8 +1703,8 @@ static void ControlGroupTests(void) {
 
 // The wireframe draw's stand-in: records which sheet the engine would have blitted from.
 static DWORD g_wireSeenSheet = 0;
-static void __attribute__((fastcall)) FakeWireDraw(DWORD button, DWORD edx) {
-    (void)button; (void)edx;
+static void __attribute__((fastcall)) FakeWireDraw(DWORD button, DWORD edx, DWORD a, DWORD b) {
+    (void)button; (void)edx; (void)a; (void)b;
     g_wireSeenSheet = *(DWORD*)FakeRt(SC_VA_GRPWIRE_SHEET);
 }
 
@@ -1749,7 +1749,7 @@ static void HudRowTests(void) {
         for (const auto& c : cases) {
             *(WORD*)(&user[SC_STATUSER_OFF_ID]) = c.id;
             g_wireSeenSheet = 0;
-            ScHudRowOnWireDraw((DWORD)&btn[0], 0, &FakeWireDraw);
+            ScHudRowOnWireDraw((DWORD)&btn[0], 0, 0, 0, &FakeWireDraw);
             char what[96];
             _snprintf(what, sizeof(what), "  id %u, %s: drawn from the %s sheet", c.id, c.what,
                       c.empty ? "empty" : "real");

@@ -215,8 +215,9 @@ function Get-StatusQueue { param([string]$Tag, [int]$TimeoutSec = 20)
 #            answer in every state, since the pane's own art always covers it.
 #   boxDiff  bytes in the box that differ from a game-thread copy taken while the
 #            indicator was HIDDEN. THE oracle for "did our line land"; -1 = no baseline.
-#   slotDiff bytes differing between queue slot 0 and slot 4 below their labels: same
-#            rect, border and type, so a wrong GRP reads hundreds, our "+N" tens.
+#   slotDiff bytes differing between queue slot 0 and slot 4 above their labels: same
+#            rect, border and type, so a wrong GRP reads hundreds, our "+N" badge tens to
+#            a hundred and some.
 #   fontH    small-font height from the font header; the engine refuses a shorter box.
 # Icon entries are `icon:mode:state:art:label`, art I (icon GRP), B (empty-slot art) or ?.
 $script:qindSeq = 0
@@ -851,8 +852,8 @@ try {
             (($qi.Bottom - $qi.Top) -ge $qi.FontH)
         # `ink` is NOT an oracle here (ConvertFrom-QIndLine: the icon's own art saturates
         # the box). boxDiff in STRIP mode counts the bytes this plugin is responsible for --
-        # icon fill AND text, since the baseline predates the fill -- so the text-specific
-        # oracle is slotDiff: both slots hold the same art and only the "+N" is left to
+        # icon fill AND badge, since the baseline predates the fill -- so the badge-specific
+        # oracle is slotDiff: both slots hold the same art and only the "+N" badge is left to
         # differ. In GROUP mode the band belongs to no control and boxDiff IS the text.
         Assert-That "the box holds bytes this plugin put there: boxDiff=$($qi.BoxDiff) (ink=$($qi.Ink), saturated by the pane art)" `
             ($qi.BoxDiff -gt 0)
@@ -1017,12 +1018,14 @@ try {
                 ($last.QueueType -eq 0xE4)
         }
 
-        $script:lastSlotPoint = Get-ScStatusSlotPoint -Status $st -Display $STATQ_LAST_DISPLAY
-        # A control's rect and the indicator's bounds are read in the SAME (dialog-
-        # relative) space -- PlaceOn derives the box from the anchor control's own
-        # bounds -- so the click point converts back by subtracting the root origin and
-        # can be compared directly. Without this the arm could pass by clicking a part
-        # of the slot the "+N" is not on, which is not the case being reported.
+        # THE CLICK GOES ON THE "+N" BADGE, the part of the last icon the case being reported
+        # is about. The indicator's bounds are dialog-relative -- PlaceOn derives the box
+        # from the anchor control's own bounds -- so the root origin turns them into the
+        # client point, and the badge's filled rows are the top ones (a few below its top).
+        $script:lastSlotPoint = [pscustomobject]@{
+            X = $st.RootRect[0] + [int](($qi.Left + $qi.Right) / 2)
+            Y = $st.RootRect[1] + $qi.Top + 4
+        }
         $dx = $script:lastSlotPoint.X - $st.RootRect[0]
         $dy = $script:lastSlotPoint.Y - $st.RootRect[1]
         Assert-That ("the click point ($($script:lastSlotPoint.X),$($script:lastSlotPoint.Y)) is INSIDE the `"$($qi.Text)`" box " +

@@ -19,6 +19,8 @@
 
 #include <windows.h>
 
+#include "sc_unit.h"
+
 // GAME THREAD ONLY, except Init/Install/Remove/LogStats: the detour and the button
 // shim run inside the engine's dispatcher and dialog event loop, so the observer
 // thread must not call in. The module writes statUser records and its own globals
@@ -45,10 +47,8 @@ int  ScHudRowInstall(void);
 // (SC_VA_WIREFRAME_DRAW). Vanilla never puts a building there; a building group does. For
 // those ids the wireframe draw runs against an all-empty sheet for that one call: border,
 // health colours and click stay the engine's, the slot shows no picture.
-bool ScHudRowWireHasArt(unsigned id);
-typedef void (__attribute__((fastcall)) *ScHudWireDrawFn)(DWORD button, DWORD edx);
 // The detour's body, exposed so the test drives it with a fake button and a fake original.
-void ScHudRowOnWireDraw(DWORD button, DWORD edx, ScHudWireDrawFn orig);
+void ScHudRowOnWireDraw(DWORD button, DWORD edx, DWORD a, DWORD b, ScCtrlDrawFn orig);
 // The sheet a no-picture id is drawn from, for the test to check its shape.
 const BYTE* ScHudRowEmptySheet(void);
 

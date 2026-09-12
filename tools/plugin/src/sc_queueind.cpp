@@ -11,7 +11,8 @@
 // the font, the colour and the clip box (research/status-pane-text.md). An
 // SC_CTRL_TYPE_LSTATIC control whose pszText points at our buffer reaches that through the
 // engine's own dispatch, so the text looks native because it IS native and no art is added
-// (AGENTS.md § "Hard rules").
+// (AGENTS.md § "Hard rules"). The one thing plotted by hand is the "+N" badge's box under
+// that text: a black rectangle framed in a colour read off the icon beside it (IndUpdate).
 
 #include <windows.h>
 #include <stdio.h>
@@ -59,7 +60,6 @@ static int   g_mode     = SC_QIND_NONE;
 static DWORD g_anchor   = 0;          // the control the box is positioned against
 
 // The indicator's own fxnUpdate (see IndUpdate) and the engine handlers it hands the text to.
-typedef void (__attribute__((fastcall)) *ScQIndUpdateFn)(DWORD ctrl, DWORD edx, DWORD a, DWORD b);
 static void __attribute__((fastcall)) SC_GAME_ENTRY IndUpdate(DWORD ctrl, DWORD edx,
                                                              DWORD a, DWORD b);
 static DWORD g_textUpdate  = 0;   // the engine's type-9 (left) handler
@@ -717,7 +717,7 @@ static void __attribute__((fastcall)) SC_GAME_ENTRY IndUpdate(DWORD ctrl, DWORD 
         ScQueueIndFillBadge(ctrl, *(DWORD*)ScRuntimeAddr(SC_VA_RENDER_TARGET));
         fn = g_textCentred;
     }
-    ((ScQIndUpdateFn)fn)(ctrl, edx, a, b);
+    ((ScCtrlDrawFn)fn)(ctrl, edx, a, b);
 }
 
 DWORD ScQueueIndOwnUpdate(void)    { return (DWORD)&IndUpdate; }
@@ -996,8 +996,9 @@ int ScQueueIndSurfaceInk(DWORD root, int left, int top, int right, int bottom) {
 
 // Two queue-slot rects, compared byte for byte on the dialog's own 8-bit surface. See the
 // block above the call site for why this is the honest oracle for the fifth icon and a
-// plain ink count is not. Rows 0..SC_QIND_SLOT_LABEL_ROWS are skipped because the engine
-// draws each slot's NUMBER there and the numbers legitimately differ ("1 " against "5 ").
+// plain ink count is not. The last SC_QIND_SLOT_LABEL_ROWS rows are skipped because the
+// engine draws each slot's NUMBER there and the numbers legitimately differ ("1 " against
+// "5 "); the badge sits in the top rows, which are compared.
 // Returns the count of differing bytes, or -1 when the surface is unreadable, either
 // control is missing or hidden, or the two rects are not the same size (which is the
 // engine's layout saying these two slots are not comparable, not a defect here).
@@ -1025,7 +1026,7 @@ int ScQueueIndSlotDiff(DWORD root, int slotA, int slotB) {
     }
 
     int diff = 0;
-    for (int y = SC_QIND_SLOT_LABEL_ROWS; y < bh; ++y) {
+    for (int y = 0; y < bh - SC_QIND_SLOT_LABEL_ROWS; ++y) {
         const BYTE* ra = (const BYTE*)(bits + (DWORD)((r[0][1] + y) * w + r[0][0]));
         const BYTE* rb = (const BYTE*)(bits + (DWORD)((r[1][1] + y) * w + r[1][0]));
         for (int x = 0; x < bw; ++x) if (ra[x] != rb[x]) ++diff;
