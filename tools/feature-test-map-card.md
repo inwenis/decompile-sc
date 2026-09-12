@@ -1,64 +1,50 @@
 # Feature test map -- quick card
 
-The map is `!feature-test.scx` -- named with a leading `!` on purpose, so it sorts
-to the very TOP of the file list (right after the folders) instead of getting lost
-among 90-odd stock maps. You should see it within the first screen of the browser,
-no scrolling.
-
-Every deploy puts a fresh copy of it in place, so it is always in the list and
-always matches the build you are playing. There is nothing to run by hand. If it is
-ever missing, that is a bug -- say so.
+The map is `!feature-test.scx`. The leading `!` sorts it to the top of the map list, right after
+the folders. Every deploy writes a fresh copy, so it always matches the build you play.
 
 ## Load it
 
 1. Main menu -> **Single Player** -> **Expansion** -> **Play Custom**.
 2. Set **Game Type** to **Use Map Settings**.
-3. Pick **!feature-test.scx** (it should be right there when the browser opens) -> **OK**.
+3. Pick **!feature-test.scx** -> **OK**.
 
-You start facing 13 Command Centers in a 4-wide block, nothing else on the map, no
-enemy anywhere.
+## What is on it
 
-## Walk through, fastest first
+1. You own all three races at once (the console is Terran's).
+   - Top left: the Terran base. Top middle: Zerg. Top right: Protoss.
+   - Under each base: that race's army, 60 to 125 units of many kinds.
+   - The camera opens on the Terran army.
+2. Every building that researches something is already built, so every upgrade and tech is on
+   offer, levels 2 and 3 included (Hive, Science Facility, Templar Archives, Fleet Beacon).
+   - Terran add-ons (Machine Shop, Control Tower, Comsat, Covert Ops, Physics Lab) are not
+     built. There is room beside each building: build one to reach its research.
+3. 50,000 minerals and 50,000 gas.
+4. Supply is at 200 for every race, with at least 60 free.
+5. The enemy field is at the bottom, 18 tiles below your armies.
+   - Turrets, bunkers, sunkens, spores, photon cannons, sieged tanks, marines, goliaths,
+     hydralisks, zerglings, zealots, dragoons.
+   - The computer runs no AI: it only fights what comes into range.
+6. Flat ground everywhere, no minerals, nothing ends the game.
 
-1. **Scroll up a little (tap the Up arrow key a few times), then drag a box around
-   all 13 buildings.** If you grab all of them on the first try, great; if the box
-   only picks up 12, nudge the view up or down slightly and drag again -- the block
-   is a little taller than one screen. The bottom of the screen shows a count and a
-   page indicator: `13 units 1-12 (1/2)`. **Right-click on that bottom row itself**
-   (not on a building, not on the ground -- the row of little portraits at the very
-   bottom of the screen) -> it flips to `13-13 (2/2)` and shows the last one. **This
-   is the first time this project has ever proven a group of BUILDINGS pages past
-   12** -- every earlier test used mobile units.
-2. **Click empty space to deselect, then click just one Command Center.** Click its
-   **Train SCV** button six to nine times, fairly quickly. Watch the production row:
-   five icons fill, then a `+N` badge appears on the last one for everything past
-   five. That `+N` badge and the fifth slot are both the feature.
-3. **With that same building still holding a queue, click the last icon in its row**
-   (the one carrying the `+N` badge). It should cancel one queued SCV and refund its
-   50 minerals: the `+N` counts down, and your minerals go up. This used to do
-   nothing at all -- the bug you reported, diagnosed in PR #95 and fixed in PR #102.
-   If the click ever goes dead again, this step is the fastest way to catch it.
-4. **Drag a box around several of the buildings, then click Train once.** Every
-   building in the box queues one SCV from that single click -- that is the group
-   queue indicator working across a multi-building selection.
-5. **Save and reload.** Press **F10** -> **Save Game** -> type any name -> Save.
-   Then **F10** -> **Load Game** -> pick that save. Everything -- the buildings,
-   their queues, your minerals -- should come back exactly as you left it.
+## Try each feature
 
-Selection circles are on the whole time -- every building you select in steps 1-4
-should show one; there is no separate step for it.
+1. **More than 12 units.** Box the 48 Zerglings. The bottom row reads `48 units 1-12 (1/4)`.
+   Right-click that row to page.
+2. **Buildings of one type.** Box the 4 Barracks (or the 4 Gateways), then press Train once:
+   every building queues one.
+   - More than 12 buildings: box the 24 Supply Depots or the 24 Pylons -> `24 units 1-12 (1/2)`.
+3. **More than 5 in a queue.** Select one Barracks and press Train 9 times: five icons, `+4`
+   on the last. Click the last icon to cancel one.
+4. **Upgrade queue.** Select an Engineering Bay, an Evolution Chamber or a Forge and queue
+   several researches: they show as icons in the queue, and a queued one is not offered again.
+5. **Move and attack.** Box an army and right-click (or A, then click) into the enemy field.
+6. **Widescreen.** Scroll around; Ctrl+Tab frees the mouse.
 
-## What this map does NOT cover, and why
+## Cheats (single player only)
 
-- **Any ability that costs energy or hit points** (Stim Packs, Cloak, Burrow). Those
-  need a second unit type and researched tech, which is a different fixture, not a
-  bigger version of this one.
-- **A unit dying while selected.** That needs a hostile force on the map, which
-  breaks the "sits there and does nothing until you're ready" property every other
-  feature here depends on.
-- **Anything about mobile-unit selection specifically** (as opposed to buildings) --
-  earlier fixtures already proved that; this map exists to prove the BUILDING case,
-  which hadn't been.
+1. `operation cwal` -- build, train and research much faster.
+2. `black sheep wall` -- reveal the map.
+3. `show me the money` -- 10,000 more minerals and gas.
 
-If you want either of those too, ask for a second map -- it should not be bolted onto
-this one.
+Press Enter, type the cheat, press Enter.
