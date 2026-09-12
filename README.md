@@ -75,3 +75,8 @@ work/       scratch/ (ignored build output + logs), defects/ (patches for build-
 ```
 
 Hard rule: no game binaries or assets in this repo.
+
+StarCraft and StarCraft: Brood War are trademarks or registered trademarks of Blizzard
+Entertainment, Inc. in the U.S. and/or other countries. Game screenshots are © Blizzard
+Entertainment and are not covered by this repository's license. This project is not
+affiliated with or endorsed by Blizzard Entertainment.

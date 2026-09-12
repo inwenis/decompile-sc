@@ -424,5 +424,5 @@ Assert-That 'StarCraft.exe on disk is byte-identical to before the run' ($hashAf
 Write-Host ''
 Write-Host "probe-upgrade-wire: $failures failure(s)"
 Write-Host "log:    $LogPath"
-Write-Host "frames (diagnostic, NOT committable): $ShotDir"
+Write-Host "frames (diagnostic): $ShotDir"
 exit ($failures -eq 0 ? 0 : 1)

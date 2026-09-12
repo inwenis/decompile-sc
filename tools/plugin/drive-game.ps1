@@ -5,8 +5,8 @@ Drive a running StarCraft 1.16.1 window with POSTED Win32 messages, and read fra
 out of it. Dot-source it; every function is a primitive, nothing here runs on import.
 
 .DESCRIPTION
-Posted messages, never synthetic input: `SendInput`/`SendKeys` are BANNED by
-config/guard-destructive.ps1, and this binary imports no DirectInput, never calls
+Posted messages, never synthetic input (`SendInput`/`SendKeys` drive the user's real
+mouse and keyboard): this binary imports no DirectInput, never calls
 `GetAsyncKeyState`, and takes the pointer position from the message's own `lParam`
 (research/pe-anatomy.md § Imports). Every coordinate here is therefore a CLIENT
 coordinate, independent of window position, DPI, monitor and foreground.
@@ -1366,19 +1366,19 @@ function Set-ScGameType {
             # points at -Visible -- true, but not the useful fact. 'Custom Type' is ONE
             # machine-wide value in the live HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft
             # key, shared with the user's real play (AGENTS.md § "Game Type / `Custom Type`"),
-            # not per-suite and not per-map, and it only changes through a real foreground
-            # pick -- writing it directly is what AGENTS.md § "Hard rules" forbids. So a
-            # mismatch cannot be cleared off-screen however the caller is invoked, and one
-            # foreground pick fixes it for every suite. The original throw is appended, not
-            # replaced: it still names the desktop/window detail this one does not.
+            # not per-suite and not per-map, and the running game changes it only through a
+            # real foreground pick. So a mismatch cannot be cleared off-screen however the
+            # caller is invoked, and one foreground pick fixes it for every suite. The original
+            # throw is appended, not replaced: it still names the desktop/window detail this
+            # one does not.
             # PARENTHESISED BEFORE -f, and that is not style: `-f` binds TIGHTER than `+`, so
             # an un-parenthesised version formats only the LAST literal and concatenates the
             # rest unformatted -- the message loses {0} and {1} (what it reads, what it wants)
             # while still looking complete (AGENTS.md § "Diagnostics and reporting").
             throw (("Set-ScGameType: Game Type reads '{0}', want '{1}' -- 'Custom Type' is one " +
-                    "machine-wide value shared with real play, changeable only by a real foreground " +
-                    "pick (hard rule 5 forbids writing it directly). One foreground pick fixes it for " +
-                    "every suite until the user's own next game changes it again. Underlying: {2}") -f `
+                    "machine-wide value shared with real play, and a running game changes it only " +
+                    "through a real foreground pick. One pick (tools/plugin/prime-game-type.ps1) fixes " +
+                    "it for every suite until the user's own next game changes it again. Underlying: {2}") -f `
                    $c.Value, $want, $_.Exception.Message)
         }
         $now = Wait-ScGameTypeControl -LogPath $LogPath -Want $want -TimeoutSec 6
@@ -2310,9 +2310,9 @@ function Save-ScWindowImage {
     .SYNOPSIS
     PNG of the game's CLIENT area, via PrintWindow.
     .DESCRIPTION
-    A DIAGNOSTIC, never an oracle (research/automated-testing-options.md O4). The output
-    reproduces game artwork, so it must stay on a gitignored path and must never be
-    committed (AGENTS.md § "Hard rules") -- this refuses to write inside the repo.
+    A DIAGNOSTIC, never an oracle (research/automated-testing-options.md O4). It refuses to
+    write inside the repo: a screenshot you publish is picked and copied in by hand
+    (AGENTS.md § "Hard rules").
 
     READ THIS BEFORE MEASURING A COORDINATE OFF ONE OF THESE FRAMES. With -FullWindow the
     capture is the WINDOW, including the border and title bar, while every function in
@@ -2346,7 +2346,7 @@ function Save-ScWindowImage {
     $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
     if ($full.StartsWith($repoRoot, [StringComparison]::OrdinalIgnoreCase) -and
         $full -notmatch '\\work\\scratch\\') {
-        throw "drive-game: refusing to write a game frame to '$full' -- screenshots reproduce game artwork and must not land in the repo (AGENTS.md hard rule 1). Use a path outside the repo, or work/scratch/."
+        throw "drive-game: refusing to write a game frame into the repo at '$full' -- frames go under C:\sc-work\ or work/scratch/; a screenshot you publish is picked and copied in by hand (AGENTS.md hard rule 1)."
     }
     New-Item -ItemType Directory -Path (Split-Path $full -Parent) -Force | Out-Null
 

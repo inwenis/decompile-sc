@@ -7,7 +7,7 @@ No fixture, no gameplay, no assertions about a map: launch, one pick, verify, qu
 .DESCRIPTION
 'Custom Type' in HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft is ONE machine-wide
 value shared with the user's real play -- its 'Recent Maps' siblings hold real user map
-paths. Only the game's own UI may write it and the pick needs the foreground
+paths. The running game changes it only through its own UI, and the pick needs the foreground
 (Send-ScDropdownPick's SetCapture, no keyboard-only path around it), so one visible
 launch here clears it for every suite -- see AGENTS.md § "Game Type / `Custom Type`".
 That raise lasts exactly one pick and the foreground is handed straight back, so the
@@ -38,6 +38,12 @@ $stock = @(Get-ChildItem -LiteralPath (Join-Path $GameDir 'Maps\BroodWar') -File
 if ($stock.Count -eq 0) { throw "prime-game-type: no stock map found under $GameDir\Maps\BroodWar." }
 $mapPath = $stock[0].FullName
 Write-Host "prime-game-type: using stock map '$mapPath' (no fixture, nothing to clean up)"
+
+# A visible launch: without $env:AGENT_TASK, run-with-plugin.ps1 takes no launch lock and
+# gives the user's foreground no hand-back (the same gate as run-offscreen.ps1).
+if ($env:AGENT_TASK -notmatch '^\s*\d') {
+    throw "prime-game-type: set `$env:AGENT_TASK to your PR or issue number first (e.g. `$env:AGENT_TASK = '125'). Without it the launch takes no launch lock and keeps the user's foreground."
+}
 
 if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPath -Force }
 

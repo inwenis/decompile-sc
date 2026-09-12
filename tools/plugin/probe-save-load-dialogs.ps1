@@ -243,9 +243,9 @@ finally {
 Write-Host ''
 if (-not $roundTripRan) {
     Write-Host "probe-save-load-dialogs: INCOMPLETE -- the round trip never ran, $failures failure(s)."
-    Write-Host "frames (diagnostic, NOT committable): $ShotDir"
+    Write-Host "frames (diagnostic): $ShotDir"
     exit 1
 }
 Write-Host "probe-save-load-dialogs: $failures failure(s)"
-Write-Host "frames (diagnostic, NOT committable): $ShotDir"
+Write-Host "frames (diagnostic): $ShotDir"
 exit ($failures -eq 0 ? 0 : 1)

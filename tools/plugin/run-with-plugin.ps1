@@ -443,14 +443,14 @@ try {
     $env:SCPLUGIN_UPGQ           = $UpgradeQueue
     $env:SCPLUGIN_UPGQ_MAX       = "$UpgradeQueueMax"
     $env:SCPLUGIN_SCREENSCAN     = $ScreenScan
-    # A frame dump reproduces game artwork, so it must never land inside the repo --
-    # the same guard Save-ScWindowImage enforces for PNGs, applied to the raw container
-    # before the path crosses into the plugin.
+    # A frame dump is raw game output and stays outside the repo -- the same guard
+    # Save-ScWindowImage enforces for PNGs, applied to the raw container before the path
+    # crosses into the plugin.
     if ($FrameDump) {
         $fdFull = [IO.Path]::GetFullPath($FrameDump)
         if ($fdFull.StartsWith($repoRoot, [StringComparison]::OrdinalIgnoreCase) -and
             $fdFull -notmatch '\\work\\scratch\\') {
-            throw "run-with-plugin: refusing -FrameDump '$FrameDump' -- frame dumps reproduce game artwork and must not land in the repo (AGENTS.md hard rule 1). Use a path under C:\sc-work\, or work/scratch/."
+            throw "run-with-plugin: refusing -FrameDump '$FrameDump' inside the repo -- frame dumps go under C:\sc-work\ or work/scratch/ (AGENTS.md hard rule 1)."
         }
         $env:SCPLUGIN_FRAMEDUMP = $fdFull
     } else { $env:SCPLUGIN_FRAMEDUMP = '' }

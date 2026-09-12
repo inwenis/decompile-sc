@@ -1600,5 +1600,5 @@ if ($script:skipped.Count -gt 0) {
     $script:skipped | ForEach-Object { Write-Host "  $_" }
 }
 Write-Host "test-production-queue: $failures failure(s), $($script:skipped.Count) skipped"
-Write-Host "frames (diagnostic, NOT committable): $ShotDir"
+Write-Host "frames (diagnostic): $ShotDir"
 exit ($failures -eq 0 ? 0 : 1)

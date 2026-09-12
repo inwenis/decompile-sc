@@ -21,7 +21,7 @@ same map with --enemy-owner player). Phase B is the combat run. -Liveness 0 runs
 same assertions against the uniqueness-only gate and FAILS; that arm is how they were
 shown capable of failing (research/fanout-liveness.md).
 
-Frame captures are diagnostics, never the oracle, never committed. Generated maps are
+Frame captures are diagnostics, never the oracle. Generated maps are
 game content (AGENTS.md hard rule 1) and are deleted afterwards.
 
 .EXAMPLE
@@ -1205,5 +1205,5 @@ Assert-That 'and still byte-identical to pristine 1.16.1' ($hashAfter -eq $PRIST
 
 Write-Host ''
 Write-Host ("test-combat-death: $failures failure(s) in {0:mm\:ss}" -f ((Get-Date) - $runStart))
-Write-Host "frames (diagnostic, NOT committable): $ShotDir"
+Write-Host "frames (diagnostic): $ShotDir"
 exit ($failures -eq 0 ? 0 : 1)

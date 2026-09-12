@@ -89,7 +89,7 @@ foreach ($protected in @(
     @{ Path = 'C:\git';        Label = 'every repo/worktree root' }
     @{ Path = 'C:\sc-work';    Label = 'the working-copy scratch root' }
     @{ Path = $SourceGameDir;  Label = '-SourceGameDir itself' }
-    @{ Path = 'C:\sc-install'; Label = 'the pristine install (hard rule 1)' }
+    @{ Path = 'C:\sc-install'; Label = 'the pristine install (hard rule 2)' }
 )) {
     $protectedFull = Get-CanonicalPath $protected.Path
     if (Test-PathUnder -Candidate $deployRootFull -Root $protectedFull) {

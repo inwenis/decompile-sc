@@ -522,6 +522,6 @@ finally {
 Write-Host ''
 Write-Host "probe (Command Center + Barracks, $Arm arm): $failures failure(s)"
 Write-Host "log:    $LogPath"
-Write-Host 'frames (diagnostic, NOT committable -- AGENTS.md hard rule 1):'
+Write-Host 'frames (diagnostic):'
 foreach ($f in $script:framesWritten) { if ($f) { Write-Host "  $f" } }
 exit ($failures -eq 0 ? 0 : 1)

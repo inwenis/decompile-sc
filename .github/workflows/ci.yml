@@ -78,10 +78,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # Project hard rule 1: never commit game binaries/archives. Extension
-          # list matches the game-content set called out in the task; a size
-          # cap catches large binary blobs of other extensions too.
-          $bannedExt = @('.exe', '.dll', '.mpq', '.snp', '.grp', '.chk', '.rep', '.idb', '.i64', '.gpr')
+          # Project hard rule 1: never commit game binaries, archives or maps (a
+          # generated fixture is an edited copy of a Blizzard map); a size cap
+          # catches large binary blobs of other extensions too.
+          $bannedExt = @('.exe', '.dll', '.mpq', '.snp', '.grp', '.chk', '.rep', '.idb', '.i64', '.gpr', '.scm', '.scx')
           $maxBytes = 5MB
           $tracked = git ls-files
           $badExt = $tracked | Where-Object {
@@ -140,6 +140,7 @@ jobs:
           # runs the checker's own negative control first, so a checker that stopped
           # matching anything cannot pass this step by finding nothing.
           python tools/check-comment-narration.py --selftest
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tools/check-comment-narration.py
           exit $LASTEXITCODE
 

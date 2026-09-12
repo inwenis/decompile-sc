@@ -137,10 +137,9 @@ function Invoke-PresentArm {
         $winW = $c[0]; $winH = $c[1]
         Write-Host "       client $winW x $winH"
 
-        # A game frame reproduces game artwork (AGENTS.md § "Screenshots"), so no frame
-        # is ever committed or put through `pr-image`; only pixel counts and column
-        # indices are reported. Save-ScWindowImage refuses to write inside the repo, so
-        # the gitignored diagnostic path is enforced rather than remembered.
+        # Only pixel counts and column indices are reported; the frame is for a human
+        # (AGENTS.md § "Screenshots"). Save-ScWindowImage refuses to write inside the
+        # repo, so the diagnostic path is enforced rather than remembered.
         $png = Join-Path $FrameDir "present-$name-menu.png"
         Save-ScWindowImage -Hwnd $h -Path $png | Out-Null
         $b = [System.Drawing.Bitmap]::new($png)
@@ -211,7 +210,7 @@ try {
         Write-Host "        => $verdict"
     }
     Write-Host ''
-    Write-Host 'probe-present: frames (gitignored diagnostic path, never committed):'
+    Write-Host 'probe-present: frames (gitignored diagnostic path):'
     foreach ($k in $frames.Keys | Sort-Object) { Write-Host "       $k : $($frames[$k])" }
 }
 finally {

@@ -317,8 +317,7 @@ static void ScanScreen(const char* tag) {
 // Same family as the SCREEN scan above: no hook, no writes, so it exists in -Mode observe.
 // Off by default: %SCPLUGIN_FRAMEDUMP% names the directory (launcher flag -FrameDump).
 // THE DUMP REPRODUCES GAME ARTWORK, so that directory must be on the gitignored diagnostic
-// path (C:\sc-work\...) and no dump is ever committed -- the same rules as for a PNG, in a
-// different container (AGENTS.md § "Screenshots").
+// path (C:\sc-work\...) and no dump is ever committed (AGENTS.md § "Hard rules").
 //
 // TEARING. The observer reads while the game thread composes, so one copy can be half of
 // one frame and half of the next. The dump therefore copies until two CONSECUTIVE copies

@@ -617,7 +617,7 @@ finally {
 }
 
 Write-Host ''
-Write-Host 'probe-wsdrive: window PNGs + dumps (gitignored diagnostic path, never committed):'
+Write-Host 'probe-wsdrive: window PNGs + dumps (gitignored diagnostic path):'
 Get-ChildItem $FrameDir -Filter 'drive-*' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "       $($_.FullName)" }
 if ($script:findings.Count) {
     Write-Host ''

@@ -28,8 +28,7 @@ Driving recipe as in test-fanout-orders.ps1 (research/automated-testing-options.
 posted Win32 messages in client coordinates, no synthetic OS input, focus not required,
 window must not be minimised.
 
-Frames are a DIAGNOSTIC only and land outside the repo -- they reproduce game artwork and
-must never be committed.
+Frames are a DIAGNOSTIC only and land outside the repo.
 
 .EXAMPLE
 ./tools/plugin/test-burrow-fanout.ps1
@@ -337,5 +336,5 @@ Assert-That 'and still byte-identical to pristine 1.16.1' ($hashAfter -eq $PRIST
 
 Write-Host ''
 Write-Host "test-burrow-fanout: $failures failure(s)"
-Write-Host "frames (diagnostic, NOT committable): $ShotDir"
+Write-Host "frames (diagnostic): $ShotDir"
 exit ($failures -eq 0 ? 0 : 1)
