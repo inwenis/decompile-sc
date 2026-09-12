@@ -19,15 +19,12 @@ import ghidra.framework.Application;
 import ghidra.program.model.data.*;
 
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public class ApplyTypes extends GhidraScript {
 
@@ -52,35 +49,13 @@ public class ApplyTypes extends GhidraScript {
             dtm.addDataType(e, DataTypeConflictHandler.REPLACE_HANDLER);
         }
 
-        // Windows types (RECT, HWND...) resolve from Ghidra's shipped archive. A type the header
-        // names but never defines (a DirectSound interface) aborts the parse; it becomes an opaque
-        // struct in a prelude and the parse restarts. A by-value use of one breaks a size assert.
+        // Windows types (RECT, HWND...) resolve from Ghidra's shipped archive.
         ResourceFile gdt = Application.findDataFileInAnyModule("typeinfo/win32/windows_vs12_32.gdt");
         FileDataTypeManager win = FileDataTypeManager.openFileArchive(gdt, false);
-        Path prelude = Paths.get(args[1] + ".opaque.h");
-        List<String> opaque = new ArrayList<>();
         CParserUtils.CParseResults parsed;
         try {
-            while (true) {
-                List<String> decls = new ArrayList<>();
-                for (String n : opaque) {
-                    decls.add("typedef struct " + n + " " + n + ";");
-                }
-                Files.write(prelude, decls);
-                try {
-                    parsed = CParserUtils.parseHeaderFiles(new DataTypeManager[] { win },
-                        new String[] { prelude.toString(), args[1] }, new String[0], new String[0], dtm, monitor);
-                    break;
-                }
-                catch (ghidra.app.util.cparser.C.ParseException e) {
-                    Matcher m = Pattern.compile("Undefined data type \"(\\w+)\"").matcher(e.getMessage());
-                    if (!m.find() || opaque.contains(m.group(1)) || opaque.size() > 100) {
-                        throw e;
-                    }
-                    opaque.add(m.group(1));
-                    println("ApplyTypes: opaque " + m.group(1));
-                }
-            }
+            parsed = CParserUtils.parseHeaderFiles(new DataTypeManager[] { win },
+                new String[] { args[1] }, new String[0], new String[0], dtm, monitor);
         }
         finally {
             win.close();
@@ -89,7 +64,6 @@ public class ApplyTypes extends GhidraScript {
         List<String> report = new ArrayList<>();
         report.add("enums=" + enums.size());
         report.add("parseSucceeded=" + parsed.successful());
-        report.add("opaqueTypes=" + String.join(" ", opaque));
         int ok = 0, missing = 0, wrong = 0;
         List<String> detail = new ArrayList<>();
         List<String> asserted = new ArrayList<>();
@@ -127,7 +101,7 @@ public class ApplyTypes extends GhidraScript {
         if (!parsed.successful() || wrong > 0 || missing > 0) {
             throw new IllegalStateException("ApplyTypes: parse or struct sizes failed, see " + args[0]);
         }
-        SweepUtil.writeManifest(args[0], ok, report.subList(0, 6));
+        SweepUtil.writeManifest(args[0], ok, report.subList(0, 5));
     }
 
     /** "struct CUnit (336 bytes)", then one self-contained line per field and per enum value, so

@@ -26,16 +26,9 @@ $out = Join-Path $OutDir $program
 New-Item -ItemType Directory -Path $out -Force | Out-Null
 $run = { param($script, [string[]]$scriptArgs, $log) & $sweep -Mode Run -ProjectDir $ProjectDir -ProgramName $program -Script $script -ScriptArgs $scriptArgs -LogFile $log }
 
-# ApplyNames only fills DEFAULT names, so tables applied over an older application would leave
-# its names and types behind: any change to what gets applied means a fresh import. The marker
-# is written after the last step succeeds, so an interrupted run imports afresh too.
-$inputs = @($script:MagnetarSha) + @('scripts/ApplyTypes.java', 'scripts/ApplyNames.java', 'magnetar-names.ps1',
-    'magnetar-overrides.tsv' | ForEach-Object { Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot $_) })
-$fingerprint = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($inputs -join "`n")))
-$marker = Join-Path $ProjectDir "$program.imported"
-if (-not (Test-Path -LiteralPath $marker) -or (Get-Content -Raw -LiteralPath $marker).Trim() -ne $fingerprint) {
-    & $sweep -Mode Prepare -InputPE $InputPE -ProjectDir $ProjectDir -Overwrite -LogFile (Join-Path $ProjectDir "import-$program.log")
-}
+# ApplyNames only fills DEFAULT names, so tables applied over an older application would leave its
+# names and types behind: every run imports afresh (analysis is about 2 of the 5 minutes).
+& $sweep -Mode Prepare -InputPE $InputPE -ProjectDir $ProjectDir -Overwrite -LogFile (Join-Path $ProjectDir "import-$program.log")
 
 if ($program -ieq 'StarCraft.exe') {
     $cache = Join-Path $ProjectDir 'magnetar'
@@ -50,7 +43,7 @@ if ($program -ieq 'StarCraft.exe') {
     Export-MagnetarTsv -Rows $t.sizes -Path (Join-Path $cache 'sizes.tsv')
     & $run ApplyTypes.java @((Join-Path $out 'types-report.txt'), $header, (Join-Path $cache 'enums.tsv'),
         (Join-Path $cache 'sizes.tsv'), (Join-Path $out 'types.txt')) (Join-Path $out 'types.log')
-    Get-Content -LiteralPath (Join-Path $out 'types-report.txt') -TotalCount 6
+    Get-Content -LiteralPath (Join-Path $out 'types-report.txt') -TotalCount 5
 
     $namesTsv = Join-Path $out 'names.tsv'
     $overrides = Import-Csv -LiteralPath (Join-Path $PSScriptRoot 'magnetar-overrides.tsv') -Delimiter "`t"
@@ -72,7 +65,6 @@ if (Test-Path -LiteralPath $objdump) {
 else {
     Write-Warning "decomp-all.ps1: no listing.asm, objdump not found at $objdump (setup-onetime.ps1 installs it)"
 }
-Set-Content -LiteralPath $marker -Value $fingerprint
 
 $index = Import-Csv -LiteralPath (Join-Path $out 'index.tsv') -Delimiter "`t"
 $failed = @($index | Where-Object status -ne 'OK')

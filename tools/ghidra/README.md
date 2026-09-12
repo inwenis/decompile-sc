@@ -134,10 +134,10 @@ the address-selector path used for stripped binaries; it independently resolved 
 importing the [Magnetar](https://github.com/joankaradimov/Magnetar) 1.16.1 tables (MIT, pinned
 by commit in `magnetar-names.ps1`): function names, prototypes, register calling conventions,
 structs, enums and typed globals. The result reads `unit->orderID != ORD_DIE` where plain
-Ghidra prints `*(char *)(param_1 + 0x4d) != 0`.
+Ghidra prints `*(char *)(param_1 + 0x4d) != '\0'`.
 
 ```powershell
-./tools/ghidra/decomp-all.ps1     # about 5 minutes; re-imports whenever the Magnetar pin or the scripts change
+./tools/ghidra/decomp-all.ps1     # about 5 minutes; imports afresh every run
 ```
 
 Needs the pinned Ghidra above, the working copy `C:\sc-work\1161-base\StarCraft.exe`, and the
@@ -177,7 +177,7 @@ Select-String tools/plugin/src/sc_addresses.h, research/*.md -Pattern '0041E0D0'
   `tools/ghidra/magnetar-overrides.tsv`, one evidence line per row. `IMPORTED` = a Magnetar
   hypothesis. `ANALYSIS` = Ghidra's own Function ID (statically linked CRT) or RTTI. `DEFAULT` =
   no name anywhere (`FUN_`). Hard rule 4 applies: a name is a reading aid, not a finding.
-- **References.** A name grep finds direct calls and pointer stores (`DAT_006d1234 = options_menu_handler;`),
+- **References.** A name grep finds direct calls and pointer stores (`active_menu_handler = options_menu_handler;`),
   plus the function's own file. A call through a table or a register never names its target, so
   no hit is not "no callers" (AGENTS.md § "Claims about the binary"). A function that jumps into
   another's shared tail decompiles with that tail inlined, so a hit can be code it reaches rather
@@ -188,7 +188,7 @@ Select-String tools/plugin/src/sc_addresses.h, research/*.md -Pattern '0041E0D0'
   from Magnetar's inline-asm wrapper. The `storage` column in `names.tsv` spells it out:
   `left=EAX;bottom=EDX;top=ECX;right=S4` means `right` is the first stack dword above the return
   address. `__thiscall` is spelled out the same way (`this_` in `ECX`), so `this_` keeps its type.
-- **Partial access.** `map_height_pixels._2_1_` is 1 byte at offset 2 inside that global.
+- **Partial access.** `active_players._4_4_` is 4 bytes at offset 4 inside that global.
 
 ### Where Magnetar is wrong
 
@@ -218,8 +218,8 @@ So neither side wins by default: where they disagree, read the evidence each cit
    match, `CUnit` at 336 bytes included.
 2. `ApplyNames.java` names functions and globals, applies prototypes, and gives register-convention
    functions custom storage parsed from the asm wrappers (`mov ecx, top` / `push dword ptr right`).
-   A table entry Ghidra never reached is disassembled, made a function, and every body is
-   recomputed once all entries exist. A function Ghidra's Function ID already named keeps that
+   A table entry Ghidra never reached is disassembled and made a function; once all entries
+   exist, its body and the body of the function it sat inside are recomputed. A function Ghidra's Function ID already named keeps that
    name and signature. Rows of `magnetar-overrides.tsv` replace Magnetar's before any of this.
 3. `DecompileMany.java ALL` decompiles every non-thunk function.
 
@@ -253,9 +253,9 @@ Against plain Ghidra (same binary, same decompiler, no Magnetar), counted over a
 | Files with struct field access (`->`) | 68 | 2986 |
 | Distinct unnamed callees / globals (`FUN_` / `DAT_`) | 4233 / 2946 | 2196 / 1570 |
 
-The remaining register reads sit in 685 functions: 613 whose Magnetar prototype leaves out a
-register argument (`isUnitBurrowed` is declared `int (void)` and reads its unit from `EAX`), 72
-that Magnetar does not list.
+The remaining register reads sit in 685 functions: 612 whose Magnetar prototype leaves out a
+register argument (`isUnitBurrowed` is declared `int (void)` and reads its unit from `EAX`), the 2
+whose prototype was not applied, and 71 that Magnetar does not list.
 
 Never point `build-opcode-policy.ps1` or `build-command-table.ps1` at `C:\sc-work\ghidra`: they
 parse `FUN_` names out of decompiled C and keep their own unnamed project. Ghidra locks a

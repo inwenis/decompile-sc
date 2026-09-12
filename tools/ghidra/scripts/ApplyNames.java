@@ -2,16 +2,16 @@
 // decompiled C reads BWFXN_RefreshTarget(left, bottom, top, right) instead of
 // FUN_0041e0d0(param_1) with in_EAX/in_ECX/in_EDX, and UnitNodeTable[i] instead of DAT_0059cca8.
 //
-// Everything lands with SourceType.IMPORTED: hypotheses from a third-party table
-// (tools/ghidra/magnetar-names.ps1). A function Ghidra already named (Function ID on a CRT
-// routine) keeps its name and its signature; the table only fills DEFAULT names, so it expects
-// a freshly imported program (decomp-all.ps1 re-imports whenever its inputs change).
+// Magnetar rows land IMPORTED, hypotheses from a third-party table (tools/ghidra/magnetar-names.ps1);
+// magnetar-overrides.tsv rows (origin=repo) land USER_DEFINED, this repo's evidence. A function
+// Ghidra already named (Function ID on a CRT routine) keeps its name and its signature; the table
+// only fills DEFAULT names, so it expects a freshly imported program (decomp-all.ps1 imports afresh).
 // A register-convention function gets custom storage read from Magnetar's inline-asm wrapper.
 // Run ApplyTypes.java first: prototypes and globals name its structs and enums.
 //
 // Script args:
 //   1: report path; <path>.manifest is the run's success signal
-//   2: names TSV: kind \t addr \t name \t conv \t proto \t storage
+//   2: names TSV: kind \t addr \t name \t conv \t proto \t storage \t origin
 //@category Headless
 
 import generic.jar.ResourceFile;

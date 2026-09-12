@@ -73,7 +73,6 @@ function Get-AsmStorage([string[]]$Asm, [string[]]$ArgNames, [bool]$ReturnsValue
 function ConvertFrom-MagnetarOffsets {
     param([Parameter(Mandatory)][AllowEmptyString()][string[]]$Lines)
     $auto = '^(sub|loc|dword|word|byte|stru|unk|off|flt|dbl|qword|asc|nullsub|j)_|^a[A-Z0-9]'
-    $seen = @{}
     $rows = [System.Collections.Generic.List[object]]::new()
     $add = {
         param($kind, $addr, $name, $conv, $proto, $storage)
@@ -82,8 +81,6 @@ function ConvertFrom-MagnetarOffsets {
         # Case-sensitive: IDA's prefixes are lower case, and -match would drop AI_Stop, Accelerate.
         if ($name -cmatch $auto) { if ($kind -eq 'data' -or -not $proto) { return }; $name = '' }
         $key = '0x{0:X8}' -f [Convert]::ToInt64($addr.Substring(2), 16)
-        if ($seen.ContainsKey($key)) { return }
-        $seen[$key] = $true
         $rows.Add([pscustomobject]@{ kind = $kind; addr = $key; name = $name; conv = $conv; proto = $proto; storage = $storage })
     }
     for ($i = 0; $i -lt $Lines.Count; $i++) {

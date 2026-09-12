@@ -58,7 +58,6 @@ void lostArg(int a1, int a2) {
 void notAWrapper(int a1) {
     return;
 }
-DECL_FUNC(void (__stdcall*dupOfWrapper)(), dupOfWrapper, 0x401150);
 CUnit(&UnitNodeTable)[1700] = * ((decltype(&UnitNodeTable)) 0x59cca8);
 CHAR(&ProcName)[] = * ((decltype(&ProcName)) 0x4fe5fc);
 CUnit *& firstUnit = * ((decltype(&firstUnit)) 0x628430);
@@ -100,7 +99,7 @@ enum Flags
 Describe 'ConvertFrom-MagnetarOffsets' {
     BeforeAll { $script:rows = ConvertFrom-MagnetarOffsets -Lines $offsets }
 
-    It 'keeps every named shape once, drops auto-names but keeps a function prototype' {
+    It 'keeps every named shape, drops auto-names but keeps a function prototype' {
         ($rows | ForEach-Object { "$($_.kind) $($_.addr) $($_.name)" }) | Should -Be @(
             'func 0x00401120 showImage',
             'func 0x00401130 plainDefault',

@@ -72,7 +72,8 @@ public class DecompileMany extends GhidraScript {
 
             try (PrintWriter w = new PrintWriter(Files.newBufferedWriter(index))) {
                 // nameSource separates evidence from hypothesis: ANALYSIS = Ghidra's Function ID /
-                // RTTI, IMPORTED = a third-party table (Magnetar), DEFAULT = no name at all.
+                // RTTI, USER_DEFINED = this repo's override (magnetar-overrides.tsv), IMPORTED = a
+                // third-party table (Magnetar), DEFAULT = no name at all.
                 // funcEnd ends the entry's own chunk; other chunks are only in ranges.tsv.
                 w.println(String.join("\t", "label", "specAddr", "resolvedVia", "funcName",
                     "funcEntry", "bodyBytes", "status", "cFile", "cLines", "nameSource", "funcEnd"));

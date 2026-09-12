@@ -212,7 +212,7 @@ Hard rule 4 applies to every line of `research/`.
 
 ## Decompiled C
 
-- DO read a function as C before its asm: `C:\sc-work\decomp\StarCraft.exe\0x<ENTRY>.<name>.c`, one file per function, `listing.asm` beside it; `ranges.tsv` maps a code address to its function, `types.txt` a struct offset to its field, a grep for `\bname\b` finds direct calls and pointer stores only. Missing? `./tools/ghidra/decomp-all.ps1`.
+- DO read a function as C before its asm: `C:\sc-work\decomp\StarCraft.exe\0x<ENTRY>.<name>.c`, one file per function, `listing.asm` beside it; `ranges.tsv` maps a code address to its function, `types.txt` a struct offset to its field, a grep for `\bname\b` also hits stubs that jump into a shared tail and misses table/register calls (real call sites: `call   0x<addr>` in `listing.asm`). Missing? `./tools/ghidra/decomp-all.ps1`.
   A name with `nameSource` IMPORTED is a Magnetar hypothesis, USER_DEFINED this repo's (`tools/ghidra/magnetar-overrides.tsv`): hard rule 4 applies before either enters `research/`, and where they disagree the cited evidence decides, not the side.
   Why: a static asm read of the terrain blitter was "clean" and wrong; in C its run+1 defect is one loop condition.
   -> tools/ghidra/README.md § "Whole-binary decompile with names"
