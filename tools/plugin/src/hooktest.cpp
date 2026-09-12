@@ -1701,6 +1701,13 @@ static void ControlGroupTests(void) {
     g_fake = NULL;
 }
 
+// The wireframe draw's stand-in: records which sheet the engine would have blitted from.
+static DWORD g_wireSeenSheet = 0;
+static void __attribute__((fastcall)) FakeWireDraw(DWORD button, DWORD edx) {
+    (void)button; (void)edx;
+    g_wireSeenSheet = *(DWORD*)FakeRt(SC_VA_GRPWIRE_SHEET);
+}
+
 static void HudRowTests(void) {
     Part("HUD-row paging: fake dialog tree, fake engine primitives");
 
@@ -1724,6 +1731,42 @@ static void HudRowTests(void) {
     // synchronously inside HudFrame -- so the module's wall-clock settle windows would be
     // measuring this harness. Zero them; the ORDER they enforce still runs (see the header).
     ScHudRowTestSetBandTiming(0, 0);
+
+    printf("\n    the row's pictures: an id grpwire.grp has no picture for is drawn from an empty sheet\n");
+    {
+        BYTE btn[SC_BINDLG_SIZE] = { 0 };
+        BYTE user[8] = { 0 };
+        *(DWORD*)(btn + SC_BINDLG_OFF_USER) = (DWORD)&user[0];
+        DWORD* sheet = (DWORD*)FakeRt(SC_VA_GRPWIRE_SHEET);
+        const DWORD real = (DWORD)FakeRt(0x00500000u);   // a value; only ever compared
+        *sheet = real;
+        const struct { WORD id; bool empty; const char* what; } cases[] = {
+            {   0, false, "Marine (a unit)" },           { 106, false, "Command Center" },
+            { 111, false, "Barracks" },                  { 122, false, "Engineering Bay" },
+            { 109, true,  "Supply Depot (BLANK frame)" }, { 130, true, "Infested CC (BLANK frame)" },
+            { 156, true,  "Pylon (past the sheet's end)" },
+        };
+        for (const auto& c : cases) {
+            *(WORD*)(&user[SC_STATUSER_OFF_ID]) = c.id;
+            g_wireSeenSheet = 0;
+            ScHudRowOnWireDraw((DWORD)&btn[0], 0, &FakeWireDraw);
+            char what[96];
+            _snprintf(what, sizeof(what), "  id %u, %s: drawn from the %s sheet", c.id, c.what,
+                      c.empty ? "empty" : "real");
+            Check(what, (long long)g_wireSeenSheet,
+                  (long long)(c.empty ? (DWORD)ScHudRowEmptySheet() : real));
+            Check("    and the real sheet is back afterwards", (long long)*sheet, (long long)real);
+        }
+        const BYTE* e = ScHudRowEmptySheet();
+        Check("  the empty sheet has a frame for every units.dat id, so the draw never falls "
+              "back to frame 0", (long long)(*(const WORD*)e >= 228), 1);
+        bool tiny = true;
+        for (int i = 0; i < *(const WORD*)e; ++i) {
+            const BYTE* f = e + 6 + i * 8;
+            if (f[2] != 1 || f[3] != 1 || *(const DWORD*)(f + 4) != (DWORD)(6 + *(const WORD*)e * 8)) tiny = false;
+        }
+        Check("  and every one of its frames is the same one transparent pixel", tiny ? 1 : 0, 1);
+    }
 
     const DWORD engineFn = (DWORD)FakeRt(SC_VA_WIREFRAME_BTN_INTERACT);
     const DWORD root     = FakeRoot();
@@ -4240,8 +4283,13 @@ static void QueueIndTests(void) {
                   (*(DWORD*)(ind + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) ? 1 : 0, 1);
             Check("  it is a static-text control", (long long)*(WORD*)(ind + SC_BINDLG_OFF_TYPE),
                   (long long)SC_CTRL_TYPE_LSTATIC);
-            Check("  drawn by the engine's own handler for that type",
-                  (long long)*(DWORD*)(ind + SC_BINDLG_OFF_UPDATE), (long long)0x44444444u);
+            // The module's own update paints the badge, then hands the TEXT to the engine's
+            // handler for that type -- which a fake table with no type-10 entry leaves the
+            // centred case too.
+            Check("  drawn by the module's badge update",
+                  (long long)*(DWORD*)(ind + SC_BINDLG_OFF_UPDATE), (long long)ScQueueIndOwnUpdate());
+            Check("  which hands the text to the engine's own handler for that type",
+                  (long long)ScQueueIndEngineUpdate(), (long long)0x44444444u);
             Check("  its id is negative, so the CREATE binder skips it",
                   (long long)(*(short*)(ind + SC_BINDLG_OFF_INDEX) < 0), 1);
             short* b = ScDlgBounds(ind);
@@ -4257,6 +4305,27 @@ static void QueueIndTests(void) {
             Check("  and sits inside the anchor icon (id 6)",
                   (long long)(b[0] >= *ScDlgBounds(QiCtl(4)) &&
                               b[2] <= *(short*)(QiCtl(4) + SC_BINDLG_OFF_BOUNDS + 4)), 1);
+            // THE BADGE: the icon's top-right corner, never the middle of its art.
+            const short* a6 = ScDlgBounds(QiCtl(4));
+            Check("  on the icon's top-right corner",
+                  (long long)(b[2] == a6[2] && b[1] == a6[1]), 1);
+            // The fill, into the fake pane's own surface. The icon's top border colour is
+            // what frames it; the rows under the font and the pixels beside it stay the pane's.
+            BYTE* px = (BYTE*)QiBits();
+            px[a6[1] * QI_SURF_W + a6[0] + 2] = 0x5A;
+            px[b[1] * QI_SURF_W + b[0] - 1] = 0x77;
+            px[(b[1] + 9) * QI_SURF_W + b[0] + 3] = 0x77;
+            px[(b[1] + 4) * QI_SURF_W + b[0] + 3] = 0x77;
+            ScQueueIndFillBadge(ind, QiRoot() + SC_BINDLG_OFF_SURFACE);
+            Check("  badge: framed in the icon border's colour",
+                  (long long)(px[b[1] * QI_SURF_W + b[0]] == 0x5A &&
+                              px[(b[1] + 8) * QI_SURF_W + b[2] - 1] == 0x5A), 1);
+            Check("  badge: black inside",
+                  (long long)px[(b[1] + 4) * QI_SURF_W + b[0] + 3], 0);
+            // The fake font is 10 tall, so the box is 9 rows; row 9 is the icon's again.
+            Check("  badge: nothing written under the font's rows or beside the box",
+                  (long long)(px[(b[1] + 9) * QI_SURF_W + b[0] + 3] == 0x77 &&
+                              px[b[1] * QI_SURF_W + b[0] - 1] == 0x77), 1);
             // AND THE VERY FIRST SHOW ALREADY HAS A BASELINE. The copy taken on hidden frames
             // needs a splice to exist, and the splice happens on this frame -- so without a
             // second capture site (just before the show) a pane going straight from an empty

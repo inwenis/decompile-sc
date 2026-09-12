@@ -488,6 +488,9 @@
 // Verified at runtime before use: sc_hudrow reads the default interact/update table
 // entries for type 9 and refuses to splice the indicator if either is null.
 #define SC_CTRL_TYPE_LSTATIC 9
+// ... and the centre-aligned one (cCSTATIC = 10), whose default update handler is
+// SC_VA_STATIC_TEXT_UPDATE10. sc_queueind centres its badge's count with it.
+#define SC_CTRL_TYPE_CSTATIC 10
 
 // The wireframe row's control ids: 12 buttons, packed left to right.
 #define SC_HUD_FIRST_SMALL_BUTTON 0x21

@@ -57,6 +57,13 @@ static char  g_text[48];
 static bool  g_shown    = false;
 static int   g_mode     = SC_QIND_NONE;
 static DWORD g_anchor   = 0;          // the control the box is positioned against
+
+// The indicator's own fxnUpdate (see IndUpdate) and the engine handlers it hands the text to.
+typedef void (__attribute__((fastcall)) *ScQIndUpdateFn)(DWORD ctrl, DWORD edx, DWORD a, DWORD b);
+static void __attribute__((fastcall)) SC_GAME_ENTRY IndUpdate(DWORD ctrl, DWORD edx,
+                                                             DWORD a, DWORD b);
+static DWORD g_textUpdate  = 0;   // the engine's type-9 (left) handler
+static DWORD g_textCentred = 0;   // its type-10 (centre) handler, or type 9's if it has none
 static bool  g_dialogLogged = false;
 static bool  g_bandLogged   = false;  // "the band is too small" said once per dialog
 
@@ -580,8 +587,13 @@ static bool EnsureSpliced(DWORD root) {
         return false;
     }
 
+    DWORD cInteract = 0, cUpdate = 0;
+    ScDlgDefaultHandlers(SC_CTRL_TYPE_CSTATIC, &cInteract, &cUpdate);
+    g_textUpdate  = tUpdate;
+    g_textCentred = cUpdate ? cUpdate : tUpdate;
+
     memset(g_ctrl, 0, sizeof(g_ctrl));
-    ScDlgMakeStaticText(ind, root, SC_QIND_CTRL_ID, g_text, tInteract, tUpdate);
+    ScDlgMakeStaticText(ind, root, SC_QIND_CTRL_ID, g_text, tInteract, (DWORD)&IndUpdate);
     if (!ScDlgAppendChild(root, ind)) {
         ScLog("QIND: child list longer than %d -- splice refused", SC_MAX_CTRLS_WALK);
         ++g_stat[SC_QIND_STAT_REFUSED];
@@ -602,8 +614,8 @@ static bool EnsureSpliced(DWORD root) {
 //     as a working feature (measured in a live group run: a box 22px wide clamped to one
 //     wireframe button, holding "4 bldgs  4 queued").
 // So the width is computed from the string rather than from the anchor. SC_QIND_CHAR_W is
-// a deliberate over-estimate of the small font's advance -- over-reserving costs nothing
-// (the box is a clip rect, not a fill), under-reserving costs the tail of the string.
+// a deliberate over-estimate of the small font's advance -- over-reserving costs a little
+// slack, under-reserving costs the tail of the string.
 //
 // Writes into the CALLER'S four shorts rather than straight into the control, because the
 // answer is recomputed every frame: the group band is a function of which buttons are
@@ -611,8 +623,6 @@ static bool EnsureSpliced(DWORD root) {
 // necessarily changing. The caller compares, and only then moves the control and redraws.
 static bool PlaceOn(short* b, DWORD anchor, DWORD root, int mode, int textLen) {
     short* a = ScDlgBounds(anchor);
-    short left = (short)(a[0] + SC_QIND_INSET_X);
-    short top  = (short)(a[1] + SC_QIND_INSET_Y);
     int   want = textLen * SC_QIND_CHAR_W;
     if (want < SC_QIND_BOX_W) want = SC_QIND_BOX_W;
 
@@ -656,16 +666,62 @@ static bool PlaceOn(short* b, DWORD anchor, DWORD root, int mode, int textLen) {
             return false;
         }
     } else {
-        // A "+N" is short and belongs inside the icon it annotates: staying within a
-        // control the engine repaints is what guarantees our pixels are painted over when
-        // the indicator goes away. UPGRADE's "+N" is the same shape: the frame path leaves
-        // icon 6 empty whenever there is a count to draw (ScQueueIndUpgradeIcons).
-        b[0] = left; b[1] = top;
-        b[2] = (short)(left + want > a[2] ? a[2] : left + want);
-        b[3] = (short)(top + SC_QIND_BOX_H > a[3] ? a[3] : top + SC_QIND_BOX_H);
+        // THE BADGE, on the icon's top-right corner and as wide as the count: a "+N" in the
+        // middle of the icon sits on unit art and is hard to read (IndUpdate paints the box
+        // under it). It stays inside the icon it annotates, because staying within a control
+        // the engine repaints is what guarantees our pixels are painted over when the
+        // indicator goes away. UPGRADE's "+N" is the same shape: the frame path leaves icon 6
+        // empty whenever there is a count to draw (ScQueueIndUpgradeIcons).
+        int w = textLen * SC_QIND_CHAR_W + SC_QIND_BADGE_PAD;
+        if (w > a[2] - a[0]) w = a[2] - a[0];
+        b[0] = (short)(a[2] - w); b[1] = a[1]; b[2] = a[2];
+        b[3] = (short)(a[1] + SC_QIND_BOX_H > a[3] ? a[3] : a[1] + SC_QIND_BOX_H);
     }
     return true;
 }
+
+// The indicator's fxnUpdate: __fastcall(ECX = control), two stack dwords, RET 8 -- how
+// 0x0041C1E5 calls it and how the engine's own static-text handlers return. GROUP draws the
+// line with the engine's left-justified handler, as a loaded control of that type would.
+// STRIP and UPGRADE first paint the badge into the render target the draw walk has just
+// pointed at this dialog's surface, then centre the count in it with the engine's
+// centre-justified handler.
+// The badge's pixels: the control's box, one row short of the small font's height (its
+// glyphs sit in the top rows; the box is taller only to satisfy the draw's clip rule), black,
+// framed in the colour of the anchor icon's own top border.
+void ScQueueIndFillBadge(DWORD ctrl, DWORD surface) {
+    if (!surface || !g_anchor) return;
+    const int w = (int)*(WORD*)(surface + SC_SURFACE_OFF_W);
+    const int h = (int)*(WORD*)(surface + SC_SURFACE_OFF_H);
+    BYTE* bits = (BYTE*)*(DWORD*)(surface + SC_SURFACE_OFF_BITS);
+    const short* b = ScDlgBounds(ctrl);
+    const short* a = ScDlgBounds(g_anchor);
+    int rows = ScQueueIndSmallFontHeight() - 1;
+    if (rows < 5) rows = SC_QIND_BAND_MIN_H;
+    const int x0 = b[0], x1 = b[2], y0 = b[1], y1 = b[1] + rows;
+    if (!bits || x0 < 0 || y0 < 0 || x1 > w || y1 > h || y1 > b[3] || x1 - x0 < 3 ||
+        a[0] < 0 || a[1] < 0 || a[0] + 2 >= w || a[1] >= h) return;
+    const BYTE frame = bits[a[1] * w + a[0] + 2];
+    for (int y = y0; y < y1; ++y) {
+        BYTE* row = bits + y * w;
+        for (int x = x0; x < x1; ++x) {
+            row[x] = (y == y0 || y == y1 - 1 || x == x0 || x == x1 - 1) ? frame : 0;
+        }
+    }
+}
+
+static void __attribute__((fastcall)) SC_GAME_ENTRY IndUpdate(DWORD ctrl, DWORD edx,
+                                                             DWORD a, DWORD b) {
+    DWORD fn = g_textUpdate;
+    if (g_mode == SC_QIND_STRIP || g_mode == SC_QIND_UPGRADE) {
+        ScQueueIndFillBadge(ctrl, *(DWORD*)ScRuntimeAddr(SC_VA_RENDER_TARGET));
+        fn = g_textCentred;
+    }
+    ((ScQIndUpdateFn)fn)(ctrl, edx, a, b);
+}
+
+DWORD ScQueueIndOwnUpdate(void)    { return (DWORD)&IndUpdate; }
+DWORD ScQueueIndEngineUpdate(void) { return g_textUpdate; }
 
 // Which control the indicator hangs off, per mode. A mode ScQueueIndCompose can return but
 // this function has no case for is invisible in every real game, on every building:
@@ -1250,13 +1306,6 @@ static void RepaintUnder(DWORD root) {
         for (int i = 0; i < SC_HUD_BUTTON_COUNT && c; ++i, c = ScDlgNext(c)) {
             if (*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) ScCtrlUpdateVia(g_update, c);
         }
-    // "+N upg" can run past icon 6 into the space above icons 2..5 too (see PlaceOn), so
-    // the same reasoning applies: repaint the whole strip, not just the icon it started on.
-    } else if (g_mode == SC_QIND_UPGRADE && root) {
-        DWORD c = ScDlgFindChild(root, SC_STATQ_FIRST_CONTROL);
-        for (int i = 0; i < SC_STATQ_SLOTS && c; ++i, c = ScDlgNext(c)) {
-            if (*(DWORD*)(c + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) ScCtrlUpdateVia(g_update, c);
-        }
     }
 }
 
@@ -1385,7 +1434,12 @@ void ScQueueIndOnFrame(void) {
     }
     const bool boxMoved = (b[0] != box[0] || b[1] != box[1] ||
                            b[2] != box[2] || b[3] != box[3]);
-    if (boxMoved) { b[0] = box[0]; b[1] = box[1]; b[2] = box[2]; b[3] = box[3]; }
+    if (boxMoved) {
+        // A badge that narrows ("+10" -> "+9") leaves its old left columns on the icon; the
+        // icon's own repaint takes them away, and the badge is drawn back over it.
+        if (g_shown && mode != SC_QIND_GROUP) ScCtrlUpdateVia(g_update, anchor);
+        b[0] = box[0]; b[1] = box[1]; b[2] = box[2]; b[3] = box[3];
+    }
     g_anchor = anchor;
 
     const bool moved   = boxMoved || (mode != g_mode);

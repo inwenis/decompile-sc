@@ -8,9 +8,10 @@
 // pointed at a plugin-owned buffer, drawn by the engine's own static-text handler
 // (research/status-pane-text.md), so font, colour and clipping are the pane's own.
 //
-// The "+N" sits over the LAST queue icon (id 6): the ring is held at SC_PRODQ_ENGINE_HOLD = 4
-// (sc_prodqueue.h), so display slot 4 never holds an engine item -- greyed for upgrades,
-// phantom-filled for units -- and the count goes on the slot the feature itself owns.
+// The "+N" is a badge on the LAST queue icon's top-right corner (id 6): the ring is held at
+// SC_PRODQ_ENGINE_HOLD = 4 (sc_prodqueue.h), so display slot 4 never holds an engine item --
+// greyed for upgrades, phantom-filled for units -- and the count goes on the slot the
+// feature itself owns.
 // Bounds come from the live control, never hardcoded. Apart from that control and the
 // phantom bracket's write-and-restore of ring bytes, it changes no game state: no unit
 // field, no resource global, no engine-owned control, no sprite. Off unless
@@ -22,16 +23,15 @@
 
 #include <windows.h>
 
-// Offsets from the anchor control's own top-left, so the indicator follows the dialog.
-#define SC_QIND_INSET_X 10
-#define SC_QIND_INSET_Y 12
+// The badge's two frame columns, on top of SC_QIND_CHAR_W's over-reserve for the glyphs.
+#define SC_QIND_BADGE_PAD 2
 // The engine's static-text draw REFUSES to draw at all when `fontHeight + y > clipBottom`
 // (research/status-pane-text.md 3), so the box must be taller than the font, not merely
 // tall enough to look right.
 #define SC_QIND_BOX_H 16
 #define SC_QIND_BOX_W 40
-// A deliberate OVER-estimate of the small font's advance per character: the box is a clip
-// rectangle, not a fill, so reserving too much costs nothing while reserving too little
+// A deliberate OVER-estimate of the small font's advance per character: reserving too much
+// costs a clip rect a little slack (or a badge a little width), while reserving too little
 // truncates the string, which reads as a working feature and is worse than drawing nothing.
 // Measured live: "4 bldgs  4 queued" cut off inside a box 22 pixels wide.
 #define SC_QIND_CHAR_W 7
@@ -110,6 +110,14 @@ void ScQueueIndRemove(void);
 // into the child chain, the engine's own visible bit, what string pszText actually holds --
 // alongside the numbers it was computed from. Never echoes inputs: every field is re-read.
 void ScQueueIndLogState(const char* tag);
+
+// THE BADGE (STRIP and UPGRADE): the indicator control's fxnUpdate is this module's own,
+// which paints the box into the render target and hands the text to the engine's
+// centre-justified handler; GROUP hands it to the left-justified one. Exposed so the test
+// can check both pointers and the fill, which it can reach with no engine to call.
+void  ScQueueIndFillBadge(DWORD ctrl, DWORD surface);
+DWORD ScQueueIndOwnUpdate(void);
+DWORD ScQueueIndEngineUpdate(void);
 
 // One line per child of the statdata dialog: id, type, flags, bounds and text. Says which
 // controls in that pane are engine-drawn TEXT and where the free pixels are on THIS install,
