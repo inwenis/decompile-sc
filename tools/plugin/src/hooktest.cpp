@@ -4309,10 +4309,12 @@ static void QueueIndTests(void) {
             const short* a6 = ScDlgBounds(QiCtl(4));
             Check("  on the icon's top-right corner",
                   (long long)(b[2] == a6[2] && b[1] == a6[1]), 1);
-            // The fill, into the fake pane's own surface. The icon's top border colour is
-            // what frames it; the rows under the font and the pixels beside it stay the pane's.
+            // The fill, into the fake pane's own surface. The icon's bright border row is what
+            // frames it and the pane's black beside the icon fills it; the rows under the font
+            // and the pixels beside the box stay the pane's.
             BYTE* px = (BYTE*)QiBits();
-            px[a6[1] * QI_SURF_W + a6[0] + 2] = 0x5A;
+            px[(a6[1] + 1) * QI_SURF_W + a6[0] + 10] = 0x5A;                         // border
+            px[(a6[1] + 9) * QI_SURF_W + a6[2] + SC_QIND_BADGE_BLACK_DX] = 0x8A;     // pane black
             px[b[1] * QI_SURF_W + b[0] - 1] = 0x77;
             px[(b[1] + 9) * QI_SURF_W + b[0] + 3] = 0x77;
             px[(b[1] + 4) * QI_SURF_W + b[0] + 3] = 0x77;
@@ -4320,8 +4322,8 @@ static void QueueIndTests(void) {
             Check("  badge: framed in the icon border's colour",
                   (long long)(px[b[1] * QI_SURF_W + b[0]] == 0x5A &&
                               px[(b[1] + 8) * QI_SURF_W + b[2] - 1] == 0x5A), 1);
-            Check("  badge: black inside",
-                  (long long)px[(b[1] + 4) * QI_SURF_W + b[0] + 3], 0);
+            Check("  badge: filled with the pane's black, not palette index 0",
+                  (long long)px[(b[1] + 4) * QI_SURF_W + b[0] + 3], 0x8A);
             // The fake font is 10 tall, so the box is 9 rows; row 9 is the icon's again.
             Check("  badge: nothing written under the font's rows or beside the box",
                   (long long)(px[(b[1] + 9) * QI_SURF_W + b[0] + 3] == 0x77 &&

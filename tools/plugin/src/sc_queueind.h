@@ -12,9 +12,9 @@
 // SC_PRODQ_ENGINE_HOLD = 4 (sc_prodqueue.h), so display slot 4 never holds an engine item --
 // greyed for upgrades, phantom-filled for units -- and the count goes on the slot the
 // feature itself owns.
-// Bounds come from the live control, never hardcoded. Apart from that control and the
-// phantom bracket's write-and-restore of ring bytes, it changes no game state: no unit
-// field, no resource global, no engine-owned control, no sprite. Off unless
+// Bounds come from the live control, never hardcoded. Apart from that control, the phantom
+// bracket's write-and-restore of ring bytes and the queue icons' wrapped handler pointers,
+// it changes no game state: no unit field, no resource global, no sprite. Off unless
 // %SCPLUGIN_QUEUEIND% asks for it (launcher -QueueIndicator 1) and inert in `-Mode
 // observe`; off, the dialog's child list is byte-for-byte stock.
 
@@ -25,6 +25,8 @@
 
 // The badge's two frame columns, on top of SC_QIND_CHAR_W's over-reserve for the glyphs.
 #define SC_QIND_BADGE_PAD 2
+// Where the badge takes the pane's black from: this many pixels right of the last icon.
+#define SC_QIND_BADGE_BLACK_DX 2
 // The engine's static-text draw REFUSES to draw at all when `fontHeight + y > clipBottom`
 // (research/status-pane-text.md 3), so the box must be taller than the font, not merely
 // tall enough to look right.
@@ -113,8 +115,10 @@ void ScQueueIndLogState(const char* tag);
 
 // THE BADGE (STRIP and UPGRADE): the indicator control's fxnUpdate is this module's own,
 // which paints the box into the render target and hands the text to the engine's
-// centre-justified handler; GROUP hands it to the left-justified one. Exposed so the test
-// can check both pointers and the fill, which it can reach with no engine to call.
+// centre-justified handler; GROUP hands it to the left-justified one. The last icon's own
+// fxnUpdate is wrapped too, so the badge is painted again right after every redraw of it.
+// Exposed so the test can check both pointers and the fill, which it can reach with no
+// engine to call.
 void  ScQueueIndFillBadge(DWORD ctrl, DWORD surface);
 DWORD ScQueueIndOwnUpdate(void);
 DWORD ScQueueIndEngineUpdate(void);

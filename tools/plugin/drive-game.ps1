@@ -2912,10 +2912,12 @@ function Get-ScSessionExpectedHooks {
 
 # Everything a non-observe run installs, for comparing against the log's own
 # `HOOK <name>: installed at` lines -- which carry every module's, not just sc_fanout's.
+# The HUD row's second hook is here and not in the fan-out set: ScHudRowInstall installs
+# both of its hooks or neither and returns 1, so sc_fanout counts the module once.
 function Get-ScPluginExpectedHooks {
     param([bool]$Circles, [bool]$HudRow, [bool]$QueueInd)
     @(Get-ScFanoutExpectedHooks -Circles $Circles -HudRow $HudRow -QueueInd $QueueInd) +
-    @(Get-ScSessionExpectedHooks)
+    @(Get-ScSessionExpectedHooks) + @(if ($HudRow) { 'wireframeDraw' })
 }
 
 # A count mismatch names no hook; this returns which names are missing and which

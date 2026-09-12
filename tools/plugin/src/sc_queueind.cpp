@@ -687,8 +687,11 @@ static bool PlaceOn(short* b, DWORD anchor, DWORD root, int mode, int textLen) {
 // pointed at this dialog's surface, then centre the count in it with the engine's
 // centre-justified handler.
 // The badge's pixels: the control's box, one row short of the small font's height (its
-// glyphs sit in the top rows; the box is taller only to satisfy the draw's clip rule), black,
-// framed in the colour of the anchor icon's own top border.
+// glyphs sit in the top rows; the box is taller only to satisfy the draw's clip rule), filled
+// with the pane's own black and framed in the icon's own border blue, both read off the
+// surface: the icon's second row is its bright border, and SC_QIND_BADGE_BLACK_DX right of the
+// icon is pane background. Not palette index 0, which is not the pane's black: the pane holds it
+// in 12 of its 24840 bytes (`surfInk=24828`).
 void ScQueueIndFillBadge(DWORD ctrl, DWORD surface) {
     if (!surface || !g_anchor) return;
     const int w = (int)*(WORD*)(surface + SC_SURFACE_OFF_W);
@@ -699,15 +702,58 @@ void ScQueueIndFillBadge(DWORD ctrl, DWORD surface) {
     int rows = ScQueueIndSmallFontHeight() - 1;
     if (rows < 5) rows = SC_QIND_BAND_MIN_H;
     const int x0 = b[0], x1 = b[2], y0 = b[1], y1 = b[1] + rows;
+    const int bx = a[2] + SC_QIND_BADGE_BLACK_DX, by = a[1] + rows;
     if (!bits || x0 < 0 || y0 < 0 || x1 > w || y1 > h || y1 > b[3] || x1 - x0 < 3 ||
-        a[0] < 0 || a[1] < 0 || a[0] + 2 >= w || a[1] >= h) return;
-    const BYTE frame = bits[a[1] * w + a[0] + 2];
+        a[0] < 0 || a[1] + 1 >= h || a[0] + 10 >= w || bx >= w || by >= h) return;
+    const BYTE frame = bits[(a[1] + 1) * w + a[0] + 10];
+    const BYTE black = bits[by * w + bx];
     for (int y = y0; y < y1; ++y) {
         BYTE* row = bits + y * w;
         for (int x = x0; x < x1; ++x) {
-            row[x] = (y == y0 || y == y1 - 1 || x == x0 || x == x1 - 1) ? frame : 0;
+            row[x] = (y == y0 || y == y1 - 1 || x == x0 || x == x1 - 1) ? frame : black;
         }
     }
+}
+
+// THE BADGE RIDES ON THE LAST ICON'S OWN DRAW. The progress bar beside it redraws every frame,
+// and its dirty block (snapped to the 16-pixel grid) takes in the icons' top rows: a badge drawn
+// only by its own control was painted every frame and was gone from the surface by the next
+// one, never reaching the screen (measured, both). So that icon's fxnUpdate is wrapped the way
+// the interacts are -- a data write, no code patched -- and the badge is painted right after
+// the engine draws the icon, in the same pass, whatever dirtied it.
+static DWORD g_iconDrawFn  = 0;   // the engine's own fxnUpdate for the last icon
+static DWORD g_iconDrawCtl = 0;   // the control whose +0x2E points at the shim
+
+static void __attribute__((fastcall)) SC_GAME_ENTRY QIndIconDrawShim(DWORD ctrl, DWORD edx,
+                                                                    DWORD a, DWORD b) {
+    ((ScCtrlDrawFn)g_iconDrawFn)(ctrl, edx, a, b);
+    if (ctrl == g_anchor && g_shown && g_spliced &&
+        (g_mode == SC_QIND_STRIP || g_mode == SC_QIND_UPGRADE)) {
+        const DWORD ind = (DWORD)&g_ctrl[0];
+        ScQueueIndFillBadge(ind, *(DWORD*)ScRuntimeAddr(SC_VA_RENDER_TARGET));
+        ((ScCtrlDrawFn)g_textCentred)(ind, edx, a, b);
+    }
+}
+
+// Idempotent, every frame: the engine rebinds a control's fxnUpdate when it lays the pane out,
+// so whatever the icon points at when it is not the shim is the engine's current handler.
+static void WrapLastIconDraw(DWORD root) {
+    const DWORD shim = (DWORD)&QIndIconDrawShim;
+    DWORD c = ScDlgFindChild(root, SC_STATQ_LAST_CONTROL);
+    if (!c) return;
+    DWORD* fn = (DWORD*)(c + SC_BINDLG_OFF_UPDATE);
+    if (*fn == shim || *fn == 0) return;
+    g_iconDrawFn  = *fn;
+    g_iconDrawCtl = c;
+    *fn = shim;
+}
+
+static void UnwrapLastIconDraw(void) {
+    if (g_iconDrawCtl && ScReadable(g_iconDrawCtl + SC_BINDLG_OFF_UPDATE, 4) &&
+        *(DWORD*)(g_iconDrawCtl + SC_BINDLG_OFF_UPDATE) == (DWORD)&QIndIconDrawShim) {
+        *(DWORD*)(g_iconDrawCtl + SC_BINDLG_OFF_UPDATE) = g_iconDrawFn;
+    }
+    g_iconDrawCtl = 0;
 }
 
 static void __attribute__((fastcall)) SC_GAME_ENTRY IndUpdate(DWORD ctrl, DWORD edx,
@@ -1323,6 +1369,7 @@ void ScQueueIndOnFrame(void) {
         // dropping the list without restoring is correct here (the records are gone), and
         // WrapIconInteracts rebuilds it against the new dialog on this same frame.
         g_iconWrapN    = 0;
+        g_iconDrawCtl  = 0;
         g_ownedIconN   = 0;
         ForgetUpgradeIcons();
         g_dialog       = root;
@@ -1345,6 +1392,7 @@ void ScQueueIndOnFrame(void) {
     // (an icon whose ring slot is occupied) is the control against which the failing one
     // means anything.
     WrapIconInteracts(root);
+    WrapLastIconDraw(root);
 
     ScQueueIndView v;
     ReadView(&v);
@@ -1616,6 +1664,7 @@ void ScQueueIndRemove(void) {
     // clean unconditionally rather than reason about that.
     ScQueueIndPhantomRestore();
     UnwrapIconInteracts();
+    UnwrapLastIconDraw();
 
     // Take the control back out of the dialog. Single dword writes, guarded reads because
     // the dialog may already be gone. Mid-game unload stays unsupported (the game thread
