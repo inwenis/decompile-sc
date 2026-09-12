@@ -28,11 +28,17 @@ Unzip [the release](https://github.com/inwenis/decompile-sc/releases) anywhere a
 
 Offline and single-player only.
 
-100 marines selected; the bottom row pages them twelve at a time and reads `100 units 1-12 (1/9)`:
+37 units selected; the bottom row pages them twelve at a time and reads `37 units 1-12 (1/4)`:
 
-![100 marines selected on the 1280x800 playfield; the bottom row reads 100 units 1-12 (1/9)](docs/screenshot-100-units-page-1-of-9.png)
+![37 units selected on the 1280x880 playfield; the bottom row reads 37 units 1-12 (1/4)](docs/screenshot-37-units-page-1-of-4.png)
 
-![63 units selected, mixed Zerg army, widescreen viewport](docs/screenshot-63-units.png)
+Three factories selected together, units queued for all of them at once, past the stock 5 per building; the bottom row reads `3 bldgs 17 queued`:
+
+![three factories selected; the bottom row reads 3 bldgs 17 queued](docs/screenshot-3-factories-17-queued.png)
+
+The Academy researching U-238 Shells, four more researches waiting in its queue as icons 2-5:
+
+![Terran Academy upgrading, four more researches queued as icons](docs/screenshot-academy-5-researches-queued.png)
 
 ## How does it work?
 
