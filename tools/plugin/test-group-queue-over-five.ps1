@@ -233,7 +233,7 @@ function Get-Logical {
 # a tick between them, not a disagreement about memory. Re-read until both agree; a
 # persistent skew still reaches Get-Logical's assertion.
 function Test-ProdRingsAgree {
-    param([Parameter(Mandatory)]$Prod, [Parameter(Mandatory)][string[]]$Units)
+    param([Parameter(Mandatory)]$Prod, [AllowEmptyCollection()][string[]]$Units = @())
     foreach ($u in $Units) {
         $row = @($Prod.Rows | Where-Object { $_.Unit -eq $u }) | Select-Object -First 1
         $trk = $Prod.Tracked[$u]
@@ -241,8 +241,10 @@ function Test-ProdRingsAgree {
     }
     $true
 }
+# -Units may be empty (a box that caught nothing): then there is nothing to compare and the
+# reading is returned as it came, so the suite's own assertions report the miss.
 function Get-ProdStable {
-    param([Parameter(Mandatory)][string]$Tag, [Parameter(Mandatory)][string[]]$Units, [int]$Tries = 4)
+    param([Parameter(Mandatory)][string]$Tag, [AllowEmptyCollection()][string[]]$Units = @(), [int]$Tries = 3)
     $p = $null
     for ($i = 1; $i -le $Tries; $i++) {
         $p = Get-Prod $Tag
