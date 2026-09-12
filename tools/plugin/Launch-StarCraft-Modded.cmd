@@ -6,9 +6,11 @@ rem start the game with scplugin.dll loaded, and put the game folder back when i
 setlocal
 cd /d "%~dp0"
 
-rem Which StarCraft? 1) the folder dropped onto this file or given as the argument,
-rem 2) game\ next to this file, 3) the InstallPath the 1.16.1 installer registered, 4) ask.
+rem Which StarCraft? 1) the folder dropped onto this file or given as the argument, 2) the
+rem SCMOD_GAME environment variable, 3) game\ next to this file, 4) the InstallPath the
+rem 1.16.1 installer registered, 5) ask.
 set "GAME=%~1"
+if not defined GAME if defined SCMOD_GAME set "GAME=%SCMOD_GAME%"
 if not defined GAME if exist "game\StarCraft.exe" set "GAME=%~dp0game"
 if not defined GAME for /f "tokens=2,*" %%a in ('reg query "HKLM\SOFTWARE\WOW6432Node\Blizzard Entertainment\Starcraft" /v InstallPath 2^>nul ^| find "InstallPath"') do set "GAME=%%b"
 if not defined GAME set /p "GAME=Where is StarCraft: Brood War 1.16.1 installed? Paste the folder path and press Enter: "
