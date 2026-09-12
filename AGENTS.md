@@ -210,6 +210,13 @@ Hard rule 4 applies to every line of `research/`.
 - A disassembly sweep must resume past undecodable bytes AND report the fraction of the section it actually covered; zero hits from partial coverage is indistinguishable from a correct all-clear.
   -> research/rulebook-history.md § "An enumeration that scanned for a NAME is not exhaustive"; research/renderer-viewport.md §12.4, §12.8
 
+## Decompiled C
+
+- DO read a function as C before its asm: `C:\sc-work\decomp\StarCraft.exe\0x<ADDR>.<name>.c`, one file per function; `index.tsv` maps entry address, name, size and file, `names.tsv` adds the globals, callers are `grep -l <name> *.c`.
+  Every name there is a Magnetar hypothesis (IMPORTED into Ghidra): hard rule 4 still applies before one enters `research/`; a `FUN_`/`DAT_` name means the table had none.
+  Why: a static asm read of the terrain blitter was "clean" and wrong; the same defect is one visible `do {} while` in C.
+  -> tools/ghidra/decomp-all.ps1 (regenerates; one persistent project under `C:\sc-work\ghidra`, one process at a time); tools/ghidra/README.md § "Whole-binary decompile with names"
+
 ## Diagnostics and reporting
 
 **Diagnostic lines are under the same rule as assertions: a wrong number in a log is worse than none, because you will reason from it.**

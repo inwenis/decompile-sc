@@ -66,8 +66,10 @@ public class DecompileMany extends GhidraScript {
             }
 
             try (PrintWriter w = new PrintWriter(Files.newBufferedWriter(index))) {
+                // nameSource separates evidence from hypothesis: ANALYSIS = Ghidra's Function ID /
+                // RTTI, IMPORTED = a third-party table (Magnetar), DEFAULT = no name at all.
                 w.println(String.join("\t", "label", "specAddr", "resolvedVia", "funcName",
-                    "funcEntry", "bodyBytes", "status", "cFile", "cLines"));
+                    "funcEntry", "bodyBytes", "status", "cFile", "cLines", "nameSource", "funcEnd"));
 
                 for (SweepUtil.Spec s : specs) {
                     Address a = addr(s.hex(0));
@@ -80,7 +82,7 @@ public class DecompileMany extends GhidraScript {
                     if (f == null) {
                         println("WARNING: no function at or containing " + a + " (" + s.label + ")");
                         w.println(String.join("\t", s.label, SweepUtil.hex(a.getOffset()),
-                            "none", "", "", "", "NO-FUNCTION", "", "0"));
+                            "none", "", "", "", "NO-FUNCTION", "", "0", "", ""));
                         rows++;
                         continue;
                     }
@@ -95,7 +97,10 @@ public class DecompileMany extends GhidraScript {
                     int lines = 0;
                     if (res.decompileCompleted()) {
                         String c = res.getDecompiledFunction().getC();
-                        fileName = s.label + "." + f.getName() + ".c";
+                        // Names carry ':' (FID_conflict:__time32) and quotes (RTTI); Windows
+                        // rejects both in a file name. The index keeps the real name.
+                        String safe = f.getName().replaceAll("[^A-Za-z0-9_.~-]", "_");
+                        fileName = s.label + "." + (safe.length() > 100 ? safe.substring(0, 100) : safe) + ".c";
                         Files.writeString(dir.resolve(fileName), c);
                         lines = c.split("\n", -1).length;
                         status = "OK";
@@ -113,7 +118,9 @@ public class DecompileMany extends GhidraScript {
                         Long.toString(f.getBody().getNumAddresses()),
                         SweepUtil.cell(status),
                         fileName,
-                        Integer.toString(lines)));
+                        Integer.toString(lines),
+                        f.getSymbol().getSource().toString(),
+                        SweepUtil.hex(f.getBody().getMaxAddress().getOffset())));
                     println("DecompileMany: " + s.label + " " + f.getName() + " -> " + status);
                     rows++;
                 }

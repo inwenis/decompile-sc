@@ -32,16 +32,17 @@ public class ApplyNames extends GhidraScript {
         }
         FunctionManager fm = currentProgram.getFunctionManager();
 
-        // Function ID check: how many functions carry a real name BEFORE the table is applied.
-        int fidNamed = 0;
+        // Function ID check: functions Ghidra's own analysis named (Function ID signatures for the
+        // statically linked CRT, RTTI). Counted by source, so a re-run reports the same number.
+        int analysisNamed = 0;
         for (Function f : fm.getFunctions(true)) {
-            if (!isAutoName(f.getName())) {
-                fidNamed++;
+            if (f.getSymbol().getSource() == SourceType.ANALYSIS) {
+                analysisNamed++;
             }
         }
 
-        int funcRenamed = 0, funcCreated = 0, funcKept = 0, funcNoCode = 0, funcBadName = 0;
-        int convSet = 0, convFailed = 0, dataLabeled = 0, dataKept = 0, outside = 0, rows = 0;
+        int funcRenamed = 0, funcCreated = 0, funcKept = 0, funcAlready = 0, funcNoCode = 0, funcBadName = 0;
+        int convSet = 0, convFailed = 0, dataLabeled = 0, dataAlready = 0, dataKept = 0, outside = 0, rows = 0;
         for (String line : Files.readAllLines(Paths.get(args[1]))) {
             String[] c = line.split("\t", -1);
             if (c.length < 3 || c[0].equals("kind") || c[0].startsWith("#")) {
@@ -66,6 +67,9 @@ public class ApplyNames extends GhidraScript {
                 }
                 else if (name.isEmpty()) {
                     // convention-only row: an auto-name in the table, nothing to rename
+                }
+                else if (f.getName().equals(name)) {
+                    funcAlready++;
                 }
                 else if (isAutoName(f.getName())) {
                     try {
@@ -92,6 +96,10 @@ public class ApplyNames extends GhidraScript {
             }
             else {
                 Symbol s = currentProgram.getSymbolTable().getPrimarySymbol(a);
+                if (s != null && s.getName().equals(name)) {
+                    dataAlready++;
+                    continue;
+                }
                 if (s != null && s.getSource() != SourceType.DEFAULT) {
                     dataKept++;
                     continue;
@@ -104,16 +112,18 @@ public class ApplyNames extends GhidraScript {
         List<String> report = new ArrayList<>();
         report.add("program=" + currentProgram.getName());
         report.add("functionsTotal=" + fm.getFunctionCount());
-        report.add("fidNamedBefore=" + fidNamed);
+        report.add("functionIdNamed=" + analysisNamed);
         report.add("tableRows=" + rows);
         report.add("funcRenamed=" + funcRenamed);
         report.add("funcCreated=" + funcCreated);
+        report.add("funcAlreadyNamed=" + funcAlready);
         report.add("funcKeptExistingName=" + funcKept);
         report.add("funcNoCodeAtAddress=" + funcNoCode);
         report.add("funcBadName=" + funcBadName);
         report.add("convSet=" + convSet);
         report.add("convFailed=" + convFailed);
         report.add("dataLabeled=" + dataLabeled);
+        report.add("dataAlreadyNamed=" + dataAlready);
         report.add("dataKeptExistingName=" + dataKept);
         report.add("outsideMemory=" + outside);
         Files.createDirectories(Paths.get(args[0]).toAbsolutePath().getParent());
