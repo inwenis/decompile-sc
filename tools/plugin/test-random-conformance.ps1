@@ -332,7 +332,7 @@ function Read-Engine {
     Set-ScMarker -MarkerPath $markerPath -Label $label
     $esc = [regex]::Escape($label)
     $want = @{
-        prodq   = "PRODQ \[$esc\] buildings=\d+ max="
+        prodq   = "PRODQ \[$esc\](?:\s+\w+=\S+)*\s+buildings=\d+ max="
         prodfan = "PRODFAN \[$esc\] buildings=\d+ selected="
         world   = "WORLD \[$esc\] p=7 units="
         card    = "CARD \[$esc\] (slots=\d+ shown=|dialog=0)"

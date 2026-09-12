@@ -813,12 +813,12 @@ try {
         # IN THE SHIPPED ARM IT CANNOT FAIL: a unit the gate DROPS never reaches the
         # `FANOUT select:` tag list, and a unit it WRONGLY PASSES gets no drop verdict, so
         # is never in $deadTags -- disjoint branches of one `if`, empty intersection
-        # whatever the gate does. Hence the POSITIVE CONTROL: the LIVE tags, judged by the
-        # same gate in the same run, MUST appear in $emitted, or the two lists come from
-        # vocabularies that never meet (a tag-format change on either side would do it)
-        # and the zero is worth nothing. AGENTS.md: prove the pattern positive where it
-        # should match, then require it absent where it should not.
-        $liveTags = @($verdicts | Where-Object { $_.Why -ne 'hp0' } | ForEach-Object { $_.Tag } | Sort-Object -Unique)
+        # whatever the gate does. Hence the POSITIVE CONTROL: the units the gate PASSED
+        # MUST appear in $emitted, or the two lists come from vocabularies that never meet
+        # (a tag-format change on either side would do it) and the zero is worth nothing.
+        # The gate writes a verdict only for a unit it drops, so the passed units are the
+        # HUD row's pre-fight tags that drew no drop verdict -- read by a different module.
+        $liveTags = @($script:beforeRow.Tags | Where-Object { $deadTags -notcontains $_ } | Sort-Object -Unique)
         $liveEmitted = Get-ScOverlap -Set $liveTags -Against $emitted
         Assert-That ("the SAME comparison matches for units the gate passed " +
                      "($($liveEmitted.Count) of $($liveTags.Count) live tags are in the emitted Selects)") `
