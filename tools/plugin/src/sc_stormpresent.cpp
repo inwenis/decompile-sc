@@ -51,7 +51,7 @@
 // storm ord432 (RVA 0x1A520), THE buffer->primary copy the exe present calls every frame:
 // stdcall(dst, src, dstPitch, srcPitch, region), RET 0x14, returns 1. It copies only the
 // dirty REGION (x<640, the presentable region's width), so on a static frame the primary's
-// x>=640 columns stay black even though the 800-wide buffer holds map there.
+// x>=640 columns stay black even though the wide buffer holds map there.
 #define STORM_RVA_ORD432     0x0001A520u
 static ScStormMode g_mode = SC_STORM_OFF;
 static BYTE*  g_stormBase = NULL;
@@ -139,9 +139,9 @@ static int StormEnvExplicit(void) {
     return SC_STORM_WIDEN;   // 1/y/widen
 }
 
-// Without the widen the engine computes 800 columns and the window shows 640
-// (renderer-viewport.md 19.8/20), so the default is WIDEN whenever the buffer actually
-// holds an 800-wide playfield (widescreen at stage >= 2). %SCPLUGIN_STORM_PRESENT%
+// Without the widen the engine computes every column of the wide screen and the window
+// shows 640 (renderer-viewport.md 19.8/20), so the default is WIDEN whenever the buffer
+// actually holds a wide playfield (widescreen at stage >= 2). %SCPLUGIN_STORM_PRESENT%
 // overrides: 0 = off, probe = read-only, widen = force on.
 ScStormMode ScStormPresentModeWanted(void) {
     const int ex = StormEnvExplicit();
@@ -176,7 +176,7 @@ static void LogRegionRects(const char* what, DWORD regionVaOfPtr) {
 // The SRgn struct ord432 copies from (allocator 0x1A7E0, size 0x30; builder ord436
 // 0x1B1F0): +0x08 span base, +0x14 span rows, +0x18 left, +0x1C row count, +0x20..0x2C
 // bounding rect {l,t,r,b}. That rect is the Ordinal_529-independent copy extent:
-// (0,0,640,480) IS the 640 cap, (0,0,800,480) puts the cap elsewhere.
+// (0,0,640,480) IS the 640 cap; a wider rect puts the cap elsewhere.
 static void LogRegionStruct(const char* t, const char* what, DWORD regionVaOfPtr) {
     bool ok = false;
     DWORD r = StormReadU32(ScRuntimeAddr(regionVaOfPtr), &ok);
@@ -228,9 +228,9 @@ void ScStormPresentLog(const char* tag) {
           t, (unsigned)surf[0], (unsigned)surf[1], (unsigned)surf[2], (unsigned)surf[3],
           okP ? (unsigned)prim : 0);
 
-    // The exe patches Ordinal_440's width argument to 0x320 (sc_screen_patches.h
-    // storm.region.width @0x0041D531): if it took, [+0x10] reads 800; if it still reads
-    // 640, storm builds every region on a 640-wide grid and THAT clips the copy.
+    // The exe patches Ordinal_440's width argument to the screen width (storm.region.width
+    // @0x0041D531): if it took, [+0x10] reads that width; if it still reads 640, storm
+    // builds every region on a 640-wide grid and THAT clips the copy.
     bool okG[6]; DWORD g[6];
     for (int i = 0; i < 6; ++i) g[i] = StormReadU32((BYTE*)StormRt(STORM_RVA_RGNGRID) + i * 4, &okG[i]);
     ScLog("STORM [%s] region-grid[0x5AC10]: cells=%u/%u log2=(%u,%u) WIDTH=%s%u HEIGHT=%u",
@@ -238,7 +238,7 @@ void ScStormPresentLog(const char* tag) {
           okG[4] ? "" : "?", (unsigned)g[4], (unsigned)g[5]);
 
     // The primary surface's REAL geometry, via IDirectDrawSurface::GetSurfaceDesc: a
-    // black RIGHT band with no letterbox and an 800 primary means only 0..639 were
+    // black RIGHT band with no letterbox and a wide primary means only 0..639 were
     // written (the cap is the copy); a 640 primary means the surface itself is narrow.
     // Read-only COM call, pointer-guarded.
     bool okS0; DWORD prim0 = StormReadU32(StormRt(STORM_RVA_SURFTABLE), &okS0);
@@ -270,7 +270,7 @@ void ScStormPresentLog(const char* tag) {
 }
 
 // ---------------------------------------------------------------------------
-// WIDEN: present the far quarter (x=640..799) the dirty-rect copy leaves black
+// WIDEN: present the columns past x=639 that the dirty-rect copy leaves black
 //
 // Two levers do NOT widen the present, measured:
 //  * Adding image nodes: the presentable region is 640 wide because its primary image
@@ -282,7 +282,7 @@ void ScStormPresentLog(const char* tag) {
 //    base +0x18=800, glass map = 0).
 //
 // So the robust fix intercepts THE COPY: after ord432's own dirty-region copy, this copies
-// the x=640..799 strip straight from the 800-wide buffer to the primary, every frame. It
+// the x>=640 strip straight from the wide buffer to the primary, every frame. It
 // touches ONLY x>=640, where there is no console/HUD (the console is 640 wide), so it
 // overwrites nothing the engine draws and is NOT a full-frame copy; src/dst/pitches are
 // ord432's own arguments, so the strip always matches the engine's copy of that frame.
@@ -562,7 +562,7 @@ void ScStormPresentInstall(BYTE* exeBase, bool writeAllowed) {
         g_mode = SC_STORM_PROBE;
     }
     if (g_mode == SC_STORM_WIDEN && !(ScScreenWidescreenWanted() && ScScreenStageWanted() >= 2)) {
-        // The strip copies the buffer's x>=640 columns, which only hold 800-wide
+        // The strip copies the buffer's x>=640 columns, which only hold
         // playfield when widescreen is active at stage >= 2; otherwise it would carry
         // black/garbage. Disarm to read-only rather than corrupt the screen.
         ScLog("STORM present: widen needs widescreen stage>=2 (an 800-wide playfield "

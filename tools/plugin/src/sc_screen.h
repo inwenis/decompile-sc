@@ -31,8 +31,8 @@ bool ScScreenWidescreenWanted(void);
 // The highest 9.3 stage to apply, from %SCPLUGIN_WS_STAGE% (default 1).
 // Stage 0 is the display mode alone; stage 1 adds the screen surface; stage 2
 // adds the playfield geometry; stage 3 widens the window-proc mouse clamps so
-// posted/real input can REACH x=640..799 -- without it every mouse x past 639 is
-// clamped to 639 and the right 160 columns are unclickable. Stage 3 buys input
+// posted/real input can REACH x>=640 -- without it every mouse x past 639 is
+// clamped to 639 and the widened columns are unclickable. Stage 3 buys input
 // reach only: pixels in that band repaint only when something marks the rect
 // dirty (sc_console.h).
 int ScScreenStageWanted(void);

@@ -43,7 +43,7 @@ $ws = Get-ScWideGeometry
 $SCREEN_W = $ws.W; $SCREEN_H = $ws.H; $STOCK_W = $ws.StockW; $STOCK_H = $ws.StockH
 $SHIFT_Y = $ws.ConsoleShiftY        # the console's move DOWN at stage 3 (0 at 480 tall)
 # The MAP right band the two numbers are read over: 20px in from the stock edge to
-# 10px short of the new one (was the fixed 660..790 of 19.8 at 800 wide).
+# 10px short of the new one.
 $BAND_X0 = $STOCK_W + 20; $BAND_X1 = $SCREEN_W - 10
 
 if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t074' -Suite 'stormpresent' }
@@ -84,7 +84,7 @@ function Get-DumpBand {
 }
 
 # The STORM log's base-region row-width, for a dedicated marker. This is the memory
-# oracle the on-glass capture corroborates: +0x18 == 800 means the widen is in force.
+# oracle the on-glass capture corroborates: +0x18 == the screen width means the widen is in force.
 function Get-StormBaseW18 {
     param([string]$Tag)
     $from = Get-ScLogLineCount -LogPath $log
@@ -96,8 +96,8 @@ function Get-StormBaseW18 {
     -1
 }
 
-# The shipped-config band read: buffer (composed, always 800) beside glass (the
-# window). MAP right band x=660..790 y=80..300 -- the same rect 19.8's finding used.
+# The shipped-config band read: buffer (composed, always full width) beside glass (the
+# window), over the MAP right band BAND_X0..BAND_X1, y=80..300.
 function Read-TwoNumbers {
     param([string]$Tag, [string]$ShotName, [int]$X0 = $BAND_X0, [int]$X1 = $BAND_X1, [int]$Y0 = 80, [int]$Y1 = 300)
     $dump = Get-BufferDump -Tag "$Tag-buf"

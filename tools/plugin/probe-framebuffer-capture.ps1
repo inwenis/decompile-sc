@@ -285,8 +285,8 @@ try {
     $fixtures = New-ScFixtureRun -Dir $FixtureDir -Names @($mapName)
     $script:fixtures = $fixtures
     # Stage-2 runs spread 36 marines on a 64px grid: their combined sight
-    # (~7 tiles beyond a ~384px block) explores the terrain under screen
-    # x=640..799, so the right band holds MAP rather than legitimate shroud.
+    # (~7 tiles beyond a ~384px block) explores the terrain under the right band
+    # up to $EXPLORED_EDGE_X, so that part holds MAP rather than legitimate shroud.
     # With a single marine that band is legitimately SHROUD-black even in a
     # correct build, and the band assertions would be vacuously failable.
     $unitCount = $Stage2 ? 36 : 1
@@ -389,7 +389,7 @@ try {
         }
     }
 
-    # ---- ARM 2: the 800-wide frame ----------------------------------------
+    # ---- ARM 2: the wide frame --------------------------------------------
     if ($arms['s1']) {
         $s1 = $arms['s1']
         foreach ($pt in @($s1.Menu, $s1.InGame)) {
@@ -418,9 +418,9 @@ try {
         if ($s1.InGame -and $s1.InGame.Dump) {
             $pt = $s1.InGame
             # The consistency check over the window-vouched playfield can only
-            # hold if rows were extracted at the TRUE pitch of 800 -- a
-            # 640-pitch misread shifts row y by 160*y bytes and lands on 0.58
-            # against the synthetic control. Same region and threshold as the
+            # hold if rows were extracted at the TRUE pitch, the screen width -- a
+            # 640-pitch misread shifts row y by (SCREEN_W-640)*y bytes and landed on 0.58
+            # against the synthetic control at 800. Same region and threshold as the
             # stock arm, same reasons.
             Write-Host "       [s1/$($pt.Tag)] consistency vs the window, pure playfield, at pitch ${SCREEN_W}:"
             $m = Invoke-FrameTool -ToolArgs (@('check', '--dump', $pt.Dump,
@@ -535,7 +535,7 @@ try {
         foreach ($pt in @($s2.InGame, $s2.Scrolled2)) {
             if ($null -eq $pt -or $null -eq $pt.Dump) { continue }
             # WMode still presents columns 0..639 at 1:1 under stage 2 (12.6),
-            # so the window-vouched mapping can only hold at true pitch 800.
+            # so the window-vouched mapping can only hold at the true pitch, the screen width.
             # ALIGNMENT IS PINNED at the measured (5,32) for the asserted pass:
             # a mislock on sprite noise at (8,36) reads a perfect dump as 0.34.
             # The render pass below keeps the auto-search, and a disagreement
@@ -548,7 +548,7 @@ try {
                 ([int]($m['window_distinct_rgb'] ?? 0) -ge 32) "(got $($m['window_distinct_rgb']))"
             Assert-True "[s2/$($pt.Tag)] the dump reproduces the presented playfield at pitch $SCREEN_W (>= 0.97)" `
                 ([double]($m['consist_frac'] ?? 0) -ge 0.97) "(got $($m['consist_frac']))"
-            # The right 160 columns over playfield rows: y=20..320 keeps clear
+            # The columns past 639 over playfield rows: y=20..320 keeps clear
             # of the top strip and the console region, and the fixture's marine
             # grid has explored the terrain there, so index 0 is damage rather
             # than legitimate shroud.

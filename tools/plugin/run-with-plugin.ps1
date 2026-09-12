@@ -199,7 +199,7 @@ param(
     # Which stage of research/renderer-viewport.md 9.3 to apply. 0 = the display mode
     # alone (expect a small image in the corner of a bigger one); 1 = + the screen
     # surface; 2 = + the playfield geometry; 3 = + input reaches the full width (the
-    # window-proc mouse clamps widen so clicks can reach x=640..799, renderer-viewport.md
+    # window-proc mouse clamps widen so clicks can reach past x=639, renderer-viewport.md
     # 18). Meaningless unless -Widescreen 1.
     [ValidateSet('0', '1', '2', '3')][string]$WidescreenStage = '1',
     # Which geometry PRESET the widescreen table targets, by name (sc_screen_presets.h:
@@ -222,7 +222,7 @@ param(
     # READ-ONLY: log storm's virtual-screen geometry, the flip clip, the fallback lock
     # pointer and the present region on the marker channel (any mode, writes nothing).
     # 'widen' = coerce storm's virtual screen to the widescreen width so the present
-    # carries all 800 columns (writes game memory, ignored in -Mode observe). '0' = off.
+    # carries every column (writes game memory, ignored in -Mode observe). '0' = off.
     # 'auto' (default) leaves %SCPLUGIN_STORM_PRESENT% UNSET so the DLL decides: WIDEN
     # at widescreen stage >= 2, off otherwise. The default must be 'auto', not '0': an
     # exported '0' disarms the DLL's auto-arm, the deployed (Wide) shortcut then plays

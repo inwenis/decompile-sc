@@ -5186,7 +5186,7 @@ static void CodeCaveTests(void) {
           ScScreenApplyCaveAt(fn2 + 5, 4, kCave, (int)sizeof(kCave)) ? 1 : 0, 0);
 
     // A cave may RETURN from the caved function instead of jumping back -- the
-    // console hit-test guard (console.hittest.xguard, sc_screen_patches.h) does
+    // console hit-test guard (console.hittest.xguard) does
     // exactly that for x >= 640: `cmp ecx,640 / jl +3 / xor eax,eax / ret /
     // <displaced insn>`. EmitCave must copy the body verbatim (a `ret` inside
     // it is not special) and the appended `jmp back` must only be reached on

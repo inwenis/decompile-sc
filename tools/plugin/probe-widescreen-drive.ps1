@@ -24,7 +24,7 @@ param(
     [string]$WindowedHelperDll = 'C:\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll',
     # Which helper PRESENTS. The engine build is identical either way (the
     # -WidescreenStage table + fog, in-process); what differs is the window.
-    # 'cnc' is the user's wide presentation (window 800, and the harness's
+    # 'cnc' is the user's wide presentation (the full-width window, and the harness's
     # posted playfield mouse does NOT register there -- measured); 'wmode' crops
     # it to 640 but posts reach every engine path, so it is the arm that PROVES
     # the engine's input mapping past x=640 (hit-testing is engine arithmetic on

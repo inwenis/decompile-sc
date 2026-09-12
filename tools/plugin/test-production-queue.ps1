@@ -59,7 +59,7 @@ param(
     # events land inside it.
     [int]$HoldSweepClicks = 0,
     [string]$HoldSweepMs = '40,60,80,120,200',
-    # '1' + stage 3 is the input-widened build (mouse clicks reach x=640..799). Every click
+    # '1' + stage 3 is the input-widened build (mouse clicks reach past x=639). Every click
     # here is computed from live control rects, so the run exercises the console at its
     # stock 640 position through the widescreen presentation.
     [ValidateSet('0', '1')][string]$Widescreen = '0',
