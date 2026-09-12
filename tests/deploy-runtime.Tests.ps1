@@ -129,9 +129,10 @@ Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-
         # The ARGUMENT lines -- stage, geometry and storm, each backtick-continued -- not
         # the launcher's own header comment, which also says "-StormPresent widen" and so
         # satisfies a plain substring match.
-        $script:launcher | Should -Match '-WidescreenStage 3 `\s*\r?\n\s*-Geometry __GEOMETRY__ `\s*\r?\n\s*-StormPresent widen `' -Because 'issue #113: run-with-plugin.ps1 exported its old default 0 verbatim, so the DLL auto-arm never fired and the deployed wide game showed a black right band; the launcher must pass the buffer->glass copy as an argument'
-        # The template carries a placeholder; deploy fills it from -Geometry before writing.
-        $script:deployText.Contains('.Replace(''__GEOMETRY__'', $Geometry)') | Should -BeTrue -Because 'the launcher must name the preset the 2x ini was generated for'
+        $script:launcher | Should -Match '-WidescreenStage 3 `\s*\r?\n\s*-Geometry \$Geometry `\s*\r?\n\s*-StormPresent widen `' -Because 'issue #113: run-with-plugin.ps1 exported its old default 0 verbatim, so the DLL auto-arm never fired and the deployed wide game showed a black right band; the launcher must pass the buffer->glass copy as an argument'
+        # The launcher's -Geometry defaults to a placeholder deploy fills from -Geometry.
+        $script:launcher.Contains("param([string]`$Geometry = '__GEOMETRY__')") | Should -BeTrue
+        $script:deployText.Contains('.Replace(''__GEOMETRY__'', $Geometry)') | Should -BeTrue -Because 'the launcher must default to the preset the main shortcut plays'
         $script:launcher | Should -Match 'cnc-ddraw\\ddraw\.dll'
         $script:launcher | Should -Not -Match 'InjectWindowedHelper' -Because 'WMode presents 640 columns whatever it is asked; the wide path must use the cnc-ddraw proxy'
     }
@@ -145,9 +146,11 @@ Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-
     }
 
     It 'the launcher presents through cnc-ddraw with the 2x/lock ini, generated at 2x the plugin geometry' {
-        $script:launcher | Should -Match 'cnc-ddraw-2x\.ini'
-        # The ini is the committed file with width/height rewritten to 2x the preset's screen.
-        $script:deployText.Contains('Get-ScWideGeometry -Geometry $Geometry') | Should -BeTrue -Because 'the ini must be sized from the preset the launcher names'
+        $script:launcher | Should -Match 'cnc-ddraw-2x-\$Geometry\.ini' -Because 'each size runs with the ini generated for it'
+        # One ini per preset: the committed file with width/height rewritten to 2x that preset's screen.
+        $script:deployText.Contains('foreach ($g in $presets)') | Should -BeTrue
+        $script:deployText.Contains('Get-ScWideGeometry -Geometry $g') | Should -BeTrue -Because 'each ini must be sized from its own preset'
+        $script:deployText.Contains('"cnc-ddraw-2x-$g.ini"') | Should -BeTrue
         $script:deployText | Should -Match '\^width=\\d\+'
         $script:deployText.Contains('does not carry width=') | Should -BeTrue -Because 'the verify step must read the ini that actually shipped'
     }
@@ -163,6 +166,7 @@ Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-
             "$($g.StockW)x$($g.StockH)" | Should -Be '640x480' -Because 'the stock screen, from the hand-written record header'
         }
         { Get-ScWideGeometry -Geometry '1280x800' } | Should -Throw '*presets: *1280x880*'
+        Get-ScWidePresetNames | Should -Be $names -Because 'deploy makes one ini and one size shortcut per name this returns'
     }
 
     It 'falls back to borderless full screen when 2x does not fit the primary monitor (the 2x-height step)' {
@@ -174,6 +178,12 @@ Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-
         $script:deployText | Should -Match "fullscreen=false', 'fullscreen=true'"
         $script:deployText | Should -Match 'maintas=true'
         $script:deployText | Should -Match 'must be borderless' -Because 'the verify step must confirm the fallback actually shipped'
+    }
+
+    It 'every preset gets a desktop shortcut that runs the launcher at its size' {
+        $script:deployText.Contains('"StarCraft Modded $g.lnk"') | Should -BeTrue
+        $script:deployText.Contains('" -Geometry $g"') | Should -BeTrue
+        $script:deployText.Contains('size shortcut $($s.Path) does not run the launcher') | Should -BeTrue -Because 'the verify step must read back each shortcut it wrote'
     }
 
     It 'a leftover Wide launcher and shortcut from an earlier deploy are removed' {

@@ -45,7 +45,9 @@ arguments.
    `pwsh -WindowStyle Hidden` with no console for any failure to otherwise show up in.
 9. Creates/updates the desktop shortcut **`StarCraft Modded.lnk`**, target
    `pwsh -WindowStyle Hidden -File <launcher>` -- double-click, the game appears, no
-   console window.
+   console window. Every geometry preset also gets **`StarCraft Modded <WxH>.lnk`**
+   (the same launcher with `-Geometry <WxH>`, presented through its own
+   `plugin\cnc-ddraw-2x-<WxH>.ini`), for trying the sizes side by side.
 10. Verifies: deployed `StarCraft.exe` sha256 == source's, the plugin binaries are newer
     than this run (proof they were actually rebuilt, not stale leftovers), the shortcut
     resolves to an existing target and launcher. Prints a one-line receipt:
@@ -167,7 +169,7 @@ reached a real deploy.
 | Screenshots | `<DeployRoot>\game\SCScrnShot_*.pcx` -- never touched by a redeploy |
 | Plugin runtime | `<DeployRoot>\plugin\` -- `scplugin.dll`, `scinject.exe`, and copies of `run-with-plugin.ps1` / `check-game-windows.ps1` / `sc-canonical-path.ps1` / `sc-audio-mute.ps1` / `sc-launch-lock.ps1` |
 | Launcher | `<DeployRoot>\Launch-StarCraft-Modded.ps1` -- zero arguments, feature set baked in |
-| Desktop shortcut | `%USERPROFILE%\Desktop\StarCraft Modded.lnk` |
+| Desktop shortcut | `%USERPROFILE%\Desktop\StarCraft Modded.lnk`, plus `StarCraft Modded <WxH>.lnk` per geometry preset |
 | Plugin log | `<DeployRoot>\logs\sc-plugin.log` (same format/rules as the dev log -- see `tools/plugin/README.md`) |
 | Launcher failure log | `<DeployRoot>\logs\launch-error.log` -- only written if the launcher itself throws |
 | Cross-worker lock | `C:\sc-work\logs\sc-launch.lock` (shared, outside `<DeployRoot>`) |
