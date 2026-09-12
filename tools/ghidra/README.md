@@ -137,7 +137,7 @@ structs, enums and typed globals. The result reads `unit->orderID != ORD_DIE` wh
 Ghidra prints `*(char *)(param_1 + 0x4d) != 0`.
 
 ```powershell
-./tools/ghidra/decomp-all.ps1     # about 6 minutes; re-imports whenever the Magnetar pin or the scripts change
+./tools/ghidra/decomp-all.ps1     # about 5 minutes; re-imports whenever the Magnetar pin or the scripts change
 ```
 
 Needs the pinned Ghidra above, the working copy `C:\sc-work\1161-base\StarCraft.exe`, and the
@@ -146,36 +146,65 @@ in `C:\sc-work\ghidra`, outside every worktree. Output lands in `C:\sc-work\deco
 
 | File | What |
 |---|---|
-| `0x<entry>.<name>.c` | decompiled C, one file per function |
-| `index.tsv` | per function: `funcEntry`, `funcName`, `nameSource`, `bodyBytes`, `cFile` |
-| `ranges.tsv` | per contiguous body range: `start`, `end`, `funcEntry`, `funcName`, `cFile` |
-| `types.txt` | every imported struct field with its offset, every enum value |
-| `names.tsv` | the parsed Magnetar table: `kind`, `addr`, `name`, `conv`, `proto`, `storage` |
-| `types-report.txt`, `names-report.txt` | what applied, what failed, the Function ID count |
+| `0x<ENTRY>.<name>.c` | decompiled C, one file per function, named by its entry address |
+| `index.tsv` | per function: `funcEntry`, `funcName`, `nameSource`, `bodyBytes`, `cFile`, `cLines`, `status`; `funcEnd` ends the entry's own chunk only |
+| `ranges.tsv` | per contiguous body range: `start`, `end` (inclusive), `funcEntry`, `funcName`, `cFile` |
+| `names.tsv` | the table as applied: `kind` (func/data), `addr`, `name`, `conv`, `proto`, `storage`, `origin` (magnetar/repo) |
+| `types.txt` | one line per struct field (`CUnit +0x04D  1  Order  orderID`) and per enum value (`Order 0x0  ORD_DIE`) |
+| `listing.asm` | the whole `.text` as `objdump -d -M intel` |
+| `types-report.txt`, `names-report.txt` | what applied, what was clamped or failed, the Function ID count |
+
+Plus one `.log` per step and the `*.manifest` success markers.
 
 ### Reading it
 
 ```powershell
 $d = 'C:\sc-work\decomp\StarCraft.exe'
-Get-ChildItem $d -Filter '*updateFog*'                                   # by name
-$a = 0x004BCDF3                                                          # by any address inside
+Get-ChildItem $d -Filter '*updateFog*'                       # a function by name
+Get-ChildItem $d -Filter '0x0041E0D0.*'                      # ... by entry address
+$a = 0x004BCDF3                                              # a CODE address -> its function
 Import-Csv "$d\ranges.tsv" -Delimiter "`t" | Where-Object { [uint32]$_.start -le $a -and $a -le [uint32]$_.end }
-Select-String -Path "$d\*.c" -Pattern '\bBWFXN_RefreshTarget\b' -List    # references
-Select-String -Path "$d\types.txt" -Pattern '^struct CUnit ' -Context 0,40   # struct offsets
+$a = 0x006284B6                                              # a DATA address -> the global at or below it
+Import-Csv "$d\names.tsv" -Delimiter "`t" | Where-Object { $_.kind -eq 'data' -and [uint32]$_.addr -le $a } | Sort-Object { [uint32]$_.addr } | Select-Object -Last 1
+Select-String "$d\types.txt" -Pattern '^CUnit \+0x04D '      # a struct offset -> its field
+Select-String "$d\types.txt" -Pattern '^Order '              # an enum's values
+Select-String "$d\listing.asm" -Pattern '^\s+4bcdf8:' -Context 3,8     # the asm: an instruction start, lower-case hex, no 0x
+Select-String -Path "$d\*.c" -Pattern '\bBWFXN_RefreshTarget\b'        # references, one line per hit
+Select-String tools/plugin/src/sc_addresses.h, research/*.md -Pattern '0041E0D0'   # this repo's evidence
 ```
 
-- A name grep lists direct calls and pointer stores (`DAT_006d1234 = options_menu_handler;`), plus
-  the function's own file. A call through a table or a register never names its target, so an
-  empty result is not "no callers" (AGENTS.md § "Claims about the binary").
-- `nameSource` is the provenance: `IMPORTED` = a Magnetar hypothesis, `ANALYSIS` = Ghidra's own
-  Function ID (statically linked CRT) or RTTI, `DEFAULT` = no name anywhere (`FUN_`).
-  Hard rule 4 applies to all of it: a name is a reading aid, not a finding.
-- `/* WARNING: Unknown calling convention */` marks a register convention read from Magnetar's
-  inline-asm wrapper: the parameters sit in the registers that wrapper loads. A `__thiscall`
-  function is spelled out the same way (`this_` in `ECX`), so its `this_` keeps its struct type.
-- Where Magnetar and this repo disagree, `tools/plugin/src/sc_addresses.h` wins: its addresses
-  carry evidence. Example: the selection iterator byte `0x006284B6` decompiles as
-  `map_height_pixels._2_1_`, because Magnetar declares a 4-byte `map_height_pixels` at `0x006284B4`.
+- **Provenance** is `nameSource` in `index.tsv`. `USER_DEFINED` = this repo's verified name, from
+  `tools/ghidra/magnetar-overrides.tsv`, one evidence line per row. `IMPORTED` = a Magnetar
+  hypothesis. `ANALYSIS` = Ghidra's own Function ID (statically linked CRT) or RTTI. `DEFAULT` =
+  no name anywhere (`FUN_`). Hard rule 4 applies: a name is a reading aid, not a finding.
+- **References.** A name grep finds direct calls and pointer stores (`DAT_006d1234 = options_menu_handler;`),
+  plus the function's own file. A call through a table or a register never names its target, so
+  no hit is not "no callers" (AGENTS.md § "Claims about the binary"). A field name can belong to
+  several structs (`orderID` is also in `COrder`), and the decompiler may compare through a temp.
+- **Register conventions.** `/* WARNING: Unknown calling convention */` marks custom storage read
+  from Magnetar's inline-asm wrapper. The `storage` column in `names.tsv` spells it out:
+  `left=EAX;bottom=EDX;top=ECX;right=S4` means `right` is the first stack dword above the return
+  address. `__thiscall` is spelled out the same way (`this_` in `ECX`), so `this_` keeps its type.
+- **Partial access.** `map_height_pixels._2_1_` is 1 byte at offset 2 inside that global.
+
+### Where Magnetar is wrong
+
+A cross-check of 561 addresses this repo verified (`sc_addresses.h`, `tools/ghidra/specs/*.spec`)
+against the table: 391 agree, 140 have nothing to compare, 30 looked like conflicts. An adversarial
+second pass left 8 real ones:
+
+| Address | Magnetar says | The evidence says | Handled |
+|---|---|---|---|
+| `0x004669B0` | `getQueuedUnitCount` | returns a free slot's index: `findFreeBuildQueueSlot` | override |
+| `0x004CE8A0` | `techIsResearchedSCBW` | reads the availability array: `techIsAvailable` | override |
+| `0x00424BA0` | `setSpellSpecialBtnGraphic` | walks `CUnit.loadedUnitIndex[8]`: `drawStatusLoadedUnits` | override |
+| `0x006284B4` / `B6` | `map_height_pixels`, an int | a u16, then the u8 `selectionIterator` | override |
+| `layer+0x00` | `buffers` | the layer's in-use flag | field name kept, [#191](https://github.com/inwenis/decompile-sc/issues/191) |
+| `StatDataDescriptor+0x00` | `CUnit* xxx` | the icon's GRP handle | field name kept, [#191](https://github.com/inwenis/decompile-sc/issues/191) |
+| `0x00512678` | `g_ActiveNationID` | Magnetar is right: the commanding player, not the local one | comment fix, [#191](https://github.com/inwenis/decompile-sc/issues/191) |
+| `0x006D1218` | `loadGameFileHandle` | Magnetar is right: a `FILE*` closed by `_fclose` | comment fix, [#191](https://github.com/inwenis/decompile-sc/issues/191) |
+
+So neither side wins by default: where they disagree, read the evidence each cites.
 
 ### How it is built, and what proves it
 
@@ -186,36 +215,42 @@ Select-String -Path "$d\types.txt" -Pattern '^struct CUnit ' -Context 0,40   # s
    match, `CUnit` at 336 bytes included.
 2. `ApplyNames.java` names functions and globals, applies prototypes, and gives register-convention
    functions custom storage parsed from the asm wrappers (`mov ecx, top` / `push dword ptr right`).
-   A function Ghidra's Function ID already named keeps that name and signature.
+   A table entry Ghidra never reached is disassembled, made a function, and every body is
+   recomputed once all entries exist. A function Ghidra's Function ID already named keeps that
+   name and signature. Rows of `magnetar-overrides.tsv` replace Magnetar's before any of this.
 3. `DecompileMany.java ALL` decompiles every non-thunk function.
 
 | Result of one run | Count |
 |---|---|
-| Functions decompiled / failed | 6321 / 0 |
+| Functions decompiled / failed | 6304 / 0 |
 | Named by Ghidra's Function ID or RTTI (`ANALYSIS`) | 265 |
-| Named by Magnetar (`IMPORTED`) | 3556 |
-| Unnamed (`FUN_`) | 2500 |
-| Table entries where Ghidra had no function, created | 1825 |
+| Named by Magnetar (`IMPORTED`) / by this repo (`USER_DEFINED`) | 3840 / 3 |
+| Unnamed (`FUN_`) | 2196 |
+| Table entries where Ghidra had no function, disassembled and created | 1825 |
+| Created functions whose body did not resolve (not a bare `RET`) | 1 |
 | Prototypes: standard convention / register wrapper / `__thiscall` | 3006 / 2682 / 260 |
 | Prototypes not applied | 2 |
-| Structs + unions / enums imported | 276 / 63 |
-| Globals named / typed | 933 / 863 |
+| Structs + unions / enums imported | 277 / 63 |
+| Globals named / typed (read back) / arrays clamped to the next global | 962 / 889 / 3 |
 
 The two prototypes not applied: a varargs wrapper (`__snprintf`) has no fixed storage, and one
 function takes `time_t`, which Ghidra's Windows archive sizes at 8 bytes where this binary's
-compiler used 4.
+compiler used 4. The clamped arrays are Magnetar declarations that run into the next global:
+`ScreenLayers` is `layer[12]` but `GameScreenBuffer` starts at its ninth element, and
+`Unit_AttackUnitOrder[228]` stops at 31 because `order_id` sits inside it. The clamp keeps both
+declarations without deciding which one Magnetar got wrong; `names-report.txt` lists all three.
 
 Against plain Ghidra (same binary, same decompiler, no Magnetar), counted over all output:
 
 | | Plain Ghidra | With Magnetar |
 |---|---|---|
-| Functions found and decompiled | 4499 | 6321 |
-| Lines reading a register the prototype does not model (`in_EAX`, `unaff_ESI`...) | 21535 | 3230 |
-| Raw offset casts, `*(T *)(p + 0x4d)` | 12178 | 2131 |
-| Files with struct field access (`->`) | 68 | 2940 |
-| Distinct unnamed callees / globals (`FUN_` / `DAT_`) | 4233 / 2946 | 2500 / 1833 |
+| Functions found and decompiled | 4499 | 6304 |
+| Lines reading a register the prototype does not model (`in_EAX`, `unaff_ESI`...) | 21535 | 3352 |
+| Raw offset casts, `*(T *)(p + 0x4d)` | 12178 | 1915 |
+| Files with struct field access (`->`) | 68 | 2986 |
+| Distinct unnamed callees / globals (`FUN_` / `DAT_`) | 4233 / 2946 | 2196 / 1570 |
 
-The remaining register reads sit in 678 functions: 606 whose Magnetar prototype leaves out a
+The remaining register reads sit in 685 functions: 613 whose Magnetar prototype leaves out a
 register argument (`isUnitBurrowed` is declared `int (void)` and reads its unit from `EAX`), 72
 that Magnetar does not list.
 

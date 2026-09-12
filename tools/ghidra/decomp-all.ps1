@@ -29,8 +29,8 @@ $run = { param($script, [string[]]$scriptArgs, $log) & $sweep -Mode Run -Project
 # ApplyNames only fills DEFAULT names, so tables applied over an older application would leave
 # its names and types behind: any change to what gets applied means a fresh import. The marker
 # is written after the last step succeeds, so an interrupted run imports afresh too.
-$inputs = @($script:MagnetarSha) + @('scripts/ApplyTypes.java', 'scripts/ApplyNames.java', 'magnetar-names.ps1' |
-    ForEach-Object { Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot $_) })
+$inputs = @($script:MagnetarSha) + @('scripts/ApplyTypes.java', 'scripts/ApplyNames.java', 'magnetar-names.ps1',
+    'magnetar-overrides.tsv' | ForEach-Object { Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot $_) })
 $fingerprint = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($inputs -join "`n")))
 $marker = Join-Path $ProjectDir "$program.imported"
 if (-not (Test-Path -LiteralPath $marker) -or (Get-Content -Raw -LiteralPath $marker).Trim() -ne $fingerprint) {
@@ -53,7 +53,8 @@ if ($program -ieq 'StarCraft.exe') {
     Get-Content -LiteralPath (Join-Path $out 'types-report.txt') -TotalCount 6
 
     $namesTsv = Join-Path $out 'names.tsv'
-    Export-MagnetarTsv -Rows (ConvertFrom-MagnetarOffsets -Lines $offsets) -Path $namesTsv
+    $overrides = Import-Csv -LiteralPath (Join-Path $PSScriptRoot 'magnetar-overrides.tsv') -Delimiter "`t"
+    Export-MagnetarTsv -Rows (Merge-MagnetarOverrides -Rows (ConvertFrom-MagnetarOffsets -Lines $offsets) -Overrides $overrides) -Path $namesTsv
     & $run ApplyNames.java @((Join-Path $out 'names-report.txt'), $namesTsv) (Join-Path $out 'names.log')
     Get-Content -LiteralPath (Join-Path $out 'names-report.txt') | Where-Object { $_ -notmatch "`t" -and $_ -notmatch '^#' }
 }
@@ -61,6 +62,16 @@ if ($program -ieq 'StarCraft.exe') {
 # A renamed function changes its file name; stale .c files from an earlier pass must not survive.
 Get-ChildItem -LiteralPath $out -Filter '*.c' | Remove-Item -Force
 & $run DecompileMany.java @((Join-Path $out 'index.tsv'), 'ALL', $DecompileTimeoutSecs) (Join-Path $out 'decompile.log')
+
+# The asm beside the C, from the pinned toolchain's objdump (the same lookup as tools/plugin/build.ps1).
+$objdump = Join-Path ($env:SC_MINGW32_BIN ?? 'C:\re-tools\mingw32-gcc-16.1.0-i686-msvcrt\mingw32\bin') 'objdump.exe'
+if (Test-Path -LiteralPath $objdump) {
+    & $objdump -d -M intel $InputPE | Set-Content -LiteralPath (Join-Path $out 'listing.asm') -Encoding utf8
+    if ($LASTEXITCODE -ne 0) { throw "decomp-all.ps1: objdump exited $LASTEXITCODE" }
+}
+else {
+    Write-Warning "decomp-all.ps1: no listing.asm, objdump not found at $objdump (setup-onetime.ps1 installs it)"
+}
 Set-Content -LiteralPath $marker -Value $fingerprint
 
 $index = Import-Csv -LiteralPath (Join-Path $out 'index.tsv') -Delimiter "`t"

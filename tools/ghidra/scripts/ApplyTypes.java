@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -129,7 +130,8 @@ public class ApplyTypes extends GhidraScript {
         SweepUtil.writeManifest(args[0], ok, report.subList(0, 6));
     }
 
-    /** "struct CUnit (336 bytes)" then "  +0x04D  1  Order  orderID" per field; enums after. */
+    /** "struct CUnit (336 bytes)", then one self-contained line per field and per enum value, so
+     *  a single grep answers "CUnit +0x04D" or "Order ORD_DIE". */
     private static List<String> layout(DataTypeManager dtm, String headerName, List<String> asserted,
             Map<String, EnumDataType> enums) {
         List<String> out = new ArrayList<>();
@@ -152,14 +154,16 @@ public class ApplyTypes extends GhidraScript {
         for (Composite s : comps) {
             out.add((s instanceof Union ? "union " : "struct ") + s.getName() + " (" + s.getLength() + " bytes)");
             for (DataTypeComponent m : s.getDefinedComponents()) {
-                out.add(String.format("  +0x%03X  %d  %s  %s", m.getOffset(), m.getLength(),
+                out.add(String.format("%s +0x%03X  %d  %s  %s", s.getName(), m.getOffset(), m.getLength(),
                     m.getDataType().getDisplayName(), m.getFieldName()));
             }
         }
         for (EnumDataType e : enums.values()) {
             out.add("enum " + e.getName() + " (" + e.getLength() + " bytes)");
             for (long v : e.getValues()) {
-                out.add(String.format("  0x%X  %s", v, e.getName(v)));
+                for (String name : e.getNames(v)) {
+                    out.add(String.format("%s 0x%X  %s", e.getName(), v, name));
+                }
             }
         }
         return out;

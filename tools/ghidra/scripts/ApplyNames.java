@@ -68,15 +68,17 @@ public class ApplyNames extends GhidraScript {
                 }
                 count("tableRows");
                 String name = c[2], conv = at(c, 3), proto = at(c, 4), storage = at(c, 5);
+                // origin=repo: this repo's verified name (magnetar-overrides.tsv), not a hypothesis
+                SourceType src = at(c, 6).equals("repo") ? SourceType.USER_DEFINED : SourceType.IMPORTED;
                 Address a = toAddr(Long.parseUnsignedLong(c[1].replaceFirst("^0[xX]", ""), 16));
                 if (!currentProgram.getMemory().contains(a)) {
                     count("outsideMemory");
                 }
                 else if (c[0].equals("func")) {
-                    applyFunction(fm, a, name, conv, proto, storage);
+                    applyFunction(fm, a, name, src, conv, proto, storage);
                 }
                 else {
-                    data.put(a, new String[] { name, proto });
+                    data.put(a, new String[] { name, proto, src.name() });
                 }
             }
             // A body traced before a later table entry existed flowed straight through it; with
@@ -84,9 +86,11 @@ public class ApplyNames extends GhidraScript {
             for (Function f : touched) {
                 CreateFunctionCmd.fixupFunctionBody(currentProgram, f, monitor);
             }
+            // A one-byte body is a bare RET stub, or code that never disassembled.
             for (Function f : created) {
-                if (f.getBody().getNumAddresses() <= 1) {
-                    count("funcBodyOneByte");
+                Instruction ins = getInstructionAt(f.getEntryPoint());
+                if (f.getBody().getNumAddresses() <= 1 && (ins == null || !ins.getFlowType().isTerminal())) {
+                    count("funcBodyUnresolved");
                     failures.add("BODY\t" + f.getEntryPoint() + "\t" + f.getName());
                 }
             }
@@ -118,7 +122,7 @@ public class ApplyNames extends GhidraScript {
         SweepUtil.writeManifest(args[0], n.getOrDefault("tableRows", 0), report);
     }
 
-    private void applyFunction(FunctionManager fm, Address a, String name, String conv,
+    private void applyFunction(FunctionManager fm, Address a, String name, SourceType src, String conv,
             String proto, String storage) throws Exception {
         Function f = fm.getFunctionAt(a);
         if (f == null) {
@@ -144,8 +148,8 @@ public class ApplyNames extends GhidraScript {
                 count("funcAlreadyNamed");
             }
             else if (f.getSymbol().getSource() == SourceType.DEFAULT) {
-                f.setName(name, SourceType.IMPORTED);
-                count("funcRenamed");
+                f.setName(name, src);
+                count(src == SourceType.USER_DEFINED ? "funcNamedFromRepo" : "funcRenamed");
             }
             else {
                 count("funcKeptExistingName");
@@ -187,7 +191,7 @@ public class ApplyNames extends GhidraScript {
             }
             else if (!conv.isEmpty()) {
                 ApplyFunctionSignatureCmd cmd = new ApplyFunctionSignatureCmd(a, sig, SourceType.IMPORTED,
-                    false, FunctionRenameOption.NO_CHANGE);
+                    false, false, DataTypeConflictHandler.DEFAULT_HANDLER, FunctionRenameOption.NO_CHANGE);
                 if (!cmd.applyTo(currentProgram)) {
                     throw new IllegalStateException(cmd.getStatusMsg());
                 }
@@ -248,7 +252,7 @@ public class ApplyNames extends GhidraScript {
                 continue;
             }
             else {
-                createLabel(a, name, true, SourceType.IMPORTED);
+                createLabel(a, name, true, SourceType.valueOf(e.getValue()[2]));
                 count("dataLabeled");
             }
             if (!e.getValue()[1].isEmpty()) {

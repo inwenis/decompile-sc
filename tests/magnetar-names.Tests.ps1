@@ -141,6 +141,22 @@ Describe 'ConvertFrom-MagnetarOffsets' {
     }
 }
 
+Describe 'Merge-MagnetarOverrides' {
+    It 'renames a Magnetar row, adds a row Magnetar lacks, and marks only those as repo' {
+        $rows = ConvertFrom-MagnetarOffsets -Lines $offsets
+        $over = @(
+            [pscustomobject]@{ kind = 'func'; addr = '0x401120'; name = 'repoName'; decl = ''; evidence = 'x' },
+            [pscustomobject]@{ kind = 'data'; addr = '0x006284B6'; name = 'selectionIterator'; decl = 'u8 __v'; evidence = 'y' })
+        $m = Merge-MagnetarOverrides -Rows $rows -Overrides $over
+        $m.Count | Should -Be ($rows.Count + 1)
+        $f = $m | Where-Object addr -eq '0x00401120'
+        "$($f.name) $($f.origin) $($f.proto)" | Should -Be 'repoName repo void __thiscall __fn(CImage *this_)'
+        $d = $m | Where-Object addr -eq '0x006284B6'
+        "$($d.kind) $($d.name) $($d.origin) $($d.proto)" | Should -Be 'data selectionIterator repo u8 __v'
+        @($m | Where-Object origin -eq 'repo').Count | Should -Be 2
+    }
+}
+
 Describe 'ConvertFrom-MagnetarTypes' {
     BeforeAll { $script:t = ConvertFrom-MagnetarTypes -Lines $types }
 

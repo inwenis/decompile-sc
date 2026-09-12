@@ -126,6 +126,27 @@ function ConvertFrom-MagnetarOffsets {
     $rows
 }
 
+# Where this repo's evidence contradicts Magnetar, the repo's name (and a global's type) wins; each
+# row of magnetar-overrides.tsv carries its evidence. origin=repo lands in Ghidra as USER_DEFINED,
+# so index.tsv's nameSource tells a verified name from a Magnetar hypothesis.
+function Merge-MagnetarOverrides {
+    param([Parameter(Mandatory)][object[]]$Rows, [Parameter(Mandatory)][object[]]$Overrides)
+    $byAddr = @{}
+    $all = [System.Collections.Generic.List[object]]::new()
+    foreach ($r in $Rows) { $r | Add-Member -NotePropertyName origin -NotePropertyValue 'magnetar' -Force; $byAddr[$r.addr] = $r; $all.Add($r) }
+    foreach ($o in $Overrides) {
+        $key = '0x{0:X8}' -f [Convert]::ToInt64($o.addr.Substring(2), 16)
+        $r = $byAddr[$key]
+        if (-not $r) {
+            $r = [pscustomobject]@{ kind = $o.kind; addr = $key; name = ''; conv = ''; proto = ''; storage = ''; origin = 'repo' }
+            $byAddr[$key] = $r; $all.Add($r)
+        }
+        $r.name = $o.name; $r.origin = 'repo'
+        if ($o.decl) { $r.proto = $o.decl }
+    }
+    $all.ToArray()
+}
+
 # Ghidra's C parser sizes every enum as an int and rejects C++11 "enum X : T", so enums leave the
 # header as rows with their true size; forward declarations, includes and the namespace go too.
 function ConvertFrom-MagnetarTypes {
