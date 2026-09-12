@@ -72,6 +72,7 @@ $pluginDir = Join-Path $scriptDir 'plugin'
 . (Join-Path $pluginDir 'sc-canonical-path.ps1')
 . (Join-Path $pluginDir 'sc-launch-lock.ps1')
 . (Join-Path $pluginDir 'sc-build-id.ps1')
+. (Join-Path $pluginDir 'sc-geometry.ps1')
 
 # --- guard: refuse a dangerous -DeployRoot ----------------------------------
 $deployRootFull = Get-CanonicalPath $DeployRoot
@@ -311,18 +312,12 @@ New-Item -ItemType Directory -Path $cncDeployDir -Force | Out-Null
 Copy-Item -LiteralPath $cncSrcDll -Destination (Join-Path $cncDeployDir 'ddraw.dll') -Force
 Copy-Item -LiteralPath (Join-Path $pluginDir 'cnc-ddraw.ini') -Destination (Join-Path $pluginDeployDir 'cnc-ddraw.ini') -Force
 # The 2x ini is GENERATED from tools/plugin/cnc-ddraw-2x.ini with width/height set to
-# twice the preset the launcher passes (-Geometry; SC_WS_SCREEN_W/H in its generated
-# sc_screen_patches_<G>.h), so the window always matches what the DLL renders. The
-# committed file keeps the stock 1280x960 (2x of 640x480) as its documented example.
-$patchHeader = Join-Path $pluginDir "src\sc_screen_patches_$Geometry.h"
-if (-not (Test-Path -LiteralPath $patchHeader)) {
-    $known = @(Get-ChildItem -LiteralPath (Join-Path $pluginDir 'src') -Filter 'sc_screen_patches_*.h' |
-               ForEach-Object { $_.BaseName -replace '^sc_screen_patches_', '' })
-    throw "deploy: no geometry preset '$Geometry'; presets: $($known -join ', ')"
-}
-$wsW = [int]((Select-String -LiteralPath $patchHeader -Pattern '^#define\s+SC_WS_SCREEN_W\s+(\d+)' | Select-Object -First 1).Matches[0].Groups[1].Value)
-$wsH = [int]((Select-String -LiteralPath $patchHeader -Pattern '^#define\s+SC_WS_SCREEN_H\s+(\d+)' | Select-Object -First 1).Matches[0].Groups[1].Value)
-if ($wsW -lt 640 -or $wsH -lt 480) { throw "deploy: could not read SC_WS_SCREEN_W/H from $patchHeader (got ${wsW}x${wsH})" }
+# twice the screen of the preset the launcher passes (-Geometry), so the window always
+# matches what the DLL renders. The committed file keeps the stock 1280x960 (2x of
+# 640x480) as its documented example.
+$ws = Get-ScWideGeometry -Geometry $Geometry
+$wsW = $ws.W
+$wsH = $ws.H
 $cnc2xIniDeployPath = Join-Path $pluginDeployDir 'cnc-ddraw-2x.ini'
 $cnc2x = Get-Content -Raw -LiteralPath (Join-Path $pluginDir 'cnc-ddraw-2x.ini')
 $cnc2x = $cnc2x -replace '(?m)^width=\d+', "width=$($wsW * 2)" -replace '(?m)^height=\d+', "height=$($wsH * 2)"

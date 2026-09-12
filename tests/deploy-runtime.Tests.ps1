@@ -146,10 +146,23 @@ Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-
 
     It 'the launcher presents through cnc-ddraw with the 2x/lock ini, generated at 2x the plugin geometry' {
         $script:launcher | Should -Match 'cnc-ddraw-2x\.ini'
-        # The ini is the committed file with width/height rewritten to 2x SC_WS_SCREEN_W/H.
-        $script:deployText | Should -Match 'SC_WS_SCREEN_W'
+        # The ini is the committed file with width/height rewritten to 2x the preset's screen.
+        $script:deployText.Contains('Get-ScWideGeometry -Geometry $Geometry') | Should -BeTrue -Because 'the ini must be sized from the preset the launcher names'
         $script:deployText | Should -Match '\^width=\\d\+'
         $script:deployText.Contains('does not carry width=') | Should -BeTrue -Because 'the verify step must read the ini that actually shipped'
+    }
+
+    It 'the geometry reader deploy and the suites share resolves every preset the DLL lists' {
+        . (Join-Path $script:pluginDir 'sc-geometry.ps1')
+        $listed = Get-Content -Raw -LiteralPath (Join-Path $script:pluginDir 'src/sc_screen_presets.h')
+        $names = @([regex]::Matches($listed, '&SC_WS_GEOM_(\d+x\d+)') | ForEach-Object { $_.Groups[1].Value })
+        $names.Count | Should -BeGreaterThan 0 -Because 'an empty list would pass every check below unexamined'
+        foreach ($n in $names) {
+            $g = Get-ScWideGeometry -Geometry $n
+            "$($g.W)x$($g.H)" | Should -Be $n -Because "the $n table's own SC_WS_SCREEN_W/H"
+            "$($g.StockW)x$($g.StockH)" | Should -Be '640x480' -Because 'the stock screen, from the hand-written record header'
+        }
+        { Get-ScWideGeometry -Geometry '1280x800' } | Should -Throw '*presets: *1280x880*'
     }
 
     It 'falls back to borderless full screen when 2x does not fit the primary monitor (the 2x-height step)' {
