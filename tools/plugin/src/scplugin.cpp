@@ -309,8 +309,8 @@ static void ScanScreen(const char* tag) {
 // Framebuffer dump -- READ-ONLY
 //
 // The PRESENTED window is WMode.dll's columns 0..639 of whatever the engine composed
-// (research/renderer-viewport.md 12.6, 12.10), so no capture of it can see the right 160
-// columns of an 800-wide frame. This reads the engine's OWN composed frame -- the screen
+// (research/renderer-viewport.md 12.6, 12.10), so no capture of it can see the columns
+// past 639 of a wide frame. This reads the engine's OWN composed frame -- the screen
 // Bitmap 0x006CEFF0 (u16 w, u16 h, u8* data; pitch == width, research/renderer-viewport.md
 // 2) -- out of process memory, without presenting it and without touching the display.
 //
@@ -841,8 +841,8 @@ static DWORD WINAPI ObserverThread(LPVOID) {
           g_frameDump ? 1 : 0,
           g_frameDump ? " dir=" : "", g_frameDump ? g_frameDumpDir : "");
     // Which ARM this run is, printed next to the read-back's own switch because every
-    // SCREEN line below is only interpretable against it -- 800x480 is the result in
-    // one arm and a defect in the other.
+    // SCREEN line below is only interpretable against it -- the wide size is the result
+    // in one arm and a defect in the other.
     ScLog("OBSERVER widescreen=%d (%%SCPLUGIN_WIDESCREEN%%; %s)",
           ScScreenActive() ? 1 : 0,
           ScScreenActive() ? "the screen geometry HAS been repatched"
@@ -1103,7 +1103,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
             ScUpgQueueRemove();
             ScFanoutRemove();
             // Console bounds restored and interacts unwrapped before the widescreen
-            // geometry (which the move's +160 only makes sense on) comes out below.
+            // geometry (which the console move only makes sense on) comes out below.
             ScConsoleRemove();
             ScMenuRemove();
             ScMarkTraceRemove();

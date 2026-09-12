@@ -326,7 +326,7 @@ try {
         # Layer 2 is a STAGE 2 site, not a stage 1 one. Stage 1 widens the
         # framebuffer's PITCH and nothing else: every rectangle, clip and dirty
         # bound stays stock, so the engine keeps composing a 640-wide picture into
-        # an 800-wide buffer. That separation is what makes stage 1 checkable at
+        # the wider buffer. That separation is what makes stage 1 checkable at
         # all -- its frame must match the control's down to the animation noise floor.
         $l2 = $wsMenu.Layers | Where-Object Index -eq 2
         if ($Stage -eq '2') {
