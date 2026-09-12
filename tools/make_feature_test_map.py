@@ -179,7 +179,7 @@ def build_layout():
     return placed, camera
 
 
-def check_layout(placed, map_w, map_h):
+def check_layout(placed, map_w, map_h, min_gap_px=MIN_SIDE_GAP_PX):
     """What the engine will not forgive: off the map, overlapping, unpowered, in range."""
     boxes = [(p, p[2] - p[4] // 2, p[3] - p[5] // 2, p[2] + p[4] // 2, p[3] + p[5] // 2)
              for p in placed if p[4]]
@@ -201,8 +201,15 @@ def check_layout(placed, map_w, map_h):
                        for q in pylons), f"unpowered: {b}"
     gap = (min(p[3] - p[5] // 2 for p in placed if p[1] == ENEMY)
            - max(p[3] + p[5] // 2 for p in placed if p[1] == HUMAN))
-    assert gap >= MIN_SIDE_GAP_PX, f"the two sides are only {gap}px apart"
+    assert gap >= min_gap_px, f"the two sides are only {gap}px apart"
     return gap
+
+
+def fill_ground(pair, variants, w, h):
+    """MTXM of one ground: the tile-group pair alternating by x, its variants scattered."""
+    tiles = [(pair[x & 1] << 4) | variants[((x >> 1) * 5 + y * 3) % len(variants)]
+             for y in range(h) for x in range(w)]
+    return struct.pack(f"<{w * h}H", *tiles)
 
 
 def flat_terrain(sections, template, start_tile):
@@ -212,9 +219,7 @@ def flat_terrain(sections, template, start_tile):
     sx, sy = start_tile
     pair = [mtxm[sy * w + (sx & ~1)] >> 4, mtxm[sy * w + (sx | 1)] >> 4]
     variants = sorted({t & 0xF for t in mtxm if t >> 4 == pair[0]})
-    tiles = [(pair[x & 1] << 4) | variants[((x >> 1) * 5 + y * 3) % len(variants)]
-             for y in range(h) for x in range(w)]
-    return struct.pack(f"<{w * h}H", *tiles), (w, h)
+    return fill_ground(pair, variants, w, h), (w, h)
 
 
 def unit_record(instance, unit, owner, x, y):
