@@ -1,0 +1,6 @@
+kind	addr	name	decl	evidence
+func	0x004669B0	findFreeBuildQueueSlot		returns the ring index of the first free (0xE4) slot from the head at +0xA4, 5 when full; Magnetar's getQueuedUnitCount reads as a count. research/production-queue.md 2.1-2.2; sc_addresses.h SC_VA_FIND_FREE_QUEUE_SLOT
+func	0x004CE8A0	techIsAvailable		reads TechAvailableSC (0x0058CE24), the availability array (research/command-card.md 6.1-6.2); Magnetar's techIsResearchedSCBW misnames it, its own isTechResearched 0x004CE850 reads TechResearchSC (0x0058CF44)
+func	0x00424BA0	drawStatusLoadedUnits		walks the eight u16 CUnit.loadedUnitIndex slots (+0xB0..+0xBE) of the unit at 0x00597248; Magnetar's setSpellSpecialBtnGraphic does not fit. teippi label in tools/ghidra/specs/hud-functions.spec
+data	0x006284B4	map_height_pixels	u16 __v	all 115 decompiled uses are 16-bit reads or byte +2, which is the selection iterator; Magnetar declares an int
+data	0x006284B6	selectionIterator	u8 __v	41 byte-width accesses, research/data/selection-xrefs.tsv; research/binary-selection-map.md 2.1

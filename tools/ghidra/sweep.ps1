@@ -36,7 +36,9 @@ param(
     [string]$LogFile,
     [string]$Processor,
     [string]$CompilerSpec,
-    [int]$TimeoutMinutes = 90
+    [int]$TimeoutMinutes = 90,
+    # Prepare only: replace a program already in the project instead of skipping the import.
+    [switch]$Overwrite
 )
 
 $ErrorActionPreference = 'Stop'
@@ -72,6 +74,7 @@ if ($Mode -eq 'Prepare') {
     $InputPE = (Resolve-Path -LiteralPath $InputPE).Path
 
     $headlessArgs = @($ProjectDir, $ProjectName, '-import', $InputPE, '-scriptPath', $ScriptPath)
+    if ($Overwrite) { $headlessArgs += '-overwrite' }
     if ($Processor) { $headlessArgs += @('-processor', $Processor) }
     if ($CompilerSpec) { $headlessArgs += @('-cspec', $CompilerSpec) }
 }
