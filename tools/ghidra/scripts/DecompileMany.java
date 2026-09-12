@@ -7,7 +7,8 @@
 //
 // Script args:
 //   1: index TSV path; the .c files land beside it. <path>.manifest is the run's success signal.
-//   2: spec file -- one function per line: label,addrHex
+//   2: spec file -- one function per line: label,addrHex -- or the word ALL for every
+//      non-thunk function in the program, labelled by its entry address
 //   3: optional -- per-function decompile timeout in seconds (default 120)
 //@category Headless
 
@@ -23,6 +24,7 @@ import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.List;
 
 public class DecompileMany extends GhidraScript {
@@ -35,7 +37,20 @@ public class DecompileMany extends GhidraScript {
                 "usage: DecompileMany.java <indexTsv> <specFile> [timeoutSecs]");
         }
         String outPath = args[0];
-        List<SweepUtil.Spec> specs = SweepUtil.readSpec(args[1]);
+        List<SweepUtil.Spec> specs;
+        if ("ALL".equals(args[1])) {
+            specs = new ArrayList<>();
+            for (Function f : currentProgram.getFunctionManager().getFunctions(true)) {
+                if (f.isThunk() || f.isExternal()) {
+                    continue;
+                }
+                String hex = SweepUtil.hex(f.getEntryPoint().getOffset());
+                specs.add(new SweepUtil.Spec(hex, List.of(hex)));
+            }
+        }
+        else {
+            specs = SweepUtil.readSpec(args[1]);
+        }
         int timeoutSecs = args.length >= 3 ? Integer.parseInt(args[2]) : 120;
 
         Path index = Paths.get(outPath).toAbsolutePath();
