@@ -116,15 +116,11 @@ bool ScUpgQueueCancelAt(DWORD unit, int index);
 // enforced by vanilla's own mechanism rather than by anything here.
 bool ScUpgQueueShouldUnblock(DWORD unit);
 
-// May the card also be shown the RUNNING upgrade's own button, so its next level can be
-// queued behind it? True only for the building whose CUnit+0xC9 already holds this very id,
-// and only while a level is left after everything running and queued -- which is what keeps a
-// SECOND building from being offered the same upgrade and the pair from paying twice for one
-// level. Only this answer authorises clearing the per-player in-progress bit (0x0058F3E0 /
-// 0x0058F230), and only for the length of the condition call before it is put straight back,
-// so that narrow case is the only stacking this module allows. Exposed so a test can assert
-// the guard directly.
-bool ScUpgQueueMaySuppressBusyBit(DWORD unit, int kind, unsigned id);
+// ONE ENTRY PER RESEARCH PER BUILDING. True when `unit` already holds this id (any position
+// of its held queue). The card condition answers 0 -- hidden, exactly vanilla's answer for
+// the item that is RUNNING -- and the receive path refuses the command. The running item
+// itself needs no help: the engine's own per-player in-progress bit hides its button.
+bool ScUpgQueueHolds(DWORD unit, int kind, unsigned id);
 
 // The promotion seam, and the only way an upgrade or tech id ever reaches a building: the
 // real one calls the engine's own start function, hooktest replaces it because there is no
@@ -165,11 +161,9 @@ enum ScUpgQueueStat {
     SC_UPGQ_STAT_REFUSED_GATE = 5,  // the engine's own gate refused an item at promotion
     SC_UPGQ_STAT_WAITING_COST = 6,  // promotions deferred because the player cannot pay yet
     SC_UPGQ_STAT_UNBLOCKED = 7,     // card conditions answered as if the building were idle
-    // The narrower, level-stacking lie: how often the per-player in-progress BIT was
-    // suppressed as well, which only ever happens for the building already running that
-    // exact upgrade. Counted separately from UNBLOCKED so a run can say which of the two
-    // lies it needed.
-    SC_UPGQ_STAT_UNBLOCKED_LEVEL = 8,
+    // Card conditions answered 0 (hidden) for an id the building already holds: the
+    // one-entry rule, counted apart from UNBLOCKED so a run can say how often it bit.
+    SC_UPGQ_STAT_HIDDEN_HELD = 8,
     // Items dropped because their record was made in a DIFFERENT game (sc_session.h). Kept
     // apart from DROPPED for the same reason sc_prodqueue keeps its own apart: "the building
     // died" and "this record belongs to a game that ended" are different events with
@@ -177,7 +171,11 @@ enum ScUpgQueueStat {
     // rarer. hooktest asserts this non-zero with the epoch pinned, so the assertion has been
     // watched failing rather than reading its answer out of the zero-initialiser.
     SC_UPGQ_STAT_STALE_SESSION = 9,
-    SC_UPGQ_STAT__COUNT = 10
+    // A 0x32/0x30 for an id the building is already running or holding. The card hides
+    // that button, so this is reachable only from a replay or a peer; refused rather than
+    // queued twice, and consumed so the engine's body cannot start it over the running one.
+    SC_UPGQ_STAT_REFUSED_DUP = 10,
+    SC_UPGQ_STAT__COUNT = 11
 };
 int ScUpgQueueStat(int which);
 

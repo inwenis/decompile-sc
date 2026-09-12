@@ -539,7 +539,6 @@ Evidence in [`research/upgrade-queue.md`](../../research/upgrade-queue.md) §10.
 | While the unit row is PAGING, the strip indicator stands down | one indicator at a time; `sc_hudrow`'s own `page i/j` owns that corner then |
 | Held research past four is a count | four small icons is what the strip has; the fifth and later say `+N`, tail-first cancel through the card still reaches them |
 | Held research waiting for money shows nothing | a building that went idle with items held (the player cannot pay yet) is in the idle layout, which owns the strip; the icons return when the next item starts |
-| The card still lights an already-queued upgrade | marking those is a card change, not a status-pane one |
 
 ---
 
@@ -581,11 +580,12 @@ line are asserted flat ZERO by both suites.
 condition tells the truth, the layout hides the button, and the client refuses on its own —
 measured in game as three presses producing zero commands.
 
-**Levels stack, scoped.** Weapons 2 can be queued behind Weapons 1, by also suppressing the
-per-player in-progress bit at `0x0058F3E0` — but ONLY for the building whose own `0xC9`
-already holds that id. That is the condition a second building cannot satisfy, so two
-buildings still cannot research the same upgrade, which matters: they would both pay and only
-one level would land.
+**One entry per research per building.** An id the building already holds is hidden on
+the card (the condition answers 0, vanilla's own answer for the running item) and refused on
+the wire (`UPGQEV refuse-dup`); the running one is hidden by the engine's own in-progress
+bit, which the plugin leaves alone. So a press queues an upgrade once and its button goes
+away until it has started and finished. Levels do not stack: Weapons 2 is queued after
+Weapons 1 has completed, as in vanilla.
 
 `-UpgradeQueueMax N` sets the total logical length, the engine's ONE included; default 8,
 clamped `[1, 16]`. Env: `%SCPLUGIN_UPGQ%`, `%SCPLUGIN_UPGQ_MAX%`.

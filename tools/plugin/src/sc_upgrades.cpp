@@ -218,79 +218,37 @@ bool ScUpgQueueShouldUnblock(DWORD unit) {
 }
 
 // ---------------------------------------------------------------------------
-// LEVEL STACKING -- Weapons 2 queued behind Weapons 1, and why it is safe
+// ONE ENTRY PER RESEARCH PER BUILDING.
 //
-// The card refuses the running upgrade's OWN button through a second, independent test:
-// the gate calls upgradeBusy (0x004281B0), which reads a PER-PLAYER, PER-UPGRADE
-// in-progress bitfield at 0x0058F3E0. Suppressing that test naively breaks a real engine
-// rule -- it is also what stops TWO BUILDINGS researching the same upgrade at once, and the
-// consequence is not cosmetic: both set `CUnit+0xCD = currentLevel + 1`, the SAME target
-// level, so when the first finishes upgradeTick's guard `currentLevel < unit->0xCD` is
-// already false at the second, which ends immediately, raises nothing, and the player has
-// paid twice for one level (upgradeTick 0x004546A0, research/upgrade-queue.md 6).
-//
-// So the suppression is scoped by a condition a second building CANNOT satisfy: this
-// building's own 0xC9 already holds this very upgrade id. A second Engineering Bay's 0xC9
-// holds 61, or a different id, so its button stays hidden and the rule is untouched.
-//
-// The LEVEL is not a problem either: startUpgrade (0x00454A80) computes
-// `0xCD = currentLevel + 1` from the level array AT THE MOMENT IT RUNS, and the plugin
-// promotes through that same function, so a queued Weapons is not "level 2" when it is
-// queued -- it is "the next level", resolved when it starts.
+// The running item's button is hidden by the engine itself: the gate calls upgradeBusy
+// (0x004281B0) / techBusy (0x00428240) on the per-player in-progress bitfields, which the
+// plugin leaves alone. A HELD item is invisible to the engine, so the card would offer it
+// again and every press would queue another copy (measured: three presses, three Infantry
+// Armor entries). The rule is therefore the plugin's: an id already held here is hidden on
+// the card (the condition answers 0, vanilla's own answer for a running item) and refused
+// on the wire. Level stacking -- Weapons 2 queued behind Weapons 1 by also suppressing the
+// busy bit for the running building -- is deliberately not offered: it is the same button
+// press the player asked to have refused.
 // ---------------------------------------------------------------------------
 
-static DWORD MaxUpgradeLevel(BYTE player, unsigned id) {
-    if (id < SC_UPGRADE_COUNT_VANILLA) {
-        return *(BYTE*)(ScRuntimeVa(SC_VA_UPGRADE_MAX_LEVEL) +
-                        (DWORD)player * SC_UPGRADE_STRIDE_VANILLA + id);
-    }
-    return *(BYTE*)(ScRuntimeVa(SC_VA_UPGRADE_MAX_BW) + (DWORD)player * SC_UPGRADE_STRIDE_BW + id);
-}
-
-static BYTE* UpgradeBusyByte(BYTE player, unsigned id) {
-    return (BYTE*)(ScRuntimeVa(SC_VA_UPGRADE_INPROGRESS_BITS) +
-                   (DWORD)player * SC_UPGRADE_BITS_STRIDE + (id >> 3));
-}
-
-static int QueuedCountOf(const UpgRecord* r, int kind, unsigned id) {
-    int n = 0;
-    if (!r) return 0;
+static bool HeldHere(const UpgRecord* r, int kind, unsigned id) {
+    if (!r) return false;
     for (int i = 0; i < r->count; ++i) {
-        if (r->items[i].kind == (BYTE)kind && r->items[i].id == (BYTE)id) ++n;
+        if (r->items[i].kind == (BYTE)kind && r->items[i].id == (BYTE)id) return true;
     }
-    return n;
+    return false;
 }
 
-// The LEVEL this press would be asking for: the one being produced right now, plus every
-// copy of the same upgrade already queued behind it, plus one.
-static DWORD WantedLevel(DWORD unit, const UpgRecord* r, int kind, unsigned id) {
-    DWORD running = *(BYTE*)(unit + SC_CUNIT_OFF_UPGRADE_LEVEL);
-    return running + (DWORD)QueuedCountOf(r, kind, id) + 1;
+// The RUNNING item, by kind: the engine's own field for it.
+static bool RunningHere(DWORD unit, int kind, unsigned id) {
+    if (kind == SC_UPGQ_KIND_TECH) return TechInProgress(unit) == (BYTE)id;
+    return UpgradeInProgress(unit) == (BYTE)id;
 }
 
-static BYTE* UpgradeLevelByte(BYTE player, unsigned id) {
-    if (id < SC_UPGRADE_COUNT_VANILLA) {
-        return (BYTE*)(ScRuntimeVa(SC_VA_UPGRADE_LEVEL) +
-                       (DWORD)player * SC_UPGRADE_STRIDE_VANILLA + id);
-    }
-    return (BYTE*)(ScRuntimeVa(SC_VA_UPGRADE_LEVEL_BW) + (DWORD)player * SC_UPGRADE_STRIDE_BW + id);
-}
-
-// True when the card may be shown THIS upgrade's own button at THIS building: the building
-// is the one researching it, and a level is left over after everything already running or
-// queued. The headroom term keeps the card honest -- without it five Weapons presses stack
-// behind a 3-level upgrade and two are dropped at promotion, which is safe (no money moves)
-// but reads as the feature losing them.
-bool ScUpgQueueMaySuppressBusyBit(DWORD unit, int kind, unsigned id) {
+bool ScUpgQueueHolds(DWORD unit, int kind, unsigned id) {
     if (!g_enabled || !unit || !IsResearchableBuilding(unit)) return false;
     UpgSessionSync();
-    if (kind != SC_UPGQ_KIND_UPGRADE) return false;   // a tech has no levels to stack
-    if (id >= SC_UPGRADE_COUNT) return false;
-    if (UpgradeInProgress(unit) != (BYTE)id) return false;   // <- the two-buildings guard
-    BYTE player = ScUnitPlayer(unit);
-    if (player >= SC_MAX_PLAYERS) return false;
-    const UpgRecord* r = ScLedgerFind(g_rec, g_recCount, unit);
-    return WantedLevel(unit, r, kind, id) <= MaxUpgradeLevel(player, id);
+    return HeldHere(ScLedgerFind(g_rec, g_recCount, unit), kind, id);
 }
 
 bool ScUpgQueueOnCommand(DWORD unit, int kind, unsigned id) {
@@ -302,14 +260,25 @@ bool ScUpgQueueOnCommand(DWORD unit, int kind, unsigned id) {
 
     do {
         if (!IsResearchableBuilding(unit)) break;
+        if (kind == SC_UPGQ_KIND_UPGRADE && id >= SC_UPGRADE_COUNT) break;
+        if (kind == SC_UPGQ_KIND_TECH    && id >= SC_TECH_COUNT) break;
+        UpgRecord* r = ScLedgerFind(g_rec, g_recCount, unit);
+        // Before the busy test: a building idle with items held (waiting for money) still
+        // holds them, and the engine starting a second copy now would pay for one the
+        // plugin promotes later.
+        if (RunningHere(unit, kind, id) || HeldHere(r, kind, id)) {
+            ++g_stat[SC_UPGQ_STAT_REFUSED_DUP];
+            ScLog("UPGQEV refuse-dup unit=0x%08X kind=%s id=%u -- already %s here",
+                  (unsigned)unit, kind == SC_UPGQ_KIND_TECH ? "tech" : "upgrade", id,
+                  RunningHere(unit, kind, id) ? "running" : "held");
+            consumed = true;   // the engine's body would start it over the running item
+            break;
+        }
         // Not busy -> this is an ordinary first item. Let the engine have it: it runs its
         // own gate, starts it and pays for it, which is the whole point of the design.
         if (!EngineBusy(unit)) break;
-        if (kind == SC_UPGQ_KIND_UPGRADE && id >= SC_UPGRADE_COUNT) break;
-        if (kind == SC_UPGQ_KIND_TECH    && id >= SC_TECH_COUNT) break;
 
         BYTE player = ScUnitPlayer(unit);
-        UpgRecord* r = ScLedgerFind(g_rec, g_recCount, unit);
         if (QueueRoom(unit, r) <= 0) {
             // Reachable only from a replay or a peer: at the cap the card conditions stop
             // being unblocked, so the client hides the button and never sends. Counted
@@ -511,14 +480,15 @@ void ScUpgQueueLogState(const char* tag) {
                    tag ? tag : "-", (unsigned)g_rec[i].unit, g_rec[i].count);
     }
     ScLog("UPGQ [%s] session=%u buildings=%d max=%d queued=%d promoted=%d cancelled=%d dropped=%d "
-          "staleSession=%d refusedFull=%d refusedGate=%d waitingCost=%d unblocked=%d unblockedLevel=%d",
+          "staleSession=%d refusedFull=%d refusedGate=%d waitingCost=%d unblocked=%d hiddenHeld=%d "
+          "refusedDup=%d",
           tag ? tag : "-", g_session, g_recCount, g_maxTotal,
           g_stat[SC_UPGQ_STAT_QUEUED], g_stat[SC_UPGQ_STAT_PROMOTED],
           g_stat[SC_UPGQ_STAT_CANCELLED], g_stat[SC_UPGQ_STAT_DROPPED],
           g_stat[SC_UPGQ_STAT_STALE_SESSION],
           g_stat[SC_UPGQ_STAT_REFUSED_FULL], g_stat[SC_UPGQ_STAT_REFUSED_GATE],
           g_stat[SC_UPGQ_STAT_WAITING_COST], g_stat[SC_UPGQ_STAT_UNBLOCKED],
-          g_stat[SC_UPGQ_STAT_UNBLOCKED_LEVEL]);
+          g_stat[SC_UPGQ_STAT_HIDDEN_HELD], g_stat[SC_UPGQ_STAT_REFUSED_DUP]);
     LeaveCriticalSection(&g_lock);
 }
 
@@ -528,13 +498,15 @@ void ScUpgQueueLogStats(void) {
     // hooktest asserts it non-zero, so a zero says the epoch test never fired.
     ScLog("UPGQSTATS queued=%d promoted=%d cancelled=%d dropped=%d staleSession=%d "
           "refusedFull=%d "
-          "refusedGate=%d waitingCost=%d unblocked=%d unblockedLevel=%d tracked=%d session=%u",
+          "refusedGate=%d waitingCost=%d unblocked=%d hiddenHeld=%d refusedDup=%d "
+          "tracked=%d session=%u",
           g_stat[SC_UPGQ_STAT_QUEUED], g_stat[SC_UPGQ_STAT_PROMOTED],
           g_stat[SC_UPGQ_STAT_CANCELLED], g_stat[SC_UPGQ_STAT_DROPPED],
           g_stat[SC_UPGQ_STAT_STALE_SESSION],
           g_stat[SC_UPGQ_STAT_REFUSED_FULL], g_stat[SC_UPGQ_STAT_REFUSED_GATE],
           g_stat[SC_UPGQ_STAT_WAITING_COST], g_stat[SC_UPGQ_STAT_UNBLOCKED],
-          g_stat[SC_UPGQ_STAT_UNBLOCKED_LEVEL], g_recCount, g_session);
+          g_stat[SC_UPGQ_STAT_HIDDEN_HELD], g_stat[SC_UPGQ_STAT_REFUSED_DUP],
+          g_recCount, g_session);
 }
 
 // The read-backs sync as well, for the reason ScUpgQueueLogState does.
@@ -776,12 +748,19 @@ static DWORD CondCommon(ScHook* hook, int kind, DWORD unit, DWORD id, DWORD play
     if (!g_enabled || !unit) return ScUpgCallCond(hook->trampoline, unit, id, player);
 
     EnterCriticalSection(&g_lock);
+    UpgSessionSync();
+    // An id this building already holds is HIDDEN: 0 is what the engine itself answers for
+    // the item that is running (0xC9 busy -> reason 5 -> 0), and a held item deserves the
+    // same. Answered before any lie is told and whether or not the building is busy right
+    // now -- idle with items held (waiting for money) still holds them.
+    if (IsResearchableBuilding(unit) &&
+        HeldHere(ScLedgerFind(g_rec, g_recCount, unit), kind, (unsigned)id)) {
+        ++g_stat[SC_UPGQ_STAT_HIDDEN_HELD];
+        LeaveCriticalSection(&g_lock);
+        return 0;
+    }
     bool lie = ScUpgQueueShouldUnblock(unit);
-    // The second, narrower lie: the per-player in-progress BIT, suppressed only for the
-    // building that is already researching this very upgrade. See MaySuppressBusyBit.
-    bool lieBit = lie && ScUpgQueueMaySuppressBusyBit(unit, kind, (unsigned)id);
-    BYTE savedUpg = 0, savedTech = 0, savedBits = 0;
-    BYTE* bitByte = NULL;
+    BYTE savedUpg = 0, savedTech = 0;
     if (lie) {
         savedUpg  = *(BYTE*)(unit + SC_CUNIT_OFF_UPGRADE_PROGRESS);
         savedTech = *(BYTE*)(unit + SC_CUNIT_OFF_TECH_PROGRESS);
@@ -789,33 +768,10 @@ static DWORD CondCommon(ScHook* hook, int kind, DWORD unit, DWORD id, DWORD play
         *(BYTE*)(unit + SC_CUNIT_OFF_TECH_PROGRESS)    = (BYTE)SC_TECH_NONE;
         ++g_stat[SC_UPGQ_STAT_UNBLOCKED];
     }
-    BYTE* levelByte = NULL;
-    BYTE savedLevel = 0;
-    if (lieBit) {
-        BYTE owner = ScUnitPlayer(unit);
-        bitByte = UpgradeBusyByte(owner, id);
-        savedBits = *bitByte;
-        *bitByte = (BYTE)(savedBits & ~(1u << (id & 7)));
-        // AND ASK ABOUT THE RIGHT LEVEL. An upgrade's requirements are per LEVEL: the
-        // requirement interpreter's opcode 0xFF1F reads the player's current level and jumps
-        // to that level's own requirement block, so evaluating the condition at the present
-        // level asks "may level N+1 be researched?" and gets level N's answer -- measured in
-        // game, the card offered Infantry Weapons 2 whose prerequisite building the player
-        // did not have, and the engine's gate refused it at promotion. So the level array is
-        // raised to the wanted level minus one for the length of the call, and the engine
-        // answers -1 (greyed) or 0 out of the block that will actually apply.
-        levelByte = UpgradeLevelByte(owner, id);
-        savedLevel = *levelByte;
-        DWORD want = WantedLevel(unit, ScLedgerFind(g_rec, g_recCount, unit), kind, id);
-        *levelByte = (BYTE)(want > 0 ? want - 1 : 0);
-        ++g_stat[SC_UPGQ_STAT_UNBLOCKED_LEVEL];
-    }
     DWORD r = ScUpgCallCond(hook->trampoline, unit, id, player);
-    if (levelByte) *levelByte = savedLevel;
-    // Restored unconditionally and in reverse order, before anything else on this thread can
-    // look. Nothing between the writes yields: the game is single-threaded here, and the
-    // observer thread's oracle takes this same lock.
-    if (bitByte) *bitByte = savedBits;
+    // Restored unconditionally, before anything else on this thread can look. Nothing
+    // between the writes yields: the game is single-threaded here, and the observer
+    // thread's oracle takes this same lock.
     if (lie) {
         *(BYTE*)(unit + SC_CUNIT_OFF_UPGRADE_PROGRESS) = savedUpg;
         *(BYTE*)(unit + SC_CUNIT_OFF_TECH_PROGRESS)    = savedTech;
