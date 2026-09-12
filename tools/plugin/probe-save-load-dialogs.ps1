@@ -8,9 +8,8 @@ One launch: can the engine's Save and Load dialogs be DRIVEN at all, and does a 
 Runs in `-Mode observe`: no hooks, nothing written to game memory, so the round trip is
 also the plugin-free POSITIVE CONTROL -- if a vanilla save does not come back, no
 statement about the plugin means anything (AGENTS.md § "Oracles: absence and defect-era
-checks"). Play Custom with NO `Set-ScGameType` call: the game-type combo is machine-wide
-registry state a dropdown cannot set on the invisible desktop (AGENTS.md § "Game Type /
-`Custom Type`"), and no particular game type is needed here.
+checks"). Play Custom with NO `Assert-ScGameType` call: no particular game type is needed
+here (AGENTS.md § "Game Type / `Custom Type`").
 
 .EXAMPLE
 ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-save-load-dialogs.ps1

@@ -153,7 +153,7 @@ function Invoke-Arm {
         # ours (AGENTS.md § "Map browser").
         Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
         Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
-        Set-ScGameType -Hwnd $hwnd -LogPath $logPath -Index 2
+        Assert-ScGameType -LogPath $logPath
         ArmShot 'lobby'
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393
         Start-Sleep -Seconds 6

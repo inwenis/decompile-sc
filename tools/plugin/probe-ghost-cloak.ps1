@@ -150,7 +150,7 @@ function Start-GhostGame {
     Start-Sleep -Seconds 2
     Assert-ScFixtureStillMine -Run $fixtures -MapPath $MapPath
     Select-ScBrowserMap -Hwnd $h -GameDir $GameDir -MapPath $MapPath | Out-Null
-    Set-ScGameType -Hwnd $h -LogPath $logPath -Index 2
+    Assert-ScGameType -LogPath $logPath
     Send-ScClick -Hwnd $h -X 516 -Y 393
     Start-Sleep -Seconds 6
     Send-ScClick -Hwnd $h -X 544 -Y 387

@@ -183,7 +183,7 @@ try {
         # makes the map play as a melee game. Entry 2 of {Melee, Free For All, Use Map
         # Settings}; picking the wrong one fails the unit-type assertion below rather than
         # passing quietly (AGENTS.md § "Game Type / `Custom Type`").
-        Set-ScGameType -Hwnd $hwnd -LogPath $LogPath -Index 2      # Use Map Settings, verified
+        Assert-ScGameType -LogPath $LogPath      # Use Map Settings, verified
         Shot 'lobby'
 
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing

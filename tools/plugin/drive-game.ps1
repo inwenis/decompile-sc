@@ -83,7 +83,7 @@ namespace ScDrive {
     public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdc, uint flags);
 
     // --- activation (task 022) ---------------------------------------------
-    // Needed by exactly one thing: the menu dropdowns. See Set-ScWindowActive.
+    // Needed only when a human asks for a raise (-RaiseWindow). See Set-ScWindowActive.
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr h);
     [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr h);
@@ -1189,12 +1189,6 @@ function Get-ScRegionFingerprint {
 }
 
 # --- the Game Type, read out of the engine's dialog memory --------------------
-#
-# The dropdown's entries, by position, for the two-player maps this harness generates.
-# CHECKED on every use against what the engine reports selected, so a map whose list is a
-# different shape (a four-player map has Top vs Bottom in it) fails here, immediately,
-# instead of playing a melee game with the wrong units on it.
-$script:ScGameTypeByIndex = @{ 0 = 'Melee'; 1 = 'Free For All'; 2 = 'Use Map Settings' }
 
 # Control type 13 in the engine's dialog list. Observed on the Create Game screen: the
 # Game Type box, the player-name box and the race box are the three of them.
@@ -1204,7 +1198,7 @@ function Get-ScGameTypeControl {
     <#
     .SYNOPSIS
     The Create Game screen's Game Type combo, READ OUT OF THE ENGINE'S DIALOG LIST:
-    which entry is selected, and where the box is. $null if the screen is not up.
+    which entry is selected. $null if the screen is not up.
     .DESCRIPTION
     AGENTS.md § "Oracles: what counts as a read-back": a dialog's CONTENT comes from
     memory, never from a hash of its pixels. The active-dialog scan already walks the list
@@ -1216,9 +1210,7 @@ function Get-ScGameTypeControl {
 
     The combo is found by its ROW, not by its index among the controls and not by a fixed
     rect: the one type-13 control that starts to the RIGHT of the 'Game Type' label and
-    overlaps it vertically -- ask the engine where its own control is, then aim at that.
-    ClickX/ClickY are that box's own centre (dialog origin + control rect); a hardcoded
-    point agrees to a pixel on one frame and silently stops agreeing on any other.
+    overlaps it vertically.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$LogPath)
@@ -1253,19 +1245,8 @@ function Get-ScGameTypeControl {
     [pscustomobject]@{
         Value  = $c.Text
         Left   = $c.Left; Top = $c.Top; Right = $c.Right; Bottom = $c.Bottom
-        ClickX = $dlg.Left + [int](($c.Left + $c.Right) / 2)
-        ClickY = $dlg.Top  + [int](($c.Top + $c.Bottom) / 2)
         PanelShows = $shown
     }
-}
-
-function Get-ScGameType {
-    <# .SYNOPSIS The Game Type currently selected on the Create Game screen, by name, or
-       $null if that screen is not up. A FACT read from the engine, not a pixel diff. #>
-    [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$LogPath)
-    $c = Get-ScGameTypeControl -LogPath $LogPath
-    if ($c) { $c.Value } else { $null }
 }
 
 function Wait-ScGameTypeControl {
@@ -1274,10 +1255,8 @@ function Wait-ScGameTypeControl {
     The Game Type combo once the Create Game screen is up, optionally waiting for a
     specific value. $null on timeout -- the caller decides whether that is a failure.
     .DESCRIPTION
-    The plugin logs a DIALOGS line whenever the dialog SET CHANGES, which a game-type pick
-    always does (the combo's own text is part of that line), so this polls the newest line
-    rather than racing the 250 ms tick. -Want makes it wait for a particular entry, which
-    is what turns "I clicked" into "the engine now holds that value".
+    The plugin logs a DIALOGS line whenever the dialog SET CHANGES (the combo's own text is
+    part of that line), so this polls the newest line rather than racing the 250 ms tick.
     #>
     [CmdletBinding()]
     param(
@@ -1294,105 +1273,43 @@ function Wait-ScGameTypeControl {
     }
 }
 
-function Set-ScGameType {
+function Assert-ScGameType {
     <#
     .SYNOPSIS
-    Make the Create Game screen's Game Type be the wanted one, reading the engine to find
-    out whether it already is -- and skipping the pick, and the foreground raise, if so.
+    Throw unless the Create Game screen's Game Type reads 'Use Map Settings', read out of
+    the engine's own dialog list.
     .DESCRIPTION
-    The Game Type combo is the single most consequential control in this whole harness --
-    get it wrong and the fixture loads as a melee game, the map's placed units are never
-    created, and the failure surfaces minutes later as "the wrong units are on the map".
-    It is also sticky: it remembers what this machine last used, so a no-op pick can look
-    like a success for months.
+    The Game Type is the most consequential control in this harness: get it wrong and the
+    fixture loads as a melee game, the map's placed units are never created, and the
+    failure surfaces minutes later as "the wrong units are on the map".
 
-    So the value is READ (Get-ScGameTypeControl, out of the engine's own dialog list): the
-    wanted entry already there means no pick, no raise and no dropdown at all -- and with
-    it goes the foreground raise a dropdown pick genuinely needs, the only raise this
-    harness ever performs. Otherwise it picks and then WAITS FOR THE ENGINE TO READ BACK
-    the wanted entry BY NAME: not "something changed", but the right value, a retry, or a
-    throw naming what the combo actually says.
-
-    That also checks the index/name table for free: -Index 2 means "Use Map Settings", and
-    if this map's list is a different shape (a four-player map carries Top vs Bottom) the
-    read says so here instead of the run playing the wrong game type.
-
-    -Force picks even when the value already matches. Only probe-quiet-dropdown.ps1 wants
-    that: it measures whether a pick TAKES under three foreground arms, so a skipped pick
-    would be a skipped experiment.
+    Nothing here picks. run-with-plugin.ps1 writes 'Use Map Settings' into HKCU
+    'Custom Type' before every agent launch and the engine takes the combo's starting
+    value from it, measured both ways off-screen; a dropdown pick instead needs the
+    foreground, which an off-screen run never has. This is the read-back that proves the
+    write reached this game.
     #>
     [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][IntPtr]$Hwnd,
-        # The plugin log this run is writing. Not optional: the alternative to reading the
-        # engine is the pixel oracle this replaced, and quietly falling back to it would be
-        # a verification that shares the flaw it is fixing.
-        [Parameter(Mandatory)][string]$LogPath,
-        [int]$Index = 2,          # Use Map Settings
-        # The entry the pick must produce. Defaults from -Index via ScGameTypeByIndex.
-        [string]$Name,
-        # Overrides for the combo's own centre, which is normally computed from the
-        # engine's rect. Here for a caller driving a screen this cannot read.
-        [int]$X = 0, [int]$Y = 0,
-        [int]$Tries = 3,
-        [switch]$Force
-    )
-    $want = if ($Name) { $Name } else { $script:ScGameTypeByIndex[$Index] }
-    if (-not $want) { throw "drive-game: no name known for game-type index $Index; pass -Name." }
-
-    $c = Wait-ScGameTypeControl -LogPath $LogPath -TimeoutSec 15
-    if (-not $c) {
-        throw ("drive-game: the Create Game screen's Game Type combo is not in the engine's dialog " +
-               "list (log: $LogPath). Either that screen is not up, or the plugin's dialog scan is " +
-               'off (%SCPLUGIN_DIALOGS%=0). Refusing to pick blind.')
-    }
-
-    if (-not $Force -and $c.Value -eq $want) {
-        Write-Host ("       game type is already '{0}' (read from the engine's dialog list; panel shows {1}) -- no pick, no raise" -f `
+    param([Parameter(Mandatory)][string]$LogPath, [int]$TimeoutSec = 15)
+    $want = 'Use Map Settings'
+    $c = Wait-ScGameTypeControl -LogPath $LogPath -Want $want -TimeoutSec $TimeoutSec
+    if ($c) {
+        Write-Host ("       game type is '{0}' (read from the engine's dialog list; panel shows {1})" -f `
             $c.Value, (($c.PanelShows -join ', ') -replace '^$', 'nothing yet'))
         return
     }
-
-    $px = if ($X) { $X } else { $c.ClickX }
-    $py = if ($Y) { $Y } else { $c.ClickY }
-    for ($try = 1; $try -le $Tries; $try++) {
-        Write-Host ("       game type is '{0}', want '{1}' -- picking index {2} at the combo's own centre ({3},{4}), attempt {5}" -f `
-            $c.Value, $want, $Index, $px, $py, $try)
-        try {
-            Send-ScDropdownPick -Hwnd $Hwnd -X $px -Y $py -Index $Index
-        }
-        catch {
-            # Off-screen, the underlying throw (Assert-ScWindowActive) names the desktop and
-            # points at -Visible -- true, but not the useful fact. 'Custom Type' is ONE
-            # machine-wide value in the live HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft
-            # key, shared with the user's real play (AGENTS.md § "Game Type / `Custom Type`"),
-            # not per-suite and not per-map, and the running game changes it only through a
-            # real foreground pick. So a mismatch cannot be cleared off-screen however the
-            # caller is invoked, and one foreground pick fixes it for every suite. The original
-            # throw is appended, not replaced: it still names the desktop/window detail this
-            # one does not.
-            # PARENTHESISED BEFORE -f, and that is not style: `-f` binds TIGHTER than `+`, so
-            # an un-parenthesised version formats only the LAST literal and concatenates the
-            # rest unformatted -- the message loses {0} and {1} (what it reads, what it wants)
-            # while still looking complete (AGENTS.md § "Diagnostics and reporting").
-            throw (("Set-ScGameType: Game Type reads '{0}', want '{1}' -- 'Custom Type' is one " +
-                    "machine-wide value shared with real play, and a running game changes it only " +
-                    "through a real foreground pick. One pick (tools/plugin/prime-game-type.ps1) fixes " +
-                    "it for every suite until the user's own next game changes it again. Underlying: {2}") -f `
-                   $c.Value, $want, $_.Exception.Message)
-        }
-        $now = Wait-ScGameTypeControl -LogPath $LogPath -Want $want -TimeoutSec 6
-        if ($now) {
-            Write-Host ("       game type set to '{0}' (engine dialog read; panel shows {1})" -f `
-                $now.Value, (($now.PanelShows -join ', ') -replace '^$', 'nothing yet'))
-            return
-        }
-        $c = (Get-ScGameTypeControl -LogPath $LogPath) ?? $c
-        Start-Sleep -Milliseconds 600
+    $now = Get-ScGameTypeControl -LogPath $LogPath
+    if (-not $now) {
+        throw ("drive-game: the Create Game screen's Game Type combo is not in the engine's dialog " +
+               "list (log: $LogPath). Either that screen is not up, or the plugin's dialog scan is " +
+               'off (%SCPLUGIN_DIALOGS%=0).')
     }
-    throw ("drive-game: could not set the Game Type to '$want' after $Tries attempt(s) -- the engine's " +
-           "dialog list still reads '$($c.Value)'. A fixture loaded under the wrong game type produces " +
-           'the wrong units, so this refuses to continue.')
+    # PARENTHESISED BEFORE -f: `-f` binds tighter than `+`, so without the parentheses only
+    # the last literal is formatted and the message silently loses what it reads.
+    throw (("drive-game: Game Type reads '{0}', want '{1}'. run-with-plugin.ps1 writes it into " +
+            "HKCU 'Custom Type' before every agent launch, so this game started without that write " +
+            '(a launch without $env:AGENT_TASK, or another StarCraft rewrote the value on exit). ' +
+            'A fixture under the wrong game type produces the wrong units.') -f $now.Value, $want)
 }
 
 function Wait-ScNoGameRunning {
@@ -1431,8 +1348,7 @@ function Set-ScWindowActive {
     <#
     .SYNOPSIS
     Make the game window the foreground window. NOT needed to drive it -- see
-    Assert-ScWindowActive. Only two things reach for it: Send-ScDropdownPick's raise, and
-    a human passing -RaiseWindow to watch a run.
+    Assert-ScWindowActive. Only a human passing -RaiseWindow to watch a run reaches for it.
     .DESCRIPTION
     DO NOT RAISE THE GAME TO DELIVER INPUT. Posted moves register while the window is in
     the background, measured two ways:
@@ -1504,8 +1420,8 @@ function Assert-ScWindowActive {
     the test is telling you something else is wrong.
 
     OFF-SCREEN RUNS cannot grant it at all, and the throw below names that case
-    specifically. It matters for exactly one primitive, Send-ScDropdownPick: posted moves,
-    clicks, drags, keys and PrintWindow all work off-screen, measured.
+    specifically. Nothing the harness drives needs it: posted moves, clicks, drags, keys
+    and PrintWindow all work off-screen, measured.
 
     -Because is glued into the message so the failure names the operation that refused,
     not just the fact that a window cannot take input.
@@ -1536,9 +1452,8 @@ function Assert-ScWindowActive {
         throw ("drive-game: this input needs the game window in the FOREGROUND, and this run is " +
                "on the invisible desktop '$myDesktop' while the monitor is showing '$onScreen'. " +
                'No window on a desktop that is not receiving input can be the foreground window, ' +
-               'so this is structural rather than a race -- retrying will not help. Only a ' +
-               'DROPDOWN PICK needs the foreground (Send-ScDropdownPick); every other input in ' +
-               'this harness drives fine off-screen. Re-run visibly -- same code path, one flag: ' +
+               'so this is structural rather than a race -- retrying will not help. Every input ' +
+               'in this harness drives fine off-screen; to watch a run, re-run visibly -- same code path, one flag: ' +
                "./tools/plugin/run-offscreen.ps1 -Visible -Suite <suite>. (The input: $Because)")
     }
 
@@ -1612,104 +1527,6 @@ function Send-ScControlGroupRecall {
     param([Parameter(Mandatory)][IntPtr]$Hwnd, [Parameter(Mandatory)][int]$Group, [int]$SettleMs = 400)
     if ($Group -lt 0 -or $Group -gt 9) { throw "drive-game: control group must be 0..9, got $Group" }
     Send-ScKey -Hwnd $Hwnd -VirtualKey (0x30 + $Group) -SettleMs $SettleMs
-}
-
-function Send-ScDropdownPick {
-    <#
-    .SYNOPSIS
-    Pick the Nth entry of one of the game's menu dropdowns (Game Type, race, ...).
-    .DESCRIPTION
-    These are press-and-hold controls, not click-to-open ones: the entry under the cursor
-    at button-UP is the one selected, the list is on screen only while the button is held,
-    and a plain click leaves the box closed with its label unchanged, choosing nothing. The
-    offsets below were read off a frame captured with WM_LBUTTONDOWN posted and the UP
-    withheld, at a 640x480 client: first entry (-Index 0) 16px below the closed box's own
-    centre line, 15px apart after that.
-
-    THIS IS THE ONE INPUT IN THE HARNESS THAT REALLY DOES NEED THE FOREGROUND, measured
-    three ways rather than assumed (probe-quiet-dropdown.ps1, one launch, all three arms
-    on the Create Game screen, using Set-ScGameType's own verdict):
-
-      A  background, no raise                                  -> pick did NOT take
-      B  background + AttachThreadInput(game) + SetActiveWindow -> pick did NOT take
-      C  foreground                                             -> pick took, attempt 1
-
-    So "share the input queue without taking the foreground" is dead for this control, on
-    measurement and not on theory. The likely mechanism: the game calls SetCapture on
-    button-down (0x004d1a76) and Windows grants the capture only to the FOREGROUND window.
-    A world drag-box is also a held-button walk and works fine in the background, so it is
-    this dialog control's handling, not held buttons in general.
-
-    THE CHEAPEST WAY TO PAY THAT COST IS NOT TO PICK: the caller reads the combo's current
-    entry out of the engine's dialog list first and skips both the pick and this raise
-    whenever the value already matches. When it does pick, this raises for the length of
-    ONE pick and then HANDS THE FOREGROUND BACK to whatever had it, so the user loses their
-    window for about two seconds rather than the entire run. -NoActivate opts out of both.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][IntPtr]$Hwnd,
-        [Parameter(Mandatory)][int]$X, [Parameter(Mandatory)][int]$Y,
-        [Parameter(Mandatory)][int]$Index,
-        [int]$FirstOffset = 16, [int]$Pitch = 15, [int]$SettleMs = 400,
-        [switch]$NoActivate,
-        # How long to wait for the list to APPEAR after the button goes down, and how long
-        # to sit on the chosen entry before releasing.
-        #
-        # 200ms each is NOT enough: at that timing a pick silently did nothing, the lobby
-        # stayed on Melee, and the map played as a melee game -- 4 Drones instead of the
-        # fixture's 36 Lurkers, with eight downstream assertions failing about something
-        # else. Holding the combo open and photographing it ruled out the alternatives:
-        # the list is exactly three entries, the entry centres land on the 16px/15px
-        # offsets below, and index 2 really is "Use Map Settings". What is left is timing.
-        # THE FAILURE IS SILENT AND STICKY -- the combo remembers the last choice in the
-        # machine's profile, so a pick that does nothing leaves the WRONG game type set
-        # for every later run too. Hence a default here rather than one caller's override.
-        [int]$OpenMs = 700, [int]$HoverMs = 400
-    )
-    Assert-ScDrivable -Hwnd $Hwnd
-    # Whose window this is about to be taken from, so it can be given back.
-    $prevFg = [IntPtr]::Zero
-    if (-not $NoActivate) {
-        $prevFg = [ScDrive.Native]::GetForegroundWindow()
-        # Loud, not silent: a pick made in the background is a measured no-op (see above)
-        # and would otherwise be discovered as a wrong unit type several minutes later.
-        Assert-ScWindowActive -Hwnd $Hwnd -RaiseWindow `
-            -Because 'a dropdown pick, whose walk down the open list needs the capture the game only gets in the foreground, and'
-    }
-    try {
-        $itemY = $Y + $FirstOffset + $Index * $Pitch
-        $atBox  = ConvertTo-ScLParam $X $Y
-        $atItem = ConvertTo-ScLParam $X $itemY
-        [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]0, $atBox)
-        Start-Sleep -Milliseconds 60
-        [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_LBUTTONDOWN, [IntPtr]$script:MK_LBUTTON, $atBox)
-        Start-Sleep -Milliseconds $OpenMs
-        [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_MOUSEMOVE, [IntPtr]$script:MK_LBUTTON, $atItem)
-        Start-Sleep -Milliseconds $HoverMs
-        [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_LBUTTONUP, [IntPtr]0, $atItem)
-        if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
-    }
-    finally {
-        # Give the user their window back, on every path including a throw. Deactivating
-        # also makes the game call ClipCursor(NULL) (0x00421730), which releases the mouse
-        # confinement its own WM_ACTIVATEAPP handler applied -- so the borrow ends cleanly
-        # rather than leaving the user's cursor trapped in a 640x480 box. NEVER FATAL: the
-        # pick has already happened, so a window that has closed or refuses to take the
-        # foreground back is a cosmetic loss, not a reason to fail a good suite.
-        if ($prevFg -ne [IntPtr]::Zero -and $prevFg -ne $Hwnd) {
-            try {
-                if ([ScDrive.Native]::IsWindow($prevFg)) {
-                    if (-not [ScDrive.Native]::MakeForeground($prevFg)) {
-                        Write-Warning 'drive-game: could not hand the foreground back after the dropdown pick; the game may be left in front. The pick itself succeeded.'
-                    }
-                }
-            }
-            catch {
-                Write-Warning "drive-game: handing the foreground back after the dropdown pick failed ($($_.Exception.Message)). The pick itself succeeded."
-            }
-        }
-    }
 }
 
 function Get-ScMinimapPoint {
@@ -2319,9 +2136,8 @@ function Save-ScWindowImage {
     this file clicks in CLIENT coordinates. At this game's window size the two differ by
     roughly (+5, +32): a control drawn at y=300 in the image is at y~268 in the
     coordinates you must post. That trap has already produced a "fix" to an
-    already-correct combo coordinate, where the real cause was timing (see
-    Send-ScDropdownPick). Subtract the offset, or capture without -FullWindow, before
-    concluding a coordinate is wrong.
+    already-correct combo coordinate, where the real cause was timing. Subtract the offset,
+    or capture without -FullWindow, before concluding a coordinate is wrong.
     #>
     [CmdletBinding()]
     param(
@@ -2681,7 +2497,7 @@ function Enter-ScCustomGame {
         Start-Sleep -Seconds 2
         Assert-ScFixtureStillMine -Run $Fixtures -MapPath $MapPath
         Select-ScBrowserMap -Hwnd $Hwnd -GameDir $GameDir -MapPath $MapPath | Out-Null
-        Set-ScGameType -Hwnd $Hwnd -LogPath $LogPath -Index 2
+        Assert-ScGameType -LogPath $LogPath
         if ($BeforeStart) { & $BeforeStart }
         $briefing = '^(\w+RR|Ready\w*)$'
         if (-not (Invoke-ScClickUntilDialog -Hwnd $Hwnd -LogPath $LogPath -X 516 -Y 393 -Name $briefing -WaitSec 20 -Noun $Noun)) { throw "${Noun}: the mission briefing never appeared." }

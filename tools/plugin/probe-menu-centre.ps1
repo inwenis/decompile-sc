@@ -145,7 +145,7 @@ function Invoke-Arm {
         Set-ScGlueOrigin -X $ox -Y $oy
         try { Select-ScBrowserMap -Hwnd $h -GameDir $GameDir -MapPath $mapPath | Out-Null }
         finally { Set-ScGlueOrigin }
-        Set-ScGameType -Hwnd $h -Index 2 -LogPath $log
+        Assert-ScGameType -LogPath $log
         Invoke-ScDialogControl -Hwnd $h -LogPath $log -Pattern 'Ok$' | Out-Null
         Start-Sleep -Seconds 4
         Show-ScDialogInventory -LogPath $log -What 'the lobby'

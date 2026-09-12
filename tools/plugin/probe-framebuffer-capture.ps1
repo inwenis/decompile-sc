@@ -198,7 +198,7 @@ function Invoke-Arm {
             Start-Sleep -Seconds 2
             Assert-ScFixtureStillMine -Run $script:fixtures -MapPath $mapPath
             Select-ScBrowserMap -Hwnd $h -GameDir $GameDir -MapPath $mapPath | Out-Null
-            Set-ScGameType -Hwnd $h -LogPath $log -Index 2
+            Assert-ScGameType -LogPath $log
             Send-ScClick -Hwnd $h -X 516 -Y 393
             Start-Sleep -Seconds 6
             Send-ScClick -Hwnd $h -X 544 -Y 387

@@ -586,6 +586,15 @@ try {
         Write-Host 'run-with-plugin: SCPLUGIN_CURSOR_POSTED=0 for this launch (no cnc-ddraw helper; the posted-cursor hook empties WMode drag boxes)'
     }
 
+    # Agent suites need the Create Game screen's Game Type to read 'Use Map Settings'. The
+    # engine takes that combo's starting value from this registry value at launch (measured
+    # both ways off-screen), where a dropdown pick needs the foreground an off-screen run
+    # never has. Agent launches only; left set, and the user's own next pick changes it.
+    if ($env:AGENT_TASK) {
+        Set-ItemProperty -LiteralPath 'HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft' -Name 'Custom Type' -Value 'Use Map Settings'
+        Write-Host "run-with-plugin: Custom Type = 'Use Map Settings' (agent launch; Assert-ScGameType reads it back)"
+    }
+
     $injOut = [System.Collections.Generic.List[string]]::new()
     & $inj @injArgs 2>&1 | ForEach-Object { Write-Host $_; $injOut.Add("$_") }
     $rc = $LASTEXITCODE
@@ -713,9 +722,9 @@ finally {
     # already on screen (a modal DirectDraw error box is exactly that case) still gives
     # the user their window back before the failure propagates. By here
     # check-game-windows.ps1 has enumerated the game's top-level windows, so the window
-    # whose creation stole the foreground exists. NEVER FATAL, on the same reasoning as
-    # Send-ScDropdownPick's hand-back: the launch has already happened, and a shell that
-    # will not give the foreground up is a cosmetic loss, not a failed launch.
+    # whose creation stole the foreground exists. NEVER FATAL: the launch has already
+    # happened, and a shell that will not give the foreground up is a cosmetic loss, not a
+    # failed launch.
     if ($preLaunchFg -ne [IntPtr]::Zero) {
         # Whether the early restore above still holds. If it does this is a no-op and says
         # nothing -- printing "handed back" twice would read as two borrows, not one.

@@ -274,7 +274,7 @@ function Invoke-Arm {
         # filesystem and the opened folder is verified before the map row is clicked.
         Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
         Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
-        Set-ScGameType -Hwnd $hwnd -LogPath $logPath -Index 2      # Use Map Settings, verified (see Set-ScGameType)
+        Assert-ScGameType -LogPath $logPath      # Use Map Settings, verified (see Assert-ScGameType)
         ArmShot 'lobby'
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393
         Start-Sleep -Seconds 6

@@ -74,10 +74,10 @@ try {
     Assert-That "the window was found by enumeration on this desktop (hwnd=0x$('{0:X}' -f [int64]$hwnd))" ($hwnd -ne [IntPtr]::Zero)
     Assert-That "it has a real client area ($($sz.Width)x$($sz.Height))" ($sz.Width -gt 0 -and $sz.Height -gt 0)
 
-    # Recorded, not asserted: it predicts Send-ScDropdownPick, the one primitive allowed to
-    # raise -- the game calls SetCapture on button-down and Windows grants capture only to the
-    # foreground window (AGENTS.md § "Foreground"). An invisible desktop has no competing
-    # application, so the game may simply hold that desktop's foreground.
+    # Recorded, not asserted: a dropdown pick would need it -- the game calls SetCapture on
+    # button-down and Windows grants capture only to the foreground window (AGENTS.md §
+    # "Foreground"). An invisible desktop has no competing application, so the game may
+    # simply hold that desktop's foreground.
     $fg = [ScDrive.Native]::GetForegroundWindow()
     Write-Host ("    GetForegroundWindow() on this desktop = 0x{0:X}{1}" -f [int64]$fg,
         $(if ($fg -eq $hwnd) { '  <- the game itself' } elseif ($fg -eq [IntPtr]::Zero) { '  <- nothing is foreground here' } else { '  <- some other window' }))
