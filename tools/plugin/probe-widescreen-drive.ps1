@@ -209,14 +209,6 @@ try {
 
     # The launch: the USER's feature set (deploy.ps1's launcher flags) plus the
     # assembled widescreen -- the -WidescreenStage table + fog, in-process.
-    # The engine's glue-screen input is ACTIVATION-GATED, and on the invisible
-    # desktop a cnc-ddraw window is never told it is active -- a posted click at
-    # a fully interactive menu registers 0/4 runs without this flag and in 0.4s
-    # with it (AGENTS.md § "Glue-screen (menu) input under cnc-ddraw"). The flag
-    # makes every input primitive post the activation triple first; real
-    # foreground/focus are untouched. Cleared in finally; WMode never gates.
-    if ($Presenter -eq 'cnc') { $env:SCDRIVE_POST_ACTIVATE = '1' }
-
     Write-Host "probe-wsdrive: launching (fanout features + stage $WidescreenStage, presenter=$Presenter)"
     $launchArgs = @{
         Mode = 'fanout'; Circles = '1'; HudRow = '1'; ProdQueue = '1'; ProdFan = '1'
@@ -272,70 +264,15 @@ try {
         }
     }
 
-    # ---- menu walk to a loaded game -- every step gated on the ENGINE's own
-    # dialog list, never on sleep guesswork: a click into a menu that is not up
-    # yet lands on the wrong screen, and the fingerprints then "confirm" a walk
-    # that never happened.
-    # A menu click that must produce a dialog, retried: the activation gate can
-    # swallow the first click even nudged (measured), so "click, wait for the
-    # ENGINE to show the dialog, click again if it did not" is the resilient form.
-    function Click-UntilDialog {
-        param([int]$X, [int]$Y, [string]$Name, [int]$Tries = 3, [int]$WaitSec = 10)
-        for ($i = 1; $i -le $Tries; $i++) {
-            Send-ScClick -Hwnd $h -X $X -Y $Y
-            $d = Wait-ScDialog -LogPath $log -Name $Name -TimeoutSec $WaitSec
-            if ($d) { return $d }
-            Write-Host "       walk: '$Name' not up after click $i/$Tries at ($X,$Y); retrying with a fresh nudge"
-        }
-        $null
-    }
-
-    Write-Host 'probe-wsdrive: walking to a loaded game (dialog-gated)'
-    if (-not (Wait-ScDialog -LogPath $log -Name 'MainMenu' -TimeoutSec 30)) {
-        throw 'probe-wsdrive: the main menu never appeared in the DIALOGS oracle.'
-    }
-    Assert-PluginAlive -Stage 'mainmenu'
-    Start-Sleep -Seconds 3
-    if (-not (Click-UntilDialog -X 215 -Y 119 -Name 'Delete')) {              # Single Player
-        throw 'probe-wsdrive: the Original/Expansion chooser never appeared (3 nudged clicks).'
-    }
-    Send-ScClick -Hwnd $h -X 373 -Y 300                       # Expansion
-    Start-Sleep -Seconds 1
-    Send-ScClick -Hwnd $h -X 75  -Y 111                       # login-profile row
-    # (516,392) OK leaves Login for the campaign RaceSelection screen; Create
-    # (the map browser) only appears after Play Custom (327,415) THERE --
-    # waiting for Create one screen early reads a healthy walk as lost.
-    if (-not (Click-UntilDialog -X 516 -Y 392 -Name 'RaceSelection' -WaitSec 15)) {
-        Assert-PluginAlive -Stage 'post-login'     # names WHICH failed: plugin or walk
-        throw 'probe-wsdrive: the campaign (RaceSelection) screen never appeared, with the plugin alive -- the walk is lost.'
-    }
-    if (-not (Click-UntilDialog -X 327 -Y 415 -Name 'Create' -WaitSec 15)) {
-        Assert-PluginAlive -Stage 'post-race'
-        throw 'probe-wsdrive: the map-browser (Create) screen never appeared, with the plugin alive -- the walk is lost.'
-    }
-    Assert-PluginAlive -Stage 'create-screen'
-    Start-Sleep -Seconds 2
-    Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
-    Select-ScBrowserMap -Hwnd $h -GameDir $GameDir -MapPath $mapPath | Out-Null
-    Assert-PluginAlive -Stage 'map-selected'
-    Set-ScGameType -Hwnd $h -LogPath $log -Index 2
-    Send-ScClick -Hwnd $h -X 516 -Y 393
-    Start-Sleep -Seconds 6
-    Send-ScClick -Hwnd $h -X 544 -Y 387
-    Start-Sleep -Seconds 10
-    Dismiss-ScTipsDialog -Hwnd $h -LogPath $log | Out-Null
-    Start-Sleep -Seconds 3
+    Write-Host 'probe-wsdrive: walking to a loaded game'
+    Assert-PluginAlive -Stage 'pre-walk'
+    # A walk that stops is reported with the plugin's liveness beside it, so "the plugin
+    # died" and "the walk lost its way" stay two findings.
+    try {
+        Enter-ScCustomGame -Hwnd $h -LogPath $log -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir `
+            -ActivationNudge:($Presenter -eq 'cnc') -Noun 'probe-wsdrive'
+    } catch { Assert-PluginAlive -Stage 'walk'; throw }
     Assert-PluginAlive -Stage 'in-game'
-
-    # In game the activation nudge comes OFF for playfield input: with it on,
-    # every playfield click-select returns an EMPTY selection -- including the
-    # x<640 control -- while the minimap (console dialog) and scroll keys still
-    # work. The activation handler re-syncs the engine's cursor (AGENTS.md §
-    # "Foreground": raising the window destroys the posted position), a fine
-    # price before a GLUE click and fatal immediately before a playfield
-    # button-down. Minimap clicks keep a nudged RETRY (Click-MinimapVerified)
-    # in case the console dialog path still wants it.
-    $env:SCDRIVE_POST_ACTIVATE = '0'
 
     # A minimap click whose effect is VERIFIED against the engine's own origin,
     # with one nudged retry: identical minimap clicks in one run do not all take.

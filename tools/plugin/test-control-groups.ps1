@@ -41,13 +41,6 @@ $BURROW_CMD = '0x2C'
 $BURROW_KEY = 0x55
 $IDLE_ORDER = '0x03'
 
-# Which entry of the lobby's Game Type combo is "Use Map Settings" -- MEASURED, by holding the
-# combo open and photographing it (work/scratch/probe-gametype.ps1 posts WM_LBUTTONDOWN without
-# the matching UP). On this 2-player fixture the list is exactly three entries -- Melee, Free
-# For All, Use Map Settings -- and the entry centres land on Send-ScDropdownPick's default
-# 16px/15px offsets, so both the index and the click geometry are right.
-$UMS_INDEX = 2
-
 # OUR OWN FIXTURE FOLDER, never the shared `00-testmap` (AGENTS.md § "Test fixtures").
 # Being careful inside a shared folder does not work: workers write into it concurrently, the
 # map browser is clicked by ROW, and a foreign file that sorts first silently becomes the map
@@ -136,37 +129,7 @@ try {
     $hwnd = Get-ScGameWindow -ProcessId $gamePid
 
     Step "menus: Single Player -> Expansion -> Play Custom -> $mapName" {
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 215 -Y 119        # Single Player
-        Send-ScClick -Hwnd $hwnd -X 373 -Y 300        # StarCraft: Brood War (Expansion)
-        Start-Sleep -Seconds 1
-        Send-ScClick -Hwnd $hwnd -X 75  -Y 111        # first entry in the Registry list
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 392        # Ok
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom
-        Start-Sleep -Seconds 2
-        # Both rows are computed from the filesystem and the opened folder is verified before
-        # the map row is clicked: no sort order holds once a second suite makes its own fixture
-        # folder (AGENTS.md § "Map browser").
-        Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
-        Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
-        # Set the Game Type EXPLICITLY: the combo carries whatever this machine's profile last
-        # used, and a stale "Melee" hands the slot melee starting units -- 4 Drones -- instead
-        # of the map's own 36 (AGENTS.md § "Game Type / `Custom Type`"). Set-ScGameType reads
-        # the engine's own dialog list back after the pick and retries up to 3 times until it
-        # reads $UMS_INDEX's name, so a pick that silently did not take fails here rather than
-        # as ten meaningless assertions downstream.
-        Set-ScGameType -Hwnd $hwnd -LogPath $LogPath -Index $UMS_INDEX
-        Shot 'lobby'
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing
-        Start-Sleep -Seconds 6
-        Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
-        Start-Sleep -Seconds 10
-        # The tips dialog is found in the engine's own dialog list and dismissed by ITS OWN OK
-        # button, then asserted gone -- never a fixed point, never the registry
-        # (AGENTS.md § "Tips dialog").
-        Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
-        Start-Sleep -Seconds 2
+        Enter-ScCustomGame -Hwnd $hwnd -LogPath $LogPath -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -BeforeStart { Shot 'lobby' } -Noun 'test'
         Shot 'in-game'
     }
 

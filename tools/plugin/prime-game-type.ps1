@@ -57,20 +57,10 @@ if (-not $gamePid) { throw 'prime-game-type: could not parse the game pid from s
 $hwnd = Get-ScGameWindow -ProcessId $gamePid
 
 try {
-    Start-Sleep -Seconds 2
-    Send-ScClick -Hwnd $hwnd -X 215 -Y 119        # Single Player
-    Send-ScClick -Hwnd $hwnd -X 373 -Y 300        # StarCraft: Brood War (Expansion)
-    Start-Sleep -Seconds 1
-    Send-ScClick -Hwnd $hwnd -X 75  -Y 111        # first entry in the Registry list
-    Send-ScClick -Hwnd $hwnd -X 516 -Y 392        # Ok
-    Start-Sleep -Seconds 2
-    Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom -- opens in Maps\BroodWar
-    Start-Sleep -Seconds 2
-    Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
-
-    # No -Force: if 'Custom Type' already reads Use Map Settings this is a genuine no-op,
-    # no raise at all -- the best case, and still worth running to CONFIRM that case.
-    Set-ScGameType -Hwnd $hwnd -LogPath $LogPath -Index 2
+    # The walk's game-type step has no -Force: if 'Custom Type' already reads Use Map
+    # Settings it is a genuine no-op, no raise at all -- the best case, and still worth
+    # running to CONFIRM that case.
+    Enter-ScCustomGame -Hwnd $hwnd -LogPath $LogPath -MapPath $mapPath -GameDir $GameDir -StopAt Lobby -Noun 'prime-game-type'
 
     # The oracle is the engine's own dialog list, not "Set-ScGameType returned without
     # throwing" -- AGENTS.md § "Oracles: what counts as a read-back".

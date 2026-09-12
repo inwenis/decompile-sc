@@ -104,17 +104,7 @@ try {
 
     Write-Host ''
     Write-Host '[1] menus: Single Player -> Expansion -> Play Custom -> a stock campaign map'
-    Start-Sleep -Seconds 2
-    Send-ScClick -Hwnd $hwnd -X 215 -Y 119
-    Send-ScClick -Hwnd $hwnd -X 373 -Y 300
-    Start-Sleep -Seconds 1
-    Send-ScClick -Hwnd $hwnd -X 75  -Y 111
-    Send-ScClick -Hwnd $hwnd -X 516 -Y 392
-    Start-Sleep -Seconds 2
-    Send-ScClick -Hwnd $hwnd -X 327 -Y 415
-    Start-Sleep -Seconds 2
-    Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir `
-        -MapPath (Join-Path $GameDir 'Maps\campaign\(1)Enslavers02b.scm') | Out-Null
+    Enter-ScCustomGame -Hwnd $hwnd -LogPath $LogPath -MapPath (Join-Path $GameDir 'Maps\campaign\(1)Enslavers02b.scm') -GameDir $GameDir -StopAt Map -Noun 'probe'
     # NO "Ok" click here: the Game Type combo lives on THIS screen and every suite calls
     # Set-ScGameType before Ok. Past Ok the 'Create' dialog is out of the engine's dialog
     # list, so all three arms score the same whatever the foreground did -- arms that cannot

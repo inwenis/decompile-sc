@@ -272,7 +272,7 @@ try {
         (@(Get-Content -LiteralPath $log | Where-Object { $_ -match 'STORM present: WIDEN armed' }).Count -gt 0)
 
     Write-Host 'probe-tooltips: walking to a loaded game'
-    Walk-ToScGame -Hwnd $h -LogPath $log -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -Noun 'probe-tooltips'
+    Enter-ScCustomGame -Hwnd $h -LogPath $log -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -ActivationNudge -Noun 'probe-tooltips'
     $mv = @(Get-Content -LiteralPath $log | Where-Object { $_ -match 'CONSOLE moved ' })
     Assert-True 'the ten bottom-console roots were moved (CONSOLE moved lines = 10)' ($mv.Count -eq 10) "(got $($mv.Count))"
 

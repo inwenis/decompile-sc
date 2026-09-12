@@ -57,8 +57,8 @@ Posted moves, clicks, drags and keys need no foreground. The one exception is `S
 
 ## Glue-screen (menu) input under cnc-ddraw
 
-Off-screen, cnc-ddraw menu input is activation-gated: a harness limit, not a feature bug (ini fixes were tried; see the `cnc-ddraw.ini` header). Walk menus with `Walk-ToScGame` (sc-wsprobe.ps1), which sets and clears `$env:SCDRIVE_POST_ACTIVATE`; why: `Send-ScActivationNudge` docstring.
-- DO keep `$env:SCDRIVE_POST_ACTIVATE` at `0` once in game (`Walk-ToScGame`'s `finally` does): the nudge re-syncs the cursor and every playfield click-select then comes back empty.
+Off-screen, cnc-ddraw menu input is activation-gated: a harness limit, not a feature bug (ini fixes were tried; see the `cnc-ddraw.ini` header). Walk menus with `Enter-ScCustomGame -ActivationNudge` (drive-game.ps1), which sets and clears `$env:SCDRIVE_POST_ACTIVATE`; why: `Send-ScActivationNudge` docstring.
+- DO keep `$env:SCDRIVE_POST_ACTIVATE` at `0` once in game (`Enter-ScCustomGame`'s `finally` does): the nudge re-syncs the cursor and every playfield click-select then comes back empty.
 - Any two-sample "did this region change" oracle calibrated under WMode is suspect under cnc-ddraw, which presents everything the engine draws (the selected browser row animates by itself). DO measure self-animating regions per batch as `Sync-ScBrowserToTop` does before trusting a settle.
 -> research/rulebook-history.md § "Glue-screen input is ACTIVATION-GATED, and a shim decides whether the gate is open"; research/renderer-viewport.md §17.2
 

@@ -2,8 +2,8 @@
 <#
 .SYNOPSIS
 What the widescreen probes share: the numbered assert and the finding line, the
-log/frame directories and counters, the stage-3 cnc-ddraw launch, the menu walk
-into a loaded game, the tagged buffer dump with its camera, and the close-down.
+log/frame directories and counters, the stage-3 cnc-ddraw launch, the tagged
+buffer dump with its camera, and the close-down.
 
 .DESCRIPTION
 Dot-sourced, like sc-suite.ps1, so `$script:failures`, `$script:step` and
@@ -92,16 +92,6 @@ function Get-ScBufferDump {
            Where-Object { $_ -match "WORLD \[$([regex]::Escape($Tag))\] screen=\((-?\d+),(-?\d+)\)" }) | Select-Object -First 1
     if ($w -and $w -match 'screen=\((-?\d+),(-?\d+)\)') { $cam = [pscustomobject]@{ X = [int]$Matches[1]; Y = [int]$Matches[2] } }
     [pscustomobject]@{ Tag = $Tag; Path = $path; Cam = $cam }
-}
-
-# The cnc-ddraw arm of drive-game's Enter-ScCustomGame: the same walk with the
-# activation nudge on, which the off-screen cnc-ddraw glue screens need.
-function Walk-ToScGame {
-    param([Parameter(Mandatory)][IntPtr]$Hwnd, [Parameter(Mandatory)][string]$LogPath,
-          [Parameter(Mandatory)]$Fixtures, [Parameter(Mandatory)][string]$MapPath,
-          [Parameter(Mandatory)][string]$GameDir, [string]$Noun = 'probe')
-    Enter-ScCustomGame -Hwnd $Hwnd -LogPath $LogPath -Fixtures $Fixtures -MapPath $MapPath `
-        -GameDir $GameDir -ActivationNudge -Noun $Noun
 }
 
 # The stage-3 cnc-ddraw launch with the frame dump armed. Returns the game pid.

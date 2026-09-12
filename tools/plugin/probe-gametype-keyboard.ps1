@@ -44,16 +44,7 @@ if (-not $gamePid) { throw 'probe-gametype-keyboard: could not parse the game pi
 $hwnd = Get-ScGameWindow -ProcessId $gamePid
 
 try {
-    Start-Sleep -Seconds 2
-    Send-ScClick -Hwnd $hwnd -X 215 -Y 119        # Single Player
-    Send-ScClick -Hwnd $hwnd -X 373 -Y 300        # StarCraft: Brood War (Expansion)
-    Start-Sleep -Seconds 1
-    Send-ScClick -Hwnd $hwnd -X 75  -Y 111        # first entry in the Registry list
-    Send-ScClick -Hwnd $hwnd -X 516 -Y 392        # Ok
-    Start-Sleep -Seconds 2
-    Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom -- opens in Maps\BroodWar
-    Start-Sleep -Seconds 2
-    Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
+    Enter-ScCustomGame -Hwnd $hwnd -LogPath $LogPath -MapPath $mapPath -GameDir $GameDir -StopAt Map -Noun 'probe-gametype-keyboard'
 
     # Every arm reads the engine's own dialog list back: "no exception" is not a read-back
     # (AGENTS.md § "Oracles: what counts as a read-back").

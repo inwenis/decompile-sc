@@ -200,23 +200,7 @@ function Invoke-Arm {
         if (-not $SkipInGame) {
             try {
                 Write-Host "       walking to a loaded game"
-                Send-ScClick -Hwnd $h -X 215 -Y 119
-                Send-ScClick -Hwnd $h -X 373 -Y 300
-                Start-Sleep -Seconds 1
-                Send-ScClick -Hwnd $h -X 75  -Y 111
-                Send-ScClick -Hwnd $h -X 516 -Y 392
-                Start-Sleep -Seconds 2
-                Send-ScClick -Hwnd $h -X 327 -Y 415
-                Start-Sleep -Seconds 2
-                Assert-ScFixtureStillMine -Run $script:fixtures -MapPath $mapPath
-                Select-ScBrowserMap -Hwnd $h -GameDir $GameDir -MapPath $mapPath | Out-Null
-                Set-ScGameType -Hwnd $h -Index 2 -LogPath $LogPath
-                Send-ScClick -Hwnd $h -X 516 -Y 393
-                Start-Sleep -Seconds 6
-                Send-ScClick -Hwnd $h -X 544 -Y 387
-                Start-Sleep -Seconds 10
-                Dismiss-ScTipsDialog -Hwnd $h -LogPath $LogPath | Out-Null
-                Start-Sleep -Seconds 3
+                Enter-ScCustomGame -Hwnd $h -LogPath $LogPath -Fixtures $script:fixtures -MapPath $mapPath -GameDir $GameDir -Noun 'test-widescreen'
                 $result.InGame = Read-ScreenLayout -Tag "$Name-ingame" -LogPath $LogPath
                 # A reading is only "in game" if the playfield layer is there: the walk
                 # can complete every click and still be sitting in a menu.

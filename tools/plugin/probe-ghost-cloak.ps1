@@ -139,26 +139,7 @@ function Start-GhostGame {
     if (-not $script:gamePid) { throw 'probe: could not parse the game pid from scinject output.' }
     $h = Get-ScGameWindow -ProcessId $script:gamePid
 
-    Start-Sleep -Seconds 2
-    Send-ScClick -Hwnd $h -X 215 -Y 119
-    Send-ScClick -Hwnd $h -X 373 -Y 300
-    Start-Sleep -Seconds 1
-    Send-ScClick -Hwnd $h -X 75  -Y 111
-    Send-ScClick -Hwnd $h -X 516 -Y 392
-    Start-Sleep -Seconds 2
-    Send-ScClick -Hwnd $h -X 327 -Y 415
-    Start-Sleep -Seconds 2
-    Assert-ScFixtureStillMine -Run $fixtures -MapPath $MapPath
-    Select-ScBrowserMap -Hwnd $h -GameDir $GameDir -MapPath $MapPath | Out-Null
-    Set-ScGameType -Hwnd $h -LogPath $logPath -Index 2
-    Send-ScClick -Hwnd $h -X 516 -Y 393
-    Start-Sleep -Seconds 6
-    Send-ScClick -Hwnd $h -X 544 -Y 387
-    Start-Sleep -Seconds 10
-    # Dismissed by its OWN OK button and asserted gone -- never a fixed point, never the
-    # registry (AGENTS.md § The in-game tips dialog is dismissed by ITS OWN button).
-    Dismiss-ScTipsDialog -Hwnd $h -LogPath $logPath | Out-Null
-    Start-Sleep -Seconds 3
+    Enter-ScCustomGame -Hwnd $h -LogPath $logPath -Fixtures $fixtures -MapPath $MapPath -GameDir $GameDir -Noun 'probe'
     $h
 }
 

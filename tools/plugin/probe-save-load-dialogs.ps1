@@ -8,9 +8,8 @@ One launch: can the engine's Save and Load dialogs be DRIVEN at all, and does a 
 Runs in `-Mode observe`: no hooks, nothing written to game memory, so the round trip is
 also the plugin-free POSITIVE CONTROL -- if a vanilla save does not come back, no
 statement about the plugin means anything (AGENTS.md § "Oracles: absence and defect-era
-checks"). Play Custom with NO `Set-ScGameType` call: the game-type combo is machine-wide
-registry state a dropdown cannot set on the invisible desktop (AGENTS.md § "Game Type /
-`Custom Type`"), and no particular game type is needed here.
+checks"). The walk reads the Game Type as every suite does (Use Map Settings), which a
+stock campaign map plays the same as any other type.
 
 .EXAMPLE
 ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-save-load-dialogs.ps1
@@ -98,23 +97,7 @@ try {
     }
 
     Step 'menus: Single Player -> Expansion -> Play Custom -> Maps\campaign\(1)Enslavers02b.scm' {
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 215 -Y 119        # Single Player
-        Send-ScClick -Hwnd $hwnd -X 373 -Y 300        # Brood War
-        Start-Sleep -Seconds 1
-        Send-ScClick -Hwnd $hwnd -X 75  -Y 111        # first entry in the Registry list
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 392        # Ok
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom
-        Start-Sleep -Seconds 2
-        Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir `
-            -MapPath (Join-Path $GameDir 'Maps\campaign\(1)Enslavers02b.scm') | Out-Null
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok
-        Start-Sleep -Seconds 6
-        Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
-        Start-Sleep -Seconds 10
-        Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
-        Start-Sleep -Seconds 2
+        Enter-ScCustomGame -Hwnd $hwnd -LogPath $LogPath -MapPath (Join-Path $GameDir 'Maps\campaign\(1)Enslavers02b.scm') -GameDir $GameDir -Noun 'probe'
         Shot 'in-game'
         Show-ScDialogInventory -LogPath $LogPath -What 'in game, no menu'
     }
