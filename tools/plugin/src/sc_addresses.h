@@ -49,9 +49,12 @@
 // Active player id, from binary-selection-map.md 7's prose alone -- these three have no
 // rows in selection-xrefs.tsv. Note 7 there warns that THREE distinct player-id globals
 // are in play and conflating them produces bugs, so the plugin logs all three.
+// 0x00512678 is the player whose commands are executing, not the local one:
+// ParseGameRecvInfo 0x00486F50 and replayLoop 0x00487100 store each sender there before
+// its commands run and restore the local id (0x00512684) after.
 #define SC_VA_ACTIVE_PLAYER_ID    0x0051267Cu  // named by selection-cap.md 2.2
 #define SC_VA_PLAYER_ID_512688    0x00512688u  // used in selectSingleUnitFromID
-#define SC_VA_PLAYER_ID_512678    0x00512678u  // GPTP ACTIVE_NATION_ID
+#define SC_VA_PLAYER_ID_512678    0x00512678u  // GPTP ACTIVE_NATION_ID, the commanding player
 
 #define SC_SELECTION_SLOTS 12
 #define SC_MAX_PLAYERS     8
@@ -132,11 +135,12 @@
 // therefore cannot relocate.
 #define SC_VA_GAME_START_EPOCH_SITE   0x004EEC37u
 
-// The Load Game path's heap buffer for the save it is about to read. Non-zero exactly
-// while a load is pending: gameStartClear itself branches on it (0x004EEC62, skipping
-// the hotkey clear), and startGame's caller frees and zeroes it on the way out
-// (0x004E07D5). READ ONLY, and only so a log line can say which kind of start this was.
-#define SC_VA_PENDING_SAVE_NAME       0x006D1218u
+// The FILE* of the save the Load Game path is about to read: LoadGameInit_Mode 0x004CF8E0
+// stores `_pfopen(...)` there, and closeLoadGameFile 0x004CE440 and startGame's caller
+// (0x004E07D5) close it with _fclose 0x0040D483 (a Function ID match) and zero it. Non-zero
+// exactly while a load is pending: gameStartClear branches on it (0x004EEC61, skipping the
+// hotkey clear). READ ONLY, and only so a log line can say which kind of start this was.
+#define SC_VA_LOAD_GAME_FILE          0x006D1218u
 
 // ---------------------------------------------------------------------------
 // CUnit layout. Offsets inherited from GPTP; each is USED by a decompiled
@@ -937,12 +941,6 @@
 // reason 0x14 when `flags & 1` is clear -- the second of which is SC_UNIT_FLAG_COMPLETED,
 // derived independently above from a production run and defined there.
 #define SC_UNIT_FLAG_BUILDING   0x2u
-
-// The LOCAL player id, as the two receive handlers read it -- `MOV EDI,[0x00512678]` at
-// 0x004C1B49 and 0x004C1BC9, and `CMP [ESI+0x4C], [0x00512678]` inside
-// cmdrecvCancelUpgrade. NOT SC_VA_ACTIVE_PLAYER_ID (0x0051267C), which selNext 0x0049A850
-// multiplies by 12 to index the selection array; the two are adjacent, never the same.
-#define SC_VA_LOCAL_PLAYER_ID  0x00512678u
 
 // The detour targets. Every one is an ENTRY-POINT verdict from HookProbe over
 // tools/ghidra/specs/upgrade-hooks.spec, with a relocation-safe patch window.

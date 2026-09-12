@@ -43,14 +43,13 @@ unsigned ScSessionEpochAtLastLoad(void) {
 
 // --- the two events --------------------------------------------------------
 
-// Is the engine about to deserialise a save? `pendingSaveName` (0x006D1218) is the heap
-// buffer the Load Game path allocates and `startGame`'s caller frees on the way out
-// (0x004E07D5: `MOV EAX,[0x006D1218]; TEST EAX,EAX; JE ...; CALL free; MOV dword ptr
-// [0x006D1218],0`). Read PURELY so the log line can say which kind of game start this
-// was -- nothing branches on it, because the epoch must move for both.
+// Is the engine about to deserialise a save? The load-game FILE* (sc_addresses.h,
+// SC_VA_LOAD_GAME_FILE) is non-null only while one is pending. Read PURELY so the log line
+// can say which kind of game start this was -- nothing branches on it, because the epoch
+// must move for both.
 static bool LoadPending(void) {
     if (!ScEngineModuleBase()) return false;
-    return *(DWORD*)ScRuntimeAddr(SC_VA_PENDING_SAVE_NAME) != 0;
+    return *(DWORD*)ScRuntimeAddr(SC_VA_LOAD_GAME_FILE) != 0;
 }
 
 static void OnGameStart(void) {
