@@ -10,9 +10,9 @@
    powershell -c "irm https://raw.githubusercontent.com/inwenis/decompile-sc/main/play.ps1 | iex"
    ```
 
-It downloads the latest release into `%LOCALAPPDATA%\StarCraft-Modded` and starts the game with the mod.
+It downloads the latest release into `%LOCALAPPDATA%\StarCraft-Modded`, puts a **StarCraft Modded** shortcut on your desktop and starts the game with the mod.
 
-Run the same line again to update, or `Launch-StarCraft-Modded.cmd` in that folder to just play.
+Next time, use the shortcut. Run the same line again to update.
 
 Rather not paste a one-liner?
 
