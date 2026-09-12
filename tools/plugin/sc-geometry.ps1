@@ -10,6 +10,12 @@ Dot-source it:  . (Join-Path $PSScriptRoot 'sc-geometry.ps1')
 # No Set-StrictMode here: this file is DOT-SOURCED, so a mode set here applies to
 # the whole calling script (deploy.ps1 does not run under it).
 
+function Get-ScWidePresetNames {
+    # The presets the DLL carries, default first: SC_WS_PRESETS in sc_screen_presets.h.
+    $listed = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'src/sc_screen_presets.h')
+    @([regex]::Matches($listed, '&SC_WS_GEOM_(\d+x\d+)') | ForEach-Object { $_.Groups[1].Value })
+}
+
 function Get-ScWideGeometry {
     <#
     .SYNOPSIS
