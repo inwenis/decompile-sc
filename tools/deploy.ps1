@@ -498,8 +498,8 @@ else {
     if (Test-Path -LiteralPath $staleWideShortcut) { Remove-Item -LiteralPath $staleWideShortcut -Force; Write-Host "removed the stale wide shortcut: $staleWideShortcut (one shortcut carries the wide geometry now)" }
 }
 
-# --- 6. regenerate the feature-test map ---------------------------------------
-# Maps\BroodWar\!feature-test.scx is a destination-only file (never in -SourceGameDir,
+# --- 6. regenerate the feature-test and battle maps ---------------------------
+# Maps\BroodWar\!feature-test.scx and !battle.scx are destination-only files (never in -SourceGameDir,
 # never in the repo -- AGENTS.md § "Hard rules"), so the true mirror in step 2 correctly
 # purges it every run. Regenerate rather than /XF-preserve: an exclusion only protects a
 # file that already exists (a fresh deploy would ship without the map), and a preserved
@@ -507,13 +507,14 @@ else {
 # player would ever see. Cost: the checkout deploying needs the map toolchain (.venv/
 # richchk -- ./setup-worktree.ps1). This runs LAST in assembly so a generator failure throws with
 # game + plugin + launcher + shortcut already assembled: the install still works, only the
-# map is missing, loudly. It writes exactly ONE file, ours by name, and never touches
+# map is missing, loudly. It writes exactly those TWO files, ours by name, and never touches
 # anything else under the user's Maps\ tree.
 Write-Host ''
-Write-Host '== Regenerating the feature-test map =='
+Write-Host '== Regenerating the feature-test and battle maps =='
 $featureMapPath = Join-Path $gameDeployDir 'Maps\BroodWar\!feature-test.scx'
+$battleMapPath = Join-Path $gameDeployDir 'Maps\BroodWar\!battle.scx'
 & (Join-Path $scriptDir 'make-feature-test-map.ps1') -OutputPath $featureMapPath | Write-Host
-if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "deploy: feature-test map generation failed (exit $LASTEXITCODE) -- the deployed game works, but $featureMapPath is missing. Fix the toolchain (./setup-worktree.ps1) and re-run the deploy, or run tools/make-feature-test-map.ps1 -OutputPath '$featureMapPath' by hand." }
+if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "deploy: map generation failed (exit $LASTEXITCODE) -- the deployed game works, but $featureMapPath or $battleMapPath is missing. Fix the toolchain (./setup-worktree.ps1) and re-run the deploy, or run tools/make-feature-test-map.ps1 -OutputPath '$featureMapPath' by hand." }
 
 # --- 7. verify -------------------------------------------------------------
 Write-Host ''
@@ -536,13 +537,15 @@ Write-Host 'verify: plugin binaries are freshly built from this run'
 # Presence alone is not enough -- a leftover from an earlier deploy passes a bare
 # Test-Path -- so the map must also be newer than this run's start, same shape as the
 # plugin-binary freshness check above.
-if (-not (Test-Path -LiteralPath $featureMapPath)) {
-    throw "deploy: feature-test map missing after deploy: $featureMapPath"
+foreach ($mapPath in $featureMapPath, $battleMapPath) {
+    if (-not (Test-Path -LiteralPath $mapPath)) {
+        throw "deploy: map missing after deploy: $mapPath"
+    }
+    if ((Get-Item -LiteralPath $mapPath).LastWriteTime -lt $deployStart) {
+        throw "deploy: $mapPath predates this deploy run -- the regeneration step did not actually write it."
+    }
+    Write-Host "verify: map regenerated this run ($mapPath)"
 }
-if ((Get-Item -LiteralPath $featureMapPath).LastWriteTime -lt $deployStart) {
-    throw "deploy: $featureMapPath predates this deploy run -- the regeneration step did not actually write it."
-}
-Write-Host "verify: feature-test map regenerated this run ($featureMapPath)"
 
 # --- 7b. the deployed plugin's IDENTITY, not its freshness --------------------
 # The check above is a TIMESTAMP: it says a file was written during this run, which is

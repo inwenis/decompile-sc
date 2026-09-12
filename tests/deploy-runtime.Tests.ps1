@@ -92,7 +92,8 @@ Describe 'a redeploy leaves the feature-test map in place (task 067)' {
     It 'the verify step requires the map to exist AND to be from this run' {
         # Presence alone passes on a stale leftover, so deploy.ps1 checks freshness the
         # same way it does for the plugin binaries.
-        $script:deployText.Contains('feature-test map missing after deploy') | Should -BeTrue
+        $script:deployText.Contains('map missing after deploy') | Should -BeTrue
+        $script:deployText.Contains("Join-Path `$gameDeployDir 'Maps\BroodWar\!battle.scx'") | Should -BeTrue
         $script:deployText.Contains('predates this deploy run -- the regeneration step did not actually write it') | Should -BeTrue
     }
 
