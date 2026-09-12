@@ -247,7 +247,8 @@ user's entire StarCraft settings key on its first live run via an unguarded `New
 -Force` against an already-existing key -- see `run-with-plugin.ps1`'s "Sound" section for
 the full incident writeup. AGENTS.md hard rule 5 governs live user state as a direct
 result: that key is written only between `tools/sc-registry-baseline.ps1 -Save` and
-`-Restore`.
+`-Restore`, except `Custom Type`, which `run-with-plugin.ps1` sets on every agent launch and
+leaves set (AGENTS.md § "Game Type / `Custom Type`").
 
 ## Re-deploy
 

@@ -661,7 +661,7 @@ try {
         Start-Sleep -Seconds 2
         Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
         Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
-        Set-ScGameType -Hwnd $hwnd -LogPath $LogPath -Index 2      # Use Map Settings, verified
+        Assert-ScGameType -LogPath $LogPath      # Use Map Settings, verified
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> briefing
         Start-Sleep -Seconds 6
         Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start

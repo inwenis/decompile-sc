@@ -712,7 +712,7 @@ containing none of the 36 units the file holds.
 It was not the lobby. Re-run on 2026-08-08 with the Game Type combo opened and *"Use Map
 Settings"* picked explicitly from its list (SC's dropdowns are press-and-hold: the entry under
 the cursor at button-*up* is what gets chosen, so a plain click cannot select anything and the
-box's label is not evidence of what is set — `Send-ScDropdownPick` in `drive-game.ps1`), the
+box's label is not evidence of what is set), the
 result was byte-for-byte the same histogram.
 
 It was not the round-trip either. The map that produced that histogram came from the raw-CHK

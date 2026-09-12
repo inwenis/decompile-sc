@@ -150,7 +150,7 @@ try {
 
     Write-Host ''
     Write-Host '[4] start the map, and ask the PROCESS which one loaded'
-    Set-ScGameType -Hwnd $hwnd -LogPath $logPath -Index 2           # Use Map Settings, verified
+    Assert-ScGameType -LogPath $logPath           # Use Map Settings, verified
     Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing
     Start-Sleep -Seconds 6
     Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start

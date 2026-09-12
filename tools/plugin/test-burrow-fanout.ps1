@@ -178,12 +178,10 @@ try {
         Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
         Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
 
-        # Set the Game Type EXPLICITLY rather than trusting what the box shows: the combo
-        # comes up carrying whatever this machine's profile last used, and a stale "Melee"
-        # makes the map play as a melee game. Entry 2 of {Melee, Free For All, Use Map
-        # Settings}; picking the wrong one fails the unit-type assertion below rather than
-        # passing quietly (AGENTS.md § "Game Type / `Custom Type`").
-        Set-ScGameType -Hwnd $hwnd -LogPath $LogPath -Index 2      # Use Map Settings, verified
+        # A stale "Melee" makes the map play as a melee game (AGENTS.md § "Game Type /
+        # `Custom Type`"), so the combo is read back here rather than discovered as a failed
+        # unit-type assertion below.
+        Assert-ScGameType -LogPath $LogPath      # Use Map Settings, verified
         Shot 'lobby'
 
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing

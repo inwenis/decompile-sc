@@ -211,7 +211,7 @@ try {
         Send-ScClick -Hwnd $hwnd -X 327 -Y 415
         Start-Sleep -Seconds 2
         Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
-        Set-ScGameType -Hwnd $hwnd -LogPath $LogPath -Index 2
+        Assert-ScGameType -LogPath $LogPath
         Send-ScClick -Hwnd $hwnd -X 516 -Y 393
         Start-Sleep -Seconds 6
         Send-ScClick -Hwnd $hwnd -X 544 -Y 387

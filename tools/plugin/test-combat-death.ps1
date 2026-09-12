@@ -290,7 +290,7 @@ function Start-Mission {
     # added to in between, and every row below the addition moves.
     Assert-ScFixtureStillMine -Run $fixtures -MapPath $MapPath
     Select-ScBrowserMap -Hwnd $script:hwnd -GameDir $GameDir -MapPath $MapPath | Out-Null
-    Set-ScGameType -Hwnd $hwnd -LogPath $LogPath -Index 2      # Use Map Settings, verified
+    Assert-ScGameType -LogPath $LogPath      # Use Map Settings, verified
     Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing
     Start-Sleep -Seconds 6
     Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start

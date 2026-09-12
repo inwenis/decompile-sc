@@ -5,8 +5,7 @@ Record the foreground window before the launch steals it, and hand it back after
 .DESCRIPTION
 StarCraft activates its own window when it creates it and nothing hands the foreground back;
 on an idle desktop, where nothing else asks for it, it held the foreground for a measured 72s
--- a whole run. That also poisons the borrow in Send-ScDropdownPick, which hands the
-foreground back to whatever held it (AGENTS.md § "Foreground").
+-- a whole run (AGENTS.md § "Foreground").
 
 Its own file because run-with-plugin.ps1 is copied into the deploy tree and must work with no
 repo present, while drive-game.ps1 -- owner of the equivalent MakeForeground -- is the whole
