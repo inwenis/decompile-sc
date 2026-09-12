@@ -31,7 +31,7 @@ Nothing here reads or writes game DATA -- it reads code bytes out of the
 executable and emits addresses and encodings. No game content is reproduced.
 
 Usage:
-  python tools/renderer_patch_sites.py [--exe PATH] [--width 800] [--height 480]
+  python tools/renderer_patch_sites.py [--exe PATH] [--width 1280] [--height 880]
                                        [--check]     # verify only, write nothing
 """
 from __future__ import annotations
@@ -614,7 +614,7 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     # The rule that sorts these: a site that computes an address INTO THE
     # FRAMEBUFFER moves when the framebuffer widens (stage 1); a site that CLIPS
     # to the playfield moves when the playfield widens (stage 2). Fog has both,
-    # and at 800x480 they are the same number, so nothing in the source
+    # and at every preset the two widths are the same number, so nothing in the source
     # distinguishes them -- only a live run does. Scanning .text for the
     # framebuffer pointer 0x006CEFF4 finds 19 instructions; three of them --
     # 0x0047EDCC, 0x0047EF35, 0x00480631 -- are immediately followed by a
@@ -1285,8 +1285,8 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     # Layer 1 is the context-help TOOLTIP: 0x00481330 installs it, and that
     # function's allocator calls carry the __FILE__ string 0x005044F0
     # "Starcraft\SWAR\lang\CtxtHelp.cpp". 0x00481480 hides it by parking the
-    # layer at (640,400) -- off the bottom-right of the playfield. At 800 wide,
-    # (640,400) is ON screen.
+    # layer at (640,400) -- off the bottom-right of the playfield. On a wider
+    # screen, (640,400) is ON screen.
     b.imm(0x004814EA, STOCK_W, PF_W, 2, "layer1.park.x", 2,
           "parks the tooltip layer just off the right edge of the playfield")
     # The two placers clamp the box to the STOCK screen from live control
@@ -1309,12 +1309,12 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     # The window procedure clamps every mouse coordinate to the STOCK screen
     # before building an input event or writing the cursor globals
     # (research/renderer-viewport.md 8, last row of the 640x480 table), so an x
-    # past 639 -- real or posted -- becomes 639 and the right 160 columns are
+    # past 639 -- real or posted -- becomes 639 and the widened columns are
     # unreachable by any click. Each clamp is a PAIR: a `cmp .., 640` that
     # decides and a `mov .., 639` that replaces; patching the 639 alone turns
-    # "click at 700" into "click at 799". X pairs widen to the new screen; the Y
-    # clamps stay, the height is unchanged. Moving the CONSOLE into the widened
-    # region is a separate, unshipped problem: relocating the console dialogs'
+    # "click at 700" into a click at the new right edge. X pairs widen to the new
+    # screen; their Y twins are in the SCREEN-height block below. Moving the CONSOLE
+    # sideways into the widened region is unshipped: relocating the console dialogs'
     # bounds moves their hit-test but NOT their on-screen pixels
     # (renderer-viewport.md 18).
     #
@@ -1323,8 +1323,8 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     # `cmp eax,0x27E / jl` -- scroll the camera RIGHT when the mouse x >= 638.
     # It ships below and MUST move with the clamp, being the same stage: with
     # the clamp lifted and the trigger at 638 the whole widened band
-    # (x 638..799) fires the scroll, the camera slides the instant the cursor
-    # crosses 638, and the right ~160px can be neither rested on nor clicked.
+    # (x >= 638) fires the scroll, the camera slides the instant the cursor
+    # crosses 638, and the band can be neither rested on nor clicked.
     # renderer-viewport.md 18.1.1.
     for cmp_va, mov_va, mov_w in (
             (0x004D1960, 0x004D196D, 2),   # 0x004D1940: cmp si,640 / mov ax,639
@@ -1349,7 +1349,7 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     # the seven ClipCursor call sites runs first: it maps client {0,0} and client
     # {640,480} through ClientToScreen and SetRects the result into 0x006CDDB0,
     # which ClipCursor then confines the OS cursor to. The 640 is a hardcoded
-    # client width, so under cnc-ddraw's 800-wide window the real mouse is pinned
+    # client width, so under cnc-ddraw's wide window the real mouse is pinned
     # to the left 640 columns -- it cannot ENTER the right band at all, and no
     # WM_MOUSEMOVE past x=639 is ever generated for the (already widened) wndproc
     # clamp to read. Only real play shows this wall: posted harness input is never
@@ -1357,7 +1357,8 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     # an off-screen desktop never has. It is the coupled other half of
     # scroll.right.trigger -- clip at 640 plus trigger at W-2 means the cursor can
     # never reach the trigger and mouse scroll-right is dead -- so the two ship
-    # together. Height stays 480. The 0x421690 explicit-rect setter takes its rect
+    # together; the bottom edge is cursor.clip.bottom in the SCREEN-height block.
+    # The 0x421690 explicit-rect setter takes its rect
     # from its 4 callers and is not touched here.
     b.imm(0x00421600, STOCK_W, W, 4, "cursor.clip.right", 3,
           "0x004215E0 clip-rect reset: ClientToScreen({640,480}) -> ({W,480}); "
@@ -1366,18 +1367,15 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
 
     # The CAMERA'S scroll clamp. 0x0049BB90 builds the maximum screenLeft once
     # per game as (mapTileW - 20) * 32 -- 20 tiles = the stock 640-px viewport.
-    # At 800 the viewport is 25 tiles, so parked at the right map edge the
-    # playfield's last 5 tile columns (the whole new band) lie PAST the map: the
+    # A wider viewport is W/32 tiles, so parked at the right map edge the
+    # playfield's last W/32 - 20 tile columns (the whole new band) lie PAST the map: the
     # terrain cache clamps to the map and the band shows whatever scratch it last
     # held, and the fog fill reads visibility for tiles beyond the row end --
     # explored/unexplored blotches belonging to the next map row. A player parks
     # at the right map edge all the time; a fixture that keeps the camera
     # interior only ever sees this as "2.28% stale at the edge" (17.1 item 4).
-    # Move the clamp with the viewport: 20 -> W/32 tiles. The vertical clamp
-    # (sub eax,0xC, 12 tiles + 8) stays, the height is unchanged. The minimap
-    # click-to-centre's own 20/13 (0x4A4D20, research 7) is NOT moved: it only
-    # decides where a click lands on screen (80 px left of centre at 800), and
-    # every suite's Get-ScMinimapPoint prediction is built on it.
+    # Move the clamp with the viewport: 20 -> W/32 tiles. Its vertical twin and the
+    # minimap's half-extents have their own blocks below.
     b.imm(0x0049BBE6, STOCK_W // 32, W // 32, 1, "scroll.clamp.x.tiles", 3,
           "0x0049BB90: maxScreenLeft = (mapTileW - 20) * 32 -> (mapTileW - W/32) * 32, "
           "so the playfield never extends past the map's right edge")
@@ -1553,9 +1551,7 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
     b.imm(0x00496924, STOCK_W // 2, PF_W // 2, 4, "camera.group.halfx", 3, "0x004967E0 centre on a group: - W/2")
 
     # -- the MINIMAP's viewport box and click-to-centre half-extents (20 x 13
-    #    tiles = 640 x ceil(400/32)). Deliberately NOT moved at 800/1280 wide
-    #    (18.1.4) because every suite's Get-ScMinimapPoint was built on the stock
-    #    value; the harness now derives it from the header.
+    #    tiles = 640 x ceil(400/32) at stock), moved to the playfield's own tiles.
     b.imm(0x004A4D68, STOCK_W // 32, PF_W // 32, 4, "minimap.centre.tilesx", 3, "0x004A4D20 minimap click -> camera: half the viewport width")
     b.imm(0x004A4D84, (STOCK_PF_H + 31) // 32, (PF_H + 31) // 32, 4, "minimap.centre.tilesy", 3, "0x004A4D20 minimap click -> camera: half the viewport height")
     b.imm(0x004A3F7E, STOCK_W // 32, PF_W // 32, 4, "minimap.box.tilesx", 3, "0x004A3F30 minimap viewport box: width in tiles")

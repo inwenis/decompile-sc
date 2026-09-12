@@ -2,13 +2,13 @@
 <#
 .SYNOPSIS
 Runs the wider-playfield patch set in a real game and READS THE GEOMETRY BACK OUT
-OF THE ENGINE, in two arms, so "the screen is 800 wide" is a measurement.
+OF THE ENGINE, in two arms, so "the screen is wider" is a measurement.
 
 .DESCRIPTION
 research/renderer-viewport.md 9.3 stages a wider screen; this suite instruments
 stages 0-2. The control arm (-Widescreen 0) and the widescreen arm run the same
 oracle and the assertion is on the DIFFERENCE: a one-armed run cannot tell "the
-descriptor says 800x480 because we patched it" from "it always said that", so
+descriptor says the wide size because we patched it" from "it always said that", so
 the control is half the result. The oracle is the `SCREEN` scan -- framebuffer
 descriptor 0x006CEFF0 and the eight graphic-layer rectangles, read out of the
 running process -- and not a screenshot: a frame is never the oracle
