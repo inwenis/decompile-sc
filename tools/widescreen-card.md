@@ -6,7 +6,7 @@ renders 1280x800 of playfield (twice the base 640x400, both across and down)
 with the console below it, in a 1280x880 screen. The window fills your monitor:
 if a 2x window (2560x1760) fits your screen it uses that, otherwise it fills the
 screen borderless, keeping the shape (black bars top/bottom or sides as needed).
-The mouse is locked to the window (hold Ctrl or Right Alt to free it).
+The mouse is locked to the window (Ctrl+Tab or Right Alt+Right Ctrl frees it; a click locks it again).
 
 ## What you should see
 

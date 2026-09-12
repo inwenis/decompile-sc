@@ -33,7 +33,7 @@ if errorlevel 1 (
 )
 
 rem cnc-ddraw shows the widened frame: borderless full screen, aspect ratio kept, cursor
-rem locked to the window (hold Ctrl or Right Alt to free it). A ddraw proxy must sit next to
+rem locked to the window (Ctrl+Tab or Right Alt+Right Ctrl frees it). A ddraw proxy must sit next to
 rem the exe, so it goes into the game folder for this session only. A ddraw.dll or ddraw.ini
 rem already there is kept aside and put back on exit (one that is already ours is left alone).
 set "KEEP_DLL="
