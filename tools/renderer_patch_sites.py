@@ -1616,6 +1616,27 @@ def build(img: Image, W: int, H: int, PF_H: int) -> Builder:
            "playfield -- never ask the 640-wide console region about it (right-click "
            "orders and the contextual cursor beside the console)")
 
+    # A dialog flagged 0x08000000 (the glue popups) composites into the surface of the
+    # dialog before it in the composite walk (0x0041CDA9 stores that one at 0x006CF4BC),
+    # at the dirty rect's SCREEN coordinates -- right only while that parent sits at
+    # (0,0), as every stock glue screen does. The centred menus (sc_menu.h) move it, so
+    # the rect is made parent-relative just before the blit: one packed 32-bit subtract
+    # per corner pair, which cannot borrow (the rect is clipped to the popup, the popup
+    # lies inside its parent). A no-op while the parent is at (0,0).
+    b.cave(0x0041C91D, "2bd15283c636568d4df4",
+           "2bd1"                      # sub edx,ecx        (displaced: source x)
+           + "52"                      # push edx
+           + "83c636"                  # add esi,0x36       (displaced: the popup's surface)
+           + "56"                      # push esi
+           + "a1bcf46c00"              # mov eax,[0x6CF4BC] (the parent dialog)
+           + "8b5004"                  # mov edx,[eax+4]    (its left | top<<16)
+           + "2955f4"                  # sub [ebp-0xC],edx  (rect left, top)
+           + "2955f8"                  # sub [ebp-0x8],edx  (rect right, bottom)
+           + "8d4df4",                 # lea ecx,[ebp-0xC]  (displaced)
+           "glue.popup.parentorigin", 3,
+           "0x0041C810 composite, flag 0x08000000 branch: blit into the parent's surface "
+           "at parent-relative coordinates")
+
     return b
 
 

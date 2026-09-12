@@ -207,6 +207,10 @@ param(
     # inherited, so a suite can set the variable once for a whole run. The DLL refuses
     # the whole widescreen install on an unknown name and logs the list.
     [string]$Geometry = '',
+    # Centre the menus on the wider screen and draw a starfield around them (sc_menu.h).
+    # Off by default: it moves the glue roots, so a suite's fixed menu coordinates would
+    # miss. The deployed launcher turns it on. Needs -Widescreen 1 -WidescreenStage 3.
+    [ValidateSet('0', '1')][string]$MenuCentre = '0',
 
     # Wrap every root dialog's interact with a logging shim (CTRACE lines: dialog name,
     # event type, dwUser, x/y, return value). The dispatcher stops at the first non-zero
@@ -450,6 +454,7 @@ try {
     $env:SCPLUGIN_WIDESCREEN     = $Widescreen
     $env:SCPLUGIN_WS_STAGE       = $WidescreenStage
     if ($Geometry) { $env:SCPLUGIN_WS_GEOMETRY = $Geometry }
+    $env:SCPLUGIN_MENU_CENTRE    = $MenuCentre
     $env:SCPLUGIN_CONSOLE_TRACE  = $ConsoleTrace
     # 'auto' must reach the DLL as UNSET. Remove-Item, not `$env:X = ''`: measured on
     # pwsh 7.6, the empty assignment leaves the variable present-but-empty in a child's

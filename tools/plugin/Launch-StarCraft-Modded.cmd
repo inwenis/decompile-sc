@@ -58,6 +58,7 @@ set SCPLUGIN_WS_STAGE=3
 rem Geometry preset: 1280x880 (default), 1280x720 (16:9, 1.5x on a 1080p screen),
 rem 1536x864 (16:9, 1.25x on a 1080p screen, more map, smaller UI).
 set SCPLUGIN_WS_GEOMETRY=1280x880
+set SCPLUGIN_MENU_CENTRE=1
 set SCPLUGIN_STORM_PRESENT=widen
 
 rem --early loads the DLL before the game's first instruction, where the widescreen patches

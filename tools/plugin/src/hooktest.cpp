@@ -29,6 +29,7 @@
 #include "sc_prodfan.h"
 #include "sc_prodqueue.h"
 #include "sc_screen.h"
+#include "sc_menu.h"
 #include "sc_session.h"
 #include "sc_upgrades.h"
 #include "sc_unit.h"
@@ -5336,6 +5337,38 @@ int main(void) {
     Check("TgtFastcall(9,1) -> original 26 + 1000", TgtFastcall(9, 1), 1026);
     Check("TgtStdcall(5,3)  -> original 14 + 2000", TgtStdcall(5, 3), 2014);
     Check("  detour entered", g_stdCalls, 1);
+
+    Part("menu starfield: palette mapping, fade-stable levels, density");
+    {
+        // A descending grey ramp: index i holds grey 255-i, plus one pure red entry.
+        BYTE pal[1024];
+        memset(pal, 0, sizeof(pal));
+        for (int i = 0; i < 256; ++i) pal[i * 4] = pal[i * 4 + 1] = pal[i * 4 + 2] = (BYTE)(255 - i);
+        pal[7 * 4] = 255; pal[7 * 4 + 1] = 0; pal[7 * 4 + 2] = 0;
+        Check("black maps to the darkest entry", ScMenuNearestIndex(pal, 0, 0, 0), 255);
+        Check("a mid grey lands mid-ramp", ScMenuNearestIndex(pal, 100, 100, 100), 155);
+        Check("a red asks for the one red entry", ScMenuNearestIndex(pal, 250, 10, 10), 7);
+        BYTE full[4], half[4];
+        ScMenuLevelsFor(pal, full);
+        Check("the sky is the darkest entry", full[0], 255);
+        Check("the bright star is near white", full[3] < 40 ? 1 : 0, 1);
+        // The same palette at half brightness, every entry scaled, as a fade does.
+        BYTE dim[1024];
+        for (int i = 0; i < 1024; ++i) dim[i] = (BYTE)(pal[i] / 2);
+        ScMenuLevelsFor(dim, half);
+        Check("a half-faded palette keeps the bright star's entry", half[3], full[3]);
+        Check("  and the mid star's", half[2], full[2]);
+        BYTE* f = (BYTE*)calloc(1280 * 720, 1);
+        const int lit = ScMenuBuildStars(f, 1280, 720);
+        Check("the starfield is lit", lit > 500 ? 1 : 0, 1);
+        Check("  but sparse (under 1% of cells)", lit < 1280 * 720 / 100 ? 1 : 0, 1);
+        int levels[4] = { 0, 0, 0, 0 };
+        for (int i = 0; i < 1280 * 720; ++i) ++levels[f[i] & 3];
+        Check("all three star levels occur", (levels[1] && levels[2] && levels[3]) ? 1 : 0, 1);
+        memset(f, 0, 1280 * 720);
+        Check("the field is deterministic", ScMenuBuildStars(f, 1280, 720), lit);
+        free(f);
+    }
 
     Part("the register-convention thunk sees EAX/ECX AND the stack args");
     printf("    and the original still runs with every register intact\n");

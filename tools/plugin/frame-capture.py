@@ -576,6 +576,56 @@ def cmd_selftest(a):
     return 1 if bad else 0
 
 
+def load_rgb(path):
+    im = Image.open(path).convert("RGB")
+    return im.size[0], im.size[1], im.tobytes()
+
+
+def cmd_glass(a):
+    """Lit pixels of a WINDOW CAPTURE in a region, outside an optional hole: what reached
+    the glass, which no buffer dump can answer. Lit = any channel above --min."""
+    w, h, px = load_rgb(a.png)
+    x1, y1 = a.x1 or w, a.y1 or h
+    hole = tuple(int(v) for v in a.hole.split(",")) if a.hole else (0, 0, 0, 0)
+    total = lit = 0
+    for y in range(a.y0, y1):
+        row = px[y * w * 3:(y + 1) * w * 3]
+        inside = hole[1] <= y < hole[3]
+        for x in range(a.x0, x1):
+            if inside and hole[0] <= x < hole[2]:
+                continue
+            total += 1
+            if max(row[x * 3], row[x * 3 + 1], row[x * 3 + 2]) > a.min:
+                lit += 1
+    print("glass_region=%d,%d-%d,%d" % (a.x0, a.y0, x1, y1))
+    print("glass_hole=%s" % (a.hole or "none"))
+    print("glass_px=%d" % total)
+    print("glass_lit=%d" % lit)
+    print("glass_lit_frac=%.5f" % (lit / total if total else 0))
+    return 0
+
+
+def cmd_glassdiff(a):
+    """Pixels that differ between two WINDOW CAPTURES inside a box."""
+    wa, ha, pa = load_rgb(a.a)
+    wb, hb, pb = load_rgb(a.b)
+    if (wa, ha) != (wb, hb):
+        print("glassdiff_error=size %dx%d vs %dx%d" % (wa, ha, wb, hb))
+        return 1
+    x1, y1 = a.x1 or wa, a.y1 or ha
+    n = changed = 0
+    for y in range(a.y0, y1):
+        for x in range(a.x0, x1):
+            i = (y * wa + x) * 3
+            n += 1
+            if pa[i:i + 3] != pb[i:i + 3]:
+                changed += 1
+    print("glassdiff_region=%d,%d-%d,%d" % (a.x0, a.y0, x1, y1))
+    print("glassdiff_px=%d" % n)
+    print("glassdiff_changed=%d" % changed)
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -660,11 +710,29 @@ def main():
     p.add_argument("--y0", type=int, default=0)
     p.add_argument("--y1", type=int, default=0)
 
+    p = sub.add_parser("glass")
+    p.add_argument("--png", required=True)
+    p.add_argument("--x0", type=int, default=0)
+    p.add_argument("--x1", type=int, default=0)
+    p.add_argument("--y0", type=int, default=0)
+    p.add_argument("--y1", type=int, default=0)
+    p.add_argument("--hole", default=None, help="x0,y0,x1,y1 (exclusive) left out of the count")
+    p.add_argument("--min", type=int, default=24)
+
+    p = sub.add_parser("glassdiff")
+    p.add_argument("--a", required=True)
+    p.add_argument("--b", required=True)
+    p.add_argument("--x0", type=int, default=0)
+    p.add_argument("--x1", type=int, default=0)
+    p.add_argument("--y0", type=int, default=0)
+    p.add_argument("--y1", type=int, default=0)
+
     a = ap.parse_args()
     return {"info": cmd_info, "check": cmd_check, "render": cmd_render,
             "band": cmd_band, "diff": cmd_diff, "zeroruns": cmd_zeroruns,
             "mapdiff": cmd_mapdiff, "diffbox": cmd_diffbox,
-            "unmarked-diff": cmd_unmarked_diff, "selftest": cmd_selftest}[a.cmd](a)
+            "unmarked-diff": cmd_unmarked_diff, "selftest": cmd_selftest,
+            "glass": cmd_glass, "glassdiff": cmd_glassdiff}[a.cmd](a)
 
 
 if __name__ == "__main__":

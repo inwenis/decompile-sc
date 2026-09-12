@@ -32,7 +32,8 @@
 //    order and STOPS at the first non-zero return, so the trace names the dialog
 //    that claims a click at any position.
 //
-// Both ride one 6-byte detour on the frame composer (0x0041E280), so all writes
+// Both -- and the menu centring (sc_menu.h), which moves glue roots from the same walk --
+// ride one 6-byte detour on the frame composer (0x0041E280), so all writes
 // to dialog records happen on the GAME thread between frames -- never from the
 // observer thread. Observe mode (the plugin's off switch) installs neither.
 #ifndef SC_CONSOLE_H
