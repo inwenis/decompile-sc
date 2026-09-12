@@ -96,13 +96,18 @@ function Get-World { param([string]$Tag, [int]$TimeoutSec = 20)
 # Both summary lines are written LAST and unconditionally, so waiting for them means the
 # whole answer has landed and an empty answer is still an answer.
 $script:oracleSeq = 0
+# A line the plugin flagged ringStable=0 is not consumable (its ring read never settled
+# against the queue indicator's phantom window): re-ask up to three times, then return the
+# flagged answer so a failure shows the flag. Same rule as test-production-queue's Get-ProdQueue.
 function Get-Prod {
     param([string]$Tag, [int]$TimeoutSec = 25)
+  for ($ask = 0; $ask -lt 3; $ask++) {
     $script:oracleSeq++
     $label = "gq-$Tag-$script:oracleSeq"
     Set-ScMarker -MarkerPath $markerPath -Label $label
     $esc = [regex]::Escape($label)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $flagged = $false
     while ((Get-Date) -lt $deadline) {
         $all = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue)
         $qLines = @($all | Select-String -Pattern "PRODQ(SEL)? \[$esc\]")
@@ -110,6 +115,11 @@ function Get-Prod {
         $qSummary = @($qLines | Select-String -Pattern 'buildings=\d+ max=')
         $fSummary = @($fLines | Select-String -Pattern 'buildings=\d+ selected=')
         if ($qSummary.Count -gt 0 -and $fSummary.Count -gt 0) {
+            if ($ask -lt 2 -and @(@($qLines) + @($fLines) | Where-Object { $_.Line -match ' ringStable=0' }).Count -gt 0) {
+                Write-Host "       ('$label' carries ringStable=0 -- re-asking rather than trusting a flagged read)"
+                $flagged = $true
+                break
+            }
             $out = [pscustomobject]@{
                 Label = $label
                 Tracked = @{}
@@ -204,7 +214,10 @@ function Get-Prod {
         }
         Start-Sleep -Milliseconds 250
     }
-    throw "test: no PRODQ+PRODFAN answer for marker '$label' within ${TimeoutSec}s (log: $LogPath). Was the game launched with -ProdQueue 1 -ProdFan 1?"
+    if (-not $flagged) {
+        throw "test: no PRODQ+PRODFAN answer for marker '$label' within ${TimeoutSec}s (log: $LogPath). Was the game launched with -ProdQueue 1 -ProdFan 1?"
+    }
+  }
 }
 
 # The LOGICAL queue of one building: the engine's occupied slots plus whatever the plugin
@@ -375,25 +388,8 @@ try {
     }
 
     Step "menus: Single Player -> Expansion -> Play Custom -> $mapName" {
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 215 -Y 119        # Single Player
-        Send-ScClick -Hwnd $hwnd -X 373 -Y 300        # StarCraft: Brood War (Expansion)
-        Start-Sleep -Seconds 1
-        Send-ScClick -Hwnd $hwnd -X 75  -Y 111        # first entry in the Registry list
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 392        # Ok
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom -- opens in Maps\BroodWar
-        Start-Sleep -Seconds 2
-        Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
-        Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
-        Set-ScGameType -Hwnd $hwnd -LogPath $LogPath -Index 2      # Use Map Settings, verified
-        Shot 'lobby'
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing
-        Start-Sleep -Seconds 6
-        Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
-        Start-Sleep -Seconds 10
-        Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
-        Start-Sleep -Seconds 2
+        Enter-ScCustomGame -Hwnd $hwnd -LogPath $LogPath -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -Noun 'test' `
+            -BeforeStart { Shot 'lobby' }
         Shot 'in-game'
     }
 

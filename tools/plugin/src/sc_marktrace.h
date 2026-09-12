@@ -11,11 +11,11 @@ bool ScMarkTraceWanted(void);
 void ScMarkTraceInstall(BYTE* moduleBase, bool writeAllowed);
 void ScMarkTraceRemove(void);
 
-// %SCPLUGIN_CURSOR_POSTED%=1 (run-offscreen.ps1 sets it for every off-screen run):
-// the engine's GetCursorPos import answers with the cursor LAYER's own position, which
-// follows posted WM_MOUSEMOVE, so the real mouse cannot pan the camera through the
-// edge-scroll. Poll re-asserts the slot: cnc-ddraw rewrites the same import at its
-// own init, after this plugin attached.
+// %SCPLUGIN_CURSOR_POSTED%=1 (run-offscreen.ps1 exports it; run-with-plugin.ps1 gates it
+// per launch): the engine's GetCursorPos import answers with the cursor LAYER's own
+// position, which follows posted WM_MOUSEMOVE, so the real mouse cannot pan the camera
+// through the edge-scroll. Poll re-asserts the slot: cnc-ddraw rewrites the same
+// import at its own init, after this plugin attached.
 void ScCursorPostedInstall(BYTE* moduleBase, bool writeAllowed);
 void ScCursorPostedPoll(void);
 void ScCursorPostedRemove(void);

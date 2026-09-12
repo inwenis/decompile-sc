@@ -2599,6 +2599,114 @@ function Dismiss-ScTipsDialog {
     return $true
 }
 
+function Invoke-ScClickUntilDialog {
+    <#
+    .SYNOPSIS
+    Click a menu point and wait for the dialog it opens, clicking again when the dialog
+    does not appear. Returns the dialog, or $null after the last try.
+    .DESCRIPTION
+    A glue screen still animating in swallows a click posted on schedule, and under load
+    the schedule is always early: the title screen can still be up when the plugin
+    attaches (measured: three consecutive runs stuck at the Original/Expansion chooser
+    while another process pegged the CPU, none once the walk waited). The engine's own
+    dialog list says when the screen is there; a sleep only guesses.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][IntPtr]$Hwnd, [Parameter(Mandatory)][string]$LogPath,
+        [Parameter(Mandatory)][int]$X, [Parameter(Mandatory)][int]$Y,
+        # A regex on the dialog NAME (Wait-ScDialog matches with -match).
+        [Parameter(Mandatory)][string]$Name,
+        # The wait stays long on every try: a retry fired while a slow screen is still
+        # sliding in lands on THAT screen, which is worse than a slow walk.
+        [int]$Tries = 3, [int]$WaitSec = 12, [string]$Noun = 'walk'
+    )
+    for ($i = 1; $i -le $Tries; $i++) {
+        Send-ScClick -Hwnd $Hwnd -X $X -Y $Y
+        $d = Wait-ScDialog -LogPath $LogPath -Name $Name -TimeoutSec $WaitSec
+        if ($d) { return $d }
+        Write-Host ("       ${Noun}: '$Name' not up ${WaitSec}s after click $i/$Tries at ($X,$Y)" + $(if ($i -lt $Tries) { '; retrying' } else { '' }))
+    }
+    $null
+}
+
+function Enter-ScCustomGame {
+    <#
+    .SYNOPSIS
+    Main menu -> Single Player -> Expansion -> the first registry entry -> Play Custom ->
+    the fixture map -> Use Map Settings -> Ok -> Start -> tips dismissed: THE walk into a
+    loaded custom game, every screen waited for in the engine's own dialog list and its
+    click retried (Invoke-ScClickUntilDialog). The short sleeps left cover a screen's
+    slide-in after it is listed, which the list does not show as a separate state.
+    .DESCRIPTION
+    -BeforeStart runs with the map and game type set, before Ok, for a suite that captures
+    the lobby. -ActivationNudge posts the activation nudge before every input, which the
+    off-screen cnc-ddraw glue screens need and WMode does not (AGENTS.md § "Glue-screen
+    (menu) input under cnc-ddraw"); the walk always leaves the nudge OFF, whatever the
+    shell had, because it re-syncs the cursor and is fatal before an in-game click.
+    The dialog names are the engine's own: the Original/Expansion chooser is 'Delete', the
+    registry is 'Login', the briefing is the race's screen ('TerranRR', 'ReadyZ', ...), and
+    the console's 'Minimap' root is the first sign of a loaded game.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][IntPtr]$Hwnd,
+        [Parameter(Mandatory)][string]$LogPath,
+        [Parameter(Mandatory)]$Fixtures,
+        [Parameter(Mandatory)][string]$MapPath,
+        [Parameter(Mandatory)][string]$GameDir,
+        [scriptblock]$BeforeStart,
+        [switch]$ActivationNudge,
+        [string]$Noun = 'walk'
+    )
+    if ($ActivationNudge) { $env:SCDRIVE_POST_ACTIVATE = '1' }
+    try {
+        if (-not (Wait-ScDialog -LogPath $LogPath -Name '^MainMenu$' -TimeoutSec 60)) { throw "${Noun}: the main menu never appeared." }
+        Start-Sleep -Seconds 2
+        if (-not (Invoke-ScClickUntilDialog -Hwnd $Hwnd -LogPath $LogPath -X 215 -Y 119 -Name '^Delete$' -Noun $Noun)) { throw "${Noun}: the Original/Expansion chooser never appeared." }
+        if (-not (Invoke-ScClickUntilDialog -Hwnd $Hwnd -LogPath $LogPath -X 373 -Y 300 -Name '^Login$' -Noun $Noun)) { throw "${Noun}: the registry never appeared." }
+        # The registry's list slides in for ~0.8 s after its dialog is listed and takes no
+        # click before that, and Ok without a selected entry does nothing, so the entry
+        # click and Ok are retried as a PAIR against the screen they open.
+        Start-Sleep -Seconds 1
+        $race = $null
+        for ($try = 1; $try -le 3 -and -not $race; $try++) {
+            Send-ScClick -Hwnd $Hwnd -X 75 -Y 111
+            $race = Invoke-ScClickUntilDialog -Hwnd $Hwnd -LogPath $LogPath -X 516 -Y 392 -Name '^RaceSelection$' -Tries 1 -WaitSec 15 -Noun $Noun
+            if (-not $race -and $try -lt 3) { Write-Host "       ${Noun}: retrying the registry entry + Ok pair ($($try + 1)/3)" }
+        }
+        if (-not $race) { throw "${Noun}: RaceSelection never appeared." }
+        Start-Sleep -Seconds 1
+        if (-not (Invoke-ScClickUntilDialog -Hwnd $Hwnd -LogPath $LogPath -X 327 -Y 415 -Name '^Create$' -WaitSec 15 -Noun $Noun)) { throw "${Noun}: the map browser never appeared." }
+        Start-Sleep -Seconds 2
+        Assert-ScFixtureStillMine -Run $Fixtures -MapPath $MapPath
+        Select-ScBrowserMap -Hwnd $Hwnd -GameDir $GameDir -MapPath $MapPath | Out-Null
+        Set-ScGameType -Hwnd $Hwnd -LogPath $LogPath -Index 2
+        if ($BeforeStart) { & $BeforeStart }
+        $briefing = '^(\w+RR|Ready\w*)$'
+        if (-not (Invoke-ScClickUntilDialog -Hwnd $Hwnd -LogPath $LogPath -X 516 -Y 393 -Name $briefing -WaitSec 20 -Noun $Noun)) { throw "${Noun}: the mission briefing never appeared." }
+        Start-Sleep -Seconds 3
+        if (-not (Invoke-ScClickUntilDialog -Hwnd $Hwnd -LogPath $LogPath -X 544 -Y 387 -Name '^Minimap$' -WaitSec 10 -Tries 1 -Noun $Noun)) {
+            # Start is clicked again only while the briefing is still the screen. An accepted
+            # Start closes it within a second and the list stays empty while the map loads,
+            # so a second click then would land in the game when it arrives.
+            if (@(Get-ScDialogs -LogPath $LogPath | Where-Object { $_.Name -match $briefing }).Count -gt 0) {
+                Write-Host "       ${Noun}: the briefing is still up 10 s after Start; clicking Start once more"
+                Send-ScClick -Hwnd $Hwnd -X 544 -Y 387
+            }
+            if (-not (Wait-ScDialog -LogPath $LogPath -Name '^Minimap$' -TimeoutSec 60)) { throw "${Noun}: the game never loaded (no Minimap root in the dialog list 70 s after Start)." }
+        }
+        # The tips dialog, when the player has it on, is listed in the same dialog scan
+        # as the Minimap root or the next one (measured across every log that had it),
+        # so a short wait decides it; the default would idle 20 s in every walk without it.
+        Dismiss-ScTipsDialog -Hwnd $Hwnd -LogPath $LogPath -TimeoutSec 3 | Out-Null
+        Start-Sleep -Seconds 2
+    }
+    finally {
+        $env:SCDRIVE_POST_ACTIVATE = '0'
+    }
+}
+
 # =============================================================================
 # ANY DIALOG, BY ITS OWN CONTROLS
 # =============================================================================

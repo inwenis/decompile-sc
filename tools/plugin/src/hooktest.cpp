@@ -4297,12 +4297,22 @@ static void QueueIndTests(void) {
         // is what keeps a phantom out of every PRODQ/PRODQSEL/STATQ line.
         Check("  the window is OPEN: generation is odd", (long long)(ScQueueIndRingGen() & 1), 1);
         Check("  and the phantom counter moved", (long long)(ScQueueIndStat(SC_QIND_STAT_PHANTOM) > 0), 1);
+        // The shared observer read, against a window nothing will close on this thread: it
+        // must give up after its bounded wait and SAY so, never hang, never claim stable.
+        WORD snap[SC_BUILD_QUEUE_SLOTS];
+        BYTE snapHead = 0xFF;
+        Check("  a coherent ring read INSIDE the window gives up and says so (0)",
+              ScQueueIndReadRing(unit, &snapHead, snap), 0);
 
         ScQueueIndPhantomRestore();
         Check("restore puts the empty sentinel back, byte-exact",
               (long long)*slot, (long long)SC_BUILD_QUEUE_EMPTY);
         Check("  the window is CLOSED: generation even and moved",
               (long long)((ScQueueIndRingGen() & 1) == 0 && ScQueueIndRingGen() != gen0), 1);
+        Check("  a coherent ring read now settles (1)", ScQueueIndReadRing(unit, &snapHead, snap), 1);
+        Check("  and it carries the engine's four, not the phantom",
+              (long long)(ScRingLength(snap) == SC_PRODQ_ENGINE_HOLD && snap[tail] == SC_BUILD_QUEUE_EMPTY &&
+                          snapHead == head), 1);
         Check("  a second restore is a no-op", (ScQueueIndPhantomRestore(),
               (long long)*slot), (long long)SC_BUILD_QUEUE_EMPTY);
 

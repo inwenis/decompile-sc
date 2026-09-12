@@ -303,6 +303,9 @@ if ($takeLock) { $lock = Enter-ScLaunchLock -TimeoutMinutes 5 }
 # the finally below cannot restore anything on a -NoLaunch/-RemoveWindowed run.
 $restoreForeground = (-not $NoForegroundRestore) -and [bool]$env:AGENT_TASK -and ($env:SCDRIVE_RAISE -ne '1')
 $preLaunchFg = [IntPtr]::Zero
+# Set when this launch overrides %SCPLUGIN_CURSOR_POSTED%; the finally puts the caller's value back.
+$cursorPostedOverridden = $false
+$cursorPostedCaller = $env:SCPLUGIN_CURSOR_POSTED
 
 try {
     $ddraw = Join-Path $GameDir 'ddraw.dll'
@@ -570,6 +573,19 @@ try {
     $logStartOffset = 0L
     if (Test-Path -LiteralPath $LogPath) { $logStartOffset = (Get-Item -LiteralPath $LogPath).Length }
 
+    # %SCPLUGIN_CURSOR_POSTED% (run-offscreen.ps1 exports 1 to every off-screen child) is
+    # for a cnc-ddraw launch, where the plugin's GetCursorPos answer keeps the real mouse
+    # from panning the camera. Under WMode the same answer empties every posted drag box
+    # (a box over 36 units read SORT candidates=0), so it reaches the game only when a
+    # cnc-ddraw DLL is the windowed helper; the caller's value is put back afterwards so a
+    # later cnc-ddraw launch from the same shell still gets it.
+    $cncDdrawHelper = [bool]($Windowed -and $WindowedHelperDll)
+    if (-not $cncDdrawHelper -and $cursorPostedCaller -match '^[1yY]') {
+        $env:SCPLUGIN_CURSOR_POSTED = '0'
+        $cursorPostedOverridden = $true
+        Write-Host 'run-with-plugin: SCPLUGIN_CURSOR_POSTED=0 for this launch (no cnc-ddraw helper; the posted-cursor hook empties WMode drag boxes)'
+    }
+
     $injOut = [System.Collections.Generic.List[string]]::new()
     & $inj @injArgs 2>&1 | ForEach-Object { Write-Host $_; $injOut.Add("$_") }
     $rc = $LASTEXITCODE
@@ -714,6 +730,7 @@ finally {
                            "It now belongs to $(Get-ScForegroundLabel -Hwnd (Get-ScForegroundWindow)). The launch itself is unaffected.")
         }
     }
+    if ($cursorPostedOverridden) { $env:SCPLUGIN_CURSOR_POSTED = $cursorPostedCaller }
     if ($lock) { Exit-ScLaunchLock -Lock $lock }
 }
 

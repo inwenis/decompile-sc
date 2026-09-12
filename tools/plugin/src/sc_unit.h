@@ -245,16 +245,23 @@ static inline void ScDlgRemoveChild(DWORD root, DWORD ctrl) {
     if (*link == ctrl) *link = ScDlgNext(ctrl);
 }
 
-// The engine's five ring slots as "0x000,0x0E4,..." for a log line; truncates rather than
-// overruns the caller's buffer.
-static inline int ScUnitFormatQueue(DWORD unit, char* out, int outLen) {
+// A ring snapshot's five slots as "0x000,0x0E4,..." for a log line; truncates rather than
+// overruns the caller's buffer. Format a SNAPSHOT (ScQueueIndReadRing), never the live
+// ring: two passes over live memory can disagree with each other.
+static inline int ScRingFormat(const WORD* ring, char* out, int outLen) {
     int used = 0;
     out[0] = '\0';
     for (int s = 0; s < SC_BUILD_QUEUE_SLOTS && used + 8 < outLen; ++s) {
-        used += _snprintf(out + used, outLen - used, "%s0x%03X",
-                          s ? "," : "", (unsigned)ScUnitQueueSlot(unit, s));
+        used += _snprintf(out + used, outLen - used, "%s0x%03X", s ? "," : "", (unsigned)ring[s]);
     }
     return used;
+}
+
+// Occupied slots in a ring snapshot, counted the way ScUnitQueueLength counts live memory.
+static inline int ScRingLength(const WORD* ring) {
+    int n = 0;
+    for (int s = 0; s < SC_BUILD_QUEUE_SLOTS; ++s) if (ring[s] != SC_BUILD_QUEUE_EMPTY) ++n;
+    return n;
 }
 
 // CreateNewUnitSelections (0x0049AE40): EAX = the CUnit* list, count PUSHED. The count is

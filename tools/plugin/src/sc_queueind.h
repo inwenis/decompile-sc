@@ -269,15 +269,24 @@ int ScQueueIndStat(int which);
 // call frame and every ENGINE reader of the ring runs on that same thread (classification in
 // research/production-queue.md 8.8; those ring mutations are multi-store and unsynchronised
 // anyway, so an off-thread reader sees torn rings in vanilla too). The readers that CAN land
-// inside are this plugin's observer thread (PRODQ/PRODQSEL, STATQ) and the test harness
-// reading process memory. Both read this generation instead of hoping: odd = open, changed
-// across a read = the read straddled one.
-//   g1 = ScQueueIndRingGen(); if (g1 & 1) retry;
-//   <read the ring>
-//   if (ScQueueIndRingGen() != g1) retry;
+// inside are this plugin's observer thread (PRODQ/PRODQSEL, PRODFAN, STATQ, QIND) and the
+// test harness reading process memory. Both read this generation instead of hoping: odd =
+// open, changed across a read = the read straddled one.
 // It moves only when a phantom is actually written, so with the feature off (or nothing
 // held) it sits at its last even value and readers pay two loads.
 unsigned ScQueueIndRingGen(void);
+
+// The generation once no window is open: an open one closes when its queueLayout call
+// returns, so this waits (bounded) instead of letting a reader spend its tries inside it.
+// Odd only when the wait gave up. Every observer try starts here.
+unsigned ScQueueIndRingGenSettled(void);
+
+// THE observer-thread read of one building's ring (head byte + five slots) straight from
+// memory, coherent against the window above. Returns 1 when the read settled, 0 when it
+// never did, in which case head/ring hold a plain read the caller must PRINT as
+// ringStable=0 rather than trust. head may be NULL. (sc_card reads through its reader
+// seam instead, with the same generation test around it.)
+int ScQueueIndReadRing(DWORD unit, BYTE* head, WORD* ring);
 
 // Test seam for the bracket itself: apply writes the held types into the portrait building's
 // empty ring slots (returns how many), restore puts back what was saved. The detour calls

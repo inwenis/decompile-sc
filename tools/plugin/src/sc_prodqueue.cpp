@@ -19,7 +19,7 @@
 #include "sc_log.h"
 #include "sc_prodqueue.h"
 #include "sc_upgrades.h"
-#include "sc_queueind.h"   // ScQueueIndRingGen -- the phantom window's seqlock
+#include "sc_queueind.h"   // ScQueueIndReadRing -- the phantom window's coherent ring read
 #include "sc_session.h"
 #include "sc_unit.h"
 
@@ -382,35 +382,14 @@ bool ScProdQueueOnCancel(DWORD unit, unsigned payload) {
 // Oracles
 // ---------------------------------------------------------------------------
 
-// The same read made COHERENT for the observer thread: the phantom bracket makes owned ring
-// slots non-empty for the length of each queueLayout call on the game thread, and a log
-// line must never carry that state. Guard the SIX RAW READS and nothing else -- at the
-// layout's real call rate (~40k brackets/s measured) a section wide enough to also format
-// five strings straddles a window on every retry. Returns 0 when 32 straddles in a row left
-// the value suspect, which the caller PRINTS (ringStable=0) rather than swallows.
+// The ring made COHERENT for the observer thread (ScQueueIndReadRing): a log line must
+// never carry the phantom bracket's state. Returns 0 when the read never settled, which
+// the caller PRINTS (ringStable=0) rather than swallows.
 static int CoherentEngineQueue(DWORD unit, char* out, int outLen, BYTE* head, int* len) {
     WORD ring[SC_BUILD_QUEUE_SLOTS];
-    int stable = 0;
-    for (int attempt = 0; attempt < 32 && !stable; ++attempt) {
-        unsigned g1 = ScQueueIndRingGen();
-        if (g1 & 1) continue;
-        *head = *(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
-        for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) ring[i] = ScUnitQueueSlot(unit, i);
-        if (ScQueueIndRingGen() == g1) stable = 1;
-    }
-    if (!stable) {
-        *head = *(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
-        for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) ring[i] = ScUnitQueueSlot(unit, i);
-    }
-    int used = 0;
-    int n = 0;
-    out[0] = '\0';
-    for (int s = 0; s < SC_BUILD_QUEUE_SLOTS && used + 8 < outLen; ++s) {
-        used += _snprintf(out + used, outLen - used, "%s0x%03X", s ? "," : "",
-                          (unsigned)ring[s]);
-        if (ring[s] != SC_BUILD_QUEUE_EMPTY) ++n;
-    }
-    *len = n;
+    int stable = ScQueueIndReadRing(unit, head, ring);
+    ScRingFormat(ring, out, outLen);
+    *len = ScRingLength(ring);
     return stable;
 }
 
