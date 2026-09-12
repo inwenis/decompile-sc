@@ -47,6 +47,11 @@ elseif ($env:GHIDRA_INSTALL_DIR) { "not on PATH, but GHIDRA_INSTALL_DIR=$($env:G
 else { 'not on PATH — needed later, not fatal now' }
 Report ($null -ne $ghidra -or $null -ne $env:GHIDRA_INSTALL_DIR) 'ghidra' $ghidraDetail
 
+# --- decompiled C, read before asm (AGENTS.md § "Decompiled C"): machine-wide, NOT fatal ---
+$decomp = 'C:\sc-work\decomp\StarCraft.exe'
+$hasDecomp = Test-Path -LiteralPath (Join-Path $decomp 'index.tsv')
+Report $hasDecomp 'decomp' ($hasDecomp ? $decomp : 'missing — ./tools/ghidra/decomp-all.ps1 makes it (Ghidra + the working copy)')
+
 # --- Python venv at .venv + requirements.txt ---
 if ($pyOk) {
     $venvPath = Join-Path $repoRoot '.venv'

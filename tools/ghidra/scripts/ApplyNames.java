@@ -154,10 +154,10 @@ public class ApplyNames extends GhidraScript {
                 // this_ onto the stack. Spelled out instead: this_ in ECX, the rest from +4.
                 StringBuilder s = new StringBuilder("ret=EAX");
                 int off = 4;
-                ParameterDefinition[] a = sig.getArguments();
-                for (int i = 0; i < a.length; i++) {
-                    s.append(';').append(a[i].getName()).append('=').append(i == 0 ? "ECX" : "S" + off);
-                    off += i == 0 ? 0 : Math.max(4, (a[i].getLength() + 3) & ~3);
+                ParameterDefinition[] defs = sig.getArguments();
+                for (int i = 0; i < defs.length; i++) {
+                    s.append(';').append(defs[i].getName()).append('=').append(i == 0 ? "ECX" : "S" + off);
+                    off += i == 0 ? 0 : Math.max(4, (defs[i].getLength() + 3) & ~3);
                 }
                 applyCustomStorage(f, sig, s.toString(), conv);
                 count("protoAppliedThiscall");

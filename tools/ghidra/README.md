@@ -128,6 +128,67 @@ Also re-ran with `-FunctionAddress 0x10004330` (no name given) against the same 
 the address-selector path used for stripped binaries; it independently resolved to
 `DllCanUnloadNow` and produced identical output.
 
+## Whole-binary decompile with names
+
+`decomp-all.ps1` writes every function of `StarCraft.exe` as C, one file per function, after
+importing the [Magnetar](https://github.com/joankaradimov/Magnetar) 1.16.1 tables (MIT, pinned
+by commit in `magnetar-names.ps1`): function names, prototypes, register calling conventions,
+structs, enums and typed globals. The result reads `unit->orderID != ORD_DIE` where plain
+Ghidra prints `*(char *)(param_1 + 0x4d) != 0`.
+
+```powershell
+./tools/ghidra/decomp-all.ps1     # @@RUNTIME@@; idempotent, re-run after a Magnetar bump
+```
+
+Needs the pinned Ghidra above, the working copy `C:\sc-work\1161-base\StarCraft.exe`, and the
+network once (Magnetar sources are cached under `C:\sc-work\ghidra\magnetar`). The project lives
+in `C:\sc-work\ghidra`, outside every worktree. Output lands in `C:\sc-work\decomp\StarCraft.exe\`:
+
+| File | What |
+|---|---|
+| `0x<entry>.<name>.c` | decompiled C, one file per function |
+| `index.tsv` | per function: `funcEntry`, `funcEnd`, `funcName`, `nameSource`, `bodyBytes`, `cFile` |
+| `types.txt` | every imported struct field with its offset, every enum value |
+| `names.tsv` | the parsed Magnetar table: `kind`, `addr`, `name`, `conv`, `proto`, `storage` |
+| `types-report.txt`, `names-report.txt` | what applied, what failed, the Function ID count |
+
+### Reading it
+
+```powershell
+$d = 'C:\sc-work\decomp\StarCraft.exe'
+Get-ChildItem $d -Filter '*updateFog*'                                   # by name
+$a = 0x004BCDF3                                                          # by any address inside
+Import-Csv "$d\index.tsv" -Delimiter "`t" | Where-Object { [uint32]$_.funcEntry -le $a -and $a -le [uint32]$_.funcEnd }
+Select-String -Path "$d\*.c" -Pattern '\bBWFXN_RefreshTarget\(' -List    # callers
+Select-String -Path "$d\types.txt" -Pattern '^struct CUnit ' -Context 0,40   # struct offsets
+```
+
+- `nameSource` is the provenance: `IMPORTED` = a Magnetar hypothesis, `ANALYSIS` = Ghidra's own
+  Function ID (statically linked CRT) or RTTI, `DEFAULT` = no name anywhere (`FUN_`).
+  Hard rule 4 applies to all of it: a name is a reading aid, not a finding.
+- `/* WARNING: Unknown calling convention */` marks a register convention read from Magnetar's
+  inline-asm wrapper: the parameters sit in the registers that wrapper loads. A `__thiscall`
+  function is spelled out the same way (`this_` in `ECX`), so its `this_` keeps its struct type.
+- Where Magnetar and this repo disagree, `tools/plugin/src/sc_addresses.h` wins: its addresses
+  carry evidence. @@CONFLICTS@@
+
+### How it is built, and what proves it
+
+1. `ApplyTypes.java` creates Magnetar's enums with their declared width first, then parses its
+   struct header. Ghidra's C parser sizes every enum as an int and has no `enum X : T`; without
+   the pre-sized enums, @@NEGCTL@@ struct sizes come out wrong. Every struct is checked against
+   the header's own `static_assert(sizeof(X) == N)`: @@SIZES@@.
+2. `ApplyNames.java` names functions and globals, applies prototypes, and gives register-convention
+   functions custom storage parsed from the asm wrappers (`mov ecx, top` / `push dword ptr right`).
+   A function Ghidra's Function ID already named keeps that name and signature.
+3. `DecompileMany.java ALL` decompiles every non-thunk function.
+
+@@NUMBERS@@
+
+Never point `build-opcode-policy.ps1` or `build-command-table.ps1` at `C:\sc-work\ghidra`: they
+parse `FUN_` names out of decompiled C and keep their own unnamed project. Ghidra locks a
+project to one process, so nothing else may hold `C:\sc-work\ghidra` while this runs.
+
 ## What StarCraft.exe 1.16.1 will need beyond this
 
 The target (`research/prior-art.md` §6, §8) is a 32-bit x86 PE from a 1998-era/2009 Blizzard

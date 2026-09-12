@@ -2,7 +2,8 @@
 <#
 .SYNOPSIS
 One-time machine install for developing the mod: the pinned 32-bit toolchain, the pinned
-cnc-ddraw presenter, and, given -StarCraftDir, the hash-checked working copy of the game.
+cnc-ddraw presenter, given -StarCraftDir the hash-checked working copy of the game, and, once
+Ghidra and that copy exist, the named decompiled C (tools/ghidra/decomp-all.ps1).
 
 .DESCRIPTION
 Idempotent: whatever is already present is skipped. Everything lands outside the repo
@@ -49,4 +50,15 @@ if ($StarCraftDir) {
 }
 else {
     Write-Host "setup-onetime: no -StarCraftDir given. Make the working copy when ready: ./tools/make-working-copy.ps1 -Source '<your StarCraft folder>'"
+}
+
+# Decompiled C for reading (AGENTS.md § "Decompiled C"): needs Ghidra and the working copy.
+if (Test-Path -LiteralPath 'C:\sc-work\decomp\StarCraft.exe\index.tsv') {
+    Write-Host 'setup-onetime: decompiled C present (C:\sc-work\decomp\StarCraft.exe)'
+}
+elseif ($env:GHIDRA_INSTALL_DIR -and (Test-Path -LiteralPath 'C:\sc-work\1161-base\StarCraft.exe')) {
+    & (Join-Path $PSScriptRoot 'tools/ghidra/decomp-all.ps1')
+}
+else {
+    Write-Host 'setup-onetime: no decompiled C yet. Install Ghidra (tools/ghidra/README.md) and the working copy, then ./tools/ghidra/decomp-all.ps1'
 }
