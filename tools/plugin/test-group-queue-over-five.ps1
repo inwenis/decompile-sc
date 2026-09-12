@@ -96,13 +96,18 @@ function Get-World { param([string]$Tag, [int]$TimeoutSec = 20)
 # Both summary lines are written LAST and unconditionally, so waiting for them means the
 # whole answer has landed and an empty answer is still an answer.
 $script:oracleSeq = 0
+# A line the plugin flagged ringStable=0 is not consumable (its ring read never settled
+# against the queue indicator's phantom window): re-ask up to three times, then return the
+# flagged answer so a failure shows the flag. Same rule as test-production-queue's Get-ProdQueue.
 function Get-Prod {
     param([string]$Tag, [int]$TimeoutSec = 25)
+  for ($ask = 0; $ask -lt 3; $ask++) {
     $script:oracleSeq++
     $label = "gq-$Tag-$script:oracleSeq"
     Set-ScMarker -MarkerPath $markerPath -Label $label
     $esc = [regex]::Escape($label)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $flagged = $false
     while ((Get-Date) -lt $deadline) {
         $all = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue)
         $qLines = @($all | Select-String -Pattern "PRODQ(SEL)? \[$esc\]")
@@ -110,6 +115,11 @@ function Get-Prod {
         $qSummary = @($qLines | Select-String -Pattern 'buildings=\d+ max=')
         $fSummary = @($fLines | Select-String -Pattern 'buildings=\d+ selected=')
         if ($qSummary.Count -gt 0 -and $fSummary.Count -gt 0) {
+            if ($ask -lt 2 -and @(@($qLines) + @($fLines) | Where-Object { $_.Line -match ' ringStable=0' }).Count -gt 0) {
+                Write-Host "       ('$label' carries ringStable=0 -- re-asking rather than trusting a flagged read)"
+                $flagged = $true
+                break
+            }
             $out = [pscustomobject]@{
                 Label = $label
                 Tracked = @{}
@@ -204,7 +214,10 @@ function Get-Prod {
         }
         Start-Sleep -Milliseconds 250
     }
-    throw "test: no PRODQ+PRODFAN answer for marker '$label' within ${TimeoutSec}s (log: $LogPath). Was the game launched with -ProdQueue 1 -ProdFan 1?"
+    if (-not $flagged) {
+        throw "test: no PRODQ+PRODFAN answer for marker '$label' within ${TimeoutSec}s (log: $LogPath). Was the game launched with -ProdQueue 1 -ProdFan 1?"
+    }
+  }
 }
 
 # The LOGICAL queue of one building: the engine's occupied slots plus whatever the plugin
@@ -226,33 +239,6 @@ function Get-Logical {
         Engine = if ($row) { $row.Engine } elseif ($trk) { $trk.Engine } else { @() }
         Tracked = ($null -ne $trk)
     }
-}
-
-# PRODFAN's row and PRODQ's record each read the ring fresh, at their own moment on the
-# observer thread, while the game thread keeps promoting: one read of 5 beside one of 4 is
-# a tick between them, not a disagreement about memory. Re-read until both agree; a
-# persistent skew still reaches Get-Logical's assertion.
-function Test-ProdRingsAgree {
-    param([Parameter(Mandatory)]$Prod, [AllowEmptyCollection()][string[]]$Units = @())
-    foreach ($u in $Units) {
-        $row = @($Prod.Rows | Where-Object { $_.Unit -eq $u }) | Select-Object -First 1
-        $trk = $Prod.Tracked[$u]
-        if ($row -and $trk -and $row.EngineLen -ne $trk.EngineLen) { return $false }
-    }
-    $true
-}
-# -Units may be empty (a box that caught nothing): then there is nothing to compare and the
-# reading is returned as it came, so the suite's own assertions report the miss.
-function Get-ProdStable {
-    param([Parameter(Mandatory)][string]$Tag, [AllowEmptyCollection()][string[]]$Units = @(), [int]$Tries = 3)
-    $p = $null
-    for ($i = 1; $i -le $Tries; $i++) {
-        $p = Get-Prod $Tag
-        if (Test-ProdRingsAgree -Prod $p -Units $Units) { return $p }
-        Write-Host "       ${Tag}: the two ring readers disagree (a promotion between reads); re-reading ($i/$Tries)"
-        Start-Sleep -Milliseconds 700
-    }
-    $p
 }
 
 # Assert one building's ring slot by slot. A length is a count, and a count can be produced
@@ -496,7 +482,7 @@ try {
     }
 
     Step "every building holds $Clicks items -- ring in its own memory, the rest in the plugin" {
-        $p = Get-ProdStable -Tag 'group-after' -Units $script:groupUnits
+        $p = Get-Prod 'group-after'
         foreach ($u in $script:groupUnits) {
             $l = Get-Logical -Prod $p -Unit $u
             Write-Host ("         unit=0x{0} ring={1} overflow={2} logical={3} engine=[{4}]" -f `
@@ -574,10 +560,7 @@ try {
         Send-ScClick -Hwnd $hwnd -X $cx -Y $cy
         Start-Sleep -Seconds 2
 
-        # The sole selected building is not named yet (the line below reads it out of this
-        # very answer), so the agreement check covers the whole group: only the selected
-        # building has a PRODFAN row, so that is the one compared.
-        $before = Get-ProdStable -Tag 'cancel-before' -Units $script:groupUnits
+        $before = Get-Prod 'cancel-before'
         Assert-That 'exactly one building is selected' ($before.Buildings -eq 1)
         $script:singleUnit = if ($before.Rows.Count -gt 0) { $before.Rows[0].Unit } else { $null }
         Assert-That 'and it is one of the group' `
@@ -599,7 +582,7 @@ try {
             Start-Sleep -Seconds 2
         }
 
-        $after = Get-ProdStable -Tag 'cancel-after' -Units @($script:singleUnit)
+        $after = Get-Prod 'cancel-after'
         $lAfter = Get-Logical -Prod $after -Unit $script:singleUnit
         Write-Host "       logical $($lBefore.Logical) -> $($lAfter.Logical), minerals $mineralsBeforeCancel -> $($after.Minerals)"
         Assert-That "the plugin cancelled exactly one of its own held items ($($after.Cancelled - $cancelledBefore))" `
@@ -620,7 +603,7 @@ try {
     # control that the single path queues past five in this game too.
     # ------------------------------------------------------------------------------
     Step 'the SINGLE-building case still queues past five, in this same game' {
-        $before = Get-ProdStable -Tag 'single-before' -Units @($script:singleUnit)
+        $before = Get-Prod 'single-before'
         Assert-That 'still exactly one building selected' ($before.Buildings -eq 1)
         $lBefore = Get-Logical -Prod $before -Unit $script:singleUnit
         $mineralsBeforeSingle = $before.Minerals
@@ -641,7 +624,7 @@ try {
         # it usable as a control arm.
         Assert-That 'and nothing was fanned out for a selection of one' ($fanned.Count -eq 0)
 
-        $after = Get-ProdStable -Tag 'single-after' -Units @($script:singleUnit)
+        $after = Get-Prod 'single-after'
         $lAfter = Get-Logical -Prod $after -Unit $script:singleUnit
         Write-Host "       logical $($lBefore.Logical) -> $($lAfter.Logical) (ring $($lAfter.Ring) + overflow $($lAfter.Overflow))"
         Assert-Ring "the single building 0x$($script:singleUnit)" `

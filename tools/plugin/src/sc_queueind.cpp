@@ -246,6 +246,31 @@ static volatile LONG g_ringGen     = 0;
 
 unsigned ScQueueIndRingGen(void) { return (unsigned)g_ringGen; }
 
+// The writer takes no lock, so waiting here cannot hold it up. Without the wait, 32
+// back-to-back tries all landed in one open window (ringStable=0 on 7 of 24 PRODQ records
+// of one run). 4096 pauses, at most ~140 cycles each on current x86, bound a wait that
+// never ends to about 0.2 ms.
+unsigned ScQueueIndRingGenSettled(void) {
+    unsigned g = ScQueueIndRingGen();
+    for (int spin = 0; (g & 1) && spin < 4096; ++spin) { YieldProcessor(); g = ScQueueIndRingGen(); }
+    return g;
+}
+
+// The guarded section is EXACTLY the six reads: at the layout's real call rate (~40k/s,
+// measured phantom=21M over 9.5 min) a wider section straddles a window on every retry.
+int ScQueueIndReadRing(DWORD unit, BYTE* head, WORD* ring) {
+    for (int attempt = 0; attempt < 32; ++attempt) {
+        unsigned g1 = ScQueueIndRingGenSettled();
+        if (g1 & 1) continue;
+        if (head) *head = *(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
+        for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) ring[i] = ScUnitQueueSlot(unit, i);
+        if (ScQueueIndRingGen() == g1) return 1;
+    }
+    if (head) *head = *(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);
+    for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) ring[i] = ScUnitQueueSlot(unit, i);
+    return 0;
+}
+
 int ScQueueIndPhantomApply(void) {
     g_phantomN    = 0;
     g_phantomUnit = 0;
@@ -448,20 +473,13 @@ int ScQueueIndCompose(char* out, int outLen, const ScQueueIndView* v) {
 // The view, read out of game memory
 // ---------------------------------------------------------------------------
 
-// A ring length the OBSERVER can trust. The guarded section is EXACTLY the five word reads
-// and nothing else: at the layout's real call rate (~40k/s, measured phantom=21M over
-// 9.5min) a section as wide as a whole ReadView straddles a phantom window on every one of
-// eight retries. Narrow section plus 32 tries makes a settle failure a real anomaly, and on
-// the game thread the generation is even and unmoving, so this costs one extra load.
+// A ring length the OBSERVER can trust (ScQueueIndReadRing); on the game thread the
+// generation is even and unmoving, so this costs one extra load there.
 static int CoherentEngineLen(DWORD unit, int* stable) {
-    for (int attempt = 0; attempt < 32; ++attempt) {
-        unsigned g1 = ScQueueIndRingGen();
-        if (g1 & 1) continue;
-        int n = ScUnitQueueLength(unit);
-        if (ScQueueIndRingGen() == g1) { if (stable) *stable = 1; return n; }
-    }
-    if (stable) *stable = 0;
-    return ScUnitQueueLength(unit);
+    WORD ring[SC_BUILD_QUEUE_SLOTS];
+    int ok = ScQueueIndReadRing(unit, NULL, ring);
+    if (stable) *stable = ok;
+    return ScRingLength(ring);
 }
 
 // Returns 1 when every ring read settled against the phantom window's seqlock, 0 when

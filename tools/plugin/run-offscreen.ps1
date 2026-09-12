@@ -268,9 +268,8 @@ try {
     # An off-screen game is driven by posted mouse messages, so the engine must read its
     # own cursor, not the OS one: the real mouse (or wherever the game's ClipCursor
     # pushed it) otherwise pans the camera through the edge-scroll on every message.
-    # The child inherits this environment (CreateProcess with no environment block).
-    # run-with-plugin.ps1 passes it into the game only for a cnc-ddraw launch: under
-    # WMode the hook empties every posted drag box.
+    # The child inherits this environment (CreateProcess with no environment block);
+    # run-with-plugin.ps1 decides per launch whether it reaches the game.
     $env:SCPLUGIN_CURSOR_POSTED = '1'
     $childPid = [ScSpawn.Native]::Start($cmdLine, $desktopName, $TranscriptPath, $repoRoot)
     if ($childPid -eq 0) { throw "run-offscreen: could not start the run — $([ScSpawn.Native]::LastError)" }

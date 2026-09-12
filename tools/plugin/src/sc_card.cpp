@@ -155,7 +155,7 @@ int ScStatusSnapshot(ScStatusHeader* hdr, ScStatusSlot* out, int max) {
         bool ok = false;
         hdr->ringStable = false;
         for (int attempt = 0; attempt < 32 && !hdr->ringStable; ++attempt) {
-            unsigned g1 = ScQueueIndRingGen();
+            unsigned g1 = ScQueueIndRingGenSettled();
             if (g1 & 1) continue;
             ok = RdU8(hdr->portrait + SC_CUNIT_OFF_BUILD_QUEUE_SLOT, &hdr->head);
             for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) {

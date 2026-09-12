@@ -11,7 +11,6 @@ block a1436f91570bf41d  # 10 identical lines: -ProdQueue 1 -ProdQueueMax 16 -Que
 block e81e97cc48ca12bc  # 10 identical lines: . (Join-Path $scriptDir 'sc-launch-lock.ps1')
 block 553638cec6156be5  # 10 identical lines: Assert-That 'the game process this probe started is gone' ($KeepOpen -
 block a34791d9899cced8  # 10 identical lines: BuildUnit = $m.Groups[10].Value
-block 916fbeeaf29aa250  # 10 identical lines: Engine = if ($row) { $row.Engine } elseif ($trk) { $trk.Engine } else 
 block 891f5ecc37b63654  # 10 identical lines: Ink = [int]$m.Groups['ink'].Value; RefInk = [int]$m.Groups['refInk'].V
 block 49c9e906f8516223  # 10 identical lines: Set-ScGameType -Hwnd $hwnd -LogPath $logPath -Index 2           # Use 
 block d7291935ce6742e8  # 10 identical lines: Shot 'in-game'
@@ -125,6 +124,7 @@ block 3a5236b83fface80  # 6 identical lines: $mark = Get-ScLogLineCount -LogPath
 block 6a46de056a173881  # 6 identical lines: $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
 block d64874ceb88c457e  # 6 identical lines: $out.Card = [pscustomobject]@{
 block 62456dbd3dc12ab4  # 6 identical lines: $script:ccs = $ccs
+block 74bc9477b8ae5ad4  # 6 identical lines: $script:qindSeq++
 block b449eaf3d3686017  # 6 identical lines: $shotN = 0
 block 3f6a96062ef1eff7  # 6 identical lines: & (Join-Path $scriptDir 'run-with-plugin.ps1') `
 block 5e9f370d43a2b5cc  # 6 identical lines: 'PRODQSEL \[[^\]]+\] unit=0x([0-9A-Fa-f]+) type=0x([0-9A-Fa-f]+) playe
@@ -182,6 +182,7 @@ block bd607dc0adef7872  # 8 identical lines: . (Join-Path $scriptDir 'drive-game
 block b169254cdfdb48eb  # 8 identical lines: @{ Rects = $rects; Line = $line }
 block ca58e8917595cb1b  # 8 identical lines: Assert-That "$What`: all $($State.Live) are $ExpectedType" $ok "(got $
 block c3e33152c31ddfb2  # 8 identical lines: Energy = [int]$m.Groups[10].Value
+block 5442be84f10a60df  # 8 identical lines: Engine = if ($row) { $row.Engine } elseif ($trk) { $trk.Engine } else 
 block 6a779eab59863ac5  # 8 identical lines: Get-ScWorldState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -
 block d2cf0cd5ac458f3e  # 8 identical lines: New-Item -ItemType Directory -Path (Split-Path $LogPath -Parent) -Forc
 block 14367aa706ca2db4  # 8 identical lines: Send-ScClick -Hwnd $h -X 544 -Y 387

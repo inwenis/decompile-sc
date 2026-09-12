@@ -294,6 +294,9 @@ if ($takeLock) { $lock = Enter-ScLaunchLock -TimeoutMinutes 5 }
 # the finally below cannot restore anything on a -NoLaunch/-RemoveWindowed run.
 $restoreForeground = (-not $NoForegroundRestore) -and [bool]$env:AGENT_TASK -and ($env:SCDRIVE_RAISE -ne '1')
 $preLaunchFg = [IntPtr]::Zero
+# Set when this launch overrides %SCPLUGIN_CURSOR_POSTED%; the finally puts the caller's value back.
+$cursorPostedOverridden = $false
+$cursorPostedCaller = $env:SCPLUGIN_CURSOR_POSTED
 
 try {
     $ddraw = Join-Path $GameDir 'ddraw.dll'
@@ -565,18 +568,16 @@ try {
     # (a box over 36 units read SORT candidates=0), so it reaches the game only when a
     # cnc-ddraw DLL is the windowed helper; the caller's value is put back afterwards so a
     # later cnc-ddraw launch from the same shell still gets it.
-    $cursorPostedCaller = $env:SCPLUGIN_CURSOR_POSTED
     $cncDdrawHelper = [bool]($Windowed -and $WindowedHelperDll)
     if (-not $cncDdrawHelper -and $cursorPostedCaller -match '^[1yY]') {
         $env:SCPLUGIN_CURSOR_POSTED = '0'
+        $cursorPostedOverridden = $true
         Write-Host 'run-with-plugin: SCPLUGIN_CURSOR_POSTED=0 for this launch (no cnc-ddraw helper; the posted-cursor hook empties WMode drag boxes)'
     }
 
     $injOut = [System.Collections.Generic.List[string]]::new()
     & $inj @injArgs 2>&1 | ForEach-Object { Write-Host $_; $injOut.Add("$_") }
     $rc = $LASTEXITCODE
-    if ($null -eq $cursorPostedCaller) { Remove-Item Env:SCPLUGIN_CURSOR_POSTED -ErrorAction SilentlyContinue }
-    else { $env:SCPLUGIN_CURSOR_POSTED = $cursorPostedCaller }
     Write-Host "run-with-plugin: scinject exit=$rc"
     if ($rc -ne 0) { throw "run-with-plugin: injection failed (exit $rc)" }
 
@@ -718,6 +719,7 @@ finally {
                            "It now belongs to $(Get-ScForegroundLabel -Hwnd (Get-ScForegroundWindow)). The launch itself is unaffected.")
         }
     }
+    if ($cursorPostedOverridden) { $env:SCPLUGIN_CURSOR_POSTED = $cursorPostedCaller }
     if ($lock) { Exit-ScLaunchLock -Lock $lock }
 }
 

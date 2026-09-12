@@ -2622,19 +2622,6 @@ function Dismiss-ScTipsDialog {
     return $true
 }
 
-# =============================================================================
-# ANY DIALOG, BY ITS OWN CONTROLS
-# =============================================================================
-#
-# The general form of Dismiss-ScTipsDialog: find the control by what the ENGINE says it
-# says, compute the click point from that control's OWN bounds, and print the whole
-# inventory when it is not there rather than clicking a guessed point. Shared here so the
-# in-game menu and the Save/Load dialogs need no per-suite copy of it.
-#
-# Control text is what the plugin's DIALOGS line carries, and the plugin renders the
-# engine's hotkey markers as '.' -- so every match here is made on the LETTERS of the
-# text ('o.O.K' -> 'OK'), never on the raw string.
-
 function Invoke-ScClickUntilDialog {
     <#
     .SYNOPSIS
@@ -2672,7 +2659,8 @@ function Enter-ScCustomGame {
     Main menu -> Single Player -> Expansion -> the first registry entry -> Play Custom ->
     the fixture map -> Use Map Settings -> Ok -> Start -> tips dismissed: THE walk into a
     loaded custom game, every screen waited for in the engine's own dialog list and its
-    click retried (Invoke-ScClickUntilDialog), never a fixed sleep.
+    click retried (Invoke-ScClickUntilDialog). The short sleeps left cover a screen's
+    slide-in after it is listed, which the list does not show as a separate state.
     .DESCRIPTION
     -BeforeStart runs with the map and game type set, before Ok, for a suite that captures
     the lobby. -ActivationNudge posts the activation nudge before every input, which the
@@ -2741,6 +2729,19 @@ function Enter-ScCustomGame {
         $env:SCDRIVE_POST_ACTIVATE = '0'
     }
 }
+
+# =============================================================================
+# ANY DIALOG, BY ITS OWN CONTROLS
+# =============================================================================
+#
+# The general form of Dismiss-ScTipsDialog: find the control by what the ENGINE says it
+# says, compute the click point from that control's OWN bounds, and print the whole
+# inventory when it is not there rather than clicking a guessed point. Shared here so the
+# in-game menu and the Save/Load dialogs need no per-suite copy of it.
+#
+# Control text is what the plugin's DIALOGS line carries, and the plugin renders the
+# engine's hotkey markers as '.' -- so every match here is made on the LETTERS of the
+# text ('o.O.K' -> 'OK'), never on the raw string.
 
 function Show-ScDialogInventory {
     <#

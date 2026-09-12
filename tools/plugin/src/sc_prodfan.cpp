@@ -20,6 +20,7 @@
 #include "sc_hook.h"
 #include "sc_log.h"
 #include "sc_prodfan.h"
+#include "sc_queueind.h"   // ScQueueIndReadRing -- the phantom window's coherent ring read
 #include "sc_unit.h"
 
 static bool  g_enabled = false;
@@ -162,9 +163,15 @@ void ScProdFanLogState(const char* tag) {
         BYTE uniq = ScUnitUniqueness(u);
         BYTE owner = ScUnitPlayer(u);
         WORD type = *(WORD*)(u + SC_CUNIT_OFF_UNIT_ID);
-        int len = ScUnitQueueLength(u);
+        // ONE coherent snapshot for engineLen AND engine=[]: two raw passes caught the
+        // queue indicator's phantom slot in one and not the other (engineLen=4 printed
+        // beside five occupied slots).
+        WORD ring[SC_BUILD_QUEUE_SLOTS];
+        BYTE head = 0;
+        int ringStable = ScQueueIndReadRing(u, &head, ring);
+        int len = ScRingLength(ring);
         char eng[96];
-        ScUnitFormatQueue(u, eng, (int)sizeof(eng));
+        ScRingFormat(ring, eng, (int)sizeof(eng));
 
         if (!havePlayer && owner < SC_MAX_PLAYERS) { player = owner; havePlayer = true; }
         ++buildings;
@@ -178,11 +185,11 @@ void ScProdFanLogState(const char* tag) {
         // draws the primary selection's queue, so this separates "four buildings are
         // working" from "the screen shows one".
         ScLog("PRODFAN [%s] i=%d/%d unit=0x%08X type=0x%03X player=%u head=%u "
-              "engineLen=%d engine=[%s] buildState=%u buildUnit=0x%08X%s",
+              "engineLen=%d engine=[%s] buildState=%u buildUnit=0x%08X ringStable=%d%s",
               t, i, n, (unsigned)u, (unsigned)type, (unsigned)owner,
-              (unsigned)*(BYTE*)(u + SC_CUNIT_OFF_BUILD_QUEUE_SLOT), len, eng,
+              (unsigned)head, len, eng,
               (unsigned)*(BYTE*)(u + SC_CUNIT_OFF_BUILD_STATE),
-              (unsigned)*(DWORD*)(u + SC_CUNIT_OFF_BUILD_UNIT),
+              (unsigned)*(DWORD*)(u + SC_CUNIT_OFF_BUILD_UNIT), ringStable,
               uniq != shadow[i].uniqueness ? " STALE(uniqueness moved)" : "");
     }
 
