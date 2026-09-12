@@ -90,7 +90,7 @@ function Read-ScreenLayout {
                 Param = $Matches[8]; Draw = $Matches[9]; DrawStatic = $Matches[10]
             }
         }
-        elseif ($l -match 'origin=\((\d+),(\d+)\) tile=\((\d+),(\d+)\) map=(\d+)x(\d+) tiles \((\d+)x(\d+) px\) scrollMax=\((-?\d+),(-?\d+)\) predicted=\((-?\d+),(-?\d+)\) match=(\d)') {
+        elseif ($l -match 'origin=\((\d+),(\d+)\) tile=\((\d+),(\d+)\) map=(\d+)x(\d+) tiles \((\d+)x(\d+) px\) scrollMax=\((-?\d+),(-?\d+)\) predicted=\((-?\d+),(-?\d+)\)(?: \w+=\S+)* match=(\d)') {
             $r.Viewport = @{
                 OriginX = [int]$Matches[1]; OriginY = [int]$Matches[2]
                 TileX = [int]$Matches[3]; TileY = [int]$Matches[4]

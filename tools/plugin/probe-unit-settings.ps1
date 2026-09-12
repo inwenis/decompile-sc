@@ -79,8 +79,11 @@ try {
             $UnisMarineHp -eq $VanillaMarineHp) {
             throw "probe: the three candidate hit-point values must all differ, or the read cannot discriminate."
         }
-        $py = Join-Path $repoRoot '.venv/Scripts/python.exe'
-        if (-not (Test-Path -LiteralPath $py)) { $py = 'python' }
+        # Resolve-ScPython also finds the MAIN checkout's .venv: a worktree has none, and a
+        # PATH python without richchk fails inside the generator, far from the cause.
+        . (Join-Path $repoRoot 'tools/sc-python.ps1')
+        $py = (Resolve-ScPython -RepoRoot $repoRoot -RequireModule 'richchk').Path
+        if (-not $py) { throw 'probe: no python that can import richchk (run ./setup-worktree.ps1).' }
         # --enemy-owner player is the generator's way to put a SECOND block of a DIFFERENT
         # type on the human's own slot: one map carries both the units to read and the
         # building to train from.
