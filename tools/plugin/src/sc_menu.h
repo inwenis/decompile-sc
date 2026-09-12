@@ -9,7 +9,7 @@
 //   2. a night sky -- nebula and stars -- is written into the framebuffer outside that
 //      centred rect;
 //   3. the buffer outside the rect is copied to the primary from the cursor's
-//      restore-under, the one moment the buffer holds the stars AND the cursor.
+//      restore-under, the one moment the buffer holds the sky AND the cursor.
 // Why the plugin presents at all: the engine presents the buffer only while a region
 // built from the console art exists, so at the glue screens nothing outside a dialog ever
 // reaches the screen -- not even the cursor (research/renderer-viewport.md 25).
