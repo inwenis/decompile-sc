@@ -1264,8 +1264,6 @@ def generate_map(
         template,
     )
 
-    # Single player, no hostile pressure: the chosen slot becomes a human slot, every
-    # other slot goes inactive (no computer players) bar one unit-less computer.
     # keep_ownr is for a template that is ALREADY a playable single-player scenario -- a
     # stock campaign mission, say. Rewriting its slots would delete the mission's own
     # actors and leave a map whose triggers reference players that do not exist.

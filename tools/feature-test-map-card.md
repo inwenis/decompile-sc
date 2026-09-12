@@ -17,7 +17,7 @@ the folders. Every deploy writes a fresh copy, so it always matches the build yo
    - The camera opens on the Terran army.
 2. Every building that researches something is already built, so every upgrade and tech is on
    offer, levels 2 and 3 included (Hive, Science Facility, Templar Archives, Fleet Beacon).
-   - Terran add-ons (Machine Shop, Control Tower, Comsat, Covert Ops, Physics Lab) are not
+   - Terran add-ons (Machine Shop, Control Tower, Covert Ops, Physics Lab) are not
      built. There is room beside each building: build one to reach its research.
 3. 50,000 minerals and 50,000 gas.
 4. Supply is at 200 for every race, with at least 60 free.

@@ -55,36 +55,34 @@ HANGAR = {U.PROTOSS_CARRIER: 4, U.PROTOSS_REAVER: 5}
 HANGAR_VALID = 0x20
 
 
-def rep(unit, n):
-    return [unit] * n
-
-
 # A base is rows packed left to right. Every research building is here, so every upgrade and
 # tech is on offer; Hive, Science Facility, Templar Archives and Fleet Beacon also unlock
 # levels 2-3. The Terran add-ons are left for the player to build, with room kept for them.
+# The depots and the pylons each fill a rectangle with nothing else in it: a box around two
+# building types selects only one of them, chosen by the engine (building-groups.md 2.2).
 TERRAN_BASE = [
-    [U.TERRAN_COMMAND_CENTER] + rep(U.TERRAN_BARRACKS, 4) + rep(U.TERRAN_ENGINEERING_BAY, 2),
-    [U.TERRAN_ACADEMY, U.TERRAN_ARMORY] + rep(U.TERRAN_FACTORY, 2) + rep(U.TERRAN_STARPORT, 2),
-    [U.TERRAN_SCIENCE_FACILITY] + rep(U.TERRAN_SUPPLY_DEPOT, 8),
-    rep(U.TERRAN_SUPPLY_DEPOT, 8),
-    rep(U.TERRAN_SUPPLY_DEPOT, 8),
+    [U.TERRAN_COMMAND_CENTER] + [U.TERRAN_BARRACKS] * 4 + [U.TERRAN_ENGINEERING_BAY] * 2,
+    [U.TERRAN_ACADEMY, U.TERRAN_ARMORY] + [U.TERRAN_FACTORY] * 2 + [U.TERRAN_STARPORT] * 2,
+    [U.TERRAN_SUPPLY_DEPOT] * 8 + [U.TERRAN_SCIENCE_FACILITY],
+    [U.TERRAN_SUPPLY_DEPOT] * 8,
+    [U.TERRAN_SUPPLY_DEPOT] * 8,
 ]
 ZERG_BASE = [
-    [U.ZERG_HIVE] + rep(U.ZERG_HATCHERY, 2)
+    [U.ZERG_HIVE] + [U.ZERG_HATCHERY] * 2
     + [U.ZERG_SPAWNING_POOL, U.ZERG_HYDRALISK_DEN, U.ZERG_CREEP_COLONY],
-    rep(U.ZERG_EVOLUTION_CHAMBER, 2)
+    [U.ZERG_EVOLUTION_CHAMBER] * 2
     + [U.ZERG_GREATER_SPIRE, U.ZERG_QUEENS_NEST, U.ZERG_DEFILER_MOUND, U.ZERG_ULTRALISK_CAVERN,
        U.ZERG_CREEP_COLONY],
 ]
-# Building rows alternate with pylon rows, so every building centre is within 112 px
+# Two pylon rows between the two building rows put every building centre within 112 px
 # vertically and 48 px horizontally of a pylon: inside the full-width band of the psi field.
 PROTOSS_BASE = [
-    [U.PROTOSS_NEXUS] + rep(U.PROTOSS_GATEWAY, 4) + rep(U.PROTOSS_STARGATE, 2),
-    rep(U.PROTOSS_PYLON, 12),
+    [U.PROTOSS_NEXUS] + [U.PROTOSS_GATEWAY] * 4 + [U.PROTOSS_STARGATE] * 2,
+    [U.PROTOSS_PYLON] * 12,
+    [U.PROTOSS_PYLON] * 12,
     [U.PROTOSS_FORGE, U.PROTOSS_CYBERNETICS_CORE, U.PROTOSS_CITADEL_OF_ADUN,
      U.PROTOSS_TEMPLAR_ARCHIVES, U.PROTOSS_FLEET_BEACON, U.PROTOSS_ARBITER_TRIBUNAL,
      U.PROTOSS_ROBOTICS_FACILITY, U.PROTOSS_ROBOTICS_SUPPORT_BAY, U.PROTOSS_OBSERVATORY],
-    rep(U.PROTOSS_PYLON, 12),
 ]
 
 # (type, count, spacing px). Supply used after placement: Terran 116, Zerg 107, Protoss 138,
@@ -112,7 +110,7 @@ PROTOSS_ARMY = [
 
 # The enemy field, one cluster under each base: static defence in front, units behind it.
 # The cannons stand beside pylons; the sunkens and the spore beside a hatchery.
-ENEMY_TERRAN = ([rep(U.TERRAN_MISSILE_TURRET, 3) + rep(U.TERRAN_BUNKER, 2) + [U.TERRAN_BARRACKS]],
+ENEMY_TERRAN = ([[U.TERRAN_MISSILE_TURRET] * 3 + [U.TERRAN_BUNKER] * 2 + [U.TERRAN_BARRACKS]],
                 [(U.TERRAN_SIEGE_TANK_SIEGE_MODE, 4, 48), (U.TERRAN_MARINE, 12, 32),
                  (U.TERRAN_GOLIATH, 4, 48)])
 ENEMY_ZERG = ([[U.ZERG_SUNKEN_COLONY, U.ZERG_SUNKEN_COLONY, U.ZERG_HATCHERY,
