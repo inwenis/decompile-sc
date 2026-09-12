@@ -632,11 +632,10 @@ mid-game cannot strand paid-for items.
      control: the badge's fxnUpdate ran at the frame rate and the fill landed (read back right
      after it), yet by the next frame the surface held the icon's own pixels there again
      (corner back to the `0xA0` border) and the captured frame was identical to one with no
-     badge. The old centred text, lower in the same icon, always survived. Hypothesis, not
-     logged: the progress bar (control 7, dialog rect `(144,39,250,47)`) redraws every frame
-     and `updateControl` snaps its dirty rect out to the 16-pixel grid (`0x0041C200`), a band
-     that takes in the icons' top rows (to dialog row 60) but not the rows the old text used.
-     Either way the answer does not depend on it: the last icon's own fxnUpdate is wrapped (a
+     badge. The old centred text, lower in the same icon, always survived. What erased the
+     badge is not established (a guess that the progress bar's per-frame dirty band did it
+     does not fit the draw walk: every visible child touching a dirty rect is drawn, in child
+     order). The answer does not depend on it: the last icon's own fxnUpdate is wrapped (a
      data write, like the interacts), the engine draws the icon, and the badge is painted over
      it in the same pass -- measured on screen at `+11`, `+9` and gone. Palette index 0 is not
      the pane's black: the pane holds it in 12 of its 24840 bytes (`surfInk=24828`);

@@ -257,8 +257,8 @@ Keep `ink` on the line; it is corroboration and it is free. Do not assert on it.
 ```
 
 The `+N` badge points `SC_BINDLG_OFF_UPDATE` at the plugin's own `IndUpdate` instead, and wraps
-the last queue icon's fxnUpdate as well, because a control's pixels inside the progress bar's
-per-frame dirty band do not survive being drawn only by that control
+the last queue icon's fxnUpdate as well, because the badge drawn only by its own control did
+not survive to the next frame (measured; the cause is not established)
 ([`production-queue.md`](production-queue.md), the badge paragraph). Same `__fastcall` shape and
 `RET 8` as the table entries: it paints the badge's box into the render target (`0x006CF4A8`)
 and then hands the text to `defaultUpdateTable[10]` (`0x004EF9C0`, which

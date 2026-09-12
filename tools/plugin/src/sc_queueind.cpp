@@ -3,9 +3,9 @@
 // WHAT THE ENGINE SEES. While the indicator is up, the only game state this module has
 // written is one BinDlg record it owns outright (a static buffer in this DLL) linked into
 // the statdata dialog's child list, that record's own fields, and the redraw-invalidate
-// 0x0041C400 the engine calls for every control it shows. No unit, no resource global, no
-// engine-owned control, no sprite: there is no path from here to CSprite::selectionIndex
-// or flag 0x08.
+// 0x0041C400 the engine calls for every control it shows, plus the queue icons' wrapped
+// handler pointers. No unit, no resource global, no sprite: there is no path from here to
+// CSprite::selectionIndex or flag 0x08.
 //
 // WHY A CONTROL AND NOT A BLIT. The engine already draws a string into this pane, picking
 // the font, the colour and the clip box (research/status-pane-text.md). An
@@ -691,7 +691,8 @@ static bool PlaceOn(short* b, DWORD anchor, DWORD root, int mode, int textLen) {
 // centre-justified handler.
 // The badge's pixels: the control's box, one row short of the small font's height (its
 // glyphs sit in the top rows; the box is taller only to satisfy the draw's clip rule), filled
-// with the pane's own black and framed in the icon's own border blue, both read off the
+// with the pane's own black and framed in the icon's own border blue (in UPGRADE the icon is
+// hidden, so the frame takes whatever the pane shows there), both read off the
 // surface: the icon's second row is its bright border, and SC_QIND_BADGE_BLACK_DX right of the
 // icon is pane background. Not palette index 0, which is not the pane's black: the pane holds it
 // in 12 of its 24840 bytes (`surfInk=24828`).
@@ -718,33 +719,28 @@ void ScQueueIndFillBadge(DWORD ctrl, DWORD surface) {
     }
 }
 
-// THE BADGE RIDES ON THE LAST ICON'S OWN DRAW. Drawn only by its own control, the badge was
+// THE BADGE RIDES ON THE LAST ICON'S OWN DRAW (STRIP; in UPGRADE the icon is hidden and the
+// control's own IndUpdate is what paints it). Drawn only by its own control, the badge was
 // painted every frame and gone from the surface by the next, never reaching the screen (both
-// measured; the likely eraser is the progress bar's per-frame dirty band over the icons' top
-// rows, research/production-queue.md). So that icon's fxnUpdate is wrapped the way the
-// interacts are -- a data write, no code patched -- and the badge is painted right after the
-// engine draws the icon, in the same pass, whatever dirtied it.
+// measured; what erased it is not established). So that icon's fxnUpdate is wrapped the way
+// the interacts are -- a data write, no code patched -- and the badge is painted right after
+// the engine draws the icon, in the same pass, whatever dirtied it.
 static void __attribute__((fastcall)) SC_GAME_ENTRY QIndIconDrawShim(DWORD ctrl, DWORD edx,
                                                                     DWORD a, DWORD b) {
     ((ScCtrlDrawFn)g_iconDrawFn)(ctrl, edx, a, b);
-    if (ctrl == g_anchor && g_shown && g_spliced &&
-        (g_mode == SC_QIND_STRIP || g_mode == SC_QIND_UPGRADE)) {
-        const DWORD ind = (DWORD)&g_ctrl[0];
-        ScQueueIndFillBadge(ind, *(DWORD*)ScRuntimeAddr(SC_VA_RENDER_TARGET));
-        ((ScCtrlDrawFn)g_textCentred)(ind, edx, a, b);
-    }
+    if (ctrl == g_anchor && g_shown && g_spliced) IndUpdate((DWORD)&g_ctrl[0], edx, a, b);
 }
 
-// Idempotent, every frame: the engine rebinds a control's fxnUpdate when it lays the pane out,
-// so whatever the icon points at when it is not the shim is the engine's current handler.
+// The icon's fxnUpdate is bound once, when the dialog is built (its CREATE case, 0x00457CB7 ->
+// 0x00457480); this runs every frame only to catch a new dialog.
 static void WrapLastIconDraw(DWORD root) {
     const DWORD shim = (DWORD)&QIndIconDrawShim;
     DWORD c = ScDlgFindChild(root, SC_STATQ_LAST_CONTROL);
     if (!c) return;
     DWORD* fn = (DWORD*)(c + SC_BINDLG_OFF_UPDATE);
-    if (*fn == shim || *fn == 0) return;
-    g_iconDrawFn  = *fn;
     g_iconDrawCtl = c;
+    if (*fn == shim || *fn == 0) return;
+    g_iconDrawFn = *fn;
     *fn = shim;
 }
 
@@ -833,23 +829,21 @@ static void PublishOwnedIcons(DWORD root, const ScQueueIndView* v, DWORD unit) {
     g_ownedIconN = ownedN;
 }
 
-// The snapshot, taken after every fill, by the thread that did it, and published whole: the
+// The snapshot, taken after every fill, by the thread that did it, the count set last: the
 // observer thread logs it between frames, and a count reset to 0 while the walk refilled it
 // read back as a two-icon strip (measured, `icons=[..,..] engineLen=4` on a five-lit pane).
 static void SnapshotIcons(DWORD root) {
-    QIconSnap snap[SC_STATQ_SLOTS];
     int n = 0;
     DWORD sc = ScDlgFindChild(root, SC_STATQ_FIRST_CONTROL);
     for (int k = 0; k < SC_STATQ_SLOTS && sc; ++k, sc = ScDlgNext(sc)) {
         DWORD su = *(DWORD*)(sc + SC_BINDLG_OFF_USER);
-        QIconSnap* q = &snap[n++];
+        QIconSnap* q = &g_icons[n++];
         q->flags = *(DWORD*)(sc + SC_BINDLG_OFF_FLAGS);
         q->icon  = su ? *(short*)(su + SC_STATUSER_OFF_ICON) : -1;
         q->mode  = su ? *(WORD*) (su + SC_STATUSER_OFF_MODE) : 0;
         q->grp   = su ? *(DWORD*)(su + SC_STATUSER_OFF_GRP)  : 0;
         q->text  = *(DWORD*)(sc + SC_BINDLG_OFF_TEXT);
     }
-    memcpy(g_icons, snap, sizeof(snap[0]) * (size_t)n);
     g_iconsN = n;
 }
 

@@ -115,8 +115,9 @@ void ScQueueIndLogState(const char* tag);
 
 // THE BADGE (STRIP and UPGRADE): the indicator control's fxnUpdate is this module's own,
 // which paints the box into the render target and hands the text to the engine's
-// centre-justified handler; GROUP hands it to the left-justified one. The last icon's own
-// fxnUpdate is wrapped too, so the badge is painted again right after every redraw of it.
+// centre-justified handler; GROUP hands it to the left-justified one. In STRIP the last
+// icon's own fxnUpdate is wrapped too, so the badge is painted again right after every redraw
+// of it (in UPGRADE that icon is hidden, and the control alone paints it).
 // Exposed so the test can check both pointers and the fill, which it can reach with no
 // engine to call.
 void  ScQueueIndFillBadge(DWORD ctrl, DWORD surface);
