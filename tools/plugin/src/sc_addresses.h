@@ -54,7 +54,7 @@
 // its commands run and restore the local id (0x00512684) after.
 #define SC_VA_ACTIVE_PLAYER_ID    0x0051267Cu  // named by selection-cap.md 2.2
 #define SC_VA_PLAYER_ID_512688    0x00512688u  // used in selectSingleUnitFromID
-#define SC_VA_PLAYER_ID_512678    0x00512678u  // GPTP ACTIVE_NATION_ID, the commanding player
+#define SC_VA_PLAYER_ID_512678    0x00512678u  // GPTP ACTIVE_NATION_ID
 
 #define SC_SELECTION_SLOTS 12
 #define SC_MAX_PLAYERS     8

@@ -43,10 +43,8 @@ unsigned ScSessionEpochAtLastLoad(void) {
 
 // --- the two events --------------------------------------------------------
 
-// Is the engine about to deserialise a save? The load-game FILE* (sc_addresses.h,
-// SC_VA_LOAD_GAME_FILE) is non-null only while one is pending. Read PURELY so the log line
-// can say which kind of game start this was -- nothing branches on it, because the epoch
-// must move for both.
+// Is the engine about to deserialise a save (sc_addresses.h, SC_VA_LOAD_GAME_FILE)? Nothing
+// branches on it, because the epoch must move for both kinds of start.
 static bool LoadPending(void) {
     if (!ScEngineModuleBase()) return false;
     return *(DWORD*)ScRuntimeAddr(SC_VA_LOAD_GAME_FILE) != 0;
