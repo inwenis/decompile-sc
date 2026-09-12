@@ -137,7 +137,7 @@ structs, enums and typed globals. The result reads `unit->orderID != ORD_DIE` wh
 Ghidra prints `*(char *)(param_1 + 0x4d) != 0`.
 
 ```powershell
-./tools/ghidra/decomp-all.ps1     # about 6 minutes from scratch; idempotent, re-run after a Magnetar bump
+./tools/ghidra/decomp-all.ps1     # about 6 minutes; re-imports whenever the Magnetar pin or the scripts change
 ```
 
 Needs the pinned Ghidra above, the working copy `C:\sc-work\1161-base\StarCraft.exe`, and the
@@ -160,10 +160,13 @@ $d = 'C:\sc-work\decomp\StarCraft.exe'
 Get-ChildItem $d -Filter '*updateFog*'                                   # by name
 $a = 0x004BCDF3                                                          # by any address inside
 Import-Csv "$d\ranges.tsv" -Delimiter "`t" | Where-Object { [uint32]$_.start -le $a -and $a -le [uint32]$_.end }
-Select-String -Path "$d\*.c" -Pattern '\bBWFXN_RefreshTarget\(' -List    # callers
+Select-String -Path "$d\*.c" -Pattern '\bBWFXN_RefreshTarget\b' -List    # references
 Select-String -Path "$d\types.txt" -Pattern '^struct CUnit ' -Context 0,40   # struct offsets
 ```
 
+- A name grep lists direct calls and pointer stores (`DAT_006d1234 = options_menu_handler;`), plus
+  the function's own file. A call through a table or a register never names its target, so an
+  empty result is not "no callers" (AGENTS.md § "Claims about the binary").
 - `nameSource` is the provenance: `IMPORTED` = a Magnetar hypothesis, `ANALYSIS` = Ghidra's own
   Function ID (statically linked CRT) or RTTI, `DEFAULT` = no name anywhere (`FUN_`).
   Hard rule 4 applies to all of it: a name is a reading aid, not a finding.

@@ -52,8 +52,10 @@ else {
     Write-Host "setup-onetime: no -StarCraftDir given. Make the working copy when ready: ./tools/make-working-copy.ps1 -Source '<your StarCraft folder>'"
 }
 
-# Decompiled C for reading (AGENTS.md § "Decompiled C"): needs Ghidra and the working copy.
-if (Test-Path -LiteralPath 'C:\sc-work\decomp\StarCraft.exe\index.tsv') {
+# Decompiled C for reading (AGENTS.md § "Decompiled C"): needs Ghidra and the working copy. The
+# manifest is written last; index.tsv alone can be a run cut short.
+$decompManifest = 'C:\sc-work\decomp\StarCraft.exe\index.tsv.manifest'
+if ((Test-Path -LiteralPath $decompManifest) -and (Select-String -LiteralPath $decompManifest -Pattern '^status=OK$' -Quiet)) {
     Write-Host 'setup-onetime: decompiled C present (C:\sc-work\decomp\StarCraft.exe)'
 }
 elseif ($env:GHIDRA_INSTALL_DIR -and (Test-Path -LiteralPath 'C:\sc-work\1161-base\StarCraft.exe')) {

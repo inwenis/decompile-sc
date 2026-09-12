@@ -79,7 +79,8 @@ function ConvertFrom-MagnetarOffsets {
         param($kind, $addr, $name, $conv, $proto, $storage)
         # An auto-name says nothing, but a function prototype beside it still shapes the decompile.
         # An auto-named global's type is IDA's guess, weaker than Ghidra's own string/data typing.
-        if ($name -match $auto) { if ($kind -eq 'data' -or -not $proto) { return }; $name = '' }
+        # Case-sensitive: IDA's prefixes are lower case, and -match would drop AI_Stop, Accelerate.
+        if ($name -cmatch $auto) { if ($kind -eq 'data' -or -not $proto) { return }; $name = '' }
         $key = '0x{0:X8}' -f [Convert]::ToInt64($addr.Substring(2), 16)
         if ($seen.ContainsKey($key)) { return }
         $seen[$key] = $true

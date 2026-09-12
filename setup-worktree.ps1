@@ -49,7 +49,9 @@ Report ($null -ne $ghidra -or $null -ne $env:GHIDRA_INSTALL_DIR) 'ghidra' $ghidr
 
 # --- decompiled C, read before asm (AGENTS.md § "Decompiled C"): machine-wide, NOT fatal ---
 $decomp = 'C:\sc-work\decomp\StarCraft.exe'
-$hasDecomp = Test-Path -LiteralPath (Join-Path $decomp 'index.tsv')
+# The manifest is written last; index.tsv alone can be a run cut short.
+$manifest = Join-Path $decomp 'index.tsv.manifest'
+$hasDecomp = (Test-Path -LiteralPath $manifest) -and (Select-String -LiteralPath $manifest -Pattern '^status=OK$' -Quiet)
 Report $hasDecomp 'decomp' ($hasDecomp ? $decomp : 'missing — ./tools/ghidra/decomp-all.ps1 makes it (Ghidra + the working copy)')
 
 # --- Python venv at .venv + requirements.txt ---

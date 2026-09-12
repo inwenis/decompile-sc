@@ -91,7 +91,9 @@ public class ApplyTypes extends GhidraScript {
         report.add("opaqueTypes=" + String.join(" ", opaque));
         int ok = 0, missing = 0, wrong = 0;
         List<String> detail = new ArrayList<>();
+        List<String> asserted = new ArrayList<>();
         for (String[] c : tsv(args[3])) {
+            asserted.add(c[0]);
             int want = Integer.parseInt(c[1]);
             DataType dt = find(dtm, c[0]);
             if (dt == null) {
@@ -118,21 +120,35 @@ public class ApplyTypes extends GhidraScript {
         report.add(parsed.cppParseMessages());
         Files.createDirectories(Paths.get(args[0]).toAbsolutePath().getParent());
         Files.write(Paths.get(args[0]), report);
-        Files.write(Paths.get(args[4]), layout(dtm, Paths.get(args[1]).getFileName().toString(), enums));
+        Files.write(Paths.get(args[4]), layout(dtm, Paths.get(args[1]).getFileName().toString(), asserted, enums));
+        // The size asserts are the layout oracle: a failed parse or one wrong size writes no
+        // manifest, so sweep.ps1 stops the pipeline instead of decompiling with broken structs.
+        if (!parsed.successful() || wrong > 0 || missing > 0) {
+            throw new IllegalStateException("ApplyTypes: parse or struct sizes failed, see " + args[0]);
+        }
         SweepUtil.writeManifest(args[0], ok, report.subList(0, 6));
     }
 
     /** "struct CUnit (336 bytes)" then "  +0x04D  1  Order  orderID" per field; enums after. */
-    private static List<String> layout(DataTypeManager dtm, String headerName, Map<String, EnumDataType> enums) {
+    private static List<String> layout(DataTypeManager dtm, String headerName, List<String> asserted,
+            Map<String, EnumDataType> enums) {
         List<String> out = new ArrayList<>();
         Category c = dtm.getCategory(new CategoryPath("/" + headerName));
-        List<Composite> comps = new ArrayList<>();
+        Map<String, Composite> byName = new TreeMap<>();
         for (DataType d : c == null ? new DataType[0] : c.getDataTypes()) {
             if (d instanceof Composite) {
-                comps.add((Composite) d);
+                byName.put(d.getName(), (Composite) d);
             }
         }
-        comps.sort((x, y) -> x.getName().compareTo(y.getName()));
+        // A header type can land outside the header's category (Location does); the size check
+        // finds it by name, so the dump does too.
+        for (String name : asserted) {
+            DataType d = find(dtm, name);
+            if (d instanceof Composite && !byName.containsKey(name)) {
+                byName.put(name, (Composite) d);
+            }
+        }
+        List<Composite> comps = new ArrayList<>(byName.values());
         for (Composite s : comps) {
             out.add((s instanceof Union ? "union " : "struct ") + s.getName() + " (" + s.getLength() + " bytes)");
             for (DataTypeComponent m : s.getDefinedComponents()) {

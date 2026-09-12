@@ -1,22 +1,12 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Decompile every function of a PE into one .c file per function, with Magnetar names, prototypes,
-register conventions, structs, enums and global types applied first.
+Decompile every function of a PE into one .c file per function, with the Magnetar names,
+prototypes, register conventions, structs, enums and global types applied first.
 
 .DESCRIPTION
-One persistent Ghidra project under -ProjectDir (default C:\sc-work\ghidra: outside every
-worktree, so a worktree prune can never take it), analyzed once per program. For StarCraft.exe
-the Magnetar tables go in first (ApplyTypes.java, then ApplyNames.java); then DecompileMany
-writes <OutDir>\<program>\:
-  index.tsv          one row per function: entry, name, name source, size, .c file
-  ranges.tsv         one row per contiguous body range: address -> function, exactly
-  names.tsv          the parsed Magnetar table (kind, addr, name, conv, proto, storage)
-  types.txt          every imported struct field with its offset, every enum value
-  types-report.txt   parser result + struct sizes checked against Magnetar's static_asserts
-  names-report.txt   names / prototypes / globals applied, kept, failed; the Function ID count
-  0x<addr>.<name>.c  decompiled C, one file per function
-Everything under OutDir is derived game content: it stays outside the repo.
+Outputs, provenance and how to read them: tools/ghidra/README.md § "Whole-binary decompile with
+names". Everything under -OutDir is derived game content and stays outside the repo.
 
 .EXAMPLE
 ./tools/ghidra/decomp-all.ps1
@@ -36,11 +26,15 @@ $out = Join-Path $OutDir $program
 New-Item -ItemType Directory -Path $out -Force | Out-Null
 $run = { param($script, [string[]]$scriptArgs, $log) & $sweep -Mode Run -ProjectDir $ProjectDir -ProgramName $program -Script $script -ScriptArgs $scriptArgs -LogFile $log }
 
-# Import + auto-analysis once per program; the marker is written only after Prepare returned.
-$imported = Join-Path $ProjectDir "$program.imported"
-if (-not (Test-Path -LiteralPath $imported)) {
-    & $sweep -Mode Prepare -InputPE $InputPE -ProjectDir $ProjectDir -LogFile (Join-Path $ProjectDir "import-$program.log")
-    Set-Content -LiteralPath $imported -Value (Get-Date -Format o)
+# ApplyNames only fills DEFAULT names, so tables applied over an older application would leave
+# its names and types behind: any change to what gets applied means a fresh import. The marker
+# is written after the last step succeeds, so an interrupted run imports afresh too.
+$inputs = @($script:MagnetarSha) + @('scripts/ApplyTypes.java', 'scripts/ApplyNames.java', 'magnetar-names.ps1' |
+    ForEach-Object { Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot $_) })
+$fingerprint = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($inputs -join "`n")))
+$marker = Join-Path $ProjectDir "$program.imported"
+if (-not (Test-Path -LiteralPath $marker) -or (Get-Content -Raw -LiteralPath $marker).Trim() -ne $fingerprint) {
+    & $sweep -Mode Prepare -InputPE $InputPE -ProjectDir $ProjectDir -Overwrite -LogFile (Join-Path $ProjectDir "import-$program.log")
 }
 
 if ($program -ieq 'StarCraft.exe') {
@@ -67,6 +61,7 @@ if ($program -ieq 'StarCraft.exe') {
 # A renamed function changes its file name; stale .c files from an earlier pass must not survive.
 Get-ChildItem -LiteralPath $out -Filter '*.c' | Remove-Item -Force
 & $run DecompileMany.java @((Join-Path $out 'index.tsv'), 'ALL', $DecompileTimeoutSecs) (Join-Path $out 'decompile.log')
+Set-Content -LiteralPath $marker -Value $fingerprint
 
 $index = Import-Csv -LiteralPath (Join-Path $out 'index.tsv') -Delimiter "`t"
 $failed = @($index | Where-Object status -ne 'OK')

@@ -3,8 +3,9 @@
 // FUN_0041e0d0(param_1) with in_EAX/in_ECX/in_EDX, and UnitNodeTable[i] instead of DAT_0059cca8.
 //
 // Everything lands with SourceType.IMPORTED: hypotheses from a third-party table
-// (tools/ghidra/magnetar-names.ps1). A function Ghidra already named from evidence (Function ID
-// on a CRT routine) keeps its name and its signature; the table never overrides it.
+// (tools/ghidra/magnetar-names.ps1). A function Ghidra already named (Function ID on a CRT
+// routine) keeps its name and its signature; the table only fills DEFAULT names, so it expects
+// a freshly imported program (decomp-all.ps1 re-imports whenever its inputs change).
 // A register-convention function gets custom storage read from Magnetar's inline-asm wrapper.
 // Run ApplyTypes.java first: prototypes and globals name its structs and enums.
 //
@@ -15,6 +16,7 @@
 
 import generic.jar.ResourceFile;
 import ghidra.app.cmd.function.ApplyFunctionSignatureCmd;
+import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.app.cmd.function.FunctionRenameOption;
 import ghidra.app.script.GhidraScript;
 import ghidra.app.util.cparser.C.CParser;
@@ -35,6 +37,8 @@ public class ApplyNames extends GhidraScript {
     private DataTypeManager[] dtms;
     private final Map<String, Integer> n = new TreeMap<>();
     private final List<String> failures = new ArrayList<>();
+    private final List<Function> created = new ArrayList<>();
+    private final Set<Function> touched = new LinkedHashSet<>();
 
     @Override
     public void run() throws Exception {
@@ -55,6 +59,7 @@ public class ApplyNames extends GhidraScript {
             }
         }
 
+        TreeMap<Address, String[]> data = new TreeMap<>();
         try {
             for (String line : Files.readAllLines(Paths.get(args[1]))) {
                 String[] c = line.split("\t", -1);
@@ -71,9 +76,21 @@ public class ApplyNames extends GhidraScript {
                     applyFunction(fm, a, name, conv, proto, storage);
                 }
                 else {
-                    applyData(a, name, proto);
+                    data.put(a, new String[] { name, proto });
                 }
             }
+            // A body traced before a later table entry existed flowed straight through it; with
+            // every entry in place, each body stops at its neighbours' entries.
+            for (Function f : touched) {
+                CreateFunctionCmd.fixupFunctionBody(currentProgram, f, monitor);
+            }
+            for (Function f : created) {
+                if (f.getBody().getNumAddresses() <= 1) {
+                    count("funcBodyOneByte");
+                    failures.add("BODY\t" + f.getEntryPoint() + "\t" + f.getName());
+                }
+            }
+            applyData(data);
         }
         finally {
             win.close();
@@ -105,19 +122,25 @@ public class ApplyNames extends GhidraScript {
             String proto, String storage) throws Exception {
         Function f = fm.getFunctionAt(a);
         if (f == null) {
+            // Ghidra never reached this code: without instructions the body is one byte.
+            if (getInstructionAt(a) == null) {
+                disassemble(a);
+            }
+            Function container = fm.getFunctionContaining(a);
+            if (container != null) {
+                touched.add(container);
+            }
             f = createFunction(a, null);
             if (f == null) {
                 count("funcNoCodeAtAddress");
                 return;
             }
+            created.add(f);
+            touched.add(f);
             count("funcCreated");
         }
         if (!name.isEmpty()) {
             if (f.getName().equals(name)) {
-                // createFunction stamps USER_DEFINED; a table name is a hypothesis, IMPORTED.
-                if (f.getSymbol().getSource() == SourceType.USER_DEFINED) {
-                    f.setName(name, SourceType.IMPORTED);
-                }
                 count("funcAlreadyNamed");
             }
             else if (f.getSymbol().getSource() == SourceType.DEFAULT) {
@@ -207,38 +230,81 @@ public class ApplyNames extends GhidraScript {
         f.updateFunction(conv, ret, params, FunctionUpdateType.CUSTOM_STORAGE, true, SourceType.IMPORTED);
     }
 
-    private void applyData(Address a, String name, String decl) throws Exception {
-        Symbol s = currentProgram.getSymbolTable().getPrimarySymbol(a);
-        if (s != null && s.getName().equals(name)) {
-            count("dataAlreadyNamed");
-        }
-        else if (s != null && s.getSource() != SourceType.DEFAULT) {
-            count("dataKeptExistingName");
-            return;
-        }
-        else {
-            createLabel(a, name, true, SourceType.IMPORTED);
-            count("dataLabeled");
-        }
-        if (decl.isEmpty()) {
-            return;
-        }
-        // CParser never fills its declarations map; a typedef of the declarator carries the type.
-        CParser p = new CParser(currentProgram.getDataTypeManager(), false, dtms);
-        try {
-            p.parse("typedef " + decl + ";");
-            DataType dt = p.getTypes().get("__v");
-            if (!(dt instanceof TypeDef)) {
-                throw new IllegalArgumentException("no type parsed");
+    // Magnetar's declarations overlap (ScreenLayers is layer[12], yet GameScreenBuffer starts at
+    // its ninth element), and creating the later one clears the earlier array whole. In address
+    // order, each array is clamped to the gap before the next typed global; a non-array that
+    // overlaps is left untyped; every type is read back afterwards.
+    private void applyData(TreeMap<Address, String[]> data) throws Exception {
+        List<Address> typed = new ArrayList<>();
+        for (Map.Entry<Address, String[]> e : data.entrySet()) {
+            Address a = e.getKey();
+            String name = e.getValue()[0];
+            Symbol s = currentProgram.getSymbolTable().getPrimarySymbol(a);
+            if (s != null && s.getName().equals(name)) {
+                count("dataAlreadyNamed");
             }
-            dt = ((TypeDef) dt).getDataType();
-            DataUtilities.createData(currentProgram, a, dt, -1, DataUtilities.ClearDataMode.CLEAR_ALL_CONFLICT_DATA);
-            count("dataTyped");
+            else if (s != null && s.getSource() != SourceType.DEFAULT) {
+                count("dataKeptExistingName");
+                continue;
+            }
+            else {
+                createLabel(a, name, true, SourceType.IMPORTED);
+                count("dataLabeled");
+            }
+            if (!e.getValue()[1].isEmpty()) {
+                typed.add(a);
+            }
         }
-        catch (Exception e) {
-            count("dataTypeFailed");
-            failures.add("DATA\t" + a + "\t" + name + "\t" + decl + "\t" + e.getMessage());
+        Map<Address, DataType> applied = new LinkedHashMap<>();
+        for (int i = 0; i < typed.size(); i++) {
+            Address a = typed.get(i);
+            String name = data.get(a)[0], decl = data.get(a)[1];
+            try {
+                DataType dt = parseDecl(decl);
+                long gap = i + 1 < typed.size() ? typed.get(i + 1).subtract(a) : Long.MAX_VALUE;
+                if (dt.getLength() > gap) {
+                    if (dt instanceof Array && gap >= ((Array) dt).getElementLength()) {
+                        Array arr = (Array) dt;
+                        int elems = (int) (gap / arr.getElementLength());
+                        failures.add("CLAMP\t" + a + "\t" + name + "\t" + decl + "\tto " + elems + " elements");
+                        dt = new ArrayDataType(arr.getDataType(), elems, arr.getElementLength(), currentProgram.getDataTypeManager());
+                        count("dataArrayClamped");
+                    }
+                    else {
+                        failures.add("OVERLAP\t" + a + "\t" + name + "\t" + decl + "\tnext global at +" + gap);
+                        count("dataTypeSkippedOverlap");
+                        continue;
+                    }
+                }
+                DataUtilities.createData(currentProgram, a, dt, -1, DataUtilities.ClearDataMode.CLEAR_ALL_CONFLICT_DATA);
+                applied.put(a, dt);
+            }
+            catch (Exception ex) {
+                count("dataTypeFailed");
+                failures.add("DATA\t" + a + "\t" + name + "\t" + decl + "\t" + ex.getMessage());
+            }
         }
+        for (Map.Entry<Address, DataType> e : applied.entrySet()) {
+            Data d = getDataAt(e.getKey());
+            if (d != null && d.getDataType().isEquivalent(e.getValue())) {
+                count("dataTyped");
+            }
+            else {
+                count("dataTypeLost");
+                failures.add("LOST\t" + e.getKey() + "\t" + data.get(e.getKey())[0]);
+            }
+        }
+    }
+
+    // CParser never fills its declarations map; a typedef of the declarator carries the type.
+    private DataType parseDecl(String decl) throws Exception {
+        CParser p = new CParser(currentProgram.getDataTypeManager(), false, dtms);
+        p.parse("typedef " + decl + ";");
+        DataType dt = p.getTypes().get("__v");
+        if (!(dt instanceof TypeDef)) {
+            throw new IllegalArgumentException("no type parsed");
+        }
+        return ((TypeDef) dt).getDataType();
     }
 
     // The C parser knows __cdecl/__stdcall/__fastcall but not __thiscall; the convention is set on

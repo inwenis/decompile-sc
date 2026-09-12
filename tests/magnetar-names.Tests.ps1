@@ -13,12 +13,13 @@ BeforeAll {
 DECL_FUNC(void (__thiscall*showImage)(CImage *this_), showImage, 0x401120);
 DECL_FUNC(void (*plainDefault)(int a), plainDefault, 0x401130);
 DECL_FUNC(int (__cdecl*sub_401140)(), sub_401140, 0x401140);
-CUnit * IterateAllScannerSweeps(int (__fastcall *a1)(CUnit *a1, int a2), int a2) {
+DECL_FUNC(void (__cdecl*AI_Stop)(), AI_Stop, 0x403380);
+CUnit * IterateAllScannerSweeps(int (__fastcall *fn)(CUnit *a1, int a2), int a2) {
     int address = 0x401150;
     CUnit * result_;
     __asm {
         push dword ptr a2
-        mov eax, a1
+        mov eax, fn
         call address
         mov result_, eax
     }
@@ -61,6 +62,7 @@ DECL_FUNC(void (__stdcall*dupOfWrapper)(), dupOfWrapper, 0x401150);
 CUnit(&UnitNodeTable)[1700] = * ((decltype(&UnitNodeTable)) 0x59cca8);
 CHAR(&ProcName)[] = * ((decltype(&ProcName)) 0x4fe5fc);
 CUnit *& firstUnit = * ((decltype(&firstUnit)) 0x628430);
+char(&active_players)[8] = * ((decltype(&active_players)) 0x6509a4);
 int& dword_6D60F0 = * ((decltype(&dword_6D60F0)) 0x6d60f0);
 char(&aRuntimeError)[15] = * ((decltype(&aRuntimeError)) 0x4fe624);
 '@ -split "`r?`n"
@@ -103,13 +105,15 @@ Describe 'ConvertFrom-MagnetarOffsets' {
             'func 0x00401120 showImage',
             'func 0x00401130 plainDefault',
             'func 0x00401140 ',
+            'func 0x00403380 AI_Stop',
             'func 0x00401150 IterateAllScannerSweeps',
             'func 0x0041E0D0 BWFXN_RefreshTarget',
             'func 0x00401170 twoPushes',
             'func 0x00401180 lostArg',
             'data 0x0059CCA8 UnitNodeTable',
             'data 0x004FE5FC ProcName',
-            'data 0x00628430 firstUnit'
+            'data 0x00628430 firstUnit',
+            'data 0x006509A4 active_players'
         )
     }
 
@@ -121,7 +125,7 @@ Describe 'ConvertFrom-MagnetarOffsets' {
     It 'reads register and stack storage out of the wrapper asm' {
         ($rows | Where-Object name -eq 'BWFXN_RefreshTarget').storage | Should -Be 'left=EAX;bottom=EDX;top=ECX;right=S4'
         # a function-pointer argument keeps its own name, not its inner argument's
-        ($rows | Where-Object name -eq 'IterateAllScannerSweeps').storage | Should -Be 'ret=EAX;a1=EAX;a2=S4'
+        ($rows | Where-Object name -eq 'IterateAllScannerSweeps').storage | Should -Be 'ret=EAX;fn=EAX;a2=S4'
         # pushed last = first stack slot; the return register is the one result_ is read from
         ($rows | Where-Object name -eq 'twoPushes').storage | Should -Be 'ret=AL;a1=AL;a2=S4;a3=S8'
     }
