@@ -212,7 +212,7 @@ Hard rule 4 applies to every line of `research/`.
 
 ## Decompiled C
 
-- DO read a function as C before its asm: `C:\sc-work\decomp\StarCraft.exe\0x<ENTRY>.<name>.c`, one file per function; `index.tsv` maps any address to its function (`funcEntry`..`funcEnd`), `types.txt` maps a struct offset to its field, callers are a grep for `name(`. Missing? `./tools/ghidra/decomp-all.ps1`.
+- DO read a function as C before its asm: `C:\sc-work\decomp\StarCraft.exe\0x<ENTRY>.<name>.c`, one file per function; `ranges.tsv` maps any address to its function, `types.txt` maps a struct offset to its field, callers are a grep for `name(`. Missing? `./tools/ghidra/decomp-all.ps1`.
   Every name, type and prototype there is a Magnetar hypothesis (`nameSource` IMPORTED): hard rule 4 applies before one enters `research/`, and `sc_addresses.h` wins where they disagree.
   Why: a static asm read of the terrain blitter was "clean" and wrong; in C its run+1 defect is one loop condition.
   -> tools/ghidra/README.md § "Whole-binary decompile with names"

@@ -8,7 +8,9 @@
 // Script args:
 //   1: index TSV path; the .c files land beside it. <path>.manifest is the run's success signal.
 //   2: spec file -- one function per line: label,addrHex -- or the word ALL for every
-//      non-thunk function in the program, labelled by its entry address
+//      non-thunk function in the program, labelled by its entry address; ALL also writes
+//      ranges.tsv beside the index, one row per contiguous body range, because a function body
+//      can be several chunks and its first..last address then spans unrelated code
 //   3: optional -- per-function decompile timeout in seconds (default 120)
 //@category Headless
 
@@ -17,6 +19,7 @@ import ghidra.app.decompiler.DecompileOptions;
 import ghidra.app.decompiler.DecompileResults;
 import ghidra.app.script.GhidraScript;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressRange;
 import ghidra.program.model.listing.Function;
 import ghidra.util.task.ConsoleTaskMonitor;
 
@@ -59,6 +62,8 @@ public class DecompileMany extends GhidraScript {
 
         DecompInterface decomp = new DecompInterface();
         long rows = 0;
+        List<String> ranges = new ArrayList<>();
+        ranges.add(String.join("\t", "start", "end", "funcEntry", "funcName", "cFile"));
         try {
             decomp.setOptions(new DecompileOptions());
             if (!decomp.openProgram(currentProgram)) {
@@ -68,6 +73,7 @@ public class DecompileMany extends GhidraScript {
             try (PrintWriter w = new PrintWriter(Files.newBufferedWriter(index))) {
                 // nameSource separates evidence from hypothesis: ANALYSIS = Ghidra's Function ID /
                 // RTTI, IMPORTED = a third-party table (Magnetar), DEFAULT = no name at all.
+                // funcEnd ends the entry's own chunk; other chunks are only in ranges.tsv.
                 w.println(String.join("\t", "label", "specAddr", "resolvedVia", "funcName",
                     "funcEntry", "bodyBytes", "status", "cFile", "cLines", "nameSource", "funcEnd"));
 
@@ -120,7 +126,12 @@ public class DecompileMany extends GhidraScript {
                         fileName,
                         Integer.toString(lines),
                         f.getSymbol().getSource().toString(),
-                        SweepUtil.hex(f.getBody().getMaxAddress().getOffset())));
+                        SweepUtil.hex(f.getBody().getRangeContaining(f.getEntryPoint()).getMaxAddress().getOffset())));
+                    for (AddressRange r : f.getBody()) {
+                        ranges.add(String.join("\t", SweepUtil.hex(r.getMinAddress().getOffset()),
+                            SweepUtil.hex(r.getMaxAddress().getOffset()),
+                            SweepUtil.hex(f.getEntryPoint().getOffset()), f.getName(), fileName));
+                    }
                     println("DecompileMany: " + s.label + " " + f.getName() + " -> " + status);
                     rows++;
                 }
@@ -130,6 +141,9 @@ public class DecompileMany extends GhidraScript {
             decomp.dispose();
         }
 
+        if ("ALL".equals(args[1])) {
+            Files.write(dir.resolve("ranges.tsv"), ranges);
+        }
         SweepUtil.writeManifest(outPath, rows, null);
     }
 

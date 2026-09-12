@@ -9,7 +9,8 @@ One persistent Ghidra project under -ProjectDir (default C:\sc-work\ghidra: outs
 worktree, so a worktree prune can never take it), analyzed once per program. For StarCraft.exe
 the Magnetar tables go in first (ApplyTypes.java, then ApplyNames.java); then DecompileMany
 writes <OutDir>\<program>\:
-  index.tsv          one row per function: entry, name, name source, size, end, .c file
+  index.tsv          one row per function: entry, name, name source, size, .c file
+  ranges.tsv         one row per contiguous body range: address -> function, exactly
   names.tsv          the parsed Magnetar table (kind, addr, name, conv, proto, storage)
   types.txt          every imported struct field with its offset, every enum value
   types-report.txt   parser result + struct sizes checked against Magnetar's static_asserts

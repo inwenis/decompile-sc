@@ -137,7 +137,7 @@ structs, enums and typed globals. The result reads `unit->orderID != ORD_DIE` wh
 Ghidra prints `*(char *)(param_1 + 0x4d) != 0`.
 
 ```powershell
-./tools/ghidra/decomp-all.ps1     # @@RUNTIME@@; idempotent, re-run after a Magnetar bump
+./tools/ghidra/decomp-all.ps1     # about 6 minutes from scratch; idempotent, re-run after a Magnetar bump
 ```
 
 Needs the pinned Ghidra above, the working copy `C:\sc-work\1161-base\StarCraft.exe`, and the
@@ -147,7 +147,8 @@ in `C:\sc-work\ghidra`, outside every worktree. Output lands in `C:\sc-work\deco
 | File | What |
 |---|---|
 | `0x<entry>.<name>.c` | decompiled C, one file per function |
-| `index.tsv` | per function: `funcEntry`, `funcEnd`, `funcName`, `nameSource`, `bodyBytes`, `cFile` |
+| `index.tsv` | per function: `funcEntry`, `funcName`, `nameSource`, `bodyBytes`, `cFile` |
+| `ranges.tsv` | per contiguous body range: `start`, `end`, `funcEntry`, `funcName`, `cFile` |
 | `types.txt` | every imported struct field with its offset, every enum value |
 | `names.tsv` | the parsed Magnetar table: `kind`, `addr`, `name`, `conv`, `proto`, `storage` |
 | `types-report.txt`, `names-report.txt` | what applied, what failed, the Function ID count |
@@ -158,7 +159,7 @@ in `C:\sc-work\ghidra`, outside every worktree. Output lands in `C:\sc-work\deco
 $d = 'C:\sc-work\decomp\StarCraft.exe'
 Get-ChildItem $d -Filter '*updateFog*'                                   # by name
 $a = 0x004BCDF3                                                          # by any address inside
-Import-Csv "$d\index.tsv" -Delimiter "`t" | Where-Object { [uint32]$_.funcEntry -le $a -and $a -le [uint32]$_.funcEnd }
+Import-Csv "$d\ranges.tsv" -Delimiter "`t" | Where-Object { [uint32]$_.start -le $a -and $a -le [uint32]$_.end }
 Select-String -Path "$d\*.c" -Pattern '\bBWFXN_RefreshTarget\(' -List    # callers
 Select-String -Path "$d\types.txt" -Pattern '^struct CUnit ' -Context 0,40   # struct offsets
 ```
@@ -170,20 +171,50 @@ Select-String -Path "$d\types.txt" -Pattern '^struct CUnit ' -Context 0,40   # s
   inline-asm wrapper: the parameters sit in the registers that wrapper loads. A `__thiscall`
   function is spelled out the same way (`this_` in `ECX`), so its `this_` keeps its struct type.
 - Where Magnetar and this repo disagree, `tools/plugin/src/sc_addresses.h` wins: its addresses
-  carry evidence. @@CONFLICTS@@
+  carry evidence. Example: the selection iterator byte `0x006284B6` decompiles as
+  `map_height_pixels._2_1_`, because Magnetar declares a 4-byte `map_height_pixels` at `0x006284B4`.
 
 ### How it is built, and what proves it
 
 1. `ApplyTypes.java` creates Magnetar's enums with their declared width first, then parses its
    struct header. Ghidra's C parser sizes every enum as an int and has no `enum X : T`; without
-   the pre-sized enums, @@NEGCTL@@ struct sizes come out wrong. Every struct is checked against
-   the header's own `static_assert(sizeof(X) == N)`: @@SIZES@@.
+   the pre-sized enums, 70 of the 271 struct sizes come out wrong (negative control, run once).
+   Every struct is checked against the header's own `static_assert(sizeof(X) == N)`: all 271
+   match, `CUnit` at 336 bytes included.
 2. `ApplyNames.java` names functions and globals, applies prototypes, and gives register-convention
    functions custom storage parsed from the asm wrappers (`mov ecx, top` / `push dword ptr right`).
    A function Ghidra's Function ID already named keeps that name and signature.
 3. `DecompileMany.java ALL` decompiles every non-thunk function.
 
-@@NUMBERS@@
+| Result of one run | Count |
+|---|---|
+| Functions decompiled / failed | 6321 / 0 |
+| Named by Ghidra's Function ID or RTTI (`ANALYSIS`) | 265 |
+| Named by Magnetar (`IMPORTED`) | 3556 |
+| Unnamed (`FUN_`) | 2500 |
+| Table entries where Ghidra had no function, created | 1825 |
+| Prototypes: standard convention / register wrapper / `__thiscall` | 3006 / 2682 / 260 |
+| Prototypes not applied | 2 |
+| Structs + unions / enums imported | 276 / 63 |
+| Globals named / typed | 933 / 863 |
+
+The two prototypes not applied: a varargs wrapper (`__snprintf`) has no fixed storage, and one
+function takes `time_t`, which Ghidra's Windows archive sizes at 8 bytes where this binary's
+compiler used 4.
+
+Against plain Ghidra (same binary, same decompiler, no Magnetar), counted over all output:
+
+| | Plain Ghidra | With Magnetar |
+|---|---|---|
+| Functions found and decompiled | 4499 | 6321 |
+| Lines reading a register the prototype does not model (`in_EAX`, `unaff_ESI`...) | 21535 | 3230 |
+| Raw offset casts, `*(T *)(p + 0x4d)` | 12178 | 2131 |
+| Files with struct field access (`->`) | 68 | 2940 |
+| Distinct unnamed callees / globals (`FUN_` / `DAT_`) | 4233 / 2946 | 2500 / 1833 |
+
+The remaining register reads sit in 678 functions: 606 whose Magnetar prototype leaves out a
+register argument (`isUnitBurrowed` is declared `int (void)` and reads its unit from `EAX`), 72
+that Magnetar does not list.
 
 Never point `build-opcode-policy.ps1` or `build-command-table.ps1` at `C:\sc-work\ghidra`: they
 parse `FUN_` names out of decompiled C and keep their own unnamed project. Ghidra locks a
