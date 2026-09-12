@@ -41,6 +41,20 @@ the folders. Every deploy writes a fresh copy, so it always matches the build yo
 5. **Move and attack.** Box an army and right-click (or A, then click) into the enemy field.
 6. **Widescreen.** Scroll around; Ctrl+Tab frees the mouse.
 
+## The battle map: `!battle.scx`
+
+For screenshots. Load it the same way (Use Map Settings).
+
+1. Two armies of all three races face each other across 10 tiles of jungle grass.
+   - Yours is at the top (red), the computer's at the bottom (blue), about 300 units each.
+   - Ranks from the front: melee, ranged, tanks/lurkers/reavers/casters, air, capital ships.
+2. Nothing fires until you move in. The computer runs no AI; its tanks start sieged and its
+   lurkers burrowed.
+3. Every tech is researched for you: storm, plague, EMP, yamato, stasis and the rest are
+   ready, casters at full energy.
+4. To fight: box your army (it is wider than the screen, box it in parts), press A, click
+   the enemy on the minimap. Type `black sheep wall` first to see the whole enemy army.
+
 ## Cheats (single player only)
 
 1. `operation cwal` -- build, train and research much faster.
