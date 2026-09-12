@@ -207,7 +207,7 @@ param(
     # inherited, so a suite can set the variable once for a whole run. The DLL refuses
     # the whole widescreen install on an unknown name and logs the list.
     [string]$Geometry = '',
-    # Centre the menus on the wider screen and draw a starfield around them (sc_menu.h).
+    # Centre the menus on the wider screen and draw a night sky around them (sc_menu.h).
     # Off by default: it moves the glue roots, so a suite's fixed menu coordinates would
     # miss. The deployed launcher turns it on. Needs -Widescreen 1 -WidescreenStage 3.
     [ValidateSet('0', '1')][string]$MenuCentre = '0',

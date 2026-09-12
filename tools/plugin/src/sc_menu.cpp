@@ -26,7 +26,7 @@ typedef void (__attribute__((stdcall)) *ScRestoreFn)(DWORD bitmap);
 static bool     g_armed = false;
 static bool     g_atMenu = false;
 static int      g_w = 0, g_h = 0, g_dx = 0, g_dy = 0;
-static BYTE*    g_levels = NULL;   // w*h star level ids
+static BYTE*    g_levels = NULL;   // w*h sky level ids: stars, then nebula inks
 static BYTE*    g_mapped = NULL;   // w*h palette indices for the live palette
 static BYTE     g_lut[SC_MENU_LEVELS];
 static bool     g_lutValid = false;
@@ -181,7 +181,7 @@ void ScMenuInstall(bool writeAllowed) {
     if (!g_levels) g_levels = (BYTE*)VirtualAlloc(NULL, n, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!g_mapped) g_mapped = (BYTE*)VirtualAlloc(NULL, n, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!g_levels || !g_mapped) {
-        ScLog("MENU: starfield allocation (%dx%d) failed -- IGNORED.", g_w, g_h);
+        ScLog("MENU: sky allocation (%dx%d) failed -- IGNORED.", g_w, g_h);
         return;
     }
     memset(g_levels, 0, n);
@@ -195,6 +195,11 @@ void ScMenuInstall(bool writeAllowed) {
             if (g_levels[j] && !inside) { g_sentinel[g_sentinelN++] = j; break; }
         }
     }
+    // After the sentinels, so they stay on stars: the nebula's dimmest inks can map to
+    // the same entry as a cleared buffer, which would hide the clear from them.
+    const DWORD buildStart = GetTickCount();
+    const int nebula = ScMenuBuildNebula(g_levels, g_w, g_h, g_dx, g_dy);
+    const DWORD buildMs = GetTickCount() - buildStart;
     if (!ScHookInstall(&g_hkRestore, "restoreUnder", ScRuntimeAddr(SC_VA_RESTORE_UNDER),
                        (void*)&HkRestoreUnder, (int)sizeof(kPrologueRestore),
                        kPrologueRestore, (int)sizeof(kPrologueRestore))) {
@@ -202,10 +207,11 @@ void ScMenuInstall(bool writeAllowed) {
         return;
     }
     g_armed = true;
-    ScLog("MENU: ON -- at the glue screens every root moves by (%d,%d); a %dx%d starfield "
-          "(%d lit cells, %d sentinels) fills the buffer outside the glue rect and is "
-          "copied to the primary from the restore-under at 0x0041DEB0",
-          g_dx, g_dy, g_w, g_h, lit, g_sentinelN);
+    ScLog("MENU: ON -- at the glue screens every root moves by (%d,%d); a %dx%d sky "
+          "(%d star cells, %d nebula cells built in %lu ms, %d sentinels) fills the buffer "
+          "outside the glue rect and is copied to the primary from the restore-under at "
+          "0x0041DEB0",
+          g_dx, g_dy, g_w, g_h, lit, nebula, (unsigned long)buildMs, g_sentinelN);
 }
 
 void ScMenuRemove(void) {

@@ -24,7 +24,7 @@ Unzip [the release](https://github.com/inwenis/decompile-sc/releases) anywhere a
 2. select buildings of one type, queue units for all at once
 3. queue more than 5 units in a building
 4. queue upgrades, shown as icons in the building's queue like units
-5. widescreen in three sizes, the menus centred on a starfield (Ctrl+Tab or Right Alt+Right Ctrl frees the mouse; a click locks it again)
+5. widescreen in three sizes, the menus centred on a nebula (Ctrl+Tab or Right Alt+Right Ctrl frees the mouse; a click locks it again)
 
 Offline and single-player only.
 
@@ -58,7 +58,7 @@ Windows, PowerShell 7, git, Python 3.11+.
 4. `./run.ps1` plays from this checkout: every feature on, a 1x window, the plugin rebuilt
    when stale; it returns when the game closes. Any launcher parameter overrides a default,
    e.g. `./run.ps1 -Geometry 1536x864`.
-5. `./deploy.ps1` installs the modded game with a desktop shortcut.
+5. `./deploy.ps1` installs the modded game with a desktop shortcut, plus one per widescreen size.
 
 Release: `git tag v1.0 && git push origin v1.0`; CI builds the zip and attaches it. Tests:
 `Invoke-Pester -Path tests`. How each feature works and how it was verified: `research/` and
