@@ -4,7 +4,7 @@ Full incident narratives live in `research/rulebook-history.md` (old headings pr
 
 ## What this repo is
 
-Reverse-engineering research on StarCraft, and the mod built on it; primary target the 1.16.1-era binary (richest public prior art: BWAPI offsets, community struct maps). Deliverables are DOCUMENTATION and TOOLING, never redistributed game content.
+Personal, private reverse-engineering research on StarCraft; primary target the 1.16.1-era binary (richest public prior art: BWAPI offsets, community struct maps). Deliverables are DOCUMENTATION and TOOLING, never redistributed game content.
 -> research/rulebook-history.md § "What this repo is"
 
 ## Hard rules

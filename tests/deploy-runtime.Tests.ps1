@@ -126,10 +126,12 @@ Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-
     It 'the launcher turns the assembled widescreen on: stage 3 + storm widen + cnc-ddraw' {
         $script:launcher | Should -Match '-Widescreen 1'
         $script:launcher | Should -Match '-WidescreenStage 3'
-        # The ARGUMENT lines -- stage and storm, each backtick-continued -- not the
-        # launcher's own header comment, which also says "-StormPresent widen" and so
+        # The ARGUMENT lines -- stage, geometry and storm, each backtick-continued -- not
+        # the launcher's own header comment, which also says "-StormPresent widen" and so
         # satisfies a plain substring match.
-        $script:launcher | Should -Match '-WidescreenStage 3 `\s*\r?\n\s*-StormPresent widen `' -Because 'issue #113: run-with-plugin.ps1 exported its old default 0 verbatim, so the DLL auto-arm never fired and the deployed wide game showed a black right band; the launcher must pass the buffer->glass copy as an argument'
+        $script:launcher | Should -Match '-WidescreenStage 3 `\s*\r?\n\s*-Geometry __GEOMETRY__ `\s*\r?\n\s*-StormPresent widen `' -Because 'issue #113: run-with-plugin.ps1 exported its old default 0 verbatim, so the DLL auto-arm never fired and the deployed wide game showed a black right band; the launcher must pass the buffer->glass copy as an argument'
+        # The template carries a placeholder; deploy fills it from -Geometry before writing.
+        $script:deployText.Contains('.Replace(''__GEOMETRY__'', $Geometry)') | Should -BeTrue -Because 'the launcher must name the preset the 2x ini was generated for'
         $script:launcher | Should -Match 'cnc-ddraw\\ddraw\.dll'
         $script:launcher | Should -Not -Match 'InjectWindowedHelper' -Because 'WMode presents 640 columns whatever it is asked; the wide path must use the cnc-ddraw proxy'
     }
