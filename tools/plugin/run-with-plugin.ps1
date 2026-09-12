@@ -600,7 +600,16 @@ try {
     & $inj @injArgs 2>&1 | ForEach-Object { Write-Host $_; $injOut.Add("$_") }
     $rc = $LASTEXITCODE
     Write-Host "run-with-plugin: scinject exit=$rc"
-    if ($rc -ne 0) { throw "run-with-plugin: injection failed (exit $rc)" }
+    if ($rc -ne 0) {
+        # Exit 3 is the game quitting on its own; with another StarCraft alive that is the
+        # engine's one-copy-per-machine check (drive-game.ps1 Wait-ScNoGameRunning).
+        $launchedPid = [regex]::Match(($injOut -join "`n"), 'scinject: launched pid=(\d+)').Groups[1].Value
+        $occupant = @(Get-Process StarCraft -ErrorAction SilentlyContinue | Where-Object { "$($_.Id)" -ne $launchedPid -and -not $_.HasExited })
+        if ($rc -eq 3 -and $occupant) {
+            throw "run-with-plugin: the StarCraft slot is occupied by another StarCraft (pid $($occupant.Id -join ', ')): an agent's test game, or a game already open. StarCraft runs one copy per machine, so this one quit on its own. Try again when that game ends."
+        }
+        throw "run-with-plugin: injection failed (exit $rc)"
+    }
 
     $gamePid = 0
     foreach ($line in $injOut) {
