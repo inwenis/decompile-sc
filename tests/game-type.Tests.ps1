@@ -4,9 +4,7 @@ Pester coverage for the Game Type read (tools/plugin/drive-game.ps1).
 AGENTS.md § "Game Type / `Custom Type`".
 
 The Game Type combo's text IS the selected entry's label, and the active-dialog scan
-logs every control that carries text, so the value reads out of the log: no pixel hash,
-and no raised window unless the read shows a pick is needed -- a pick must take the
-foreground, so proving a pick by hashing pays that cost on every run.
+logs every control that carries text, so the value reads out of the log: no pixel hash.
 The fixture below is a REAL DIALOGS line copied verbatim out of a run log, not one
 written to make these tests pass, and it is the awkward case: the Create screen carries
 THREE type-13 combos (game type, player name, race), so "find the combo" must mean
@@ -76,19 +74,6 @@ Describe 'Get-ScGameTypeControl reads the combo out of the dialog list' {
         finally { Remove-Item $p -Force }
     }
 
-    It "computes the click point from the control's own rect, not a fixed (265,268)" {
-        # rect=180,261,351,277 on a dialog at origin 0,0 -> centre (266,269). A hard-coded
-        # point hides its own error: (265,268) is off by one on both axes yet still lands
-        # inside a box 171 wide and 16 tall, so it reads as correct until the rect moves.
-        $p = New-Log
-        try {
-            $c = Get-ScGameTypeControl -LogPath $p
-            $c.ClickX | Should -Be 266
-            $c.ClickY | Should -Be 269
-        }
-        finally { Remove-Item $p -Force }
-    }
-
     It 'reports the map-information panel lines the engine is SHOWING, as corroboration' {
         # Engine fact: under Use Map Settings the panel shows Human/Computer Slots
         # (flag 0x8) and hides Number of Players (0x0).
@@ -110,7 +95,7 @@ Describe 'Get-ScGameTypeControl reads the combo out of the dialog list' {
         finally { Remove-Item $p -Force }
     }
 
-    It 'reads the NEWEST line, so a pick that changed the value is not read as stale' {
+    It 'reads the NEWEST line, so a changed value is not read as stale' {
         # Get-ScDialogs takes the last DIALOGS line, so an earlier one must not win.
         $stale = $script:CREATE_LINE -f 'Melee'
         $p = New-Log -GameType 'Use Map Settings' -Extra @($stale)
@@ -119,11 +104,23 @@ Describe 'Get-ScGameTypeControl reads the combo out of the dialog list' {
     }
 }
 
-Describe 'Set-ScGameType index/name table' {
-    It 'maps the indices this harness picks to the entries it expects' {
-        # Call sites pass an index and depend on which entry it selects, so this mapping
-        # is an invariant checked against what the engine reports after the pick.
-        $script:ScGameTypeByIndex[0] | Should -Be 'Melee'
-        $script:ScGameTypeByIndex[2] | Should -Be 'Use Map Settings'
+Describe 'Assert-ScGameType' {
+    It 'passes when the engine reads Use Map Settings' {
+        $p = New-Log -GameType 'Use Map Settings'
+        try { { Assert-ScGameType -LogPath $p -TimeoutSec 0 } | Should -Not -Throw }
+        finally { Remove-Item $p -Force }
+    }
+
+    It 'throws naming what the engine reads when it is anything else' {
+        $p = New-Log -GameType 'Melee'
+        try { { Assert-ScGameType -LogPath $p -TimeoutSec 0 } | Should -Throw -ExpectedMessage "*reads 'Melee', want 'Use Map Settings'*" }
+        finally { Remove-Item $p -Force }
+    }
+
+    It 'throws when the Create Game screen is not up' {
+        $p = Join-Path ([IO.Path]::GetTempPath()) ("sc-gt-" + [Guid]::NewGuid().ToString('n') + '.log')
+        Set-Content -LiteralPath $p -Value "[2026-08-11 09:40:36.054] DIALOGS n=1  dlg='Tips_Dlg' rect=128,32,511,287 ctrl='o.O.K' rect=20,216,123,243 type=14 flags=0x8"
+        try { { Assert-ScGameType -LogPath $p -TimeoutSec 0 } | Should -Throw -ExpectedMessage '*not in the engine*' }
+        finally { Remove-Item $p -Force }
     }
 }

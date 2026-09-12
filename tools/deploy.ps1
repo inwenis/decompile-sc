@@ -47,8 +47,9 @@ param(
     [string]$SourceGameDir = 'C:\sc-work\1161-base',
     [string]$ShortcutName = 'StarCraft Modded.lnk',
     [string]$CncDdrawDir = 'C:\sc-work\cnc-ddraw\v7.1.0.0',
-    # The geometry preset the shortcut plays at; tools/plugin/src/sc_screen_patches_<G>.h
-    # must exist (sc_screen_presets.h lists the ones the DLL carries).
+    # The geometry preset the main shortcut plays at; tools/plugin/src/sc_screen_patches_<G>.h
+    # must exist (sc_screen_presets.h lists the ones the DLL carries). Every preset also
+    # gets its own "StarCraft Modded <G>" shortcut, for trying the sizes side by side.
     [string]$Geometry = '1280x880',
     [switch]$NoShortcut
 )
@@ -296,7 +297,7 @@ Write-Host 'plugin runtime copied: scplugin.dll, scinject.exe, run-with-plugin.p
 # committed (AGENTS.md § "Hard rules"), sha256-verified HERE so a deploy cannot ship a DLL
 # the pin does not vouch for. run-with-plugin.ps1 -WindowedHelperDll copies it into the
 # game dir per launch and -WindowedHelperIni picks which ini travels with it: unscaled
-# cnc-ddraw.ini (width=0/height=0) or cnc-ddraw-2x.ini (2x scale, cursor locked). Both are
+# cnc-ddraw.ini (width=0/height=0) or a cnc-ddraw-2x-<preset>.ini (2x scale, cursor locked). All are
 # staged unconditionally so either can be run standalone.
 $cncSrcDll = Join-Path $CncDdrawDir 'ddraw.dll'
 if (-not (Test-Path -LiteralPath $cncSrcDll)) {
@@ -311,39 +312,46 @@ $cncDeployDir = Join-Path $pluginDeployDir 'cnc-ddraw'
 New-Item -ItemType Directory -Path $cncDeployDir -Force | Out-Null
 Copy-Item -LiteralPath $cncSrcDll -Destination (Join-Path $cncDeployDir 'ddraw.dll') -Force
 Copy-Item -LiteralPath (Join-Path $pluginDir 'cnc-ddraw.ini') -Destination (Join-Path $pluginDeployDir 'cnc-ddraw.ini') -Force
-# The 2x ini is GENERATED from tools/plugin/cnc-ddraw-2x.ini with width/height set to
-# twice the screen of the preset the launcher passes (-Geometry), so the window always
-# matches what the DLL renders. The committed file keeps the stock 1280x960 (2x of
-# 640x480) as its documented example.
-$ws = Get-ScWideGeometry -Geometry $Geometry
-$wsW = $ws.W
-$wsH = $ws.H
-$cnc2xIniDeployPath = Join-Path $pluginDeployDir 'cnc-ddraw-2x.ini'
-$cnc2x = Get-Content -Raw -LiteralPath (Join-Path $pluginDir 'cnc-ddraw-2x.ini')
-$cnc2x = $cnc2x -replace '(?m)^width=\d+', "width=$($wsW * 2)" -replace '(?m)^height=\d+', "height=$($wsH * 2)"
-# A 2x window only if it FITS the primary screen -- 1280x880 x2 = 2560x1760 does not fit a
-# 1920x1080 monitor. Otherwise cnc-ddraw's borderless mode (fullscreen=true + windowed=true)
-# stretches the game to the desktop with the aspect ratio kept (maintas), letterboxed as
-# needed; its cursor lock engages on activation there. The width/height lines stay at 2x for
-# the verify below (cnc-ddraw ignores them under fullscreen=true).
+# One 2x ini per preset the DLL carries, GENERATED from tools/plugin/cnc-ddraw-2x.ini with
+# width/height set to twice that preset's screen, so whichever size the launcher is asked
+# for (-Geometry), the window matches what the DLL renders. The committed file keeps the
+# stock 1280x960 (2x of 640x480) as its documented example.
 Add-Type -AssemblyName System.Windows.Forms
 $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-$fits2x = ($wsW * 2 -le $screen.Width) -and ($wsH * 2 -le $screen.Height - 48)
-if (-not $fits2x) {
-    $cnc2x = $cnc2x -replace '(?m)^fullscreen=false', 'fullscreen=true'
-    $cnc2x = $cnc2x -replace '(?m)^(renderer=gdi\r?\n)', "`$1maintas=true`n"
+$cnc2xTemplate = Get-Content -Raw -LiteralPath (Join-Path $pluginDir 'cnc-ddraw-2x.ini')
+$presets = @(Get-ScWidePresetNames)
+$cnc2xInis = foreach ($g in $presets) {
+    $ws = Get-ScWideGeometry -Geometry $g
+    $wsW = $ws.W
+    $wsH = $ws.H
+    $cnc2x = $cnc2xTemplate -replace '(?m)^width=\d+', "width=$($wsW * 2)" -replace '(?m)^height=\d+', "height=$($wsH * 2)"
+    # A 2x window only if it FITS the primary screen -- 1280x880 x2 = 2560x1760 does not fit a
+    # 1920x1080 monitor. Otherwise cnc-ddraw's borderless mode (fullscreen=true + windowed=true)
+    # stretches the game to the desktop with the aspect ratio kept (maintas), letterboxed as
+    # needed; its cursor lock engages on activation there. The width/height lines stay at 2x for
+    # the verify below (cnc-ddraw ignores them under fullscreen=true).
+    $fits2x = ($wsW * 2 -le $screen.Width) -and ($wsH * 2 -le $screen.Height - 48)
+    if (-not $fits2x) {
+        $cnc2x = $cnc2x -replace '(?m)^fullscreen=false', 'fullscreen=true'
+        $cnc2x = $cnc2x -replace '(?m)^(renderer=gdi\r?\n)', "`$1maintas=true`n"
+    }
+    $cnc2xIniDeployPath = Join-Path $pluginDeployDir "cnc-ddraw-2x-$g.ini"
+    Set-Content -LiteralPath $cnc2xIniDeployPath -Value $cnc2x -Encoding ascii -NoNewline
+    $present = $fits2x ? "window $($wsW * 2)x$($wsH * 2) = 2x the ${wsW}x${wsH} the plugin renders" : "borderless full screen on the $($screen.Width)x$($screen.Height) monitor, aspect kept (2x = $($wsW * 2)x$($wsH * 2) does not fit)"
+    Write-Host "cnc-ddraw ini staged: plugin\cnc-ddraw-2x-$g.ini ($present)"
+    [pscustomobject]@{ Name = $g; Path = $cnc2xIniDeployPath; W = $wsW; H = $wsH; Fits2x = $fits2x }
 }
-Set-Content -LiteralPath $cnc2xIniDeployPath -Value $cnc2x -Encoding ascii -NoNewline
-$present = $fits2x ? "window $($wsW * 2)x$($wsH * 2) = 2x the ${wsW}x${wsH} the plugin renders" : "borderless full screen on the $($screen.Width)x$($screen.Height) monitor, aspect kept (2x = $($wsW * 2)x$($wsH * 2) does not fit)"
-Write-Host "cnc-ddraw staged: $cncDeployDir\ddraw.dll (sha256 verified) + plugin\cnc-ddraw.ini + plugin\cnc-ddraw-2x.ini ($present)"
+if ($presets -notcontains $Geometry) { throw "deploy: -Geometry $Geometry is not a preset the DLL carries ($($presets -join ', '))." }
+Write-Host "cnc-ddraw staged: $cncDeployDir\ddraw.dll (sha256 verified) + plugin\cnc-ddraw.ini + one 2x ini per preset"
 
 # --- 4. write the zero-argument launcher --------------------------------------
 $launcherPath = Join-Path $deployRootFull 'Launch-StarCraft-Modded.ps1'
 $launcherBody = @'
 #Requires -Version 7
 <#
-Deployed launcher -- no arguments. Generated by tools/deploy.ps1; re-run that to refresh
-this file rather than editing it by hand. Baked feature set: fan-out + selection circles
+Deployed launcher -- no arguments needed; -Geometry <preset> plays another size (the
+"StarCraft Modded <preset>" shortcuts pass it). Generated by tools/deploy.ps1; re-run that
+to refresh this file rather than editing it by hand. Baked feature set: fan-out + selection circles
 + HUD row paging + over-cap production queue + group production fan-out, windowed,
 sound ON (run-with-plugin.ps1 mutes by default for unattended
 test suites -- -Sound here is what keeps the user's own play audible; see
@@ -360,7 +368,7 @@ through this script's exported default). Known imperfections: widescreen-card.md
 Presenter: cnc-ddraw, not WMode (task 075, issue #114 -- window scale + mouse lock had
 disappeared). WMode.dll has no export table and no config (README "Windowed mode:
 injected, not proxied"), so it cannot scale a window or clip the cursor; cnc-ddraw can.
-cnc-ddraw-2x.ini (plugin\cnc-ddraw-2x.ini, generated by deploy.ps1 at 2x the preset's
+plugin\cnc-ddraw-2x-<preset>.ini (generated by deploy.ps1 at 2x that preset's
 geometry) sets the window size and locks the cursor to the window on the
 first click inside it -- per-session: Ctrl+Tab or Right Alt+Right Ctrl frees the cursor.
 
@@ -385,6 +393,7 @@ process is otherwise invisible. On failure this writes the error to
 <here>\logs\launch-error.log and shows a message box -- something on screen, rather than
 a double-click that silently does nothing.
 #>
+param([string]$Geometry = '__GEOMETRY__')
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
 try {
@@ -395,10 +404,10 @@ try {
         -Mode fanout `
         -Windowed `
         -WindowedHelperDll (Join-Path $here 'plugin\cnc-ddraw\ddraw.dll') `
-        -WindowedHelperIni (Join-Path $here 'plugin\cnc-ddraw-2x.ini') `
+        -WindowedHelperIni (Join-Path $here "plugin\cnc-ddraw-2x-$Geometry.ini") `
         -Widescreen 1 `
         -WidescreenStage 3 `
-        -Geometry __GEOMETRY__ `
+        -Geometry $Geometry `
         -StormPresent widen `
         -MenuCentre 1 `
         -Sound `
@@ -466,20 +475,31 @@ if ($NoShortcut) {
 }
 else {
     $shell = New-Object -ComObject WScript.Shell
-    $lnk = $shell.CreateShortcut($shortcutPath)
-    $lnk.TargetPath = $pwshExe
-    $lnk.Arguments = "-WindowStyle Hidden -File `"$launcherPath`""
-    $lnk.WorkingDirectory = $deployRootFull
-    $lnk.IconLocation = "$deployedExe,0"
-    $lnk.Description = "StarCraft 1.16.1, modded (fan-out select-past-12 + circles + HUD row), WIDESCREEN ${wsW}x${wsH} shown at 2x, mouse locked -- see widescreen-card.md"
-    $lnk.Save()
-    Write-Host "shortcut written: $shortcutPath"
+    $saveShortcut = {
+        param([string]$Path, [string]$LauncherArgs, [string]$Size)
+        $lnk = $shell.CreateShortcut($Path)
+        $lnk.TargetPath = $pwshExe
+        $lnk.Arguments = "-WindowStyle Hidden -File `"$launcherPath`"$LauncherArgs"
+        $lnk.WorkingDirectory = $deployRootFull
+        $lnk.IconLocation = "$deployedExe,0"
+        $lnk.Description = "StarCraft 1.16.1, modded (fan-out select-past-12 + circles + HUD row), WIDESCREEN $Size, mouse locked -- see widescreen-card.md"
+        $lnk.Save()
+        Write-Host "shortcut written: $Path"
+    }
+    & $saveShortcut $shortcutPath '' $Geometry
+    # One per preset, for trying the sizes side by side: the same launcher at that
+    # -Geometry, presented through that preset's 2x ini.
+    $sizeShortcuts = foreach ($g in $presets) {
+        $path = Join-Path $desktop "StarCraft Modded $g.lnk"
+        & $saveShortcut $path " -Geometry $g" $g
+        [pscustomobject]@{ Name = $g; Path = $path }
+    }
     $staleWideShortcut = Join-Path $desktop 'StarCraft Modded (Wide).lnk'
     if (Test-Path -LiteralPath $staleWideShortcut) { Remove-Item -LiteralPath $staleWideShortcut -Force; Write-Host "removed the stale wide shortcut: $staleWideShortcut (one shortcut carries the wide geometry now)" }
 }
 
-# --- 6. regenerate the feature-test map ---------------------------------------
-# Maps\BroodWar\!feature-test.scx is a destination-only file (never in -SourceGameDir,
+# --- 6. regenerate the feature-test and battle maps ---------------------------
+# Maps\BroodWar\!feature-test.scx and !battle.scx are destination-only files (never in -SourceGameDir,
 # never in the repo -- AGENTS.md § "Hard rules"), so the true mirror in step 2 correctly
 # purges it every run. Regenerate rather than /XF-preserve: an exclusion only protects a
 # file that already exists (a fresh deploy would ship without the map), and a preserved
@@ -487,13 +507,14 @@ else {
 # player would ever see. Cost: the checkout deploying needs the map toolchain (.venv/
 # richchk -- ./setup-worktree.ps1). This runs LAST in assembly so a generator failure throws with
 # game + plugin + launcher + shortcut already assembled: the install still works, only the
-# map is missing, loudly. It writes exactly ONE file, ours by name, and never touches
+# map is missing, loudly. It writes exactly those TWO files, ours by name, and never touches
 # anything else under the user's Maps\ tree.
 Write-Host ''
-Write-Host '== Regenerating the feature-test map =='
+Write-Host '== Regenerating the feature-test and battle maps =='
 $featureMapPath = Join-Path $gameDeployDir 'Maps\BroodWar\!feature-test.scx'
+$battleMapPath = Join-Path $gameDeployDir 'Maps\BroodWar\!battle.scx'
 & (Join-Path $scriptDir 'make-feature-test-map.ps1') -OutputPath $featureMapPath | Write-Host
-if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "deploy: feature-test map generation failed (exit $LASTEXITCODE) -- the deployed game works, but $featureMapPath is missing. Fix the toolchain (./setup-worktree.ps1) and re-run the deploy, or run tools/make-feature-test-map.ps1 -OutputPath '$featureMapPath' by hand." }
+if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "deploy: map generation failed (exit $LASTEXITCODE) -- the deployed game works, but $featureMapPath or $battleMapPath is missing. Fix the toolchain (./setup-worktree.ps1) and re-run the deploy, or run tools/make-feature-test-map.ps1 -OutputPath '$featureMapPath' by hand." }
 
 # --- 7. verify -------------------------------------------------------------
 Write-Host ''
@@ -516,13 +537,15 @@ Write-Host 'verify: plugin binaries are freshly built from this run'
 # Presence alone is not enough -- a leftover from an earlier deploy passes a bare
 # Test-Path -- so the map must also be newer than this run's start, same shape as the
 # plugin-binary freshness check above.
-if (-not (Test-Path -LiteralPath $featureMapPath)) {
-    throw "deploy: feature-test map missing after deploy: $featureMapPath"
+foreach ($mapPath in $featureMapPath, $battleMapPath) {
+    if (-not (Test-Path -LiteralPath $mapPath)) {
+        throw "deploy: map missing after deploy: $mapPath"
+    }
+    if ((Get-Item -LiteralPath $mapPath).LastWriteTime -lt $deployStart) {
+        throw "deploy: $mapPath predates this deploy run -- the regeneration step did not actually write it."
+    }
+    Write-Host "verify: map regenerated this run ($mapPath)"
 }
-if ((Get-Item -LiteralPath $featureMapPath).LastWriteTime -lt $deployStart) {
-    throw "deploy: $featureMapPath predates this deploy run -- the regeneration step did not actually write it."
-}
-Write-Host "verify: feature-test map regenerated this run ($featureMapPath)"
 
 # --- 7b. the deployed plugin's IDENTITY, not its freshness --------------------
 # The check above is a TIMESTAMP: it says a file was written during this run, which is
@@ -569,14 +592,20 @@ $stagedCnc = Join-Path $cncDeployDir 'ddraw.dll'
 $stagedHash = (Get-FileHash -LiteralPath $stagedCnc -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($stagedHash -ne $CNC_DDRAW_DLL_SHA256) { throw "deploy: staged cnc-ddraw hash mismatch after copy: $stagedCnc" }
 if (-not (Test-Path -LiteralPath (Join-Path $pluginDeployDir 'cnc-ddraw.ini'))) { throw 'deploy: plugin\cnc-ddraw.ini missing -- the wide launcher would run cnc-ddraw unconfigured (fullscreen-shaped).' }
-if (-not (Test-Path -LiteralPath $cnc2xIniDeployPath)) { throw 'deploy: plugin\cnc-ddraw-2x.ini missing -- the launcher would run cnc-ddraw unconfigured (fullscreen-shaped), losing the 2x scale + mouse lock task 075 added.' }
-$iniText = Get-Content -Raw -LiteralPath $cnc2xIniDeployPath
-# \r?$ : the ini inherits CRLF from the committed file, and under (?m) .NET's $ matches
-# before \n only -- without the \r? this check rejects its own correct output.
-if ($iniText -notmatch "(?m)^width=$($wsW * 2)\r?$" -or $iniText -notmatch "(?m)^height=$($wsH * 2)\r?$") { throw "deploy: plugin\cnc-ddraw-2x.ini does not carry width=$($wsW * 2)/height=$($wsH * 2) (2x the plugin's ${wsW}x${wsH})." }
-if (-not $fits2x -and ($iniText -notmatch "(?m)^fullscreen=true\r?$" -or $iniText -notmatch "(?m)^maintas=true\r?$")) { throw "deploy: plugin\cnc-ddraw-2x.ini must be borderless (fullscreen=true + maintas=true): 2x does not fit the $($screen.Width)x$($screen.Height) screen." }
+foreach ($ini in $cnc2xInis) {
+    $wsW = $ini.W
+    $wsH = $ini.H
+    $fits2x = $ini.Fits2x
+    $cnc2xIniDeployPath = $ini.Path
+    if (-not (Test-Path -LiteralPath $cnc2xIniDeployPath)) { throw "deploy: $cnc2xIniDeployPath missing -- the launcher would run cnc-ddraw unconfigured (fullscreen-shaped), losing the 2x scale + mouse lock task 075 added." }
+    $iniText = Get-Content -Raw -LiteralPath $cnc2xIniDeployPath
+    # \r?$ : the ini inherits CRLF from the committed file, and under (?m) .NET's $ matches
+    # before \n only -- without the \r? this check rejects its own correct output.
+    if ($iniText -notmatch "(?m)^width=$($wsW * 2)\r?$" -or $iniText -notmatch "(?m)^height=$($wsH * 2)\r?$") { throw "deploy: $cnc2xIniDeployPath does not carry width=$($wsW * 2)/height=$($wsH * 2) (2x the plugin's ${wsW}x${wsH})." }
+    if (-not $fits2x -and ($iniText -notmatch "(?m)^fullscreen=true\r?$" -or $iniText -notmatch "(?m)^maintas=true\r?$")) { throw "deploy: $cnc2xIniDeployPath must be borderless (fullscreen=true + maintas=true): 2x does not fit the $($screen.Width)x$($screen.Height) screen." }
+}
 if (-not (Test-Path -LiteralPath (Join-Path $deployRootFull 'widescreen-card.md'))) { throw 'deploy: widescreen-card.md missing from the deploy root.' }
-Write-Host "verify: launcher, pinned cnc-ddraw, both inis (2x ini at $($wsW * 2)x$($wsH * 2)) + card all present"
+Write-Host "verify: launcher, pinned cnc-ddraw, cnc-ddraw.ini + a 2x ini for each of $($presets -join ', ') + card all present"
 
 if ($NoShortcut) {
     Write-Host 'verify: shortcuts skipped (-NoShortcut)'
@@ -588,6 +617,11 @@ else {
     if ($resolved.Arguments -notmatch [Regex]::Escape($launcherPath)) { throw "deploy: shortcut arguments do not reference the launcher: $($resolved.Arguments)" }
     if (-not (Test-Path -LiteralPath $launcherPath)) { throw "deploy: shortcut points at a launcher that does not exist: $launcherPath" }
     Write-Host "verify: shortcut resolves ($shortcutPath -> $pwshExe $($resolved.Arguments))"
+    foreach ($s in $sizeShortcuts) {
+        $sized = $shell.CreateShortcut($s.Path)
+        if ($sized.TargetPath -ne $pwshExe -or $sized.Arguments -notmatch ([Regex]::Escape($launcherPath) + '" -Geometry ' + $s.Name + '$')) { throw "deploy: size shortcut $($s.Path) does not run the launcher at -Geometry $($s.Name): $($sized.TargetPath) $($sized.Arguments)" }
+    }
+    Write-Host "verify: size shortcuts resolve ($(($sizeShortcuts | ForEach-Object { Split-Path $_.Path -Leaf }) -join ', '))"
 }
 
 } finally {

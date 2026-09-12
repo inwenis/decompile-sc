@@ -5186,7 +5186,7 @@ static void CodeCaveTests(void) {
           ScScreenApplyCaveAt(fn2 + 5, 4, kCave, (int)sizeof(kCave)) ? 1 : 0, 0);
 
     // A cave may RETURN from the caved function instead of jumping back -- the
-    // console hit-test guard (console.hittest.xguard, sc_screen_patches.h) does
+    // console hit-test guard (console.hittest.xguard) does
     // exactly that for x >= 640: `cmp ecx,640 / jl +3 / xor eax,eax / ret /
     // <displaced insn>`. EmitCave must copy the body verbatim (a `ret` inside
     // it is not special) and the appended `jmp back` must only be reached on
@@ -5348,7 +5348,7 @@ int main(void) {
     Check("TgtStdcall(5,3)  -> original 14 + 2000", TgtStdcall(5, 3), 2014);
     Check("  detour entered", g_stdCalls, 1);
 
-    Part("menu starfield: palette mapping, fade-stable levels, density");
+    Part("menu sky: palette mapping, fade-stable levels, star density, the nebula");
     {
         // A descending grey ramp: index i holds grey 255-i, plus one pure red entry.
         BYTE pal[1024];
@@ -5358,7 +5358,7 @@ int main(void) {
         Check("black maps to the darkest entry", ScMenuNearestIndex(pal, 0, 0, 0), 255);
         Check("a mid grey lands mid-ramp", ScMenuNearestIndex(pal, 100, 100, 100), 155);
         Check("a red asks for the one red entry", ScMenuNearestIndex(pal, 250, 10, 10), 7);
-        BYTE full[4], half[4];
+        BYTE full[SC_MENU_LEVELS], half[SC_MENU_LEVELS];
         ScMenuLevelsFor(pal, full);
         Check("the sky is the darkest entry", full[0], 255);
         Check("the bright star is near white", full[3] < 40 ? 1 : 0, 1);
@@ -5368,6 +5368,14 @@ int main(void) {
         ScMenuLevelsFor(dim, half);
         Check("a half-faded palette keeps the bright star's entry", half[3], full[3]);
         Check("  and the mid star's", half[2], full[2]);
+        int drift = 0;
+        for (int l = SC_MENU_STAR_LEVELS; l < SC_MENU_LEVELS; ++l)
+            if (half[l] - full[l] > 3 || full[l] - half[l] > 3) ++drift;
+        // Halving duplicates the ramp's entries in pairs, so an ink can land a step or two
+        // along the ramp -- the same grey to the eye, never a different colour.
+        Check("  and every nebula ink's, within 3 entries of the grey ramp", drift, 0);
+        Check("the brightest blue ink is brighter than the dimmest",
+              full[SC_MENU_STAR_LEVELS + SC_MENU_NEB_INKS - 1] < full[SC_MENU_STAR_LEVELS] ? 1 : 0, 1);
         BYTE* f = (BYTE*)calloc(1280 * 720, 1);
         const int lit = ScMenuBuildStars(f, 1280, 720);
         Check("the starfield is lit", lit > 500 ? 1 : 0, 1);
@@ -5378,6 +5386,58 @@ int main(void) {
         memset(f, 0, 1280 * 720);
         Check("the field is deterministic", ScMenuBuildStars(f, 1280, 720), lit);
         free(f);
+
+        // The nebula around a 640x480 rect centred on 1280x880, over the stars.
+        const int W = 1280, H = 880, GX = 320, GY = 200;
+        BYTE* sky = (BYTE*)calloc((size_t)W * H, 1);
+        BYTE* again = (BYTE*)calloc((size_t)W * H, 1);
+        ScMenuBuildStars(sky, W, H);
+        memcpy(again, sky, (size_t)W * H);
+        const DWORD t0 = GetTickCount();
+        const int neb = ScMenuBuildNebula(sky, W, H, GX, GY);
+        printf("    nebula: %d cells in %lu ms\n", neb, (unsigned long)(GetTickCount() - t0));
+        int starsKept = 1, inside = 0, outOfRange = 0, nearN = 0, nearInk = 0, farN = 0, farInk = 0;
+        int perLayer[SC_MENU_NEB_LAYERS] = { 0 };
+        double inkSum[2][2] = { { 0, 0 }, { 0, 0 } };   // [row, column parity][even, odd]
+        int inkN[2][2] = { { 0, 0 }, { 0, 0 } };
+        for (int y = 0; y < H; ++y) {
+            for (int x = 0; x < W; ++x) {
+                const BYTE v = sky[(size_t)y * W + x], before = again[(size_t)y * W + x];
+                if (before && v != before) starsKept = 0;
+                if (v >= SC_MENU_LEVELS) ++outOfRange;
+                const bool ink = v >= SC_MENU_STAR_LEVELS && v < SC_MENU_LEVELS;
+                if (ink) {
+                    ++perLayer[(v - SC_MENU_STAR_LEVELS) / SC_MENU_NEB_INKS];
+                    const int k = (v - SC_MENU_STAR_LEVELS) % SC_MENU_NEB_INKS + 1;
+                    inkSum[0][y & 1] += k; ++inkN[0][y & 1];
+                    inkSum[1][x & 1] += k; ++inkN[1][x & 1];
+                }
+                const int ox = x < GX ? GX - x : (x > GX + 639 ? x - (GX + 639) : 0);
+                const int oy = y < GY ? GY - y : (y > GY + 479 ? y - (GY + 479) : 0);
+                if (!ox && !oy) { if (ink) ++inside; continue; }
+                const int d = ox > oy ? ox : oy;
+                if (d < 20) { ++nearN; if (ink) ++nearInk; }
+                if (d >= SC_MENU_FADE && ox + oy > 0) { ++farN; if (ink) ++farInk; }
+            }
+        }
+        Check("the nebula lights a real share of the far sky (over 25%)", farInk * 4 > farN ? 1 : 0, 1);
+        Check("  fading out next to the menu (under a quarter of that share)",
+              (long long)nearInk * farN * 4 < (long long)farInk * nearN ? 1 : 0, 1);
+        Check("  and never inside it", inside, 0);
+        Check("  over the stars, not through them", starsKept, 1);
+        Check("  with both layers' inks", (perLayer[0] > 1000 && perLayer[1] > 1000) ? 1 : 0, 1);
+        Check("  every level one ScMenuLevelsFor maps", outOfRange, 0);
+        // A Bayer matrix's rows alternate low and high thresholds: scanlines (renderer 25.3).
+        const double rowSkew = inkSum[0][0] / inkN[0][0] - inkSum[0][1] / inkN[0][1];
+        const double colSkew = inkSum[1][0] / inkN[1][0] - inkSum[1][1] / inkN[1][1];
+        printf("    mean ink even-odd: rows %+.3f, columns %+.3f\n", rowSkew, colSkew);
+        Check("  even and odd rows as bright as each other (no scanlines)",
+              (rowSkew < 0.05 && rowSkew > -0.05) ? 1 : 0, 1);
+        Check("  and even and odd columns", (colSkew < 0.05 && colSkew > -0.05) ? 1 : 0, 1);
+        memcpy(sky, again, (size_t)W * H);
+        Check("the nebula is deterministic", ScMenuBuildNebula(sky, W, H, GX, GY), neb);
+        free(sky);
+        free(again);
     }
 
     Part("the register-convention thunk sees EAX/ECX AND the stack args");

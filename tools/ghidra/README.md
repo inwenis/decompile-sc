@@ -204,8 +204,8 @@ second pass left 8 real ones:
 | `0x006284B4` / `B6` | `map_height_pixels`, an int | a u16, then the u8 `selectionIterator` | override |
 | `layer+0x00` | `buffers` | the layer's in-use flag | field name kept, [#191](https://github.com/inwenis/decompile-sc/issues/191) |
 | `StatDataDescriptor+0x00` | `CUnit* xxx` | the icon's GRP handle | field name kept, [#191](https://github.com/inwenis/decompile-sc/issues/191) |
-| `0x00512678` | `g_ActiveNationID` | Magnetar is right: the commanding player, not the local one | comment fix, [#191](https://github.com/inwenis/decompile-sc/issues/191) |
-| `0x006D1218` | `loadGameFileHandle` | Magnetar is right: a `FILE*` closed by `_fclose` | comment fix, [#191](https://github.com/inwenis/decompile-sc/issues/191) |
+| `0x00512678` | `g_ActiveNationID` | Magnetar is right: the commanding player, not the local one | repo comment fixed, [#191](https://github.com/inwenis/decompile-sc/issues/191) |
+| `0x006D1218` | `loadGameFileHandle` | Magnetar is right: a `FILE*` closed by `_fclose` | repo comment fixed, [#191](https://github.com/inwenis/decompile-sc/issues/191) |
 
 So neither side wins by default: where they disagree, read the evidence each cites.
 

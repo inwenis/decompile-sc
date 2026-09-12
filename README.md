@@ -24,15 +24,21 @@ Unzip [the release](https://github.com/inwenis/decompile-sc/releases) anywhere a
 2. select buildings of one type, queue units for all at once
 3. queue more than 5 units in a building
 4. queue upgrades, shown as icons in the building's queue like units
-5. widescreen in three sizes, the menus centred on a starfield (Ctrl+Tab or Right Alt+Right Ctrl frees the mouse; a click locks it again)
+5. widescreen in three sizes, the menus centred on a nebula (Ctrl+Tab or Right Alt+Right Ctrl frees the mouse; a click locks it again)
 
 Offline and single-player only.
 
-100 marines selected; the bottom row pages them twelve at a time and reads `100 units 1-12 (1/9)`:
+37 units selected; the bottom row pages them twelve at a time and reads `37 units 1-12 (1/4)`:
 
-![100 marines selected on the 1280x800 playfield; the bottom row reads 100 units 1-12 (1/9)](docs/screenshot-100-units-page-1-of-9.png)
+![37 units selected on the 1280x880 playfield; the bottom row reads 37 units 1-12 (1/4)](docs/screenshot-37-units-page-1-of-4.png)
 
-![63 units selected, mixed Zerg army, widescreen viewport](docs/screenshot-63-units.png)
+Three factories selected together, units queued for all of them at once, past the stock 5 per building; the bottom row reads `3 bldgs 17 queued`:
+
+![three factories selected; the bottom row reads 3 bldgs 17 queued](docs/screenshot-3-factories-17-queued.png)
+
+The Academy researching U-238 Shells, four more researches waiting in its queue as icons 2-5:
+
+![Terran Academy upgrading, four more researches queued as icons](docs/screenshot-academy-5-researches-queued.png)
 
 ## How does it work?
 
@@ -58,7 +64,7 @@ Windows, PowerShell 7, git, Python 3.11+.
 4. `./run.ps1` plays from this checkout: every feature on, a 1x window, the plugin rebuilt
    when stale; it returns when the game closes. Any launcher parameter overrides a default,
    e.g. `./run.ps1 -Geometry 1536x864`.
-5. `./deploy.ps1` installs the modded game with a desktop shortcut.
+5. `./deploy.ps1` installs the modded game with a desktop shortcut, plus one per widescreen size.
 
 Release: `git tag v1.0 && git push origin v1.0`; CI builds the zip and attaches it. Tests:
 `Invoke-Pester -Path tests`. How each feature works and how it was verified: `research/` and

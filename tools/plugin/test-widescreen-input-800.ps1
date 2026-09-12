@@ -1,11 +1,11 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Proves stage 3 lets mouse input REACH x=640..799 at 800 wide -- the
+Proves stage 3 lets mouse input REACH past x=639 on the wide screen -- the
 window-proc mouse clamps do not pin every x to 639 -- while everything at
-640 (flag off) is byte-for-byte stock, and the CONSOLE is deliberately NOT
-moved (renderer-viewport.md 18: relocating its bounds moved the hit-test, not
-the pixels, so the move was dropped from what ships).
+640 (flag off) is byte-for-byte stock, and the CONSOLE keeps its stock 640
+columns (renderer-viewport.md 18: relocating its bounds sideways moved the
+hit-test, not the pixels).
 
 .DESCRIPTION
 Two arms, one oracle each -- the engine's own world scan and portrait, never

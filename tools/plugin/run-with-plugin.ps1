@@ -11,11 +11,12 @@ StarCraft.exe directly" -- see tools/plugin/README.md. -Windowed (WMode.dll copi
 as ddraw.dll, research/launch-baseline.md) is the ONE thing that writes into the game
 directory; -RemoveWindowed undoes it, tools/make-working-copy.ps1 -Force purges it.
 
-Touches only the working copy (default C:\sc-work\1161-base), never
+On disk, touches only the working copy (default C:\sc-work\1161-base), never
 C:\sc-install\Starcraft; the log goes outside the repo (C:/sc-work/ is gitignored).
 
-Worker launches ($env:AGENT_TASK set) take the launch lock, hand the foreground back
-and run muted; the deployed shortcut passes -NoLaunchLock -NoForegroundRestore -Sound.
+Worker launches ($env:AGENT_TASK set) take the launch lock, set HKCU 'Custom Type' to
+'Use Map Settings' (left set), hand the foreground back and run muted; the deployed
+shortcut passes -NoLaunchLock -NoForegroundRestore -Sound.
 The DLL's build stamp is checked against src/ before launch and against the ATTACH
 banner after it. Each mechanism's why sits at its code site below.
 
@@ -199,7 +200,7 @@ param(
     # Which stage of research/renderer-viewport.md 9.3 to apply. 0 = the display mode
     # alone (expect a small image in the corner of a bigger one); 1 = + the screen
     # surface; 2 = + the playfield geometry; 3 = + input reaches the full width (the
-    # window-proc mouse clamps widen so clicks can reach x=640..799, renderer-viewport.md
+    # window-proc mouse clamps widen so clicks can reach past x=639, renderer-viewport.md
     # 18). Meaningless unless -Widescreen 1.
     [ValidateSet('0', '1', '2', '3')][string]$WidescreenStage = '1',
     # Which geometry PRESET the widescreen table targets, by name (sc_screen_presets.h:
@@ -207,7 +208,7 @@ param(
     # inherited, so a suite can set the variable once for a whole run. The DLL refuses
     # the whole widescreen install on an unknown name and logs the list.
     [string]$Geometry = '',
-    # Centre the menus on the wider screen and draw a starfield around them (sc_menu.h).
+    # Centre the menus on the wider screen and draw a night sky around them (sc_menu.h).
     # Off by default: it moves the glue roots, so a suite's fixed menu coordinates would
     # miss. The deployed launcher turns it on. Needs -Widescreen 1 -WidescreenStage 3.
     [ValidateSet('0', '1')][string]$MenuCentre = '0',
@@ -222,7 +223,7 @@ param(
     # READ-ONLY: log storm's virtual-screen geometry, the flip clip, the fallback lock
     # pointer and the present region on the marker channel (any mode, writes nothing).
     # 'widen' = coerce storm's virtual screen to the widescreen width so the present
-    # carries all 800 columns (writes game memory, ignored in -Mode observe). '0' = off.
+    # carries every column (writes game memory, ignored in -Mode observe). '0' = off.
     # 'auto' (default) leaves %SCPLUGIN_STORM_PRESENT% UNSET so the DLL decides: WIDEN
     # at widescreen stage >= 2, off otherwise. The default must be 'auto', not '0': an
     # exported '0' disarms the DLL's auto-arm, the deployed (Wide) shortcut then plays
@@ -586,11 +587,29 @@ try {
         Write-Host 'run-with-plugin: SCPLUGIN_CURSOR_POSTED=0 for this launch (no cnc-ddraw helper; the posted-cursor hook empties WMode drag boxes)'
     }
 
+    # Agent suites need the Create Game screen's Game Type to read 'Use Map Settings'. The
+    # engine takes that combo's starting value from this registry value at launch (measured
+    # both ways off-screen), where a dropdown pick needs the foreground an off-screen run
+    # never has. Agent launches only; left set, and the user's own next pick changes it.
+    if ($env:AGENT_TASK) {
+        Set-ItemProperty -LiteralPath 'HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft' -Name 'Custom Type' -Value 'Use Map Settings'
+        Write-Host "run-with-plugin: Custom Type = 'Use Map Settings' (agent launch; Assert-ScGameType reads it back)"
+    }
+
     $injOut = [System.Collections.Generic.List[string]]::new()
     & $inj @injArgs 2>&1 | ForEach-Object { Write-Host $_; $injOut.Add("$_") }
     $rc = $LASTEXITCODE
     Write-Host "run-with-plugin: scinject exit=$rc"
-    if ($rc -ne 0) { throw "run-with-plugin: injection failed (exit $rc)" }
+    if ($rc -ne 0) {
+        # Exit 3 is the game quitting on its own; with another StarCraft alive that is the
+        # engine's one-copy-per-machine check (drive-game.ps1 Wait-ScNoGameRunning).
+        $launchedPid = [regex]::Match(($injOut -join "`n"), 'scinject: launched pid=(\d+)').Groups[1].Value
+        $occupant = @(Get-Process StarCraft -ErrorAction SilentlyContinue | Where-Object { "$($_.Id)" -ne $launchedPid -and -not $_.HasExited })
+        if ($rc -eq 3 -and $occupant) {
+            throw "run-with-plugin: the StarCraft slot is occupied by another StarCraft (pid $($occupant.Id -join ', ')): an agent's test game, or a game already open. StarCraft runs one copy per machine, so this one quit on its own. Try again when that game ends."
+        }
+        throw "run-with-plugin: injection failed (exit $rc)"
+    }
 
     $gamePid = 0
     foreach ($line in $injOut) {
@@ -713,9 +732,9 @@ finally {
     # already on screen (a modal DirectDraw error box is exactly that case) still gives
     # the user their window back before the failure propagates. By here
     # check-game-windows.ps1 has enumerated the game's top-level windows, so the window
-    # whose creation stole the foreground exists. NEVER FATAL, on the same reasoning as
-    # Send-ScDropdownPick's hand-back: the launch has already happened, and a shell that
-    # will not give the foreground up is a cosmetic loss, not a failed launch.
+    # whose creation stole the foreground exists. NEVER FATAL: the launch has already
+    # happened, and a shell that will not give the foreground up is a cosmetic loss, not a
+    # failed launch.
     if ($preLaunchFg -ne [IntPtr]::Zero) {
         # Whether the early restore above still holds. If it does this is a no-op and says
         # nothing -- printing "handed back" twice would read as two borrows, not one.

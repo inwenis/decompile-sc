@@ -1,15 +1,15 @@
 // sc_stormpresent.h -- the storm-side of the buffer->glass present.
 //
-// The exe renders 800 columns of fogged map into its framebuffer (0x6CEFF4) but
+// The exe renders the full wide screen of fogged map into its framebuffer (0x6CEFF4) but
 // only 640 reach the window: storm keeps its OWN virtual-screen width at
 // [storm+0x5A7C4] = 640, and the per-frame present is ord350 (lock, builds the
 // flip clip from that width) -> ord432 (copy buffer->locked via region) ->
 // ord356 (unlock/flip, Blts the clip). See research/renderer-viewport.md 19.8.
 //
 // The mode: probe is the read-only instrument that decides which present path is live;
-// widen hooks the present copy (ord432) and copies the x=640..799 strip from the
-// 800-wide buffer to the primary after the engine's own copy, so all 800 columns reach
-// the glass -- it writes game memory, so observe refuses it like every other writer.
+// widen hooks the present copy (ord432) and copies the x>=640 strip from the wide
+// buffer to the primary after the engine's own copy, so every column reaches the
+// glass -- it writes game memory, so observe refuses it like every other writer.
 //
 // Every storm address is resolved from the LOADED module (GetModuleHandleA), never
 // from the preferred base -- storm.dll's base is not fixed (research/pe-anatomy.md).

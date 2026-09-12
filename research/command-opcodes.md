@@ -539,7 +539,7 @@ Task 016 root-caused both. Neither was the CHK round-trip that was suspected at 
    and never creates that player's placed units. Ruled out first, by measurement, not by
    argument: the Game Type combo was opened and *Use Map Settings* picked explicitly from its
    list (SC's dropdowns select on button-*up*, so a plain click chooses nothing and the box's
-   label is not evidence — `Send-ScDropdownPick`), and the histogram above did not change. And
+   label is not evidence), and the histogram above did not change. And
    the map that produced that histogram came from task 016's raw-CHK generator at a point where
    it did not touch `SIDE`: it differed from the stock ladder map in `OWNR`, `UNIT` and `TRIG`
    **and nothing else**, with `SIDE` still holding the template's own `0x05` — so no section

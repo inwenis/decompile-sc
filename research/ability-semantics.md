@@ -635,6 +635,12 @@ acquisition code that could plausibly cause it.
 > the read can, so a run whose game type is already correct now **skips the pick entirely**,
 > and with it the last foreground raise in the harness. This is AGENTS.md's "read a dialog's
 > CONTENT from memory; never hash its pixels" reaching the one control that had escaped it.
+>
+> **AND THE PICK IS GONE (issue #194, 2026-09-12).** The engine starts the combo on the
+> `Custom Type` registry value it reads at launch (measured both ways off-screen: `Melee` in,
+> `Melee` shown; `Use Map Settings` in, `Use Map Settings` shown). `run-with-plugin.ps1` now
+> writes `Use Map Settings` before every agent launch and `Assert-ScGameType` reads it back;
+> `Send-ScDropdownPick` and `Set-ScGameType` are removed.
 
 **The game ignores a posted `WM_MOUSEMOVE` when its window is not the foreground window.**
 Posted clicks are processed either way, which is why every other part of `drive-game.ps1` works
