@@ -1174,6 +1174,15 @@
 #define SC_VA_FRAME_COMPOSE        0x0041E280u  // walks layers 7..0, builds each clip rect
 #define SC_VA_MARK_DIRTY           0x0041E0D0u  // the dirty-grid marker
 #define SC_VA_PRESENT_BLIT         0x0041D420u  // lock, Ordinal_432(dst, screen, pitch, 0x280), unlock
+// The cursor's restore-under, stdcall(Bitmap* target), `ret 4`. Two callers: the
+// composer's LAST act on the screen Bitmap (0x0041E414, after the present) and the
+// direct dialog composite on a dialog surface (0x0041C9B2). Until the first one runs,
+// the buffer holds the frame WITH the cursor. Read from the listing; renderer-viewport.md 25.
+#define SC_VA_RESTORE_UNDER        0x0041DEB0u
+// The present's storm thunks: ord350(surface, rect, &ptr, &pitch, flags) and
+// ord356(surface, ptr, 0, 0) -- exe IAT 0x4FE5A0 / 0x4FE59C, both called by 0x0041D420.
+#define SC_VA_STORM_LOCK_THUNK     0x00411E4Eu
+#define SC_VA_STORM_UNLOCK_THUNK   0x00411E48u
 #define SC_VA_SURFACE_REBUILD      0x0041D470u  // Ordinal_440(0x280, 0x1e0, 0x10, 0x10)
 #define SC_VA_PLAYFIELD_DRAW       0x004BD580u  // layer 5's callback: the whole playfield chain
 #define SC_VA_TERRAIN_DRAW         0x004BCDC0u  // the tile blitter

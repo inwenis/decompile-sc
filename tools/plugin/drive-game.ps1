@@ -459,10 +459,16 @@ $script:ScBrowserUpArrowX    = 339
 $script:ScBrowserUpArrowY    = 141
 $script:ScBrowserDownArrowX  = 339
 $script:ScBrowserDownArrowY  = 211
+# Every coordinate above is the glue screen's own. The menu centring (sc_menu.h,
+# -MenuCentre 1) translates each glue root by one (dx,dy); a walk through centred menus
+# sets that origin here once, and every browser click and fingerprint follows it.
+$script:ScGlueX = 0
+$script:ScGlueY = 0
+function Set-ScGlueOrigin { param([int]$X = 0, [int]$Y = 0) $script:ScGlueX = $X; $script:ScGlueY = $Y }
 
 function Get-ScBrowserRowY {
     param([Parameter(Mandatory)][int]$Row)
-    $script:ScBrowserFirstRowY + ($Row - 1) * $script:ScBrowserRowPitch
+    $script:ScGlueY + $script:ScBrowserFirstRowY + ($Row - 1) * $script:ScBrowserRowPitch
 }
 
 function Sort-ScBrowserNames {
@@ -575,7 +581,7 @@ function Get-ScBrowserRowOccupancy {
     [CmdletBinding()]
     param([Parameter(Mandatory)][IntPtr]$Hwnd)
     1..$script:ScBrowserVisibleRows | ForEach-Object {
-        Get-ScRegionFingerprint -Hwnd $Hwnd -X 62 -Y ((Get-ScBrowserRowY -Row $_) - 9) -Width 250 -Height 18
+        Get-ScRegionFingerprint -Hwnd $Hwnd -X ($script:ScGlueX + 62) -Y ((Get-ScBrowserRowY -Row $_) - 9) -Width 250 -Height 18
     }
 }
 
@@ -618,7 +624,7 @@ function Sync-ScBrowserToTop {
     $announcedSelfRows = $false
     for ($batch = 1; $batch -le $MaxBatches; $batch++) {
         for ($i = 0; $i -lt $ClicksPerBatch; $i++) {
-            Send-ScClick -Hwnd $Hwnd -X $script:ScBrowserUpArrowX -Y $script:ScBrowserUpArrowY `
+            Send-ScClick -Hwnd $Hwnd -X ($script:ScGlueX + $script:ScBrowserUpArrowX) -Y ($script:ScGlueY + $script:ScBrowserUpArrowY) `
                          -HoldMs 40 -SettleMs 40 -NoActivate
         }
         Start-Sleep -Milliseconds 250
@@ -664,7 +670,7 @@ function Get-ScBrowserInfoPanel {
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][IntPtr]$Hwnd)
-    Get-ScRegionFingerprint -Hwnd $Hwnd -X 405 -Y 60 -Width 225 -Height 200
+    Get-ScRegionFingerprint -Hwnd $Hwnd -X ($script:ScGlueX + 405) -Y ($script:ScGlueY + 60) -Width 225 -Height 200
 }
 
 function Assert-ScBrowserMapSelected {
@@ -736,8 +742,8 @@ function Enter-ScBrowserEntry {
     $target = if ($entry.Kind -eq 'up') { Split-Path $before.Dir -Parent } else { Join-Path $before.Dir $entry.Name }
 
     Write-Host "       browser: $Dir -> [$Name] (row $($entry.Row), y=$($entry.Y))"
-    Send-ScClick -Hwnd $Hwnd -X $script:ScBrowserRowX -Y $entry.Y
-    Send-ScClick -Hwnd $Hwnd -X $script:ScBrowserOkX -Y $script:ScBrowserOkY
+    Send-ScClick -Hwnd $Hwnd -X ($script:ScGlueX + $script:ScBrowserRowX) -Y $entry.Y
+    Send-ScClick -Hwnd $Hwnd -X ($script:ScGlueX + $script:ScBrowserOkX) -Y ($script:ScGlueY + $script:ScBrowserOkY)
     if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
 
     # The new listing arrives scrolled too, so put it back where the model can read it.
@@ -809,11 +815,11 @@ function Select-ScBrowserMap {
         Where-Object { $_.Kind -ne 'file' -and $_.Row -le $script:ScBrowserVisibleRows } |
         Select-Object -First 1)
     if ($folderRow.Count -gt 0) {
-        Send-ScClick -Hwnd $Hwnd -X $script:ScBrowserRowX -Y $folderRow[0].Y
+        Send-ScClick -Hwnd $Hwnd -X ($script:ScGlueX + $script:ScBrowserRowX) -Y $folderRow[0].Y
         Start-Sleep -Milliseconds 300
     }
     $panelBefore = Get-ScBrowserInfoPanel -Hwnd $Hwnd
-    Send-ScClick -Hwnd $Hwnd -X $script:ScBrowserRowX -Y $entry.Y
+    Send-ScClick -Hwnd $Hwnd -X ($script:ScGlueX + $script:ScBrowserRowX) -Y $entry.Y
     Start-Sleep -Milliseconds 500
     $panelAfter = Get-ScBrowserInfoPanel -Hwnd $Hwnd
     Assert-ScBrowserMapSelected -Hwnd $Hwnd -Before $panelBefore -After $panelAfter `

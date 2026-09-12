@@ -139,7 +139,7 @@ Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-
     It 'the launcher keeps the full feature set (it is the same game, wider)' {
         foreach ($flag in '-Mode fanout', '-Sound', '-NoLaunchLock', '-NoForegroundRestore',
                           '-Circles 1', '-HudRow 1', '-ProdQueue 1', '-ProdFan 1',
-                          '-UpgradeQueue 1', '-QueueIndicator 1') {
+                          '-UpgradeQueue 1', '-QueueIndicator 1', '-MenuCentre 1') {
             $script:launcher.Contains($flag) | Should -BeTrue -Because "the launcher must not silently drop $flag"
         }
     }

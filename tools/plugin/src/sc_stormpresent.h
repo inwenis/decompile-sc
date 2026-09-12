@@ -36,4 +36,11 @@ void ScStormPresentLog(const char* tag);
 void ScStormPresentRemove(void);
 void ScStormPresentLogStats(void);
 
+// The primary's live palette, 256 x {r,g,b,flags} (IDirectDrawSurface::GetPalette +
+// IDirectDrawPalette::GetEntries on storm's primary), and its row count
+// (GetSurfaceDesc; 0 when unreadable). For sc_menu.cpp, which presents at the glue
+// screens where no ord432 call ever runs.
+bool ScStormReadPalette(BYTE* out1024);
+int  ScStormReadPrimaryRows(void);
+
 #endif

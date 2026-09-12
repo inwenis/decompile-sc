@@ -400,6 +400,7 @@ try {
         -WidescreenStage 3 `
         -Geometry __GEOMETRY__ `
         -StormPresent widen `
+        -MenuCentre 1 `
         -Sound `
         -NoLaunchLock `
         -NoForegroundRestore `

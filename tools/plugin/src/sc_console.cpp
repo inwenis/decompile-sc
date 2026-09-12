@@ -57,6 +57,8 @@
 #include "sc_session.h"
 #include "sc_unit.h"
 
+#include "sc_menu.h"
+
 // The composite-target bit (0x0041C810: `test [dlg+0x18],0x10000000` -> the
 // screen buffer). StatRes ships with it (flags 0x7000200D read live, 19.1).
 #define SC_DLG_FLAG_COMPOSITE_BUFFER 0x10000000u
@@ -66,6 +68,7 @@
 #define SC_CONSOLE_NAME_LEN    20
 
 static bool  g_move    = false;   // the down-move: widescreen ACTIVE with a taller playfield
+static bool  g_centre  = false;   // the glue roots centred while no game is played (sc_menu.h)
 static bool  g_trace   = false;
 static bool  g_fullRedraw = false;   // request the engine's full playfield redraw every frame
 static ScHook g_hkCompose;
@@ -85,6 +88,7 @@ static int      g_wrapN = 0;
 struct MoveSlot {
     DWORD dlg;
     short l, t, r, b;   // ORIGINAL bounds
+    short dx, dy;       // the translation applied
 };
 static MoveSlot g_moved[SC_CONSOLE_MAX_ROOTS];
 static int      g_movedN = 0;
@@ -93,6 +97,7 @@ static unsigned g_traceLines   = 0;
 static unsigned g_traceDropped = 0;
 static unsigned g_frames       = 0;
 static unsigned g_moves        = 0;
+static unsigned g_menuMoves    = 0;   // glue roots centred (sc_menu.h)
 static unsigned g_converted    = 0;   // roots given the buffer-composite bit
 static unsigned g_fullFrames   = 0;   // frames that took the engine's full-redraw path on request
 static unsigned g_selects      = 0;
@@ -195,12 +200,6 @@ static void UnwrapAll(void) {
 // The move
 // ---------------------------------------------------------------------------
 
-static bool AlreadyMoved(DWORD dlg) {
-    for (int i = 0; i < g_movedN; ++i)
-        if (g_moved[i].dlg == dlg) return true;
-    return false;
-}
-
 // Both surface descriptors, logged as evidence: the draw walk installs +0x36
 // and the status allocator fills +0x0C (sc_addresses.h explains the pair).
 static void LogSurfaces(DWORD dlg, const char* name) {
@@ -229,55 +228,94 @@ static void ConvertToBuffer(DWORD dlg, const char* name) {
           (unsigned)*flags);
 }
 
-static void TryMove(DWORD dlg, const char* name) {
-    if (AlreadyMoved(dlg) || g_movedN >= (int)(sizeof(g_moved) / sizeof(g_moved[0]))) return;
-    if (!ScReadable(dlg + SC_BINDLG_OFF_BOUNDS, 8)) return;
+static MoveSlot* FindMoved(DWORD dlg) {
+    for (int i = 0; i < g_movedN; ++i)
+        if (g_moved[i].dlg == dlg) return &g_moved[i];
+    return NULL;
+}
 
-    // Wait for the surface: moving BEFORE 0x004C35F0 has copied the art slice
-    // would make that copy read the 480-row console.pcx out of range.
-    DWORD bits36 = ScReadable(dlg + SC_BINDLG_OFF_SURFACE + SC_SURFACE_OFF_BITS, 4)
-                       ? *(DWORD*)(dlg + SC_BINDLG_OFF_SURFACE + SC_SURFACE_OFF_BITS) : 0;
-    DWORD bits0C = ScReadable(dlg + SC_BINDLG_OFF_SURFACE_ALT + SC_SURFACE_OFF_BITS, 4)
-                       ? *(DWORD*)(dlg + SC_BINDLG_OFF_SURFACE_ALT + SC_SURFACE_OFF_BITS) : 0;
-    if (!bits36 && !bits0C) return;   // not yet drawn once; try again next frame
+// Translate one root by (dx,dy), once, keeping the original for detach. With
+// waitSurface, not before the root's surface exists: moving BEFORE 0x004C35F0 has
+// copied the console art slice would make that copy read the 480-row console.pcx out of
+// range. Returns whether it moved; menu moves log and count apart.
+static bool TryMove(DWORD dlg, const char* name, int dx, int dy, bool waitSurface,
+                    bool menu) {
+    if (!ScReadable(dlg + SC_BINDLG_OFF_BOUNDS, 8)) return false;
+    short* bl = ScDlgBounds(dlg);
+    MoveSlot* old = FindMoved(dlg);
+    if (old) {
+        // Glue screens come and go at the same heap addresses: a row whose dialog reads
+        // un-moved again is a new dialog in a freed one's memory, and must move too.
+        const bool fresh = menu && bl[0] == old->l && bl[1] == old->t &&
+                           bl[2] == old->r && bl[3] == old->b;
+        if (!fresh) return false;
+        *old = g_moved[--g_movedN];
+        memset(&g_moved[g_movedN], 0, sizeof(g_moved[g_movedN]));
+    }
+    if (g_movedN >= (int)(sizeof(g_moved) / sizeof(g_moved[0]))) return false;
 
-    const int dy = ScScreenConsoleShiftY();
-    short* bl = ScDlgBounds(dlg);       // l,t,r,b
+    DWORD bits36 = 0, bits0C = 0;
+    if (waitSurface) {
+        bits36 = ScReadable(dlg + SC_BINDLG_OFF_SURFACE + SC_SURFACE_OFF_BITS, 4)
+                     ? *(DWORD*)(dlg + SC_BINDLG_OFF_SURFACE + SC_SURFACE_OFF_BITS) : 0;
+        bits0C = ScReadable(dlg + SC_BINDLG_OFF_SURFACE_ALT + SC_SURFACE_OFF_BITS, 4)
+                     ? *(DWORD*)(dlg + SC_BINDLG_OFF_SURFACE_ALT + SC_SURFACE_OFF_BITS) : 0;
+        if (!bits36 && !bits0C) return false;   // not yet drawn once; try again next frame
+    }
+
     MoveSlot* m = &g_moved[g_movedN];
     m->dlg = dlg; m->l = bl[0]; m->t = bl[1]; m->r = bl[2]; m->b = bl[3];
+    m->dx = (short)dx; m->dy = (short)dy;
 
-    LogSurfaces(dlg, name);
+    if (!menu) LogSurfaces(dlg, name);
     ScCtrlUpdate(dlg);                    // the rect being VACATED goes dirty
+    bl[0] = (short)(m->l + dx);
+    bl[2] = (short)(m->r + dx);
     bl[1] = (short)(m->t + dy);
     bl[3] = (short)(m->b + dy);
     ScCtrlUpdate(dlg);                    // the rect being CLAIMED goes dirty
     ++g_movedN;
-    ++g_moves;
-    ScLog("CONSOLE moved '%s' 0x%08X (%d,%d)-(%d,%d) -> (%d,%d)-(%d,%d) "
+    if (menu) ++g_menuMoves; else ++g_moves;
+    ScLog("%s moved '%s' 0x%08X (%d,%d)-(%d,%d) -> (%d,%d)-(%d,%d) "
           "flags=0x%08X surf36bits=0x%08X surf0Cbits=0x%08X",
-          name, (unsigned)dlg, m->l, m->t, m->r, m->b,
+          menu ? "MENU" : "CONSOLE", name, (unsigned)dlg, m->l, m->t, m->r, m->b,
           (int)bl[0], (int)bl[1], (int)bl[2], (int)bl[3],
           (unsigned)*(DWORD*)(dlg + SC_BINDLG_OFF_FLAGS),
           (unsigned)bits36, (unsigned)bits0C);
+    return true;
 }
 
 static void UnmoveAll(void) {
-    const int dy = ScScreenConsoleShiftY();
     for (int i = 0; i < g_movedN; ++i) {
         DWORD dlg = g_moved[i].dlg;
         if (!ScReadable(dlg + SC_BINDLG_OFF_BOUNDS, 8)) continue;
         short* bl = ScDlgBounds(dlg);
+        const MoveSlot* m = &g_moved[i];
         // Restore only if the bounds still read as OUR move; anything else means
         // the record was freed and reused, and writing it would corrupt a stranger.
-        if (bl[1] == (short)(g_moved[i].t + dy) && bl[3] == (short)(g_moved[i].b + dy)) {
+        if (bl[0] == (short)(m->l + m->dx) && bl[1] == (short)(m->t + m->dy) &&
+            bl[2] == (short)(m->r + m->dx) && bl[3] == (short)(m->b + m->dy)) {
             ScCtrlUpdate(dlg);
-            bl[1] = g_moved[i].t;
-            bl[3] = g_moved[i].b;
+            bl[0] = m->l; bl[1] = m->t; bl[2] = m->r; bl[3] = m->b;
             ScCtrlUpdate(dlg);
         }
     }
     g_movedN = 0;
     memset(g_moved, 0, sizeof(g_moved));
+}
+
+// Drop the rows whose dialog has left the list, so a menu session's freed roots never
+// fill the table the console needs in game. Only after a walk that reached the list's
+// end: a row dropped for a dialog the walk never reached would move that dialog twice.
+static void PruneMoved(const DWORD* live, int liveN) {
+    int kept = 0;
+    for (int i = 0; i < g_movedN; ++i) {
+        bool seen = false;
+        for (int k = 0; k < liveN && !seen; ++k) seen = (live[k] == g_moved[i].dlg);
+        if (seen) g_moved[kept++] = g_moved[i];
+    }
+    for (int i = kept; i < g_movedN; ++i) memset(&g_moved[i], 0, sizeof(g_moved[i]));
+    g_movedN = kept;
 }
 
 // ---------------------------------------------------------------------------
@@ -374,10 +412,11 @@ static void OnFrame(void) {
     if (!ScReadable(ScRuntimeVa(SC_VA_DIALOG_LIST), 4)) return;
     const DWORD head = *(DWORD*)ScRuntimeAddr(SC_VA_DIALOG_LIST);
 
-    // In game? The console roots exist only then; the menus' glue dialogs stay
-    // direct-blit (the buffer is never presented there) and must not be touched.
+    // In game? The console roots exist only then. The glue dialogs stay direct-blit (the
+    // buffer is never presented there) and are touched only by the menu centring.
     bool inGame = false;
-    if (g_move && ScScreenActive()) {
+    const bool walk = (g_move || g_centre) && ScScreenActive();
+    if (walk) {
         DWORD d = head;
         int k = 0;
         while (d && k < SC_MAX_DIALOGS_WALK) {
@@ -390,24 +429,43 @@ static void OnFrame(void) {
         }
         g_inGame = inGame ? 1 : 0;
     }
-    if (inGame && g_fullRedraw) RequestFullRedraw();
+    if (inGame && g_move && g_fullRedraw) RequestFullRedraw();
+    const bool atMenu = walk && !inGame && g_centre;
+    int mdx = 0, mdy = 0;
+    if (atMenu) ScMenuOffset(&mdx, &mdy);
 
+    DWORD live[SC_MAX_DIALOGS_WALK];
+    int liveN = 0;
     DWORD dlg = head;
-    int n = 0;
-    while (dlg && n < SC_MAX_DIALOGS_WALK) {
+    while (dlg && liveN < SC_MAX_DIALOGS_WALK) {
         if (!ScReadable(dlg, SC_BINDLG_SIZE)) break;
+        live[liveN++] = dlg;
         char name[SC_CONSOLE_NAME_LEN];
         ReadName(dlg, name, sizeof(name));
         if (g_trace) WrapRoot(dlg, name);
-        if (inGame) {
+        if (inGame && g_move) {
             // Every root, not only the console: a root left direct-blitting would
             // be erased by the whole-frame mirror (the F10 menu, tooltips, chat).
             ConvertToBuffer(dlg, name);
-            if (IsConsoleRoot(name)) TryMove(dlg, name);
+            if (IsConsoleRoot(name)) TryMove(dlg, name, 0, ScScreenConsoleShiftY(), true, false);
+        } else if (atMenu && ScReadable(dlg + SC_BINDLG_OFF_BOUNDS, 8)) {
+            // A full glue screen moves once it rests at (0,0); a popup moves at once,
+            // before its first composite. A popup flagged 0x08000000 (the Single Player
+            // one reads flags=0xE804000D) draws into its parent's surface at its bounds:
+            // the stage-3 cave glue.popup.parentorigin makes that parent-relative, so a moved
+            // popup is drawn and hit-tested where it shows (unmoved, it was drawn centred by
+            // its parent but clicked at its raw bounds; moved without the cave, the blit ran
+            // past the 640x480 surface and the game quit). The glue slide (0x004DCDE2)
+            // moves CONTROL rects, root-relative.
+            const short* bl = ScDlgBounds(dlg);
+            const bool full = bl[2] - bl[0] + 1 >= SC_SCREEN_W && bl[3] - bl[1] + 1 >= SC_SCREEN_H;
+            if ((!full || (bl[0] == 0 && bl[1] == 0)) && TryMove(dlg, name, mdx, mdy, false, true))
+                ScMenuRequestCopy();   // the primary still holds its art at the old place
         }
         dlg = *(DWORD*)(dlg + SC_BINDLG_OFF_NEXT);
-        ++n;
     }
+    if (walk && !dlg) PruneMoved(live, liveN);
+    if (g_centre) ScMenuOnFrame(atMenu);
 }
 
 // ---------------------------------------------------------------------------
@@ -446,16 +504,18 @@ void ScConsoleInstall(BYTE* moduleBase, bool writeAllowed, bool trace) {
     // follow the console are stage-3 sites; a move at stage 2 would be half done.
     g_move = writeAllowed && ScScreenWidescreenWanted() && ScScreenStageWanted() >= SC_WS_STAGE_MAX
              && ScScreenConsoleShiftY() > 0;
+    // The menu centring rides the same frame walk; sc_menu.cpp decided whether it is armed.
+    g_centre = writeAllowed && ScMenuArmed();
     // The full redraw belongs to the buffer-resident shape (the mirror presents the
     // whole buffer); %SCPLUGIN_FULLREDRAW%=0 is the A/B switch for its cost.
     g_fullRedraw = g_move && ScEnvFlag("SCPLUGIN_FULLREDRAW", true);
     memset(&g_hkCompose, 0, sizeof(g_hkCompose));
     g_wrapN = 0;  memset(g_wrap, 0, sizeof(g_wrap));
     g_movedN = 0; memset(g_moved, 0, sizeof(g_moved));
-    g_traceLines = g_traceDropped = g_frames = g_moves = g_converted = g_fullFrames = 0;
+    g_traceLines = g_traceDropped = g_frames = g_moves = g_menuMoves = g_converted = g_fullFrames = 0;
     g_session = 0;
     g_inGame = -1;
-    if (!g_move && !g_trace) {
+    if (!g_move && !g_trace && !g_centre) {
         ScLog("CONSOLE: off (no console shift in the table; %%SCPLUGIN_CONSOLE_TRACE%% unset)");
         return;
     }
@@ -463,14 +523,15 @@ void ScConsoleInstall(BYTE* moduleBase, bool writeAllowed, bool trace) {
                        (void*)&HkFrameCompose, (int)sizeof(kPrologueCompose),
                        kPrologueCompose, (int)sizeof(kPrologueCompose))) {
         ScLog("CONSOLE: frame-compose hook failed to install -- feature disabled");
-        g_move = g_trace = false;
+        g_move = g_trace = g_centre = false;
         return;
     }
-    ScLog("CONSOLE: ON move=%d trace=%d fullredraw=%d (frame hook at 0x0041E280; in game every root "
+    ScLog("CONSOLE: ON move=%d trace=%d fullredraw=%d centre=%d (frame hook at 0x0041E280; in game every root "
           "composites into the buffer, and the bottom console moves DOWN %d once its "
           "surfaces exist, old+new rects marked dirty; fullredraw requests the engine's "
           "full playfield path before every compose)",
-          g_move ? 1 : 0, g_trace ? 1 : 0, g_fullRedraw ? 1 : 0, ScScreenConsoleShiftY());
+          g_move ? 1 : 0, g_trace ? 1 : 0, g_fullRedraw ? 1 : 0, g_centre ? 1 : 0,
+          ScScreenConsoleShiftY());
 }
 
 void ScConsoleRemove(void) {
@@ -480,9 +541,9 @@ void ScConsoleRemove(void) {
 }
 
 void ScConsoleLogStats(void) {
-    if (!g_move && !g_trace && g_frames == 0) return;
+    if (!g_move && !g_trace && !g_centre && g_frames == 0) return;
     ScLog("CONSOLESTATS frames=%u moves=%u converted=%u fullFrames=%u wrapped=%d traceLines=%u "
-          "traceDropped=%u selects=%u",
+          "traceDropped=%u selects=%u menuMoves=%u",
           g_frames, g_moves, g_converted, g_fullFrames, g_wrapN, g_traceLines, g_traceDropped,
-          g_selects);
+          g_selects, g_menuMoves);
 }

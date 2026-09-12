@@ -311,6 +311,34 @@ static int ReadPrimaryRows(void) {
     return (int)*(DWORD*)(ddsd + 0x08);   // dwHeight
 }
 
+int ScStormReadPrimaryRows(void) { return ReadPrimaryRows(); }
+
+#define DDS_VTBL_GETPALETTE 0x50u
+#define DDP_VTBL_RELEASE    0x08u
+#define DDP_VTBL_GETENTRIES 0x10u
+bool ScStormReadPalette(BYTE* out1024) {
+    // storm.dll by name when the present module is off: its base doubles as its
+    // installed flag, so it is read here, never set.
+    BYTE* base = g_stormBase ? g_stormBase : (BYTE*)GetModuleHandleA("storm.dll");
+    if (!base) return false;
+    bool ok; DWORD prim0 = StormReadU32(base + STORM_RVA_SURFTABLE, &ok);
+    if (!ok || !prim0 || !ScReadableAt((void*)(DWORD_PTR)prim0, 4)) return false;
+    DWORD vtbl = *(DWORD*)(DWORD_PTR)prim0;
+    if (!ScReadableAt((void*)(DWORD_PTR)(vtbl + DDS_VTBL_GETPALETTE), 4)) return false;
+    typedef long (__attribute__((stdcall)) *GetPalFn)(DWORD, DWORD*);
+    typedef long (__attribute__((stdcall)) *GetEntriesFn)(DWORD, DWORD, DWORD, DWORD, void*);
+    typedef unsigned long (__attribute__((stdcall)) *ReleaseFn)(DWORD);
+    DWORD pal = 0;
+    if (((GetPalFn)(DWORD_PTR)*(DWORD*)(DWORD_PTR)(vtbl + DDS_VTBL_GETPALETTE))(prim0, &pal) != 0 || !pal)
+        return false;
+    DWORD pvt = *(DWORD*)(DWORD_PTR)pal;
+    const long hr = ScReadableAt((void*)(DWORD_PTR)(pvt + DDP_VTBL_GETENTRIES), 4)
+        ? ((GetEntriesFn)(DWORD_PTR)*(DWORD*)(DWORD_PTR)(pvt + DDP_VTBL_GETENTRIES))(pal, 0, 0, 256, out1024)
+        : -1;
+    ((ReleaseFn)(DWORD_PTR)*(DWORD*)(DWORD_PTR)(pvt + DDP_VTBL_RELEASE))(pal);   // GetPalette AddRef'd it
+    return hr == 0;
+}
+
 static LONGLONG QpcNow(void) {
     if (!g_qpf) return 0;
     LARGE_INTEGER v;
