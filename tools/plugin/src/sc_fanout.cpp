@@ -1901,8 +1901,8 @@ int ScFanoutInstall(BYTE* moduleBase, ScMode mode) {
     // half-installed set is never observable.
     if (circles) installed += ScCirclesInstall();
 
-    // The HUD row's one dispatcher detour, same suspension. ScHudRowInstall
-    // returns 0 or 1, like every Sc*Install in this set.
+    // The HUD row's two detours (dispatcher, wireframe draw), same suspension.
+    // ScHudRowInstall returns 0 or 1, like every Sc*Install in this set.
     if (hudrow) installed += ScHudRowInstall();
 
     // A HUD-driver detour plus the queueLayout bracket -- TWO patches inside sc_queueind,

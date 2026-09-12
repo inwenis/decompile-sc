@@ -2676,8 +2676,8 @@ function Send-ScText {
 
 # --- hook-set composition, by NAME rather than a hardcoded total ---------------
 
-# The five hooks sc_fanout.cpp installs unconditionally in fanout mode plus the three
-# optional single-hook features, named exactly as ScHookInstall logs them
+# The five hooks sc_fanout.cpp installs unconditionally in fanout mode plus one hook per
+# optional feature, named exactly as ScHookInstall logs them
 # (sc_circles.cpp:340, sc_hudrow.cpp:828, sc_queueind.cpp:788). Callers pass what the
 # RUN'S OWN `FANOUT config:` line reported, never a source-level default, so this stays
 # right even if a default changes.
@@ -2712,10 +2712,13 @@ function Get-ScSessionExpectedHooks {
 
 # Everything a non-observe run installs, for comparing against the log's own
 # `HOOK <name>: installed at` lines -- which carry every module's, not just sc_fanout's.
+# The HUD row's and the indicator's second hooks are here and not in the fan-out set: each
+# module installs both of its hooks or neither and returns 1, so sc_fanout counts it once.
 function Get-ScPluginExpectedHooks {
     param([bool]$Circles, [bool]$HudRow, [bool]$QueueInd)
     @(Get-ScFanoutExpectedHooks -Circles $Circles -HudRow $HudRow -QueueInd $QueueInd) +
-    @(Get-ScSessionExpectedHooks)
+    @(Get-ScSessionExpectedHooks) + @(if ($HudRow) { 'wireframeDraw' }) +
+    @(if ($QueueInd) { 'queueLayout' })
 }
 
 # A count mismatch names no hook; this returns which names are missing and which

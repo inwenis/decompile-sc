@@ -19,6 +19,8 @@
 
 #include <windows.h>
 
+#include "sc_unit.h"
+
 // GAME THREAD ONLY, except Init/Install/Remove/LogStats: the detour and the button
 // shim run inside the engine's dispatcher and dialog event loop, so the observer
 // thread must not call in. The module writes statUser records and its own globals
@@ -33,9 +35,22 @@
 void ScHudRowInit(BYTE* moduleBase, bool enabled);
 bool ScHudRowEnabled(void);
 
-// Installs the one detour (dispatcher 0x00458120); returns the number installed
-// (0 or 1). Call under the same thread suspension as the other hooks.
+// Installs the dispatcher detour (0x00458120) and the wireframe-draw detour (0x00456F50);
+// returns 1 when both went in, else 0 with its own half rolled back. Call under the same
+// thread suspension as the other hooks.
 int  ScHudRowInstall(void);
+
+// THE ROW'S PICTURES. Each button blits frame `unit type` of grpwire.grp, a 131-frame sheet
+// of the units plus the six Terran buildings that lift off (CC 106, Barracks 111, Factory
+// 113, Starport 114, Science Facility 116, Engineering Bay 122). Every other building id
+// below 131 is a "BLANK" placeholder frame and every id past it draws frame 0, the Marine
+// (SC_VA_WIREFRAME_DRAW). Vanilla never puts a building there; a building group does. For
+// those ids the wireframe draw runs against an all-empty sheet for that one call: border,
+// health colours and click stay the engine's, the slot shows no picture.
+// The detour's body, exposed so the test drives it with a fake button and a fake original.
+void ScHudRowOnWireDraw(DWORD button, DWORD edx, DWORD a, DWORD b, ScCtrlDrawFn orig);
+// The sheet a no-picture id is drawn from, for the test to check its shape.
+const BYTE* ScHudRowEmptySheet(void);
 
 // Best-effort restore of the detour, the 12 wrapped interact pointers and the
 // indicator splice. Mid-game unload stays unsupported (the game thread may be

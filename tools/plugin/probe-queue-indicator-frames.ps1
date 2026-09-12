@@ -333,7 +333,7 @@ try {
                 # failure in either means the world is not as claimed.
                 # slotDiff: slots 0 and 4 hold the same unit type and the same border graphic,
                 # so once the strip has settled every differing byte is this plugin's --
-                #   fixed   tens: the same picture with our "+N" drawn on it;
+                #   fixed   under 200: the same picture with our "+N" badge on its corner;
                 #   defect  hundreds: a different picture entirely (measured: 470).
                 # boxDiff: the indicator's box against the same box with none of our line in it --
                 #   fixed   > 0: the line is on the screen;

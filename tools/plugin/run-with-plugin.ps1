@@ -156,10 +156,10 @@ param(
     [ValidateSet('0', '1')][string]$ProdFan = '0',
     # The QUEUE-OVERFLOW INDICATOR. When a building's logical queue is longer than the
     # five icons of the production strip can draw, the plugin draws the icons the engine
-    # left empty from its OWN overflow and puts a "+N" over the last one; with several
-    # producing buildings selected it says how many of them are queueing. All of it is
-    # ENGINE-DRAWN TEXT through a spliced static-text control -- no art is added
-    # (research/status-pane-text.md). Off by default because it DRAWS: '0' leaves the
+    # left empty from its OWN overflow and puts a "+N" badge on the last one; with several
+    # producing buildings selected it says how many of them are queueing. The text is
+    # ENGINE-DRAWN through a spliced static-text control, on a plain box the plugin paints
+    # -- no art is added (research/status-pane-text.md). Off by default because it DRAWS: '0' leaves the
     # status dialog's child list byte-for-byte stock. Only meaningful in -Mode fanout,
     # and worth little without -ProdQueue 1, which creates the overflow it reports.
     [ValidateSet('0', '1')][string]$QueueIndicator = '0',

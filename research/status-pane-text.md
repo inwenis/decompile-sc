@@ -203,8 +203,9 @@ So the box is sized from the STRING, not from the control it hangs off:
 int want = strlen(text) * SC_QIND_CHAR_W;   // a deliberate OVER-estimate of the advance
 ```
 
-over-reserving costs nothing (the box is a clip rectangle, not a fill) and under-reserving costs
-the tail of the sentence. Where the box may then extend past the control it started on, the
+over-reserving costs a little slack (the group line's box is only a clip rectangle; the `+N`
+badge's box is filled, so it is two frame columns wider than the reservation and no more) and
+under-reserving costs the tail of the sentence. Where the box may then extend past the control it started on, the
 clean-up path has to repaint everything it covered rather than just the anchor.
 
 **The transferable form:** an oracle that proves a thing HAPPENED is not an oracle that proves it
@@ -254,6 +255,15 @@ Keep `ink` on the line; it is corroboration and it is free. Do not assert on it.
 *(DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD) = ind;
 // bounds: at least SC_QIND_BOX_H tall (§5), inside a control the engine repaints
 ```
+
+The `+N` badge points `SC_BINDLG_OFF_UPDATE` at the plugin's own `IndUpdate` instead, and wraps
+the last queue icon's fxnUpdate as well, because the badge drawn only by its own control did
+not survive to the next frame (measured; the cause is not established)
+([`production-queue.md`](production-queue.md), the badge paragraph). Same `__fastcall` shape and
+`RET 8` as the table entries: it paints the badge's box into the render target (`0x006CF4A8`)
+and then hands the text to `defaultUpdateTable[10]` (`0x004EF9C0`, which
+stores justification `0x12`; the glyph loop reads it at `0x00420127` and on `TEST AL,2` at
+`0x00420130` centres the string between the clip box's left and right, `0x006CE0CC`).
 
 Four points that are not obvious and each cost something to learn:
 

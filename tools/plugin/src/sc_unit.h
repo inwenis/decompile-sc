@@ -291,6 +291,10 @@ static inline DWORD ScPortraitUnit(void) { return *(DWORD*)ScRuntimeAddr(SC_VA_A
 // with no engine under it.
 typedef void (*ScCtrlFn)(DWORD ctrl);
 
+// A control's fxnUpdate (+0x2E), in the shape the dialog draw walk calls it at 0x0041C1E5:
+// ECX = the control, EDX, and two stack dwords the handler pops (RET 8).
+typedef void (__attribute__((fastcall)) *ScCtrlDrawFn)(DWORD ctrl, DWORD edx, DWORD a, DWORD b);
+
 static inline void ScCtrlShow(DWORD ctrl) {
     void* fn = ScRuntimeAddr(SC_VA_SHOW_CONTROL);
     __asm__ __volatile__("calll *%[fn]"

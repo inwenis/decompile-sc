@@ -481,11 +481,11 @@ function Invoke-IndicatorEpisode {
     # WHAT IT SAYS -- the content oracle, read out of the live control's own pszText.
     Assert-Inv -Id 'INV-Q' -What "the two states really do carry different strings (`"$($low.Qind.Text)`" vs `"$($high.Qind.Text)`")" `
         -Ok ($low.Qind.Text -ne $high.Qind.Text)
-    # AND THAT THE BOX CAN HOLD IT. Do not assert that a longer string made the box WIDER:
-    # `"+1"` and `"+10"` both measure 28 px, because in STRIP mode PlaceOn CLAMPS the box to
-    # its anchor icon (`b[2] = min(left + want, a[2])`) so our pixels sit inside a control the
-    # engine repaints -- which is what paints them over when the indicator goes away. What
-    # must hold is the other direction: a box narrower than its string is drawn TRUNCATED.
+    # AND THAT THE BOX CAN HOLD IT. Do not assert on the box's exact width: in STRIP mode
+    # PlaceOn anchors the badge to its icon's right edge and CLAMPS it to the icon's width, so
+    # our pixels sit inside a control the engine repaints -- which is what paints them over
+    # when the indicator goes away. What must hold is that a box narrower than its string is
+    # drawn TRUNCATED.
     # Same invariant hooktest asserts offline, checked here against the live control.
     foreach ($state in @(
         [pscustomobject]@{ Name = 'short'; Q = $low.Qind },
