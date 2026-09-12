@@ -620,9 +620,13 @@ mid-game cannot strand paid-for items.
      fields and cleared DISABLED (which is what destroyed the click, §8.6); task 066 replaced
      the hand-fill with the phantom bracket (§8.8), under which the ENGINE's own layout writes
      every field;
-   * a `"+N"` is drawn over the last icon for whatever is queued past those five, as ENGINE-DRAWN
-     TEXT through a spliced static-text control ([`status-pane-text.md`](status-pane-text.md)) —
-     no art added;
+   * a `"+N"` is drawn on the last icon for whatever is queued past those five, as ENGINE-DRAWN
+     TEXT through a spliced static-text control ([`status-pane-text.md`](status-pane-text.md)).
+     It is a BADGE on that icon's top-right corner: the control's own fxnUpdate paints a black
+     box framed in the icon border's colour into the dialog surface, then hands the text to the
+     engine's centre-justified static handler (`0x004EF9C0`). Centred on the icon's art it was
+     hard to read (owner, 2026-09-12). The box stays inside the icon, so the icon's own repaint
+     still erases it;
    * and because a lit icon is a CLICKABLE icon, the cancel side moved with it: §6.4's "payload
      0…4 always passes straight through" is no longer true, and the reason is in §6.4 below.
 

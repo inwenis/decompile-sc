@@ -230,6 +230,33 @@ palette registers `0x0050CE81..0x0050CE9C` (`0x004567C0`, `0x004566B0`, `0x00456
 blits the **`grpwire.grp` frame indexed by `statUser->unitId`** (`0x0068C1FC`, frame count
 guarded by `*grp & 0x7FFF`). Everything it needs is the 8-byte record plus static art.
 
+**The guard's fallback is the Marine.** Read off the listing (objdump of this binary):
+
+```
+00456FB6  MOV EAX,[0x0068C1FC]     ; the sheet
+00456FBB  MOV CX,[EBX+4]           ; statUser->unitId
+00456FC1  MOV DX,[EAX]             ; frame count
+00456FC4  AND EDX,0x7FFF
+00456FCA  CMP CX,DX
+00456FCD  JB  0x00456FD1
+00456FCF  XOR ECX,ECX              ; id >= count -> frame 0
+```
+
+**What the sheet holds.** `grpwire.grp` in `BrooDat.mpq` (and `StarDat.mpq`; `patch_rt.mpq`
+has none) is 131 frames of 32x32, one per unit id 0..130. Rendered frame by frame, the only
+buildings with a picture are the six Terran ones that lift off: Command Center 106,
+Barracks 111, Factory 113, Starport 114, Science Facility 116 and Engineering Bay 122. Every
+other id from 105 to 130 is a placeholder frame reading `BLANK` (and so are the turret and
+missile ids among the units, which are never selected). So a building group shows `BLANK` for
+depots, add-ons and the rest, and every Zerg and Protoss building (ids 131 and up) falls off
+the end and draws the Marine. Vanilla never reaches either case, because it never puts a
+building in this row.
+
+`sc_hudrow` detours the draw (6-byte prologue `55 8B EC 83 EC 18`) and, for an id with no
+picture, points `0x0068C1FC` at a 228-frame sheet of one-pixel transparent frames for that one
+call. The border, the health colours and the click stay the engine's, and the slot shows no
+picture. The owner's rule, 2026-09-12: blank where the picture does not exist.
+
 ## 5. The click path
 
 Button interact `0x004583E0` (listing `work/scratch/hud/binder-listing.tsv`): a switch on

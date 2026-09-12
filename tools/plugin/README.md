@@ -498,7 +498,7 @@ It answers three things the user asked for after playing the deployed build:
 | they said | it now shows |
 |---|---|
 | *"when i queue more then 5 units the 5'th slot is emtpy"* | the icons the engine leaves empty are filled from the plugin's own overflow and lit |
-| *"is the info showing that? (some +x number somewhere in tug?)"* | `+N` over the last icon, for whatever is queued past those five |
+| *"is the info showing that? (some +x number somewhere in tug?)"* | a `+N` badge on the last icon's top-right corner, for whatever is queued past those five |
 | *"queueing upgrades … there is no queue insidcating the queu"* | the held research items as ICONS in queue slots 2..5, the same strip a training building shows; past four held, three icons and a `+N` on the empty fourth |
 
 and one nobody had asked for but task 030 needed: with several producing buildings selected the
