@@ -247,7 +247,7 @@ function Get-ProdStable {
     for ($i = 1; $i -le $Tries; $i++) {
         $p = Get-Prod $Tag
         if (Test-ProdRingsAgree -Prod $p -Units $Units) { return $p }
-        Write-Host "       $Tag: the two ring readers disagree (a promotion between reads); re-reading ($i/$Tries)"
+        Write-Host "       ${Tag}: the two ring readers disagree (a promotion between reads); re-reading ($i/$Tries)"
         Start-Sleep -Milliseconds 700
     }
     $p
@@ -572,7 +572,10 @@ try {
         Send-ScClick -Hwnd $hwnd -X $cx -Y $cy
         Start-Sleep -Seconds 2
 
-        $before = Get-ProdStable -Tag 'cancel-before' -Units @($script:singleUnit)
+        # The sole selected building is not named yet (the line below reads it out of this
+        # very answer), so the agreement check covers the whole group: only the selected
+        # building has a PRODFAN row, so that is the one compared.
+        $before = Get-ProdStable -Tag 'cancel-before' -Units $script:groupUnits
         Assert-That 'exactly one building is selected' ($before.Buildings -eq 1)
         $script:singleUnit = if ($before.Rows.Count -gt 0) { $before.Rows[0].Unit } else { $null }
         Assert-That 'and it is one of the group' `

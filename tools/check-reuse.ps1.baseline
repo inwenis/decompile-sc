@@ -5,12 +5,16 @@ block 185f5b8064b318b9  # 10 identical lines: $left = $null
 block 6a1f26bc71ca3a91  # 10 identical lines: $out.Lit = [int]$s.Groups[13].Value
 block 60934a9b931539fd  # 10 identical lines: $x1 = ($Units | Measure-Object X -Minimum).Minimum - $w.Screen.Left - 
 block edac1afdc714b99d  # 10 identical lines: & (Join-Path $scriptDir 'run-with-plugin.ps1') `
+block 2ab27964e2784fc3  # 10 identical lines: (@($log | Select-String -Pattern 'HOOK btnTrainCondition: installed at
 block b777f11ac58d039f  # 10 identical lines: -BuildingGroups 1 -ProdQueue 0 -ProdFan $prodFan -QueueIndicator 1 `
+block a1436f91570bf41d  # 10 identical lines: -ProdQueue 1 -ProdQueueMax 16 -QueueIndicator 1 `
 block e81e97cc48ca12bc  # 10 identical lines: . (Join-Path $scriptDir 'sc-launch-lock.ps1')
 block 553638cec6156be5  # 10 identical lines: Assert-That 'the game process this probe started is gone' ($KeepOpen -
 block a34791d9899cced8  # 10 identical lines: BuildUnit = $m.Groups[10].Value
+block 916fbeeaf29aa250  # 10 identical lines: Engine = if ($row) { $row.Engine } elseif ($trk) { $trk.Engine } else 
 block 891f5ecc37b63654  # 10 identical lines: Ink = [int]$m.Groups['ink'].Value; RefInk = [int]$m.Groups['refInk'].V
 block 49c9e906f8516223  # 10 identical lines: Set-ScGameType -Hwnd $hwnd -LogPath $logPath -Index 2           # Use 
+block d7291935ce6742e8  # 10 identical lines: Shot 'in-game'
 block 8e5d0985c7ffbcfd  # 10 identical lines: Start-Sleep -Seconds 2
 block 40b8b0635d39b609  # 10 identical lines: [int]$Margin = 24,
 block 9780e3abd90b000c  # 10 identical lines: [string]$ShotDir = 'C:\sc-work\logs\043\probe-frames',
@@ -91,17 +95,13 @@ block a8723cd37ad42e48  # 21 identical lines: }
 block fe1c7b4e9599183f  # 22 identical lines: $obsLog = Get-Content -LiteralPath $o.LogPath
 block 20c31b8c1c40432e  # 22 identical lines: -Mode observe -LogCommands 1 -WorldScan 1 -CardScan 1 `
 block 56537e5f38f45dfa  # 22 identical lines: }
-block 70075c06a668e98c  # 24 identical lines: (@($log | Select-String -Pattern 'HOOK btnTrainCondition: installed at
 block d6d3b2c73c04e0c2  # 24 identical lines: Save-ScWindowImage -Hwnd $script:hwnd -Path (Join-Path $ShotDir ("{0}-
 block a5c93012c0e466d1  # 24 identical lines: [int]$IdleSeconds = 120,
 block ce1830688fbb9860  # 24 identical lines: }
 block 9972b972143b18da  # 25 identical lines: Assert-That 'at least one command id passed through untouched' ($passe
 block 9c18282aa4336681  # 25 identical lines: }
-block d8514ff145a937c3  # 26 identical lines: (@(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'PRODQ: 
 block 89758ae58c9869ef  # 26 identical lines: ,@($Card.Slots | Where-Object { $_.HasButton -and ($_.Action -eq $UPGR
 block 00855d63f8cbd6fd  # 26 identical lines: . (Join-Path $scriptDir 'drive-game.ps1')
-block e60a7e57ef9a3778  # 27 identical lines: (@($log | Select-String -Pattern 'HOOK btnTrainCondition: installed at
-block f0af7ca49e215845  # 27 identical lines: }
 block ad3071a57187aa5a  # 28 identical lines: }
 block b90ec864130999f1  # 29 identical lines: -Mode observe -InjectWindowedHelper WMode `
 block 5902a4bde84ae924  # 29 identical lines: if (-not $gamePid) { throw 'probe: could not parse the game pid from s
@@ -111,10 +111,8 @@ block 352e3a335524d646  # 31 identical lines: -InjectWindowedHelper WMode -NoLau
 block d44c6185faf0ad8e  # 32 identical lines: -Mode observe -LogCommands 1 -WorldScan 1 -CardScan 1 `
 block a2421524e8b79a58  # 32 identical lines: Write-Host ''
 block 05158c8e8c967ec0  # 32 identical lines: try {
-block 4619200df8f7b0eb  # 35 identical lines: -ProdQueue 1 -ProdQueueMax 16 -QueueIndicator 1 `
 block 7bf8a724736d2023  # 36 identical lines: }
 block 5d358f10be3a92ac  # 37 identical lines: }
-block c099816363774559  # 39 identical lines: }
 block 1cb9a496c3229b8b  # 44 identical lines: }
 block 6f5175676d0c17f9  # 53 identical lines: }
 block ed62c39016f30308  # 58 identical lines: -Mode fanout -Circles 1 -HudRow 0 -WorldScan 1 -BuildingGroups $groups
@@ -184,7 +182,6 @@ block bd607dc0adef7872  # 8 identical lines: . (Join-Path $scriptDir 'drive-game
 block b169254cdfdb48eb  # 8 identical lines: @{ Rects = $rects; Line = $line }
 block ca58e8917595cb1b  # 8 identical lines: Assert-That "$What`: all $($State.Live) are $ExpectedType" $ok "(got $
 block c3e33152c31ddfb2  # 8 identical lines: Energy = [int]$m.Groups[10].Value
-block 5442be84f10a60df  # 8 identical lines: Engine = if ($row) { $row.Engine } elseif ($trk) { $trk.Engine } else 
 block 6a779eab59863ac5  # 8 identical lines: Get-ScWorldState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -
 block d2cf0cd5ac458f3e  # 8 identical lines: New-Item -ItemType Directory -Path (Split-Path $LogPath -Parent) -Forc
 block 14367aa706ca2db4  # 8 identical lines: Send-ScClick -Hwnd $h -X 544 -Y 387
