@@ -985,7 +985,10 @@ A test run puts **nothing** on the monitor. The suite is started as a child proc
 born on a Windows **desktop object** that is never switched to (`CreateDesktop`,
 built into Windows — no VM, no second user account, nothing installed, nothing left
 behind), and `run-with-plugin.ps1` then hands that desktop's name to
-`scinject.exe --desktop` so the game is born there too.
+`scinject.exe --desktop` so the game is born there too. The same flag turns off Windows'
+crash box for that game (`SEM_NOGPFAULTERRORBOX`, inherited): a box from a hidden game is
+drawn on the visible desktop, where nothing in the run can answer it. A crash ends the game
+quietly instead, and StarCraft's `Errors\*.ERR` still records it.
 
 ```powershell
 # the normal way to run a suite: invisible

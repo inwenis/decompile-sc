@@ -219,6 +219,12 @@ int main(int argc, char** argv) {
     ZeroMemory(&si, sizeof(si)); si.cb = sizeof(si);
     ZeroMemory(&pi, sizeof(pi));
     if (desktopName) si.lpDesktop = (char*)desktopName;
+    // A crash box raised by a game on an invisible desktop is drawn on the VISIBLE one, in
+    // front of the user, and nothing in the run can answer it. The game inherits this
+    // error mode, and the caller's own depends on how it was started (0x8003 under Claude
+    // Code, 0 under Start-Process), so an off-screen launch sets it. A crash then ends the
+    // game quietly; StarCraft's Errors\*.ERR still records it.
+    if (desktopName) SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
 
     // CREATE_SUSPENDED always, for two reasons: the pid is known before a single
     // instruction runs, and it is the only window in which --early-dll injection
