@@ -61,6 +61,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# $env:AGENT_TASK keys the launch lock, the foreground hand-back and the per-run fixture
+# folder (run-with-plugin.ps1, Resolve-ScFixtureDir); left empty, all three switch off
+# without a word.
+if ($env:AGENT_TASK -notmatch '^\s*\d') {
+    throw "run-offscreen: set `$env:AGENT_TASK to your PR or issue number first (e.g. `$env:AGENT_TASK = '125'). Without it the run takes no launch lock and shares a fixture folder with other runs."
+}
 $scriptDir = $PSScriptRoot
 . (Join-Path $scriptDir 'sc-desktop.ps1')
 

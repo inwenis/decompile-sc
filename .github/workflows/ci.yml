@@ -140,6 +140,7 @@ jobs:
           # runs the checker's own negative control first, so a checker that stopped
           # matching anything cannot pass this step by finding nothing.
           python tools/check-comment-narration.py --selftest
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tools/check-comment-narration.py
           exit $LASTEXITCODE
 
