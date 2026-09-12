@@ -48,9 +48,9 @@ Commands (all output is `key=value` lines, one per metric, like frame-diff.py):
   selftest
           (synthetic frames through diffbox and unmarked-diff; exit 1 when a detector lies)
 
-Hard rule 1: dumps and rendered PNGs reproduce game artwork. They live on the
-gitignored diagnostic path and are never committed; what this tool PRINTS is
-counts, fractions and indices, which reproduce nothing.
+Hard rule 1: dumps and rendered PNGs live on the gitignored diagnostic path and a
+dump is never committed; what this tool PRINTS is counts, fractions and indices,
+which reproduce nothing.
 """
 import argparse
 import json

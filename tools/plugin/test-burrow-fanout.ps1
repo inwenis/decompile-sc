@@ -28,8 +28,7 @@ Driving recipe as in test-fanout-orders.ps1 (research/automated-testing-options.
 posted Win32 messages in client coordinates, no synthetic OS input, focus not required,
 window must not be minimised.
 
-Frames are a DIAGNOSTIC only and land outside the repo -- they reproduce game artwork and
-must never be committed.
+Frames are a DIAGNOSTIC only and land outside the repo.
 
 .EXAMPLE
 ./tools/plugin/test-burrow-fanout.ps1

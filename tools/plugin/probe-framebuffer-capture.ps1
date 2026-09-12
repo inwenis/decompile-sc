@@ -21,8 +21,8 @@ full-width geometry is read, not just more bytes.
 
 Read-only toward the game in the stock arm (-Mode observe); the wide arms patch
 geometry in-process as test-widescreen.ps1 does, leaving StarCraft.exe on disk
-untouched. Dumps and PNGs reproduce game artwork: they stay on the gitignored
-diagnostic path and are never committed (AGENTS.md § "Hard rules").
+untouched. Dumps and PNGs stay on the gitignored diagnostic path; a dump is never
+committed (AGENTS.md § "Hard rules").
 
 .EXAMPLE
 ./tools/plugin/probe-framebuffer-capture.ps1

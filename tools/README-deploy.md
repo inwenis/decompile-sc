@@ -243,10 +243,9 @@ This replaced an earlier registry-based approach (`HKCU:\SOFTWARE\Blizzard
 Entertainment\Starcraft` `music`/`sfx`, save-before/restore-after) that wiped a real
 user's entire StarCraft settings key on its first live run via an unguarded `New-Item
 -Force` against an already-existing key -- see `run-with-plugin.ps1`'s "Sound" section for
-the full incident writeup. `config/guard-destructive.ps1` now hard-denies writes to that
-registry key (and its parent, and common aliases/the .NET Registry API/`regedit /s`) from
-any worker, and AGENTS.md carries a standing rule against writing live user state outside
-the repo/working copy as a direct result.
+the full incident writeup. AGENTS.md hard rule 5 governs live user state as a direct
+result: that key is written only between `tools/sc-registry-baseline.ps1 -Save` and
+`-Restore`.
 
 ## Re-deploy
 
@@ -331,11 +330,6 @@ pwsh -File 'C:\git\decompile-sc\tools\plugin\close-game.ps1'
   launch through the actual script showing acquire -> launch -> release. Also verified
   `-NoLaunchLock` and the absence of `$env:AGENT_TASK` each independently skip the lock
   entirely.
-- Guard hook: unit-tested the updated regex directly (via a throwaway script file, to
-  route around the hook's own quoted-text false-positive class -- see
-  `config/guard-destructive.ps1`'s own residual-limits comment) -- read-only queries pass,
-  parent-key deletion/PowerShell aliases (`ri`/`sp`)/the .NET Registry API are now all
-  correctly blocked.
 
 ### Known limitation: the running-game guard checks by name, not by path
 

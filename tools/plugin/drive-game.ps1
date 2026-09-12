@@ -5,8 +5,8 @@ Drive a running StarCraft 1.16.1 window with POSTED Win32 messages, and read fra
 out of it. Dot-source it; every function is a primitive, nothing here runs on import.
 
 .DESCRIPTION
-Posted messages, never synthetic input: `SendInput`/`SendKeys` are BANNED by
-config/guard-destructive.ps1, and this binary imports no DirectInput, never calls
+Posted messages, never synthetic input (`SendInput`/`SendKeys` drive the user's real
+mouse and keyboard): this binary imports no DirectInput, never calls
 `GetAsyncKeyState`, and takes the pointer position from the message's own `lParam`
 (research/pe-anatomy.md § Imports). Every coordinate here is therefore a CLIENT
 coordinate, independent of window position, DPI, monitor and foreground.

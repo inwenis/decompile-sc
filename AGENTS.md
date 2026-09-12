@@ -22,14 +22,14 @@ Archived incident narratives live in `research/rulebook-history.md` (old heading
 3. Offline and single-player only: NEVER open Multiplayer (Battle.net, any gateway, LAN); menu walks click Single Player only.
 4. Every claimed address, offset or struct in `research/` carries how it was found AND how it was verified. No guessed offsets.
 5. NEVER write live user state outside the repo and the working copy: registry, `%APPDATA%`, Documents, the desktop.
-   - Exception: the game's own settings, `HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft`. Write them when that makes development simpler, then put them back with `./tools/sc-registry-baseline.ps1 -Restore`. NEVER touch its sibling keys: they hold the Battle.net app's login.
+   - Exception: the game's own settings, `HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft`, when that makes development simpler: `./tools/sc-registry-baseline.ps1 -Save` right before you write, `-Restore` when done. NEVER touch its sibling keys: they hold the Battle.net app's login.
    - DO prove any state-touching mechanism against a throwaway key or path first; prefer a process-scoped mechanism over persistent user state whenever both work.
    - Deployment targets the user chose (the deploy dir, a desktop shortcut) are written too, never destructively (`deploy.ps1` excludes and tripwires player data).
 -> research/rulebook-history.md § "Project hard rules"; tools/deploy.ps1
 
 ## Before any suite run: arm `$env:AGENT_TASK`
 
-`run-offscreen.ps1` refuses to start without it (your PR or issue digits, e.g. `$env:AGENT_TASK = '125'`).
+`run-offscreen.ps1` and `prime-game-type.ps1` refuse to start without it (your PR or issue digits, e.g. `$env:AGENT_TASK = '125'`).
 
 ## Running a suite
 
@@ -47,7 +47,7 @@ Archived incident narratives live in `research/rulebook-history.md` (old heading
 ## Foreground
 
 Posted moves, clicks, drags and keys need no foreground. The one exception is `Send-ScDropdownPick` (the combo `SetCapture`s), which borrows it for one pick and hands it back, as `run-with-plugin.ps1` does after launch.
-- NEVER raise or activate the game window to deliver input or to fix a flaky one: activation re-syncs the game cursor to the physical mouse and `ClipCursor`s the user's mouse. Off-screen a raise throws; on a `-Visible` run nothing stops it.
+- NEVER raise or activate the game window to deliver input or to fix a flaky one: activation re-syncs the game cursor to the physical mouse and `ClipCursor`s the user's mouse. Off-screen a raise cannot succeed; on a `-Visible` run nothing stops it.
 - NEVER pass `-RaiseWindow`, set `$env:SCDRIVE_RAISE=1` or call `Set-ScWindowActive` from a suite or probe: they are for a human watching, and `SCDRIVE_RAISE` also switches off the launch hand-back.
 - Leave `run-with-plugin.ps1`'s launch foreground hand-back in place: off-screen it only logs 'no foreground window to record', but it protects `-Visible` runs.
 - NEVER claim a run did not steal focus without `tools/plugin/watch-foreground.ps1` running beside it. A correct off-screen run shows no game foreground; a correct `-Visible` run shows one borrow-and-return pair for the launch (~4 s) plus one per Game Type pick; anything else is a bug.
@@ -177,7 +177,7 @@ Fixture ownership is code: copy `test-burrow-fanout.ps1`'s recipe (`Resolve-ScFi
 ## Diagnostics and reporting
 
 **Diagnostic lines are under the same rule as assertions: a wrong number in a log is worse than none, because you will reason from it.**
-- A count you print must be a count something incremented, never a constant (the build's `-Werror=format` catches a missing argument everywhere except `DlgAppend`).
+- A count you print must be a count something incremented, never a constant (the build's `-Wall -Werror` rejects a missing format argument everywhere except `DlgAppend`).
 - DO count every exit term of a gate and print them together, so "it refused" names the test that refused and "holding nothing" is distinguishable from "was never handed anything" (`trainSeen`/`trainNoUnit` in `PRODQSTATS`).
 - DO log function entry as well as outcome at least once, so "no log line appeared" is distinguishable from "the function returned false".
   -> research/rulebook-history.md § "Your DIAGNOSTICS are under the same rule as your assertions"; research/production-queue.md §10.4
@@ -213,7 +213,7 @@ Fixture ownership is code: copy `test-burrow-fanout.ps1`'s recipe (`Resolve-ScFi
 
 ## Conventions
 
-- PowerShell 7 (`#Requires -Version 7`) for every script except `play.ps1`, which must stay Windows PowerShell 5.1 (the README one-liner runs it under `powershell`); run scripts via the PowerShell tool, never Bash.
+- PowerShell 7 (`#Requires -Version 7` on every entry script) except `play.ps1`, which must stay Windows PowerShell 5.1 (the README one-liner runs it under `powershell`); run scripts via the PowerShell tool, never Bash.
 - NEVER point anything persistent (launcher, shortcut, scheduled task, env var) at a `C:/git/wt/...` path: worktrees are disposable and pruned after merge.
 - NEVER name a new AGENTS.md heading after a `research/rulebook-history.md` heading unless it carries that same rule: old `AGENTS.md § "..."` citations resolve there.
 

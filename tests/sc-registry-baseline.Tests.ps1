@@ -7,25 +7,24 @@ whatever a run added behind.
 
 BeforeAll {
     $script:tool = Join-Path $PSScriptRoot '..' 'tools' 'sc-registry-baseline.ps1'
-    $script:root = 'HKCU\SOFTWARE\decompile-sc-pester'
-    $script:key  = "$root\$([Guid]::NewGuid().ToString('n'))"
+    $script:key  = "HKCU\SOFTWARE\decompile-sc-pester-$([Guid]::NewGuid().ToString('n'))"
     $script:ps   = "Registry::$($key -replace '^HKCU\\', 'HKEY_CURRENT_USER\')"
     & reg.exe add $key /v A /t REG_DWORD /d 1 /f | Out-Null
     & reg.exe add "$key\Sub" /v C /t REG_SZ /d keep /f | Out-Null
 }
 
-AfterAll { & reg.exe delete $root /f 2>&1 | Out-Null }
+AfterAll { & reg.exe delete $key /f 2>&1 | Out-Null }
 
 Describe 'sc-registry-baseline' {
     It 'refuses to restore before a baseline exists, and leaves the key alone' {
-        { & $tool -Restore -Key $key -Dir (Join-Path $TestDrive 'none') } | Should -Throw -ExpectedMessage '*run -Save first*'
+        { & $tool -Restore -Key $key -Dir (Join-Path $TestDrive 'none') } | Should -Throw -ExpectedMessage '*-Save goes BEFORE a write*'
         (Get-ItemProperty $ps).A | Should -Be 1
     }
 
-    It 'saves once and refuses to overwrite without -Force' {
+    It 'saves the current state and keeps a timestamped copy' {
         & $tool -Save -Key $key -Dir $TestDrive
         Join-Path $TestDrive 'baseline.reg' | Should -Exist
-        { & $tool -Save -Key $key -Dir $TestDrive } | Should -Throw -ExpectedMessage '*already exists*'
+        @(Get-ChildItem $TestDrive -Filter 'saved-*.reg').Count | Should -Be 1
     }
 
     It 'restores exactly: changed value back, added value gone, deleted subkey back' {

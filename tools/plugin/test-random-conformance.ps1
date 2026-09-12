@@ -57,8 +57,7 @@ with its coverage: which invariants were asserted and how often the seam was rea
 param(
     [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
     [string]$LogPath = 'C:\sc-work\logs\041\random-conformance.log',
-    # Frames are named for the state they show. They never enter the repo or a PR (a game
-    # frame reproduces game artwork, hard rule 1): what ships is the PATH, and the read-back
+    # Frames are named for the state they show and written outside the repo; the read-back
     # stays the oracle.
     [string]$ShotDir = 'C:\sc-work\logs\041-frames',
     [string]$FixtureDir,
@@ -573,7 +572,7 @@ $runStart = Get-Date
 
 # A frame of whatever is on screen, named for the STATE it shows rather than its position in
 # the run: `frame-007.png` is not a thing anyone can ask for. The path is PRINTED because the
-# frame can never leave this machine (hard rule 1), so the path is the whole deliverable.
+# frame lives outside the repo.
 function Shot([string]$tag) {
     if ($script:hwnd -eq [IntPtr]::Zero) { return $null }
     $script:shotN++
