@@ -622,11 +622,24 @@ mid-game cannot strand paid-for items.
      every field;
    * a `"+N"` is drawn on the last icon for whatever is queued past those five, as ENGINE-DRAWN
      TEXT through a spliced static-text control ([`status-pane-text.md`](status-pane-text.md)).
-     It is a BADGE on that icon's top-right corner: the control's own fxnUpdate paints a black
-     box framed in the icon border's colour into the dialog surface, then hands the text to the
-     engine's centre-justified static handler (`0x004EF9C0`). Centred on the icon's art it was
-     hard to read (owner, 2026-09-12). The box stays inside the icon, so the icon's own repaint
-     still erases it;
+     It is a BADGE on that icon's top-right corner: a box in the pane's own black, framed in the
+     icon's border blue (both palette indices read off the dialog surface), with the text handed
+     to the engine's centre-justified static handler (`0x004EF9C0`). Centred on the icon's art
+     it was hard to read (owner, 2026-09-12). The box stays inside the icon, so the icon's own
+     repaint still erases it when the count goes away.
+
+     **Where it is painted matters more than what.** Measured, painted only from its own
+     control: the badge's fxnUpdate ran at the frame rate and the fill landed (read back right
+     after it), yet by the next frame the surface held the icon's own pixels there again
+     (corner back to the `0xA0` border) and the captured frame was identical to one with no
+     badge. The old centred text, lower in the same icon, always survived. Hypothesis, not
+     logged: the progress bar (control 7, dialog rect `(144,39,250,47)`) redraws every frame
+     and `updateControl` snaps its dirty rect out to the 16-pixel grid (`0x0041C200`), a band
+     that takes in the icons' top rows (to dialog row 60) but not the rows the old text used.
+     Either way the answer does not depend on it: the last icon's own fxnUpdate is wrapped (a
+     data write, like the interacts), the engine draws the icon, and the badge is painted over
+     it in the same pass -- measured on screen at `+11`, `+9` and gone. Palette index 0 is not
+     the pane's black: the pane holds it in 12 of its 24840 bytes (`surfInk=24828`);
    * and because a lit icon is a CLICKABLE icon, the cancel side moved with it: §6.4's "payload
      0…4 always passes straight through" is no longer true, and the reason is in §6.4 below.
 

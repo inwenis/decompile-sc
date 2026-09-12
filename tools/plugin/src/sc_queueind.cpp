@@ -64,6 +64,8 @@ static void __attribute__((fastcall)) SC_GAME_ENTRY IndUpdate(DWORD ctrl, DWORD 
                                                              DWORD a, DWORD b);
 static DWORD g_textUpdate  = 0;   // the engine's type-9 (left) handler
 static DWORD g_textCentred = 0;   // its type-10 (centre) handler, or type 9's if it has none
+static DWORD g_iconDrawFn  = 0;   // the engine's own fxnUpdate for the last icon (see QIndIconDrawShim)
+static DWORD g_iconDrawCtl = 0;   // the control whose +0x2E points at the shim
 static bool  g_dialogLogged = false;
 static bool  g_bandLogged   = false;  // "the band is too small" said once per dialog
 
@@ -144,6 +146,7 @@ static void QIndSessionSync(void) {
     g_dialogLogged = false;
     g_bandLogged   = false;
     g_iconsN       = 0;
+    g_iconDrawCtl  = 0;
     g_baseValid    = false;
     g_baseRect[0] = g_baseRect[1] = g_baseRect[2] = g_baseRect[3] = 0;
     ForgetUpgradeIcons();
@@ -715,15 +718,12 @@ void ScQueueIndFillBadge(DWORD ctrl, DWORD surface) {
     }
 }
 
-// THE BADGE RIDES ON THE LAST ICON'S OWN DRAW. The progress bar beside it redraws every frame,
-// and its dirty block (snapped to the 16-pixel grid) takes in the icons' top rows: a badge drawn
-// only by its own control was painted every frame and was gone from the surface by the next
-// one, never reaching the screen (measured, both). So that icon's fxnUpdate is wrapped the way
-// the interacts are -- a data write, no code patched -- and the badge is painted right after
-// the engine draws the icon, in the same pass, whatever dirtied it.
-static DWORD g_iconDrawFn  = 0;   // the engine's own fxnUpdate for the last icon
-static DWORD g_iconDrawCtl = 0;   // the control whose +0x2E points at the shim
-
+// THE BADGE RIDES ON THE LAST ICON'S OWN DRAW. Drawn only by its own control, the badge was
+// painted every frame and gone from the surface by the next, never reaching the screen (both
+// measured; the likely eraser is the progress bar's per-frame dirty band over the icons' top
+// rows, research/production-queue.md). So that icon's fxnUpdate is wrapped the way the
+// interacts are -- a data write, no code patched -- and the badge is painted right after the
+// engine draws the icon, in the same pass, whatever dirtied it.
 static void __attribute__((fastcall)) SC_GAME_ENTRY QIndIconDrawShim(DWORD ctrl, DWORD edx,
                                                                     DWORD a, DWORD b) {
     ((ScCtrlDrawFn)g_iconDrawFn)(ctrl, edx, a, b);
@@ -833,19 +833,24 @@ static void PublishOwnedIcons(DWORD root, const ScQueueIndView* v, DWORD unit) {
     g_ownedIconN = ownedN;
 }
 
-// The snapshot, taken after every fill, by the thread that did it.
+// The snapshot, taken after every fill, by the thread that did it, and published whole: the
+// observer thread logs it between frames, and a count reset to 0 while the walk refilled it
+// read back as a two-icon strip (measured, `icons=[..,..] engineLen=4` on a five-lit pane).
 static void SnapshotIcons(DWORD root) {
-    g_iconsN = 0;
+    QIconSnap snap[SC_STATQ_SLOTS];
+    int n = 0;
     DWORD sc = ScDlgFindChild(root, SC_STATQ_FIRST_CONTROL);
     for (int k = 0; k < SC_STATQ_SLOTS && sc; ++k, sc = ScDlgNext(sc)) {
         DWORD su = *(DWORD*)(sc + SC_BINDLG_OFF_USER);
-        QIconSnap* q = &g_icons[g_iconsN++];
+        QIconSnap* q = &snap[n++];
         q->flags = *(DWORD*)(sc + SC_BINDLG_OFF_FLAGS);
         q->icon  = su ? *(short*)(su + SC_STATUSER_OFF_ICON) : -1;
         q->mode  = su ? *(WORD*) (su + SC_STATUSER_OFF_MODE) : 0;
         q->grp   = su ? *(DWORD*)(su + SC_STATUSER_OFF_GRP)  : 0;
         q->text  = *(DWORD*)(sc + SC_BINDLG_OFF_TEXT);
     }
+    memcpy(g_icons, snap, sizeof(snap[0]) * (size_t)n);
+    g_iconsN = n;
 }
 
 // ---------------------------------------------------------------------------

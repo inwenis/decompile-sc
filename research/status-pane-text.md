@@ -256,9 +256,12 @@ Keep `ink` on the line; it is corroboration and it is free. Do not assert on it.
 // bounds: at least SC_QIND_BOX_H tall (§5), inside a control the engine repaints
 ```
 
-The `+N` badge points `SC_BINDLG_OFF_UPDATE` at the plugin's own `IndUpdate` instead: same
-`__fastcall` shape and `RET 8` as the table entries, it paints the badge's box into the render
-target (`0x006CF4A8`) and then hands the text to `defaultUpdateTable[10]` (`0x004EF9C0`, which
+The `+N` badge points `SC_BINDLG_OFF_UPDATE` at the plugin's own `IndUpdate` instead, and wraps
+the last queue icon's fxnUpdate as well, because a control's pixels inside the progress bar's
+per-frame dirty band do not survive being drawn only by that control
+([`production-queue.md`](production-queue.md), the badge paragraph). Same `__fastcall` shape and
+`RET 8` as the table entries: it paints the badge's box into the render target (`0x006CF4A8`)
+and then hands the text to `defaultUpdateTable[10]` (`0x004EF9C0`, which
 stores justification `0x12`; the glyph loop reads it at `0x00420127` and on `TEST AL,2` at
 `0x00420130` centres the string between the clip box's left and right, `0x006CE0CC`).
 
