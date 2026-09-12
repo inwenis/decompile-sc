@@ -18,6 +18,7 @@
 #include "sc_ledger.h"
 #include "sc_log.h"
 #include "sc_prodqueue.h"
+#include "sc_upgrades.h"
 #include "sc_queueind.h"   // ScQueueIndRingGen -- the phantom window's seqlock
 #include "sc_session.h"
 #include "sc_unit.h"
@@ -357,13 +358,17 @@ bool ScProdQueueOnCancel(DWORD unit, unsigned payload) {
                       (unsigned)unit, payload, idx, (unsigned)type, r->count,
                       (unsigned)MineralCost(type), (unsigned)GasCost(type));
                 if (r->count == 0) ScLedgerDropAt(g_rec, &g_recCount, (int)(r - g_rec));
+            } else if (payload >= 1 && ScUpgQueueCancelAt(unit, (int)payload - 1)) {
+                // A researching building's strip: the queue indicator draws held research
+                // into icons 3..6 (display 1..4), so display k is held item k-1. The
+                // engine's own icon (id 15) sits at display 0 and cancels through 0x33/0x31.
             } else {
                 // Nothing behind that icon -- it drained between the draw and the click.
-                // SWALLOW rather than pass through: the engine's handler would refund an
-                // EMPTY ring slot, with the player's minerals on the other side of the call.
+                // SWALLOWED, which changes nothing: cancelBuildQueueSlot (0x00466A70)
+                // returns without touching anything for a slot holding 0xE4.
                 ScLog("PRODQEV cancel-icon unit=0x%08X display=%u names an empty ring slot "
-                      "(engineLen=%d overflow=%d) -- swallowed, the engine is not asked to "
-                      "refund 0xE4", (unsigned)unit, payload, engineLen, r ? r->count : 0);
+                      "(engineLen=%d overflow=%d) -- swallowed", (unsigned)unit, payload,
+                      engineLen, r ? r->count : 0);
             }
             consumed = true;
         }

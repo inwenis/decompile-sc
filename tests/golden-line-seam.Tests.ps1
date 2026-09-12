@@ -101,8 +101,8 @@ this file's own copy of a regex cannot keep passing while the shipped one it sta
             Parsers = @(
                 # Same tolerant gap as the PRODQ summary above: if this regex misses, the
                 # suite's `RefusedFull -eq 0` assertion reads a zeroed field and is vacuous.
-                @{ Suite = 'test-upgrade-queue.ps1'; SuiteLine = 220; Groups = 11; ExpectMatch = $true
-                   Fragments = @('buildings=(\d+) max=(\d+) queued=(\d+) promoted=(\d+) cancelled=(\d+) dropped=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+) refusedGate=(\d+) waitingCost=(\d+) unblocked=(\d+) unblockedLevel=(\d+)') }
+                @{ Suite = 'test-upgrade-queue.ps1'; SuiteLine = 220; Groups = 12; ExpectMatch = $true
+                   Fragments = @('buildings=(\d+) max=(\d+) queued=(\d+) promoted=(\d+) cancelled=(\d+) dropped=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+) refusedGate=(\d+) waitingCost=(\d+) unblocked=(\d+) hiddenHeld=(\d+) refusedDup=(\d+)') }
             )
         }
         @{

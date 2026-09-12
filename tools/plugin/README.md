@@ -498,7 +498,7 @@ It answers three things the user asked for after playing the deployed build:
 |---|---|
 | *"when i queue more then 5 units the 5'th slot is emtpy"* | the icons the engine leaves empty are filled from the plugin's own overflow and lit |
 | *"is the info showing that? (some +x number somewhere in tug?)"* | `+N` over the last icon, for whatever is queued past those five |
-| *"queueing upgrades … there is no queue insidcating the queu"* | `+N upg` for a building with queued research, which has no icons at all |
+| *"queueing upgrades … there is no queue insidcating the queu"* | the held research items as ICONS in queue slots 2..5, the same strip a training building shows; past four held, three icons and a `+N` on the empty fourth |
 
 and one nobody had asked for but task 030 needed: with several producing buildings selected the
 strip is not drawn at all, so it says `N bldgs  M queued` — the only thing on screen that says a
@@ -513,9 +513,22 @@ already been laid out. Off → the dialog's child list is byte-for-byte stock.
 
 **The cancel rule that comes with it.** A lit icon is a clickable icon, and clicking icon *k*
 makes the engine call `cancelBuildQueueSlot(k)`. When the ring slot behind that icon is empty the
-engine would refund by the sentinel type `0xE4`, reading both cost tables out of bounds — so the
-plugin takes any such click itself and cancels the item it actually holds. Vanilla cannot produce
-that click (an empty slot's icon is drawn disabled), so a stock game is unchanged.
+engine does nothing at all (`0x00466A70` returns on `0xE4` before it refunds or compacts), so the
+plugin takes any such click itself and cancels the item it actually holds: a queued unit past the
+ring, or a held research item. Vanilla cannot produce that click (an empty slot's icon is drawn
+disabled), so a stock game is unchanged.
+
+**Held research as icons.** A researching building's pane is laid out by the engine's two
+research layouts (`0x00426500` upgrade, `0x004266F0` tech), which draw the RUNNING item into
+their own icon (control id 15, where slot 0 sits, with the progress bar) and leave queue icons
+3..6 hidden; they touch those only through the hide-all sweep that runs when the pane's layout
+kind byte (`0x0068C1E5`: 7 tech, 8 upgrade) changes. So after the driver the plugin fills icons
+3..6 with the held items exactly as the research layout fills id 15 — `grp` = cmdicons, frame
+from `upgrades.dat`/`techdata.dat`'s icon table (`0x00655AC0` / `0x00656430`), mode 5 / 4, type
+= the id, the slot label — and shows them through the engine's own `showControl`. The engine's
+icon handler draws them, its hit test takes the click, and `{0x20, k}` routes to
+`ScUpgQueueCancelAt(k-1)`. Only in a research layout: any other layout owns those icons itself.
+Evidence in [`research/upgrade-queue.md`](../../research/upgrade-queue.md) §10.
 
 ### Known limitations
 
@@ -524,7 +537,8 @@ that click (an empty slot's icon is drawn disabled), so a stock game is unchange
 | The strip still stops at five icons | past that it is a number, not a picture. Widening the strip means inventing control positions over Blizzard art, which the game-file rules forbid |
 | The `+N` overlays the last icon | there is no free margin in the status pane's 269×91 — the live bounds are tabulated in `research/status-pane-text.md` §8 |
 | While the unit row is PAGING, the strip indicator stands down | one indicator at a time; `sc_hudrow`'s own `page i/j` owns that corner then |
-| Upgrades are a count, not a list | it says how many are queued, not which — the card still lights an already-queued upgrade. Marking those is a card change, not a status-pane one |
+| Held research past four is a count | four small icons is what the strip has; the fifth and later say `+N`, tail-first cancel through the card still reaches them |
+| Held research waiting for money shows nothing | a building that went idle with items held (the player cannot pay yet) is in the idle layout, which owns the strip; the icons return when the next item starts |
 
 ---
 
@@ -566,11 +580,12 @@ line are asserted flat ZERO by both suites.
 condition tells the truth, the layout hides the button, and the client refuses on its own —
 measured in game as three presses producing zero commands.
 
-**Levels stack, scoped.** Weapons 2 can be queued behind Weapons 1, by also suppressing the
-per-player in-progress bit at `0x0058F3E0` — but ONLY for the building whose own `0xC9`
-already holds that id. That is the condition a second building cannot satisfy, so two
-buildings still cannot research the same upgrade, which matters: they would both pay and only
-one level would land.
+**One entry per research per building.** An id the building already holds is hidden on
+the card (the condition answers 0, vanilla's own answer for the running item) and refused on
+the wire (`UPGQEV refuse-dup`); the running one is hidden by the engine's own in-progress
+bit, which the plugin leaves alone. So a press queues an upgrade once and its button goes
+away until it has started and finished. Levels do not stack: Weapons 2 is queued after
+Weapons 1 has completed, as in vanilla.
 
 `-UpgradeQueueMax N` sets the total logical length, the engine's ONE included; default 8,
 clamped `[1, 16]`. Env: `%SCPLUGIN_UPGQ%`, `%SCPLUGIN_UPGQ_MAX%`.

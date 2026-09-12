@@ -1,15 +1,15 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Queues 2+ upgrades at a real building and reads back whether the QUEUE INDICATOR
-(sc_queueind.cpp, SC_QIND_UPGRADE) shows it -- from the in-process oracle AND a real frame.
+Queues 2+ upgrades at a real building and reads back whether the held items show up as
+QUEUE ICONS (sc_queueind.cpp) -- from the engine's own strip controls, then a click on one.
 
 .DESCRIPTION
-QIND reports the module's own state, and that state can be entirely truthful about a string
-no player can read: `mode=3 text="+2 upg" ink>0` says nothing about paint order or about the
-art the text lands on, which is what decides whether it reaches the glass legibly. So the
-frame `-CaptureFrames` captures is what settles this probe, not the log line
-(AGENTS.md § "Oracles: what counts as a read-back").
+The oracle is the STATQ walk (Get-ScStatusQueue): the five queue icons' visible bit,
+statUser frame/mode/type, read out of the statdata dialog the engine draws from, never the
+indicator module's own bookkeeping. A click on the first held item's icon goes through the
+engine's own activate ({0x20, 1}) and must drop exactly that item. The frame
+`-CaptureFrames` captures is for a human to look at (AGENTS.md § "Screenshots").
 
 .EXAMPLE
 ./tools/plugin/probe-upgrade-queue-indicator.ps1 -UnitType engineering-bay -CaptureFrames
@@ -111,6 +111,12 @@ function Get-QInd {
     throw "probe: no QIND answer for marker '$label' within ${TimeoutSec}s (log: $LogPath)."
 }
 
+function Get-Strip { param([string]$Tag)
+    Get-ScStatusQueue -LogPath $LogPath -Tag "st-$Tag" -MarkerPath $markerPath -TimeoutSec 20 }
+function Show-Strip { param($St, [string]$Tag)
+    Write-Host ("       STATQ ${Tag}: " + (@($St.Slots | ForEach-Object { 'disp={0} {1} uicon=0x{2:X} umode={3} utype=0x{4:X}' -f $_.Display, $_.State, $_.UIcon, $_.UMode, $_.UType }) -join ' | '))
+}
+
 function Get-ResearchSlots {
     param($Card)
     ,@($Card.Slots | Where-Object { $_.HasButton -and ($_.Action -eq $UPGRADE_ACTION.ToUpperInvariant() -or $_.Action -eq $TECH_ACTION.ToUpperInvariant()) })
@@ -150,7 +156,7 @@ try {
     $launchLock = Enter-ScLaunchLock -TaskId "037-qind-$UnitType"
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
         -Mode hooktest -LogCommands 1 -Circles 0 -HudRow 0 -WorldScan 1 -CardScan 1 `
-        -UpgradeQueue 1 -UpgradeQueueMax 8 -QueueIndicator 1 `
+        -ProdQueue 1 -UpgradeQueue 1 -UpgradeQueueMax 8 -QueueIndicator 1 `
         -InjectWindowedHelper WMode -NoLaunchLock -BuildDir $BuildDir `
         -GameDir $GameDir -LogPath $LogPath 6>&1 | ForEach-Object {
         Write-Host $_
@@ -225,36 +231,77 @@ try {
         Start-Sleep -Seconds $SettleSec
     }
 
-    Step 'press the SECOND, different research -- must be QUEUED, not refused' {
+    Step 'press the SECOND, different research THREE times -- queued ONCE, then its button is gone' {
         $mark = Get-ScLogLineCount -LogPath $LogPath
         $card = Get-Card 'busy'
         $pt = Get-ScCardSlotPoint -Card $script:idleCard -Slot $script:upgB.Index
         for ($i = 1; $i -le 3; $i++) { Send-ScClick -Hwnd $hwnd -X $pt.X -Y $pt.Y -SettleMs 300 }
         Start-Sleep -Seconds 2
         Shot 'queued-2'
+        $sent = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark |
+                  Select-String -Pattern "CMD id=($UPGRADE_CMD|$TECH_CMD) ")
+        Assert-That "exactly ONE command reached the wire for three presses ($($sent.Count))" ($sent.Count -eq 1)
+        $after = Get-Card 'held'
+        $rsAfter = Get-ResearchSlots -Card $after   # assign first: the comma-wrapped array unrolls once on assignment, not in a pipe
+        $still = @($rsAfter | Where-Object { $_.Index -eq $script:upgB.Index })
+        Assert-That 'the held research is no longer offered on the card' ($still.Count -eq 0)
+        $other = @($rsAfter | Where-Object { $_.Index -ne $script:upgB.Index })
+        Write-Host "       card after: $($other.Count) other research button(s) still offered"
     }
 
-    Step 'READ THE QUEUE INDICATOR WITH 2 UPGRADES QUEUED -- the headline' {
+    $script:heldIcon = -1
+    Step 'READ THE STRIP WITH 2 RESEARCH ITEMS HELD -- the headline, out of the engine''s own controls' {
         $q = Get-QInd 'queued'
-        Write-Host "       QIND queued: mode=$($q.Mode) linked=$($q.Linked) visible=$($q.Visible) text=`"$($q.Text)`" bounds=($($q.Left),$($q.Top),$($q.Right),$($q.Bottom)) ink=$($q.Ink) refInk=$($q.RefInk) upg=$($q.Upg)"
+        Write-Host "       QIND queued: mode=$($q.Mode) text=`"$($q.Text)`" upg=$($q.Upg) line=$($q.Line -replace '^.*ringStable=\d+ ', '')"
         Assert-That "the plugin is holding at least one ($($q.Upg))" ($q.Upg -ge 1)
-        Assert-That 'the indicator picked UPGRADE mode (mode=3)' ($q.Mode -eq 3) "(mode=$($q.Mode))"
-        Assert-That 'it is linked into the dialog' ($q.Linked)
-        Assert-That 'the engine''s own visible bit is set' ($q.Visible)
-        Assert-That "text says +N upg (got `"$($q.Text)`")" ($q.Text -match '^\+\d+ upg$')
-        # Do not assert `ink > 0`: the pane draws its own art into the surface this probe
-        # counts, so every rect in it is saturated (ink=608 here) before one pixel of ours
-        # exists. boxDiff is that same box against a copy taken while the indicator was
-        # hidden -- the only bytes this plugin is responsible for.
-        Assert-That "the box holds bytes this plugin put there (boxDiff=$($q.BoxDiff), ink=$($q.Ink) is saturated by the pane's own art)" `
-            ($q.BoxDiff -gt 0)
-        Assert-That "and the probe can read this surface at all (surfInk=$($q.SurfInk))" `
-            ($q.SurfInk -gt 0)
+        Assert-That 'held items fit the icons, so the text indicator stays down (mode=0)' ($q.Mode -eq 0) "(mode=$($q.Mode))"
+        $st = Get-Strip 'queued'
+        Show-Strip $st 'queued'
+        Assert-That 'the strip walk completed' ($st.Ok)
+        $held = @($st.Slots | Where-Object { $_.Display -ge 1 -and $_.Display -le $q.Upg })
+        $rest = @($st.Slots | Where-Object { $_.Display -eq 0 -or $_.Display -gt $q.Upg })
+        Assert-That "one icon per held item is up ($($held.Count) of $($q.Upg))" ($held.Count -eq $q.Upg)
+        foreach ($s in $held) {
+            Assert-That "display $($s.Display) is ENABLED, not greyed or hidden ($($s.State))" ($s.State -eq 'enabled')
+            Assert-That "  and draws a research icon (umode $($s.UMode) is 4 tech / 5 upgrade)" ($s.UMode -eq 4 -or $s.UMode -eq 5)
+            Assert-That "  with a real frame, not the k+6 placeholder (uicon=0x$('{0:X}' -f $s.UIcon))" ($s.UIcon -gt 0x20)
+        }
+        foreach ($s in $rest) {
+            Assert-That "display $($s.Display) stays hidden ($($s.State))" ($s.State -eq 'hidden')
+        }
+        # The first held item is the SECOND press (upgB): its icon on the strip must be the
+        # very frame the card's button for it carries.
+        $first = @($held | Where-Object Display -eq 1) | Select-Object -First 1
+        if ($first -and $script:upgB.BIcon -gt 0) {
+            Assert-That "display 1 draws upgB's own card icon (0x$('{0:X}' -f $first.UIcon) vs card 0x$('{0:X}' -f $script:upgB.BIcon))" `
+                ($first.UIcon -eq $script:upgB.BIcon)
+        }
+        $script:heldIcon = $q.Upg
+        Assert-That "and the probe can read this surface at all (surfInk=$($q.SurfInk))" ($q.SurfInk -gt 0)
     }
 
     Step 'one more frame, a couple seconds later, for a human to open' {
         Start-Sleep -Seconds 2
         Shot 'queued-2-settled'
+    }
+
+    Step 'CLICK the first held item''s icon -- the engine''s own {0x20,1} must cancel exactly it' {
+        $st = Get-Strip 'click'
+        $pt = Get-ScStatusSlotPoint -Status $st -Display 1
+        $mark = Get-ScLogLineCount -LogPath $LogPath
+        Send-ScClick -Hwnd $hwnd -X $pt.X -Y $pt.Y
+        Start-Sleep -Seconds 2
+        Shot 'cancelled-1'
+        $q = Get-QInd 'cancelled'
+        Write-Host "       QIND cancelled: mode=$($q.Mode) upg=$($q.Upg)"
+        Assert-That "one fewer is held ($($q.Upg) after $($script:heldIcon))" ($q.Upg -eq $script:heldIcon - 1)
+        $ev = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark | Select-String -Pattern 'UPGQEV cancel-icon .* index=0 ')
+        Assert-That 'the cancel went through the icon route (UPGQEV cancel-icon index=0)' ($ev.Count -eq 1) "($($ev.Count) lines)"
+        $st2 = Get-Strip 'after-click'
+        Show-Strip $st2 'after-click'
+        $up = @($st2.Slots | Where-Object { $_.State -eq 'enabled' -and $_.Display -ge 1 })
+        Assert-That "the strip shows one icon fewer ($($up.Count))" ($up.Count -eq $script:heldIcon - 1)
+        Assert-That "display $($script:heldIcon) went dark" (@($st2.Slots | Where-Object { $_.Display -eq $script:heldIcon -and $_.State -eq 'hidden' }).Count -eq 1)
     }
 
 }

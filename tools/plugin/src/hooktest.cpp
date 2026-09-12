@@ -3377,64 +3377,56 @@ static void UpgradeQueueTests(void) {
         Check("nor a single unit of gas", (long long)*UqGas(), (long long)gasBefore);
     }
 
-    // LEVEL STACKING, and the engine rule it must not break.
-    //
-    // Suppressing upgradeBusy for everybody would let two buildings pay for one level, so it
-    // is suppressed only for the building whose own CUnit+0xC9 already holds that upgrade id.
-    // The assertions below are a PAIR: the running building may stack, a SECOND building of
-    // the same player may not. A test making only the first claim passes for the dangerous
-    // version too.
-    printf("\n    LEVEL STACKING: the running building may queue its own next level\n");
+    // ONE ENTRY PER RESEARCH PER BUILDING. A held id is hidden on the card and refused on
+    // the wire; the running one is refused on the wire too (the engine's own busy bit hides
+    // its button). Both halves are asserted with the balance beside them: a refusal that
+    // started something, or queued a second copy, would move a number here.
+    printf("\n    ONE ENTRY PER RESEARCH: a held id is hidden on the card and refused on the wire\n");
     UqBegin(8, 5000, 5000);
-    *(BYTE*)((DWORD)FakeRt(SC_VA_UPGRADE_MAX_LEVEL) +
-             UQ_PLAYER * SC_UPGRADE_STRIDE_VANILLA + UQ_UPG_A) = 3;
-    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);
-    *(BYTE*)(UqBuilding() + SC_CUNIT_OFF_UPGRADE_LEVEL) = 1;   // startUpgrade wrote this
-    Check("the building running Weapons may be offered Weapons again",
-          ScUpgQueueMaySuppressBusyBit(UqBuilding(), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 1);
-    // THE GUARD. A second building of the SAME player, idle, must never be offered it --
-    // that is the engine rule that stops two buildings paying for one level.
-    *(BYTE*)(FakeUnit(1) + SC_CUNIT_OFF_UPGRADE_PROGRESS) = (BYTE)SC_UPGRADE_NONE;
-    Check("a SECOND, idle building of the same player may NOT",
-          ScUpgQueueMaySuppressBusyBit(FakeUnit(1), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 0);
-    // ... and neither may a second building researching something ELSE.
-    *(BYTE*)(FakeUnit(2) + SC_CUNIT_OFF_UPGRADE_PROGRESS) = (BYTE)UQ_UPG_B;
-    Check("nor a second building researching a DIFFERENT upgrade",
-          ScUpgQueueMaySuppressBusyBit(FakeUnit(2), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 0);
-    Check("and a TECH is never level-stacked -- it has no levels",
-          ScUpgQueueMaySuppressBusyBit(UqBuilding(), SC_UPGQ_KIND_TECH, UQ_TECH_A) ? 1 : 0, 0);
-
-    printf("\n    ... and it stops at the LEVEL CEILING rather than losing presses\n");
-    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);   // level 2 queued
-    Check("one queued", UqQueued(), 1);
-    Check("level 3 may still be offered",
-          ScUpgQueueMaySuppressBusyBit(UqBuilding(), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 1);
-    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);   // level 3 queued
-    Check("two queued", UqQueued(), 2);
-    Check("but level 4 is NOT -- the ceiling is 3",
-          ScUpgQueueMaySuppressBusyBit(UqBuilding(), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 0);
-    Check("still paid for exactly the ONE that is running",
-          (long long)*UqMinerals(), 5000 - 100);
-
-    printf("\n    the stacked levels start in order, each paying its OWN level's price\n");
-    // base 100 + factor 75 * currentLevel, which is what the engine's own cost helper
-    // computes -- so level 2 costs 175 and level 3 costs 250. The plugin queues an ID, not
-    // a price: the level (and therefore the cost) is resolved when the item STARTS.
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);    // running
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_B);    // held
+    Check("one held", UqQueued(), 1);
+    Check("the held id is reported held here",
+          ScUpgQueueHolds(UqBuilding(), SC_UPGQ_KIND_UPGRADE, UQ_UPG_B) ? 1 : 0, 1);
+    Check("  the running id is not (the engine hides that one itself)",
+          ScUpgQueueHolds(UqBuilding(), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 0);
+    Check("  nor is it held at a SECOND building of the same player",
+          ScUpgQueueHolds(FakeUnit(1), SC_UPGQ_KIND_UPGRADE, UQ_UPG_B) ? 1 : 0, 0);
+    Check("  and the same id as a TECH is a different item",
+          ScUpgQueueHolds(UqBuilding(), SC_UPGQ_KIND_TECH, UQ_UPG_B) ? 1 : 0, 0);
     {
-        DWORD before = *UqMinerals();
-        *(BYTE*)((DWORD)FakeRt(SC_VA_UPGRADE_LEVEL) +
-                 UQ_PLAYER * SC_UPGRADE_STRIDE_VANILLA + UQ_UPG_A) = 1;   // L1 completed
-        UqFinishRunning(); ScUpgQueueOnTick(UqBuilding());
-        Check("level 2 started", g_uqStarted, 2);
-        Check("and it cost 100 + 75*1", (long long)(before - *UqMinerals()), 175);
-        before = *UqMinerals();
-        *(BYTE*)((DWORD)FakeRt(SC_VA_UPGRADE_LEVEL) +
-                 UQ_PLAYER * SC_UPGRADE_STRIDE_VANILLA + UQ_UPG_A) = 2;   // L2 completed
-        UqFinishRunning(); ScUpgQueueOnTick(UqBuilding());
-        Check("level 3 started", g_uqStarted, 3);
-        Check("and it cost 100 + 75*2", (long long)(before - *UqMinerals()), 250);
-        Check("the queue is empty", UqQueued(), 0);
+        const DWORD before = *UqMinerals();
+        Check("a second press of the HELD id is consumed, not queued",
+              ScUpgQueueOnCommand(UqBuilding(), SC_UPGQ_KIND_UPGRADE, UQ_UPG_B) ? 1 : 0, 1);
+        Check("  still one held", UqQueued(), 1);
+        Check("  counted as a duplicate refusal", ScUpgQueueStat(SC_UPGQ_STAT_REFUSED_DUP), 1);
+        Check("a press of the RUNNING id is consumed too, so the engine cannot restart it",
+              ScUpgQueueOnCommand(UqBuilding(), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 1);
+        Check("  still one held", UqQueued(), 1);
+        Check("  two duplicate refusals", ScUpgQueueStat(SC_UPGQ_STAT_REFUSED_DUP), 2);
+        Check("  and only the running one was ever started", g_uqStarted, 1);
+        Check("  and not one mineral moved", (long long)*UqMinerals(), (long long)before);
+        // A DIFFERENT id still queues: the rule is per id, not a cap.
+        UqPress(SC_UPGQ_KIND_TECH, UQ_TECH_A);
+        Check("a different research still queues behind it", UqQueued(), 2);
     }
+    // Once promoted, the id is running rather than held: Holds drops it and the engine's
+    // own bit takes over hiding it.
+    UqFinishRunning(); ScUpgQueueOnTick(UqBuilding());
+    Check("after promotion the id is no longer HELD", ScUpgQueueHolds(UqBuilding(), SC_UPGQ_KIND_UPGRADE, UQ_UPG_B) ? 1 : 0, 0);
+    Check("  it is running", (long long)*UqUpgField(), UQ_UPG_B);
+    // IDLE WITH AN ITEM HELD (the player cannot pay yet): still held, still refused -- the
+    // engine starting a second copy now would pay for one the plugin promotes later.
+    UqBegin(8, 5000, 5000);
+    UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);    // running
+    UqPress(SC_UPGQ_KIND_TECH,    UQ_TECH_A);   // held
+    UqFinishRunning();                          // idle; the tick has not promoted yet
+    Check("idle with an item held: it is still reported held",
+          ScUpgQueueHolds(UqBuilding(), SC_UPGQ_KIND_TECH, UQ_TECH_A) ? 1 : 0, 1);
+    Check("  and a press of it is refused rather than handed to the engine",
+          ScUpgQueueOnCommand(UqBuilding(), SC_UPGQ_KIND_TECH, UQ_TECH_A) ? 1 : 0, 1);
+    Check("  so the engine started nothing new", g_uqStarted, 1);
+    Check("  and it is still held exactly once", UqQueued(), 1);
 
     // WHICH SELECTION ARRAY THE RECEIVE HANDLERS READ, the same trap sc_prodqueue.cpp has:
     // the two arrays ABUT (0x006284B8 + 12*4 == 0x006284E8) and agree whenever exactly one
@@ -3485,8 +3477,8 @@ static void UpgradeQueueTests(void) {
     Check("no cancel is consumed", ScUpgQueueOnCancel(UqBuilding()) ? 1 : 0, 0);
     Check("nothing is ever unblocked",
           ScUpgQueueShouldUnblock(UqBuilding()) ? 1 : 0, 0);
-    Check("and no level is ever stacked either",
-          ScUpgQueueMaySuppressBusyBit(UqBuilding(), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 0);
+    Check("and nothing is ever reported held",
+          ScUpgQueueHolds(UqBuilding(), SC_UPGQ_KIND_UPGRADE, UQ_UPG_A) ? 1 : 0, 0);
 }
 
 static void ExitLogTests(void) {
@@ -4031,6 +4023,8 @@ static unsigned g_qiShows = 0, g_qiHides = 0, g_qiUpdates = 0, g_qiDriverCalls =
 static void QiShow(DWORD c)   { ++g_qiShows;   *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) |= SC_CTRL_FLAG_VISIBLE; }
 static void QiHide(DWORD c)   { ++g_qiHides;   *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) &= ~(DWORD)SC_CTRL_FLAG_VISIBLE; }
 static void QiUpdate(DWORD c) { ++g_qiUpdates; (void)c; }
+static unsigned g_qiEnables = 0;
+static void QiEnable(DWORD c) { ++g_qiEnables; *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) &= ~(DWORD)SC_CTRL_FLAG_DISABLED; }
 static void QiOrigDriver(void) { ++g_qiDriverCalls; }
 
 // Root + the five queue icons (ids 2..6) + the twelve wireframe buttons (ids 0x21..0x2C),
@@ -4172,10 +4166,21 @@ static void QueueIndTests(void) {
         Check("  the string is exactly that", (long long)(strcmp(t, "+4") == 0), 1);
         Check("  and only five icons are drawable", ScQueueIndDrawableSlots(&v), 5);
 
-        memset(&v, 0, sizeof(v)); v.selection = 1; v.upgrades = 3;
-        Check("queued upgrades -> \"+3 upg\"", ScQueueIndCompose(t, sizeof(t), &v),
-              SC_QIND_UPGRADE);
-        Check("  the string is exactly that", (long long)(strcmp(t, "+3 upg") == 0), 1);
+        memset(&v, 0, sizeof(v)); v.selection = 1; v.upgrades = 3; v.research = 1;
+        Check("three held research items fit the four small icons -> nothing said",
+              ScQueueIndCompose(t, sizeof(t), &v), SC_QIND_NONE);
+
+        memset(&v, 0, sizeof(v)); v.selection = 1; v.upgrades = 7; v.research = 1;
+        Check("seven held -> three icons and \"+4\" on the empty fourth",
+              ScQueueIndCompose(t, sizeof(t), &v), SC_QIND_UPGRADE);
+        Check("  the string is exactly that", (long long)(strcmp(t, "+4") == 0), 1);
+        Check("  three drawable", ScQueueIndUpgradeIcons(7), 3);
+        Check("  four held are all drawable", ScQueueIndUpgradeIcons(4), 4);
+
+        memset(&v, 0, sizeof(v)); v.selection = 1; v.upgrades = 3; v.research = 0;
+        Check("outside a research layout nothing is drawn, so the count covers all three",
+              ScQueueIndCompose(t, sizeof(t), &v), SC_QIND_UPGRADE);
+        Check("  the string is exactly that", (long long)(strcmp(t, "+3") == 0), 1);
 
         memset(&v, 0, sizeof(v)); v.selection = 4; v.buildings = 4; v.queued = 12;
         Check("a group -> the group line", ScQueueIndCompose(t, sizeof(t), &v), SC_QIND_GROUP);
@@ -4204,7 +4209,7 @@ static void QueueIndTests(void) {
     Check("the plugin holds five", PqOverflow(), 5);
 
     BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
-    ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiOrigDriver);
+    ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable, &QiOrigDriver);
     Check("nothing spliced before the first frame", QiChildren(), QI_CTL_COUNT);
     // THE POSITIVE HALF of the icon assertions below: the fifth slot starts out pointing at
     // the button-border art, because that is what the engine's layout leaves on a slot it
@@ -4326,7 +4331,7 @@ static void QueueIndTests(void) {
         // the empty-slot layout EXACTLY as the engine's own empty branch left it. This is
         // the regression guard on a hand-fill quietly reappearing in the frame path.
         BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
-        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiOrigDriver);
+        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable, &QiOrigDriver);
         ScQueueIndOnFrame();
         DWORD c = QiCtl(4), u = QiUser(4);
         Check("the frame path no longer writes the fifth icon's mode",
@@ -4348,6 +4353,135 @@ static void QueueIndTests(void) {
         ScQueueIndOnFrame();
         Check("a settled frame re-shows nothing", (long long)(g_qiShows - shows), 0);
         Check("  and re-draws nothing", (long long)(g_qiUpdates - updates), 0);
+    }
+
+    printf("\n    QUEUED RESEARCH AS ICONS: held items light queue icons 3..6 in a research layout\n");
+    // The pane as the research layout leaves it: all five queue icons HIDDEN, their
+    // statUser records still whatever was last written (here queueLayout's empty
+    // placeholders, DISABLED and drawing from the border grp -- the worst case, since a
+    // Hatchery that morphed and then researches arrives exactly so), and the layout-kind
+    // byte saying "upgrade research". The building holds two items behind the running one.
+    {
+        UqBegin(8, 5000, 5000);
+        UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);    // starts in the engine's own field
+        UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_B);    // held [0]
+        UqPress(SC_UPGQ_KIND_TECH,    UQ_TECH_A);   // held [1]
+        Check("two items are held behind the running upgrade", UqQueued(), 2);
+        BuildFakeQIndPane(0, PQ_TYPE_B);
+        for (int k = 0; k < SC_STATQ_SLOTS; ++k) QiHide(QiCtl(k));
+        *(DWORD*)FakeRt(SC_VA_ACTIVE_PORTRAIT_UNIT) = UqBuilding();
+        *(BYTE*)FakeRt(SC_VA_STAT_ALL_HIDDEN) = (BYTE)SC_STAT_LAYOUT_UPGRADE;
+        // The dat icon tables: distinct, non-zero frames, so a slot drawing frame 0 (an
+        // untouched record) or the OTHER item's frame is a visible failure.
+        *(WORD*)((DWORD)FakeRt(SC_VA_UPGRADE_ICON) + UQ_UPG_B * 2) = 0x124;
+        *(WORD*)((DWORD)FakeRt(SC_VA_TECH_ICON)    + UQ_TECH_A * 2) = 0x12E;
+        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable, &QiOrigDriver);
+        ScQueueIndOnFrame();
+        Check("two held fit the icons, so no \"+N\" is said", ScQueueIndCurrentMode(), SC_QIND_NONE);
+        Check("the ENGINE's own slot 0 (id 2) was left hidden",
+              (*(DWORD*)(QiCtl(0) + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) ? 1 : 0, 0);
+        Check("  and untouched", (long long)*(WORD*)(QiUser(0) + SC_STATUSER_OFF_MODE), 6);
+        Check("icon 3 is lit", (*(DWORD*)(QiCtl(1) + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) ? 1 : 0, 1);
+        Check("  from the ICON grp, not the border placeholder's",
+              (long long)(*(DWORD*)(QiUser(1) + SC_STATUSER_OFF_GRP) == QiGrpIcons()), 1);
+        Check("  with the first held item's upgrade icon",
+              (long long)*(WORD*)(QiUser(1) + SC_STATUSER_OFF_ICON), 0x124);
+        Check("  mode 5, the research layout's own value for an upgrade",
+              (long long)*(WORD*)(QiUser(1) + SC_STATUSER_OFF_MODE), SC_STATUSER_MODE_UPGRADE);
+        Check("  type = the upgrade id", (long long)*(short*)(QiUser(1) + SC_STATUSER_OFF_TYPE), UQ_UPG_B);
+        {
+            const char* label = (const char*)*(DWORD*)(QiCtl(1) + SC_BINDLG_OFF_TEXT);
+            Check("  labelled \"2 \" like the second unit-queue slot",
+                  (long long)(label && strcmp(label, "2 ") == 0), 1);
+        }
+        Check("  and its DISABLED bit went through the engine's enable",
+              (*(DWORD*)(QiCtl(1) + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_DISABLED) ? 1 : 0, 0);
+        Check("  (the seam saw the call)", (long long)(g_qiEnables > 0), 1);
+        Check("icon 4 is lit with the tech's icon",
+              (long long)*(WORD*)(QiUser(2) + SC_STATUSER_OFF_ICON), 0x12E);
+        Check("  mode 4 (tech)", (long long)*(WORD*)(QiUser(2) + SC_STATUSER_OFF_MODE), SC_STATUSER_MODE_TECH);
+        Check("icons 5 and 6 stay hidden",
+              (long long)(((*(DWORD*)(QiCtl(3) + SC_BINDLG_OFF_FLAGS) |
+                            *(DWORD*)(QiCtl(4) + SC_BINDLG_OFF_FLAGS)) & SC_CTRL_FLAG_VISIBLE) == 0), 1);
+        Check("two icon shows counted", ScQueueIndStat(SC_QIND_STAT_UPG_ICON_SHOWS), 2);
+
+        unsigned shows = g_qiShows, updates = g_qiUpdates;
+        ScQueueIndOnFrame();
+        Check("a settled frame re-shows nothing", (long long)(g_qiShows - shows), 0);
+        Check("  and re-draws nothing", (long long)(g_qiUpdates - updates), 0);
+
+        // PROMOTION: the running upgrade finishes, held [0] starts, the tech moves up a
+        // slot and the slot it left goes dark.
+        UqFinishRunning();
+        ScUpgQueueOnTick(UqBuilding());
+        Check("the plugin now holds one", UqQueued(), 1);
+        ScQueueIndOnFrame();
+        Check("icon 3 now shows the tech", (long long)*(WORD*)(QiUser(1) + SC_STATUSER_OFF_ICON), 0x12E);
+        Check("  with its mode", (long long)*(WORD*)(QiUser(1) + SC_STATUSER_OFF_MODE), SC_STATUSER_MODE_TECH);
+        Check("icon 4 went dark", (*(DWORD*)(QiCtl(2) + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) ? 1 : 0, 0);
+        Check("  and that hide was counted", ScQueueIndStat(SC_QIND_STAT_UPG_ICON_HIDES), 1);
+
+        // THE ENGINE'S HIDE-ALL SWEEP (a layout-kind change) takes the icon down; the next
+        // frame puts it back without rewriting its fields.
+        QiHide(QiCtl(1));
+        shows = g_qiShows;
+        ScQueueIndOnFrame();
+        Check("after the engine's sweep the icon is re-shown", (long long)(g_qiShows - shows), 1);
+        Check("  still drawing the tech", (long long)*(WORD*)(QiUser(1) + SC_STATUSER_OFF_ICON), 0x12E);
+
+        // A CLICK on it: {0x20, 1} reaches sc_prodqueue's cancel detour with an empty ring
+        // slot, which hands display 1 to the upgrade queue as held item 0.
+        for (int k = 0; k < SC_BUILD_QUEUE_SLOTS; ++k) {
+            *(WORD*)(UqBuilding() + SC_CUNIT_OFF_BUILD_QUEUE + (DWORD)k * 2) = SC_BUILD_QUEUE_EMPTY;
+        }
+        Check("cancel-at out of range is refused", ScUpgQueueCancelAt(UqBuilding(), 1) ? 1 : 0, 0);
+        Check("cancel-at 0 drops the held tech", ScUpgQueueCancelAt(UqBuilding(), 0) ? 1 : 0, 1);
+        Check("  nothing is held now", UqQueued(), 0);
+        Check("  and it was counted as a cancel", ScUpgQueueStat(SC_UPGQ_STAT_CANCELLED), 1);
+        ScQueueIndOnFrame();
+        Check("  the icon went dark with it", (*(DWORD*)(QiCtl(1) + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) ? 1 : 0, 0);
+
+        // SEVEN HELD: three icons and a "+4" on the empty fourth, inside icon 6.
+        UqBegin(8, 50000, 50000);
+        UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);
+        for (unsigned t = 0; t < 7; ++t) UqPress(SC_UPGQ_KIND_TECH, t);   // seven DISTINCT techs
+        Check("seven are held", UqQueued(), 7);
+        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable, &QiOrigDriver);
+        ScQueueIndOnFrame();
+        Check("the indicator is in UPGRADE mode", ScQueueIndCurrentMode(), SC_QIND_UPGRADE);
+        Check("  saying \"+4\"", (long long)(strcmp(ScQueueIndCurrentText(), "+4") == 0), 1);
+        Check("icons 3, 4 and 5 are lit",
+              (long long)((*(DWORD*)(QiCtl(1) + SC_BINDLG_OFF_FLAGS) &
+                           *(DWORD*)(QiCtl(2) + SC_BINDLG_OFF_FLAGS) &
+                           *(DWORD*)(QiCtl(3) + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) != 0), 1);
+        Check("  icon 6 is left empty under the count",
+              (*(DWORD*)(QiCtl(4) + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) ? 1 : 0, 0);
+        {
+            DWORD ind = QiIndicator();
+            short* b = ind ? ScDlgBounds(ind) : 0;
+            Check("  and the count sits inside icon 6",
+                  (long long)(b && b[0] >= *ScDlgBounds(QiCtl(4)) &&
+                              b[2] <= *(short*)(QiCtl(4) + SC_BINDLG_OFF_BOUNDS + 4)), 1);
+        }
+
+        // ANY OTHER LAYOUT owns icons 3..6 itself: the icons go dark and the count covers
+        // everything held.
+        *(BYTE*)FakeRt(SC_VA_STAT_ALL_HIDDEN) = 3;
+        ScQueueIndOnFrame();
+        Check("outside a research layout the icons are taken down",
+              (long long)(((*(DWORD*)(QiCtl(1) + SC_BINDLG_OFF_FLAGS) |
+                            *(DWORD*)(QiCtl(2) + SC_BINDLG_OFF_FLAGS) |
+                            *(DWORD*)(QiCtl(3) + SC_BINDLG_OFF_FLAGS)) & SC_CTRL_FLAG_VISIBLE) == 0), 1);
+        Check("  and the count covers all seven", (long long)(strcmp(ScQueueIndCurrentText(), "+7") == 0), 1);
+
+        // Back to the production fixture the parts below expect, with the upgrade core
+        // holding nothing for the building they share.
+        ScUpgQueueTestBegin(NULL, 0, NULL);
+        PqBegin(16, 3000, 500);
+        for (int i = 0; i < 9; ++i) PqTrain(PQ_TYPE_B);
+        BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
+        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable, &QiOrigDriver);
+        ScQueueIndOnFrame();
     }
 
     printf("\n    the GROUP line gets a box sized for IT, not for the button it starts on\n");
@@ -4502,7 +4636,7 @@ static void QueueIndTests(void) {
         PqBegin(16, 3000, 500);
         for (int i = 0; i < 9; ++i) PqTrain(PQ_TYPE_B);
         BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
-        ScQueueIndTestBegin(NULL, &QiShow, &QiHide, &QiUpdate, &QiOrigDriver);  // disabled
+        ScQueueIndTestBegin(NULL, &QiShow, &QiHide, &QiUpdate, &QiEnable, &QiOrigDriver);  // disabled
         unsigned shows = g_qiShows;
         ScQueueIndOnFrame();
         ScQueueIndOnFrame();
@@ -4516,7 +4650,7 @@ static void QueueIndTests(void) {
               (long long)(*(DWORD*)(QiUser(4) + SC_STATUSER_OFF_GRP) == QiGrpBtns()), 1);
     }
 
-    ScQueueIndTestBegin(NULL, NULL, NULL, NULL, NULL);
+    ScQueueIndTestBegin(NULL, NULL, NULL, NULL, NULL, NULL);
     ScProdQueueTestBegin(NULL, SC_PRODQ_DEFAULT_MAX);
     VirtualFree(g_fake, 0, MEM_RELEASE);
     g_fake = NULL;
@@ -4544,7 +4678,7 @@ static void UpgQueueIndTests(void) {
     // is researching is not training anything, so every one of the five queue icons starts
     // in the engine's own greyed placeholder state, same as a real Engineering Bay's.
     BuildFakeQIndPane(0, 0);
-    ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiOrigDriver);
+    ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable, &QiOrigDriver);
 
     // One running (the engine's own slot) plus two held -- "2+ upgrades queued", the
     // user's own words, and a mixed upgrade/tech pair so this cannot be mistaken for a
@@ -4559,7 +4693,9 @@ static void UpgQueueIndTests(void) {
     ScQueueIndOnFrame();
 
     // The assertions the composer cannot make for this mode: whether the player would see
-    // anything, rather than what the composer intended to say.
+    // anything, rather than what the composer intended to say. The fake's layout-kind byte
+    // is 0 (not a research layout), so nothing is drawn as icons and the count covers both
+    // held items; the research-layout half lives in QueueIndTests.
     Check("the frame path settles on UPGRADE mode", ScQueueIndCurrentMode(), SC_QIND_UPGRADE);
     Check("the indicator is linked into the dialog's child chain",
           ScQueueIndIsSpliced() ? 1 : 0, 1);
@@ -4569,16 +4705,12 @@ static void UpgQueueIndTests(void) {
         Check("the walk finds it", ind ? 1 : 0, 1);
         if (ind) {
             const char* text = (const char*)*(DWORD*)(ind + SC_BINDLG_OFF_TEXT);
-            Check("its pszText says \"+2 upg\"",
-                  (long long)(text && strcmp(text, "+2 upg") == 0), 1);
+            Check("its pszText says \"+2\"",
+                  (long long)(text && strcmp(text, "+2") == 0), 1);
             short* b = ScDlgBounds(ind);
             Check("the box is at least SC_QIND_BOX_H tall", b[3] - b[1] >= SC_QIND_BOX_H, 1);
             Check("and wide enough for the string it holds",
                   (b[2] - b[0]) >= (int)strlen(ScQueueIndCurrentText()) * SC_QIND_CHAR_W ? 1 : 0, 1);
-            // ... which on the LIVE pane means sliding left off icon 6's own start: the icon
-            // begins at x=231 of a 270-wide surface and "+2 upg" needs 42px, so a box clamped
-            // to the surface edge holds 38 and cuts the string. The fake can only say so
-            // because it carries a real surface.
             Check("and it stays inside the dialog's surface",
                   (b[2] <= QI_SURF_W) ? 1 : 0, 1);
         }
@@ -4598,7 +4730,7 @@ static void UpgQueueIndTests(void) {
     Check("and the engine's visible bit is clear",
           ScQueueIndIsShown() ? 1 : 0, 0);
 
-    ScQueueIndTestBegin(NULL, NULL, NULL, NULL, NULL);
+    ScQueueIndTestBegin(NULL, NULL, NULL, NULL, NULL, NULL);
     ScUpgQueueTestBegin(NULL, SC_UPGQ_DEFAULT_MAX, NULL);
     VirtualFree(g_fake, 0, MEM_RELEASE);
     g_fake = NULL;

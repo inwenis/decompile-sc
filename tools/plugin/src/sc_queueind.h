@@ -46,6 +46,17 @@
 // that measured too short.
 #define SC_QIND_BAND_MIN_H 10
 
+// How many queued upgrades the strip can show as ICONS: the four small queue icons (ids
+// 3..6). Slot 0's position is taken by the research layout's own icon (id 15), which
+// draws the RUNNING item with its progress bar.
+#define SC_QIND_UPGRADE_ICONS 4
+
+// How many of `held` research items are drawn as icons. All of them up to the four; past
+// that, THREE, so the "+N" for the rest sits on an EMPTY fourth slot rather than on
+// another item's art (the same rule the strip applies to units: the engine's ring is held
+// at four so the "+N" slot is free). Pure; the frame path draws exactly this many.
+int  ScQueueIndUpgradeIcons(int held);
+
 // An enum so the log line and the offline test name the case instead of matching a string.
 enum ScQueueIndMode {
     SC_QIND_NONE   = 0,   // nothing to say -- the control is hidden
@@ -60,7 +71,9 @@ struct ScQueueIndView {
     int selection;   // clientSelectionCount (0x0059723D)
     int engineLen;   // occupied slots of the portrait building's ring (CUnit+0x98)
     int overflow;    // items sc_prodqueue is holding for it, or 0
-    int upgrades;    // upgrades sc_upgrades is holding for it, or 0
+    int upgrades;    // research items sc_upgrades is holding for it, or 0
+    int research;    // 1 while the pane holds a RESEARCH layout (SC_VA_STAT_ALL_HIDDEN is
+                     // 7 or 8), the only layouts in which the held items are drawn as icons
     int buildings;   // selected buildings with a non-empty logical queue (group case)
     int queued;      // their logical items in total (group case)
     int hudPages;    // sc_hudrow's page count -- >1 means the row indicator owns the space
@@ -187,7 +200,7 @@ typedef void (*ScQueueIndDriverFn)(void);
 
 void ScQueueIndTestBegin(BYTE* fakeModuleBase,
                          ScQueueIndCtlFn show, ScQueueIndCtlFn hide, ScQueueIndCtlFn update,
-                         ScQueueIndDriverFn origDriver);
+                         ScQueueIndCtlFn enable, ScQueueIndDriverFn origDriver);
 
 // The per-frame body the detour calls. Exposed so the offline test drives exactly the
 // code the game drives.
@@ -236,7 +249,11 @@ enum ScQueueIndStat {
     // at the hold while overflow exists). The phantom REFUSES such a slot rather than
     // overwrite an engine item, and counts the refusal here. Expected 0.
     SC_QIND_STAT_PHANTOM_DIRTY = 11,
-    SC_QIND_STAT__COUNT = 12
+    // Queue icons 3..6 lit with a held research item / taken back down (one per icon, not
+    // per frame: a settled pane moves neither).
+    SC_QIND_STAT_UPG_ICON_SHOWS = 12,
+    SC_QIND_STAT_UPG_ICON_HIDES = 13,
+    SC_QIND_STAT__COUNT = 14
 };
 int ScQueueIndStat(int which);
 

@@ -409,6 +409,11 @@
 #define SC_VA_SHOW_CONTROL   0x004186A0u  // ESI = BinDlg*
 #define SC_VA_HIDE_CONTROL   0x00418700u  // ESI = BinDlg*
 #define SC_VA_UPDATE_CONTROL 0x0041C400u  // EAX = BinDlg*
+// ESI = BinDlg*. Clears SC_CTRL_FLAG_DISABLED, sends the control its enable event and
+// marks it for update; a NO-OP when the bit is already clear. The call queueLayout's
+// occupied branch makes (0x00426A33..0x00426A55) and the research layouts make for their
+// own icon (0x00426500, 0x004266F0).
+#define SC_VA_ENABLE_CONTROL 0x00418E00u
 
 // __fastcall(ECX = BinDlg* control, EDX = event) -> int. The wireframe button's interact
 // handler; all 12 buttons point here via the 44-entry table at 0x00504AF0
@@ -419,7 +424,16 @@
 // The statdata module's globals (hud-selection-row.md 2):
 #define SC_VA_STATDATA_DIALOG 0x0068C1F0u  // BinDlg* -- the whole status-area dialog
 #define SC_VA_STAT_DIRTY      0x0068C1F8u  // u8 -- redraw-needed flag the dispatcher consumes
-#define SC_VA_STAT_ALL_HIDDEN 0x0068C1E5u  // u8 -- "children currently hidden" state
+// u8 -- which LAYOUT the pane currently holds. Every layout of the per-unit-type act
+// 0x00427890 compares it before doing anything to the child list and hides every child
+// (0x00457310, from id -8 on) ONLY when it differs, then writes its own value: 3 the
+// default single-unit layout, 4 a foreign player's unit, 7 the tech-research layout
+// (0x004266F0), 8 the upgrade-research layout (0x00426500); the dispatcher 0x00458120
+// zeroes it when the pane empties. So a control this plugin shows in a research layout
+// stays shown until the KIND changes, not until the next frame.
+#define SC_VA_STAT_ALL_HIDDEN 0x0068C1E5u
+#define SC_STAT_LAYOUT_TECH    7
+#define SC_STAT_LAYOUT_UPGRADE 8
 
 // Default per-control-type handler tables the .bin relocator (0x004194E0) assigns from;
 // sc_hudrow's indicator takes its handlers from the same tables, so it is drawn by
@@ -1008,6 +1022,20 @@
 #define SC_VA_UPGRADE_GAS_FACTOR     0x006557C0u
 #define SC_VA_TECH_MINERAL_COST      0x00656248u
 #define SC_VA_TECH_GAS_COST          0x006561F0u
+
+// The ICON a research draws, read off the two research layouts of the status pane, which
+// fill their own icon control (id SC_STAT_RESEARCH_ICON_CONTROL) with the same five
+// fields queueLayout writes for a queued unit:
+//   0x00426500 (upgrade)  statUser->grp = [SC_VA_GRP_CMDICONS], icon = u16[0x00655AC0 +
+//                         unit->0xC9 * 2], mode = 5, type = unit->0xC9, then 0x00418E00
+//   0x004266F0 (tech)     the same with u16[0x00656430 + unit->0xC8 * 2] and mode = 4
+// so both tables index cmdicons.grp, exactly as the card's button records do.
+#define SC_VA_UPGRADE_ICON 0x00655AC0u   // u16[61]
+#define SC_VA_TECH_ICON    0x00656430u   // u16[44]
+#define SC_STATUSER_MODE_UNIT    3        // queueLayout's occupied slot
+#define SC_STATUSER_MODE_TECH    4
+#define SC_STATUSER_MODE_UPGRADE 5
+#define SC_STAT_RESEARCH_ICON_CONTROL 15  // the research layouts' own icon, at slot 0's place
 // RENDERER / VIEWPORT. Full evidence, with the decompiles, in
 // research/renderer-viewport.md. Nothing here is inherited: the renderer is the one
 // subsystem BWAPI, GPTP and OpenBW all skip (research/prior-art.md 9). The modules were
