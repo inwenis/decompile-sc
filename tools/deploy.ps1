@@ -487,8 +487,8 @@ else {
         Write-Host "shortcut written: $Path"
     }
     & $saveShortcut $shortcutPath '' $Geometry
-    # One per preset, for trying the sizes side by side (the user asked, 2026-09-12). Each
-    # runs the same launcher at its own -Geometry, presented through that preset's 2x ini.
+    # One per preset, for trying the sizes side by side: the same launcher at that
+    # -Geometry, presented through that preset's 2x ini.
     $sizeShortcuts = foreach ($g in $presets) {
         $path = Join-Path $desktop "StarCraft Modded $g.lnk"
         & $saveShortcut $path " -Geometry $g" $g
