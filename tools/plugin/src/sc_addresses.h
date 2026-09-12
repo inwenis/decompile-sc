@@ -425,6 +425,18 @@
 // thin shim and tail-calls this address -- the code itself is never patched.
 #define SC_VA_WIREFRAME_BTN_INTERACT 0x004583E0u
 
+// __fastcall(ECX = BinDlg* button), plain RET: the wireframe button's fxnUpdate, which
+// 0x0045841C writes into every button's +0x2E. It draws the border and the health colours,
+// then blits frame statUser->id (SC_STATUSER_OFF_ID) of the sheet at SC_VA_GRPWIRE_SHEET --
+// and for an id at or past that sheet's frame count it blits frame 0, the Marine
+// (0x00456FC1..0x00456FCF: `MOV DX,[EAX] / AND EDX,0x7FFF / CMP CX,DX / JB / XOR ECX,ECX`).
+// Prologue 55 / 8B EC / 83 EC 18: three instructions, 6 bytes, none PC-relative (objdump of
+// this binary).
+#define SC_VA_WIREFRAME_DRAW 0x00456F50u
+// BYTE* -- the loaded unit\wirefram\grpwire.grp (hud-selection-row.md 2): u16 frame count,
+// u16 w, u16 h, then 8-byte frame headers {x, y, w, h, u32 offset from the sheet's start}.
+#define SC_VA_GRPWIRE_SHEET  0x0068C1FCu
+
 // The statdata module's globals (hud-selection-row.md 2):
 #define SC_VA_STATDATA_DIALOG 0x0068C1F0u  // BinDlg* -- the whole status-area dialog
 #define SC_VA_STAT_DIRTY      0x0068C1F8u  // u8 -- redraw-needed flag the dispatcher consumes

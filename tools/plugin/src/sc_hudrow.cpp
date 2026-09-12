@@ -33,6 +33,8 @@
 static bool  g_enabled = false;
 
 static ScHook g_hkDispatch;
+static ScHook g_hkWireDraw;
+static unsigned g_statBlank = 0;   // wireframe draws handed the empty sheet
 
 // Test seam -- NULL means "call the real engine".
 static ScHudCtlFn       g_show             = NULL;
@@ -1051,6 +1053,57 @@ static void SC_GAME_ENTRY HkStatDispatch(void) {
 static const BYTE kPrologueDispatch[] = { 0xA1, 0x48, 0x72, 0x59, 0x00 };
 
 // ---------------------------------------------------------------------------
+// The row's pictures (see ScHudRowWireHasArt in sc_hudrow.h)
+// ---------------------------------------------------------------------------
+
+// Every units.dat id, so the draw's own guard never sends one to frame 0; every frame one
+// transparent pixel, so the blit puts nothing on the button.
+#define SC_WIRE_EMPTY_FRAMES 228
+#define SC_WIRE_EMPTY_DATA   (6 + SC_WIRE_EMPTY_FRAMES * 8)
+static BYTE g_emptySheet[SC_WIRE_EMPTY_DATA + 3];
+
+static void BuildEmptySheet(void) {
+    *(WORD*)&g_emptySheet[0] = SC_WIRE_EMPTY_FRAMES;
+    *(WORD*)&g_emptySheet[2] = 32;
+    *(WORD*)&g_emptySheet[4] = 32;
+    for (int i = 0; i < SC_WIRE_EMPTY_FRAMES; ++i) {
+        BYTE* f = &g_emptySheet[6 + i * 8];
+        f[0] = 0; f[1] = 0; f[2] = 1; f[3] = 1;
+        *(DWORD*)(f + 4) = SC_WIRE_EMPTY_DATA;
+    }
+    *(WORD*)&g_emptySheet[SC_WIRE_EMPTY_DATA] = 2;   // row 0 starts after the row table
+    g_emptySheet[SC_WIRE_EMPTY_DATA + 2] = 0x81;       // skip one pixel
+}
+
+const BYTE* ScHudRowEmptySheet(void) { return g_emptySheet; }
+
+bool ScHudRowWireHasArt(unsigned id) {
+    if (id < 106) return true;   // every unit; 106 is the first building
+    return id == 106 || id == 111 || id == 113 || id == 114 || id == 116 || id == 122;
+}
+
+void ScHudRowOnWireDraw(DWORD button, DWORD edx, ScHudWireDrawFn orig) {
+    DWORD su = *(DWORD*)(button + SC_BINDLG_OFF_USER);
+    if (!su || ScHudRowWireHasArt(*(WORD*)(su + SC_STATUSER_OFF_ID))) {
+        orig(button, edx);
+        return;
+    }
+    // One call, on the game thread that owns the sheet: nothing else can read it meanwhile.
+    DWORD* sheet = (DWORD*)ScRuntimeAddr(SC_VA_GRPWIRE_SHEET);
+    DWORD real = *sheet;
+    *sheet = (DWORD)&g_emptySheet[0];
+    orig(button, edx);
+    *sheet = real;
+    ++g_statBlank;
+}
+
+static void __attribute__((fastcall)) SC_GAME_ENTRY HkWireDraw(DWORD button, DWORD edx) {
+    ScHudRowOnWireDraw(button, edx, (ScHudWireDrawFn)g_hkWireDraw.trampoline);
+}
+
+static const BYTE kPrologueWireDraw[] = { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x18 };
+
+// ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
 
@@ -1086,6 +1139,8 @@ void ScHudRowInit(BYTE* moduleBase, bool enabled) {
     g_inkedLogged = false;
     g_session = ScSessionEpoch();
     g_statSessionDrop = 0;
+    g_statBlank = 0;
+    BuildEmptySheet();
 }
 
 bool ScHudRowEnabled(void) { return g_enabled; }
@@ -1097,14 +1152,21 @@ int ScHudRowInstall(void) {
                       ScRuntimeAddr(SC_VA_STAT_DATA_UPDATE),
                       (void*)&HkStatDispatch, 5,
                       kPrologueDispatch, (int)sizeof(kPrologueDispatch))) {
-        return 1;
+        if (ScHookInstall(&g_hkWireDraw, "wireframeDraw",
+                          ScRuntimeAddr(SC_VA_WIREFRAME_DRAW),
+                          (void*)&HkWireDraw, (int)sizeof(kPrologueWireDraw),
+                          kPrologueWireDraw, (int)sizeof(kPrologueWireDraw))) {
+            return 1;
+        }
+        ScHookRemove(&g_hkDispatch);
     }
-    ScLog("HUDROW: dispatcher hook failed to install -- feature disabled");
+    ScLog("HUDROW: a hook failed to install -- feature disabled");
     g_enabled = false;
     return 0;
 }
 
 void ScHudRowRemove(void) {
+    ScHookRemove(&g_hkWireDraw);
     ScHookRemove(&g_hkDispatch);
 
     // Best-effort pointer restores: single atomic dword writes, guarded reads because the
@@ -1139,10 +1201,10 @@ void ScHudRowLogStats(void) {
     // and both cross-check against the run's own `HUDROW show` lines.
     ScLog("HUDROW stats: acts=%u stock=%u flips=%u staleDropped=%u wraps=%u splices=%u "
           "diverged=%u gated=%u pagedEpisodes=%u bandSuppressed=%u session=%u "
-          "sessionDrops=%u",
+          "sessionDrops=%u blankDraws=%u",
           g_statActs, g_statStock, g_statFlips, g_statStale, g_statWraps, g_statSplices,
           g_statDiverged, g_statGated, g_statEpisodes, g_statSuppressed,
-          g_session, g_statSessionDrop);
+          g_session, g_statSessionDrop, g_statBlank);
 }
 
 // ---------------------------------------------------------------------------
