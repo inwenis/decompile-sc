@@ -228,6 +228,31 @@ function Get-Logical {
     }
 }
 
+# PRODFAN's row and PRODQ's record each read the ring fresh, at their own moment on the
+# observer thread, while the game thread keeps promoting: one read of 5 beside one of 4 is
+# a tick between them, not a disagreement about memory. Re-read until both agree; a
+# persistent skew still reaches Get-Logical's assertion.
+function Test-ProdRingsAgree {
+    param([Parameter(Mandatory)]$Prod, [Parameter(Mandatory)][string[]]$Units)
+    foreach ($u in $Units) {
+        $row = @($Prod.Rows | Where-Object { $_.Unit -eq $u }) | Select-Object -First 1
+        $trk = $Prod.Tracked[$u]
+        if ($row -and $trk -and $row.EngineLen -ne $trk.EngineLen) { return $false }
+    }
+    $true
+}
+function Get-ProdStable {
+    param([Parameter(Mandatory)][string]$Tag, [Parameter(Mandatory)][string[]]$Units, [int]$Tries = 4)
+    $p = $null
+    for ($i = 1; $i -le $Tries; $i++) {
+        $p = Get-Prod $Tag
+        if (Test-ProdRingsAgree -Prod $p -Units $Units) { return $p }
+        Write-Host "       $Tag: the two ring readers disagree (a promotion between reads); re-reading ($i/$Tries)"
+        Start-Sleep -Milliseconds 700
+    }
+    $p
+}
+
 # Assert one building's ring slot by slot. A length is a count, and a count can be produced
 # by the wrong things sitting in the wrong slots.
 function Assert-Ring {
@@ -375,25 +400,8 @@ try {
     }
 
     Step "menus: Single Player -> Expansion -> Play Custom -> $mapName" {
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 215 -Y 119        # Single Player
-        Send-ScClick -Hwnd $hwnd -X 373 -Y 300        # StarCraft: Brood War (Expansion)
-        Start-Sleep -Seconds 1
-        Send-ScClick -Hwnd $hwnd -X 75  -Y 111        # first entry in the Registry list
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 392        # Ok
-        Start-Sleep -Seconds 2
-        Send-ScClick -Hwnd $hwnd -X 327 -Y 415        # Play Custom -- opens in Maps\BroodWar
-        Start-Sleep -Seconds 2
-        Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
-        Select-ScBrowserMap -Hwnd $hwnd -GameDir $GameDir -MapPath $mapPath | Out-Null
-        Set-ScGameType -Hwnd $hwnd -LogPath $LogPath -Index 2      # Use Map Settings, verified
-        Shot 'lobby'
-        Send-ScClick -Hwnd $hwnd -X 516 -Y 393        # Ok -> mission briefing
-        Start-Sleep -Seconds 6
-        Send-ScClick -Hwnd $hwnd -X 544 -Y 387        # Start
-        Start-Sleep -Seconds 10
-        Dismiss-ScTipsDialog -Hwnd $hwnd -LogPath $LogPath | Out-Null
-        Start-Sleep -Seconds 2
+        Enter-ScCustomGame -Hwnd $hwnd -LogPath $LogPath -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -Noun 'test' `
+            -BeforeStart { Shot 'lobby' }
         Shot 'in-game'
     }
 
@@ -486,7 +494,7 @@ try {
     }
 
     Step "every building holds $Clicks items -- ring in its own memory, the rest in the plugin" {
-        $p = Get-Prod 'group-after'
+        $p = Get-ProdStable -Tag 'group-after' -Units $script:groupUnits
         foreach ($u in $script:groupUnits) {
             $l = Get-Logical -Prod $p -Unit $u
             Write-Host ("         unit=0x{0} ring={1} overflow={2} logical={3} engine=[{4}]" -f `
@@ -564,7 +572,7 @@ try {
         Send-ScClick -Hwnd $hwnd -X $cx -Y $cy
         Start-Sleep -Seconds 2
 
-        $before = Get-Prod 'cancel-before'
+        $before = Get-ProdStable -Tag 'cancel-before' -Units @($script:singleUnit)
         Assert-That 'exactly one building is selected' ($before.Buildings -eq 1)
         $script:singleUnit = if ($before.Rows.Count -gt 0) { $before.Rows[0].Unit } else { $null }
         Assert-That 'and it is one of the group' `
@@ -586,7 +594,7 @@ try {
             Start-Sleep -Seconds 2
         }
 
-        $after = Get-Prod 'cancel-after'
+        $after = Get-ProdStable -Tag 'cancel-after' -Units @($script:singleUnit)
         $lAfter = Get-Logical -Prod $after -Unit $script:singleUnit
         Write-Host "       logical $($lBefore.Logical) -> $($lAfter.Logical), minerals $mineralsBeforeCancel -> $($after.Minerals)"
         Assert-That "the plugin cancelled exactly one of its own held items ($($after.Cancelled - $cancelledBefore))" `
@@ -607,7 +615,7 @@ try {
     # control that the single path queues past five in this game too.
     # ------------------------------------------------------------------------------
     Step 'the SINGLE-building case still queues past five, in this same game' {
-        $before = Get-Prod 'single-before'
+        $before = Get-ProdStable -Tag 'single-before' -Units @($script:singleUnit)
         Assert-That 'still exactly one building selected' ($before.Buildings -eq 1)
         $lBefore = Get-Logical -Prod $before -Unit $script:singleUnit
         $mineralsBeforeSingle = $before.Minerals
@@ -628,7 +636,7 @@ try {
         # it usable as a control arm.
         Assert-That 'and nothing was fanned out for a selection of one' ($fanned.Count -eq 0)
 
-        $after = Get-Prod 'single-after'
+        $after = Get-ProdStable -Tag 'single-after' -Units @($script:singleUnit)
         $lAfter = Get-Logical -Prod $after -Unit $script:singleUnit
         Write-Host "       logical $($lBefore.Logical) -> $($lAfter.Logical) (ring $($lAfter.Ring) + overflow $($lAfter.Overflow))"
         Assert-Ring "the single building 0x$($script:singleUnit)" `

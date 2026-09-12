@@ -94,44 +94,14 @@ function Get-ScBufferDump {
     [pscustomobject]@{ Tag = $Tag; Path = $path; Cam = $cam }
 }
 
-function Click-UntilDialog {
-    param([Parameter(Mandatory)][IntPtr]$Hwnd, [Parameter(Mandatory)][string]$LogPath,
-          [int]$X, [int]$Y, [string]$Name, [int]$Tries = 3, [int]$WaitSec = 12)
-    for ($i = 1; $i -le $Tries; $i++) {
-        Send-ScClick -Hwnd $Hwnd -X $X -Y $Y
-        $d = Wait-ScDialog -LogPath $LogPath -Name $Name -TimeoutSec $WaitSec
-        if ($d) { return $d }
-        Write-Host "       walk: '$Name' not up after click $i/$Tries at ($X,$Y); retrying"
-    }
-    $null
-}
-
-# Main menu -> Single Player -> Expansion -> a Use Map Settings game on the
-# fixture -> Start -> tips dismissed. Throws with the caller's noun in front.
+# The cnc-ddraw arm of drive-game's Enter-ScCustomGame: the same walk with the
+# activation nudge on, which the off-screen cnc-ddraw glue screens need.
 function Walk-ToScGame {
     param([Parameter(Mandatory)][IntPtr]$Hwnd, [Parameter(Mandatory)][string]$LogPath,
           [Parameter(Mandatory)]$Fixtures, [Parameter(Mandatory)][string]$MapPath,
           [Parameter(Mandatory)][string]$GameDir, [string]$Noun = 'probe')
-    $env:SCDRIVE_POST_ACTIVATE = '1'
-    try {
-        if (-not (Wait-ScDialog -LogPath $LogPath -Name 'MainMenu' -TimeoutSec 30)) { throw "${Noun}: main menu never appeared." }
-        Start-Sleep -Seconds 3
-        if (-not (Click-UntilDialog -Hwnd $Hwnd -LogPath $LogPath -X 215 -Y 119 -Name 'Delete')) { throw "${Noun}: Original/Expansion chooser never appeared." }
-        Send-ScClick -Hwnd $Hwnd -X 373 -Y 300; Start-Sleep -Seconds 1
-        Send-ScClick -Hwnd $Hwnd -X 75 -Y 111
-        if (-not (Click-UntilDialog -Hwnd $Hwnd -LogPath $LogPath -X 516 -Y 392 -Name 'RaceSelection' -WaitSec 15)) { throw "${Noun}: RaceSelection never appeared." }
-        if (-not (Click-UntilDialog -Hwnd $Hwnd -LogPath $LogPath -X 327 -Y 415 -Name 'Create' -WaitSec 15)) { throw "${Noun}: map browser never appeared." }
-        Start-Sleep -Seconds 2
-        Assert-ScFixtureStillMine -Run $Fixtures -MapPath $MapPath
-        Select-ScBrowserMap -Hwnd $Hwnd -GameDir $GameDir -MapPath $MapPath | Out-Null
-        Set-ScGameType -Hwnd $Hwnd -LogPath $LogPath -Index 2
-        Send-ScClick -Hwnd $Hwnd -X 516 -Y 393; Start-Sleep -Seconds 6
-        Send-ScClick -Hwnd $Hwnd -X 544 -Y 387; Start-Sleep -Seconds 10
-        Dismiss-ScTipsDialog -Hwnd $Hwnd -LogPath $LogPath | Out-Null
-        Start-Sleep -Seconds 3
-    } finally {
-        $env:SCDRIVE_POST_ACTIVATE = '0'
-    }
+    Enter-ScCustomGame -Hwnd $Hwnd -LogPath $LogPath -Fixtures $Fixtures -MapPath $MapPath `
+        -GameDir $GameDir -ActivationNudge -Noun $Noun
 }
 
 # The stage-3 cnc-ddraw launch with the frame dump armed. Returns the game pid.
