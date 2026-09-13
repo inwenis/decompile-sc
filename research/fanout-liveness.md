@@ -215,7 +215,7 @@ selection arrays every 250 ms.
 ```powershell
 ./tools/plugin/test-combat-death.ps1                 # gate ON  -> the unit is refused
 ./tools/plugin/test-combat-death.ps1 -Liveness 0 `   # gate OFF -> the unit is replayed
-    -LogPath 'C:\sc-work\logs\020-defect-arm.log'
+    -LogPath 'C:\decompile-sc-data\sc-work\logs\020-defect-arm.log'
 ```
 
 **Arm A — the gate ON.** 36 Lurkers boxed, walked into the Hydralisks, one dies; 1.2 s later the
@@ -527,7 +527,7 @@ should.
 ./tools/plugin/build.ps1 -Test                      # offline: hooktest part [7]
 ./tools/plugin/test-combat-death.ps1                # in game: the fix, green
 ./tools/plugin/test-combat-death.ps1 -Liveness 0 `  # in game: the defect, RED by design
-    -LogPath 'C:\sc-work\logs\020-defect-arm.log'
+    -LogPath 'C:\decompile-sc-data\sc-work\logs\020-defect-arm.log'
 ```
 
 ---

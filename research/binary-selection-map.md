@@ -18,11 +18,11 @@ launched, no binary was modified, and the user's playable install was never open
 
 | | |
 |---|---|
-| Binary | `C:\sc-work\1161-base\StarCraft.exe` (the project's disposable working copy) |
+| Binary | `C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe` (the project's disposable working copy) |
 | Size | 1,220,608 bytes |
 | SHA-256 | `AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C6A46` |
 | Hash verified | **Yes**, twice — `Get-FileHash` before the run, and independently by Ghidra, which reports `executableSHA256 = ad6b58b2…88c6a46` for the imported program. The analyzed image and the expected image are the same bytes. |
-| Pristine install | `C:\sc-install\Starcraft` — **never opened**. Not read, not written. |
+| Pristine install | `C:\decompile-sc-data\sc-install\Starcraft` — **never opened**. Not read, not written. |
 | Tool | Ghidra 12.1.2 (`ghidra_12.1.2_PUBLIC_20260605.zip`, SHA-256 `b62e81a0…272cf99d`), headless |
 | JDK | 24.0.1 |
 
@@ -990,7 +990,7 @@ Committed data, all of it findings rather than derived game content:
 [`selection-immediates.tsv`](data/selection-immediates.tsv) (§4),
 [`selection-function-probe.tsv`](data/selection-function-probe.tsv) (§7).
 
-The Ghidra install lives at `C:\re-tools\ghidra_12.1.2_PUBLIC` (outside every worktree, so that
+The Ghidra install lives at `C:\decompile-sc-data\re-tools\ghidra_12.1.2_PUBLIC` (outside every worktree, so that
 pruning a merged worktree cannot delete it) and is found via `$env:GHIDRA_INSTALL_DIR`. The Ghidra
 project, full listings, decompiled C and per-function instruction dumps are **derived game content**
 and stay under `work/scratch/` (gitignored); only the finding tables in `research/data/` are

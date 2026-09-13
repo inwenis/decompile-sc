@@ -25,7 +25,7 @@ at all with twelve units selected, but a fan-out chunk CAN be one unit long, so 
 it would make a command fire that the player's own selection never would.
 
 .EXAMPLE
-./tools/ghidra/sweep.ps1 -Mode Prepare -InputPE C:\sc-work\1161-base\StarCraft.exe `
+./tools/ghidra/sweep.ps1 -Mode Prepare -InputPE C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe `
     -ProjectDir work/scratch/ghidra-sweep -LogFile work/scratch/ghidra-sweep/import.log
 ./tools/ghidra/build-opcode-policy.ps1
 #>
@@ -34,7 +34,7 @@ param(
     [string]$ProjectDir = 'work/scratch/ghidra-sweep',
     [string]$WorkDir    = 'work/scratch/opcode-policy',
     [string]$OutTsv     = 'research/data/command-opcodes.tsv',
-    [string]$InputPE    = 'C:\sc-work\1161-base\StarCraft.exe',
+    [string]$InputPE    = 'C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe',
     [string]$SendTsv    = 'research/data/command-ids.tsv',
     [switch]$SkipSweep
 )

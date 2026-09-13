@@ -9,8 +9,8 @@ Usage:
 
 Example (this repo's baseline):
     python tools/pe_report.py \
-        C:/sc-work/1161-base/StarCraft.exe \
-        C:/sc-work/1161-base/storm.dll \
+        C:/decompile-sc-data/sc-work/1161-base/StarCraft.exe \
+        C:/decompile-sc-data/sc-work/1161-base/storm.dll \
         -o research/pe-anatomy.md
 """
 

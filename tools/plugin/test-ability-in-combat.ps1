@@ -21,7 +21,7 @@ scans. Background: research/ability-semantics.md §7, research/command-card.md.
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
+    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
     # Which ability is used mid-fight; $ABILITIES below holds everything that differs per arm.
     [ValidateSet('stim', 'cloak')][string]$Ability = 'stim',
     # Defaulted after the param block so it can follow -Ability; a caller can still pin it.
@@ -171,7 +171,7 @@ $ABILITY_KEY = $ABIL.Key
 if (-not $PSBoundParameters.ContainsKey('EnemyCount')) { $EnemyCount = $ABIL.EnemyCount }
 if (-not $PSBoundParameters.ContainsKey('EnemyType'))  { $EnemyType  = $ABIL.EnemyType }
 $ENEMY_TYPE_ID = [int]$EnemyType
-if (-not $LogDir) { $LogDir = $(if ($Ability -eq 'stim') { 'C:\sc-work\logs\022' } else { 'C:\sc-work\logs\026' }) }
+if (-not $LogDir) { $LogDir = $(if ($Ability -eq 'stim') { 'C:\decompile-sc-data\sc-work\logs\022' } else { 'C:\decompile-sc-data\sc-work\logs\026' }) }
 # The camera opens centred on the start location and never moves on its own, so a click
 # at client x is an order to (start.x + x - 320). Same constants as test-combat-death.ps1.
 $WALK_X = 540

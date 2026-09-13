@@ -13,7 +13,7 @@ state beside the baseline (so the restore itself can be undone), then deletes th
 imports the baseline, so values added since are gone too. Save right before, not once: a
 restore also reverts whatever the user changed since the save. Every save keeps a
 timestamped copy, so no earlier state is lost to a later save.
-The files stay under C:\sc-work: they hold the user's own Recent Maps paths.
+The files stay under C:\decompile-sc-data\sc-work: they hold the user's own Recent Maps paths.
 
 .EXAMPLE
 ./tools/sc-registry-baseline.ps1 -Save
@@ -26,7 +26,7 @@ param(
     [Parameter(ParameterSetName = 'Restore', Mandatory)][switch]$Restore,
     # Injectable so Pester proves this against a throwaway key, never the real one.
     [string]$Key = 'HKCU\SOFTWARE\Blizzard Entertainment\Starcraft',
-    [string]$Dir = 'C:\sc-work\registry'
+    [string]$Dir = 'C:\decompile-sc-data\sc-work\registry'
 )
 $ErrorActionPreference = 'Stop'
 $baseline = Join-Path $Dir 'baseline.reg'

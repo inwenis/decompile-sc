@@ -23,8 +23,8 @@ running process -- and not a screenshot: a frame is never the oracle
 [CmdletBinding()]
 param(
     [ValidateSet('0', '1', '2')][string]$Stage = '1',
-    [string]$GameDir = 'C:\sc-work\1161-base',
-    [string]$LogDir = 'C:\sc-work\logs',
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
+    [string]$LogDir = 'C:\decompile-sc-data\sc-work\logs',
     # This suite's own fixture folder (AGENTS.md § "Test fixtures").
     [string]$FixtureDir,
     # Menu reading only. Stages 0 and 1 are fully decided at the menu; skipping the
@@ -41,7 +41,7 @@ param(
     # outside the repo (Save-ScWindowImage refuses inside it); publishing one is a
     # deliberate copy (AGENTS.md § "Screenshots").
     [switch]$CaptureFrames,
-    [string]$FrameDir = 'C:\sc-work\logs\034-frames',
+    [string]$FrameDir = 'C:\decompile-sc-data\sc-work\logs\034-frames',
     [switch]$KeepOpen
 )
 

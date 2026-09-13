@@ -17,7 +17,7 @@ hand produces the same zip under work\scratch\release (gitignored).
 [CmdletBinding()]
 param(
     [string]$OutDir,
-    [string]$CncDdrawDll = 'C:\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll'
+    [string]$CncDdrawDll = 'C:\decompile-sc-data\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll'
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot  = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path

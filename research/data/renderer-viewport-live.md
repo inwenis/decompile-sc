@@ -11,7 +11,7 @@ process. This is those values, read out of a live StarCraft.
 - **Arms**: two readings, `menu` (main menu) and `ingame` (a generated 128x96-tile map loaded,
   one Marine). The pair is the point: a single in-game reading cannot tell "layer 5 is the
   playfield" from "layer 5 always looks like that".
-- Log kept at the gitignored diagnostic path `C:\sc-work\logs\032-screen-layout.log`; the
+- Log kept at the gitignored diagnostic path `C:\decompile-sc-data\sc-work\logs\032-screen-layout.log`; the
   lines below are copied verbatim minus their timestamps.
 
 ## menu

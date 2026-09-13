@@ -19,9 +19,9 @@ diagnostic, written outside the repo (AGENTS.md § "Screenshots").
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = 'C:\sc-work\1161-base',
-    [string]$LogPath = 'C:\sc-work\logs\015-fanout-orders.log',
-    [string]$ShotDir = 'C:\sc-work\logs\015-fanout-frames',
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
+    [string]$LogPath = 'C:\decompile-sc-data\sc-work\logs\015-fanout-orders.log',
+    [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\015-fanout-frames',
     [switch]$KeepOpen
 )
 

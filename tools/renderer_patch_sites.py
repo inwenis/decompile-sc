@@ -50,7 +50,7 @@ except ImportError:  # pragma: no cover
     sys.exit("renderer_patch_sites: capstone is required (pip install capstone)")
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_EXE = r"C:\sc-work\1161-base\StarCraft.exe"
+DEFAULT_EXE = r"C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe"
 
 # The stock geometry every site below is declared against: a site whose current
 # bytes do not carry the stock value is refused, which pins the table to 1.16.1.

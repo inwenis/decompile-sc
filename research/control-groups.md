@@ -548,7 +548,7 @@ part had two of them before.
 
 ```powershell
 # static: import + analyze once, then the queries
-./tools/ghidra/sweep.ps1 -Mode Prepare -InputPE C:\sc-work\1161-base\StarCraft.exe `
+./tools/ghidra/sweep.ps1 -Mode Prepare -InputPE C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe `
     -ProjectDir work/scratch/ghidra-021 -LogFile work/scratch/ghidra-021/import.log
 ./tools/ghidra/sweep.ps1 -Mode Run -ProjectDir work/scratch/ghidra-021 -ProgramName StarCraft.exe `
     -Script DisassembleAt.java -ScriptArgs work/scratch/ghidra-021/recovery.tsv, tools/ghidra/specs/selection-code-recovery.spec
@@ -561,9 +561,9 @@ part had two of them before.
 # into one file, so the first call writes and the second appends; --module defaults to the
 # PE's file name, which is what the committed table's `module` column holds. This
 # reproduces research/data/accelerators.tsv byte-identically.
-python tools/parse_accelerators.py C:\sc-work\1161-base\StarCraft.exe `
+python tools/parse_accelerators.py C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe `
     --tsv research/data/accelerators.tsv --append
-python tools/parse_accelerators.py C:\sc-work\1161-base\Local.dll `
+python tools/parse_accelerators.py C:\decompile-sc-data\sc-work\1161-base\Local.dll `
     --tsv research/data/accelerators.tsv --append
 
 # offline core tests, then the in-game run

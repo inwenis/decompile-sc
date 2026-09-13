@@ -17,8 +17,8 @@ Archived incident narratives live in `research/rulebook-history.md` (old heading
 ## Hard rules
 
 1. NEVER commit game binaries, MPQ archives, extracted assets, maps (stock or generated: a fixture is an edited copy of a Blizzard map), or anything else that reproduces game content; CI's extension ban is a backstop.
-   Screenshots are allowed: whole game view, one per claim or state, never a frame dump or a crop that isolates a sprite, icon, portrait or UI panel. Write frames under `C:\sc-work\` and copy in only the one you publish.
-2. `C:\sc-install` (the user's playable install) is READ-ONLY; `run-with-plugin.ps1`, `scinject.exe` and `deploy.ps1` refuse it. Patching is in-process only: `StarCraft.exe` in the working copy `C:\sc-work\1161-base` stays byte-identical to pristine; to patch a binary on disk, copy it into `work/scratch/` first.
+   Screenshots are allowed: whole game view, one per claim or state, never a frame dump or a crop that isolates a sprite, icon, portrait or UI panel. Write frames under `C:\decompile-sc-data\sc-work\` and copy in only the one you publish.
+2. `C:\decompile-sc-data\sc-install` (the user's playable install) is READ-ONLY; `run-with-plugin.ps1`, `scinject.exe` and `deploy.ps1` refuse it. Patching is in-process only: `StarCraft.exe` in the working copy `C:\decompile-sc-data\sc-work\1161-base` stays byte-identical to pristine; to patch a binary on disk, copy it into `work/scratch/` first.
 3. Offline and single-player only: NEVER open Multiplayer (Battle.net, any gateway, LAN); menu walks click Single Player only.
 4. Every claimed address, offset or struct in `research/` carries how it was found AND how it was verified. No guessed offsets.
 5. NEVER write live user state outside the repo and the working copy: registry, `%APPDATA%`, Documents, the desktop.
@@ -167,7 +167,7 @@ Fixture ownership is code: copy `test-burrow-fanout.ps1`'s recipe (`Resolve-ScFi
 
 ## Decompiled C
 
-- DO read a function as C before its asm: `C:\sc-work\decomp\StarCraft.exe\0x<ENTRY>.<name>.c`, one file per function, `listing.asm` beside it; `ranges.tsv` maps a code address to its function, `types.txt` a struct offset to its field, a grep for `\bname\b` also hits stubs that jump into a shared tail and misses table/register calls (real call sites: `call   0x<addr>` in `listing.asm`). Missing? `./tools/ghidra/decomp-all.ps1`.
+- DO read a function as C before its asm: `C:\decompile-sc-data\sc-work\decomp\StarCraft.exe\0x<ENTRY>.<name>.c`, one file per function, `listing.asm` beside it; `ranges.tsv` maps a code address to its function, `types.txt` a struct offset to its field, a grep for `\bname\b` also hits stubs that jump into a shared tail and misses table/register calls (real call sites: `call   0x<addr>` in `listing.asm`). Missing? `./tools/ghidra/decomp-all.ps1`.
   A name with `nameSource` IMPORTED is a Magnetar hypothesis, USER_DEFINED this repo's (`tools/ghidra/magnetar-overrides.tsv`): hard rule 4 applies before either enters `research/`, and where they disagree the cited evidence decides, not the side.
   Why: a static asm read of the terrain blitter was "clean" and wrong; in C its run+1 defect is one loop condition.
   -> tools/ghidra/README.md § "Whole-binary decompile with names"

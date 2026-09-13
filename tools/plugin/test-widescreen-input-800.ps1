@@ -39,10 +39,10 @@ picture of the wide window is another suite's; this suite is the input proof.
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
-    [string]$LogDir = 'C:\sc-work\logs\071',
+    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
+    [string]$LogDir = 'C:\decompile-sc-data\sc-work\logs\071',
     [string]$FixtureDir,
-    [string]$FrameDir = 'C:\sc-work\logs\071-frames',
+    [string]$FrameDir = 'C:\decompile-sc-data\sc-work\logs\071-frames',
     [switch]$StockOnly,
     [switch]$S3Only,
     [switch]$KeepOpen

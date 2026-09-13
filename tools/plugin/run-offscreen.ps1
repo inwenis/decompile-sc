@@ -34,9 +34,9 @@ that needs to join a run already in progress.
 
 .EXAMPLE
 ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/test-selection-circles.ps1 `
-    -SuiteArgs @{ ShotDir = 'C:\sc-work\logs\frames' }
+    -SuiteArgs @{ ShotDir = 'C:\decompile-sc-data\sc-work\logs\frames' }
 A frame reproduces game artwork, so a suite's frames stay a diagnostic on a gitignored path
-under C:\sc-work\ whatever desktop the run is on (AGENTS.md § "Screenshots").
+under C:\decompile-sc-data\sc-work\ whatever desktop the run is on (AGENTS.md § "Screenshots").
 
 .EXAMPLE
 # Anything, not only a suite -- used by probe-cross-desktop-input.ps1:
@@ -221,7 +221,7 @@ namespace ScSpawn {
 # --- where the run happens ----------------------------------------------------
 # Outside the repo, like every other artifact of a run: a transcript is scratch, and the
 # shared scratch root is the one place every launch already uses.
-$runRoot = 'C:\sc-work\logs\offscreen'
+$runRoot = 'C:\decompile-sc-data\sc-work\logs\offscreen'
 New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
 $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
 $tag = if ($Suite) { [IO.Path]::GetFileNameWithoutExtension($Suite) } else { 'command' }

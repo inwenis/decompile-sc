@@ -24,7 +24,7 @@ Usage:
     python tools/plugin/analyze_present_frames.py [frame_dir]
 
 Reads present-<arm>-menu.png (and -menu2.png brackets if present) from
-frame_dir (default C:\\sc-work\\logs\\065-frames) and prints readings; it
+frame_dir (default C:\\decompile-sc-data\\sc-work\\logs\\065-frames) and prints readings; it
 asserts nothing itself -- the numbers go into research/renderer-viewport.md
 with the run they came from.
 """
@@ -121,7 +121,7 @@ def caption_rows(im):
 
 
 def main():
-    d = Path(sys.argv[1] if len(sys.argv) > 1 else r"C:\sc-work\logs\065-frames")
+    d = Path(sys.argv[1] if len(sys.argv) > 1 else r"C:\decompile-sc-data\sc-work\logs\065-frames")
     frames = {f.stem.removeprefix("present-").removesuffix("-menu"): f
               for f in sorted(d.glob("present-*-menu.png"))}
     brackets = {f.stem.removeprefix("present-").removesuffix("-menu2"): f

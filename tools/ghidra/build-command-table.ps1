@@ -25,7 +25,7 @@ Sites whose buffer is not an [EBP + disp] local (a handful build theirs elsewher
 are counted and reported, not silently dropped.
 
 .EXAMPLE
-./tools/ghidra/sweep.ps1 -Mode Prepare -InputPE C:\sc-work\1161-base\StarCraft.exe `
+./tools/ghidra/sweep.ps1 -Mode Prepare -InputPE C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe `
     -ProjectDir work/scratch/ghidra-sweep -LogFile work/scratch/ghidra-sweep/import.log
 ./tools/ghidra/sweep.ps1 -Mode Run -ProjectDir work/scratch/ghidra-sweep `
     -ProgramName StarCraft.exe -Script HookProbe.java `

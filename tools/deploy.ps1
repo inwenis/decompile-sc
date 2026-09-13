@@ -18,12 +18,12 @@ map dropped straight into <DeployRoot>\game\Maps\ does not.
 
 .PARAMETER DeployRoot
 Where the self-contained install is assembled. Must not be inside this repo, under
-C:\git, under C:\sc-work, under -SourceGameDir, or under C:\sc-install. Checked against
+C:\git, under C:\decompile-sc-data\sc-work, under -SourceGameDir, or under C:\decompile-sc-data\sc-install. Checked against
 the canonical (device-prefix/8.3/junction-resolved) form of both the argument and every
 protected root, not the literal spelling.
 
 .PARAMETER SourceGameDir
-The pristine-verified working copy to deploy from. Never C:\sc-install -- nothing writes
+The pristine-verified working copy to deploy from. Never C:\decompile-sc-data\sc-install -- nothing writes
 to the pristine install (AGENTS.md § "Hard rules").
 
 .PARAMETER ShortcutName
@@ -43,10 +43,10 @@ touch live user state such as the desktop (AGENTS.md § "Hard rules").
 #>
 [CmdletBinding()]
 param(
-    [string]$DeployRoot = 'C:\sc-deploy\starcraft-modded',
-    [string]$SourceGameDir = 'C:\sc-work\1161-base',
+    [string]$DeployRoot = 'C:\decompile-sc-data\sc-deploy\starcraft-modded',
+    [string]$SourceGameDir = 'C:\decompile-sc-data\sc-work\1161-base',
     [string]$ShortcutName = 'StarCraft Modded.lnk',
-    [string]$CncDdrawDir = 'C:\sc-work\cnc-ddraw\v7.1.0.0',
+    [string]$CncDdrawDir = 'C:\decompile-sc-data\sc-work\cnc-ddraw\v7.1.0.0',
     # The geometry preset the main shortcut plays at; tools/plugin/src/sc_screen_patches_<G>.h
     # must exist (sc_screen_presets.h lists the ones the DLL carries). Every preset also
     # gets its own "StarCraft Modded <G>" shortcut, for trying the sizes side by side.
@@ -68,7 +68,7 @@ $pluginDir = Join-Path $scriptDir 'plugin'
 
 # Junction/8.3/device-prefix-proof canonicalisation (Get-CanonicalPath, Test-PathUnder) --
 # shared with run-with-plugin.ps1's pristine-install guard. A plain GetFullPath comparison
-# is spellable around: '-DeployRoot \\?\C:\sc-install\Starcraft' passes a naive prefix
+# is spellable around: '-DeployRoot \\?\C:\decompile-sc-data\sc-install\Starcraft' passes a naive prefix
 # check unchanged, and /MIR would then purge inside the pristine install.
 . (Join-Path $pluginDir 'sc-canonical-path.ps1')
 . (Join-Path $pluginDir 'sc-launch-lock.ps1')
@@ -88,9 +88,9 @@ foreach ($devicePrefix in @('\\?\', '\\.\')) {
 foreach ($protected in @(
     @{ Path = $repoRoot;       Label = 'this repo' }
     @{ Path = 'C:\git';        Label = 'every repo/worktree root' }
-    @{ Path = 'C:\sc-work';    Label = 'the working-copy scratch root' }
+    @{ Path = 'C:\decompile-sc-data\sc-work';    Label = 'the working-copy scratch root' }
     @{ Path = $SourceGameDir;  Label = '-SourceGameDir itself' }
-    @{ Path = 'C:\sc-install'; Label = 'the pristine install (hard rule 2)' }
+    @{ Path = 'C:\decompile-sc-data\sc-install'; Label = 'the pristine install (hard rule 2)' }
 )) {
     $protectedFull = Get-CanonicalPath $protected.Path
     if (Test-PathUnder -Candidate $deployRootFull -Root $protectedFull) {
@@ -581,7 +581,7 @@ $buildIdPath = Join-Path $deployRootFull 'BUILD-ID.txt'
     '    . <thisdir>\plugin\sc-build-id.ps1'
     '    Get-ScDllBuildStamp -Path <thisdir>\plugin\scplugin.dll'
     'Every game launched through the shortcut also logs this in its ATTACH banner'
-    '(C:\sc-work\logs\sc-plugin.log, line "  build         : ...").'
+    '(C:\decompile-sc-data\sc-work\logs\sc-plugin.log, line "  build         : ...").'
 ) | Set-Content -LiteralPath $buildIdPath -Encoding utf8
 Write-Host "verify: build receipt written -> $buildIdPath"
 

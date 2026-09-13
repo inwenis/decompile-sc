@@ -10,7 +10,7 @@ Every field below is read directly from the PE headers via `pefile`; the field n
 
 ## `StarCraft.exe`
 
-- File: `C:\sc-work\1161-base\StarCraft.exe`
+- File: `C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe`
 - Size: 1,220,608 bytes
 - sha256: `AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C6A46`
 - Type: EXE (evidence: FILE_HEADER.Characteristics IMAGE_FILE_DLL bit clear / pefile.is_exe())
@@ -62,7 +62,7 @@ Every field below is read directly from the PE headers via `pefile`; the field n
 
 ## `storm.dll`
 
-- File: `C:\sc-work\1161-base\storm.dll`
+- File: `C:\decompile-sc-data\sc-work\1161-base\storm.dll`
 - Size: 409,600 bytes
 - sha256: `706FF2164CA472F27C44235ED55586644E5C86E68CD69B62D76F5A78778BFF25`
 - Type: DLL (evidence: FILE_HEADER.Characteristics IMAGE_FILE_DLL bit set / pefile.is_dll())

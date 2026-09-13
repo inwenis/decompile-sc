@@ -16,8 +16,8 @@ already changed. A leak can rearrange desktop icons, which are live user state
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = 'C:\sc-work\1161-base',
-    [string]$LogDir = 'C:\sc-work\logs',
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
+    [string]$LogDir = 'C:\decompile-sc-data\sc-work\logs',
     [int]$HoldSec = 20,
     [int]$TimeoutMinutes = 6
 )

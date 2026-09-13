@@ -1,7 +1,7 @@
 # How the status pane draws TEXT — and what it costs to put a number of your own in it
 
 Task 033. Everything here was read out of `StarCraft.exe` 1.16.1 (the working copy at
-`C:\sc-work\1161-base`, SHA-256 `AD6B…6A46`, verified before analysis) with this repo's own
+`C:\decompile-sc-data\sc-work\1161-base`, SHA-256 `AD6B…6A46`, verified before analysis) with this repo's own
 Ghidra pipeline, plus one raw dump of `.rdata` taken independently of Ghidra. Every address
 carries how it was found and how it was checked (AGENTS.md hard rule 4). Nothing below is
 inherited from public prior art — GPTP, teippi and BWAPI all name the *control types*, but none
@@ -286,12 +286,12 @@ Four points that are not obvious and each cost something to learn:
 
 ```powershell
 # once: import + analyse into a persistent project (~3 min)
-./tools/ghidra/sweep.ps1 -Mode Prepare -InputPE C:\sc-work\1161-base\StarCraft.exe `
+./tools/ghidra/sweep.ps1 -Mode Prepare -InputPE C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe `
     -ProjectDir work/scratch/033/ghidra -LogFile work/scratch/033/ghidra/import.log
 
 # the two default handler tables, straight out of .rdata, independent of Ghidra
-python work/scratch/033/peek.py C:\sc-work\1161-base\StarCraft.exe dwords 0x005014AC 20
-python work/scratch/033/peek.py C:\sc-work\1161-base\StarCraft.exe dwords 0x00501504 20
+python work/scratch/033/peek.py C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe dwords 0x005014AC 20
+python work/scratch/033/peek.py C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe dwords 0x00501504 20
 
 # the static-text handlers are reachable ONLY through those tables, so auto-analysis leaves
 # them undefined -- recover them from the table entries first, then read them as listings

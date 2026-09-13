@@ -2141,7 +2141,7 @@ function Save-ScWindowImage {
     $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
     if ($full.StartsWith($repoRoot, [StringComparison]::OrdinalIgnoreCase) -and
         $full -notmatch '\\work\\scratch\\') {
-        throw "drive-game: refusing to write a game frame into the repo at '$full' -- frames go under C:\sc-work\ or work/scratch/; a screenshot you publish is picked and copied in by hand (AGENTS.md hard rule 1)."
+        throw "drive-game: refusing to write a game frame into the repo at '$full' -- frames go under C:\decompile-sc-data\sc-work\ or work/scratch/; a screenshot you publish is picked and copied in by hand (AGENTS.md hard rule 1)."
     }
     New-Item -ItemType Directory -Path (Split-Path $full -Parent) -Force | Out-Null
 

@@ -7,7 +7,7 @@ Ghidra and that copy exist, the named decompiled C (tools/ghidra/decomp-all.ps1)
 
 .DESCRIPTION
 Idempotent: whatever is already present is skipped. Everything lands outside the repo
-(C:\re-tools, C:\sc-work), so pruning a worktree cannot delete it. Per-worktree setup is
+(C:\decompile-sc-data\re-tools, C:\decompile-sc-data\sc-work), so pruning a worktree cannot delete it. Per-worktree setup is
 setup-worktree.ps1. Toolchain provenance and sha256: tools/plugin/README.md "Toolchain
 (pinned)"; cnc-ddraw pin: tools/plugin/fetch-cnc-ddraw.ps1.
 
@@ -19,7 +19,7 @@ param(
     # Your own StarCraft: Brood War 1.16.1 install. Omit to make the working copy later
     # with ./tools/make-working-copy.ps1 -Source <that folder>.
     [string]$StarCraftDir,
-    [string]$ToolchainRoot = 'C:\re-tools\mingw32-gcc-16.1.0-i686-msvcrt'
+    [string]$ToolchainRoot = 'C:\decompile-sc-data\re-tools\mingw32-gcc-16.1.0-i686-msvcrt'
 )
 $ErrorActionPreference = 'Stop'
 
@@ -43,7 +43,7 @@ else {
 }
 
 & (Join-Path $PSScriptRoot 'tools/plugin/fetch-cnc-ddraw.ps1') | Out-Null
-Write-Host 'setup-onetime: cnc-ddraw present (C:\sc-work\cnc-ddraw\v7.1.0.0)'
+Write-Host 'setup-onetime: cnc-ddraw present (C:\decompile-sc-data\sc-work\cnc-ddraw\v7.1.0.0)'
 
 if ($StarCraftDir) {
     & (Join-Path $PSScriptRoot 'tools/make-working-copy.ps1') -Source $StarCraftDir
@@ -54,11 +54,11 @@ else {
 
 # Decompiled C for reading (AGENTS.md § "Decompiled C"): needs Ghidra and the working copy. The
 # manifest is written last; index.tsv alone can be a run cut short.
-$decompManifest = 'C:\sc-work\decomp\StarCraft.exe\index.tsv.manifest'
+$decompManifest = 'C:\decompile-sc-data\sc-work\decomp\StarCraft.exe\index.tsv.manifest'
 if ((Test-Path -LiteralPath $decompManifest) -and (Select-String -LiteralPath $decompManifest -Pattern '^status=OK$' -Quiet)) {
-    Write-Host 'setup-onetime: decompiled C present (C:\sc-work\decomp\StarCraft.exe)'
+    Write-Host 'setup-onetime: decompiled C present (C:\decompile-sc-data\sc-work\decomp\StarCraft.exe)'
 }
-elseif ($env:GHIDRA_INSTALL_DIR -and (Test-Path -LiteralPath 'C:\sc-work\1161-base\StarCraft.exe')) {
+elseif ($env:GHIDRA_INSTALL_DIR -and (Test-Path -LiteralPath 'C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe')) {
     & (Join-Path $PSScriptRoot 'tools/ghidra/decomp-all.ps1')
 }
 else {

@@ -21,8 +21,8 @@ probe read-only: no hooks, no writes to game memory, no patch to StarCraft.exe o
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = 'C:\sc-work\1161-base',
-    [string]$LogDir = 'C:\sc-work\logs',
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
+    [string]$LogDir = 'C:\decompile-sc-data\sc-work\logs',
     # This run's own fixture folder, one folder per run (AGENTS.md § "Test fixtures").
     [string]$FixtureDir,
     [switch]$KeepOpen

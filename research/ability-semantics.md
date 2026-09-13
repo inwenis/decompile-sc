@@ -2,7 +2,7 @@
 
 Analysis date: 2026-08-09 (task 022). Target: `StarCraft.exe`, StarCraft: Brood War 1.16.1
 (classic), SHA-256 `AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C6A46` — the
-project's disposable working copy `C:\sc-work\1161-base`, hash checked before and after every
+project's disposable working copy `C:\decompile-sc-data\sc-work\1161-base`, hash checked before and after every
 run in this document.
 
 This is an AUDIT, opened by three things the user saw while playing the fan-out build:
@@ -236,7 +236,7 @@ reason — see §5, which settles it by comparing sets instead of by arguing abo
 24 at full health and 12 pre-damaged to 25%, which for a 40-hit-point Marine is **exactly 10 HP
 = 0xa00, the gate constant itself**. One Stim keypress, then three more.
 
-Verbatim from `C:\sc-work\logs\022\stim-fanout.log`, nothing elided between the lines shown:
+Verbatim from `C:\decompile-sc-data\sc-work\logs\022\stim-fanout.log`, nothing elided between the lines shown:
 
 ```
 UNITSTATE [boxed]   n=36 live=36 visible=12 overflow=24 orders=[0x03:36] types=[0x00:36]
@@ -646,7 +646,7 @@ acquisition code that could plausibly cause it.
 Posted clicks are processed either way, which is why every other part of `drive-game.ps1` works
 with the window in the background, and why this went unseen.
 
-Measured (`work/scratch/022/probe-gametype*.ps1`, frames under `C:\sc-work\logs\022*-frames`):
+Measured (`work/scratch/022/probe-gametype*.ps1`, frames under `C:\decompile-sc-data\sc-work\logs\022*-frames`):
 posting a move to (500,200) with the window inactive leaves the game's own drawn cursor exactly
 where the last posted **click** left it. So a dropdown opened by a posted button-down highlights
 whatever row the cursor was on when it opened, never moves, and the button-up commits the value

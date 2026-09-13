@@ -11,7 +11,7 @@ through neither them, an 8.3 short name, nor a symlink/junction on the path -- s
 guard can be spelled around. Get-CanonicalPath resolves all of it through the filesystem's
 own APIs, so the guard tests the real path, not the spelling that arrived in an argument.
 
-Callers use it to refuse writes inside the pristine install at C:\sc-install (AGENTS.md
+Callers use it to refuse writes inside the pristine install at C:\decompile-sc-data\sc-install (AGENTS.md
 § "Hard rules"), so every such guard dot-sources this single copy rather than re-deriving
 a second one that can drift.
 

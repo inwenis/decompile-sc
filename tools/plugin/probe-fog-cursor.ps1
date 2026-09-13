@@ -18,11 +18,11 @@ $env:AGENT_TASK = '145'; ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
-    [string]$LogDir = 'C:\sc-work\logs\145',
+    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
+    [string]$LogDir = 'C:\decompile-sc-data\sc-work\logs\145',
     [string]$FixtureDir,
-    [string]$FrameDir = 'C:\sc-work\logs\145-frames',
-    [string]$WindowedHelperDll = 'C:\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll',
+    [string]$FrameDir = 'C:\decompile-sc-data\sc-work\logs\145-frames',
+    [string]$WindowedHelperDll = 'C:\decompile-sc-data\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll',
     [switch]$KeepOpen
 )
 

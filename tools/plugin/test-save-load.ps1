@@ -17,11 +17,11 @@ Only -GameDir's own save\asdf\ is ever opened; the user's real saves are never t
 [CmdletBinding()]
 param(
     [ValidateSet('control', 'fanout', 'crossload')][string]$Phase = 'control',
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
+    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
     [string]$LogPath,
-    [string]$ShotDir = 'C:\sc-work\logs\051-frames',
+    [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\051-frames',
     # Where the cross-phase snapshots live. Not the repo: these are run data.
-    [string]$StateDir = 'C:\sc-work\logs\051',
+    [string]$StateDir = 'C:\decompile-sc-data\sc-work\logs\051',
     [string]$FixtureDir,
     # The plugin's logical cap for the fanout arms. 8 = 4 in the engine's ring
     # (SC_PRODQ_ENGINE_HOLD) + 4 held by the plugin, comfortably inside the 18 psi two
@@ -51,7 +51,7 @@ $repoRoot = Split-Path (Split-Path $scriptDir -Parent) -Parent
 
 . (Join-Path $scriptDir 'sc-suite.ps1')
 
-if (-not $LogPath) { $LogPath = "C:\sc-work\logs\051\save-load-$Phase.log" }
+if (-not $LogPath) { $LogPath = "C:\decompile-sc-data\sc-work\logs\051\save-load-$Phase.log" }
 
 # --- fixture ------------------------------------------------------------------
 if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-t051' -Suite 'save-load' }

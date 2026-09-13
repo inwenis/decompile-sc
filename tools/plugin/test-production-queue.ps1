@@ -16,9 +16,9 @@ the plugin's while it holds any; a status-strip icon click (payload k) is the en
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
-    [string]$LogPath = 'C:\sc-work\logs\025\production-queue.log',
-    [string]$ShotDir = 'C:\sc-work\logs\025\production-frames',
+    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
+    [string]$LogPath = 'C:\decompile-sc-data\sc-work\logs\025\production-queue.log',
+    [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\025\production-frames',
     [string]$FixtureDir,
     # How many times the Train button is clicked. Deliberately MORE than -QueueMax, so the
     # cap refusal is exercised rather than assumed absent.

@@ -65,6 +65,7 @@ Windows, PowerShell 7, git, Python 3.11+.
    when stale; it returns when the game closes. Any launcher parameter overrides a default,
    e.g. `./run.ps1 -Geometry 1536x864`.
 5. `./deploy.ps1` installs the modded game with a desktop shortcut, plus one per widescreen size.
+6. `./clean.ps1` frees disk under `C:\decompile-sc-data` (scratch deploys, builds, logs); preview with `-WhatIf`.
 
 Release: `git tag v1.0 && git push origin v1.0`; CI builds the zip and attaches it. Tests:
 `Invoke-Pester -Path tests`. How each feature works and how it was verified: `research/` and

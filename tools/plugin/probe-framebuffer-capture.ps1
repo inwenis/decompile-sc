@@ -32,10 +32,10 @@ committed (AGENTS.md § "Hard rules").
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = 'C:\sc-work\1161-base',
-    [string]$LogDir = 'C:\sc-work\logs',
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
+    [string]$LogDir = 'C:\decompile-sc-data\sc-work\logs',
     [string]$FixtureDir,
-    [string]$FrameDir = 'C:\sc-work\logs\063-frames',
+    [string]$FrameDir = 'C:\decompile-sc-data\sc-work\logs\063-frames',
     # One arm only, for iterating. A RESULT needs both: the stock arm is the
     # instrument's positive control, the stage-1 arm is the question.
     [switch]$StockOnly,

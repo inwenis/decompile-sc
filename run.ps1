@@ -11,7 +11,7 @@ Any tools/plugin/run-with-plugin.ps1 parameter overrides a default:
   ./run.ps1 -Sound:$false
 #>
 $play = [ordered]@{
-    Mode = 'fanout'; Windowed = $true; WindowedHelperDll = 'C:\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll'
+    Mode = 'fanout'; Windowed = $true; WindowedHelperDll = 'C:\decompile-sc-data\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll'
     Widescreen = '1'; WidescreenStage = '3'; Geometry = '1280x880'; StormPresent = 'widen'; MenuCentre = '1'
     Circles = '1'; HudRow = '1'; ProdQueue = '1'; ProdFan = '1'; UpgradeQueue = '1'; QueueIndicator = '1'
     Sound = $true; WaitForExit = $true

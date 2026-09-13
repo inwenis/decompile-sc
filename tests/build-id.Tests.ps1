@@ -197,7 +197,7 @@ Describe 'Test-ScPluginCurrent' {
 
 Describe 'run-with-plugin.ps1 -BuildDir is honoured, not "helpfully" rebuilt' {
     # A NAMED build dir is a deliberate choice: test-random-conformance.ps1 points at
-    # C:\sc-work\builds\<sha> to reproduce a bug against the commit before its fix, and
+    # C:\decompile-sc-data\sc-work\builds\<sha> to reproduce a bug against the commit before its fix, and
     # README-deploy.md points this script at the user's DEPLOYED plugin dir. Rebuilding
     # into either destroys the build the caller asked for, and in the deploy case
     # overwrites the user's installed binary from a test run.
@@ -207,10 +207,10 @@ Describe 'run-with-plugin.ps1 -BuildDir is honoured, not "helpfully" rebuilt' {
 
     BeforeAll {
         $script:runner  = Join-Path $script:pluginDir 'run-with-plugin.ps1'
-        $script:gameDir = 'C:\sc-work\1161-base'
+        $script:gameDir = 'C:\decompile-sc-data\sc-work\1161-base'
     }
 
-    It 'leaves a stale DLL in a named -BuildDir untouched, and says so' -Skip:(-not (Test-Path 'C:\sc-work\1161-base')) {
+    It 'leaves a stale DLL in a named -BuildDir untouched, and says so' -Skip:(-not (Test-Path 'C:\decompile-sc-data\sc-work\1161-base')) {
         $bd = Join-Path ([IO.Path]::GetTempPath()) ("scbuilddir-" + [Guid]::NewGuid().ToString('n'))
         New-Item -ItemType Directory -Path $bd -Force | Out-Null
         try {

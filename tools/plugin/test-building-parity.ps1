@@ -30,9 +30,9 @@ of them" is assertable.
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = 'C:\sc-work\1161-base',
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
     [string]$LogPath,
-    [string]$ShotDir = 'C:\sc-work\logs\036-building-parity-frames',
+    [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\036-building-parity-frames',
     [string]$FixtureDir,
     # The BEFORE measurement: report every layer, assert almost nothing.
     [switch]$Measure,
@@ -44,7 +44,7 @@ param(
 $ErrorActionPreference = 'Stop'
 if ($Measure -and $Stock) { throw 'test: -Measure and -Stock are separate arms; pass one.' }
 $arm = if ($Measure) { 'measure' } elseif ($Stock) { 'stock' } else { 'feature' }
-if (-not $LogPath) { $LogPath = "C:\sc-work\logs\036-building-parity-$arm.log" }
+if (-not $LogPath) { $LogPath = "C:\decompile-sc-data\sc-work\logs\036-building-parity-$arm.log" }
 
 $scriptDir = $PSScriptRoot
 $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path

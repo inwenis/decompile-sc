@@ -99,7 +99,7 @@ With parameters:
 
 ```powershell
 ./tools/make-test-map.ps1 -UnitCount 50 -UnitType marine -Player 0 `
-    -OutputPath C:\sc-work\1161-base\Maps\my-test.scx
+    -OutputPath C:\decompile-sc-data\sc-work\1161-base\Maps\my-test.scx
 ```
 
 | Param          | Default                                                   | Meaning                              |
@@ -113,8 +113,8 @@ With parameters:
 | `-KeepTriggers` | off                                                        | keep the template's `TRIG`/`MBRF`. **Never for a fixture** — a stock map's own triggers end the game within seconds of loading |
 | `-Race`        | the placed unit type's race                                 | `zerg`/`terran`/`protoss`, written into `SIDE` for the human and computer slots |
 | `-UnitHp`      | `100`                                                       | hit points as a **percentage** of the type's maximum (1-100), applied to the `-UnitType` block **only**. Lower makes the combat variant's victims die in seconds instead of minutes. The enemy force is deliberately left at 100%: it has to survive the engagement, which is what keeps the deaths a trickle |
-| `-TemplatePath`| `C:\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx` | source map for terrain/start location |
-| `-OutputPath`  | `C:\sc-work\1161-base\Maps\test-many-units.scx`            | where the generated map is written    |
+| `-TemplatePath`| `C:\decompile-sc-data\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx` | source map for terrain/start location |
+| `-OutputPath`  | `C:\decompile-sc-data\sc-work\1161-base\Maps\test-many-units.scx`            | where the generated map is written    |
 
 Combat variant (task 019) — off unless `-EnemyCount` is given:
 
@@ -160,8 +160,8 @@ be used as a fixture with its triggers left in.
 
 ## Output location
 
-Generated maps go into `C:\sc-work\1161-base\Maps\` (the disposable working
-copy), never `C:\sc-install\Starcraft` (hard rule: never touch the pristine
+Generated maps go into `C:\decompile-sc-data\sc-work\1161-base\Maps\` (the disposable working
+copy), never `C:\decompile-sc-data\sc-install\Starcraft` (hard rule: never touch the pristine
 install). `tools/make-working-copy.ps1 -Force` preserves anything under
 `Maps\` that isn't part of the pristine install (task 010), so a generated
 map survives a default reset. Pass `-PurgeExtras` for a true byte-for-byte
@@ -180,8 +180,8 @@ terrain dimensions, and that the output differs from its template in no
 section other than the ones it meant to change. Example output:
 
 ```
-wrote C:\sc-work\1161-base\Maps\BroodWar\00-testmap\lurkers.scx
-OK: C:\sc-work\1161-base\Maps\BroodWar\00-testmap\lurkers.scx
+wrote C:\decompile-sc-data\sc-work\1161-base\Maps\BroodWar\00-testmap\lurkers.scx
+OK: C:\decompile-sc-data\sc-work\1161-base\Maps\BroodWar\00-testmap\lurkers.scx
   36 unit(s) of type 103 owned by player 0, at 100% hit points
   start location for player 0 at (864, 624)
   OWNR[0] = HUMAN(open slot); one computer slot at 1 owning 0 unit(s) -- nothing hostile in the game
@@ -427,7 +427,7 @@ corrupt. The cause: richchk 0.3.0's `StarCraftMpqIo.save_chk_to_mpq()` writes
 Checked independently -- an MPQ reader written from scratch against the
 public MoPaQ format spec (not richchk, not StormLib, not anything that wrote
 the file under test) -- every stock map inspected
-(`C:\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx`, the
+(`C:\decompile-sc-data\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx`, the
 template this generator uses, and a scenario map,
 `Maps\campaign\(1)Enslavers02b.scm`) stores `staredit\scenario.chk`
 **encrypted** and **PKWARE-compressed** (sector data starts with byte
@@ -521,7 +521,7 @@ suggested otherwise.)
 # task 028's cancel fixture: two Nexuses, 3000 minerals
 ./tools/make-test-map.ps1 -UnitCount 2 -UnitType nexus -Player 0 -Race protoss `
     -ClearPlayerUnits -GridSpacing 160 -StartingMinerals 3000 -StartingGas 1000 `
-    -OutputPath 'C:\sc-work\1161-base\Maps\BroodWar\00-t028\production-queue.scx'
+    -OutputPath 'C:\decompile-sc-data\sc-work\1161-base\Maps\BroodWar\00-t028\production-queue.scx'
 ```
 
 ## Unit settings — `-UnitBuildTime` and friends (task 031)

@@ -706,7 +706,7 @@ run, and what looked like a "hand back" was the process exiting).
 So a worker launch now records the foreground window immediately before `CreateProcess`
 and restores it once the game's window exists — `tools/plugin/sc-foreground.ps1`, called
 from `run-with-plugin.ps1`. Measured before and after, same machine, same minute, one
-launch each (in-process sampler, 150 ms, `C:\sc-work\logs\035\fg2-*.txt`):
+launch each (in-process sampler, 150 ms, `C:\decompile-sc-data\sc-work\logs\035\fg2-*.txt`):
 
 | | game holds the foreground | how it ended |
 |---|---|---|
@@ -883,7 +883,7 @@ by READING the key, never writing it:
 
 ```
 Custom Type   : Free For All
-Recent Maps   : {..., C:\sc-work\1161-base\maps\campaign\(1)Enslavers02b.scm}
+Recent Maps   : {..., C:\decompile-sc-data\sc-work\1161-base\maps\campaign\(1)Enslavers02b.scm}
 ```
 
 `Recent Maps` in the SAME key held a real path from the user's own play, not a test
@@ -984,7 +984,7 @@ with screenshots"*. Both halves hold at once, and they do not conflict:
 
 - Every visual claim a worker makes — in a PR body or a message — carries a PNG of that
   exact state, captured through the suite's `-CaptureFrames` path into
-  `C:\sc-work\logs\<NNN>-frames\`, named for the STATE rather than a counter, before and
+  `C:\decompile-sc-data\sc-work\logs\<NNN>-frames\`, named for the STATE rather than a counter, before and
   after for anything claimed fixed, one pair per distinct case.
 - The path is what travels. Never the image: no `pr-image`, no committed frame, ever.
   Hand the user the paths and they open them locally.
@@ -1041,7 +1041,7 @@ Before killing an agent or a test driver, ALWAYS:
    concluding an agent is unresponsive, send it something and give it time to
    answer; do not infer death from silence alone.
 4. After stopping, re-check for a surviving game and for a
-   `C:\sc-work\logs\sc-launch.lock` naming a dead pid.
+   `C:\decompile-sc-data\sc-work\logs\sc-launch.lock` naming a dead pid.
 
 Killing an orphan is allowed ONLY with positive proof it is orphaned — a
 test output file that has stopped growing, and a lock file naming a dead

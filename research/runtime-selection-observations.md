@@ -7,7 +7,7 @@ what happened when we put our own code inside StarCraft 1.16.1 and read those ad
 
 Tooling, toolchain and injection design: [`tools/plugin/README.md`](../tools/plugin/README.md).
 
-All work was done on the disposable working copy `C:\sc-work\1161-base`, offline, single-player
+All work was done on the disposable working copy `C:\decompile-sc-data\sc-work\1161-base`, offline, single-player
 only. No Battle.net, no multiplayer, no CD key. The plugin is **read-only**: it does not write
 to game memory, patch code, change page protections, or hook input.
 
@@ -49,7 +49,7 @@ rather than silently producing garbage.
 
 ```
 [2026-08-07 08:30:19.324] ATTACH pid=26952 tid=21604
-[2026-08-07 08:30:19.324]   host exe      : C:\sc-work\1161-base\StarCraft.exe
+[2026-08-07 08:30:19.324]   host exe      : C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe
 [2026-08-07 08:30:19.324]   module base   : 0x00400000
 [2026-08-07 08:30:19.324]   preferred base: 0x00400000
 [2026-08-07 08:30:19.324]   reloc delta   : +0x00000000  => static addresses are USABLE VERBATIM
@@ -80,8 +80,8 @@ flag, so Windows honours its preferred base — which is what we observed, not w
 `HMODULE`, which is checked rather than assumed:
 
 ```
-scinject: launched pid=26952  C:\sc-work\1161-base\StarCraft.exe
-scinject: early-injected C:\sc-work\1161-base\WMode.dll -> HMODULE 0x10000000
+scinject: launched pid=26952  C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe
+scinject: early-injected C:\decompile-sc-data\sc-work\1161-base\WMode.dll -> HMODULE 0x10000000
 scinject: WaitForInputIdle -> 0
 scinject: injected ...\scplugin.dll -> HMODULE 0x71F70000 in pid 26952
 ```
@@ -358,7 +358,7 @@ Injecting `WMode.dll` into the still-suspended process, before `ResumeThread`, w
 ```
 
 ```
-scinject: early-injected C:\sc-work\1161-base\WMode.dll -> HMODULE 0x10000000
+scinject: early-injected C:\decompile-sc-data\sc-work\1161-base\WMode.dll -> HMODULE 0x10000000
 check-game-windows: pid=26952  top-level windows=3
   hwnd=0x043507C8 class='SWarClass' visible=True rect=1595,784-2245,1301 style=0x94000000 title='Brood War'
 check-game-windows: OK — no error dialogs
@@ -468,7 +468,7 @@ have to be force-killed out of the process.
 
 ## 7. Housekeeping
 
-- **Pristine install.** Nothing in this task wrote to `C:\sc-install\Starcraft`. It was read
+- **Pristine install.** Nothing in this task wrote to `C:\decompile-sc-data\sc-install\Starcraft`. It was read
   twice, both times read-only and both times for verification: by
   `tools/make-working-copy.ps1`, which uses it as the `robocopy` source and hash-verifies it, and
   by a directory listing (file names only, no contents) to produce the diff in §6. Stated
@@ -482,8 +482,8 @@ have to be force-killed out of the process.
   (`characters\asdf.spc`), their replay, and another task's scratch map. The working copy is a
   shared resource; a reset is not free.
 - **No game process left running.** Verified after every launch.
-- **No game content committed.** Logs live under `C:\sc-work\logs\` (outside the repo;
-  `C:/sc-work/` is gitignored) and only excerpts appear here. Screenshots taken during testing
+- **No game content committed.** Logs live under `C:\decompile-sc-data\sc-work\logs\` (outside the repo;
+  `C:/decompile-sc-data/sc-work/` is gitignored) and only excerpts appear here. Screenshots taken during testing
   were used for verification and are deliberately **not** committed or attached to the PR: they
   reproduce game artwork, which project hard rule 1 forbids. Built binaries are likewise not
   committed (`.gitignore` blocks `*.dll`/`*.exe`).

@@ -1,7 +1,7 @@
 // sc_log.h -- the plugin's log file. Shared by the observer and the fan-out hooks.
 //
-// Destination: %SCPLUGIN_LOG%, default C:\sc-work\logs\sc-plugin.log. Both are
-// outside the repo and C:/sc-work/ is gitignored, so captured game state is never
+// Destination: %SCPLUGIN_LOG%, default C:\decompile-sc-data\sc-work\logs\sc-plugin.log. Both are
+// outside the repo and C:/decompile-sc-data/sc-work/ is gitignored, so captured game state is never
 // committed (AGENTS.md hard rule 1).
 
 #ifndef SC_LOG_H

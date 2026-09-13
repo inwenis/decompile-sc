@@ -51,15 +51,15 @@ with its coverage: which invariants were asserted and how often the seam was rea
 
 .EXAMPLE
 # the teeth test: the same plan against a plugin built from another commit
-./tools/plugin/test-random-conformance.ps1 -Seed 1837465102 -BuildDir C:\sc-work\builds\59aa50b
+./tools/plugin/test-random-conformance.ps1 -Seed 1837465102 -BuildDir C:\decompile-sc-data\sc-work\builds\59aa50b
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
-    [string]$LogPath = 'C:\sc-work\logs\041\random-conformance.log',
+    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
+    [string]$LogPath = 'C:\decompile-sc-data\sc-work\logs\041\random-conformance.log',
     # Frames are named for the state they show and written outside the repo; the read-back
     # stays the oracle.
-    [string]$ShotDir = 'C:\sc-work\logs\041-frames',
+    [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\041-frames',
     [string]$FixtureDir,
     # 0 means "choose one and PRINT it" -- an unseeded run still has a seed, it just has
     # not been told which one yet, and a run whose seed is not on the console is a run

@@ -16,9 +16,9 @@ test-burrow-fanout.ps1; the map is generated per run and deleted (game content, 
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = 'C:\sc-work\1161-base',
-    [string]$LogPath = 'C:\sc-work\logs\017-hud-row.log',
-    [string]$ShotDir = 'C:\sc-work\logs\017-hud-row-frames',
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
+    [string]$LogPath = 'C:\decompile-sc-data\sc-work\logs\017-hud-row.log',
+    [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\017-hud-row-frames',
     # Plugin build to run (default: run-with-plugin.ps1's). A parameter so a before/after
     # pair can run this suite against a defect build in its own directory: before-numbers
     # and before-frames then come from the build that actually ships, not a description.

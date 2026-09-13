@@ -14,7 +14,7 @@ block a34791d9899cced8  # 10 identical lines: BuildUnit = $m.Groups[10].Value
 block 891f5ecc37b63654  # 10 identical lines: Ink = [int]$m.Groups['ink'].Value; RefInk = [int]$m.Groups['refInk'].V
 block d7291935ce6742e8  # 10 identical lines: Shot 'in-game'
 block 40b8b0635d39b609  # 10 identical lines: [int]$Margin = 24,
-block 9780e3abd90b000c  # 10 identical lines: [string]$ShotDir = 'C:\sc-work\logs\043\probe-frames',
+block 972d7acb6b8fb049  # 10 identical lines: [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\043\probe-frames
 block 9b2fd93e9f28d9f8  # 10 identical lines: if ($fixtures) {
 block 6ef9e11470f47cc1  # 10 identical lines: }
 block ce6f1aa4df0da592  # 10 identical lines: } }
@@ -140,7 +140,7 @@ block 007390454501f8cd  # 7 identical lines: Assert-That "the key emitted $BURRO
 block 1a65fb829e0726a9  # 7 identical lines: Step 'POSITIVE CONTROL: click ONE building and press Train once' {
 block 9d9ed85112a622ee  # 7 identical lines: [CmdletBinding()]
 block c53a3545d5be8304  # 7 identical lines: [DllImport("user32.dll")] public static extern IntPtr GetForegroundWin
-block 4c30d46ced7cee02  # 7 identical lines: if (-not $LogPath) { $LogPath = "C:\sc-work\logs\024-building-groups-$
+block 939cd76c83f16635  # 7 identical lines: if (-not $LogPath) { $LogPath = "C:\decompile-sc-data\sc-work\logs\024
 block 670c1e8295456468  # 7 identical lines: if (-not ('ScDrive.Native' -as [type])) {
 block d855bbf7108e7e29  # 7 identical lines: if (-not ('ScSpawn.Native' -as [type])) {
 block cd35980922b59abd  # 7 identical lines: if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPa
@@ -164,7 +164,7 @@ block d2cf0cd5ac458f3e  # 8 identical lines: New-Item -ItemType Directory -Path 
 block 7a1cf7df06d1807f  # 8 identical lines: Send-ScDrag -Hwnd $hwnd -X1 10 -Y1 10 -X2 630 -Y2 340 -Steps 20
 block aa8a26be6a56cc2f  # 8 identical lines: [CmdletBinding()]
 block a1fbe42c62503caa  # 8 identical lines: [string]$DecoyFolder = '00-t000',
-block 871a0535b2f9a6f5  # 8 identical lines: [string]$ShotDir = 'C:\sc-work\logs\043\probe-frames',
+block 30ac0c80bfbc8aad  # 8 identical lines: [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\043\probe-frames
 block d88814f1c3b054ba  # 8 identical lines: if (-not $gamePid) { throw "probe-framecap: could not parse the game p
 block 14c70206a22edb8e  # 8 identical lines: if (-not ('SCWin.Enum' -as [type])) {
 block 8c7ec4976f9a729c  # 8 identical lines: param([string]$What, [bool]$Ok, [string]$Detail = '')

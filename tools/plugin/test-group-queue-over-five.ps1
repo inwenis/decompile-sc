@@ -17,9 +17,9 @@ holds, what the engine charged.
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
-    [string]$LogPath = 'C:\sc-work\logs\038\group-queue-over-five.log',
-    [string]$ShotDir = 'C:\sc-work\logs\038\group-queue-frames',
+    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
+    [string]$LogPath = 'C:\decompile-sc-data\sc-work\logs\038\group-queue-over-five.log',
+    [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\038\group-queue-frames',
     [string]$FixtureDir,
     # Both numbers are chosen against the fixture's own limits, not for roundness:
     #   * 9 > 5, so every building has to go past the engine's ring for this to pass at all;

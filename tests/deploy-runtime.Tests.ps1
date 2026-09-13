@@ -76,7 +76,7 @@ Describe 'a redeploy leaves the feature-test map in place (task 067)' {
 
     It 'pins the output into the deployed game tree, not the generator''s default' {
         # make-feature-test-map.ps1 DEFAULTS to the user's live install at
-        # C:\sc-deploy\starcraft-modded; deploy.ps1 must pin -OutputPath under its own
+        # C:\decompile-sc-data\sc-deploy\starcraft-modded; deploy.ps1 must pin -OutputPath under its own
         # $gameDeployDir or a -DeployRoot override would write the map into the wrong tree.
         $script:deployText.Contains("Join-Path `$gameDeployDir 'Maps\BroodWar\!feature-test.scx'") |
             Should -BeTrue -Because 'the map must land in THIS deploy''s game tree for any -DeployRoot'

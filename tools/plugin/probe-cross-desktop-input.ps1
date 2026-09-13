@@ -18,10 +18,10 @@ already work (AGENTS.md § "Oracles: absence and defect-era checks").
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = 'C:\sc-work\1161-base',
-    [string]$LogPath = 'C:\sc-work\logs\043\probe-cross-desktop.log',
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
+    [string]$LogPath = 'C:\decompile-sc-data\sc-work\logs\043\probe-cross-desktop.log',
     # Outside the repo: a frame reproduces game artwork (AGENTS.md § "Hard rules").
-    [string]$ShotDir = 'C:\sc-work\logs\043\probe-frames',
+    [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\043\probe-frames',
     [switch]$KeepOpen
 )
 

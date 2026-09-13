@@ -32,9 +32,9 @@ upgrade" can be asked without dragging in the level-N/level-N+1 case.
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
-    [string]$LogPath = 'C:\sc-work\logs\029\upgrade-wire.log',
-    [string]$ShotDir = 'C:\sc-work\logs\029\upgrade-wire-frames',
+    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
+    [string]$LogPath = 'C:\decompile-sc-data\sc-work\logs\029\upgrade-wire.log',
+    [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\029\upgrade-wire-frames',
     [string]$FixtureDir,
     [int]$StartingMinerals = 3000,
     [int]$StartingGas = 3000,

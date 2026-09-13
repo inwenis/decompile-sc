@@ -1,6 +1,6 @@
 # Launch baseline
 
-Working copy: `C:\sc-work\1161-base` (created/verified by `tools/make-working-copy.ps1`,
+Working copy: `C:\decompile-sc-data\sc-work\1161-base` (created/verified by `tools/make-working-copy.ps1`,
 see Context in `work/tasks/002-working-copy-baseline.md` for the pristine fingerprint it's
 checked against). All testing below was done offline, single-player scope only: no
 Battle.net connection, no CD key entry, no multiplayer.
@@ -9,9 +9,9 @@ Battle.net connection, no CD key entry, no multiplayer.
 
 **Yes**, directly, with no modification needed.
 
-- Command: `C:\sc-work\1161-base\StarCraft.exe` (working directory = its own folder;
+- Command: `C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe` (working directory = its own folder;
   no arguments).
-- Verified via `Start-Process -FilePath 'C:\sc-work\1161-base\StarCraft.exe' -WorkingDirectory 'C:\sc-work\1161-base' -PassThru`,
+- Verified via `Start-Process -FilePath 'C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe' -WorkingDirectory 'C:\decompile-sc-data\sc-work\1161-base' -PassThru`,
   polled with `Get-Process` for up to ~15s, then terminated with `taskkill /PID <pid> /F`
   (`Stop-Process -Force` returned "Access is denied" against this process — cause not
   investigated further, `taskkill` worked every time and every launch in this session was
@@ -29,7 +29,7 @@ Read-only inspection (never wrote to the registry):
 
 - `HKLM:\SOFTWARE\WOW6432Node\Blizzard Entertainment\Starcraft` already exists (from the
   original installer of the pristine copy) with `InstallPath` / `Program` pointing at
-  `C:\sc-install\Starcraft` — i.e. the **pristine** path, not the working copy.
+  `C:\decompile-sc-data\sc-install\Starcraft` — i.e. the **pristine** path, not the working copy.
 - `HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft` holds gameplay preferences (gamma,
   scroll speed, volume, etc.), not tied to any install path.
 - No `CDKey`/activation value was found in either key.
@@ -61,8 +61,8 @@ copy (`storm.dll` loads `ddraw.dll` dynamically via `LoadLibraryA`, not a static
 Windows' "check the app directory first" DLL search order picks up the local copy):
 
 ```powershell
-Copy-Item C:\sc-work\1161-base\WMode.dll C:\sc-work\1161-base\ddraw.dll -Force
-Start-Process C:\sc-work\1161-base\StarCraft.exe -WorkingDirectory C:\sc-work\1161-base
+Copy-Item C:\decompile-sc-data\sc-work\1161-base\WMode.dll C:\decompile-sc-data\sc-work\1161-base\ddraw.dll -Force
+Start-Process C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe -WorkingDirectory C:\decompile-sc-data\sc-work\1161-base
 ```
 
 Result with `WMode.dll` as `ddraw.dll`:
@@ -85,7 +85,7 @@ Result with `WMode.dll` as `ddraw.dll`:
   than function as a passive drop-in `ddraw.dll` — not verified.
 
 **Practical recipe for future windowed-mode use**:
-1. `Copy-Item C:\sc-work\1161-base\WMode.dll C:\sc-work\1161-base\ddraw.dll -Force`
+1. `Copy-Item C:\decompile-sc-data\sc-work\1161-base\WMode.dll C:\decompile-sc-data\sc-work\1161-base\ddraw.dll -Force`
 2. Launch `StarCraft.exe` as normal.
 3. If the window is minimized on first appearance, restore it (click the taskbar icon, or
    `ShowWindow(hwnd, SW_RESTORE)` if automating).
@@ -103,7 +103,7 @@ source).
 
 ## How to iterate fast (for future patch tasks)
 
-- `C:\sc-work\1161-base` is disposable and outside git — patch it freely.
+- `C:\decompile-sc-data\sc-work\1161-base` is disposable and outside git — patch it freely.
 - `tools/make-working-copy.ps1 -Force` resets it back to byte-identical-to-pristine in ~3
   seconds (`robocopy` measured ~350 MB/s on this machine for the 1.043 GB payload) and
   re-verifies both key-binary hashes plus whole-install file count/size.

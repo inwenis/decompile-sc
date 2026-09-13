@@ -15,7 +15,7 @@ Project directory and output belong under work/scratch/ (gitignored): a Ghidra p
 a game binary embeds that binary and must never be committed.
 
 .EXAMPLE
-./tools/ghidra/sweep.ps1 -Mode Prepare -InputPE C:\sc-work\1161-base\StarCraft.exe `
+./tools/ghidra/sweep.ps1 -Mode Prepare -InputPE C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe `
     -ProjectDir work/scratch/ghidra-sweep -LogFile work/scratch/ghidra-sweep/import.log
 
 .EXAMPLE
