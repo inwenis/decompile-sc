@@ -52,7 +52,7 @@ try:
 except ImportError:                                        # pragma: no cover
     sys.exit("renderer_pitch_sweep: capstone is required (pip install capstone)")
 
-DEFAULT_EXE = os.environ.get("SC_EXE", r"C:\sc-work\1161-base\StarCraft.exe")
+DEFAULT_EXE = os.environ.get("SC_EXE", r"C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe")
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TSV = os.path.join(REPO, "research", "data", "renderer-widescreen-patches.tsv")
 

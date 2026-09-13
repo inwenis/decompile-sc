@@ -19,7 +19,7 @@ game/
 
 # working copies live outside the repo already; belt-and-braces in case a
 # future worker symlinks/copies one in
-C:/sc-work/
+C:/decompile-sc-data/sc-work/
 /sc-work/
 *.exe
 *.dll

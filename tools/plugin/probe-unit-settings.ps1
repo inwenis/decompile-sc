@@ -17,9 +17,9 @@ advantage -- and hp at CUnit+0x08 names the winner. The map also cuts the SCV bu
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
-    [string]$LogPath = 'C:\sc-work\logs\031\unit-settings-probe.log',
-    [string]$ShotDir = 'C:\sc-work\logs\031\probe-frames',
+    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
+    [string]$LogPath = 'C:\decompile-sc-data\sc-work\logs\031\unit-settings-probe.log',
+    [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\031\probe-frames',
     [string]$FixtureDir,
     # FOUR, not twelve: a lone Command Center supplies 10 and every placed Marine eats 1,
     # so a dozen Marines put the player over the cap before the probe presses anything.

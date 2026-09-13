@@ -165,7 +165,7 @@ print(m.UNIX_OFF_USE_DEFAULT, m.UNIX_OFF_HIT_POINTS, m.UNIX_OFF_SHIELD_POINTS,
     # and getting five units' real, publicly-known stats back is what makes the layout a
     # reading rather than a guess.
     It 'decodes the Brood War template to the real stats of five units' {
-        $template = 'C:\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx'
+        $template = 'C:\decompile-sc-data\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx'
         if (-not (Test-Path -LiteralPath $template)) {
             Set-ItResult -Skipped -Because 'the template map is not on this machine'
         }

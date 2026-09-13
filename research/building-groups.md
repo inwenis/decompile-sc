@@ -1,7 +1,7 @@
 # Selecting buildings as a group — the gate, and what it takes to relax it
 
 Analysis date: 2026-08-09. Target: `StarCraft.exe`, StarCraft: Brood War 1.16.1 (classic),
-`C:\sc-work\1161-base\StarCraft.exe`, SHA-256
+`C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe`, SHA-256
 `AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C6A46` — the same disposable working
 copy every other document here analyses, hashed before the run. Tool: Ghidra 12.1.2 headless, the
 persistent-project driver `tools/ghidra/sweep.ps1`. The user's playable install was never opened.

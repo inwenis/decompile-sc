@@ -10,7 +10,7 @@
 // It never patches StarCraft.exe on disk; every modification lives in this process's
 // memory and is undone on unload.
 //
-// Log destination: %SCPLUGIN_LOG%, else C:\sc-work\logs\sc-plugin.log -- outside the
+// Log destination: %SCPLUGIN_LOG%, else C:\decompile-sc-data\sc-work\logs\sc-plugin.log -- outside the
 // repo and gitignored, so no captured game data is committed (AGENTS.md § "Hard rules").
 
 #include <windows.h>
@@ -317,7 +317,7 @@ static void ScanScreen(const char* tag) {
 // Same family as the SCREEN scan above: no hook, no writes, so it exists in -Mode observe.
 // Off by default: %SCPLUGIN_FRAMEDUMP% names the directory (launcher flag -FrameDump).
 // THE DUMP REPRODUCES GAME ARTWORK, so that directory must be on the gitignored diagnostic
-// path (C:\sc-work\...) and no dump is ever committed (AGENTS.md § "Hard rules").
+// path (C:\decompile-sc-data\sc-work\...) and no dump is ever committed (AGENTS.md § "Hard rules").
 //
 // TEARING. The observer reads while the game thread composes, so one copy can be half of
 // one frame and half of the next. The dump therefore copies until two CONSECUTIVE copies
@@ -335,7 +335,7 @@ static bool GetFrameDump(void) {
     DWORD n = GetEnvironmentVariableA("SCPLUGIN_FRAMEDUMP", g_frameDumpDir,
                                       sizeof(g_frameDumpDir));
     if (n == 0 || n >= sizeof(g_frameDumpDir)) { g_frameDumpDir[0] = '\0'; return false; }
-    // Last component only; the parent (C:\sc-work\logs) exists on every machine
+    // Last component only; the parent (C:\decompile-sc-data\sc-work\logs) exists on every machine
     // this runs on, and a caller pointing somewhere deeper owns that path.
     CreateDirectoryA(g_frameDumpDir, NULL);
     return true;

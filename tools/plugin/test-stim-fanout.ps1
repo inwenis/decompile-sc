@@ -27,9 +27,9 @@ is generated at run time and deleted afterwards (AGENTS.md § "Test fixtures").
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
-    [string]$LogPath = 'C:\sc-work\logs\022\stim-fanout.log',
-    [string]$ShotDir = 'C:\sc-work\logs\022\stim-frames',
+    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
+    [string]$LogPath = 'C:\decompile-sc-data\sc-work\logs\022\stim-fanout.log',
+    [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\022\stim-frames',
     # Which folder under Maps\ the fixture is generated into; see test-burrow-fanout.ps1.
     [string]$FixtureDir,
     # Long enough to show nothing drifts on its own: hit points and stim timers are either

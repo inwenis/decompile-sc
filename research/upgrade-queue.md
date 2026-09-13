@@ -1,7 +1,7 @@
 # Upgrades and research — where the ONE lives, and what can be done about it
 
 Task 029. Everything here was derived from `StarCraft.exe` 1.16.1 (the working copy at
-`C:\sc-work\1161-base`, SHA-256 `AD6B…6A46`) with this repo's own Ghidra pipeline and its own
+`C:\decompile-sc-data\sc-work\1161-base`, SHA-256 `AD6B…6A46`) with this repo's own Ghidra pipeline and its own
 in-process readers. Every address carries how it was found and how it was checked (AGENTS.md
 hard rule 4). Nothing is inherited from public prior art: the community fact that would have
 been tempting to copy — "`building.techType` is at `CUnit+0xC8` and `building.upgradeType` at
@@ -647,7 +647,7 @@ untouched.
 
 ```powershell
 # once: import + analyse into a persistent project (~4 min)
-./tools/ghidra/sweep.ps1 -Mode Prepare -InputPE C:\sc-work\1161-base\StarCraft.exe `
+./tools/ghidra/sweep.ps1 -Mode Prepare -InputPE C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe `
     -ProjectDir work/scratch/029/ghidra -LogFile work/scratch/029/ghidra/import.log
 
 # the handlers, the button conditions and the emitters

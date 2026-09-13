@@ -2,7 +2,7 @@
 
 Analysis date: 2026-08-08 (task 015). Target: `StarCraft.exe`, StarCraft: Brood War 1.16.1
 (classic), SHA-256 `AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C6A46` — the
-project's disposable working copy `C:\sc-work\1161-base`, hash checked before and after every
+project's disposable working copy `C:\decompile-sc-data\sc-work\1161-base`, hash checked before and after every
 run in this document.
 
 Companion to [`command-path.md`](command-path.md) (task 011), which mapped the **send** side:
@@ -579,7 +579,7 @@ read-only tool the evidence came out of is `tools/inspect_map.py`
 generates a 36-Lurker Use-Map-Settings map at run time, loads it through Play Custom, and deletes
 it afterwards. Burrow is innate to Lurkers, so the map needs no tech state at all.
 
-Verbatim from `C:\sc-work\logs\016-burrow-fanout.log`, one run, nothing elided:
+Verbatim from `C:\decompile-sc-data\sc-work\logs\016-burrow-fanout.log`, one run, nothing elided:
 
 ```
 [2026-08-08 05:32:07.201] UNITSTATE [boxed-1] n=36 live=36 visible=12 overflow=24 orders=[0x03:36] orders2=[0x17:36] types=[0x67:36] burrowed=0/36
@@ -644,8 +644,8 @@ at 24 units), and **in the live game as an ability** (here, Burrow at 36 units).
 ### Reproducing this
 
 ```powershell
-$env:GHIDRA_INSTALL_DIR = 'C:\re-tools\ghidra_12.1.2_PUBLIC'
-./tools/ghidra/sweep.ps1 -Mode Prepare -InputPE C:\sc-work\1161-base\StarCraft.exe `
+$env:GHIDRA_INSTALL_DIR = 'C:\decompile-sc-data\re-tools\ghidra_12.1.2_PUBLIC'
+./tools/ghidra/sweep.ps1 -Mode Prepare -InputPE C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe `
     -ProjectDir work/scratch/ghidra-sweep -LogFile work/scratch/ghidra-sweep/import.log
 ./tools/ghidra/build-opcode-policy.ps1          # -> research/data/command-opcodes.tsv
 ./tools/plugin/build.ps1 -Test                  # the offline proofs, no game

@@ -16,7 +16,7 @@ Windows drops the handle the instant the holder dies, so no lock can outlive its
 and no pid-liveness bookkeeping is needed.
 
 Not under work/scratch/: that directory is worktree-local, so each worker would lock its
-own private copy and nothing would serialise. C:\sc-work\logs\ is the scratch root every
+own private copy and nothing would serialise. C:\decompile-sc-data\sc-work\logs\ is the scratch root every
 launch already shares.
 
 WORKERS ONLY: callers must gate taking it on something never true of the user's own
@@ -30,7 +30,7 @@ scope.
 function Enter-ScLaunchLock {
     [CmdletBinding()]
     param(
-        [string]$LockPath = 'C:\sc-work\logs\sc-launch.lock',
+        [string]$LockPath = 'C:\decompile-sc-data\sc-work\logs\sc-launch.lock',
         [string]$TaskId = $(if ($env:AGENT_TASK) { $env:AGENT_TASK } else { "pid$PID" }),
         [int]$TimeoutMinutes = 5
     )

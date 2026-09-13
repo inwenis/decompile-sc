@@ -1051,7 +1051,7 @@ python tools/plugin/frame-capture.py --help                     # dump decode/ch
 #   user-attended GO: its LEAKED outcome flips the real desktop's mode for seconds
 ```
 
-Dumps and rendered PNGs land in `C:\sc-work\logs\063-frames\` (gitignored); the suite prints
+Dumps and rendered PNGs land in `C:\decompile-sc-data\sc-work\logs\063-frames\` (gitignored); the suite prints
 their paths for a human to open. Nothing in any of it changes what the user sees when they
 play, and `StarCraft.exe` on disk stays byte-identical.
 
@@ -1070,7 +1070,7 @@ presentation path; what fills those columns is task 064's half (stage 2).
   zip sha256 `0b13ab89a64c9918189b1dadd449ef6ed3cb3b7b19cabd96d8adbd95505bb908`,
   ddraw.dll sha256 `85e0f7d530dfda134793a57cb3e76b0287dcc96892ee57162dd68f47283b03a9`,
   x86 PE confirmed (machine 0x14C). Fetched and pinned by
-  `tools/plugin/fetch-cnc-ddraw.ps1` to `C:\sc-work\cnc-ddraw\v7.1.0.0\` — a
+  `tools/plugin/fetch-cnc-ddraw.ps1` to `C:\decompile-sc-data\sc-work\cnc-ddraw\v7.1.0.0\` — a
   game-adjacent binary, never committed (hard rule 1); a hash mismatch on re-fetch is a
   hard stop, not a re-pin.
 - **Install:** `run-with-plugin.ps1 -Windowed -WindowedHelperDll <path>` copies it in as
@@ -1167,15 +1167,15 @@ should not expect their noise floors to match.
 ### 14.5 How to reproduce
 
 ```powershell
-./tools/plugin/fetch-cnc-ddraw.ps1     # pinned v7.1.0.0 -> C:\sc-work\cnc-ddraw\ + hashes
+./tools/plugin/fetch-cnc-ddraw.ps1     # pinned v7.1.0.0 -> C:\decompile-sc-data\sc-work\cnc-ddraw\ + hashes
 ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-widescreen-present.ps1 `
   -SuiteArgs @{ Vector='both'; Stage='1'; BracketSeconds=4;
-                WindowedHelperDll='C:\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll';
-                FrameDir='C:\sc-work\logs\065-frames' }
+                WindowedHelperDll='C:\decompile-sc-data\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll';
+                FrameDir='C:\decompile-sc-data\sc-work\logs\065-frames' }
 .\.venv\Scripts\python.exe tools/plugin/analyze_present_frames.py   # the structural readings
 ```
 
-Frames land in `C:\sc-work\logs\065-frames\` (gitignored, paths travel, never
+Frames land in `C:\decompile-sc-data\sc-work\logs\065-frames\` (gitignored, paths travel, never
 `pr-image`d — hard rule 1). `StarCraft.exe` byte-identical throughout; the user's display
 mode, desktop and registry untouched; everything behind `-WindowedHelperDll`, which no
 suite passes by default.
@@ -1374,10 +1374,10 @@ fog defect stated rather than withheld.
 > section's measurements are all still good; only the attribution was wrong.
 
 Artifacts (gitignored diagnostic path; paths travel, images never):
-`C:\sc-work\logs\063-frames\fd-{stock,s2}-*.bin`, `*-render.png`,
+`C:\decompile-sc-data\sc-work\logs\063-frames\fd-{stock,s2}-*.bin`, `*-render.png`,
 `fd-synthetic-stride640.bin`; transcripts
-`C:\sc-work\logs\064-framecap-run{1b,2,3}.txt` and
-`C:\sc-work\logs\offscreen\20260813-*-probe-framebuffer-capture.txt`.
+`C:\decompile-sc-data\sc-work\logs\064-framecap-run{1b,2,3}.txt` and
+`C:\decompile-sc-data\sc-work\logs\offscreen\20260813-*-probe-framebuffer-capture.txt`.
 
 ### 15.5 What stage 2 still does not cover, stated so nobody over-reads
 
@@ -1528,7 +1528,7 @@ class anywhere). Row-side counts (14/15/17 rows, the 480-px vertical span,
 Predictions were registered before the first patched run (065's rule); each
 is scored below, misses included.
 
-**Run 1** (`C:\sc-work\logs\068-framecap-run1.txt`) — stock + defect + s2
+**Run 1** (`C:\decompile-sc-data\sc-work\logs\068-framecap-run1.txt`) — stock + defect + s2
 with scroll captures, 46/47, the one FAIL being the most informative reading
 of the run:
 
@@ -1575,7 +1575,7 @@ were not exercised by run 1; the probe now holds VK_RIGHT for 100 ms. The
 overshoot bought one thing free: map-LEFT-edge fog at 800 is correct
 (zeroruns `0-15; 32-358`, both map-anchored).
 
-**Run 2** (`C:\sc-work\logs\068-framecap-run2.txt`) — same probe, oracles
+**Run 2** (`C:\decompile-sc-data\sc-work\logs\068-framecap-run2.txt`) — same probe, oracles
 repaired per the above, scrollmid at 100 ms: **48/48 PASS**, stock positive
 control and the defect arm's RED (`dense_rows=59`) in the same run as the
 fix's green (`dense_rows=0` cross-arm, `0/0` same-origin).
@@ -1596,11 +1596,11 @@ fix's green (`dense_rows=0` cross-arm, `0/0` same-origin).
   (scrolled2); stock arm 0.99196.
 
 Artifacts (gitignored diagnostic path; paths travel, images never):
-dumps + renders `C:\sc-work\logs\063-frames\fd-s2-*.bin`,
+dumps + renders `C:\decompile-sc-data\sc-work\logs\063-frames\fd-s2-*.bin`,
 `s2-ingame-render.png` (800-wide, fog boundary continuous, no seam),
 `s2-scrolled2-render.png` (unexplored right band correctly black);
-transcripts `C:\sc-work\logs\068-framecap-run{1,2}.txt`,
-`C:\sc-work\logs\offscreen\20260813-{153254,154014}-probe-framebuffer-capture.txt`.
+transcripts `C:\decompile-sc-data\sc-work\logs\068-framecap-run{1,2}.txt`,
+`C:\decompile-sc-data\sc-work\logs\offscreen\20260813-{153254,154014}-probe-framebuffer-capture.txt`.
 
 One operational residue, not this task's to fix: `sc-launch.lock` leaked
 after BOTH runs (exit 1 and exit 0) with `Exit-ScLaunchLock: released`
@@ -1694,14 +1694,14 @@ scrollmid (848,416) x%32=16, defect arm RED dense_rows=24, WIDESCREEN ACTIVE
     -SuiteArgs @{ Presenter = 'wmode' }
 #   the engine-input arm: same session; the click/box/command steps carry the
 #   17.2 readings (posted coords reach the engine there)
-./tools/deploy.ps1 -DeployRoot C:\sc-deploy\scratch-task070 -NoShortcut
+./tools/deploy.ps1 -DeployRoot C:\decompile-sc-data\sc-deploy\scratch-task070 -NoShortcut
 #   the one-action switch, proven against a scratch root: stages pinned
 #   cnc-ddraw, writes Launch-StarCraft-Modded-Wide.ps1 + widescreen-card.md
 ```
 
 Artifacts (gitignored diagnostic path; paths travel, images never):
-`C:\sc-work\logs\070-frames\drive-*.png` / `fd-drive-*.bin`, transcripts
-`C:\sc-work\logs\offscreen\20260813-*-probe-widescreen-drive.txt`.
+`C:\decompile-sc-data\sc-work\logs\070-frames\drive-*.png` / `fd-drive-*.bin`, transcripts
+`C:\decompile-sc-data\sc-work\logs\offscreen\20260813-*-probe-widescreen-drive.txt`.
 
 
 ## 18. Task 071 — input reaches the full width; the console move is a measured NO-GO
@@ -1917,7 +1917,7 @@ list confirmed the move**: `StatRes` read (380,0)-(799,19), `StatBtn`
 (656,354)-(799,479). Every memory oracle agreed the console had moved.
 
 **The picture did not.** Captured through cnc-ddraw at 800 (070's presentation
-vector + `%SCDRIVE_POST_ACTIVATE%`; `C:\sc-work\logs\071-frames\console-800-*.png`),
+vector + `%SCDRIVE_POST_ACTIVATE%`; `C:\decompile-sc-data\sc-work\logs\071-frames\console-800-*.png`),
 the console still reads as a 640 console with a black strip on the right: the
 bronze frame, the command-card panel, the MENU button and the minimap all sit
 in the left ~640, x=640..799 at the bottom is black, and the resource number
@@ -2010,7 +2010,7 @@ python tools/renderer_patch_sites.py --check      # 269 sites verify against the
 ```
 
 The NO-GO capture (§18.2) is 070's vector at stage 3 with the move prototype
-(git history); the picture is `C:\sc-work\logs\071-frames\console-800-*.png`
+(git history); the picture is `C:\decompile-sc-data\sc-work\logs\071-frames\console-800-*.png`
 (gitignored; paths travel, images never).
 
 ## 19. Task 073 — the console moves after all: the composite follows live bounds, and one .data clip box was the wall
@@ -2029,7 +2029,7 @@ flag carrying the instruments, wired into nothing. No art shipped,
 byte-identical binary throughout.
 
 Captures (gitignored diagnostic path; paths travel, images never):
-`C:\sc-work\logs\073-frames\console-800-edge-selected.png` (the card with its
+`C:\decompile-sc-data\sc-work\logs\073-frames\console-800-edge-selected.png` (the card with its
 buttons at the right edge, Nexus selected) against 071's
 `console-800-ingame.png` as the before. Everything below was read out of
 `StarCraft.exe` 1.16.1 by this task (Ghidra decompiles + capstone listings,
@@ -2204,8 +2204,8 @@ corroborated from the outside.
 #   captured and pixel-counted (positive control: the unmoved minimap), the
 #   clean-slate select through the engine funnel, the Train click on the wire,
 #   the ring read back, minimap steering
-python work/scratch/073/findrefs.py C:\sc-work\1161-base\StarCraft.exe 0x0051A174
-python work/scratch/073/readdata.py C:\sc-work\1161-base\StarCraft.exe 0x0051A16C 0x0051A170 0x0051A174 0x0051A178
+python work/scratch/073/findrefs.py C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe 0x0051A174
+python work/scratch/073/readdata.py C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe 0x0051A16C 0x0051A170 0x0051A174 0x0051A178
 ```
 
 ### 19.8 Finding two, STRUCTURAL: in game, GLASS has never shown x>639 through the buffer path — the last clamp is inside storm.dll
@@ -2215,7 +2215,7 @@ widened (§19.3), the moved resource bar COMPOSITED — the 800-wide buffer dump
 shows its supply counter at the new x~748..782 (rendered and read by eye as
 well as by band count) — and the GLASS stayed black there. Wider still: **no
 buffer pixel past x~648 has ever reached the glass in game.** 070's own window
-capture (`C:\sc-work\logs\070-frames\drive-ingame-after.png`) shows the right
+capture (`C:\decompile-sc-data\sc-work\logs\070-frames\drive-ingame-after.png`) shows the right
 band BLACK ON GLASS, top to bottom, while its 800-wide FRAMEDUMPS held map —
 every right-band assertion 064/068/070 made was measured from the DUMP (the
 buffer), and the window PNGs were "for the human", whom nobody asked about the
@@ -2397,12 +2397,12 @@ overrides: `0` off, `probe` read-only diagnostics, `widen` force on.
 ```
 
 Captures (gitignored diagnostic path; paths travel, images never — hard rule 1):
-`C:\sc-work\logs\074-frames\storm-present-shipped-static.png` (map past x=648 on the
+`C:\decompile-sc-data\sc-work\logs\074-frames\storm-present-shipped-static.png` (map past x=648 on the
 static load frame) and `…-shipped-scrolled.png`.
 
 ### 20.10 CORRECTION (2026-09-05, issue #113): the shipped config never armed the widen
 
-The user's only wide session (deployed log `C:\sc-deploy\starcraft-modded\logs\sc-plugin.log`,
+The user's only wide session (deployed log `C:\decompile-sc-data\sc-deploy\starcraft-modded\logs\sc-plugin.log`,
 2026-08-13 23:56, build `8d40c89+dirty`, which contains §20's PR) reads:
 
 ```
@@ -2551,7 +2551,7 @@ Predictions were registered before each run; misses are recorded as such.
 1. **The table applies.** `WIDESCREEN ACTIVE: 243 patch(es) applied, 0 refused,
    stage<=2` (stage 3: 256), the five caves at `cave@01120000..0112003E` with
    rel32s that decode back to those addresses, grid guard OK, storm strip armed
-   for x=640..1279 (`C:\sc-work\logs\063-framecap-s2.log`).
+   for x=640..1279 (`C:\decompile-sc-data\sc-work\logs\063-framecap-s2.log`).
 2. **The frame is right** (`probe-framebuffer-capture.ps1 -Stage2`, stock vs
    stage 2, 36-marine fixture, origin 544,416): every dump `1280x480` settled;
    window-vouched consistency at pitch 1280 = 0.99247 in game, 0.99737 scrolled
@@ -2575,7 +2575,7 @@ Predictions were registered before each run; misses are recorded as such.
    The 800-era `glass >= 0.30` floor was the same fixture-sight artefact as
    item 2 and is now the agreement form (`glass >= 0.8 x buffer`, `buffer >=
    0.05` so it cannot pass vacuously). Captures:
-   `C:\sc-work\logs\074-frames\storm-present-shipped-{static,scrolled}.png`.
+   `C:\decompile-sc-data\sc-work\logs\074-frames\storm-present-shipped-{static,scrolled}.png`.
 4. **Input reaches the new width** (`test-widescreen-input-800.ps1`, stock + stage
    3 arms, WMode): at stock no widescreen verdict, no clamp, no trigger, no
    guard, the Nexus selected by a click at (320,208); at stage 3 the table

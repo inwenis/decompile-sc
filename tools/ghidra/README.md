@@ -13,7 +13,7 @@ StarCraft 1.16.1 work in `research/`.
 | Download URL | https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.2_build/ghidra_12.1.2_PUBLIC_20260605.zip |
 | SHA-256 | `b62e81a0390618466c019c60d8c2f796ced2509c4c1aea4a37644a77272cf99d` |
 | Size | ~546 MB zip, ~1.2 GB extracted |
-| Install path | `C:\re-tools\ghidra_12.1.2_PUBLIC\` -- OUTSIDE every worktree and repo, see below |
+| Install path | `C:\decompile-sc-data\re-tools\ghidra_12.1.2_PUBLIC\` -- OUTSIDE every worktree and repo, see below |
 
 Hash confirmed two ways: matches the `digest` field on the GitHub release asset, and matches
 the SHA-256 published in the release notes body.
@@ -21,7 +21,7 @@ the SHA-256 published in the release notes body.
 ## Install location: outside every worktree and repo
 
 The install must live **outside every worktree and repo**, at the shared path
-`C:\re-tools\ghidra_12.1.2_PUBLIC\`, with `GHIDRA_INSTALL_DIR` pointed at it (user scope, so
+`C:\decompile-sc-data\re-tools\ghidra_12.1.2_PUBLIC\`, with `GHIDRA_INSTALL_DIR` pointed at it (user scope, so
 every new shell/agent picks it up without re-setting it). `analyze.ps1` already resolves the
 install dir in this order: `-GhidraInstallDir` param, then `$env:GHIDRA_INSTALL_DIR`, then a
 single auto-discovered `ghidra_*/` directory next to the script -- setting the env var once is
@@ -37,20 +37,20 @@ to a shared path outside every worktree means no worker's worktree prune can eve
 ## Install (fresh machine)
 
 ```powershell
-New-Item -ItemType Directory -Path C:\re-tools -Force | Out-Null
-cd C:\re-tools
+New-Item -ItemType Directory -Path C:\decompile-sc-data\re-tools -Force | Out-Null
+cd C:\decompile-sc-data\re-tools
 Invoke-WebRequest -Uri 'https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.2_build/ghidra_12.1.2_PUBLIC_20260605.zip' -OutFile ghidra_12.1.2_PUBLIC_20260605.zip
 $hash = (Get-FileHash ghidra_12.1.2_PUBLIC_20260605.zip -Algorithm SHA256).Hash
 if ($hash -ne 'B62E81A0390618466C019C60D8C2F796CED2509C4C1AEA4A37644A77272CF99D') { throw "hash mismatch: $hash" }
 Expand-Archive ghidra_12.1.2_PUBLIC_20260605.zip -DestinationPath .
-[Environment]::SetEnvironmentVariable('GHIDRA_INSTALL_DIR', 'C:\re-tools\ghidra_12.1.2_PUBLIC', 'User')
+[Environment]::SetEnvironmentVariable('GHIDRA_INSTALL_DIR', 'C:\decompile-sc-data\re-tools\ghidra_12.1.2_PUBLIC', 'User')
 ```
 
-Extracts to `C:\re-tools\ghidra_12.1.2_PUBLIC\` (note: the top-level folder inside the zip is
+Extracts to `C:\decompile-sc-data\re-tools\ghidra_12.1.2_PUBLIC\` (note: the top-level folder inside the zip is
 named after the version, not the dated asset filename). Delete the zip once extraction is
 verified -- `Remove-Item ghidra_12.1.2_PUBLIC_20260605.zip` -- there's no reason to keep an
 extra 546 MB around. The `[Environment]::SetEnvironmentVariable(..., 'User')` call sets it for
-future shells; the shell you ran it in needs `$env:GHIDRA_INSTALL_DIR = 'C:\re-tools\ghidra_12.1.2_PUBLIC'`
+future shells; the shell you ran it in needs `$env:GHIDRA_INSTALL_DIR = 'C:\decompile-sc-data\re-tools\ghidra_12.1.2_PUBLIC'`
 (or a restart) to pick it up immediately. Neither the zip nor the extracted install should ever
 end up under a repo or worktree path -- they'd be gitignored there too, which is exactly the
 silent-prune trap above.
@@ -140,9 +140,9 @@ Ghidra prints `*(char *)(param_1 + 0x4d) != '\0'`.
 ./tools/ghidra/decomp-all.ps1     # about 5 minutes; imports afresh every run
 ```
 
-Needs the pinned Ghidra above, the working copy `C:\sc-work\1161-base\StarCraft.exe`, and the
-network once (Magnetar sources are cached under `C:\sc-work\ghidra\magnetar`). The project lives
-in `C:\sc-work\ghidra`, outside every worktree. Output lands in `C:\sc-work\decomp\StarCraft.exe\`:
+Needs the pinned Ghidra above, the working copy `C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe`, and the
+network once (Magnetar sources are cached under `C:\decompile-sc-data\sc-work\ghidra\magnetar`). The project lives
+in `C:\decompile-sc-data\sc-work\ghidra`, outside every worktree. Output lands in `C:\decompile-sc-data\sc-work\decomp\StarCraft.exe\`:
 
 | File | What |
 |---|---|
@@ -159,7 +159,7 @@ Plus one `.log` per step and the `*.manifest` success markers.
 ### Reading it
 
 ```powershell
-$d = 'C:\sc-work\decomp\StarCraft.exe'
+$d = 'C:\decompile-sc-data\sc-work\decomp\StarCraft.exe'
 Get-ChildItem $d -Filter '*updateFog*'                       # a function by name
 Get-ChildItem $d -Filter '0x0041E0D0.*'                      # ... by entry address
 $a = 0x004BCDF3                                              # a CODE address -> its function
@@ -257,9 +257,9 @@ The remaining register reads sit in 685 functions: 612 whose Magnetar prototype 
 register argument (`isUnitBurrowed` is declared `int (void)` and reads its unit from `EAX`), the 2
 whose prototype was not applied, and 71 that Magnetar does not list.
 
-Never point `build-opcode-policy.ps1` or `build-command-table.ps1` at `C:\sc-work\ghidra`: they
+Never point `build-opcode-policy.ps1` or `build-command-table.ps1` at `C:\decompile-sc-data\sc-work\ghidra`: they
 parse `FUN_` names out of decompiled C and keep their own unnamed project. Ghidra locks a
-project to one process, so nothing else may hold `C:\sc-work\ghidra` while this runs.
+project to one process, so nothing else may hold `C:\decompile-sc-data\sc-work\ghidra` while this runs.
 
 ## What StarCraft.exe 1.16.1 will need beyond this
 

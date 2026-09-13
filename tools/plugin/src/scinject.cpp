@@ -33,7 +33,7 @@ enum ScInjectExit {
 };
 
 // MinGW's CRT expands wildcards in argv by default. '?' is a wildcard, so
-// '\\?\C:\sc-install\...' would reach main() mangled and silently defeat the
+// '\\?\C:\decompile-sc-data\sc-install\...' would reach main() mangled and silently defeat the
 // pristine-install guard below, which would never see the real path. Every
 // argument here is a filesystem path from a caller that already knows what it
 // means; there is nothing to glob.
@@ -124,12 +124,12 @@ static void CanonicalPath(const char* in, char* out, size_t outLen) {
     while (n > 3 && out[n - 1] == '\\') out[--n] = '\0';
 }
 
-// AGENTS.md § "Hard rules": C:\sc-install\Starcraft is the user's playable install
+// AGENTS.md § "Hard rules": C:\decompile-sc-data\sc-install\Starcraft is the user's playable install
 // and is never touched -- not even launched, which reads it. The wrapper script
 // guards this too; this is the same check one layer down, so calling scinject.exe
 // by hand cannot get past it.
 static bool IsUnderPristineInstall(const char* path, char* canonOut, size_t canonLen) {
-    static const char* kRoot = "C:\\sc-install";
+    static const char* kRoot = "C:\\decompile-sc-data\\sc-install";
     CanonicalPath(path, canonOut, canonLen);
 
     size_t rootLen = strlen(kRoot);
@@ -200,7 +200,7 @@ int main(int argc, char** argv) {
     if (IsUnderPristineInstall(gameExe, gameCanon, sizeof(gameCanon))) {
         fprintf(stderr, "scinject: refusing to launch from the pristine install.\n"
                         "          '%s' resolves to '%s'.\n"
-                        "          Use the working copy (C:\\sc-work\\1161-base).\n",
+                        "          Use the working copy (C:\\decompile-sc-data\\sc-work\\1161-base).\n",
                 argv[1], gameCanon);
         return SCINJECT_BAD_ARGS;
     }

@@ -17,9 +17,9 @@ and the rightmost non-black column gives the ratio; FOLLOW = the client area is 
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = 'C:\sc-work\1161-base',
-    [string]$LogDir = 'C:\sc-work\logs',
-    [string]$FrameDir = 'C:\sc-work\logs\034-frames',
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
+    [string]$LogDir = 'C:\decompile-sc-data\sc-work\logs',
+    [string]$FrameDir = 'C:\decompile-sc-data\sc-work\logs\034-frames',
     [ValidateSet('inject', 'ddraw', 'both')][string]$Vector = 'both',
     # Which DLL the ddraw vector installs. Empty = WMode.dll. Point it at cnc-ddraw's
     # ddraw.dll (fetch-cnc-ddraw.ps1) and -Vector both weighs a candidate replacement

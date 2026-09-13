@@ -118,7 +118,7 @@ explicitly asks for more.
 
 1. `-Mode observe` (or just not setting `%SCPLUGIN_MODE%`) — the plugin loads and writes nothing.
 2. Do not inject: `run-with-plugin.ps1 -NoPlugin`, or launch
-   `C:\sc-work\1161-base\StarCraft.exe` directly. The game directory contains nothing of ours.
+   `C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe` directly. The game directory contains nothing of ours.
 3. Unload the DLL — `DLL_PROCESS_DETACH` un-splices every hook and restores the original bytes.
    **Unloading mid-game is unsupported, and it leaves task 014's circles on screen.** Everything in
    `sc_circles.cpp` is game-thread-only; taking the circles off from the unloader's thread would
@@ -633,7 +633,7 @@ There was no C++ compiler on this machine at all (`setup-worktree.ps1` reports n
 | Asset | `winlibs-i686-posix-dwarf-gcc-16.1.0-mingw-w64msvcrt-14.0.0-r4.zip` (283,287,220 bytes) |
 | Download URL | https://github.com/brechtsanders/winlibs_mingw/releases/download/16.1.0posix-14.0.0-msvcrt-r4/winlibs-i686-posix-dwarf-gcc-16.1.0-mingw-w64msvcrt-14.0.0-r4.zip |
 | SHA-256 | `a5817469f554314b03cd5298c0b247057d7a7da5b85a01d89d9fc9feb7adbc19` |
-| Install path | `C:\re-tools\mingw32-gcc-16.1.0-i686-msvcrt\` — **outside every worktree** |
+| Install path | `C:\decompile-sc-data\re-tools\mingw32-gcc-16.1.0-i686-msvcrt\` — **outside every worktree** |
 | Target triple | `i686-w64-mingw32` (`g++ -dumpmachine`) |
 
 The SHA-256 above is GitHub's own `digest` field on the release asset; `build.ps1`
@@ -658,23 +658,23 @@ does not re-check it, the install step does.
 ### Install (fresh machine)
 
 ```powershell
-New-Item -ItemType Directory -Path C:\re-tools -Force | Out-Null
-$zip = 'C:\re-tools\winlibs-i686-posix-dwarf-gcc-16.1.0-mingw-w64msvcrt-14.0.0-r4.zip'
+New-Item -ItemType Directory -Path C:\decompile-sc-data\re-tools -Force | Out-Null
+$zip = 'C:\decompile-sc-data\re-tools\winlibs-i686-posix-dwarf-gcc-16.1.0-mingw-w64msvcrt-14.0.0-r4.zip'
 Invoke-WebRequest -Uri 'https://github.com/brechtsanders/winlibs_mingw/releases/download/16.1.0posix-14.0.0-msvcrt-r4/winlibs-i686-posix-dwarf-gcc-16.1.0-mingw-w64msvcrt-14.0.0-r4.zip' -OutFile $zip
 $h = (Get-FileHash $zip -Algorithm SHA256).Hash
 if ($h -ne 'A5817469F554314B03CD5298C0B247057D7A7DA5B85A01D89D9FC9FEB7ADBC19') { throw "hash mismatch: $h" }
-Expand-Archive -LiteralPath $zip -DestinationPath C:\re-tools\mingw32-gcc-16.1.0-i686-msvcrt
+Expand-Archive -LiteralPath $zip -DestinationPath C:\decompile-sc-data\re-tools\mingw32-gcc-16.1.0-i686-msvcrt
 Remove-Item $zip
 ```
 
 The zip's top-level folder is `mingw32/`, so the compiler lands at
-`C:\re-tools\mingw32-gcc-16.1.0-i686-msvcrt\mingw32\bin\g++.exe` — which is
+`C:\decompile-sc-data\re-tools\mingw32-gcc-16.1.0-i686-msvcrt\mingw32\bin\g++.exe` — which is
 `build.ps1`'s default. Override with `-ToolchainBin` or `$env:SC_MINGW32_BIN`.
 
 **The install must not live inside a worktree.** It is gitignored, so git cannot
 see it, so pruning the worktree deletes it with no warning. That has already cost
 this project once (task 005 lost Ghidra when task 001's worktree was pruned — see
-`tools/ghidra/README.md`). `C:\re-tools\` is shared by every worker.
+`tools/ghidra/README.md`). `C:\decompile-sc-data\re-tools\` is shared by every worker.
 
 ---
 
@@ -861,7 +861,7 @@ no handle on is worse than none.
 | `scinject.exe` exit | meaning |
 |---|---|
 | `0` | launched and injected |
-| `1` | bad arguments, missing file, or a path under `C:\sc-install` |
+| `1` | bad arguments, missing file, or a path under `C:\decompile-sc-data\sc-install` |
 | `2` | a Win32 call failed before the process existed |
 | `3` | the game exited on its own before injection |
 | `4` | late injection failed — game terminated |
@@ -933,10 +933,10 @@ file in the game folder.
 
 # the feature: fan one order out over more than 12 units
 ./tools/plugin/run-with-plugin.ps1 -Mode fanout -InjectWindowedHelper WMode `
-    -LogPath C:\sc-work\logs\fanout.log
+    -LogPath C:\decompile-sc-data\sc-work\logs\fanout.log
 
 # options
-./tools/plugin/run-with-plugin.ps1 -PollMs 100 -LogPath C:\sc-work\logs\run.log
+./tools/plugin/run-with-plugin.ps1 -PollMs 100 -LogPath C:\decompile-sc-data\sc-work\logs\run.log
 ./tools/plugin/run-with-plugin.ps1 -NoPlugin -InjectWindowedHelper WMode   # A/B control
 
 # never leave a game process running (hard rule); WM_CLOSE so DETACH/STATS get written
@@ -957,17 +957,17 @@ file in the game folder.
 | `-Windowed` / `-RemoveWindowed` | the **old** `ddraw.dll`-swap recipe and its undo. Kept only so the failure is reproducible; it does not work — use `-InjectWindowedHelper` |
 | `-WaitForExit` | block until the game exits instead of returning |
 
-Defaults: game `C:\sc-work\1161-base` (the disposable working copy), log
-`C:\sc-work\logs\sc-plugin.log`, poll 250 ms.
+Defaults: game `C:\decompile-sc-data\sc-work\1161-base` (the disposable working copy), log
+`C:\decompile-sc-data\sc-work\logs\sc-plugin.log`, poll 250 ms.
 
 **The pristine install is guarded on the canonical path, not on how it was
 spelled.** `-GameDir` is first canonicalised — `/` → `\`, `\\?\` and `\\.\`
 device prefixes stripped, `.`/`..` resolved, 8.3 short names expanded, symlinks
 and junctions followed — and the run is refused if the result is at or under
-`C:\sc-install`. Everything afterwards uses that canonical path, so the guard
+`C:\decompile-sc-data\sc-install`. Everything afterwards uses that canonical path, so the guard
 cannot test one spelling while `Copy-Item`/`Remove-Item` act on another. All of
-`C:\sc-install\Starcraft`, `C:/sc-install/Starcraft`, `\\?\C:\sc-install\x` and
-`C:\sc-work\..\sc-install` are rejected. `scinject.exe` carries the same check
+`C:\decompile-sc-data\sc-install\Starcraft`, `C:/decompile-sc-data/sc-install/Starcraft`, `\\?\C:\decompile-sc-data\sc-install\x` and
+`C:\decompile-sc-data\sc-work\..\sc-install` are rejected. `scinject.exe` carries the same check
 independently, so calling the injector by hand does not get past it.
 
 After injecting, the script runs `check-game-windows.ps1` **against the pid
@@ -1002,7 +1002,7 @@ quietly instead, and StarCraft's `Errors\*.ERR` still records it.
 
 # arguments reach the suite unchanged (clixml, not a re-quoted command line)
 ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/test-stim-fanout.ps1 `
-    -SuiteArgs @{ FixtureDir = 'C:\sc-work\1161-base\Maps\BroodWar\00-t043' }
+    -SuiteArgs @{ FixtureDir = 'C:\decompile-sc-data\sc-work\1161-base\Maps\BroodWar\00-t043' }
 ```
 
 `-Visible` is one flag on the same generated child script, the same `CreateProcess`
@@ -1035,8 +1035,8 @@ it is left set, and the user's next pick in the game changes it.
 
 ### Log
 
-`%SCPLUGIN_LOG%`, default `C:\sc-work\logs\sc-plugin.log`. Outside the repo, and
-`C:/sc-work/` is gitignored — captured game state is never committed (project hard
+`%SCPLUGIN_LOG%`, default `C:\decompile-sc-data\sc-work\logs\sc-plugin.log`. Outside the repo, and
+`C:/decompile-sc-data/sc-work/` is gitignored — captured game state is never committed (project hard
 rule 1). `%SCPLUGIN_POLL_MS%` sets the poll interval (default 250, clamped 20–5000).
 
 `%SCPLUGIN_MARKER%` (default `marker.txt` beside the log) is a correlation channel:
@@ -1082,7 +1082,7 @@ Attach banner, then one block per observed change:
 
 ```
 ATTACH pid=21392 tid=30764
-  host exe      : C:\sc-work\1161-base\StarCraft.exe
+  host exe      : C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe
   module base   : 0x00400000
   preferred base: 0x00400000
   reloc delta   : +0x00000000  => static addresses are USABLE VERBATIM
@@ -1106,7 +1106,7 @@ bugs.
 ## Uninstall
 
 **Nothing to uninstall.** The plugin is never copied into the game directory; it is
-loaded from wherever it was built. Launch `C:\sc-work\1161-base\StarCraft.exe`
+loaded from wherever it was built. Launch `C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe`
 directly and the game is a stock, unmodified 1.16.1 client. Verified: after all
 testing, the working copy differed from the pristine install by exactly one file —
 `Maps\test-many-units.scx`, which belongs to task 009, not to this task (242
@@ -1199,7 +1199,7 @@ It drives the game with `PostMessage` and **client** coordinates in `lParam` —
 ([`research/automated-testing-options.md`](../../research/automated-testing-options.md) §4.1).
 Focus is not required; the
 window must not be minimised. The oracle is the plugin's own log, because it is written from inside
-the process. Frames are captured at every step into `-ShotDir` (default `C:\sc-work\logs\014-frames`,
+the process. Frames are captured at every step into `-ShotDir` (default `C:\decompile-sc-data\sc-work\logs\014-frames`,
 outside the repo) as a **diagnostic only**.
 
 It also asserts hard rule 2 rather than attesting to it: `StarCraft.exe` is SHA-256'd before launch

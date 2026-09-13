@@ -16,8 +16,8 @@ SetDisplayMode 640x480x8, on failure SetDisplayMode(GetSystemMetrics(0/1), 8)).
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = 'C:\sc-work\1161-base',
-    [string]$LogDir = 'C:\sc-work\logs',
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
+    [string]$LogDir = 'C:\decompile-sc-data\sc-work\logs',
     [int]$HoldSec = 20
 )
 

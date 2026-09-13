@@ -34,7 +34,7 @@ $srcDir    = Join-Path $scriptDir 'src'
 
 . (Join-Path $scriptDir 'sc-build-id.ps1')
 
-$DEFAULT_TOOLCHAIN = 'C:\re-tools\mingw32-gcc-16.1.0-i686-msvcrt\mingw32\bin'
+$DEFAULT_TOOLCHAIN = 'C:\decompile-sc-data\re-tools\mingw32-gcc-16.1.0-i686-msvcrt\mingw32\bin'
 
 if (-not $ToolchainBin) { $ToolchainBin = $env:SC_MINGW32_BIN }
 if (-not $ToolchainBin) { $ToolchainBin = $DEFAULT_TOOLCHAIN }

@@ -21,11 +21,11 @@ $env:AGENT_TASK = '901'; ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/
 [CmdletBinding()]
 param(
     [string]$Geometry = '1280x880',
-    [string]$GameDir = 'C:\sc-work\1161-base',
-    [string]$LogDir = 'C:\sc-work\logs',
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
+    [string]$LogDir = 'C:\decompile-sc-data\sc-work\logs',
     [string]$FixtureDir,
     [string]$FrameDir,
-    [string]$CncDdrawDll = 'C:\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll',
+    [string]$CncDdrawDll = 'C:\decompile-sc-data\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll',
     [switch]$CentredOnly
 )
 
@@ -40,7 +40,7 @@ $DX = [int](($geo.W - $geo.StockW) / 2)
 $DY = [int](($geo.H - $geo.StockH) / 2)
 $task = if ($env:AGENT_TASK) { $env:AGENT_TASK } else { 'menu' }
 if (-not $FixtureDir) { $FixtureDir = Resolve-ScFixtureDir -GameDir $GameDir -Fallback '00-testmap' -Suite 'menu-centre' }
-if (-not $FrameDir) { $FrameDir = "C:\sc-work\logs\$task-frames" }
+if (-not $FrameDir) { $FrameDir = "C:\decompile-sc-data\sc-work\logs\$task-frames" }
 $mapName = 'menu-centre.scx'
 $mapPath = Join-Path $FixtureDir $mapName
 $markerPath = Join-Path $LogDir 'marker.txt'

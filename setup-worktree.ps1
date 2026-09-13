@@ -48,7 +48,7 @@ else { 'not on PATH — needed later, not fatal now' }
 Report ($null -ne $ghidra -or $null -ne $env:GHIDRA_INSTALL_DIR) 'ghidra' $ghidraDetail
 
 # --- decompiled C, read before asm (AGENTS.md § "Decompiled C"): machine-wide, NOT fatal ---
-$decomp = 'C:\sc-work\decomp\StarCraft.exe'
+$decomp = 'C:\decompile-sc-data\sc-work\decomp\StarCraft.exe'
 # The manifest is written last; index.tsv alone can be a run cut short.
 $manifest = Join-Path $decomp 'index.tsv.manifest'
 $hasDecomp = (Test-Path -LiteralPath $manifest) -and (Select-String -LiteralPath $manifest -Pattern '^status=OK$' -Quiet)

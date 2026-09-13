@@ -20,8 +20,8 @@ does. That difference is why both arms run.
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
-    [string]$LogDir = 'C:\sc-work\logs\022',
+    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
+    [string]$LogDir = 'C:\decompile-sc-data\sc-work\logs\022',
     # Which folder under Maps\ the fixture is generated into; see test-burrow-fanout.ps1.
     [string]$FixtureDir,
     # MORE THAN TWELVE, on purpose. At six units the fan-out never fires, the overflow

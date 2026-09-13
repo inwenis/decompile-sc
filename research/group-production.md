@@ -1,7 +1,7 @@
 # Queueing a unit at every selected production building — the two gates, and what it takes to open them
 
 Analysis date: 2026-08-10 (task 030). Target: `StarCraft.exe`, StarCraft: Brood War 1.16.1
-(classic), the project's disposable working copy `C:\sc-work\1161-base`, SHA-256
+(classic), the project's disposable working copy `C:\decompile-sc-data\sc-work\1161-base`, SHA-256
 `AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C6A46` — hashed before and after
 every run below and byte-identical each time. The user's playable install was never opened.
 
@@ -379,8 +379,8 @@ is visible on each building and is asserted here from each building's own `CUnit
 ## 8. Reproducing this
 
 ```powershell
-$env:GHIDRA_INSTALL_DIR = 'C:\re-tools\ghidra_12.1.2_PUBLIC'
-./tools/ghidra/sweep.ps1 -Mode Prepare -InputPE C:\sc-work\1161-base\StarCraft.exe `
+$env:GHIDRA_INSTALL_DIR = 'C:\decompile-sc-data\re-tools\ghidra_12.1.2_PUBLIC'
+./tools/ghidra/sweep.ps1 -Mode Prepare -InputPE C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe `
     -ProjectDir work/scratch/030/ghidra -LogFile work/scratch/030/ghidra/import.log
 
 # the two gates and their neighbours, decompiled

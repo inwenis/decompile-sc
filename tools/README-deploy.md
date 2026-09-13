@@ -12,9 +12,9 @@ arguments.
 
 1. Guards `-DeployRoot`: canonicalises it (device prefix / 8.3 short name / symlink /
    junction -- `tools/plugin/sc-canonical-path.ps1`, shared with `run-with-plugin.ps1`'s
-   own pristine-install guard, so `-DeployRoot '\\?\C:\sc-install\Starcraft'` cannot slip
+   own pristine-install guard, so `-DeployRoot '\\?\C:\decompile-sc-data\sc-install\Starcraft'` cannot slip
    past a naive string check) and refuses a target inside this repo, under `C:\git`, under
-   `C:\sc-work`, under `-SourceGameDir`, or under `C:\sc-install`.
+   `C:\decompile-sc-data\sc-work`, under `-SourceGameDir`, or under `C:\decompile-sc-data\sc-install`.
 2. Takes the cross-worker launch/deploy lock (`tools/plugin/sc-launch-lock.ps1`, the same
    one `run-with-plugin.ps1` uses) for the rest of the run -- guard checks through verify
    -- so a game cannot start in the window between step 3's check and the mirror actually
@@ -26,7 +26,7 @@ arguments.
 5. Builds `scplugin.dll` + `scinject.exe` from the current checkout
    (`tools/plugin/build.ps1` -- fails the whole deploy if the build fails or either
    artifact is not PE32/x86).
-6. Mirrors the working copy (`C:\sc-work\1161-base` by default) into
+6. Mirrors the working copy (`C:\decompile-sc-data\sc-work\1161-base` by default) into
    `<DeployRoot>\game` -- the same `StarCraft.exe` bytes, not a rebuild.
    `characters\`, `save\`, `Maps\Replays\`, `maps\download\` and `SCScrnShot_*.pcx` are
    excluded from the mirror entirely, so anything the deployed game itself writes there
@@ -125,7 +125,7 @@ hypothetical -- it happened live during this task: a second worker's own StarCra
 was mistaken by its cleanup logic for this one's leftover and closed mid-test, and
 `deploy.ps1`'s running-game preflight check has the identical TOCTOU across its own
 build+mirror window. Both `run-with-plugin.ps1` and `deploy.ps1` now take an exclusive OS
-file lock (`C:\sc-work\logs\sc-launch.lock`, `tools/plugin/sc-launch-lock.ps1`) before
+file lock (`C:\decompile-sc-data\sc-work\logs\sc-launch.lock`, `tools/plugin/sc-launch-lock.ps1`) before
 touching the shared working copy or the shared game process, and hold it until the
 protected section finishes.
 
@@ -160,7 +160,7 @@ reached a real deploy.
 
 | what | where |
 | --- | --- |
-| Deployed install | `C:\sc-deploy\starcraft-modded\` (default; `-DeployRoot` to change) |
+| Deployed install | `C:\decompile-sc-data\sc-deploy\starcraft-modded\` (default; `-DeployRoot` to change) |
 | Game files | `<DeployRoot>\game\` -- mirror of the working copy, `StarCraft.exe` byte-identical to it |
 | Player profiles | `<DeployRoot>\game\characters\` -- never touched by a redeploy |
 | Single-player saves | `<DeployRoot>\game\save\` -- never touched by a redeploy |
@@ -172,11 +172,11 @@ reached a real deploy.
 | Desktop shortcut | `%USERPROFILE%\Desktop\StarCraft Modded.lnk`, plus `StarCraft Modded <WxH>.lnk` per geometry preset |
 | Plugin log | `<DeployRoot>\logs\sc-plugin.log` (same format/rules as the dev log -- see `tools/plugin/README.md`) |
 | Launcher failure log | `<DeployRoot>\logs\launch-error.log` -- only written if the launcher itself throws |
-| Cross-worker lock | `C:\sc-work\logs\sc-launch.lock` (shared, outside `<DeployRoot>`) |
+| Cross-worker lock | `C:\decompile-sc-data\sc-work\logs\sc-launch.lock` (shared, outside `<DeployRoot>`) |
 
 None of this is committed or trackable: `<DeployRoot>` is outside the repo (`deploy.ps1`
-refuses a target inside this repo, any repo/worktree under `C:\git`, `C:\sc-work`, the
-source working copy, or `C:\sc-install`), and it is game content (project hard rule 1).
+refuses a target inside this repo, any repo/worktree under `C:\git`, `C:\decompile-sc-data\sc-work`, the
+source working copy, or `C:\decompile-sc-data\sc-install`), and it is game content (project hard rule 1).
 
 ## Design: self-contained, not a thin repo pointer
 
@@ -263,13 +263,13 @@ whatever game state is currently in the working copy.
 
 ```powershell
 Remove-Item "$env:USERPROFILE\Desktop\StarCraft Modded.lnk" -Force
-Remove-Item C:\sc-deploy\starcraft-modded -Recurse -Force
+Remove-Item C:\decompile-sc-data\sc-deploy\starcraft-modded -Recurse -Force
 ```
 
 Nothing else to undo: the deployed `StarCraft.exe` was never written to (it's a mirror of
 the working copy, itself never written to by the injection path -- see
 `tools/plugin/README.md` "Uninstall"), and nothing outside `<DeployRoot>` and the one
-shortcut file was touched. (The shared lock file at `C:\sc-work\logs\sc-launch.lock` is
+shortcut file was touched. (The shared lock file at `C:\decompile-sc-data\sc-work\logs\sc-launch.lock` is
 not deploy-specific -- leave it; it is reused by every future launch/deploy.)
 
 ## Debug / off-switch
@@ -283,14 +283,14 @@ install, since `run-with-plugin.ps1` is silent by default (see "Sound" above):
 ```powershell
 # 1. Cleanest: launch the deployed game with nothing of ours injected at all (inherently
 #    audible -- nothing of ours runs, so there is nothing to mute).
-Start-Process 'C:\sc-deploy\starcraft-modded\game\StarCraft.exe'
+Start-Process 'C:\decompile-sc-data\sc-deploy\starcraft-modded\game\StarCraft.exe'
 
 # 2. Plugin attached but passive (read-only observer, writes nothing to game memory) --
 #    useful for confirming the deployed binaries load without the fan-out/circles/HUD
 #    hooks in the way. -Sound because this goes through run-with-plugin.ps1.
-pwsh -File 'C:\sc-deploy\starcraft-modded\plugin\run-with-plugin.ps1' `
-    -GameDir 'C:\sc-deploy\starcraft-modded\game' `
-    -BuildDir 'C:\sc-deploy\starcraft-modded\plugin' `
+pwsh -File 'C:\decompile-sc-data\sc-deploy\starcraft-modded\plugin\run-with-plugin.ps1' `
+    -GameDir 'C:\decompile-sc-data\sc-deploy\starcraft-modded\game' `
+    -BuildDir 'C:\decompile-sc-data\sc-deploy\starcraft-modded\plugin' `
     -Mode observe -InjectWindowedHelper WMode -Sound
 
 # 3. Never leave a game process running (hard rule) -- close it politely so the plugin's
@@ -311,9 +311,9 @@ pwsh -File 'C:\git\decompile-sc\tools\plugin\close-game.ps1'
   all three classes proven together in the same runs -- this is the round-2 acceptance bar
   ("a real save survives two deploys"), not the round-1 proxy-marker test it originally
   shipped with.
-- `-DeployRoot` pointed inside the repo, under `C:\git`, under `C:\sc-work`, under the
-  source working copy, and under `C:\sc-install` all refuse before touching disk. Also
-  refuses a device-prefix (`\\?\C:\sc-install\Starcraft\evil`) and an 8.3-short-name
+- `-DeployRoot` pointed inside the repo, under `C:\git`, under `C:\decompile-sc-data\sc-work`, under the
+  source working copy, and under `C:\decompile-sc-data\sc-install` all refuse before touching disk. Also
+  refuses a device-prefix (`\\?\C:\decompile-sc-data\sc-install\Starcraft\evil`) and an 8.3-short-name
   (`C:\SC-INS~1\evil`) attempt to spell a protected root differently -- both canonicalise
   to the real path before the comparison.
 - A junction planted under `<DeployRoot>\game` is refused outright (reparse-point guard)

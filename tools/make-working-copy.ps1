@@ -12,13 +12,13 @@
     ./tools/make-working-copy.ps1
     ./tools/make-working-copy.ps1 -Force
     ./tools/make-working-copy.ps1 -Force -PurgeExtras
-    ./tools/make-working-copy.ps1 -Source D:\sc-install\Starcraft -Destination D:\sc-work\1161-base
+    ./tools/make-working-copy.ps1 -Source D:\decompile-sc-data\sc-install\Starcraft -Destination D:\decompile-sc-data\sc-work\1161-base
 #>
 
 [CmdletBinding()]
 param(
-    [string]$Source = 'C:\sc-install\Starcraft',
-    [string]$Destination = 'C:\sc-work\1161-base',
+    [string]$Source = 'C:\decompile-sc-data\sc-install\Starcraft',
+    [string]$Destination = 'C:\decompile-sc-data\sc-work\1161-base',
     [switch]$Force,
     # Re-sync as a true mirror: also delete the destination-only files a
     # re-sync keeps by default (see $PreservedExtraPrefixes).
@@ -38,7 +38,7 @@ $ExpectedTotalBytesApprox = 1068MB
 
 # Guards a mistyped -Destination: a reset deletes whatever lives there, so
 # only an empty, StarCraft-looking, or known-scratch path may be reset.
-$KnownScratchRoots = @('C:\sc-work')
+$KnownScratchRoots = @('C:\decompile-sc-data\sc-work')
 
 # Destination-only paths under these prefixes survive a reset by default: they
 # are not part of the pristine install (player profiles in characters\; replays

@@ -11,8 +11,8 @@ StarCraft.exe directly" -- see tools/plugin/README.md. -Windowed (WMode.dll copi
 as ddraw.dll, research/launch-baseline.md) is the ONE thing that writes into the game
 directory; -RemoveWindowed undoes it, tools/make-working-copy.ps1 -Force purges it.
 
-On disk, touches only the working copy (default C:\sc-work\1161-base), never
-C:\sc-install\Starcraft; the log goes outside the repo (C:/sc-work/ is gitignored).
+On disk, touches only the working copy (default C:\decompile-sc-data\sc-work\1161-base), never
+C:\decompile-sc-data\sc-install\Starcraft; the log goes outside the repo (C:/decompile-sc-data/sc-work/ is gitignored).
 
 Worker launches ($env:AGENT_TASK set) take the launch lock, set HKCU 'Custom Type' to
 'Use Map Settings' (left set), hand the foreground back and run muted; the deployed
@@ -28,9 +28,9 @@ banner after it. Each mechanism's why sits at its code site below.
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir  = 'C:\sc-work\1161-base',
+    [string]$GameDir  = 'C:\decompile-sc-data\sc-work\1161-base',
     [string]$BuildDir,
-    [string]$LogPath  = 'C:\sc-work\logs\sc-plugin.log',
+    [string]$LogPath  = 'C:\decompile-sc-data\sc-work\logs\sc-plugin.log',
     [int]$PollMs      = 250,
     [int]$SettleMs    = 4000,
     [switch]$Build,
@@ -184,7 +184,7 @@ param(
     # presented window discards (research/renderer-viewport.md 12.6/12.10). Installs no
     # hook and writes nothing to game memory, so it exists in -Mode observe too. Empty =
     # off. THE DUMP REPRODUCES GAME ARTWORK (AGENTS.md § Project hard rules, 1): point
-    # this at the gitignored diagnostic path (C:\sc-work\...), never inside the repo.
+    # this at the gitignored diagnostic path (C:\decompile-sc-data\sc-work\...), never inside the repo.
     [string]$FrameDump = '',
     # The WIDER PLAYFIELD: rewrites the operands that carry the screen's geometry so the
     # engine composes a bigger frame (research/renderer-viewport.md 9.3). Off by default,
@@ -238,9 +238,9 @@ $scriptDir = $PSScriptRoot
 $repoRoot  = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 
 # --- pristine-install guard ---------------------------------------------------
-# C:\sc-install\Starcraft is the user's playable install and is never touched.
-# A literal prefix match is NOT enough: 'C:/sc-install/...' and
-# '\\?\C:\sc-install\...' are both valid Windows paths that Test-Path, Join-Path
+# C:\decompile-sc-data\sc-install\Starcraft is the user's playable install and is never touched.
+# A literal prefix match is NOT enough: 'C:/decompile-sc-data/sc-install/...' and
+# '\\?\C:\decompile-sc-data\sc-install\...' are both valid Windows paths that Test-Path, Join-Path
 # and CreateProcess all accept, and -Windowed COPIES into $GameDir\ddraw.dll
 # while -RemoveWindowed DELETES it. So canonicalise first -- device prefix,
 # slash direction, . and .., 8.3 short names, symlinks and junctions -- then
@@ -264,17 +264,17 @@ $repoRoot  = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 # here is copied into the deployed plugin dir by deploy.ps1: this script runs from there too.
 . (Join-Path $scriptDir 'sc-build-id.ps1')
 
-$PRISTINE_ROOT = 'C:\sc-install'
+$PRISTINE_ROOT = 'C:\decompile-sc-data\sc-install'
 $givenGameDir  = $GameDir
 $GameDir       = Get-CanonicalPath $GameDir
 
 # Compare against both the literal root and its canonical form, so the guard
-# still holds if C:\sc-install is itself a junction (or does not exist yet).
+# still holds if C:\decompile-sc-data\sc-install is itself a junction (or does not exist yet).
 $guardRoots = @($PRISTINE_ROOT, (Get-CanonicalPath $PRISTINE_ROOT)) |
               Where-Object { $_ } | Select-Object -Unique
 foreach ($root in $guardRoots) {
     if (Test-PathUnder -Candidate $GameDir -Root $root) {
-        throw "run-with-plugin: refusing to touch the pristine install. '$givenGameDir' resolves to '$GameDir', which is under '$root'. Use the working copy (C:\sc-work\1161-base)."
+        throw "run-with-plugin: refusing to touch the pristine install. '$givenGameDir' resolves to '$GameDir', which is under '$root'. Use the working copy (C:\decompile-sc-data\sc-work\1161-base)."
     }
 }
 
@@ -353,7 +353,7 @@ try {
         }
         elseif ($explicitBuildDir) {
             # A NAMED -BuildDir is a deliberate choice of build, and real callers depend on
-            # it being honoured: test-random-conformance.ps1 points at C:\sc-work\builds\<sha>
+            # it being honoured: test-random-conformance.ps1 points at C:\decompile-sc-data\sc-work\builds\<sha>
             # to reproduce a bug against the commit BEFORE its fix, probe-queue-indicator-frames.ps1
             # keeps a 'defect' arm, and README-deploy.md points this script at the user's
             # DEPLOYED plugin dir. Rebuilding into any of those destroys what the caller asked
@@ -451,7 +451,7 @@ try {
         $fdFull = [IO.Path]::GetFullPath($FrameDump)
         if ($fdFull.StartsWith($repoRoot, [StringComparison]::OrdinalIgnoreCase) -and
             $fdFull -notmatch '\\work\\scratch\\') {
-            throw "run-with-plugin: refusing -FrameDump '$FrameDump' inside the repo -- frame dumps go under C:\sc-work\ or work/scratch/ (AGENTS.md hard rule 1)."
+            throw "run-with-plugin: refusing -FrameDump '$FrameDump' inside the repo -- frame dumps go under C:\decompile-sc-data\sc-work\ or work/scratch/ (AGENTS.md hard rule 1)."
         }
         $env:SCPLUGIN_FRAMEDUMP = $fdFull
     } else { $env:SCPLUGIN_FRAMEDUMP = '' }

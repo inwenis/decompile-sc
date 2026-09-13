@@ -49,7 +49,7 @@ static void EnsureDirectoryTree(const char* filePath) {
 void ScLogResolvePath(char* out, size_t outLen) {
     DWORD n = GetEnvironmentVariableA("SCPLUGIN_LOG", out, (DWORD)outLen);
     if (n == 0 || n >= outLen) {
-        lstrcpynA(out, "C:\\sc-work\\logs\\sc-plugin.log", (int)outLen);
+        lstrcpynA(out, "C:\\decompile-sc-data\\sc-work\\logs\\sc-plugin.log", (int)outLen);
     }
 }
 

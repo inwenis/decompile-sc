@@ -1,7 +1,7 @@
 # The production queue — where the 5 lives, and what can be done about it
 
 Task 025. Everything here was derived from `StarCraft.exe` 1.16.1 (the working copy at
-`C:\sc-work\1161-base`, SHA-256 `AD6B…6A46`) with the repo's own Ghidra pipeline. Every
+`C:\decompile-sc-data\sc-work\1161-base`, SHA-256 `AD6B…6A46`) with the repo's own Ghidra pipeline. Every
 address carries how it was found and how it was checked (AGENTS.md hard rule 4). Nothing is
 inherited from public prior art: the two community facts that would have been tempting to
 copy — "the build queue is `u16[5]` at `CUnit+0x98`" and "`buildQueueSlot` is at `+0xA4`" —
@@ -1050,13 +1050,13 @@ and none of their output is committed.
 ```powershell
 # the two live emitters, and the dead one: every queueCommand call site with the command
 # byte it stores first
-python work/scratch/028/cmdsites.py C:\sc-work\1161-base\StarCraft.exe 0x20
-python work/scratch/028/peek.py     C:\sc-work\1161-base\StarCraft.exe callers 0x004C01A0   # empty
-python work/scratch/028/peek.py     C:\sc-work\1161-base\StarCraft.exe refs    0x004C01A0   # empty
+python work/scratch/028/cmdsites.py C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe 0x20
+python work/scratch/028/peek.py     C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe callers 0x004C01A0   # empty
+python work/scratch/028/peek.py     C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe refs    0x004C01A0   # empty
 
 # the button record, the buttonsets that carry it, and what masks it
-python work/scratch/028/peek.py      C:\sc-work\1161-base\StarCraft.exe button 0x00517340
-python work/scratch/028/cancelbtn.py C:\sc-work\1161-base\StarCraft.exe 0 200
+python work/scratch/028/peek.py      C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe button 0x00517340
+python work/scratch/028/cancelbtn.py C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe 0 200
 
 # the decompiles quoted above. 0x00457F30, 0x00425180 and 0x00427890 are reachable only
 # through data tables, so auto-analysis leaves them undefined -- recover them first.
@@ -1209,7 +1209,7 @@ sweep asserts every click cancels at every hold with zero collisions, per durati
 
 ```powershell
 # once: import + analyse into a persistent project (~3 min)
-./tools/ghidra/sweep.ps1 -Mode Prepare -InputPE C:\sc-work\1161-base\StarCraft.exe `
+./tools/ghidra/sweep.ps1 -Mode Prepare -InputPE C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe `
     -ProjectDir work/scratch/025/ghidra -LogFile work/scratch/025/ghidra/import.log
 
 # the struct: every instruction touching the array and the head index

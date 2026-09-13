@@ -18,11 +18,11 @@ reload, which rebuilds the base region to 640 and must be re-widened.
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
-    [string]$LogDir = 'C:\sc-work\logs\074',
+    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
+    [string]$LogDir = 'C:\decompile-sc-data\sc-work\logs\074',
     [string]$FixtureDir,
-    [string]$FrameDir = 'C:\sc-work\logs\074-frames',
-    [string]$WindowedHelperDll = 'C:\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll',
+    [string]$FrameDir = 'C:\decompile-sc-data\sc-work\logs\074-frames',
+    [string]$WindowedHelperDll = 'C:\decompile-sc-data\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll',
     # 'widen' forces the fix on (what the deployed wide launcher passes). 'auto' passes
     # nothing through to the DLL and lets its own auto-arm decide -- the auto-arm bug
     # was about: before the fix this arm read "STORM present: off", after it "WIDEN armed".

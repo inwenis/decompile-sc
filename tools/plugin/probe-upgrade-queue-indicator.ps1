@@ -14,24 +14,24 @@ engine's own activate ({0x20, 1}) and must drop exactly that item. The frame
 .EXAMPLE
 ./tools/plugin/probe-upgrade-queue-indicator.ps1 -UnitType engineering-bay -CaptureFrames
 .EXAMPLE
-./tools/plugin/probe-upgrade-queue-indicator.ps1 -UnitType academy -CaptureFrames -BuildDir C:\sc-work\logs\037\build-fixed2
+./tools/plugin/probe-upgrade-queue-indicator.ps1 -UnitType academy -CaptureFrames -BuildDir C:\decompile-sc-data\sc-work\logs\037\build-fixed2
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
+    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
     # Two interchangeable samples, not a required set: neither AnchorFor nor the mode it is
     # given looks at the unit's type, so the indicator behaves identically at every
     # upgrade-producing building.
     [ValidateSet('engineering-bay', 'academy')]
     [string]$UnitType = 'engineering-bay',
     [string]$BuildDir,
-    [string]$LogPath = "C:\sc-work\logs\037\qind-$UnitType.log",
+    [string]$LogPath = "C:\decompile-sc-data\sc-work\logs\037\qind-$UnitType.log",
     [string]$FixtureDir,
     [int]$StartingMinerals = 5000,
     [int]$StartingGas = 5000,
     [int]$SettleSec = 4,
     [switch]$CaptureFrames,
-    [string]$FrameDir = "C:\sc-work\logs\037-frames",
+    [string]$FrameDir = "C:\decompile-sc-data\sc-work\logs\037-frames",
     [switch]$KeepOpen
 )
 

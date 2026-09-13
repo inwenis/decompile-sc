@@ -16,14 +16,14 @@ Oracle: the statUser records and `boxDiff`, not the pixels (AGENTS.md § "Oracle
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
+    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
     # The arm only labels the log, the frames and the assertions' expectations; the build itself
     # comes from -BuildDir, and 'defect' means that tree has the fixes reverted.
     [ValidateSet('defect', 'fixed')]
     [string]$Arm = 'fixed',
     [string]$BuildDir,
-    [string]$LogPath = "C:\sc-work\logs\039\qind-frames-$Arm.log",
-    [string]$FrameDir = 'C:\sc-work\logs\039-frames',
+    [string]$LogPath = "C:\decompile-sc-data\sc-work\logs\039\qind-frames-$Arm.log",
+    [string]$FrameDir = 'C:\decompile-sc-data\sc-work\logs\039-frames',
     [string]$FixtureDir,
     # More than five, so the plugin is holding at least one item the strip cannot draw and the
     # fifth icon is the plugin's rather than the engine's. Ten is the ceiling: the map's one

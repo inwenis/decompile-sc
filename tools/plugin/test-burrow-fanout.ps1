@@ -38,9 +38,9 @@ Frames are a DIAGNOSTIC only and land outside the repo.
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = 'C:\sc-work\1161-base',
-    [string]$LogPath = 'C:\sc-work\logs\016-burrow-fanout.log',
-    [string]$ShotDir = 'C:\sc-work\logs\016-burrow-frames',
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
+    [string]$LogPath = 'C:\decompile-sc-data\sc-work\logs\016-burrow-fanout.log',
+    [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\016-burrow-frames',
     # Which folder under Maps\ the fixture is generated into. Concurrent workers share
     # this suite, so each points it at its own folder and nobody's row click can land on
     # anybody else's map.

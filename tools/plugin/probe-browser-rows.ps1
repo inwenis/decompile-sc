@@ -16,8 +16,8 @@ deleted afterwards, never committed (AGENTS.md § "Hard rules").
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = 'C:\sc-work\1161-base',
-    [string]$LogDir = 'C:\sc-work\logs\023',
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
+    [string]$LogDir = 'C:\decompile-sc-data\sc-work\logs\023',
     # This run's own folder, and the decoy that sorts before it.
     [string]$MyFolder = '00-t023',
     [string]$DecoyFolder = '00-t000',

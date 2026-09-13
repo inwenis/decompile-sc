@@ -18,7 +18,7 @@ Usage:
     python tools/make_test_map.py
     python tools/make_test_map.py --unit-count 36 --unit-type lurker --player 0
     python tools/make_test_map.py --unit-count 36 --unit-type lurker --enemy-count 6
-    python tools/make_test_map.py --validate-only C:\\sc-work\\1161-base\\Maps\\test-many-units.scx --unit-count 36 --unit-type marine --player 0
+    python tools/make_test_map.py --validate-only C:\\decompile-sc-data\\sc-work\\1161-base\\Maps\\test-many-units.scx --unit-count 36 --unit-type marine --player 0
 """
 
 import argparse
@@ -751,8 +751,8 @@ def read_unit_settings(payload: bytes, unit_ids: list[int]) -> dict[int, dict]:
     return out
 
 
-DEFAULT_TEMPLATE = r"C:\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx"
-DEFAULT_OUTPUT = r"C:\sc-work\1161-base\Maps\test-many-units.scx"
+DEFAULT_TEMPLATE = r"C:\decompile-sc-data\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx"
+DEFAULT_OUTPUT = r"C:\decompile-sc-data\sc-work\1161-base\Maps\test-many-units.scx"
 DEFAULT_UNIT_COUNT = 36
 # One tile between units, and the block CENTRED on the start location. Both matter:
 # the camera opens centred on the start location and shows about 20x12 tiles, so a block

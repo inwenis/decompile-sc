@@ -15,8 +15,8 @@ memory on both fixtures -- the only arm whose answer needs no posted message to 
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = 'C:\sc-work\1161-base',
-    [string]$LogDir = 'C:\sc-work\logs\026',
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
+    [string]$LogDir = 'C:\decompile-sc-data\sc-work\logs\026',
     [string]$FixtureDir,
     [int]$UnitCount = 18,
     # Plain letters: card hotkeys carry no modifier, so the posted-modifier limit in

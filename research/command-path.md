@@ -2,7 +2,7 @@
 
 Analysis date: 2026-08-07 (task 011). Target: `StarCraft.exe`, StarCraft: Brood War 1.16.1
 (classic), SHA-256 `AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C6A46` — the
-project's disposable working copy `C:\sc-work\1161-base`, hash checked before the run.
+project's disposable working copy `C:\decompile-sc-data\sc-work\1161-base`, hash checked before the run.
 
 Companions:
 [`selection-cap.md`](selection-cap.md) (public-sources recon),
@@ -16,7 +16,7 @@ written because task 011 needed to emit `Select`+order pairs, and emitting a com
 read the encoding of is guesswork.
 
 Everything below is static analysis of the working copy plus, where stated, values observed in a
-live process. `C:\sc-install\Starcraft` was never opened.
+live process. `C:\decompile-sc-data\sc-install\Starcraft` was never opened.
 
 ---
 
@@ -427,8 +427,8 @@ hook placed on one *builder* would miss half the traffic — another reason to h
 ### Reproducing this
 
 ```powershell
-$env:GHIDRA_INSTALL_DIR = 'C:\re-tools\ghidra_12.1.2_PUBLIC'
-./tools/ghidra/sweep.ps1 -Mode Prepare -InputPE C:\sc-work\1161-base\StarCraft.exe `
+$env:GHIDRA_INSTALL_DIR = 'C:\decompile-sc-data\re-tools\ghidra_12.1.2_PUBLIC'
+./tools/ghidra/sweep.ps1 -Mode Prepare -InputPE C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe `
     -ProjectDir work/scratch/ghidra-sweep -LogFile work/scratch/ghidra-sweep/import.log
 ./tools/ghidra/sweep.ps1 -Mode Run -ProjectDir work/scratch/ghidra-sweep `
     -ProgramName StarCraft.exe -Script HookProbe.java `

@@ -8,7 +8,7 @@ cnc-ddraw (github.com/FunkyFr3sh/cnc-ddraw, MIT) presents the full ddraw surface
 the game asks for -- the replacement candidate for WMode.dll's measured
 640-column crop (research/renderer-viewport.md 12.6, 13.4). Never committed: a
 game-adjacent third-party binary (AGENTS.md § "Hard rules"), so it lands under
-C:\sc-work\. Nothing here builds third-party C sources, so the release asset is
+C:\decompile-sc-data\sc-work\. Nothing here builds third-party C sources, so the release asset is
 taken as-is and the pinned SHA256 below -- not a source build -- is what verifies
 it.
 
@@ -19,7 +19,7 @@ it.
 [CmdletBinding()]
 param(
     [string]$Version = 'v7.1.0.0',
-    [string]$DestRoot = 'C:\sc-work\cnc-ddraw',
+    [string]$DestRoot = 'C:\decompile-sc-data\sc-work\cnc-ddraw',
     # A mismatch is a HARD STOP: an artifact that changed under a fixed version tag
     # needs re-review, never a silent re-pin. Other versions have no pin to check.
     [string]$ExpectedZipSha256 = '0b13ab89a64c9918189b1dadd449ef6ed3cb3b7b19cabd96d8adbd95505bb908'

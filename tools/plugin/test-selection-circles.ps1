@@ -18,10 +18,10 @@ are DRAWN is the one question the frames in -ShotDir hand back to a human.
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = 'C:\sc-work\1161-base',
-    [string]$LogPath = 'C:\sc-work\logs\014-circles-test.log',
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
+    [string]$LogPath = 'C:\decompile-sc-data\sc-work\logs\014-circles-test.log',
     # Frames land here. MUST be outside the repo: they reproduce game artwork.
-    [string]$ShotDir = 'C:\sc-work\logs\014-frames',
+    [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\014-frames',
     [switch]$KeepOpen,
     [switch]$NoCircles          # the off-switch run: fan-out on, circles off
 )

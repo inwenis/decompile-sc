@@ -16,9 +16,9 @@ such a message to itself at 0x004D1BA0; only the key-to-accelerator mapping stay
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = 'C:\sc-work\1161-base',
-    [string]$LogPath = 'C:\sc-work\logs\021-control-groups.log',
-    [string]$ShotDir = 'C:\sc-work\logs\021-control-group-frames',
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
+    [string]$LogPath = 'C:\decompile-sc-data\sc-work\logs\021-control-groups.log',
+    [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\021-control-group-frames',
     # Which folder under Maps\ the fixture is generated into; see test-burrow-fanout.ps1.
     [string]$FixtureDir,
     [int]$UnitCount = 36,

@@ -31,9 +31,9 @@ generated maps are game content (AGENTS.md § "Test fixtures").
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = 'C:\sc-work\1161-base',
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
     [string]$LogPath,
-    [string]$ShotDir = 'C:\sc-work\logs\024-building-frames',
+    [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\024-building-frames',
     # This run's fixture folder. Defaults to this AGENT's own (Resolve-ScFixtureDir), so
     # two workers can never land in one folder and move each other's browser rows.
     [string]$FixtureDir,
@@ -47,7 +47,7 @@ param(
 $ErrorActionPreference = 'Stop'
 if ($Stock -and $Combat) { throw 'test: -Stock and -Combat are separate arms; pass one.' }
 $arm = if ($Stock) { 'stock' } elseif ($Combat) { 'combat' } else { 'feature' }
-if (-not $LogPath) { $LogPath = "C:\sc-work\logs\024-building-groups-$arm.log" }
+if (-not $LogPath) { $LogPath = "C:\decompile-sc-data\sc-work\logs\024-building-groups-$arm.log" }
 
 $scriptDir = $PSScriptRoot
 $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path

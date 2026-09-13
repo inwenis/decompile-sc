@@ -16,12 +16,12 @@ probe-framebuffer-capture already owns that instrument under WMode.
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = 'C:\sc-work\1161-base',
-    [string]$LogDir = 'C:\sc-work\logs',
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
+    [string]$LogDir = 'C:\decompile-sc-data\sc-work\logs',
     [string]$FixtureDir,
-    [string]$FrameDir = 'C:\sc-work\logs\070-frames',
+    [string]$FrameDir = 'C:\decompile-sc-data\sc-work\logs\070-frames',
     # The pinned cnc-ddraw (fetch-cnc-ddraw.ps1, sha256-verified at fetch).
-    [string]$WindowedHelperDll = 'C:\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll',
+    [string]$WindowedHelperDll = 'C:\decompile-sc-data\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll',
     # Which helper PRESENTS. The engine build is identical either way (the
     # -WidescreenStage table + fog, in-process); what differs is the window.
     # 'cnc' is the user's wide presentation (the full-width window, and the harness's

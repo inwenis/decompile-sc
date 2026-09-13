@@ -17,9 +17,9 @@ its own SCVs, so supply-block cannot explain a zero. Numbers: research/group-pro
 [CmdletBinding()]
 param(
     [ValidateSet('baseline', 'feature', 'cap')][string]$Arm = 'feature',
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
+    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
     [string]$LogPath,
-    [string]$ShotDir = 'C:\sc-work\logs\030\group-production-frames',
+    [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\030\group-production-frames',
     [string]$FixtureDir,
     # How many production buildings the box selects. 4 is enough to make "one" and "all"
     # unmistakably different numbers and still fits one screen at the spacing below.
@@ -37,7 +37,7 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 
 . (Join-Path $scriptDir 'sc-suite.ps1')
 
-if (-not $LogPath) { $LogPath = "C:\sc-work\logs\030\group-production-$Arm.log" }
+if (-not $LogPath) { $LogPath = "C:\decompile-sc-data\sc-work\logs\030\group-production-$Arm.log" }
 
 $failures = 0
 $step = 0

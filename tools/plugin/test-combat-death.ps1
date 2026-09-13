@@ -32,9 +32,9 @@ game content (AGENTS.md hard rule 1) and are deleted afterwards.
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = 'C:\sc-work\1161-base',
-    [string]$LogPath = 'C:\sc-work\logs\019-combat-death.log',
-    [string]$ShotDir = 'C:\sc-work\logs\019-combat-death-frames',
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
+    [string]$LogPath = 'C:\decompile-sc-data\sc-work\logs\019-combat-death.log',
+    [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\019-combat-death-frames',
     # Which folder under Maps\ the two fixtures are generated into. More than one worker
     # runs this suite, so each points it at its own folder and no other run's browser
     # click can land on its map, nor its own on theirs.
@@ -206,7 +206,7 @@ function Shot([string]$tag) {
 $script:launchedPids = @()
 
 # CROSS-WORKER LAUNCH SERIALISATION IS NOT THIS FILE'S JOB. run-with-plugin.ps1 takes
-# an exclusive OS handle on C:\sc-work\logs\sc-launch.lock for the launch sequence
+# an exclusive OS handle on C:\decompile-sc-data\sc-work\logs\sc-launch.lock for the launch sequence
 # whenever $env:AGENT_TASK is set (tools/plugin/sc-launch-lock.ps1), which covers
 # every launch this test makes. Do not add a content-based claim on that path beside
 # it: while another worker holds the handle with FileShare.None, `Get-Content` THROWS,

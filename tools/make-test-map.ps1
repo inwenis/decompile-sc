@@ -12,7 +12,7 @@
 .EXAMPLE
     ./tools/make-test-map.ps1
     ./tools/make-test-map.ps1 -UnitCount 50 -UnitType marine -Player 0
-    ./tools/make-test-map.ps1 -OutputPath C:\sc-work\1161-base\Maps\my-test.scx
+    ./tools/make-test-map.ps1 -OutputPath C:\decompile-sc-data\sc-work\1161-base\Maps\my-test.scx
 #>
 
 [CmdletBinding()]
@@ -23,8 +23,8 @@ param(
     # Pixels between placed units (32 = one tile). Types bigger than a tile need more:
     # the game silently drops the ones it cannot place, so the map comes up short.
     [int]$GridSpacing = 32,
-    [string]$TemplatePath = 'C:\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx',
-    [string]$OutputPath = 'C:\sc-work\1161-base\Maps\test-many-units.scx',
+    [string]$TemplatePath = 'C:\decompile-sc-data\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx',
+    [string]$OutputPath = 'C:\decompile-sc-data\sc-work\1161-base\Maps\test-many-units.scx',
     # Leave the template's player slots alone: rewriting them deletes the actors of a
     # template that is already a playable scenario (a stock campaign mission).
     [switch]$KeepOwnr,

@@ -12,9 +12,9 @@ names". Everything under -OutDir is derived game content and stays outside the r
 ./tools/ghidra/decomp-all.ps1
 #>
 param(
-    [string]$InputPE = 'C:\sc-work\1161-base\StarCraft.exe',
-    [string]$ProjectDir = 'C:\sc-work\ghidra',
-    [string]$OutDir = 'C:\sc-work\decomp',
+    [string]$InputPE = 'C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe',
+    [string]$ProjectDir = 'C:\decompile-sc-data\sc-work\ghidra',
+    [string]$OutDir = 'C:\decompile-sc-data\sc-work\decomp',
     [int]$DecompileTimeoutSecs = 120
 )
 
@@ -57,7 +57,7 @@ Get-ChildItem -LiteralPath $out -Filter '*.c' | Remove-Item -Force
 & $run DecompileMany.java @((Join-Path $out 'index.tsv'), 'ALL', $DecompileTimeoutSecs) (Join-Path $out 'decompile.log')
 
 # The asm beside the C, from the pinned toolchain's objdump (the same lookup as tools/plugin/build.ps1).
-$objdump = Join-Path ($env:SC_MINGW32_BIN ?? 'C:\re-tools\mingw32-gcc-16.1.0-i686-msvcrt\mingw32\bin') 'objdump.exe'
+$objdump = Join-Path ($env:SC_MINGW32_BIN ?? 'C:\decompile-sc-data\re-tools\mingw32-gcc-16.1.0-i686-msvcrt\mingw32\bin') 'objdump.exe'
 if (Test-Path -LiteralPath $objdump) {
     & $objdump -d -M intel $InputPE | Set-Content -LiteralPath (Join-Path $out 'listing.asm') -Encoding utf8
     if ($LASTEXITCODE -ne 0) { throw "decomp-all.ps1: objdump exited $LASTEXITCODE" }

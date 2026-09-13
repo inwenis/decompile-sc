@@ -19,12 +19,12 @@ A .scm/.scx is game content and is never committed (AGENTS.md § "Hard rules").
 The stock ladder map the sandboxes are cut from (its settings and strings).
 
 .EXAMPLE
-./tools/make-feature-test-map.ps1 -OutputPath 'C:\sc-work\1161-base\Maps\BroodWar\!feature-test.scx'
+./tools/make-feature-test-map.ps1 -OutputPath 'C:\decompile-sc-data\sc-work\1161-base\Maps\BroodWar\!feature-test.scx'
 #>
 [CmdletBinding()]
 param(
-    [string]$OutputPath = 'C:\sc-deploy\starcraft-modded\game\Maps\BroodWar\!feature-test.scx',
-    [string]$TemplatePath = 'C:\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx'
+    [string]$OutputPath = 'C:\decompile-sc-data\sc-deploy\starcraft-modded\game\Maps\BroodWar\!feature-test.scx',
+    [string]$TemplatePath = 'C:\decompile-sc-data\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx'
 )
 
 $ErrorActionPreference = 'Stop'

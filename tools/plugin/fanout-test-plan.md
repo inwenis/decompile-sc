@@ -10,7 +10,7 @@ Two runs, identical actions, one word different between them. About two minutes 
 
 ## What the map has to provide
 
-1. Loads in single-player on the working copy `C:\sc-work\1161-base`.
+1. Loads in single-player on the working copy `C:\decompile-sc-data\sc-work\1161-base`.
 2. Gives the player **more than 12 units they own and can select together** — same-ish type,
    standing close enough to fit in one drag box. Marines, Zerglings, Zealots, SCVs: anything
    mobile.
@@ -64,7 +64,7 @@ pairs and 72–74 bytes.
 ```powershell
 cd C:\git\decompile-sc-task011
 ./tools/plugin/run-with-plugin.ps1 -Mode observe -InjectWindowedHelper WMode `
-    -LogPath C:\sc-work\logs\fanout-A-observe.log
+    -LogPath C:\decompile-sc-data\sc-work\logs\fanout-A-observe.log
 ```
 
 1. The game opens in a ~650×517 window.
@@ -84,7 +84,7 @@ cd C:\git\decompile-sc-task011
 
 ```powershell
 ./tools/plugin/run-with-plugin.ps1 -Mode fanout -InjectWindowedHelper WMode `
-    -LogPath C:\sc-work\logs\fanout-B-fanout.log
+    -LogPath C:\decompile-sc-data\sc-work\logs\fanout-B-fanout.log
 ```
 
 9. Repeat steps 2–7 exactly.
@@ -117,7 +117,7 @@ account of what happened on screen, and that is what goes in the PR.
 ## If it misbehaves
 
 Close the game. There is nothing to uninstall — the plugin is never copied into the game folder and
-never patches `StarCraft.exe` on disk. Launching `C:\sc-work\1161-base\StarCraft.exe` directly, or
+never patches `StarCraft.exe` on disk. Launching `C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe` directly, or
 re-running with `-Mode observe`, is a stock 1.16.1 client.
 
 ---

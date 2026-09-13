@@ -7,9 +7,9 @@ Every in-game result so far required them ([`runtime-selection-observations.md`]
 §3.1: "a human drove the game, not the harness"). That does not scale to a test suite and it makes
 regressions invisible between sessions.
 
-All work below was done on the disposable working copy `C:\sc-work\1161-base`, offline,
+All work below was done on the disposable working copy `C:\decompile-sc-data\sc-work\1161-base`, offline,
 single-player, with the conductor's standing permission to launch and kill the game freely. The
-pristine install `C:\sc-install\Starcraft` was never opened. After every probe the working copy's
+pristine install `C:\decompile-sc-data\sc-install\Starcraft` was never opened. After every probe the working copy's
 `StarCraft.exe` still hashes `AD6B58B2…88C6A46` — the documented pristine value — and no
 `ddraw.dll` or any other file was added to the game directory.
 
@@ -404,7 +404,7 @@ Further limits that apply to the whole plan:
 
 ## 8. Housekeeping
 
-- **Pristine install untouched.** `C:\sc-install\Starcraft` was never read, written or launched by this task.
+- **Pristine install untouched.** `C:\decompile-sc-data\sc-install\Starcraft` was never read, written or launched by this task.
 - **Working copy unchanged.** `StarCraft.exe` still hashes `AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C6A46`. No `ddraw.dll` was created; the windowed helper is early-injected, never copied.
 - **No game process left running.** Verified zero after the final probe.
 - **No game content committed.** The two window captures live in `work/scratch/` (gitignored) and are deliberately not committed or attached to the PR: they reproduce game artwork. Built binaries are likewise not committed.

@@ -21,9 +21,9 @@ diagnostics outside the repo (AGENTS.md § "Hard rules").
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = 'C:\sc-work\1161-base',
-    [string]$LogPath = 'C:\sc-work\logs\027-probe-quiet.log',
-    [string]$ShotDir = 'C:\sc-work\logs\027-probe-frames',
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
+    [string]$LogPath = 'C:\decompile-sc-data\sc-work\logs\027-probe-quiet.log',
+    [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\027-probe-frames',
     [switch]$KeepOpen
 )
 

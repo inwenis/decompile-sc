@@ -23,9 +23,9 @@ trigger that sets resources once, so nothing but this suite can move a mineral.
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\sc-work\1161-base' }),
-    [string]$LogPath = 'C:\sc-work\logs\029\upgrade-queue.log',
-    [string]$ShotDir = 'C:\sc-work\logs\029\upgrade-queue-frames',
+    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
+    [string]$LogPath = 'C:\decompile-sc-data\sc-work\logs\029\upgrade-queue.log',
+    [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\029\upgrade-queue-frames',
     [string]$FixtureDir,
     # The plugin's total logical queue length, the engine's ONE included. 3 = 1 running +
     # 2 queued: more than vanilla's one, and small enough to finish inside a few minutes.

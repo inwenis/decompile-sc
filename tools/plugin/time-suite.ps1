@@ -13,13 +13,13 @@ where exist on stdout alone.
 
 .EXAMPLE
 ./tools/plugin/time-suite.ps1 -Suite ./tools/plugin/test-production-queue.ps1 `
-    -SuiteArgs @{ FixtureDir = 'C:\sc-work\1161-base\Maps\BroodWar\00-t<NNN>-production-queue' } `
-    -PluginLog C:\sc-work\logs\timing\production-queue.log `
-    -OutFile C:\sc-work\logs\timing\prodqueue.txt
+    -SuiteArgs @{ FixtureDir = 'C:\decompile-sc-data\sc-work\1161-base\Maps\BroodWar\00-t<NNN>-production-queue' } `
+    -PluginLog C:\decompile-sc-data\sc-work\logs\timing\production-queue.log `
+    -OutFile C:\decompile-sc-data\sc-work\logs\timing\prodqueue.txt
 
 .EXAMPLE
 # Just re-report from a transcript this script already wrote:
-./tools/plugin/time-suite.ps1 -ReportOnly C:\sc-work\logs\timing\prodqueue.txt
+./tools/plugin/time-suite.ps1 -ReportOnly C:\decompile-sc-data\sc-work\logs\timing\prodqueue.txt
 #>
 [CmdletBinding(DefaultParameterSetName = 'Run')]
 param(

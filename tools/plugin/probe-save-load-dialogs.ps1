@@ -16,10 +16,10 @@ stock campaign map plays the same as any other type.
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = 'C:\sc-work\1161-base',
-    [string]$LogPath = 'C:\sc-work\logs\051\save-dialog-probe.log',
-    [string]$ShotDir = 'C:\sc-work\logs\051-frames',
-    [string]$StashDir = 'C:\sc-work\logs\051\stash',
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
+    [string]$LogPath = 'C:\decompile-sc-data\sc-work\logs\051\save-dialog-probe.log',
+    [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\051-frames',
+    [string]$StashDir = 'C:\decompile-sc-data\sc-work\logs\051\stash',
     [string]$SaveName = 'slprobe',
     [switch]$KeepOpen
 )
