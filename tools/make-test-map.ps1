@@ -37,6 +37,9 @@ param(
     # Keep the template's TRIG/MBRF sections. NOT for a test fixture: stock triggers end
     # the game seconds after a generated map loads (tools/README-test-map.md).
     [switch]$KeepTriggers,
+    # Write a mission briefing (a talking Marine portrait over the map's name and
+    # description), so the ready room plays one the way a campaign mission's does.
+    [switch]$Briefing,
     # Race written into SIDE, defaulting to the placed unit type's. A ladder template's
     # "User Selectable" gets MELEE starting units even under Use Map Settings.
     [ValidateSet('zerg', 'terran', 'protoss')]
@@ -138,6 +141,7 @@ if ($KeepOwnr) { $pyArgs += '--keep-ownr' }
 if ($ClearPlayerUnits) { $pyArgs += '--clear-player-units' }
 if ($ClearCritters) { $pyArgs += '--clear-critters' }
 if ($KeepTriggers) { $pyArgs += '--keep-triggers' }
+if ($Briefing) { $pyArgs += '--briefing' }
 if ($Race) { $pyArgs += @('--race', $Race) }
 if ($EnemyCount -gt 0) { $pyArgs += @('--enemy-count', $EnemyCount) }
 if ($EnemyType) { $pyArgs += @('--enemy-type', $EnemyType) }
