@@ -198,6 +198,40 @@ try {
         Shot 'selected-idle'
     }
 
+    $script:producerPoint = $null
+    $script:researchPoint = $null
+    if ($ThenTrain) {
+        Step 'queue THREE units at the Command Center FIRST, then come back to the research building' {
+            $w = Get-World 'aim-producer'
+            $rb = @($w.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $BUILDING_TYPE })[0]
+            $script:researchPoint = @{ X = $rb.X - $w.Screen.Left; Y = $rb.Y - $w.Screen.Top }
+            $b = @($w.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq 106 }) | Select-Object -First 1
+            Assert-That 'the map holds one player-owned Command Center' ($null -ne $b)
+            $cx = $b.X - $w.Screen.Left
+            $cy = $b.Y - $w.Screen.Top
+            Assert-That "the Command Center is on screen ($cx,$cy)" ($cx -ge 0 -and $cx -lt 640 -and $cy -ge 0 -and $cy -lt 340)
+            $script:producerPoint = @{ X = $cx; Y = $cy }
+            Send-ScClick -Hwnd $hwnd -X $cx -Y $cy
+            Start-Sleep -Seconds 2
+            $card = Get-Card 'producer'
+            Assert-That "the card shows the Command Center (portrait type $($card.PortraitType))" ($card.Ok -and $card.PortraitType -eq 106)
+            $train = @($card.Slots | Where-Object { $_.HasButton -and $_.Action -eq '004234B0' }) | Select-Object -First 1
+            Assert-That 'the card offers a Train button (action 0x004234B0)' ($null -ne $train)
+            $pt = Get-ScCardSlotPoint -Card $card -Slot $train.Index
+            $mark = Get-ScLogLineCount -LogPath $LogPath
+            for ($i = 1; $i -le 3; $i++) { Send-ScClick -Hwnd $hwnd -X $pt.X -Y $pt.Y -SettleMs 300 }
+            Start-Sleep -Seconds 2
+            $sent = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark | Select-String -Pattern 'CMD id=0x1F ')
+            Assert-That "three Train commands reached the wire ($($sent.Count))" ($sent.Count -eq 3)
+            $st = Get-Strip 'producer-queued'
+            Show-Strip $st 'producer-queued'
+            $up = @($st.Slots | Where-Object { $_.Display -le 2 -and $_.State -eq 'enabled' })
+            Assert-That "the strip shows the three queued units ($($up.Count) of 3)" ($up.Count -eq 3)
+            Send-ScClick -Hwnd $hwnd -X $script:researchPoint.X -Y $script:researchPoint.Y
+            Start-Sleep -Seconds 2
+        }
+    }
+
     Step 'READ THE QUEUE INDICATOR BEFORE ANYTHING IS QUEUED -- the negative half' {
         $q = Get-QInd 'idle'
         Write-Host "       QIND idle: mode=$($q.Mode) linked=$($q.Linked) visible=$($q.Visible) text=`"$($q.Text)`" ink=$($q.Ink) upg=$($q.Upg)"
@@ -279,45 +313,30 @@ try {
     }
 
     if ($ThenTrain) {
-        $script:researchPoint = $null
-        Step 'with a research HELD, select the Command Center beside it and queue THREE units' {
-            $w = Get-World 'aim-producer'
-            $rb = @($w.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $BUILDING_TYPE })[0]
-            $script:researchPoint = @{ X = $rb.X - $w.Screen.Left; Y = $rb.Y - $w.Screen.Top }
-            $b = @($w.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq 106 }) | Select-Object -First 1
-            Assert-That 'the map holds one player-owned Command Center' ($null -ne $b)
-            $cx = $b.X - $w.Screen.Left
-            $cy = $b.Y - $w.Screen.Top
-            Assert-That "the Command Center is on screen ($cx,$cy)" ($cx -ge 0 -and $cx -lt 640 -and $cy -ge 0 -and $cy -lt 340)
-            Send-ScClick -Hwnd $hwnd -X $cx -Y $cy
+        Step 'with a research HELD, go back to the Command Center (its three units still queued)' {
+            Send-ScClick -Hwnd $hwnd -X $script:producerPoint.X -Y $script:producerPoint.Y
             Start-Sleep -Seconds 2
-            $card = Get-Card 'producer'
+            $card = Get-Card 'producer-back'
             Assert-That "the card shows the Command Center (portrait type $($card.PortraitType))" ($card.Ok -and $card.PortraitType -eq 106)
-            $train = @($card.Slots | Where-Object { $_.HasButton -and $_.Action -eq '004234B0' }) | Select-Object -First 1
-            Assert-That 'the card offers a Train button (action 0x004234B0)' ($null -ne $train)
-            $pt = Get-ScCardSlotPoint -Card $card -Slot $train.Index
-            $mark = Get-ScLogLineCount -LogPath $LogPath
-            for ($i = 1; $i -le 3; $i++) { Send-ScClick -Hwnd $hwnd -X $pt.X -Y $pt.Y -SettleMs 300 }
-            Start-Sleep -Seconds 2
-            Shot 'producer-queued-3'
-            $sent = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark | Select-String -Pattern 'CMD id=0x1F ')
-            Assert-That "three Train commands reached the wire ($($sent.Count))" ($sent.Count -eq 3)
+            Shot 'producer-back-3-queued'
         }
 
         Step 'READ THE STRIP WITH 3 UNITS QUEUED -- every queued unit''s icon is up, slot 2 included' {
             $st = Get-Strip 'trained'
             Show-Strip $st 'trained'
             Assert-That 'the strip walk completed' ($st.Ok -and $st.RingStable)
+            # A unit may have finished while the research was queued: the ring, not the
+            # three presses, says how many icons must be up.
             $ring = @($st.Engine | Where-Object { $_ -ne 0xE4 })
-            Assert-That "the engine's own ring holds 3 units ($($ring.Count))" ($ring.Count -eq 3)
-            foreach ($d in 0..2) {
+            Assert-That "the engine's own ring still holds at least 2 units ($($ring.Count))" ($ring.Count -ge 2)
+            foreach ($d in 0..4) {
                 $s = @($st.Slots | Where-Object Display -eq $d) | Select-Object -First 1
-                Assert-That "display $d (the player's slot $($d + 1)) is enabled, not hidden ($($s.State))" ($s.State -eq 'enabled')
-                Assert-That "  and draws a unit icon (umode $($s.UMode) is 3)" ($s.UMode -eq 3)
-            }
-            foreach ($d in 3..4) {
-                $s = @($st.Slots | Where-Object Display -eq $d) | Select-Object -First 1
-                Assert-That "display $d is the engine's greyed empty slot ($($s.State))" ($s.State -eq 'GREYED')
+                if ($d -lt $ring.Count) {
+                    Assert-That "display $d (the player's slot $($d + 1)) is enabled, not hidden ($($s.State))" ($s.State -eq 'enabled')
+                    Assert-That "  and draws a unit icon (umode $($s.UMode) is 3)" ($s.UMode -eq 3)
+                } else {
+                    Assert-That "display $d is the engine's greyed empty slot ($($s.State))" ($s.State -eq 'GREYED')
+                }
             }
         }
 
