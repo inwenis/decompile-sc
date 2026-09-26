@@ -449,9 +449,11 @@ def _brf_action(action: int, string: int = 0, time_ms: int = 0, slot: int = 0,
 
 
 def build_briefing_mbrf(player: int, sections: list[ChkSection], template: Path) -> bytes:
-    """One briefing trigger for `player`: a Marine portrait speaks the map's name, then its
-    description (the two strings SPRP already names, so no string is added), then the
-    description again as the objectives."""
+    """One briefing trigger for `player`: the map's name, then its description (the two
+    strings SPRP already names, so no string is added), then the description again as the
+    objectives, with a Marine portrait asked for in slot 0 and told to speak. The text and
+    objectives show; the portrait does not (the fields match BRFACT_ShowPortrait's reads,
+    so what it still needs is unknown)."""
     sprp = sections[require_section(sections, "SPRP", template)].payload
     name_str, desc_str = struct.unpack_from("<HH", sprp, 0)
     actions = [

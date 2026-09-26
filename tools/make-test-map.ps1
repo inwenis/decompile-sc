@@ -37,8 +37,9 @@ param(
     # Keep the template's TRIG/MBRF sections. NOT for a test fixture: stock triggers end
     # the game seconds after a generated map loads (tools/README-test-map.md).
     [switch]$KeepTriggers,
-    # Write a mission briefing (a talking Marine portrait over the map's name and
-    # description), so the ready room plays one the way a campaign mission's does.
+    # Write a mission briefing (the map's name and description as text, then objectives),
+    # so the ready room plays one; the Show Portrait action it also writes does not put a
+    # portrait on screen yet, so a briefing with portraits still needs a stock campaign map.
     [switch]$Briefing,
     # Race written into SIDE, defaulting to the placed unit type's. A ladder template's
     # "User Selectable" gets MELEE starting units even under Use Map Settings.
