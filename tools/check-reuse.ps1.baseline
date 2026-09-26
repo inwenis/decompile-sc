@@ -121,7 +121,9 @@ block a9fa24ff1de21804  # 6 identical lines: Set-ScMarker -MarkerPath $markerPat
 block 11392f0b7da1c73b  # 6 identical lines: Step "the map spawned exactly the $UnitCount placed Lurkers, and nothi
 block 80f7800b1a82019e  # 6 identical lines: Step 'a drag box captures more units than the engine can hold' {
 block 4c8c7489ff934fa2  # 6 identical lines: [CmdletBinding()]
+block cb0e5c4e33821057  # 6 identical lines: [string]$BuildDir,
 block fa8b1ea2c949b4d6  # 6 identical lines: catch { Write-Host "  FAIL close-game failed for arm '$Mode': $($_.Exc
+block 43a3fa1bcd264b0b  # 6 identical lines: if ($d.Count) { "$($d[0].Left),$($d[0].Top),$($d[0].Right),$($d[0].Bot
 block 31ee088ab3c520b7  # 6 identical lines: if (-not (Test-Path -LiteralPath $exePath)) { throw "probe: $exePath n
 block 5c54564a788f9fca  # 6 identical lines: public static class Enum {
 block 43531a002d8ffa80  # 6 identical lines: try { Remove-ScOwnFixtureDir -Dir $fixtures.Dir | Out-Null } catch { W
@@ -141,6 +143,7 @@ block 1a65fb829e0726a9  # 7 identical lines: Step 'POSITIVE CONTROL: click ONE b
 block 9d9ed85112a622ee  # 7 identical lines: [CmdletBinding()]
 block c53a3545d5be8304  # 7 identical lines: [DllImport("user32.dll")] public static extern IntPtr GetForegroundWin
 block 939cd76c83f16635  # 7 identical lines: if (-not $LogPath) { $LogPath = "C:\decompile-sc-data\sc-work\logs\024
+block 1a15b3f159e40979  # 7 identical lines: if (-not $gamePid) { throw "no game pid for arm $Index" }
 block 670c1e8295456468  # 7 identical lines: if (-not ('ScDrive.Native' -as [type])) {
 block d855bbf7108e7e29  # 7 identical lines: if (-not ('ScSpawn.Native' -as [type])) {
 block cd35980922b59abd  # 7 identical lines: if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPa
@@ -165,6 +168,7 @@ block 7a1cf7df06d1807f  # 8 identical lines: Send-ScDrag -Hwnd $hwnd -X1 10 -Y1 
 block aa8a26be6a56cc2f  # 8 identical lines: [CmdletBinding()]
 block a1fbe42c62503caa  # 8 identical lines: [string]$DecoyFolder = '00-t000',
 block 30ac0c80bfbc8aad  # 8 identical lines: [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\043\probe-frames
+block be28fd78108f1ac2  # 8 identical lines: foreach ($lib in 'drive-game.ps1', 'sc-launch-lock.ps1', 'sc-suite.ps1
 block d88814f1c3b054ba  # 8 identical lines: if (-not $gamePid) { throw "probe-framecap: could not parse the game p
 block 14c70206a22edb8e  # 8 identical lines: if (-not ('SCWin.Enum' -as [type])) {
 block 8c7ec4976f9a729c  # 8 identical lines: param([string]$What, [bool]$Ok, [string]$Detail = '')

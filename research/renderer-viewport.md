@@ -3342,8 +3342,9 @@ capture was lit again, which the player never gets: a `PrintWindow` repaints and
 re-realizes; the player's window sits idle until they press Start into black.
 
 Bisected, one fresh launch each, all black at ~1 s: centring off; centring and widescreen
-off; `-Mode observe` (the plugin writes nothing, no detour, no patch). So it is not this
-plugin's doing. The instrumented arm (a detour on `TitlePaletteUpdate 0x0041EA30`, the
+off; `-Mode observe` (the plugin writes nothing, no detour, no patch). With the WMode shim
+in cnc-ddraw's place (`-Presenter wmode`, otherwise the same): 14 lit samples, no black.
+So it is not this plugin's doing; it is the game under cnc-ddraw. The instrumented arm (a detour on `TitlePaletteUpdate 0x0041EA30`, the
 one writer of an all-black palette, logging its caller and the fade's state beside every
 palette poll) read, at the black: `fade flag=0 tops written=255 to=255 from=0` with no
 `TitlePaletteUpdate` since the ready room's own swish-in 0.9 s earlier -- the engine
