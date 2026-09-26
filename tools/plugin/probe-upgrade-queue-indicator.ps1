@@ -32,9 +32,10 @@ param(
     [int]$SettleSec = 4,
     [switch]$CaptureFrames,
     [string]$FrameDir = "C:\decompile-sc-data\sc-work\logs\037-frames",
-    # Also place a Barracks beside the research building and, with a research held, select
-    # it and queue three units: every queued unit's icon must stay up (the plugin once hid
-    # the second one, taking its own lit icon down after the layout had changed hands).
+    # Also place a Command Center beside the research building: queue three units there
+    # first, hold a research at the bay, come back. Every queued unit's icon must be up:
+    # outside a research layout the strip's icons are the engine's, and a plugin snapshot
+    # that outlives the layout change must not take one down.
     [switch]$ThenTrain,
     [switch]$KeepOpen
 )

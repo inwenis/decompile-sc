@@ -4550,9 +4550,8 @@ static void QueueIndTests(void) {
         // hide-all sweep (0x00457310) and the new layout lights what it needs: here a
         // producing building's queueLayout lights icons 3 and 4 for its second and third
         // queued units. Those are the ENGINE'S icons now: the plugin forgets its own and
-        // must not touch them. (Before this check modelled the sweep, the plugin hid icon 3
-        // here -- the second queued unit of the next Barracks vanished in play; predicted
-        // reading pre-fix: icons 3 and 4 hidden, upgIconHides +2; post-fix: lit, +0.)
+        // must not touch them. A plugin that hides on a stale snapshot reads icons 3 and 4
+        // hidden and upgIconHides +2 here; the correct one reads lit and +0.
         {
             const unsigned hidesBefore = (unsigned)ScQueueIndStat(SC_QIND_STAT_UPG_ICON_HIDES);
             *(BYTE*)FakeRt(SC_VA_STAT_ALL_HIDDEN) = 3;
