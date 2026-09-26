@@ -1197,6 +1197,29 @@
 // ord356(surface, ptr, 0, 0) -- exe IAT 0x4FE5A0 / 0x4FE59C, both called by 0x0041D420.
 #define SC_VA_STORM_LOCK_THUNK     0x00411E4Eu
 #define SC_VA_STORM_UNLOCK_THUNK   0x00411E48u
+// A glue screen's palette: registerMenuFunctions 0x004DD9E0 loads <paldir>\BackGnd.pcx
+// through AllocBackgroundImage, fastcall(fileName, Bitmap*, PALETTEENTRY* palette,
+// srcFile, srcLine), `ret 0xC`, prologue 55 8B EC 83 EC 08 (listing 0x4D27A0..0x4D27A6),
+// with the palette buffer 0x005994E0 (listing 0x4DDAEB push / 0x4DDAF8 call). It runs
+// BEFORE the engine's colour-matched tables (system colours 0x4DDB2C, blend tables
+// 0x4DDB3A), so an entry written into that buffer is what every later consumer sees.
+// The screen it is for is glGluesMode: SwitchMenu 0x004DE200 assigns it, then the mode's
+// loader calls registerMenuFunctions (decomp 0x004DE200.SwitchMenu.c).
+#define SC_VA_ALLOC_BACKGROUND     0x004D27A0u
+#define SC_VA_GLUES_MODE           0x006D11BCu
+// The glue fade. TitlePaletteUpdate 0x0041EA30, cdecl(int steps), prologue
+// 55 8B EC 81 EC 00 04 00 00 (listing 0x41EA30..0x41EA38): while the fade flag
+// 0x0051A0E9 reads 1 (its first instruction, `mov al,[0x51a0e9]`) it writes an all-black
+// palette through storm ord357 (0x41EA86 -> thunk 0x00410244), clears the flag, zeroes the
+// fade's FROM palette 0x006CE720 and fades in to the TO palette 0x006CEB40 (decomp
+// 0x0041EA30.TitlePaletteUpdate.c; setPaletteGamma 0x0041E5C0 interpolates FROM..TO into
+// the written palette 0x006CE320, listing 0x41E5C0..0x41E7A3). SwitchMenu 0x004DE200 fills
+// TO from the loaded glue palette (rep movs 0x5994E0 -> 0x6CEB40 at 0x4DE1AB).
+#define SC_VA_TITLE_PALETTE_UPDATE 0x0041EA30u
+#define SC_VA_FADE_FLAG            0x0051A0E9u
+#define SC_VA_PAL_FADE_FROM        0x006CE720u
+#define SC_VA_PAL_FADE_TO          0x006CEB40u
+#define SC_VA_PAL_WRITTEN          0x006CE320u
 #define SC_VA_SURFACE_REBUILD      0x0041D470u  // Ordinal_440(0x280, 0x1e0, 0x10, 0x10)
 #define SC_VA_PLAYFIELD_DRAW       0x004BD580u  // layer 5's callback: the whole playfield chain
 #define SC_VA_TERRAIN_DRAW         0x004BCDC0u  // the tile blitter

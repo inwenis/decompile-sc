@@ -2612,6 +2612,38 @@ function Invoke-ScDialogControl {
     $hit
 }
 
+function Invoke-ScDialogStep {
+    <#
+    .SYNOPSIS
+    Click the control whose letters match -Pattern, then require the NEXT screen's control
+    (-Expect) to be listed; up to three clicks. Off-screen, the first input after a screen
+    change can be lost to the activation gate (AGENTS.md § "Glue-screen (menu) input under
+    cnc-ddraw"), so one click is not a step.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][IntPtr]$Hwnd, [Parameter(Mandatory)][string]$LogPath,
+        [Parameter(Mandatory)][string]$Pattern, [Parameter(Mandatory)][string]$Expect
+    )
+    foreach ($try in 1..3) {
+        Invoke-ScDialogControl -Hwnd $Hwnd -LogPath $LogPath -Pattern $Pattern -TimeoutSec 15 | Out-Null
+        if (Wait-ScDialogControl -LogPath $LogPath -Pattern $Expect -TimeoutSec 6) { return }
+    }
+    Show-ScDialogInventory -LogPath $LogPath -What "after '$Pattern'"
+    throw "the screen with '$Expect' never followed a click on '$Pattern'"
+}
+
+function Get-ScToolValue {
+    <#
+    .SYNOPSIS
+    The value of one `key=value` line in a tool's output (frame-capture.py prints its
+    measurements that way), or $null when the key is not there.
+    #>
+    param([string[]]$Lines, [string]$Key)
+    $m = @($Lines | Where-Object { $_ -match "^$Key=(.*)$" })
+    if ($m.Count) { ($m[0] -replace "^$Key=", '') } else { $null }
+}
+
 function Open-ScGameMenu {
     <#
     .SYNOPSIS

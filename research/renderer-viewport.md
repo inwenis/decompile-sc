@@ -3284,3 +3284,45 @@ and a click on its Expansion button opens the Login screen.
 `-SuiteArgs @{ Geometry = '1536x864' }` for another preset). PASS at 1280x880 and
 1536x864: the MainMenu and popup records read centred, the walk by name reaches a game,
 the console still moves, stars on glass against a black stock surround.
+
+### 25.7 One sky on every screen: the inks live in each palette's unused entries (2026-09-26)
+
+The user saw "two pictures": the nebula matched to the nearest entry of whatever glue
+palette was live, and the palettes differ (the main menu's PalMm holds blues, the
+registry's PalNl a yellow ramp, the ready room's PalRt browns), so `MENU palette` read
+`0 228 243 252` at MainMenu, `0 192 234 252` at Create and `0 145 151 85` at TerranRR
+from the user's own log, with a different nebula behind each.
+
+**No entry is free everywhere.** Every glue screen's consumers were decoded offline from
+StarDat/BrooDat/patch_rt (StormLib through richchk; `C:\decompile-sc-data\sc-work\scratch-agents\glue-palettes\glue_palettes.py`,
+`report.txt`, `report2.txt`, never committed): the screen's PCX art, the SMK button
+animations (the biggest consumer, 73..189 entries each; their frames carry the glue
+palette's indices, 0 pixels of 30 SMKs off the BackGnd palette), `tFont.pcx` rows (text
+never writes an index of its own), `arrow.grp`, `Dlg.grp`, `tEffect.pcx`, the 26 system
+colours `FUN_0041e450` matches by RGB into `0x006CEB20`, and the blend tables
+`FUN_004178b0` builds by RGB. Per screen there are free entries (MainMenu 19, the PalNl
+screens 50, Campaign 14, ExCampaign 13, ready rooms 30..44, score screens 36..66,
+title.pcx 1); their intersection over the BW set is 0, over the Original set 0, over
+MainMenu+PalNl+Campaign 0. Campaign and ExCampaign share PalCs but not their SMKs, so
+they share one free entry (145).
+
+**So the inks are written per screen.** `glGluesMode` (`0x006D11BC`, SwitchMenu stores
+0x11/0x9/0x7/0x8 into it, `0x4DE281..0x4DE474`) indexes `0x004FFAD4` (stride 0xC: palette
+dir, subdir), the dirs are `0x0050E06C` (12 x 0x518: PalMm, PalCs, PalRt, PalRz, PalRp,
+PalPd, PalPv, PalZd, PalZv, PalTd, PalTv, PalNl), and each screen's palette is
+`<dir>\BackGnd.pcx`, loaded by `registerMenuFunctions 0x004DD9E0` through
+`AllocBackgroundImage 0x004D27A0` into `0x005994E0` (`0x4DDAEB push 0x5994e0`,
+`0x4DDAF8 call`), BEFORE the system colours (`0x4DDB2C`) and blend tables (`0x4DDB3A`)
+are derived from it and before SwitchMenu copies it to the fade target `0x006CEB40`.
+`sc_menu.cpp` detours the loader (fastcall, `ret 0xC`, prologue `55 8B EC 83 EC 08`) and,
+for a `\Pal??\BackGnd.pcx`, writes the twelve inks (2 layers x 6, down from 8) into that
+dir's row of `kScMenuHijack` (PalCs by mode: 6 Campaign, 22 ExCampaign); the LUT then
+maps ink levels to those entries and only the stars are still matched. The fade scales
+the entries like any other, so nothing is rewritten during a fade. Title/loading
+(`title.pcx`, 255 of 256 used) keeps the nearest match.
+
+Measured (`probe-menu-centre.ps1 -CentredOnly`, 1280x880, cnc-ddraw, off-screen): the
+twelve most frequent non-grey RGBs outside the menu at MainMenu against those at Login
+(`frame-capture.py colours`) share 10 of 12 with the hijack (`MENUSTATS paletteLoads=28
+hijacked=5`) against 0..2 with the deployed nearest match. Frames: the same blue-and-red
+nebula at both screens.

@@ -5469,6 +5469,63 @@ int main(void) {
         Check("  and every nebula ink's, within 3 entries of the grey ramp", drift, 0);
         Check("the brightest blue ink is brighter than the dimmest",
               full[SC_MENU_STAR_LEVELS + SC_MENU_NEB_INKS - 1] < full[SC_MENU_STAR_LEVELS] ? 1 : 0, 1);
+
+        // THE HIJACK: a palette file names its row; the inks go into that row's entries
+        // and the LUT maps them there, whatever colours the palette held; the stars are
+        // still matched.
+        const ScMenuHijack* mm = ScMenuHijackFor("glue\\PalMm\\BackGnd.pcx", 0);
+        Check("PalMm's BackGnd.pcx has a row", mm ? 1 : 0, 1);
+        Check("  starting at entry 39", mm ? (long long)mm->idx[0] : -1, 39);
+        Check("the case of the path does not matter",
+              (long long)(ScMenuHijackFor("GLUE\\palnl\\BACKGND.PCX", 0) != NULL), 1);
+        const ScMenuHijack* cs22 = ScMenuHijackFor("glue\\PalCs\\BackGnd.pcx", 22);
+        const ScMenuHijack* cs6  = ScMenuHijackFor("glue\\PalCs\\BackGnd.pcx", 6);
+        Check("PalCs at the Expansion campaign (mode 22) takes its own row",
+              cs22 ? (long long)cs22->idx[0] : -1, 47);
+        Check("  and at the Original campaign (mode 6) the other",
+              cs6 ? (long long)cs6->idx[0] : -1, 84);
+        Check("the title screen's own palette has no row",
+              (long long)(ScMenuHijackFor("glue\\title\\title.pcx", 0) != NULL), 0);
+        Check("a BackGnd.pcx outside a Pal directory has none",
+              (long long)(ScMenuHijackFor("glue\\mainmenu\\BackGnd.pcx", 0) != NULL), 0);
+        Check("a null name has none", (long long)(ScMenuHijackFor(NULL, 0) != NULL), 0);
+        {
+            BYTE hp[1024];
+            memcpy(hp, pal, sizeof(hp));
+            ScMenuHijackPalette(hp, mm);
+            int r, g, b;
+            ScMenuInkRgb(SC_MENU_STAR_LEVELS, &r, &g, &b);
+            Check("the first ink is written at its entry", (long long)hp[39 * 4 + 2], (long long)b);
+            ScMenuInkRgb(SC_MENU_LEVELS - 1, &r, &g, &b);
+            Check("  and the last at its", (long long)hp[141 * 4], (long long)r);
+            int untouched = 0;
+            for (int i = 0; i < 256; ++i) {
+                bool own = false;
+                for (int k = 0; k < SC_MENU_HIJACK_N; ++k) if (mm->idx[k] == i) own = true;
+                if (!own && memcmp(hp + i * 4, pal + i * 4, 4) == 0) ++untouched;
+            }
+            Check("  every other entry is untouched", untouched, 256 - SC_MENU_HIJACK_N);
+            BYTE hl[SC_MENU_LEVELS];
+            ScMenuLevelsFor(hp, hl, mm);
+            Check("with the row, the LUT's inks are the row's entries", (long long)hl[SC_MENU_STAR_LEVELS], 39);
+            Check("  through the last", (long long)hl[SC_MENU_LEVELS - 1], 141);
+            Check("  and the stars are still matched", (long long)hl[3], (long long)full[3]);
+            BYTE dl[1024];
+            for (int i = 0; i < 1024; ++i) dl[i] = (BYTE)(hp[i] / 2);
+            ScMenuLevelsFor(dl, hl, mm);
+            Check("  a fade does not move an ink off its entry", (long long)hl[SC_MENU_STAR_LEVELS + 5], (long long)mm->idx[5]);
+        }
+        Check("every row holds twelve distinct entries, none of them black",
+              [] {
+                  int bad = 0;
+                  for (size_t i = 0; i < sizeof(kScMenuHijack) / sizeof(kScMenuHijack[0]); ++i)
+                      for (int a = 0; a < SC_MENU_HIJACK_N; ++a) {
+                          if (kScMenuHijack[i].idx[a] == 0) ++bad;
+                          for (int c = a + 1; c < SC_MENU_HIJACK_N; ++c)
+                              if (kScMenuHijack[i].idx[a] == kScMenuHijack[i].idx[c]) ++bad;
+                      }
+                  return (long long)bad;
+              }(), 0);
         BYTE* f = (BYTE*)calloc(1280 * 720, 1);
         const int lit = ScMenuBuildStars(f, 1280, 720);
         Check("the starfield is lit", lit > 500 ? 1 : 0, 1);

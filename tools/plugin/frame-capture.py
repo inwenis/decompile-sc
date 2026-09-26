@@ -626,6 +626,30 @@ def cmd_glassdiff(a):
     return 0
 
 
+def cmd_colours(a):
+    """The most frequent RGB triplets of a WINDOW CAPTURE outside an optional hole, greys
+    (r == g == b) left out: what the sky is made of on glass, so two screens can be
+    compared by the colours they show rather than by the indices behind them."""
+    w, h, px = load_rgb(a.png)
+    hole = tuple(int(v) for v in a.hole.split(",")) if a.hole else (0, 0, 0, 0)
+    counts = {}
+    for y in range(h):
+        row = px[y * w * 3:(y + 1) * w * 3]
+        inside = hole[1] <= y < hole[3]
+        for x in range(w):
+            if inside and hole[0] <= x < hole[2]:
+                continue
+            r, g, b = row[x * 3], row[x * 3 + 1], row[x * 3 + 2]
+            if r == g == b:
+                continue
+            counts[(r, g, b)] = counts.get((r, g, b), 0) + 1
+    top = sorted(counts.items(), key=lambda kv: -kv[1])[:a.top]
+    print("colours_hole=%s" % (a.hole or "none"))
+    print("colours_distinct=%d" % len(counts))
+    print("colours_top=%s" % ";".join("%d,%d,%d:%d" % (k[0], k[1], k[2], n) for k, n in top))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -719,6 +743,11 @@ def main():
     p.add_argument("--hole", default=None, help="x0,y0,x1,y1 (exclusive) left out of the count")
     p.add_argument("--min", type=int, default=24)
 
+    p = sub.add_parser("colours")
+    p.add_argument("--png", required=True)
+    p.add_argument("--hole", default=None, help="x0,y0,x1,y1 (exclusive) left out of the count")
+    p.add_argument("--top", type=int, default=16)
+
     p = sub.add_parser("glassdiff")
     p.add_argument("--a", required=True)
     p.add_argument("--b", required=True)
@@ -732,7 +761,7 @@ def main():
             "band": cmd_band, "diff": cmd_diff, "zeroruns": cmd_zeroruns,
             "mapdiff": cmd_mapdiff, "diffbox": cmd_diffbox,
             "unmarked-diff": cmd_unmarked_diff, "selftest": cmd_selftest,
-            "glass": cmd_glass, "glassdiff": cmd_glassdiff}[a.cmd](a)
+            "glass": cmd_glass, "glassdiff": cmd_glassdiff, "colours": cmd_colours}[a.cmd](a)
 
 
 if __name__ == "__main__":

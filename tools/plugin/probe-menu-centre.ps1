@@ -26,6 +26,8 @@ param(
     [string]$FixtureDir,
     [string]$FrameDir,
     [string]$CncDdrawDll = 'C:\decompile-sc-data\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll',
+    # Another plugin build to measure (the deployed one, for a before/after).
+    [string]$BuildDir,
     [switch]$CentredOnly
 )
 
@@ -50,41 +52,34 @@ $script:failures = $script:step = 0
 $launchLock = $fixtures = $null
 $arms = [ordered]@{}
 
-function Get-Kv([string[]]$Lines, [string]$Key) {
-    $m = @($Lines | Where-Object { $_ -match "^$Key=(.*)$" })
-    if ($m.Count) { ($m[0] -replace "^$Key=", '') } else { $null }
-}
-
 # Captures come back through cnc-ddraw, which on the invisible desktop draws the frame a
 # few percent larger than the client (art 640 px wide spans ~648 captured), so the glue
 # rect is left out with a margin rather than to the pixel.
 function Measure-Glass([string]$Png, [int]$HX0, [int]$HY0) {
     $hole = "$([Math]::Max(0, $HX0 - 24)),$([Math]::Max(0, $HY0 - 24)),$($HX0 + 640 + 40),$($HY0 + 480 + 40)"
     $out = @(& python $tool glass --png $Png --hole $hole 2>&1 | ForEach-Object { "$_" })
-    [int](Get-Kv $out 'glass_lit')
+    [int](Get-ScToolValue $out 'glass_lit')
 }
 
 function Measure-Box([string]$A, [string]$B, [int]$X, [int]$Y) {
     $out = @(& python $tool glassdiff --a $A --b $B --x0 ($X - 30) --y0 ($Y - 30) --x1 ($X + 60) --y1 ($Y + 70) 2>&1 | ForEach-Object { "$_" })
-    [int](Get-Kv $out 'glassdiff_changed')
+    [int](Get-ScToolValue $out 'glassdiff_changed')
+}
+
+# The sky's colours on glass: the most frequent non-grey RGBs outside the menu. The same
+# twelve inks must show on every screen (sc_menu.h); matched per palette they did not.
+function Measure-Colours([string]$Png, [int]$HX0, [int]$HY0) {
+    $hole = "$([Math]::Max(0, $HX0 - 24)),$([Math]::Max(0, $HY0 - 24)),$($HX0 + 640 + 40),$($HY0 + 480 + 40)"
+    $out = @(& python $tool colours --png $Png --hole $hole --top 12 2>&1 | ForEach-Object { "$_" })
+    $top = Get-ScToolValue $out 'colours_top'
+    if (-not $top) { return @() }
+    @($top -split ';' | ForEach-Object { ($_ -split ':')[0] })
 }
 
 # The newest DIALOGS line naming a root, parsed by the shared reader.
 function Get-RootRect([string]$LogPath, [string]$Name) {
     $d = @(Get-ScDialogs -LogPath $LogPath | Where-Object Name -eq $Name)
     if ($d.Count) { "$($d[0].Left),$($d[0].Top),$($d[0].Right),$($d[0].Bottom)" } else { $null }
-}
-
-# Click a control by name at the centre the engine reports, then require the next screen's
-# control to appear. Re-clicks: off-screen, the first input after a screen change can be
-# lost to the activation gate (AGENTS.md § "Glue-screen (menu) input under cnc-ddraw").
-function Invoke-Step([IntPtr]$Hwnd, [string]$LogPath, [string]$Pattern, [string]$Expect) {
-    foreach ($try in 1..3) {
-        Invoke-ScDialogControl -Hwnd $Hwnd -LogPath $LogPath -Pattern $Pattern -TimeoutSec 15 | Out-Null
-        if (Wait-ScDialogControl -LogPath $LogPath -Pattern $Expect -TimeoutSec 6) { return }
-    }
-    Show-ScDialogInventory -LogPath $LogPath -What "after '$Pattern'"
-    throw "the screen with '$Expect' never followed a click on '$Pattern'"
 }
 
 function Invoke-Arm {
@@ -99,10 +94,11 @@ function Invoke-Arm {
     Write-Host ''
     Write-Host "probe-menu-centre: ARM '$Name' (-MenuCentre $([int]$Centre), $Geometry, offset $ox,$oy)"
     try {
+        $bd = if ($BuildDir) { @{ BuildDir = $BuildDir } } else { @{} }
         & (Join-Path $scriptDir 'run-with-plugin.ps1') `
             -Mode fanout -Widescreen 1 -WidescreenStage 3 -Geometry $Geometry -StormPresent widen `
             -MenuCentre ($Centre ? '1' : '0') -Windowed -WindowedHelperDll $CncDdrawDll `
-            -NoLaunchLock -GameDir $GameDir -LogPath $log 6>&1 | ForEach-Object {
+            -NoLaunchLock -GameDir $GameDir -LogPath $log @bd 6>&1 | ForEach-Object {
                 if ("$_" -match 'scinject:\s*PID=(\d+)') { $gamePid = [int]$Matches[1] }
             }
         if (-not $gamePid) { throw "no game pid for arm '$Name'" }
@@ -131,15 +127,27 @@ function Invoke-Arm {
 
         # The walk, by control NAME: every click lands where the engine says the control
         # is, so the same walk drives both layouts.
-        Invoke-Step $h $log 'inglePlayer' 'xpansion'
+        Invoke-ScDialogStep $h $log 'inglePlayer' 'xpansion'
         $r.Popup = Get-RootRect $log 'Delete'
         Start-Sleep -Milliseconds 800
         $popPng = Join-Path $FrameDir "menu-$Geometry-$Name-popup.png"
         Save-ScWindowImage -Hwnd $h -Path $popPng | Out-Null
         $r.Frames += $popPng
-        Invoke-Step $h $log 'xpansion' 'Ok$'
-        Invoke-Step $h $log 'Ok$' 'Custom'
-        Invoke-Step $h $log 'Custom' 'ListMap'
+        Invoke-ScDialogStep $h $log 'xpansion' 'Ok$'
+        # The sky on a second screen with its own palette (the registry, 'Login'): the
+        # same inks must be on glass as at the main menu.
+        Start-Sleep -Milliseconds 1200
+        $loginPng = Join-Path $FrameDir "menu-$Geometry-$Name-login.png"
+        Save-ScWindowImage -Hwnd $h -Path $loginPng | Out-Null
+        $r.Frames += $loginPng
+        if ($Centre) {
+            $r.MenuColours = Measure-Colours $inPng $ox $oy
+            $r.LoginColours = Measure-Colours $loginPng $ox $oy
+            Write-Host "       sky colours at MainMenu: $($r.MenuColours -join ' ')"
+            Write-Host "       sky colours at Login:    $($r.LoginColours -join ' ')"
+        }
+        Invoke-ScDialogStep $h $log 'Ok$' 'Custom'
+        Invoke-ScDialogStep $h $log 'Custom' 'ListMap'
         Assert-ScFixtureStillMine -Run $script:fixtures -MapPath $mapPath
         # The browser's own geometry is glue coordinates: shift it by this arm's origin.
         Set-ScGlueOrigin -X $ox -Y $oy
@@ -201,6 +209,13 @@ try {
     $ok = $stats.Count -eq 1 -and $stats[0] -match 'fills=(\d+) copies=(\d+) remaps=(\d+) lockFails=(\d+)' -and
           [int]$Matches[1] -ge 1 -and [int]$Matches[2] -ge 1 -and [int]$Matches[4] -eq 0
     Assert-True 'MENUSTATS: the buffer was filled and presented, no lock failed' $ok "($($stats | Select-Object -First 1))"
+    # ONE sky: the twelve most frequent non-grey colours outside the menu are the same
+    # RGBs at the main menu (PalMm) and at the registry (PalNl). Matched per palette
+    # (the deployed build before the hijack) the two lists shared 0-2 colours.
+    $shared = @($c.MenuColours | Where-Object { $c.LoginColours -contains $_ }).Count
+    Assert-True "the sky shows the same colours at MainMenu and at Login ($shared of 12 shared)" ($c.MenuColours.Count -ge 10 -and $shared -ge 10)
+    $hijacks = @($cLog | Where-Object { $_ -match 'MENU palette load .* inks written' }).Count
+    Assert-True 'the inks were written into each screen''s palette as it loaded' ($hijacks -ge 3) "($hijacks loads)"
     # ~1100 of the 1280x880 field's 1531 lit cells lie outside the menu; the margin costs some.
     # Stars alone light ~1,000 px at 1280x880; the nebula lights hundreds of thousands.
     Assert-True 'the sky (nebula and stars) reached the glass outside the menu' ($c.StarsLit -gt 50000) "(lit $($c.StarsLit))"
