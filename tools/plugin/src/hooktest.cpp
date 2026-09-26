@@ -4546,15 +4546,37 @@ static void QueueIndTests(void) {
                               b[2] <= *(short*)(QiCtl(4) + SC_BINDLG_OFF_BOUNDS + 4)), 1);
         }
 
-        // ANY OTHER LAYOUT owns icons 3..6 itself: the icons go dark and the count covers
-        // everything held.
-        *(BYTE*)FakeRt(SC_VA_STAT_ALL_HIDDEN) = 3;
-        ScQueueIndOnFrame();
-        Check("outside a research layout the icons are taken down",
-              (long long)(((*(DWORD*)(QiCtl(1) + SC_BINDLG_OFF_FLAGS) |
-                            *(DWORD*)(QiCtl(2) + SC_BINDLG_OFF_FLAGS) |
-                            *(DWORD*)(QiCtl(3) + SC_BINDLG_OFF_FLAGS)) & SC_CTRL_FLAG_VISIBLE) == 0), 1);
-        Check("  and the count covers all seven", (long long)(strcmp(ScQueueIndCurrentText(), "+7") == 0), 1);
+        // ANY OTHER LAYOUT owns icons 3..6 itself. The engine's kind change runs its
+        // hide-all sweep (0x00457310) and the new layout lights what it needs: here a
+        // producing building's queueLayout lights icons 3 and 4 for its second and third
+        // queued units. Those are the ENGINE'S icons now: the plugin forgets its own and
+        // must not touch them. A plugin that hides on a stale snapshot reads icons 3 and 4
+        // hidden and upgIconHides +2 here; the correct one reads lit and +0.
+        {
+            const unsigned hidesBefore = (unsigned)ScQueueIndStat(SC_QIND_STAT_UPG_ICON_HIDES);
+            *(BYTE*)FakeRt(SC_VA_STAT_ALL_HIDDEN) = 3;
+            QiHide(QiCtl(1)); QiHide(QiCtl(2)); QiHide(QiCtl(3));
+            QiShow(QiCtl(1)); QiShow(QiCtl(2));
+            ScQueueIndOnFrame();
+            Check("outside a research layout the engine's lit icons 3 and 4 stay lit",
+                  (long long)(((*(DWORD*)(QiCtl(1) + SC_BINDLG_OFF_FLAGS) &
+                                *(DWORD*)(QiCtl(2) + SC_BINDLG_OFF_FLAGS)) & SC_CTRL_FLAG_VISIBLE) != 0), 1);
+            Check("  icon 5 stays as the sweep left it",
+                  (*(DWORD*)(QiCtl(3) + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) ? 1 : 0, 0);
+            Check("  and the plugin hid nothing", (long long)((unsigned)ScQueueIndStat(SC_QIND_STAT_UPG_ICON_HIDES) - hidesBefore), 0);
+            Check("  and the count covers all seven", (long long)(strcmp(ScQueueIndCurrentText(), "+7") == 0), 1);
+            // Back in a research layout (its own sweep first), the held items are lit again.
+            *(BYTE*)FakeRt(SC_VA_STAT_ALL_HIDDEN) = SC_STAT_LAYOUT_UPGRADE;
+            QiHide(QiCtl(1)); QiHide(QiCtl(2));
+            ScQueueIndOnFrame();
+            Check("back in a research layout icons 3, 4 and 5 are lit again",
+                  (long long)((*(DWORD*)(QiCtl(1) + SC_BINDLG_OFF_FLAGS) &
+                               *(DWORD*)(QiCtl(2) + SC_BINDLG_OFF_FLAGS) &
+                               *(DWORD*)(QiCtl(3) + SC_BINDLG_OFF_FLAGS) & SC_CTRL_FLAG_VISIBLE) != 0), 1);
+            *(BYTE*)FakeRt(SC_VA_STAT_ALL_HIDDEN) = 3;
+            QiHide(QiCtl(1)); QiHide(QiCtl(2)); QiHide(QiCtl(3));
+            ScQueueIndOnFrame();
+        }
 
         // Back to the production fixture the parts below expect, with the upgrade core
         // holding nothing for the building they share.
