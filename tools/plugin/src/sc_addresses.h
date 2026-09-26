@@ -1215,6 +1215,13 @@
 // 0x0041EA30.TitlePaletteUpdate.c; setPaletteGamma 0x0041E5C0 interpolates FROM..TO into
 // the written palette 0x006CE320, listing 0x41E5C0..0x41E7A3). SwitchMenu 0x004DE200 fills
 // TO from the loaded glue palette (rep movs 0x5994E0 -> 0x6CEB40 at 0x4DE1AB).
+// The palette's two storm thunks: ord357 SDrawUpdatePalette(start, count, entries, flag),
+// `jmp [0x4FE4A4]` at 0x00410244 (setPaletteGamma's only palette write, listing 0x41EA86
+// in TitlePaletteUpdate), and ord354 SDrawRealizePalette(), `jmp [0x4FE58C]` at
+// 0x00411E30, `call 0x411E30` at 0x41D746 inside realizePalette 0x0041D710 (which then
+// marks every region dirty).
+#define SC_VA_STORM_PALETTE_THUNK  0x00410244u
+#define SC_VA_STORM_REALIZE_THUNK  0x00411E30u
 #define SC_VA_TITLE_PALETTE_UPDATE 0x0041EA30u
 #define SC_VA_FADE_FLAG            0x0051A0E9u
 #define SC_VA_PAL_FADE_FROM        0x006CE720u

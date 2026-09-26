@@ -3324,5 +3324,38 @@ the entries like any other, so nothing is rewritten during a fade. Title/loading
 Measured (`probe-menu-centre.ps1 -CentredOnly`, 1280x880, cnc-ddraw, off-screen): the
 twelve most frequent non-grey RGBs outside the menu at MainMenu against those at Login
 (`frame-capture.py colours`) share 10 of 12 with the hijack (`MENUSTATS paletteLoads=28
-hijacked=5`) against 0..2 with the deployed nearest match. Frames: the same blue-and-red
-nebula at both screens.
+hijacked=5`) against 0 of 12 with the deployed nearest match (the same probe, `-BuildDir`
+the deployed plugin). Frames: the same blue-and-red nebula at both screens.
+
+### 25.8 The briefing goes black: the DirectDraw palette is zeroed behind the engine's back (2026-09-26)
+
+The user: "when I play missions or use map settings, sometimes the screen before the game
+where the commanders talk disappears". The user's own log (24 briefings) had the shape:
+in the FIRST briefing of a launch on a map with real transmissions, `MENU palette` read
+all-zero 0.93..0.97 s after the ready room appeared and no line followed until Start,
+while later briefings of the same launch and briefings with no transmissions never did.
+
+Reproduced off-screen with `probe-briefing.ps1 -StockMap (1)Enslavers01.scm` (a stock
+briefing with portraits and WAVs): every fresh launch, one fully black capture at
+0.96..1.35 s with the ready-room root still listed and centred. The harness's next
+capture was lit again, which the player never gets: a `PrintWindow` repaints and
+re-realizes; the player's window sits idle until they press Start into black.
+
+Bisected, one fresh launch each, all black at ~1 s: centring off; centring and widescreen
+off; `-Mode observe` (the plugin writes nothing, no detour, no patch). So it is not this
+plugin's doing. The instrumented arm (a detour on `TitlePaletteUpdate 0x0041EA30`, the
+one writer of an all-black palette, logging its caller and the fade's state beside every
+palette poll) read, at the black: `fade flag=0 tops written=255 to=255 from=0` with no
+`TitlePaletteUpdate` since the ready room's own swish-in 0.9 s earlier -- the engine
+believes its palette is lit (`0x006CE320`, the copy `setPaletteGamma` hands to storm),
+no fade is running, and storm's `GetPalette`/`GetEntries` read zeros. Something outside
+the engine's fade path (the briefing's first portrait SMK is the prime suspect: it is the
+one thing that starts at that second, on the first briefing only) zeroes the DirectDraw
+palette, and nothing asks storm to realize it again.
+
+The rescue (`sc_menu.cpp` `RescuePalette`): in the 50 ms palette poll at a glue screen,
+when storm reads all-zero while the engine's written palette is lit and the fade flag is
+0, re-issue that palette through storm's ord357 (`0x00410244`, the engine's own write) and
+ord354 SDrawRealizePalette (`0x00411E30`, what `realizePalette 0x0041D710` calls on
+activation), at most every 250 ms, counted in `MENUSTATS rescues=`. A fade the engine
+asked for reads `flag=1` or `written=0` and is left alone.

@@ -100,7 +100,9 @@ function Invoke-Arm {
         $h = Get-ScGameWindow -ProcessId $gamePid
         if (-not (Wait-ScDialog -LogPath $log -Name '^MainMenu$' -TimeoutSec 60)) { throw 'the main menu never came up' }
         Start-Sleep -Seconds 2
-        $env:SCDRIVE_POST_ACTIVATE = '1'
+        # The activation nudge is what cnc-ddraw's glue screens need and what breaks
+        # WMode's (AGENTS.md § "Glue-screen (menu) input under cnc-ddraw").
+        $env:SCDRIVE_POST_ACTIVATE = $Presenter -eq 'cnc' ? '1' : '0'
         Invoke-ScDialogStep $h $log 'inglePlayer' 'xpansion'
         Invoke-ScDialogStep $h $log 'xpansion' 'Ok$'
         Invoke-ScDialogStep $h $log 'Ok$' 'Custom'

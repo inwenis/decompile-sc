@@ -137,6 +137,38 @@ static void __attribute__((cdecl)) SC_GAME_ENTRY HkTitlePaletteUpdate(int steps)
 // none PC-relative.
 static const BYTE kPrologueTitlePal[] = { 0x55, 0x8B, 0xEC, 0x81, 0xEC, 0x00, 0x04, 0x00, 0x00 };
 
+// THE BRIEFING GOES BLACK. About a second into the first mission briefing of a launch,
+// with a real briefing (portraits, WAVs), storm's palette reads all-zero while the
+// engine's own written palette is lit and no fade is in progress: something outside the
+// engine's fade path zeroes the DirectDraw palette, and nothing re-realizes it until the
+// window is activated or repainted, which the player's game never is until Start. Same
+// with every plugin feature off and in observe mode, so it is not this plugin's doing
+// (research/renderer-viewport.md 25.8). The engine's own fade-in was the last writer, so
+// its palette is re-written and re-realized through the two storm calls the engine uses.
+typedef BOOL (__attribute__((stdcall)) *ScUpdatePalFn)(DWORD start, DWORD count, const BYTE* entries, DWORD flag);
+typedef BOOL (__attribute__((stdcall)) *ScRealizePalFn)(void);
+#define SC_MENU_RESCUE_MS 250
+static DWORD    g_lastRescueMs = 0;
+static unsigned g_rescues = 0;
+
+static void RescuePalette(const BYTE* stormPal, DWORD now) {
+    int stormTop = 0;
+    for (int i = 0; i < 256 * 4 && !stormTop; ++i)
+        if ((i & 3) != 3 && stormPal[i]) stormTop = stormPal[i];
+    if (stormTop) return;
+    if (now - g_lastRescueMs < SC_MENU_RESCUE_MS) return;
+    const int flag = ScReadable(ScRuntimeVa(SC_VA_FADE_FLAG), 1) ? *(BYTE*)ScRuntimeAddr(SC_VA_FADE_FLAG) : -1;
+    const int written = PaletteTop(SC_VA_PAL_WRITTEN);
+    if (flag != 0 || written <= 0) return;   // a fade the engine asked for, or no palette yet
+    g_lastRescueMs = now;
+    ((ScUpdatePalFn)ScRuntimeAddr(SC_VA_STORM_PALETTE_THUNK))(0, 256, (const BYTE*)ScRuntimeAddr(SC_VA_PAL_WRITTEN), 1);
+    ((ScRealizePalFn)ScRuntimeAddr(SC_VA_STORM_REALIZE_THUNK))();
+    g_palValid = false;   // read it back fresh next poll
+    if (++g_rescues <= SC_MENU_LOG_REMAPS)
+        ScLog("MENU palette rescue: storm read all-black while the engine's palette is lit (top %d, fade flag 0) "
+              "-- re-written and re-realized (%u so far)", written, g_rescues);
+}
+
 void ScMenuOnFrame(bool atMenu) {
     g_atMenu = g_armed && atMenu;
     if (!g_atMenu) return;
@@ -150,8 +182,12 @@ void ScMenuOnFrame(bool atMenu) {
     if (!g_palValid || now - g_lastPalMs >= SC_MENU_PALETTE_MS) {
         g_lastPalMs = now;
         BYTE pal[256 * 4];
-        if (ScStormReadPalette(pal)) TakePalette(pal);
-        else ++g_palFails;
+        if (ScStormReadPalette(pal)) {
+            TakePalette(pal);
+            RescuePalette(pal, now);
+        } else {
+            ++g_palFails;
+        }
     }
     if (!g_lutValid) return;
     BYTE* buf = Buffer();
@@ -234,7 +270,8 @@ static const BYTE kPrologueAllocBg[] = { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x08 };
 void ScMenuInstall(bool writeAllowed) {
     g_armed = g_atMenu = false;
     g_lutValid = g_palValid = g_needCopy = false;
-    g_fills = g_copies = g_remaps = g_lockFails = g_palFails = g_hijacks = g_loads = 0;
+    g_fills = g_copies = g_remaps = g_lockFails = g_palFails = g_hijacks = g_loads = g_rescues = 0;
+    g_lastRescueMs = 0;
     g_hijack = NULL;
     g_rows = -1;
     memset(&g_hkRestore, 0, sizeof(g_hkRestore));
@@ -311,6 +348,6 @@ void ScMenuRemove(void) {
 
 void ScMenuLogStats(void) {
     if (!g_armed) return;
-    ScLog("MENUSTATS fills=%u copies=%u remaps=%u lockFails=%u palFails=%u paletteLoads=%u hijacked=%u",
-          g_fills, g_copies, g_remaps, g_lockFails, g_palFails, g_loads, g_hijacks);
+    ScLog("MENUSTATS fills=%u copies=%u remaps=%u lockFails=%u palFails=%u paletteLoads=%u hijacked=%u rescues=%u",
+          g_fills, g_copies, g_remaps, g_lockFails, g_palFails, g_loads, g_hijacks, g_rescues);
 }
