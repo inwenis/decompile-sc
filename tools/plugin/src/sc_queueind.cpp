@@ -379,8 +379,11 @@ static int UpgIconFrame(int kind, int id) {
 }
 
 // Light icons 3..(3+want-1) with `unit`'s first `want` held items and take down any this
-// module lit past that. `want` 0 (no research layout, nothing held, no unit) takes them
-// all down. Every write is compared first, so a settled pane costs four reads.
+// module lit past that (`want` 0: nothing held, no unit). Only inside a research layout:
+// leaving one runs the engine's hide-all sweep, and whatever is visible in ids 3..6 after
+// that is the engine's own (queueLayout lights them for queued units), so outside a
+// research layout the caller forgets the snapshots instead of hiding anything. Every
+// write is compared first, so a settled pane costs four reads.
 static void FillUpgradeIcons(DWORD root, DWORD unit, int want) {
     DWORD c = ScDlgFindChild(root, (short)(SC_STATQ_FIRST_CONTROL + 1));   // id 3
     for (int i = 0; i < SC_QIND_UPGRADE_ICONS && c; ++i, c = ScDlgNext(c)) {
@@ -1409,16 +1412,15 @@ void ScQueueIndOnFrame(void) {
         // with the state that created it, not outlive it.
         g_ownedIconN = 0;
     }
-    {
-        // Held research into icons 3..6 -- or all of them back down, which is what any
-        // other state of the pane asks for (the sweep may already have hidden them; the
-        // fill compares before it writes).
+    if (v.selection <= 1 && v.research && v.hudPages <= 1) {
+        // Held research into icons 3..6 -- or, with nothing held, this module's own icons
+        // back down.
         DWORD unit = ScPortraitUnit();
-        int want = 0;
-        if (v.selection <= 1 && v.research && v.hudPages <= 1 && ScUnitPtrValid(unit)) {
-            want = ScQueueIndUpgradeIcons(v.upgrades);
-        }
-        FillUpgradeIcons(root, unit, want);
+        FillUpgradeIcons(root, unit, ScUnitPtrValid(unit) ? ScQueueIndUpgradeIcons(v.upgrades) : 0);
+    } else {
+        // Not a research layout: the kind change swept ids 3..6 and the engine owns them
+        // now. Hiding one here hid the second queued unit of the next producing building.
+        ForgetUpgradeIcons();
     }
     SnapshotIcons(root);
 

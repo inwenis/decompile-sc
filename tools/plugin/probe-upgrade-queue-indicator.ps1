@@ -32,6 +32,10 @@ param(
     [int]$SettleSec = 4,
     [switch]$CaptureFrames,
     [string]$FrameDir = "C:\decompile-sc-data\sc-work\logs\037-frames",
+    # Also place a Barracks beside the research building and, with a research held, select
+    # it and queue three units: every queued unit's icon must stay up (the plugin once hid
+    # the second one, taking its own lit icon down after the layout had changed hands).
+    [switch]$ThenTrain,
     [switch]$KeepOpen
 )
 
@@ -142,10 +146,16 @@ function Shot([string]$tag) {
 try {
     Step "generate the fixture: one $UnitType, $StartingMinerals minerals / $StartingGas gas" {
         Wait-ScFixtureFolderFree -Run $fixtures
+        # -ThenTrain: a player-owned Command Center 224 px east of the research building, on
+        # the first screen (the building is 128 px wide, so the gap is 96 px). A Command
+        # Center, not a Barracks: it brings the supply its own units need (a Barracks alone
+        # on the map had every Train refused for supply).
+        $extra = if ($ThenTrain) { @{ EnemyCount = 1; EnemyType = 'command-center'; EnemyOwner = 'player'
+                                      EnemyOffsetX = 224; EnemyOffsetY = 0; MinEnemyGap = 64 } } else { @{} }
         $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
             -UnitCount 1 -UnitType $UnitType -Player 0 -ClearPlayerUnits `
             -GridSpacing 160 -StartingMinerals $StartingMinerals -StartingGas $StartingGas `
-            -OutputPath $mapPath 2>&1
+            -OutputPath $mapPath @extra 2>&1
         $gen | ForEach-Object { Write-Host "       $_" }
         Assert-That 'the generator succeeded' ($LASTEXITCODE -eq 0) "(exit $LASTEXITCODE)"
         Assert-That 'it wrote the map' (Test-Path -LiteralPath $mapPath)
@@ -266,6 +276,62 @@ try {
     Step 'one more frame, a couple seconds later, for a human to open' {
         Start-Sleep -Seconds 2
         Shot 'queued-2-settled'
+    }
+
+    if ($ThenTrain) {
+        $script:researchPoint = $null
+        Step 'with a research HELD, select the Command Center beside it and queue THREE units' {
+            $w = Get-World 'aim-producer'
+            $rb = @($w.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq $BUILDING_TYPE })[0]
+            $script:researchPoint = @{ X = $rb.X - $w.Screen.Left; Y = $rb.Y - $w.Screen.Top }
+            $b = @($w.Units | Where-Object { $_.Player -eq 0 -and $_.Type -eq 106 }) | Select-Object -First 1
+            Assert-That 'the map holds one player-owned Command Center' ($null -ne $b)
+            $cx = $b.X - $w.Screen.Left
+            $cy = $b.Y - $w.Screen.Top
+            Assert-That "the Command Center is on screen ($cx,$cy)" ($cx -ge 0 -and $cx -lt 640 -and $cy -ge 0 -and $cy -lt 340)
+            Send-ScClick -Hwnd $hwnd -X $cx -Y $cy
+            Start-Sleep -Seconds 2
+            $card = Get-Card 'producer'
+            Assert-That "the card shows the Command Center (portrait type $($card.PortraitType))" ($card.Ok -and $card.PortraitType -eq 106)
+            $train = @($card.Slots | Where-Object { $_.HasButton -and $_.Action -eq '004234B0' }) | Select-Object -First 1
+            Assert-That 'the card offers a Train button (action 0x004234B0)' ($null -ne $train)
+            $pt = Get-ScCardSlotPoint -Card $card -Slot $train.Index
+            $mark = Get-ScLogLineCount -LogPath $LogPath
+            for ($i = 1; $i -le 3; $i++) { Send-ScClick -Hwnd $hwnd -X $pt.X -Y $pt.Y -SettleMs 300 }
+            Start-Sleep -Seconds 2
+            Shot 'producer-queued-3'
+            $sent = @(Get-Content -LiteralPath $LogPath | Select-Object -Skip $mark | Select-String -Pattern 'CMD id=0x1F ')
+            Assert-That "three Train commands reached the wire ($($sent.Count))" ($sent.Count -eq 3)
+        }
+
+        Step 'READ THE STRIP WITH 3 UNITS QUEUED -- every queued unit''s icon is up, slot 2 included' {
+            $st = Get-Strip 'trained'
+            Show-Strip $st 'trained'
+            Assert-That 'the strip walk completed' ($st.Ok -and $st.RingStable)
+            $ring = @($st.Engine | Where-Object { $_ -ne 0xE4 })
+            Assert-That "the engine's own ring holds 3 units ($($ring.Count))" ($ring.Count -eq 3)
+            foreach ($d in 0..2) {
+                $s = @($st.Slots | Where-Object Display -eq $d) | Select-Object -First 1
+                Assert-That "display $d (the player's slot $($d + 1)) is enabled, not hidden ($($s.State))" ($s.State -eq 'enabled')
+                Assert-That "  and draws a unit icon (umode $($s.UMode) is 3)" ($s.UMode -eq 3)
+            }
+            foreach ($d in 3..4) {
+                $s = @($st.Slots | Where-Object Display -eq $d) | Select-Object -First 1
+                Assert-That "display $d is the engine's greyed empty slot ($($s.State))" ($s.State -eq 'GREYED')
+            }
+        }
+
+        Step 'back at the research building, its held icon is up again' {
+            Send-ScClick -Hwnd $hwnd -X $script:researchPoint.X -Y $script:researchPoint.Y
+            Start-Sleep -Seconds 2
+            $st = Get-Strip 'back'
+            Show-Strip $st 'back'
+            Assert-That 'the strip walk completed' ($st.Ok)
+            $first = @($st.Slots | Where-Object Display -eq 1) | Select-Object -First 1
+            Assert-That "display 1 shows the held research again ($($first.State), umode $($first.UMode))" ($first.State -eq 'enabled' -and ($first.UMode -eq 4 -or $first.UMode -eq 5))
+            $zero = @($st.Slots | Where-Object Display -eq 0) | Select-Object -First 1
+            Assert-That "display 0 stays hidden under the research layout ($($zero.State))" ($zero.State -eq 'hidden')
+        }
     }
 
     Step 'CLICK the first held item''s icon -- the engine''s own {0x20,1} must cancel exactly it' {
