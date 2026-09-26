@@ -8,7 +8,7 @@ DLL on disk was built from the source next to it.
 A hash of the DLL names the BINARY, never the TREE it came from, so the DLL carries its own
 identity: build.ps1 stamps a string in; this file writes, reads and compares it. buildId
 ("<short sha>", "+dirty" when the tree had uncommitted edits) answers "which commit".
-srcDigest, 12 hex over the CONTENT of tools/plugin/src/* and build.ps1, answers "which
+srcDigest, 12 hex over the CONTENT of src/* and build.ps1, answers "which
 source bytes" -- what the staleness gate compares, since every dirty build shares one sha.
 
 .NOTES

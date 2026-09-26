@@ -47,7 +47,7 @@ param(
     [string]$SourceGameDir = 'C:\decompile-sc-data\sc-work\1161-base',
     [string]$ShortcutName = 'StarCraft Modded.lnk',
     [string]$CncDdrawDir = 'C:\decompile-sc-data\sc-work\cnc-ddraw\v7.1.0.0',
-    # The geometry preset the main shortcut plays at; tools/plugin/src/sc_screen_patches_<G>.h
+    # The geometry preset the main shortcut plays at; src/sc_screen_patches_<G>.h
     # must exist (sc_screen_presets.h lists the ones the DLL carries). Every preset also
     # gets its own "StarCraft Modded <G>" shortcut, for trying the sizes side by side.
     [string]$Geometry = '1280x880',
@@ -359,7 +359,7 @@ tools/README-deploy.md "Sound").
 
 Geometry: WIDESCREEN, on by default since 2026-09-06 (the user asked for ONE shortcut
 with the extended viewport): -Widescreen 1 -WidescreenStage 3 patch the engine to the
-preset -Geometry names (tools/plugin/src/sc_screen_patches_<G>.h; stage 2 playfield +
+preset -Geometry names (src/sc_screen_patches_<G>.h; stage 2 playfield +
 fog + stage 3 input, tasks 064/068/071) in-process at launch -- the exe on
 disk is byte-identical -- and -StormPresent widen is the buffer->glass copy of the new
 columns (task 074; named on purpose, issue #113: the DLL's auto-arm was unreachable

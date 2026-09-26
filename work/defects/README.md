@@ -1,6 +1,6 @@
 # Defect patches for `tools/plugin/build-defect-arm.ps1`
 
-Issue #78. Each `.patch` here is one deliberate, small break in `tools/plugin/src`,
+Issue #78. Each `.patch` here is one deliberate, small break in `src`,
 meant to be applied to a throwaway copy, never to the real tree.
 
 ```powershell
@@ -9,9 +9,10 @@ meant to be applied to a throwaway copy, never to the real tree.
 
 Prints every hooktest check whose verdict changed between the unpatched (baseline) and
 patched (defect) copy, grouped by the checks that caught it and the ones in the same
-part that did not. Neither arm ever touches `tools/plugin/src` in the real tree.
+part that did not. Neither arm ever touches `src` in the real tree.
 
 Add a new one the same way: pick an assertion you believe is good, break the line
-under it, generate the patch with `git diff --no-index` (or by hand -- see the two
-here for the header shape `git apply` expects), and run it. If nothing catches it,
+under it, generate the patch with `git diff` and drop its `diff --git` and `index`
+lines (see the two here for the plain `---`/`+++` shape; a `diff --git` header makes
+`git apply` skip the copy silently, which the script refuses), and run it. If nothing catches it,
 that is a finding about the suite, and the script says so instead of staying quiet.

@@ -329,7 +329,7 @@ longer exist while the engine's own groups are empty".
 
 ## 7. The fix — plugin-side shadow groups
 
-`tools/plugin/src/sc_fanout.cpp`, the SHADOW CONTROL GROUPS block.
+`src/sc_fanout.cpp`, the SHADOW CONTROL GROUPS block.
 
 ### 7.1 Why not widen the engine's array
 

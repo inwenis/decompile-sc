@@ -21,10 +21,11 @@ BeforeAll {
     # The layout the checker expects, so a planted duplicate never touches real sources.
     function New-ReuseSandbox {
         $root = Join-Path ([IO.Path]::GetTempPath()) "reuse-$([guid]::NewGuid().ToString('N'))"
-        $src = Join-Path $root 'tools/plugin/src'
-        New-Item -ItemType Directory -Path $src -Force | Out-Null
+        $src = Join-Path $root 'src'
+        $suites = Join-Path $root 'tools/plugin'
+        New-Item -ItemType Directory -Path $src, $suites -Force | Out-Null
         Copy-Item -LiteralPath $script:checker -Destination (Join-Path $root 'tools')
-        @{ Root = $root; Src = $src; Suites = (Join-Path $root 'tools/plugin') }
+        @{ Root = $root; Src = $src; Suites = $suites }
     }
 
     function Invoke-Checker {

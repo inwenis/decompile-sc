@@ -116,7 +116,7 @@ Fixture ownership is code: copy `test-burrow-fanout.ps1`'s recipe (`Resolve-ScFi
 - When an instrument turns out to be blind, DO audit every other place it is load-bearing in the same sitting; one fixed call site is not a fixed instrument.
 - DO decide that a surface has settled by wall clock, not call count (the status dispatcher runs tens of thousands of times a second, so "the next call" is the same painted frame). Print a call count only beside its own elapsed ms.
 - Frame comparisons go through `frame-diff.py` (or `frame-capture.py diff`): assert on `wide_rows` (shape), never on a zero diff, and print the noise floor beside the verdict; the header says why.
--> research/rulebook-history.md § "Assert the ENGINE'S OWN RESULT, not your bookkeeping"; tools/plugin/src/sc_queueind.cpp; tools/plugin/src/sc_hudrow.cpp; research/status-pane-text.md §5.2; research/hud-selection-row.md
+-> research/rulebook-history.md § "Assert the ENGINE'S OWN RESULT, not your bookkeeping"; src/sc_queueind.cpp; src/sc_hudrow.cpp; research/status-pane-text.md §5.2; research/hud-selection-row.md
 
 ## Oracles: threads, races, confounds
 
@@ -206,7 +206,7 @@ Fixture ownership is code: copy `test-burrow-fanout.ps1`'s recipe (`Resolve-ScFi
 
 ## Plugin code reuse
 
-- NEVER copy a helper into a second `tools/plugin/src` file or `tools/plugin/*.ps1` suite, even one the reuse gate misses (a short or renamed copy). Shared homes: `sc_engine.h`, `sc_unit.h`, `sc_env.h`, `sc_ledger.h`, `sc_log.h`; `sc-suite.ps1`, `drive-game.ps1`.
+- NEVER copy a helper into a second `src` file or `tools/plugin/*.ps1` suite, even one the reuse gate misses (a short or renamed copy). Shared homes: `sc_engine.h`, `sc_unit.h`, `sc_env.h`, `sc_ledger.h`, `sc_log.h`; `sc-suite.ps1`, `drive-game.ps1`.
 - Gate: `python tools/check-reuse.py` (CI); its failure message says how to baseline a deliberate copy.
 
 ## Conventions

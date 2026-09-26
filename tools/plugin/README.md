@@ -34,7 +34,7 @@ engine's five as slots free. Design evidence:
 
 ## The source map, and how things are named
 
-`src/` is one translation unit per feature plus two shared headers. Every module keeps the same
+The repo-root [`src/`](../../src) is one translation unit per feature plus two shared headers. Every module keeps the same
 four names for itself — a C prefix, a log tag, an env var, a launcher flag — and only the first
 of those is free to change: the other three are parsed by 24 `.ps1` files and renaming one is a
 suite break, not a cleanup.
@@ -741,7 +741,7 @@ Get-ScDllBuildStamp -Path work/scratch/plugin-build/scplugin.dll
 `Test-Path` and nothing else, and `-Build` was opt-in — so editing `src/` and
 forgetting `-Build` meant every suite in that worktree tested the PREVIOUS DLL,
 green, attributed to code that never ran. Now the SRC digest in the DLL is
-compared against the source beside the script: mismatch (or no stamp at all)
+compared against the repo's `src/`: mismatch (or no stamp at all)
 rebuilds by default, or refuses under `-NoAutoBuild`. Neither is silent. The
 comparison is over content, not mtimes, so a `git checkout` of identical source
 is not stale and an edit-then-revert is not stale, while one changed byte in one
@@ -1127,6 +1127,8 @@ The one exception is the deprecated `-Windowed` switch, which *does* write
 ---
 
 ## Source layout
+
+`src/` rows are repo-root paths; the rest sit beside this README.
 
 | file | what |
 |---|---|

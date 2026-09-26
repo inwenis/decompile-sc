@@ -4,13 +4,13 @@
 Build a baseline arm and a patched arm, and report every hooktest check whose verdict moved.
 
 .DESCRIPTION
-Builds two throwaway copies of tools/plugin -- baseline and defect (one patch applied) --
+Builds two throwaway copies of src + tools/plugin -- baseline and defect (one patch applied) --
 runs build.ps1 -Test on each (hooktest.exe, no game) and prints every check whose verdict
 CHANGED. A check that stays green while the code under it is broken was never testing that
 code, so an unchanged verdict is a finding about the suite, not a pass for the patch.
 Measured this way, one real defect build moved 28 balance checks to FAIL while every
 "spent NOTHING" check stayed green -- that family of checks was never testing its code.
-Both arms are copies: Get-ScSourceDigest over the real tools/plugin/src is taken around the
+Both arms are copies: Get-ScSourceDigest over the real src is taken around the
 run, and the run throws if it differs.
 
 .EXAMPLE
@@ -29,7 +29,7 @@ $repoRoot  = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'sc-build-id.ps1')   # Get-ScSourceDigest
 
 $patchPath = (Resolve-Path -LiteralPath $Patch).Path
-$realSrc   = Join-Path $repoRoot 'tools/plugin/src'
+$realSrc   = Join-Path $repoRoot 'src'
 $realBuild = Join-Path $repoRoot 'tools/plugin/build.ps1'
 $digestBefore = Get-ScSourceDigest -SrcDir $realSrc -BuildScript $realBuild
 
@@ -41,9 +41,15 @@ function Build-Arm {
     param([string]$ArmName, [string]$ApplyPatch)
     $copyRoot = Join-Path $armsRoot $ArmName
     Copy-Item -LiteralPath (Join-Path $repoRoot 'tools/plugin') -Destination (Join-Path $copyRoot 'tools/plugin') -Recurse
+    Copy-Item -LiteralPath $realSrc -Destination (Join-Path $copyRoot 'src') -Recurse
     if ($ApplyPatch) {
         & git -C $copyRoot apply --whitespace=nowarn -- $ApplyPatch
-        if ($LASTEXITCODE -ne 0) { throw "defect-arm: '$ApplyPatch' did not apply cleanly against a fresh copy of tools/plugin -- regenerate it against the current tree." }
+        if ($LASTEXITCODE -ne 0) { throw "defect-arm: '$ApplyPatch' did not apply cleanly against a fresh copy of src -- regenerate it against the current tree." }
+        # git apply skips a path outside its cwd and still exits 0: a 'diff --git' header is
+        # repo-relative, and this copy sits inside the repo.
+        if ((Get-ScSourceDigest -SrcDir (Join-Path $copyRoot 'src') -BuildScript (Join-Path $copyRoot 'tools/plugin/build.ps1')) -eq $digestBefore) {
+            throw "defect-arm: '$ApplyPatch' changed nothing in the copy -- use a plain ---/+++ header, not 'diff --git'."
+        }
         Write-Host "defect-arm: $ArmName arm patched with $ApplyPatch"
     }
     $log = Join-Path $copyRoot 'hooktest.log'
@@ -112,6 +118,6 @@ $digestAfter = Get-ScSourceDigest -SrcDir $realSrc -BuildScript $realBuild
 if ($digestBefore -ne $digestAfter) {
     throw "defect-arm: the REAL tree changed during this run (src digest $digestBefore -> $digestAfter). This must never happen."
 }
-Write-Host "`ndefect-arm: real tools/plugin/src untouched -- digest $digestBefore before and after"
-$porcelain = @(& git -C $repoRoot status --porcelain -- tools/plugin)
-Write-Host "defect-arm: git status --porcelain -- tools/plugin : $(if ($porcelain) { $porcelain -join '; ' } else { '(clean)' })"
+Write-Host "`ndefect-arm: real src untouched -- digest $digestBefore before and after"
+$porcelain = @(& git -C $repoRoot status --porcelain -- tools/plugin src)
+Write-Host "defect-arm: git status --porcelain -- tools/plugin src : $(if ($porcelain) { $porcelain -join '; ' } else { '(clean)' })"

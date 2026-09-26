@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the widescreen patch table for tools/plugin/src/sc_screen.cpp.
+"""Generate the widescreen patch table for src/sc_screen.cpp.
 
 Task 034. `research/renderer-viewport.md` establishes that the playfield's size
 is not stored anywhere -- it is an immediate in every function that clips to it.
@@ -64,7 +64,7 @@ STOCK_COLS = STOCK_W // STOCK_BLOCK
 STOCK_ROWS = STOCK_H // STOCK_BLOCK
 
 # Longest single rewrite the plugin's record can hold (its arrays are sized in
-# tools/plugin/src/sc_screen_patch.h; these two must not exceed those). The EFLAGS-hazard
+# src/sc_screen_patch.h; these two must not exceed those). The EFLAGS-hazard
 # reorder windows are the long ones: 0x0042D2C7 swallows three stores between cmp and jg.
 SC_MAX_PATCH_LEN = 32
 # Longest code cave (Builder.cave): the window's instructions re-encoded with
@@ -1740,7 +1740,7 @@ def main():
     ap.add_argument("--playfield-height", type=int, default=None,
                     help="default: height - 80 (the console keeps its stock 80 rows)")
     ap.add_argument("--out", default=None,
-                    help="header path; default tools/plugin/src/sc_screen_patches_<W>x<H>.h")
+                    help="header path; default src/sc_screen_patches_<W>x<H>.h")
     ap.add_argument("--tsv", default=None,
                     help="research TSV path; default research/data/renderer-widescreen-patches.tsv "
                          "for the 1280x880 preset, none for any other")
@@ -1779,7 +1779,7 @@ def main():
     if a.check:
         return 0
 
-    hdr = a.out or os.path.join(REPO, "tools", "plugin", "src",
+    hdr = a.out or os.path.join(REPO, "src",
                                 "sc_screen_patches_%dx%d.h" % (a.width, a.height))
     tsv = a.tsv
     if tsv is None and (a.width, a.height) == (1280, 880):

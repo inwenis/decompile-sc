@@ -545,7 +545,7 @@ which is not the question, and it answered it inconsistently across sessions.
 
 ## 9. The read-back oracle
 
-`tools/plugin/src/sc_card.cpp` (module `sc_card`), driven on the existing marker channel next to
+`src/sc_card.cpp` (module `sc_card`), driven on the existing marker channel next to
 the world scan, `%SCPLUGIN_CARDSCAN%` / `run-with-plugin.ps1 -CardScan 1`:
 
 - it installs **no hook**, calls nothing in the game and writes nothing, so it exists in

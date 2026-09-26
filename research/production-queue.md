@@ -485,7 +485,7 @@ The reasoning, since the task asked for a justified number rather than a big one
 
 ## 6. What the plugin does
 
-`tools/plugin/src/sc_prodqueue.{h,cpp}`. Off unless `%SCPLUGIN_PRODQ%=1`, and ignored outright in
+`src/sc_prodqueue.{h,cpp}`. Off unless `%SCPLUGIN_PRODQ%=1`, and ignored outright in
 `-Mode observe`, which stays the whole plugin's read-only off switch.
 
 ### 6.1 Three detours, all on the receive side

@@ -898,7 +898,7 @@ static void LogAttachBanner(void) {
     ScLog("ATTACH pid=%u tid=%u", (unsigned)GetCurrentProcessId(),
           (unsigned)GetCurrentThreadId());
     // FIRST line of the banner, so every log, transcript and frame this run produces can
-    // name the build behind it. "<short sha>[+dirty] SRC=<12 hex over tools/plugin/src +
+    // name the build behind it. "<short sha>[+dirty] SRC=<12 hex over src +
     // build.ps1>": the sha answers "which commit", the digest answers "which source
     // bytes", and the digest is the half that still means something when +dirty says the
     // sha is a lie. UNSTAMPED means this DLL did not come from build.ps1 at all.

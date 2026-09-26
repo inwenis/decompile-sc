@@ -100,7 +100,7 @@ $CC_TYPE    = 106         # units.dat 106, richchk UnitId 'Terran Command Center
 $PROBE_TYPE = 64          # units.dat 64,  richchk UnitId 'Protoss Probe'
 # CUnit+0xDC bit 0x01. A unit being trained is already in the player's unit list with this
 # CLEAR; it is set when the unit is actually there. See Get-TraineeCount below and
-# tools/plugin/src/sc_addresses.h for the observation this comes from.
+# src/sc_addresses.h for the observation this comes from.
 $SC_UNIT_FLAG_COMPLETED = 0x01
 $PROBE_COST = 50          # minerals; asserted against the run's own arithmetic below
 $TRAIN_CMD  = '0x1F'      # research/data/command-opcodes.tsv

@@ -2,7 +2,7 @@
 <#
 Golden-line tests for the printf-to-regex oracle seam.
 
-THE HAZARD: tools/plugin/src writes the ScLog(...) format strings, every suite under
+THE HAZARD: src writes the ScLog(...) format strings, every suite under
 tools/plugin reads them back with its OWN hand-copied regex, and nothing binds the two.
 Deleting three dead counters broke five parsers across four suites, caught only by a grep.
 Most such parsers fall through to a default object of zeros with no `else`, so drift does not
@@ -220,7 +220,7 @@ Describe 'Golden-line seam: every parser regex still matches the plugin''s own f
 
     BeforeAll {
         $script:PluginRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' 'tools' 'plugin')).Path
-        $script:SrcRoot    = Join-Path $script:PluginRoot 'src'
+        $script:SrcRoot    = (Resolve-Path (Join-Path $PSScriptRoot '..' 'src')).Path
         $script:renderN    = 0
 
         # Concatenate the adjacent string literals of the ScLog(...) call whose first literal
