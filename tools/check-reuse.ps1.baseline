@@ -23,14 +23,13 @@ block 5424e1123b108e43  # 11 identical lines: $gen = & (Join-Path $repoRoot 'too
 block 38ec9e9705b586cf  # 11 identical lines: $left = if ($gamePid -gt 0) { Get-Process -Id $gamePid -ErrorAction Si
 block aec20d0962258943  # 11 identical lines: $out.TrackedCount = [int]$s.Groups[1].Value
 block 17e9575bfad0321a  # 11 identical lines: ([int]$m.Groups[1].Value -eq $wantFanned)
-block 19275a25a198fca4  # 11 identical lines: -OutputPath $mapPath 2>&1
+block 3d65b497aab11cad  # 11 identical lines: -UnitCount 1 -UnitType engineering-bay -Player 0 -ClearPlayerUnits `
 block 70656ad881c26ddc  # 11 identical lines: Assert-That 'the image free list never ran out' ([int]$m.Groups[5].Val
 block ff5a7b67230d4c8c  # 11 identical lines: Step "generate the fixture: two Nexuses + one Command Center, $Startin
 block 0e0dff1611246d04  # 11 identical lines: [Parameter(Mandatory)][int]$Seed,
 block d1cca791031acdb5  # 11 identical lines: [int]$OrderDelaySec = 0,
 block 861776c109a412fd  # 11 identical lines: [string]$DecoyFolder = '00-t000',
 block f29a0e1cc559591e  # 11 identical lines: }
-block 0ebf7ddcfd4ce7f9  # 12 identical lines: -UnitCount 1 -UnitType $UnitType -Player 0 -ClearPlayerUnits `
 block c1ccda285f827329  # 12 identical lines: Dump = $null; W = 0; H = 0; Reads = 0; Stable = 0; Refused = $null }
 block 540aabb0973929c1  # 12 identical lines: Enter-ScCustomGame -Hwnd $hwnd -LogPath $LogPath -Fixtures $fixtures -
 block 5d1dda8d37352208  # 12 identical lines: OutputPath = $mapPath
@@ -38,7 +37,7 @@ block b74ad40dc6360b74  # 12 identical lines: }
 block 5cf01b94c8a07313  # 13 identical lines: $hookLines = @(Wait-ScLogMatch -LogPath $LogPath -Pattern 'HOOK (\S+):
 block f27e43aeeca177a4  # 13 identical lines: $out.Rows += [pscustomobject]@{
 block c4e17c395a70538f  # 13 identical lines: -Mode observe -LogCommands 1 -WorldScan 1 -CardScan 1 `
-block 9b5862d54ab3639d  # 13 identical lines: -UnitCount 1 -UnitType $UnitType -Player 0 -ClearPlayerUnits `
+block 4880af4698018985  # 13 identical lines: -UnitCount 1 -UnitType engineering-bay -Player 0 -ClearPlayerUnits `
 block dcaaeb3fd47af89e  # 13 identical lines: Assert-That "$What`: all $($State.Live) are $ExpectedType" $ok "(got $
 block dab717cd2c390433  # 13 identical lines: Assert-That 'nothing was refunded for a building that went away' ($ref
 block fb06c2d6030e7914  # 13 identical lines: New-Item -ItemType Directory -Path (Split-Path $LogPath -Parent) -Forc
@@ -48,6 +47,7 @@ block c011719a9d28ebb7  # 13 identical lines: if (-not $gamePid) { throw 'probe:
 block 1e0f88d016df4c54  # 13 identical lines: return list;
 block 82fcc797d1e3f71c  # 13 identical lines: uint tFg = GetWindowThreadProcessId(fg, IntPtr.Zero);
 block 937921217fcef21d  # 14 identical lines: $mapPath = Join-Path $mapDir $mapName
+block 271d5105879d54e4  # 14 identical lines: -OutputPath $mapPath 2>&1
 block 4059ce2a152c725d  # 14 identical lines: . (Join-Path $scriptDir 'drive-game.ps1')
 block f9c6a77a1f0795d1  # 14 identical lines: [ValidateSet('2', '3')][string]$WidescreenStage = '3',
 block 4754b8eae487ab70  # 14 identical lines: }
@@ -114,7 +114,6 @@ block ef9c759f02100b66  # 6 identical lines: )
 block 6eea6c84b3c1c331  # 6 identical lines: -Mode observe -InjectWindowedHelper WMode -GameDir $GameDir -LogPath $
 block 303efd8baff646a7  # 6 identical lines: -Mode observe -WorldScan 1 -InjectWindowedHelper WMode -NoLaunchLock `
 block 9d7c261563ef2d0d  # 6 identical lines: -NoLaunchLock -Widescreen $Widescreen -WidescreenStage $Stage `
-block 5a82fad841b26ce5  # 6 identical lines: -UnitCount 1 -UnitType $UnitType -Player 0 -ClearPlayerUnits `
 block 98b0aff3eb91cbff  # 6 identical lines: Assert-That "every placed unit was commanded ($u of $UnitCount)" ($u -
 block eac885b72963b609  # 6 identical lines: Index  = [int]$m.Groups[2].Value
 block a23d8ee7882de8db  # 6 identical lines: Send-ScDrag -Hwnd $script:hwnd -X1 $x1 -Y1 $y1 -X2 $x2 -Y2 $y2 -Steps 
@@ -131,6 +130,7 @@ block 60cb90ad4c95b059  # 7 identical lines: $gamePid = 0
 block 0ea18bf6114f76cb  # 7 identical lines: $hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Ha
 block 11b6f73015c314ef  # 7 identical lines: $mapPath = Join-Path $mapDir $mapName
 block 503120ee01e08f3f  # 7 identical lines: $out.Visible = [int]$s.Groups[3].Value
+block 9974bbc809d520f4  # 7 identical lines: $pt = Get-ScCardSlotPoint -Card $script:idleCard -Slot $script:upgB.In
 block ab6ba48cc5a1a0b7  # 7 identical lines: $r = @{ Tag = $Tag; Layers = @(); Bitmap = $null; Viewport = $null; Li
 block 6cfd4cb825be1e54  # 7 identical lines: $seam = @()
 block 9c4ee129f6f82278  # 7 identical lines: -InjectWindowedHelper WMode -NoLaunchLock -BuildDir $BuildDir `
