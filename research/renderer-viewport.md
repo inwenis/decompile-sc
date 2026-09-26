@@ -3284,3 +3284,79 @@ and a click on its Expansion button opens the Login screen.
 `-SuiteArgs @{ Geometry = '1536x864' }` for another preset). PASS at 1280x880 and
 1536x864: the MainMenu and popup records read centred, the walk by name reaches a game,
 the console still moves, stars on glass against a black stock surround.
+
+### 25.7 One sky on every screen: the inks live in each palette's unused entries (2026-09-26)
+
+The user saw "two pictures": the nebula matched to the nearest entry of whatever glue
+palette was live, and the palettes differ (the main menu's PalMm holds blues, the
+registry's PalNl a yellow ramp, the ready room's PalRt browns), so `MENU palette` read
+`0 228 243 252` at MainMenu, `0 192 234 252` at Create and `0 145 151 85` at TerranRR
+from the user's own log, with a different nebula behind each.
+
+**No entry is free everywhere.** Every glue screen's consumers were decoded offline from
+StarDat/BrooDat/patch_rt (StormLib through richchk; `C:\decompile-sc-data\sc-work\scratch-agents\glue-palettes\glue_palettes.py`,
+`report.txt`, `report2.txt`, never committed): the screen's PCX art, the SMK button
+animations (the biggest consumer, 73..189 entries each; their frames carry the glue
+palette's indices, 0 pixels of 30 SMKs off the BackGnd palette), `tFont.pcx` rows (text
+never writes an index of its own), `arrow.grp`, `Dlg.grp`, `tEffect.pcx`, the 26 system
+colours `FUN_0041e450` matches by RGB into `0x006CEB20`, and the blend tables
+`FUN_004178b0` builds by RGB. Per screen there are free entries (MainMenu 19, the PalNl
+screens 50, Campaign 14, ExCampaign 13, ready rooms 30..44, score screens 36..66,
+title.pcx 1); their intersection over the BW set is 0, over the Original set 0, over
+MainMenu+PalNl+Campaign 0. Campaign and ExCampaign share PalCs but not their SMKs, so
+they share one free entry (145).
+
+**So the inks are written per screen.** `glGluesMode` (`0x006D11BC`, SwitchMenu stores
+0x11/0x9/0x7/0x8 into it, `0x4DE281..0x4DE474`) indexes `0x004FFAD4` (stride 0xC: palette
+dir, subdir), the dirs are `0x0050E06C` (12 x 0x518: PalMm, PalCs, PalRt, PalRz, PalRp,
+PalPd, PalPv, PalZd, PalZv, PalTd, PalTv, PalNl), and each screen's palette is
+`<dir>\BackGnd.pcx`, loaded by `registerMenuFunctions 0x004DD9E0` through
+`AllocBackgroundImage 0x004D27A0` into `0x005994E0` (`0x4DDAEB push 0x5994e0`,
+`0x4DDAF8 call`), BEFORE the system colours (`0x4DDB2C`) and blend tables (`0x4DDB3A`)
+are derived from it and before SwitchMenu copies it to the fade target `0x006CEB40`.
+`sc_menu.cpp` detours the loader (fastcall, `ret 0xC`, prologue `55 8B EC 83 EC 08`) and,
+for a `\Pal??\BackGnd.pcx`, writes the twelve inks (2 layers x 6, down from 8) into that
+dir's row of `kScMenuHijack` (PalCs by mode: 6 Campaign, 22 ExCampaign); the LUT then
+maps ink levels to those entries and only the stars are still matched. The fade scales
+the entries like any other, so nothing is rewritten during a fade. Title/loading
+(`title.pcx`, 255 of 256 used) keeps the nearest match.
+
+Measured (`probe-menu-centre.ps1 -CentredOnly`, 1280x880, cnc-ddraw, off-screen): the
+twelve most frequent non-grey RGBs outside the menu at MainMenu against those at Login
+(`frame-capture.py colours`) share 10 of 12 with the hijack (`MENUSTATS paletteLoads=28
+hijacked=5`) against 0 of 12 with the deployed nearest match (the same probe, `-BuildDir`
+the deployed plugin). Frames: the same blue-and-red nebula at both screens.
+
+### 25.8 The briefing goes black: the DirectDraw palette is zeroed behind the engine's back (2026-09-26)
+
+The user: "when I play missions or use map settings, sometimes the screen before the game
+where the commanders talk disappears". The user's own log (24 briefings) had the shape:
+in the FIRST briefing of a launch on a map with real transmissions, `MENU palette` read
+all-zero 0.93..0.97 s after the ready room appeared and no line followed until Start,
+while later briefings of the same launch and briefings with no transmissions never did.
+
+Reproduced off-screen with `probe-briefing.ps1 -StockMap (1)Enslavers01.scm` (a stock
+briefing with portraits and WAVs): every fresh launch, one fully black capture at
+0.96..1.35 s with the ready-room root still listed and centred. The harness's next
+capture was lit again, which the player never gets: a `PrintWindow` repaints and
+re-realizes; the player's window sits idle until they press Start into black.
+
+Bisected, one fresh launch each, all black at ~1 s: centring off; centring and widescreen
+off; `-Mode observe` (the plugin writes nothing, no detour, no patch). With the WMode shim
+in cnc-ddraw's place (`-Presenter wmode`, otherwise the same): 14 lit samples, no black.
+So it is not this plugin's doing; it is the game under cnc-ddraw. The instrumented arm (a detour on `TitlePaletteUpdate 0x0041EA30`, the
+one writer of an all-black palette, logging its caller and the fade's state beside every
+palette poll) read, at the black: `fade flag=0 tops written=255 to=255 from=0` with no
+`TitlePaletteUpdate` since the ready room's own swish-in 0.9 s earlier -- the engine
+believes its palette is lit (`0x006CE320`, the copy `setPaletteGamma` hands to storm),
+no fade is running, and storm's `GetPalette`/`GetEntries` read zeros. Something outside
+the engine's fade path (the briefing's first portrait SMK is the prime suspect: it is the
+one thing that starts at that second, on the first briefing only) zeroes the DirectDraw
+palette, and nothing asks storm to realize it again.
+
+The rescue (`sc_menu.cpp` `RescuePalette`): in the 50 ms palette poll at a glue screen,
+when storm reads all-zero while the engine's written palette is lit and the fade flag is
+0, re-issue that palette through storm's ord357 (`0x00410244`, the engine's own write) and
+ord354 SDrawRealizePalette (`0x00411E30`, what `realizePalette 0x0041D710` calls on
+activation), at most every 250 ms, counted in `MENUSTATS rescues=`. A fade the engine
+asked for reads `flag=1` or `written=0` and is left alone.

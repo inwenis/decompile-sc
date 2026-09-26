@@ -420,6 +420,67 @@ def build_starting_resources_trig(player: int, minerals: int, gas: int) -> bytes
     return bytes(out)
 
 
+# ---------------------------------------------------------------------------
+# A mission briefing (MBRF), so a fixture shows the ready room the way a campaign
+# mission does: a portrait that talks over scrolling text, then Start.
+# ---------------------------------------------------------------------------
+# staredit's briefing action ids; the 32-byte record is the trigger action's.
+BRF_ACTION_WAIT = 1
+BRF_ACTION_TEXT = 3
+BRF_ACTION_OBJECTIVES = 4
+BRF_ACTION_SHOW_PORTRAIT = 5
+BRF_ACTION_SPEAKING_PORTRAIT = 7
+BRF_PORTRAIT_UNIT = 0            # units.dat 0, the Marine: a portrait every install has
+BRF_LINE_MS = 5000
+
+
+def _brf_action(action: int, string: int = 0, time_ms: int = 0, slot: int = 0,
+                unit: int = 0) -> bytes:
+    """One briefing action: +4 string, +12 time, +16 portrait slot (the trigger action's
+    player field: BRFACT_ShowPortrait 0x00427EF0 reads action->player), +24 unit type,
+    +26 id."""
+    act = bytearray(TRIG_ACTION_BYTES)
+    struct.pack_into("<I", act, 4, string)
+    struct.pack_into("<I", act, 12, time_ms)
+    struct.pack_into("<I", act, 16, slot)
+    struct.pack_into("<H", act, 24, unit)
+    act[26] = action
+    return bytes(act)
+
+
+def build_briefing_mbrf(player: int, sections: list[ChkSection], template: Path) -> bytes:
+    """One briefing trigger for `player`: the map's name, then its description (the two
+    strings SPRP already names, so no string is added), then the description again as the
+    objectives, with a Marine portrait asked for in slot 0 and told to speak. The text and
+    objectives show; the portrait does not (the fields match BRFACT_ShowPortrait's reads,
+    so what it still needs is unknown)."""
+    sprp = sections[require_section(sections, "SPRP", template)].payload
+    name_str, desc_str = struct.unpack_from("<HH", sprp, 0)
+    actions = [
+        _brf_action(BRF_ACTION_SHOW_PORTRAIT, slot=0, unit=BRF_PORTRAIT_UNIT),
+        _brf_action(BRF_ACTION_TEXT, string=name_str, time_ms=BRF_LINE_MS),
+        _brf_action(BRF_ACTION_SPEAKING_PORTRAIT, slot=0, time_ms=BRF_LINE_MS),
+        _brf_action(BRF_ACTION_WAIT, time_ms=BRF_LINE_MS),
+        _brf_action(BRF_ACTION_TEXT, string=desc_str, time_ms=BRF_LINE_MS),
+        _brf_action(BRF_ACTION_SPEAKING_PORTRAIT, slot=0, time_ms=BRF_LINE_MS),
+        _brf_action(BRF_ACTION_WAIT, time_ms=BRF_LINE_MS),
+        _brf_action(BRF_ACTION_OBJECTIVES, string=desc_str),
+    ]
+    out = bytearray()
+    out += _trigger_condition_always()
+    out += bytes(TRIG_CONDITION_BYTES) * (TRIG_CONDITIONS - 1)
+    for act in actions:
+        out += act
+    out += bytes(TRIG_ACTION_BYTES) * (TRIG_ACTIONS - len(actions))
+    out += struct.pack("<I", 0)
+    flags = bytearray(TRIG_PLAYER_FLAGS)
+    flags[player] = 1
+    out += bytes(flags)
+    out += bytes(1)
+    assert len(out) == TRIG_BYTES, f"briefing trigger is {len(out)} bytes, expected {TRIG_BYTES}"
+    return bytes(out)
+
+
 def read_starting_resources(trig_payload: bytes) -> list[tuple[int, int, int]]:
     """Every (player, resource, amount) a TRIG payload's Set Resources actions grant.
 
@@ -1154,6 +1215,7 @@ def generate_map(
     starting_gas: int | None = None,
     unit_settings: dict[str, list[tuple[int, int]]] | None = None,
     clear_critters: bool = False,
+    briefing: bool = False,
 ) -> None:
     unit_id = resolve_unit_id(unit_type)
     if not 0 <= player <= 7:
@@ -1312,6 +1374,11 @@ def generate_map(
                 build_starting_resources_trig(player, starting_minerals, starting_gas),
                 template,
             )
+        # A briefing cannot end the game either: MBRF actions only show text and portraits.
+        if briefing:
+            sections = replace_section(sections, "MBRF", build_briefing_mbrf(player, sections, template), template)
+    elif briefing:
+        raise ValueError("--briefing cannot be combined with --keep-triggers: it replaces the template's MBRF")
     elif starting_minerals is not None or starting_gas is not None:
         raise ValueError(
             "--starting-minerals/--starting-gas cannot be combined with --keep-triggers: "
@@ -1795,6 +1862,13 @@ def main() -> int:
              "on its own (a probe judging buffer changes against marks cannot have them).",
     )
     parser.add_argument(
+        "--briefing",
+        action="store_true",
+        help="Write a mission briefing (MBRF): a Marine portrait speaks the map's name and "
+             "description over scrolling text, so the ready room shows a talking briefing "
+             "the way a campaign mission's does. Not with --keep-triggers.",
+    )
+    parser.add_argument(
         "--keep-triggers",
         action="store_true",
         help="Keep the template's TRIG/MBRF sections. NOT for a test fixture: every "
@@ -1985,7 +2059,7 @@ def main() -> int:
             args.enemy_owner, args.min_enemy_gap, args.unit_hp,
             args.damaged_count, args.damaged_hp, techs, args.damaged_energy,
             args.starting_minerals, args.starting_gas, unit_settings,
-            clear_critters=args.clear_critters,
+            clear_critters=args.clear_critters, briefing=args.briefing,
         )
         print(f"wrote {args.output}")
         if not args.no_validate:

@@ -18,6 +18,7 @@
 
 #include <windows.h>
 #include <math.h>
+#include <string.h>
 
 bool ScMenuWanted(void);                // %SCPLUGIN_MENU_CENTRE% == 1
 void ScMenuInstall(bool writeAllowed);  // arms it: wanted, writable, widescreen at stage 3
@@ -35,13 +36,23 @@ void ScMenuLogStats(void);
 // The pure half, header-only so hooktest runs it with no game.
 //
 // The sky is a field of level ids, one per pixel; a palette change maps each level to an
-// index once (ScMenuLevelsFor) and the field through that table, so no pixel is ever
-// matched against the palette on its own. Levels 0..3 are the sky and three star
-// brightnesses; the rest are the nebula's inks, a few steps of each layer's colour.
+// index once and the field through that table, so no pixel is ever matched against the
+// palette on its own. Levels 0..3 are the sky and three star brightnesses; the rest are
+// the nebula's inks, a few steps of each layer's colour.
+//
+// The inks are the SAME colour on every screen: each glue screen's palette (its
+// <paldir>\BackGnd.pcx) has entries its art never references, and the plugin writes the
+// inks into twelve of them as the palette is loaded (ScMenuHijackFor), so the LUT maps an
+// ink to that screen's own entry and the RGB never changes from screen to screen. The
+// stars are mapped to the nearest existing grey, which every glue palette holds within a
+// few steps. Matched by nearest colour instead, the inks came out a different picture on
+// every screen: no index is unused by ALL glue screens, and the palettes hold different
+// blues (the survey behind the table: research/renderer-viewport.md 25.7).
 #define SC_MENU_STAR_LEVELS 4
 #define SC_MENU_NEB_LAYERS  2
-#define SC_MENU_NEB_INKS    8   // per layer: ink k of 8 is k/8 of the layer's colour
+#define SC_MENU_NEB_INKS    6   // per layer: ink k of 6 is k/6 of the layer's colour
 #define SC_MENU_LEVELS      (SC_MENU_STAR_LEVELS + SC_MENU_NEB_LAYERS * SC_MENU_NEB_INKS)
+#define SC_MENU_HIJACK_N    (SC_MENU_NEB_LAYERS * SC_MENU_NEB_INKS)
 #define SC_MENU_FADE        140 // px from the glue rect to the nebula's full strength
 #define SC_MENU_NEB_STEP    2   // the nebula is sampled every 2 px and dithered per pixel
 
@@ -52,6 +63,68 @@ static const ScMenuNebLayer kScMenuNebLayers[SC_MENU_NEB_LAYERS] = {
     {  70, 100, 185, 2.0f, 0.10f, 3,  0.0f, 0.0f, 7u },   // blue-violet, broad
     { 170,  45,  55, 3.0f, 0.02f, 4, 17.3f, 5.1f, 8u },   // dim red, patchy
 };
+
+// Twelve palette entries per glue palette directory that no art of its screens
+// references: not a PCX, not an SMK button frame, not the font rows, cursor, dialog
+// theme, the 26 system colours or the blend tables (every consumer decoded offline from
+// the MPQs). PalCs serves two screens whose race-button SMKs use different entries, so it
+// is keyed by glGluesMode: 6 (Campaign) or 22 (ExCampaign); 0 means any mode.
+struct ScMenuHijack { const char* dir; unsigned mode; BYTE idx[SC_MENU_HIJACK_N]; };
+static const ScMenuHijack kScMenuHijack[] = {
+    { "PalMm",  0, {  39,  88,  94,  96,  99, 104, 108, 110, 111, 133, 139, 141 } },
+    { "PalNl",  0, {   6,  14,  15,  20,  26,  30,  31,  33,  37,  42,  44,  52 } },
+    { "PalCs",  6, {  84,  96, 100, 107, 111, 114, 116, 122, 123, 124, 128, 145 } },
+    { "PalCs", 22, {  47,  50, 118, 133, 136, 139, 145, 152, 153, 155, 156, 157 } },
+    { "PalRt",  0, {   1,   2,   3,   5,   6,   7,   9,  10,  11,  13,  14,  15 } },
+    { "PalRz",  0, {   1,   2,   3,   5,   6,   7,   9,  10,  11,  13,  14,  49 } },
+    { "PalRp",  0, {   1,   2,   3,   5,   6,   7,   9,  10,  11,  13,  14,  59 } },
+    { "PalZd",  0, {  91, 101, 114, 115, 119, 120, 122, 123, 126, 127, 128, 129 } },
+    { "PalZv",  0, {  62,  66,  67,  71,  73,  74,  76,  77,  78,  81,  82,  83 } },
+    { "PalTd",  0, {  84,  85,  88,  92,  93,  94,  97,  99, 100, 102, 103, 104 } },
+    { "PalTv",  0, {  49,  52,  58,  64,  65,  67,  68,  69,  72,  73,  74,  76 } },
+    { "PalPd",  0, {  53,  72,  74,  77,  79,  81,  84,  85,  89,  90,  92,  93 } },
+    { "PalPv",  0, {  90,  91,  94,  96,  97,  99, 100, 101, 104, 105, 106, 109 } },
+};
+
+// The RGB of ink level `l` (SC_MENU_STAR_LEVELS..SC_MENU_LEVELS-1).
+static inline void ScMenuInkRgb(int l, int* r, int* g, int* b) {
+    const ScMenuNebLayer& L = kScMenuNebLayers[(l - SC_MENU_STAR_LEVELS) / SC_MENU_NEB_INKS];
+    const int k = (l - SC_MENU_STAR_LEVELS) % SC_MENU_NEB_INKS + 1;
+    *r = L.r * k / SC_MENU_NEB_INKS; *g = L.g * k / SC_MENU_NEB_INKS; *b = L.b * k / SC_MENU_NEB_INKS;
+}
+
+// The hijack row for a palette file, or NULL: `fileName` must end in \BackGnd.pcx under a
+// \Pal?? directory (case does not matter), and PalCs picks its row by `mode`.
+static inline const ScMenuHijack* ScMenuHijackFor(const char* fileName, unsigned mode) {
+    if (!fileName) return NULL;
+    const size_t n = strlen(fileName);
+    const char* tail = "\\BackGnd.pcx";
+    const size_t tn = strlen(tail);
+    if (n < tn + 6 || _stricmp(fileName + n - tn, tail) != 0) return NULL;
+    const char* dir = fileName + n - tn - 6;   // "\PalXx" precedes the tail
+    if (dir[0] != '\\') return NULL;
+    for (size_t i = 0; i < sizeof(kScMenuHijack) / sizeof(kScMenuHijack[0]); ++i) {
+        const ScMenuHijack& h = kScMenuHijack[i];
+        if (_strnicmp(dir + 1, h.dir, 5) != 0) continue;
+        if (h.mode == 0) return &h;
+        if (h.mode == mode) return &h;
+    }
+    // PalCs under a mode the table does not name: the Campaign row's entries are the
+    // safer guess (its SMKs are the Original set's).
+    for (size_t i = 0; i < sizeof(kScMenuHijack) / sizeof(kScMenuHijack[0]); ++i)
+        if (_strnicmp(dir + 1, kScMenuHijack[i].dir, 5) == 0) return &kScMenuHijack[i];
+    return NULL;
+}
+
+// Write the inks into a 256 x {r,g,b,flags} palette at the row's entries.
+static inline void ScMenuHijackPalette(BYTE* pal, const ScMenuHijack* h) {
+    for (int i = 0; i < SC_MENU_HIJACK_N; ++i) {
+        int r, g, b;
+        ScMenuInkRgb(SC_MENU_STAR_LEVELS + i, &r, &g, &b);
+        BYTE* e = pal + (size_t)h->idx[i] * 4;
+        e[0] = (BYTE)r; e[1] = (BYTE)g; e[2] = (BYTE)b;
+    }
+}
 
 // Nearest of 256 palette entries {r,g,b,flags} to an RGB.
 static inline int ScMenuNearestIndex(const BYTE* e, int r, int g, int b) {
@@ -68,8 +141,9 @@ static inline int ScMenuNearestIndex(const BYTE* e, int r, int g, int b) {
 // Every level -- sky, dim, mid and bright star, then each layer's inks -- as indices
 // into `pal`. The targets scale with the palette's brightest component, so a palette
 // fading to black maps to the same entries at every step and the sky fades with the menu
-// instead of popping.
-static inline void ScMenuLevelsFor(const BYTE* pal, BYTE* lut) {
+// instead of popping. With a hijack row the inks are that row's entries and only the
+// stars are matched.
+static inline void ScMenuLevelsFor(const BYTE* pal, BYTE* lut, const ScMenuHijack* hijack = NULL) {
     static const int kStarRgb[SC_MENU_STAR_LEVELS][3] = {
         { 0, 0, 0 }, { 70, 70, 80 }, { 140, 140, 150 }, { 230, 230, 240 }
     };
@@ -80,10 +154,11 @@ static inline void ScMenuLevelsFor(const BYTE* pal, BYTE* lut) {
         int r, g, b;
         if (l < SC_MENU_STAR_LEVELS) {
             r = kStarRgb[l][0]; g = kStarRgb[l][1]; b = kStarRgb[l][2];
+        } else if (hijack) {
+            lut[l] = hijack->idx[l - SC_MENU_STAR_LEVELS];
+            continue;
         } else {
-            const ScMenuNebLayer& L = kScMenuNebLayers[(l - SC_MENU_STAR_LEVELS) / SC_MENU_NEB_INKS];
-            const int k = (l - SC_MENU_STAR_LEVELS) % SC_MENU_NEB_INKS + 1;
-            r = L.r * k / SC_MENU_NEB_INKS; g = L.g * k / SC_MENU_NEB_INKS; b = L.b * k / SC_MENU_NEB_INKS;
+            ScMenuInkRgb(l, &r, &g, &b);
         }
         lut[l] = (BYTE)ScMenuNearestIndex(pal, r * top / 255, g * top / 255, b * top / 255);
     }
