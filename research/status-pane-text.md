@@ -241,7 +241,7 @@ Keep `ink` on the line; it is corroboration and it is free. Do not assert on it.
 
 ## 6. What a plugin has to do
 
-`tools/plugin/src/sc_queueind.cpp`, and it is nine fields:
+`src/sc_queueind.cpp`, and it is nine fields:
 
 ```c
 *(DWORD*)(ind + SC_BINDLG_OFF_FLAGS)    = SC_CTRL_FONT_SMALLEST;   // 0x400 -> the small font

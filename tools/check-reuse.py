@@ -15,8 +15,8 @@ a copy or re-wording its trailing comments does not make it a different block.
 
 WHAT IT REPORTS, per target:
 
-  cpp   tools/plugin/src/*.cpp, *.h     block, name, define, va
-  ps1   tools/plugin/*.ps1              block
+  cpp   src/*.cpp, *.h        block, name, define, va
+  ps1   tools/plugin/*.ps1    block
 
   block   MIN_LINES or more lines, MIN_TOKENS or more tokens, the same in two files
   name    one `static` function name defined in two different files
@@ -214,7 +214,7 @@ def collect_vas(files, target):
 
 
 TARGETS = [
-    dict(name="cpp", root=pathlib.Path("tools/plugin/src"), globs=("*.cpp", "*.h"),
+    dict(name="cpp", root=pathlib.Path("src"), globs=("*.cpp", "*.h"),
          pattern="*.{cpp,h}", comment="//", block=("/*", "*/"), ignore=("#include",),
          # Generated, or a table of evidence rather than code.
          skip={"sc_screen_patches_*.h", "sc_addresses.h"},   # generated tables: same instructions, different immediates
@@ -300,8 +300,9 @@ def main():
                     help="rewrite the baselines from what is in the tree now")
     args = ap.parse_args()
 
-    if not TARGETS[0]["root"].is_dir():
-        print("check-reuse: %s not found -- run me from the repo root" % TARGETS[0]["root"])
+    missing = [str(t["root"]) for t in TARGETS if not t["root"].is_dir()]
+    if missing:
+        print("check-reuse: %s not found -- run me from the repo root" % ", ".join(missing))
         return 2
     return max(check(t, args) for t in TARGETS)
 

@@ -12,7 +12,7 @@ Dot-source it:  . (Join-Path $PSScriptRoot 'sc-geometry.ps1')
 
 function Get-ScWidePresetNames {
     # The presets the DLL carries, default first: SC_WS_PRESETS in sc_screen_presets.h.
-    $listed = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'src/sc_screen_presets.h')
+    $listed = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '../../src/sc_screen_presets.h')
     @([regex]::Matches($listed, '&SC_WS_GEOM_(\d+x\d+)') | ForEach-Object { $_.Groups[1].Value })
 }
 
@@ -21,7 +21,7 @@ function Get-ScWideGeometry {
     .SYNOPSIS
     The widescreen geometry of a preset, read from the generated table header.
     .DESCRIPTION
-    tools/plugin/src/sc_screen_patches_<WxH>.h is GENERATED (tools/renderer_patch_sites.py),
+    src/sc_screen_patches_<WxH>.h is GENERATED (tools/renderer_patch_sites.py),
     one per geometry preset, and is the one place a preset's width/height live. Every probe
     that asserts a client size, a dump size or a band extent reads them here: a literal
     width copied into a probe goes stale, silently, the moment the target size moves.
@@ -32,7 +32,7 @@ function Get-ScWideGeometry {
     param(
         [string]$Geometry = $(if ($env:SCPLUGIN_WS_GEOMETRY) { $env:SCPLUGIN_WS_GEOMETRY } else { '1280x880' })
     )
-    $src = Join-Path $PSScriptRoot 'src'
+    $src = Join-Path $PSScriptRoot '../../src'
     $header = Join-Path $src "sc_screen_patches_$Geometry.h"
     if (-not (Test-Path -LiteralPath $header)) {
         $known = @(Get-ChildItem -LiteralPath $src -Filter 'sc_screen_patches_*.h' |

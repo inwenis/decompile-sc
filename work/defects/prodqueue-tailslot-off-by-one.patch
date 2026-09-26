@@ -1,5 +1,5 @@
---- a/tools/plugin/src/sc_prodqueue.cpp
-+++ b/tools/plugin/src/sc_prodqueue.cpp
+--- a/src/sc_prodqueue.cpp
++++ b/src/sc_prodqueue.cpp
 @@ -225,5 +225,5 @@ static int TailSlot(DWORD unit, int len) {
      if (len <= 0) return -1;
      unsigned head = *(BYTE*)(unit + SC_CUNIT_OFF_BUILD_QUEUE_SLOT);

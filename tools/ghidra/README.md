@@ -170,7 +170,7 @@ Select-String "$d\types.txt" -Pattern '^CUnit \+0x04D '      # a struct offset -
 Select-String "$d\types.txt" -Pattern '^Order '              # an enum's values
 Select-String "$d\listing.asm" -Pattern '^\s+4bcdf8:' -Context 3,8     # the asm: an instruction start, lower-case hex, no 0x
 Select-String -Path "$d\*.c" -Pattern '\bBWFXN_RefreshTarget\b'        # references, one line per hit
-Select-String tools/plugin/src/sc_addresses.h, research/*.md -Pattern '0041E0D0'   # this repo's evidence
+Select-String src/sc_addresses.h, research/*.md -Pattern '0041E0D0'   # this repo's evidence
 ```
 
 - **Provenance** is `nameSource` in `index.tsv`. `USER_DEFINED` = this repo's verified name, from

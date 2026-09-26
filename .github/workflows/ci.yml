@@ -122,7 +122,7 @@ jobs:
               Write-Host 'No tools/ directory -- skipping'
           }
 
-      - name: Reuse gate (tools/plugin/src and tools/plugin/*.ps1)
+      - name: Reuse gate (src and tools/plugin/*.ps1)
         shell: pwsh
         run: |
           # Fails only on duplication that is NOT already in a tools/check-reuse.*.baseline,

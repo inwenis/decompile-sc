@@ -2,7 +2,7 @@
 
 *Task 020. Derived from StarCraft.exe 1.16.1 (`AD6B58B2…88C6A46`), from the plugin's own
 in-process observation on the task-019 combat fixture, and from the offline core tests in
-`tools/plugin/src/hooktest.cpp` part [7].*
+`src/hooktest.cpp` part [7].*
 
 ---
 
@@ -123,7 +123,7 @@ the thing the engine's own design never does. The obligation to check therefore 
 
 ## 3. The gate
 
-`tools/plugin/src/sc_fanout.cpp`, `UnitLive()`. Five terms, evaluated cheapest-first, every one of
+`src/sc_fanout.cpp`, `UnitLive()`. Five terms, evaluated cheapest-first, every one of
 them a field this repo has already derived:
 
 | # | term | address | catches | evidence |

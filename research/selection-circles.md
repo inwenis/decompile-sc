@@ -403,7 +403,7 @@ the only unit touched in each.
 
 ## 5. The implementation
 
-`tools/plugin/src/sc_circles.{h,cpp}`. One hook, two calls.
+`src/sc_circles.{h,cpp}`. One hook, two calls.
 
 ```
 0x0049AE40 CreateNewUnitSelectionsFromList   <- the client's "replace the selection" funnel

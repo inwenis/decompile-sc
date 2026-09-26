@@ -256,7 +256,7 @@ Describe 'the pieces are actually wired together' {
     }
 
     It 'the ATTACH banner logs the stamp' {
-        $t = Get-Content -Raw -LiteralPath (Join-Path $script:pluginDir 'src/scplugin.cpp')
+        $t = Get-Content -Raw -LiteralPath (Join-Path $script:repoRoot 'src/scplugin.cpp')
         $t | Should -BeLike '*ScBuildStampShort()*'
     }
 

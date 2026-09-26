@@ -135,7 +135,7 @@ exercises the code the project is actually changing.
 | | |
 |---|---|
 | Automates | Observing |
-| Feasibility | **The read path is already proven.** `tools/plugin/src/scplugin.cpp` reads all six selection globals through a `VirtualQuery`-guarded `SafeRead` and logged them correctly through a real game session (`runtime-selection-observations.md` §3) |
+| Feasibility | **The read path is already proven.** `src/scplugin.cpp` reads all six selection globals through a `VirtualQuery`-guarded `SafeRead` and logged them correctly through a real game session (`runtime-selection-observations.md` §3) |
 | Cost | **Low for what exists, medium to extend.** The gap is not the mechanism, it is the address map — see the honest cost below |
 | Can prove | What is selected, how many, in which order, per player; player ids; anything else whose address we verify |
 | **Cannot prove** | **Anything we have not mapped.** Today the plugin can assert on *selection* and nothing else. Asserting "these 36 units now have a move order to point X" needs `CUnit` field offsets for order id, order target and position. This project has verified only `sizeof(CUnit) = 0x150`, `CUnit+0x0C` (sprite), `CUnit+0x4C` (player id) and `CUnit+0xA5` (uniqueness). Community sources give the rest; **under this repo's evidence rule they must be re-derived from the binary before any assertion depends on them** |

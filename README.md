@@ -74,8 +74,9 @@ Release: `git tag v1.0 && git push origin v1.0`; CI builds the zip and attaches 
 ## Layout
 
 ```
-research/   per-subsystem findings -- the product of this repo
-tools/      plugin, Ghidra automation, map + deploy + release tooling
+src/        the mod: scplugin.dll + scinject.exe C++ source
+research/   per-subsystem findings behind the mod
+tools/      build, test harness, Ghidra automation, map + deploy + release tooling
 tests/      Pester tests for the tooling
 docs/       README screenshots
 work/       scratch/ (ignored build output + logs), defects/ (patches for build-defect-arm.ps1)

@@ -30,7 +30,7 @@ $ErrorActionPreference = 'Stop'
 
 $scriptDir = $PSScriptRoot
 $repoRoot  = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
-$srcDir    = Join-Path $scriptDir 'src'
+$srcDir    = Join-Path $repoRoot 'src'
 
 . (Join-Path $scriptDir 'sc-build-id.ps1')
 
@@ -65,7 +65,7 @@ Write-Host "build: outdir    $OutDir"
 # replaced under it without a word. tools/plugin/sc-build-id.ps1 says what each
 # of the two values answers and why +dirty is not cosmetic. The stamp is a gate,
 # not a label: run-with-plugin.ps1 refuses to launch a DLL whose SRC digest does
-# not match the source sitting beside it.
+# not match the repo's src/.
 $identity  = Get-ScBuildIdentity -RepoRoot $repoRoot
 $srcDigest = Get-ScSourceDigest -SrcDir $srcDir -BuildScript $PSCommandPath
 Write-Host "build: build id  $($identity.BuildId)  src=$srcDigest"

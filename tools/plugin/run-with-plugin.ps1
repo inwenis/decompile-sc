@@ -35,7 +35,7 @@ param(
     [int]$SettleMs    = 4000,
     [switch]$Build,
     # The stale-DLL gate below REBUILDS by default when the DLL in $BuildDir was not
-    # built from the source next to this script. -NoAutoBuild makes it refuse instead:
+    # built from the repo's src/. -NoAutoBuild makes it refuse instead:
     # same detection, no compile -- for a machine with no toolchain, or a deliberate
     # run against a specific old DLL, which is then an explicit choice, not an oversight.
     [switch]$NoAutoBuild,
@@ -344,10 +344,11 @@ try {
     # code that never ran -- silently, since nothing in the run says which build was
     # injected. The DLL carries its own identity (build.ps1 stamps it, sc-build-id.ps1
     # compares it against the CONTENT of src/* plus build.ps1) so the mismatch is loud.
-    $gateSrcDir = Join-Path $scriptDir 'src'
-    if (Test-Path -LiteralPath $gateSrcDir) {
-        $verdict = Test-ScPluginCurrent -DllPath $dll -SrcDir $gateSrcDir `
-                                        -BuildScript (Join-Path $scriptDir 'build.ps1')
+    # The deployed copy has neither build.ps1 beside it nor a repo around it.
+    $gateSrcDir = Join-Path $repoRoot 'src'
+    $gateBuild  = Join-Path $scriptDir 'build.ps1'
+    if ((Test-Path -LiteralPath $gateSrcDir) -and (Test-Path -LiteralPath $gateBuild)) {
+        $verdict = Test-ScPluginCurrent -DllPath $dll -SrcDir $gateSrcDir -BuildScript $gateBuild
         if ($verdict.Current) {
             Write-Host "run-with-plugin: plugin $($verdict.Reason)"
         }
@@ -372,12 +373,11 @@ try {
         else {
             Write-Host "run-with-plugin: STALE PLUGIN -- $($verdict.Reason)"
             Write-Host 'run-with-plugin: rebuilding before launch (this used to run the old DLL and say nothing).'
-            & (Join-Path $scriptDir 'build.ps1') -OutDir $BuildDir | Write-Host
+            & $gateBuild -OutDir $BuildDir | Write-Host
             # Re-check rather than assume the rebuild fixed it. A build that
             # wrote somewhere else, or produced an unstamped DLL, must not be
             # able to satisfy this gate by having exited 0.
-            $verdict = Test-ScPluginCurrent -DllPath $dll -SrcDir $gateSrcDir `
-                                            -BuildScript (Join-Path $scriptDir 'build.ps1')
+            $verdict = Test-ScPluginCurrent -DllPath $dll -SrcDir $gateSrcDir -BuildScript $gateBuild
             if (-not $verdict.Current) {
                 throw "run-with-plugin: rebuilt and the DLL is STILL not this tree -- $($verdict.Reason)"
             }
@@ -386,7 +386,7 @@ try {
         $expectedStamp = $verdict.Stamp
     }
     else {
-        # The deployed runtime copy: plugin\ next to the game, no src/, no toolchain,
+        # The deployed runtime copy: plugin\ next to the game, no source tree, no toolchain,
         # nothing to be stale against. Say what the DLL is and say WHY the comparison
         # did not run -- a gate that quietly no-ops in one deployment is how "green"
         # stops meaning anything; a skipped gate is not a passed gate.
@@ -397,7 +397,7 @@ try {
         } else {
             Write-Warning "run-with-plugin: $dll carries NO build stamp -- it cannot say what source it came from (pre-task-056 build, or not built by build.ps1)."
         }
-        Write-Host "run-with-plugin: no src/ beside this script (deployed runtime copy) -- the staleness comparison did NOT run here; there is nothing on this machine to compare against."
+        Write-Host "run-with-plugin: no source tree around this script (deployed runtime copy) -- the staleness comparison did NOT run here; there is nothing on this machine to compare against."
     }
 
     if ($Windowed) {

@@ -158,7 +158,7 @@ Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-
 
     It 'the geometry reader deploy and the suites share resolves every preset the DLL lists' {
         . (Join-Path $script:pluginDir 'sc-geometry.ps1')
-        $listed = Get-Content -Raw -LiteralPath (Join-Path $script:pluginDir 'src/sc_screen_presets.h')
+        $listed = Get-Content -Raw -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'src/sc_screen_presets.h')
         $names = @([regex]::Matches($listed, '&SC_WS_GEOM_(\d+x\d+)') | ForEach-Object { $_.Groups[1].Value })
         $names.Count | Should -BeGreaterThan 0 -Because 'an empty list would pass every check below unexamined'
         foreach ($n in $names) {
