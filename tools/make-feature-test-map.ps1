@@ -15,16 +15,12 @@ copy's Maps\BroodWar\, the folder Play Custom's map browser opens in; the leadin
 above the stock maps, right after the folders.
 A .scm/.scx is game content and is never committed (AGENTS.md § "Hard rules").
 
-.PARAMETER TemplatePath
-The stock ladder map the sandboxes are cut from (its settings and strings).
-
 .EXAMPLE
 ./tools/make-feature-test-map.ps1 -OutputPath 'C:\decompile-sc-data\sc-work\1161-base\Maps\BroodWar\!feature-test.scx'
 #>
 [CmdletBinding()]
 param(
-    [string]$OutputPath = 'C:\decompile-sc-data\sc-deploy\starcraft-modded\game\Maps\BroodWar\!feature-test.scx',
-    [string]$TemplatePath = 'C:\decompile-sc-data\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx'
+    [string]$OutputPath = 'C:\decompile-sc-data\sc-deploy\starcraft-modded\game\Maps\BroodWar\!feature-test.scx'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -35,7 +31,7 @@ if (-not $resolved.Path) {
 }
 $battlePath = Join-Path (Split-Path -Parent $OutputPath) '!battle.scx'
 foreach ($map in @(@('make_feature_test_map.py', $OutputPath), @('make_battle_map.py', $battlePath))) {
-    & $resolved.Path (Join-Path $PSScriptRoot $map[0]) --template $TemplatePath --output $map[1] 2>&1 |
+    & $resolved.Path (Join-Path $PSScriptRoot $map[0]) --output $map[1] 2>&1 |
         Where-Object { "$_" -notmatch 'WARNING:StormLibFinder' }
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }

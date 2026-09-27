@@ -25,18 +25,12 @@ param(
     [int]$GridSpacing = 32,
     [string]$TemplatePath = 'C:\decompile-sc-data\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx',
     [string]$OutputPath = 'C:\decompile-sc-data\sc-work\1161-base\Maps\test-many-units.scx',
-    # Leave the template's player slots alone: rewriting them deletes the actors of a
-    # template that is already a playable scenario (a stock campaign mission).
-    [switch]$KeepOwnr,
     # Drop the target player's existing units first, so the placed group is all one type.
     # A mixed selection is offered only the basic command card in game -- no ability buttons.
     [switch]$ClearPlayerUnits,
     # Drop the template's critters, the one kind of neutral unit that moves on its own;
     # a probe that judges buffer changes against the engine's marks cannot have them.
     [switch]$ClearCritters,
-    # Keep the template's TRIG/MBRF sections. NOT for a test fixture: stock triggers end
-    # the game seconds after a generated map loads (tools/README-test-map.md).
-    [switch]$KeepTriggers,
     # Write a mission briefing (the map's name and description as text, then objectives),
     # so the ready room plays one; the Show Portrait action it also writes does not put a
     # portrait on screen yet, so a briefing with portraits still needs a stock campaign map.
@@ -84,25 +78,15 @@ param(
     # --- the production variant ---------------------------------------------------
     # Starting resources for -Player, as ONE `Always -> Set Resources` trigger in the
     # emptied TRIG section (a CHK has no starting-resources field and Use Map Settings
-    # hands out none, so a producing building otherwise affords one unit). Not with -KeepTriggers.
+    # hands out none, so a producing building otherwise affords one unit).
     [int]$StartingMinerals,
     [int]$StartingGas,
     # --- unit settings, the map's own UNIx override -------------------------------
-    # Per-unit-TYPE overrides for this map only, each 'TYPE=VALUE' and repeatable.
+    # Per-unit-TYPE build time for this map only, each 'TYPE=VALUE' and repeatable.
     # -UnitBuildTime is safe nearly everywhere: build time is SETUP, not measurement
     # (`test-production-queue` waits 153 of its 224 seconds on nine SCVs at 20 game
     # seconds each; 'scv=1' deletes that term and nothing else).
-    # -UnitMaxHp / -UnitShields / -UnitArmor change how long a FIGHT takes: a target
-    # dying inside a measurement window forges the very signature a combat or liveness
-    # suite hunts -- for damaged starting units use -UnitHp, a percentage of an unchanged max.
-    # -UnitMineralCost / -UnitGasCost save no time (nothing waits on a resource) and
-    # break suites doing the arithmetic: `test-production-queue` asserts 2550 = 3000 - 9 x 50.
     [string[]]$UnitBuildTime = @(),
-    [string[]]$UnitMaxHp = @(),
-    [string[]]$UnitShields = @(),
-    [string[]]$UnitArmor = @(),
-    [string[]]$UnitMineralCost = @(),
-    [string[]]$UnitGasCost = @(),
     # Explicit interpreter override: skips resolution AND the import preflight, so the
     # caller vouches for it (which is how tests reach the failure paths).
     [string]$Python
@@ -138,10 +122,8 @@ $pyArgs = @(
     '--template', $TemplatePath
     '--output', $OutputPath
 )
-if ($KeepOwnr) { $pyArgs += '--keep-ownr' }
 if ($ClearPlayerUnits) { $pyArgs += '--clear-player-units' }
 if ($ClearCritters) { $pyArgs += '--clear-critters' }
-if ($KeepTriggers) { $pyArgs += '--keep-triggers' }
 if ($Briefing) { $pyArgs += '--briefing' }
 if ($Race) { $pyArgs += @('--race', $Race) }
 if ($EnemyCount -gt 0) { $pyArgs += @('--enemy-count', $EnemyCount) }
@@ -162,14 +144,9 @@ foreach ($t in $TechResearched) { $pyArgs += @('--tech-researched', $t) }
 # 0 is a meaningful amount ("start with nothing"), so test for "passed", not non-zero.
 if ($PSBoundParameters.ContainsKey('StartingMinerals')) { $pyArgs += @('--starting-minerals', $StartingMinerals) }
 if ($PSBoundParameters.ContainsKey('StartingGas')) { $pyArgs += @('--starting-gas', $StartingGas) }
-# Empty by default: a caller that passes none of these gets byte-identical output, so
-# unit settings cannot perturb a suite that never asks for them.
-foreach ($s in $UnitBuildTime)    { $pyArgs += @('--unit-build-time', $s) }
-foreach ($s in $UnitMaxHp)        { $pyArgs += @('--unit-max-hp', $s) }
-foreach ($s in $UnitShields)      { $pyArgs += @('--unit-shields', $s) }
-foreach ($s in $UnitArmor)        { $pyArgs += @('--unit-armor', $s) }
-foreach ($s in $UnitMineralCost)  { $pyArgs += @('--unit-mineral-cost', $s) }
-foreach ($s in $UnitGasCost)      { $pyArgs += @('--unit-gas-cost', $s) }
+# Empty by default: a caller that passes none gets byte-identical output, so unit
+# settings cannot perturb a suite that never asks for them.
+foreach ($s in $UnitBuildTime) { $pyArgs += @('--unit-build-time', $s) }
 
 # Tee, not capture: suites parse this stream for the generator's validation lines
 # (`^OK: `, `TRIG holds ...`), while a copy stays here so a failure carries the traceback

@@ -18,7 +18,6 @@ Usage:
     python tools/make_test_map.py
     python tools/make_test_map.py --unit-count 36 --unit-type lurker --player 0
     python tools/make_test_map.py --unit-count 36 --unit-type lurker --enemy-count 6
-    python tools/make_test_map.py --validate-only C:\\decompile-sc-data\\sc-work\\1161-base\\Maps\\test-many-units.scx --unit-count 36 --unit-type marine --player 0
 """
 
 import argparse
@@ -389,8 +388,6 @@ def build_starting_resources_trig(player: int, minerals: int, gas: int) -> bytes
     No Preserve Trigger action, so StarCraft disables it once its actions have run --
     it fires on the first trigger loop of the game and never again.
     """
-    if not 0 <= player < TRIG_PLAYER_FLAGS:
-        raise ValueError(f"player {player} is outside the trigger's 0..{TRIG_PLAYER_FLAGS - 1} range")
     for name, value in (("minerals", minerals), ("gas", gas)):
         if value is not None and not 0 <= value <= 0xFFFFFFFF:
             raise ValueError(f"--starting-{name} must be a non-negative 32-bit value, got {value}")
@@ -400,10 +397,6 @@ def build_starting_resources_trig(player: int, minerals: int, gas: int) -> bytes
         actions.append(_trigger_action_set_resources(player, minerals, TRIG_RESOURCE_ORE))
     if gas is not None:
         actions.append(_trigger_action_set_resources(player, gas, TRIG_RESOURCE_GAS))
-    if not actions:
-        raise ValueError("build_starting_resources_trig called with nothing to set")
-    if len(actions) > TRIG_ACTIONS:
-        raise ValueError("too many actions for one trigger")
 
     out = bytearray()
     out += _trigger_condition_always()
@@ -702,27 +695,18 @@ HP_FIXED_POINT = 256
 
 # The settable fields, and the WIDTH of each, because a u8 field silently truncating a
 # caller's 500 is the kind of thing this tool is supposed to refuse rather than do.
+# `scale`: the stored value is the caller's value times this.
 # Base weapon damage is deliberately absent: it is indexed by WEAPON, not by unit, so a
 # `--unit-...` flag would be lying about what it changes. Nothing here has needed it.
 UNIT_SETTING_FIELDS = {
-    #  name            offset                    struct  max
-    "max-hp":        (UNIX_OFF_HIT_POINTS,    "<I", 0xFFFFFFFF // HP_FIXED_POINT),
-    "shields":       (UNIX_OFF_SHIELD_POINTS, "<H", 0xFFFF),
-    "armor":         (UNIX_OFF_ARMOR,         "<B", 0xFF),
-    "build-time":    (UNIX_OFF_BUILD_TIME,    "<H", 0xFFFF // BUILD_TIME_PER_GAME_SECOND),
-    "mineral-cost":  (UNIX_OFF_MINERAL_COST,  "<H", 0xFFFF),
-    "gas-cost":      (UNIX_OFF_GAS_COST,      "<H", 0xFFFF),
+    #  name           offset                  struct  max                                   scale
+    "max-hp":       (UNIX_OFF_HIT_POINTS,    "<I", 0xFFFFFFFF // HP_FIXED_POINT,          HP_FIXED_POINT),
+    "shields":      (UNIX_OFF_SHIELD_POINTS, "<H", 0xFFFF,                                1),
+    "armor":        (UNIX_OFF_ARMOR,         "<B", 0xFF,                                  1),
+    "build-time":   (UNIX_OFF_BUILD_TIME,    "<H", 0xFFFF // BUILD_TIME_PER_GAME_SECOND,  BUILD_TIME_PER_GAME_SECOND),
+    "mineral-cost": (UNIX_OFF_MINERAL_COST,  "<H", 0xFFFF,                                1),
+    "gas-cost":     (UNIX_OFF_GAS_COST,      "<H", 0xFFFF,                                1),
 }
-
-# Fields whose stored value is not the value a caller types.
-UNIT_SETTING_SCALE = {
-    "max-hp": HP_FIXED_POINT,
-    "build-time": BUILD_TIME_PER_GAME_SECOND,
-}
-
-
-def unit_setting_scale(field: str) -> int:
-    return UNIT_SETTING_SCALE.get(field, 1)
 
 
 def parse_unit_setting(spec: str) -> tuple[int, int]:
@@ -766,8 +750,7 @@ def set_unit_settings(payload: bytes, settings: dict[str, list[tuple[int, int]]]
     for field, pairs in settings.items():
         if field not in UNIT_SETTING_FIELDS:
             raise ValueError(f"Unknown unit setting {field!r}")
-        offset, fmt, limit = UNIT_SETTING_FIELDS[field]
-        scale = unit_setting_scale(field)
+        offset, fmt, limit, scale = UNIT_SETTING_FIELDS[field]
         width = struct.calcsize(fmt)
         for unit_id, amount in pairs:
             if amount < 0:
@@ -804,10 +787,10 @@ def read_unit_settings(payload: bytes, unit_ids: list[int]) -> dict[int, dict]:
     out = {}
     for unit_id in unit_ids:
         entry = {"uses-default": payload[UNIX_OFF_USE_DEFAULT + unit_id]}
-        for field, (offset, fmt, _limit) in UNIT_SETTING_FIELDS.items():
+        for field, (offset, fmt, _limit, scale) in UNIT_SETTING_FIELDS.items():
             width = struct.calcsize(fmt)
             (raw,) = struct.unpack_from(fmt, payload, offset + width * unit_id)
-            entry[field] = raw // unit_setting_scale(field)
+            entry[field] = raw // scale
         out[unit_id] = entry
     return out
 
@@ -877,12 +860,7 @@ def block_gap_px(a: list[UnitRecord], b: list[UnitRecord]) -> int:
 
 
 def resolve_race(race: str | None, unit_type: str) -> int:
-    if race:
-        key = race.strip().lower()
-        if key not in RACE_IDS:
-            raise ValueError(f"Unknown race {race!r}; use one of {sorted(RACE_IDS)}.")
-        return RACE_IDS[key]
-    return UNIT_TYPE_RACES.get(unit_type.strip().lower(), SIDE_TERRAN)
+    return RACE_IDS[race] if race else UNIT_TYPE_RACES.get(unit_type.strip().lower(), SIDE_TERRAN)
 
 
 def resolve_unit_id(unit_type: str) -> int:
@@ -918,7 +896,7 @@ def build_new_unit_records(
     count: int, unit_id: int, player: int, center_x: int, center_y: int, next_instance: int,
     spacing: int = GRID_SPACING_PX, hp_percent: int = 100,
     damaged_count: int = 0, damaged_hp_percent: int = 0,
-    energy_percent: int = 100, damaged_energy_percent: int | None = None,
+    damaged_energy_percent: int | None = None,
 ) -> list[UnitRecord]:
     """The block, optionally with a PRE-DAMAGED TAIL.
 
@@ -952,14 +930,12 @@ def build_new_unit_records(
     # affordability gate too (0x00491B30 compares `cost*0x100 <= CUnit+0xA2` before it
     # deducts -- research/ability-semantics.md 3), so the same tail makes it testable.
     if damaged_energy_percent is None:
-        damaged_energy_percent = energy_percent
-    for name, value in (("energy", energy_percent),
-                        ("damaged-energy", damaged_energy_percent)):
-        if not MIN_HP_PERCENT <= value <= MAX_HP_PERCENT:
-            raise ValueError(
-                f"{name} must be {MIN_HP_PERCENT}-{MAX_HP_PERCENT} (a PERCENTAGE of the "
-                f"unit type's maximum), got {value}"
-            )
+        damaged_energy_percent = MAX_HP_PERCENT
+    if not MIN_HP_PERCENT <= damaged_energy_percent <= MAX_HP_PERCENT:
+        raise ValueError(
+            f"damaged-energy must be {MIN_HP_PERCENT}-{MAX_HP_PERCENT} (a PERCENTAGE of the "
+            f"unit type's maximum), got {damaged_energy_percent}"
+        )
     per_row = math.ceil(math.sqrt(count))
     rows = math.ceil(count / per_row)
     # Centre the block on (center_x, center_y) -- see GRID_SPACING_PX.
@@ -981,7 +957,7 @@ def build_new_unit_records(
                 hp=damaged_hp_percent if i >= count - damaged_count else hp_percent,
                 shield=100,
                 energy=(damaged_energy_percent if i >= count - damaged_count
-                        else energy_percent),
+                        else MAX_HP_PERCENT),
                 resource=0,
                 hangar=0,
                 state_flags=0,
@@ -1200,8 +1176,7 @@ def rewrite_player_slots(
 
 def generate_map(
     template: Path, output: Path, unit_count: int, unit_type: str, player: int,
-    spacing: int = GRID_SPACING_PX, keep_ownr: bool = False,
-    clear_player_units: bool = False, keep_triggers: bool = False,
+    spacing: int = GRID_SPACING_PX, clear_player_units: bool = False,
     race: int = SIDE_TERRAN,
     enemy_count: int = 0, enemy_type: str = ENEMY_TYPE,
     enemy_offset: tuple[int, int] = (ENEMY_OFFSET_X_PX, ENEMY_OFFSET_Y_PX),
@@ -1230,19 +1205,6 @@ def generate_map(
         )
     if enemy_count < 0:
         raise ValueError(f"enemy-count must be >= 0, got {enemy_count}")
-    if enemy_owner not in ENEMY_OWNERS:
-        raise ValueError(f"enemy-owner must be one of {ENEMY_OWNERS}, got {enemy_owner!r}")
-    if enemy_count and keep_ownr and enemy_owner == ENEMY_OWNER_COMPUTER:
-        # --keep-ownr leaves the template's slots as they are, so this tool does not
-        # know which of them is a computer, whether it is active, or what race it is.
-        # Placing a hostile force on a slot it did not configure would produce a map
-        # whose behaviour this tool cannot describe.
-        raise ValueError(
-            "--enemy-count with --keep-ownr is refused: with the template's own player "
-            "slots left alone there is no slot this tool has made into a known, active, "
-            "fixed-race computer opponent to own the enemy force. Drop --keep-ownr, or "
-            "pass --enemy-owner player for the placement-probe variant."
-        )
     enemy_id = resolve_unit_id(enemy_type) if enemy_count else 0
     if (enemy_count and enemy_owner == ENEMY_OWNER_PLAYER and enemy_id == unit_id):
         # Both blocks would land on the same slot with the same type, and neither
@@ -1326,19 +1288,15 @@ def generate_map(
         template,
     )
 
-    # keep_ownr is for a template that is ALREADY a playable single-player scenario -- a
-    # stock campaign mission, say. Rewriting its slots would delete the mission's own
-    # actors and leave a map whose triggers reference players that do not exist.
-    if not keep_ownr:
-        # In the COMBAT variant the computer gets the race the ENEMY units belong to.
-        # Nothing observed says a Zerg slot cannot own Terran units under Use Map
-        # Settings, but a slot whose race matches what it owns is what every stock map
-        # uses, and it costs nothing to match it.
-        combat = bool(enemy_count) and enemy_owner == ENEMY_OWNER_COMPUTER
-        sections = rewrite_player_slots(
-            sections, template, player, race,
-            enemy_race if combat and enemy_race is not None else race, hostile=combat,
-        )
+    # In the COMBAT variant the computer gets the race the ENEMY units belong to.
+    # Nothing observed says a Zerg slot cannot own Terran units under Use Map
+    # Settings, but a slot whose race matches what it owns is what every stock map
+    # uses, and it costs nothing to match it.
+    combat = bool(enemy_count) and enemy_owner == ENEMY_OWNER_COMPUTER
+    sections = rewrite_player_slots(
+        sections, template, player, race,
+        enemy_race if combat and enemy_race is not None else race, hostile=combat,
+    )
 
     # THE MISSION MUST NOT BE ABLE TO END ITSELF.
     #
@@ -1359,33 +1317,23 @@ def generate_map(
     # An empty TRIG section is a legal, common thing for a CHK to hold -- (2)Fading
     # Realm.scx ships a zero-length MBRF -- and it is what makes a generated map sit
     # there indefinitely, which is the whole point of a test fixture.
-    if not keep_triggers:
-        for name in ("TRIG", "MBRF"):
-            if find_section(sections, name) >= 0:
-                sections = replace_section(sections, name, b"", template)
+    for name in ("TRIG", "MBRF"):
+        if find_section(sections, name) >= 0:
+            sections = replace_section(sections, name, b"", template)
 
-        # STARTING RESOURCES. The template's own triggers have just been dropped, so the
-        # ONE trigger written back here is the only trigger the fixture carries -- see
-        # the STARTING RESOURCES block at the top of this file for why a UMS fixture
-        # needs it at all and why it cannot end the game.
-        if starting_minerals is not None or starting_gas is not None:
-            sections = replace_section(
-                sections, "TRIG",
-                build_starting_resources_trig(player, starting_minerals, starting_gas),
-                template,
-            )
-        # A briefing cannot end the game either: MBRF actions only show text and portraits.
-        if briefing:
-            sections = replace_section(sections, "MBRF", build_briefing_mbrf(player, sections, template), template)
-    elif briefing:
-        raise ValueError("--briefing cannot be combined with --keep-triggers: it replaces the template's MBRF")
-    elif starting_minerals is not None or starting_gas is not None:
-        raise ValueError(
-            "--starting-minerals/--starting-gas cannot be combined with --keep-triggers: "
-            "the resource trigger is written into a TRIG section this tool has just "
-            "emptied, and appending it to a stock map's triggers would keep that map's "
-            "victory/defeat triggers as well."
+    # STARTING RESOURCES. The template's own triggers have just been dropped, so the
+    # ONE trigger written back here is the only trigger the fixture carries -- see
+    # the STARTING RESOURCES block at the top of this file for why a UMS fixture
+    # needs it at all and why it cannot end the game.
+    if starting_minerals is not None or starting_gas is not None:
+        sections = replace_section(
+            sections, "TRIG",
+            build_starting_resources_trig(player, starting_minerals, starting_gas),
+            template,
         )
+    # A briefing cannot end the game either: MBRF actions only show text and portraits.
+    if briefing:
+        sections = replace_section(sections, "MBRF", build_briefing_mbrf(player, sections, template), template)
 
     # TECH STATE. Without it a fixture cannot test any ability with a per-unit COST --
     # see the PTEx block at the top of this file.
@@ -1454,8 +1402,7 @@ def diff_against_template(output: Path, template: Path) -> list[str]:
 
 
 def validate_map(
-    path: Path, unit_count: int, unit_type: str, player: int, keep_ownr: bool = False,
-    keep_triggers: bool = False, template: Path | None = None,
+    path: Path, template: Path, unit_count: int, unit_type: str, player: int,
     enemy_count: int = 0, enemy_type: str = ENEMY_TYPE,
     enemy_owner: str = ENEMY_OWNER_COMPUTER, min_enemy_gap: int = MIN_ENEMY_GAP_PX,
     unit_hp_percent: int = MAX_HP_PERCENT,
@@ -1545,13 +1492,13 @@ def validate_map(
     trig_len = len(trig_payload)
     wants_resources = starting_minerals is not None or starting_gas is not None
     allowed_trig = TRIG_BYTES if wants_resources else 0
-    if not keep_triggers and trig_len != allowed_trig:
+    if trig_len != allowed_trig:
         raise AssertionError(
             f"{path}: TRIG holds {trig_len} bytes ({trig_len // TRIG_BYTES} trigger(s)), "
             f"expected {allowed_trig}; a generated fixture must carry none, or the "
             "map's own victory/defeat triggers end the game within seconds of loading"
         )
-    if not keep_triggers and wants_resources:
+    if wants_resources:
         # The single trigger is checked from its BYTES, both ways round: it grants what
         # was asked for, AND its only action is Set Resources -- so it cannot end the
         # game. Reading back only the grants would leave the second half unproved.
@@ -1573,74 +1520,67 @@ def validate_map(
                 f"{sorted(want)}"
             )
 
-    if keep_ownr:
-        if actual not in (OWNR_HUMAN, OWNR_HUMAN_OCCUPIED):
+    if actual != OWNR_HUMAN:
+        raise AssertionError(
+            f"{path}: player {player} OWNR slot is {OWNR_NAMES.get(actual, actual)}, "
+            f"expected HUMAN (0x06 'Human (Open Slot)' -- 0x02 HUMAN_OCCUPIED makes "
+            f"the Play Custom dialog report 'no slot for a human participant')"
+        )
+    # Exactly one computer slot, and it must own nothing: that is what keeps "at
+    # least one computer opponent" satisfied for a melee-type launch while leaving
+    # nothing hostile in the game. More than one, or one with units, is a bug.
+    opponent = pick_opponent_slot(player)
+    computers = [
+        i for i, t in enumerate(slots)
+        if i != player and t in (OWNR_COMPUTER, OWNR_COMPUTER_GAME)
+    ]
+    if computers != [opponent]:
+        raise AssertionError(
+            f"{path}: computer slots are {computers}, expected exactly [{opponent}]"
+        )
+    opponent_units = [
+        r for r in records
+        if r.player == opponent and r.unit_id != START_LOCATION_UNIT_ID
+    ]
+    want_opponent_units = enemy_count if enemy_owner == ENEMY_OWNER_COMPUTER else 0
+    if len(opponent_units) != want_opponent_units:
+        raise AssertionError(
+            f"{path}: the computer opponent owns {len(opponent_units)} unit(s), "
+            f"expected {want_opponent_units}"
+            + ("" if want_opponent_units else
+               " -- with no --enemy-count the map must be hostility-free")
+        )
+    # No active slot may be left on "User Selectable" -- that is what makes the
+    # engine hand out melee starting units under Use Map Settings. See the SIDE
+    # note in generate_map().
+    side_idx = find_section(sections, "SIDE")
+    if side_idx < 0:
+        raise AssertionError(f"{path}: no SIDE section found")
+    sides = list(sections[side_idx].payload)
+    for slot in (player, opponent):
+        if sides[slot] == SIDE_USER_SELECTABLE:
             raise AssertionError(
-                f"{path}: --keep-ownr was used but player {player}'s slot is "
-                f"{OWNR_NAMES.get(actual, actual)}, which no human can occupy"
+                f"{path}: SIDE[{slot}] is 0x05 'User Selectable'; the engine gives "
+                f"such a slot the standard MELEE starting units even under Use Map "
+                f"Settings, and the map's own placed units are never created"
             )
-    else:
-        if actual != OWNR_HUMAN:
-            raise AssertionError(
-                f"{path}: player {player} OWNR slot is {OWNR_NAMES.get(actual, actual)}, "
-                f"expected HUMAN (0x06 'Human (Open Slot)' -- 0x02 HUMAN_OCCUPIED makes "
-                f"the Play Custom dialog report 'no slot for a human participant')"
-            )
-        # Exactly one computer slot, and it must own nothing: that is what keeps "at
-        # least one computer opponent" satisfied for a melee-type launch while leaving
-        # nothing hostile in the game. More than one, or one with units, is a bug.
-        opponent = pick_opponent_slot(player)
-        computers = [
-            i for i, t in enumerate(slots)
-            if i != player and t in (OWNR_COMPUTER, OWNR_COMPUTER_GAME)
-        ]
-        if computers != [opponent]:
-            raise AssertionError(
-                f"{path}: computer slots are {computers}, expected exactly [{opponent}]"
-            )
-        opponent_units = [
-            r for r in records
-            if r.player == opponent and r.unit_id != START_LOCATION_UNIT_ID
-        ]
-        want_opponent_units = enemy_count if enemy_owner == ENEMY_OWNER_COMPUTER else 0
-        if len(opponent_units) != want_opponent_units:
-            raise AssertionError(
-                f"{path}: the computer opponent owns {len(opponent_units)} unit(s), "
-                f"expected {want_opponent_units}"
-                + ("" if want_opponent_units else
-                   " -- with no --enemy-count the map must be hostility-free")
-            )
-        # No active slot may be left on "User Selectable" -- that is what makes the
-        # engine hand out melee starting units under Use Map Settings. See the SIDE
-        # note in generate_map().
-        side_idx = find_section(sections, "SIDE")
-        if side_idx < 0:
-            raise AssertionError(f"{path}: no SIDE section found")
-        sides = list(sections[side_idx].payload)
-        for slot in (player, opponent):
-            if sides[slot] == SIDE_USER_SELECTABLE:
-                raise AssertionError(
-                    f"{path}: SIDE[{slot}] is 0x05 'User Selectable'; the engine gives "
-                    f"such a slot the standard MELEE starting units even under Use Map "
-                    f"Settings, and the map's own placed units are never created"
-                )
-        # No force may randomise start locations: that shuffles which player id the human
-        # actually plays as, and half the time they are not the one owning the units. See
-        # the FORC note in generate_map().
-        forc_idx = find_section(sections, "FORC")
-        if forc_idx < 0:
-            raise AssertionError(f"{path}: no FORC section found")
-        random_start = [
-            i for i, f in enumerate(sections[forc_idx].payload[16:20])
-            if f & FORC_RANDOM_START
-        ]
-        if random_start:
-            raise AssertionError(
-                f"{path}: force(s) {[i + 1 for i in random_start]} still carry the FORC "
-                f"'randomize start location' bit (0x01); with it set the human's player "
-                f"id is not fixed, and on a slot other than {player} they own none of the "
-                f"placed units"
-            )
+    # No force may randomise start locations: that shuffles which player id the human
+    # actually plays as, and half the time they are not the one owning the units. See
+    # the FORC note in generate_map().
+    forc_idx = find_section(sections, "FORC")
+    if forc_idx < 0:
+        raise AssertionError(f"{path}: no FORC section found")
+    random_start = [
+        i for i, f in enumerate(sections[forc_idx].payload[16:20])
+        if f & FORC_RANDOM_START
+    ]
+    if random_start:
+        raise AssertionError(
+            f"{path}: force(s) {[i + 1 for i in random_start]} still carry the FORC "
+            f"'randomize start location' bit (0x01); with it set the human's player "
+            f"id is not fixed, and on a slot other than {player} they own none of the "
+            f"placed units"
+        )
 
     # --- the enemy force ------------------------------------------------------
     # Everything asserted here is STRUCTURE, read back out of the finished file: the
@@ -1652,13 +1592,6 @@ def validate_map(
     enemy_records: list[UnitRecord] = []
     if enemy_count:
         enemy_slot = player if enemy_owner == ENEMY_OWNER_PLAYER else pick_opponent_slot(player)
-        if enemy_owner == ENEMY_OWNER_PLAYER and enemy_id == unit_id:
-            raise AssertionError(
-                f"{path}: the placement-probe variant (--enemy-owner player) puts both "
-                f"blocks on player {player}, so they must be different unit types or "
-                f"neither block's count can be read back on its own (both are type "
-                f"{unit_id})"
-            )
         enemy_records = [
             r for r in records if r.unit_id == enemy_id and r.player == enemy_slot
         ]
@@ -1733,28 +1666,20 @@ def validate_map(
                         f"the engine would read units.dat and ignore every override on it"
                     )
 
-    changed = None
-    if template is not None and template.exists():
-        changed = diff_against_template(path, template)
-        # Only the sections this run actually edited may differ. With --keep-triggers
-        # the tool does not touch TRIG/MBRF at all, so whitelisting them there would
-        # let a real difference in them pass unnoticed -- same reasoning as keep_ownr.
-        expected = {"UNIT"}
-        if not keep_ownr:
-            expected |= {"OWNR", "SIDE", "FORC"}
-        if not keep_triggers:
-            expected |= {"TRIG", "MBRF"}
-        if tech_researched:
-            expected |= {"PTEx"}
-        if unit_settings:
-            expected |= {"UNIx"}
-        unexpected = [c for c in changed if c not in expected]
-        if unexpected:
-            raise AssertionError(
-                f"{path}: the output differs from its template in section(s) "
-                f"{unexpected}, which this tool never asked to change. Every other "
-                f"section must come across byte-for-byte."
-            )
+    changed = diff_against_template(path, template)
+    # Only the sections this run actually edited may differ.
+    expected = {"UNIT", "OWNR", "SIDE", "FORC", "TRIG", "MBRF"}
+    if tech_researched:
+        expected |= {"PTEx"}
+    if unit_settings:
+        expected |= {"UNIx"}
+    unexpected = [c for c in changed if c not in expected]
+    if unexpected:
+        raise AssertionError(
+            f"{path}: the output differs from its template in section(s) "
+            f"{unexpected}, which this tool never asked to change. Every other "
+            f"section must come across byte-for-byte."
+        )
 
     print(f"OK: {path}")
     print(f"  {len(matching)} unit(s) of type {unit_id} owned by player {player}, "
@@ -1786,15 +1711,11 @@ def validate_map(
     print(f"  start location for player {player} at ({start.x}, {start.y})")
     side_idx = find_section(sections, "SIDE")
     side = list(sections[side_idx].payload)[player] if side_idx >= 0 else None
-    if keep_ownr:
-        print(f"  OWNR left as the template had it; player {player} = "
-              f"{OWNR_NAMES.get(actual, actual)}")
-    else:
-        opp = pick_opponent_slot(player)
-        opp_units = enemy_count if enemy_owner == ENEMY_OWNER_COMPUTER else 0
-        print(f"  OWNR[{player}] = {OWNR_NAMES.get(actual, actual)}; one computer slot "
-              f"at {opp} owning {opp_units} unit(s)"
-              + ("" if opp_units else " -- nothing hostile in the game"))
+    opp = pick_opponent_slot(player)
+    opp_units = enemy_count if enemy_owner == ENEMY_OWNER_COMPUTER else 0
+    print(f"  OWNR[{player}] = {OWNR_NAMES.get(actual, actual)}; one computer slot "
+          f"at {opp} owning {opp_units} unit(s)"
+          + ("" if opp_units else " -- nothing hostile in the game"))
     print(f"  SIDE[{player}] = {SIDE_NAMES.get(side, side)}"
           + ("" if side == SIDE_USER_SELECTABLE else " -- not 'User Selectable', so the "
              "engine adds no melee starting units"))
@@ -1805,8 +1726,7 @@ def validate_map(
               + (" -- no force randomises start locations, so the human's player id is "
                  f"not left to the engine to pick"
                  if not any(f & FORC_RANDOM_START for f in flags) else ""))
-    print(f"  TRIG holds {trig_len} byte(s)"
-          + ("" if keep_triggers else " -- nothing can end the game on its own"))
+    print(f"  TRIG holds {trig_len} byte(s) -- nothing can end the game on its own")
     if enemy_count:
         ex0, ey0, ex1, ey1 = block_bounds(enemy_records)
         px0, py0, px1, py1 = block_bounds(matching)
@@ -1819,8 +1739,7 @@ def validate_map(
         print(f"        offset from the start location: "
               f"({(ex0 + ex1) // 2 - start.x:+d}, {(ey0 + ey1) // 2 - start.y:+d}) px")
     print(f"  terrain {width}x{height} tiles")
-    if changed is not None:
-        print(f"  differs from the template ONLY in: {' '.join(changed) or '(nothing)'}")
+    print(f"  differs from the template ONLY in: {' '.join(changed) or '(nothing)'}")
 
 
 def main() -> int:
@@ -1844,12 +1763,6 @@ def main() -> int:
     parser.add_argument("--template", type=Path, default=Path(DEFAULT_TEMPLATE))
     parser.add_argument("--output", type=Path, default=Path(DEFAULT_OUTPUT))
     parser.add_argument(
-        "--keep-ownr",
-        action="store_true",
-        help="Do not rewrite the player slots. Use when the template is already a "
-             "playable single-player scenario (a stock campaign mission).",
-    )
-    parser.add_argument(
         "--clear-player-units",
         action="store_true",
         help="Remove the target player's existing units first, so the placed group is "
@@ -1866,14 +1779,7 @@ def main() -> int:
         action="store_true",
         help="Write a mission briefing (MBRF): a Marine portrait speaks the map's name and "
              "description over scrolling text, so the ready room shows a talking briefing "
-             "the way a campaign mission's does. Not with --keep-triggers.",
-    )
-    parser.add_argument(
-        "--keep-triggers",
-        action="store_true",
-        help="Keep the template's TRIG/MBRF sections. NOT for a test fixture: every "
-             "stock map ships triggers that end the game, and they fire within seconds "
-             "of loading a generated map (see the TRIG note in generate_map).",
+             "the way a campaign mission's does.",
     )
     # --- the combat variant --------------------------------------------------
     parser.add_argument(
@@ -1962,7 +1868,7 @@ def main() -> int:
              "`Always -> Set Resources` trigger into the (otherwise emptied) TRIG "
              "section. A CHK has no starting-resources field and Use Map Settings hands "
              "out none, so without this a fixture starts on the melee default and can "
-             "afford almost nothing. Incompatible with --keep-triggers.",
+             "afford almost nothing.",
     )
     parser.add_argument(
         "--starting-gas", type=int, default=None,
@@ -1989,38 +1895,6 @@ def main() -> int:
              "identical to the effect being measured. Prefer --unit-hp, which sets the "
              "PLACED units' starting percentage and leaves the type alone.",
     )
-    parser.add_argument(
-        "--unit-mineral-cost", type=str, action="append", default=None, metavar="TYPE=N",
-        help="Override a unit type's mineral cost (TYPE=N, repeatable). Only useful with "
-             "the calling suite's own arithmetic updated in the same change -- "
-             "test-production-queue asserts 2550 = 3000 - 9 x 50 -- and it saves no time, "
-             "since nothing waits on a resource.",
-    )
-    parser.add_argument(
-        "--unit-gas-cost", type=str, action="append", default=None, metavar="TYPE=N",
-        help="The vespene counterpart of --unit-mineral-cost. Same caveat.",
-    )
-    parser.add_argument(
-        "--unit-shields", type=str, action="append", default=None, metavar="TYPE=N",
-        help="Override a unit type's shield points (TYPE=N, repeatable). Protoss only; "
-             "same measurement hazard as --unit-max-hp.",
-    )
-    parser.add_argument(
-        "--unit-armor", type=str, action="append", default=None, metavar="TYPE=N",
-        help="Override a unit type's armor (TYPE=N, repeatable). Same measurement hazard "
-             "as --unit-max-hp -- it changes how long a fight takes.",
-    )
-    parser.add_argument(
-        "--validate-only",
-        type=Path,
-        default=None,
-        help="Skip generation; just structurally validate the given map file.",
-    )
-    parser.add_argument(
-        "--no-validate",
-        action="store_true",
-        help="Skip the post-generation structural validation pass.",
-    )
     args = parser.parse_args()
 
     try:
@@ -2031,27 +1905,12 @@ def main() -> int:
             for field, specs in (
                 ("build-time", args.unit_build_time),
                 ("max-hp", args.unit_max_hp),
-                ("mineral-cost", args.unit_mineral_cost),
-                ("gas-cost", args.unit_gas_cost),
-                ("shields", args.unit_shields),
-                ("armor", args.unit_armor),
             )
             if specs
         }
-        if args.validate_only is not None:
-            validate_map(
-                args.validate_only, args.unit_count, args.unit_type, args.player,
-                args.keep_ownr, args.keep_triggers, None,
-                args.enemy_count, args.enemy_type, args.enemy_owner, args.min_enemy_gap,
-                args.unit_hp, args.damaged_count, args.damaged_hp, techs,
-                args.damaged_energy, args.starting_minerals, args.starting_gas,
-                unit_settings,
-            )
-            return 0
-
         generate_map(
             args.template, args.output, args.unit_count, args.unit_type, args.player,
-            args.grid_spacing, args.keep_ownr, args.clear_player_units, args.keep_triggers,
+            args.grid_spacing, args.clear_player_units,
             resolve_race(args.race, args.unit_type),
             args.enemy_count, args.enemy_type,
             (args.enemy_offset_x, args.enemy_offset_y), args.enemy_spacing,
@@ -2062,15 +1921,13 @@ def main() -> int:
             clear_critters=args.clear_critters, briefing=args.briefing,
         )
         print(f"wrote {args.output}")
-        if not args.no_validate:
-            validate_map(
-                args.output, args.unit_count, args.unit_type, args.player, args.keep_ownr,
-                args.keep_triggers, args.template,
-                args.enemy_count, args.enemy_type, args.enemy_owner, args.min_enemy_gap,
-                args.unit_hp, args.damaged_count, args.damaged_hp, techs,
-                args.damaged_energy, args.starting_minerals, args.starting_gas,
-                unit_settings,
-            )
+        validate_map(
+            args.output, args.template, args.unit_count, args.unit_type, args.player,
+            args.enemy_count, args.enemy_type, args.enemy_owner, args.min_enemy_gap,
+            args.unit_hp, args.damaged_count, args.damaged_hp, techs,
+            args.damaged_energy, args.starting_minerals, args.starting_gas,
+            unit_settings,
+        )
         return 0
     except (ValueError, FileNotFoundError, AssertionError) as exc:
         print(f"error: {exc}", file=sys.stderr)
