@@ -37,8 +37,7 @@ param(
     [string]$ProjectDir = 'work/scratch/ghidra-sweep',
     [string]$WorkDir    = 'work/scratch/allcmd',
     [string]$OutTsv     = 'research/data/command-ids.tsv',
-    [string]$CallersFile = 'work/scratch/hookprobe/queueCommand.FUN_00485bd0.callers',
-    [switch]$SkipSweep
+    [string]$CallersFile = 'work/scratch/hookprobe/queueCommand.FUN_00485bd0.callers'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -55,14 +54,12 @@ Write-Host "build-command-table: $($addrs.Count) distinct callers of queueComman
 
 New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null
 
-if (-not $SkipSweep) {
-    $spec = Join-Path $WorkDir 'allcmd.spec'
-    ($addrs | ForEach-Object { "c$($_.Substring(2)),$_" }) -join "`n" |
-        Set-Content -NoNewline -LiteralPath $spec
-    & (Join-Path $PSScriptRoot 'sweep.ps1') -Mode Run -ProjectDir $ProjectDir `
-        -ProgramName 'StarCraft.exe' -Script 'HookProbe.java' `
-        -ScriptArgs "$WorkDir/allcmd.tsv", $spec | Write-Host
-}
+$spec = Join-Path $WorkDir 'allcmd.spec'
+($addrs | ForEach-Object { "c$($_.Substring(2)),$_" }) -join "`n" |
+    Set-Content -NoNewline -LiteralPath $spec
+& (Join-Path $PSScriptRoot 'sweep.ps1') -Mode Run -ProjectDir $ProjectDir `
+    -ProgramName 'StarCraft.exe' -Script 'HookProbe.java' `
+    -ScriptArgs "$WorkDir/allcmd.tsv", $spec | Write-Host
 
 $sites = @()
 $unresolved = 0

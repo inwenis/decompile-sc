@@ -53,9 +53,7 @@ public class RawHitDecode extends GhidraScript {
         int maxBack = args.length >= 3 ? Integer.parseInt(args[2]) : 8;
 
         Path out = Paths.get(outPath);
-        if (out.toAbsolutePath().getParent() != null) {
-            Files.createDirectories(out.toAbsolutePath().getParent());
-        }
+        Files.createDirectories(out.toAbsolutePath().getParent());
 
         PseudoDisassembler pd = new PseudoDisassembler(currentProgram);
         long rows = 0;
@@ -66,7 +64,7 @@ public class RawHitDecode extends GhidraScript {
                 "hexWindow"));
 
             for (SweepUtil.Spec s : specs) {
-                Address hit = addr(s.hex(0));
+                Address hit = toAddr(s.hex(0));
                 MemoryBlock blk = currentProgram.getMemory().getBlock(hit);
 
                 Instruction existing = currentProgram.getListing().getInstructionContaining(hit);
@@ -96,7 +94,7 @@ public class RawHitDecode extends GhidraScript {
                     StringBuilder cands = new StringBuilder();
                     int found = 0;
                     for (int back = maxBack; back >= 1; back--) {
-                        Address cand = addr(hit.getOffset() - back);
+                        Address cand = toAddr(hit.getOffset() - back);
                         PseudoInstruction pi;
                         try {
                             pi = pd.disassemble(cand);
@@ -159,7 +157,7 @@ public class RawHitDecode extends GhidraScript {
         StringBuilder sb = new StringBuilder();
         for (long i = -before; i <= after; i++) {
             try {
-                byte b = currentProgram.getMemory().getByte(addr(a.getOffset() + i));
+                byte b = currentProgram.getMemory().getByte(toAddr(a.getOffset() + i));
                 if (i == 0) {
                     sb.append('|');
                 }
@@ -174,9 +172,5 @@ public class RawHitDecode extends GhidraScript {
             }
         }
         return sb.toString().trim();
-    }
-
-    private Address addr(long offset) {
-        return currentProgram.getAddressFactory().getDefaultAddressSpace().getAddress(offset);
     }
 }

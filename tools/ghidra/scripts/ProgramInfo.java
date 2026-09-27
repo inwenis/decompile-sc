@@ -1,9 +1,8 @@
 // Reports what Ghidra ACTUALLY resolved for the imported program -- language/compiler spec,
 // image base, entry point(s), memory block map, function/symbol counts.
 //
-// Exists so the research write-up can state these as observations rather than assumptions
-// (tools/ghidra/README.md §"What StarCraft.exe 1.16.1 will need beyond this" point 2/3 warns
-// that the language and image base must be verified, not assumed).
+// Exists so research can state the language, image base and entry as observations, not
+// assumptions (research/binary-selection-map.md §0).
 //
 // Script args:
 //   1: output path (a text report; <path>.manifest is the run's success signal)
@@ -72,9 +71,7 @@ public class ProgramInfo extends GhidraScript {
         }
 
         Path p = Paths.get(outPath);
-        if (p.toAbsolutePath().getParent() != null) {
-            Files.createDirectories(p.toAbsolutePath().getParent());
-        }
+        Files.createDirectories(p.toAbsolutePath().getParent());
         Files.write(p, out);
         println("ProgramInfo: wrote " + p.toAbsolutePath());
 

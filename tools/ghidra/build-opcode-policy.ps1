@@ -35,8 +35,7 @@ param(
     [string]$WorkDir    = 'work/scratch/opcode-policy',
     [string]$OutTsv     = 'research/data/command-opcodes.tsv',
     [string]$InputPE    = 'C:\decompile-sc-data\sc-work\1161-base\StarCraft.exe',
-    [string]$SendTsv    = 'research/data/command-ids.tsv',
-    [switch]$SkipSweep
+    [string]$SendTsv    = 'research/data/command-ids.tsv'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -98,11 +97,9 @@ Write-Host ("build-opcode-policy: length table 0x{0:X8}, {1} entries read from {
 # are emitted rather than one being silently preferred.
 $dispSpec = Join-Path $WorkDir 'dispatcher.spec'
 "dispatcher,$($DISPATCHER.Substring(2))" | Set-Content -LiteralPath $dispSpec
-if (-not $SkipSweep) {
-    & (Join-Path $PSScriptRoot 'sweep.ps1') -Mode Run -ProjectDir $ProjectDir `
-        -ProgramName 'StarCraft.exe' -Script 'DecompileMany.java' `
-        -ScriptArgs (Join-Path $repoRoot "$WorkDir/dispatcher.tsv"), (Join-Path $repoRoot $dispSpec) | Write-Host
-}
+& (Join-Path $PSScriptRoot 'sweep.ps1') -Mode Run -ProjectDir $ProjectDir `
+    -ProgramName 'StarCraft.exe' -Script 'DecompileMany.java' `
+    -ScriptArgs (Join-Path $repoRoot "$WorkDir/dispatcher.tsv"), (Join-Path $repoRoot $dispSpec) | Write-Host
 $dispC = Get-ChildItem (Join-Path $WorkDir 'dispatcher.*.c') | Select-Object -First 1
 if (-not $dispC) { throw "build-opcode-policy: the dispatcher decompile is missing from $WorkDir." }
 $lines = Get-Content $dispC.FullName
@@ -150,11 +147,9 @@ $handlers = @($handlers | Sort-Object -Unique)
 $hSpec = Join-Path $WorkDir 'handlers.spec'
 ($handlers | ForEach-Object { "h$($_.Substring(4)),$($_.Substring(4))" }) -join "`n" |
     Set-Content -NoNewline -LiteralPath $hSpec
-if (-not $SkipSweep) {
-    & (Join-Path $PSScriptRoot 'sweep.ps1') -Mode Run -ProjectDir $ProjectDir `
-        -ProgramName 'StarCraft.exe' -Script 'DecompileMany.java' `
-        -ScriptArgs (Join-Path $repoRoot "$WorkDir/handlers.tsv"), (Join-Path $repoRoot $hSpec) | Write-Host
-}
+& (Join-Path $PSScriptRoot 'sweep.ps1') -Mode Run -ProjectDir $ProjectDir `
+    -ProgramName 'StarCraft.exe' -Script 'DecompileMany.java' `
+    -ScriptArgs (Join-Path $repoRoot "$WorkDir/handlers.tsv"), (Join-Path $repoRoot $hSpec) | Write-Host
 
 function Get-HandlerFacts([string]$fn) {
     $f = Get-ChildItem (Join-Path $WorkDir "h$($fn.Substring(4)).*.c") -ErrorAction SilentlyContinue |

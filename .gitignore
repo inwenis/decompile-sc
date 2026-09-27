@@ -59,7 +59,6 @@ assets/
 *.i64
 
 # Ghidra
-ghidra_projects/
 *.gpr
 *.rep/
 

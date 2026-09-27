@@ -43,9 +43,7 @@ public class FuncProbe extends GhidraScript {
         List<SweepUtil.Spec> specs = SweepUtil.readSpec(args[1]);
 
         Path out = Paths.get(outPath);
-        if (out.toAbsolutePath().getParent() != null) {
-            Files.createDirectories(out.toAbsolutePath().getParent());
-        }
+        Files.createDirectories(out.toAbsolutePath().getParent());
 
         long rows = 0;
         try (PrintWriter w = new PrintWriter(Files.newBufferedWriter(out))) {
@@ -54,7 +52,7 @@ public class FuncProbe extends GhidraScript {
                 "jumpRefs", "refsTotal", "callingConvention", "firstInstruction"));
 
             for (SweepUtil.Spec s : specs) {
-                Address a = addr(s.hex(0));
+                Address a = toAddr(s.hex(0));
                 MemoryBlock blk = currentProgram.getMemory().getBlock(a);
                 Function exact = currentProgram.getFunctionManager().getFunctionAt(a);
                 Function containing = exact != null ? exact
@@ -128,9 +126,5 @@ public class FuncProbe extends GhidraScript {
 
         println("FuncProbe: wrote " + rows + " rows -> " + out.toAbsolutePath());
         SweepUtil.writeManifest(outPath, rows, null);
-    }
-
-    private Address addr(long offset) {
-        return currentProgram.getAddressFactory().getDefaultAddressSpace().getAddress(offset);
     }
 }

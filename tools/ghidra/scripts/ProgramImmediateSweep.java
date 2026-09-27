@@ -6,7 +6,7 @@
 // The `opKind` column matters: in `MOV EAX,[EDX + 0x280]` the 0x280 is a structure
 // displacement, in `CMP EAX,0x280` a screen width, and instruction text alone cannot tell them
 // apart. No companion body dump: program-wide that is the whole disassembly listing, derived
-// game content at a size nobody reads. Decompile hits with DecompileMany/analyze.ps1 instead.
+// game content at a size nobody reads. Decompile hits with DecompileMany instead.
 //
 // Args: <outTsv> <hexWatchList> [immediate]
 //   <path>.manifest is the run's success signal. Separate watch values with '+': analyzeHeadless
@@ -19,7 +19,6 @@
 
 import ghidra.app.script.GhidraScript;
 import ghidra.program.model.address.Address;
-import ghidra.program.model.lang.OperandType;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.InstructionIterator;
@@ -29,7 +28,6 @@ import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -45,23 +43,11 @@ public class ProgramImmediateSweep extends GhidraScript {
         String outPath = args[0];
         boolean immediatesOnly = args.length >= 3 && "immediate".equalsIgnoreCase(args[2].trim());
 
-        Set<Long> watch = new LinkedHashSet<>();
-        for (String t : args[1].split("[,+]")) {
-            String s = t.trim();
-            if (s.isEmpty()) {
-                continue;
-            }
-            if (s.startsWith("0x") || s.startsWith("0X")) {
-                s = s.substring(2);
-            }
-            watch.add(Long.parseUnsignedLong(s, 16));
-        }
+        Set<Long> watch = SweepUtil.parseWatch(args[1]);
         println("ProgramImmediateSweep: watching " + watch + " immediatesOnly=" + immediatesOnly);
 
         Path out = Paths.get(outPath);
-        if (out.toAbsolutePath().getParent() != null) {
-            Files.createDirectories(out.toAbsolutePath().getParent());
-        }
+        Files.createDirectories(out.toAbsolutePath().getParent());
 
         long rows = 0;
         long scanned = 0;
@@ -75,7 +61,7 @@ public class ProgramImmediateSweep extends GhidraScript {
                 Instruction ins = it.next();
                 scanned++;
                 for (int op = 0; op < ins.getNumOperands(); op++) {
-                    String opKind = operandKind(ins.getOperandType(op));
+                    String opKind = SweepUtil.operandKind(ins.getOperandType(op));
                     if (immediatesOnly && !"immediate".equals(opKind)) {
                         continue;
                     }
@@ -108,16 +94,5 @@ public class ProgramImmediateSweep extends GhidraScript {
         println("ProgramImmediateSweep: " + scanned + " instructions scanned, " + rows
             + " matches -> " + out.toAbsolutePath());
         SweepUtil.writeManifest(outPath, rows, List.of("instructionsScanned=" + scanned));
-    }
-
-    /** Same classification ImmediateSweep uses, so the two sweeps' opKind columns compare. */
-    private static String operandKind(int type) {
-        if (OperandType.isDynamic(type) || OperandType.isAddress(type)) {
-            return "mem-operand";
-        }
-        if (OperandType.isScalar(type)) {
-            return "immediate";
-        }
-        return "other";
     }
 }

@@ -56,7 +56,7 @@ public class HookProbe extends GhidraScript {
                 "firstInstruction"));
 
             for (SweepUtil.Spec s : specs) {
-                Address a = addr(s.hex(0));
+                Address a = toAddr(s.hex(0));
                 Function exact = currentProgram.getFunctionManager().getFunctionAt(a);
                 Function f = exact != null ? exact
                     : currentProgram.getFunctionManager().getFunctionContaining(a);
@@ -190,9 +190,5 @@ public class HookProbe extends GhidraScript {
             sb.append(' ');
         }
         return sb.toString();
-    }
-
-    private Address addr(long offset) {
-        return currentProgram.getAddressFactory().getDefaultAddressSpace().getAddress(offset);
     }
 }

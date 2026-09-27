@@ -181,10 +181,3 @@ function ConvertFrom-MagnetarTypes {
     if ($close -ge 0) { $header.RemoveAt($close) }
     [pscustomobject]@{ header = $header.ToArray(); enums = $enums.ToArray(); sizes = $sizes.ToArray() }
 }
-
-function Export-MagnetarTsv {
-    param([Parameter(Mandatory)][object[]]$Rows, [Parameter(Mandatory)][string]$Path)
-    $cols = $Rows[0].PSObject.Properties.Name
-    $lines = @($cols -join "`t") + @($Rows | ForEach-Object { $r = $_; ($cols | ForEach-Object { $r.$_ }) -join "`t" })
-    Set-Content -LiteralPath $Path -Value $lines -Encoding utf8
-}
