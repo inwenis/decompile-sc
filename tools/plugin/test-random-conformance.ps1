@@ -66,7 +66,7 @@ param(
     # whose failures cannot be replayed.
     [int]$Seed = 0,
     [int]$Episodes = 6,
-    [ValidateSet('production', 'upgrades', 'hudrow')][string]$Profile = 'production',
+    [ValidateSet('production')][string]$Profile = 'production',
     # THREE Command Centers: 3 is the smallest block whose reachable drag rectangles cover
     # sizes 1, 2 AND 3 (a 2x2 grid with the last cell empty), so one fixture exercises both
     # the single-building path and the group path.
@@ -140,31 +140,9 @@ if ($DryRun) {
     exit 0
 }
 
-# ---------------------------------------------------------------------------
-# WHAT THIS RUNNER CAN DRIVE: one list, used by the refusal below AND by the dispatch in
-# the episode loop, so the two cannot drift apart. random-conformance-plan.ps1 also emits
-# upgrade-* (-Profile upgrades) and row-* (-Profile hudrow) kinds with no driver here; a
-# `default` that fell through to Invoke-QueueEpisode would press the TRAIN button and report
-# a green upgrades run that exercised no line of sc_upgrades. A refusal costs a launch; a
-# green lie costs whatever is built on it. -DryRun still prints those plans, which is where
-# an implementation starts.
+# What this runner can drive, read by the episode dispatch; its default throws for anything else.
 $QUEUE_EPISODE_KINDS = @('queue-burst', 'group-recall', 'queue-cancel', 'cancel-slot', 'queue-drain')
 $IMPLEMENTED_KINDS = $QUEUE_EPISODE_KINDS + @('indicator')
-$unimplemented = @($plan.episodes | ForEach-Object { $_.kind } | Sort-Object -Unique |
-                   Where-Object { $IMPLEMENTED_KINDS -notcontains $_ })
-if ($unimplemented.Count -gt 0) {
-    Write-Host ''
-    Write-Host 'REFUSED  this runner has no episode implementation for: ' -NoNewline
-    Write-Host ($unimplemented -join ', ')
-    Write-Host "         -Profile $Profile generates them, but the only episode drivers that exist are"
-    Write-Host "         [$($IMPLEMENTED_KINDS -join ', ')], all of which press the TRAIN button and assert"
-    Write-Host '         production-queue invariants. Running anyway would test sc_prodqueue and report it'
-    Write-Host "         as a green -Profile $Profile run (issue #68)."
-    Write-Host '         -DryRun still prints the plan, which is where an implementation starts.'
-    Write-Host ''
-    Write-Host 'INCOMPLETE  no episode ran; nothing was asserted.'
-    exit 2
-}
 
 . (Join-Path $scriptDir 'drive-game.ps1')
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
@@ -878,10 +856,9 @@ try {
         # is the first point at which the episode is certain to assert something.
         $script:episodesActed++
         # No silent default: a kind with no driver must not land in Invoke-QueueEpisode and
-        # pass for whatever profile asked for it. The refusal before the launch catches a whole
-        # plan; this catches a plan mutated after that check, and throws into the RUN catch,
-        # which records a failure rather than unwinding past the verdict. (PowerShell's switch
-        # has no fall-through, so the queue kinds are one condition rather than five labels.)
+        # pass as a production run. It throws into the RUN catch, which records a failure
+        # rather than unwinding past the verdict. (PowerShell's switch has no fall-through,
+        # so the queue kinds are one condition rather than five labels.)
         switch ($ep.kind) {
             'indicator' { Invoke-IndicatorEpisode -Ep $ep -Unit $units[0] -Before $before }
             { $QUEUE_EPISODE_KINDS -contains $_ } {
@@ -983,8 +960,6 @@ finally {
         Write-Host ("          NOTE {0} episode(s) planned to reach the seam and did not -- presses refused, or a ring that never filled." -f `
                     ($script:groupOverflowPlanned - $script:groupOverflowReached))
     }
-    # Only `production` can reach this line: the other two profiles are refused before the
-    # launch because nothing implements their episode kinds.
     Write-Host '          features NOT reached by this profile: sc_upgrades, sc_hudrow paging -- neither has an episode driver (issue #76)'
 
     Write-Host ''

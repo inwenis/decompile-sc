@@ -66,12 +66,6 @@ class ScRng {
     }
 }
 
-function New-ScRng {
-    [CmdletBinding()]
-    param([Parameter(Mandatory)][int]$Seed)
-    [ScRng]::new($Seed)
-}
-
 # --- WHICH SUBSETS OF THE BLOCK A DRAG BOX CAN ACTUALLY REACH ---
 # The map generator lays a block out row-major on a grid `per_row = ceil(sqrt(n))`
 # (tools/make_test_map.py, place_units) and a drag box selects a RECTANGLE, so the
@@ -97,11 +91,10 @@ function Get-ScGridSubsets {
         for ($c0 = 0; $c0 -lt $perRow; $c0++) {
           for ($c1 = $c0; $c1 -lt $perRow; $c1++) {
             $members = @()
-            $full = $true
             for ($r = $r0; $r -le $r1; $r++) {
               for ($c = $c0; $c -le $c1; $c++) {
                 $k = "$r,$c"
-                if ($cell.ContainsKey($k)) { $members += $cell[$k] } else { $full = $false }
+                if ($cell.ContainsKey($k)) { $members += $cell[$k] }
               }
             }
             # A rectangle with a HOLE (the ragged last row of a non-square block) is still
@@ -111,13 +104,7 @@ function Get-ScGridSubsets {
             $key = ($members -join ',')
             if ($seen.ContainsKey($key)) { continue }
             $seen[$key] = $true
-            $out += [pscustomobject]@{
-                Members = @($members)
-                Size    = $members.Count
-                Ragged  = (-not $full)
-                Rows    = @($r0, $r1)
-                Cols    = @($c0, $c1)
-            }
+            $out += [pscustomobject]@{ Members = @($members); Size = $members.Count }
           }
         }
       }
@@ -133,7 +120,7 @@ function New-ScConformancePlan {
     .SYNOPSIS
     A whole run's worth of random actions, as data. Pure: same arguments -> same object.
     .DESCRIPTION
-    Episode kinds and the seam each one exists to reach; weights are per profile.
+    Episode kinds and the seam each one exists to reach.
 
       queue-burst   subset, press Train N times, read everything back: the core case.
       group-recall  the same measurement through the OTHER input path, since a bug in
@@ -152,7 +139,7 @@ function New-ScConformancePlan {
     param(
         [Parameter(Mandatory)][int]$Seed,
         [int]$Episodes = 6,
-        [ValidateSet('production', 'upgrades', 'hudrow')][string]$Profile = 'production',
+        [ValidateSet('production')][string]$Profile = 'production',
         [int]$Buildings = 3,
         # The plugin's logical cap per building; bursts stay under it, since a refusal for
         # a full queue is a legitimate engine answer and would make the charge assertion
@@ -190,25 +177,14 @@ function New-ScConformancePlan {
     # pressing, printing `presses=<planned> -> <actual>`. The plan stays a pure function of
     # the seed and what the run did to honour it is reported, not pre-guessed.
 
-    $kinds = switch ($Profile) {
-        'production' { @(
-            @{ v = 'queue-burst';  w = 34 },
-            @{ v = 'group-recall'; w = 26 },
-            @{ v = 'queue-cancel'; w = 16 },
-            @{ v = 'cancel-slot';  w = 10 },
-            @{ v = 'queue-drain';  w =  8 },
-            @{ v = 'indicator';    w =  6 }
-        ) }
-        'upgrades' { @(
-            @{ v = 'upgrade-burst';  w = 50 },
-            @{ v = 'upgrade-cancel'; w = 25 },
-            @{ v = 'upgrade-drain';  w = 25 }
-        ) }
-        'hudrow' { @(
-            @{ v = 'row-select'; w = 60 },
-            @{ v = 'row-page';   w = 40 }
-        ) }
-    }
+    $kinds = @(
+        @{ v = 'queue-burst';  w = 34 },
+        @{ v = 'group-recall'; w = 26 },
+        @{ v = 'queue-cancel'; w = 16 },
+        @{ v = 'cancel-slot';  w = 10 },
+        @{ v = 'queue-drain';  w =  8 },
+        @{ v = 'indicator';    w =  6 }
+    )
 
     # RESERVED SLOTS, so a gate run cannot come out green having never asserted an
     # invariant: at six episodes weighted sampling alone draws seeds with no drain and no
@@ -217,7 +193,7 @@ function New-ScConformancePlan {
     # random, and the reservation itself comes out of the same seeded stream.
     #   -> AGENTS.md § "Generated suites (random, fuzzed, property-based)"
     $reserved = @{}
-    if ($Profile -eq 'production' -and $Episodes -ge 5) {
+    if ($Episodes -ge 5) {
         $a = $rng.Range(1, $Episodes)
         $b = $rng.Range(1, $Episodes)
         if ($b -eq $a) { $b = ($a % $Episodes) + 1 }
@@ -297,21 +273,6 @@ function New-ScConformancePlan {
                 $ep.presses = $rng.Range(1, 3)
                 $ep.drain = $ep.presses
             }
-            'upgrade-burst|upgrade-cancel|upgrade-drain' {
-                $ep.selectMode = if ($subset.Size -eq 1) { 'click' } else { 'box' }
-                $ep.presses = $rng.Range(1, 4)
-                if ($kind -eq 'upgrade-cancel') { $ep.cancels = $rng.Range(1, 2) }
-                if ($kind -eq 'upgrade-drain') { $ep.drain = 1 }
-            }
-            'row-select|row-page' {
-                # The hudrow profile selects UNITS, not buildings, so its "size" is a count
-                # out of the block rather than a subset of it.
-                $ep.members = @()
-                $ep.size = $rng.Range(1, 2)
-                $ep.selectMode = 'box'
-                $ep.units = $rng.Range(8, 24)
-                if ($kind -eq 'row-page') { $ep.flips = $rng.Range(1, 4) }
-            }
         }
 
         # A settle between episodes, so consecutive bursts are not one long burst and the
@@ -337,13 +298,6 @@ function New-ScConformancePlan {
     }
 }
 
-function Get-ScPlanJson {
-    <# .SYNOPSIS The plan's canonical JSON -- one text, so a hash of it means something. #>
-    [CmdletBinding()]
-    param([Parameter(Mandatory)]$Plan)
-    $Plan | ConvertTo-Json -Depth 10 -Compress
-}
-
 function Get-ScPlanHash {
     <#
     .SYNOPSIS
@@ -352,7 +306,7 @@ function Get-ScPlanHash {
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Plan)
-    $bytes = [Text.Encoding]::UTF8.GetBytes((Get-ScPlanJson -Plan $Plan))
+    $bytes = [Text.Encoding]::UTF8.GetBytes(($Plan | ConvertTo-Json -Depth 10 -Compress))
     $sha = [Security.Cryptography.SHA256]::Create()
     try { ($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) -join '' }
     finally { $sha.Dispose() }
@@ -369,7 +323,7 @@ function Format-ScPlan {
     }
     foreach ($e in $Plan.episodes) {
         $bits = @("[$($e.index)] $($e.kind)", "select=$($e.selectMode)", "members=[$($e.members -join ' ')]")
-        foreach ($f in 'group', 'presses', 'cancels', 'display', 'drain', 'units', 'flips', 'qLow', 'qHigh') {
+        foreach ($f in 'group', 'presses', 'cancels', 'display', 'drain', 'qLow', 'qHigh') {
             $v = $e.PSObject.Properties[$f]
             if ($v -and $null -ne $v.Value -and $v.Value -ne 0) { $bits += "$f=$($v.Value)" }
         }
