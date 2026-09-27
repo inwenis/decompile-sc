@@ -105,12 +105,10 @@ With parameters:
 | Param          | Default                                                   | Meaning                              |
 | -------------- | ---------------------------------------------------------- | ------------------------------------- |
 | `-UnitCount`   | `36`                                                        | units to place (must be comfortably > 12) |
-| `-UnitType`    | `marine`                                                    | a name from the built-in table (`marine`, `goliath`, `siege-tank`, `zergling`, `hydralisk`, `ultralisk`, `zealot`, `dragoon`, `lurker`) or a raw units.dat integer id |
+| `-UnitType`    | `marine`                                                    | a richchk `UnitId` name, lowercase with dashes and the race prefix dropped (`marine`, `siege-tank-tank-mode`, `lurker`; `siege-tank` is kept as an alias), or a raw units.dat integer id |
 | `-Player`      | `0`                                                         | 0-based slot, 0-7 (0 = Player 1)      |
 | `-GridSpacing` | `32`                                                        | pixels between units (32 = one tile). Units bigger than a tile need more, or the game silently drops the ones it cannot place |
-| `-KeepOwnr`    | off                                                         | leave the template's player slots and races alone — for a template that is already a playable single-player scenario |
 | `-ClearPlayerUnits` | off                                                    | drop the target player's existing units first, so the placed group is all one type |
-| `-KeepTriggers` | off                                                        | keep the template's `TRIG`/`MBRF`. **Never for a fixture** — a stock map's own triggers end the game within seconds of loading |
 | `-Race`        | the placed unit type's race                                 | `zerg`/`terran`/`protoss`, written into `SIDE` for the human and computer slots |
 | `-UnitHp`      | `100`                                                       | hit points as a **percentage** of the type's maximum (1-100), applied to the `-UnitType` block **only**. Lower makes the combat variant's victims die in seconds instead of minutes. The enemy force is deliberately left at 100%: it has to survive the engagement, which is what keeps the deaths a trickle |
 | `-TemplatePath`| `C:\decompile-sc-data\sc-work\1161-base\Maps\BroodWar\Ladder\(2)Fading Realm.scx` | source map for terrain/start location |
@@ -131,11 +129,10 @@ Combat variant (task 019) — off unless `-EnemyCount` is given:
 
 The `.ps1` is a thin wrapper; the actual logic is `tools/make_test_map.py`
 (same params as `--unit-count`/`--unit-type`/`--player`/`--grid-spacing`/
-`--keep-ownr`/`--clear-player-units`/`--keep-triggers`/`--race`/`--unit-hp`/
+`--clear-player-units`/`--race`/`--unit-hp`/
 `--enemy-count`/`--enemy-type`/`--enemy-offset-x`/`--enemy-offset-y`/
 `--enemy-spacing`/`--enemy-race`/`--enemy-owner`/`--min-enemy-gap`/`--template`/
-`--output`, plus `--validate-only PATH` to just re-validate an existing map and
-`--no-validate` to skip the post-generation check).
+`--output`).
 
 The unit block is **centred on the start location**. The camera opens centred there and shows
 about 20x12 tiles, so a block that grew right-and-down from that point (as it did before task 015)
@@ -171,13 +168,13 @@ Generated `.scx` files are gitignored; only the generator is committed.
 
 ## Validation
 
-The generator runs a structural validation pass on its own output (unless
-`--no-validate` is passed): it re-reads the produced file and asserts the
-placed-unit count/type/owner, a start location for that player, the player
-slots (one human, exactly one unit-less computer), that neither active slot is
-left on the race value "User Selectable", that `TRIG` is empty, non-zero
-terrain dimensions, and that the output differs from its template in no
-section other than the ones it meant to change. Example output:
+The generator runs a structural validation pass on its own output: it re-reads
+the produced file and asserts the placed-unit count/type/owner, a start
+location for that player, the player slots (one human, exactly one unit-less
+computer), that neither active slot is left on the race value "User
+Selectable", that `TRIG` is empty, non-zero terrain dimensions, and that the
+output differs from its template in no section other than the ones it meant to
+change. Example output:
 
 ```
 wrote C:\decompile-sc-data\sc-work\1161-base\Maps\BroodWar\00-testmap\lurkers.scx
@@ -351,9 +348,8 @@ out of the engine's own PTEx applier (`0x004CB7D0`, disassembled in
 that `(tech 10, player 0)` is byte 10 and not byte 120.
 
 Tech ids come from richchk's own `TechId` enum — the same source, and the same provenance
-discipline, as the unit ids. Named here: `stim-packs` (0), `siege-mode` (5),
-`cloaking-field` (9), `personnel-cloaking` (10), `burrowing` (11); anything else can be
-passed as a raw `techdata.dat` id.
+discipline, as the unit ids: any member name, lowercase with dashes (`stim-packs` (0),
+`personnel-cloaking` (10), `burrowing` (11) ...), or a raw `techdata.dat` id.
 
 Proved in game: with `--tech-researched stim-packs`, 36 generated Marines have the Stim
 button and one keypress emits command `0x36`. Without it the run fails several minutes later
@@ -447,21 +443,7 @@ binding, but calls
 stock map checked. Verified (again with the same from-scratch reader, not
 richchk) that regenerated output now reports `flags=0x80010200`
 (COMPRESS+ENCRYPTED+EXISTS) and leading sector byte `0x08` (PKWARE),
-matching stock exactly. See `work/scratch/raw_mpq_inspect.py` (not
-committed -- throwaway diagnostic script) for the reader used.
-
-**Not yet closed**: this is still round-tripping-adjacent proof -- an
-independent *parser* agrees the container now looks like a real one, but
-per this task's own rule, only an actual game load proves the game accepts
-it. That confirmation was not spent on this fix; task 013's one human
-verification attempt went to unblocking task 011 with a stock map instead
-(see task 013's PR/report). Re-running `./tools/make-test-map.ps1` and
-getting one human load is the remaining step to fully close this out.
-
-Also fixed in passing: `-UnitType zealot` mapped to unit id `64`, which is
-Protoss Probe, not Zealot (id `65`) -- confirmed against richchk's own
-`unis/unit_id.py` enum. Unrelated to the corruption bug; would have placed
-the wrong unit, not broken the file.
+matching stock exactly.
 
 ## Starting resources — `-StartingMinerals` / `-StartingGas` (task 025)
 
@@ -494,9 +476,6 @@ are exactly what was asked for, and that the only action byte present anywhere i
 "TRIG holds 0 bytes" check becomes "TRIG holds exactly one trigger" only when resources were
 requested; without the flags it is unchanged.
 
-Incompatible with `-KeepTriggers`, which is refused with a message rather than silently appending
-to a stock map's victory triggers.
-
 ```powershell
 # task 025's production fixture: one Command Center, 3000 minerals, 1000 gas
 ./tools/make-test-map.ps1 -UnitCount 1 -UnitType command-center -Player 0 `
@@ -504,18 +483,17 @@ to a stock map's victory triggers.
     -OutputPath 'C:\sc-workN1-base\Maps\BroodWar -t025\production-queue.scx'
 ```
 
-Three building names were added to the unit table for that fixture: `command-center` (106),
-`supply-depot` (109) and `barracks` (111). A Command Center is the cheapest producing building
-to test with — it trains SCVs at 50 minerals and 1 supply each **and** provides 10 supply of its
-own, so a queue of nine needs no Supply Depot to have landed on buildable ground.
+That fixture's buildings are `command-center` (106), `supply-depot` (109) and `barracks` (111). A
+Command Center is the cheapest producing building to test with — it trains SCVs at 50 minerals and 1
+supply each **and** provides 10 supply of its own, so a queue of nine needs no Supply Depot to have
+landed on buildable ground.
 
-A fourth was added by task 028: `nexus` (154), the cancel fixture. Its card carries the Cancel
-button at slot 9 with no other button sharing that slot, it trains Probes (50 minerals, 1 supply —
-the same arithmetic as an SCV), it supplies 9 psi of its own, and it needs no Pylon, which a
-Gateway would. (A Terran producer would have done too: its slot 9 is shared with Land and Lift Off,
-but those conditions are complementary to Cancel's, so the control shows Cancel exactly while
-something is queued — `research/production-queue.md` §8.3, measured in game after the button table
-suggested otherwise.)
+Task 028's cancel fixture is `nexus` (154). Its card carries the Cancel button at slot 9 with no
+other button sharing that slot, it trains Probes (50 minerals, 1 supply — the same arithmetic as an
+SCV), it supplies 9 psi of its own, and it needs no Pylon, which a Gateway would. (A Terran producer
+would have done too: its slot 9 is shared with Land and Lift Off, but those conditions are
+complementary to Cancel's, so the control shows Cancel exactly while something is queued —
+`research/production-queue.md` §8.3, measured in game after the button table suggested otherwise.)
 
 ```powershell
 # task 028's cancel fixture: two Nexuses, 3000 minerals
@@ -524,7 +502,7 @@ suggested otherwise.)
     -OutputPath 'C:\decompile-sc-data\sc-work\1161-base\Maps\BroodWar\00-t028\production-queue.scx'
 ```
 
-## Unit settings — `-UnitBuildTime` and friends (task 031)
+## Unit settings — `-UnitBuildTime` (task 031)
 
 A Use Map Settings map may override, **per unit type**, its hit points, shield points, armor,
 build time, mineral cost and gas cost. Task 031 wanted one of those and measured why first:
@@ -538,11 +516,12 @@ Probes to build, at 20 game seconds each. Nothing else in that suite comes close
     -UnitBuildTime 'probe=8' -OutputPath '...\production-queue.scx'
 ```
 
-Each flag is `TYPE=VALUE` and repeatable: `-UnitBuildTime` (GAME seconds), `-UnitMaxHp`,
-`-UnitShields`, `-UnitArmor`, `-UnitMineralCost`, `-UnitGasCost`. They are **opt-in**: pass none
-and the generator's output is byte-identical to what it produced before task 031 — verified by
-generating the same fixture with the previous version of the generator and this one and comparing
-the CHK bytes, which is what let this land while other tasks were mid-run against the same tool.
+Each flag is `TYPE=VALUE` and repeatable: `-UnitBuildTime` (GAME seconds) is the only wrapper flag;
+the generator also takes `--unit-max-hp`, used only by `tools/plugin/probe-unit-settings.ps1`. They
+are **opt-in**: pass none and the generator's output is byte-identical to what it produced before
+task 031 — verified by generating the same fixture with the previous version of the generator and
+this one and comparing the CHK bytes, which is what let this land while other tasks were mid-run
+against the same tool.
 
 ### The section is `UNIx`, and that was proved in a running game
 
@@ -609,17 +588,10 @@ coincidence. Pinned in `tests/make-test-map.Tests.ps1`.
   the wire and the suite reported **21 failures**. So its build time is 8 game seconds against a
   burst of about three, and the burst step now **asserts** that nothing was promoted, so the
   assumption fails loudly instead of the queue being blamed.
-- **`-UnitMaxHp` / `-UnitShields` / `-UnitArmor` must not go near a suite that measures combat or
-  liveness** — `test-combat-death`, `test-ability-in-combat`, `test-sunken-acquire`, and
-  `test-building-groups`'s combat arm. Task 026 lost a run to a target dying inside a two-second
-  measurement window, producing bit-for-bit the signature the experiment was hunting, and it then
-  went the *other* way on purpose (Command Centers at 1500 hp instead of Supply Depots at 500). To
-  start the placed units damaged, use `-UnitHp`, which is a percentage of an unchanged maximum and
-  touches no unit type.
-- **`-UnitMineralCost` / `-UnitGasCost` save no time at all** — nothing in any suite waits on a
-  resource — and they break any suite whose assertions do the arithmetic
-  (`test-production-queue` reconciles every mineral against the commands it accepted). Only with
-  that suite changed in the same commit.
+- **`--unit-max-hp` must not go near a combat or liveness suite**: a target dying inside a
+  measurement window forges the signature being hunted. To start units damaged, use `-UnitHp`.
+- **Other `UNIx` fields (shields, armor, costs) have no flag**: call `set_unit_settings`. Costs
+  break suites that do resource arithmetic (`test-production-queue`).
 
 ### What it does not do
 
@@ -650,11 +622,9 @@ treats the two as the same reads a unit that does not exist yet. That cost task 
   existing doodads. On the default template this lands in open ground, but a
   different `-TemplatePath` map could place units somewhere awkward (e.g.
   overlapping a cliff edge) -- worth an eyeball check if you swap templates.
-- `-UnitType` and `-EnemyType` have a handful of built-in names between them
-  (Marine, Ghost, Medic, Goliath, Siege Tank (Tank Mode), Zergling, Hydralisk,
-  Ultralisk, Zealot, Dragoon, Lurker, the three task-025 buildings
-  Command Center, Supply Depot and Barracks, and task 028's Nexus); any other
-  unit needs its units.dat integer id passed directly.
+- `-UnitType` and `-EnemyType` take any richchk `UnitId` name below id 228 (the
+  trigger unit groups start there); where a name repeats (`marker`, `beacon`,
+  `flag-beacon`) it means the first id, so pass the others as raw units.dat ids.
 - A template that uses the negative-size CHK chunk trick (map protection) is
   refused outright: this tool cannot re-serialise one faithfully, and would
   rather fail than quietly change what the game reads.
@@ -745,7 +715,8 @@ shows none.
 
 Generating from a stock **campaign** template produced a map that loaded, briefed, entered the
 mission and then ended within about seven seconds. The suspicion was that the CHK round-trip had
-disturbed trigger data. It had not:
+disturbed trigger data. It had not (the `-KeepOwnr`/`-KeepTriggers` switches used here no longer
+exist; git history has the generator that ran these):
 
 - Diffed field by field across the old richchk round-trip, `TRIG` came back **byte-identical**
   (50400 bytes for `(1)Enslavers01.scm`), and so did `MBRF`, `STR` and `UPRP`. Whatever the

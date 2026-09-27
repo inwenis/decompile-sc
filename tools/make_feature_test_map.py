@@ -231,6 +231,24 @@ def unit_record(instance, unit, owner, x, y):
     )
 
 
+def write_sandbox(sections, template, output, starts, camera, records, **payloads):
+    """UNIT = the template's start locations (the human's moved to `camera`, where the view
+    opens) then `records`, numbered after them; the player slots rewritten; MBRF and THG2
+    (the doodads' sprites) emptied; every other named section replaced by its payload."""
+    first = max(r.instance for r in starts) + 1
+    units = ([r._replace(x=camera[0], y=camera[1]) if r.player == HUMAN else r for r in starts]
+             + [r._replace(instance=first + i) for i, r in enumerate(records)])
+    payloads = {"UNIT": b"".join(m.pack_unit_record(r) for r in units),
+                "MBRF": b"", "THG2": b"", **payloads}
+    for name, payload in payloads.items():
+        sections = m.replace_section(sections, name, payload, template)
+    sections = m.rewrite_player_slots(sections, template, HUMAN, m.SIDE_TERRAN, m.SIDE_ZERG,
+                                      hostile=True)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    m.save_chk_bytes_to_mpq(m.serialize_chk_sections(sections), template, output)
+    print(f"wrote {output}")
+
+
 def generate(template: Path, output: Path) -> None:
     sections = m.load_template_sections(template)
     starts = [r for r in m.parse_unit_records(
@@ -243,32 +261,20 @@ def generate(template: Path, output: Path) -> None:
     gap = check_layout(placed, map_w, map_h)
 
     # The template's minerals, geysers and critters sat on terrain that is gone; only the
-    # start locations stay, the human's moved under the Terran army so the camera opens on it.
-    records = [r._replace(x=camera[0], y=camera[1]) if r.player == HUMAN else r for r in starts]
-    first = max(r.instance for r in starts) + 1
-    records += [unit_record(first + i, *p[:4]) for i, p in enumerate(placed)]
-
-    sections = m.replace_section(
-        sections, "UNIT", b"".join(m.pack_unit_record(r) for r in records), template)
-    sections = m.rewrite_player_slots(sections, template, HUMAN, m.SIDE_TERRAN, m.SIDE_ZERG,
-                                      hostile=True)
-    sections = m.replace_section(
-        sections, "TRIG", m.build_starting_resources_trig(HUMAN, MINERALS, GAS), template)
-    sections = m.replace_section(sections, "MBRF", b"", template)
-    sections = m.replace_section(sections, "MTXM", mtxm, template)
-    sections = m.replace_section(sections, "THG2", b"", template)  # the doodads' sprites
-    output.parent.mkdir(parents=True, exist_ok=True)
-    m.save_chk_bytes_to_mpq(m.serialize_chk_sections(sections), template, output)
+    # start locations stay, the human's under the Terran army.
+    write_sandbox(sections, template, output, starts, camera,
+                  [unit_record(0, *p[:4]) for p in placed],
+                  TRIG=m.build_starting_resources_trig(HUMAN, MINERALS, GAS), MTXM=mtxm)
 
     human = sum(1 for p in placed if p[1] == HUMAN)
-    print(f"wrote {output}")
     print(f"  human (slot 0, Terran console): {human} units and buildings; computer (slot 1): "
           f"{len(placed) - human}; {gap // TILE} empty tiles between them")
     print(f"  camera opens at ({camera[0]},{camera[1]}) px; {MINERALS} minerals and {GAS} gas")
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+def run(generate, doc: str) -> int:
+    """The command line both sandbox generators share: --template, --output, exit 1 on a refusal."""
+    parser = argparse.ArgumentParser(description=doc.splitlines()[0])
     parser.add_argument("--template", type=Path, default=Path(m.DEFAULT_TEMPLATE))
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -281,4 +287,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run(generate, __doc__))
