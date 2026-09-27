@@ -297,7 +297,7 @@ no richchk, no template map needed.
 #>
 Describe 'make-test-map.ps1 refuses at generation instead of failing downstream' {
     BeforeAll {
-        $script:tmp = Join-Path ([IO.Path]::GetTempPath()) "mtm-tests-$([guid]::NewGuid().ToString('N'))"
+        $script:tmp = Join-Path $TestDrive "mtm-tests-$([guid]::NewGuid().ToString('N'))"
         New-Item -ItemType Directory -Path $script:tmp | Out-Null
         $script:wrapper = Join-Path $script:RepoRoot 'tools/make-test-map.ps1'
         # A python that dies: prints a traceback shape to stderr, exits 3, writes nothing.
@@ -306,11 +306,6 @@ Describe 'make-test-map.ps1 refuses at generation instead of failing downstream'
         # A python that lies: exits 0 without writing the output file.
         $script:silentPy = Join-Path $script:tmp 'silent-python.cmd'
         Set-Content -LiteralPath $script:silentPy -Value "@echo off`r`nexit /b 0"
-    }
-    AfterAll {
-        if ($script:tmp -and (Test-Path -LiteralPath $script:tmp)) {
-            Remove-Item -LiteralPath $script:tmp -Recurse -Force -ErrorAction SilentlyContinue
-        }
     }
 
     It 'throws when the generator exits non-zero, carrying its output in the message' {

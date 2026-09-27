@@ -13,7 +13,7 @@ BeforeAll {
 
     function New-TestMapsTree {
         param([string[]]$BroodWarDirs = @(), [string[]]$FixtureFiles = @())
-        $root = Join-Path ([IO.Path]::GetTempPath()) ("sc-browser-" + [Guid]::NewGuid().ToString('n'))
+        $root = Join-Path $TestDrive ("sc-browser-" + [Guid]::NewGuid().ToString('n'))
         $maps = Join-Path $root 'Maps'
         # The stock shape, as it is on disk in the working copy.
         foreach ($d in @('BroodWar', 'campaign', 'ladder', 'oldladder', 'replays', 'scenario')) {
@@ -47,23 +47,19 @@ Describe 'map-browser listing model' {
     It 'sorts [Up One Level] AMONG the directories, not above them (016-frames\05-browse.png)' {
         # The captured frame reads: [Allied] [Ladder] [Up One Level] [WebMaps].
         $t = New-TestMapsTree
-        try {
-            $l = Get-ScBrowserListing -Dir (Join-Path $t.Maps 'BroodWar') -MapsRoot $t.Maps
-            $l.Entries[0..3].Name | Should -Be @('Allied', 'Ladder', 'Up One Level', 'WebMaps')
-            ($l.Entries | Where-Object Kind -eq 'up').Row | Should -Be 3
-            ($l.Entries | Where-Object Kind -eq 'up').Y | Should -Be 178
-        } finally { Remove-Item -LiteralPath $t.Root -Recurse -Force }
+        $l = Get-ScBrowserListing -Dir (Join-Path $t.Maps 'BroodWar') -MapsRoot $t.Maps
+        $l.Entries[0..3].Name | Should -Be @('Allied', 'Ladder', 'Up One Level', 'WebMaps')
+        ($l.Entries | Where-Object Kind -eq 'up').Row | Should -Be 3
+        ($l.Entries | Where-Object Kind -eq 'up').Y | Should -Be 178
     }
 
     It 'moves [Up One Level] down a row for every fixture folder that sorts before it' {
         # A fixture directory nobody else has shifts the parent entry down, so a caller
         # holding a hardcoded row opens a folder instead of leaving BroodWar.
         $t = New-TestMapsTree -BroodWarDirs @('00-t021', '00-t022')
-        try {
-            $l = Get-ScBrowserListing -Dir (Join-Path $t.Maps 'BroodWar') -MapsRoot $t.Maps
-            ($l.Entries | Where-Object Kind -eq 'up').Row | Should -Be 5
-            (Get-ScBrowserEntry -Listing $l -Name '00-t022').Row | Should -Be 2
-        } finally { Remove-Item -LiteralPath $t.Root -Recurse -Force }
+        $l = Get-ScBrowserListing -Dir (Join-Path $t.Maps 'BroodWar') -MapsRoot $t.Maps
+        ($l.Entries | Where-Object Kind -eq 'up').Row | Should -Be 5
+        (Get-ScBrowserEntry -Listing $l -Name '00-t022').Row | Should -Be 2
     }
 
     It 'gives the maps root no parent entry, and does list BroodWar' {
@@ -72,54 +68,44 @@ Describe 'map-browser listing model' {
         # sitting above the visible window. A model that silently drops a directory puts
         # every row below it off by one.
         $t = New-TestMapsTree
-        try {
-            $l = Get-ScBrowserListing -Dir $t.Maps -MapsRoot $t.Maps
-            $l.IsRoot | Should -BeTrue
-            $l.Entries.Name | Should -Not -Contain 'Up One Level'
-            $l.Entries[0..5].Name | Should -Be @('BroodWar', 'campaign', 'ladder', 'oldladder',
-                                                 'replays', 'scenario')
-        } finally { Remove-Item -LiteralPath $t.Root -Recurse -Force }
+        $l = Get-ScBrowserListing -Dir $t.Maps -MapsRoot $t.Maps
+        $l.IsRoot | Should -BeTrue
+        $l.Entries.Name | Should -Not -Contain 'Up One Level'
+        $l.Entries[0..5].Name | Should -Be @('BroodWar', 'campaign', 'ladder', 'oldladder',
+                                             'replays', 'scenario')
     }
 
     It 'puts (1)Enslavers02b.scm on row 4 (015-probe-scroll\02-campaign-listing.png)' {
         # The row the campaign suites click: derived from the listing, never typed in.
         $t = New-TestMapsTree
-        try {
-            $l = Get-ScBrowserListing -Dir (Join-Path $t.Maps 'campaign') -MapsRoot $t.Maps
-            $e = Get-ScBrowserEntry -Listing $l -Name '(1)Enslavers02b.scm'
-            $e.Row | Should -Be 4
-            $e.Y | Should -Be 197
-        } finally { Remove-Item -LiteralPath $t.Root -Recurse -Force }
+        $l = Get-ScBrowserListing -Dir (Join-Path $t.Maps 'campaign') -MapsRoot $t.Maps
+        $e = Get-ScBrowserEntry -Listing $l -Name '(1)Enslavers02b.scm'
+        $e.Row | Should -Be 4
+        $e.Y | Should -Be 197
     }
 
     It 'lists directories before map files and ignores non-map files' {
         $t = New-TestMapsTree -FixtureFiles @('BroodWar\00-t023\023-combat.scx',
                                               'BroodWar\00-t023\notes.txt')
-        try {
-            $l = Get-ScBrowserListing -Dir (Join-Path $t.Maps 'BroodWar\00-t023') -MapsRoot $t.Maps
-            $l.Count | Should -Be 2
-            $l.Entries[0].Name | Should -Be 'Up One Level'
-            $l.Entries[1].Name | Should -Be '023-combat.scx'
-            $l.Entries[1].Y | Should -Be 159
-        } finally { Remove-Item -LiteralPath $t.Root -Recurse -Force }
+        $l = Get-ScBrowserListing -Dir (Join-Path $t.Maps 'BroodWar\00-t023') -MapsRoot $t.Maps
+        $l.Count | Should -Be 2
+        $l.Entries[0].Name | Should -Be 'Up One Level'
+        $l.Entries[1].Name | Should -Be '023-combat.scx'
+        $l.Entries[1].Y | Should -Be 159
     }
 
     It 'refuses a target below the six visible rows rather than clicking row 6' {
         $t = New-TestMapsTree -BroodWarDirs @('00-t001', '00-t002', '00-t003', '00-t004', '00-t005')
-        try {
-            $l = Get-ScBrowserListing -Dir (Join-Path $t.Maps 'BroodWar') -MapsRoot $t.Maps
-            { Get-ScBrowserEntry -Listing $l -Name 'WebMaps' } |
-                Should -Throw -ExpectedMessage '*only 6 rows are visible*'
-        } finally { Remove-Item -LiteralPath $t.Root -Recurse -Force }
+        $l = Get-ScBrowserListing -Dir (Join-Path $t.Maps 'BroodWar') -MapsRoot $t.Maps
+        { Get-ScBrowserEntry -Listing $l -Name 'WebMaps' } |
+            Should -Throw -ExpectedMessage '*only 6 rows are visible*'
     }
 
     It 'names what IS in the listing when the wanted entry is not' {
         $t = New-TestMapsTree
-        try {
-            $l = Get-ScBrowserListing -Dir (Join-Path $t.Maps 'BroodWar') -MapsRoot $t.Maps
-            { Get-ScBrowserEntry -Listing $l -Name '00-t023' } |
-                Should -Throw -ExpectedMessage '*The browser shows:*'
-        } finally { Remove-Item -LiteralPath $t.Root -Recurse -Force }
+        $l = Get-ScBrowserListing -Dir (Join-Path $t.Maps 'BroodWar') -MapsRoot $t.Maps
+        { Get-ScBrowserEntry -Listing $l -Name '00-t023' } |
+            Should -Throw -ExpectedMessage '*The browser shows:*'
     }
 }
 
@@ -129,31 +115,27 @@ Describe 'log parsing' {
         # Do not emit the pointers as one nested array: a caller's own `@(...)` then reads
         # Count 1 and `-contains` matches nothing, so a suite fails assertions about the
         # engine's selection while the log in front of it holds all twelve pointers.
-        $log = Join-Path ([IO.Path]::GetTempPath()) ("sc-sel-" + [Guid]::NewGuid().ToString('n') + ".log")
+        $log = Join-Path $TestDrive ("sc-sel-" + [Guid]::NewGuid().ToString('n') + ".log")
         $ptrs = 0..11 | ForEach-Object { "[$_]=0x0062{0:X4}" -f (0x1000 + $_ * 0x150) }
-        try {
-            Set-Content -LiteralPath $log -Value @(
-                '[2026-08-09 06:00:00.000] observer tick'
-                "[2026-08-09 06:00:01.000]     clientSelectionGroup   $($ptrs -join ' ')"
-                "[2026-08-09 06:00:01.002]     clientSelectionGroup2  $($ptrs -join ' ')"
-            )
-            $engine = @(Get-ScSelectionGroup -LogPath $log)
-            $engine.Count | Should -Be 12
-            $engine[0] | Should -Be '00621000'
-            # The whole point of reading them: intersecting with Get-ScWorldState's units.
-            $engine | Should -Contain '00621150'
-        } finally { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
+        Set-Content -LiteralPath $log -Value @(
+            '[2026-08-09 06:00:00.000] observer tick'
+            "[2026-08-09 06:00:01.000]     clientSelectionGroup   $($ptrs -join ' ')"
+            "[2026-08-09 06:00:01.002]     clientSelectionGroup2  $($ptrs -join ' ')"
+        )
+        $engine = @(Get-ScSelectionGroup -LogPath $log)
+        $engine.Count | Should -Be 12
+        $engine[0] | Should -Be '00621000'
+        # The whole point of reading them: intersecting with Get-ScWorldState's units.
+        $engine | Should -Contain '00621150'
     }
 
     It 'does not mistake clientSelectionGroup2 for clientSelectionGroup' {
-        $log = Join-Path ([IO.Path]::GetTempPath()) ("sc-sel-" + [Guid]::NewGuid().ToString('n') + ".log")
-        try {
-            Set-Content -LiteralPath $log -Value @(
-                '[2026-08-09 06:00:01.000]     clientSelectionGroup   [0]=0x00621000 [1]=0x00621150'
-                '[2026-08-09 06:00:01.002]     clientSelectionGroup2  [0]=0x00AAAAAA [1]=0x00BBBBBB [2]=0x00CCCCCC'
-            )
-            @(Get-ScSelectionGroup -LogPath $log) | Should -Be @('00621000', '00621150')
-        } finally { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
+        $log = Join-Path $TestDrive ("sc-sel-" + [Guid]::NewGuid().ToString('n') + ".log")
+        Set-Content -LiteralPath $log -Value @(
+            '[2026-08-09 06:00:01.000]     clientSelectionGroup   [0]=0x00621000 [1]=0x00621150'
+            '[2026-08-09 06:00:01.002]     clientSelectionGroup2  [0]=0x00AAAAAA [1]=0x00BBBBBB [2]=0x00CCCCCC'
+        )
+        @(Get-ScSelectionGroup -LogPath $log) | Should -Be @('00621000', '00621150')
     }
 }
 
@@ -164,7 +146,6 @@ Describe 'fixture ownership registry' {
         $script:dir = Join-Path $script:tree.Maps 'BroodWar\00-t023'
         New-Item -ItemType Directory -Path $script:dir -Force | Out-Null
     }
-    AfterEach { Remove-Item -LiteralPath $script:tree.Root -Recurse -Force -ErrorAction SilentlyContinue }
 
     It 'does not call a suite OWN earlier fixture foreign (the 2026-08-09 self-deadlock)' {
         # A suite writes several fixtures into one folder (a placement probe, then the
@@ -333,7 +314,7 @@ Describe 'Get-ScCardState' {
         # carries every label the call could pick rather than guessing the seq.
         function New-CardLog {
             param([string]$Tag, [string[]]$Body)
-            $path = Join-Path ([IO.Path]::GetTempPath()) ("sc-card-" + [Guid]::NewGuid().ToString('n') + ".log")
+            $path = Join-Path $TestDrive ("sc-card-" + [Guid]::NewGuid().ToString('n') + ".log")
             $lines = foreach ($seq in 1..60) {
                 foreach ($b in $Body) { "2026-08-09 21:00:00.000  " + ($b -replace '<L>', "$Tag-$seq") }
             }
@@ -354,91 +335,77 @@ Describe 'Get-ScCardState' {
 
     It 'parses the header, including the dialog origin' {
         $log = New-CardLog -Tag 'hdr' -Body $script:GhostCardBody
-        try {
-            $c = Get-ScCardState -LogPath $log -Tag 'hdr' `
-                    -MarkerPath (Join-Path (Split-Path $log -Parent) 'marker.txt') -TimeoutSec 5
-            $c.Ok | Should -BeTrue
-            $c.CardId | Should -Be 1
-            $c.OverrideSel | Should -Be 228
-            $c.PortraitType | Should -Be 1
-            $c.PortraitSet | Should -Be 1
-            $c.SetCount | Should -Be 9
-            $c.RootRect | Should -Be @(500, 358, 639, 479)
-            $c.Shown | Should -Be 7
-            $c.Greyed | Should -Be 2
-        } finally { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
+        $c = Get-ScCardState -LogPath $log -Tag 'hdr' `
+                -MarkerPath (Join-Path (Split-Path $log -Parent) 'marker.txt') -TimeoutSec 5
+        $c.Ok | Should -BeTrue
+        $c.CardId | Should -Be 1
+        $c.OverrideSel | Should -Be 228
+        $c.PortraitType | Should -Be 1
+        $c.PortraitSet | Should -Be 1
+        $c.SetCount | Should -Be 9
+        $c.RootRect | Should -Be @(500, 358, 639, 479)
+        $c.Shown | Should -Be 7
+        $c.Greyed | Should -Be 2
     }
 
     It 'reads slot 7 as the greyed Cloak button, with its Button record' {
         $log = New-CardLog -Tag 'slot' -Body $script:GhostCardBody
-        try {
-            $c = Get-ScCardState -LogPath $log -Tag 'slot' `
-                    -MarkerPath (Join-Path (Split-Path $log -Parent) 'marker.txt') -TimeoutSec 5
-            $s = Get-ScCardSlot -Card $c -Slot 7
-            $s.State     | Should -Be 'GREYED'
-            $s.Visible   | Should -BeTrue
-            $s.Disabled  | Should -BeTrue
-            $s.Flags     | Should -Be 0xB
-            $s.HasButton | Should -BeTrue
-            $s.BSlot     | Should -Be 7
-            # The action names the ability, the conditionParam names the tech.
-            $s.Action    | Should -Be '00423730'
-            $s.CondParam | Should -Be 10
-        } finally { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
+        $c = Get-ScCardState -LogPath $log -Tag 'slot' `
+                -MarkerPath (Join-Path (Split-Path $log -Parent) 'marker.txt') -TimeoutSec 5
+        $s = Get-ScCardSlot -Card $c -Slot 7
+        $s.State     | Should -Be 'GREYED'
+        $s.Visible   | Should -BeTrue
+        $s.Disabled  | Should -BeTrue
+        $s.Flags     | Should -Be 0xB
+        $s.HasButton | Should -BeTrue
+        $s.BSlot     | Should -Be 7
+        # The action names the ability, the conditionParam names the tech.
+        $s.Action    | Should -Be '00423730'
+        $s.CondParam | Should -Be 10
     }
 
     It 'distinguishes hidden from greyed, and a slot with no Button record' {
         $log = New-CardLog -Tag 'hid' -Body $script:GhostCardBody
-        try {
-            $c = Get-ScCardState -LogPath $log -Tag 'hid' `
-                    -MarkerPath (Join-Path (Split-Path $log -Parent) 'marker.txt') -TimeoutSec 5
-            $s6 = Get-ScCardSlot -Card $c -Slot 6
-            $s6.Visible   | Should -BeFalse
-            $s6.Disabled  | Should -BeFalse
-            $s6.HasButton | Should -BeFalse
-            (Get-ScCardSlot -Card $c -Slot 1).Disabled | Should -BeFalse
-        } finally { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
+        $c = Get-ScCardState -LogPath $log -Tag 'hid' `
+                -MarkerPath (Join-Path (Split-Path $log -Parent) 'marker.txt') -TimeoutSec 5
+        $s6 = Get-ScCardSlot -Card $c -Slot 6
+        $s6.Visible   | Should -BeFalse
+        $s6.Disabled  | Should -BeFalse
+        $s6.HasButton | Should -BeFalse
+        (Get-ScCardSlot -Card $c -Slot 1).Disabled | Should -BeFalse
     }
 
     It 'parses the per-player tech state as id lists' {
         $log = New-CardLog -Tag 'tech' -Body $script:GhostCardBody
-        try {
-            $c = Get-ScCardState -LogPath $log -Tag 'tech' `
-                    -MarkerPath (Join-Path (Split-Path $log -Parent) 'marker.txt') -TimeoutSec 5
-            $c.TechPlayer     | Should -Be 0
-            $c.TechAvailable  | Should -Be @(0, 1, 10, 11)
-            $c.TechResearched | Should -Be @(10)
-        } finally { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
+        $c = Get-ScCardState -LogPath $log -Tag 'tech' `
+                -MarkerPath (Join-Path (Split-Path $log -Parent) 'marker.txt') -TimeoutSec 5
+        $c.TechPlayer     | Should -Be 0
+        $c.TechAvailable  | Should -Be @(0, 1, 10, 11)
+        $c.TechResearched | Should -Be @(10)
     }
 
     It 'computes a slot centre as dialog origin + control rect, never a constant' {
         $log = New-CardLog -Tag 'pt' -Body $script:GhostCardBody
-        try {
-            $c = Get-ScCardState -LogPath $log -Tag 'pt' `
-                    -MarkerPath (Join-Path (Split-Path $log -Parent) 'marker.txt') -TimeoutSec 5
-            $p = Get-ScCardSlotPoint -Card $c -Slot 7
-            $p.X | Should -Be (500 + [math]::Floor((3 + 35) / 2))    # 519
-            $p.Y | Should -Be (358 + [math]::Floor((90 + 122) / 2))  # 464
-        } finally { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
+        $c = Get-ScCardState -LogPath $log -Tag 'pt' `
+                -MarkerPath (Join-Path (Split-Path $log -Parent) 'marker.txt') -TimeoutSec 5
+        $p = Get-ScCardSlotPoint -Card $c -Slot 7
+        $p.X | Should -Be (500 + [math]::Floor((3 + 35) / 2))    # 519
+        $p.Y | Should -Be (358 + [math]::Floor((90 + 122) / 2))  # 464
     }
 
     It 'reports not-ok rather than hanging when the process has no card' {
         $log = New-CardLog -Tag 'none' -Body @(
             'CARD [<L>] dialog=0 (no command card in this process state)')
-        try {
-            $c = Get-ScCardState -LogPath $log -Tag 'none' `
-                    -MarkerPath (Join-Path (Split-Path $log -Parent) 'marker.txt') -TimeoutSec 5
-            $c.Ok | Should -BeFalse
-            $c.Slots.Count | Should -Be 0
-        } finally { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
+        $c = Get-ScCardState -LogPath $log -Tag 'none' `
+                -MarkerPath (Join-Path (Split-Path $log -Parent) 'marker.txt') -TimeoutSec 5
+        $c.Ok | Should -BeFalse
+        $c.Slots.Count | Should -Be 0
     }
 
     It 'throws with the -CardScan hint when no CARD line ever arrives' {
         $log = New-CardLog -Tag 'quiet' -Body @('WORLD [<L>] p=7 units=0 recount=0 complete=1')
-        try {
-            { Get-ScCardState -LogPath $log -Tag 'quiet' `
-                    -MarkerPath (Join-Path (Split-Path $log -Parent) 'marker.txt') -TimeoutSec 1 } |
-                Should -Throw -ExpectedMessage '*-CardScan 1*'
-        } finally { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
+        { Get-ScCardState -LogPath $log -Tag 'quiet' `
+                -MarkerPath (Join-Path (Split-Path $log -Parent) 'marker.txt') -TimeoutSec 1 } |
+            Should -Throw -ExpectedMessage '*-CardScan 1*'
     }
 }

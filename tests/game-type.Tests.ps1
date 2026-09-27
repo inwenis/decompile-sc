@@ -37,7 +37,7 @@ BeforeAll {
 
     function New-Log {
         param([string]$GameType = 'Use Map Settings', [string[]]$Extra = @())
-        $p = Join-Path ([IO.Path]::GetTempPath()) ("sc-gt-" + [Guid]::NewGuid().ToString('n') + '.log')
+        $p = Join-Path $TestDrive ("sc-gt-" + [Guid]::NewGuid().ToString('n') + '.log')
         $lines = @('[2026-08-11 09:40:30.000] OBSERVER started') + $Extra +
                  @($script:CREATE_LINE -f $GameType)
         Set-Content -LiteralPath $p -Value $lines
@@ -49,8 +49,7 @@ Describe 'Get-ScGameTypeControl reads the combo out of the dialog list' {
 
     It 'reports the selected entry by name' {
         $p = New-Log -GameType 'Use Map Settings'
-        try { (Get-ScGameTypeControl -LogPath $p).Value | Should -Be 'Use Map Settings' }
-        finally { Remove-Item $p -Force }
+        (Get-ScGameTypeControl -LogPath $p).Value | Should -Be 'Use Map Settings'
     }
 
     It 'TRACKS THE VALUE -- a different selection reads differently' {
@@ -59,68 +58,56 @@ Describe 'Get-ScGameTypeControl reads the combo out of the dialog list' {
         # cannot separate "the pick did not take" from "the value was already right", and
         # the combo keeps the last value used, so "already right" is the common case.
         $p = New-Log -GameType 'Melee'
-        try { (Get-ScGameTypeControl -LogPath $p).Value | Should -Be 'Melee' }
-        finally { Remove-Item $p -Force }
+        (Get-ScGameTypeControl -LogPath $p).Value | Should -Be 'Melee'
     }
 
     It 'picks the combo on the Game Type ROW, not the player-name or race combo' {
         $p = New-Log -GameType 'Free For All'
-        try {
-            $c = Get-ScGameTypeControl -LogPath $p
-            $c.Value | Should -Be 'Free For All'
-            $c.Value | Should -Not -Be 'asdf'
-            $c.Value | Should -Not -Be 'Random'
-        }
-        finally { Remove-Item $p -Force }
+        $c = Get-ScGameTypeControl -LogPath $p
+        $c.Value | Should -Be 'Free For All'
+        $c.Value | Should -Not -Be 'asdf'
+        $c.Value | Should -Not -Be 'Random'
     }
 
     It 'reports the map-information panel lines the engine is SHOWING, as corroboration' {
         # Engine fact: under Use Map Settings the panel shows Human/Computer Slots
         # (flag 0x8) and hides Number of Players (0x0).
         $p = New-Log
-        try {
-            $c = Get-ScGameTypeControl -LogPath $p
-            $c.PanelShows | Should -Contain 'Human Slots'
-            $c.PanelShows | Should -Contain 'Computer Slots'
-            $c.PanelShows | Should -Not -Contain 'Number of Players'
-        }
-        finally { Remove-Item $p -Force }
+        $c = Get-ScGameTypeControl -LogPath $p
+        $c.PanelShows | Should -Contain 'Human Slots'
+        $c.PanelShows | Should -Contain 'Computer Slots'
+        $c.PanelShows | Should -Not -Contain 'Number of Players'
     }
 
     It 'returns $null when the Create screen is not up, rather than guessing' {
-        $p = Join-Path ([IO.Path]::GetTempPath()) ("sc-gt-" + [Guid]::NewGuid().ToString('n') + '.log')
+        $p = Join-Path $TestDrive ("sc-gt-" + [Guid]::NewGuid().ToString('n') + '.log')
         Set-Content -LiteralPath $p -Value @(
             "[2026-08-11 09:40:36.054] DIALOGS n=1  dlg='Tips_Dlg' rect=128,32,511,287 ctrl='o.O.K' rect=20,216,123,243 type=14 flags=0x8")
-        try { Get-ScGameTypeControl -LogPath $p | Should -BeNullOrEmpty }
-        finally { Remove-Item $p -Force }
+        Get-ScGameTypeControl -LogPath $p | Should -BeNullOrEmpty
     }
 
     It 'reads the NEWEST line, so a changed value is not read as stale' {
         # Get-ScDialogs takes the last DIALOGS line, so an earlier one must not win.
         $stale = $script:CREATE_LINE -f 'Melee'
         $p = New-Log -GameType 'Use Map Settings' -Extra @($stale)
-        try { (Get-ScGameTypeControl -LogPath $p).Value | Should -Be 'Use Map Settings' }
-        finally { Remove-Item $p -Force }
+        (Get-ScGameTypeControl -LogPath $p).Value | Should -Be 'Use Map Settings'
     }
 }
 
 Describe 'Assert-ScGameType' {
     It 'passes when the engine reads Use Map Settings' {
         $p = New-Log -GameType 'Use Map Settings'
-        try { { Assert-ScGameType -LogPath $p -TimeoutSec 0 } | Should -Not -Throw }
-        finally { Remove-Item $p -Force }
+        { Assert-ScGameType -LogPath $p -TimeoutSec 0 } | Should -Not -Throw
     }
 
     It 'throws naming what the engine reads when it is anything else' {
         $p = New-Log -GameType 'Melee'
-        try { { Assert-ScGameType -LogPath $p -TimeoutSec 0 } | Should -Throw -ExpectedMessage "*reads 'Melee', want 'Use Map Settings'*" }
-        finally { Remove-Item $p -Force }
+        { Assert-ScGameType -LogPath $p -TimeoutSec 0 } | Should -Throw -ExpectedMessage "*reads 'Melee', want 'Use Map Settings'*"
     }
 
     It 'throws when the Create Game screen is not up' {
-        $p = Join-Path ([IO.Path]::GetTempPath()) ("sc-gt-" + [Guid]::NewGuid().ToString('n') + '.log')
+        $p = Join-Path $TestDrive ("sc-gt-" + [Guid]::NewGuid().ToString('n') + '.log')
         Set-Content -LiteralPath $p -Value "[2026-08-11 09:40:36.054] DIALOGS n=1  dlg='Tips_Dlg' rect=128,32,511,287 ctrl='o.O.K' rect=20,216,123,243 type=14 flags=0x8"
-        try { { Assert-ScGameType -LogPath $p -TimeoutSec 0 } | Should -Throw -ExpectedMessage '*not in the engine*' }
-        finally { Remove-Item $p -Force }
+        { Assert-ScGameType -LogPath $p -TimeoutSec 0 } | Should -Throw -ExpectedMessage '*not in the engine*'
     }
 }

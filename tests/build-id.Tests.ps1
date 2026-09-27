@@ -21,7 +21,7 @@ BeforeAll {
     # A throwaway source tree. Never the real one: these tests mutate files.
     function New-FakeSrc {
         param([hashtable]$Files)
-        $dir = Join-Path ([IO.Path]::GetTempPath()) ("scbuildid-" + [Guid]::NewGuid().ToString('n'))
+        $dir = Join-Path $TestDrive ("scbuildid-" + [Guid]::NewGuid().ToString('n'))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         foreach ($name in $Files.Keys) {
             Set-Content -LiteralPath (Join-Path $dir $name) -Value $Files[$name] -NoNewline
@@ -33,7 +33,7 @@ BeforeAll {
     # the literal, NUL-terminated, surrounded by binary noise.
     function New-FakeDll {
         param([string]$Stamp)
-        $path = Join-Path ([IO.Path]::GetTempPath()) ("scbuildid-" + [Guid]::NewGuid().ToString('n') + '.bin')
+        $path = Join-Path $TestDrive ("scbuildid-" + [Guid]::NewGuid().ToString('n') + '.bin')
         $noise = [byte[]]::new(256)
         for ($i = 0; $i -lt $noise.Length; $i++) { $noise[$i] = ($i * 7) % 256 }
         $body = [byte[]]@()
@@ -49,52 +49,39 @@ Describe 'Get-ScSourceDigest' {
 
     It 'is stable across calls on unchanged content' {
         $d = New-FakeSrc @{ 'a.cpp' = 'int a;'; 'b.h' = '#define B 1' }
-        try { (Get-ScSourceDigest -SrcDir $d) | Should -Be (Get-ScSourceDigest -SrcDir $d) }
-        finally { Remove-Item -LiteralPath $d -Recurse -Force }
+        (Get-ScSourceDigest -SrcDir $d) | Should -Be (Get-ScSourceDigest -SrcDir $d)
     }
 
     It 'CHANGES when one byte of one file changes' {
         # The half that matters. A digest that is merely stable is also achieved by
         # returning a constant, and a constant digest calls every stale DLL current.
         $d = New-FakeSrc @{ 'a.cpp' = 'int a;'; 'b.h' = '#define B 1' }
-        try {
-            $before = Get-ScSourceDigest -SrcDir $d
-            Set-Content -LiteralPath (Join-Path $d 'a.cpp') -Value 'int b;' -NoNewline
-            (Get-ScSourceDigest -SrcDir $d) | Should -Not -Be $before
-        }
-        finally { Remove-Item -LiteralPath $d -Recurse -Force }
+        $before = Get-ScSourceDigest -SrcDir $d
+        Set-Content -LiteralPath (Join-Path $d 'a.cpp') -Value 'int b;' -NoNewline
+        (Get-ScSourceDigest -SrcDir $d) | Should -Not -Be $before
     }
 
     It 'CHANGES when a file is renamed, even though the bytes are identical' {
         $d = New-FakeSrc @{ 'a.cpp' = 'int a;' }
-        try {
-            $before = Get-ScSourceDigest -SrcDir $d
-            Rename-Item -LiteralPath (Join-Path $d 'a.cpp') -NewName 'z.cpp'
-            (Get-ScSourceDigest -SrcDir $d) | Should -Not -Be $before
-        }
-        finally { Remove-Item -LiteralPath $d -Recurse -Force }
+        $before = Get-ScSourceDigest -SrcDir $d
+        Rename-Item -LiteralPath (Join-Path $d 'a.cpp') -NewName 'z.cpp'
+        (Get-ScSourceDigest -SrcDir $d) | Should -Not -Be $before
     }
 
     It 'CHANGES when a new file appears' {
         $d = New-FakeSrc @{ 'a.cpp' = 'int a;' }
-        try {
-            $before = Get-ScSourceDigest -SrcDir $d
-            Set-Content -LiteralPath (Join-Path $d 'new.h') -Value 'x' -NoNewline
-            (Get-ScSourceDigest -SrcDir $d) | Should -Not -Be $before
-        }
-        finally { Remove-Item -LiteralPath $d -Recurse -Force }
+        $before = Get-ScSourceDigest -SrcDir $d
+        Set-Content -LiteralPath (Join-Path $d 'new.h') -Value 'x' -NoNewline
+        (Get-ScSourceDigest -SrcDir $d) | Should -Not -Be $before
     }
 
     It 'ignores mtime -- touching a file without changing it is not a change' {
         # An mtime-based gate would call a fresh `git checkout` of identical source
         # stale and rebuild on every branch switch, which is how a gate gets turned off.
         $d = New-FakeSrc @{ 'a.cpp' = 'int a;' }
-        try {
-            $before = Get-ScSourceDigest -SrcDir $d
-            (Get-Item -LiteralPath (Join-Path $d 'a.cpp')).LastWriteTime = (Get-Date).AddHours(1)
-            (Get-ScSourceDigest -SrcDir $d) | Should -Be $before
-        }
-        finally { Remove-Item -LiteralPath $d -Recurse -Force }
+        $before = Get-ScSourceDigest -SrcDir $d
+        (Get-Item -LiteralPath (Join-Path $d 'a.cpp')).LastWriteTime = (Get-Date).AddHours(1)
+        (Get-ScSourceDigest -SrcDir $d) | Should -Be $before
     }
 
     It 'CHANGES when the build script changes, with the sources untouched' {
@@ -105,17 +92,13 @@ Describe 'Get-ScSourceDigest' {
         $b2 = Join-Path $d '..\scbuildid-build2.ps1'
         Set-Content -LiteralPath $b1 -Value '-O2' -NoNewline
         Set-Content -LiteralPath $b2 -Value '-O0' -NoNewline
-        try {
-            (Get-ScSourceDigest -SrcDir $d -BuildScript $b1) |
-                Should -Not -Be (Get-ScSourceDigest -SrcDir $d -BuildScript $b2)
-        }
-        finally { Remove-Item -LiteralPath $d -Recurse -Force; Remove-Item -LiteralPath $b1, $b2 -Force }
+        (Get-ScSourceDigest -SrcDir $d -BuildScript $b1) |
+            Should -Not -Be (Get-ScSourceDigest -SrcDir $d -BuildScript $b2)
     }
 
     It 'refuses an empty source directory rather than digesting nothing' {
         $d = New-FakeSrc @{}
-        try { { Get-ScSourceDigest -SrcDir $d } | Should -Throw '*refusing to digest an empty tree*' }
-        finally { Remove-Item -LiteralPath $d -Recurse -Force }
+        { Get-ScSourceDigest -SrcDir $d } | Should -Throw '*refusing to digest an empty tree*'
     }
 }
 
@@ -125,35 +108,27 @@ Describe 'Get-ScDllBuildStamp' {
         # Positive control: without it every "no stamp" below is indistinguishable from
         # a reader that never matches (AGENTS.md § "Oracles: absence and defect-era checks").
         $f = New-FakeDll 'SCPLUGIN_BUILD_ID=abc1234 SRC=0123456789ab'
-        try {
-            $s = Get-ScDllBuildStamp -Path $f
-            $s | Should -Not -BeNullOrEmpty
-            $s.BuildId   | Should -Be 'abc1234'
-            $s.SrcDigest | Should -Be '0123456789ab'
-        }
-        finally { Remove-Item -LiteralPath $f -Force }
+        $s = Get-ScDllBuildStamp -Path $f
+        $s | Should -Not -BeNullOrEmpty
+        $s.BuildId   | Should -Be 'abc1234'
+        $s.SrcDigest | Should -Be '0123456789ab'
     }
 
     It 'keeps the +dirty suffix, which is the part that says the sha alone is a lie' {
         $f = New-FakeDll 'SCPLUGIN_BUILD_ID=abc1234+dirty SRC=0123456789ab'
-        try { (Get-ScDllBuildStamp -Path $f).BuildId | Should -Be 'abc1234+dirty' }
-        finally { Remove-Item -LiteralPath $f -Force }
+        (Get-ScDllBuildStamp -Path $f).BuildId | Should -Be 'abc1234+dirty'
     }
 
     It 'returns $null for a binary with no stamp' {
         $f = New-FakeDll $null
-        try { Get-ScDllBuildStamp -Path $f | Should -BeNullOrEmpty }
-        finally { Remove-Item -LiteralPath $f -Force }
+        Get-ScDllBuildStamp -Path $f | Should -BeNullOrEmpty
     }
 
     It 'reads an UNSTAMPED build as its literal value, never as a match' {
         # sc_buildid.cpp's fallback for a hand-compiled DLL: SRC=UNSTAMPED is not hex, so
         # the pattern rejects it -- an unstamped DLL cannot present a src digest at all.
         $f = New-FakeDll 'SCPLUGIN_BUILD_ID=UNSTAMPED SRC=UNSTAMPED'
-        try {
-            Get-ScDllBuildStamp -Path $f | Should -BeNullOrEmpty
-        }
-        finally { Remove-Item -LiteralPath $f -Force }
+        Get-ScDllBuildStamp -Path $f | Should -BeNullOrEmpty
     }
 }
 
@@ -163,35 +138,25 @@ Describe 'Test-ScPluginCurrent' {
         $d = New-FakeSrc @{ 'a.cpp' = 'int a;' }
         $digest = Get-ScSourceDigest -SrcDir $d
         $f = New-FakeDll "SCPLUGIN_BUILD_ID=abc1234 SRC=$digest"
-        try {
-            $v = Test-ScPluginCurrent -DllPath $f -SrcDir $d
-            $v.Current | Should -BeTrue
-        }
-        finally { Remove-Item -LiteralPath $d -Recurse -Force; Remove-Item -LiteralPath $f -Force }
+        (Test-ScPluginCurrent -DllPath $f -SrcDir $d).Current | Should -BeTrue
     }
 
     It 'says STALE when the source changed under a stamped DLL' {
         $d = New-FakeSrc @{ 'a.cpp' = 'int a;' }
         $f = New-FakeDll "SCPLUGIN_BUILD_ID=abc1234 SRC=$(Get-ScSourceDigest -SrcDir $d)"
-        try {
-            Set-Content -LiteralPath (Join-Path $d 'a.cpp') -Value 'int changed;' -NoNewline
-            $v = Test-ScPluginCurrent -DllPath $f -SrcDir $d
-            $v.Current | Should -BeFalse
-            $v.Reason  | Should -BeLike '*was built from source*'
-        }
-        finally { Remove-Item -LiteralPath $d -Recurse -Force; Remove-Item -LiteralPath $f -Force }
+        Set-Content -LiteralPath (Join-Path $d 'a.cpp') -Value 'int changed;' -NoNewline
+        $v = Test-ScPluginCurrent -DllPath $f -SrcDir $d
+        $v.Current | Should -BeFalse
+        $v.Reason  | Should -BeLike '*was built from source*'
     }
 
     It 'treats an UNSTAMPED DLL as not current -- unknown is never current' {
         $d = New-FakeSrc @{ 'a.cpp' = 'int a;' }
         $f = New-FakeDll $null
-        try {
-            $v = Test-ScPluginCurrent -DllPath $f -SrcDir $d
-            $v.Current | Should -BeFalse
-            $v.Stamp   | Should -BeNullOrEmpty
-            $v.Reason  | Should -BeLike '*carries NO build stamp*'
-        }
-        finally { Remove-Item -LiteralPath $d -Recurse -Force; Remove-Item -LiteralPath $f -Force }
+        $v = Test-ScPluginCurrent -DllPath $f -SrcDir $d
+        $v.Current | Should -BeFalse
+        $v.Stamp   | Should -BeNullOrEmpty
+        $v.Reason  | Should -BeLike '*carries NO build stamp*'
     }
 }
 
@@ -211,25 +176,21 @@ Describe 'run-with-plugin.ps1 -BuildDir is honoured, not "helpfully" rebuilt' {
     }
 
     It 'leaves a stale DLL in a named -BuildDir untouched, and says so' -Skip:(-not (Test-Path 'C:\decompile-sc-data\sc-work\1161-base')) {
-        $bd = Join-Path ([IO.Path]::GetTempPath()) ("scbuilddir-" + [Guid]::NewGuid().ToString('n'))
+        $bd = Join-Path $TestDrive ("scbuilddir-" + [Guid]::NewGuid().ToString('n'))
         New-Item -ItemType Directory -Path $bd -Force | Out-Null
-        try {
-            $fake = New-FakeDll 'SCPLUGIN_BUILD_ID=0000000 SRC=000000000000'
-            Copy-Item -LiteralPath $fake -Destination (Join-Path $bd 'scplugin.dll')
-            Copy-Item -LiteralPath $fake -Destination (Join-Path $bd 'scinject.exe')
-            Remove-Item -LiteralPath $fake -Force
-            $beforeHash = (Get-FileHash -LiteralPath (Join-Path $bd 'scplugin.dll') -Algorithm SHA256).Hash
+        $fake = New-FakeDll 'SCPLUGIN_BUILD_ID=0000000 SRC=000000000000'
+        Copy-Item -LiteralPath $fake -Destination (Join-Path $bd 'scplugin.dll')
+        Copy-Item -LiteralPath $fake -Destination (Join-Path $bd 'scinject.exe')
+        $beforeHash = (Get-FileHash -LiteralPath (Join-Path $bd 'scplugin.dll') -Algorithm SHA256).Hash
 
-            $out = & $script:runner -NoLaunch -NoLaunchLock -BuildDir $bd -GameDir $script:gameDir 3>&1 2>&1 | Out-String
+        $out = & $script:runner -NoLaunch -NoLaunchLock -BuildDir $bd -GameDir $script:gameDir 3>&1 2>&1 | Out-String
 
-            # The bytes are the assertion. A rebuild would replace them with a real DLL.
-            (Get-FileHash -LiteralPath (Join-Path $bd 'scplugin.dll') -Algorithm SHA256).Hash |
-                Should -Be $beforeHash -Because 'a named -BuildDir must never be rebuilt into'
-            # And it must not go quietly: an unannounced skip reads as a build that ran.
-            $out | Should -BeLike '*NOT this worktree*'
-            $out | Should -BeLike '*Nothing was rebuilt*'
-        }
-        finally { Remove-Item -LiteralPath $bd -Recurse -Force -ErrorAction SilentlyContinue }
+        # The bytes are the assertion. A rebuild would replace them with a real DLL.
+        (Get-FileHash -LiteralPath (Join-Path $bd 'scplugin.dll') -Algorithm SHA256).Hash |
+            Should -Be $beforeHash -Because 'a named -BuildDir must never be rebuilt into'
+        # And it must not go quietly: an unannounced skip reads as a build that ran.
+        $out | Should -BeLike '*NOT this worktree*'
+        $out | Should -BeLike '*Nothing was rebuilt*'
     }
 }
 

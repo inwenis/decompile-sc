@@ -20,7 +20,7 @@ BeforeAll {
 
     # The layout the checker expects, so a planted duplicate never touches real sources.
     function New-ReuseSandbox {
-        $root = Join-Path ([IO.Path]::GetTempPath()) "reuse-$([guid]::NewGuid().ToString('N'))"
+        $root = Join-Path $TestDrive "reuse-$([guid]::NewGuid().ToString('N'))"
         $src = Join-Path $root 'src'
         $suites = Join-Path $root 'tools/plugin'
         New-Item -ItemType Directory -Path $src, $suites -Force | Out-Null
@@ -100,12 +100,6 @@ Describe 'check-reuse [cpp] fails on a NEW copy and passes without one' -Skip:(-
         Set-Content -LiteralPath (Join-Path $script:box.Src 'sc_alpha.cpp') -Value $script:dupBody
     }
 
-    AfterAll {
-        if ($script:box) {
-            Remove-Item -LiteralPath $script:box.Root -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
-
     It 'is quiet when nothing is duplicated' {
         $r = Invoke-Checker -Root $script:box.Root
         $r.Exit | Should -Be 0 -Because $r.Out
@@ -168,12 +162,6 @@ Describe 'check-reuse [ps1] polices the suites the same way' -Skip:(-not $script
     BeforeAll {
         $script:box = New-ReuseSandbox
         Set-Content -LiteralPath (Join-Path $script:box.Suites 'suite-alpha.ps1') -Value $script:dupSuite
-    }
-
-    AfterAll {
-        if ($script:box) {
-            Remove-Item -LiteralPath $script:box.Root -Recurse -Force -ErrorAction SilentlyContinue
-        }
     }
 
     It 'is quiet when nothing is duplicated' {

@@ -11,7 +11,7 @@ BeforeAll {
 
     function New-DataRoot {
         param([string[]]$Files)
-        $root = Join-Path ([IO.Path]::GetTempPath()) "clean-test-$([guid]::NewGuid())"
+        $root = Join-Path $TestDrive "clean-test-$([guid]::NewGuid())"
         foreach ($f in $Files) { New-Item -ItemType File -Path (Join-Path $root $f) -Force | Out-Null }
         $root
     }
@@ -25,11 +25,8 @@ Describe 'clean.ps1' {
     It 'refuses and deletes nothing while a StarCraft runs' {
         Mock Get-Process { [pscustomobject]@{ Id = 1 } } -ParameterFilter { $Name -eq 'StarCraft' }
         $root = New-DataRoot 'sc-work\scratch\x.bin'
-        try {
-            { & $script:clean -DataRoot $root 6>$null } | Should -Throw '*a StarCraft is running*'
-            Join-Path $root 'sc-work\scratch\x.bin' | Should -Exist
-        }
-        finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+        { & $script:clean -DataRoot $root 6>$null } | Should -Throw '*a StarCraft is running*'
+        Join-Path $root 'sc-work\scratch\x.bin' | Should -Exist
     }
 
     It 'deletes scratch and logs, keeps the install, toolchain, working copy and deployed game' {
@@ -41,13 +38,10 @@ Describe 'clean.ps1' {
             'sc-work\builds\59aa50b\scplugin.dll', 'sc-work\logs\sc-plugin.log',
             'sc-work\logs\070-frames\f.png', 'sc-work\logs\sc-launch.lock'
         $root = New-DataRoot ($kept + $gone)
-        try {
-            & $script:clean -DataRoot $root 6>$null
-            foreach ($f in $kept) { Join-Path $root $f | Should -Exist }
-            foreach ($f in $gone) { Join-Path $root $f | Should -Not -Exist }
-            @(Get-ChildItem -LiteralPath (Join-Path $root 'sc-work\logs') -Force).Count | Should -Be 0
-        }
-        finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+        & $script:clean -DataRoot $root 6>$null
+        foreach ($f in $kept) { Join-Path $root $f | Should -Exist }
+        foreach ($f in $gone) { Join-Path $root $f | Should -Not -Exist }
+        @(Get-ChildItem -LiteralPath (Join-Path $root 'sc-work\logs') -Force).Count | Should -Be 0
     }
 
     It 'refuses and deletes nothing while a launch holds sc-launch.lock' {
@@ -57,9 +51,6 @@ Describe 'clean.ps1' {
             { & $script:clean -DataRoot $root 6>$null } | Should -Throw '*a launch holds*'
             Join-Path $root 'sc-work\scratch\x.bin' | Should -Exist
         }
-        finally {
-            $held.Dispose()
-            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
-        }
+        finally { $held.Dispose() }
     }
 }
