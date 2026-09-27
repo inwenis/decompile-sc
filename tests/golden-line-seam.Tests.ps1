@@ -35,11 +35,11 @@ this file's own copy of a regex cannot keep passing while the shipped one it sta
             Name = 'PRODQ per-record (sc_prodqueue.cpp)'
             SourceFile = 'sc_prodqueue.cpp'; Marker = 'PRODQ [%s] unit=0x'; First = $null
             Parsers = @(
-                @{ Suite = 'test-production-queue.ps1'; SuiteLine = 591; Groups = 10; ExpectMatch = $true
+                @{ Suite = 'test-production-queue.ps1'; Groups = 10
                    Fragments = @('PRODQ \[[^\]]+\] unit=0x([0-9A-Fa-f]+) player=(\d+) head=(\d+) engineLen=(\d+) engine=\[([^\]]*)\] overflow=(\d+) overflowTypes=\[([^\]]*)\] logical=(\d+) minerals=(\d+) gas=(\d+)') }
-                @{ Suite = 'test-group-queue-over-five.ps1'; SuiteLine = 196; Groups = 10; ExpectMatch = $true
+                @{ Suite = 'test-group-queue-over-five.ps1'; Groups = 10
                    Fragments = @('PRODQ \[[^\]]+\] unit=0x([0-9A-Fa-f]+) player=(\d+) head=(\d+) engineLen=(\d+) engine=\[([^\]]*)\] overflow=(\d+) overflowTypes=\[([^\]]*)\] logical=(\d+) minerals=(\d+) gas=(\d+)') }
-                @{ Suite = 'test-random-conformance.ps1'; SuiteLine = 498; Groups = 10; ExpectMatch = $true
+                @{ Suite = 'test-random-conformance.ps1'; Groups = 10
                    Fragments = @('PRODQ \[[^\]]+\] unit=0x([0-9A-Fa-f]+) player=(\d+) head=(\d+) engineLen=(\d+) engine=\[([^\]]*)\] overflow=(\d+) overflowTypes=\[([^\]]*)\] logical=(\d+) minerals=(\d+) gas=(\d+)') }
             )
         }
@@ -51,15 +51,15 @@ this file's own copy of a regex cannot keep passing while the shipped one it sta
                 # a field inserted at that junction must not silently re-break these parsers.
                 # Each suite site pairs its match with an `else` so a summary line that fails to
                 # parse fails loudly instead of leaving its fields at the zeros they start from.
-                @{ Suite = 'test-group-queue-over-five.ps1'; SuiteLine = 214; Groups = 7; ExpectMatch = $true
+                @{ Suite = 'test-group-queue-over-five.ps1'; Groups = 7
                    Fragments = @('buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+)') }
-                @{ Suite = 'test-production-queue.ps1'; SuiteLine = 606; Groups = 7; ExpectMatch = $true
+                @{ Suite = 'test-production-queue.ps1'; Groups = 7
                    Fragments = @('buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+)') }
-                @{ Suite = 'test-random-conformance.ps1'; SuiteLine = 511; Groups = 7; ExpectMatch = $true
+                @{ Suite = 'test-random-conformance.ps1'; Groups = 7
                    Fragments = @('PRODQ \[[^\]]+\](?:\s+\w+=\S+)*\s+buildings=(\d+) max=(\d+) captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+)') }
-                @{ Suite = 'test-random-conformance.ps1'; SuiteLine = 519; Groups = 2; ExpectMatch = $true
+                @{ Suite = 'test-random-conformance.ps1'; Groups = 2
                    Fragments = @('trainSeen=(\d+) trainNoUnit=(\d+)') }
-                @{ Suite = 'test-save-load.ps1'; SuiteLine = 182; Groups = 1; ExpectMatch = $true
+                @{ Suite = 'test-save-load.ps1'; Groups = 1
                    Fragments = @('buildings=(\d+)') }
             )
         }
@@ -67,9 +67,9 @@ this file's own copy of a regex cannot keep passing while the shipped one it sta
             Name = 'PRODQSTATS (sc_prodqueue.cpp)'
             SourceFile = 'sc_prodqueue.cpp'; Marker = 'PRODQSTATS captured=%d'; First = $null
             Parsers = @(
-                @{ Suite = 'test-production-queue.ps1'; SuiteLine = 1517; Groups = 6; ExpectMatch = $true
+                @{ Suite = 'test-production-queue.ps1'; Groups = 6
                    Fragments = @('captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+) mineralsRefunded=(\d+)') }
-                @{ Suite = 'test-group-queue-over-five.ps1'; SuiteLine = 776; Groups = 7; ExpectMatch = $true
+                @{ Suite = 'test-group-queue-over-five.ps1'; Groups = 7
                    Fragments = @('captured=(\d+) promoted=(\d+) cancelled=(\d+) refunded=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+) mineralsRefunded=(\d+) gasRefunded=(\d+)') }
             )
         }
@@ -77,9 +77,9 @@ this file's own copy of a regex cannot keep passing while the shipped one it sta
             Name = 'PRODQSEL (sc_prodqueue.cpp)'
             SourceFile = 'sc_prodqueue.cpp'; Marker = 'PRODQSEL [%s] unit=0x'; First = $null
             Parsers = @(
-                @{ Suite = 'test-production-queue.ps1'; SuiteLine = 574; Groups = 10; ExpectMatch = $true
+                @{ Suite = 'test-production-queue.ps1'; Groups = 10
                    Fragments = @('PRODQSEL \[[^\]]+\] unit=0x([0-9A-Fa-f]+) type=0x([0-9A-Fa-f]+) player=(\d+) head=(\d+) engineLen=(\d+) engine=\[([^\]]*)\] overflow=(\d+) logical=(\d+) minerals=(\d+) gas=(\d+)') }
-                @{ Suite = 'test-save-load.ps1'; SuiteLine = 174; Groups = 10; ExpectMatch = $true
+                @{ Suite = 'test-save-load.ps1'; Groups = 10
                    Fragments = @('PRODQSEL \[[^\]]+\] unit=0x([0-9A-Fa-f]+) type=0x([0-9A-Fa-f]+) player=(\d+) head=(\d+) engineLen=(\d+) engine=\[([^\]]*)\] overflow=(\d+) logical=(\d+) minerals=(\d+) gas=(\d+)') }
             )
         }
@@ -91,7 +91,7 @@ this file's own copy of a regex cannot keep passing while the shipped one it sta
             Marker = '%s [%s] unit=0x%08X type=0x%03X player=%u upg=%u tech=%u lvl=%u time=%u '
             First = 'UPGQSEL'
             Parsers = @(
-                @{ Suite = 'test-upgrade-queue.ps1'; SuiteLine = 189; Groups = 13; ExpectMatch = $true
+                @{ Suite = 'test-upgrade-queue.ps1'; Groups = 13
                    Fragments = @('UPGQSEL \[[^\]]+\] unit=0x([0-9A-Fa-f]+) type=0x([0-9A-Fa-f]+) player=(\d+) upg=(\d+) tech=(\d+) lvl=(\d+) time=(\d+) busy=(\d+) queued=(\d+) queue=\[([^\]]*)\] logical=(\d+) minerals=(\d+) gas=(\d+)') }
             )
         }
@@ -101,7 +101,7 @@ this file's own copy of a regex cannot keep passing while the shipped one it sta
             Parsers = @(
                 # Same tolerant gap as the PRODQ summary above: if this regex misses, the
                 # suite's `RefusedFull -eq 0` assertion reads a zeroed field and is vacuous.
-                @{ Suite = 'test-upgrade-queue.ps1'; SuiteLine = 220; Groups = 12; ExpectMatch = $true
+                @{ Suite = 'test-upgrade-queue.ps1'; Groups = 12
                    Fragments = @('buildings=(\d+) max=(\d+) queued=(\d+) promoted=(\d+) cancelled=(\d+) dropped=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+) refusedGate=(\d+) waitingCost=(\d+) unblocked=(\d+) hiddenHeld=(\d+) refusedDup=(\d+)') }
             )
         }
@@ -111,7 +111,7 @@ this file's own copy of a regex cannot keep passing while the shipped one it sta
             Parsers = @(
                 # No tolerant gap needed: this suite indexes only the first four fields, all
                 # ahead of the junction where later fields get inserted.
-                @{ Suite = 'test-upgrade-queue.ps1'; SuiteLine = 736; Groups = 4; ExpectMatch = $true
+                @{ Suite = 'test-upgrade-queue.ps1'; Groups = 4
                    Fragments = @('queued=(\d+) promoted=(\d+) cancelled=(\d+) dropped=(\d+)') }
             )
         }
@@ -119,11 +119,11 @@ this file's own copy of a regex cannot keep passing while the shipped one it sta
             Name = 'HUDROW show (sc_hudrow.cpp)'
             SourceFile = 'sc_hudrow.cpp'; Marker = 'HUDROW show n=%d page=%d/%d slots=%d'; First = $null
             Parsers = @(
-                @{ Suite = 'test-combat-death.ps1'; SuiteLine = 452; Groups = 6; ExpectMatch = $true
+                @{ Suite = 'test-combat-death.ps1'; Groups = 6
                    Fragments = @('HUDROW show n=(\d+) page=(\d+)/(\d+) slots=(\d+) \[([0-9A-F ]*)\] indicator="([^"]*)"') }
-                @{ Suite = 'test-control-groups.ps1'; SuiteLine = 395; Groups = 5; ExpectMatch = $true
+                @{ Suite = 'test-control-groups.ps1'; Groups = 5
                    Fragments = @('HUDROW show n=(\d+) page=(\d+)/(\d+) slots=(\d+) \[([0-9A-F ]*)\]') }
-                @{ Suite = 'test-hud-row.ps1'; SuiteLine = 107; Groups = 19; ExpectMatch = $true
+                @{ Suite = 'test-hud-row.ps1'; Groups = 19
                    Fragments = @(
                        'HUDROW show n=(?<n>\d+) page=(?<page>\d+)/(?<pages>\d+) slots=(?<slots>\d+) ',
                        '\[(?<tags>[0-9A-F ]*)\] indicator="(?<text>[^"]*)" ',
@@ -137,9 +137,9 @@ this file's own copy of a regex cannot keep passing while the shipped one it sta
             Name = 'FANOUT select: (sc_fanout.cpp)'
             SourceFile = 'sc_fanout.cpp'; Marker = 'FANOUT select: in=%d out=%d dropped=%d tags='; First = $null
             Parsers = @(
-                @{ Suite = 'test-building-groups.ps1'; SuiteLine = 490; Groups = 3; ExpectMatch = $true
+                @{ Suite = 'test-building-groups.ps1'; Groups = 3
                    Fragments = @('FANOUT select: in=(\d+) out=(\d+) dropped=(\d+)') }
-                @{ Suite = 'test-combat-death.ps1'; SuiteLine = 927; Groups = 1; ExpectMatch = $true
+                @{ Suite = 'test-combat-death.ps1'; Groups = 1
                    Fragments = @('FANOUT select: in=\d+ out=\d+ dropped=\d+ tags=\[([0-9A-F ]*)\]') }
             )
         }
@@ -147,7 +147,7 @@ this file's own copy of a regex cannot keep passing while the shipped one it sta
             Name = 'WORLD screen (scplugin.cpp)'
             SourceFile = 'scplugin.cpp'; Marker = 'WORLD [%s] screen='; First = $null
             Parsers = @(
-                @{ Suite = 'test-random-conformance.ps1'; SuiteLine = 537; Groups = 2; ExpectMatch = $true
+                @{ Suite = 'test-random-conformance.ps1'; Groups = 2
                    EscPlaceholder = $true
                    Fragments = @('WORLD \[$esc\].*screen=\((\d+),(\d+)\)') }
             )
@@ -156,7 +156,7 @@ this file's own copy of a regex cannot keep passing while the shipped one it sta
             Name = 'WORLD per-unit (scplugin.cpp)'
             SourceFile = 'scplugin.cpp'; Marker = 'WORLD [%s] p=%d i=%d unit=0x'; First = $null
             Parsers = @(
-                @{ Suite = 'test-random-conformance.ps1'; SuiteLine = 523; Groups = 13; ExpectMatch = $true
+                @{ Suite = 'test-random-conformance.ps1'; Groups = 13
                    Fragments = @('WORLD \[[^\]]+\] p=(\d+) i=(\d+) unit=0x([0-9A-Fa-f]+) owner=(\d+) type=0x([0-9A-Fa-f]+) hp=(-?\d+) order=0x([0-9A-Fa-f]+) order2=0x([0-9A-Fa-f]+) stim=(\d+) energy=(\d+) pos=\((\d+),(\d+)\) flags=0x([0-9A-Fa-f]+)') }
             )
         }
@@ -164,7 +164,7 @@ this file's own copy of a regex cannot keep passing while the shipped one it sta
             Name = 'WORLD per-player summary (scplugin.cpp)'
             SourceFile = 'scplugin.cpp'; Marker = 'WORLD [%s] p=%d units=%d recount='; First = $null
             Parsers = @(
-                @{ Suite = 'test-random-conformance.ps1'; SuiteLine = 542; Groups = 4; ExpectMatch = $true
+                @{ Suite = 'test-random-conformance.ps1'; Groups = 4
                    EscPlaceholder = $true
                    Fragments = @('WORLD \[$esc\] p=(\d+) units=(\d+) recount=(\d+) complete=(\d+)') }
             )
@@ -173,11 +173,11 @@ this file's own copy of a regex cannot keep passing while the shipped one it sta
             Name = 'CIRCLES show (sc_circles.cpp)'
             SourceFile = 'sc_circles.cpp'; Marker = 'CIRCLES show: %d/%d units circled'; First = $null
             Parsers = @(
-                @{ Suite = 'test-building-groups.ps1'; SuiteLine = 566; Groups = 2; ExpectMatch = $true
+                @{ Suite = 'test-building-groups.ps1'; Groups = 2
                    Fragments = @('CIRCLES show: (\d+)/(\d+)') }
-                @{ Suite = 'test-control-groups.ps1'; SuiteLine = 432; Groups = 2; ExpectMatch = $true
+                @{ Suite = 'test-control-groups.ps1'; Groups = 2
                    Fragments = @('CIRCLES show: (\d+)/(\d+)') }
-                @{ Suite = 'test-selection-circles.ps1'; SuiteLine = 222; Groups = 2; ExpectMatch = $true
+                @{ Suite = 'test-selection-circles.ps1'; Groups = 2
                    Fragments = @('CIRCLES show: (\d+)/(\d+)') }
             )
         }
@@ -189,9 +189,9 @@ this file's own copy of a regex cannot keep passing while the shipped one it sta
             Name = 'CIRCLES stats (sc_circles.cpp)'
             SourceFile = 'sc_circles.cpp'; Marker = 'CIRCLES stats: session=%u shown=%u'; First = $null
             Parsers = @(
-                @{ Suite = 'test-selection-circles.ps1'; SuiteLine = 377; Groups = 6; ExpectMatch = $true
+                @{ Suite = 'test-selection-circles.ps1'; Groups = 6
                    Fragments = @('CIRCLES stats:.* shown=(\d+) hidden=(\d+) held=(-?\d+) skipped=(\d+) noImage=(\d+) lost=(\d+)') }
-                @{ Suite = 'test-building-groups.ps1'; SuiteLine = 698; Groups = 6; ExpectMatch = $true
+                @{ Suite = 'test-building-groups.ps1'; Groups = 6
                    Fragments = @('CIRCLES stats:.* shown=(\d+) hidden=(\d+) held=(-?\d+) skipped=(\d+) noImage=(\d+) lost=(\d+)') }
             )
         }
@@ -199,7 +199,7 @@ this file's own copy of a regex cannot keep passing while the shipped one it sta
             Name = 'QIND (sc_queueind.cpp) -- the two consumers that index its groups'
             SourceFile = 'sc_queueind.cpp'; Marker = 'QIND [%s] mode=%d linked=%d visible=%d'; First = $null
             Parsers = @(
-                @{ Suite = 'test-production-queue.ps1'; SuiteLine = 357; Groups = 22; ExpectMatch = $true
+                @{ Suite = 'test-production-queue.ps1'; Groups = 22
                    Fragments = @(
                        'QIND \[[^\]]+\] mode=(?<mode>\d+) linked=(?<linked>\d+) visible=(?<visible>\d+) ',
                        'text="(?<text>[^"]*)" ',
@@ -210,7 +210,7 @@ this file's own copy of a regex cannot keep passing while the shipped one it sta
                        'icons=\[(?<icons>[^\]]*)\] ',
                        'sel=(?<sel>\d+) engineLen=(?<engineLen>\d+) overflow=(?<overflow>\d+) ',
                        'upg=(?<upg>\d+) bldgs=(?<bldgs>\d+) queued=(?<queued>\d+)') }
-                @{ Suite = 'test-random-conformance.ps1'; SuiteLine = 565; Groups = 10; ExpectMatch = $true
+                @{ Suite = 'test-random-conformance.ps1'; Groups = 10
                    Fragments = @('QIND \[[^\]]+\] mode=(\d+) linked=(\d+) visible=(\d+) text="([^"]*)" bounds=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\) ink=(-?\d+) refInk=(-?\d+)') }
             )
         }
@@ -284,7 +284,7 @@ Describe 'Golden-line seam: every parser regex still matches the plugin''s own f
             $script:renderedLine | Should -Not -BeNullOrEmpty
         }
 
-        Context '<Suite>:<SuiteLine>' -ForEach $Parsers {
+        Context '<Suite>' -ForEach $Parsers {
 
             It 'the regex is present VERBATIM in the suite it claims to come from' {
                 $suiteText = Get-Content -Raw -LiteralPath (Join-Path $script:PluginRoot $Suite)
@@ -299,17 +299,8 @@ Describe 'Golden-line seam: every parser regex still matches the plugin''s own f
                 if ($EscPlaceholder) { $pattern = Resolve-EscPlaceholder $pattern }
                 $m = [regex]::Match($script:renderedLine, $pattern)
                 $detail = "rendered:`n  $script:renderedLine`npattern:`n  $pattern"
-                if ($ExpectMatch) {
-                    $m.Success | Should -BeTrue -Because $detail
-                    ($m.Groups.Count - 1) | Should -Be $Groups
-                } else {
-                    # ExpectMatch = $false pins a REPORTED finding: the parser does not match
-                    # the plugin's own output, and the finding is reported rather than quietly
-                    # patched (AGENTS.md § "Diagnostics and reporting"). If this It starts
-                    # FAILING, someone repaired the suite's regex -- flip ExpectMatch to $true
-                    # so the group-count assert above confirms the fix group-for-group.
-                    $m.Success | Should -BeFalse -Because "known-broken finding, issue #87, not fixed here. $detail"
-                }
+                $m.Success | Should -BeTrue -Because $detail
+                ($m.Groups.Count - 1) | Should -Be $Groups
             }
         }
     }
