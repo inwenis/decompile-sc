@@ -379,11 +379,7 @@
 
 // Wire command ids used by the fan-out; the full 46-entry table is command-path.md 5.
 #define SC_CMD_SELECT        0x09u
-#define SC_CMD_SELECT_ADD    0x0Au
-#define SC_CMD_SELECT_REMOVE 0x0Bu
 #define SC_CMD_HOTKEY        0x13u
-#define SC_CMD_RIGHT_CLICK   0x14u
-#define SC_CMD_TARGETED_ORDER 0x15u
 
 // ---------------------------------------------------------------------------
 // HUD SELECTION ROW. Full evidence, with decompiles and the creation chain, in
@@ -905,11 +901,10 @@
 // neighbouring condition 0x00429520, which compares its own EDX against the unit's
 // owner byte at CUnit+0x4C.
 #define SC_VA_BTN_TRAIN_CONDITION  0x00428E60u
-// The multi-select count the condition tests. A BYTE (`CMP byte ptr [..],1`). The plugin
-// LOGS it beside the selection size, so "this is the client's selection count" is a
-// reading the in-game suite asserts (it must read 4 with four buildings boxed), not a
-// label.
-#define SC_VA_CLIENT_SELECTION_COUNT 0x0059723Du
+// The multi-select count the condition tests is SC_VA_CLIENT_SELECTION_COUNT (above), a
+// BYTE (`CMP byte ptr [..],1`). The plugin LOGS it beside the selection size, so "this is
+// the client's selection count" is a reading the in-game suite asserts (it must read 4 with
+// four buildings boxed), not a label.
 // The condition's tail call: the player's requirement/tech interpreter. Convention, read
 // off its own body: **ESI = the PRODUCING unit**, **AX = the type being built**, and the
 // player as its one stack argument (the `PUSH EDX` above), `RET 4`.
@@ -1010,21 +1005,10 @@
 // computation -- 0x004CE7A0 (current) and 0x004CE7F0 (max) -- and confirmed by the same
 // expression appearing verbatim in startUpgrade, upgradeRefund, 0x0042D190 and 0x00453F70.
 #define SC_VA_UPGRADE_LEVEL      0x0058D2B0u  // u8[12][46]
-#define SC_VA_UPGRADE_MAX_LEVEL  0x0058D088u  // u8[12][46]
 #define SC_VA_UPGRADE_LEVEL_BW   0x0058F2FEu  // u8[?][15], upgrades 46..60 (base biased)
-#define SC_VA_UPGRADE_MAX_BW     0x0058F24Au
 #define SC_UPGRADE_STRIDE_VANILLA 0x2Eu  // 46
 #define SC_UPGRADE_STRIDE_BW      0x0Fu  // 15
 #define SC_UPGRADE_COUNT_VANILLA  46
-
-// "This PLAYER is already researching this UPGRADE / TECH, somewhere." Bitfields, set by
-// the two starts, cleared by the two ticks and the two cancels, tested by 0x004281B0 and
-// 0x00428240 which the gates call. The rule that keeps two buildings off the same upgrade;
-// untouched here, which is why queueing level N+1 behind N is refused (upgrade-queue.md 8.2).
-#define SC_VA_UPGRADE_INPROGRESS_BITS 0x0058F3E0u  // 8 bytes per player
-#define SC_VA_TECH_INPROGRESS_BITS    0x0058F230u  // 6 bytes per player
-#define SC_UPGRADE_BITS_STRIDE 8u
-#define SC_TECH_BITS_STRIDE    6u
 
 // Costs. An upgrade's is base + factor*currentLevel out of four u16 tables (0x0042D190,
 // 0x00454170 and 0x00453F70 all read the same pairs); a tech's is two flat u16 lookups
@@ -1154,7 +1138,7 @@
 #define SC_DIRTY_BLOCK             16
 #define SC_DIRTY_COLS              40      // 0x28, the row stride in 0x0041E0D0
 #define SC_DIRTY_ROWS              30
-#define SC_VA_RENDER_TARGET        0x006CF4A8u  // the global immediately after the grid
+#define SC_VA_RENDER_TARGET        0x006CF4A8u  // {u16 w, u16 h, u8* bits}*, right after the grid
 
 // The terrain scratch surface the tile blitter 0x004BCDC0 reads through: pitch 0x2A0 = 672,
 // total 0x49800 = 301056 = 672 * 448, addressed modulo its own size so a scroll wraps rather
@@ -1386,7 +1370,6 @@
 // restored to the previous target on the way out.
 #define SC_VA_DIALOG_DRAW_WALK     0x0041C080u
 #define SC_VA_DIALOG_LAYER_DRAW    0x0041CB50u
-#define SC_VA_RENDER_TARGET        0x006CF4A8u  // {u16 w, u16 h, u8* bits}*
 
 // The surface descriptor itself: {u16 w, u16 h, u8* bits}, 8 bits per pixel, at the offset
 // 0x0041C080 installs (above). The allocator 0x004C35F0's own decompile puts it 0x2A
@@ -1399,29 +1382,6 @@
 #define SC_SURFACE_OFF_H           0x02u   // u16
 #define SC_SURFACE_OFF_BITS        0x04u   // u8*
 
-// ---------------------------------------------------------------------------
-// THE DIALOG DIRTY-MARK CLIP BOX.
-// updateControlInner (0x0041C200) -- the ONE function that adds a dialog rect to the
-// layer-2 dirty region (storm region 0x006D5E2C, consumed by 0x0041CB50) -- aligns the
-// rect to 16px and clamps it against these four globals (0x0041C21B, 0x0041C24D,
-// 0x0041C240, 0x0041C25C). Each is referenced by EXACTLY that one instruction in all of
-// .text (byte-scan) -- NO WRITER EXISTS. They are link-time .data constants
-// {0, 0, 640, 480}, read straight out of the file image. So no dialog repaint can ever be
-// MARKED past x=639, and moving a dialog's bounds past it changes nothing on screen:
-// measured, StatBtn moved to 656..799 drew NOTHING while StatRes -- whose overlap with the
-// ever-repainting playfield rides a different dirty path -- showed its number at x~760.
-// Because no writer exists, widening the max-x once is a stable, one-shot data patch with
-// no engine re-assertion to fight (AGENTS.md § "Engine-owned flags") -- sc_console does it
-// while the console-edge move is armed, and restores it on remove.
-//
-// The sibling box at 0x0051A15C..0x0051A168 = {0, 0, 639, 479} is the DRAW-time clip in
-// 0x0041C080, in ROOT-RELATIVE coordinates -- a 144- or 420-wide console dialog never
-// reaches it, so it is recorded, not patched.
-#define SC_VA_DLG_DIRTY_CLIP_X0    0x0051A16Cu  // 0
-#define SC_VA_DLG_DIRTY_CLIP_Y0    0x0051A170u  // 0
-#define SC_VA_DLG_DIRTY_CLIP_X1    0x0051A174u  // 640 stock
-#define SC_VA_DLG_DIRTY_CLIP_Y1    0x0051A178u  // 480 stock
-
 // u8 -- client_selection_changed (binary-selection-map.md 7 window table). The stat
 // display driver's FIRST instruction reads it (0x004D93F0 MOV AL,[0x0059723C]) and, when
 // set, calls updateSelectedUnitData (0x004C38B0), which copies activePlayerSelection into
@@ -1430,9 +1390,6 @@
 // funnel so the engine's own writer completes the client half exactly as a real click
 // does (measured: without it, active=1 sim=1 but client=0 and the card stays empty).
 #define SC_VA_CLIENT_SEL_CHANGED   0x0059723Cu
-
-
-#endif // SC_ADDRESSES_H
 
 // --- the GetCursorPos import -------------------------------------------------------
 // The edge-scroll 0x004D12A0 reads the OS cursor through this import slot and compares
@@ -1448,3 +1405,5 @@
 // grid rows itself, never through the marker 0x0041E0D0. A trace of the marker alone
 // therefore misses every sprite mark; sc_marktrace hooks this one beside it.
 #define SC_VA_IMAGE_MARK           0x0042D280u
+
+#endif // SC_ADDRESSES_H

@@ -41,7 +41,6 @@
 struct ScHook {
     const char* name;
     void*  target;        // runtime address of the hooked function
-    void*  detour;        // our replacement
     BYTE*  trampoline;    // relocated prologue + JMP back to target+patchLen
     int    patchLen;
     BYTE   saved[SC_HOOK_MAX_PATCH];

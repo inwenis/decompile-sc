@@ -41,7 +41,7 @@ suite break, not a cleanup.
 
 | file | what it is | C prefix | log tag(s) | env / launcher flag |
 |---|---|---|---|---|
-| `scplugin.cpp` | `DllMain`, the read-only observer, attach/detach | — | `ATTACH` `DETACH` `OBSERVER` `SEL` `SELSNAP` `WORLD` `SCREEN` `DIALOGS` `HEARTBEAT` `ERROR` | `SCPLUGIN_MODE`, `SCPLUGIN_LOG`, `SCPLUGIN_POLL_MS`, `SCPLUGIN_MARKER`, `SCPLUGIN_WORLDSCAN`, `SCPLUGIN_SCREENSCAN`, `SCPLUGIN_DIALOGS`, `SCPLUGIN_FRAMEDUMP` |
+| `scplugin.cpp` | `DllMain`, the read-only observer, attach/detach | — | `ATTACH` `DETACH` `OBSERVER` `SEL` `SELSNAP` `WORLD` `SCREEN` `DIALOGS` `HEARTBEAT` `ERROR` | `SCPLUGIN_MODE`, `SCPLUGIN_LOG`, `SCPLUGIN_POLL_MS`, `SCPLUGIN_WORLDSCAN`, `SCPLUGIN_SCREENSCAN`, `SCPLUGIN_DIALOGS`, `SCPLUGIN_FRAMEDUMP` |
 | `sc_engine.h/.cpp` | **the relocation layer**: static VA → this process, and the readable-memory probe | `ScRuntime*`, `ScEngine*`, `ScReadable` | — | — |
 | `sc_unit.h` | **the shared reads**: CUnit fields, the player unit list, the build queue, the dialog tree | `ScUnit*`, `ScDlg*`, `ScCtrl*`, `ScPlayer*` | — | — |
 | `sc_env.h` | **the config reads**: every `%SCPLUGIN_*%` opt-in, flag and clamped int | `ScEnv*` | — | *(all of them)* |
@@ -1039,7 +1039,7 @@ it is left set, and the user's next pick in the game changes it.
 `C:/decompile-sc-data/sc-work/` is gitignored — captured game state is never committed (project hard
 rule 1). `%SCPLUGIN_POLL_MS%` sets the poll interval (default 250, clamped 20–5000).
 
-`%SCPLUGIN_MARKER%` (default `marker.txt` beside the log) is a correlation channel:
+The marker file (`marker.txt` beside the log) is a correlation channel:
 write a one-line label into that file and the observer stamps
 `---- MARK: <label> ----` into the log between snapshots. Timestamps alone are
 ambiguous at 250 ms granularity when you are trying to line "what I did on screen"

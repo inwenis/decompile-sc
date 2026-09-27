@@ -181,9 +181,7 @@ static char g_only[256];
 static bool g_onlySet = false;
 
 static void LoadOnlyFilter(void) {
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_WS_ONLY", g_only, sizeof(g_only));
-    g_onlySet = (n > 0 && n < sizeof(g_only));
-    if (!g_onlySet) g_only[0] = '\0';
+    g_onlySet = ScEnvRead("SCPLUGIN_WS_ONLY", g_only, sizeof(g_only));
 }
 
 static bool NameSelected(const char* name) {

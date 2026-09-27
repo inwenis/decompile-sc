@@ -343,7 +343,7 @@ reading `playersSelections` cannot mis-describe it.
 
 - Cost: turn the plugin's prose log into machine-readable snapshots and add a checker script. Well under one task.
 - Buys: exact, replayable assertions from a session the user drives in the normal way; one human minute per run instead of a description round trip.
-- The marker channel this needs **already exists** — `scplugin.cpp` polls `SCPLUGIN_MARKER` and stamps a labelled line into the log, so a driver can already segment a session into named test cases.
+- The marker channel this needs **already exists** — `scplugin.cpp` polls a marker file beside its log and stamps a labelled line into the log, so a driver can already segment a session into named test cases.
 
 ### 5.2 The full recommendation
 

@@ -335,50 +335,34 @@ void ScUpgQueueOnTick(DWORD unit) {
     LeaveCriticalSection(&g_lock);
 }
 
-bool ScUpgQueueOnCancel(DWORD unit) {
+// TAIL FIRST: the last item of the logical queue really is the plugin's, so the plugin
+// is its correct owner. Press again to keep unwinding; once the plugin holds nothing the
+// cancel falls through to vanilla, which stops the RUNNING item and refunds it exactly.
+// Nothing is refunded here because a held item was never paid for.
+// index < 0 = the tail (a 0x33/0x31 press); otherwise the held item a queue icon draws.
+static bool DropHeld(DWORD unit, int index) {
     if (!g_enabled || !unit) return false;
-    bool consumed = false;
-    EnterCriticalSection(&g_lock);
-    UpgSessionSync();
-    CollectGarbage(true);
-
-    // TAIL FIRST: the last item of the logical queue really is the plugin's, so the plugin
-    // is its correct owner. Press again to keep unwinding; once the plugin holds nothing the
-    // cancel falls through to vanilla, which stops the RUNNING item and refunds it exactly.
-    // Nothing is refunded here because a held item was never paid for.
-    UpgRecord* r = ScLedgerFind(g_rec, g_recCount, unit);
-    if (r && r->count > 0) {
-        UpgItem it = r->items[--r->count];
-        ++g_stat[SC_UPGQ_STAT_CANCELLED];
-        ScLog("UPGQEV cancel-last unit=0x%08X kind=%s id=%u queuedLeft=%d "
-              "(no refund -- it was never paid for)",
-              (unsigned)unit, it.kind == SC_UPGQ_KIND_TECH ? "tech" : "upgrade",
-              (unsigned)it.id, r->count);
-        if (r->count == 0) ScLedgerDropAt(g_rec, &g_recCount, (int)(r - g_rec));
-        RequestRedraw();
-        consumed = true;
-    }
-
-    LeaveCriticalSection(&g_lock);
-    return consumed;
-}
-
-bool ScUpgQueueCancelAt(DWORD unit, int index) {
-    if (!g_enabled || !unit || index < 0) return false;
+    const bool last = index < 0;
     bool consumed = false;
     EnterCriticalSection(&g_lock);
     UpgSessionSync();
     CollectGarbage(true);
     UpgRecord* r = ScLedgerFind(g_rec, g_recCount, unit);
-    if (r && index < r->count) {
+    if (r && last) index = r->count - 1;
+    if (r && index >= 0 && index < r->count) {
         UpgItem it = r->items[index];
         for (int i = index + 1; i < r->count; ++i) r->items[i - 1] = r->items[i];
         --r->count;
         ++g_stat[SC_UPGQ_STAT_CANCELLED];
-        ScLog("UPGQEV cancel-icon unit=0x%08X index=%d kind=%s id=%u queuedLeft=%d "
-              "(no refund -- it was never paid for)",
-              (unsigned)unit, index, it.kind == SC_UPGQ_KIND_TECH ? "tech" : "upgrade",
-              (unsigned)it.id, r->count);
+        const char* kind = it.kind == SC_UPGQ_KIND_TECH ? "tech" : "upgrade";
+        if (last)
+            ScLog("UPGQEV cancel-last unit=0x%08X kind=%s id=%u queuedLeft=%d "
+                  "(no refund -- it was never paid for)",
+                  (unsigned)unit, kind, (unsigned)it.id, r->count);
+        else
+            ScLog("UPGQEV cancel-icon unit=0x%08X index=%d kind=%s id=%u queuedLeft=%d "
+                  "(no refund -- it was never paid for)",
+                  (unsigned)unit, index, kind, (unsigned)it.id, r->count);
         if (r->count == 0) ScLedgerDropAt(g_rec, &g_recCount, (int)(r - g_rec));
         RequestRedraw();
         consumed = true;
@@ -386,6 +370,10 @@ bool ScUpgQueueCancelAt(DWORD unit, int index) {
     LeaveCriticalSection(&g_lock);
     return consumed;
 }
+
+bool ScUpgQueueOnCancel(DWORD unit) { return DropHeld(unit, -1); }
+
+bool ScUpgQueueCancelAt(DWORD unit, int index) { return index >= 0 && DropHeld(unit, index); }
 
 // --- Oracles -----------------------------------------------------------------
 
