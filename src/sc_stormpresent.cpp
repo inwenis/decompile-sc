@@ -132,8 +132,7 @@ static DWORD StormReadU32(const void* addr, bool* ok) {
 // -1 = unset, else the explicit SC_STORM_* the env asked for.
 static int StormEnvExplicit(void) {
     char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_STORM_PRESENT", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return -1;
+    if (!ScEnvRead("SCPLUGIN_STORM_PRESENT", buf, sizeof(buf))) return -1;
     if (buf[0] == '0' || buf[0] == 'n' || buf[0] == 'N') return SC_STORM_OFF;
     if (buf[0] == 'p' || buf[0] == 'P') return SC_STORM_PROBE;
     return SC_STORM_WIDEN;   // 1/y/widen

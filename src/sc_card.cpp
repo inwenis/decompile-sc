@@ -8,6 +8,7 @@
 #include "sc_engine.h"
 #include "sc_log.h"
 #include "sc_queueind.h"   // ScQueueIndRingGen -- the phantom window's seqlock
+#include "sc_unit.h"       // ScRingFormat
 
 static bool         g_enabled = false;
 static ScCardReadFn g_read    = NULL;
@@ -20,6 +21,19 @@ static bool Rd(DWORD addr, void* out, size_t n) {
 static bool RdU8(DWORD addr, BYTE* out)   { return Rd(addr, out, 1); }
 static bool RdU16(DWORD addr, WORD* out)  { return Rd(addr, out, 2); }
 static bool RdU32(DWORD addr, DWORD* out) { return Rd(addr, out, 4); }
+
+// The climb both engine walks below start with: a child dialog (TYPE != 0) stands for its
+// parent. Reads the root's BOUNDS into `rect` (all four shorts) and returns the root.
+static DWORD ReadRoot(DWORD dialog, short (&rect)[4]) {
+    DWORD root = dialog;
+    WORD type = 0;
+    if (RdU16(dialog + SC_BINDLG_OFF_TYPE, &type) && (short)type != 0) {
+        DWORD parent = 0;
+        if (RdU32(dialog + SC_BINDLG_OFF_PARENT, &parent) && parent) root = parent;
+    }
+    Rd(root + SC_BINDLG_OFF_BOUNDS, rect, sizeof(rect));
+    return root;
+}
 
 // Reproduces the layout function's own child walk (0x004591D0):
 //     root = cardDialog;
@@ -55,14 +69,7 @@ int ScCardSnapshot(ScCardHeader* hdr, ScCardSlot* out, int max) {
         RdU32(e + SC_BUTTONSET_OFF_PTR, &hdr->setButtons);
     }
 
-    hdr->root = hdr->dialog;
-    WORD type = 0;
-    if (RdU16(hdr->dialog + SC_BINDLG_OFF_TYPE, &type) && (short)type != 0) {
-        DWORD parent = 0;
-        if (RdU32(hdr->dialog + SC_BINDLG_OFF_PARENT, &parent) && parent) hdr->root = parent;
-    }
-
-    Rd(hdr->root + SC_BINDLG_OFF_BOUNDS, hdr->rootRect, sizeof(hdr->rootRect));
+    hdr->root = ReadRoot(hdr->dialog, hdr->rootRect);
 
     DWORD ctrl = 0;
     if (!RdU32(hdr->root + SC_BINDLG_OFF_FIRST_CHILD, &ctrl)) return 0;
@@ -134,13 +141,7 @@ int ScStatusSnapshot(ScStatusHeader* hdr, ScStatusSlot* out, int max) {
     if (!RdU32(ScRuntimeVa(SC_VA_STATDATA_DIALOG), &hdr->dialog) || hdr->dialog == 0) return 0;
     hdr->ok = true;
 
-    hdr->root = hdr->dialog;
-    WORD type = 0;
-    if (RdU16(hdr->dialog + SC_BINDLG_OFF_TYPE, &type) && (short)type != 0) {
-        DWORD parent = 0;
-        if (RdU32(hdr->dialog + SC_BINDLG_OFF_PARENT, &parent) && parent) hdr->root = parent;
-    }
-    Rd(hdr->root + SC_BINDLG_OFF_BOUNDS, hdr->rootRect, sizeof(hdr->rootRect));
+    hdr->root = ReadRoot(hdr->dialog, hdr->rootRect);
 
     // The queue the strip is DRAWING is the portrait unit's, not the selection's --
     // 0x004268D0 reads DAT_00597248 for every one of its five slots. Reading the same
@@ -244,13 +245,10 @@ void ScStatusScan(const char* tag) {
         return;
     }
 
+    WORD q[SC_BUILD_QUEUE_SLOTS];
+    for (int i = 0; i < SC_BUILD_QUEUE_SLOTS; ++i) q[i] = hdr.queueOk ? hdr.queue[i] : 0xFFF;
     char eng[96];
-    int used = 0;
-    eng[0] = '\0';
-    for (int i = 0; i < SC_BUILD_QUEUE_SLOTS && used + 8 < (int)sizeof(eng); ++i) {
-        used += _snprintf(eng + used, sizeof(eng) - used, "%s0x%03X",
-                          i ? "," : "", hdr.queueOk ? (unsigned)hdr.queue[i] : 0xFFFu);
-    }
+    ScRingFormat(q, eng, (int)sizeof(eng));
 
     ScLog("STATQ [%s] dialog=0x%08X root=0x%08X rootrect=(%d,%d,%d,%d) portrait=0x%08X "
           "ptype=0x%03X powner=%u head=%u queueOk=%d ringStable=%d engine=[%s]",

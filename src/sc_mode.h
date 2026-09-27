@@ -35,7 +35,6 @@ static inline ScMode ScModeResolve(void) {
     char buf[SC_ENV_MAX];
     if (!ScEnvRead("SCPLUGIN_MODE", buf, sizeof(buf))) return SC_MODE_OBSERVE;
     if (lstrcmpiA(buf, "hooktest") == 0) return SC_MODE_LOGONLY;
-    if (lstrcmpiA(buf, "logonly")  == 0) return SC_MODE_LOGONLY;
     if (lstrcmpiA(buf, "fanout")   == 0) return SC_MODE_FANOUT;
     return SC_MODE_OBSERVE;
 }

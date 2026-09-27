@@ -332,9 +332,7 @@ static bool g_frameDump = false;
 static char g_frameDumpDir[MAX_PATH];
 
 static bool GetFrameDump(void) {
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_FRAMEDUMP", g_frameDumpDir,
-                                      sizeof(g_frameDumpDir));
-    if (n == 0 || n >= sizeof(g_frameDumpDir)) { g_frameDumpDir[0] = '\0'; return false; }
+    if (!ScEnvRead("SCPLUGIN_FRAMEDUMP", g_frameDumpDir, sizeof(g_frameDumpDir))) return false;
     // Last component only; the parent (C:\decompile-sc-data\sc-work\logs) exists on every machine
     // this runs on, and a caller pointing somewhere deeper owns that path.
     CreateDirectoryA(g_frameDumpDir, NULL);
@@ -551,9 +549,6 @@ static char g_markerPath[MAX_PATH];
 static char g_lastMarker[256];
 
 static void ResolveMarkerPath(void) {
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_MARKER", g_markerPath, MAX_PATH);
-    if (n != 0 && n < MAX_PATH) return;
-
     char logPath[MAX_PATH];
     ScLogResolvePath(logPath, sizeof(logPath));
     char* slash = strrchr(logPath, '\\');
@@ -686,13 +681,6 @@ static void PollMarker(void) {
 
 static bool g_dialogScan = true;
 
-// Copies a NUL-terminated string out of the game, one byte at a time through
-// SafeRead, and sanitises it for the log: dialog text is game data, so a stray
-// newline or '|' would corrupt the line a parser is about to read.
-static void ReadDlgText(DWORD ptr, char* out, size_t outLen) {
-    ScLogCopyText(ptr, out, outLen);
-}
-
 // left,top,right,bottom -- four s16 at +0x04 (SC_BINDLG_OFF_BOUNDS).
 static void ReadDlgRect(DWORD dlg, int* r) {
     for (int i = 0; i < 4; ++i) {
@@ -734,7 +722,7 @@ static void ScanDialogs(void) {
             char name[64];
             DWORD text = 0;
             ReadU32(dlg + SC_BINDLG_OFF_TEXT, &text);
-            ReadDlgText(text, name, sizeof(name));
+            ScLogCopyText(text, name, sizeof(name));
             int r[4];
             ReadDlgRect(dlg, r);
 
@@ -753,7 +741,7 @@ static void ScanDialogs(void) {
                 char ctext[64];
                 DWORD ct = 0;
                 ReadU32(ctrl + SC_BINDLG_OFF_TEXT, &ct);
-                ReadDlgText(ct, ctext, sizeof(ctext));
+                ScLogCopyText(ct, ctext, sizeof(ctext));
                 if (ctext[0]) {
                     int cr[4];
                     ReadDlgRect(ctrl, cr);
@@ -785,41 +773,20 @@ static void ScanDialogs(void) {
     ScLog("DIALOGS n=%d%s%s", n, n ? " " : "", line);
 }
 
-static DWORD GetPollMs(void) {
-    return (DWORD)ScEnvInt("SCPLUGIN_POLL_MS", 250, 20, 5000);
-}
-
 static ScMode g_mode = SC_MODE_OBSERVE;
 
-static bool GetWorldScan(void) {
-    return ScEnvOptIn("SCPLUGIN_WORLDSCAN");
-}
-
-// ON by default, unlike the world scan: one line per CHANGE of the dialog set is a
-// handful of lines per run, and every suite's tips-dialog dismissal depends on it.
-static bool GetDialogScan(void) {
-    return ScEnvFlag("SCPLUGIN_DIALOGS", true);
-}
-
-// OFF by default, same shape and reason as the world scan.
-static bool GetCardScan(void) {
-    return ScEnvOptIn("SCPLUGIN_CARDSCAN");
-}
-
-// OFF by default, same shape and reason as the world scan.
-static bool GetScreenScan(void) {
-    return ScEnvOptIn("SCPLUGIN_SCREENSCAN");
-}
-
 static DWORD WINAPI ObserverThread(LPVOID) {
-    const DWORD pollMs = GetPollMs();
-    g_worldScan = GetWorldScan();
-    g_screenScan = GetScreenScan();
+    const DWORD pollMs = (DWORD)ScEnvInt("SCPLUGIN_POLL_MS", 250, 20, 5000);
+    // The world, screen and card scans are OFF by default (the world scan's section says
+    // why); the dialog scan is ON: one line per CHANGE of the dialog set is a handful of
+    // lines per run, and every suite's tips-dialog dismissal depends on it.
+    g_worldScan = ScEnvOptIn("SCPLUGIN_WORLDSCAN");
+    g_screenScan = ScEnvOptIn("SCPLUGIN_SCREENSCAN");
     g_frameDump = GetFrameDump();
-    g_dialogScan = GetDialogScan();
+    g_dialogScan = ScEnvFlag("SCPLUGIN_DIALOGS", true);
     // The read-only command-card scan must exist in observe mode too, because "the
     // card the stock game draws" is half of every comparison.
-    ScCardInit(ScEngineModuleBase(), GetCardScan());
+    ScCardInit(ScEngineModuleBase(), ScEnvOptIn("SCPLUGIN_CARDSCAN"));
     ResolveMarkerPath();
     ScLog("OBSERVER start pollMs=%u mode=%s%s", (unsigned)pollMs, ScModeName(g_mode),
           g_mode == SC_MODE_OBSERVE ? " (read-only; no writes to game memory)" : "");

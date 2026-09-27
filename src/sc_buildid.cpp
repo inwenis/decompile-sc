@@ -23,8 +23,6 @@ __attribute__((used))
 static const char g_scBuildStamp[] =
     SC_BUILD_STAMP_PREFIX SC_BUILD_ID " SRC=" SC_BUILD_SRC;
 
-const char* ScBuildStamp(void) { return g_scBuildStamp; }
-
 const char* ScBuildStampShort(void) {
     return g_scBuildStamp + (sizeof(SC_BUILD_STAMP_PREFIX) - 1);
 }

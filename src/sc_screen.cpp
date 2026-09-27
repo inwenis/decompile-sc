@@ -181,9 +181,7 @@ static char g_only[256];
 static bool g_onlySet = false;
 
 static void LoadOnlyFilter(void) {
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_WS_ONLY", g_only, sizeof(g_only));
-    g_onlySet = (n > 0 && n < sizeof(g_only));
-    if (!g_onlySet) g_only[0] = '\0';
+    g_onlySet = ScEnvRead("SCPLUGIN_WS_ONLY", g_only, sizeof(g_only));
 }
 
 static bool NameSelected(const char* name) {
@@ -205,9 +203,7 @@ static bool NameSelected(const char* name) {
 bool ScScreenActive(void) { return g_active; }
 int  ScScreenTargetWidth(void)  { return Geom()->w; }
 int  ScScreenTargetHeight(void) { return Geom()->h; }
-int  ScScreenPlayfieldHeight(void) { return Geom()->pfH; }
 int  ScScreenConsoleShiftY(void)  { return Geom()->consoleShiftY; }
-const char* ScScreenGeometryName(void) { return Geom()->name; }
 
 int ScScreenViewportTilesX(void) {
     // scroll.clamp.x.tiles is a stage-3 site; below that, or with the table

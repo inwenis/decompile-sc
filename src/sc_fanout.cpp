@@ -1706,26 +1706,20 @@ asm(
 );
 
 // The four allowlisted return addresses, relocated to this process's load address: a static
-// VA would be wrong under any base other than 0x00400000.
-static bool IsExtendSite(DWORD retAddr) {
-    return retAddr == ScRuntimeVa(SC_RET_MOVABLE_SHIFT_LEAD)
-        || retAddr == ScRuntimeVa(SC_RET_MOVABLE_SHIFT_CLICKED)
-        || retAddr == ScRuntimeVa(SC_RET_MOVABLE_COMBINE_NEW)
-        || retAddr == ScRuntimeVa(SC_RET_MOVABLE_COMBINE_OLD);
-}
-
+// VA would be wrong under any base other than 0x00400000. NULL = not one of them.
 static const char* ExtendSiteName(DWORD retAddr) {
     if (retAddr == ScRuntimeVa(SC_RET_MOVABLE_SHIFT_LEAD))    return "shift-click/lead";
     if (retAddr == ScRuntimeVa(SC_RET_MOVABLE_SHIFT_CLICKED)) return "shift-click/clicked";
     if (retAddr == ScRuntimeVa(SC_RET_MOVABLE_COMBINE_NEW))   return "combine/new-list";
     if (retAddr == ScRuntimeVa(SC_RET_MOVABLE_COMBINE_OLD))   return "combine/existing";
-    return "?";
+    return NULL;
 }
 
 extern "C" int SC_GAME_ENTRY
 ScFanoutMovableDecide(DWORD unit, DWORD retAddr, int verdict) {
     if (!g_buildingGroups || g_mode != SC_MODE_FANOUT) return verdict;
-    if (!IsExtendSite(retAddr)) return verdict;
+    const char* site = ExtendSiteName(retAddr);
+    if (!site) return verdict;
 
     const DWORD lead = *(DWORD*)ScRuntimeAddr(SC_VA_ACTIVE_PLAYER_SELECTION);
     if (!ScUnitPtrValid(lead)) return verdict;
@@ -1758,7 +1752,7 @@ ScFanoutMovableDecide(DWORD unit, DWORD retAddr, int verdict) {
     // pile ShouldLogForensics exists to prevent.
     ScLog("BGROUP extend [%s]: lead=0x%08X type=%u owner=%u | unit=0x%08X type=%u owner=%u "
           "live=%d(%s) engineSaid=%d -> %s",
-          ExtendSiteName(retAddr), (unsigned)lead, leadType, leadOwner,
+          site, (unsigned)lead, leadType, leadOwner,
           (unsigned)unit, type, owner, live ? 1 : 0, DropWhyName(why), verdict,
           allow ? "ALLOW" : "refuse");
     return allow ? 1 : 0;

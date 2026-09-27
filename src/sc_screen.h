@@ -65,15 +65,13 @@ int ScScreenScrollBiasY(void);
 // preset (unset = the first in sc_screen_presets.h).
 int ScScreenTargetWidth(void);
 int ScScreenTargetHeight(void);
-const char* ScScreenGeometryName(void);
 // Exposed for hooktest: resolves a %SCPLUGIN_WS_GEOMETRY% value the way the install
 // does. NULL or "" is the first preset; a known name (case-insensitive) fills w/h
 // and returns true; anything else returns false, which the install turns into a
 // refusal rather than a default.
 bool ScScreenLookupPreset(const char* name, int* w, int* h);
-// The playfield height and how far the bottom console moves DOWN (PF_H - 400;
-// 0 at the stock playfield height). Both from the generated table.
-int ScScreenPlayfieldHeight(void);
+// How far the bottom console moves DOWN (PF_H - 400; 0 at the stock playfield height),
+// from the generated table.
 int ScScreenConsoleShiftY(void);
 
 // Marks every dirty-grid cell under the playfield: what the engine's own full-redraw

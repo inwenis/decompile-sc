@@ -643,12 +643,7 @@ static const BYTE kPrologueTick[]   = { 0x56, 0x8B, 0xF0, 0x8B, 0x86,
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-bool ScProdQueueEnabled(void) {
-    char buf[16];
-    DWORD n = GetEnvironmentVariableA("SCPLUGIN_PRODQ", buf, sizeof(buf));
-    if (n == 0 || n >= sizeof(buf)) return false;
-    return buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y';
-}
+bool ScProdQueueEnabled(void) { return ScEnvOptIn("SCPLUGIN_PRODQ"); }
 
 static int ResolveMax(void) {
     return ScEnvInt("SCPLUGIN_PRODQ_MAX", SC_PRODQ_DEFAULT_MAX,

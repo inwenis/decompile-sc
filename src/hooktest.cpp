@@ -250,6 +250,19 @@ static int   g_captureCount = 0;
 
 static void* FakeRt(DWORD staticVa) { return g_fake + (staticVa - SC_PREFERRED_IMAGE_BASE); }
 
+static void DropFakeImage(void) {
+    if (g_fake) VirtualFree(g_fake, 0, MEM_RELEASE);
+    g_fake = NULL;
+}
+
+// Every part that builds engine state starts on a fresh, zeroed image.
+static bool FreshFakeImage(void) {
+    DropFakeImage();
+    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return false; }
+    return true;
+}
+
 static void __attribute__((fastcall)) CaptureEmit(const void* buf, unsigned len) {
     if (g_captureLen + (int)len > (int)sizeof(g_capture)) return;
     memcpy(g_capture + g_captureLen, buf, len);
@@ -356,9 +369,7 @@ static int ExpectOrderAt(const char* what, int off) {
 static void FanoutCoreTests(void) {
     Part("the fan-out core: 36 units, one right-click, no game, no hooks");
 
-    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
-                                 PAGE_READWRITE);
-    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+    if (!FreshFakeImage()) return;
 
     MakeUnits(64, 1);
     ResetQueueCounters();
@@ -604,8 +615,7 @@ static void FanoutCoreTests(void) {
     Check("nothing half-emitted", g_captureCount, 0);
 
     ScFanoutTestBegin(NULL, NULL, 200);   // leave the core inert
-    VirtualFree(g_fake, 0, MEM_RELEASE);
-    g_fake = NULL;
+    DropFakeImage();
 }
 
 // ---------------------------------------------------------------------------
@@ -643,9 +653,7 @@ static FanoutOutcome RunOne(const BYTE* cmd, int len) {
 static void OpcodePolicyTests(void) {
     Part("the per-opcode policy: which commands reach all 36 units");
 
-    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
-                                 PAGE_READWRITE);
-    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+    if (!FreshFakeImage()) return;
     MakeUnits(64, 1);
 
     // --- Stop: 2 bytes, id + queued.
@@ -798,8 +806,7 @@ static void OpcodePolicyTests(void) {
     }
 
     ScFanoutTestBegin(NULL, NULL, 200);
-    VirtualFree(g_fake, 0, MEM_RELEASE);
-    g_fake = NULL;
+    DropFakeImage();
 }
 
 // ---------------------------------------------------------------------------
@@ -815,7 +822,7 @@ static void OpcodePolicyTests(void) {
 #define FAKE_SPRITE_VA 0x00680000u          // inside the fake image, clear of everything else
 
 static DWORD g_addCalls = 0, g_removeCalls = 0;
-static DWORD g_lastAddSprite = 0, g_lastAddColour = 0, g_lastAddImageId = 0;
+static DWORD g_lastAddColour = 0, g_lastAddImageId = 0;
 static DWORD g_removedSprites[64];
 static int   g_removedCount = 0;
 static bool  g_addFails = false;            // simulate an exhausted image free list
@@ -824,7 +831,7 @@ static DWORD FakeSprite(int i) { return (DWORD)FakeRt(FAKE_SPRITE_VA) + (DWORD)i
 
 static DWORD FakeAddCircle(DWORD sprite, DWORD colour, DWORD baseImageId) {
     ++g_addCalls;
-    g_lastAddSprite = sprite; g_lastAddColour = colour; g_lastAddImageId = baseImageId;
+    (void)sprite; g_lastAddColour = colour; g_lastAddImageId = baseImageId;
     if (g_addFails) return 0;
     return 0xC0FFEE00u;   // a non-NULL "CImage*"; the module only tests it for zero
 }
@@ -885,9 +892,7 @@ static bool NoSelectionIndexWasWritten(int n) {
 static void CircleTests(void) {
     Part("selection circles: fake sprites, fake engine primitives");
 
-    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
-                                 PAGE_READWRITE);
-    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+    if (!FreshFakeImage()) return;
 
     MakeUnits(64, 1);
     MakeSprites(64);
@@ -1027,8 +1032,7 @@ static void CircleTests(void) {
     Check("FINAL: selectionIndex was never written",       NoSelectionIndexWasWritten(64) ? 1 : 0, 1);
 
     ScCirclesInit(NULL, false);   // leave the module inert
-    VirtualFree(g_fake, 0, MEM_RELEASE);
-    g_fake = NULL;
+    DropFakeImage();
 }
 
 // ---------------------------------------------------------------------------
@@ -1045,12 +1049,12 @@ static void CircleTests(void) {
 #define FAKE_DLG_VA      0x00690000u
 #define FAKE_STATUSER_VA 0x00691000u
 
-static unsigned g_ctlShows = 0, g_ctlHides = 0, g_ctlUpdates = 0;
+static unsigned g_ctlShows = 0, g_ctlUpdates = 0;
 static unsigned g_engInteractCalls = 0;
 static unsigned g_origDispatchCalls = 0;
 
 static void FakeShowCtl(DWORD ctrl)   { ++g_ctlShows;   *(DWORD*)(ctrl + SC_BINDLG_OFF_FLAGS) |= SC_CTRL_FLAG_VISIBLE; }
-static void FakeHideCtl(DWORD ctrl)   { ++g_ctlHides;   *(DWORD*)(ctrl + SC_BINDLG_OFF_FLAGS) &= ~(DWORD)SC_CTRL_FLAG_VISIBLE; }
+static void FakeHideCtl(DWORD ctrl)   { *(DWORD*)(ctrl + SC_BINDLG_OFF_FLAGS) &= ~(DWORD)SC_CTRL_FLAG_VISIBLE; }
 
 // A MODEL OF WHEN PIXELS LAND -- and it is a model; the engine is not in this process. The two
 // facts the band placement rests on are both about TIMING and ORDER, which a primitive that
@@ -1282,15 +1286,8 @@ static void SmallSync(int n)    { SmallSelection(n);  SetEngineSelectionFirst(n)
 // Link FakeUnit(0..n-1) into the fake playerUnitList[player] via +0x68/+0x6C, so
 // the click gate's ScUnitInOwnPlayerList walk runs for real. Head-insert.
 static void BuildFakePlayerList(int n, BYTE player) {
-    DWORD* heads = (DWORD*)FakeRt(SC_VA_PLAYER_UNIT_LIST);
-    heads[player] = 0;
-    for (int i = 0; i < n; ++i) {
-        DWORD u = FakeUnit(i);
-        *(DWORD*)(u + SC_CUNIT_OFF_LIST_PREV) = 0;
-        *(DWORD*)(u + SC_CUNIT_OFF_LIST_NEXT) = heads[player];
-        if (heads[player]) *(DWORD*)(heads[player] + SC_CUNIT_OFF_LIST_PREV) = u;
-        heads[player] = u;
-    }
+    ((DWORD*)FakeRt(SC_VA_PLAYER_UNIT_LIST))[player] = 0;
+    for (int i = 0; i < n; ++i) RelinkFakeUnit(i, player);
 }
 static void UnlinkFakeUnit(int i, BYTE player) {   // models removal from play
     DWORD* heads = (DWORD*)FakeRt(SC_VA_PLAYER_UNIT_LIST);
@@ -1302,7 +1299,7 @@ static void UnlinkFakeUnit(int i, BYTE player) {   // models removal from play
     *(DWORD*)(u + SC_CUNIT_OFF_LIST_NEXT) = 0;
     *(DWORD*)(u + SC_CUNIT_OFF_LIST_PREV) = 0;
 }
-static void RelinkFakeUnit(int i, BYTE player) {   // put it back, for cleanup
+static void RelinkFakeUnit(int i, BYTE player) {
     DWORD* heads = (DWORD*)FakeRt(SC_VA_PLAYER_UNIT_LIST);
     DWORD u = FakeUnit(i);
     *(DWORD*)(u + SC_CUNIT_OFF_LIST_PREV) = 0;
@@ -1323,7 +1320,7 @@ static void MakeRButtonEvt(BYTE* buf) {
 }
 
 static void ResetHudCounters(void) {
-    g_ctlShows = g_ctlHides = g_ctlUpdates = 0;
+    g_ctlShows = g_ctlUpdates = 0;
     g_engInteractCalls = g_origDispatchCalls = 0;
 }
 
@@ -1375,9 +1372,7 @@ static const int kFirstTwelve[12] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
 static void ControlGroupTests(void) {
     Part("shadow control groups: Ctrl+N over 12, and N brings them back");
 
-    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
-                                 PAGE_READWRITE);
-    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+    if (!FreshFakeImage()) return;
 
     MakeUnits(64, 1);
     // All three player-id globals set to the units' owner, so the row this code indexes
@@ -1697,8 +1692,7 @@ static void ControlGroupTests(void) {
     }
 
     ScFanoutTestBegin(NULL, NULL, 200);   // leave the core inert
-    VirtualFree(g_fake, 0, MEM_RELEASE);
-    g_fake = NULL;
+    DropFakeImage();
 }
 
 // The wireframe draw's stand-in: records which sheet the engine would have blitted from.
@@ -1708,13 +1702,7 @@ static void __attribute__((fastcall)) FakeWireDraw(DWORD button, DWORD edx, DWOR
     g_wireSeenSheet = *(DWORD*)FakeRt(SC_VA_GRPWIRE_SHEET);
 }
 
-static void HudRowTests(void) {
-    Part("HUD-row paging: fake dialog tree, fake engine primitives");
-
-    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
-                                 PAGE_READWRITE);
-    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
-
+static void BeginHudFixture(void) {
     MakeUnits(64, 1);
     MakeSprites(64);                          // poisoned selectionIndex, part [8] style
     for (int i = 0; i < 64; ++i) {            // give every unit a type id and HP
@@ -1731,6 +1719,13 @@ static void HudRowTests(void) {
     // synchronously inside HudFrame -- so the module's wall-clock settle windows would be
     // measuring this harness. Zero them; the ORDER they enforce still runs (see the header).
     ScHudRowTestSetBandTiming(0, 0);
+}
+
+static void HudRowTests(void) {
+    Part("HUD-row paging: fake dialog tree, fake engine primitives");
+
+    if (!FreshFakeImage()) return;
+    BeginHudFixture();
 
     printf("\n    the row's pictures: an id grpwire.grp has no picture for is drawn from an empty sheet\n");
     {
@@ -2216,8 +2211,7 @@ static void HudRowTests(void) {
 
     ScHudRowTestBegin(NULL, NULL, NULL, NULL, NULL, NULL);   // leave it inert
     ScFanoutTestBegin(NULL, NULL, 200);
-    VirtualFree(g_fake, 0, MEM_RELEASE);
-    g_fake = NULL;
+    DropFakeImage();
 }
 
 // ---------------------------------------------------------------------------
@@ -2269,10 +2263,7 @@ static void MakeCandidates(DWORD* buf, const int* idx, int n) {
 static void BuildingGroupTests(void) {
     Part("same-type building groups: one box, N buildings, N rallies");
 
-    // Its own fake image, like every other part: each one releases the previous one's.
-    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
-                                 PAGE_READWRITE);
-    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+    if (!FreshFakeImage()) return;
 
     MakeUnits(64, 1);
     ResetQueueCounters();
@@ -2476,8 +2467,7 @@ static void BuildingGroupTests(void) {
     }
 
     ScFanoutTestSetMovable(NULL);
-    VirtualFree(g_fake, 0, MEM_RELEASE);
-    g_fake = NULL;
+    DropFakeImage();
 }
 
 // ---------------------------------------------------------------------------
@@ -2517,9 +2507,7 @@ static void SetFakeEngineSelection(const int* idx, int n) {
 static void BuildingParityTests(void) {
     Part("building-group parity: extend a group, recall a group");
 
-    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
-                                 PAGE_READWRITE);
-    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+    if (!FreshFakeImage()) return;
 
     MakeUnits(64, 1);
     ResetQueueCounters();
@@ -2717,8 +2705,7 @@ static void BuildingParityTests(void) {
 
     ScFanoutTestSetCreateSelections(NULL);
     ScFanoutTestSetMovable(NULL);
-    VirtualFree(g_fake, 0, MEM_RELEASE);
-    g_fake = NULL;
+    DropFakeImage();
 }
 
 // ---------------------------------------------------------------------------
@@ -2840,11 +2827,7 @@ static void PqBegin(int maxTotal, DWORD minerals, DWORD gas) {
 static void ProdQueueTests(void) {
     Part("the production-queue core: >5 queued, no game, no hooks");
 
-    if (!g_fake) {
-        g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
-                                     PAGE_READWRITE);
-        if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
-    }
+    if (!FreshFakeImage()) return;
 
     printf("\n    the FIFTH item is taken back out of the ring -- and the plugin pays nothing\n");
     PqBegin(16, 1000, 500);
@@ -3272,11 +3255,7 @@ static void UqPress(int kind, unsigned id) {
 static void UpgradeQueueTests(void) {
     Part("the upgrade-queue core: more than one research at a building");
 
-    if (!g_fake) {
-        g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
-                                     PAGE_READWRITE);
-        if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
-    }
+    if (!FreshFakeImage()) return;
 
     printf("\n    an IDLE building is left entirely to the engine\n");
     UqBegin(8, 1000, 1000);
@@ -3708,10 +3687,10 @@ static void BuildFakeCard(bool cloakDisabled) {
     *(DWORD*)(DWORD_PTR)(e + SC_BUTTONSET_OFF_PTR) = FakeCardBtn(0);
 }
 
-// A checksum over the whole fake card region -- the dialog, the controls and the
-// Button array. "Read-only" is a claim about behaviour, so it is measured.
-static DWORD FakeCardChecksum(void) {
-    const BYTE* p = (const BYTE*)FakeRt(FAKE_CARD_DLG_VA);
+// A checksum over a whole fake dialog region -- the dialog, its controls and the records
+// they point at. "Read-only" is a claim about behaviour, so it is measured.
+static DWORD FakeChecksum(DWORD va) {
+    const BYTE* p = (const BYTE*)FakeRt(va);
     DWORD h = 2166136261u;
     for (unsigned i = 0; i < 0x3000u; ++i) { h ^= p[i]; h *= 16777619u; }
     return h;
@@ -3725,11 +3704,7 @@ static const ScCardSlot* FindSlot(const ScCardSlot* s, int n, int index) {
 static void CardScanTests(void) {
     Part("the command-card read-back, against a fake card dialog");
 
-    // Every part allocates its own fake image and releases it again (the previous
-    // part has already freed g_fake by the time this runs).
-    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
-                                 PAGE_READWRITE);
-    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+    if (!FreshFakeImage()) return;
     ScCardTestBegin(g_fake, FakeCardRead);
 
     ScCardHeader hdr;
@@ -3737,10 +3712,10 @@ static void CardScanTests(void) {
 
     // --- (a) the Ghost card with Cloak GREYED -------------------------------
     BuildFakeCard(true);
-    DWORD before = FakeCardChecksum();
+    DWORD before = FakeChecksum(FAKE_CARD_DLG_VA);
     int n = ScCardSnapshot(&hdr, slots, SC_CARD_SLOTS);
     Check("nine card controls found", n, 9);
-    Check("the walk wrote nothing (checksum)", (long long)(FakeCardChecksum() == before), 1);
+    Check("the walk wrote nothing (checksum)", (long long)(FakeChecksum(FAKE_CARD_DLG_VA) == before), 1);
     Check("header resolved the card dialog", hdr.ok ? 1 : 0, 1);
     Check("card id is the portrait unit's buttonset", hdr.cardId, hdr.portraitSet);
     Check("that buttonset holds nine buttons", hdr.setCount, 9);
@@ -3833,8 +3808,7 @@ static void CardScanTests(void) {
     ScCardTestEnd();
     Check("the module is off again after the test", ScCardEnabled() ? 1 : 0, 0);
 
-    VirtualFree(g_fake, 0, MEM_RELEASE);
-    g_fake = NULL;
+    DropFakeImage();
 }
 
 // ---------------------------------------------------------------------------
@@ -3930,15 +3904,6 @@ static void ProdFanTests(void) {
 
 static DWORD FakeStatCtl(int i)  { return (DWORD)FakeRt(FAKE_STAT_DLG_VA) + 0x100u + (DWORD)i * SC_BINDLG_SIZE; }
 static DWORD FakeQIconUser(int i) { return (DWORD)FakeRt(FAKE_STAT_USER_VA) + (DWORD)i * 0x10u; }
-
-// Over the dialog, its controls and the statUser records -- "read-only" is a claim
-// about behaviour, so it is measured here the way [14] measures the card's.
-static DWORD FakeStatusChecksum(void) {
-    const BYTE* p = (const BYTE*)FakeRt(FAKE_STAT_DLG_VA);
-    DWORD h = 2166136261u;
-    for (unsigned i = 0; i < 0x3000u; ++i) { h ^= p[i]; h *= 16777619u; }
-    return h;
-}
 
 // `queued` is the logical queue in DISPLAY order (0xE4 = empty), `head` the ring head
 // the icons are read through, so the fake exercises the (head + k) % 5 arithmetic
@@ -4063,13 +4028,12 @@ static void QiBtnRect(int i, short* r) {
     r[3] = (short)(r[1] + 33);
 }
 
-static unsigned g_qiShows = 0, g_qiHides = 0, g_qiUpdates = 0, g_qiDriverCalls = 0;
+static unsigned g_qiShows = 0, g_qiUpdates = 0;
 static void QiShow(DWORD c)   { ++g_qiShows;   *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) |= SC_CTRL_FLAG_VISIBLE; }
-static void QiHide(DWORD c)   { ++g_qiHides;   *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) &= ~(DWORD)SC_CTRL_FLAG_VISIBLE; }
+static void QiHide(DWORD c)   { *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) &= ~(DWORD)SC_CTRL_FLAG_VISIBLE; }
 static void QiUpdate(DWORD c) { ++g_qiUpdates; (void)c; }
 static unsigned g_qiEnables = 0;
 static void QiEnable(DWORD c) { ++g_qiEnables; *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) &= ~(DWORD)SC_CTRL_FLAG_DISABLED; }
-static void QiOrigDriver(void) { ++g_qiDriverCalls; }
 
 // Root + the five queue icons (ids 2..6) + the twelve wireframe buttons (ids 0x21..0x2C),
 // laid out the way the live dialog's QINDDLG dump reports them.
@@ -4186,9 +4150,7 @@ static DWORD QiIndicator(void) {
 static void QueueIndTests(void) {
     Part("the queue-overflow indicator: composer, splice, and the fifth icon");
 
-    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
-                                 PAGE_READWRITE);
-    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+    if (!FreshFakeImage()) return;
 
     printf("\n    the composer, driven directly -- one case per line it can produce\n");
     {
@@ -4253,7 +4215,7 @@ static void QueueIndTests(void) {
     Check("the plugin holds five", PqOverflow(), 5);
 
     BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
-    ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable, &QiOrigDriver);
+    ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable);
     Check("nothing spliced before the first frame", QiChildren(), QI_CTL_COUNT);
     // THE POSITIVE HALF of the icon assertions below: the fifth slot starts out pointing at
     // the button-border art, because that is what the engine's layout leaves on a slot it
@@ -4338,7 +4300,6 @@ static void QueueIndTests(void) {
                   (long long)(ScQueueIndBoxDiff(QiRoot()) >= 0), 1);
         }
     }
-    Check("the original driver ran first, every frame", (long long)g_qiDriverCalls, 0);
 
     printf("\n    ... and the FIFTH icon is the ENGINE's to draw now: the phantom bracket\n");
     // The fifth icon is the ENGINE's to draw: the detour on queueLayout (0x004268D0) writes
@@ -4413,7 +4374,7 @@ static void QueueIndTests(void) {
         // the empty-slot layout EXACTLY as the engine's own empty branch left it. This is
         // the regression guard on a hand-fill quietly reappearing in the frame path.
         BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
-        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable, &QiOrigDriver);
+        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable);
         ScQueueIndOnFrame();
         DWORD c = QiCtl(4), u = QiUser(4);
         Check("the frame path no longer writes the fifth icon's mode",
@@ -4457,7 +4418,7 @@ static void QueueIndTests(void) {
         // untouched record) or the OTHER item's frame is a visible failure.
         *(WORD*)((DWORD)FakeRt(SC_VA_UPGRADE_ICON) + UQ_UPG_B * 2) = 0x124;
         *(WORD*)((DWORD)FakeRt(SC_VA_TECH_ICON)    + UQ_TECH_A * 2) = 0x12E;
-        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable, &QiOrigDriver);
+        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable);
         ScQueueIndOnFrame();
         Check("two held fit the icons, so no \"+N\" is said", ScQueueIndCurrentMode(), SC_QIND_NONE);
         Check("the ENGINE's own slot 0 (id 2) was left hidden",
@@ -4528,7 +4489,7 @@ static void QueueIndTests(void) {
         UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);
         for (unsigned t = 0; t < 7; ++t) UqPress(SC_UPGQ_KIND_TECH, t);   // seven DISTINCT techs
         Check("seven are held", UqQueued(), 7);
-        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable, &QiOrigDriver);
+        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable);
         ScQueueIndOnFrame();
         Check("the indicator is in UPGRADE mode", ScQueueIndCurrentMode(), SC_QIND_UPGRADE);
         Check("  saying \"+4\"", (long long)(strcmp(ScQueueIndCurrentText(), "+4") == 0), 1);
@@ -4584,7 +4545,7 @@ static void QueueIndTests(void) {
         PqBegin(16, 3000, 500);
         for (int i = 0; i < 9; ++i) PqTrain(PQ_TYPE_B);
         BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
-        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable, &QiOrigDriver);
+        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable);
         ScQueueIndOnFrame();
     }
 
@@ -4740,7 +4701,7 @@ static void QueueIndTests(void) {
         PqBegin(16, 3000, 500);
         for (int i = 0; i < 9; ++i) PqTrain(PQ_TYPE_B);
         BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
-        ScQueueIndTestBegin(NULL, &QiShow, &QiHide, &QiUpdate, &QiEnable, &QiOrigDriver);  // disabled
+        ScQueueIndTestBegin(NULL, &QiShow, &QiHide, &QiUpdate, &QiEnable);  // disabled
         unsigned shows = g_qiShows;
         ScQueueIndOnFrame();
         ScQueueIndOnFrame();
@@ -4754,10 +4715,9 @@ static void QueueIndTests(void) {
               (long long)(*(DWORD*)(QiUser(4) + SC_STATUSER_OFF_GRP) == QiGrpBtns()), 1);
     }
 
-    ScQueueIndTestBegin(NULL, NULL, NULL, NULL, NULL, NULL);
+    ScQueueIndTestBegin(NULL, NULL, NULL, NULL, NULL);
     ScProdQueueTestBegin(NULL, SC_PRODQ_DEFAULT_MAX);
-    VirtualFree(g_fake, 0, MEM_RELEASE);
-    g_fake = NULL;
+    DropFakeImage();
 }
 
 // ---------------------------------------------------------------------------
@@ -4774,15 +4734,13 @@ static void QueueIndTests(void) {
 static void UpgQueueIndTests(void) {
     Part("the queue indicator shows QUEUED UPGRADES through the real frame path (task 037)");
 
-    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
-                                 PAGE_READWRITE);
-    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+    if (!FreshFakeImage()) return;
 
     // The same fake status pane QueueIndTests drives, with an EMPTY ring: a building that
     // is researching is not training anything, so every one of the five queue icons starts
     // in the engine's own greyed placeholder state, same as a real Engineering Bay's.
     BuildFakeQIndPane(0, 0);
-    ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable, &QiOrigDriver);
+    ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable);
 
     // One running (the engine's own slot) plus two held -- "2+ upgrades queued", the
     // user's own words, and a mixed upgrade/tech pair so this cannot be mistaken for a
@@ -4834,18 +4792,15 @@ static void UpgQueueIndTests(void) {
     Check("and the engine's visible bit is clear",
           ScQueueIndIsShown() ? 1 : 0, 0);
 
-    ScQueueIndTestBegin(NULL, NULL, NULL, NULL, NULL, NULL);
+    ScQueueIndTestBegin(NULL, NULL, NULL, NULL, NULL);
     ScUpgQueueTestBegin(NULL, SC_UPGQ_DEFAULT_MAX, NULL);
-    VirtualFree(g_fake, 0, MEM_RELEASE);
-    g_fake = NULL;
+    DropFakeImage();
 }
 
 static void StatusStripTests(void) {
     Part("the status pane's production-queue strip, against a fake dialog");
 
-    g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
-                                 PAGE_READWRITE);
-    if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
+    if (!FreshFakeImage()) return;
     ScCardTestBegin(g_fake, FakeCardRead);
 
     ScStatusHeader hdr;
@@ -4855,12 +4810,12 @@ static void StatusStripTests(void) {
     const WORD PROBE = 64;
     WORD q3[SC_STATQ_SLOTS] = { PROBE, PROBE, PROBE, SC_BUILD_QUEUE_EMPTY, SC_BUILD_QUEUE_EMPTY };
     BuildFakeStatusPane(q3, 3, false);
-    DWORD before = FakeStatusChecksum();
+    DWORD before = FakeChecksum(FAKE_STAT_DLG_VA);
     int n = ScStatusSnapshot(&hdr, slots, SC_STATQ_SLOTS);
     Check("five queue icons found", n, SC_STATQ_SLOTS);
     Check("the header resolved the status dialog", hdr.ok ? 1 : 0, 1);
     Check("the walk wrote nothing (checksum)",
-          (long long)(FakeStatusChecksum() == before), 1);
+          (long long)(FakeChecksum(FAKE_STAT_DLG_VA) == before), 1);
     Check("the portrait unit's ring was readable", hdr.queueOk ? 1 : 0, 1);
     Check("head reads back", hdr.head, 3);
     Check("all five icons are visible", hdr.shown, SC_STATQ_SLOTS);
@@ -4939,8 +4894,7 @@ static void StatusStripTests(void) {
     Check("a null status dialog reports not-ok, no slots", (n == 0 && !hdr.ok) ? 1 : 0, 1);
 
     ScCardTestEnd();
-    VirtualFree(g_fake, 0, MEM_RELEASE);
-    g_fake = NULL;
+    DropFakeImage();
 }
 
 // ---------------------------------------------------------------------------
@@ -4958,11 +4912,7 @@ static void StatusStripTests(void) {
 static void SessionEpochTests(void) {
     Part("the game-session epoch: six kinds of cross-game state, one counter");
 
-    if (!g_fake) {
-        g_fake = (BYTE*)VirtualAlloc(NULL, FAKE_IMAGE_BYTES, MEM_COMMIT | MEM_RESERVE,
-                                     PAGE_READWRITE);
-        if (!g_fake) { printf("  FAIL could not allocate the fake image\n"); ++g_failures; return; }
-    }
+    if (!FreshFakeImage()) return;
 
     printf("\n    the counter itself\n");
     ScSessionTestBegin();
@@ -5208,18 +5158,7 @@ static void SessionEpochTests(void) {
     // The shadow version's consumer: the HUD row's page state.
     printf("\n    #67(4) sc_hudrow: the page and the slot cache do not survive a game\n");
     {
-        MakeUnits(64, 1);
-        MakeSprites(64);
-        for (int i = 0; i < 64; ++i) {
-            *(WORD*) (FakeUnit(i) + SC_CUNIT_OFF_UNIT_ID)   = (WORD)(100 + i);
-            *(DWORD*)(FakeUnit(i) + SC_CUNIT_OFF_HITPOINTS) = 40 * 256;
-        }
-        BuildFakePlayerList(64, 1);
-        ScFanoutTestBegin(g_fake, NULL, 200);
-        BuildFakeDialog();
-        ScHudRowTestBegin(g_fake, &FakeShowCtl, &FakeHideCtl, &FakeUpdateCtl,
-                          &FakeEngineInteract, &FakeOrigDispatch);
-        ScHudRowTestSetBandTiming(0, 0);
+        BeginHudFixture();
         SetHudGlobals(FakeRoot(), FakeUnit(0));
 
         Drive36Sync();
@@ -5315,18 +5254,6 @@ struct LedgerFake {
 };
 
 static void LedgerTests(void) {
-    Part("widescreen presets: the name lookup the install refuses on");
-    {
-        int w = 0, h = 0;
-        Check("unset picks the first preset", ScScreenLookupPreset(NULL, &w, &h) ? 1 : 0, 1);
-        Check("  and it is 1280 wide", w, 1280);
-        Check("  and 880 tall", h, 880);
-        Check("empty is unset", ScScreenLookupPreset("", &w, &h) ? 1 : 0, 1);
-        Check("a named preset resolves, case-insensitive", ScScreenLookupPreset("1280X720", &w, &h) ? 1 : 0, 1);
-        Check("  to its own height", h, 720);
-        Check("a near miss is refused, not defaulted", ScScreenLookupPreset("1280x800", &w, &h) ? 1 : 0, 0);
-    }
-
     Part("the shared per-building ledger: lookup, removal, and the total");
 
     LedgerFake rec[4];
@@ -5375,72 +5302,21 @@ static void LedgerTests(void) {
     Check("  and an empty one refuses to go negative", n, 0);
 }
 
-int main(void) {
-    // Unbuffered: this binary writes executable memory and drives a fake image, so the
-    // interesting failure is a fault, and a faulting run must still say WHICH case it
-    // was in. With the default buffering the last few hundred lines are lost with the
-    // process and the crash looks like it happened at the end of the previous part.
-    setvbuf(stdout, NULL, _IONBF, 0);
-
-    // PER PROCESS, not one path for the whole machine. A single %TEMP%\scplugin-hooktest.log
-    // lets two workers running run-ci-local.ps1 at the same time fight over one file, and a
-    // gate that fails once then passes on a re-run at the SAME commit is the worst shape a
-    // gate can have: a real failure is indistinguishable from a collision. A caller that
-    // wants the log somewhere specific can still set SCPLUGIN_LOG; this only fills in a
-    // default that cannot collide.
-    char tmp[MAX_PATH];
-    if (GetEnvironmentVariableA("SCPLUGIN_LOG", tmp, MAX_PATH) == 0) {
-        char dir[MAX_PATH];
-        GetTempPathA(MAX_PATH, dir);
-        wsprintfA(tmp, "%sscplugin-hooktest-%lu.log", dir, GetCurrentProcessId());
-        SetEnvironmentVariableA("SCPLUGIN_LOG", tmp);
-    }
-    ScLogOpen();
-    printf("hooktest: log -> %s\n", tmp);
-
-    unsigned slots[4] = { 11, 22, 33, 44 };
-
-    Part("baseline (unhooked)");
-    Check("TgtFastcall(5,3) = 5*2+3+7", TgtFastcall(5, 3), 20);
-    Check("TgtStdcall(5,3)  = 5+3*3",   TgtStdcall(5, 3), 14);
-    CallMixed(2, slots, 100, 1000);
-    Check("TgtMixed -> 2+11+100+1000", g_mixedResult, 1113);
-
-    Part("the signature check refuses a wrong prologue");
+static void PresetTests(void) {
+    Part("widescreen presets: the name lookup the install refuses on");
     {
-        ScHook bogus;
-        const BYTE wrong[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0x00 };
-        bool ok = ScHookInstall(&bogus, "bogus", (void*)&TgtFastcall, (void*)&HkFast,
-                                5, wrong, (int)sizeof(wrong));
-        Check("install with a mismatched prologue is refused", ok ? 1 : 0, 0);
-        Check("nothing was patched: TgtFastcall(5,3)", TgtFastcall(5, 3), 20);
+        int w = 0, h = 0;
+        Check("unset picks the first preset", ScScreenLookupPreset(NULL, &w, &h) ? 1 : 0, 1);
+        Check("  and it is 1280 wide", w, 1280);
+        Check("  and 880 tall", h, 880);
+        Check("empty is unset", ScScreenLookupPreset("", &w, &h) ? 1 : 0, 1);
+        Check("a named preset resolves, case-insensitive", ScScreenLookupPreset("1280X720", &w, &h) ? 1 : 0, 1);
+        Check("  to its own height", h, 720);
+        Check("a near miss is refused, not defaulted", ScScreenLookupPreset("1280x800", &w, &h) ? 1 : 0, 0);
     }
+}
 
-    Part("install the three detours");
-    {
-        const BYTE pFast[]  = { 0x55, 0x8B, 0xEC, 0x51, 0xA1 };
-        const BYTE pStd[]   = { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x5C };
-        const BYTE pMixed[] = { 0x55, 0x8B, 0xEC, 0x53, 0x56 };
-
-        Check("install queueCommand-shaped (9B window)",
-              ScHookInstall(&g_hFast, "fast", (void*)&TgtFastcall, (void*)&HkFast,
-                            9, pFast, (int)sizeof(pFast)) ? 1 : 0, 1);
-        Check("install CMDACT_Select-shaped (6B window)",
-              ScHookInstall(&g_hStd, "std", (void*)&TgtStdcall, (void*)&HkStd,
-                            6, pStd, (int)sizeof(pStd)) ? 1 : 0, 1);
-        bool m = ScHookInstall(&g_hMixed, "mixed", (void*)&TgtMixed,
-                               (void*)&ScTestMixedThunk, 5, pMixed, (int)sizeof(pMixed));
-        if (m) g_testMixedTrampoline = g_hMixed.trampoline;
-        Check("install sortOverflow-shaped (5B window)", m ? 1 : 0, 1);
-    }
-
-    Part("detours run, trampolines still compute the original result");
-    Check("TgtFastcall(5,3) -> original 20 + 1000", TgtFastcall(5, 3), 1020);
-    Check("  detour entered", g_fastCalls, 1);
-    Check("TgtFastcall(9,1) -> original 26 + 1000", TgtFastcall(9, 1), 1026);
-    Check("TgtStdcall(5,3)  -> original 14 + 2000", TgtStdcall(5, 3), 2014);
-    Check("  detour entered", g_stdCalls, 1);
-
+static void MenuSkyTests(void) {
     Part("menu sky: palette mapping, fade-stable levels, star density, the nebula");
     {
         // A descending grey ramp: index i holds grey 255-i, plus one pure red entry.
@@ -5589,6 +5465,73 @@ int main(void) {
         free(sky);
         free(again);
     }
+}
+
+int main(void) {
+    // Unbuffered: this binary writes executable memory and drives a fake image, so the
+    // interesting failure is a fault, and a faulting run must still say WHICH case it
+    // was in. With the default buffering the last few hundred lines are lost with the
+    // process and the crash looks like it happened at the end of the previous part.
+    setvbuf(stdout, NULL, _IONBF, 0);
+
+    // PER PROCESS, not one path for the whole machine. A single %TEMP%\scplugin-hooktest.log
+    // lets two hooktest runs at the same time fight over one file, and a
+    // gate that fails once then passes on a re-run at the SAME commit is the worst shape a
+    // gate can have: a real failure is indistinguishable from a collision. A caller that
+    // wants the log somewhere specific can still set SCPLUGIN_LOG; this only fills in a
+    // default that cannot collide.
+    char tmp[MAX_PATH];
+    if (GetEnvironmentVariableA("SCPLUGIN_LOG", tmp, MAX_PATH) == 0) {
+        char dir[MAX_PATH];
+        GetTempPathA(MAX_PATH, dir);
+        wsprintfA(tmp, "%sscplugin-hooktest-%lu.log", dir, GetCurrentProcessId());
+        SetEnvironmentVariableA("SCPLUGIN_LOG", tmp);
+    }
+    ScLogOpen();
+    printf("hooktest: log -> %s\n", tmp);
+
+    unsigned slots[4] = { 11, 22, 33, 44 };
+
+    Part("baseline (unhooked)");
+    Check("TgtFastcall(5,3) = 5*2+3+7", TgtFastcall(5, 3), 20);
+    Check("TgtStdcall(5,3)  = 5+3*3",   TgtStdcall(5, 3), 14);
+    CallMixed(2, slots, 100, 1000);
+    Check("TgtMixed -> 2+11+100+1000", g_mixedResult, 1113);
+
+    Part("the signature check refuses a wrong prologue");
+    {
+        ScHook bogus;
+        const BYTE wrong[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0x00 };
+        bool ok = ScHookInstall(&bogus, "bogus", (void*)&TgtFastcall, (void*)&HkFast,
+                                5, wrong, (int)sizeof(wrong));
+        Check("install with a mismatched prologue is refused", ok ? 1 : 0, 0);
+        Check("nothing was patched: TgtFastcall(5,3)", TgtFastcall(5, 3), 20);
+    }
+
+    Part("install the three detours");
+    {
+        const BYTE pFast[]  = { 0x55, 0x8B, 0xEC, 0x51, 0xA1 };
+        const BYTE pStd[]   = { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x5C };
+        const BYTE pMixed[] = { 0x55, 0x8B, 0xEC, 0x53, 0x56 };
+
+        Check("install queueCommand-shaped (9B window)",
+              ScHookInstall(&g_hFast, "fast", (void*)&TgtFastcall, (void*)&HkFast,
+                            9, pFast, (int)sizeof(pFast)) ? 1 : 0, 1);
+        Check("install CMDACT_Select-shaped (6B window)",
+              ScHookInstall(&g_hStd, "std", (void*)&TgtStdcall, (void*)&HkStd,
+                            6, pStd, (int)sizeof(pStd)) ? 1 : 0, 1);
+        bool m = ScHookInstall(&g_hMixed, "mixed", (void*)&TgtMixed,
+                               (void*)&ScTestMixedThunk, 5, pMixed, (int)sizeof(pMixed));
+        if (m) g_testMixedTrampoline = g_hMixed.trampoline;
+        Check("install sortOverflow-shaped (5B window)", m ? 1 : 0, 1);
+    }
+
+    Part("detours run, trampolines still compute the original result");
+    Check("TgtFastcall(5,3) -> original 20 + 1000", TgtFastcall(5, 3), 1020);
+    Check("  detour entered", g_fastCalls, 1);
+    Check("TgtFastcall(9,1) -> original 26 + 1000", TgtFastcall(9, 1), 1026);
+    Check("TgtStdcall(5,3)  -> original 14 + 2000", TgtStdcall(5, 3), 2014);
+    Check("  detour entered", g_stdCalls, 1);
 
     Part("the register-convention thunk sees EAX/ECX AND the stack args");
     printf("    and the original still runs with every register intact\n");
@@ -5649,6 +5592,8 @@ int main(void) {
     SessionEpochTests();     // [22]
     CodeCaveTests();         // [23]  1280 wide
     LedgerTests();           // [24]  the shared per-building ledger
+    PresetTests();           // [25]
+    MenuSkyTests();          // [26]
 
     printf("\nhooktest: %d failure(s)\n", g_failures);
     ScLogClose();

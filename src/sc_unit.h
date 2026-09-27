@@ -186,6 +186,15 @@ static inline DWORD ScDlgFindChild(DWORD root, short id) {
     return 0;
 }
 
+// Is `ctrl` (by address) linked into root's child chain? Bounded like ScDlgFindChild.
+static inline bool ScDlgHasChild(DWORD root, DWORD ctrl) {
+    DWORD c = ScDlgChild(root);
+    for (int guard = 0; c && guard < SC_MAX_CTRLS_WALK; ++guard, c = ScDlgNext(c)) {
+        if (c == ctrl) return true;
+    }
+    return false;
+}
+
 // A control's bounds: four shorts at +0x04, in LEFT, TOP, RIGHT, BOTTOM order, and
 // RELATIVE TO THE DIALOG -- the engine adds the dialog's own origin (0x00458850 does
 // `dlg->rct.left + child->rct.left`), so an absolute point is root + ctrl.

@@ -125,7 +125,6 @@ bool ScHookInstall(ScHook* h, const char* name, void* target, void* detour,
     VirtualProtect(target, (SIZE_T)patchLen, oldProtect, &ignore);
 
     h->target = target;
-    h->detour = detour;
     h->trampoline = tramp;
     h->patchLen = patchLen;
     h->installed = true;

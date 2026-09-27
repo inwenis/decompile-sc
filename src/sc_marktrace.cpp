@@ -15,7 +15,6 @@
 
 #include <string.h>
 
-#define SC_VA_DIRTY_MARKER 0x0041E0D0u
 #define SC_MARKTRACE_MAX_LINES 80000u
 #define SC_MARKTRACE_CALLERS 32
 
@@ -174,7 +173,7 @@ void ScMarkTraceInstall(BYTE* moduleBase, bool writeAllowed) {
         ScLog("MARKTRACE: %%SCPLUGIN_MARKTRACE%% set but the mode is observe -- IGNORED.");
         return;
     }
-    if (!ScHookInstall(&g_hk, "dirtyMarker", ScRuntimeAddr(SC_VA_DIRTY_MARKER),
+    if (!ScHookInstall(&g_hk, "dirtyMarker", ScRuntimeAddr(SC_VA_MARK_DIRTY),
                        (void*)&ScMarkTraceThunk, (int)sizeof(kPrologueMarker),
                        kPrologueMarker, (int)sizeof(kPrologueMarker))) {
         ScLog("MARKTRACE: marker hook failed to install -- off");
@@ -192,7 +191,7 @@ void ScMarkTraceInstall(BYTE* moduleBase, bool writeAllowed) {
         g_imgTraceTrampoline = g_hkImg.trampoline;
     g_installed = true;
     ScLog("MARKTRACE: armed (hook at 0x%08X); a 'marktrace-on' marker starts the MARK lines, "
-          "'marktrace-off' stops them and prints the per-caller totals", SC_VA_DIRTY_MARKER);
+          "'marktrace-off' stops them and prints the per-caller totals", SC_VA_MARK_DIRTY);
 }
 
 void ScMarkTraceRemove(void) {
