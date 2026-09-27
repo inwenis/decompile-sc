@@ -92,8 +92,7 @@ static const ScScreenGeometry* Geom(void) {
 // fields and a `jmp` back. The generator picks the windows (>= 5 bytes, no
 // PC-relative operand, nothing branches into them) and carries the cave code;
 // this side owns only the two rel32s, which need the cave's runtime address.
-// One RWX page, bump-allocated, leaked on remove like a trampoline: a game
-// thread may be executing inside it.
+// One RWX page, bump-allocated, never freed.
 #define SC_WS_CAVE_POOL 4096
 static BYTE*  g_cavePool = NULL;
 static SIZE_T g_caveUsed = 0;
@@ -124,6 +123,16 @@ static void PointWindowAt(BYTE* window, const BYTE* at, const BYTE* cave) {
     memcpy(window + 1, &rel, 4);
 }
 
+// False only when the page would not unprotect; GetLastError is still that failure's.
+static bool WriteCode(void* at, const BYTE* b, SIZE_T n) {
+    DWORD oldProtect = 0, ignore = 0;
+    if (!VirtualProtect(at, n, PAGE_EXECUTE_READWRITE, &oldProtect)) return false;
+    memcpy(at, b, n);
+    FlushInstructionCache(GetCurrentProcess(), at, n);
+    VirtualProtect(at, n, oldProtect, &ignore);
+    return true;
+}
+
 bool ScScreenApplyCaveAt(BYTE* at, int len, const BYTE* code, int codeLen) {
     if (len < 5 || len > SC_WS_MAX_PATCH_LEN || codeLen <= 0 || codeLen > SC_WS_MAX_CAVE_LEN)
         return false;
@@ -132,13 +141,7 @@ bool ScScreenApplyCaveAt(BYTE* at, int len, const BYTE* code, int codeLen) {
     BYTE window[SC_WS_MAX_PATCH_LEN];
     memset(window, 0x90, sizeof(window));
     PointWindowAt(window, at, cave);
-    DWORD oldProtect = 0;
-    if (!VirtualProtect(at, (SIZE_T)len, PAGE_EXECUTE_READWRITE, &oldProtect)) return false;
-    memcpy(at, window, (size_t)len);
-    FlushInstructionCache(GetCurrentProcess(), at, (SIZE_T)len);
-    DWORD ignore = 0;
-    VirtualProtect(at, (SIZE_T)len, oldProtect, &ignore);
-    return true;
+    return WriteCode(at, window, (SIZE_T)len);
 }
 
 // ---------------------------------------------------------------------------
@@ -168,10 +171,6 @@ int ScScreenStageWanted(void) {
 // tool. Only coherent subsets mean anything: {grid, terrain, dirty} move as one.
 static char g_only[256];
 static bool g_onlySet = false;
-
-static void LoadOnlyFilter(void) {
-    g_onlySet = ScEnvRead("SCPLUGIN_WS_ONLY", g_only, sizeof(g_only));
-}
 
 static bool NameSelected(const char* name) {
     if (!g_onlySet) return true;
@@ -302,17 +301,11 @@ static bool WriteOne(const ScScreenPatch* p) {
         PointWindowAt(bytes, (BYTE*)at, cave);
     }
 
-    DWORD oldProtect = 0;
-    if (!VirtualProtect(at, p->len, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+    if (!WriteCode(at, bytes, p->len)) {
         ScLog("WIDESCREEN %s @0x%08X: VirtualProtect failed gle=%u",
               p->name, (unsigned)p->va, (unsigned)GetLastError());
         return false;
     }
-
-    memcpy(at, bytes, p->len);
-    FlushInstructionCache(GetCurrentProcess(), at, p->len);
-    DWORD ignore = 0;
-    VirtualProtect(at, p->len, oldProtect, &ignore);
 
     char before[SC_WS_MAX_PATCH_LEN * 2 + 1], after[SC_WS_MAX_PATCH_LEN * 2 + 1];
     ScHexDump(p->expect, p->len, before, sizeof(before));
@@ -363,7 +356,7 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
     ScLog("WIDESCREEN preset: %s (%%SCPLUGIN_WS_GEOMETRY%%%s)", G->name,
           g_geomAsked[0] ? "" : " unset -> the first preset");
     g_stage = ScScreenStageWanted();
-    LoadOnlyFilter();
+    g_onlySet = ScEnvRead("SCPLUGIN_WS_ONLY", g_only, sizeof(g_only));
 
     DWORD data = 0;
     unsigned w = 0, h = 0;

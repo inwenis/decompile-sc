@@ -55,7 +55,6 @@
 #define STORM_RVA_ORD432     0x0001A520u
 static ScStormMode g_mode = SC_STORM_OFF;
 static BYTE*  g_stormBase = NULL;
-static bool   g_writeAllowed = false;
 static unsigned g_logs = 0;
 
 // --- WIDEN state ---
@@ -144,11 +143,8 @@ static int StormEnvExplicit(void) {
 // overrides: 0 = off, probe = read-only, widen = force on.
 ScStormMode ScStormPresentModeWanted(void) {
     const int ex = StormEnvExplicit();
-    if (ex == SC_STORM_OFF) return SC_STORM_OFF;
-    if (ex == SC_STORM_PROBE) return SC_STORM_PROBE;
-    const bool wsPlayfield = ScScreenWidescreenWanted() && ScScreenStageWanted() >= 2;
-    if (ex == SC_STORM_WIDEN) return SC_STORM_WIDEN;      // forced (gated again in Install)
-    return wsPlayfield ? SC_STORM_WIDEN : SC_STORM_OFF;
+    if (ex >= 0) return (ScStormMode)ex;   // a forced widen is gated again in Install
+    return (ScScreenWidescreenWanted() && ScScreenStageWanted() >= 2) ? SC_STORM_WIDEN : SC_STORM_OFF;
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +185,21 @@ static void LogRegionStruct(const char* t, const char* what, DWORD regionVaOfPtr
           "+1C(rows)=%d  BOUNDS[+20]=(%d,%d,%d,%d)",
           t, what, (unsigned)r, (unsigned)f[2], (unsigned)f[5], (int)f[6],
           (int)f[7], (int)f[8], (int)f[9], (int)f[10], (int)f[11]);
+}
+
+// IDirectDrawSurface::GetSurfaceDesc on storm's surface-table entry 0, the primary: a
+// read-only COM call, pointer-guarded. Returns the guard that refused (1 = the entry,
+// 2 = its vtable slot +0x58), or 0 with *hr the call's own result and ddsd filled.
+static int PrimaryDesc(BYTE* ddsd /*0x6C*/, DWORD* prim, long* hr) {
+    bool ok; *prim = StormReadU32(StormRt(STORM_RVA_SURFTABLE), &ok);
+    if (!ok || !*prim || !ScReadableAt((void*)(DWORD_PTR)*prim, 4)) return 1;
+    const DWORD vtbl = *(DWORD*)(DWORD_PTR)*prim;
+    if (!ScReadableAt((void*)(DWORD_PTR)(vtbl + DDS_VTBL_GETSURFACEDESC), 4)) return 2;
+    memset(ddsd, 0, 0x6C);
+    *(DWORD*)ddsd = 0x6C;   // dwSize
+    typedef long (__attribute__((stdcall)) *GetDescFn)(DWORD, void*);
+    *hr = ((GetDescFn)(DWORD_PTR)*(DWORD*)(DWORD_PTR)(vtbl + DDS_VTBL_GETSURFACEDESC))(*prim, ddsd);
+    return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -239,28 +250,18 @@ void ScStormPresentLog(const char* tag) {
     // The primary surface's REAL geometry, via IDirectDrawSurface::GetSurfaceDesc: a
     // black RIGHT band with no letterbox and a wide primary means only 0..639 were
     // written (the cap is the copy); a 640 primary means the surface itself is narrow.
-    // Read-only COM call, pointer-guarded.
-    bool okS0; DWORD prim0 = StormReadU32(StormRt(STORM_RVA_SURFTABLE), &okS0);
-    if (okS0 && prim0 && ScReadableAt((void*)(DWORD_PTR)prim0, 4)) {
-        DWORD vtbl = *(DWORD*)(DWORD_PTR)prim0;
-        if (ScReadableAt((void*)(DWORD_PTR)(vtbl + DDS_VTBL_GETSURFACEDESC), 4)) {
-            DWORD fn = *(DWORD*)(DWORD_PTR)(vtbl + DDS_VTBL_GETSURFACEDESC);
-            BYTE ddsd[0x6C];
-            memset(ddsd, 0, sizeof(ddsd));
-            *(DWORD*)ddsd = 0x6C;   // dwSize
-            typedef long (__attribute__((stdcall)) *GetDescFn)(DWORD, void*);
-            long hr = ((GetDescFn)(DWORD_PTR)fn)(prim0, ddsd);
-            ScLog("STORM [%s] primary 0x%08X GetSurfaceDesc hr=0x%08X: dwWidth=%u dwHeight=%u "
-                  "lPitch=%d dwFlags=0x%08X",
-                  t, (unsigned)prim0, (unsigned)hr,
-                  (unsigned)*(DWORD*)(ddsd + 0x0C), (unsigned)*(DWORD*)(ddsd + 0x08),
-                  (int)*(long*)(ddsd + 0x10), (unsigned)*(DWORD*)(ddsd + 0x04));
-        } else {
-            ScLog("STORM [%s] primary 0x%08X: vtable+0x58 unreadable -- no GetSurfaceDesc", t, (unsigned)prim0);
-        }
-    } else {
+    BYTE ddsd[0x6C]; DWORD prim0; long hr = 0;
+    const int refused = PrimaryDesc(ddsd, &prim0, &hr);
+    if (refused == 1)
         ScLog("STORM [%s] primary surface pointer not readable (0x%08X)", t, (unsigned)prim0);
-    }
+    else if (refused == 2)
+        ScLog("STORM [%s] primary 0x%08X: vtable+0x58 unreadable -- no GetSurfaceDesc", t, (unsigned)prim0);
+    else
+        ScLog("STORM [%s] primary 0x%08X GetSurfaceDesc hr=0x%08X: dwWidth=%u dwHeight=%u "
+              "lPitch=%d dwFlags=0x%08X",
+              t, (unsigned)prim0, (unsigned)hr,
+              (unsigned)*(DWORD*)(ddsd + 0x0C), (unsigned)*(DWORD*)(ddsd + 0x08),
+              (int)*(long*)(ddsd + 0x10), (unsigned)*(DWORD*)(ddsd + 0x04));
 
     LogRegionRects("frame 0x6D5E18", EXE_VA_REGION_FRAME);
     LogRegionRects("base  0x6D5E14", EXE_VA_REGION_BASE);
@@ -290,27 +291,16 @@ void ScStormPresentLog(const char* tag) {
 typedef int (__attribute__((stdcall)) *ScOrd432Fn)(DWORD dst, DWORD src, DWORD dstPitch,
                                                     DWORD srcPitch, DWORD region);
 
-// The primary's real row count, via IDirectDrawSurface::GetSurfaceDesc on storm's surface
-// table entry 0. Read once; an unreadable table or a failed call returns 0 and the mirror
-// falls back to the table's H. This keeps a whole-frame mirror inside the surface if a
-// display-mode change ever leaves the primary shorter than the table says.
-static int ReadPrimaryRows(void) {
-    if (!g_stormBase) return 0;
-    bool ok; DWORD prim0 = StormReadU32(StormRt(STORM_RVA_SURFTABLE), &ok);
-    if (!ok || !prim0 || !ScReadableAt((void*)(DWORD_PTR)prim0, 4)) return 0;
-    DWORD vtbl = *(DWORD*)(DWORD_PTR)prim0;
-    if (!ScReadableAt((void*)(DWORD_PTR)(vtbl + DDS_VTBL_GETSURFACEDESC), 4)) return 0;
-    DWORD fn = *(DWORD*)(DWORD_PTR)(vtbl + DDS_VTBL_GETSURFACEDESC);
-    BYTE ddsd[0x6C];
-    memset(ddsd, 0, sizeof(ddsd));
-    *(DWORD*)ddsd = 0x6C;
-    typedef long (__attribute__((stdcall)) *GetDescFn)(DWORD, void*);
-    long hr = ((GetDescFn)(DWORD_PTR)fn)(prim0, ddsd);
-    if (hr != 0) return 0;
+// The primary's real row count (GetSurfaceDesc's dwHeight). An unreadable table or a
+// failed call returns 0 and the mirror falls back to the table's H. This keeps a
+// whole-frame mirror inside the surface if a display-mode change ever leaves the primary
+// shorter than the table says. g_stormBase is NULL while this module is off, and
+// sc_menu.cpp still asks.
+int ScStormReadPrimaryRows(void) {
+    BYTE ddsd[0x6C]; DWORD prim; long hr = -1;
+    if (!g_stormBase || PrimaryDesc(ddsd, &prim, &hr) != 0 || hr != 0) return 0;
     return (int)*(DWORD*)(ddsd + 0x08);   // dwHeight
 }
-
-int ScStormReadPrimaryRows(void) { return ReadPrimaryRows(); }
 
 #define DDS_VTBL_GETPALETTE 0x50u
 #define DDP_VTBL_RELEASE    0x08u
@@ -461,7 +451,7 @@ HkOrd432(DWORD dst, DWORD src, DWORD dstPitch, DWORD srcPitch, DWORD region) {
         // display-mode change that leaves the primary shorter than the table says cannot
         // overrun it.
         if (g_primaryRows < 0) {
-            g_primaryRows = ReadPrimaryRows();
+            g_primaryRows = ScStormReadPrimaryRows();
             ScLog("STORM present: primary dwHeight=%d (table H=%d) -- the mirror covers "
                   "min(H, dwHeight) rows%s", g_primaryRows, H,
                   g_primaryRows == 0 ? " (unreadable: assuming H)" : "");
@@ -534,9 +524,7 @@ static const BYTE kPrologueOrd432[] = { 0x55, 0x8B, 0xEC, 0x8B, 0x45, 0x18 };
 
 void ScStormPresentInstall(BYTE* exeBase, bool writeAllowed) {
     ScEngineSetModuleBase(exeBase);
-    g_writeAllowed = writeAllowed;
     g_mode = ScStormPresentModeWanted();
-    g_logs = 0;
     if (g_mode == SC_STORM_OFF) {
         // Name the half that decided it: a bare "unset/0" cannot distinguish "the
         // launcher exported 0" from "nothing to present", and a wide game running with
@@ -570,25 +558,9 @@ void ScStormPresentInstall(BYTE* exeBase, bool writeAllowed) {
         g_mode = SC_STORM_PROBE;
     }
     if (g_mode == SC_STORM_WIDEN) {
-        g_stripFrames = 0;
-        g_cursorForced = 0;
-        g_tipForced = 0;
         g_tipFix = ScEnvFlag("SCPLUGIN_TIPFIX", true);
-        g_stripSkipped = 0;
-        g_mirrorFrames = 0;
-        g_primaryRows = -1;
         LARGE_INTEGER f;
         g_qpf = QueryPerformanceFrequency(&f) ? f.QuadPart : 0;
-        g_tPrev = g_tWinStart = 0;
-        g_prevInGame = -1;
-        g_winPresents = g_winIngame = g_winSamples = g_winStalls = 0;
-        g_winIngameKnown = false;
-        g_winSumUs = g_winMaxUs = g_winHookSumUs = g_winHookMaxUs = 0;
-        g_totPresents = g_totSamples = g_totStalls = g_totWindows = 0;
-        g_totSumUs = g_totMaxUs = g_totHookMaxUs = 0;
-        g_cpuWinStart = g_totCpu100ns = 0;
-        g_totWallUs = 0;
-        memset(&g_hkCopy, 0, sizeof(g_hkCopy));
         void* ord432 = StormRt(STORM_RVA_ORD432);
         if (!ScHookInstall(&g_hkCopy, "stormWidenCopy", ord432,
                            (void*)&HkOrd432, (int)sizeof(kPrologueOrd432),
