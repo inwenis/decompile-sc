@@ -57,7 +57,7 @@ suite break, not a cleanup.
 | `sc_prodqueue.cpp` | a building holds more than five queued units | `ScProdQueue*` | `PRODQ` `PRODQEV` `PRODQSEL` `PRODQSTATS` | `SCPLUGIN_PRODQ`, `SCPLUGIN_PRODQ_MAX` |
 | `sc_upgrades.cpp` | a building holds more than one research | `ScUpgQueue*` | `UPGQ` `UPGQEV` `UPGQLVL` `UPGQSEL` `UPGQSTATS` | `SCPLUGIN_UPGQ`, `SCPLUGIN_UPGQ_MAX` |
 | `sc_prodfan.cpp` | one Train click trains at every building in the group | `ScProdFan*` | `PRODFAN` | `SCPLUGIN_PRODFAN` |
-| `sc_queueind.cpp` | the indicator for queue items the strip cannot draw | `ScQueueInd*` | `QIND` `QINDDLG` `QINDSTATS` `QINDCLICK` `QINDCLICKSTATS` | `SCPLUGIN_QUEUEIND`, `SCPLUGIN_QIND_CLICKTRACE` |
+| `sc_queueind.cpp` | the indicator for queue items the strip cannot draw | `ScQueueInd*` | `QIND` `QINDDLG` `QINDSTATS` `QINDCLICK` | `SCPLUGIN_QUEUEIND` |
 | `sc_card.cpp` | reading the command card back out of the process | `ScCard*` | `CARD` | `SCPLUGIN_CARDSCAN` |
 | `sc_screen.cpp` | the widescreen patch tables (`sc_screen_patches_<WxH>.h`, **generated**, one per preset listed in `sc_screen_presets.h`; their record type is in `sc_screen_patch.h`) | `ScScreen*`, `SC_WS_*` | `WIDESCREEN` | `SCPLUGIN_WIDESCREEN`, `SCPLUGIN_WS_STAGE`, `SCPLUGIN_WS_GEOMETRY`, `SCPLUGIN_WS_ONLY` |
 | `sc_stormpresent.cpp` | copying the widened strip to the primary every frame; the tooltip layer composed every frame while the console is buffer-resident (`tipForced=` on `STORMSTATS`); process CPU per present window (`cpu_pct=` on `STORMTIME`, `cpuPct=` on `STORMSTATS`) | `ScStormPresent*` | `STORM` `STORMTIME` `STORMSTALL` `STORMSTATS` | `SCPLUGIN_STORM_PRESENT`, `SCPLUGIN_TIPFIX` (default on; `0` leaves layer 1 dirty-driven) |

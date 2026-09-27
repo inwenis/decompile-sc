@@ -856,26 +856,9 @@ static void SnapshotIcons(DWORD root) {
 // owned slot, so `disableOnOwned` must not move at all while `phantom` climbs; a suite reads
 // both either side of a click, which is what separates "the fix is active" from "the race
 // was won".
-//
-// WHAT THE TRACE DROPS, AND WHY EACH ONE. MOUSEMOVE (type 3) arrives thousands of times a
-// second, `dwUser=8` is a periodic sweep the engine sends all five icons about ten times a
-// second whether anything happened or not, and an INVISIBLE control cannot be under
-// anybody's cursor. None of the three can carry the answer and together they are the entire
-// flood -- unfiltered, the trace hits its line cap in the MENUS before a single click. Each
-// drop is COUNTED, because a filtered trace that does not say what it filtered is a count
-// over an unknown denominator.
-#define SC_QIND_CLICKTRACE_MAX 2000
-#define SC_QIND_SWEEP_USER     8
-static bool  g_clickTrace  = false;
 static DWORD g_iconOrigFn  = 0;                     // the engine's own status-control interact
 static DWORD g_iconWrapped[SC_STATQ_SLOTS];
 static int   g_iconWrapN   = 0;
-static unsigned g_clickTraceLines   = 0;
-static unsigned g_clickTraceSeen    = 0;   // events the shim was handed, all kinds
-static unsigned g_clickTraceMoves   = 0;   // ... dropped: MOUSEMOVE
-static unsigned g_clickTraceSweeps  = 0;   // ... dropped: the dwUser=8 sweep
-static unsigned g_clickTraceHidden  = 0;   // ... dropped: control not visible
-static unsigned g_clickTraceCapped  = 0;   // ... dropped: over the line cap
 
 typedef int (__attribute__((fastcall)) *ScIconInteractFn)(DWORD, DWORD);
 
@@ -896,58 +879,31 @@ static int __attribute__((fastcall)) SC_GAME_ENTRY QIndIconInteractShim(DWORD ct
     // WHERE A NEXT ATTEMPT WOULD START is one function: `0x00418830`, called on button-down
     // with the hit control, sends it a `dwUser=5` "can you take focus" query and records
     // `[dlg+0x3e] = ctrl` ONLY if the control returns non-zero, and the dialog's focused
-    // control is what the button-up is routed to. The trace shows that query reaching our
-    // icon (`idx=6 type=14 dwUser=5 flags=0x00000418`), so what it ANSWERS is the open
-    // question, not whether it is asked.
+    // control is what the button-up is routed to. That query reaches our icon (measured:
+    // `idx=6 type=14 dwUser=5 flags=0x00000418`, research/production-queue.md 8.6), so what
+    // it ANSWERS is the open question, not whether it is asked.
     //
-    // AND NO SINGLE-RUN CONCLUSION ABOUT ANY OF IT IS VALID: the click is a RACE, and the
-    // instrument flips the outcome in BOTH directions (with the bracket out, tracing
-    // cancels and not tracing does not; with it in, the reverse), which is incoherent as a
-    // cause, so the variable is timing. A claim that this is fixed has to click N times and
-    // assert the RATE (AGENTS.md § "Oracles: threads, races, confounds").
+    // AND NO SINGLE-RUN CONCLUSION ABOUT ANY OF IT IS VALID: the click is a RACE, and a
+    // per-event log line in this shim flipped the outcome in BOTH directions (with the bracket
+    // out, logging cancelled and not logging did not; with it in, the reverse), which is
+    // incoherent as a cause, so the variable is timing. A claim that this is fixed has to
+    // click N times and assert the RATE (AGENTS.md § "Oracles: threads, races, confounds").
     //
     // The counters below cost one compare on an event the engine sends anyway.
     if (g_iconOrigFn && evt &&
         *(WORD*)(evt + SC_EVT_OFF_TYPE) == SC_EVT_TYPE_USER &&
         *(DWORD*)evt == SC_USER_DISABLED &&
         IsPluginOwnedIcon(ctrl)) {
-        // Counted here as well, or QINDCLICKSTATS's `seen` would be a denominator with the
-        // busiest event on the busiest control missing from it.
-        ++g_clickTraceSeen;
         ++g_stat[SC_QIND_STAT_DISABLE_OWNED];
         const DWORD flags = *(DWORD*)(ctrl + SC_BINDLG_OFF_FLAGS);
         if (flags & SC_CTRL_FLAG_PRESSED) ++g_stat[SC_QIND_STAT_DISABLE_PRESSED];
-        return ((ScIconInteractFn)g_iconOrigFn)(ctrl, evt);
     }
-    if (g_iconOrigFn && evt) {
-        ++g_clickTraceSeen;
-        const WORD  type   = *(WORD*)(evt + SC_EVT_OFF_TYPE);
-        const DWORD dwUser = *(DWORD*)evt;
-        const DWORD flags  = *(DWORD*)(ctrl + SC_BINDLG_OFF_FLAGS);
-        if (type == SC_EVT_MOUSEMOVE)                                ++g_clickTraceMoves;
-        else if (type == SC_EVT_TYPE_USER && dwUser == SC_QIND_SWEEP_USER)
-                                                                     ++g_clickTraceSweeps;
-        else if ((flags & SC_CTRL_FLAG_VISIBLE) == 0)                ++g_clickTraceHidden;
-        else if (g_clickTraceLines >= SC_QIND_CLICKTRACE_MAX)         ++g_clickTraceCapped;
-        else {
-            ++g_clickTraceLines;
-            ScLog("QINDCLICK ctrl=0x%08X idx=%d type=%u dwUser=%u flags=0x%08X "
-                  "disabled=%d visible=%d x=%d y=%d",
-                  (unsigned)ctrl, (int)*(short*)(ctrl + SC_BINDLG_OFF_INDEX),
-                  (unsigned)type, (unsigned)dwUser, (unsigned)flags,
-                  (flags & SC_CTRL_FLAG_DISABLED) ? 1 : 0,
-                  (flags & SC_CTRL_FLAG_VISIBLE) ? 1 : 0,
-                  (int)*(short*)(evt + SC_EVT_OFF_X),
-                  (int)*(short*)(evt + SC_EVT_OFF_Y));
-        }
-    }
-    if (!g_iconOrigFn) return 0;
-    return ((ScIconInteractFn)g_iconOrigFn)(ctrl, evt);
+    return g_iconOrigFn ? ((ScIconInteractFn)g_iconOrigFn)(ctrl, evt) : 0;
 }
 
 // Wrap/unwrap the five queue icons. Idempotent, and it takes the ENGINE'S OWN pointer from
-// the first icon rather than from a constant -- if this build dispatches these controls
-// through something else, the trace records that and wraps nothing.
+// the first icon rather than from a constant -- an icon that dispatches through anything
+// else is logged and left unwrapped.
 static void WrapIconInteracts(DWORD root) {
     const DWORD shim = (DWORD)&QIndIconInteractShim;
     g_iconWrapN = 0;
@@ -1350,9 +1306,8 @@ void ScQueueIndOnFrame(void) {
     }
     if (!root) return;
 
-    // The trace wraps ALL FIVE icons, not only the one the plugin fills: the working case
-    // (an icon whose ring slot is occupied) is the control against which the failing one
-    // means anything.
+    // ALL FIVE icons are wrapped, not only the ones the plugin fills: which slots it owns
+    // changes frame to frame, and the shim answers "is this one mine" per event.
     WrapIconInteracts(root);
     WrapLastIconDraw(root);
 
@@ -1568,13 +1523,6 @@ void ScQueueIndInit(BYTE* moduleBase, bool enabled) {
     g_phantomN = 0;
     g_phantomUnit = 0;
     g_ringGen = 0;
-    g_clickTraceLines = 0;
-    g_clickTrace = ScEnvFlag("SCPLUGIN_QIND_CLICKTRACE", false);
-    if (g_clickTrace) {
-        ScLog("QINDCLICK: click trace ON (%%SCPLUGIN_QIND_CLICKTRACE%%) -- every non-MOUSEMOVE "
-              "event the engine hands a queue icon is logged, up to %d lines, and passed "
-              "straight on to the engine's own handler", SC_QIND_CLICKTRACE_MAX);
-    }
     memset(g_ctrl, 0, sizeof(g_ctrl));
     ScLog("QIND: %s (%%SCPLUGIN_QUEUEIND%%). Draws a \"+N\" over the last queue icon when "
           "the logical queue is longer than the strip can show, a \"N bldgs M queued\" "
@@ -1641,14 +1589,6 @@ void ScQueueIndLogStats(void) {
           g_stat[SC_QIND_STAT_DISABLE_OWNED], g_stat[SC_QIND_STAT_DISABLE_PRESSED],
           g_stat[SC_QIND_STAT_PRESSKEPT],
           g_stat[SC_QIND_STAT_UPG_ICON_SHOWS], g_stat[SC_QIND_STAT_UPG_ICON_HIDES]);
-    // The trace's own denominator: what it saw and what it dropped, so "no click event was
-    // ever logged" and "the filter ate it" are different readings rather than one silence.
-    if (g_clickTrace) {
-        ScLog("QINDCLICKSTATS seen=%u logged=%u droppedMoves=%u droppedSweeps=%u "
-              "droppedHidden=%u droppedOverCap=%u wrapped=%d engineFn=0x%08X",
-              g_clickTraceSeen, g_clickTraceLines, g_clickTraceMoves, g_clickTraceSweeps,
-              g_clickTraceHidden, g_clickTraceCapped, g_iconWrapN, (unsigned)g_iconOrigFn);
-    }
 }
 
 // ---------------------------------------------------------------------------

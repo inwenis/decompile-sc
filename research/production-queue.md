@@ -953,6 +953,10 @@ idx=6  type=14 dwUser=6  flags=0x0000041B disabled=1    x1474 in 13 seconds, ~18
 `QINDCLICKSTATS ... wrapped=5 engineFn=0x00457F30` — one interact pointer, all five icons, so there
 is no dispatch difference to explain anything.
 
+The per-event `QINDCLICK` lines and `QINDCLICKSTATS` are no longer in the plugin: the shim now only
+counts `disableOnOwned`/`disableWithPress` (§8.8), and `engineFn` is still logged once per process
+by `QINDCLICK: tracing the five queue icons; the engine's own interact for them is 0x...`.
+
 Five links, each read out of the binary:
 
 1. `disableControl` (`0x00418640`) is a **no-op when the control is already disabled**
