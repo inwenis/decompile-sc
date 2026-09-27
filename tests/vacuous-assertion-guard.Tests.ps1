@@ -63,10 +63,9 @@ Describe 'No assertion in tools/plugin is vacuous by inspection (issues #69, #70
     It 'POSITIVE CONTROL: both scans find a planted instance' {
         # Without a planted instance the guard passes by finding nothing, over any tree --
         # the exact failure mode it exists to catch.
-        $dir = Join-Path ([IO.Path]::GetTempPath()) ("sc-vac-" + [Guid]::NewGuid().ToString('n'))
+        $dir = Join-Path $TestDrive ("sc-vac-" + [Guid]::NewGuid().ToString('n'))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
-        try {
-            @'
+        @'
 function Test-Thing {
     Assert-That 'a real check' ($after -eq $before)
     Assert-That 'the tautology' ($mineralsAfter -eq $mineralsAfter)
@@ -75,13 +74,11 @@ function Test-Thing {
 }
 '@ | Set-Content -LiteralPath (Join-Path $dir 'planted.ps1') -NoNewline
 
-            $found = Find-VacuousAssertion -Root $dir
-            @($found | Where-Object { $_.Kind -eq 'self-comparison' }).Count | Should -Be 1
-            @($found | Where-Object { $_.Kind -eq 'literal-true' }).Count | Should -Be 1
-            @($found | Where-Object { $_.Text -match 'else branch' }).Count |
-                Should -Be 0 -Because '$false records a definite failure and is not vacuous'
-        }
-        finally { Remove-Item $dir -Recurse -Force }
+        $found = Find-VacuousAssertion -Root $dir
+        @($found | Where-Object { $_.Kind -eq 'self-comparison' }).Count | Should -Be 1
+        @($found | Where-Object { $_.Kind -eq 'literal-true' }).Count | Should -Be 1
+        @($found | Where-Object { $_.Text -match 'else branch' }).Count |
+            Should -Be 0 -Because '$false records a definite failure and is not vacuous'
     }
 
     It 'tools/plugin has no self-comparison and no literal-true assertion' {

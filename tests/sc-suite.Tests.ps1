@@ -11,45 +11,32 @@ suite DOT-SOURCES the file, so the functions are defined in the suite's own scop
 If someone ever changes a suite to `& (Join-Path ... 'sc-suite.ps1')`, every FAIL stops
 counting and the suite exits 0 with failures on screen -- the exact shape of defect this
 repo's oracle-guard rules exist for. So the cases below drive a FAKE suite file from disk
-and read its counters back, and the last one watches the `&` form fail to do so.
+and read its counters back, and the negative control watches the `&` form fail to do so.
 #>
 
 BeforeAll {
     $script:suiteLib = (Resolve-Path (Join-Path $PSScriptRoot '..' 'tools' 'plugin' 'sc-suite.ps1')).Path
 
-    # A throwaway "suite": dot-sources the library, runs a few assertions, and reports
-    # what its own counters ended on.
-    function New-FakeSuite {
-        param([string]$Loader = '.')
-        $path = Join-Path ([IO.Path]::GetTempPath()) "scsuite-$([guid]::NewGuid().ToString('N')).ps1"
-        @"
-`$ErrorActionPreference = 'Stop'
-$Loader ('$($script:suiteLib -replace "'", "''")')
-`$failures = 0
-`$step = 0
-Step 'first step' { Assert-That 'a true thing' `$true }
-Step 'second step' { Assert-That 'a false thing' `$false '(expected 1, got 2)' }
-Step 'third step' { Assert-That 'another false thing' `$false }
-"@ | Set-Content -LiteralPath $path -Encoding utf8
-        $path
-    }
-
-    function Invoke-FakeSuite {
-        param([string]$Path)
-        $out = & pwsh -NoProfile -NonInteractive -File $Path 2>&1 | Out-String
-        $out
+    # A throwaway "suite" run in its own pwsh: loads the library with $Loader, owns its
+    # counters, runs $Body, and returns everything it printed.
+    function Invoke-LibScript {
+        param([string]$Body, [string]$Loader = '.')
+        $p = Join-Path $TestDrive "$(New-Guid).ps1"
+        "$Loader ('$($script:suiteLib -replace "'", "''")')`n`$failures = 0`n`$step = 0`n$Body" |
+            Set-Content -LiteralPath $p -Encoding utf8
+        & pwsh -NoProfile -NonInteractive -File $p 2>&1 | Out-String
     }
 }
 
 Describe 'sc-suite.ps1 counts the SUITE''s failures, not its own' {
 
     BeforeAll {
-        $script:dotted = New-FakeSuite -Loader '.'
-        $script:dottedOut = Invoke-FakeSuite -Path $script:dotted
-    }
-
-    AfterAll {
-        Remove-Item -LiteralPath $script:dotted -ErrorAction SilentlyContinue
+        $script:dottedOut = Invoke-LibScript @'
+$ErrorActionPreference = 'Stop'
+Step 'first step' { Assert-That 'a true thing' $true }
+Step 'second step' { Assert-That 'a false thing' $false '(expected 1, got 2)' }
+Step 'third step' { Assert-That 'another false thing' $false }
+'@
     }
 
     It 'numbers the steps from the suite''s own $step' {
@@ -70,18 +57,12 @@ Describe 'sc-suite.ps1 counts the SUITE''s failures, not its own' {
         # The fake suite prints nothing itself, so read the counter out of the library's
         # own effect: two FAIL lines must have moved a counter the suite owns. Drive it
         # again with a suite that reports the number.
-        $p = Join-Path ([IO.Path]::GetTempPath()) "scsuite-$([guid]::NewGuid().ToString('N')).ps1"
-        @"
-. ('$($script:suiteLib -replace "'", "''")')
-`$failures = 0
-`$step = 0
-Assert-That 'one' `$false
-Assert-That 'two' `$false
-Assert-That 'three' `$true
-Write-Host "COUNTED=`$failures"
-"@ | Set-Content -LiteralPath $p -Encoding utf8
-        $out = & pwsh -NoProfile -NonInteractive -File $p 2>&1 | Out-String
-        Remove-Item -LiteralPath $p -ErrorAction SilentlyContinue
+        $out = Invoke-LibScript @'
+Assert-That 'one' $false
+Assert-That 'two' $false
+Assert-That 'three' $true
+Write-Host "COUNTED=$failures"
+'@
         $out | Should -Match 'COUNTED=2'
     }
 }
@@ -89,30 +70,22 @@ Write-Host "COUNTED=`$failures"
 Describe 'the negative control: running it with & instead of . loses the count' {
 
     It 'does NOT reach the suite''s counter, which is why every suite dot-sources it' {
-        $p = Join-Path ([IO.Path]::GetTempPath()) "scsuite-$([guid]::NewGuid().ToString('N')).ps1"
-        @"
-. ('$($script:suiteLib -replace "'", "''")')
-`$failures = 0
-Assert-That 'one' `$false
-Write-Host "DOTTED=`$failures"
-"@ | Set-Content -LiteralPath $p -Encoding utf8
-        $dotted = & pwsh -NoProfile -NonInteractive -File $p 2>&1 | Out-String
-
-        @"
-& ('$($script:suiteLib -replace "'", "''")')
-`$failures = 0
+        $dotted = Invoke-LibScript @'
+Assert-That 'one' $false
+Write-Host "DOTTED=$failures"
+'@
+        $amped = Invoke-LibScript -Loader '&' @'
 if (Get-Command Assert-That -ErrorAction SilentlyContinue) {
-    Assert-That 'one' `$false
-    Write-Host "AMPED=`$failures"
+    Assert-That 'one' $false
+    Write-Host "AMPED=$failures"
 } else {
     Write-Host 'AMPED=no-function'
 }
-"@ | Set-Content -LiteralPath $p -Encoding utf8
-        $amped = & pwsh -NoProfile -NonInteractive -File $p 2>&1 | Out-String
-        Remove-Item -LiteralPath $p -ErrorAction SilentlyContinue
-
+'@
         $dotted | Should -Match 'DOTTED=1'
         $amped  | Should -Not -Match 'AMPED=1'
+        # A crashed script also lacks AMPED=1: require the & branch to have run.
+        $amped  | Should -Match 'AMPED=no-function'
     }
 }
 
@@ -136,15 +109,10 @@ Describe 'every suite that uses the primitives loads them the right way' {
 Describe 'Write-ScStepFailure prints the caller''s noun and counts the throw' {
 
     It 'reports the message, the stack trace, and moves the suite''s counter' {
-        $p = Join-Path ([IO.Path]::GetTempPath()) "scsuite-$([guid]::NewGuid().ToString('N')).ps1"
-        @"
-. ('$($script:suiteLib -replace "'", "''")')
-`$failures = 0
-try { throw 'a planted explosion' } catch { Write-ScStepFailure `$_ 'a test step' }
-Write-Host "COUNTED=`$failures"
-"@ | Set-Content -LiteralPath $p -Encoding utf8
-        $out = & pwsh -NoProfile -NonInteractive -File $p 2>&1 | Out-String
-        Remove-Item -LiteralPath $p -ErrorAction SilentlyContinue
+        $out = Invoke-LibScript @'
+try { throw 'a planted explosion' } catch { Write-ScStepFailure $_ 'a test step' }
+Write-Host "COUNTED=$failures"
+'@
         $out | Should -Match '  FAIL a test step threw: a planted explosion'
         $out | Should -Match 'COUNTED=1'
         # the stack trace line is what makes a thrown failure actionable

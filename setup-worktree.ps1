@@ -69,15 +69,10 @@ if ($pyOk) {
     }
 
     $reqFile = Join-Path $repoRoot 'requirements.txt'
-    if (Test-Path -LiteralPath $reqFile) {
-        Write-Host 'setup: pip install -r requirements.txt ...'
-        & $venvPython -m pip install -r $reqFile --quiet
-        if ($LASTEXITCODE -ne 0) { throw 'setup: pip install failed.' }
-        Report $true 'deps' 'requirements.txt installed into .venv'
-    }
-    else {
-        Report $true 'deps' 'no requirements.txt yet — nothing to install (add one when tools/ grows deps)'
-    }
+    Write-Host 'setup: pip install -r requirements.txt ...'
+    & $venvPython -m pip install -r $reqFile --quiet
+    if ($LASTEXITCODE -ne 0) { throw 'setup: pip install failed.' }
+    Report $true 'deps' 'requirements.txt installed into .venv'
 }
 else {
     Report $false 'venv' 'skipped — python 3.11+ missing'

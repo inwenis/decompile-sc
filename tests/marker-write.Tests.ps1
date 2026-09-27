@@ -37,7 +37,7 @@ namespace ScMarkerTest {
     }
 
     function New-MarkerFile {
-        $dir = Join-Path ([IO.Path]::GetTempPath()) ("sc-marker-" + [Guid]::NewGuid().ToString('n'))
+        $dir = Join-Path $TestDrive ("sc-marker-" + [Guid]::NewGuid().ToString('n'))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         $p = Join-Path $dir 'marker.txt'
         Set-Content -LiteralPath $p -Value 'seed' -NoNewline
@@ -55,7 +55,7 @@ Describe 'Set-ScMarker survives the plugin observer holding the marker open' {
             { Set-Content -LiteralPath $p -Value 'nope' -NoNewline -ErrorAction Stop } |
                 Should -Throw -Because 'Set-Content opens FileShare.None; this is issue #37 itself'
         }
-        finally { [void][ScMarkerTest.Native]::CloseHandle($h); Remove-Item (Split-Path $p) -Recurse -Force }
+        finally { [void][ScMarkerTest.Native]::CloseHandle($h) }
     }
 
     It 'writes the label while the observer holds it open' {
@@ -65,7 +65,7 @@ Describe 'Set-ScMarker survives the plugin observer holding the marker open' {
             { Set-ScMarker -MarkerPath $p -Label 'baseline-7' } | Should -Not -Throw
             Get-Content -Raw -LiteralPath $p | Should -Be 'baseline-7'
         }
-        finally { [void][ScMarkerTest.Native]::CloseHandle($h); Remove-Item (Split-Path $p) -Recurse -Force }
+        finally { [void][ScMarkerTest.Native]::CloseHandle($h) }
     }
 
     It 'writes the label while ANOTHER DRIVER holds the same marker open for writing' {
@@ -78,16 +78,13 @@ Describe 'Set-ScMarker survives the plugin observer holding the marker open' {
         try {
             { Set-ScMarker -MarkerPath $p -Label 'other-driver-9' } | Should -Not -Throw
         }
-        finally { $other.Dispose(); Remove-Item (Split-Path $p) -Recurse -Force }
+        finally { $other.Dispose() }
     }
 
     It 'writes no trailing newline -- PollMarker compares the whole line' {
         $p = New-MarkerFile
-        try {
-            Set-ScMarker -MarkerPath $p -Label 'card-3'
-            [IO.File]::ReadAllBytes($p).Length | Should -Be 6
-        }
-        finally { Remove-Item (Split-Path $p) -Recurse -Force }
+        Set-ScMarker -MarkerPath $p -Label 'card-3'
+        [IO.File]::ReadAllBytes($p).Length | Should -Be 6
     }
 
     It 'gives up loudly, naming the marker, when the file cannot be written at all' {
@@ -100,7 +97,7 @@ Describe 'Set-ScMarker survives the plugin observer holding the marker open' {
             { Set-ScMarker -MarkerPath $p -Label 'blocked-1' -Tries 2 -BackoffMs 1 } |
                 Should -Throw -ExpectedMessage '*could not write the marker*'
         }
-        finally { $hog.Dispose(); Remove-Item (Split-Path $p) -Recurse -Force }
+        finally { $hog.Dispose() }
     }
 }
 
@@ -163,10 +160,9 @@ Describe 'No caller bypasses Set-ScMarker (issue #71 -- the #37 regression guard
     It 'POSITIVE CONTROL: the scan finds a planted bypass' {
         # Without this, a typo in the writer list or the AST walk would make the guard
         # below pass by finding nothing, forever, over any tree at all.
-        $dir = Join-Path ([IO.Path]::GetTempPath()) ("sc-guard-" + [Guid]::NewGuid().ToString('n'))
+        $dir = Join-Path $TestDrive ("sc-guard-" + [Guid]::NewGuid().ToString('n'))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
-        try {
-            @'
+        @'
 function Send-Probe {
     param([string]$Tag)
     # a comment mentioning Set-Content and marker must NOT be a hit
@@ -176,11 +172,9 @@ function Send-Probe {
 }
 '@ | Set-Content -LiteralPath (Join-Path $dir 'planted.ps1') -NoNewline
 
-            $found = Find-MarkerBypass -Root $dir
-            $found.Count | Should -Be 1 -Because 'exactly the raw marker write is a bypass -- not the comment, not Set-ScMarker, not the unrelated file write'
-            $found[0].Line | Should -Be 4
-        }
-        finally { Remove-Item $dir -Recurse -Force }
+        $found = Find-MarkerBypass -Root $dir
+        $found.Count | Should -Be 1 -Because 'exactly the raw marker write is a bypass -- not the comment, not Set-ScMarker, not the unrelated file write'
+        $found[0].Line | Should -Be 4
     }
 
     It 'tools/plugin writes every marker through Set-ScMarker' {
