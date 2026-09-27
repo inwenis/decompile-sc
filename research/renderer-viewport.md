@@ -923,7 +923,7 @@ python tools/renderer_patch_sites.py --check          # every site verifies agai
 python tools/renderer_pitch_sweep.py                  # stride-shaped operands, undeclared ones flagged
 python tools/renderer_pitch_sweep.py --pitch 672 --anchor 0x00628454   # the scratch surface
 ./tools/plugin/test-widescreen.ps1 -Stage 1           # two arms, frames compared row by row
-./tools/plugin/probe-widescreen-present.ps1 -Stage 0  # what the helper actually presents
+./tools/plugin/probe-widescreen-present.ps1 -Stage 0  # what the helper presents (removed; a6998df has it)
 
 $env:SCPLUGIN_WS_ONLY = 'grid,dirty,terrain'          # bisect stage 2 by group (read the
 ./tools/plugin/test-widescreen.ps1 -Stage 2           #   coupling warning in sc_screen.cpp)
@@ -1029,7 +1029,7 @@ Facts measured or established this task, then the routes they price:
 | ----- | ------------------ | ------------ | ------------------------- |
 | WMode.dll (current) | decided: presents 640 whatever it is asked (§12.6) | — | — |
 | true fullscreen, user's desktop | decided for 800x480: impossible (no mode). 800x600: user-attended decision | regenerate at 800x600 + user accepts mode switch + icon shuffle | switches their desktop; never unattended |
-| true fullscreen, invisible desktop (test vehicle) | one probe run (`probe-fullscreen-desktop.ps1`, **built, never run, since removed (894c7e1 has it)**: parent samples the REAL desktop mode 4x/s while the child launches fullscreen off-screen; restore-on-leak; CONTAINED/LEAKED/REFUSED verdict). Withheld because §13.3's YES removed what it blocked, and its LEAKED outcome spends the user's icon layout — the conductor holds it for a user-attended GO | n/a — it is a measurement, not a shipping route | none if CONTAINED/REFUSED; seconds of mode flip if LEAKED |
+| true fullscreen, invisible desktop (test vehicle) | one probe run (`probe-fullscreen-desktop.ps1`, **built, never run, since removed (894c7e1 has it)**: parent samples the REAL desktop mode 4x/s while the child launches fullscreen off-screen; restore-on-leak; CONTAINED/LEAKED/REFUSED verdict). Withheld because §13.3's YES removed what it blocked, and its LEAKED outcome spends the user's icon layout | n/a — it is a measurement, not a shipping route | none if CONTAINED/REFUSED; seconds of mode flip if LEAKED |
 | **cnc-ddraw** | **one task**: build/obtain, drop in via the existing `-Windowed` mechanism, run `probe-widescreen-present.ps1` and read CROP/SCALE/FOLLOW | config + the same stage-2 work the engine side always needed | none (windowed, off-screen testable) |
 | own ddraw shim | bounded by facts 2–3 but strictly dominated by cnc-ddraw unless it fails its probe | est. 4–8 tasks | none |
 | plugin-side presenter (hook the ONE present blit `FUN_0041D420`, StretchDIBits the engine's buffer at its true pitch) | design known; palette capture is the open question (Storm's GDI palette imports / the §12.6-adjacent palette registers) | est. 2–4 tasks | none |
@@ -1165,6 +1165,7 @@ should not expect their noise floors to match.
 ### 14.5 How to reproduce
 
 ```powershell
+# the probe and the analyzer were removed after this measurement; a6998df has both
 ./tools/plugin/fetch-cnc-ddraw.ps1     # pinned v7.1.0.0 -> C:\decompile-sc-data\sc-work\cnc-ddraw\ + hashes
 ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-widescreen-present.ps1 `
   -SuiteArgs @{ Vector='both'; Stage='1'; BracketSeconds=4;
