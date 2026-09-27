@@ -580,25 +580,7 @@ try {
 }
 catch { Write-ScStepFailure $_ 'a test step' }
 finally {
-    if (-not $KeepOpen -and $gamePid -gt 0) {
-        try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | Write-Host }
-        catch {
-            Write-Host "  FAIL close-game could not shut the game down: $($_.Exception.Message)"
-            $failures++
-        }
-        Start-Sleep -Seconds 2
-    }
-    elseif (-not $KeepOpen) {
-        Write-Host '  FAIL no pid was ever parsed, so nothing could be closed'
-        $failures++
-    }
-    if (-not $KeepOpen -and (Test-Path -LiteralPath $mapDir)) {
-        Remove-ScOwnFixture -Run $fixtures
-        # And take the FOLDER away too when it is empty. An abandoned empty folder still
-        # pushes every entry below it down a row, and only six rows are visible.
-        # Remove-ScOwnFixtureDir refuses if anything at all is still in it.
-        Remove-ScOwnFixtureDir -Dir $mapDir
-    }
+    Stop-ScSuiteGame -GamePid $gamePid -KeepOpen:$KeepOpen -Fixtures $fixtures
 }
 
 Write-Host ''

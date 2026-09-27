@@ -70,7 +70,7 @@ Off-screen, cnc-ddraw menu input is activation-gated: a harness limit, not a fea
 
 ## Test fixtures
 
-Fixture ownership is code: copy `test-burrow-fanout.ps1`'s recipe (`Resolve-ScFixtureDir -Suite`, `New-ScFixtureRun` declaring every file, named after the suite, `Wait-ScFixtureFolderFree`, `Assert-ScFixtureStillMine` right before `Select-ScBrowserMap`, `Remove-ScOwnFixture` + `Remove-ScOwnFixtureDir` in `finally`).
+Fixture ownership is code: copy `test-burrow-fanout.ps1`'s recipe (`Resolve-ScFixtureDir -Suite`, `New-ScFixtureRun` declaring every file, named after the suite, `Wait-ScFixtureFolderFree`, `Assert-ScFixtureStillMine` right before `Select-ScBrowserMap`, `Stop-ScSuiteGame -Fixtures $fixtures` in `finally`).
 - DO default `-FixtureDir` with `Resolve-ScFixtureDir -Suite <suite>`; a hardcoded folder is shared by every task running that suite.
 - NEVER run one suite twice at once under one `$env:AGENT_TASK` without distinct `-FixtureDir`s: same folder, same names, and the second run's `Wait-ScFixtureFolderFree` silently deletes the first run's map.
 - NEVER delete or skip an undeclared `.scx` because no StarCraft is running: its owner may not have launched yet.

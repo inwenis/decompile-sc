@@ -2,8 +2,8 @@
 <#
 .SYNOPSIS
 The suite prelude: loads drive-game.ps1, sc-launch-lock.ps1 and sc-oracle-guard.ps1, sets
-$repoRoot, zeroes $failures and $step, and defines the assertion helpers every suite and
-probe in this directory writes its output with.
+$repoRoot, zeroes $failures and $step, and defines the assertion and epilogue helpers every
+suite and probe in this directory writes its output with.
 
 .DESCRIPTION
 WHY THIS IS SAFE TO SHARE, and the one thing to know about it. This file is DOT-SOURCED:
@@ -21,10 +21,9 @@ dot-source so it wins:
   test-building-groups.ps1,   Assert-ScAllOneType prints "all N are T", without the word
   test-building-parity.ps1    "units" the shared one prints
 
-The `finally` half of each suite's epilogue is NOT here and should not be: it reads
-$gamePid, $KeepOpen, $mapDir and the suite's own fixture list, so sharing it means passing
-four things in. Its `catch` half IS here, because that half only ever needed the error
-record and a noun.
+Both halves of a suite's epilogue are here: Write-ScStepFailure is the `catch`,
+Stop-ScSuiteGame the `finally`. What stays at the call site is the launch-lock release,
+which must come after the game is closed, and any fixture rule of the suite's own.
 
 .EXAMPLE
 $scriptDir = $PSScriptRoot
@@ -64,6 +63,54 @@ function Write-ScStepFailure {
     Write-Host "  FAIL $What threw: $($Err.Exception.Message)"
     Write-Host "       $($Err.ScriptStackTrace)"
     $script:failures++
+}
+
+# The `finally` every game-driving suite ends with. -ProcessId, always: close-game.ps1
+# resolving the game by NAME throws whenever any other StarCraft is running -- including the
+# user's own playable install -- and would close the wrong game. close-game escalates to
+# Stop-Process and throws only when the game is STILL alive afterwards, so a stranded game
+# fails the run rather than warning about it (AGENTS.md § "Stopping a run / orphaned games").
+# -Fixtures is the suite's New-ScFixtureRun: its declared files go, then its folder if that
+# is now empty -- an empty folder still pushes every browser row below it down. -KeepOpen
+# leaves both the game and its map for a human.
+function Stop-ScSuiteGame {
+    param([int]$GamePid, [switch]$KeepOpen, $Fixtures)
+    if (-not $KeepOpen -and $GamePid -gt 0) {
+        try { & (Join-Path $PSScriptRoot 'close-game.ps1') -ProcessId $GamePid | Write-Host }
+        catch {
+            Write-Host "  FAIL close-game could not shut the game down: $($_.Exception.Message)"
+            $script:failures++
+        }
+        Start-Sleep -Seconds 2
+    }
+    elseif (-not $KeepOpen) {
+        Write-Host '  FAIL no pid was ever parsed, so nothing could be closed'
+        $script:failures++
+    }
+    if ($Fixtures -and -not $KeepOpen) {
+        Remove-ScOwnFixture -Run $Fixtures
+        Remove-ScOwnFixtureDir -Dir $Fixtures.Dir
+    }
+}
+
+# The whole-run fan-out check: every FANOUT start in the log must name an id the policy
+# table marks fanout (research/data/command-opcodes.tsv; src/hooktest.cpp asserts the same
+# 19 ids on its side). One stray id is a policy bug no per-case step can see. Returns the
+# ids that fanned out, for a suite's own follow-up checks.
+function Assert-ScFanoutPolicy {
+    param([Parameter(Mandatory)][string]$LogPath)
+    $allowed = @('0x14', '0x15', '0x1A', '0x1B', '0x1C', '0x1D', '0x1E', '0x21',
+                 '0x22', '0x25', '0x26', '0x28', '0x2A', '0x2B', '0x2C', '0x2D',
+                 '0x2E', '0x36', '0x5A')
+    $ids = @(Get-Content -LiteralPath $LogPath |
+             Select-String -Pattern 'FANOUT start: cmd=(0x[0-9A-F]{2})' |
+             ForEach-Object { [regex]::Match($_.Line, 'cmd=(0x[0-9A-F]{2})').Groups[1].Value } |
+             Sort-Object -Unique)
+    Write-Host "       ids fanned out this run: $($ids -join ' ')"
+    $stray = @($ids | Where-Object { $allowed -notcontains $_ })
+    Assert-That 'every fanned-out id is in the policy set' ($stray.Count -eq 0) `
+        ($stray.Count -gt 0 ? "(stray: $($stray -join ' '))" : '')
+    $ids
 }
 
 # AGENTS.md § "Hard rules": patching is in-process only, so StarCraft.exe on disk must stay

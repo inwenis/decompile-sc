@@ -25,6 +25,7 @@ block aec20d0962258943  # 11 identical lines: $out.TrackedCount = [int]$s.Groups
 block caf302d4b459b7d3  # 11 identical lines: -InjectWindowedHelper WMode -NoLaunchLock -BuildDir $BuildDir `
 block 0ceea2fcdad5257c  # 11 identical lines: -Mode hooktest -LogCommands 1 -Circles 0 -HudRow 0 -WorldScan 1 `
 block 3d65b497aab11cad  # 11 identical lines: -UnitCount 1 -UnitType engineering-bay -Player 0 -ClearPlayerUnits `
+block 8df9faf95de074ff  # 11 identical lines: Assert-That 'at least one command id passed through untouched' ($passe
 block ff5a7b67230d4c8c  # 11 identical lines: Step "generate the fixture: two Nexuses + one Command Center, $Startin
 block 0e0dff1611246d04  # 11 identical lines: [Parameter(Mandatory)][int]$Seed,
 block fdbafa35bdba49a3  # 11 identical lines: if (Test-Path -LiteralPath $markerPath) { Remove-Item -LiteralPath $ma
@@ -51,31 +52,26 @@ block 4754b8eae487ab70  # 14 identical lines: }
 block 9d599aabf8f26ff1  # 15 identical lines: function Get-QInd {
 block bb5c40339097b1bc  # 15 identical lines: if (-not $m.Success) { throw "probe: unparseable QIND line: $($Hit.Lin
 block 3080635399d2b21f  # 15 identical lines: if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPa
-block a9c5fe18cee9ea6a  # 15 identical lines: }
 block 1cebd70f54fde23a  # 16 identical lines: Get-ScCardState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -T
 block aa3132aefd9bcbcb  # 16 identical lines: }
-block 484f03f0fc0b6949  # 17 identical lines: ($stray.Count -gt 0 ? "(stray: $($stray -join ' '))" : '')
+block 09d4565b14fd0de2  # 17 identical lines: Write-Host ''
 block ca78403f0bac17cb  # 18 identical lines: [int]$IdleSeconds = 120,
 block 67e146a5fe0ac3e0  # 18 identical lines: function ConvertFrom-QIndLine {
 block beac9646227126ca  # 18 identical lines: if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPa
-block 291da2cdf195c491  # 18 identical lines: try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | 
 block c2df6b37c8be8b84  # 18 identical lines: }
-block 9a7a3cbd2ca90300  # 19 identical lines: ($stray.Count -gt 0 ? "(stray: $($stray -join ' '))" : '')
 block bfdb776db09e0b6e  # 19 identical lines: ,@($Card.Slots | Where-Object { $_.HasButton -and ($_.Action -eq $UPGR
 block c97c95db695e4018  # 19 identical lines: Indicator = $m.Groups[6].Value
 block 9780f9427db18299  # 19 identical lines: }
 block c1d652d64daa8d9e  # 20 identical lines: $arms = @{}
 block c3e7b23fe46ee3fe  # 20 identical lines: }
 block 52503702ad8a40b8  # 22 identical lines: Save-ScWindowImage -Hwnd $script:hwnd -Path (Join-Path $ShotDir ("{0}-
+block 398f2dc63e9bf072  # 22 identical lines: catch { Write-ScStepFailure $_ 'a probe step' }
+block 56537e5f38f45dfa  # 22 identical lines: }
+block 7b5abcea445cd564  # 23 identical lines: }
 block 981f55cb367d2653  # 24 identical lines: -Mode fanout -Circles 1 -HudRow 0 -WorldScan 1 -BuildingGroups $groups
-block 9972b972143b18da  # 25 identical lines: Assert-That 'at least one command id passed through untouched' ($passe
 block 9c18282aa4336681  # 25 identical lines: }
 block ad3071a57187aa5a  # 28 identical lines: }
 block ac43f769c8a0f70e  # 31 identical lines: }
-block a2421524e8b79a58  # 32 identical lines: Write-Host ''
-block 0873131461cc3598  # 35 identical lines: }
-block 7bf8a724736d2023  # 36 identical lines: }
-block 032e69fab86b871f  # 55 identical lines: }
 block 4d3ebc7ee82a5a9b  # 6 identical lines: $UPGRADE_CMD = '0x32'
 block f6e173e26764f1e3  # 6 identical lines: $gamePid = 0
 block 2eee37c6206a06f6  # 6 identical lines: $mapPath = Join-Path $FixtureDir $mapName
@@ -85,6 +81,7 @@ block 6a46de056a173881  # 6 identical lines: $markerPath = Join-Path (Split-Path
 block d64874ceb88c457e  # 6 identical lines: $out.Card = [pscustomobject]@{
 block 62456dbd3dc12ab4  # 6 identical lines: $script:ccs = $ccs
 block 74bc9477b8ae5ad4  # 6 identical lines: $script:qindSeq++
+block 9d98507683956a95  # 6 identical lines: ($ids -notcontains '0x13')
 block 198e08b2579f919b  # 6 identical lines: (@($decoy | Select-String -Pattern 'as the LAST chunk').Count -gt 0)
 block 4a000fb4f542078e  # 6 identical lines: (@($gen | Select-String -Pattern 'no force randomises start locations'
 block 9d9ed32b83533cd4  # 6 identical lines: (@($log | Select-String -Pattern 'HOOK btnTrainCondition: installed at
@@ -137,6 +134,8 @@ block d2cf0cd5ac458f3e  # 8 identical lines: New-Item -ItemType Directory -Path 
 block aa8a26be6a56cc2f  # 8 identical lines: [CmdletBinding()]
 block c7705500b17f9e2a  # 8 identical lines: [ValidateSet('2', '3')][string]$WidescreenStage = '3',
 block b6b33d1e42f66f96  # 8 identical lines: [switch]$Stage2,
+block df15ae6d419bc0a7  # 8 identical lines: catch { Write-ScStepFailure $_ 'a probe step' }
+block 3e54829fee3ccf5a  # 8 identical lines: if ($launchLock) { Exit-ScLaunchLock -Lock $launchLock; $launchLock = 
 block d88814f1c3b054ba  # 8 identical lines: if (-not $gamePid) { throw "probe-framecap: could not parse the game p
 block 2b97738cc86a206d  # 8 identical lines: if (-not $gamePid) { throw 'probe: could not parse the game pid from s
 block 14c70206a22edb8e  # 8 identical lines: if (-not ('SCWin.Enum' -as [type])) {
@@ -150,7 +149,6 @@ block af9a16a4d23e7de3  # 9 identical lines: $script:failures++
 block 9b207e9a4c0ff900  # 9 identical lines: -InjectWindowedHelper WMode -NoLaunchLock -BuildDir $BuildDir `
 block 8dc70b29ce0e52bc  # 9 identical lines: -OutputPath $mapPath 2>&1
 block 945ad2caf3afeb07  # 9 identical lines: -UnitCount 1 -UnitType engineering-bay -Player 0 -ClearPlayerUnits `
-block 03026ad0b4c5dc77  # 9 identical lines: Assert-That "display $($script:heldIcon) went dark" (@($st2.Slots | Wh
 block 56c82a894a2ccec4  # 9 identical lines: Assert-That 'nothing was refunded for a building that went away' ($ref
 block 3feca71dae282647  # 9 identical lines: [string]$DecoyFolder = '00-t000',
 block 4c96aa92e8d9bf92  # 9 identical lines: foreach ($l in $lines) {

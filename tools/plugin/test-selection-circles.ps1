@@ -242,24 +242,7 @@ try {
 }
 catch { Write-ScStepFailure $_ 'a test step' }
 finally {
-    # -ProcessId, always: close-game.ps1 resolving the game by NAME throws whenever any
-    # other StarCraft is running -- including the user's own playable install -- and
-    # would close the wrong game.
-    if (-not $KeepOpen -and $gamePid -gt 0) {
-        try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | Write-Host }
-        catch {
-            # close-game escalates to Stop-Process and throws only when the game is
-            # STILL alive afterwards: a stranded game process fails the run rather than
-            # warning about it (AGENTS.md § "Stopping a run / orphaned games").
-            Write-Host "  FAIL close-game could not shut the game down: $($_.Exception.Message)"
-            $failures++
-        }
-        Start-Sleep -Seconds 2
-    }
-    elseif (-not $KeepOpen) {
-        Write-Host '  FAIL no pid was ever parsed, so nothing could be closed'
-        $failures++
-    }
+    Stop-ScSuiteGame -GamePid $gamePid -KeepOpen:$KeepOpen
 }
 
 # --- shutdown accounting -----------------------------------------------------

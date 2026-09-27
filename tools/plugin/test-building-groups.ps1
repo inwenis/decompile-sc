@@ -571,18 +571,7 @@ try {
 }
 catch { Write-ScStepFailure $_ 'a test step' }
 finally {
-    if (-not $KeepOpen -and $gamePid -gt 0) {
-        try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | Write-Host }
-        catch {
-            Write-Host "  FAIL close-game could not shut the game down: $($_.Exception.Message)"
-            $failures++
-        }
-        Start-Sleep -Seconds 2
-    }
-    elseif (-not $KeepOpen) {
-        Write-Host '  FAIL no pid was ever parsed, so nothing could be closed'
-        $failures++
-    }
+    Stop-ScSuiteGame -GamePid $gamePid -KeepOpen:$KeepOpen
     # Only this run's own declared fixture, on every path, and only an EMPTY folder -- an
     # empty folder of ours still pushes every browser row below it down for everyone else.
     Remove-ScOwnFixture -Run $fixtures

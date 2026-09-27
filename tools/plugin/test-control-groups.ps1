@@ -52,10 +52,6 @@ $mapName = 'control-groups.scx'
 $mapPath = Join-Path $mapDir $mapName
 $fixtures = New-ScFixtureRun -Dir $mapDir -Names @($mapName)
 
-function Remove-MyFixtureDirIfEmpty { Remove-ScOwnFixtureDir -Dir $mapDir }
-function Remove-MyFixture { Remove-ScOwnFixture -Run $fixtures }
-function Assert-FixtureFolderIsOurs { Assert-ScFixtureFolderMine -Run $fixtures }
-
 $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
 function Get-ScState {
     param([string]$Tag, [int]$TimeoutSec = 15)
@@ -84,8 +80,8 @@ function Shot([string]$tag) {
 
 try {
     Step "generate the fixture: $UnitCount Lurkers, Use Map Settings, no triggers" {
-        Assert-FixtureFolderIsOurs
-        Remove-MyFixture
+        Assert-ScFixtureFolderMine -Run $fixtures
+        Remove-ScOwnFixture -Run $fixtures
         $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
             -UnitCount $UnitCount -UnitType lurker -Player 0 -OutputPath $mapPath 2>&1
         $gen = @($gen | Where-Object { "$_" -notmatch 'WARNING:StormLibFinder' })
@@ -389,17 +385,7 @@ try {
     }
 
     Step 'the run never fanned out anything outside the policy set' {
-        $allowed = @('0x14', '0x15', '0x1A', '0x1B', '0x1C', '0x1D', '0x1E', '0x21',
-                     '0x22', '0x25', '0x26', '0x28', '0x2A', '0x2B', '0x2C', '0x2D',
-                     '0x2E', '0x36', '0x5A')
-        $ids = @(Get-Content -LiteralPath $LogPath |
-                 Select-String -Pattern 'FANOUT start: cmd=(0x[0-9A-F]{2})' |
-                 ForEach-Object { [regex]::Match($_.Line, 'cmd=(0x[0-9A-F]{2})').Groups[1].Value } |
-                 Sort-Object -Unique)
-        Write-Host "       ids fanned out this run: $($ids -join ' ')"
-        $stray = @($ids | Where-Object { $allowed -notcontains $_ })
-        Assert-That 'every fanned-out id is in the policy set' ($stray.Count -eq 0) `
-            ($stray.Count -gt 0 ? "(stray: $($stray -join ' '))" : '')
+        $ids = Assert-ScFanoutPolicy -LogPath $LogPath
         # 0x13 must never be fanned out: it is a control-group command, not an order.
         Assert-That 'the hotkey command itself was never fanned out' `
             ($ids -notcontains '0x13')
@@ -407,21 +393,7 @@ try {
 }
 catch { Write-ScStepFailure $_ 'a test step' }
 finally {
-    if (-not $KeepOpen -and $gamePid -gt 0) {
-        try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | Write-Host }
-        catch {
-            Write-Host "  FAIL close-game could not shut the game down: $($_.Exception.Message)"
-            $failures++
-        }
-        Start-Sleep -Seconds 2
-    }
-    elseif (-not $KeepOpen) {
-        Write-Host '  FAIL no pid was ever parsed, so nothing could be closed'
-        $failures++
-    }
-    # ONLY our own file, and the folder only while it is empty -- another worker's fixture
-    # may be sitting beside it with their game still reading it.
-    if (-not $KeepOpen) { Remove-MyFixture; Remove-MyFixtureDirIfEmpty }
+    Stop-ScSuiteGame -GamePid $gamePid -KeepOpen:$KeepOpen -Fixtures $fixtures
 }
 
 Write-Host ''

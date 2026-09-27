@@ -325,37 +325,12 @@ try {
     }
 
     Step 'the run never fanned out anything outside the policy set' {
-        $allowed = @('0x14', '0x15', '0x1A', '0x1B', '0x1C', '0x1D', '0x1E', '0x21',
-                     '0x22', '0x25', '0x26', '0x28', '0x2A', '0x2B', '0x2C', '0x2D',
-                     '0x2E', '0x36', '0x5A')
-        $ids = @(Get-Content -LiteralPath $LogPath |
-                 Select-String -Pattern 'FANOUT start: cmd=(0x[0-9A-F]{2})' |
-                 ForEach-Object { [regex]::Match($_.Line, 'cmd=(0x[0-9A-F]{2})').Groups[1].Value } |
-                 Sort-Object -Unique)
-        Write-Host "       ids fanned out this run: $($ids -join ' ')"
-        $stray = @($ids | Where-Object { $allowed -notcontains $_ })
-        Assert-That 'every fanned-out id is in the policy set' ($stray.Count -eq 0) `
-            ($stray.Count -gt 0 ? "(stray: $($stray -join ' '))" : '')
+        $null = Assert-ScFanoutPolicy -LogPath $LogPath
     }
 }
 catch { Write-ScStepFailure $_ 'a test step' }
 finally {
-    if (-not $KeepOpen -and $gamePid -gt 0) {
-        try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | Write-Host }
-        catch {
-            Write-Host "  FAIL close-game could not shut the game down: $($_.Exception.Message)"
-            $failures++
-        }
-        Start-Sleep -Seconds 2
-    }
-    elseif (-not $KeepOpen) {
-        Write-Host '  FAIL no pid was ever parsed, so nothing could be closed'
-        $failures++
-    }
-    if (-not $KeepOpen) { Remove-ScOwnFixture -Run $fixtures }
-    # An empty folder of ours left behind still pushes every entry below it down a row,
-    # and only six are visible, so it goes too -- but only if it is empty, and only ours.
-    Remove-ScOwnFixtureDir -Dir $mapDir
+    Stop-ScSuiteGame -GamePid $gamePid -KeepOpen:$KeepOpen -Fixtures $fixtures
     if ($launchLock) { Exit-ScLaunchLock -Lock $launchLock; $launchLock = $null }
 }
 

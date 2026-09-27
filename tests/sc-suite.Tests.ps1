@@ -222,6 +222,65 @@ Write-Host "EMPTY=`$failures"
     }
 }
 
+Describe 'Stop-ScSuiteGame closes by pid, FAILs a run that never had one, and cleans only what it declared' {
+
+    It 'FAILs once when no pid was ever parsed, and not at all under -KeepOpen' {
+        $out = Invoke-LibScript @'
+Stop-ScSuiteGame -GamePid 0
+Write-Host "NOPID=$failures"
+Stop-ScSuiteGame -GamePid 0 -KeepOpen
+Write-Host "KEPT=$failures"
+'@
+        ([regex]::Matches($out, '  FAIL no pid was ever parsed, so nothing could be closed')).Count | Should -Be 1
+        $out | Should -Match 'NOPID=1'
+        $out | Should -Match 'KEPT=1'
+    }
+
+    It 'runs close-game.ps1 from its own folder, by pid' {
+        # Windows pids are multiples of 4, so this one can never name a real process.
+        $out = Invoke-LibScript @'
+Stop-ScSuiteGame -GamePid 2147483647
+Write-Host "COUNTED=$failures"
+'@
+        $out | Should -Match 'close-game: pid 2147483647 is not running'
+        $out | Should -Match 'COUNTED=0'
+    }
+
+    It 'removes the declared fixture and keeps a foreign file, its folder, and everything under -KeepOpen' {
+        $shared = Join-Path $TestDrive 'shared'; $own = Join-Path $TestDrive 'own'; $kept = Join-Path $TestDrive 'kept'
+        foreach ($d in $shared, $own, $kept) { New-Item -ItemType Directory -Path $d | Out-Null; Set-Content (Join-Path $d 'mine.scx') 'x' }
+        Set-Content (Join-Path $shared 'theirs.scx') 'x'
+        Invoke-LibScript @"
+foreach (`$d in '$shared', '$own') { Stop-ScSuiteGame -GamePid 0 -Fixtures (New-ScFixtureRun -Dir `$d -Names 'mine.scx') }
+Stop-ScSuiteGame -GamePid 0 -KeepOpen -Fixtures (New-ScFixtureRun -Dir '$kept' -Names 'mine.scx')
+"@ | Out-Null
+        Join-Path $shared 'mine.scx' | Should -Not -Exist
+        Join-Path $shared 'theirs.scx' | Should -Exist
+        $own | Should -Not -Exist
+        Join-Path $kept 'mine.scx' | Should -Exist
+    }
+}
+
+Describe 'Assert-ScFanoutPolicy FAILs a fanned-out id outside the policy set' {
+
+    It 'passes an allowed id, returns the ids, and counts a stray one' {
+        $ok = Join-Path $TestDrive 'ok.log'; $bad = Join-Path $TestDrive 'bad.log'
+        $line = 'FANOUT start: cmd=0x{0} len=2 units=20 (visible 12 + overflow 8) '
+        Set-Content -LiteralPath $ok -Value ($line -f '2C'), ($line -f '2C'), 'CMD id=0x13'
+        Set-Content -LiteralPath $bad -Value ($line -f '2C'), ($line -f '13')
+        $out = Invoke-LibScript @"
+`$ids = Assert-ScFanoutPolicy -LogPath '$ok'
+Write-Host "OK=`$failures IDS=`$(`$ids -join ',')"
+`$null = Assert-ScFanoutPolicy -LogPath '$bad'
+Write-Host "BAD=`$failures"
+"@
+        $out | Should -Match '  ok   every fanned-out id is in the policy set'
+        $out | Should -Match 'OK=0 IDS=0x2C\r?\n'
+        $out | Should -Match '  FAIL every fanned-out id is in the policy set \(stray: 0x13\)'
+        $out | Should -Match 'BAD=1'
+    }
+}
+
 Describe 'a suite that keeps its OWN variant defines it after the dot-source' {
 
     It 'so the library cannot silently override the ones that are different' {

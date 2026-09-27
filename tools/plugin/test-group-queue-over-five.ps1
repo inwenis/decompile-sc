@@ -638,22 +638,7 @@ try {
     }
 }
 finally {
-    if ($gamePid -gt 0 -and -not $KeepOpen) {
-        try {
-            & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | ForEach-Object { Write-Host "       $_" }
-        }
-        catch {
-            Write-Host "  FAIL close-game could not shut the game down: $($_.Exception.Message)"
-            $failures++
-        }
-        Start-Sleep -Seconds 2
-    }
-    elseif (-not $KeepOpen) {
-        Write-Host '  FAIL no pid was ever parsed, so nothing could be closed'
-        $failures++
-    }
-    if (-not $KeepOpen) { Remove-ScOwnFixture -Run $fixtures }
-    Remove-ScOwnFixtureDir -Dir $mapDir
+    Stop-ScSuiteGame -GamePid $gamePid -KeepOpen:$KeepOpen -Fixtures $fixtures
     if ($launchLock) { Exit-ScLaunchLock -Lock $launchLock; $launchLock = $null }
 }
 
