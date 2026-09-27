@@ -19,8 +19,7 @@ run, and the run throws if it differs.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$Patch,
-    [string]$Name = [IO.Path]::GetFileNameWithoutExtension($Patch),
-    [string]$ToolchainBin
+    [string]$Name = [IO.Path]::GetFileNameWithoutExtension($Patch)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -53,9 +52,7 @@ function Build-Arm {
         Write-Host "defect-arm: $ArmName arm patched with $ApplyPatch"
     }
     $log = Join-Path $copyRoot 'hooktest.log'
-    $buildArgs = @('-OutDir', (Join-Path $copyRoot 'out'), '-Test')
-    if ($ToolchainBin) { $buildArgs += @('-ToolchainBin', $ToolchainBin) }
-    & pwsh -NoProfile -File (Join-Path $copyRoot 'tools/plugin/build.ps1') @buildArgs *> $log
+    & pwsh -NoProfile -File (Join-Path $copyRoot 'tools/plugin/build.ps1') -OutDir (Join-Path $copyRoot 'out') -Test *> $log
     $text = Get-Content -LiteralPath $log -Raw
     if ($text -notmatch 'hooktest: \d+ failure') {
         throw "defect-arm: $ArmName arm never reached hooktest's own summary line (build failure or crash) -- see $log`n$((Get-Content -LiteralPath $log -Tail 25) -join "`n")"

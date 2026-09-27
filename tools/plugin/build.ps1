@@ -39,8 +39,7 @@ $DEFAULT_TOOLCHAIN = 'C:\decompile-sc-data\re-tools\mingw32-gcc-16.1.0-i686-msvc
 if (-not $ToolchainBin) { $ToolchainBin = $env:SC_MINGW32_BIN }
 if (-not $ToolchainBin) { $ToolchainBin = $DEFAULT_TOOLCHAIN }
 
-$gpp     = Join-Path $ToolchainBin 'g++.exe'
-$objdump = Join-Path $ToolchainBin 'objdump.exe'
+$gpp = Join-Path $ToolchainBin 'g++.exe'
 
 if (-not (Test-Path -LiteralPath $gpp)) {
     throw @"
@@ -189,13 +188,6 @@ Assert-Pe32 $exeOut
 if ($Test) { Assert-Pe32 $testOut }
 
 Assert-BuildStamp -Path $dllOut -ExpectId $identity.BuildId -ExpectSrc $srcDigest
-
-if (Test-Path -LiteralPath $objdump) {
-    Write-Host 'verify: objdump cross-check'
-    & $objdump -f $dllOut | Select-String 'file format|architecture' | ForEach-Object { "  $_" }
-    Write-Host 'verify: scplugin.dll imports'
-    & $objdump -p $dllOut | Select-String 'DLL Name:' | ForEach-Object { "  $_" }
-}
 
 if ($Test) {
     Write-Host ''

@@ -62,11 +62,6 @@ function Test-SafeMirrorDestination {
     return (-not $existingItems)
 }
 
-function Get-Sha256 {
-    param([string]$Path)
-    (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToUpperInvariant()
-}
-
 function Test-KeyBinaries {
     param([string]$Root, [string]$Label)
     $ok = $true
@@ -77,7 +72,7 @@ function Test-KeyBinaries {
             $ok = $false
             continue
         }
-        $actual = Get-Sha256 -Path $path
+        $actual = (Get-FileHash -Path $path -Algorithm SHA256).Hash
         $expected = $ExpectedHashes[$name]
         if ($actual -ne $expected) {
             Write-Warning "[$Label] $name sha256 MISMATCH`n  expected: $expected`n  actual:   $actual"
@@ -254,7 +249,7 @@ if ($coreCount -ne $srcCount -or $coreBytesSum -ne $srcBytes) {
     $statsOk = $false
 }
 if ([Math]::Abs($srcCount - $ExpectedFileCountApprox) -gt 5) {
-    Write-Warning "Source file count ($srcCount) drifted from documented baseline (~$ExpectedFileCountApprox). Update research/pe-anatomy.md context if this is expected."
+    Write-Warning "Source file count ($srcCount) drifted from documented baseline (~$ExpectedFileCountApprox). Update the figure in research/runtime-selection-observations.md if this is expected."
 }
 if ([Math]::Abs($srcBytes - $ExpectedTotalBytesApprox) -gt 50MB) {
     Write-Warning "Source total size ($([Math]::Round($srcBytes/1MB,1)) MB) drifted from documented baseline (~$([Math]::Round($ExpectedTotalBytesApprox/1MB,0)) MB)."

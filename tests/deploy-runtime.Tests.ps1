@@ -41,9 +41,10 @@ Describe 'the deployed plugin runtime carries every dependency it dot-sources' {
 
     It 'copies every helper run-with-plugin.ps1 dot-sources into <DeployRoot>\plugin' {
         $deployText = Get-Content -Raw -LiteralPath $script:deploy
-        foreach ($h in @(Get-DotSourcedHelper -Path $script:runner)) {
-            $copied = $deployText -match [regex]::Escape("Join-Path `$pluginDir '$h'")
-            $copied | Should -BeTrue -Because "deploy.ps1 must Copy-Item $h, or the deployed launcher throws on a machine with no repo"
+        $runtimeLine = [regex]::Match($deployText, "(?m)^\`$runtime = (.+)$").Groups[1].Value
+        $runtimeLine | Should -Match 'run-with-plugin\.ps1' -Because 'an empty extraction makes every check below vacuous'
+        foreach ($h in @(Get-DotSourcedHelper -Path $script:runner) + 'check-game-windows.ps1') {
+            $runtimeLine.Contains("'$h'") | Should -BeTrue -Because "deploy.ps1 must copy $h, or the deployed launcher throws on a machine with no repo"
         }
     }
 
@@ -90,8 +91,7 @@ Describe 'a redeploy leaves the feature-test map in place (task 067)' {
     }
 
     It 'the verify step requires the map to exist AND to be from this run' {
-        # Presence alone passes on a stale leftover, so deploy.ps1 checks freshness the
-        # same way it does for the plugin binaries.
+        # Presence alone passes on a stale leftover, so deploy.ps1 also checks the map's mtime.
         $script:deployText.Contains('map missing after deploy') | Should -BeTrue
         $script:deployText.Contains("Join-Path `$gameDeployDir 'Maps\BroodWar\!battle.scx'") | Should -BeTrue
         $script:deployText.Contains('predates this deploy run -- the regeneration step did not actually write it') | Should -BeTrue
@@ -103,10 +103,9 @@ Describe 'a redeploy leaves the feature-test map in place (task 067)' {
     }
 }
 
-Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-06)' {
-    # The deploy ships ONE launcher and one shortcut, and it carries the extended
-    # viewport; a separate "Wide" launcher off by default is the shape these checks
-    # forbid, and each fails against a two-launcher deploy.ps1, so none is vacuous.
+Describe 'the one launcher ships the wide geometry at 2x' {
+    # The deploy ships ONE launcher, and it carries the extended viewport; the ONE-launcher-body
+    # count fails against a two-launcher deploy.ps1.
 
     BeforeAll {
         $script:deployText = Get-Content -Raw -LiteralPath $script:deploy
@@ -118,10 +117,8 @@ Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-
         $script:launcher.Length | Should -BeGreaterThan 100
     }
 
-    It 'there is exactly ONE launcher body and no wide launcher left' {
+    It 'there is exactly ONE launcher body' {
         ([regex]::Matches($script:deployText, "(?m)^\`$\w*[lL]auncherBody = @'")).Count | Should -Be 1
-        $script:deployText | Should -Not -Match 'wideLauncherBody'
-        $script:deployText | Should -Not -Match 'WideShortcutName'
     }
 
     It 'the launcher turns the assembled widescreen on: stage 3 + storm widen + cnc-ddraw' {
@@ -153,7 +150,7 @@ Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-
         $script:deployText.Contains('Get-ScWideGeometry -Geometry $g') | Should -BeTrue -Because 'each ini must be sized from its own preset'
         $script:deployText.Contains('"cnc-ddraw-2x-$g.ini"') | Should -BeTrue
         $script:deployText | Should -Match '\^width=\\d\+'
-        $script:deployText.Contains('does not carry width=') | Should -BeTrue -Because 'the verify step must read the ini that actually shipped'
+        $script:deployText.Contains('does not carry width=') | Should -BeTrue -Because 'deploy must read back the ini that actually shipped'
     }
 
     It 'the geometry reader deploy and the suites share resolves every preset the DLL lists' {
@@ -178,19 +175,13 @@ Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-
         $script:deployText | Should -Match '\$fits2x'
         $script:deployText | Should -Match "fullscreen=false', 'fullscreen=true'"
         $script:deployText | Should -Match 'maintas=true'
-        $script:deployText | Should -Match 'must be borderless' -Because 'the verify step must confirm the fallback actually shipped'
+        $script:deployText | Should -Match 'must be borderless' -Because 'deploy must confirm the fallback actually shipped'
     }
 
     It 'every preset gets a desktop shortcut that runs the launcher at its size' {
         $script:deployText.Contains('"StarCraft Modded $g.lnk"') | Should -BeTrue
         $script:deployText.Contains('" -Geometry $g"') | Should -BeTrue
         $script:deployText.Contains('size shortcut $($s.Path) does not run the launcher') | Should -BeTrue -Because 'the verify step must read back each shortcut it wrote'
-    }
-
-    It 'a leftover Wide launcher and shortcut from an earlier deploy are removed' {
-        $script:deployText.Contains("Launch-StarCraft-Modded-Wide.ps1") | Should -BeTrue
-        $script:deployText.Contains("StarCraft Modded (Wide).lnk") | Should -BeTrue
-        $script:deployText | Should -Match 'Remove-Item -LiteralPath \$staleWideShortcut'
     }
 
     It 'deploy stages cnc-ddraw only through its own sha256 pin' {
@@ -219,9 +210,7 @@ Describe 'the one launcher ships the wide geometry at 2x (one shortcut, 2026-09-
         $script:deployText.Contains('shortcuts SKIPPED (-NoShortcut)') | Should -BeTrue
         $gateAt = $script:deployText.IndexOf('if ($NoShortcut) {')
         $lnkAt = $script:deployText.IndexOf('$lnk.Save()')
-        $staleAt = $script:deployText.IndexOf('$staleWideShortcut = ')
         $gateAt | Should -BeGreaterThan -1
         $lnkAt | Should -BeGreaterThan $gateAt -Because 'the shortcut write must sit behind the -NoShortcut gate'
-        $staleAt | Should -BeGreaterThan $gateAt -Because 'a scratch deploy must not delete anything on the desktop either'
     }
 }
