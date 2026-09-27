@@ -39,9 +39,9 @@ from __future__ import annotations
 import argparse
 import os
 import re
-import struct
 import sys
-from types import SimpleNamespace
+
+import pefile
 
 try:
     from capstone import Cs, CS_ARCH_X86, CS_MODE_32, CS_GRP_JUMP, CS_GRP_CALL, CS_GRP_BRANCH_RELATIVE
@@ -81,35 +81,19 @@ class Image:
     """The on-disk PE, addressable by VA."""
 
     def __init__(self, path: str):
-        self.path = path
-        self.data = open(path, "rb").read()
-        pe = struct.unpack_from("<I", self.data, 0x3C)[0]
-        if self.data[pe:pe + 4] != b"PE\0\0":
+        try:
+            self.pe = pefile.PE(path, fast_load=True)
+        except pefile.PEFormatError:
             raise SystemExit("renderer_patch_sites: %s is not a PE" % path)
-        nsec = struct.unpack_from("<H", self.data, pe + 6)[0]
-        optsz = struct.unpack_from("<H", self.data, pe + 20)[0]
-        self.imagebase = struct.unpack_from("<I", self.data, pe + 24 + 28)[0]
-        self.secs = []
-        for i in range(nsec):
-            o = pe + 24 + optsz + i * 40
-            name = self.data[o:o + 8].rstrip(b"\0").decode("ascii", "replace")
-            vsize, va, rawsize, raw = struct.unpack_from("<IIII", self.data, o + 8)
-            self.secs.append((name, va, vsize, raw, rawsize))
-
-    def off(self, va: int):
-        r = va - self.imagebase
-        for _name, sva, vsz, raw, rawsz in self.secs:
-            if sva <= r < sva + max(vsz, rawsz):
-                d = r - sva
-                if d < rawsz:
-                    return raw + d
-        return None
 
     def read(self, va: int, n: int) -> bytes:
-        o = self.off(va)
-        if o is None:
+        # pefile alone returns b"" for zero-filled .data and header bytes below
+        # the first section; a site there is a table error, so refuse it.
+        rva = va - self.pe.OPTIONAL_HEADER.ImageBase
+        blob = self.pe.get_data(rva, n) if self.pe.get_section_by_rva(rva) else b""
+        if not blob:
             raise SystemExit("renderer_patch_sites: VA 0x%08X is not in any section" % va)
-        return self.data[o:o + n]
+        return blob
 
 
 MD = Cs(CS_ARCH_X86, CS_MODE_32)
@@ -184,9 +168,6 @@ class Builder:
         self.warnings: list[str] = []
 
     # -- flags safety --------------------------------------------------------
-    def check_flags(self, p: "Patch"):
-        self.check_flags_bytes(p.name, p.va, p.expect, p.patch)
-
     def check_flags_bytes(self, name, va, expect, patch):
         """Refuse a rewrite that destroys a live flags value.
 
@@ -202,9 +183,8 @@ class Builder:
         forward from the end of the patch and refuse if a flags READER is reached
         before a flags WRITER.
         """
-        p = SimpleNamespace(name=name, va=va, expect=expect, patch=patch)
-        orig = disasm_all(p.va, p.expect)
-        new = disasm_all(p.va, p.patch)
+        orig = disasm_all(va, expect)
+        new = disasm_all(va, patch)
         if not orig or not new:
             return
         orig_writes = any(touches_flags(i)[1] for i in orig)
@@ -214,14 +194,14 @@ class Builder:
             # `shl r,1` changes SF/ZF/CF too. Only a warning, because a reorder
             # window legitimately holds the setter a downstream branch wants.
             if [fmt(i) for i in orig] != [fmt(i) for i in new]:
-                after = self.img.read(p.va + len(p.expect), 64)
-                for ins in disasm_all(p.va + len(p.expect), after):
+                after = self.img.read(va + len(expect), 64)
+                for ins in disasm_all(va + len(expect), after):
                     reads, writes = touches_flags(ins)
                     if reads:
                         self.warnings.append(
                             "%s @0x%08X: both old and new write EFLAGS but differently, and "
                             "`%s` @0x%08X reads them next -- check the branch by hand"
-                            % (p.name, p.va, fmt(ins), ins.address))
+                            % (name, va, fmt(ins), ins.address))
                         break
                     if writes:
                         break
@@ -234,25 +214,29 @@ class Builder:
         # i.e. exactly the sites this check exists for, and reports a clean table
         # over a broken game. A reorder is already covered, because its window
         # CONTAINS the original `cmp` and so makes `orig_writes` true on its own.
-        after = self.img.read(p.va + len(p.expect), 64)
-        for ins in disasm_all(p.va + len(p.expect), after):
+        after = self.img.read(va + len(expect), 64)
+        for ins in disasm_all(va + len(expect), after):
             reads, writes = touches_flags(ins)
             if reads:
                 self.errors.append(
                     "%s @0x%08X: the replacement writes EFLAGS and `%s` @0x%08X reads "
                     "them before anything else writes them -- this rewrite would change "
                     "a branch. Extend the window and reorder so the flag setter is last."
-                    % (p.name, p.va, fmt(ins), ins.address))
+                    % (name, va, fmt(ins), ins.address))
                 return
             if writes:
                 return
 
-    def imm(self, va, old, new, width, name, stage, note):
+    def imm(self, va, old, new, width, name, stage, note, signed=False):
         """Rewrite one immediate/displacement field of `width` bytes.
 
         The field's position is FOUND, not declared: the instruction is
         disassembled, its bytes searched for the encoded old value, and the
         site refused unless exactly one candidate of that width exists.
+        `signed` declares a NEGATIVE field (the terrain refresh band's wrap
+        arithmetic, `lea ecx,[eax - 0x498000]`, `and eax,0xfffb6800`): its bytes
+        are the two's complement and the operand text prints the magnitude or
+        the unsigned hex.
         """
         blob = self.img.read(va, 16)
         ins = disasm_one(va, blob)
@@ -260,24 +244,28 @@ class Builder:
             self.errors.append("%s @0x%08X: does not disassemble" % (name, va))
             return
         raw = bytes(ins.bytes)
-        enc_old = old.to_bytes(width, "little", signed=False)
+        enc_old = old.to_bytes(width, "little", signed=signed)
         hits = [i for i in range(len(raw) - width + 1) if raw[i:i + width] == enc_old]
         # A 2-byte field also matches inside a 4-byte one; require the operand
         # text to name the value so a coincidental match cannot pass.
         # capstone prints values below 10 in decimal ("add eax, 8"), the rest in hex.
         ops = ins.op_str.lower()
-        carried = ("0x%x" % old) in ops or (old < 10 and re.search(r"\b%d\b" % old, ops) is not None)
+        mask = (1 << (8 * width)) - 1
+        carried = (("0x%x" % abs(old)) in ops or ("0x%x" % (old & mask)) in ops
+                   or (0 <= old < 10 and re.search(r"\b%d\b" % old, ops) is not None))
         if not carried:
             self.errors.append("%s @0x%08X: `%s` does not carry 0x%X"
-                               % (name, va, fmt(ins), old))
+                               % (name, va, fmt(ins), abs(old)))
             return
         if len(hits) != 1:
-            self.errors.append("%s @0x%08X: %d candidate fields of width %d for 0x%X in %s"
+            self.errors.append("%s @0x%08X: %d candidate fields of width %d for %d in %s"
                                % (name, va, len(hits), width, old, raw.hex()))
             return
         off = hits[0]
-        if new >= (1 << (8 * width)):
-            self.errors.append("%s @0x%08X: new value 0x%X does not fit in %d byte(s)"
+        try:
+            enc_new = new.to_bytes(width, "little", signed=signed)
+        except OverflowError:
+            self.errors.append("%s @0x%08X: new value %d does not fit %d byte(s)"
                                % (name, va, new, width))
             return
         # A ONE-BYTE field is SIGN-EXTENDED by every encoding this table declares
@@ -289,53 +277,14 @@ class Builder:
                                "(it would ship as %d) -- use cave()" % (name, va, new, new - 256))
             return
         patched = bytearray(raw)
-        patched[off:off + width] = new.to_bytes(width, "little")
+        patched[off:off + width] = enc_new
         after = disasm_one(va, bytes(patched))
         self.patches.append(Patch(va, raw, bytes(patched), name, stage, note,
                                   before=fmt(ins),
                                   after=fmt(after) if after else "??"))
 
-    def simm(self, va, old, new, width, name, stage, note):
-        """Rewrite one SIGNED immediate/displacement field of `width` bytes.
-
-        Task 064. The terrain refresh band holds its wrap arithmetic as
-        NEGATIVE encodings -- `lea ecx,[eax - 0x498000]`, `and eax,0xfffb6800`
-        -- which imm() cannot declare: the encoded bytes are the two's
-        complement and the operand text prints the magnitude. Same location
-        discipline as imm(): the field is FOUND inside the instruction's own
-        bytes and refused unless exactly one candidate exists, and the operand
-        text must carry the value (as magnitude or as unsigned hex).
-        """
-        blob = self.img.read(va, 16)
-        ins = disasm_one(va, blob)
-        if ins is None:
-            self.errors.append("%s @0x%08X: does not disassemble" % (name, va))
-            return
-        raw = bytes(ins.bytes)
-        mask = (1 << (8 * width)) - 1
-        enc_old = (old & mask).to_bytes(width, "little")
-        hits = [i for i in range(len(raw) - width + 1) if raw[i:i + width] == enc_old]
-        ops = ins.op_str.lower()
-        if ("0x%x" % abs(old)) not in ops and ("0x%x" % (old & mask)) not in ops:
-            self.errors.append("%s @0x%08X: `%s` does not carry 0x%X"
-                               % (name, va, fmt(ins), abs(old)))
-            return
-        if len(hits) != 1:
-            self.errors.append("%s @0x%08X: %d candidate fields of width %d for %d in %s"
-                               % (name, va, len(hits), width, old, raw.hex()))
-            return
-        lo, hi = -(1 << (8 * width - 1)), (1 << (8 * width - 1)) - 1
-        if not (lo <= new <= hi):
-            self.errors.append("%s @0x%08X: new value %d does not fit signed %d byte(s)"
-                               % (name, va, new, width))
-            return
-        off = hits[0]
-        patched = bytearray(raw)
-        patched[off:off + width] = (new & mask).to_bytes(width, "little")
-        after = disasm_one(va, bytes(patched))
-        self.patches.append(Patch(va, raw, bytes(patched), name, stage, note,
-                                  before=fmt(ins),
-                                  after=fmt(after) if after else "??"))
+    def simm(self, *a):
+        return self.imm(*a, signed=True)
 
     # -- raw DATA rewrite ----------------------------------------------------
     def data(self, va, expect_hex, patch_hex, name, stage, note):
@@ -381,7 +330,7 @@ class Builder:
         p = Patch(va, expect, patch, name, stage, note,
                   fixup_off=fixup_off, fixup_addend=fixup_addend,
                   before=before, after=after)
-        self.check_flags(p)
+        self.check_flags_bytes(name, va, expect, patch)
         self.patches.append(p)
 
     # -- code cave: a window that jumps out to a longer replacement ----------
