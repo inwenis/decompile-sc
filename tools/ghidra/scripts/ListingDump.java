@@ -1,10 +1,10 @@
 // Dumps the disassembly listing for a raw address RANGE, function or no function.
 //
-// Exists because ExportListingAndDecompile needs a function selector and DecompileMany
-// resolves through the function manager -- neither can show code that Ghidra defined as
-// instructions but never attributed to any function body (e.g. switch-case tails reached
-// only through a jump table). 0x004583DC-0x004584A0 is such a range: instructions between
-// the end of statusScreenButton's body and the next function entry, inside no function.
+// Exists because DecompileMany resolves through the function manager, so it cannot show code
+// that Ghidra defined as instructions but never attributed to any function body (e.g.
+// switch-case tails reached only through a jump table). 0x004583DC-0x004584A0 is such a range:
+// instructions between the end of statusScreenButton's body and the next function entry, inside
+// no function.
 //
 // Output rows are raw disassembly of a game binary -- DERIVED GAME CONTENT, scratch only
 // (same rule as DecompileMany's .c files).

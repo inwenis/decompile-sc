@@ -47,9 +47,7 @@ public class XrefSweep extends GhidraScript {
         List<SweepUtil.Spec> specs = SweepUtil.readSpec(args[1]);
 
         Path out = Paths.get(outPath);
-        if (out.toAbsolutePath().getParent() != null) {
-            Files.createDirectories(out.toAbsolutePath().getParent());
-        }
+        Files.createDirectories(out.toAbsolutePath().getParent());
 
         Listing listing = currentProgram.getListing();
         ReferenceManager refs = currentProgram.getReferenceManager();
@@ -66,7 +64,7 @@ public class XrefSweep extends GhidraScript {
                 long start = s.hex(0);
                 long len = s.dec(1);
                 for (long off = 0; off < len; off++) {
-                    Address target = addr(start + off);
+                    Address target = toAddr(start + off);
                     ReferenceIterator it = refs.getReferencesTo(target);
                     while (it.hasNext()) {
                         Reference r = it.next();
@@ -138,7 +136,7 @@ public class XrefSweep extends GhidraScript {
                         if (v < start || v >= start + len) {
                             continue;
                         }
-                        Address at = addr(base + i);
+                        Address at = toAddr(base + i);
                         CodeUnit cu = listing.getCodeUnitContaining(at);
                         Address cuAddr = cu == null ? null : cu.getMinAddress();
                         boolean covered = refProducers.contains(at)
@@ -162,9 +160,5 @@ public class XrefSweep extends GhidraScript {
         }
         println("XrefSweep: pass 2 wrote " + hits + " raw dword hits -> " + p.toAbsolutePath());
         return hits;
-    }
-
-    private Address addr(long offset) {
-        return currentProgram.getAddressFactory().getDefaultAddressSpace().getAddress(offset);
     }
 }

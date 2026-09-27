@@ -1,6 +1,6 @@
 // Decompiles a LIST of functions in one pass against an already-analyzed program.
-// One import+analyze cycle per function (tools/ghidra/analyze.ps1) costs minutes each on a 1.2 MB
-// binary, so batching against the persistent project is what makes side-by-side comparison affordable.
+// An import+analyze cycle costs minutes on a 1.2 MB binary, so batching against the persistent
+// project is what makes side-by-side comparison affordable.
 //
 // Output .c files are DERIVED GAME CONTENT -- whole decompiled functions -- and must stay under a
 // gitignored scratch path (AGENTS.md § "Hard rules"). Only findings about them belong in research/.
@@ -79,7 +79,7 @@ public class DecompileMany extends GhidraScript {
                     "funcEntry", "bodyBytes", "status", "cFile", "cLines", "nameSource", "funcEnd"));
 
                 for (SweepUtil.Spec s : specs) {
-                    Address a = addr(s.hex(0));
+                    Address a = toAddr(s.hex(0));
                     Function f = currentProgram.getFunctionManager().getFunctionAt(a);
                     String via = "exact-entry";
                     if (f == null) {
@@ -146,9 +146,5 @@ public class DecompileMany extends GhidraScript {
             Files.write(dir.resolve("ranges.tsv"), ranges);
         }
         SweepUtil.writeManifest(outPath, rows, null);
-    }
-
-    private Address addr(long offset) {
-        return currentProgram.getAddressFactory().getDefaultAddressSpace().getAddress(offset);
     }
 }

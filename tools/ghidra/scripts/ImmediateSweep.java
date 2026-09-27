@@ -16,7 +16,6 @@
 
 import ghidra.app.script.GhidraScript;
 import ghidra.program.model.address.Address;
-import ghidra.program.model.lang.OperandType;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.InstructionIterator;
@@ -27,7 +26,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -48,27 +46,11 @@ public class ImmediateSweep extends GhidraScript {
         List<SweepUtil.Spec> specs = SweepUtil.readSpec(args[1]);
         String watchCsvRaw = args.length >= 3 ? args[2] : DEFAULT_WATCH;
 
-        // Split on '+' as well as ',': analyzeHeadless is a .bat, so cmd.exe splits the command
-        // line on commas as well as spaces. A comma-separated watch list passed as ONE argument
-        // arrives as several and the script then silently watches only the first value. Callers
-        // should use '+'; ',' stays accepted for a list built outside cmd.
-        Set<Long> watch = new LinkedHashSet<>();
-        for (String t : watchCsvRaw.split("[,+]")) {
-            String s = t.trim();
-            if (s.isEmpty()) {
-                continue;
-            }
-            if (s.startsWith("0x") || s.startsWith("0X")) {
-                s = s.substring(2);
-            }
-            watch.add(Long.parseUnsignedLong(s, 16));
-        }
+        Set<Long> watch = SweepUtil.parseWatch(watchCsvRaw);
         println("ImmediateSweep: watching " + watch);
 
         Path out = Paths.get(outPath);
-        if (out.toAbsolutePath().getParent() != null) {
-            Files.createDirectories(out.toAbsolutePath().getParent());
-        }
+        Files.createDirectories(out.toAbsolutePath().getParent());
 
         long rows = 0;
         List<String> unresolved = new ArrayList<>();
@@ -80,7 +62,7 @@ public class ImmediateSweep extends GhidraScript {
                 "insAddr", "opIndex", "opKind", "valueHex", "valueDec", "mnemonic", "instruction"));
 
             for (SweepUtil.Spec s : specs) {
-                Address want = addr(s.hex(0));
+                Address want = toAddr(s.hex(0));
                 Function f = currentProgram.getFunctionManager().getFunctionAt(want);
                 String via = "exact-entry";
                 if (f == null) {
@@ -109,7 +91,7 @@ public class ImmediateSweep extends GhidraScript {
                     Instruction ins = it.next();
                     body.println("  " + ins.getAddress() + "  " + ins);
                     for (int op = 0; op < ins.getNumOperands(); op++) {
-                        String opKind = operandKind(ins.getOperandType(op));
+                        String opKind = SweepUtil.operandKind(ins.getOperandType(op));
                         for (Object o : ins.getOpObjects(op)) {
                             if (!(o instanceof Scalar)) {
                                 continue;
@@ -143,31 +125,5 @@ public class ImmediateSweep extends GhidraScript {
         SweepUtil.writeManifest(outPath, rows, List.of(
             "bodyDump=" + (outPath + ".body.txt").replace("\\", "/"),
             "unresolved=" + String.join(";", unresolved)));
-    }
-
-    /**
-     * What the matched scalar IS within its operand. An x86 instruction can carry a memory
-     * displacement AND an immediate at once, and they mean opposite things here: in
-     * `CMP byte ptr [ESI + 0x1],0xc` the 0xc is the selection cap checked against a packet field
-     * and the 0x1 is a structure offset. Instruction text cannot tell them apart, so the kind
-     * comes from Ghidra's operand type at the point where the match is made.
-     *
-     *   immediate    a literal operand in its own right -- CMP DL,0xc / PUSH 0x180 / RET 0xc.
-     *   mem-operand  part of a memory reference -- the displacement in [ECX + 0xc], or a scale
-     *                factor. Never a cap for any value watched here (scales are only 1/2/4/8).
-     *   other        neither; emitted rather than guessed at.
-     */
-    private static String operandKind(int type) {
-        if (OperandType.isDynamic(type) || OperandType.isAddress(type)) {
-            return "mem-operand";
-        }
-        if (OperandType.isScalar(type)) {
-            return "immediate";
-        }
-        return "other";
-    }
-
-    private Address addr(long offset) {
-        return currentProgram.getAddressFactory().getDefaultAddressSpace().getAddress(offset);
     }
 }

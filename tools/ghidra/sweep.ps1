@@ -5,8 +5,8 @@ Ghidra headless driver: analyze a PE once into a persistent project, then run ma
 scripts against it.
 
 .DESCRIPTION
-A cross-reference sweep needs a dozen queries to see the SAME analyzed program, and analyze.ps1
-re-imports and re-analyzes on every invocation -- minutes per query. Prepare analyzes once and
+A cross-reference sweep needs a dozen queries to see the SAME analyzed program, and a fresh
+import re-analyzes the binary -- minutes per query. Prepare analyzes once and
 writes the full analyzeHeadless log to -LogFile, so the "Using Language/Compiler" line, image
 base and entry point are evidence rather than assumption; Run queries that program with
 -noanalysis, in seconds.
@@ -27,43 +27,23 @@ param(
     [Parameter(Mandatory)][ValidateSet('Prepare', 'Run')][string]$Mode,
     [string]$InputPE,
     [Parameter(Mandatory)][string]$ProjectDir,
-    [string]$ProjectName = 'sweep',
     [string]$ProgramName,
     [string]$Script,
     [string[]]$ScriptArgs = @(),
-    [string]$ScriptPath,
-    [string]$GhidraInstallDir,
     [string]$LogFile,
-    [string]$Processor,
-    [string]$CompilerSpec,
-    [int]$TimeoutMinutes = 90,
     # Prepare only: replace a program already in the project instead of skipping the import.
     [switch]$Overwrite
 )
 
 $ErrorActionPreference = 'Stop'
 
-# Resolution order matches analyze.ps1. Never hardcode a path into another worktree: the install
-# is gitignored, so pruning that worktree deletes the only copy on the machine mid-run.
-if (-not $GhidraInstallDir) {
-    if ($env:GHIDRA_INSTALL_DIR) {
-        $GhidraInstallDir = $env:GHIDRA_INSTALL_DIR
-    }
-    else {
-        $candidates = @(Get-ChildItem -LiteralPath $PSScriptRoot -Directory -Filter 'ghidra_*' -ErrorAction SilentlyContinue |
-            Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'support/analyzeHeadless.bat') })
-        if ($candidates.Count -eq 1) { $GhidraInstallDir = $candidates[0].FullName }
-        elseif ($candidates.Count -gt 1) { throw "Multiple Ghidra installs under $PSScriptRoot -- pass -GhidraInstallDir explicitly." }
-        else { throw "No Ghidra install found. Pass -GhidraInstallDir, set `$env:GHIDRA_INSTALL_DIR, or install the pinned release per tools/ghidra/README.md." }
-    }
-}
-$analyzeHeadless = Join-Path $GhidraInstallDir 'support/analyzeHeadless.bat'
+# Env var only: an install beside this script sits in a worktree, and pruning that deletes it.
+if (-not $env:GHIDRA_INSTALL_DIR) { throw 'sweep.ps1: set $env:GHIDRA_INSTALL_DIR (tools/ghidra/README.md, Install).' }
+$analyzeHeadless = Join-Path $env:GHIDRA_INSTALL_DIR 'support/analyzeHeadless.bat'
 if (-not (Test-Path -LiteralPath $analyzeHeadless -PathType Leaf)) {
-    throw "analyzeHeadless.bat not found at $analyzeHeadless -- check -GhidraInstallDir."
+    throw "analyzeHeadless.bat not found at $analyzeHeadless -- check `$env:GHIDRA_INSTALL_DIR."
 }
-
-if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'scripts' }
-$ScriptPath = (Resolve-Path -LiteralPath $ScriptPath).Path
+$ScriptPath = Join-Path $PSScriptRoot 'scripts'
 
 New-Item -ItemType Directory -Path $ProjectDir -Force | Out-Null
 $ProjectDir = (Resolve-Path -LiteralPath $ProjectDir).Path
@@ -73,10 +53,8 @@ if ($Mode -eq 'Prepare') {
     if (-not (Test-Path -LiteralPath $InputPE -PathType Leaf)) { throw "InputPE not found: $InputPE" }
     $InputPE = (Resolve-Path -LiteralPath $InputPE).Path
 
-    $headlessArgs = @($ProjectDir, $ProjectName, '-import', $InputPE, '-scriptPath', $ScriptPath)
+    $headlessArgs = @($ProjectDir, 'sweep', '-import', $InputPE, '-scriptPath', $ScriptPath)
     if ($Overwrite) { $headlessArgs += '-overwrite' }
-    if ($Processor) { $headlessArgs += @('-processor', $Processor) }
-    if ($CompilerSpec) { $headlessArgs += @('-cspec', $CompilerSpec) }
 }
 else {
     if (-not $ProgramName) { throw '-Mode Run requires -ProgramName.' }
@@ -99,7 +77,7 @@ else {
     if (Test-Path -LiteralPath $manifestPath) { Remove-Item -LiteralPath $manifestPath -Force }
 
     $headlessArgs = @(
-        $ProjectDir, $ProjectName,
+        $ProjectDir, 'sweep',
         '-process', $ProgramName,
         '-noanalysis',
         '-scriptPath', $ScriptPath,
@@ -129,5 +107,5 @@ if ($Mode -eq 'Run') {
     Write-Host "sweep.ps1: OK -- $($manifest.rows) rows -> $($ScriptArgs[0])"
 }
 else {
-    Write-Host "sweep.ps1: project prepared at $ProjectDir ($ProjectName). Log: $LogFile"
+    Write-Host "sweep.ps1: project prepared at $ProjectDir (sweep). Log: $LogFile"
 }

@@ -50,9 +50,7 @@ public class RegionProbe extends GhidraScript {
         int maxRefs = args.length >= 3 ? Integer.parseInt(args[2]) : 6;
 
         Path out = Paths.get(outPath);
-        if (out.toAbsolutePath().getParent() != null) {
-            Files.createDirectories(out.toAbsolutePath().getParent());
-        }
+        Files.createDirectories(out.toAbsolutePath().getParent());
 
         Listing listing = currentProgram.getListing();
         long rows = 0;
@@ -65,7 +63,7 @@ public class RegionProbe extends GhidraScript {
                 long start = s.hex(0);
                 long len = s.dec(1);
                 for (long off = 0; off < len; off++) {
-                    Address a = addr(start + off);
+                    Address a = toAddr(start + off);
                     MemoryBlock blk = currentProgram.getMemory().getBlock(a);
                     String byteStr;
                     try {
@@ -122,9 +120,5 @@ public class RegionProbe extends GhidraScript {
 
         println("RegionProbe: wrote " + rows + " rows -> " + out.toAbsolutePath());
         SweepUtil.writeManifest(outPath, rows, null);
-    }
-
-    private Address addr(long offset) {
-        return currentProgram.getAddressFactory().getDefaultAddressSpace().getAddress(offset);
     }
 }

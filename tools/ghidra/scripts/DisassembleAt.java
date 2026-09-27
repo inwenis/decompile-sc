@@ -51,9 +51,7 @@ public class DisassembleAt extends GhidraScript {
         boolean reanalyze = args.length < 3 || Boolean.parseBoolean(args[2]);
 
         Path out = Paths.get(outPath);
-        if (out.toAbsolutePath().getParent() != null) {
-            Files.createDirectories(out.toAbsolutePath().getParent());
-        }
+        Files.createDirectories(out.toAbsolutePath().getParent());
 
         int before = currentProgram.getFunctionManager().getFunctionCount();
         long rows = 0;
@@ -63,7 +61,7 @@ public class DisassembleAt extends GhidraScript {
                 "resultFunction", "resultEntry", "firstInstruction"));
 
             for (SweepUtil.Spec s : specs) {
-                Address seed = addr(s.hex(0));
+                Address seed = toAddr(s.hex(0));
                 Address entry = walkBackToEntry(seed);
                 String action;
 
@@ -120,30 +118,26 @@ public class DisassembleAt extends GhidraScript {
     private Address walkBackToEntry(Address seed) throws Exception {
         long a = seed.getOffset();
         for (int i = 0; i < MAX_WALK_BACK; i++) {
-            Address prev = addr(a - 1);
+            Address prev = toAddr(a - 1);
             if (currentProgram.getMemory().getBlock(prev) == null) {
-                return addr(a);
+                return toAddr(a);
             }
             if (currentProgram.getListing().getCodeUnitAt(prev) != null
                 && currentProgram.getListing().getInstructionAt(prev) != null) {
-                return addr(a);
+                return toAddr(a);
             }
             byte b;
             try {
                 b = currentProgram.getMemory().getByte(prev);
             }
             catch (Exception e) {
-                return addr(a);
+                return toAddr(a);
             }
             if ((b & 0xFF) == 0xCC) {
-                return addr(a);
+                return toAddr(a);
             }
             a--;
         }
         return seed;
-    }
-
-    private Address addr(long offset) {
-        return currentProgram.getAddressFactory().getDefaultAddressSpace().getAddress(offset);
     }
 }

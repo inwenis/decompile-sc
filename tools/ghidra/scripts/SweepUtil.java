@@ -1,5 +1,4 @@
-// Shared helpers for the selection-sweep query scripts (XrefSweep, ImmediateSweep,
-// RegionProbe, FuncProbe, DecompileMany, ProgramInfo).
+// Shared helpers for the query scripts in this directory.
 //
 // Not a GhidraScript -- a plain class compiled alongside them by Ghidra's script compiler
 // because it lives in the same -scriptPath directory.
@@ -11,12 +10,16 @@
 //
 //@category Headless
 
+import ghidra.program.model.lang.OperandType;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 public class SweepUtil {
 
@@ -95,5 +98,47 @@ public class SweepUtil {
 
     public static String hex(long v) {
         return "0x" + String.format("%08X", v);
+    }
+
+    /**
+     * Parses a hex watch list separated by '+' or ','. Callers use '+': analyzeHeadless is a .bat,
+     * so cmd.exe splits one comma-separated argument into several and the script would silently
+     * watch only the first value. ',' stays accepted for a list built outside cmd.
+     */
+    public static Set<Long> parseWatch(String list) {
+        Set<Long> watch = new LinkedHashSet<>();
+        for (String t : list.split("[,+]")) {
+            String s = t.trim();
+            if (s.isEmpty()) {
+                continue;
+            }
+            if (s.startsWith("0x") || s.startsWith("0X")) {
+                s = s.substring(2);
+            }
+            watch.add(Long.parseUnsignedLong(s, 16));
+        }
+        return watch;
+    }
+
+    /**
+     * What the matched scalar IS within its operand. An x86 instruction can carry a memory
+     * displacement AND an immediate at once, and they mean opposite things here: in
+     * `CMP byte ptr [ESI + 0x1],0xc` the 0xc is the selection cap checked against a packet field
+     * and the 0x1 is a structure offset. Instruction text cannot tell them apart, so the kind
+     * comes from Ghidra's operand type at the point where the match is made.
+     *
+     *   immediate    a literal operand in its own right -- CMP DL,0xc / PUSH 0x180 / RET 0xc.
+     *   mem-operand  part of a memory reference -- the displacement in [ECX + 0xc], or a scale
+     *                factor. Never a cap for any value watched here (scales are only 1/2/4/8).
+     *   other        neither; emitted rather than guessed at.
+     */
+    public static String operandKind(int type) {
+        if (OperandType.isDynamic(type) || OperandType.isAddress(type)) {
+            return "mem-operand";
+        }
+        if (OperandType.isScalar(type)) {
+            return "immediate";
+        }
+        return "other";
     }
 }

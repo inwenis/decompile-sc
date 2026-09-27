@@ -90,9 +90,7 @@ public class StrideSweep extends GhidraScript {
             + " spec functions");
 
         Path out = Paths.get(outPath);
-        if (out.toAbsolutePath().getParent() != null) {
-            Files.createDirectories(out.toAbsolutePath().getParent());
-        }
+        Files.createDirectories(out.toAbsolutePath().getParent());
 
         long rows = 0;
         long functions = 0;

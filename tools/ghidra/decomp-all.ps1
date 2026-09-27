@@ -39,15 +39,15 @@ if ($program -ieq 'StarCraft.exe') {
     $com = [regex]::Matches(($offsets + $types) -join "`n", '\bIDirect\w+') | ForEach-Object Value | Sort-Object -Unique
     $header = Join-Path $cache 'magnetar.h'
     Set-Content -LiteralPath $header -Value (@($com | ForEach-Object { "typedef struct $_ $_;" }) + $t.header) -Encoding utf8
-    Export-MagnetarTsv -Rows $t.enums -Path (Join-Path $cache 'enums.tsv')
-    Export-MagnetarTsv -Rows $t.sizes -Path (Join-Path $cache 'sizes.tsv')
+    $t.enums | Export-Csv -LiteralPath (Join-Path $cache 'enums.tsv') -Delimiter "`t" -UseQuotes Never
+    $t.sizes | Export-Csv -LiteralPath (Join-Path $cache 'sizes.tsv') -Delimiter "`t" -UseQuotes Never
     & $run ApplyTypes.java @((Join-Path $out 'types-report.txt'), $header, (Join-Path $cache 'enums.tsv'),
         (Join-Path $cache 'sizes.tsv'), (Join-Path $out 'types.txt')) (Join-Path $out 'types.log')
     Get-Content -LiteralPath (Join-Path $out 'types-report.txt') -TotalCount 5
 
     $namesTsv = Join-Path $out 'names.tsv'
     $overrides = Import-Csv -LiteralPath (Join-Path $PSScriptRoot 'magnetar-overrides.tsv') -Delimiter "`t"
-    Export-MagnetarTsv -Rows (Merge-MagnetarOverrides -Rows (ConvertFrom-MagnetarOffsets -Lines $offsets) -Overrides $overrides) -Path $namesTsv
+    Merge-MagnetarOverrides -Rows (ConvertFrom-MagnetarOffsets -Lines $offsets) -Overrides $overrides | Export-Csv -LiteralPath $namesTsv -Delimiter "`t" -UseQuotes Never
     & $run ApplyNames.java @((Join-Path $out 'names-report.txt'), $namesTsv) (Join-Path $out 'names.log')
     Get-Content -LiteralPath (Join-Path $out 'names-report.txt') | Where-Object { $_ -notmatch "`t" -and $_ -notmatch '^#' }
 }
