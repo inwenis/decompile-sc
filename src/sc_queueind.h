@@ -44,8 +44,8 @@
 // edge (read from the live buttons) plus this gap; one pixel keeps the text off the borders.
 #define SC_QIND_BAND_GAP 1
 // Fallback minimum height for that band, used only when the font handle cannot be read
-// (normally the FONT'S OWN height decides -- see SmallFontHeight). One pixel over the nine
-// that measured too short.
+// (normally the FONT'S OWN height decides -- see ScQueueIndSmallFontHeight). One pixel over
+// the nine that measured too short.
 #define SC_QIND_BAND_MIN_H 10
 
 // How many queued upgrades the strip can show as ICONS: the four small queue icons (ids
@@ -124,28 +124,7 @@ void  ScQueueIndFillBadge(DWORD ctrl, DWORD surface);
 DWORD ScQueueIndOwnUpdate(void);
 DWORD ScQueueIndEngineUpdate(void);
 
-// One line per child of the statdata dialog: id, type, flags, bounds and text. Says which
-// controls in that pane are engine-drawn TEXT and where the free pixels are on THIS install,
-// not from a public struct map. Read-only, and runs feature-enabled or not, because the
-// stock layout is the baseline the indicator is placed against.
-void ScQueueIndLogDialog(const char* tag);
-
 void ScQueueIndLogStats(void);
-
-// Rows at the BOTTOM of a queue-slot rect holding the engine's own slot NUMBER, excluded from
-// ScQueueIndSlotDiff because two slots legitimately differ there ("1 " against "5 "). Measured:
-// compared, these rows add a constant 24 bytes to slotDiff for "+2", "+3" and "+4" alike --
-// the digits. Sized from the small font's height plus the label's inset, and every
-// QIND line reports the live `fontH=` so the number is checkable rather than assumed.
-#define SC_QIND_SLOT_LABEL_ROWS 12
-
-// TWO QUEUE SLOTS, COMPARED ON THE SURFACE. With five of one unit type queued, slot 0 and
-// slot 4 are the same picture -- same 38x35 rect, same border graphic, same icon -- so the
-// bytes differing between them above the label rows are exactly what this plugin added. A
-// check that CAN fail, which an ink count over an engine-drawn icon cannot: ink reads > 0
-// whether or not anything of ours was drawn. -1 when the comparison cannot be taken
-// honestly: no surface, a missing or hidden control, or unequal rects.
-int ScQueueIndSlotDiff(DWORD root, int slotA, int slotB);
 
 // HOW MANY BYTES OF THE INDICATOR'S BOX ARE OURS: the count differing from a baseline copy
 // of those same pixels taken with none of our line in them. 0 means nothing of ours is on
@@ -158,8 +137,8 @@ int ScQueueIndSlotDiff(DWORD root, int slotA, int slotB);
 // The MODE decides what it counts. GROUP: the band belongs to no control, so every differing
 // byte is the LINE, a text oracle outright. STRIP: the "+N" box sits inside queue icon 6,
 // which the phantom bracket has the engine fill, and the baseline predates that fill -- a
-// reading is "bytes this plugin is responsible for", not "the badge drew"; ScQueueIndSlotDiff
-// is the badge-only oracle there.
+// reading is "bytes this plugin is responsible for", not "the badge drew"; the QIND
+// line's `slotDiff` is the badge-only oracle there.
 //
 // The baseline is taken on the GAME thread at the two moments the pane looks as it does
 // without us: frames the indicator is hidden -- but NOT the frame it hides on, whose repaint
@@ -187,15 +166,16 @@ int ScQueueIndSurfaceSize(DWORD root, int* w, int* h);
 // header. 0 means "no answer" (the handle is not up yet), never "zero pixels tall".
 int ScQueueIndSmallFontHeight(void);
 
-// The band `want` pixels wide and SC_QIND_BOX_H tall at (left, top), clamped to a
-// surfW x surfH surface, written to `box` -- and whether the engine's own draw would
+// The band wide enough for `textLen` characters at SC_QIND_CHAR_W (at least SC_QIND_BOX_W)
+// and SC_QIND_BOX_H tall at (left, top), clamped to a surfW x surfH surface, written to
+// `box` -- and whether the engine's own draw would
 // still draw ALL of a string in it. SC_VA_DRAW_STRING refuses outright when
 // `top + fontHeight > clip.bottom` (research/status-pane-text.md 3), so the band is
 // measured against the FONT'S own height rather than a constant: a band shorter than the
 // font draws nothing while every field read-back says the indicator is fine. A box
 // narrower than the string draws a TRUNCATION, worse than nothing because it reads as a
 // working feature. `fontH` gets the height that decided, for the caller's own log line.
-bool ScQueueIndPlaceBand(int left, int top, int want, int surfW, int surfH,
+bool ScQueueIndPlaceBand(int left, int top, int textLen, int surfW, int surfH,
                          short* box, int* fontH);
 
 // INK: non-background bytes of the dialog's own 8-bit surface inside a rect. That surface is
@@ -210,11 +190,10 @@ int ScQueueIndSurfaceInk(DWORD root, int left, int top, int right, int bottom);
 // ---------------------------------------------------------------------------
 
 typedef void (*ScQueueIndCtlFn)(DWORD ctrl);
-typedef void (*ScQueueIndDriverFn)(void);
 
 void ScQueueIndTestBegin(BYTE* fakeModuleBase,
                          ScQueueIndCtlFn show, ScQueueIndCtlFn hide, ScQueueIndCtlFn update,
-                         ScQueueIndCtlFn enable, ScQueueIndDriverFn origDriver);
+                         ScQueueIndCtlFn enable);
 
 // The per-frame body the detour calls. Exposed so the offline test drives exactly the
 // code the game drives.
@@ -231,17 +210,10 @@ enum ScQueueIndStat {
     SC_QIND_STAT_HIDES = 2,     // times it went away because there was nothing to say
     SC_QIND_STAT_SPLICES = 3,   // controls spliced into a dialog child list
     SC_QIND_STAT_REFUSED = 4,   // splices refused (no engine handler for the type)
-    // RESERVED: nothing increments these two, since the ENGINE writes the overflow slots
-    // under the phantom bracket instead of this module hand-filling them. They keep their
-    // numbers so no other value silently changes meaning, and stay off the QINDSTATS line
-    // because a printed count must be one something increments (AGENTS.md § "Diagnostics
-    // and reporting").
-    SC_QIND_STAT_ICONS = 5,
-    SC_QIND_STAT_NOGRP = 6,
     // Presses RESCUED from the engine's own disable event on a slot the plugin fills -- not
     // "disable events seen", only ones arriving while a human holds the mouse down on that
     // icon, which is what makes a green regression arm with this at 0 suspicious.
-    SC_QIND_STAT_PRESSKEPT = 7,
+    SC_QIND_STAT_PRESSKEPT = 5,
     // THE DENOMINATOR for pressKept: `pressKept=0` alone cannot tell an INERT fix from a race
     // the click happened to win. All three count on the same path, so together they say which
     // it is -- no disable events on our slots means the ownership test never fired; disables
@@ -249,25 +221,25 @@ enum ScQueueIndStat {
     // disables during a press with pressKept still 0 means the restore itself is broken.
     // (AGENTS.md § "Diagnostics and reporting": log ENTRY as well as outcome, or "it never
     // ran" and "it ran and did nothing" are one silence.)
-    SC_QIND_STAT_DISABLE_OWNED = 8,    // disable events that reached a slot we own
-    SC_QIND_STAT_DISABLE_PRESSED = 9,  // ... of those, ones arriving with a press in flight
+    SC_QIND_STAT_DISABLE_OWNED = 6,    // disable events that reached a slot we own
+    SC_QIND_STAT_DISABLE_PRESSED = 7,  // ... of those, ones arriving with a press in flight
     // Ring slots phantom-written for the length of one queueLayout call: the bracket's OWN
     // activity counter, with DISABLE_OWNED above as its tripwire. Without the phantom the
     // engine's disable lands on an owned slot EXACTLY once per click (measured deterministic);
     // with it, queueLayout takes the occupied branch and DISABLE_OWNED must not move at all.
     // A suite asserts the pair -- phantom moving, disableOnOwned still -- which is what stops
     // a green arm meaning "the race was won".
-    SC_QIND_STAT_PHANTOM = 10,
+    SC_QIND_STAT_PHANTOM = 8,
     // A slot the overflow map called the plugin's held a REAL type when the phantom went to
     // write it: the rebalance invariant broken (occupied slots contiguous from the head, ring
     // at the hold while overflow exists). The phantom REFUSES such a slot rather than
     // overwrite an engine item, and counts the refusal here. Expected 0.
-    SC_QIND_STAT_PHANTOM_DIRTY = 11,
+    SC_QIND_STAT_PHANTOM_DIRTY = 9,
     // Queue icons 3..6 lit with a held research item / taken back down (one per icon, not
     // per frame: a settled pane moves neither).
-    SC_QIND_STAT_UPG_ICON_SHOWS = 12,
-    SC_QIND_STAT_UPG_ICON_HIDES = 13,
-    SC_QIND_STAT__COUNT = 14
+    SC_QIND_STAT_UPG_ICON_SHOWS = 10,
+    SC_QIND_STAT_UPG_ICON_HIDES = 11,
+    SC_QIND_STAT__COUNT = 12
 };
 int ScQueueIndStat(int which);
 

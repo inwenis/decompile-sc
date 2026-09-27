@@ -271,15 +271,7 @@ static bool EngineSelectionMatchesVisible(void) {
 static unsigned g_session = 0;
 static unsigned g_statSessionDrop = 0;
 
-static void HudRowSessionSync(void) {
-    const unsigned now = ScSessionEpoch();
-    if (g_session == now) return;
-    if (g_n > 0 || g_dispN > 0 || g_page > 0 || g_dialog != 0) {
-        ScLog("HUDROW session %u -> %u: dropping the page state (%d listed, %d shown, "
-              "page %d, dialog 0x%08X) -- it describes a game that has ended",
-              g_session, now, g_n, g_dispN, g_page + 1, (unsigned)g_dialog);
-        ++g_statSessionDrop;
-    }
+static void ForgetPageState(void) {
     g_verValid   = false;
     g_n = g_vis = g_dispN = 0;
     g_page       = 0;
@@ -295,6 +287,18 @@ static void HudRowSessionSync(void) {
     g_indSpliced = false;
     g_indText[0] = '\0';
     g_rectsLogged = false;
+}
+
+static void HudRowSessionSync(void) {
+    const unsigned now = ScSessionEpoch();
+    if (g_session == now) return;
+    if (g_n > 0 || g_dispN > 0 || g_page > 0 || g_dialog != 0) {
+        ScLog("HUDROW session %u -> %u: dropping the page state (%d listed, %d shown, "
+              "page %d, dialog 0x%08X) -- it describes a game that has ended",
+              g_session, now, g_n, g_dispN, g_page + 1, (unsigned)g_dialog);
+        ++g_statSessionDrop;
+    }
+    ForgetPageState();
     g_session = now;
 }
 
@@ -449,15 +453,6 @@ static void Unwrap(DWORD root) {
 // The indicator control
 // ---------------------------------------------------------------------------
 
-// Is the indicator actually linked into this root's child chain? g_indSpliced goes stale
-// when the engine frees the dialog and allocates a NEW one at the SAME address, which the
-// root==g_dialog check cannot see; walk the chain rather than trust the flag.
-static bool IndicatorInChain(DWORD root) {
-    DWORD ind = (DWORD)&g_indCtrl[0];
-    for (DWORD c = ScDlgChild(root); c; c = ScDlgNext(c)) if (c == ind) return true;
-    return false;
-}
-
 // Spliced at the TAIL of the child list. The CREATE-time handler binder skips it either way
 // (index <= 0) and the engine's hide-all sweep hides it wherever it sits -- but the END of the
 // list is what decides whether the text lands ON TOP of what it overlaps.
@@ -471,9 +466,10 @@ static bool IndicatorInChain(DWORD root) {
 // hard to read (the measurement that proves it is in LogReadback).
 static bool EnsureSpliced(DWORD root) {
     DWORD ind = (DWORD)&g_indCtrl[0];
-    // Re-splice if we think we are spliced but are not actually in the chain
-    // (same-address dialog realloc).
-    if (g_indSpliced && !IndicatorInChain(root)) g_indSpliced = false;
+    // Re-splice if we think we are spliced but are not actually in the chain: g_indSpliced
+    // goes stale when the engine frees the dialog and allocates a NEW one at the SAME
+    // address, which the root==g_dialog check cannot see.
+    if (g_indSpliced && !ScDlgHasChild(root, ind)) g_indSpliced = false;
     if (g_indSpliced) return true;
 
     // Runtime evidence guard for the type: the engine must have a real interact AND update
@@ -543,7 +539,7 @@ static int IndicatorWidestLen(void) {
 // its baseline away on every flip.
 static bool PlaceIndicator(short* box, DWORD root, DWORD firstBtn, int textLen) {
     int surfW = 0, surfH = 0;
-    if (!ScQueueIndSurfaceSize(root, &surfW, &surfH) || surfW <= 0 || surfH <= 0) return false;
+    if (!ScQueueIndSurfaceSize(root, &surfW, &surfH)) return false;
 
     short* fb = ScDlgBounds(firstBtn);
     int rowLeft = fb[0], rowBottom = fb[3];
@@ -554,12 +550,10 @@ static bool PlaceIndicator(short* box, DWORD root, DWORD firstBtn, int textLen) 
         if (b[3] > rowBottom) rowBottom = b[3];
     }
 
-    int want = textLen * SC_QIND_CHAR_W;
-    if (want < SC_QIND_BOX_W) want = SC_QIND_BOX_W;
     // Refused loudly and once when the band cannot hold the string (ScQueueIndPlaceBand
     // says why): a nine-pixel box passes every non-pixel check while drawing nothing.
     int fontH = 0;
-    if (!ScQueueIndPlaceBand(rowLeft, rowBottom + SC_QIND_BAND_GAP, want, surfW, surfH,
+    if (!ScQueueIndPlaceBand(rowLeft, rowBottom + SC_QIND_BAND_GAP, textLen, surfW, surfH,
                              box, &fontH)) {
         if (!g_bandTooSmall) {
             ScLog("HUDROW: the band below the row is (%d,%d,%d,%d) on a %dx%d surface -- too "
@@ -703,11 +697,8 @@ static bool IndicatorFrame(DWORD root, DWORD firstBtn) {
 
 static void UnspliceIndicator(DWORD root) {
     if (!g_indSpliced) return;
-    DWORD ind = (DWORD)&g_indCtrl[0];
     HideIndicator();                 // hide AND ask for the band's repaint, while still linked
-    DWORD* link = (DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD);
-    while (*link && *link != ind) link = (DWORD*)(*link + SC_BINDLG_OFF_NEXT);
-    if (*link == ind) *link = ScDlgNext(ind);
+    ScDlgRemoveChild(root, (DWORD)&g_indCtrl[0]);
     g_indSpliced = false;
 }
 
@@ -787,8 +778,7 @@ static void LogReadback(DWORD firstBtn) {
     // taken with none of our line on it (BandDiff). `indRefInk`/`indSurfInk` stay as the two
     // blindness checks -- a control the engine fills, and the whole surface.
     DWORD ind = (DWORD)&g_indCtrl[0];
-    bool linked = false;
-    for (DWORD c = ScDlgChild(g_dialog); c && !linked; c = ScDlgNext(c)) if (c == ind) linked = true;
+    bool linked = ScDlgHasChild(g_dialog, ind);
     const char* live = "";
     int ink = -1;
     DWORD flags = 0;
@@ -903,7 +893,7 @@ static void LogVerifyStock(DWORD root) {
     int chainLen = 0;
     for (DWORD w = ScDlgChild(root); w && chainLen < 128; w = ScDlgNext(w)) ++chainLen;
     ScLog("HUDROW verify stock: engineInteract=%d/%d indicatorLinked=%d chainLen=%d",
-          engineOwned, walked, IndicatorInChain(root) ? 1 : 0, chainLen);
+          engineOwned, walked, ScDlgHasChild(root, (DWORD)&g_indCtrl[0]) ? 1 : 0, chainLen);
 }
 
 // Leave paged mode: restore the stock pointers, remove the indicator, force-repaint the
@@ -1114,19 +1104,7 @@ void ScHudRowInit(BYTE* moduleBase, bool enabled) {
     g_show = g_hide = g_update = NULL;
     g_engineInteract = NULL;
     g_testOrigDispatch = NULL;
-    g_verValid = false;
-    g_n = g_vis = g_dispN = 0;
-    g_page = 0;
-    g_pageCount = 1;
-    g_flipPending = false;
-    g_cacheValid = false;
-    g_cacheN = 0;
-    g_dialog = 0;
-    g_wrapCount = 0;
-    g_indSpliced = false;
-    g_indText[0] = '\0';
-    g_rectsLogged = false;
-    g_diverged = false;
+    ForgetPageState();
     g_indShowing = false;
     g_wasPaged = false;
     g_bandTooSmall = false;
@@ -1143,8 +1121,6 @@ void ScHudRowInit(BYTE* moduleBase, bool enabled) {
     g_statBlank = 0;
     BuildEmptySheet();
 }
-
-bool ScHudRowEnabled(void) { return g_enabled; }
 
 int ScHudRowInstall(void) {
     if (!g_enabled) return 0;
@@ -1233,7 +1209,6 @@ int ScHudRowCurrentPage(void)  { HudRowSessionSync(); return g_page; }
 int ScHudRowPageCount(void)    { HudRowSessionSync(); return g_pageCount; }
 int ScHudRowGatedCount(void)   { return (int)g_statGated; }
 bool ScHudRowIsDiverged(void)  { HudRowSessionSync(); return g_diverged; }
-int ScHudRowPagedFrames(void)  { return (int)g_statEpisodes; }
 void ScHudRowTestSetBandTiming(int settleMs, int pollMs) {
     g_bandSettleMs = settleMs < 0 ? 0 : settleMs;
     g_bandPollMs   = pollMs   < 0 ? 0 : pollMs;

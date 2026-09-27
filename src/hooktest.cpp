@@ -4063,13 +4063,12 @@ static void QiBtnRect(int i, short* r) {
     r[3] = (short)(r[1] + 33);
 }
 
-static unsigned g_qiShows = 0, g_qiHides = 0, g_qiUpdates = 0, g_qiDriverCalls = 0;
+static unsigned g_qiShows = 0, g_qiHides = 0, g_qiUpdates = 0;
 static void QiShow(DWORD c)   { ++g_qiShows;   *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) |= SC_CTRL_FLAG_VISIBLE; }
 static void QiHide(DWORD c)   { ++g_qiHides;   *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) &= ~(DWORD)SC_CTRL_FLAG_VISIBLE; }
 static void QiUpdate(DWORD c) { ++g_qiUpdates; (void)c; }
 static unsigned g_qiEnables = 0;
 static void QiEnable(DWORD c) { ++g_qiEnables; *(DWORD*)(c + SC_BINDLG_OFF_FLAGS) &= ~(DWORD)SC_CTRL_FLAG_DISABLED; }
-static void QiOrigDriver(void) { ++g_qiDriverCalls; }
 
 // Root + the five queue icons (ids 2..6) + the twelve wireframe buttons (ids 0x21..0x2C),
 // laid out the way the live dialog's QINDDLG dump reports them.
@@ -4253,7 +4252,7 @@ static void QueueIndTests(void) {
     Check("the plugin holds five", PqOverflow(), 5);
 
     BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
-    ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable, &QiOrigDriver);
+    ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable);
     Check("nothing spliced before the first frame", QiChildren(), QI_CTL_COUNT);
     // THE POSITIVE HALF of the icon assertions below: the fifth slot starts out pointing at
     // the button-border art, because that is what the engine's layout leaves on a slot it
@@ -4338,7 +4337,6 @@ static void QueueIndTests(void) {
                   (long long)(ScQueueIndBoxDiff(QiRoot()) >= 0), 1);
         }
     }
-    Check("the original driver ran first, every frame", (long long)g_qiDriverCalls, 0);
 
     printf("\n    ... and the FIFTH icon is the ENGINE's to draw now: the phantom bracket\n");
     // The fifth icon is the ENGINE's to draw: the detour on queueLayout (0x004268D0) writes
@@ -4413,7 +4411,7 @@ static void QueueIndTests(void) {
         // the empty-slot layout EXACTLY as the engine's own empty branch left it. This is
         // the regression guard on a hand-fill quietly reappearing in the frame path.
         BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
-        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable, &QiOrigDriver);
+        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable);
         ScQueueIndOnFrame();
         DWORD c = QiCtl(4), u = QiUser(4);
         Check("the frame path no longer writes the fifth icon's mode",
@@ -4457,7 +4455,7 @@ static void QueueIndTests(void) {
         // untouched record) or the OTHER item's frame is a visible failure.
         *(WORD*)((DWORD)FakeRt(SC_VA_UPGRADE_ICON) + UQ_UPG_B * 2) = 0x124;
         *(WORD*)((DWORD)FakeRt(SC_VA_TECH_ICON)    + UQ_TECH_A * 2) = 0x12E;
-        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable, &QiOrigDriver);
+        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable);
         ScQueueIndOnFrame();
         Check("two held fit the icons, so no \"+N\" is said", ScQueueIndCurrentMode(), SC_QIND_NONE);
         Check("the ENGINE's own slot 0 (id 2) was left hidden",
@@ -4528,7 +4526,7 @@ static void QueueIndTests(void) {
         UqPress(SC_UPGQ_KIND_UPGRADE, UQ_UPG_A);
         for (unsigned t = 0; t < 7; ++t) UqPress(SC_UPGQ_KIND_TECH, t);   // seven DISTINCT techs
         Check("seven are held", UqQueued(), 7);
-        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable, &QiOrigDriver);
+        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable);
         ScQueueIndOnFrame();
         Check("the indicator is in UPGRADE mode", ScQueueIndCurrentMode(), SC_QIND_UPGRADE);
         Check("  saying \"+4\"", (long long)(strcmp(ScQueueIndCurrentText(), "+4") == 0), 1);
@@ -4584,7 +4582,7 @@ static void QueueIndTests(void) {
         PqBegin(16, 3000, 500);
         for (int i = 0; i < 9; ++i) PqTrain(PQ_TYPE_B);
         BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
-        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable, &QiOrigDriver);
+        ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable);
         ScQueueIndOnFrame();
     }
 
@@ -4740,7 +4738,7 @@ static void QueueIndTests(void) {
         PqBegin(16, 3000, 500);
         for (int i = 0; i < 9; ++i) PqTrain(PQ_TYPE_B);
         BuildFakeQIndPane(SC_PRODQ_ENGINE_HOLD, PQ_TYPE_B);
-        ScQueueIndTestBegin(NULL, &QiShow, &QiHide, &QiUpdate, &QiEnable, &QiOrigDriver);  // disabled
+        ScQueueIndTestBegin(NULL, &QiShow, &QiHide, &QiUpdate, &QiEnable);  // disabled
         unsigned shows = g_qiShows;
         ScQueueIndOnFrame();
         ScQueueIndOnFrame();
@@ -4754,7 +4752,7 @@ static void QueueIndTests(void) {
               (long long)(*(DWORD*)(QiUser(4) + SC_STATUSER_OFF_GRP) == QiGrpBtns()), 1);
     }
 
-    ScQueueIndTestBegin(NULL, NULL, NULL, NULL, NULL, NULL);
+    ScQueueIndTestBegin(NULL, NULL, NULL, NULL, NULL);
     ScProdQueueTestBegin(NULL, SC_PRODQ_DEFAULT_MAX);
     VirtualFree(g_fake, 0, MEM_RELEASE);
     g_fake = NULL;
@@ -4782,7 +4780,7 @@ static void UpgQueueIndTests(void) {
     // is researching is not training anything, so every one of the five queue icons starts
     // in the engine's own greyed placeholder state, same as a real Engineering Bay's.
     BuildFakeQIndPane(0, 0);
-    ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable, &QiOrigDriver);
+    ScQueueIndTestBegin(g_fake, &QiShow, &QiHide, &QiUpdate, &QiEnable);
 
     // One running (the engine's own slot) plus two held -- "2+ upgrades queued", the
     // user's own words, and a mixed upgrade/tech pair so this cannot be mistaken for a
@@ -4834,7 +4832,7 @@ static void UpgQueueIndTests(void) {
     Check("and the engine's visible bit is clear",
           ScQueueIndIsShown() ? 1 : 0, 0);
 
-    ScQueueIndTestBegin(NULL, NULL, NULL, NULL, NULL, NULL);
+    ScQueueIndTestBegin(NULL, NULL, NULL, NULL, NULL);
     ScUpgQueueTestBegin(NULL, SC_UPGQ_DEFAULT_MAX, NULL);
     VirtualFree(g_fake, 0, MEM_RELEASE);
     g_fake = NULL;

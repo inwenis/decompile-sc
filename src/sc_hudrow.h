@@ -33,7 +33,6 @@
 // %SCPLUGIN_HUDROW% (default on in fanout mode). Disabled means every entry point
 // below is a no-op, so this feature has its own off switch independent of the mode.
 void ScHudRowInit(BYTE* moduleBase, bool enabled);
-bool ScHudRowEnabled(void);
 
 // Installs the dispatcher detour (0x00458120) and the wireframe-draw detour (0x00456F50);
 // returns 1 when both went in, else 0 with its own half rolled back. Call under the same
@@ -93,12 +92,6 @@ int  ScHudRowCurrentPage(void);   // 0-based
 int  ScHudRowPageCount(void);
 int  ScHudRowGatedCount(void);    // clicks the gate has swallowed
 bool ScHudRowIsDiverged(void);    // latched off-to-stock on engine divergence
-
-// Frames the PAGED path actually ran. This module's whole seam is the >12 state, so this is
-// the coverage number a run prints beside its verdict: 0 means the run never reached the
-// thing under test, whatever else it says (AGENTS.md § "Generated suites (random, fuzzed,
-// property-based)").
-int  ScHudRowPagedFrames(void);
 
 // The page indicator ("36 units 1-12 (1/3)") is one extra text control spliced into the
 // dialog; its draw/interact handlers come from the engine's per-type default tables, so it

@@ -42,12 +42,10 @@ static ScHook g_hkDriver;
 static ScHook g_hkLayout;   // queueLayout 0x004268D0 -- the phantom bracket
 
 // Test seam -- NULL means "call the real engine".
-static ScQueueIndCtlFn    g_show          = NULL;
-static ScQueueIndCtlFn    g_hide          = NULL;
-static ScQueueIndCtlFn    g_update        = NULL;
-static ScQueueIndCtlFn    g_enable        = NULL;
-static ScQueueIndDriverFn g_testOrigDriver = NULL;
-static bool           g_testing       = false;
+static ScQueueIndCtlFn g_show   = NULL;
+static ScQueueIndCtlFn g_hide   = NULL;
+static ScQueueIndCtlFn g_update = NULL;
+static ScQueueIndCtlFn g_enable = NULL;
 
 // Dialog bookkeeping. Every pointer below belongs to ONE dialog instance; a new dialog
 // (new game -> console re-created) invalidates the lot.
@@ -119,7 +117,7 @@ static bool  g_baseValid = false;
 // every game, so a new game's status pane can land on the byte for byte same address as the
 // old one's, and that test then says "same dialog" about a dialog never seen before.
 //
-// EnsureSpliced covers the SPLICE: it re-checks `InChain(root)` and drops g_spliced when
+// EnsureSpliced covers the SPLICE: it re-checks `ScDlgHasChild` and drops g_spliced when
 // our control is not in the new chain. Nothing covers THE BASELINE, and `ScQueueIndBoxDiff`
 // diffing live pixels against a baseline carried across a game start fails by producing a
 // PLAUSIBLE NUMBER rather than a zero. Nothing the player sees is wrong -- this is an
@@ -127,6 +125,24 @@ static bool  g_baseValid = false;
 static unsigned g_session = 0;
 
 static void ForgetUpgradeIcons(void);
+
+// Everything that belongs to one dialog instance; the callers add what else they own.
+static void ForgetDialog(void) {
+    g_spliced      = false;
+    g_shown        = false;
+    g_anchor       = 0;
+    g_mode         = SC_QIND_NONE;
+    g_text[0]      = '\0';
+    g_dialogLogged = false;
+    g_bandLogged   = false;
+    g_iconDrawCtl  = 0;
+    // THE BASELINE BELONGS TO THE OLD DIALOG'S SURFACE. Its rect can match the new one
+    // exactly -- the pane is laid out the same way every time -- so without this the
+    // first read in a new dialog diffs live pixels against a copy of a buffer that is
+    // gone. -1 ("no answer") is the only honest state here.
+    g_baseValid    = false;
+    ForgetUpgradeIcons();
+}
 
 static void QIndSessionSync(void) {
     const unsigned now = ScSessionEpoch();
@@ -137,19 +153,10 @@ static void QIndSessionSync(void) {
               "pane of the next one can be allocated at the same address",
               g_session, now, (unsigned)g_dialog, g_spliced ? 1 : 0, g_baseValid ? 1 : 0);
     }
+    ForgetDialog();
     g_dialog       = 0;
-    g_spliced      = false;
-    g_shown        = false;
-    g_anchor       = 0;
-    g_mode         = SC_QIND_NONE;
-    g_text[0]      = '\0';
-    g_dialogLogged = false;
-    g_bandLogged   = false;
     g_iconsN       = 0;
-    g_iconDrawCtl  = 0;
-    g_baseValid    = false;
     g_baseRect[0] = g_baseRect[1] = g_baseRect[2] = g_baseRect[3] = 0;
-    ForgetUpgradeIcons();
     g_session = now;
 }
 
@@ -159,20 +166,11 @@ static void QIndSessionSync(void) {
 
 typedef void (*OrigDriverFn)(void);
 
-static void CallOrigDriver(void) {
-    if (g_testOrigDriver) { g_testOrigDriver(); return; }
-    if (g_hkDriver.installed) ((OrigDriverFn)g_hkDriver.trampoline)();
-}
-
 static int   SelectionCount(void) { return (int)*(BYTE*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT); }
 
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
-
-// Forward: the box sizing needs the surface width, and the surface reader lives with the
-// ink probe further down.
-static DWORD SurfaceOf(DWORD root);
 
 // The height of the font the SC_CTRL_FONT_SMALLEST bit selects, out of the font's own
 // header -- the byte SC_VA_SET_FONT copies into the global the string draw's clip rule is
@@ -186,17 +184,17 @@ int ScQueueIndSmallFontHeight(void) {
     return (int)*(BYTE*)(f + SC_FONT_OFF_HEIGHT);
 }
 
-static int SmallFontHeight(void) { return ScQueueIndSmallFontHeight(); }
-
-bool ScQueueIndPlaceBand(int left, int top, int want, int surfW, int surfH,
+bool ScQueueIndPlaceBand(int left, int top, int textLen, int surfW, int surfH,
                          short* box, int* fontH) {
+    int want = textLen * SC_QIND_CHAR_W;
+    if (want < SC_QIND_BOX_W) want = SC_QIND_BOX_W;
     int right  = left + want;
     if (right > surfW - 1) right = surfW - 1;
     int bottom = top + SC_QIND_BOX_H;
     if (bottom > surfH) bottom = surfH;
     box[0] = (short)left;  box[1] = (short)top;
     box[2] = (short)right; box[3] = (short)bottom;
-    *fontH = SmallFontHeight();
+    *fontH = ScQueueIndSmallFontHeight();
     return bottom - top >= (*fontH > 0 ? *fontH : SC_QIND_BAND_MIN_H) && right - left >= want;
 }
 
@@ -535,15 +533,6 @@ static int ReadView(ScQueueIndView* v) {
 // The spliced control
 // ---------------------------------------------------------------------------
 
-static bool InChain(DWORD root) {
-    DWORD ind = (DWORD)&g_ctrl[0];
-    DWORD c = ScDlgChild(root);
-    for (int guard = 0; c && guard < SC_MAX_CTRLS_WALK; ++guard, c = ScDlgNext(c)) {
-        if (c == ind) return true;
-    }
-    return false;
-}
-
 // Spliced at the TAIL of the child list, and the tail is what decides whether the text is
 // on top of what it overlays. The CREATE-time binder skips it either way (index <= 0) and
 // the engine's hide-all sweeps hide it like any child wherever it sits, so the position
@@ -559,7 +548,7 @@ static bool InChain(DWORD root) {
 // it paints over it, in the same frame, every frame.
 static bool EnsureSpliced(DWORD root) {
     DWORD ind = (DWORD)&g_ctrl[0];
-    if (g_spliced && !InChain(root)) g_spliced = false;   // same-address dialog realloc
+    if (g_spliced && !ScDlgHasChild(root, ind)) g_spliced = false;   // same-address realloc
     if (g_spliced) return true;
 
     // AND THE OTHER DIRECTION, which the line above does not cover: the flag says NOT
@@ -571,7 +560,7 @@ static bool EnsureSpliced(DWORD root) {
     // loop inside the game's own paint, not a cosmetic bug. Adopting the existing link is
     // also right on its own terms: the control IS in the chain, so the invariant the flag
     // records is already true.
-    if (InChain(root)) {
+    if (ScDlgHasChild(root, ind)) {
         ScLog("QIND: our indicator control is already in this dialog's chain while the "
               "module thought it was not -- adopting the existing link rather than "
               "appending a second one (dialog 0x%08X)", (unsigned)root);
@@ -629,8 +618,6 @@ static bool EnsureSpliced(DWORD root) {
 // necessarily changing. The caller compares, and only then moves the control and redraws.
 static bool PlaceOn(short* b, DWORD anchor, DWORD root, int mode, int textLen) {
     short* a = ScDlgBounds(anchor);
-    int   want = textLen * SC_QIND_CHAR_W;
-    if (want < SC_QIND_BOX_W) want = SC_QIND_BOX_W;
 
     if (mode == SC_QIND_GROUP) {
         // BELOW THE ROW, NOT ON IT. Starting at the first wireframe button's own top-left
@@ -653,15 +640,10 @@ static bool PlaceOn(short* b, DWORD anchor, DWORD root, int mode, int textLen) {
         }
 
         int surfW = 0, surfH = 0;
-        DWORD d = SurfaceOf(root);
-        if (d) {
-            surfW = (int)*(WORD*)(d + SC_SURFACE_OFF_W);
-            surfH = (int)*(WORD*)(d + SC_SURFACE_OFF_H);
-        }
-        if (surfW <= 0 || surfH <= 0) return false;
+        if (!ScQueueIndSurfaceSize(root, &surfW, &surfH)) return false;
 
         int fontH = 0;
-        if (!ScQueueIndPlaceBand(rowLeft, rowBottom + SC_QIND_BAND_GAP, want, surfW, surfH,
+        if (!ScQueueIndPlaceBand(rowLeft, rowBottom + SC_QIND_BAND_GAP, textLen, surfW, surfH,
                                  b, &fontH)) {
             if (!g_bandLogged) {
                 ScLog("QIND: the band below the row is (%d,%d,%d,%d) on a %dx%d surface -- "
@@ -1042,6 +1024,12 @@ int ScQueueIndSurfaceInk(DWORD root, int left, int top, int right, int bottom) {
     return ink;
 }
 
+// Rows at the BOTTOM of a queue-slot rect holding the engine's own slot NUMBER. Measured:
+// compared, these rows add a constant 24 bytes to slotDiff for "+2", "+3" and "+4" alike --
+// the digits. Sized from the small font's height plus the label's inset, and every
+// QIND line reports the live `fontH=` so the number is checkable rather than assumed.
+#define SC_QIND_SLOT_LABEL_ROWS 12
+
 // Two queue-slot rects, compared byte for byte on the dialog's own 8-bit surface. See the
 // block above the call site for why this is the honest oracle for the fifth icon and a
 // plain ink count is not. The last SC_QIND_SLOT_LABEL_ROWS rows are skipped because the
@@ -1050,7 +1038,7 @@ int ScQueueIndSurfaceInk(DWORD root, int left, int top, int right, int bottom) {
 // Returns the count of differing bytes, or -1 when the surface is unreadable, either
 // control is missing or hidden, or the two rects are not the same size (which is the
 // engine's layout saying these two slots are not comparable, not a defect here).
-int ScQueueIndSlotDiff(DWORD root, int slotA, int slotB) {
+static int SlotDiff(DWORD root, int slotA, int slotB) {
     if (!root || slotA < 0 || slotB < 0 ||
         slotA >= SC_STATQ_SLOTS || slotB >= SC_STATQ_SLOTS) return -1;
     DWORD d = SurfaceOf(root);
@@ -1082,37 +1070,24 @@ int ScQueueIndSlotDiff(DWORD root, int slotA, int slotB) {
     return diff;
 }
 
-// Walk a rect of the dialog surface. The two callers want different things out of the same
-// bounds check, so each inlines its own body rather than passing a callback. `maxBytes <= 0`
-// means "no size limit", and every caller states its own: a fixed cap here would silently
-// make this module's own buffer the size limit for all of them, sc_hudrow's wider band
-// included.
-static bool BoxOnSurface(DWORD root, const short* r, DWORD* bits, int* w, int* stride,
-                         int maxBytes) {
-    DWORD d = root ? SurfaceOf(root) : 0;
-    if (!d) return false;
-    const int sw = (int)*(WORD*)(d + SC_SURFACE_OFF_W);
-    const int sh = (int)*(WORD*)(d + SC_SURFACE_OFF_H);
-    if (r[0] < 0 || r[1] < 0 || r[2] > sw || r[3] > sh) return false;
-    if (r[2] <= r[0] || r[3] <= r[1]) return false;
-    if (maxBytes > 0 && (r[2] - r[0]) * (r[3] - r[1]) > maxBytes) return false;
-    *bits   = *(DWORD*)(d + SC_SURFACE_OFF_BITS);
-    *w      = sw;
-    *stride = sw;
-    return *bits != 0;
-}
-
 // THE ONE READER. Copy a rect of the dialog's own 8-bit surface into a caller-owned buffer.
-// Both modules' "the pane without our text on it" copies go through here, so there is one
-// place that knows where this dialog's pixels live and one bounds check guarding them.
+// Every "the pane without our text on it" copy and every diff against one goes through here,
+// so there is one place that knows where this dialog's pixels live and one bounds check
+// guarding them.
 int ScQueueIndCopyRect(DWORD root, const short* rect, BYTE* out, int outMax) {
     if (!rect || !out || outMax <= 0) return 0;
-    DWORD bits; int w, stride;
-    if (!BoxOnSurface(root, rect, &bits, &w, &stride, outMax)) return 0;
+    DWORD d = root ? SurfaceOf(root) : 0;
+    if (!d) return 0;
+    const int sw = (int)*(WORD*)(d + SC_SURFACE_OFF_W);
+    const int sh = (int)*(WORD*)(d + SC_SURFACE_OFF_H);
+    if (rect[0] < 0 || rect[1] < 0 || rect[2] > sw || rect[3] > sh) return 0;
     const int bw = rect[2] - rect[0], bh = rect[3] - rect[1];
+    if (bw <= 0 || bh <= 0 || bw * bh > outMax) return 0;
+    const DWORD bits = *(DWORD*)(d + SC_SURFACE_OFF_BITS);
+    if (!bits) return 0;
     for (int y = 0; y < bh; ++y) {
         memcpy(out + (size_t)y * bw,
-               (const void*)(bits + (DWORD)((rect[1] + y) * stride + rect[0])), (size_t)bw);
+               (const void*)(bits + (DWORD)((rect[1] + y) * sw + rect[0])), (size_t)bw);
     }
     return bw * bh;
 }
@@ -1147,15 +1122,11 @@ int ScQueueIndBoxDiff(DWORD root) {
     if (!g_baseValid) return -1;
     const short* r = (const short*)&g_ctrl[SC_BINDLG_OFF_BOUNDS];
     for (int i = 0; i < 4; ++i) if (r[i] != g_baseRect[i]) return -1;
-    DWORD bits; int w, stride;
-    if (!BoxOnSurface(root, r, &bits, &w, &stride, SC_QIND_BASELINE_MAX)) return -1;
-    const int bw = r[2] - r[0], bh = r[3] - r[1];
+    BYTE now[SC_QIND_BASELINE_MAX];   // on the stack: this runs on two threads
+    const int n = ScQueueIndCopyRect(root, r, now, (int)sizeof(now));
+    if (n <= 0) return -1;
     int diff = 0;
-    for (int y = 0; y < bh; ++y) {
-        const BYTE* row = (const BYTE*)(bits + (DWORD)((r[1] + y) * stride + r[0]));
-        const BYTE* base = g_baseline + (size_t)y * bw;
-        for (int x = 0; x < bw; ++x) if (row[x] != base[x]) ++diff;
-    }
+    for (int i = 0; i < n; ++i) if (now[i] != g_baseline[i]) ++diff;
     return diff;
 }
 
@@ -1179,7 +1150,7 @@ void ScQueueIndLogState(const char* tag) {
     if (!root) { ScLog("QIND [%s] dialog=0 (no status pane in this process state)", t); return; }
 
     DWORD ind = (DWORD)&g_ctrl[0];
-    bool  linked = InChain(root);
+    bool  linked = ScDlgHasChild(root, ind);
     DWORD flags  = linked ? *(DWORD*)(ind + SC_BINDLG_OFF_FLAGS) : 0;
     short* b     = ScDlgBounds(ind);
     const char* live = "";
@@ -1241,7 +1212,7 @@ void ScQueueIndLogState(const char* tag) {
     //   a wrong GRP  -> hundreds of bytes differ (different art entirely);
     //   text drawn UNDER the icon -> 0 (the icon painted over it);
     //   text drawn ON TOP -> the glyph, tens of bytes.
-    int slotDiff = ScQueueIndSlotDiff(root, 0, SC_STATQ_SLOTS - 1);
+    int slotDiff = SlotDiff(root, 0, SC_STATQ_SLOTS - 1);
 
     // The two GRPs the engine picks between, so every `art` letter below is decidable
     // against the engine's own globals rather than against a number this file remembers.
@@ -1277,7 +1248,8 @@ void ScQueueIndLogState(const char* tag) {
           t, g_mode, linked ? 1 : 0,
           (flags & SC_CTRL_FLAG_VISIBLE) ? 1 : 0, live,
           linked ? b[0] : 0, linked ? b[1] : 0, linked ? b[2] : 0, linked ? b[3] : 0, ink,
-          refInk, refId, surfInk, slotDiff, ScQueueIndBoxDiff(root), SmallFontHeight(), icons,
+          refInk, refId, surfInk, slotDiff, ScQueueIndBoxDiff(root), ScQueueIndSmallFontHeight(),
+          icons,
           v.selection, v.engineLen, v.overflow, v.upgrades, v.buildings, v.queued,
           v.hudPages, (unsigned)g_anchor,
           // `owned` is how many queue icons the plugin is holding an item behind right now;
@@ -1293,8 +1265,9 @@ void ScQueueIndLogState(const char* tag) {
 
 // One line per child of the statdata dialog: which controls in this pane are engine-drawn
 // text and where the free pixels are, read off the LIVE dialog on THIS install rather than
-// off a dump (research/hud-selection-row.md 10).
-void ScQueueIndLogDialog(const char* tag) {
+// off a dump (research/hud-selection-row.md 10). Read-only, and runs feature-enabled or not,
+// because the stock layout is the baseline the indicator is placed against.
+static void LogDialog(const char* tag) {
     const char* t = tag ? tag : "-";
     DWORD dlg  = ScEngineModuleBase() ? ScStatDialog() : 0;
     DWORD root = dlg ? ScDlgRoot(dlg) : 0;
@@ -1370,23 +1343,10 @@ void ScQueueIndOnFrame(void) {
         // rather than dereference them. The wrapped interact pointers are among them --
         // dropping the list without restoring is correct here (the records are gone), and
         // WrapIconInteracts rebuilds it against the new dialog on this same frame.
+        ForgetDialog();
         g_iconWrapN    = 0;
-        g_iconDrawCtl  = 0;
         g_ownedIconN   = 0;
-        ForgetUpgradeIcons();
         g_dialog       = root;
-        g_spliced      = false;
-        g_shown        = false;
-        g_anchor       = 0;
-        g_mode         = SC_QIND_NONE;
-        g_text[0]      = '\0';
-        g_dialogLogged = false;
-        g_bandLogged   = false;
-        // THE BASELINE BELONGS TO THE OLD DIALOG'S SURFACE. Its rect can match the new one
-        // exactly -- the pane is laid out the same way every time -- so without this the
-        // first read in a new dialog diffs live pixels against a copy of a buffer that is
-        // gone. -1 ("no answer") is the only honest state here.
-        g_baseValid    = false;
     }
     if (!root) return;
 
@@ -1400,7 +1360,7 @@ void ScQueueIndOnFrame(void) {
     ReadView(&v);
 
     // The fifth icon is the ENGINE's to draw (the phantom bracket around queueLayout ran
-    // inside CallOrigDriver, before this line). What the frame path owns is the owned-icon
+    // inside the original driver, before this line). What the frame path owns is the owned-icon
     // list and the game-thread snapshot, published from the settled post-layout state.
     if (v.selection <= 1 && v.overflow > 0 && v.hudPages <= 1) {
         DWORD unit = ScPortraitUnit();
@@ -1460,7 +1420,7 @@ void ScQueueIndOnFrame(void) {
     }
 
     if (!EnsureSpliced(root)) return;
-    if (!g_dialogLogged) { ScQueueIndLogDialog("attach"); g_dialogLogged = true; }
+    if (!g_dialogLogged) { LogDialog("attach"); g_dialogLogged = true; }
 
     // The box, worked out fresh every frame: it is a function of the anchor, the string AND
     // the layout around it, and only the first two are cheap to notice changing.
@@ -1531,7 +1491,7 @@ void ScQueueIndOnFrame(void) {
 static void SC_GAME_ENTRY HkStatDisplayDriver(void) {
     static DWORD tid = 0;
     ScThreadCheck("qind-driver", &tid);
-    CallOrigDriver();
+    if (g_hkDriver.installed) ((OrigDriverFn)g_hkDriver.trampoline)();
     ScQueueIndOnFrame();
 }
 
@@ -1595,20 +1555,11 @@ void ScQueueIndInit(BYTE* moduleBase, bool enabled) {
     ScEngineSetModuleBase(moduleBase);
     g_enabled = enabled;
     g_show = g_hide = g_update = g_enable = NULL;
-    g_testOrigDriver = NULL;
-    g_testing  = false;
+    ForgetDialog();
     g_dialog   = 0;
-    g_spliced  = false;
-    g_shown    = false;
-    g_mode     = SC_QIND_NONE;
-    g_anchor   = 0;
-    g_text[0]  = '\0';
-    g_dialogLogged = false;
-    g_bandLogged   = false;
     g_iconsN = 0;
     g_iconWrapN = 0;
     g_ownedIconN = 0;
-    ForgetUpgradeIcons();
     for (int i = 0; i < SC_QIND_UPGRADE_ICONS; ++i) {
         _snprintf(g_upgLabel[i], sizeof(g_upgLabel[i]), "%d ", i + 2);
         g_upgLabel[i][sizeof(g_upgLabel[i]) - 1] = '\0';
@@ -1706,14 +1657,12 @@ void ScQueueIndLogStats(void) {
 
 void ScQueueIndTestBegin(BYTE* fakeModuleBase,
                          ScQueueIndCtlFn show, ScQueueIndCtlFn hide, ScQueueIndCtlFn update,
-                         ScQueueIndCtlFn enable, ScQueueIndDriverFn origDriver) {
+                         ScQueueIndCtlFn enable) {
     ScQueueIndInit(fakeModuleBase, fakeModuleBase != NULL);
     g_show           = show;
     g_hide           = hide;
     g_update         = update;
     g_enable         = enable;
-    g_testOrigDriver = origDriver;
-    g_testing        = true;
     g_dialogLogged   = true;         // the fake tree's dump is not the evidence
     for (int i = 0; i < SC_QIND_STAT__COUNT; ++i) g_stat[i] = 0;
 }

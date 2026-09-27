@@ -324,7 +324,7 @@ content. They stay under `work/scratch/` (gitignored) and only the findings abov
 
 `hud-selection-row.md` §10 left "the exact bounds of the controls, and of the usable free
 margin, live in `rez\statdata.bin`; stage B should read them from the live dialog and log them,
-not hardcode" as an open question. `ScQueueIndLogDialog` (`QINDDLG` lines, one per child: id,
+not hardcode" as an open question. sc_queueind's `LogDialog` (`QINDDLG` lines, one per child: id,
 type, flags, bounds, update handler, text) does exactly that, and the production strip's own
 bounds were read out of a live run before anything was positioned against them:
 
