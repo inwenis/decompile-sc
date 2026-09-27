@@ -284,7 +284,7 @@ Describe 'Golden-line seam: every parser regex still matches the plugin''s own f
             $script:renderedLine | Should -Not -BeNullOrEmpty
         }
 
-        Context '<Suite>' -ForEach $Parsers {
+        Context '<Suite> (<Groups> groups)' -ForEach $Parsers {
 
             It 'the regex is present VERBATIM in the suite it claims to come from' {
                 $suiteText = Get-Content -Raw -LiteralPath (Join-Path $script:PluginRoot $Suite)
