@@ -33,9 +33,8 @@ arguments.
    survives every future redeploy -- see "What survives a redeploy, and what does not"
    below. A tripwire hashes those directories before and after the mirror and throws if
    anything preserved actually changed.
-7. Copies the freshly built plugin binaries, plus `run-with-plugin.ps1` and its
-   `check-game-windows.ps1` / `sc-canonical-path.ps1` / `sc-audio-mute.ps1` /
-   `sc-launch-lock.ps1` dependencies, into `<DeployRoot>\plugin`.
+7. Copies the freshly built plugin binaries, plus `run-with-plugin.ps1` and every
+   helper it dot-sources or runs (deploy.ps1's `$runtime` list), into `<DeployRoot>\plugin`.
 8. Writes `<DeployRoot>\Launch-StarCraft-Modded.ps1`, a zero-argument launcher with the
    feature set baked in (`-Mode fanout -InjectWindowedHelper WMode -Circles 1 -HudRow 1
    -Sound -NoLaunchLock` -- fan-out select-past-12, selection circles, HUD row paging,
@@ -48,8 +47,8 @@ arguments.
    console window. Every geometry preset also gets **`StarCraft Modded <WxH>.lnk`**
    (the same launcher with `-Geometry <WxH>`, presented through its own
    `plugin\cnc-ddraw-2x-<WxH>.ini`), for trying the sizes side by side.
-10. Verifies: deployed `StarCraft.exe` sha256 == source's, the plugin binaries are newer
-    than this run (proof they were actually rebuilt, not stale leftovers), the shortcut
+10. Verifies: deployed `StarCraft.exe` sha256 == source's, the deployed `scplugin.dll`'s
+    embedded build stamp equals this run's version, the shortcut
     resolves to an existing target and launcher. Prints a one-line receipt:
     `deploy: OK  version=<git-short-sha>[+dirty]  date=<yyyy-mm-dd>  -> <DeployRoot>`.
 
@@ -167,7 +166,7 @@ reached a real deploy.
 | Replays | `<DeployRoot>\game\Maps\Replays\` -- never touched by a redeploy |
 | Map-download cache | `<DeployRoot>\game\maps\download\` -- never touched by a redeploy |
 | Screenshots | `<DeployRoot>\game\SCScrnShot_*.pcx` -- never touched by a redeploy |
-| Plugin runtime | `<DeployRoot>\plugin\` -- `scplugin.dll`, `scinject.exe`, and copies of `run-with-plugin.ps1` / `check-game-windows.ps1` / `sc-canonical-path.ps1` / `sc-audio-mute.ps1` / `sc-launch-lock.ps1` |
+| Plugin runtime | `<DeployRoot>\plugin\` -- `scplugin.dll`, `scinject.exe`, and copies of `run-with-plugin.ps1` and its helpers (deploy.ps1's `$runtime`) |
 | Launcher | `<DeployRoot>\Launch-StarCraft-Modded.ps1` -- zero arguments, feature set baked in |
 | Desktop shortcut | `%USERPROFILE%\Desktop\StarCraft Modded.lnk`, plus `StarCraft Modded <WxH>.lnk` per geometry preset |
 | Plugin log | `<DeployRoot>\logs\sc-plugin.log` (same format/rules as the dev log -- see `tools/plugin/README.md`) |

@@ -14,16 +14,12 @@ hand produces the same zip under work\scratch\release (gitignored).
 .EXAMPLE
 ./tools/package-release.ps1
 #>
-[CmdletBinding()]
-param(
-    [string]$OutDir,
-    [string]$CncDdrawDll = 'C:\decompile-sc-data\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll'
-)
 $ErrorActionPreference = 'Stop'
 $repoRoot  = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $pluginDir = Join-Path $PSScriptRoot 'plugin'
 $buildDir  = Join-Path $repoRoot 'work\scratch\plugin-build'
-if (-not $OutDir) { $OutDir = Join-Path $repoRoot 'work\scratch\release' }
+$OutDir    = Join-Path $repoRoot 'work\scratch\release'
+$CncDdrawDll = 'C:\decompile-sc-data\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll'
 
 foreach ($f in @((Join-Path $buildDir 'scplugin.dll'), (Join-Path $buildDir 'scinject.exe'), $CncDdrawDll)) {
     if (-not (Test-Path -LiteralPath $f)) { throw "package: missing $f (run ./build.ps1 and ./setup-onetime.ps1 first)" }
