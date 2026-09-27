@@ -17,12 +17,12 @@ and read its counters back, and the negative control watches the `&` form fail t
 BeforeAll {
     $script:suiteLib = (Resolve-Path (Join-Path $PSScriptRoot '..' 'tools' 'plugin' 'sc-suite.ps1')).Path
 
-    # A throwaway "suite" run in its own pwsh: loads the library with $Loader, owns its
-    # counters, runs $Body, and returns everything it printed.
+    # A throwaway "suite" run in its own pwsh: loads the library with $Loader, runs $Body,
+    # and returns everything it printed. The counters are the library's to zero.
     function Invoke-LibScript {
         param([string]$Body, [string]$Loader = '.')
         $p = Join-Path $TestDrive "$(New-Guid).ps1"
-        "$Loader ('$($script:suiteLib -replace "'", "''")')`n`$failures = 0`n`$step = 0`n$Body" |
+        "$Loader ('$($script:suiteLib -replace "'", "''")')`n$Body" |
             Set-Content -LiteralPath $p -Encoding utf8
         & pwsh -NoProfile -NonInteractive -File $p 2>&1 | Out-String
     }
@@ -64,6 +64,23 @@ Assert-That 'three' $true
 Write-Host "COUNTED=$failures"
 '@
         $out | Should -Match 'COUNTED=2'
+    }
+}
+
+Describe 'sc-suite.ps1 is the whole prelude a suite needs' {
+
+    It 'loads drive-game, the launch lock and the oracle guard, and sets $repoRoot, into the suite' {
+        $out = Invoke-LibScript @'
+foreach ($fn in 'Send-ScClick', 'Enter-ScLaunchLock', 'Test-ScReached') {
+    Write-Host "$fn=$([bool](Get-Command $fn -ErrorAction SilentlyContinue))"
+}
+Write-Host "REPO=$repoRoot"
+'@
+        $out | Should -Match 'Send-ScClick=True'
+        $out | Should -Match 'Enter-ScLaunchLock=True'
+        $out | Should -Match 'Test-ScReached=True'
+        $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+        $out | Should -Match ('(?m)^REPO=' + [regex]::Escape($repo) + '\r?$')
     }
 }
 

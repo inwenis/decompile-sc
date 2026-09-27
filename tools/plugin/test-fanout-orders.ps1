@@ -27,12 +27,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot
-. (Join-Path $scriptDir 'drive-game.ps1')
-
 . (Join-Path $scriptDir 'sc-suite.ps1')
-
-$failures = 0
-$step = 0
 
 # The two order ids this test pins, both observed on this fixture and explained in
 # research/command-opcodes.md §4.1 / §7.1. They are asserted, not merely reported, so a

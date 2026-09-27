@@ -42,14 +42,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot
-$repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
-. (Join-Path $scriptDir 'drive-game.ps1')
-. (Join-Path $scriptDir 'sc-launch-lock.ps1')
-
 . (Join-Path $scriptDir 'sc-suite.ps1')
-
-$failures = 0
-$step = 0
 
 # units.dat ids, evidence: the UNIT_TYPE_IDS table in tools/make_test_map.py.
 $UNIT_TYPE_ID = @{ 'engineering-bay' = 122; 'academy' = 112 }

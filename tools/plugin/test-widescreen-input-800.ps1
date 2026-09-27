@@ -50,9 +50,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot
-$repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
-. (Join-Path $scriptDir 'drive-game.ps1')
-. (Join-Path $scriptDir 'sc-launch-lock.ps1')
+. (Join-Path $scriptDir 'sc-suite.ps1')
 
 $geom = Get-ScWideGeometry
 $STOCK_W  = $geom.StockW
@@ -91,18 +89,7 @@ New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 New-Item -ItemType Directory -Path $FrameDir -Force | Out-Null
 $markerPath = Join-Path $LogDir 'marker.txt'
 
-$script:failures = 0
-$script:step = 0
 $launchLock = $null
-
-function Step([string]$What, [scriptblock]$Body) {
-    $script:step++; Write-Host "[$script:step] $What"; & $Body
-}
-function Assert-That {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    if ($Ok) { Write-Host "  ok   $What" }
-    else { Write-Host "  FAIL $What $Detail"; $script:failures++ }
-}
 
 # A behavioural claim the OFF-SCREEN HARNESS CANNOT FEED is REPORTED, never
 # asserted (the widescreen input proof and AGENTS.md's seam-coverage rule).

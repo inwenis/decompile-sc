@@ -50,13 +50,7 @@ $arm = if ($Stock) { 'stock' } elseif ($Combat) { 'combat' } else { 'feature' }
 if (-not $LogPath) { $LogPath = "C:\decompile-sc-data\sc-work\logs\024-building-groups-$arm.log" }
 
 $scriptDir = $PSScriptRoot
-$repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
-. (Join-Path $scriptDir 'drive-game.ps1')
-
 . (Join-Path $scriptDir 'sc-suite.ps1')
-
-$failures = 0
-$step = 0
 
 # Pinned ids, asserted rather than reported.
 #   TURRET   units.dat 124 (0x7C). A 2x2-tile Terran building: it fails

@@ -75,14 +75,10 @@ New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 
 $script:failures = 0
 $script:step = 0
+$script:findings = @()
 $launchLock = $null
 $fixtures = $null
 $arms = @{}
-
-function Report-Finding {
-    param([string]$What)
-    Write-Host "  ---- FINDING: $What"
-}
 
 # One reading: write a marker, wait for the plugin's SCREEN lines carrying that
 # exact tag, parse them. Same synchronisation every oracle in this repo uses.

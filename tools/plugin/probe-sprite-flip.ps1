@@ -35,8 +35,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$scriptDir = $PSScriptRoot; $repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
-foreach ($f in 'drive-game', 'sc-launch-lock', 'sc-suite', 'sc-wsprobe', 'sc-oracle-guard') { . (Join-Path $scriptDir "$f.ps1") }
+$scriptDir = $PSScriptRoot
+foreach ($f in 'sc-suite', 'sc-wsprobe') { . (Join-Path $scriptDir "$f.ps1") }
 
 $ws = Get-ScWideGeometry
 $SCREEN_W = $ws.W; $SCREEN_H = $ws.H; $STOCK_H = $ws.StockH

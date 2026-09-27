@@ -1,15 +1,16 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-The assertion helpers every suite and probe in this directory writes its output with.
+The suite prelude: loads drive-game.ps1, sc-launch-lock.ps1 and sc-oracle-guard.ps1, sets
+$repoRoot, zeroes $failures and $step, and defines the assertion helpers every suite and
+probe in this directory writes its output with.
 
 .DESCRIPTION
-WHY THIS IS SAFE TO SHARE, and the one thing to know about it. Every function here writes to
-`$script:failures` / `$script:step`, which belong to the SUITE, not to this file. That
-works because this file is DOT-SOURCED: dot-sourcing runs it in the caller's scope, so the
-functions are defined there and their `$script:` is the caller's script scope. It would
-NOT work if a suite ran this with `&` instead of `.`. tests/sc-suite.Tests.ps1 pins that
-behaviour by watching a fake suite's own counter move.
+WHY THIS IS SAFE TO SHARE, and the one thing to know about it. This file is DOT-SOURCED:
+that runs it in the caller's scope, so the libraries it loads, the counters it zeroes and
+the `$script:` inside every function here all belong to the SUITE, not to this file. It
+would NOT work if a suite ran this with `&` instead of `.`. tests/sc-suite.Tests.ps1 pins
+that behaviour by watching a fake suite's own counter move.
 
 WHAT IS DELIBERATELY NOT HERE. Some suites keep their own variant, defined after the
 dot-source so it wins:
@@ -29,6 +30,13 @@ record and a noun.
 $scriptDir = $PSScriptRoot
 . (Join-Path $scriptDir 'sc-suite.ps1')
 #>
+
+. (Join-Path $PSScriptRoot 'drive-game.ps1')
+. (Join-Path $PSScriptRoot 'sc-launch-lock.ps1')
+. (Join-Path $PSScriptRoot 'sc-oracle-guard.ps1')
+$script:repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+$script:failures = 0
+$script:step = 0
 
 # One assertion line. `$Detail` is for the numbers a reader needs when it FAILS -- the
 # expected and the actual -- and is printed only then, so a passing run stays scannable.

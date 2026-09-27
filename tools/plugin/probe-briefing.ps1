@@ -48,8 +48,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot
-foreach ($lib in 'drive-game.ps1', 'sc-launch-lock.ps1', 'sc-suite.ps1', 'sc-wsprobe.ps1') { . (Join-Path $scriptDir $lib) }
-$repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
+foreach ($lib in 'sc-suite.ps1', 'sc-wsprobe.ps1') { . (Join-Path $scriptDir $lib) }
 
 $env:SCPLUGIN_WS_GEOMETRY = $Geometry
 $geo = Get-ScWideGeometry
@@ -67,7 +66,6 @@ $markerPath = Join-Path $LogDir 'marker.txt'
 $tool = Join-Path $scriptDir 'frame-capture.py'
 $briefingRoot = '^(\w+RR|Ready\w*)$'
 New-Item -ItemType Directory -Path $LogDir, $FrameDir -Force | Out-Null
-$script:failures = $script:step = 0
 $launchLock = $fixtures = $null
 
 # Lit fraction of the capture inside the glue rect, 24 px in from every edge.

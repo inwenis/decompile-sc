@@ -40,14 +40,7 @@ $arm = if ($Stock) { 'stock' } else { 'feature' }
 if (-not $LogPath) { $LogPath = "C:\decompile-sc-data\sc-work\logs\036-building-parity-$arm.log" }
 
 $scriptDir = $PSScriptRoot
-$repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
-. (Join-Path $scriptDir 'drive-game.ps1')
-. (Join-Path $scriptDir 'sc-oracle-guard.ps1')
-
 . (Join-Path $scriptDir 'sc-suite.ps1')
-
-$failures = 0
-$step = 0
 
 # Pinned ids, asserted rather than reported.
 #   BARRACKS units.dat 111 (0x6F), 4x3 tiles, a PRODUCTION building -- it fails

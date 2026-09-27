@@ -41,15 +41,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot
-$repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
-. (Join-Path $scriptDir 'drive-game.ps1')
-. (Join-Path $scriptDir 'sc-launch-lock.ps1')
-. (Join-Path $scriptDir 'sc-oracle-guard.ps1')
-
 . (Join-Path $scriptDir 'sc-suite.ps1')
-
-$failures = 0
-$step = 0
 
 # Pinned constants, asserted rather than reported.
 $ACADEMY_TYPE = 112       # units.dat 112, richchk UnitId 'Terran Academy'

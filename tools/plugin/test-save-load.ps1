@@ -45,10 +45,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot
-$repoRoot = Split-Path (Split-Path $scriptDir -Parent) -Parent
-. (Join-Path $scriptDir 'drive-game.ps1')
-. (Join-Path $scriptDir 'sc-launch-lock.ps1')
-
 . (Join-Path $scriptDir 'sc-suite.ps1')
 
 if (-not $LogPath) { $LogPath = "C:\decompile-sc-data\sc-work\logs\051\save-load-$Phase.log" }
@@ -74,8 +70,6 @@ $SC_UNIT_FLAG_COMPLETED = 0x01
 $saveRoot = Join-Path $GameDir 'save'
 $stashDir = Join-Path $StateDir 'stash'
 
-$failures = 0
-$step = 0
 $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
 
 # =============================================================================

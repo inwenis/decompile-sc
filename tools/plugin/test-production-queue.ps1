@@ -69,14 +69,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot
-$repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
-. (Join-Path $scriptDir 'drive-game.ps1')
-. (Join-Path $scriptDir 'sc-launch-lock.ps1')
-
 . (Join-Path $scriptDir 'sc-suite.ps1')
 
-$failures = 0
-$step = 0
 # How many items this run has cancelled so far. Every later expectation is written
 # against it rather than against a literal, so the two cancel arms cannot drift out of
 # step with the counts the drain and the reconciliation expect.

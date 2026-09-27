@@ -31,16 +31,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot
-$repoRoot = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
-. (Join-Path $scriptDir 'drive-game.ps1')
-. (Join-Path $scriptDir 'sc-launch-lock.ps1')
-
 . (Join-Path $scriptDir 'sc-suite.ps1')
 
 if (-not $LogPath) { $LogPath = "C:\decompile-sc-data\sc-work\logs\030\group-production-$Arm.log" }
-
-$failures = 0
-$step = 0
 
 # Pinned constants, asserted rather than reported.
 $CC_TYPE    = 106         # units.dat 106, richchk UnitId 'Terran Command Center'

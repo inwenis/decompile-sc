@@ -28,12 +28,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot
-. (Join-Path $scriptDir 'drive-game.ps1')
-
 . (Join-Path $scriptDir 'sc-suite.ps1')
-
-$failures = 0
-$step = 0
 
 $hashBefore = Assert-ScExePristine -GameDir $GameDir
 
