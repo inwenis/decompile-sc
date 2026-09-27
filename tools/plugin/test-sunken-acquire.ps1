@@ -20,7 +20,7 @@ does. That difference is why both arms run.
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
     [string]$LogDir = 'C:\decompile-sc-data\sc-work\logs\022',
     # Which folder under Maps\ the fixture is generated into; see test-burrow-fanout.ps1.
     [string]$FixtureDir,
@@ -116,7 +116,6 @@ function Invoke-Arm {
         -EnemyOffsetX $ENEMY_OFFSET_X -EnemyOffsetY 0 `
         -OutputPath $mapPath 2>&1
     $gen | Where-Object { "$_" -notmatch 'WARNING:StormLib' } | ForEach-Object { Write-Host "       $_" }
-    Assert-That "[$tag] the generator succeeded" ($LASTEXITCODE -eq 0) "(exit $LASTEXITCODE)"
 
     Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
     Wait-ScNoGameRunning

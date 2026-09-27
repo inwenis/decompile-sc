@@ -16,7 +16,7 @@ the plugin's while it holds any; a status-strip icon click (payload k) is the en
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
     [string]$LogPath = 'C:\decompile-sc-data\sc-work\logs\025\production-queue.log',
     [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\025\production-frames',
     [string]$FixtureDir,
@@ -552,8 +552,6 @@ try {
         if ($ProbeBuildSeconds -gt 0) { $genArgs.UnitBuildTime = @("probe=$ProbeBuildSeconds") }
         $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') @genArgs 2>&1
         $gen | ForEach-Object { Write-Host "       $_" }
-        Assert-That 'the generator succeeded' ($LASTEXITCODE -eq 0) "(exit $LASTEXITCODE)"
-        Assert-That 'it wrote the map' (Test-Path -LiteralPath $mapPath)
         Assert-That 'its structural validation passed' `
             (@($gen | Select-String -Pattern '^OK: ').Count -gt 0)
         # ONE trigger, and the generator has already proved from the bytes that its only

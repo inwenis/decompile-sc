@@ -19,7 +19,7 @@ $env:AGENT_TASK = '156'; ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
     [string]$LogDir = 'C:\decompile-sc-data\sc-work\logs\156',
     [string]$FixtureDir,
     [string]$FrameDir = 'C:\decompile-sc-data\sc-work\logs\156-frames',
@@ -254,7 +254,7 @@ try {
     $launchLock = Enter-ScLaunchLock -TaskId '156-tooltips'
 
     Write-Host 'probe-tooltips: generating the fixture (one Nexus, explored start)'
-    $fixtures = New-ScNexusFixture -RepoRoot $repoRoot -FixtureDir $FixtureDir -MapName $mapName -Noun 'probe-tooltips'
+    $fixtures = New-ScNexusFixture -RepoRoot $repoRoot -FixtureDir $FixtureDir -MapName $mapName
 
     if (Test-Path -LiteralPath $log) { Remove-Item -LiteralPath $log -Force }
     if (Test-Path -LiteralPath $markerPath) { Remove-Item -LiteralPath $markerPath -Force }

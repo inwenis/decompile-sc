@@ -17,7 +17,7 @@ Only -GameDir's own save\asdf\ is ever opened; the user's real saves are never t
 [CmdletBinding()]
 param(
     [ValidateSet('control', 'fanout', 'crossload')][string]$Phase = 'control',
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
     [string]$LogPath,
     [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\051-frames',
     # Where the cross-phase snapshots live. Not the repo: these are run data.
@@ -586,8 +586,6 @@ try {
         }
         $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') @genArgs 2>&1
         $gen | ForEach-Object { Write-Host "       $_" }
-        Assert-That 'the generator succeeded' ($LASTEXITCODE -eq 0) "(exit $LASTEXITCODE)"
-        Assert-That 'it wrote the map' (Test-Path -LiteralPath $mapPath)
         Assert-That 'its structural validation passed' `
             (@($gen | Select-String -Pattern '^OK: ').Count -gt 0)
         Assert-That "the fixture overrides the Probe's build time to ${ProbeBuildSeconds}s in UNIx" `

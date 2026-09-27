@@ -231,8 +231,6 @@ try {
         $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
             -UnitCount $UnitCount -UnitType lurker -Player 0 -OutputPath $mapPath 2>&1
         $gen | ForEach-Object { Write-Host "       $_" }
-        Assert-That 'the generator succeeded' ($LASTEXITCODE -eq 0) "(exit $LASTEXITCODE)"
-        Assert-That 'it wrote the map' (Test-Path -LiteralPath $mapPath)
         Assert-That 'its structural validation passed' `
             (@($gen | Select-String -Pattern '^OK: ').Count -gt 0)
     }

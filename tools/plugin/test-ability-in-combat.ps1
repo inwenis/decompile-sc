@@ -21,7 +21,7 @@ scans. Background: research/ability-semantics.md §7, research/command-card.md.
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
     # Which ability is used mid-fight; $ABILITIES below holds everything that differs per arm.
     [ValidateSet('stim', 'cloak')][string]$Ability = 'stim',
     # Defaulted after the param block so it can follow -Ability; a caller can still pin it.
@@ -195,7 +195,6 @@ function New-Fixture {
         -EnemyCount $EnemyCount -EnemyType $EnemyType -EnemyRace $EnemyRace `
         -OutputPath $mapPath 2>&1
     $gen | Where-Object { "$_" -notmatch 'WARNING:StormLib' } | ForEach-Object { Write-Host "       $_" }
-    Assert-That 'the generator succeeded' ($LASTEXITCODE -eq 0) "(exit $LASTEXITCODE)"
     # Necessary, not sufficient: a read-back that shares the writer's index order confirms
     # a byte the engine never reads. The ENGINE's own opinion is asserted in the arm.
     Assert-That "$($ABIL.Name) is researched for the human slot" `

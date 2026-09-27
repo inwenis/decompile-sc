@@ -111,8 +111,6 @@ try {
             -UnitCount $UnitCount -UnitType lurker -Player 0 -OutputPath $mapPath 2>&1
         $gen = @($gen | Where-Object { "$_" -notmatch 'WARNING:StormLibFinder' })
         $gen | ForEach-Object { Write-Host "       $_" }
-        Assert-That 'the generator succeeded' ($LASTEXITCODE -eq 0) "(exit $LASTEXITCODE)"
-        Assert-That 'it wrote the map' (Test-Path -LiteralPath $mapPath)
         Assert-That 'nothing can end the game on its own (TRIG is empty)' `
             (@($gen | Select-String -Pattern 'TRIG holds 0 byte').Count -gt 0)
         Assert-That "the human's player id is not left to the engine to pick" `

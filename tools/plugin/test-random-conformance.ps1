@@ -55,7 +55,7 @@ with its coverage: which invariants were asserted and how often the seam was rea
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
     [string]$LogPath = 'C:\decompile-sc-data\sc-work\logs\041\random-conformance.log',
     # Frames are named for the state they show and written outside the repo; the read-back
     # stays the oracle.

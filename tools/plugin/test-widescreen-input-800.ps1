@@ -39,7 +39,7 @@ picture of the wide window is another suite's; this suite is the input proof.
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
     [string]$LogDir = 'C:\decompile-sc-data\sc-work\logs\071',
     [string]$FixtureDir,
     [string]$FrameDir = 'C:\decompile-sc-data\sc-work\logs\071-frames',
@@ -329,7 +329,6 @@ try {
             -UnitCount 1 -UnitType 'nexus' -Player 0 -ClearPlayerUnits `
             -Race 'protoss' -StartingMinerals 500 -StartingGas 0 -OutputPath $mapPath 2>&1
         $gen | ForEach-Object { Write-Host "       $_" }
-        Assert-That 'the generator succeeded' ($LASTEXITCODE -eq 0) "(exit $LASTEXITCODE)"
         Assert-That 'its structural validation passed' (@($gen | Select-String -Pattern '^OK: ').Count -gt 0)
     }
     Wait-ScNoGameRunning

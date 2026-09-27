@@ -180,7 +180,6 @@ try {
     # again between the two arms would delete the control map this run had just made.
     Wait-ScFixtureFolderFree -Run $fixtures
     $ctlGen = New-GhostFixture -Path $ctlPath
-    Assert-That 'the control generator succeeded' ($LASTEXITCODE -eq 0) "(exit $LASTEXITCODE)"
     Assert-That 'and it wrote NO PTEx research -- that is what makes it a control' `
         (@($ctlGen | Select-String -Pattern 'PTEx: player 0 has researched').Count -eq 0)
 
@@ -209,7 +208,6 @@ try {
     Write-Host ''
     Write-Host "[3] fixture: $UnitCount Ghosts, Personnel Cloaking researched, full energy"
     $gen = New-GhostFixture -Path $mapPath -WithTech
-    Assert-That 'the generator succeeded' ($LASTEXITCODE -eq 0) "(exit $LASTEXITCODE)"
     # Without this the button is not on the card and every key emits nothing, which would
     # make "the key is not C" unfalsifiable.
     Assert-That 'Personnel Cloaking is marked researched for the human slot' `

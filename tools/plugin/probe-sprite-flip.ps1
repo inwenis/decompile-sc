@@ -25,7 +25,7 @@ $env:AGENT_TASK = '157'; ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = $(if ($env:SC_TASK_GAMEDIR) { $env:SC_TASK_GAMEDIR } else { 'C:\decompile-sc-data\sc-work\1161-base' }),
+    [string]$GameDir = 'C:\decompile-sc-data\sc-work\1161-base',
     [string]$LogDir = 'C:\decompile-sc-data\sc-work\logs\157',
     [string]$FixtureDir,
     [string]$FrameDir = 'C:\decompile-sc-data\sc-work\logs\157-frames',
@@ -140,7 +140,7 @@ try {
     $launchLock = Enter-ScLaunchLock -TaskId '157-spriteflip'
 
     Write-Host 'probe-flip: generating the fixture (one Nexus at a stock start location with its mineral line)'
-    $fixtures = New-ScNexusFixture -RepoRoot $repoRoot -FixtureDir $FixtureDir -MapName $mapName -Noun 'probe-flip' -ClearCritters
+    $fixtures = New-ScNexusFixture -RepoRoot $repoRoot -FixtureDir $FixtureDir -MapName $mapName -ClearCritters
 
     if (Test-Path -LiteralPath $log) { Remove-Item -LiteralPath $log -Force }
     if (Test-Path -LiteralPath $markerPath) { Remove-Item -LiteralPath $markerPath -Force }

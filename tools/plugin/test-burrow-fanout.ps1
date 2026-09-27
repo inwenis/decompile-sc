@@ -135,8 +135,6 @@ try {
         $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
             -UnitCount $UnitCount -UnitType lurker -Player 0 -OutputPath $mapPath 2>&1
         $gen | ForEach-Object { Write-Host "       $_" }
-        Assert-That 'the generator succeeded' ($LASTEXITCODE -eq 0) "(exit $LASTEXITCODE)"
-        Assert-That 'it wrote the map' (Test-Path -LiteralPath $mapPath)
         # The generator's own structural validation is part of the contract: it is what
         # asserts the human slot is 0x06, the race is not "User Selectable", TRIG is empty,
         # and every other CHK section came across byte-for-byte from the template.

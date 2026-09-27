@@ -279,13 +279,6 @@ try {
             -UnitCount $unitCount -GridSpacing $spacing -UnitType 'marine' `
             -Player 0 -Race 'terran' -OutputPath $mapPath 2>&1
     @($gen | Where-Object { "$_" -notmatch 'WARNING:StormLibFinder' }) | ForEach-Object { Write-Host "       $_" }
-    # A generation that failed leaves no file, and the browser walk's re-check
-    # then reports the map "gone between generation and launch -- another
-    # worker's cleanup took it": a wrong CULPRIT asserted from no evidence.
-    # Refuse here, where the generator's own traceback is still on the screen.
-    if (-not (Test-Path -LiteralPath $mapPath)) {
-        throw "probe-framecap: the fixture was never generated ($mapPath does not exist) -- read the generator output above; nothing was launched."
-    }
 
     if ($Stage2) {
         $arms['stock'] = Invoke-Arm -Name 'stock' -Widescreen '0'

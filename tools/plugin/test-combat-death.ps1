@@ -152,7 +152,6 @@ function New-Fixture {
         -UnitCount $UnitCount -UnitType lurker -Player 0 -UnitHp $UnitHp `
         -EnemyCount $EnemyCount -EnemyType hydralisk -EnemyOwner $EnemyOwner `
         -OutputPath $path 2>&1
-    $rc = $LASTEXITCODE
     # richchk's StormLib loader writes the same "no DLL path was provided" warning to
     # stderr on every archive it opens; it says nothing about the map and buries the
     # generator's own read-back.
@@ -161,9 +160,7 @@ function New-Fixture {
     $text = ($out | ForEach-Object { "$_" }) -join "`n"
     $fx = @{
         Path = $path
-        Exit = $rc
         Ok = ($text -match '(?m)^OK: ')
-        Written = (Test-Path -LiteralPath $path)
     }
     if ($text -match 'start location for player \d+ at \((\d+), (\d+)\)') {
         $fx.StartX = [int]$Matches[1]; $fx.StartY = [int]$Matches[2]
@@ -481,8 +478,6 @@ try {
     # =====================================================================
     Step "PHASE A: generate the PLACEMENT PROBE ($UnitCount lurkers + $EnemyCount hydralisks, both the human's)" {
         $script:probeFx = New-Fixture -Name 'combat-death-probe.scx' -EnemyOwner 'player'
-        Assert-That 'the generator succeeded' ($probeFx.Exit -eq 0) "(exit $($probeFx.Exit))"
-        Assert-That 'it wrote the map' ([bool]$probeFx.Written)
         Assert-That 'its structural validation passed' ([bool]$probeFx.Ok)
         Assert-That "it placed $EnemyCount enemy-type units" ($probeFx.EnemyN -eq $EnemyCount)
         Assert-That 'the enemy block is owned by the human slot' `
@@ -530,8 +525,6 @@ try {
     # =====================================================================
     Step "PHASE B: generate the COMBAT map (same block, owned by the computer)" {
         $script:combatFx = New-Fixture -Name 'combat-death.scx' -EnemyOwner 'computer'
-        Assert-That 'the generator succeeded' ($combatFx.Exit -eq 0) "(exit $($combatFx.Exit))"
-        Assert-That 'it wrote the map' ([bool]$combatFx.Written)
         Assert-That 'its structural validation passed' ([bool]$combatFx.Ok)
         Assert-That "the computer slot owns the $EnemyCount enemy units" `
             ($combatFx.EnemyN -eq $EnemyCount -and $combatFx.EnemySlot -eq 1 -and

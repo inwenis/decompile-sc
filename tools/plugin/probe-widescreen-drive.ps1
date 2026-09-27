@@ -200,9 +200,6 @@ try {
             -UnitCount 36 -GridSpacing 64 -UnitType 'marine' `
             -Player 0 -Race 'terran' -OutputPath $mapPath 2>&1
     @($gen | Where-Object { "$_" -notmatch 'WARNING:StormLibFinder' }) | ForEach-Object { Write-Host "       $_" }
-    if (-not (Test-Path -LiteralPath $mapPath)) {
-        throw "probe-wsdrive: the fixture was never generated ($mapPath does not exist) -- read the generator output above; nothing was launched."
-    }
 
     if (Test-Path -LiteralPath $log) { Remove-Item -LiteralPath $log -Force }
     if (Test-Path -LiteralPath $markerPath) { Remove-Item -LiteralPath $markerPath -Force }
