@@ -243,8 +243,8 @@ one a single line of output instead of another evening.
 | case | what happens | where the evidence is |
 |---|---|---|
 | a building already at the engine's five | the engine's `addToBuildQueue` returns 0 at its own `CMP EAX,0x5` **without touching the array or the player's resources** — so it is skipped and costs nothing | in game, §6: the full building stays at five and the payment is `(N−1) × cost`, not `N × cost` |
-| a group whose buildings are not all one type | **refused outright**, and the whole command rather than the odd building, because a partial fan-out would spend the player's minerals on a subset they never chose | offline, `hooktest` part [15]; and §4 — the engine would refuse it for free anyway |
-| a >12 **unit** selection | refused: `simSlots != 1`, so `0x1F` stays passthrough exactly as `command-opcodes.md` §5.1 has it | offline, `hooktest` part [15] |
+| a group whose buildings are not all one type | **refused outright**, and the whole command rather than the odd building, because a partial fan-out would spend the player's minerals on a subset they never chose | offline, `hooktest` part [18]; and §4 — the engine would refuse it for free anyway |
+| a >12 **unit** selection | refused: `simSlots != 1`, so `0x1F` stays passthrough exactly as `command-opcodes.md` §5.1 has it | offline, `hooktest` part [18] |
 | one building selected | not fanned out at all, so the path stays byte-for-byte stock — which is what makes it usable as a control arm | in game, §6, both arms |
 | `%SCPLUGIN_BUILDING_GROUPS%=0` | a box selects one building, the count is 1, and the detour returns "not ours" before looking at anything else | by construction, §5.4 |
 
@@ -263,7 +263,7 @@ predicate, a selection task 024 would not have produced cannot reach either.
 
 ### 6.1 Offline, with no game in the process
 
-`hooktest.exe` part [15], `0 failure(s)`. The policy is pure, and it is the same call both the
+`hooktest.exe` part [18], `0 failure(s)`. The policy is pure, and it is the same call both the
 button detour and the command path make, so testing it once tests both: a same-type building
 group of two or more at chunk size 1 fans out; a **unit** selection is refused at 4 and at 13
 (that 12 + 1 split being exactly the hazard); a single building and an empty selection are

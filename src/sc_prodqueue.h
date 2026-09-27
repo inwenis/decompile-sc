@@ -54,7 +54,7 @@ void ScProdQueueLogState(const char* tag);
 void ScProdQueueLogStats(void);
 
 // The core, hook-free -- driven byte-for-byte from hooktest.exe with no StarCraft in
-// sight (src/hooktest.cpp part [11]). The three detours only marshal arguments into these.
+// sight (src/hooktest.cpp part [15]). The three detours only marshal arguments into these.
 
 // A Train command (0x1F) has just been handled by the engine for `unit`: it accepted and
 // paid for the item, or refused it. Rebalances the building: takes the newest items back

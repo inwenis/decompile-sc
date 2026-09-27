@@ -1299,7 +1299,7 @@ static void UnlinkFakeUnit(int i, BYTE player) {   // models removal from play
     *(DWORD*)(u + SC_CUNIT_OFF_LIST_NEXT) = 0;
     *(DWORD*)(u + SC_CUNIT_OFF_LIST_PREV) = 0;
 }
-static void RelinkFakeUnit(int i, BYTE player) {   // put it back, for cleanup
+static void RelinkFakeUnit(int i, BYTE player) {
     DWORD* heads = (DWORD*)FakeRt(SC_VA_PLAYER_UNIT_LIST);
     DWORD u = FakeUnit(i);
     *(DWORD*)(u + SC_CUNIT_OFF_LIST_PREV) = 0;

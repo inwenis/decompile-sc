@@ -530,7 +530,7 @@ So the suppression is scoped by a condition a second building **cannot** satisfy
 
 A second Engineering Bay's `0xC9` holds 61, or a different id, so its button stays hidden
 and the two-buildings rule is untouched. Only the building that already owns the upgrade is
-allowed to be asked about it again. `hooktest` part [16] asserts that as a **pair** — the
+allowed to be asked about it again. `hooktest` part [17] asserts that as a **pair** — the
 running building may stack, an idle sibling and a sibling researching something else may
 not — because a test making only the first claim would pass for the dangerous version too.
 
