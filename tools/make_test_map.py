@@ -1125,11 +1125,7 @@ def generate_map(a: argparse.Namespace) -> None:
         None,
     )
     if start is None:
-        start = next(
-            (r for r in existing_records if r.unit_id == START_LOCATION_UNIT_ID), None
-        )
-    if start is None:
-        raise ValueError(f"Template {template} has no start location in its UNIT section")
+        raise ValueError(f"Template {template} has no start location for player {player}")
 
     # Placing on top of the player's own units gives a mixed selection, and in game a
     # mixed selection is offered only the basic command card -- no unit ability button at
