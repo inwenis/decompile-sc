@@ -667,7 +667,7 @@ and button-up land at the same point, so the box opens and closes on one pixel a
 nothing — silently, with three other suites in the same sweep boxing fine, which is exactly the
 intermittency you would expect from something that depends on which window happens to be
 foreground. Their minimap-centring click is a third candidate with the same shape. So
-activation is now part of dragging as well as of picking (`Send-ScDrag -NoActivate` opts out).
+activation is now part of dragging as well as of picking.
 
 Four changes, in `drive-game.ps1`:
 

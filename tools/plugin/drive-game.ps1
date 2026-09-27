@@ -33,25 +33,16 @@ Set-StrictMode -Version Latest
 
 # System.Drawing is deliberately NOT used from the C# below: on .NET 10 the GDI+ types
 # live in a private assembly Add-Type's reference list cannot name, so the bitmap half is
-# done in PowerShell and the C# stays pure Win32 P/Invoke. Its absence is tolerated so
-# this file can be dot-sourced where there is no GDI+ at all (a CI runner exercising the
-# browser model and the fixture registry touches no bitmap); the two functions that DO
-# need it say so themselves rather than failing the load with an unrelated message.
-$script:ScHaveDrawing = $true
-try { Add-Type -AssemblyName System.Drawing -ErrorAction Stop | Out-Null }
-catch { $script:ScHaveDrawing = $false }
+# done in PowerShell and the C# stays pure Win32 P/Invoke.
+Add-Type -AssemblyName System.Drawing
 
 # Which desktop this thread is on: the foreground gate must be able to say WHY it cannot
 # have the foreground when a run is off-screen (see Assert-ScWindowActive).
 . (Join-Path $PSScriptRoot 'sc-desktop.ps1')
 # Get-ScWideGeometry, shared with deploy.ps1.
 . (Join-Path $PSScriptRoot 'sc-geometry.ps1')
-
-function Assert-ScDrawing {
-    if (-not $script:ScHaveDrawing) {
-        throw 'drive-game: System.Drawing is not available in this PowerShell, so no frame can be captured. Frame capture needs a Windows host with GDI+.'
-    }
-}
+# MakeForeground and GetForegroundWindow live in ScFg.Native.
+. (Join-Path $PSScriptRoot 'sc-foreground.ps1')
 
 if (-not ('ScDrive.Native' -as [type])) {
     Add-Type @"
@@ -81,40 +72,6 @@ namespace ScDrive {
     private static extern bool GetClientRect(IntPtr hWnd, out RECT r);
     [DllImport("user32.dll")]
     public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdc, uint flags);
-
-    // --- activation (task 022) ---------------------------------------------
-    // Used by Set-ScWindowActive (the opt-in raise) and by probes that read the foreground.
-    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr h);
-    [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr h);
-    [DllImport("user32.dll")] private static extern IntPtr SetActiveWindow(IntPtr h);
-    [DllImport("user32.dll")] private static extern IntPtr SetFocus(IntPtr h);
-    [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint a, uint b, bool attach);
-    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr h, IntPtr pid);
-    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
-
-    // Windows refuses SetForegroundWindow from a process that does not already own the
-    // foreground, and returns TRUE while doing nothing (it only flashes the taskbar).
-    // Attaching this thread's input queue to the current foreground thread first is the
-    // documented way to be allowed to do it; the attachment is undone immediately.
-    // Returns whether the window really ended up foreground -- callers assert on that
-    // rather than on the API's return value.
-    public static bool MakeForeground(IntPtr h) {
-      IntPtr fg = GetForegroundWindow();
-      if (fg == h) return true;
-      uint tFg = GetWindowThreadProcessId(fg, IntPtr.Zero);
-      uint tMe = GetCurrentThreadId();
-      bool attached = (tFg != 0 && tFg != tMe) ? AttachThreadInput(tMe, tFg, true) : false;
-      try {
-        BringWindowToTop(h);
-        SetForegroundWindow(h);
-        SetActiveWindow(h);
-        SetFocus(h);
-      } finally {
-        if (attached) AttachThreadInput(tMe, tFg, false);
-      }
-      return GetForegroundWindow() == h;
-    }
 
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT { public int Left, Top, Right, Bottom; }
@@ -353,16 +310,13 @@ function Send-ScDrag {
         [Parameter(Mandatory)][IntPtr]$Hwnd,
         [Parameter(Mandatory)][int]$X1, [Parameter(Mandatory)][int]$Y1,
         [Parameter(Mandatory)][int]$X2, [Parameter(Mandatory)][int]$Y2,
-        [int]$Steps = 12, [int]$StepMs = 40, [int]$SettleMs = 400,
-        [switch]$NoActivate
+        [int]$Steps = 12, [int]$StepMs = 40, [int]$SettleMs = 400
     )
     Assert-ScDrivable -Hwnd $Hwnd
     # A drag is made of mouse MOVES, and posted moves reach the engine whether or not the
     # window is foreground (measured -- see Set-ScWindowActive). What still swallows them
     # is a MINIMISED or dead window, which is what this gate catches.
-    if (-not $NoActivate) {
-        Assert-ScWindowActive -Hwnd $Hwnd -Because 'a drag, which is made of mouse MOVES and'
-    }
+    Assert-ScWindowActive -Hwnd $Hwnd -Because 'a drag, which is made of mouse MOVES and'
     if ($Steps -lt 2) { $Steps = 2 }
     if ($env:SCDRIVE_POST_ACTIVATE -eq '1') { Send-ScActivationNudge -Hwnd $Hwnd }
 
@@ -396,25 +350,15 @@ function Send-ScKey {
         [Parameter(Mandatory)][IntPtr]$Hwnd,
         [Parameter(Mandatory)][int]$VirtualKey,
         [char]$Char = [char]0,
-        [switch]$Ctrl, [switch]$Shift,
         [int]$HoldMs = 50, [int]$SettleMs = 200
     )
     Assert-ScDrivable -Hwnd $Hwnd
-    # -Ctrl / -Shift bracket the key with posted modifier KEYDOWN/KEYUP. Whether that is
-    # ENOUGH is a property of this binary: Windows does not update the thread key-state
-    # table for posted messages, so a game resolving modifiers through `GetKeyState` will
-    # not see them. research/control-groups.md holds the answer for the control-group
-    # keys; treat a failure as "drive it another way", never as "the modifier is broken".
-    if ($Shift) { [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_KEYDOWN, [IntPtr]0x10, [IntPtr]0x002A0001) }
-    if ($Ctrl)  { [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_KEYDOWN, [IntPtr]0x11, [IntPtr]0x001D0001) }
     [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_KEYDOWN, [IntPtr]$VirtualKey, [IntPtr]1)
     if ($Char -ne [char]0) {
         [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_CHAR, [IntPtr][int]$Char, [IntPtr]1)
     }
     Start-Sleep -Milliseconds $HoldMs
     [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_KEYUP, [IntPtr]$VirtualKey, [IntPtr]0xC0000001)
-    if ($Ctrl)  { [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_KEYUP, [IntPtr]0x11, [IntPtr]0xC01D0001) }
-    if ($Shift) { [void][ScDrive.Native]::PostMessage($Hwnd, $script:WM_KEYUP, [IntPtr]0x10, [IntPtr]0xC02A0001) }
     if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
 }
 
@@ -457,8 +401,6 @@ $script:ScBrowserMapExt      = @('.scm', '.scx')
 # (+5,+32) window-to-client offset).
 $script:ScBrowserUpArrowX    = 339
 $script:ScBrowserUpArrowY    = 141
-$script:ScBrowserDownArrowX  = 339
-$script:ScBrowserDownArrowY  = 211
 # Every coordinate above is the glue screen's own. The menu centring (sc_menu.h,
 # -MenuCentre 1) translates each glue root by one (dx,dy); a walk through centred menus
 # sets that origin here once, and every browser click and fingerprint follows it.
@@ -697,7 +639,6 @@ function Assert-ScBrowserMapSelected {
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][IntPtr]$Hwnd,
         [Parameter(Mandatory)][string]$Before,
         [Parameter(Mandatory)][string]$After,
         [Parameter(Mandatory)][psobject]$Listing,
@@ -763,20 +704,18 @@ function Select-ScBrowserMap {
     (Assert-ScGameType) and presses Ok, because what happens between selecting and launching
     differs per suite.
 
-    -OpenDir is where the browser opens, which for Single Player -> Expansion -> Play
-    Custom is `<GameDir>\Maps\BroodWar`. The route out of it is up to the common ancestor
-    and back down; `Maps\` is the root, and the ascent stops there.
+    The browser opens in `<GameDir>\Maps\BroodWar` (Single Player -> Expansion -> Play
+    Custom). The route out of it is up to the common ancestor and back down; `Maps\` is
+    the root, and the ascent stops there.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][IntPtr]$Hwnd,
         [Parameter(Mandatory)][string]$GameDir,
-        [Parameter(Mandatory)][string]$MapPath,
-        [string]$OpenDir
+        [Parameter(Mandatory)][string]$MapPath
     )
     $mapsRoot = [IO.Path]::GetFullPath((Join-Path $GameDir 'Maps'))
-    if (-not $OpenDir) { $OpenDir = Join-Path $mapsRoot 'BroodWar' }
-    $cur = [IO.Path]::GetFullPath($OpenDir).TrimEnd('\')
+    $cur = Join-Path $mapsRoot 'BroodWar'
     $mapFull = [IO.Path]::GetFullPath($MapPath)
     if (-not (Test-Path -LiteralPath $mapFull -PathType Leaf)) {
         throw "drive-game: $mapFull does not exist, so the browser cannot be walked to it."
@@ -790,7 +729,7 @@ function Select-ScBrowserMap {
     $guard = 0
     while (-not (($targetDir + '\') -ilike (($cur + '\') + '*'))) {
         if ($cur -ieq $mapsRoot) { throw "drive-game: $targetDir is not under the browser's root $mapsRoot." }
-        if (++$guard -gt 8) { throw "drive-game: the browser route from $OpenDir to $targetDir did not converge." }
+        if (++$guard -gt 8) { throw "drive-game: the browser route from $mapsRoot\BroodWar to $targetDir did not converge." }
         $listing = Enter-ScBrowserEntry -Hwnd $Hwnd -Dir $cur -MapsRoot $mapsRoot -Name $script:ScBrowserUpEntry
         $cur = $listing.Dir
     }
@@ -823,8 +762,7 @@ function Select-ScBrowserMap {
     Send-ScClick -Hwnd $Hwnd -X ($script:ScGlueX + $script:ScBrowserRowX) -Y $entry.Y
     Start-Sleep -Milliseconds 500
     $panelAfter = Get-ScBrowserInfoPanel -Hwnd $Hwnd
-    Assert-ScBrowserMapSelected -Hwnd $Hwnd -Before $panelBefore -After $panelAfter `
-                                -Listing $listing -Entry $entry
+    Assert-ScBrowserMapSelected -Before $panelBefore -After $panelAfter -Listing $listing -Entry $entry
     $entry
 }
 
@@ -1065,14 +1003,10 @@ function Wait-ScFixtureFolderFree {
         against (AGENTS.md § "Hard rules");
       * for OUR OWN previous file to become deletable: a stale one can still be held open
         by a game that is shutting down.
-
-    -Names narrows the deletion to the fixtures the caller is about to (re)write, so an
-    earlier phase's file survives into a later phase. Omitted, it clears all of them.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][psobject]$Run,
-        [string[]]$Names,
         [int]$TimeoutMinutes = 20
     )
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
@@ -1092,9 +1026,7 @@ function Wait-ScFixtureFolderFree {
         Start-Sleep -Seconds 20
     }
 
-    $want = if ($Names) { $Names } else { $Run.Names }
-    foreach ($n in $want) {
-        if ($Run.Names -notcontains $n) { throw "drive-game: '$n' is not one of this run's declared fixtures." }
+    foreach ($n in $Run.Names) {
         $p = Join-Path $Run.Dir $n
         $deleteDeadline = (Get-Date).AddMinutes($TimeoutMinutes)
         while (Test-Path -LiteralPath $p) {
@@ -1157,7 +1089,6 @@ function Get-ScRegionFingerprint {
         [Parameter(Mandatory)][int]$Width, [Parameter(Mandatory)][int]$Height
     )
     Assert-ScDrivable -Hwnd $Hwnd
-    Assert-ScDrawing
     $sz = Get-ScWindowSize -Hwnd $Hwnd
     $bmp = New-Object System.Drawing.Bitmap($sz.Width, $sz.Height,
                      [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
@@ -1374,9 +1305,9 @@ function Set-ScWindowActive {
         [int]$Tries = 3
     )
     Assert-ScDrivable -Hwnd $Hwnd
-    if ([ScDrive.Native]::GetForegroundWindow() -eq $Hwnd) { return $true }
+    if ([ScFg.Native]::GetForegroundWindow() -eq $Hwnd) { return $true }
     for ($i = 0; $i -lt $Tries; $i++) {
-        if ([ScDrive.Native]::MakeForeground($Hwnd)) {
+        if ([ScFg.Native]::MakeForeground($Hwnd)) {
             if ($SettleMs -gt 0) { Start-Sleep -Milliseconds $SettleMs }
             return $true
         }
@@ -2136,7 +2067,6 @@ function Save-ScWindowImage {
         [switch]$ClientByGeometry
     )
     Assert-ScDrivable -Hwnd $Hwnd
-    Assert-ScDrawing
     $full = [IO.Path]::GetFullPath($Path)
     $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
     if ($full.StartsWith($repoRoot, [StringComparison]::OrdinalIgnoreCase) -and

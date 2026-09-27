@@ -22,21 +22,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-if (-not ('ScWatch.Native' -as [type])) {
-    Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-using System.Text;
-namespace ScWatch {
-  public static class Native {
-    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
-    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
-    public static string TitleOf(IntPtr h) { var sb = new StringBuilder(512); GetWindowTextW(h, sb, 512); return sb.ToString(); }
-  }
-}
-"@
-}
+# Only ScFg.Native's raw reads: the StarCraft test below stays local, so this oracle does not
+# share a predicate with the launch hand-back it checks.
+. (Join-Path $PSScriptRoot 'sc-foreground.ps1')
 
 $deadline = (Get-Date).AddSeconds($Seconds)
 $last = [IntPtr]::Zero
@@ -44,13 +32,12 @@ $stolen = $false
 
 Write-Host "watch-foreground: sampling every ${PollMs}ms for ${Seconds}s. One line per change."
 while ((Get-Date) -lt $deadline) {
-    $h = [ScWatch.Native]::GetForegroundWindow()
+    $h = [ScFg.Native]::GetForegroundWindow()
     if ($h -ne $last) {
         $last = $h
-        $pid2 = 0
-        [void][ScWatch.Native]::GetWindowThreadProcessId($h, [ref]$pid2)
+        $pid2 = [ScFg.Native]::PidOf($h)
         $proc = try { (Get-Process -Id $pid2 -ErrorAction Stop).ProcessName } catch { '?' }
-        $title = [ScWatch.Native]::TitleOf($h)
+        $title = [ScFg.Native]::TitleOf($h)
         $flag = ''
         if ($proc -like 'StarCraft*') { $stolen = $true; $flag = '   <-- THE GAME TOOK THE FOREGROUND' }
         Write-Host ("{0:HH:mm:ss}  hwnd=0x{1:X8} pid={2} proc={3} title='{4}'{5}" -f (Get-Date), [int64]$h, $pid2, $proc, $title, $flag)

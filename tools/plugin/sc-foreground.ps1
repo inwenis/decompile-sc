@@ -8,11 +8,11 @@ on an idle desktop, where nothing else asks for it, it held the foreground for a
 -- a whole run (AGENTS.md § "Foreground").
 
 Its own file because run-with-plugin.ps1 is copied into the deploy tree and must work with no
-repo present, while drive-game.ps1 -- owner of the equivalent MakeForeground -- is the whole
-input machinery a launch has no business loading; deploy-runtime.Tests.ps1 fails if one of
-run-with-plugin.ps1's dependencies is missing from deploy.ps1's copy list. Callers restore
-only under $env:AGENT_TASK, and never when $env:SCDRIVE_RAISE=1: a human who launched or is
-watching the game wants to see it.
+repo present, while drive-game.ps1 is the whole input machinery a launch has no business
+loading: drive-game dot-sources this file, never the reverse. deploy-runtime.Tests.ps1 fails
+if one of run-with-plugin.ps1's dependencies is missing from deploy.ps1's copy list. Callers
+restore only under $env:AGENT_TASK, and never when $env:SCDRIVE_RAISE=1: a human who launched
+or is watching the game wants to see it.
 #>
 
 if (-not ('ScFg.Native' -as [type])) {

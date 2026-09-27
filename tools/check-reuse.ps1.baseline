@@ -39,7 +39,6 @@ block 5cf01b94c8a07313  # 13 identical lines: $hookLines = @(Wait-ScLogMatch -Lo
 block f27e43aeeca177a4  # 13 identical lines: $out.Rows += [pscustomobject]@{
 block 6fd0b155909ecf6d  # 13 identical lines: Overflow = [int]$t.Groups[6].Value
 block 1e0f88d016df4c54  # 13 identical lines: return list;
-block 82fcc797d1e3f71c  # 13 identical lines: uint tFg = GetWindowThreadProcessId(fg, IntPtr.Zero);
 block 6a7e15c8852c7443  # 13 identical lines: }
 block ae1e8575428b4393  # 14 identical lines: -InjectWindowedHelper WMode -NoLaunchLock `
 block 48279fdac50e3588  # 14 identical lines: -Mode fanout -Circles 0 -HudRow 0 -InjectWindowedHelper WMode `
@@ -125,7 +124,6 @@ block e22c71a46f856a95  # 7 identical lines: -Mode observe -WorldScan 1 -InjectW
 block 007390454501f8cd  # 7 identical lines: Assert-That "the key emitted $BURROW_CMD" `
 block 2467dd70a37d0828  # 7 identical lines: Assert-That 'nothing can end the game on its own (TRIG is empty)' `
 block 1a65fb829e0726a9  # 7 identical lines: Step 'POSITIVE CONTROL: click ONE building and press Train once' {
-block c53a3545d5be8304  # 7 identical lines: [DllImport("user32.dll")] public static extern IntPtr GetForegroundWin
 block 939cd76c83f16635  # 7 identical lines: if (-not $LogPath) { $LogPath = "C:\decompile-sc-data\sc-work\logs\024
 block 1a15b3f159e40979  # 7 identical lines: if (-not $gamePid) { throw "no game pid for arm $Index" }
 block 670c1e8295456468  # 7 identical lines: if (-not ('ScDrive.Native' -as [type])) {
