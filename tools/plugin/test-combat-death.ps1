@@ -459,13 +459,7 @@ function Wait-RowSettled {
 
 # --- on-disk binary, BEFORE anything runs --------------------------------------
 $runStart = Get-Date
-$exePath = Join-Path $GameDir 'StarCraft.exe'
-if (-not (Test-Path -LiteralPath $exePath)) { throw "test: $exePath not found." }
-$hashBefore = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
-Write-Host "[0] StarCraft.exe SHA-256 before: $hashBefore"
-$PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C6A46'
-Assert-That 'the working copy starts out byte-identical to pristine 1.16.1' `
-    ($hashBefore -eq $PRISTINE_SHA256) "(got $hashBefore)"
+$hashBefore = Assert-ScExePristine -GameDir $GameDir
 
 New-Item -ItemType Directory -Path $ShotDir -Force | Out-Null
 
@@ -1165,10 +1159,7 @@ Assert-That 'no game process this test started is left running' `
     "(launched $($script:launchedPids -join ' '); still up: $($stillUp -join ' '))"
 Assert-That 'the generated maps were cleaned up' ($KeepOpen -or @(Get-ChildItem -LiteralPath $mapDir -Filter *.scx -ErrorAction SilentlyContinue | Where-Object { $fixtures.Names -contains $_.Name }).Count -eq 0)
 
-$hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
-Write-Host "  StarCraft.exe SHA-256 after:  $hashAfter"
-Assert-That 'StarCraft.exe on disk is byte-identical to before the run' ($hashAfter -eq $hashBefore)
-Assert-That 'and still byte-identical to pristine 1.16.1' ($hashAfter -eq $PRISTINE_SHA256)
+Assert-ScExeUnchanged -GameDir $GameDir -Before $hashBefore
 
 Write-Host ''
 Write-Host ("test-combat-death: $failures failure(s) in {0:mm\:ss}" -f ((Get-Date) - $runStart))

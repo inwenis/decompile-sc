@@ -120,9 +120,94 @@ Write-Host "COUNTED=$failures"
     }
 }
 
-Describe 'a suite that keeps its OWN Step defines it after the dot-source' {
+Describe 'Assert-ScExePristine and Assert-ScExeUnchanged hash StarCraft.exe against the pin' {
 
-    It 'so the library cannot silently override the two that are different' {
+    BeforeAll {
+        $script:gameDir = Join-Path $TestDrive 'game'
+        New-Item -ItemType Directory -Path $script:gameDir | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:gameDir 'StarCraft.exe') -Value 'not the real exe'
+        $script:fakeHash = (Get-FileHash -LiteralPath (Join-Path $script:gameDir 'StarCraft.exe') -Algorithm SHA256).Hash
+    }
+
+    It 'FAILs a working copy that is not pristine, and returns its hash as one string' {
+        $out = Invoke-LibScript @"
+`$h = Assert-ScExePristine -GameDir '$($script:gameDir)' -Label 'arm=x  '
+Write-Host "COUNTED=`$failures TYPE=`$(`$h.GetType().Name) HASH=`$h"
+"@
+        $out | Should -Match '\[0\] arm=x  StarCraft\.exe SHA-256 before: '
+        $out | Should -Match '  FAIL the working copy starts out byte-identical to pristine 1\.16\.1 \(got '
+        $out | Should -Match "COUNTED=1 TYPE=String HASH=$($script:fakeHash)"
+    }
+
+    It 'passes a copy that matches the pin, and fails each after-run comparison on its own' {
+        $out = Invoke-LibScript @"
+`$ScPristineExeSha256 = '$($script:fakeHash)'
+`$h = Assert-ScExePristine -GameDir '$($script:gameDir)'
+Assert-ScExeUnchanged -GameDir '$($script:gameDir)' -Before `$h
+Write-Host "CLEAN=`$failures"
+Assert-ScExeUnchanged -GameDir '$($script:gameDir)' -Before 'SOMETHING ELSE'
+Write-Host "CHANGED=`$failures"
+`$ScPristineExeSha256 = 'SOMETHING ELSE'
+Assert-ScExeUnchanged -GameDir '$($script:gameDir)' -Before `$h
+Write-Host "NOT-PRISTINE=`$failures"
+"@
+        $out | Should -Match 'CLEAN=0'
+        $out | Should -Match '  FAIL StarCraft\.exe on disk is byte-identical to before the run'
+        $out | Should -Match 'CHANGED=1'
+        $out | Should -Match '  FAIL and still byte-identical to pristine 1\.16\.1'
+        $out | Should -Match 'NOT-PRISTINE=2'
+    }
+}
+
+Describe 'Assert-ScAllOneType wants ONE bucket, of the expected type' {
+
+    It 'passes a pure State and FAILs a mixed one' {
+        $out = Invoke-LibScript @'
+Assert-ScAllOneType 'pure' @{ Types = @{ '0x67' = 3 }; Live = 3; TypesText = '0x67:3' } '0x67'
+Assert-ScAllOneType 'mixed' @{ Types = @{ '0x67' = 3; '0x40' = 1 }; Live = 4; TypesText = '0x67:3 0x40:1' } '0x67'
+Write-Host "COUNTED=$failures"
+'@
+        $out | Should -Match '  ok   pure: all 3 units are 0x67'
+        $out | Should -Match '  FAIL mixed: all 4 units are 0x67 \(got 0x67:3 0x40:1\)'
+        $out | Should -Match 'COUNTED=1'
+    }
+}
+
+Describe 'Assert-ScStockArm proves each absence pattern positive before requiring it absent' {
+
+    BeforeAll {
+        $script:pluginLog = Join-Path $TestDrive 'plugin.log'
+        $script:stockLog = Join-Path $TestDrive 'stock.log'
+        $script:leakyLog = Join-Path $TestDrive 'leaky.log'
+        $script:emptyLog = Join-Path $TestDrive 'empty.log'
+        Set-Content -LiteralPath $script:pluginLog -Value 'HOOK btnTrain: installed at 0x1', 'CMD id=0x14', 'FANOUT start units=36'
+        Set-Content -LiteralPath $script:stockLog -Value 'mode=observe', 'WORLD [0]'
+        Set-Content -LiteralPath $script:leakyLog -Value 'mode=observe', 'WORLD [0]', 'CMD id=0x14'
+        New-Item -ItemType File -Path $script:emptyLog | Out-Null
+    }
+
+    It 'counts nothing for a clean pair, the leak for a stock log with a command, and every probe for an empty plugin log' {
+        $out = Invoke-LibScript @"
+Assert-ScStockArm -PluginLogPath '$($script:pluginLog)' -StockLogPath '$($script:stockLog)'
+Write-Host "CLEAN=`$failures"
+`$failures = 0
+Assert-ScStockArm -PluginLogPath '$($script:pluginLog)' -StockLogPath '$($script:leakyLog)'
+Write-Host "LEAKY=`$failures"
+`$failures = 0
+Assert-ScStockArm -PluginLogPath '$($script:emptyLog)' -StockLogPath '$($script:stockLog)'
+Write-Host "EMPTY=`$failures"
+"@
+        $out | Should -Match 'CLEAN=0'
+        $out | Should -Match '  FAIL the stock arm shows no an intercepted command'
+        $out | Should -Match 'LEAKY=1'
+        $out | Should -Match '  FAIL the plugin arm DOES show a fan-out'
+        $out | Should -Match 'EMPTY=3'
+    }
+}
+
+Describe 'a suite that keeps its OWN variant defines it after the dot-source' {
+
+    It 'so the library cannot silently override the ones that are different' {
         # test-production-queue.ps1 keeps a Step with -SweepPerturbed. If the
         # dot-source ever moves below that definition, the library's plain Step wins and
         # every -HoldSweepClicks run starts asserting on perturbed state without saying so.
@@ -133,7 +218,7 @@ Describe 'a suite that keeps its OWN Step defines it after the dot-source' {
             $lines = Get-Content -LiteralPath $f.FullName
             $src = ($lines | Select-String -Pattern 'sc-suite\.ps1' | Select-Object -First 1).LineNumber
             if (-not $src) { continue }
-            foreach ($fn in 'Step', 'Assert-That') {
+            foreach ($fn in 'Step', 'Assert-That', 'Assert-ScAllOneType') {
                 $own = ($lines | Select-String -Pattern "^function\s+$fn\b" | Select-Object -First 1).LineNumber
                 if ($own -and $own -lt $src) { $bad += "$($f.Name): $fn at $own, dot-source at $src" }
             }

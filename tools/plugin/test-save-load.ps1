@@ -545,13 +545,7 @@ function Add-ToQueue {
 # THE RUN
 # =============================================================================
 
-$exePath = Join-Path $GameDir 'StarCraft.exe'
-if (-not (Test-Path -LiteralPath $exePath)) { throw "test: $exePath not found." }
-$hashBefore = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
-$PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C6A46'
-Write-Host "[0] phase=$Phase  StarCraft.exe SHA-256 before: $hashBefore"
-Assert-That 'the working copy starts out byte-identical to pristine 1.16.1' `
-    ($hashBefore -eq $PRISTINE_SHA256) "(got $hashBefore)"
+$hashBefore = Assert-ScExePristine -GameDir $GameDir -Label "phase=$Phase  "
 
 New-Item -ItemType Directory -Path (Split-Path $LogPath -Parent) -Force | Out-Null
 New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
@@ -825,8 +819,7 @@ Write-Host ''
 Write-Host '[final] the run must balance'
 $left = if ($gamePid -gt 0) { Get-Process -Id $gamePid -ErrorAction SilentlyContinue } else { $null }
 Assert-That 'the game process this test started is gone' ($KeepOpen -or $null -eq $left)
-$hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
-Assert-That 'StarCraft.exe on disk is byte-identical to before the run' ($hashAfter -eq $hashBefore)
+Assert-ScExeUnchanged -GameDir $GameDir -Before $hashBefore
 
 # AGENTS.md § "A random suite must report the coverage of its SEAM": a verdict that does not
 # depend on reaching the end of the work is not a verdict. If no arm ran to a comparison, this

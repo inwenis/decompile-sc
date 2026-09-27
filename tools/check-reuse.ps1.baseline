@@ -10,7 +10,6 @@ block 2ab27964e2784fc3  # 10 identical lines: (@($log | Select-String -Pattern '
 block b777f11ac58d039f  # 10 identical lines: -BuildingGroups 1 -ProdQueue 0 -ProdFan $prodFan -QueueIndicator 1 `
 block d6d7483a6cef3d58  # 10 identical lines: -Mode fanout -Circles 0 -HudRow 0 -InjectWindowedHelper WMode `
 block 0a976666a94149af  # 10 identical lines: -Mode hooktest -LogCommands 1 -Circles 0 -HudRow 0 -WorldScan 1 `
-block 553638cec6156be5  # 10 identical lines: Assert-That 'the game process this probe started is gone' ($KeepOpen -
 block a34791d9899cced8  # 10 identical lines: BuildUnit = $m.Groups[10].Value
 block 891f5ecc37b63654  # 10 identical lines: Ink = [int]$m.Groups['ink'].Value; RefInk = [int]$m.Groups['refInk'].V
 block e74420f2481169ba  # 10 identical lines: OutputPath = $mapPath
@@ -18,15 +17,12 @@ block d7291935ce6742e8  # 10 identical lines: Shot 'in-game'
 block 40b8b0635d39b609  # 10 identical lines: [int]$Margin = 24,
 block 6ef9e11470f47cc1  # 10 identical lines: }
 block cb37a6e3fa9f0ff7  # 11 identical lines: $deadline = (Get-Date).AddSeconds($TimeoutSec)
-block d1ad24cf449c7b6a  # 11 identical lines: $failures++
 block 38ec9e9705b586cf  # 11 identical lines: $left = if ($gamePid -gt 0) { Get-Process -Id $gamePid -ErrorAction Si
 block aec20d0962258943  # 11 identical lines: $out.TrackedCount = [int]$s.Groups[1].Value
-block 17e9575bfad0321a  # 11 identical lines: ([int]$m.Groups[1].Value -eq $wantFanned)
 block caf302d4b459b7d3  # 11 identical lines: -InjectWindowedHelper WMode -NoLaunchLock -BuildDir $BuildDir `
 block 0ceea2fcdad5257c  # 11 identical lines: -Mode hooktest -LogCommands 1 -Circles 0 -HudRow 0 -WorldScan 1 `
 block 3d65b497aab11cad  # 11 identical lines: -UnitCount 1 -UnitType engineering-bay -Player 0 -ClearPlayerUnits `
 block 5d358a748e68cc13  # 11 identical lines: . (Join-Path $scriptDir 'sc-launch-lock.ps1')
-block 70656ad881c26ddc  # 11 identical lines: Assert-That 'the image free list never ran out' ([int]$m.Groups[5].Val
 block ff5a7b67230d4c8c  # 11 identical lines: Step "generate the fixture: two Nexuses + one Command Center, $Startin
 block 0e0dff1611246d04  # 11 identical lines: [Parameter(Mandatory)][int]$Seed,
 block d1cca791031acdb5  # 11 identical lines: [int]$OrderDelaySec = 0,
@@ -41,27 +37,27 @@ block 1581c90baa7f140e  # 12 identical lines: Send-ScDrag -Hwnd $hwnd -X1 10 -Y1
 block b74ad40dc6360b74  # 12 identical lines: }
 block 5cf01b94c8a07313  # 13 identical lines: $hookLines = @(Wait-ScLogMatch -LogPath $LogPath -Pattern 'HOOK (\S+):
 block f27e43aeeca177a4  # 13 identical lines: $out.Rows += [pscustomobject]@{
-block dab717cd2c390433  # 13 identical lines: Assert-That 'nothing was refunded for a building that went away' ($ref
 block 6fd0b155909ecf6d  # 13 identical lines: Overflow = [int]$t.Groups[6].Value
 block 1e0f88d016df4c54  # 13 identical lines: return list;
 block 82fcc797d1e3f71c  # 13 identical lines: uint tFg = GetWindowThreadProcessId(fg, IntPtr.Zero);
-block 937921217fcef21d  # 14 identical lines: $mapPath = Join-Path $mapDir $mapName
+block 6a7e15c8852c7443  # 13 identical lines: }
 block ae1e8575428b4393  # 14 identical lines: -InjectWindowedHelper WMode -NoLaunchLock `
 block 48279fdac50e3588  # 14 identical lines: -Mode fanout -Circles 0 -HudRow 0 -InjectWindowedHelper WMode `
 block 7a9fe9d607a0cf62  # 14 identical lines: -ProdQueue 1 -ProdQueueMax 16 -QueueIndicator 1 `
 block 4059ce2a152c725d  # 14 identical lines: . (Join-Path $scriptDir 'drive-game.ps1')
+block d38ee322ac2953e4  # 14 identical lines: New-Item -ItemType Directory -Path (Split-Path $LogPath -Parent) -Forc
 block f9c6a77a1f0795d1  # 14 identical lines: [ValidateSet('2', '3')][string]$WidescreenStage = '3',
 block 4754b8eae487ab70  # 14 identical lines: }
-block 67be64e45550d8b9  # 15 identical lines: $PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61
 block cbb60ab8ae5ad554  # 15 identical lines: $failures = 0
 block c0f7858bd129a58a  # 15 identical lines: [string]$DecoyFolder = '00-t000',
 block 9d599aabf8f26ff1  # 15 identical lines: function Get-QInd {
 block bb5c40339097b1bc  # 15 identical lines: if (-not $m.Success) { throw "probe: unparseable QIND line: $($Hit.Lin
+block 3080635399d2b21f  # 15 identical lines: if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPa
+block a9c5fe18cee9ea6a  # 15 identical lines: }
 block 29f1b1b2ac8be460  # 16 identical lines: . (Join-Path $scriptDir 'drive-game.ps1')
 block 1cebd70f54fde23a  # 16 identical lines: Get-ScCardState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -T
 block 90899140b51fbdc1  # 16 identical lines: [string]$DecoyFolder = '00-t000',
 block aa3132aefd9bcbcb  # 16 identical lines: }
-block 888ac9db211fc637  # 17 identical lines: $PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61
 block 484f03f0fc0b6949  # 17 identical lines: ($stray.Count -gt 0 ? "(stray: $($stray -join ' '))" : '')
 block 4e455110e9a53dff  # 18 identical lines: [string]$DecoyFolder = '00-t000',
 block 67e146a5fe0ac3e0  # 18 identical lines: function ConvertFrom-QIndLine {
@@ -69,6 +65,7 @@ block beac9646227126ca  # 18 identical lines: if (Test-Path -LiteralPath $LogPat
 block 291da2cdf195c491  # 18 identical lines: try { & (Join-Path $scriptDir 'close-game.ps1') -ProcessId $gamePid | 
 block c2df6b37c8be8b84  # 18 identical lines: }
 block 9a7a3cbd2ca90300  # 19 identical lines: ($stray.Count -gt 0 ? "(stray: $($stray -join ' '))" : '')
+block bfdb776db09e0b6e  # 19 identical lines: ,@($Card.Slots | Where-Object { $_.HasButton -and ($_.Action -eq $UPGR
 block c97c95db695e4018  # 19 identical lines: Indicator = $m.Groups[6].Value
 block 162ed6552b436b3f  # 19 identical lines: [string]$DecoyFolder = '00-t000',
 block 9780f9427db18299  # 19 identical lines: }
@@ -76,25 +73,21 @@ block c1d652d64daa8d9e  # 20 identical lines: $arms = @{}
 block d5449fb3d80d359c  # 20 identical lines: [string]$DecoyFolder = '00-t000',
 block c3e7b23fe46ee3fe  # 20 identical lines: }
 block 8ebeb082ac0e38fe  # 21 identical lines: )
-block fe1c7b4e9599183f  # 22 identical lines: $obsLog = Get-Content -LiteralPath $o.LogPath
 block 52503702ad8a40b8  # 22 identical lines: Save-ScWindowImage -Hwnd $script:hwnd -Path (Join-Path $ShotDir ("{0}-
-block 56537e5f38f45dfa  # 22 identical lines: }
 block 981f55cb367d2653  # 24 identical lines: -Mode fanout -Circles 1 -HudRow 0 -WorldScan 1 -BuildingGroups $groups
 block a5c93012c0e466d1  # 24 identical lines: [int]$IdleSeconds = 120,
-block ce1830688fbb9860  # 24 identical lines: }
 block 9972b972143b18da  # 25 identical lines: Assert-That 'at least one command id passed through untouched' ($passe
 block 9c18282aa4336681  # 25 identical lines: }
-block 89758ae58c9869ef  # 26 identical lines: ,@($Card.Slots | Where-Object { $_.HasButton -and ($_.Action -eq $UPGR
 block ad3071a57187aa5a  # 28 identical lines: }
+block ac43f769c8a0f70e  # 31 identical lines: }
 block a2421524e8b79a58  # 32 identical lines: Write-Host ''
+block 0873131461cc3598  # 35 identical lines: }
 block 7bf8a724736d2023  # 36 identical lines: }
-block 5d358f10be3a92ac  # 37 identical lines: }
-block 1cb9a496c3229b8b  # 44 identical lines: }
-block 6f5175676d0c17f9  # 53 identical lines: }
-block 44e174b5a11631be  # 58 identical lines: }
+block 032e69fab86b871f  # 55 identical lines: }
 block 4d3ebc7ee82a5a9b  # 6 identical lines: $UPGRADE_CMD = '0x32'
 block f6e173e26764f1e3  # 6 identical lines: $gamePid = 0
 block 2eee37c6206a06f6  # 6 identical lines: $mapPath = Join-Path $FixtureDir $mapName
+block 04ee2c337f8a168b  # 6 identical lines: $mapPath = Join-Path $mapDir $mapName
 block 3a5236b83fface80  # 6 identical lines: $mark = Get-ScLogLineCount -LogPath $LogPath
 block 6a46de056a173881  # 6 identical lines: $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
 block d64874ceb88c457e  # 6 identical lines: $out.Card = [pscustomobject]@{
@@ -106,8 +99,10 @@ block 9d9ed32b83533cd4  # 6 identical lines: (@($log | Select-String -Pattern 'H
 block b6ab670414c9a64d  # 6 identical lines: (@(Get-Content -LiteralPath $LogPath | Select-String -Pattern 'PRODQ: 
 block ef9c759f02100b66  # 6 identical lines: )
 block 303efd8baff646a7  # 6 identical lines: -Mode observe -WorldScan 1 -InjectWindowedHelper WMode -NoLaunchLock `
+block 1cac0f57722180dd  # 6 identical lines: Assert-ScStockArm -PluginLogPath $f.LogPath -StockLogPath $o.LogPath
 block e6eda80a9bcad183  # 6 identical lines: Assert-That "and owns nothing else ($($mine.Count) unit(s) total)" ($m
 block 98b0aff3eb91cbff  # 6 identical lines: Assert-That "every placed unit was commanded ($u of $UnitCount)" ($u -
+block f928de81dd39e01e  # 6 identical lines: Assert-That 'the game process this probe started is gone' ($KeepOpen -
 block eac885b72963b609  # 6 identical lines: Index  = [int]$m.Groups[2].Value
 block a23d8ee7882de8db  # 6 identical lines: Send-ScDrag -Hwnd $script:hwnd -X1 $x1 -Y1 $y1 -X2 $x2 -Y2 $y2 -Steps 
 block a9fa24ff1de21804  # 6 identical lines: Set-ScMarker -MarkerPath $markerPath -Label $label
@@ -117,11 +112,10 @@ block 4c8c7489ff934fa2  # 6 identical lines: [CmdletBinding()]
 block cb0e5c4e33821057  # 6 identical lines: [string]$BuildDir,
 block fa8b1ea2c949b4d6  # 6 identical lines: catch { Write-Host "  FAIL close-game failed for arm '$Mode': $($_.Exc
 block 43a3fa1bcd264b0b  # 6 identical lines: if ($d.Count) { "$($d[0].Left),$($d[0].Top),$($d[0].Right),$($d[0].Bot
-block 31ee088ab3c520b7  # 6 identical lines: if (-not (Test-Path -LiteralPath $exePath)) { throw "probe: $exePath n
 block 5c54564a788f9fca  # 6 identical lines: public static class Enum {
 block 53cd00724a2229b7  # 6 identical lines: }
 block f15728abded2bad9  # 7 identical lines: $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') @genArgs 2>&1
-block 0ea18bf6114f76cb  # 7 identical lines: $hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Ha
+block 9bb5f1c26a9c0ba8  # 7 identical lines: $left = if ($gamePid -gt 0) { Get-Process -Id $gamePid -ErrorAction Si
 block 11b6f73015c314ef  # 7 identical lines: $mapPath = Join-Path $mapDir $mapName
 block 503120ee01e08f3f  # 7 identical lines: $out.Visible = [int]$s.Groups[3].Value
 block 9974bbc809d520f4  # 7 identical lines: $pt = Get-ScCardSlotPoint -Card $script:idleCard -Slot $script:upgB.In
@@ -138,16 +132,15 @@ block 670c1e8295456468  # 7 identical lines: if (-not ('ScDrive.Native' -as [typ
 block d855bbf7108e7e29  # 7 identical lines: if (-not ('ScSpawn.Native' -as [type])) {
 block cd35980922b59abd  # 7 identical lines: if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPa
 block 550d28aabe41bf58  # 7 identical lines: }
-block c65ac5dcbd033e20  # 8 identical lines: $hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Ha
 block d075c8279b76a103  # 8 identical lines: $left = if ($gamePid -gt 0) { Get-Process -Id $gamePid -ErrorAction Si
 block e3d6e0d917d7973e  # 8 identical lines: $mapPath = Join-Path $mapDir $mapName
 block 2f958e0e081ae6dc  # 8 identical lines: $p = Get-ScMinimapPoint -MapTilesW $MapW -MapTilesH $MapH -TileX $Tile
 block 8b08bf454957df1d  # 8 identical lines: $y2 = ($Units | Measure-Object Y -Maximum).Maximum - $w.Screen.Top  + 
+block cdadfd116a0ced96  # 8 identical lines: ([int]$m.Groups[1].Value -eq $wantFanned)
 block 1540be5f7a3456e9  # 8 identical lines: -GameDir $GameDir -LogPath $LogPath 6>&1 | ForEach-Object {
 block b169254cdfdb48eb  # 8 identical lines: @{ Rects = $rects; Line = $line }
-block ca58e8917595cb1b  # 8 identical lines: Assert-That "$What`: all $($State.Live) are $ExpectedType" $ok "(got $
+block f8f5b58f7ef503fa  # 8 identical lines: Assert-That 'the image free list never ran out' ([int]$m.Groups[5].Val
 block c3e33152c31ddfb2  # 8 identical lines: Energy = [int]$m.Groups[10].Value
-block 6a779eab59863ac5  # 8 identical lines: Get-ScWorldState -LogPath $LogPath -Tag $Tag -MarkerPath $markerPath -
 block d2cf0cd5ac458f3e  # 8 identical lines: New-Item -ItemType Directory -Path (Split-Path $LogPath -Parent) -Forc
 block aa8a26be6a56cc2f  # 8 identical lines: [CmdletBinding()]
 block a1fbe42c62503caa  # 8 identical lines: [string]$DecoyFolder = '00-t000',
@@ -157,9 +150,7 @@ block 2b97738cc86a206d  # 8 identical lines: if (-not $gamePid) { throw 'probe: 
 block 14c70206a22edb8e  # 8 identical lines: if (-not ('SCWin.Enum' -as [type])) {
 block 8c7ec4976f9a729c  # 8 identical lines: param([string]$What, [bool]$Ok, [string]$Detail = '')
 block 5eaf1dd5dc44a2fe  # 8 identical lines: }
-block edebdd6561a1b467  # 8 identical lines: } else { Assert-That 'the plugin wrote its group-production stats line
 block 8537b8b29c690c3f  # 9 identical lines: $cy = $b.Y - $w.Screen.Top
-block 7a54afa1906e2e92  # 9 identical lines: $exePath = Join-Path $GameDir 'StarCraft.exe'
 block 78d78cf86e622f15  # 9 identical lines: $failures++
 block cea392b73e2788d2  # 9 identical lines: $mapPath = Join-Path $mapDir $mapName
 block 629045b6c9e0445d  # 9 identical lines: $mark = Get-ScLogLineCount -LogPath $LogPath
@@ -169,7 +160,7 @@ block 9b207e9a4c0ff900  # 9 identical lines: -InjectWindowedHelper WMode -NoLaun
 block 8dc70b29ce0e52bc  # 9 identical lines: -OutputPath $mapPath 2>&1
 block 945ad2caf3afeb07  # 9 identical lines: -UnitCount 1 -UnitType engineering-bay -Player 0 -ClearPlayerUnits `
 block 03026ad0b4c5dc77  # 9 identical lines: Assert-That "display $($script:heldIcon) went dark" (@($st2.Slots | Wh
-block 3e83b7977e872ba0  # 9 identical lines: Assert-That 'this run left no fixture behind' (-not (Test-Path -Litera
+block 56c82a894a2ccec4  # 9 identical lines: Assert-That 'nothing was refunded for a building that went away' ($ref
 block c1a03a4d2edd3745  # 9 identical lines: [int]$Clicks = 8,
 block 3feca71dae282647  # 9 identical lines: [string]$DecoyFolder = '00-t000',
 block 4c96aa92e8d9bf92  # 9 identical lines: foreach ($l in $lines) {

@@ -111,14 +111,7 @@ function Assert-ScCommandReachedEveryone {
     return $after
 }
 
-# --- on-disk binary, BEFORE anything runs --------------------------------------
-$exePath = Join-Path $GameDir 'StarCraft.exe'
-if (-not (Test-Path -LiteralPath $exePath)) { throw "test: $exePath not found." }
-$hashBefore = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
-Write-Host "[0] StarCraft.exe SHA-256 before: $hashBefore"
-$PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C6A46'
-Assert-That 'the working copy starts out byte-identical to pristine 1.16.1' `
-    ($hashBefore -eq $PRISTINE_SHA256) "(got $hashBefore)"
+$hashBefore = Assert-ScExePristine -GameDir $GameDir
 
 if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPath -Force }
 if (Test-Path -LiteralPath $markerPath) { Remove-Item -LiteralPath $markerPath -Force }
@@ -298,10 +291,7 @@ Write-Host '[final] the run must balance'
 $left = if ($gamePid -gt 0) { Get-Process -Id $gamePid -ErrorAction SilentlyContinue } else { $null }
 Assert-That 'the game process this test started is gone' ($KeepOpen -or $null -eq $left)
 
-$hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
-Write-Host "  StarCraft.exe SHA-256 after:  $hashAfter"
-Assert-That 'StarCraft.exe on disk is byte-identical to before the run' ($hashAfter -eq $hashBefore)
-Assert-That 'and still byte-identical to pristine 1.16.1' ($hashAfter -eq $PRISTINE_SHA256)
+Assert-ScExeUnchanged -GameDir $GameDir -Before $hashBefore
 
 Write-Host ''
 Write-Host "test-fanout-orders: $failures failure(s)"

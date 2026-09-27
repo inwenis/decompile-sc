@@ -67,7 +67,6 @@ $WALK_X = 540
 $WALK_Y = 240
 $ENEMY_OFFSET_X = 448
 
-$PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C6A46'
 # A FIXTURE FOLDER OF ITS OWN, not the shared 00-testmap: sharing one means two workers can
 # pick each other's maps. With $env:AGENT_TASK set this resolves to THIS agent's own folder,
 # so two concurrent runs of this suite cannot land in one folder and overwrite each other's
@@ -198,11 +197,7 @@ function Invoke-Arm {
     return $result
 }
 
-$exePath = Join-Path $GameDir 'StarCraft.exe'
-$hashBefore = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
-Write-Host "[0] StarCraft.exe SHA-256 before: $hashBefore"
-Assert-That 'the working copy starts out byte-identical to pristine 1.16.1' `
-    ($hashBefore -eq $PRISTINE_SHA256) "(got $hashBefore)"
+$hashBefore = Assert-ScExePristine -GameDir $GameDir
 
 $arms = @{}
 try {
@@ -328,32 +323,7 @@ try {
         Step 'the stock arm must really be stock' {
             $o = $arms['medic-observe']
             $f = $arms['medic-fanout']
-            $obsLog = Get-Content -LiteralPath $o.LogPath
-            $fanLog = Get-Content -LiteralPath $f.LogPath
-
-            # AN ABSENCE ASSERTION IS WORTH NOTHING UNLESS THE SAME PATTERN IS SHOWN TO
-            # MATCH SOMETHING. Do not probe for a string the plugin never writes: 'HOOK
-            # install' matches no log at all (the real lines are `HOOK %s: installed at %p`
-            # and `HOOK: %d/%d installed`), so it passes on a fanout log too. Each pattern
-            # below is checked POSITIVE against the plugin arm's log first, and only then
-            # required absent from the stock arm's.
-            foreach ($probe in @(
-                @{ What = 'a hook installation line'; Pattern = 'HOOK .*installed' },
-                @{ What = 'an intercepted command';   Pattern = 'CMD id=' },
-                @{ What = 'a fan-out';                Pattern = 'FANOUT start' }
-            )) {
-                $inFanout = @($fanLog | Select-String -Pattern $probe.Pattern).Count
-                $inObserve = @($obsLog | Select-String -Pattern $probe.Pattern).Count
-                Assert-That "the plugin arm DOES show $($probe.What) -- so its absence below means something" `
-                    ($inFanout -gt 0) "(pattern '$($probe.Pattern)' matched nothing in the fanout log either)"
-                Assert-That "the stock arm shows no $($probe.What)" ($inObserve -eq 0) `
-                    "(found $inObserve line(s) matching '$($probe.Pattern)')"
-            }
-            # And a POSITIVE statement about what the stock arm is, not just what it is not.
-            Assert-That 'the stock arm ran in observe mode' `
-                (@($obsLog | Select-String -Pattern 'mode=observe').Count -gt 0)
-            Assert-That 'and it still produced the same oracle (WORLD lines)' `
-                (@($obsLog | Select-String -Pattern 'WORLD \[').Count -gt 0)
+            Assert-ScStockArm -PluginLogPath $f.LogPath -StockLogPath $o.LogPath
         }
     }
 }
@@ -365,9 +335,7 @@ foreach ($k in $arms.Keys) {
     $left = Get-Process -Id $arms[$k].Pid -ErrorAction SilentlyContinue
     Assert-That "the '$k' game process is gone" ($KeepOpen -or $null -eq $left)
 }
-$hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
-Assert-That 'StarCraft.exe on disk is byte-identical to before the run' ($hashAfter -eq $hashBefore)
-Assert-That 'and still byte-identical to pristine 1.16.1' ($hashAfter -eq $PRISTINE_SHA256)
+Assert-ScExeUnchanged -GameDir $GameDir -Before $hashBefore
 
 Write-Host ''
 Write-Host "test-sunken-acquire: $failures failure(s)"

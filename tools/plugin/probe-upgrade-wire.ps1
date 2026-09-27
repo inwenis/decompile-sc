@@ -99,14 +99,7 @@ function Get-ResearchSlots {
     ,@($Card.Slots | Where-Object { $_.HasButton -and ($_.Action -eq $UPGRADE_ACTION.ToUpperInvariant() -or $_.Action -eq $TECH_ACTION.ToUpperInvariant()) })
 }
 
-# --- on-disk binary, BEFORE anything runs --------------------------------------
-$exePath = Join-Path $GameDir 'StarCraft.exe'
-if (-not (Test-Path -LiteralPath $exePath)) { throw "probe: $exePath not found." }
-$hashBefore = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
-Write-Host "[0] StarCraft.exe SHA-256 before: $hashBefore"
-$PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C6A46'
-Assert-That 'the working copy starts out byte-identical to pristine 1.16.1' `
-    ($hashBefore -eq $PRISTINE_SHA256) "(got $hashBefore)"
+$hashBefore = Assert-ScExePristine -GameDir $GameDir
 
 New-Item -ItemType Directory -Path (Split-Path $LogPath -Parent) -Force | Out-Null
 if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPath -Force }
@@ -396,8 +389,7 @@ if ($gamePid -gt 0 -and -not $KeepOpen) {
 }
 Assert-That 'the game process this probe started is gone' ($KeepOpen -or $null -eq $left)
 Assert-That 'the generated map was cleaned up' ($KeepOpen -or -not (Test-Path -LiteralPath $mapPath))
-$hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
-Assert-That 'StarCraft.exe on disk is byte-identical to before the run' ($hashAfter -eq $hashBefore)
+Assert-ScExeUnchanged -GameDir $GameDir -Before $hashBefore
 
 Write-Host ''
 Write-Host "probe-upgrade-wire: $failures failure(s)"

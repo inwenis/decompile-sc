@@ -35,19 +35,7 @@ $scriptDir = $PSScriptRoot
 $failures = 0
 $step = 0
 
-# --- on-disk binary, BEFORE anything runs ------------------------------------
-# AGENTS.md § "Hard rules": patching is in-process only, so StarCraft.exe on disk must
-# stay byte-identical to pristine -- hashed and shown, not attested.
-$exePath = Join-Path $GameDir 'StarCraft.exe'
-if (-not (Test-Path -LiteralPath $exePath)) { throw "test: $exePath not found." }
-$hashBefore = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
-Write-Host "[0] StarCraft.exe SHA-256 before: $hashBefore"
-
-# The pristine 1.16.1 hash, from tools/make-working-copy.ps1 -- the same constant that
-# script verifies the working copy against after it mirrors the install.
-$PRISTINE_SHA256 = 'AD6B58B27B8948845CCFA69BCFCC1B10D6AA7A27A371EE3E61453925288C6A46'
-Assert-That 'the working copy starts out byte-identical to pristine 1.16.1' `
-    ($hashBefore -eq $PRISTINE_SHA256) "(got $hashBefore)"
+$hashBefore = Assert-ScExePristine -GameDir $GameDir
 
 # --- launch ------------------------------------------------------------------
 if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPath -Force }
@@ -257,14 +245,7 @@ try {
         Shot 'after-order'
     }
 }
-catch {
-    # A step that throws is a failed run, not an aborted one: recording it here instead
-    # of letting it propagate keeps the post-mortem reachable, and the after-close hash,
-    # the stranded-process check and the circle accounting matter MOST on a bad run.
-    Write-Host "  FAIL a test step threw: $($_.Exception.Message)"
-    Write-Host "       $($_.ScriptStackTrace)"
-    $failures++
-}
+catch { Write-ScStepFailure $_ 'a test step' }
 finally {
     # -ProcessId, always: close-game.ps1 resolving the game by NAME throws whenever any
     # other StarCraft is running -- including the user's own playable install -- and
@@ -332,14 +313,7 @@ else {
 $left = if ($gamePid -gt 0) { Get-Process -Id $gamePid -ErrorAction SilentlyContinue } else { $null }
 Assert-That 'the game process this test started is gone' ($KeepOpen -or $null -eq $left)
 
-# --- on-disk binary, AFTER the run -------------------------------------------
-# The other half of the on-disk invariant: a code path that wrote to StarCraft.exe -- a
-# stray patch, a botched working-copy refresh -- shows up here as a failed assertion
-# rather than as a claim in a report.
-$hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
-Write-Host "  StarCraft.exe SHA-256 after:  $hashAfter"
-Assert-That 'StarCraft.exe on disk is byte-identical to before the run' ($hashAfter -eq $hashBefore)
-Assert-That 'and still byte-identical to pristine 1.16.1' ($hashAfter -eq $PRISTINE_SHA256)
+Assert-ScExeUnchanged -GameDir $GameDir -Before $hashBefore
 
 Write-Host ''
 Write-Host "test-selection-circles: $failures failure(s)"
