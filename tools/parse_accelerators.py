@@ -32,6 +32,8 @@ import os
 import struct
 import sys
 
+import pefile
+
 RT_ACCELERATOR = 9
 
 # ACCEL resource entry flags (winuser.h).
@@ -72,75 +74,13 @@ def mod_name(flags):
     return "+".join(mods)
 
 
-class PE:
-    """Just enough PE to walk the resource directory. No third-party dependency."""
-
-    def __init__(self, data):
-        self.data = data
-        if data[:2] != b"MZ":
-            raise ValueError("not a PE: no MZ")
-        pe_off = struct.unpack_from("<I", data, 0x3C)[0]
-        if data[pe_off:pe_off + 4] != b"PE\0\0":
-            raise ValueError("not a PE: no PE signature")
-        coff = pe_off + 4
-        n_sections, = struct.unpack_from("<H", data, coff + 2)
-        opt_size, = struct.unpack_from("<H", data, coff + 16)
-        opt = coff + 20
-        magic, = struct.unpack_from("<H", data, opt)
-        if magic != 0x10B:
-            raise ValueError(f"expected PE32 (0x10B), got 0x{magic:X}")
-        # Data directory 2 is the resource table.
-        self.res_rva, self.res_size = struct.unpack_from("<II", data, opt + 112)
-        self.sections = []
-        sec = opt + opt_size
-        for i in range(n_sections):
-            off = sec + i * 40
-            name = data[off:off + 8].rstrip(b"\0").decode("ascii", "replace")
-            vsize, vaddr, rsize, raddr = struct.unpack_from("<IIII", data, off + 8)
-            self.sections.append((name, vaddr, vsize, raddr, rsize))
-
-    def rva_to_off(self, rva):
-        for _name, vaddr, vsize, raddr, rsize in self.sections:
-            if vaddr <= rva < vaddr + max(vsize, rsize):
-                delta = rva - vaddr
-                if delta < rsize:
-                    return raddr + delta
-        raise ValueError(f"RVA 0x{rva:08X} is not file-backed")
-
-    def _entries(self, dir_rva):
-        off = self.rva_to_off(dir_rva)
-        n_named, n_id = struct.unpack_from("<HH", self.data, off + 12)
-        out = []
-        for i in range(n_named + n_id):
-            e = off + 16 + i * 8
-            name, offset = struct.unpack_from("<II", self.data, e)
-            out.append((name, offset))
-        return out
-
-    def accelerator_blobs(self):
-        """(resource id, language, bytes) for every RT_ACCELERATOR in the file."""
-        if not self.res_rva:
-            return []
-        root = self.res_rva
-        found = []
-        for type_id, type_off in self._entries(root):
-            if type_id & 0x80000000:            # a NAMED type is never RT_ACCELERATOR
-                continue
-            if type_id != RT_ACCELERATOR:
-                continue
-            if not (type_off & 0x80000000):
-                continue
-            for name_id, name_off in self._entries(root + (type_off & 0x7FFFFFFF)):
-                if not (name_off & 0x80000000):
-                    continue
-                for lang_id, lang_off in self._entries(root + (name_off & 0x7FFFFFFF)):
-                    if lang_off & 0x80000000:
-                        continue
-                    data_off = self.rva_to_off(root + lang_off)
-                    rva, size = struct.unpack_from("<II", self.data, data_off)
-                    blob_off = self.rva_to_off(rva)
-                    found.append((name_id, lang_id, self.data[blob_off:blob_off + size]))
-        return found
+def accelerator_blobs(path):
+    """(resource id, language, bytes) for every RT_ACCELERATOR in the file."""
+    pe = pefile.PE(path)
+    res = getattr(pe, "DIRECTORY_ENTRY_RESOURCE", None)
+    return [(n.id, l.id, pe.get_data(l.data.struct.OffsetToData, l.data.struct.Size))
+            for t in (res.entries if res else []) if t.id == RT_ACCELERATOR
+            for n in t.directory.entries for l in n.directory.entries]
 
 
 def parse_accel_blob(blob):
@@ -174,9 +114,6 @@ def main():
     if "sc-install" in args.pe.replace("\\", "/").lower():
         sys.exit("refusing to read the pristine install; point this at a working copy")
 
-    with open(args.pe, "rb") as fh:
-        pe = PE(fh.read())
-
     keep = None
     if args.ids:
         keep = {int(x, 16) for x in args.ids.replace("0x", "").split(",")}
@@ -184,7 +121,7 @@ def main():
     module = args.module or os.path.basename(args.pe)
 
     rows = []
-    for res_id, lang, blob in sorted(pe.accelerator_blobs()):
+    for res_id, lang, blob in sorted(accelerator_blobs(args.pe)):
         if keep is not None and res_id not in keep:
             continue
         for flags, key, cmd in parse_accel_blob(blob):

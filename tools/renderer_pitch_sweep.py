@@ -46,6 +46,8 @@ import os
 import struct
 import sys
 
+import pefile
+
 try:
     from capstone import Cs, CS_ARCH_X86, CS_MODE_32
     from capstone.x86_const import X86_OP_IMM, X86_OP_MEM
@@ -59,22 +61,6 @@ TSV = os.path.join(REPO, "research", "data", "renderer-widescreen-patches.tsv")
 FRAME_PTR = 0x006CEFF4      # the framebuffer pointer, zero until the video init
 FRAME_BMP = 0x006CEFF0      # the screen Bitmap descriptor itself
 STOCK_PITCH = 640
-
-
-def load_image(path: str):
-    with open(path, "rb") as f:
-        data = f.read()
-    pe = struct.unpack_from("<I", data, 0x3C)[0]
-    nsec = struct.unpack_from("<H", data, pe + 6)[0]
-    optsz = struct.unpack_from("<H", data, pe + 20)[0]
-    base = struct.unpack_from("<I", data, pe + 24 + 28)[0]
-    secs, off = [], pe + 24 + optsz
-    for _ in range(nsec):
-        name = data[off:off + 8].rstrip(b"\0").decode("latin1")
-        vsz, va, rsz, ptr = struct.unpack_from("<IIII", data, off + 8)
-        secs.append((name, base + va, vsz, ptr, rsz))
-        off += 40
-    return data, secs
 
 
 def disasm_all(md, blob: bytes, base: int):
@@ -112,12 +98,12 @@ def main() -> int:
     ap.add_argument("--all", action="store_true", help="also list the far hits")
     a = ap.parse_args()
 
-    data, secs = load_image(a.exe)
-    text = [s for s in secs if s[0].startswith(".text")]
-    if not text:
+    pe = pefile.PE(a.exe, fast_load=True)
+    sec = next((s for s in pe.sections if s.Name.startswith(b".text")), None)
+    if sec is None:
         sys.exit("renderer_pitch_sweep: no .text section in %s" % a.exe)
-    _, tva, tvsz, tptr, trsz = text[0]
-    blob = data[tptr:tptr + min(trsz, tvsz)]
+    blob = sec.get_data(ignore_padding=True)
+    tva = pe.OPTIONAL_HEADER.ImageBase + sec.VirtualAddress
 
     refs = []
     for target in (a.anchor if a.anchor else (FRAME_PTR, FRAME_BMP)):
@@ -126,15 +112,6 @@ def main() -> int:
         while i != -1:
             refs.append(tva + i)
             i = blob.find(enc, i + 1)
-    refs.sort()
-
-    def distance_to_frame_ref(va: int):
-        best = None
-        for r in refs:
-            d = abs(r - va)
-            if best is None or d < best:
-                best = d
-        return best
 
     declared = {}
     if os.path.exists(TSV):
@@ -163,7 +140,7 @@ def main() -> int:
         if val is None:
             continue
         k, d = shapes[val]
-        dist = distance_to_frame_ref(ins.address)
+        dist = min((abs(r - ins.address) for r in refs), default=None)
         rec = (ins.address, ins.bytes.hex(), "%s %s" % (ins.mnemonic, ins.op_str),
                val, k, d, dist, declared.get(ins.address))
         if a.all or (dist is not None and dist <= a.near):
