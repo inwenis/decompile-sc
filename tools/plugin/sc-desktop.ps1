@@ -40,10 +40,7 @@ namespace ScDesktop {
     [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
     public static extern IntPtr CreateDesktopW(string name, IntPtr device, IntPtr devmode,
                                                uint flags, uint access, IntPtr sa);
-    [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
-    public static extern IntPtr OpenDesktopW(string name, uint flags, bool inherit, uint access);
     [DllImport("user32.dll", SetLastError=true)] public static extern bool CloseDesktop(IntPtr h);
-    [DllImport("user32.dll", SetLastError=true)] public static extern bool SetThreadDesktop(IntPtr h);
     [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr GetThreadDesktop(uint threadId);
     [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
     [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
@@ -143,19 +140,16 @@ function Assert-ScDesktopHidden {
 
     Returns the name of the desktop this thread is on.
     #>
-    param([switch]$Quiet)
     $mine  = Get-ScThreadDesktopName
     $shown = Get-ScInputDesktopName
     if ($null -eq $shown) {
-        if (-not $Quiet) { Write-Host "sc-desktop: on '$mine'; the input desktop could not be opened, so visibility is UNVERIFIED for this run." }
+        Write-Host "sc-desktop: on '$mine'; the input desktop could not be opened, so visibility is UNVERIFIED for this run."
         return $mine
     }
     if ($mine -eq $shown) {
         throw "sc-desktop: this thread is on '$mine', which IS the desktop on the monitor. Refusing to call this run invisible."
     }
-    if (-not $Quiet) {
-        Write-Host "sc-desktop: this process is on '$mine'; the monitor is showing '$shown'. Different desktop objects, so nothing this run draws composites to the screen."
-    }
+    Write-Host "sc-desktop: this process is on '$mine'; the monitor is showing '$shown'. Different desktop objects, so nothing this run draws composites to the screen."
     return $mine
 }
 
@@ -172,10 +166,7 @@ function New-ScTestDesktop {
     caller in the same process cannot fight the first over it.
     #>
     [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string]$Name,
-        [switch]$Quiet
-    )
+    param([Parameter(Mandatory)][string]$Name)
     if ($Name -match '[\\/]') { throw "sc-desktop: '$Name' is not a desktop name (a backslash would name a window station)." }
     if ([ScDesktop.Native]::Owned -ne [IntPtr]::Zero) {
         throw "sc-desktop: this process already holds the desktop '$([ScDesktop.Native]::OwnedName)'. Close it before creating another."
@@ -197,9 +188,7 @@ function New-ScTestDesktop {
         Close-ScTestDesktop -Quiet
         throw "sc-desktop: '$Name' is the desktop currently on the monitor. Refusing to use it as an invisible one."
     }
-    if (-not $Quiet) {
-        Write-Host "sc-desktop: created the invisible desktop '$Name' (the monitor is showing '$shown')."
-    }
+    Write-Host "sc-desktop: created the invisible desktop '$Name' (the monitor is showing '$shown')."
     $Name
 }
 

@@ -28,10 +28,6 @@ transcript stays afterwards, and the child's exit code is this script's exit cod
 Run on the desktop that IS on the monitor -- the debugging run a human watches. Identical
 in every other respect, cursor-clip watch included.
 
-.PARAMETER Desktop
-Name the desktop explicitly instead of generating one per run. Mostly for a second process
-that needs to join a run already in progress.
-
 .EXAMPLE
 ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/test-selection-circles.ps1 `
     -SuiteArgs @{ ShotDir = 'C:\decompile-sc-data\sc-work\logs\frames' }
@@ -39,7 +35,7 @@ A frame reproduces game artwork, so a suite's frames stay a diagnostic on a giti
 under C:\decompile-sc-data\sc-work\ whatever desktop the run is on (AGENTS.md § "Screenshots").
 
 .EXAMPLE
-# Anything, not only a suite -- used by probe-cross-desktop-input.ps1:
+# Anything, not only a suite:
 ./tools/plugin/run-offscreen.ps1 -Command '(Get-Process StarCraft).Count'
 #>
 [CmdletBinding(DefaultParameterSetName = 'Suite')]
@@ -47,7 +43,7 @@ param(
     [Parameter(ParameterSetName = 'Suite', Mandatory, Position = 0)]
     [string]$Suite,
     # Splatted into the suite, so the keys are spelled exactly as the suite spells its
-    # parameters (the convention time-suite.ps1 uses too).
+    # parameters.
     [Parameter(ParameterSetName = 'Suite')]
     [hashtable]$SuiteArgs = @{},
 
@@ -55,7 +51,6 @@ param(
     [string]$Command,
 
     [switch]$Visible,
-    [string]$Desktop,
     [string]$TranscriptPath,
     [int]$TimeoutMinutes = 30
 )
@@ -123,7 +118,6 @@ namespace ScSpawn {
     private const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
 
     public static IntPtr LastProcess = IntPtr.Zero;
-    public static int    LastPid     = 0;
     public static string LastError   = null;
 
     // Starts `cmdLine` on the named desktop with stdout+stderr going to `outPath` and
@@ -184,7 +178,6 @@ namespace ScSpawn {
 
       CloseHandle(pi.hThread);
       LastProcess = pi.hProcess;
-      LastPid = pi.dwProcessId;
       return pi.dwProcessId;
     }
   }
@@ -289,8 +282,7 @@ try {
         Write-Host "run-offscreen: -Visible — running on '$desktopName', the desktop on the monitor. You will see this run."
     }
     else {
-        if (-not $Desktop) { $Desktop = New-ScTestDesktopName }
-        $desktopName = New-ScTestDesktop -Name $Desktop
+        $desktopName = New-ScTestDesktop -Name (New-ScTestDesktopName)
         $owned = $true
     }
 
