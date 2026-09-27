@@ -294,9 +294,7 @@ function Compare-RoundTrip {
 # =============================================================================
 # Nothing here clicks a fixed point or a row by number: every click is computed from the
 # control's OWN bounds in the engine's dialog list (the plugin's DIALOGS line), and every
-# failure prints the full inventory of what WAS on screen. The primitives live in
-# drive-game.ps1 so this suite and probe-save-load-dialogs.ps1 drive the same dialogs
-# through exactly one implementation.
+# failure prints the full inventory of what WAS on screen.
 
 function Get-SaveFiles {
     if (-not (Test-Path -LiteralPath $saveRoot)) { return @() }
@@ -353,7 +351,7 @@ function Save-ScGame {
     Write-Host "       the name box reads '$($box.Text)' -- exactly what this arm meant to save"
 
     # 'Save$', not '^Save$': the engine keeps the hotkey inside the string, so the button
-    # reads 's.S.ave' and its LETTERS are 'sSave' (measured, probe-save-load-dialogs.ps1).
+    # reads 's.S.ave' and its LETTERS are 'sSave' (measured).
     # Anchoring at the END separates the button from the dialog TITLE, 'SaveGame'.
     Invoke-ScDialogControl -Hwnd $Hwnd -LogPath $LogPath -Pattern '(OK$|Save$)' `
         -What 'the save dialog Save button' | Out-Null

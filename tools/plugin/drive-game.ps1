@@ -1343,7 +1343,7 @@ function Set-ScWindowActive {
                         _DAT_006cddc8 = lParam >> 16;       /* y, clamped to 0x1df  */
                         return 1;
         The binary's only GetForegroundWindow call site (0x004eddf0) is a diagnostic.
-      * LIVE (tools/plugin/probe-quiet-input.ps1). With the USER'S window holding the
+      * LIVE (research/automated-testing-options.md §9.3). With the USER'S window holding the
         foreground throughout, a posted move onto the Single Player button changed that
         button's region (FF975A03A546737B -> 271D215ABFB1EF45) and GetForegroundWindow
         never changed: the move registered AND was drawn from the background.
@@ -1394,7 +1394,7 @@ function Assert-ScWindowActive {
     What it gates is Assert-ScDrivable's fact: a MINIMISED or dead window really does
     swallow posted mouse messages. It does not touch the foreground, because posted moves
     register in the background anyway (see Set-ScWindowActive for the decompiled
-    WM_MOUSEMOVE case and the live probe) -- a raise buys no input, and costs the user
+    WM_MOUSEMOVE case and the live measurement) -- a raise buys no input, and costs the user
     their foreground window and, through the game's own ClipCursor, their mouse.
 
     $env:SCDRIVE_RAISE=1 is the opt-in escape hatch for a human who wants to watch a run.

@@ -1029,7 +1029,7 @@ Facts measured or established this task, then the routes they price:
 | ----- | ------------------ | ------------ | ------------------------- |
 | WMode.dll (current) | decided: presents 640 whatever it is asked (§12.6) | — | — |
 | true fullscreen, user's desktop | decided for 800x480: impossible (no mode). 800x600: user-attended decision | regenerate at 800x600 + user accepts mode switch + icon shuffle | switches their desktop; never unattended |
-| true fullscreen, invisible desktop (test vehicle) | one probe run (`probe-fullscreen-desktop.ps1`, **built and deliberately NOT run**: parent samples the REAL desktop mode 4x/s while the child launches fullscreen off-screen; restore-on-leak; CONTAINED/LEAKED/REFUSED verdict). Withheld because §13.3's YES removed what it blocked, and its LEAKED outcome spends the user's icon layout — the conductor holds it for a user-attended GO | n/a — it is a measurement, not a shipping route | none if CONTAINED/REFUSED; seconds of mode flip if LEAKED |
+| true fullscreen, invisible desktop (test vehicle) | one probe run (`probe-fullscreen-desktop.ps1`, **built, never run, since removed (894c7e1 has it)**: parent samples the REAL desktop mode 4x/s while the child launches fullscreen off-screen; restore-on-leak; CONTAINED/LEAKED/REFUSED verdict). Withheld because §13.3's YES removed what it blocked, and its LEAKED outcome spends the user's icon layout — the conductor holds it for a user-attended GO | n/a — it is a measurement, not a shipping route | none if CONTAINED/REFUSED; seconds of mode flip if LEAKED |
 | **cnc-ddraw** | **one task**: build/obtain, drop in via the existing `-Windowed` mechanism, run `probe-widescreen-present.ps1` and read CROP/SCALE/FOLLOW | config + the same stage-2 work the engine side always needed | none (windowed, off-screen testable) |
 | own ddraw shim | bounded by facts 2–3 but strictly dominated by cnc-ddraw unless it fails its probe | est. 4–8 tasks | none |
 | plugin-side presenter (hook the ONE present blit `FUN_0041D420`, StretchDIBits the engine's buffer at its true pitch) | design known; palette capture is the open question (Storm's GDI palette imports / the §12.6-adjacent palette registers) | est. 2–4 tasks | none |
@@ -1047,8 +1047,6 @@ python tools/plugin/frame-capture.py --help                     # dump decode/ch
 ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-framebuffer-capture.ps1
 #   two launches: stock-observe positive control, then stage 1; asserts the
 #   playfield consistency, the 800x480 read, the right band, the cross-arm diff
-./tools/plugin/probe-fullscreen-desktop.ps1   # the §13.4 desktop measurement -- ONLY with a
-#   user-attended GO: its LEAKED outcome flips the real desktop's mode for seconds
 ```
 
 Dumps and rendered PNGs land in `C:\decompile-sc-data\sc-work\logs\063-frames\` (gitignored); the suite prints
