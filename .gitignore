@@ -1,10 +1,6 @@
 # throwaway build output, logs, analysis dumps
 work/scratch/
 
-node_modules/
-dist/
-test-results/
-
 # Invoke-Pester -CI writes this next to the repo root on every local CI run. It is a
 # run artifact, not a source file -- it was committed by accident once and its only
 # effect was a diff on every run.
@@ -31,7 +27,6 @@ C:/decompile-sc-data/sc-work/
 *.rep
 *.chk
 *.grp
-*.dat.bin
 
 # MPQ extraction output (audio/video/gfx/fonts/string tables/data tables)
 extracted/
@@ -59,9 +54,7 @@ assets/
 *.i64
 
 # Ghidra
-ghidra_projects/
 *.gpr
-*.rep/
 
 # Ghidra headless install (task 001) -- large (~1.2 GB), pinned version + hash in
 # tools/ghidra/README.md, reinstalled on demand, never committed
