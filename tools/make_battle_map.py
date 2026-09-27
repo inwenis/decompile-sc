@@ -8,7 +8,6 @@ Every tech is researched for the human, so storm, plague, yamato and the rest wo
 The ground is one flat jungle grass. How to use it: tools/feature-test-map-card.md.
 """
 
-import argparse
 import math
 import struct
 import sys
@@ -17,7 +16,9 @@ from pathlib import Path
 from richchk.model.richchk.unis.unit_id import UnitId as U
 
 import make_test_map as m
-from make_feature_test_map import ENEMY, HUMAN, TILE, check_layout, fill_ground, unit_record
+from make_feature_test_map import (
+    ENEMY, HUMAN, TILE, check_layout, fill_ground, run, unit_record, write_sandbox,
+)
 
 JUNGLE_ERA = 4
 # Jungle tile groups 8/9 (even/odd x): the low jungle grass, picked by rendering every common
@@ -79,48 +80,24 @@ def generate(template: Path, output: Path) -> None:
     starts = [r for r in m.parse_unit_records(
         sections[m.require_section(sections, "UNIT", template)].payload)
         if r.unit_id == m.START_LOCATION_UNIT_ID]
-    records = [r._replace(x=mid_x, y=mid_y) if r.player == HUMAN else r for r in starts]
-    first = max(r.instance for r in starts) + 1
-    for i, (unit, owner, x, y, _, _) in enumerate(placed):
-        rec = unit_record(first + i, unit, owner, x, y)
+    records = []
+    for unit, owner, x, y, _, _ in placed:
+        rec = unit_record(0, unit, owner, x, y)
         if owner == ENEMY and unit in ENEMY_BURROWED:
             rec = rec._replace(special_flags=BURROW, state_flags=BURROW)
         records.append(rec)
 
     ptex = sections[m.require_section(sections, "PTEx", template)].payload
-    sections = m.replace_section(
-        sections, "UNIT", b"".join(m.pack_unit_record(r) for r in records), template)
-    sections = m.rewrite_player_slots(sections, template, HUMAN, m.SIDE_TERRAN, m.SIDE_ZERG,
-                                      hostile=True)
-    sections = m.replace_section(
-        sections, "PTEx", m.set_techs_researched(ptex, list(range(m.PTEX_TECHS)), HUMAN), template)
-    sections = m.replace_section(sections, "TRIG", b"", template)
-    sections = m.replace_section(sections, "MBRF", b"", template)
-    sections = m.replace_section(sections, "ERA", struct.pack("<H", JUNGLE_ERA), template)
-    sections = m.replace_section(
-        sections, "MTXM", fill_ground(JUNGLE_GRASS, JUNGLE_GRASS_VARIANTS, map_w, map_h), template)
-    sections = m.replace_section(sections, "THG2", b"", template)  # the doodads' sprites
-    output.parent.mkdir(parents=True, exist_ok=True)
-    m.save_chk_bytes_to_mpq(m.serialize_chk_sections(sections), template, output)
+    write_sandbox(
+        sections, template, output, starts, (mid_x, mid_y), records,
+        PTEx=m.set_techs_researched(ptex, list(range(m.PTEX_TECHS)), HUMAN),
+        TRIG=b"", ERA=struct.pack("<H", JUNGLE_ERA),
+        MTXM=fill_ground(JUNGLE_GRASS, JUNGLE_GRASS_VARIANTS, map_w, map_h))
 
     human = sum(1 for p in placed if p[1] == HUMAN)
-    print(f"wrote {output}")
     print(f"  human (slot 0): {human} units; computer (slot 1): {len(placed) - human}; "
           f"{gap // TILE} tiles between the front ranks; camera opens at ({mid_x},{mid_y}) px")
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--template", type=Path, default=Path(m.DEFAULT_TEMPLATE))
-    parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
-    try:
-        generate(args.template, args.output)
-        return 0
-    except (ValueError, FileNotFoundError, AssertionError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
-
-
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run(generate, __doc__))

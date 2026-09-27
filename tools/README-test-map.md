@@ -105,7 +105,7 @@ With parameters:
 | Param          | Default                                                   | Meaning                              |
 | -------------- | ---------------------------------------------------------- | ------------------------------------- |
 | `-UnitCount`   | `36`                                                        | units to place (must be comfortably > 12) |
-| `-UnitType`    | `marine`                                                    | a name from the built-in table (`marine`, `goliath`, `siege-tank`, `zergling`, `hydralisk`, `ultralisk`, `zealot`, `dragoon`, `lurker`) or a raw units.dat integer id |
+| `-UnitType`    | `marine`                                                    | a richchk `UnitId` name, lowercase with dashes and the race prefix dropped (`marine`, `siege-tank-tank-mode`, `lurker`; `siege-tank` is kept as an alias), or a raw units.dat integer id |
 | `-Player`      | `0`                                                         | 0-based slot, 0-7 (0 = Player 1)      |
 | `-GridSpacing` | `32`                                                        | pixels between units (32 = one tile). Units bigger than a tile need more, or the game silently drops the ones it cannot place |
 | `-ClearPlayerUnits` | off                                                    | drop the target player's existing units first, so the placed group is all one type |
@@ -168,12 +168,13 @@ Generated `.scx` files are gitignored; only the generator is committed.
 
 ## Validation
 
-The generator runs a structural validation pass on its own output: it re-reads the produced file and asserts the
-placed-unit count/type/owner, a start location for that player, the player
-slots (one human, exactly one unit-less computer), that neither active slot is
-left on the race value "User Selectable", that `TRIG` is empty, non-zero
-terrain dimensions, and that the output differs from its template in no
-section other than the ones it meant to change. Example output:
+The generator runs a structural validation pass on its own output: it re-reads
+the produced file and asserts the placed-unit count/type/owner, a start
+location for that player, the player slots (one human, exactly one unit-less
+computer), that neither active slot is left on the race value "User
+Selectable", that `TRIG` is empty, non-zero terrain dimensions, and that the
+output differs from its template in no section other than the ones it meant to
+change. Example output:
 
 ```
 wrote C:\decompile-sc-data\sc-work\1161-base\Maps\BroodWar\00-testmap\lurkers.scx
@@ -347,9 +348,8 @@ out of the engine's own PTEx applier (`0x004CB7D0`, disassembled in
 that `(tech 10, player 0)` is byte 10 and not byte 120.
 
 Tech ids come from richchk's own `TechId` enum — the same source, and the same provenance
-discipline, as the unit ids. Named here: `stim-packs` (0), `siege-mode` (5),
-`cloaking-field` (9), `personnel-cloaking` (10), `burrowing` (11); anything else can be
-passed as a raw `techdata.dat` id.
+discipline, as the unit ids: any member name, lowercase with dashes (`stim-packs` (0),
+`personnel-cloaking` (10), `burrowing` (11) ...), or a raw `techdata.dat` id.
 
 Proved in game: with `--tech-researched stim-packs`, 36 generated Marines have the Stim
 button and one keypress emits command `0x36`. Without it the run fails several minutes later
@@ -483,18 +483,17 @@ requested; without the flags it is unchanged.
     -OutputPath 'C:\sc-workN1-base\Maps\BroodWar -t025\production-queue.scx'
 ```
 
-Three building names were added to the unit table for that fixture: `command-center` (106),
-`supply-depot` (109) and `barracks` (111). A Command Center is the cheapest producing building
-to test with — it trains SCVs at 50 minerals and 1 supply each **and** provides 10 supply of its
-own, so a queue of nine needs no Supply Depot to have landed on buildable ground.
+That fixture's buildings are `command-center` (106), `supply-depot` (109) and `barracks` (111). A
+Command Center is the cheapest producing building to test with — it trains SCVs at 50 minerals and 1
+supply each **and** provides 10 supply of its own, so a queue of nine needs no Supply Depot to have
+landed on buildable ground.
 
-A fourth was added by task 028: `nexus` (154), the cancel fixture. Its card carries the Cancel
-button at slot 9 with no other button sharing that slot, it trains Probes (50 minerals, 1 supply —
-the same arithmetic as an SCV), it supplies 9 psi of its own, and it needs no Pylon, which a
-Gateway would. (A Terran producer would have done too: its slot 9 is shared with Land and Lift Off,
-but those conditions are complementary to Cancel's, so the control shows Cancel exactly while
-something is queued — `research/production-queue.md` §8.3, measured in game after the button table
-suggested otherwise.)
+Task 028's cancel fixture is `nexus` (154). Its card carries the Cancel button at slot 9 with no
+other button sharing that slot, it trains Probes (50 minerals, 1 supply — the same arithmetic as an
+SCV), it supplies 9 psi of its own, and it needs no Pylon, which a Gateway would. (A Terran producer
+would have done too: its slot 9 is shared with Land and Lift Off, but those conditions are
+complementary to Cancel's, so the control shows Cancel exactly while something is queued —
+`research/production-queue.md` §8.3, measured in game after the button table suggested otherwise.)
 
 ```powershell
 # task 028's cancel fixture: two Nexuses, 3000 minerals
@@ -517,12 +516,12 @@ Probes to build, at 20 game seconds each. Nothing else in that suite comes close
     -UnitBuildTime 'probe=8' -OutputPath '...\production-queue.scx'
 ```
 
-Each flag is `TYPE=VALUE` and repeatable: `-UnitBuildTime` (GAME seconds) is the only wrapper
-flag; the generator also takes `--unit-max-hp`, used only by `tools/plugin/probe-unit-settings.ps1`.
-They are **opt-in**: pass none
-and the generator's output is byte-identical to what it produced before task 031 — verified by
-generating the same fixture with the previous version of the generator and this one and comparing
-the CHK bytes, which is what let this land while other tasks were mid-run against the same tool.
+Each flag is `TYPE=VALUE` and repeatable: `-UnitBuildTime` (GAME seconds) is the only wrapper flag;
+the generator also takes `--unit-max-hp`, used only by `tools/plugin/probe-unit-settings.ps1`. They
+are **opt-in**: pass none and the generator's output is byte-identical to what it produced before
+task 031 — verified by generating the same fixture with the previous version of the generator and
+this one and comparing the CHK bytes, which is what let this land while other tasks were mid-run
+against the same tool.
 
 ### The section is `UNIx`, and that was proved in a running game
 
@@ -623,11 +622,9 @@ treats the two as the same reads a unit that does not exist yet. That cost task 
   existing doodads. On the default template this lands in open ground, but a
   different `-TemplatePath` map could place units somewhere awkward (e.g.
   overlapping a cliff edge) -- worth an eyeball check if you swap templates.
-- `-UnitType` and `-EnemyType` have a handful of built-in names between them
-  (Marine, Ghost, Medic, Goliath, Siege Tank (Tank Mode), Zergling, Hydralisk,
-  Ultralisk, Zealot, Dragoon, Lurker, the three task-025 buildings
-  Command Center, Supply Depot and Barracks, and task 028's Nexus); any other
-  unit needs its units.dat integer id passed directly.
+- `-UnitType` and `-EnemyType` take any richchk `UnitId` name below id 228 (the
+  trigger unit groups start there); where a name repeats (`marker`, `beacon`,
+  `flag-beacon`) it means the first id, so pass the others as raw units.dat ids.
 - A template that uses the negative-size CHK chunk trick (map protection) is
   refused outright: this tool cannot re-serialise one faithfully, and would
   rather fail than quietly change what the game reads.

@@ -33,6 +33,8 @@ from richchk.io.mpq.starcraft_mpq_io_helper import StarCraftMpqIoHelper
 from richchk.model.mpq.stormlib.stormlib_archive_mode import StormLibArchiveMode
 from richchk.model.mpq.stormlib.stormlib_flag import StormLibFlag
 from richchk.model.mpq.stormlib.stormlib_operation import StormLibOperation
+from richchk.model.richchk.techs.tech_id import TechId
+from richchk.model.richchk.unis.unit_id import UnitId
 from richchk.mpq.stormlib.stormlib_helper import StormLibHelper
 from richchk.util.fileutils import CrossPlatformSafeTemporaryNamedFile
 
@@ -240,88 +242,29 @@ FORC_ALLIED = 0x02
 FORC_ALLIED_VICTORY = 0x04
 FORC_SHARED_VISION = 0x08
 
-# A handful of common unit type names (units.dat ids). Marine is the
-# documented default: small, cheap, unambiguous to count on screen. Anything
-# else can be passed as a raw units.dat integer id.
-#
-# Every id here is read off richchk's own units.dat enum
-# (.venv/Lib/site-packages/richchk/model/richchk/unis/unit_id.py, `UnitId`), never
-# from memory: 64 is the Probe, not the Zealot. Printed straight out of that enum:
-#     0 Terran Marine        3 Terran Goliath      5 Terran Siege Tank (Tank Mode)
-#    37 Zerg Zergling       38 Zerg Hydralisk     39 Zerg Ultralisk
-#    65 Protoss Zealot      66 Protoss Dragoon   103 Zerg Lurker
-UNIT_TYPE_IDS = {
-    "marine": 0,
-    # Ghost: the only vanilla unit with an UNTARGETED, ENERGY-costed ability (Personnel
-    # Cloaking, command 0x21) that a generated map can switch on -- what makes the
-    # energy half of "does every unit pay its own cost" testable in game at all.
-    "ghost": 1,
-    "medic": 34,
-    "goliath": 3,
-    "siege-tank": 5,
-    "zergling": 37,
-    # Hydralisk is the default ENEMY: a ranged ground attacker, so it can hurt a block
-    # of units standing next to it without pathing into the middle of them, and cheap
-    # enough that a handful kill a Lurker slowly rather than wiping the boxed selection
-    # below the 12-unit cap.
-    "hydralisk": 38,
-    "ultralisk": 39,
-    "zealot": 65,
-    "dragoon": 66,
-    # Lurker is the fan-out fixture for untargeted ABILITIES: Burrow is innate (no
-    # research, so it works with no tech set at all), takes no target, and leaves a
-    # per-unit state a plugin can assert on (CUnit+0xDC bit 0x10, SC_UNIT_FLAG_BURROWED).
-    # It is ALSO the combat fixture's player unit: an UNBURROWED Lurker has no weapon
-    # (its spines are burrowed-only), so a block walked into an enemy takes fire without
-    # killing the enemy back, and the death trickle is steady instead of being decided
-    # by which side wins. Confirmed in game: tools/README-test-map.md "Combat variant".
-    "lurker": 103,
-    # Neither is ever PLACED by this tool; they are named because the production
-    # fixtures TRAIN them and `--unit-build-time probe=8` needs a name for its target.
-    # Both cross-checked against the template's own UNIx entry rather than a table: SCV
-    # 60 hit points / build 300 (20 game seconds) / 50 minerals, Probe 20 / 300 / 50.
-    "scv": 7,
-    "probe": 64,
-    # The production fixture. A Command Center is the cheapest building that TRAINS --
-    # it produces SCVs (50 minerals, 1 supply) and supplies 10 of its own, so a fixture
-    # needs it plus a couple of depots and nothing else.
-    "command-center": 106,
-    "supply-depot": 109,
-    "barracks": 111,
-    # The upgrade-queue fixture. An Engineering Bay is the cheapest building that
-    # RESEARCHES: two independent level-1 upgrades -- Terran Infantry Armor
-    # (upgrades.dat 0) and Terran Infantry Weapons (upgrades.dat 7) -- so two distinct
-    # items queue at one building without the messy level-N/level-N+1 case, and it
-    # needs no prerequisite building. An Academy is the companion for the OTHER opcode:
-    # it carries techs (0x30 Tech) as well as an upgrade (0x32), so a mixed queue is
-    # expressible.
-    "engineering-bay": 122,
-    "academy": 112,
-    # The cancel fixture. Its command card carries the Cancel button -- the one that
-    # emits "cancel the last queued item" (actionParam 0xFE), the only wire form a
-    # plugin holding queue overflow can be asked to serve -- at slot 9 with no other
-    # button sharing that slot, needs no Pylon to produce (a Gateway would), and
-    # supplies 9 psi of its own, so a queue of Probes needs no second building.
-    # A Terran producer would also do: its slot 9 is shared with Land and Lift Off, but
-    # their conditions are complementary to Cancel's, so Cancel shows exactly while
-    # something is queued (research/production-queue.md 8.3, measured in game).
-    "nexus": 154,
-}
+# Unit type names come from richchk's own units.dat enum (`UnitId`): the member name
+# lowercased, dashes for underscores, the race prefix dropped and used as the race
+# (TERRAN_SIEGE_TANK_TANK_MODE -> siege-tank-tank-mode, Terran). The race only picks a
+# default for the placed units' owner; unprefixed names and raw ids default to Terran.
+# Ids from NO_UNIT (228) on are trigger unit GROUPS, not units. A repeated name (marker,
+# beacon, flag-beacon) keeps its first id. Anything else is passed as a raw units.dat id.
+def _unit_type_tables() -> tuple[dict[str, int], dict[str, int]]:
+    ids: dict[str, int] = {}
+    races: dict[str, int] = {}
+    for member, unit in UnitId.__members__.items():
+        prefix, _, rest = member.partition("_")
+        race = RACE_IDS.get(prefix.lower())
+        name = (rest if race is not None else member).lower().replace("_", "-")
+        if unit.id < UnitId.NO_UNIT.id and name not in ids:
+            ids[name] = unit.id
+            if race is not None:
+                races[name] = race
+    return ids, races
 
-# Which race each named unit type belongs to. Only consulted to pick a sensible default
-# for the placed units' owner; a Terran player can own Lurkers perfectly well under
-# Use Map Settings. Anything passed as a raw id defaults to Terran and can be
-# overridden with --race.
-UNIT_TYPE_RACES = {
-    "marine": SIDE_TERRAN, "ghost": SIDE_TERRAN, "medic": SIDE_TERRAN,
-    "goliath": SIDE_TERRAN, "siege-tank": SIDE_TERRAN, "scv": SIDE_TERRAN,
-    "zergling": SIDE_ZERG, "hydralisk": SIDE_ZERG, "ultralisk": SIDE_ZERG,
-    "zealot": SIDE_PROTOSS, "dragoon": SIDE_PROTOSS,
-    "lurker": SIDE_ZERG,
-    "command-center": SIDE_TERRAN, "supply-depot": SIDE_TERRAN, "barracks": SIDE_TERRAN,
-    "engineering-bay": SIDE_TERRAN, "academy": SIDE_TERRAN,
-    "nexus": SIDE_PROTOSS, "probe": SIDE_PROTOSS,
-}
+
+UNIT_TYPE_IDS, UNIT_TYPE_RACES = _unit_type_tables()
+UNIT_TYPE_IDS["siege-tank"] = UnitId.TERRAN_SIEGE_TANK_TANK_MODE.id
+UNIT_TYPE_RACES["siege-tank"] = SIDE_TERRAN
 
 # ---------------------------------------------------------------------------
 # STARTING RESOURCES
@@ -382,6 +325,21 @@ def _trigger_action_set_resources(player: int, amount: int, resource: int) -> by
     return bytes(act)
 
 
+def _one_trigger(player: int, actions: list[bytes]) -> bytes:
+    """One 2400-byte trigger: `Always` -> `actions`, executed for `player` only."""
+    flags = bytearray(TRIG_PLAYER_FLAGS)
+    flags[player] = 1
+    out = (_trigger_condition_always()
+           + bytes(TRIG_CONDITION_BYTES) * (TRIG_CONDITIONS - 1)
+           + b"".join(actions)
+           + bytes(TRIG_ACTION_BYTES) * (TRIG_ACTIONS - len(actions))
+           + struct.pack("<I", 0)                     # execution flags: no preserve
+           + bytes(flags)
+           + bytes(1))                                # current action index
+    assert len(out) == TRIG_BYTES, f"trigger is {len(out)} bytes, expected {TRIG_BYTES}"
+    return out
+
+
 def build_starting_resources_trig(player: int, minerals: int, gas: int) -> bytes:
     """One trigger: `Always -> Set Resources`, executed for `player` only.
 
@@ -397,20 +355,7 @@ def build_starting_resources_trig(player: int, minerals: int, gas: int) -> bytes
         actions.append(_trigger_action_set_resources(player, minerals, TRIG_RESOURCE_ORE))
     if gas is not None:
         actions.append(_trigger_action_set_resources(player, gas, TRIG_RESOURCE_GAS))
-
-    out = bytearray()
-    out += _trigger_condition_always()
-    out += bytes(TRIG_CONDITION_BYTES) * (TRIG_CONDITIONS - 1)
-    for act in actions:
-        out += act
-    out += bytes(TRIG_ACTION_BYTES) * (TRIG_ACTIONS - len(actions))
-    out += struct.pack("<I", 0)                       # execution flags: no preserve
-    flags = bytearray(TRIG_PLAYER_FLAGS)
-    flags[player] = 1                                 # executed for this player only
-    out += bytes(flags)
-    out += bytes(1)                                   # current action index
-    assert len(out) == TRIG_BYTES, f"trigger is {len(out)} bytes, expected {TRIG_BYTES}"
-    return bytes(out)
+    return _one_trigger(player, actions)
 
 
 # ---------------------------------------------------------------------------
@@ -459,19 +404,19 @@ def build_briefing_mbrf(player: int, sections: list[ChkSection], template: Path)
         _brf_action(BRF_ACTION_WAIT, time_ms=BRF_LINE_MS),
         _brf_action(BRF_ACTION_OBJECTIVES, string=desc_str),
     ]
-    out = bytearray()
-    out += _trigger_condition_always()
-    out += bytes(TRIG_CONDITION_BYTES) * (TRIG_CONDITIONS - 1)
-    for act in actions:
-        out += act
-    out += bytes(TRIG_ACTION_BYTES) * (TRIG_ACTIONS - len(actions))
-    out += struct.pack("<I", 0)
-    flags = bytearray(TRIG_PLAYER_FLAGS)
-    flags[player] = 1
-    out += bytes(flags)
-    out += bytes(1)
-    assert len(out) == TRIG_BYTES, f"briefing trigger is {len(out)} bytes, expected {TRIG_BYTES}"
-    return bytes(out)
+    return _one_trigger(player, actions)
+
+
+def _trigger_actions(trig_payload: bytes):
+    """(executing players, 32-byte action) for every non-blank action of every trigger."""
+    for base in range(0, len(trig_payload) - TRIG_BYTES + 1, TRIG_BYTES):
+        acts = base + TRIG_CONDITIONS * TRIG_CONDITION_BYTES
+        flags_at = acts + TRIG_ACTIONS * TRIG_ACTION_BYTES + 4
+        players = [p for p in range(TRIG_PLAYER_FLAGS) if trig_payload[flags_at + p] == 1]
+        for off in range(acts, acts + TRIG_ACTIONS * TRIG_ACTION_BYTES, TRIG_ACTION_BYTES):
+            act = trig_payload[off:off + TRIG_ACTION_BYTES]
+            if act[26]:
+                yield players, act
 
 
 def read_starting_resources(trig_payload: bytes) -> list[tuple[int, int, int]]:
@@ -480,37 +425,14 @@ def read_starting_resources(trig_payload: bytes) -> list[tuple[int, int, int]]:
     Used by validate_map to check the trigger it wrote from the BYTES, and to prove the
     same payload carries no game-ending action.
     """
-    out: list[tuple[int, int, int]] = []
-    for base in range(0, len(trig_payload) - TRIG_BYTES + 1, TRIG_BYTES):
-        acts = base + TRIG_CONDITIONS * TRIG_CONDITION_BYTES
-        flags_at = acts + TRIG_ACTIONS * TRIG_ACTION_BYTES + 4
-        players = [p for p in range(TRIG_PLAYER_FLAGS)
-                   if trig_payload[flags_at + p] == 1]
-        for i in range(TRIG_ACTIONS):
-            off = acts + i * TRIG_ACTION_BYTES
-            action_id = trig_payload[off + 26]
-            if action_id == 0:
-                break
-            if action_id != TRIG_ACTION_SET_RESOURCES:
-                continue
-            amount = struct.unpack_from("<I", trig_payload, off + 20)[0]
-            resource = struct.unpack_from("<H", trig_payload, off + 24)[0]
-            for p in players:
-                out.append((p, resource, amount))
-    return out
+    return [(p, struct.unpack_from("<H", act, 24)[0], struct.unpack_from("<I", act, 20)[0])
+            for players, act in _trigger_actions(trig_payload)
+            if act[26] == TRIG_ACTION_SET_RESOURCES for p in players]
 
 
 def trigger_action_ids(trig_payload: bytes) -> set[int]:
     """Every non-zero action byte in a TRIG payload."""
-    ids: set[int] = set()
-    for base in range(0, len(trig_payload) - TRIG_BYTES + 1, TRIG_BYTES):
-        acts = base + TRIG_CONDITIONS * TRIG_CONDITION_BYTES
-        for i in range(TRIG_ACTIONS):
-            action_id = trig_payload[acts + i * TRIG_ACTION_BYTES + 26]
-            if action_id == 0:
-                break
-            ids.add(action_id)
-    return ids
+    return {act[26] for _, act in _trigger_actions(trig_payload)}
 
 
 # ---------------------------------------------------------------------------
@@ -569,17 +491,8 @@ def ptex_index(tech: int, player: int) -> int:
     """
     return player * PTEX_TECHS + tech
 
-# techdata.dat ids, printed straight out of richchk's own enum
-# (.venv/Lib/site-packages/richchk/model/richchk/techs/tech_id.py, `TechId`) -- the same
-# source, and the same provenance discipline, as UNIT_TYPE_IDS above. Only the ones a
-# fixture in this repo has needed are named; anything else can be passed as a raw id.
-TECH_IDS = {
-    "stim-packs": 0,
-    "siege-mode": 5,
-    "cloaking-field": 9,       # Wraith; an UNTARGETED ability that costs ENERGY
-    "personnel-cloaking": 10,  # Ghost; likewise
-    "burrowing": 11,
-}
+# techdata.dat names from richchk's own `TechId` enum, lowercased with dashes.
+TECH_IDS = {k.lower().replace("_", "-"): t.id for k, t in TechId.__members__.items()}
 
 
 def resolve_tech_id(tech: str) -> int:
@@ -589,8 +502,8 @@ def resolve_tech_id(tech: str) -> int:
         key = tech.strip().lower()
         if key not in TECH_IDS:
             raise ValueError(
-                f"Unknown tech {tech!r}. Use one of {sorted(TECH_IDS)} or a raw "
-                f"techdata.dat integer id."
+                f"Unknown tech {tech!r}. Use a richchk TechId name, lowercase with "
+                f"dashes (stim-packs), or a raw techdata.dat integer id."
             ) from None
         value = TECH_IDS[key]
     if not 0 <= value < PTEX_TECHS:
@@ -699,13 +612,14 @@ HP_FIXED_POINT = 256
 # Base weapon damage is deliberately absent: it is indexed by WEAPON, not by unit, so a
 # `--unit-...` flag would be lying about what it changes. Nothing here has needed it.
 UNIT_SETTING_FIELDS = {
-    #  name           offset                  struct  max                                   scale
-    "max-hp":       (UNIX_OFF_HIT_POINTS,    "<I", 0xFFFFFFFF // HP_FIXED_POINT,          HP_FIXED_POINT),
-    "shields":      (UNIX_OFF_SHIELD_POINTS, "<H", 0xFFFF,                                1),
-    "armor":        (UNIX_OFF_ARMOR,         "<B", 0xFF,                                  1),
-    "build-time":   (UNIX_OFF_BUILD_TIME,    "<H", 0xFFFF // BUILD_TIME_PER_GAME_SECOND,  BUILD_TIME_PER_GAME_SECOND),
-    "mineral-cost": (UNIX_OFF_MINERAL_COST,  "<H", 0xFFFF,                                1),
-    "gas-cost":     (UNIX_OFF_GAS_COST,      "<H", 0xFFFF,                                1),
+    #  name           offset                  struct  max, scale
+    "max-hp":       (UNIX_OFF_HIT_POINTS,    "<I", 0xFFFFFFFF // HP_FIXED_POINT, HP_FIXED_POINT),
+    "shields":      (UNIX_OFF_SHIELD_POINTS, "<H", 0xFFFF, 1),
+    "armor":        (UNIX_OFF_ARMOR,         "<B", 0xFF, 1),
+    "build-time":   (UNIX_OFF_BUILD_TIME,    "<H", 0xFFFF // BUILD_TIME_PER_GAME_SECOND,
+                     BUILD_TIME_PER_GAME_SECOND),
+    "mineral-cost": (UNIX_OFF_MINERAL_COST,  "<H", 0xFFFF, 1),
+    "gas-cost":     (UNIX_OFF_GAS_COST,      "<H", 0xFFFF, 1),
 }
 
 
@@ -827,6 +741,9 @@ GRID_SPACING_PX = 32
 ENEMY_OFFSET_X_PX = 448          # 14 tiles east of the start location
 ENEMY_OFFSET_Y_PX = 0
 ENEMY_SPACING_PX = 48
+# Hydralisk: a ranged ground attacker, so it can hurt a block of units standing next to it
+# without pathing into the middle of them, and cheap enough that a handful kill a Lurker
+# slowly rather than wiping the boxed selection below the 12-unit cap.
 ENEMY_TYPE = "hydralisk"
 # The two blocks must not start out on top of each other, or the "the map still
 # idles" property is gone before the test begins. This is pure geometry -- the
@@ -871,8 +788,9 @@ def resolve_unit_id(unit_type: str) -> int:
     key = unit_type.strip().lower()
     if key not in UNIT_TYPE_IDS:
         raise ValueError(
-            f"Unknown unit type {unit_type!r}. Use one of "
-            f"{sorted(UNIT_TYPE_IDS)} or a raw units.dat integer id."
+            f"Unknown unit type {unit_type!r}. Use a richchk UnitId name, lowercase with "
+            f"dashes and the race prefix dropped (siege-tank-tank-mode), or a raw units.dat "
+            f"integer id."
         )
     return UNIT_TYPE_IDS[key]
 
@@ -1174,39 +1092,23 @@ def rewrite_player_slots(
     return sections
 
 
-def generate_map(
-    template: Path, output: Path, unit_count: int, unit_type: str, player: int,
-    spacing: int = GRID_SPACING_PX, clear_player_units: bool = False,
-    race: int = SIDE_TERRAN,
-    enemy_count: int = 0, enemy_type: str = ENEMY_TYPE,
-    enemy_offset: tuple[int, int] = (ENEMY_OFFSET_X_PX, ENEMY_OFFSET_Y_PX),
-    enemy_spacing: int = ENEMY_SPACING_PX, enemy_race: int | None = None,
-    enemy_owner: str = ENEMY_OWNER_COMPUTER, min_enemy_gap: int = MIN_ENEMY_GAP_PX,
-    unit_hp_percent: int = MAX_HP_PERCENT,
-    damaged_count: int = 0, damaged_hp_percent: int = 0,
-    tech_researched: list[int] | None = None,
-    damaged_energy_percent: int | None = None,
-    starting_minerals: int | None = None,
-    starting_gas: int | None = None,
-    unit_settings: dict[str, list[tuple[int, int]]] | None = None,
-    clear_critters: bool = False,
-    briefing: bool = False,
-) -> None:
-    unit_id = resolve_unit_id(unit_type)
+def generate_map(a: argparse.Namespace) -> None:
+    template, player = a.template, a.player
+    unit_id = resolve_unit_id(a.unit_type)
     if not 0 <= player <= 7:
         raise ValueError(f"player must be 0-7 (Player 1..Player 8), got {player}")
-    if unit_count < 1:
-        raise ValueError(f"unit-count must be >= 1, got {unit_count}")
-    if not MIN_HP_PERCENT <= unit_hp_percent <= MAX_HP_PERCENT:
+    if a.unit_count < 1:
+        raise ValueError(f"unit-count must be >= 1, got {a.unit_count}")
+    if not MIN_HP_PERCENT <= a.unit_hp_percent <= MAX_HP_PERCENT:
         raise ValueError(
             f"unit-hp must be {MIN_HP_PERCENT}-{MAX_HP_PERCENT} (it is a PERCENTAGE of "
             f"the unit type's maximum hit points, not an absolute value), got "
-            f"{unit_hp_percent}"
+            f"{a.unit_hp_percent}"
         )
-    if enemy_count < 0:
-        raise ValueError(f"enemy-count must be >= 0, got {enemy_count}")
-    enemy_id = resolve_unit_id(enemy_type) if enemy_count else 0
-    if (enemy_count and enemy_owner == ENEMY_OWNER_PLAYER and enemy_id == unit_id):
+    if a.enemy_count < 0:
+        raise ValueError(f"enemy-count must be >= 0, got {a.enemy_count}")
+    enemy_id = resolve_unit_id(a.enemy_type) if a.enemy_count else 0
+    if (a.enemy_count and a.enemy_owner == ENEMY_OWNER_PLAYER and enemy_id == unit_id):
         # Both blocks would land on the same slot with the same type, and neither
         # block's count could be read back on its own -- in the file or in game.
         raise ValueError(
@@ -1233,34 +1135,34 @@ def generate_map(
     # mixed selection is offered only the basic command card -- no unit ability button at
     # all. Clearing them first is what makes the generated map able to test an ability.
     kept_records = existing_records
-    if clear_player_units:
+    if a.clear_player_units:
         kept_records = [
             r for r in existing_records
             if r.player != player or r.unit_id == START_LOCATION_UNIT_ID
         ]
-    if clear_critters:
+    if a.clear_critters:
         kept_records = [r for r in kept_records if r.unit_id not in CRITTER_UNIT_IDS]
 
     next_instance = max((r.instance for r in existing_records), default=0) + 1
     new_records = build_new_unit_records(
-        unit_count, unit_id, player, start.x, start.y, next_instance, spacing,
-        unit_hp_percent, damaged_count, damaged_hp_percent,
-        damaged_energy_percent=damaged_energy_percent,
+        a.unit_count, unit_id, player, start.x, start.y, next_instance, a.spacing,
+        a.unit_hp_percent, a.damaged_count, a.damaged_hp_percent,
+        damaged_energy_percent=a.damaged_energy_percent,
     )
 
     # THE ENEMY FORCE. Placed relative to the SAME start location the player's block is
     # centred on, so the two are a documented, fixed distance apart whatever template
     # supplied the coordinates.
     enemy_records: list[UnitRecord] = []
-    if enemy_count:
-        enemy_slot = player if enemy_owner == ENEMY_OWNER_PLAYER else pick_opponent_slot(player)
-        ex = start.x + enemy_offset[0]
-        ey = start.y + enemy_offset[1]
+    if a.enemy_count:
+        enemy_slot = player if a.enemy_owner == ENEMY_OWNER_PLAYER else pick_opponent_slot(player)
+        ex = start.x + a.enemy_offset_x
+        ey = start.y + a.enemy_offset_y
         dim_idx = require_section(sections, "DIM", template)
         map_w, map_h = struct.unpack_from("<HH", sections[dim_idx].payload, 0)
         enemy_records = build_new_unit_records(
-            enemy_count, enemy_id, enemy_slot, ex, ey,
-            next_instance + unit_count, enemy_spacing,
+            a.enemy_count, enemy_id, enemy_slot, ex, ey,
+            next_instance + a.unit_count, a.enemy_spacing,
         )
         # Off the map is not "somewhere awkward", it is a record the engine cannot
         # place at all -- and a silently dropped enemy force is a fixture that looks
@@ -1273,10 +1175,10 @@ def generate_map(
                 f"0-{map_h * 32 - 1}). Move it with --enemy-offset-x/--enemy-offset-y."
             )
         gap = block_gap_px(new_records, enemy_records)
-        if gap < min_enemy_gap:
+        if gap < a.min_enemy_gap:
             raise ValueError(
                 f"the enemy block is only {gap}px ({gap / 32:.1f} tiles) from the "
-                f"player's block, under the {min_enemy_gap}px minimum. A fixture whose "
+                f"player's block, under the {a.min_enemy_gap}px minimum. A fixture whose "
                 f"two sides can see each other on the first frame is not idle, and the "
                 f"test that boxes the player's units has nothing left to box. Move it "
                 f"with --enemy-offset-x/--enemy-offset-y."
@@ -1292,10 +1194,10 @@ def generate_map(
     # Nothing observed says a Zerg slot cannot own Terran units under Use Map
     # Settings, but a slot whose race matches what it owns is what every stock map
     # uses, and it costs nothing to match it.
-    combat = bool(enemy_count) and enemy_owner == ENEMY_OWNER_COMPUTER
+    combat = bool(a.enemy_count) and a.enemy_owner == ENEMY_OWNER_COMPUTER
     sections = rewrite_player_slots(
-        sections, template, player, race,
-        enemy_race if combat and enemy_race is not None else race, hostile=combat,
+        sections, template, player, a.race,
+        a.enemy_race if combat and a.enemy_race is not None else a.race, hostile=combat,
     )
 
     # THE MISSION MUST NOT BE ABLE TO END ITSELF.
@@ -1325,19 +1227,19 @@ def generate_map(
     # ONE trigger written back here is the only trigger the fixture carries -- see
     # the STARTING RESOURCES block at the top of this file for why a UMS fixture
     # needs it at all and why it cannot end the game.
-    if starting_minerals is not None or starting_gas is not None:
+    if a.starting_minerals is not None or a.starting_gas is not None:
         sections = replace_section(
             sections, "TRIG",
-            build_starting_resources_trig(player, starting_minerals, starting_gas),
+            build_starting_resources_trig(player, a.starting_minerals, a.starting_gas),
             template,
         )
     # A briefing cannot end the game either: MBRF actions only show text and portraits.
-    if briefing:
+    if a.briefing:
         sections = replace_section(sections, "MBRF", build_briefing_mbrf(player, sections, template), template)
 
     # TECH STATE. Without it a fixture cannot test any ability with a per-unit COST --
     # see the PTEx block at the top of this file.
-    if tech_researched:
+    if a.tech_researched:
         ptex_idx = find_section(sections, "PTEx")
         if ptex_idx < 0:
             raise ValueError(
@@ -1346,14 +1248,14 @@ def generate_map(
             )
         sections = replace_section(
             sections, "PTEx",
-            set_techs_researched(sections[ptex_idx].payload, tech_researched, player),
+            set_techs_researched(sections[ptex_idx].payload, a.tech_researched, player),
             template,
         )
 
     # UNIT SETTINGS. Opt-in and additive: with no --unit-* flag this block does not run,
     # no section is touched, and the output is byte-for-byte identical to a run without
     # the flag -- diff_against_template and every flag-less caller rely on that.
-    if unit_settings:
+    if a.unit_settings:
         unix_idx = find_section(sections, "UNIx")
         if unix_idx < 0:
             # NOT quietly falling back to UNIS: on a Brood War map a UNIS section is never
@@ -1368,13 +1270,13 @@ def generate_map(
             )
         sections = replace_section(
             sections, "UNIx",
-            set_unit_settings(sections[unix_idx].payload, unit_settings),
+            set_unit_settings(sections[unix_idx].payload, a.unit_settings),
             template,
         )
 
     new_chk = serialize_chk_sections(sections)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    save_chk_bytes_to_mpq(new_chk, template, output)
+    a.output.parent.mkdir(parents=True, exist_ok=True)
+    save_chk_bytes_to_mpq(new_chk, template, a.output)
 
 
 def diff_against_template(output: Path, template: Path) -> list[str]:
@@ -1401,20 +1303,10 @@ def diff_against_template(output: Path, template: Path) -> list[str]:
     return changed
 
 
-def validate_map(
-    path: Path, template: Path, unit_count: int, unit_type: str, player: int,
-    enemy_count: int = 0, enemy_type: str = ENEMY_TYPE,
-    enemy_owner: str = ENEMY_OWNER_COMPUTER, min_enemy_gap: int = MIN_ENEMY_GAP_PX,
-    unit_hp_percent: int = MAX_HP_PERCENT,
-    damaged_count: int = 0, damaged_hp_percent: int = 0,
-    tech_researched: list[int] | None = None,
-    damaged_energy_percent: int | None = None,
-    starting_minerals: int | None = None,
-    starting_gas: int | None = None,
-    unit_settings: dict[str, list[tuple[int, int]]] | None = None,
-) -> None:
-    unit_id = resolve_unit_id(unit_type)
-    enemy_id = resolve_unit_id(enemy_type) if enemy_count else 0
+def validate_map(a: argparse.Namespace) -> None:
+    path, player = a.output, a.player
+    unit_id = resolve_unit_id(a.unit_type)
+    enemy_id = resolve_unit_id(a.enemy_type) if a.enemy_count else 0
     sections = parse_chk_sections(read_chk_bytes(path))
     # Duplicated additive chunks would make every count below a half-truth: the
     # numbers would describe one chunk while the game reads them all.
@@ -1426,9 +1318,9 @@ def validate_map(
     records = parse_unit_records(sections[unit_idx].payload)
 
     matching = [r for r in records if r.unit_id == unit_id and r.player == player]
-    if len(matching) != unit_count:
+    if len(matching) != a.unit_count:
         raise AssertionError(
-            f"{path}: expected {unit_count} unit(s) of type {unit_id} owned by "
+            f"{path}: expected {a.unit_count} unit(s) of type {unit_id} owned by "
             f"player {player}, found {len(matching)}"
         )
 
@@ -1440,25 +1332,25 @@ def validate_map(
     # values: the point of that fixture is that some units can afford an ability's cost
     # and some cannot, and "10 healthy + 26 damaged" would satisfy a set-based check
     # while testing something entirely different from "24 healthy + 12 damaged".
-    healthy_wanted = unit_count - damaged_count
+    healthy_wanted = a.unit_count - a.damaged_count
     got = collections.Counter(r.hp for r in matching)
     want = collections.Counter()
     if healthy_wanted:
-        want[unit_hp_percent] += healthy_wanted
-    if damaged_count:
-        want[damaged_hp_percent] += damaged_count
+        want[a.unit_hp_percent] += healthy_wanted
+    if a.damaged_count:
+        want[a.damaged_hp_percent] += a.damaged_count
     if got != want:
         raise AssertionError(
             f"{path}: placed units carry hit-point percentages "
             f"{dict(sorted(got.items()))}, expected {dict(sorted(want.items()))}"
         )
 
-    if damaged_energy_percent is not None and damaged_count:
+    if a.damaged_energy_percent is not None and a.damaged_count:
         got_e = collections.Counter(r.energy for r in matching)
         want_e = collections.Counter()
         if healthy_wanted:
             want_e[MAX_HP_PERCENT] += healthy_wanted
-        want_e[damaged_energy_percent] += damaged_count
+        want_e[a.damaged_energy_percent] += a.damaged_count
         if got_e != want_e:
             raise AssertionError(
                 f"{path}: placed units carry energy percentages "
@@ -1490,7 +1382,7 @@ def validate_map(
     trig_idx = find_section(sections, "TRIG")
     trig_payload = sections[trig_idx].payload if trig_idx >= 0 else b""
     trig_len = len(trig_payload)
-    wants_resources = starting_minerals is not None or starting_gas is not None
+    wants_resources = a.starting_minerals is not None or a.starting_gas is not None
     allowed_trig = TRIG_BYTES if wants_resources else 0
     if trig_len != allowed_trig:
         raise AssertionError(
@@ -1510,10 +1402,10 @@ def validate_map(
             )
         granted = read_starting_resources(trig_payload)
         want = []
-        if starting_minerals is not None:
-            want.append((player, TRIG_RESOURCE_ORE, starting_minerals))
-        if starting_gas is not None:
-            want.append((player, TRIG_RESOURCE_GAS, starting_gas))
+        if a.starting_minerals is not None:
+            want.append((player, TRIG_RESOURCE_ORE, a.starting_minerals))
+        if a.starting_gas is not None:
+            want.append((player, TRIG_RESOURCE_GAS, a.starting_gas))
         if sorted(granted) != sorted(want):
             raise AssertionError(
                 f"{path}: the resource trigger grants {sorted(granted)}, expected "
@@ -1542,7 +1434,7 @@ def validate_map(
         r for r in records
         if r.player == opponent and r.unit_id != START_LOCATION_UNIT_ID
     ]
-    want_opponent_units = enemy_count if enemy_owner == ENEMY_OWNER_COMPUTER else 0
+    want_opponent_units = a.enemy_count if a.enemy_owner == ENEMY_OWNER_COMPUTER else 0
     if len(opponent_units) != want_opponent_units:
         raise AssertionError(
             f"{path}: the computer opponent owns {len(opponent_units)} unit(s), "
@@ -1590,26 +1482,26 @@ def validate_map(
     # they actually shoot is a behavioural claim, and is asserted in game by
     # tools/plugin/test-combat-death.ps1 -- not here.
     enemy_records: list[UnitRecord] = []
-    if enemy_count:
-        enemy_slot = player if enemy_owner == ENEMY_OWNER_PLAYER else pick_opponent_slot(player)
+    if a.enemy_count:
+        enemy_slot = player if a.enemy_owner == ENEMY_OWNER_PLAYER else pick_opponent_slot(player)
         enemy_records = [
             r for r in records if r.unit_id == enemy_id and r.player == enemy_slot
         ]
-        if len(enemy_records) != enemy_count:
+        if len(enemy_records) != a.enemy_count:
             raise AssertionError(
-                f"{path}: expected {enemy_count} enemy unit(s) of type {enemy_id} owned "
+                f"{path}: expected {a.enemy_count} enemy unit(s) of type {enemy_id} owned "
                 f"by slot {enemy_slot}, found {len(enemy_records)}"
             )
         gap = block_gap_px(matching, enemy_records)
-        if gap < min_enemy_gap:
+        if gap < a.min_enemy_gap:
             raise AssertionError(
                 f"{path}: the enemy block is {gap}px ({gap / 32:.1f} tiles) from the "
-                f"player's block, under the {min_enemy_gap}px minimum -- the two sides "
+                f"player's block, under the {a.min_enemy_gap}px minimum -- the two sides "
                 f"would be engaged before the test has boxed anything"
             )
         # Allies never shoot each other, and a combat fixture whose enemy is an ally is
         # a fixture that times out. Same FORC bit the generator refuses on.
-        if enemy_owner == ENEMY_OWNER_COMPUTER:
+        if a.enemy_owner == ENEMY_OWNER_COMPUTER:
             forc_idx = find_section(sections, "FORC")
             if forc_idx < 0 or len(sections[forc_idx].payload) < 20:
                 raise AssertionError(f"{path}: no usable FORC section")
@@ -1625,12 +1517,12 @@ def validate_map(
     # needs research, so a map that quietly lost this byte produces a command card with
     # no ability button on it -- a run that fails on "the key emitted nothing", minutes
     # later and several steps away from the cause.
-    if tech_researched:
+    if a.tech_researched:
         ptex_idx = find_section(sections, "PTEx")
         if ptex_idx < 0:
             raise AssertionError(f"{path}: no PTEx section, so no tech state to check")
         have = read_techs_researched(sections[ptex_idx].payload, player)
-        missing = sorted(set(tech_researched) - set(have))
+        missing = sorted(set(a.tech_researched) - set(have))
         if missing:
             raise AssertionError(
                 f"{path}: PTEx does not mark tech id(s) {missing} as available AND "
@@ -1643,13 +1535,13 @@ def validate_map(
     # nothing (the PTEx lesson). It is still only the FILE's word -- what the ENGINE does
     # with these bytes is proved in a running game by tools/plugin/probe-unit-settings.ps1.
     unix_read: dict[int, dict] = {}
-    if unit_settings:
+    if a.unit_settings:
         unix_idx = find_section(sections, "UNIx")
         if unix_idx < 0:
             raise AssertionError(f"{path}: no UNIx section, so no unit settings to check")
-        touched = sorted({u for pairs in unit_settings.values() for u, _ in pairs})
+        touched = sorted({u for pairs in a.unit_settings.values() for u, _ in pairs})
         unix_read = read_unit_settings(sections[unix_idx].payload, touched)
-        for field, pairs in unit_settings.items():
+        for field, pairs in a.unit_settings.items():
             for unit_id_, want in pairs:
                 got = unix_read[unit_id_][field]
                 if got != want:
@@ -1666,12 +1558,12 @@ def validate_map(
                         f"the engine would read units.dat and ignore every override on it"
                     )
 
-    changed = diff_against_template(path, template)
+    changed = diff_against_template(path, a.template)
     # Only the sections this run actually edited may differ.
     expected = {"UNIT", "OWNR", "SIDE", "FORC", "TRIG", "MBRF"}
-    if tech_researched:
+    if a.tech_researched:
         expected |= {"PTEx"}
-    if unit_settings:
+    if a.unit_settings:
         expected |= {"UNIx"}
     unexpected = [c for c in changed if c not in expected]
     if unexpected:
@@ -1683,18 +1575,18 @@ def validate_map(
 
     print(f"OK: {path}")
     print(f"  {len(matching)} unit(s) of type {unit_id} owned by player {player}, "
-          f"at {unit_hp_percent}% hit points")
-    if damaged_count:
-        print(f"  of those, the LAST {damaged_count} are pre-damaged to "
-              f"{damaged_hp_percent}% -- so one selection holds units that can afford a "
+          f"at {a.unit_hp_percent}% hit points")
+    if a.damaged_count:
+        print(f"  of those, the LAST {a.damaged_count} are pre-damaged to "
+              f"{a.damaged_hp_percent}% -- so one selection holds units that can afford a "
               f"per-unit ability cost and units that cannot")
-        if damaged_energy_percent is not None:
-            print(f"  and that same tail starts at {damaged_energy_percent}% energy, "
+        if a.damaged_energy_percent is not None:
+            print(f"  and that same tail starts at {a.damaged_energy_percent}% energy, "
                   f"for the energy-costed half of the same question")
     if unix_read:
         unit_names = {v: k for k, v in UNIT_TYPE_IDS.items()}
         for unit_id_, entry in sorted(unix_read.items()):
-            asked = {f for f, pairs in unit_settings.items() if any(u == unit_id_ for u, _ in pairs)}
+            asked = {f for f, pairs in a.unit_settings.items() if any(u == unit_id_ for u, _ in pairs)}
             shown = " ".join(
                 ("*" if f in asked else "") + f"{f}={entry[f]}"
                 for f in UNIT_SETTING_FIELDS
@@ -1703,16 +1595,16 @@ def validate_map(
                   f"usesDefault={entry['uses-default']} {shown}")
         print("        (* = overridden by this run; build-time is in GAME seconds, and "
               "every other field is left as the template had it)")
-    if tech_researched:
+    if a.tech_researched:
         names = {v: k for k, v in TECH_IDS.items()}
         print("  PTEx: player {} has researched {}".format(
             player,
-            " ".join(f"{t}({names.get(t, '?')})" for t in sorted(tech_researched))))
+            " ".join(f"{t}({names.get(t, '?')})" for t in sorted(a.tech_researched))))
     print(f"  start location for player {player} at ({start.x}, {start.y})")
     side_idx = find_section(sections, "SIDE")
     side = list(sections[side_idx].payload)[player] if side_idx >= 0 else None
     opp = pick_opponent_slot(player)
-    opp_units = enemy_count if enemy_owner == ENEMY_OWNER_COMPUTER else 0
+    opp_units = a.enemy_count if a.enemy_owner == ENEMY_OWNER_COMPUTER else 0
     print(f"  OWNR[{player}] = {OWNR_NAMES.get(actual, actual)}; one computer slot "
           f"at {opp} owning {opp_units} unit(s)"
           + ("" if opp_units else " -- nothing hostile in the game"))
@@ -1727,13 +1619,13 @@ def validate_map(
                  f"not left to the engine to pick"
                  if not any(f & FORC_RANDOM_START for f in flags) else ""))
     print(f"  TRIG holds {trig_len} byte(s) -- nothing can end the game on its own")
-    if enemy_count:
+    if a.enemy_count:
         ex0, ey0, ex1, ey1 = block_bounds(enemy_records)
         px0, py0, px1, py1 = block_bounds(matching)
         gap = block_gap_px(matching, enemy_records)
-        slot = player if enemy_owner == ENEMY_OWNER_PLAYER else pick_opponent_slot(player)
+        slot = player if a.enemy_owner == ENEMY_OWNER_PLAYER else pick_opponent_slot(player)
         print(f"  ENEMY {len(enemy_records)} unit(s) of type {enemy_id} owned by slot "
-              f"{slot} ({enemy_owner}), spanning ({ex0},{ey0})-({ex1},{ey1}) px")
+              f"{slot} ({a.enemy_owner}), spanning ({ex0},{ey0})-({ex1},{ey1}) px")
         print(f"        the player's block spans ({px0},{py0})-({px1},{py1}) px; the two "
               f"are at least {gap}px ({gap / 32:.1f} tiles) apart")
         print(f"        offset from the start location: "
@@ -1748,7 +1640,7 @@ def main() -> int:
     parser.add_argument("--unit-type", type=str, default="marine")
     parser.add_argument("--player", type=int, default=0, help="0-based player slot (0 = Player 1)")
     parser.add_argument(
-        "--grid-spacing",
+        "--grid-spacing", dest="spacing",
         type=int,
         default=GRID_SPACING_PX,
         help="pixels between placed units (32 = one tile). Units bigger than a tile "
@@ -1826,7 +1718,7 @@ def main() -> int:
              f"(default {MIN_ENEMY_GAP_PX} = {MIN_ENEMY_GAP_PX // 32} tiles).",
     )
     parser.add_argument(
-        "--unit-hp", type=int, default=MAX_HP_PERCENT,
+        "--unit-hp", dest="unit_hp_percent", type=int, default=MAX_HP_PERCENT,
         help=f"Hit points for the placed units, as a PERCENTAGE of the unit type's "
              f"maximum ({MIN_HP_PERCENT}-{MAX_HP_PERCENT}, default {MAX_HP_PERCENT}). "
              f"Lower is how the combat fixture makes its victims die in seconds rather "
@@ -1841,13 +1733,13 @@ def main() -> int:
              "who the ENGINE skips.",
     )
     parser.add_argument(
-        "--damaged-hp", type=int, default=0,
+        "--damaged-hp", dest="damaged_hp_percent", type=int, default=0,
         help=f"Hit points for the --damaged-count tail, as a PERCENTAGE of the unit "
              f"type's maximum ({MIN_HP_PERCENT}-{MAX_HP_PERCENT}). Required whenever "
              f"--damaged-count is non-zero.",
     )
     parser.add_argument(
-        "--damaged-energy", type=int, default=None,
+        "--damaged-energy", dest="damaged_energy_percent", type=int, default=None,
         help=f"Energy for the --damaged-count tail, as a PERCENTAGE of the unit type's "
              f"maximum ({MIN_HP_PERCENT}-{MAX_HP_PERCENT}). The energy counterpart of "
              f"--damaged-hp: an ability that costs energy has a per-unit affordability "
@@ -1858,9 +1750,10 @@ def main() -> int:
         "--tech-researched", type=str, action="append", default=None,
         metavar="TECH",
         help="Mark a tech as available AND already-researched for --player, by writing "
-             "PTEx. Repeatable. Names: " + ", ".join(sorted(TECH_IDS)) + "; or a raw "
-             "techdata.dat id. Without this, no unit on a generated map has any ability "
-             "that needs research -- which is every ability with a per-unit cost.",
+             "PTEx. Repeatable. A richchk TechId name, lowercase with dashes "
+             "(stim-packs, personnel-cloaking), or a raw techdata.dat id. Without this, "
+             "no unit on a generated map has any ability that needs research -- which is "
+             "every ability with a per-unit cost.",
     )
     parser.add_argument(
         "--starting-minerals", type=int, default=None,
@@ -1895,39 +1788,22 @@ def main() -> int:
              "identical to the effect being measured. Prefer --unit-hp, which sets the "
              "PLACED units' starting percentage and leaves the type alone.",
     )
-    args = parser.parse_args()
+    a = parser.parse_args()
 
     try:
-        techs = [resolve_tech_id(t) for t in (args.tech_researched or [])]
+        # Resolved here, once, so each of these has one name and one type below.
+        a.tech_researched = [resolve_tech_id(t) for t in a.tech_researched or []]
         # Field name -> [(unit id, value)]; empty when no --unit-* flag was passed.
-        unit_settings = {
+        a.unit_settings = {
             field: [parse_unit_setting(s) for s in specs]
-            for field, specs in (
-                ("build-time", args.unit_build_time),
-                ("max-hp", args.unit_max_hp),
-            )
+            for field, specs in (("build-time", a.unit_build_time), ("max-hp", a.unit_max_hp))
             if specs
         }
-        generate_map(
-            args.template, args.output, args.unit_count, args.unit_type, args.player,
-            args.grid_spacing, args.clear_player_units,
-            resolve_race(args.race, args.unit_type),
-            args.enemy_count, args.enemy_type,
-            (args.enemy_offset_x, args.enemy_offset_y), args.enemy_spacing,
-            resolve_race(args.enemy_race, args.enemy_type) if args.enemy_count else None,
-            args.enemy_owner, args.min_enemy_gap, args.unit_hp,
-            args.damaged_count, args.damaged_hp, techs, args.damaged_energy,
-            args.starting_minerals, args.starting_gas, unit_settings,
-            clear_critters=args.clear_critters, briefing=args.briefing,
-        )
-        print(f"wrote {args.output}")
-        validate_map(
-            args.output, args.template, args.unit_count, args.unit_type, args.player,
-            args.enemy_count, args.enemy_type, args.enemy_owner, args.min_enemy_gap,
-            args.unit_hp, args.damaged_count, args.damaged_hp, techs,
-            args.damaged_energy, args.starting_minerals, args.starting_gas,
-            unit_settings,
-        )
+        a.race = resolve_race(a.race, a.unit_type)
+        a.enemy_race = resolve_race(a.enemy_race, a.enemy_type) if a.enemy_count else None
+        generate_map(a)
+        print(f"wrote {a.output}")
+        validate_map(a)
         return 0
     except (ValueError, FileNotFoundError, AssertionError) as exc:
         print(f"error: {exc}", file=sys.stderr)

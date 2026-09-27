@@ -25,16 +25,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from make_test_map import (  # noqa: E402
-    OWNR_NAMES, SIDE_NAMES, START_LOCATION_UNIT_ID, parse_chk_sections,
+    OWNR_NAMES, SIDE_NAMES, START_LOCATION_UNIT_ID, TRIG_ACTION_BYTES, TRIG_ACTIONS,
+    TRIG_BYTES, TRIG_CONDITION_BYTES, TRIG_CONDITIONS, parse_chk_sections,
     parse_unit_records, read_chk_bytes,
 )
-
-# --- TRIG record layout (staredit.net CHK spec) ----------------------------
-# 2400 bytes per trigger: 16 conditions x 20 bytes, 64 actions x 32 bytes,
-# 4 bytes execution flags, 28 bytes "executing players" (one per group slot).
-_TRIGGER_SIZE = 2400
-_COND_SIZE = 20
-_ACTION_SIZE = 32
 
 CONDITIONS = {
     0: "(none)", 1: "Countdown Timer", 2: "Command", 3: "Bring", 4: "Accumulate",
@@ -178,17 +172,17 @@ def cmd_players(args):
 def cmd_triggers(args):
     secs = {s.name: s.payload for s in load(args.map)}
     trig = secs.get("TRIG", b"")
-    n = len(trig) // _TRIGGER_SIZE
+    n = len(trig) // TRIG_BYTES
     print(f"{args.map}: TRIG is {len(trig)} bytes = {n} trigger(s)")
     if n == 0:
         print("  nothing here can end the game -- this is what a generated fixture must look like")
         return
     for t in range(n):
-        rec = trig[t * _TRIGGER_SIZE:(t + 1) * _TRIGGER_SIZE]
+        rec = trig[t * TRIG_BYTES:(t + 1) * TRIG_BYTES]
         who = [group_name(i) for i, v in enumerate(rec[2372:2400]) if v]
         conds, acts, ends = [], [], False
-        for c in range(16):
-            cb = rec[c * _COND_SIZE:(c + 1) * _COND_SIZE]
+        for c in range(TRIG_CONDITIONS):
+            cb = rec[c * TRIG_CONDITION_BYTES:(c + 1) * TRIG_CONDITION_BYTES]
             loc, grp, qty = struct.unpack_from("<III", cb, 0)
             unit, comp, ctype, _res, _fl, _mask = struct.unpack_from("<HBBBBH", cb, 12)
             if ctype == 0:
@@ -196,9 +190,9 @@ def cmd_triggers(args):
             conds.append(f"{CONDITIONS.get(ctype, ctype)}: {group_name(grp)} "
                          f"{COMPARISONS.get(comp, comp)} {qty} {unit_name(unit)}"
                          + (f" @loc{loc}" if loc else ""))
-        base = 320
-        for a in range(64):
-            ab = rec[base + a * _ACTION_SIZE:base + (a + 1) * _ACTION_SIZE]
+        base = TRIG_CONDITIONS * TRIG_CONDITION_BYTES
+        for a in range(TRIG_ACTIONS):
+            ab = rec[base + a * TRIG_ACTION_BYTES:base + (a + 1) * TRIG_ACTION_BYTES]
             atype = ab[26]
             if atype == 0:
                 continue
