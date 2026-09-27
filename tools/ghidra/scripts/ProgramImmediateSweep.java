@@ -9,11 +9,9 @@
 // game content at a size nobody reads. Decompile hits with DecompileMany instead.
 //
 // Args: <outTsv> <hexWatchList> [immediate]
-//   <path>.manifest is the run's success signal. Separate watch values with '+': analyzeHeadless
-//   is a .bat, so cmd.exe re-splits a comma-separated list into several arguments and the sweep
-//   then watches only the first value while still reporting success; ',' is accepted only for a
-//   list built outside cmd. 'immediate' drops the structure displacements, which for a value
-//   like 0x280 are the bulk of the noise.
+//   <path>.manifest is the run's success signal. Separate watch values with '+'
+//   (SweepUtil.parseWatch says why). 'immediate' drops the structure displacements, which for a
+//   value like 0x280 are the bulk of the noise.
 //
 //@category Headless
 

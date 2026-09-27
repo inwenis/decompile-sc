@@ -1,5 +1,4 @@
-// Shared helpers for the selection-sweep query scripts (XrefSweep, ImmediateSweep,
-// ProgramImmediateSweep, RegionProbe, FuncProbe, DecompileMany, ProgramInfo).
+// Shared helpers for the query scripts in this directory.
 //
 // Not a GhidraScript -- a plain class compiled alongside them by Ghidra's script compiler
 // because it lives in the same -scriptPath directory.
