@@ -45,26 +45,20 @@ function Get-ScSourceDigest {
     $files = @(Get-ChildItem -LiteralPath $SrcDir -File | Sort-Object -Property Name -CaseSensitive)
     if ($files.Count -eq 0) { throw "Get-ScSourceDigest: $SrcDir holds no files -- refusing to digest an empty tree." }
 
-    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $h = [Security.Cryptography.IncrementalHash]::CreateHash([Security.Cryptography.HashAlgorithmName]::SHA256)
     try {
-        $parts = [System.Collections.Generic.List[byte[]]]::new()
         foreach ($f in $files) {
-            $parts.Add([Text.Encoding]::UTF8.GetBytes("src/$($f.Name)`n"))
-            $parts.Add([IO.File]::ReadAllBytes($f.FullName))
+            $h.AppendData([Text.Encoding]::UTF8.GetBytes("src/$($f.Name)`n"))
+            $h.AppendData([IO.File]::ReadAllBytes($f.FullName))
         }
         if ($BuildScript) {
             if (-not (Test-Path -LiteralPath $BuildScript)) { throw "Get-ScSourceDigest: no such build script: $BuildScript" }
-            $parts.Add([Text.Encoding]::UTF8.GetBytes("build/$(Split-Path $BuildScript -Leaf)`n"))
-            $parts.Add([IO.File]::ReadAllBytes($BuildScript))
+            $h.AppendData([Text.Encoding]::UTF8.GetBytes("build/$(Split-Path $BuildScript -Leaf)`n"))
+            $h.AppendData([IO.File]::ReadAllBytes($BuildScript))
         }
-        $total = 0
-        foreach ($p in $parts) { $total += $p.Length }
-        $buf = [byte[]]::new($total)
-        $at = 0
-        foreach ($p in $parts) { [Array]::Copy($p, 0, $buf, $at, $p.Length); $at += $p.Length }
-        $hash = $sha.ComputeHash($buf)
+        $hash = $h.GetHashAndReset()
     }
-    finally { $sha.Dispose() }
+    finally { $h.Dispose() }
 
     -join ($hash[0..5] | ForEach-Object { $_.ToString('x2') })
 }
