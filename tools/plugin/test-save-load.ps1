@@ -70,7 +70,6 @@ $ENGINE_SLOTS = 5         # research/production-queue.md 2.3
 $ENGINE_HOLD  = 4         # SC_PRODQ_ENGINE_HOLD
 $QUEUE_EMPTY  = 0xE4      # SC_BUILD_QUEUE_EMPTY
 $SC_UNIT_FLAG_COMPLETED = 0x01
-$VK_F10 = 0x79
 
 $saveRoot = Join-Path $GameDir 'save'
 $stashDir = Join-Path $StateDir 'stash'

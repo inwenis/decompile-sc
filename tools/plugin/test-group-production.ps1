@@ -689,7 +689,6 @@ try {
             }
             Assert-That "the building reached the engine cap of $ENGINE_SLOTS ($(($filled.Rows.Count -gt 0) ? $filled.Rows[0].EngineLen : -1))" `
                 ($filled.Rows.Count -gt 0 -and $filled.Rows[0].EngineLen -ge $ENGINE_SLOTS)
-            $script:mineralsFilled = $filled.Minerals
 
             # Do not -Reuse here, even inside a ten-second window: the reuse path skips the
             # world scan and with it the check for anything else in the box -- exactly the

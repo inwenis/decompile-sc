@@ -2647,8 +2647,8 @@ static void BuildingParityTests(void) {
 
         // Press 1. THE ENGINE HANDS BACK ONE, which is not a fault in its recall: its own row
         // was filled from playersSelections and the sim gate capped that at one building. The
-        // measured shape -- the in-game -Measure arm reads `GROUP recall enter: ... visible=1`
-        // against six stored.
+        // measured shape -- the in-game suite (test-building-parity.ps1) logs
+        // `GROUP recall enter: ... visible=1` against six stored.
         const int engineGave[1] = { 0 };
         SetFakeEngineSelection(engineGave, 1);
         const BYTE recall[3] = { 0x13, SC_HOTKEY_RECALL, 0x01 };

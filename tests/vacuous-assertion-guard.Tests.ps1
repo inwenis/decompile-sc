@@ -17,9 +17,8 @@ that cannot intersect are invisible to a parser and still cost a human a review.
 BeforeAll {
     $script:PluginRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' 'tools' 'plugin')).Path
 
-    # The suites carry 25 separate copies of the same assertion idea under different names,
-    # so the guard has to match a list rather than one name.
-    $script:AssertNames = @('Assert-That', 'Assert-Feature', 'Assert-Inv', 'Assert-Every', 'Check')
+    # The suites assert under more than one name, so the guard has to match a list.
+    $script:AssertNames = @('Assert-That', 'Assert-Inv', 'Assert-Every', 'Check')
 
     function Find-VacuousAssertion {
         param([Parameter(Mandatory)][string]$Root)

@@ -130,10 +130,6 @@ function Get-ScState {
 # set is fixed here and every file outside it is still foreign. The names are the
 # suite's, not a task's, because more than one worker runs this file.
 $fixtures = New-ScFixtureRun -Dir $mapDir -Names @('combat-death-probe.scx', 'combat-death.scx')
-$script:myFixtures = $fixtures.Names
-
-function Remove-MyFixtures { Remove-ScOwnFixture -Run $fixtures }
-function Assert-FixtureFolderIsOurs { Assert-ScFixtureFolderMine -Run $fixtures }
 
 # Generate one variant and parse the generator's own validation read-back, so the
 # geometry this script clicks at comes from the file that was written rather than
@@ -149,7 +145,7 @@ function New-Fixture {
     # Only THIS fixture is cleared, not both: phase B must not delete phase A's probe out
     # from under a comparison that is still using it.
     New-Item -ItemType Directory -Path $mapDir -Force | Out-Null
-    Assert-FixtureFolderIsOurs
+    Assert-ScFixtureFolderMine -Run $fixtures
     Remove-ScOwnFixture -Run $fixtures -Names @($Name)
     $path = Join-Path $mapDir $Name
     $out = & (Join-Path $repoRoot 'tools/make-test-map.ps1') `
@@ -191,11 +187,10 @@ $script:hwnd = [IntPtr]::Zero
 $script:shotN = 0
 
 function Shot([string]$tag) {
-    if ($script:hwnd -eq [IntPtr]::Zero) { return $null }
+    if ($script:hwnd -eq [IntPtr]::Zero) { return }
     $script:shotN++
     $p = Join-Path $ShotDir ("{0:d2}-{1}.png" -f $script:shotN, $tag)
-    try { Save-ScWindowImage -Hwnd $script:hwnd -Path $p -FullWindow | Out-Null } catch { return $null }
-    $p
+    try { Save-ScWindowImage -Hwnd $script:hwnd -Path $p -FullWindow | Out-Null } catch { }
 }
 
 # EVERY process claim in this file is PID-SCOPED. Another worker may be driving its
@@ -503,7 +498,7 @@ try {
         Assert-That "they are all Lurkers and nothing else (types=[$($s.TypesText)])" `
             (@($s.Types.Keys).Count -eq 1 -and @($s.Types.Keys)[0] -eq $LURKER_TYPE)
         Assert-That "every one is live (live=$($s.Live))" ($s.Live -eq $UnitCount)
-        Shot 'probe-player-block' | Out-Null
+        Shot 'probe-player-block'
     }
 
     Step 'PHASE A: the ENEMY BLOCK spawns exactly what the file places, at the coordinates it places them' {
@@ -525,7 +520,7 @@ try {
             (@($s.Types.Keys).Count -eq 1 -and @($s.Types.Keys)[0] -eq $HYDRALISK_TYPE)
         Assert-That 'and none of the player block came with them (a different type would show)' `
             (-not $s.Types.ContainsKey($LURKER_TYPE))
-        Shot 'probe-enemy-block' | Out-Null
+        Shot 'probe-enemy-block'
     }
 
     Stop-Mission
@@ -621,7 +616,7 @@ try {
         $idle = Get-ScState 'combat-idle'
         Assert-That "still all $UnitCount, still all live (n=$($idle.N) live=$($idle.Live))" `
             ($idle.N -eq $UnitCount -and $idle.Live -eq $UnitCount)
-        Shot 'idle-boxed' | Out-Null
+        Shot 'idle-boxed'
     }
 
     $script:samePassProof = $null
@@ -701,7 +696,7 @@ try {
         Assert-That "the gate counts no more survivors than the row did (row $($drop.N), gate $($now.Live))" `
             ($now.Live -le $drop.N)
         Write-Host "       $($now.Line)"
-        Shot 'at-the-death' | Out-Null
+        Shot 'at-the-death'
 
         if ($drop.Kind -eq 'stock') {
             # The dead unit was one of the ENGINE's own visible twelve, so the engine's
@@ -853,7 +848,7 @@ try {
             ($st.Live -lt $st.UniqOnly -and ($st.Hp0 + $st.Removed) -ge 1)
         Assert-That "the run is using the liveness gate (liveness=$($st.Liveness))" `
             ($st.Liveness -eq [int]$Liveness)
-        Shot 'after-fanned-order' | Out-Null
+        Shot 'after-fanned-order'
 
         # The engine is still standing after being handed that Select, and the
         # survivors obeyed the order. What the DEFECT does to the engine instead is
@@ -956,7 +951,7 @@ try {
         $s = Get-ScState 'after-consequence'
         Assert-That "the row and the shadow list agree again on the survivors (row n=$($after.N), shadow n=$($s.N) live=$($s.Live))" `
             ($s.N -eq $after.N -and $s.Live -eq $s.N)
-        Shot 'row-after-death' | Out-Null
+        Shot 'row-after-death'
 
         # If the death happened to fall on an overflow unit, the same selection was
         # walked page by page WITH the dead unit still in the shadow list -- report it,
@@ -1068,7 +1063,7 @@ try {
         # fanned order in PHASE B and byte-exactly offline in hooktest part [11].
         $deadTags = @($drops | ForEach-Object { $_.Tag } | Sort-Object -Unique)
         Write-Host "       corpses refused by the recall, none of them in the list above: $($deadTags -join ' ')"
-        Shot 'after-group-recall' | Out-Null
+        Shot 'after-group-recall'
     }
 
     Step 'PHASE B: losing units does NOT end the mission' {
@@ -1124,7 +1119,7 @@ try {
             ($up.Burrowed -eq 0)
         Assert-That 'the selection still ran through our own hooks after the losses' `
             (@($lines | Select-String -Pattern 'SORT candidates=\d+ clicked=0x[0-9A-Fa-f]+ -> engine=\d+ selected=\d+|SHADOW captured: \d+ units').Count -gt 0)
-        Shot 'still-running' | Out-Null
+        Shot 'still-running'
     }
 }
 catch {
@@ -1139,7 +1134,7 @@ catch {
 finally {
     if (-not $KeepOpen) { Stop-Mission }
     # ONLY our own fixtures, never another worker's -- their map may be beside them.
-    if (-not $KeepOpen) { Remove-MyFixtures }
+    if (-not $KeepOpen) { Remove-ScOwnFixture -Run $fixtures }
     # And the FOLDER itself, only when it is provably empty. AGENTS.md "one folder per
     # task": an empty folder left behind becomes the first row for everyone else's
     # positional click -- the same bug with the roles swapped; it broke
@@ -1175,7 +1170,7 @@ foreach ($id in $script:launchedPids) {
 Assert-That 'no game process this test started is left running' `
     ($KeepOpen -or $stillUp.Count -eq 0) `
     "(launched $($script:launchedPids -join ' '); still up: $($stillUp -join ' '))"
-Assert-That 'the generated maps were cleaned up' ($KeepOpen -or @(Get-ChildItem -LiteralPath $mapDir -Filter *.scx -ErrorAction SilentlyContinue | Where-Object { $script:myFixtures -contains $_.Name }).Count -eq 0)
+Assert-That 'the generated maps were cleaned up' ($KeepOpen -or @(Get-ChildItem -LiteralPath $mapDir -Filter *.scx -ErrorAction SilentlyContinue | Where-Object { $fixtures.Names -contains $_.Name }).Count -eq 0)
 
 $hashAfter = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
 Write-Host "  StarCraft.exe SHA-256 after:  $hashAfter"

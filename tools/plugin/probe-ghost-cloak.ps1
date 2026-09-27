@@ -55,10 +55,7 @@ function Get-CloakFace  { param($Slot) $(if ($Slot.Action -eq $CLOAK_ACTION) { '
 
 # The command card in CLIENT coordinates: the (+5,+32) window offset is already
 # subtracted, and Save-ScWindowImage / Get-ScRegionFingerprint add it themselves -- do not
-# "fix" these by adding it again. Column and row centres are confirmed live: clicking
-# (568,375) emits Stop and (568,418) emits Hold.
-$CARD_COLS = @(523, 568, 613)
-$CARD_ROWS = @(375, 418, 458)
+# "fix" it by adding it again.
 $CARD_RECT = @{ X = 500; Y = 355; Width = 140; Height = 125 }
 
 if (-not $FixtureDir) { $FixtureDir = Join-Path $GameDir 'Maps\BroodWar\00-t026' }

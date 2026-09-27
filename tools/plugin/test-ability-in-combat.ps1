@@ -29,11 +29,6 @@ param(
     # Folder under Maps\ the fixture is generated into; defaulted below via Resolve-ScFixtureDir.
     [string]$FixtureDir,
     [int]$UnitCount = 36,
-    # No low-energy tail by default: the command card refuses an ability when the units it
-    # can see cannot pay for it (research/command-card.md §4.3), so a tail can grey the
-    # button and leave the run measuring nothing. Pass -DamagedCount to test that gate.
-    [int]$DamagedCount = 0,
-    [int]$DamagedEnergy = 5,
     # THE ENEMY CANNOT SHOOT BACK BY ANY CHOICE OF ITS OWN, AND THERE IS A LOT OF IT. The
     # three two-second windows need a STEADY fight. Do not use Hydralisks: with sixteen the
     # group lost units fast enough that the controls disagreed by exactly the spread limit;
@@ -69,8 +64,6 @@ $failures = 0
 $step = 0
 $script:armLock = $null
 
-# Overwritten from -EnemyType once the descriptor default is applied below.
-$ENEMY_TYPE_ID = 109
 # units.dat ids accepted as a target block: no weapon, and no way to DECIDE to act (a
 # computer-owned Command Centre with no orders never lifts off). See -EnemyCount.
 $ENEMY_TYPES_OK = @{ 109 = 'Terran Supply Depot (500 hp)'; 106 = 'Terran Command Centre (1500 hp)' }
@@ -98,7 +91,7 @@ $ABILITIES = @{
     stim = @{
         Name = 'Stim Pack'; UnitName = 'marine'; UnitType = 0; UnitLabel = 'Marines'
         Tech = 'stim-packs'; TechPattern = 'PTEx: player 0 has researched 0\(stim-packs\)'
-        Cmd = '0x36'; Cmds = @('0x36')
+        Cmds = @('0x36')
         # 'T', plain: a MODIFIED key resolves through TranslateAcceleratorA, which a posted
         # message can never satisfy (research/control-groups.md §5).
         Key = 0x54
@@ -123,7 +116,7 @@ $ABILITIES = @{
         Name = 'Personnel Cloaking'; UnitName = 'ghost'; UnitType = 1; UnitLabel = 'Ghosts'
         Tech = 'personnel-cloaking'
         TechPattern = 'PTEx: player 0 has researched 10\(personnel-cloaking\)'
-        Cmd = '0x21'; Cmds = @('0x21', '0x22')   # Cloak / Decloak -- the two faces of slot 7
+        Cmds = @('0x21', '0x22')   # Cloak / Decloak -- the two faces of slot 7
         # No key: hotkey and mouse paths test the same disabled bit (research/command-card.md
         # §5), but only the CLICK can be aimed at the button's own rect read from the live
         # dialog, which rules out "the input missed".
@@ -164,7 +157,6 @@ $ABILITIES = @{
 }
 $ABIL = $ABILITIES[$Ability]
 $UNIT_TYPE = $ABIL.UnitType
-$ABILITY_CMD = $ABIL.Cmd
 $ABILITY_KEY = $ABIL.Key
 # The descriptor supplies the default only when the caller did not: an explicit
 # -EnemyCount 12 stays 12 even on the arm whose descriptor says 16.
@@ -199,11 +191,6 @@ function New-Fixture {
         UnitCount = $UnitCount; UnitType = $ABIL.UnitName; Player = 0
         TechResearched = $ABIL.Tech
     }
-    if ($DamagedCount -gt 0) {
-        $genArgs.DamagedCount = $DamagedCount
-        $genArgs.DamagedHp = 100
-        $genArgs.DamagedEnergy = $DamagedEnergy
-    }
     $gen = & (Join-Path $repoRoot 'tools/make-test-map.ps1') @genArgs `
         -EnemyCount $EnemyCount -EnemyType $EnemyType -EnemyRace $EnemyRace `
         -OutputPath $mapPath 2>&1
@@ -213,10 +200,6 @@ function New-Fixture {
     # a byte the engine never reads. The ENGINE's own opinion is asserted in the arm.
     Assert-That "$($ABIL.Name) is researched for the human slot" `
         (@($gen | Select-String -Pattern $ABIL.TechPattern).Count -gt 0)
-    if ($DamagedCount -gt 0) {
-        Assert-That "the low-energy tail is in the map file ($DamagedCount at $DamagedEnergy%)" `
-            (@($gen | Select-String -Pattern "tail starts at $DamagedEnergy% energy").Count -gt 0)
-    }
 }
 
 # One arm: launch in $Mode, walk into the enemy, use the ability once, and take the scans
@@ -238,7 +221,6 @@ function Invoke-Arm {
     Assert-ScFixtureStillMine -Run $fixtures -MapPath $mapPath
     Wait-ScNoGameRunning
     $script:armLock = Enter-ScLaunchLock -TaskId '022-ability-in-combat'
-    $gamePid = 0
     # -CardScan only where the arm needs it: read-only and hookless in both modes, but it
     # writes a block of CARD lines per marker that an arm never asking for a card need not carry.
     & (Join-Path $scriptDir 'run-with-plugin.ps1') `
@@ -251,7 +233,6 @@ function Invoke-Arm {
     $gamePid = $script:armPid
     if (-not $gamePid) { throw "test: could not parse the game pid for arm '$Mode'." }
     $hwnd = Get-ScGameWindow -ProcessId $gamePid
-    $shotN = 0
     function ArmShot([string]$t) {
         $script:shotSeq++
         Save-ScWindowImage -Hwnd $hwnd -Path (Join-Path $shotDir ("{0:d2}-{1}.png" -f $script:shotSeq, $t)) -FullWindow | Out-Null
@@ -269,9 +250,7 @@ function Invoke-Arm {
 
         # Into the enemy. One right-click; in `observe` only the engine's twelve obey,
         # which is the stock behaviour and exactly what the control is for.
-        $mark = Get-ScLogLineCount -LogPath $logPath
         Send-ScClick -Hwnd $hwnd -X $WALK_X -Y $WALK_Y -Right
-        $result.WalkMark = $mark
 
         # "Shots are landing" has one signal: enemy hit points below their starting total,
         # read from the enemy's own units.
@@ -284,7 +263,6 @@ function Invoke-Arm {
             $hp = Get-EnemyHp $w
             if ($hp -lt $startEnemyHp) { $engaged = $w; break }
         }
-        $result.StartEnemyHp = $startEnemyHp
         if (-not $engaged) {
             $result.Engaged = $engaged
             ArmShot 'engaged'
@@ -309,7 +287,6 @@ function Invoke-Arm {
                 $engaged = $s
             }
             Write-Host ("       [{0}] fight settled at orders [{1}]" -f $Mode, $prevHist)
-            $result.SettledOrders = $prevHist
         }
         $result.Engaged = $engaged
         ArmShot 'engaged'
@@ -634,12 +611,8 @@ try {
             # (fail by one). The LARGER control is not "conservative", it is lenient -- it
             # raises the bar an excess has to clear. Both are asserted and reported; the
             # strict one decides.
-            $arm.ControlBefore = $ctrlBefore
-            $arm.ControlAfterT = $ctrlAfter
             $arm.ControlStrict = $(if ($ctrlAfter.Changed -lt $ctrlBefore.Changed) { $ctrlAfter } else { $ctrlBefore })
             $arm.ControlLenient = $(if ($ctrlAfter.Changed -gt $ctrlBefore.Changed) { $ctrlAfter } else { $ctrlBefore })
-            $ctrl = $arm.ControlStrict
-            $arm.Control = $ctrl
             $arm.Transitions = $t
             $arm.EnemyHpEngaged = Get-EnemyHp $arm.Engaged
             $arm.EnemyHpAfter = Get-EnemyHp $arm.After
@@ -737,9 +710,9 @@ try {
         Step 'PLUGIN vs STOCK: the comparison this question was asked for' {
             $f = $arms['fanout']; $o = $arms['observe']
             Write-Host ("       fanout : ability {0}/{1} changed ({2} stopped attacking); control {3}/{4} changed ({5})" -f `
-                $f.Transitions.Changed, $f.Transitions.StillAlive, $f.Transitions.WentIdle, $f.Control.Changed, $f.Control.StillAlive, $f.Control.WentIdle)
+                $f.Transitions.Changed, $f.Transitions.StillAlive, $f.Transitions.WentIdle, $f.ControlStrict.Changed, $f.ControlStrict.StillAlive, $f.ControlStrict.WentIdle)
             Write-Host ("       observe: ability {0}/{1} changed ({2} stopped attacking); control {3}/{4} changed ({5})" -f `
-                $o.Transitions.Changed, $o.Transitions.StillAlive, $o.Transitions.WentIdle, $o.Control.Changed, $o.Control.StillAlive, $o.Control.WentIdle)
+                $o.Transitions.Changed, $o.Transitions.StillAlive, $o.Transitions.WentIdle, $o.ControlStrict.Changed, $o.ControlStrict.StillAlive, $o.ControlStrict.WentIdle)
             # NORMALISE BEFORE COMPARING THE ARMS. Raw churn is not comparable: the fan-out is
             # the thing under test, so in the plugin arm ALL units got the move order and are
             # fighting while in stock only the engine's twelve did. Measured: 0x03:5 0x06:9
@@ -753,10 +726,8 @@ try {
             $oLenient = $o.Transitions.Changed - $o.ControlLenient.Changed
             Write-Host ("       excess disturbance caused by the ability -- fanout: {0} (strict) / {1} (lenient); stock: {2} / {3}" -f `
                 $fStrict, $fLenient, $oStrict, $oLenient)
-            $fDelta = $fStrict
-            $oDelta = $oStrict
             Assert-That 'the ability disturbs no more orders under the plugin than under stock, once each arm is compared with its own control' `
-                ($fDelta -le $oDelta + 5) "(fanout $fDelta vs observe $oDelta)"
+                ($fStrict -le $oStrict + 5) "(fanout $fStrict vs observe $oStrict)"
             Assert-That 'both arms were still fighting after the ability' `
                 (($f.EnemyHpLater -lt $f.EnemyHpAfter) -and ($o.EnemyHpLater -lt $o.EnemyHpAfter))
             # AN ABSENCE ASSERTION IS WORTH NOTHING UNLESS THE SAME PATTERN IS SHOWN TO MATCH

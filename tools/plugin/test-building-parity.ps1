@@ -8,9 +8,8 @@ unit_IsStandardAndMovable (0x0047B770) gates every selection path, not only the 
 SortAllUnits 0x0046F0F0 at 0x0046F1A3 (double/ctrl-click), the click handler 0x0046FB40 at
 0x0046FD27/0x0046FD44 (shift-click ADD), combineSelectionsLists 0x0046F290 at
 0x0046F2C8/0x0046F2E8 (shift+box), and the SIM gate 0x0049AF80 that caps the control-group
-row at one (research/building-groups.md 8). Three arms, one launch each: -Measure reports
-every layer, asserting only the fixture and that each input reached the engine; the default
-asserts the feature; -Stock (%SCPLUGIN_BUILDING_GROUPS%=0) proves the same inputs select ONE
+row at one (research/building-groups.md 8). Two arms, one launch each: the default asserts
+the feature; -Stock (%SCPLUGIN_BUILDING_GROUPS%=0) proves the same inputs select ONE
 building, so the feature arm has something to fail against (AGENTS.md "Absence assertions
 must first be proved positive"). Fixture, generated per run and deleted after (AGENTS.md hard
 rule 1): 6 Barracks plus 6 Marines for the mixed arm, both human-owned. Barracks because a
@@ -18,9 +17,6 @@ production building takes a plain right-click order (a Missile Turret takes none
 eight at 128 px span 304 client px vertically plus box margin and the battlefield ends at
 y=340 with the camera centred, and six is under the engine's twelve so "the ENGINE holds all
 of them" is assertable.
-
-.EXAMPLE
-./tools/plugin/test-building-parity.ps1 -Measure
 
 .EXAMPLE
 ./tools/plugin/test-building-parity.ps1
@@ -34,16 +30,13 @@ param(
     [string]$LogPath,
     [string]$ShotDir = 'C:\decompile-sc-data\sc-work\logs\036-building-parity-frames',
     [string]$FixtureDir,
-    # The BEFORE measurement: report every layer, assert almost nothing.
-    [switch]$Measure,
     # The control arm: the feature switched off at plugin-install time.
     [switch]$Stock,
     [switch]$KeepOpen
 )
 
 $ErrorActionPreference = 'Stop'
-if ($Measure -and $Stock) { throw 'test: -Measure and -Stock are separate arms; pass one.' }
-$arm = if ($Measure) { 'measure' } elseif ($Stock) { 'stock' } else { 'feature' }
+$arm = if ($Stock) { 'stock' } else { 'feature' }
 if (-not $LogPath) { $LogPath = "C:\decompile-sc-data\sc-work\logs\036-building-parity-$arm.log" }
 
 $scriptDir = $PSScriptRoot
@@ -67,14 +60,6 @@ $MARINE_TYPE    = '0x00'
 $BARRACKS_COUNT = 6
 $MARINE_COUNT   = 6
 $GROUP          = 1     # the control group this suite drives
-
-# The measurement arm REPORTS where the feature arm ASSERTS. Same call sites, so the two
-# arms cannot drift apart, and a measurement run can never be read as a passing test.
-function Assert-Feature {
-    param([string]$What, [bool]$Ok, [string]$Detail = '')
-    if ($script:Measure) { Write-Host "  ---- (measure) $What -> $(if ($Ok) { 'yes' } else { 'NO' }) $Detail" }
-    else { Assert-That $What $Ok $Detail }
-}
 
 $markerPath = Join-Path (Split-Path $LogPath -Parent) 'marker.txt'
 function Get-ScState {
@@ -138,7 +123,7 @@ function Assert-ScAllOneType {
     $only = @($State.Types.Keys)
     $ok = ($only.Count -eq 1) -and ($State.Types[$only[0]] -eq $State.Live) -and
           ($only[0] -eq $ExpectedType)
-    Assert-Feature "$What`: all $($State.Live) are $ExpectedType" $ok "(got $($State.TypesText))"
+    Assert-That "$What`: all $($State.Live) are $ExpectedType" $ok "(got $($State.TypesText))"
 }
 
 # --- on-disk binary, BEFORE anything runs --------------------------------------
@@ -338,13 +323,13 @@ try {
             Assert-That "  and the engine's own client array holds one ($($b.Sel.Active))" ($b.Sel.Active -eq 1)
         }
         else {
-            Assert-Feature "the box selects all $BARRACKS_COUNT ($($b.Unit.N))" ($b.Unit.N -eq $BARRACKS_COUNT)
+            Assert-That "the box selects all $BARRACKS_COUNT ($($b.Unit.N))" ($b.Unit.N -eq $BARRACKS_COUNT)
             Assert-ScAllOneType '  the boxed buildings' $b.Unit $BARRACKS_TYPE
-            Assert-Feature "  the engine's own client array holds all $BARRACKS_COUNT ($($b.Sel.Active))" `
+            Assert-That "  the engine's own client array holds all $BARRACKS_COUNT ($($b.Sel.Active))" `
                 ($b.Sel.Active -eq $BARRACKS_COUNT)
-            Assert-Feature "  and the status row's array holds all $BARRACKS_COUNT ($($b.Sel.Client))" `
+            Assert-That "  and the status row's array holds all $BARRACKS_COUNT ($($b.Sel.Client))" `
                 ($b.Sel.Client -eq $BARRACKS_COUNT)
-            Assert-Feature "  while the SIMULATION holds one (sim=$($b.Sel.Sim), simSlots=$($b.Unit.SimSlots))" `
+            Assert-That "  while the SIMULATION holds one (sim=$($b.Sel.Sim), simSlots=$($b.Unit.SimSlots))" `
                 ($b.Sel.Sim -eq 1 -and $b.Unit.SimSlots -eq 1)
         }
         Shot 'box'
@@ -382,10 +367,10 @@ try {
             Assert-That "with the feature off a double click selects ONE building ($($b.Unit.N))" ($b.Unit.N -eq 1)
         }
         else {
-            Assert-Feature "a double click selects all $BARRACKS_COUNT same-type buildings ($($b.Unit.N))" `
+            Assert-That "a double click selects all $BARRACKS_COUNT same-type buildings ($($b.Unit.N))" `
                 ($b.Unit.N -eq $BARRACKS_COUNT)
             Assert-ScAllOneType '  the selected buildings' $b.Unit $BARRACKS_TYPE
-            Assert-Feature "  the engine's own client array holds all $BARRACKS_COUNT ($($b.Sel.Active))" `
+            Assert-That "  the engine's own client array holds all $BARRACKS_COUNT ($($b.Sel.Active))" `
                 ($b.Sel.Active -eq $BARRACKS_COUNT)
         }
         Shot 'double-click'
@@ -411,7 +396,7 @@ try {
             Assert-That "with the feature off a ctrl click selects ONE building ($($b.Unit.N))" ($b.Unit.N -eq 1)
         }
         else {
-            Assert-Feature "a ctrl click selects all $BARRACKS_COUNT same-type buildings ($($b.Unit.N))" `
+            Assert-That "a ctrl click selects all $BARRACKS_COUNT same-type buildings ($($b.Unit.N))" `
                 ($b.Unit.N -eq $BARRACKS_COUNT)
             Assert-ScAllOneType '  the selected buildings' $b.Unit $BARRACKS_TYPE
         }
@@ -440,8 +425,8 @@ try {
             Assert-That "with the feature off shift-click adds nothing ($($after.Unit.N))" ($after.Unit.N -eq 1)
         }
         else {
-            Assert-Feature "shift-click added the second building (now $($after.Unit.N))" ($after.Unit.N -eq 2)
-            Assert-Feature "  the engine's own client array holds both ($($after.Sel.Active))" ($after.Sel.Active -eq 2)
+            Assert-That "shift-click added the second building (now $($after.Unit.N))" ($after.Unit.N -eq 2)
+            Assert-That "  the engine's own client array holds both ($($after.Sel.Active))" ($after.Sel.Active -eq 2)
             Assert-ScAllOneType '  the two selected' $after.Unit $BARRACKS_TYPE
         }
         Shot 'shift-add'
@@ -468,7 +453,7 @@ try {
         Send-ScClick -Hwnd $hwnd -X $p.X -Y $p.Y -Shift -SettleMs 1200
         $after = Read-ScBoth 'remove-after'
         Show-Both $after 'after shift-clicking a selected building'
-        Assert-Feature "shift-click removed exactly one ($($before.Unit.N) -> $($after.Unit.N))" `
+        Assert-That "shift-click removed exactly one ($($before.Unit.N) -> $($after.Unit.N))" `
             ($after.Unit.N -eq $before.Unit.N - 1)
         Shot 'shift-remove'
     }
@@ -500,7 +485,7 @@ try {
                 ($after.Unit.N -le $before.Unit.N)
         }
         else {
-            Assert-Feature "the shift+box extended the group to all $BARRACKS_COUNT ($($before.Unit.N) -> $($after.Unit.N))" `
+            Assert-That "the shift+box extended the group to all $BARRACKS_COUNT ($($before.Unit.N) -> $($after.Unit.N))" `
                 ($after.Unit.N -eq $BARRACKS_COUNT)
             Assert-ScAllOneType '  the extended group' $after.Unit $BARRACKS_TYPE
         }
@@ -581,7 +566,7 @@ try {
                     ($stored -eq 1)
             }
             else {
-                Assert-Feature "  the plugin stored all $BARRACKS_COUNT ($stored)" ($stored -eq $BARRACKS_COUNT)
+                Assert-That "  the plugin stored all $BARRACKS_COUNT ($stored)" ($stored -eq $BARRACKS_COUNT)
             }
         }
         # What the ENGINE stored, read from its own row: the number that lets the recall
@@ -629,17 +614,17 @@ try {
             Assert-That "with the feature off the recall brings back ONE ($($back.Sel.Active))" ($back.Sel.Active -eq 1)
         }
         else {
-            Assert-Feature "the recall brings back all $BARRACKS_COUNT in the plugin's list ($($back.Unit.N))" `
+            Assert-That "the recall brings back all $BARRACKS_COUNT in the plugin's list ($($back.Unit.N))" `
                 ($back.Unit.N -eq $BARRACKS_COUNT)
             # THE USER'S SYMPTOM, as a number. "It only shows 1" is the STOCK STATUS ROW,
             # which draws clientSelectionGroup -- so the row is fixed only if that array
             # holds them all, and the plugin's own shadow count says nothing about it.
-            Assert-Feature "  the engine's own client array holds all $BARRACKS_COUNT ($($back.Sel.Active))" `
+            Assert-That "  the engine's own client array holds all $BARRACKS_COUNT ($($back.Sel.Active))" `
                 ($back.Sel.Active -eq $BARRACKS_COUNT)
-            Assert-Feature "  and the STATUS ROW's array holds all $BARRACKS_COUNT ($($back.Sel.Client) / count byte $($back.Sel.ClientCount))" `
+            Assert-That "  and the STATUS ROW's array holds all $BARRACKS_COUNT ($($back.Sel.Client) / count byte $($back.Sel.ClientCount))" `
                 ($back.Sel.Client -eq $BARRACKS_COUNT)
             Assert-ScAllOneType '  the recalled group' $back.Unit $BARRACKS_TYPE
-            Assert-Feature "  every one of them is circled ($($back.Unit.Circled)/$($back.Unit.CircledOf))" `
+            Assert-That "  every one of them is circled ($($back.Unit.Circled)/$($back.Unit.CircledOf))" `
                 ($back.Unit.Circled -eq $BARRACKS_COUNT)
         }
         Shot 'group-recalled'
@@ -659,16 +644,16 @@ try {
         $rallied = Read-ScBoth 'group-rallied'
         Show-Both $rallied 'after one right-click on the recalled group'
         if (-not $Stock) {
-            Assert-Feature 'the right-click on the recalled group was fanned out' ($start.Count -gt 0)
+            Assert-That 'the right-click on the recalled group was fanned out' ($start.Count -gt 0)
             $nowKeys = @($rallied.Unit.Rally.Keys)
             # THE MOVE, asserted separately from the agreement, because they fail for
             # different reasons and a reader needs to know which one happened: no move at
             # all means the right-click never became an order, while a move into more than
             # one bucket means the fan-out reached some of them and not others.
-            Assert-Feature "the right-click MOVED the rally point ($rallyBefore -> $($rallied.Unit.RallyText))" `
+            Assert-That "the right-click MOVED the rally point ($rallyBefore -> $($rallied.Unit.RallyText))" `
                 (Test-ScChanged -Before $rallyBefore -After $rallied.Unit.RallyText) `
                 '(an unrallied group is also one bucket -- without this the agreement below passes for a click that did nothing)'
-            Assert-Feature "every recalled building is rallied to the SAME point (buckets: $($nowKeys.Count))" `
+            Assert-That "every recalled building is rallied to the SAME point (buckets: $($nowKeys.Count))" `
                 (Test-ScWitnessed -Claim ($nowKeys.Count -eq 1 -and $rallied.Unit.Rally[$nowKeys[0]] -eq $rallied.Unit.Live) `
                                   -Witness (Test-ScChanged -Before $rallyBefore -After $rallied.Unit.RallyText)) `
                 "(got $($rallied.Unit.RallyText) over $($rallied.Unit.Live) live)"

@@ -137,7 +137,7 @@ function Invoke-Arm {
         Save-ScWindowImage -Hwnd $hwnd -Path (Join-Path $shotDir ("{0:d2}-{1}.png" -f $script:shotSeq, $t)) -FullWindow | Out-Null
     }
 
-    $result = [ordered]@{ Tag = $tag; UnitType = $UnitType; Mode = $Mode; LogPath = $logPath; Pid = $gamePid; MapPath = $mapPath }
+    $result = [ordered]@{ Tag = $tag; UnitType = $UnitType; Mode = $Mode; LogPath = $logPath; Pid = $gamePid }
     try {
         Enter-ScCustomGame -Hwnd $hwnd -LogPath $logPath -Fixtures $fixtures -MapPath $mapPath -GameDir $GameDir -BeforeStart { ArmShot 'lobby' } -Noun 'test'
 
@@ -234,27 +234,21 @@ try {
 
                 $arm.DistArrived = Get-MinDistance $mine1 $sunk1
                 $arm.DistWatched = Get-MinDistance $mine2 $sunk2
-                $arm.MyHpArrived = Get-TotalHp $mine1
                 $arm.MyHpWatched = Get-TotalHp $mine2
                 $arm.MyHpStart = Get-TotalHp $mine0
                 $arm.SunkenHpStart = Get-TotalHp $sunk0
                 $arm.SunkenHpWatched = Get-TotalHp $sunk2
                 $arm.SunkenOrders = (($sunk2 | ForEach-Object { '0x{0:x2}' -f $_.Order }) -join ',')
-                # A Marine block can kill the Sunken outright, so "no Sunken" is a real
-                # outcome and reads as -1 rather than throwing.
                 $arm.SunkenOrderBefore = $(if ($sunk0.Count -gt 0) { $sunk0[0].Order } else { -1 })
-                $arm.SunkenOrderAfter = $(if ($sunk2.Count -gt 0) { $sunk2[0].Order } else { -1 })
-                $arm.SunkenAcquired = ($arm.SunkenOrderAfter -eq $SUNKEN_ATTACK_ORDER)
                 $arm.Survivors = $mine2.Count
-                $arm.MyHpMin = $arm.MinHp
                 # "It was shot" is the LOWEST hit-point total seen while standing there,
                 # or a missing unit -- not the final reading, which healing can restore.
-                $arm.Attacked = ($arm.MyHpMin -lt $arm.MyHpStart) -or ($mine2.Count -lt $UnitCount)
+                $arm.Attacked = ($arm.MinHp -lt $arm.MyHpStart) -or ($mine2.Count -lt $UnitCount)
 
                 Write-Host ("       [{0}] closest {1} to the Sunken: {2}px on arrival, {3}px after the watch (weapon range {4}px)" -f `
                     $arm.Tag, $ut, $arm.DistArrived, $arm.DistWatched, $SUNKEN_RANGE_PX)
                 Write-Host ("       [{0}] my hit points {1} -> {2} (lowest seen {3}); survivors {4}/{5}; Sunken hp {6} -> {7}; Sunken order(s) {8}" -f `
-                    $arm.Tag, $arm.MyHpStart, $arm.MyHpWatched, $arm.MyHpMin, $arm.Survivors, $UnitCount,
+                    $arm.Tag, $arm.MyHpStart, $arm.MyHpWatched, $arm.MinHp, $arm.Survivors, $UnitCount,
                     $arm.SunkenHpStart, $arm.SunkenHpWatched, $arm.SunkenOrders)
 
                 # The fixture is only meaningful if the units actually got within range.
@@ -300,8 +294,8 @@ try {
             if (-not $f -or -not $o) { continue }
             $pairsCompared++
             Write-Host ("       {0}: fanout attacked={1} (hp {2}, lowest {3}, {4} samples, orders {5}), observe attacked={6} (hp {7}, lowest {8}, {9} samples, orders {10})" -f `
-                $ut, $f.Attacked, $f.MyHpStart, $f.MyHpMin, $f.WatchSamples, $f.OrdersSeen,
-                $o.Attacked, $o.MyHpStart, $o.MyHpMin, $o.WatchSamples, $o.OrdersSeen)
+                $ut, $f.Attacked, $f.MyHpStart, $f.MinHp, $f.WatchSamples, $f.OrdersSeen,
+                $o.Attacked, $o.MyHpStart, $o.MinHp, $o.WatchSamples, $o.OrdersSeen)
             # THE WITNESS both of the assertions below need: each arm's block has to have
             # got within the Sunken's reach. Without it, two arms that never arrived are
             # both "not attacked", the comparison passes, and the run reports parity between

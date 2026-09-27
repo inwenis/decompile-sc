@@ -239,16 +239,6 @@ try {
 
     $runArgs = @{ Mode = 'fanout'; InjectWindowedHelper = 'WMode'; GameDir = $GameDir; LogPath = $LogPath }
     if ($BuildDir) { $runArgs.BuildDir = $BuildDir }
-    # Hash the plugin this run is about to load, before it loads it: when the suite runs
-    # against two builds, "which tree did that DLL come from" must not need answering by hand.
-    $dllDir  = if ($BuildDir) { $BuildDir } else { Join-Path $repoRoot 'work/scratch/plugin-build' }
-    $dllPath = Join-Path $dllDir 'scplugin.dll'
-    if (Test-Path -LiteralPath $dllPath) {
-        Write-Host ("[0] scplugin.dll SHA-256: {0}  ({1})" -f `
-            (Get-FileHash -LiteralPath $dllPath -Algorithm SHA256).Hash, $dllPath)
-    } else {
-        Write-Host "[0] scplugin.dll not found at $dllPath -- run-with-plugin will say so"
-    }
     & (Join-Path $scriptDir 'run-with-plugin.ps1') @runArgs 6>&1 | ForEach-Object {
             Write-Host $_
             if ("$_" -match 'scinject:\s*PID=(\d+)') { $script:gamePid = [int]$Matches[1] }

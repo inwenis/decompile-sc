@@ -121,12 +121,7 @@ function Get-UpgQueue {
         if (@($lines | Select-String -Pattern 'buildings=').Count -gt 0) {
             $out = [pscustomobject]@{
                 Label = $label; Selected = $null
-                # QueuedTotal is the CUMULATIVE counter from the summary line; what the
-                # plugin holds RIGHT NOW is .Selected.Queued, off the per-building line.
-                # Conflating them asserts "holds one item" against a lifetime total.
-                Buildings = 0; Max = 0; QueuedTotal = 0; Promoted = 0; Cancelled = 0
-                Dropped = 0; RefusedFull = 0; RefusedGate = 0; WaitingCost = 0
-                Unblocked = 0; HiddenHeld = 0; RefusedDup = 0
+                Buildings = 0; Promoted = 0; Cancelled = 0; Dropped = 0; RefusedFull = 0; RefusedGate = 0
                 Levels = @{}; LevelCount = -1; Techs = @(); TechCount = -1
                 Lines = @($lines | ForEach-Object { $_.Line })
             }
@@ -135,19 +130,15 @@ function Get-UpgQueue {
                     'UPGQSEL \[[^\]]+\] unit=0x([0-9A-Fa-f]+) type=0x([0-9A-Fa-f]+) player=(\d+) upg=(\d+) tech=(\d+) lvl=(\d+) time=(\d+) busy=(\d+) queued=(\d+) queue=\[([^\]]*)\] logical=(\d+) minerals=(\d+) gas=(\d+)')
                 if ($m.Success) {
                     $out.Selected = [pscustomobject]@{
-                        Unit = $m.Groups[1].Value
                         Type = [Convert]::ToInt32($m.Groups[2].Value, 16)
-                        Player = [int]$m.Groups[3].Value
                         Upgrade = [int]$m.Groups[4].Value
                         Tech = [int]$m.Groups[5].Value
-                        Level = [int]$m.Groups[6].Value
                         Time = [int]$m.Groups[7].Value
                         Busy = [int]$m.Groups[8].Value
                         Queued = [int]$m.Groups[9].Value
                         Queue = @($m.Groups[10].Value -split ',' | Where-Object { $_ -match '^[UT]:' })
                         Logical = [int]$m.Groups[11].Value
                         Minerals = [int]$m.Groups[12].Value
-                        Gas = [int]$m.Groups[13].Value
                     }
                     continue
                 }
@@ -166,17 +157,11 @@ function Get-UpgQueue {
                     'buildings=(\d+) max=(\d+) queued=(\d+) promoted=(\d+) cancelled=(\d+) dropped=(\d+)(?:\s+\w+=\S+)*\s+refusedFull=(\d+) refusedGate=(\d+) waitingCost=(\d+) unblocked=(\d+) hiddenHeld=(\d+) refusedDup=(\d+)')
                 if ($s.Success) {
                     $out.Buildings = [int]$s.Groups[1].Value
-                    $out.Max = [int]$s.Groups[2].Value
-                    $out.QueuedTotal = [int]$s.Groups[3].Value
                     $out.Promoted = [int]$s.Groups[4].Value
                     $out.Cancelled = [int]$s.Groups[5].Value
                     $out.Dropped = [int]$s.Groups[6].Value
                     $out.RefusedFull = [int]$s.Groups[7].Value
                     $out.RefusedGate = [int]$s.Groups[8].Value
-                    $out.WaitingCost = [int]$s.Groups[9].Value
-                    $out.Unblocked = [int]$s.Groups[10].Value
-                    $out.HiddenHeld = [int]$s.Groups[11].Value
-                    $out.RefusedDup = [int]$s.Groups[12].Value
                 } elseif ($l.Line -match 'buildings=') {
                     Assert-That 'the UPGQ summary line parsed' $false "($($l.Line))"
                 }
@@ -327,7 +312,6 @@ try {
             ($q.LevelCount -eq 0 -and $q.TechCount -eq 0) `
             "(levels=$($q.LevelCount) techs=$($q.TechCount))"
         $script:mineralsStart = $q.Selected.Minerals
-        $script:gasStart = $q.Selected.Gas
     }
 
     Step 'read the card: which research does this Academy actually offer?' {

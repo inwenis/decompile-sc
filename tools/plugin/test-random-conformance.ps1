@@ -177,8 +177,6 @@ if ($unimplemented.Count -gt 0) {
 $CC_TYPE       = 106      # units.dat 106, Terran Command Center
 $SCV_TYPE      = 7        # units.dat 7,   Terran SCV
 $DEPOT_TYPE    = 109      # units.dat 109, Terran Supply Depot
-$EBAY_TYPE     = 122      # units.dat 122, Terran Engineering Bay
-$MARINE_TYPE   = 0        # units.dat 0,   Terran Marine
 $SCV_COST      = 50       # minerals
 $SCV_SUPPLY    = 1
 $CC_SUPPLY     = 10
@@ -780,7 +778,6 @@ try {
     # -----------------------------------------------------------------------
     # THE EPISODES
     # -----------------------------------------------------------------------
-    $script:builtBaseline = 0
     foreach ($ep in $plan.episodes) {
         $script:episodeNo = $ep.index
         # ENTERED, not run. The four `continue` paths below can all fire before this episode

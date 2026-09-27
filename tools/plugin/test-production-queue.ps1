@@ -824,7 +824,6 @@ try {
             ($wrong.Count -eq 0) `
             "(bad: $(($wrong | ForEach-Object { "disp$($_.Display) uicon=0x$('{0:x}' -f $_.UIcon) qtype=0x$('{0:x}' -f $_.QueueType)" }) -join ' '))"
         Write-Host "       the player sees $($st.Clickable) icons for a queue of $QueueMax -- the $expectOverflow the plugin holds are NOT drawn"
-        $script:stripWithOverflow = $st
     }
 
     Step 'THE INDICATOR says what the strip cannot show (task 033)' {
@@ -864,7 +863,6 @@ try {
         Assert-That 'every lit icon draws from the ICON grp, not the empty-slot placeholder art' `
             (@($qi.Icons | Where-Object { $_.State -eq 'lit' -and $_.Art -ne 'I' }).Count -eq 0) `
             "(art letters: $(($qi.Icons | ForEach-Object { $_.Art }) -join ''))"
-        $script:qindDrawn = $qi
     }
 
     Step 'READ the card again: NOW the Cancel button is there' {

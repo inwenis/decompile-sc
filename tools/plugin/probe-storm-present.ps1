@@ -8,10 +8,8 @@ independent of 073's unshipped console experiment.
 
 It reads the buffer-vs-glass two numbers over the MAP right band (the instrument
 renderer-viewport.md 19.8 leaves behind; this reuses it, it does not build another),
-captures the window the user would actually see, checks the widen held (base region
-+0x18 == 800 from the STORM log), that a minimap click still steers (must-not-break),
-and -- the conductor's ask -- that the widen RE-ASSERTS across a return-to-menu +
-reload, which rebuilds the base region to 640 and must be re-widened.
+captures the window the user would actually see, and checks that a minimap click still
+steers (must-not-break).
 
 .EXAMPLE
 ./tools/plugin/run-offscreen.ps1 -Suite ./tools/plugin/probe-storm-present.ps1
@@ -81,19 +79,6 @@ function Get-DumpBand {
     $out = & python (Join-Path $scriptDir 'frame-capture.py') band --dump $Dump --x0 $X0 --x1 $X1 --y0 $Y0 --y1 $Y1 2>&1
     foreach ($l in $out) { if ("$l" -match '^band_nonzero_frac=(.+)$') { return [double]$Matches[1] } }
     -1.0
-}
-
-# The STORM log's base-region row-width, for a dedicated marker. This is the memory
-# oracle the on-glass capture corroborates: +0x18 == the screen width means the widen is in force.
-function Get-StormBaseW18 {
-    param([string]$Tag)
-    $from = Get-ScLogLineCount -LogPath $log
-    Set-ScMarker -MarkerPath $markerPath -Label $Tag
-    [void](Wait-ScLogMatch -LogPath $log -Pattern "STORM \[$([regex]::Escape($Tag))\] region-struct base" -TimeoutSec 15 -FromLine $from)
-    $line = @(Get-Content -LiteralPath $log | Select-Object -Skip $from |
-              Where-Object { $_ -match "STORM \[$([regex]::Escape($Tag))\] region-struct base" }) | Select-Object -First 1
-    if ($line -and $line -match '\+18=(\d+)') { return [int]$Matches[1] }
-    -1
 }
 
 # The shipped-config band read: buffer (composed, always full width) beside glass (the
@@ -256,4 +241,4 @@ if ($script:findings.Count) { Write-Host 'probe-storm: FINDINGS:'; $script:findi
 Write-Host ''
 if (-not $completed) { Write-Host "probe-storm: INCOMPLETE -- the run did not reach its end; $script:failures failure(s) so far"; exit 1 }
 elseif ($script:failures -gt 0) { Write-Host "probe-storm: FAIL ($script:failures failure(s))"; exit 1 }
-else { Write-Host 'probe-storm: PASS (0 failures) -- the playfield presents past x=648 in the shipped config, and re-asserts across a reload'; exit 0 }
+else { Write-Host 'probe-storm: PASS (0 failures) -- the playfield presents past x=648 in the shipped config'; exit 0 }

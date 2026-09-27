@@ -169,7 +169,6 @@ try {
             "(types seen: $((($mine | ForEach-Object { '0x{0:x}' -f $_.Type }) | Sort-Object -Unique) -join ' '))"
         Assert-That 'the world scan of player 0 was not taken mid-edit' `
             ($w.Counts[0].Units -eq $w.Counts[0].Recount -and $w.Counts[0].Complete -eq 1)
-        $script:bayUnit = if ($bays.Count -gt 0) { $bays[0].Unit } else { $null }
         # The BEFORE half of the order comparison the "is it really running" step makes.
         $script:idleOrder = if ($bays.Count -gt 0) { $bays[0].Order } else { -1 }
         $script:idleOrder2 = if ($bays.Count -gt 0) { $bays[0].Order2 } else { -1 }
@@ -239,7 +238,6 @@ try {
             Note ("researching Engineering Bay: order=0x{0:x} order2=0x{1:x} (idle was order=0x{2:x} order2=0x{3:x})" -f `
                 $bay.Order, $bay.Order2, $script:idleOrder, $script:idleOrder2)
             $script:busyOrder = $bay.Order
-            $script:busyOrder2 = $bay.Order2
         }
         # The precondition of the whole question. If the order did not change, the click
         # did not start anything and every measurement below is about the wrong state.
@@ -259,7 +257,6 @@ try {
         Note ("buttonset changed while researching: " + ($(if ($card.PortraitSet -ne $script:idleSet) { "YES ($script:idleSet -> $($card.PortraitSet))" } else { "NO (still $($card.PortraitSet))" })))
         $stillEnabled = @($rs | Where-Object { $_.Visible -and -not $_.Disabled })
         Note ("upgrade/research buttons still ENABLED while one runs: $($stillEnabled.Count) of $($rs.Count)")
-        $script:busyEnabled = $stillEnabled
         Shot 'busy'
     }
 

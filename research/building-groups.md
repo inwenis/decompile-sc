@@ -525,8 +525,9 @@ call `0x00496B40` made a few instructions earlier.
 
 ### 8.5 What each path actually did, measured before anything was changed
 
-`tools/plugin/test-building-parity.ps1 -Measure`, one game, six Barracks and six Marines, all
-player-owned. Three engine arrays read at each named instant through the plugin's `SELSNAP` line —
+The pre-fix build of task 036 (PR #42, 09dc9b4), measured with `tools/plugin/test-building-parity.ps1`'s
+since-removed `-Measure` arm (report every layer, assert nothing), one game, six Barracks and six
+Marines, all player-owned. Three engine arrays read at each named instant through the plugin's `SELSNAP` line —
 `client` = `clientSelectionGroup` (what the stock row draws), `active` = `activePlayerSelection`
 (the client's selection), `sim` = `playersSelections[player]` (what every order applier iterates) —
 beside the plugin's own shadow list. **A symptom does not say which layer refused; three numbers
