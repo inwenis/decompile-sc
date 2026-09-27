@@ -811,9 +811,9 @@ line — so two branches adding a part each get different numbers however they m
 
 Three branches used to claim a number another branch had already taken (024/026 → `[13]`,
 021/025 → `[11]`, 028/029 → `[16]`), and every one of them merged cleanly on its own, because
-the declarations sit in different regions of the file. `run-ci-local.ps1`'s `hooktest-parts`
-step now fails on a hand-written header or a duplicate part name; it is a **required** step, so
-unlike `hooktest` itself it cannot skip on a machine with no 32-bit toolchain.
+the declarations sit in different regions of the file. `Part()` itself fails a duplicate part
+name; nothing checks the ORDER, so a part inserted mid-list renumbers every later one without a
+word.
 
 Reordering the list in `main()` renumbers the parts, and `research/` cites several of them by
 number — so add at the end rather than inserting.
