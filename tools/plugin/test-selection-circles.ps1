@@ -306,7 +306,7 @@ else {
 
     # The books must balance: every circle attached was either detached again or is still
     # held when the process died. `held > 0` is NORMAL -- the test quits with a live
-    # selection, and scplugin.cpp deliberately does not un-splice on the process-exit path
+    # selection, and scplugin.cpp deliberately does not un-splice at process exit
     # (walking the thread list from DllMain under the loader lock is unsafe, and the
     # address space is going away anyway). A circle that is neither is the bug.
     Assert-That "the circle accounting balances ($shown = $hidden detached + $held held)" ($shown -eq $hidden + $held)

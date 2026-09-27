@@ -1001,8 +1001,7 @@ int ScUpgQueueInstall(BYTE* moduleBase) {
 }
 
 void ScUpgQueueRemove(void) {
-    // Nothing to give back: every held item is unpaid, so unloading mid-game costs the
-    // player exactly nothing.
+    // Nothing to give back: every held item is unpaid.
     if (g_lockReady) {
         EnterCriticalSection(&g_lock);
         g_recCount = 0;

@@ -595,8 +595,8 @@ Cancel Train command — a player action). The cost of that split is stated rath
 building destroyed while the player is idle is refunded on their next click rather than on the next
 frame.
 
-`ScProdQueueRemove` refunds everything still held before it un-splices, so unloading the plugin
-mid-game cannot strand paid-for items.
+The plugin is never unloaded mid-game (nothing calls `FreeLibrary` on it), so held items leave
+only through the paths above or with the process. `ScProdQueueRemove` is the install rollback.
 
 ---
 

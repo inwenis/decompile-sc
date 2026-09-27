@@ -1,6 +1,6 @@
-// sc_console.cpp -- the console at the bottom of a TALLER screen, and the click
-// trace. See sc_console.h for the contract; research/renderer-viewport.md 22
-// for the read that settled the design (renderer-viewport.md 19.x is the prior half).
+// sc_console.cpp -- the console at the bottom of a TALLER screen. See sc_console.h
+// for the contract; research/renderer-viewport.md 22 for the read that settled the
+// design (renderer-viewport.md 19.x is the prior half).
 //
 // Mechanism notes, each read out of StarCraft.exe 1.16.1:
 //
@@ -45,7 +45,6 @@
 
 #include "sc_console.h"
 
-#include <stdio.h>
 #include <string.h>
 
 #include "sc_addresses.h"
@@ -64,37 +63,23 @@
 #define SC_DLG_FLAG_COMPOSITE_BUFFER 0x10000000u
 
 #define SC_CONSOLE_MAX_ROOTS   16
-#define SC_CONSOLE_TRACE_MAX   2000
 #define SC_CONSOLE_NAME_LEN    20
 
 static bool  g_move    = false;   // the down-move: widescreen ACTIVE with a taller playfield
 static bool  g_centre  = false;   // the glue roots centred while no game is played (sc_menu.h)
-static bool  g_trace   = false;
 static bool  g_fullRedraw = false;   // request the engine's full playfield redraw every frame
 static ScHook g_hkCompose;
 
 static unsigned g_session = 0;
 
-// The interact wrap table: one row per wrapped ROOT dialog.
-struct WrapSlot {
-    DWORD dlg;
-    DWORD orig;
-    char  name[SC_CONSOLE_NAME_LEN];
-};
-static WrapSlot g_wrap[SC_CONSOLE_MAX_ROOTS];
-static int      g_wrapN = 0;
-
-// The move table: one row per translated root, holding what to restore.
+// The move table: one row per translated root.
 struct MoveSlot {
     DWORD dlg;
     short l, t, r, b;   // ORIGINAL bounds
-    short dx, dy;       // the translation applied
 };
 static MoveSlot g_moved[SC_CONSOLE_MAX_ROOTS];
 static int      g_movedN = 0;
 
-static unsigned g_traceLines   = 0;
-static unsigned g_traceDropped = 0;
 static unsigned g_frames       = 0;
 static unsigned g_moves        = 0;
 static unsigned g_menuMoves    = 0;   // glue roots centred (sc_menu.h)
@@ -125,94 +110,8 @@ static void ReadName(DWORD dlg, char* out, size_t outLen) {
 }
 
 // ---------------------------------------------------------------------------
-// The interact trace
-// ---------------------------------------------------------------------------
-
-typedef int (__attribute__((fastcall)) *ScInteractFn)(DWORD, DWORD);
-
-static WrapSlot* FindWrap(DWORD dlg) {
-    for (int i = 0; i < g_wrapN; ++i)
-        if (g_wrap[i].dlg == dlg) return &g_wrap[i];
-    return NULL;
-}
-
-static int __attribute__((fastcall)) SC_GAME_ENTRY ConsoleInteractShim(DWORD ctrl, DWORD evt) {
-    WrapSlot* w = FindWrap(ctrl);
-    if (!w || !w->orig) {
-        // A shim call with no table row means the table was reset under a live
-        // pointer (session change mid-dispatch). Claim nothing.
-        return 0;
-    }
-    int ret = ((ScInteractFn)w->orig)(ctrl, evt);
-    if (evt) {
-        const WORD type = *(WORD*)(evt + SC_EVT_OFF_TYPE);
-        // The floods that ate the first run's 600-line cap before the game even
-        // loaded (TitleDlg every ~100ms): type 13 (a timer tick carrying a raw
-        // pointer in dwUser) and the type-14 dwUser=8 sweep. Both dropped;
-        // mouse buttons (4..8) and the rest of the USER codes stay.
-        const bool flood = (type == 13) ||
-                           (type == SC_EVT_TYPE_USER && *(DWORD*)evt == 8);
-        if (type != SC_EVT_MOUSEMOVE && !flood) {
-            if (g_traceLines < SC_CONSOLE_TRACE_MAX) {
-                ++g_traceLines;
-                ScLog("CTRACE dlg='%s' 0x%08X type=%u user=%u x=%d y=%d -> ret=%d",
-                      w->name, (unsigned)ctrl, (unsigned)type, (unsigned)*(DWORD*)evt,
-                      (int)*(short*)(evt + SC_EVT_OFF_X),
-                      (int)*(short*)(evt + SC_EVT_OFF_Y), ret);
-            } else {
-                ++g_traceDropped;
-            }
-        }
-    }
-    return ret;
-}
-
-static void WrapRoot(DWORD dlg, const char* name) {
-    if (FindWrap(dlg)) return;
-    if (g_wrapN >= SC_CONSOLE_MAX_ROOTS) return;
-    if (!ScReadable(dlg + SC_BINDLG_OFF_INTERACT, 4)) return;
-    DWORD* fn = (DWORD*)(dlg + SC_BINDLG_OFF_INTERACT);
-    if (*fn == (DWORD)&ConsoleInteractShim) return;   // stale table row survived; leave it
-    WrapSlot* w = &g_wrap[g_wrapN];
-    w->dlg  = dlg;
-    w->orig = *fn;
-    _snprintf(w->name, sizeof(w->name), "%s", name[0] ? name : "?");
-    w->name[sizeof(w->name) - 1] = '\0';
-    ++g_wrapN;
-    *fn = (DWORD)&ConsoleInteractShim;
-    ScLog("CTRACE wrapped root '%s' 0x%08X orig=0x%08X (dispatch order = dialog-list "
-          "order; the first non-zero return claims the event)",
-          w->name, (unsigned)dlg, (unsigned)w->orig);
-}
-
-static void UnwrapAll(void) {
-    for (int i = 0; i < g_wrapN; ++i) {
-        DWORD dlg = g_wrap[i].dlg;
-        if (!ScReadable(dlg + SC_BINDLG_OFF_INTERACT, 4)) continue;
-        DWORD* fn = (DWORD*)(dlg + SC_BINDLG_OFF_INTERACT);
-        if (*fn == (DWORD)&ConsoleInteractShim) *fn = g_wrap[i].orig;
-    }
-    g_wrapN = 0;
-    memset(g_wrap, 0, sizeof(g_wrap));
-}
-
-// ---------------------------------------------------------------------------
 // The move
 // ---------------------------------------------------------------------------
-
-// Both surface descriptors, logged as evidence: the draw walk installs +0x36
-// and the status allocator fills +0x0C (sc_addresses.h explains the pair).
-static void LogSurfaces(DWORD dlg, const char* name) {
-    for (int k = 0; k < 2; ++k) {
-        DWORD d = dlg + (k == 0 ? SC_BINDLG_OFF_SURFACE : SC_BINDLG_OFF_SURFACE_ALT);
-        if (!ScReadable(d, 8)) continue;
-        ScLog("CONSOLE surf '%s' +0x%02X: w=%d h=%d bits=0x%08X", name,
-              (unsigned)(k == 0 ? SC_BINDLG_OFF_SURFACE : SC_BINDLG_OFF_SURFACE_ALT),
-              (int)*(short*)(d + SC_SURFACE_OFF_W),
-              (int)*(short*)(d + SC_SURFACE_OFF_H),
-              (unsigned)*(DWORD*)(d + SC_SURFACE_OFF_BITS));
-    }
-}
 
 // Every in-game root composites into the buffer, not the primary. Set once per
 // dialog (the bit is a plain dword field the engine never rewrites), and mark
@@ -234,10 +133,10 @@ static MoveSlot* FindMoved(DWORD dlg) {
     return NULL;
 }
 
-// Translate one root by (dx,dy), once, keeping the original for detach. With
-// waitSurface, not before the root's surface exists: moving BEFORE 0x004C35F0 has
-// copied the console art slice would make that copy read the 480-row console.pcx out of
-// range. Returns whether it moved; menu moves log and count apart.
+// Translate one root by (dx,dy), once. With waitSurface, not before the root's surface
+// exists: moving BEFORE 0x004C35F0 has copied the console art slice would make that copy
+// read the 480-row console.pcx out of range. Returns whether it moved; menu moves log and
+// count apart.
 static bool TryMove(DWORD dlg, const char* name, int dx, int dy, bool waitSurface,
                     bool menu) {
     if (!ScReadable(dlg + SC_BINDLG_OFF_BOUNDS, 8)) return false;
@@ -265,9 +164,7 @@ static bool TryMove(DWORD dlg, const char* name, int dx, int dy, bool waitSurfac
 
     MoveSlot* m = &g_moved[g_movedN];
     m->dlg = dlg; m->l = bl[0]; m->t = bl[1]; m->r = bl[2]; m->b = bl[3];
-    m->dx = (short)dx; m->dy = (short)dy;
 
-    if (!menu) LogSurfaces(dlg, name);
     ScCtrlUpdate(dlg);                    // the rect being VACATED goes dirty
     bl[0] = (short)(m->l + dx);
     bl[2] = (short)(m->r + dx);
@@ -283,25 +180,6 @@ static bool TryMove(DWORD dlg, const char* name, int dx, int dy, bool waitSurfac
           (unsigned)*(DWORD*)(dlg + SC_BINDLG_OFF_FLAGS),
           (unsigned)bits36, (unsigned)bits0C);
     return true;
-}
-
-static void UnmoveAll(void) {
-    for (int i = 0; i < g_movedN; ++i) {
-        DWORD dlg = g_moved[i].dlg;
-        if (!ScReadable(dlg + SC_BINDLG_OFF_BOUNDS, 8)) continue;
-        short* bl = ScDlgBounds(dlg);
-        const MoveSlot* m = &g_moved[i];
-        // Restore only if the bounds still read as OUR move; anything else means
-        // the record was freed and reused, and writing it would corrupt a stranger.
-        if (bl[0] == (short)(m->l + m->dx) && bl[1] == (short)(m->t + m->dy) &&
-            bl[2] == (short)(m->r + m->dx) && bl[3] == (short)(m->b + m->dy)) {
-            ScCtrlUpdate(dlg);
-            bl[0] = m->l; bl[1] = m->t; bl[2] = m->r; bl[3] = m->b;
-            ScCtrlUpdate(dlg);
-        }
-    }
-    g_movedN = 0;
-    memset(g_moved, 0, sizeof(g_moved));
 }
 
 // Drop the rows whose dialog has left the list, so a menu session's freed roots never
@@ -325,7 +203,7 @@ static void PruneMoved(const DWORD* live, int liveN) {
 typedef void (__attribute__((stdcall)) *ScCmdactSelectFn)(DWORD count, DWORD* units);
 
 void ScConsoleOnMarker(const char* label) {
-    if (!label || (!g_move && !g_trace)) return;
+    if (!label || !g_move) return;
     if (strncmp(label, "conedge-select", 14) == 0) InterlockedExchange(&g_selectReq, 1);
 }
 
@@ -398,8 +276,6 @@ static void SessionSync(void) {
     const unsigned now = ScSessionEpoch();
     if (g_session == now) return;
     // The dialogs of the previous game are freed heap; forget, never touch.
-    g_wrapN  = 0;
-    memset(g_wrap, 0, sizeof(g_wrap));
     g_movedN = 0;
     memset(g_moved, 0, sizeof(g_moved));
     g_session = now;
@@ -442,7 +318,6 @@ static void OnFrame(void) {
         live[liveN++] = dlg;
         char name[SC_CONSOLE_NAME_LEN];
         ReadName(dlg, name, sizeof(name));
-        if (g_trace) WrapRoot(dlg, name);
         if (inGame && g_move) {
             // Every root, not only the console: a root left direct-blitting would
             // be erased by the whole-frame mirror (the F10 menu, tooltips, chat).
@@ -490,13 +365,11 @@ static const BYTE kPrologueCompose[] = { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x14 };
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-bool ScConsoleTraceWanted(void) { return ScEnvOptIn("SCPLUGIN_CONSOLE_TRACE"); }
 bool ScConsoleBufferResident(void) { return g_move; }
 int  ScConsoleInGame(void) { return g_inGame; }
 
-void ScConsoleInstall(BYTE* moduleBase, bool writeAllowed, bool trace) {
+void ScConsoleInstall(BYTE* moduleBase, bool writeAllowed) {
     ScEngineSetModuleBase(moduleBase);
-    g_trace = trace;
     // The move is not a flag: it is what a taller playfield means. It engages
     // whenever the widescreen table asks for one (CONSOLE_SHIFT_Y > 0) and the
     // plugin may write; the table's own ACTIVE verdict gates it per frame.
@@ -510,40 +383,31 @@ void ScConsoleInstall(BYTE* moduleBase, bool writeAllowed, bool trace) {
     // whole buffer); %SCPLUGIN_FULLREDRAW%=0 is the A/B switch for its cost.
     g_fullRedraw = g_move && ScEnvFlag("SCPLUGIN_FULLREDRAW", true);
     memset(&g_hkCompose, 0, sizeof(g_hkCompose));
-    g_wrapN = 0;  memset(g_wrap, 0, sizeof(g_wrap));
     g_movedN = 0; memset(g_moved, 0, sizeof(g_moved));
-    g_traceLines = g_traceDropped = g_frames = g_moves = g_menuMoves = g_converted = g_fullFrames = 0;
+    g_frames = g_moves = g_menuMoves = g_converted = g_fullFrames = 0;
     g_session = 0;
     g_inGame = -1;
-    if (!g_move && !g_trace && !g_centre) {
-        ScLog("CONSOLE: off (no console shift in the table; %%SCPLUGIN_CONSOLE_TRACE%% unset)");
+    if (!g_move && !g_centre) {
+        ScLog("CONSOLE: off (no console shift in the table)");
         return;
     }
     if (!ScHookInstall(&g_hkCompose, "frameCompose", ScRuntimeAddr(SC_VA_FRAME_COMPOSE),
                        (void*)&HkFrameCompose, (int)sizeof(kPrologueCompose),
                        kPrologueCompose, (int)sizeof(kPrologueCompose))) {
         ScLog("CONSOLE: frame-compose hook failed to install -- feature disabled");
-        g_move = g_trace = g_centre = false;
+        g_move = g_centre = false;
         return;
     }
-    ScLog("CONSOLE: ON move=%d trace=%d fullredraw=%d centre=%d (frame hook at 0x0041E280; in game every root "
+    ScLog("CONSOLE: ON move=%d fullredraw=%d centre=%d (frame hook at 0x0041E280; in game every root "
           "composites into the buffer, and the bottom console moves DOWN %d once its "
           "surfaces exist, old+new rects marked dirty; fullredraw requests the engine's "
           "full playfield path before every compose)",
-          g_move ? 1 : 0, g_trace ? 1 : 0, g_fullRedraw ? 1 : 0, g_centre ? 1 : 0,
+          g_move ? 1 : 0, g_fullRedraw ? 1 : 0, g_centre ? 1 : 0,
           ScScreenConsoleShiftY());
 }
 
-void ScConsoleRemove(void) {
-    UnmoveAll();
-    UnwrapAll();
-    ScHookRemove(&g_hkCompose);
-}
-
 void ScConsoleLogStats(void) {
-    if (!g_move && !g_trace && !g_centre && g_frames == 0) return;
-    ScLog("CONSOLESTATS frames=%u moves=%u converted=%u fullFrames=%u wrapped=%d traceLines=%u "
-          "traceDropped=%u selects=%u menuMoves=%u",
-          g_frames, g_moves, g_converted, g_fullFrames, g_wrapN, g_traceLines, g_traceDropped,
-          g_selects, g_menuMoves);
+    if (!g_move && !g_centre && g_frames == 0) return;
+    ScLog("CONSOLESTATS frames=%u moves=%u converted=%u fullFrames=%u selects=%u menuMoves=%u",
+          g_frames, g_moves, g_converted, g_fullFrames, g_selects, g_menuMoves);
 }

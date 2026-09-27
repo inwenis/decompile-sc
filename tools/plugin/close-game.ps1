@@ -4,8 +4,8 @@
 Close a running StarCraft process politely (WM_CLOSE), then verify it is gone.
 
 .DESCRIPTION
-Never leave a game process running. WM_CLOSE rather than Stop-Process: the plugin un-splices its
-hooks and writes its closing STATS line on DLL_PROCESS_DETACH, and a killed process runs neither.
+Never leave a game process running. WM_CLOSE rather than Stop-Process: the plugin writes its
+closing STATS and DETACH lines on DLL_PROCESS_DETACH, and a killed process never runs it.
 A timeout falls back to Stop-Process and says so, so a silent kill cannot read as a clean shutdown.
 AGENTS.md § "Stopping a run / orphaned games".
 

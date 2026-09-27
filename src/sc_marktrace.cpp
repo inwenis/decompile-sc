@@ -194,16 +194,6 @@ void ScMarkTraceInstall(BYTE* moduleBase, bool writeAllowed) {
           "'marktrace-off' stops them and prints the per-caller totals", SC_VA_MARK_DIRTY);
 }
 
-void ScMarkTraceRemove(void) {
-    if (!g_installed) return;
-    g_on = 0;
-    ScHookRemove(&g_hk);
-    if (g_hkFog.installed) ScHookRemove(&g_hkFog);
-    if (g_hkTerr.installed) ScHookRemove(&g_hkTerr);
-    if (g_hkImg.installed) ScHookRemove(&g_hkImg);
-    g_installed = false;
-}
-
 void ScMarkTraceOnMarker(const char* label) {
     if (!g_installed || !label) return;
     if (strcmp(label, "marktrace-on") == 0) {
@@ -223,9 +213,7 @@ void ScMarkTraceOnMarker(const char* label) {
 // ---------------------------------------------------------------------------
 
 static DWORD* g_cursorSlot   = NULL;   // the import slot, once installed
-static DWORD  g_cursorStock  = 0;      // what the slot held before the first write
 static DWORD  g_cursorSeen   = 0;      // the last foreign value the poll replaced
-static unsigned g_cursorReasserts = 0;
 
 // The cursor layer's rect (layer 0, s16 left/top at +2/+4) is written by the engine's
 // own cursor path from the position the window procedure stored for the last mouse
@@ -250,10 +238,10 @@ void ScCursorPostedInstall(BYTE* moduleBase, bool writeAllowed) {
     if (!writeAllowed || !ScEnvOptIn("SCPLUGIN_CURSOR_POSTED")) return;
     g_cursorSlot = (DWORD*)(moduleBase + (SC_VA_IMPORT_GETCURSORPOS - SC_PREFERRED_IMAGE_BASE));
     if (!ScReadableAt(g_cursorSlot, sizeof(DWORD))) { g_cursorSlot = NULL; return; }
-    g_cursorStock = *g_cursorSlot;
+    const DWORD stock = *g_cursorSlot;
     if (!CursorSlotWrite((DWORD)(DWORD_PTR)&HkGetCursorPos)) { g_cursorSlot = NULL; return; }
     ScLog("CURSOR posted: GetCursorPos import at 0x%08X answers from the cursor layer (was 0x%08X)",
-          (unsigned)(DWORD_PTR)g_cursorSlot, (unsigned)g_cursorStock);
+          (unsigned)(DWORD_PTR)g_cursorSlot, (unsigned)stock);
 }
 
 void ScCursorPostedPoll(void) {
@@ -265,16 +253,5 @@ void ScCursorPostedPoll(void) {
               (unsigned)cur);
         g_cursorSeen = cur;
     }
-    if (CursorSlotWrite((DWORD)(DWORD_PTR)&HkGetCursorPos)) ++g_cursorReasserts;
-}
-
-void ScCursorPostedRemove(void) {
-    if (!g_cursorSlot) return;
-    // The helper's value, when it took the slot after us, is the one to leave behind:
-    // restoring the stock import under a still-loaded cnc-ddraw would bypass its
-    // translation for the rest of the process.
-    CursorSlotWrite(g_cursorSeen ? g_cursorSeen : g_cursorStock);
-    ScLog("CURSOR posted: import restored to 0x%08X after %u re-assert(s)",
-          (unsigned)(g_cursorSeen ? g_cursorSeen : g_cursorStock), g_cursorReasserts);
-    g_cursorSlot = NULL;
+    CursorSlotWrite((DWORD)(DWORD_PTR)&HkGetCursorPos);
 }

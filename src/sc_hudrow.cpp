@@ -1147,8 +1147,7 @@ void ScHudRowRemove(void) {
     ScHookRemove(&g_hkDispatch);
 
     // Best-effort pointer restores: single atomic dword writes, guarded reads because the
-    // dialog may be gone. Mid-game unload stays unsupported (the game thread may be in the
-    // shim), same policy as sc_circles.
+    // dialog may be gone.
     if (g_wrapCount > 0) {
         const DWORD engineFn = ScRuntimeVa(SC_VA_WIREFRAME_BTN_INTERACT);
         const DWORD shim     = (DWORD)&HudBtnInteractShim;

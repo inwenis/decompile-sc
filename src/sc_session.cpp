@@ -168,11 +168,6 @@ int ScSessionInstall(BYTE* moduleBase, bool enabled) {
     return n;
 }
 
-void ScSessionRemove(void) {
-    ScHookRemove(&g_hkStart);
-    ScHookRemove(&g_hkLoad);
-}
-
 void ScSessionLogState(const char* tag) {
     ScLog("SESSION [%s] epoch=%u starts=%u loads=%u epochAtLastLoad=%u installed=%d%s",
           tag ? tag : "-", ScSessionEpoch(),

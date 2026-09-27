@@ -25,8 +25,8 @@ void ScFanoutLogState(void);
 // echoed into the line so a run can be read back case by case.
 void ScFanoutLogUnitStates(const char* tag);
 
-// One STATS line. Written on BOTH detach paths -- including process exit, where the hooks
-// stay spliced (the address space is going away) but the counters are still what a reader needs.
+// One STATS line, written at process exit: the hooks stay spliced (the address space is
+// going away) but the counters are still what a reader needs.
 void ScFanoutLogStats(void);
 
 // ---------------------------------------------------------------------------

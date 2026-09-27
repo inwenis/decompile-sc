@@ -104,7 +104,7 @@ void ScLog(const char* fmt, ...) {
     // -- do not soften that assertion, it is a real oracle over a real logging bug. So wait
     // briefly (a live owner releases in microseconds, and waiting keeps lines ordered), then
     // write anyway: unlocked is safe here only because the plugin sets the try-lock flag
-    // solely for lpReserved != NULL, where no thread survives to race us.
+    // solely at process exit, where no thread survives to race us.
     LARGE_INTEGER t0, t1;
     QueryPerformanceCounter(&t0);
     bool locked = false;

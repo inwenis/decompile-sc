@@ -66,7 +66,7 @@ void ScUpgQueueRemove(void);
 // CUnit+0xC8/0xC9/0xC6/0xCD alongside the plugin's queue, so an unattended run asserts on the
 // building's memory rather than on the screen.
 void ScUpgQueueLogState(const char* tag);
-// One STATS line, written on both detach paths.
+// One STATS line, written at detach.
 void ScUpgQueueLogStats(void);
 
 // ---------------------------------------------------------------------------

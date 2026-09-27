@@ -8,7 +8,7 @@
 // Unset or unrecognised -> observe: the plugin is passive unless asked for more.
 //
 // It never patches StarCraft.exe on disk; every modification lives in this process's
-// memory and is undone on unload.
+// memory and ends with it.
 //
 // Log destination: %SCPLUGIN_LOG%, else C:\decompile-sc-data\sc-work\logs\sc-plugin.log -- outside the
 // repo and gitignored, so no captured game data is committed (AGENTS.md § "Hard rules").
@@ -38,8 +38,6 @@
 #include "sc_unit.h"
 #include "sc_stormpresent.h"
 #include "sc_upgrades.h"
-
-static volatile LONG g_stop = 0;
 
 struct Snapshot {
     BYTE  count;                              // clientSelectionCount (u8)
@@ -819,7 +817,7 @@ static DWORD WINAPI ObserverThread(LPVOID) {
     memset(&prev, 0xFF, sizeof(prev));  // force a first log line
     unsigned ticks = 0;
 
-    while (!InterlockedCompareExchange(&g_stop, 0, 0)) {
+    for (;;) {
         PollMarker();
         ScanDialogs();
         Snapshot cur;
@@ -840,9 +838,6 @@ static DWORD WINAPI ObserverThread(LPVOID) {
         }
         Sleep(pollMs);
     }
-
-    ScLog("OBSERVER stop ticks=%u", ticks);
-    return 0;
 }
 
 static void LogAttachBanner(void) {
@@ -933,9 +928,7 @@ static void LogAttachBanner(void) {
           "nothing to game memory)", ScModeName(g_mode));
 }
 
-static HANDLE g_observer = NULL;
-
-BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
+BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID /*lpReserved*/) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hinst);
         ScLogOpen();
@@ -957,18 +950,8 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         // The centred menus: decided here (they need the widescreen verdict above) and
         // acted on by the console's frame walk, which reads ScMenuArmed().
         ScMenuInstall(g_mode != SC_MODE_OBSERVE);
-        // The console move + click-route trace both write to dialog records on the
-        // game thread, so observe -- the whole plugin's off switch -- ignores them
-        // like every other writer.
-        {
-            bool consoleTrace = ScConsoleTraceWanted();
-            if (g_mode == SC_MODE_OBSERVE && consoleTrace) {
-                ScLog("CONSOLE: %%SCPLUGIN_CONSOLE_TRACE%% set but the mode is observe "
-                      "-- IGNORED. Observe writes nothing to game memory.");
-                consoleTrace = false;
-            }
-            ScConsoleInstall(ScEngineModuleBase(), g_mode != SC_MODE_OBSERVE, consoleTrace);
-        }
+        // The console move writes dialog records on the game thread; observe ignores it.
+        ScConsoleInstall(ScEngineModuleBase(), g_mode != SC_MODE_OBSERVE);
         ScMarkTraceInstall(ScEngineModuleBase(), g_mode != SC_MODE_OBSERVE);
         ScCursorPostedInstall(ScEngineModuleBase(), g_mode != SC_MODE_OBSERVE);
         // The storm-side buffer->glass present. PROBE is read-only and runs in any
@@ -1024,24 +1007,15 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         }
         // The observer runs on its own thread; DllMain itself does nothing but
         // start it, so we never hold the loader lock while polling.
-        g_observer = CreateThread(NULL, 0, ObserverThread, NULL, 0, NULL);
-        if (!g_observer) ScLog("ERROR CreateThread failed gle=%u",
-                               (unsigned)GetLastError());
+        HANDLE observer = CreateThread(NULL, 0, ObserverThread, NULL, 0, NULL);
+        if (observer) CloseHandle(observer);
+        else ScLog("ERROR CreateThread failed gle=%u", (unsigned)GetLastError());
     } else if (reason == DLL_PROCESS_DETACH) {
-        InterlockedExchange(&g_stop, 1);
-
-        // lpReserved == NULL means FreeLibrary: the observer thread is still running and
-        // this DLL's code is about to be unmapped underneath it, so it has to be joined
-        // before the log handle and the lock are destroyed. The thread only calls file,
-        // memory and Sleep APIs -- never LoadLibrary or FreeLibrary -- so it cannot be
-        // waiting on the loader lock DllMain holds, and this bounded wait cannot deadlock.
-        //
-        // lpReserved != NULL means the process is exiting: Windows has already terminated
-        // every other thread, so there is nothing to join, and the log lock may be
-        // permanently owned by one of those terminated threads.
-        bool joined = true;
-        if (lpReserved != NULL) ScLogSetTryLock();
-        ScFanoutLogStats();   // the run's counters, on both detach paths
+        // Only process exit gets here: nothing calls FreeLibrary on this DLL. Windows
+        // has already terminated every other thread, and one of them may own the log
+        // lock for good. The hooks stay in: the address space goes away with them.
+        ScLogSetTryLock();
+        ScFanoutLogStats();   // the run's counters
         ScProdQueueLogStats();
         ScProdFanLogStats();
         ScUpgQueueLogStats();
@@ -1050,53 +1024,8 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID lpReserved) {
         ScMenuLogStats();
         ScStormPresentLogStats();
         ScSessionLogState("detach");
-        if (lpReserved == NULL) {
-            if (g_observer) joined = (WaitForSingleObject(g_observer, 5000) == WAIT_OBJECT_0);
-            // Un-splice only on the FreeLibrary path. On process exit the address
-            // space is being torn down anyway, and walking the thread list from
-            // DllMain under the loader lock is exactly the kind of call that is
-            // documented as unsafe there.
-            //
-            // ScProdQueueRemove goes FIRST: it refunds every overflow item it is still
-            // holding before it un-splices. The other order would leave paid-for items
-            // with no hook left to promote or refund them.
-            ScProdQueueRemove();
-            // The prodfan detour holds nothing, so its position is free; here the card
-            // is back to stock before the fan-out's own hooks leave.
-            ScProdFanRemove();
-            // Every item the upgrade queue holds is unpaid, so it has nothing to give
-            // back and its position is free too. Before the fan-out's, so the whole
-            // splice comes out newest-first.
-            ScUpgQueueRemove();
-            ScFanoutRemove();
-            // Console bounds restored and interacts unwrapped before the widescreen
-            // geometry (which the console move only makes sense on) comes out below.
-            ScConsoleRemove();
-            ScMenuRemove();
-            ScMarkTraceRemove();
-            ScCursorPostedRemove();
-            // Storm present: PROBE has nothing to restore, WIDEN restores storm's
-            // geometry. Comes out before the exe geometry below.
-            ScStormPresentRemove();
-            // The geometry patches are the outermost change, so they leave after every
-            // detour that might still be running against them.
-            ScScreenRemove();
-            // The epoch's own splice comes out LAST, after every module that reads it:
-            // a module still running its SessionSync while the counter's writer was
-            // already gone would be asking a question nothing can answer any more.
-            ScSessionRemove();
-        }
-
         ScLog("DETACH pid=%u", (unsigned)GetCurrentProcessId());
-
-        if (joined) {
-            if (g_observer) { CloseHandle(g_observer); g_observer = NULL; }
-            ScLogClose();
-        }
-        // If the join timed out, the handles and the critical section are leaked
-        // on purpose: a thread that may still be logging must not find them
-        // closed. A leak at unload is strictly better than a use-after-free
-        // inside the game.
+        ScLogClose();
     }
     return TRUE;
 }

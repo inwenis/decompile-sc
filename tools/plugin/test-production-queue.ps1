@@ -1563,9 +1563,9 @@ $left = if ($gamePid -gt 0) { Get-Process -Id $gamePid -ErrorAction SilentlyCont
 Assert-That 'the game process this test started is gone' ($KeepOpen -or $null -eq $left)
 Assert-That 'the generated map was cleaned up' ($KeepOpen -or -not (Test-Path -LiteralPath $mapPath))
 
-# THE DETACH-TIME REFUND. The plugin gives back anything it is still holding before it
-# un-splices, so a run can never end with the player short. By this point it is holding
-# nothing, so the honest assertion is that spend and refund agree with the queue.
+# THE DETACH STATS LINE. The plugin writes PRODQSTATS as the process exits. By this point
+# it is holding nothing, so the honest assertion is that spend and refund agree with the
+# queue.
 $statLine = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue |
               Select-String -Pattern 'PRODQSTATS ')
 if ($statLine.Count -gt 0) {

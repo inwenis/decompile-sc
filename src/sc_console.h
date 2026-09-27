@@ -1,5 +1,4 @@
-// sc_console.h -- the bottom console on a TALLER screen (the 2x-height step),
-// and the click-route trace.
+// sc_console.h -- the bottom console on a TALLER screen (the 2x-height step).
 //
 //  * THE MOVE (no flag: it is what a taller playfield means). When the generated
 //    widescreen table carries a console shift (SC_WS_CONSOLE_SHIFT_Y > 0, i.e.
@@ -25,23 +24,14 @@
 //    clip boxes) is in the generated table (console.*, minimap.anchor.*,
 //    dlgclip.*). Research: renderer-viewport.md 22.
 //
-//  * %SCPLUGIN_CONSOLE_TRACE%=1 -- the TRACE. Wraps every ROOT dialog's interact
-//    (+0x2A) with a logging shim: one CTRACE line per non-MOUSEMOVE event with
-//    the dialog's name, event type, dwUser, cursor x/y and the interact's RETURN
-//    VALUE. The dispatcher (0x00419FD0) offers each event to the roots in list
-//    order and STOPS at the first non-zero return, so the trace names the dialog
-//    that claims a click at any position.
-//
-// Both -- and the menu centring (sc_menu.h), which moves glue roots from the same walk --
-// ride one 6-byte detour on the frame composer (0x0041E280), so all writes
+// The move -- and the menu centring (sc_menu.h), which moves glue roots from the same
+// walk -- ride one 6-byte detour on the frame composer (0x0041E280), so all writes
 // to dialog records happen on the GAME thread between frames -- never from the
-// observer thread. Observe mode (the plugin's off switch) installs neither.
+// observer thread. Observe mode (the plugin's off switch) installs nothing.
 #ifndef SC_CONSOLE_H
 #define SC_CONSOLE_H
 
 #include <windows.h>
-
-bool ScConsoleTraceWanted(void);  // %SCPLUGIN_CONSOLE_TRACE% == 1
 
 // True once ScConsoleInstall decided the console is buffer-resident (the move
 // is armed): the storm present widen mirrors the WHOLE frame then, and only
@@ -54,10 +44,9 @@ bool ScConsoleBufferResident(void);
 // read: the walk already computes it for its own decision.
 int ScConsoleInGame(void);
 
-// Installs the frame hook when the move is armed or the trace is wanted.
+// Installs the frame hook when the move or the menu centring is armed.
 // writeAllowed is false in observe mode (nothing is installed then).
-void ScConsoleInstall(BYTE* moduleBase, bool writeAllowed, bool trace);
-void ScConsoleRemove(void);
+void ScConsoleInstall(BYTE* moduleBase, bool writeAllowed);
 void ScConsoleLogStats(void);
 
 // Marker channel: "conedge-select" asks the game thread to select the active

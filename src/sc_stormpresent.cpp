@@ -621,12 +621,6 @@ void ScStormPresentInstall(BYTE* exeBase, bool writeAllowed) {
     }
 }
 
-void ScStormPresentRemove(void) {
-    // PROBE writes nothing; WIDEN only needs the copy hook un-spliced, because the strip
-    // copy wrote presented pixels only, which the next stock present overwrites.
-    if (g_hkCopy.installed) ScHookRemove(&g_hkCopy);
-}
-
 void ScStormPresentLogStats(void) {
     if (g_mode == SC_STORM_OFF) return;
     // The cumulative half of STORMTIME: the window totals plus whatever the window in

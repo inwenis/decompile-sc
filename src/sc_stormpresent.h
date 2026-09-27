@@ -32,8 +32,7 @@ void ScStormPresentInstall(BYTE* exeBase, bool writeAllowed);
 // Read-only dump on the marker channel, safe from the observer's PollMarker.
 void ScStormPresentLog(const char* tag);
 
-// Restore anything the widen changed; log the run's counters.
-void ScStormPresentRemove(void);
+// The run's counters, on detach.
 void ScStormPresentLogStats(void);
 
 // The primary's live palette, 256 x {r,g,b,flags} (IDirectDrawSurface::GetPalette +

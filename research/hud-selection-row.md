@@ -439,11 +439,9 @@ for a frame — same exposure class as vanilla, bounded by the per-fill guards; 
 min(N,12) ≥ 2 whenever N ≥ 2, the multi path is taken exactly when it should be; (3) a
 page showing units 13..24 while the engine's 12 are units 1..12 means shift/ctrl-click
 collection (which reads visible buttons) operates on the *displayed* page — coherent, but
-it must be stated in the UX: row gestures act on what the row shows; (4) mid-game plugin
-unload leaves wrapped fxnInteract pointers → same policy as circles: unload mid-game is
-unsupported (process exit is fine, the address space goes away… but the dialog outlives a
-*detach* — the remove path must unwrap the 12 pointers and un-splice the two detours under
-suspend, which IS feasible here because unlike image lists, pointer writes are atomic).
+it must be stated in the UX: row gestures act on what the row shows; (4) the plugin is never
+unloaded mid-game, so the wrapped fxnInteract pointers stay wrapped until the process exits and
+the address space goes away with them.
 
 **Cost**: small. Two detours + a pointer wrap + page arithmetic; every visual element is the
 engine's own.

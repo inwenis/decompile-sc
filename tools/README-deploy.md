@@ -274,10 +274,10 @@ not deploy-specific -- leave it; it is reused by every future launch/deploy.)
 ## Debug / off-switch
 
 The Goal for this task is zero-argument play, so there's deliberately no second desktop
-shortcut for debugging -- use one of these one-liners instead, same three off switches
-`tools/plugin/README.md` documents for the dev flow, applied to the deployed copy. **All
-three pass `-Sound`** where relevant -- without it you would be muting the user's own
-install, since `run-with-plugin.ps1` is silent by default (see "Sound" above):
+shortcut for debugging -- use one of these one-liners instead: the two off switches
+`tools/plugin/README.md` documents for the dev flow, applied to the deployed copy, and a
+polite close. **All three pass `-Sound`** where relevant -- without it you would be muting the
+user's own install, since `run-with-plugin.ps1` is silent by default (see "Sound" above):
 
 ```powershell
 # 1. Cleanest: launch the deployed game with nothing of ours injected at all (inherently

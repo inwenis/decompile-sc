@@ -51,10 +51,8 @@ void ScHudRowOnWireDraw(DWORD button, DWORD edx, DWORD a, DWORD b, ScCtrlDrawFn 
 // The sheet a no-picture id is drawn from, for the test to check its shape.
 const BYTE* ScHudRowEmptySheet(void);
 
-// Best-effort restore of the detour, the 12 wrapped interact pointers and the
-// indicator splice. Mid-game unload stays unsupported (the game thread may be
-// inside the shim), but each pointer restore is one atomic dword write, so it is
-// attempted anyway.
+// The fan-out's install rollback: the detour, the 12 wrapped interact pointers and
+// the indicator splice, each pointer restore one atomic dword write.
 void ScHudRowRemove(void);
 
 void ScHudRowLogStats(void);

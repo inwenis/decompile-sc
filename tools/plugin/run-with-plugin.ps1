@@ -102,15 +102,6 @@ param(
     # focus theft this fixes. $env:SCDRIVE_RAISE=1 (drive-game.ps1's "a human is
     # watching this run" knob) also turns it off.
     [switch]$NoForegroundRestore,
-    # Launch the game onto a named Windows DESKTOP OBJECT rather than the one on the
-    # monitor (scinject.exe --desktop -> STARTUPINFO.lpDesktop). Normally NOBODY PASSES
-    # THIS: run-offscreen.ps1 starts the whole run in a process born on the invisible
-    # desktop, and this script finds itself already there and follows suit on its own
-    # (see $effectiveDesktop below). A launcher that had to be TOLD could be forgotten,
-    # and the failure mode of forgetting is the game appearing on the user's screen --
-    # exactly what this is for. Pass it explicitly only to launch onto a desktop this
-    # process is not itself on.
-    [string]$Desktop,
     # The emit-side liveness gate. '1' (the default) refuses to put a dead /
     # removed-from-play unit's tag into a replayed Select. '0' is a KNOWN-BAD
     # configuration that restores the uniqueness-only test the fan-out shipped with, so
@@ -213,12 +204,6 @@ param(
     # miss. The deployed launcher turns it on. Needs -Widescreen 1 -WidescreenStage 3.
     [ValidateSet('0', '1')][string]$MenuCentre = '0',
 
-    # Wrap every root dialog's interact with a logging shim (CTRACE lines: dialog name,
-    # event type, dwUser, x/y, return value). The dispatcher stops at the first non-zero
-    # return, so the trace names the dialog that claims any click. Read-only in effect
-    # but it writes dialog records, so it is ignored in -Mode observe too.
-    [ValidateSet('0', '1')][string]$ConsoleTrace = '0',
-
     # The storm-side buffer->glass present (renderer-viewport.md 19.8). 'probe' =
     # READ-ONLY: log storm's virtual-screen geometry, the flip clip, the fallback lock
     # pointer and the present region on the marker channel (any mode, writes nothing).
@@ -258,7 +243,7 @@ $repoRoot  = (Resolve-Path (Join-Path $scriptDir '..' '..')).Path
 . (Join-Path $scriptDir 'sc-launch-lock.ps1')
 # Record-and-restore of the pre-launch foreground window -- see the foreground gate below.
 . (Join-Path $scriptDir 'sc-foreground.ps1')
-# Which desktop this process is on -- see -Desktop above and tools/plugin/sc-desktop.ps1.
+# Which desktop this process is on -- see the desktop block below and tools/plugin/sc-desktop.ps1.
 . (Join-Path $scriptDir 'sc-desktop.ps1')
 # What build the DLL about to be injected IS -- see the stale-DLL gate below. Every helper
 # here is copied into the deployed plugin dir by deploy.ps1: this script runs from there too.
@@ -459,7 +444,6 @@ try {
     $env:SCPLUGIN_WS_STAGE       = $WidescreenStage
     if ($Geometry) { $env:SCPLUGIN_WS_GEOMETRY = $Geometry }
     $env:SCPLUGIN_MENU_CENTRE    = $MenuCentre
-    $env:SCPLUGIN_CONSOLE_TRACE  = $ConsoleTrace
     # 'auto' must reach the DLL as UNSET. Remove-Item, not `$env:X = ''`: measured on
     # pwsh 7.6, the empty assignment leaves the variable present-but-empty in a child's
     # environment block; the DLL happens to treat length 0 as unset, but the launcher
@@ -485,24 +469,21 @@ try {
     $injArgs = @($exe, $dll, '--wait-ms', "$SettleMs", '--no-wait-exit')
 
     # --- which desktop the game is born on ---------------------------------------
-    # Explicit -Desktop wins. Otherwise: if THIS process is not on the desktop the monitor
-    # is showing, it was started by run-offscreen.ps1 onto an invisible one, and the game
-    # belongs there too. Named rather than left to CreateProcess inheritance: measured,
-    # the inheritance chain does not reliably hold through PowerShell's own process-launch
-    # path (the game came up on no discoverable desktop at all) -- that is what
-    # scinject.exe --desktop is for. Naming it costs nothing and removes the question.
-    $effectiveDesktop = $Desktop
-    if (-not $effectiveDesktop) {
-        $here = Get-ScThreadDesktopName
-        $shown = Get-ScInputDesktopName
-        # $shown is $null on a locked workstation. "I could not find out what is on the
-        # monitor" is not a reason to assume this process is off-screen, so that case
-        # deliberately falls through to the ordinary visible launch.
-        if ($here -and $shown -and ($here -ne $shown)) { $effectiveDesktop = $here }
-    }
-    if ($effectiveDesktop) {
-        $injArgs += @('--desktop', $effectiveDesktop)
-        Write-Host "run-with-plugin: launching onto the desktop '$effectiveDesktop' — nothing from this run reaches the monitor (task 043)."
+    # If THIS process is not on the desktop the monitor is showing, it was started by
+    # run-offscreen.ps1 onto an invisible one, and the game belongs there too. Detected,
+    # never passed in: a launcher that had to be told could be forgotten, and forgetting
+    # puts the game on the user's screen. Named rather than left to CreateProcess
+    # inheritance: measured, the inheritance chain does not reliably hold through
+    # PowerShell's own process-launch path (the game came up on no discoverable desktop at
+    # all) -- that is what scinject.exe --desktop is for.
+    $here = Get-ScThreadDesktopName
+    $shown = Get-ScInputDesktopName
+    # $shown is $null on a locked workstation. "I could not find out what is on the
+    # monitor" is not a reason to assume this process is off-screen, so that case
+    # deliberately falls through to the ordinary visible launch.
+    if ($here -and $shown -and ($here -ne $shown)) {
+        $injArgs += @('--desktop', $here)
+        Write-Host "run-with-plugin: launching onto the desktop '$here' — nothing from this run reaches the monitor (task 043)."
     }
 
     # The windowed-mode helpers have no export table, so they cannot be a ddraw proxy;
@@ -615,6 +596,7 @@ try {
     foreach ($line in $injOut) {
         if ($line -match 'scinject:\s*PID=(\d+)\b') { $gamePid = [int]$Matches[1] }
     }
+    if (-not $gamePid) { throw 'run-with-plugin: scinject exited 0 but printed no PID=' }
 
     # --- hand the foreground back, at the FIRST moment this script can ----------------
     # scinject's return is the first instant this script runs after the window exists
@@ -640,35 +622,27 @@ try {
     # and calling the interop directly rather than Set-ScProcessMuted's poll loop: -Sound
     # runs on EVERY user launch, where a COM hiccup must not report "failed to launch"
     # over a game that is running fine, and insurance is not worth up to 5 s of polling.
-    if ($gamePid -gt 0) {
-        try {
-            if ($Sound) {
-                [ScAudio.Interop]::TryMuteProcess([uint32]$gamePid, $false) | Out-Null
-                Write-Host 'run-with-plugin: -Sound — ensured the game''s audio session is not muted'
-            }
-            elseif (Set-ScProcessMuted -ProcessId $gamePid -Mute $true) {
-                Write-Host 'run-with-plugin: sound muted for this launch (process-scoped WASAPI session mute, every active render endpoint) -- pass -Sound to keep audio on'
-            }
-            else {
-                Write-Warning 'run-with-plugin: could not find an audio session to mute within the timeout -- launch continues audible. Pass -Sound to silence this warning if that is expected.'
-            }
+    try {
+        if ($Sound) {
+            [ScAudio.Interop]::TryMuteProcess([uint32]$gamePid, $false) | Out-Null
+            Write-Host 'run-with-plugin: -Sound — ensured the game''s audio session is not muted'
         }
-        catch {
-            Write-Warning "run-with-plugin: sound mute/unmute failed unexpectedly ($($_.Exception.Message)) -- the launch itself is unaffected."
+        elseif (Set-ScProcessMuted -ProcessId $gamePid -Mute $true) {
+            Write-Host 'run-with-plugin: sound muted for this launch (process-scoped WASAPI session mute, every active render endpoint) -- pass -Sound to keep audio on'
         }
+        else {
+            Write-Warning 'run-with-plugin: could not find an audio session to mute within the timeout -- launch continues audible. Pass -Sound to silence this warning if that is expected.'
+        }
+    }
+    catch {
+        Write-Warning "run-with-plugin: sound mute/unmute failed unexpectedly ($($_.Exception.Message)) -- the launch itself is unaffected."
     }
 
     # A launch can fail with the process still alive and a modal DirectDraw error box on
     # screen -- invisible to exit codes. Check from outside the process, regardless of
     # -WaitForExit: scinject.exe returns as soon as injection succeeds and waits for nothing.
     Start-Sleep -Seconds 2
-    if ($gamePid -gt 0) {
-        & (Join-Path $scriptDir 'check-game-windows.ps1') -ProcessId $gamePid
-    }
-    else {
-        Write-Warning 'run-with-plugin: could not parse the pid from scinject output; falling back to resolving the game by process name.'
-        & (Join-Path $scriptDir 'check-game-windows.ps1')
-    }
+    & (Join-Path $scriptDir 'check-game-windows.ps1') -ProcessId $gamePid
     # Any non-zero is unhealthy, not just exit 1 (error dialog). check-game-windows.ps1
     # exits 3 when the pid is not running at all -- reachable because scinject returns as
     # soon as injection succeeds and the game has the ~2 s settle above to die on its own

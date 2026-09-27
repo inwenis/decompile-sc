@@ -2,7 +2,7 @@
 //
 // %SCPLUGIN_WS_GEOMETRY% names one ("1280x880"); unset means the first. To add a preset:
 //   1. python tools/renderer_patch_sites.py --width W --height H   (playfield = H - 80)
-//   2. include the file below and add its SC_WS_GEOM_ to the list and the max
+//   2. include the file below and add its SC_WS_GEOM_ to the list
 //   3. prove it in game: $env:SCPLUGIN_WS_GEOMETRY='WxH' then test-widescreen.ps1
 //      off-screen. The generator checks bytes against the binary, never the picture.
 // Width is constrained: W + 32 must be a sum of exactly three powers of two (the
@@ -21,11 +21,5 @@ static const ScScreenGeometry* const SC_WS_PRESETS[] = {
     &SC_WS_GEOM_1536x864,   // 16:9 -- 1.25x on 1080p: more map, smaller UI
 };
 #define SC_WS_PRESET_COUNT (sizeof(SC_WS_PRESETS) / sizeof(SC_WS_PRESETS[0]))
-
-// The largest table, for statics sized by the table (sc_screen.cpp's saved originals).
-#define SC_WS_MAX2(a, b) ((a) > (b) ? (a) : (b))
-#define SC_WS_PATCH_COUNT_MAX \
-    SC_WS_MAX2(SC_WS_PATCH_COUNT_1280x880, \
-               SC_WS_MAX2(SC_WS_PATCH_COUNT_1280x720, SC_WS_PATCH_COUNT_1536x864))
 
 #endif  // SC_SCREEN_PRESETS_H

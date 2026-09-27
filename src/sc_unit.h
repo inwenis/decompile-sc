@@ -242,9 +242,9 @@ static inline void ScDlgDefaultHandlers(int ctrlType, DWORD* interact, DWORD* up
     *update   = *(DWORD*)(ScRuntimeVa(SC_VA_DEFAULT_UPDATE_TABLE)   + (DWORD)ctrlType * 4);
 }
 
-// Unlink a control we spliced in. Every link is probed before it is followed: this runs
-// on the detach path, where the dialog may already be gone. A control that is not in the
-// chain is left alone -- no return value, because a caller could do nothing differently.
+// Unlink a control we spliced in. Every link is probed before it is followed: the dialog
+// may already be gone. A control that is not in the chain is left alone -- no return
+// value, because a caller could do nothing differently.
 static inline void ScDlgRemoveChild(DWORD root, DWORD ctrl) {
     DWORD* link = (DWORD*)(root + SC_BINDLG_OFF_FIRST_CHILD);
     while (*link && *link != ctrl) {

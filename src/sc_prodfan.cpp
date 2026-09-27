@@ -511,9 +511,3 @@ int ScProdFanInstall(void) {
     }
     return 1;
 }
-
-void ScProdFanRemove(void) {
-    if (g_hkCond.installed) ScHookRemove(&g_hkCond);
-    g_condTrampoline = NULL;
-    g_scProdFanCondTramp = NULL;
-}

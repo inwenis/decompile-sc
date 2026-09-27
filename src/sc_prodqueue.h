@@ -12,7 +12,7 @@
 // addToBuildQueue (0x00467250), which also checks affordability; moving an item out of the
 // ring and back is a bare `buildQueue[slot] = type` store touching no resource global. The
 // plugin's only resource writes are refunds of held items that are lost (cancel, building
-// dying, plugin unload), out of the cost tables the engine's own refund reads.
+// dying), out of the cost tables the engine's own refund reads.
 
 #ifndef SC_PRODQUEUE_H
 #define SC_PRODQUEUE_H
@@ -50,7 +50,7 @@ void ScProdQueueRemove(void);
 // plugin's overflow, so an unattended run asserts on the building's memory rather than
 // on the screen.
 void ScProdQueueLogState(const char* tag);
-// One STATS line, written on both detach paths.
+// One STATS line, written at detach.
 void ScProdQueueLogStats(void);
 
 // The core, hook-free -- driven byte-for-byte from hooktest.exe with no StarCraft in

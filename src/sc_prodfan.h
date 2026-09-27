@@ -42,7 +42,7 @@ void ScProdFanInit(BYTE* moduleBase, bool enabled);
 // Read-only, observer thread.
 void ScProdFanLogState(const char* tag);
 
-// One STATS line, written on the detach paths beside the other subsystems'.
+// One STATS line, written at detach beside the other subsystems'.
 void ScProdFanLogStats(void);
 
 // THE ONE PATCH: a detour on the Train button's condition (0x00428E60), so the button is
@@ -51,7 +51,6 @@ void ScProdFanLogStats(void);
 // is absent from the card entirely). A failed install DISABLES the feature rather than
 // leaving it half-armed. No-op unless enabled.
 int  ScProdFanInstall(void);
-void ScProdFanRemove(void);
 
 // ---------------------------------------------------------------------------
 // The policy, hook-free -- driven from hooktest.exe with no StarCraft in sight.

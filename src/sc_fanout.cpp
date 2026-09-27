@@ -2067,20 +2067,7 @@ int ScFanoutCopyShadow(ScShadowInfo* out, int maxOut, int* visibleCount,
 void ScFanoutRemove(void) {
     if (g_mode == SC_MODE_OBSERVE && !g_hkQueue.installed) return;
 
-    // Our circles are deliberately NOT taken off here. This runs on the FreeLibrary path,
-    // on the UNLOADER's thread: the engine being alive is a liveness answer to a
-    // concurrency question. 0x004975D0 unlinks an image from the sprite's overlay list and
-    // pushes it onto the image free list, and the game's own thread may be walking exactly
-    // those lists to render the frame -- and the 0x0049AE40 hook is still installed, so
-    // that thread can be inside ScCirclesHide() concurrently with this one.
-    //
-    // Everything in sc_circles.cpp is therefore GAME-THREAD-ONLY, and unloading mid-game is
-    // documented as unsupported (tools/plugin/README.md, off switch 3). The circles left
-    // behind are self-healing: the engine calls 0x004975D0 on death
-    // (research/selection-circles.md 4.5) and 0x00497620 on the next select/deselect.
-    ScLog("CIRCLES: %d circle(s) left attached -- unloading mid-game does not remove "
-          "them (see tools/plugin/README.md, off switch 3)", ScCirclesCount());
-
+    // Circles are not taken off here: sc_circles.cpp is game-thread only (sc_circles.h).
     ScHookSuspendThreads();
     ScQueueIndRemove();
     ScHudRowRemove();

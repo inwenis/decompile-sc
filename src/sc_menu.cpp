@@ -118,25 +118,6 @@ static void TakePalette(const BYTE* pal) {
     }
 }
 
-// Every glue fade, with who asked for it: TitlePaletteUpdate is the one writer of an
-// all-black palette (sc_addresses.h at SC_VA_TITLE_PALETTE_UPDATE).
-typedef void (__attribute__((cdecl)) *ScTitlePalFn)(int steps);
-static ScHook   g_hkTitlePal;
-static unsigned g_fadeLogs = 0;
-
-static void __attribute__((cdecl)) SC_GAME_ENTRY HkTitlePaletteUpdate(int steps) {
-    const void* caller = __builtin_return_address(0);
-    const int flag = ScReadable(ScRuntimeVa(SC_VA_FADE_FLAG), 1) ? *(BYTE*)ScRuntimeAddr(SC_VA_FADE_FLAG) : -1;
-    if (++g_fadeLogs <= 2 * SC_MENU_LOG_REMAPS)
-        ScLog("MENU fade: TitlePaletteUpdate(%d) from 0x%08X, fade flag=%d, tops written=%d to=%d from=%d",
-              steps, (unsigned)(DWORD_PTR)caller, flag,
-              PaletteTop(SC_VA_PAL_WRITTEN), PaletteTop(SC_VA_PAL_FADE_TO), PaletteTop(SC_VA_PAL_FADE_FROM));
-    ((ScTitlePalFn)g_hkTitlePal.trampoline)(steps);
-}
-// 0x0041EA30 opens PUSH EBP / MOV EBP,ESP / SUB ESP,0x400: 9 bytes, 3 whole instructions,
-// none PC-relative.
-static const BYTE kPrologueTitlePal[] = { 0x55, 0x8B, 0xEC, 0x81, 0xEC, 0x00, 0x04, 0x00, 0x00 };
-
 // THE BRIEFING GOES BLACK. About a second into the first mission briefing of a launch,
 // with a real briefing (portraits, WAVs), storm's palette reads all-zero while the
 // engine's own written palette is lit and no fade is in progress: something outside the
@@ -324,26 +305,12 @@ void ScMenuInstall(bool writeAllowed) {
                        kPrologueAllocBg, (int)sizeof(kPrologueAllocBg))) {
         ScLog("MENU: palette-load hook failed to install -- the inks stay nearest-matched per screen.");
     }
-    memset(&g_hkTitlePal, 0, sizeof(g_hkTitlePal));
-    g_fadeLogs = 0;
-    if (!ScHookInstall(&g_hkTitlePal, "titlePaletteUpdate", ScRuntimeAddr(SC_VA_TITLE_PALETTE_UPDATE),
-                       (void*)&HkTitlePaletteUpdate, (int)sizeof(kPrologueTitlePal),
-                       kPrologueTitlePal, (int)sizeof(kPrologueTitlePal))) {
-        ScLog("MENU: fade hook failed to install -- fades go unlogged.");
-    }
     g_armed = true;
     ScLog("MENU: ON -- at the glue screens every root moves by (%d,%d); a %dx%d sky "
           "(%d star cells, %d nebula cells built in %lu ms, %d sentinels) fills the buffer "
           "outside the glue rect and is copied to the primary from the restore-under at "
           "0x0041DEB0; the inks are written into each screen's palette at 0x004D27A0",
           g_dx, g_dy, g_w, g_h, lit, nebula, (unsigned long)buildMs, g_sentinelN);
-}
-
-void ScMenuRemove(void) {
-    ScHookRemove(&g_hkTitlePal);
-    ScHookRemove(&g_hkAllocBg);
-    ScHookRemove(&g_hkRestore);
-    g_armed = g_atMenu = false;
 }
 
 void ScMenuLogStats(void) {

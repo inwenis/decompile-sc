@@ -491,7 +491,7 @@ run the engine's own accept path on it — `gate(unit, id, player) == 1` then
 | hazard | answer |
 |---|---|
 | paid **twice** | Only the engine ever pays, in `startUpgrade`/`startTech`, at the moment the item actually starts (§5.3). Holding an item costs nothing because a held item is one id and no money. There is no second payer, so "exactly once" is the shape of the design and not a discipline. |
-| a **wrong refund** | There is nothing to refund. A held item is unpaid, so dropping one — cancel, building destroyed, plugin unloaded mid-game — strands nothing. A cancel that reaches the running item is vanilla's own `0x33`/`0x31` path, untouched. |
+| a **wrong refund** | There is nothing to refund. A held item is unpaid, so dropping one — cancel, building destroyed — strands nothing. A cancel that reaches the running item is vanilla's own `0x33`/`0x31` path, untouched. |
 | the **UI disagreeing** | The status area draws the running item's progress bar, which is true, and the held items as icons in queue slots 2..5 (§10). The plugin's `UPGQ` log line and the engine's own strip walk (`STATQ`) are the read-back oracles. |
 | **negative resources** | Not reachable: the plugin never spends, and before promoting it compares the engine's own cost tables against `0x0057F0F0`/`0x0057F120` and simply waits when the player is short. A comparison, not a transaction. |
 

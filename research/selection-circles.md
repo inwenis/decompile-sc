@@ -442,24 +442,20 @@ Guards, each ruling out a distinct way a record goes bad between attach and deta
 the mode; circles are only ever active in `fanout` mode, because `shadow` mode's contract is
 "capture and log, change nothing".
 
-### 5.1 Threading, and why unloading mid-game is unsupported
+### 5.1 Threading
 
 Everything in `sc_circles.cpp` runs on the **game's own thread** — the `0x0049AE40` detour and
 sc_fanout's `CMDACT_Select` detour are both called by the game. Nothing takes a lock, and nothing
 may be reached from the observer thread or from `DllMain`.
 
-That rules out one thing the first draft did: taking the circles off from `ScFanoutRemove`, which
-runs on the **unloader's** thread during `DLL_PROCESS_DETACH`. The engine is alive there — but
-liveness is not the question. `0x004975D0` unlinks an image from the sprite's overlay list and
+That rules out taking the circles off from `ScFanoutRemove`, the fan-out's install rollback, which
+does not run on the game thread. `0x004975D0` unlinks an image from the sprite's overlay list and
 pushes it onto the image free list, and the game thread may be walking exactly those lists to render
-the frame; worse, the `0x0049AE40` hook is still installed at that point, so the game thread can be
-inside `ScCirclesHide()` at the same time.
+the frame; worse, the `0x0049AE40` hook may still be installed at that point, so the game thread can
+be inside `ScCirclesHide()` at the same time.
 
-So the detach path does **not** hide, and **unloading the plugin mid-game is unsupported**. The
-circles left behind are self-healing rather than permanent: the engine's own unit-removal path calls
-`0x004975D0` on death (§4.5), and `0x00497620` takes the circle off the next time that unit is
-selected and deselected. (Process exit is unaffected — `scplugin.cpp` already skips `ScFanoutRemove`
-entirely on that path.)
+So `ScFanoutRemove` does **not** hide. The plugin is never unloaded mid-game (nothing calls
+`FreeLibrary` on it), and at process exit `scplugin.cpp` un-splices nothing.
 
 ### 5.2 What was deliberately left out
 
@@ -552,5 +548,3 @@ pixels, which is why the test says so and prints where they are.
    if anything dispatches indirectly.
 7. **The displacement sweep's blind spot**, §4.1: a `selectionIndex` access computed arithmetically
    would not appear in it.
-8. **Unloading the plugin mid-game leaves its circles on screen.** Documented as unsupported rather
-   than fixed — see §5.2.

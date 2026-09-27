@@ -22,7 +22,6 @@
 
 bool ScMenuWanted(void);                // %SCPLUGIN_MENU_CENTRE% == 1
 void ScMenuInstall(bool writeAllowed);  // arms it: wanted, writable, widescreen at stage 3
-void ScMenuRemove(void);
 bool ScMenuArmed(void);
 void ScMenuOffset(int* dx, int* dy);    // ((W-640)/2, (H-480)/2) for the active preset
 

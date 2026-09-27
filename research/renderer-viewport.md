@@ -2153,8 +2153,9 @@ produced "no interact ever invoked" for every in-game click — because its
 600-line cap had been eaten in the MENUS by two flood event types (type 13, a
 timer tick, and the type-14 `dwUser=8` sweep, both arriving ~10/s per dialog).
 A capped trace reads exactly like a dead route (task 048's blind-instrument
-class). The shipped trace drops both floods and carries `traceDropped` in
-CONSOLESTATS so a saturated run names itself.
+class). The trace dropped both floods and carried `traceDropped` in CONSOLESTATS
+so a saturated run named itself; it was deleted from `sc_console.cpp` once no caller
+used it (`git log -S ConsoleInteractShim` recovers it).
 
 ### 19.5 The select aid — the client half of a selection is a FLAG away
 
@@ -3343,7 +3344,7 @@ re-realizes; the player's window sits idle until they press Start into black.
 Bisected, one fresh launch each, all black at ~1 s: centring off; centring and widescreen
 off; `-Mode observe` (the plugin writes nothing, no detour, no patch). With the WMode shim
 in cnc-ddraw's place (`-Presenter wmode`, otherwise the same): 14 lit samples, no black.
-So it is not this plugin's doing; it is the game under cnc-ddraw. The instrumented arm (a detour on `TitlePaletteUpdate 0x0041EA30`, the
+So it is not this plugin's doing; it is the game under cnc-ddraw. The instrumented arm (a detour on `TitlePaletteUpdate 0x0041EA30`, since deleted from `sc_menu.cpp` -- `git log -S HkTitlePaletteUpdate` recovers it -- the
 one writer of an all-black palette, logging its caller and the fade's state beside every
 palette poll) read, at the black: `fade flag=0 tops written=255 to=255 from=0` with no
 `TitlePaletteUpdate` since the ready room's own swish-in 0.9 s earlier -- the engine

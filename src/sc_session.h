@@ -55,9 +55,8 @@ unsigned ScSessionEpoch(void);
 // design. Nothing branches into the body, so the splice is reached once per call,
 // exactly as often as the entry.
 int  ScSessionInstall(BYTE* moduleBase, bool enabled);
-void ScSessionRemove(void);
 
-// One line for the observer's marker channel and for the detach paths. It prints the
+// One line for the observer's marker channel and for the detach path. It prints the
 // LOAD WITNESS beside the epoch because "the epoch bumped" and "a save was actually
 // deserialised" are separate observations: a run with the second and not the first is
 // exactly the failure this mechanism must not have, and counting bumps alone leaves it

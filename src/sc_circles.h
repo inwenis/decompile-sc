@@ -9,8 +9,7 @@
 //
 // ScCirclesShow / ScCirclesHide are GAME THREAD ONLY: those primitives mutate the
 // sprite overlay list and the image free list the game thread walks to render every
-// frame, under no lock. Hence circles are not taken off at unload, and unloading
-// mid-game is unsupported (tools/plugin/README.md, off switch 3).
+// frame, under no lock. Hence no other thread ever takes a circle off.
 
 #ifndef SC_CIRCLES_H
 #define SC_CIRCLES_H
@@ -36,7 +35,7 @@ bool ScCirclesEnabled(void);
 // The one hook this feature needs is CreateNewUnitSelectionsFromList (0x0049AE40),
 // whose entry is where our circles come off before the engine puts its own on. Returns
 // hooks installed: 1 on success, 0 on failure and 0 when disabled, which is not a
-// failure. ScCirclesRemove only un-splices, so DLL_PROCESS_DETACH is safe.
+// failure. ScCirclesRemove only un-splices, for the fan-out's install rollback.
 int  ScCirclesInstall(void);
 void ScCirclesRemove(void);
 

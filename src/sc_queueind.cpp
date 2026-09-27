@@ -1560,15 +1560,14 @@ void ScQueueIndRemove(void) {
     ScHookRemove(&g_hkDriver);
     ScHookRemove(&g_hkLayout);
     // A phantom left in the ring survives its window only if the game thread died inside
-    // queueLayout -- but restore is idempotent and cheap, so make unload leave the ring
-    // clean unconditionally rather than reason about that.
+    // queueLayout -- but restore is idempotent and cheap, so leave the ring clean
+    // unconditionally rather than reason about that.
     ScQueueIndPhantomRestore();
     UnwrapIconInteracts();
     UnwrapLastIconDraw();
 
     // Take the control back out of the dialog. Single dword writes, guarded reads because
-    // the dialog may already be gone. Mid-game unload stays unsupported (the game thread
-    // may be inside the detour), same policy as sc_circles and sc_hudrow.
+    // the dialog may already be gone.
     if (g_spliced && g_dialog && ScReadable(g_dialog + SC_BINDLG_OFF_FIRST_CHILD, 4)) {
         ScDlgRemoveChild(g_dialog, (DWORD)&g_ctrl[0]);
     }

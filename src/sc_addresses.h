@@ -508,12 +508,12 @@
 // -> CALL 0x00458220. BWAPI BW/Dialog.h names it BW_USER_ACTIVATE = 2.
 #define SC_USER_ACTIVATE 2
 
-// The event's CURSOR POSITION, and the two type codes a click trace has to tell apart.
+// The event's CURSOR POSITION, and two of its type codes.
 // Both offsets come from the dialog hit test 0x00418340, which reads the event with
 // `MOV AX,[ECX + 0xe]` / `MOV CX,[ECX + 0x10]` and compares them against a control's
 // bounds (+0x04..+0x0A) -- so +0x0E is x and +0x10 is y, in the dialog's parent space.
 // MOUSEMOVE is 3 (the status control interact 0x00457F30 opens `CMP EAX,3 / JE` on the
-// type from +0x0C); it arrives thousands of times a second, so a trace drops it.
+// type from +0x0C); it arrives thousands of times a second.
 #define SC_EVT_OFF_X       0x0Eu
 #define SC_EVT_OFF_Y       0x10u
 #define SC_EVT_MOUSEMOVE   3

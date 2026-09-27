@@ -19,7 +19,8 @@
 //    take process-wide locks; taking one while another thread is suspended holding
 //    it would deadlock the game. Only the memcpy happens under suspension.
 //
-//  * Every hook is removable, and RemoveAll runs on detach.
+//  * Every hook is removable, so a module whose install fails part-way rolls back
+//    what went in. Nothing is removed at process exit.
 
 #ifndef SC_HOOK_H
 #define SC_HOOK_H

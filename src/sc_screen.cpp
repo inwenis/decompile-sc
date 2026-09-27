@@ -85,17 +85,6 @@ static const ScScreenGeometry* Geom(void) {
 // have faulted stock too. If a real consumer ever needs more, clamp it instead.
 #define SC_WS_GRID_GUARD 0x10000
 
-// Saved originals, so a FreeLibrary detach can put the process back. Sized by
-// the largest preset's table, never a fixed cap: a cap below the patch count
-// stops saving mid-table in silence and leaves detach unable to restore the rest.
-#define SC_WS_MAX_SAVED SC_WS_PATCH_COUNT_MAX
-static struct {
-    void* addr;
-    BYTE  len;
-    BYTE  bytes[SC_WS_MAX_PATCH_LEN];
-} g_saved[SC_WS_MAX_SAVED];
-static int g_savedCount = 0;
-
 // CODE CAVES. A value that fits no encoding of the instruction's own length --
 // the fog cell stride at 1280 wide is 168, and all six of its sites are
 // sign-extended imm8/disp8 -- needs a WINDOW of whole instructions replaced by
@@ -320,13 +309,6 @@ static bool WriteOne(const ScScreenPatch* p) {
         return false;
     }
 
-    if (g_savedCount < (int)SC_WS_MAX_SAVED) {
-        g_saved[g_savedCount].addr = at;
-        g_saved[g_savedCount].len = p->len;
-        memcpy(g_saved[g_savedCount].bytes, at, p->len);
-        ++g_savedCount;
-    }
-
     memcpy(at, bytes, p->len);
     FlushInstructionCache(GetCurrentProcess(), at, p->len);
     DWORD ignore = 0;
@@ -481,26 +463,6 @@ void ScScreenInstall(BYTE* base, ScMode mode) {
     // variable cannot be read as a full-stage result.
     ScLog("WIDESCREEN filter: %%SCPLUGIN_WS_ONLY%%=%s -- %d stage-%d site(s) skipped",
           g_onlySet ? g_only : "(unset, whole stage applied)", skipped, g_stage);
-}
-
-void ScScreenRemove(void) {
-    if (!g_savedCount) return;
-    int n = 0;
-    for (int i = g_savedCount - 1; i >= 0; --i) {
-        DWORD oldProtect = 0;
-        if (!VirtualProtect(g_saved[i].addr, g_saved[i].len, PAGE_EXECUTE_READWRITE,
-                            &oldProtect)) continue;
-        memcpy(g_saved[i].addr, g_saved[i].bytes, g_saved[i].len);
-        FlushInstructionCache(GetCurrentProcess(), g_saved[i].addr, g_saved[i].len);
-        DWORD ignore = 0;
-        VirtualProtect(g_saved[i].addr, g_saved[i].len, oldProtect, &ignore);
-        ++n;
-    }
-    g_savedCount = 0;
-    g_active = false;
-    ScLog("WIDESCREEN removed: %d site(s) restored (the relocated grid region %p is "
-          "left allocated on purpose -- a live loop may still hold a pointer into it)",
-          n, g_gridRegion);
 }
 
 void ScScreenLogStats(void) {

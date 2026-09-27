@@ -41,10 +41,6 @@ int ScScreenStageWanted(void);
 // (scinject --early); refuses and changes nothing once the framebuffer exists.
 void ScScreenInstall(BYTE* base, ScMode mode);
 
-// Restores every byte this module wrote; the FreeLibrary detach path only, like
-// the detour engine's own removal.
-void ScScreenRemove(void);
-
 void ScScreenLogStats(void);
 
 // True once the patches are in -- both the arm a read-back's log names and the
