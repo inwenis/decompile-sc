@@ -39,6 +39,10 @@
 // makes each of these functions realign ESP itself.
 #define SC_GAME_ENTRY __attribute__((force_align_arg_pointer))
 
+// An engine function whose only argument is in EAX and that ends in a bare RET is GCC's
+// regparm(1); declare a detour of that shape regparm(1) as well.
+typedef void (__attribute__((regparm(1))) *ScEaxFn)(DWORD);
+
 struct ScHook {
     const char* name;
     void*  target;        // runtime address of the hooked function

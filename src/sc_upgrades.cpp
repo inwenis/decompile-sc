@@ -524,8 +524,7 @@ int ScUpgQueueStat(int which) {
 // ---------------------------------------------------------------------------
 // Calling the engine
 //
-// None of these four conventions is expressible in C; each is read off cmdrecvUpgrade's /
-// cmdrecvTech's own listing:
+// Each convention is read off cmdrecvUpgrade's / cmdrecvTech's own listing:
 //
 //   0x004C1B43  MOVZX BX,byte ptr [EAX+1]      the id, into BX
 //   0x004C1B49  MOV EDI,[0x00512678]           the player, into EDI
@@ -535,8 +534,10 @@ int ScUpgQueueStat(int which) {
 //   0x004C1BE1  MOV AL,[ECX+1]  / MOV EDX,ESI  startTech:    AL = id, EDX = unit
 //   0x004C1B6F  MOV CL,0x4C     / (ESI = unit) afterAccept:  CL = order, ESI = unit
 //
-// Whole asm stubs rather than inline-asm constraints: a constraint list pinning EBX, ECX,
-// EDX, ESI and EDI at once is where a compiler quietly picks a register you also needed.
+// The gate and afterAccept take arguments in callee-saved registers, which no C convention
+// expresses. Whole asm stubs rather than inline-asm constraints: a constraint list pinning
+// EBX, ECX, EDX, ESI and EDI at once is where a compiler quietly picks a register you also
+// needed.
 // ---------------------------------------------------------------------------
 
 extern "C" DWORD ScUpgCallGate(void* fn, DWORD unit, DWORD id, DWORD player);
@@ -559,43 +560,12 @@ asm(".text\n"
     "  popl  %ebp\n"
     "  ret\n");
 
-extern "C" DWORD ScUpgCallStartUpgrade(void* fn, DWORD unit, DWORD id);
-asm(".text\n"
-    ".globl _ScUpgCallStartUpgrade\n"
-    "_ScUpgCallStartUpgrade:\n"
-    "  pushl %ebp\n"
-    "  movl  %esp, %ebp\n"
-    "  pushl %ebx\n"
-    "  pushl %esi\n"
-    "  pushl %edi\n"
-    "  movl   8(%ebp), %ebx\n"      // fn -> EBX, which the callee preserves
-    "  movl  12(%ebp), %ecx\n"      // unit -> ECX
-    "  movl  16(%ebp), %eax\n"      // id -> AL
-    "  call  *%ebx\n"
-    "  popl  %edi\n"
-    "  popl  %esi\n"
-    "  popl  %ebx\n"
-    "  popl  %ebp\n"
-    "  ret\n");
-
-extern "C" DWORD ScUpgCallStartTech(void* fn, DWORD unit, DWORD id);
-asm(".text\n"
-    ".globl _ScUpgCallStartTech\n"
-    "_ScUpgCallStartTech:\n"
-    "  pushl %ebp\n"
-    "  movl  %esp, %ebp\n"
-    "  pushl %ebx\n"
-    "  pushl %esi\n"
-    "  pushl %edi\n"
-    "  movl   8(%ebp), %ebx\n"      // fn
-    "  movl  12(%ebp), %edx\n"      // unit -> EDX
-    "  movl  16(%ebp), %eax\n"      // id -> AL
-    "  call  *%ebx\n"
-    "  popl  %edi\n"
-    "  popl  %esi\n"
-    "  popl  %ebx\n"
-    "  popl  %ebp\n"
-    "  ret\n");
+// startUpgrade / startTech: regparm(3) loads EAX, EDX, ECX, so (id, unit, unit) fills AL
+// and whichever of ECX/EDX the target reads; each overwrites the other before reading it.
+// Both end in a bare RET and preserve EBX/ESI/EDI/EBP, as the engine's own callers rely on:
+// after startUpgrade, ESI/EBX at 0x004C1B71/0x004C1B78 and EDI/EBP at 0x004346FF/0x00434710;
+// after startTech, the same at 0x004C1BF1/0x004C1BF8 and 0x0043464F/0x00434660.
+typedef DWORD (__attribute__((regparm(3))) *StartFn)(DWORD id, DWORD edx, DWORD ecx);
 
 extern "C" void ScUpgCallAfterAccept(void* fn, DWORD unit, DWORD order);
 asm(".text\n"
@@ -609,28 +579,6 @@ asm(".text\n"
     "  movl   8(%ebp), %ebx\n"      // fn
     "  movl  12(%ebp), %esi\n"      // unit -> ESI
     "  movl  16(%ebp), %ecx\n"      // order id -> CL
-    "  call  *%ebx\n"
-    "  popl  %edi\n"
-    "  popl  %esi\n"
-    "  popl  %ebx\n"
-    "  popl  %ebp\n"
-    "  ret\n");
-
-// The card condition, called through its trampoline: __stdcall(unit) with CL = the
-// button's conditionParam and EDX = the player, exactly as the layout function calls it.
-extern "C" DWORD ScUpgCallCond(void* fn, DWORD unit, DWORD id, DWORD player);
-asm(".text\n"
-    ".globl _ScUpgCallCond\n"
-    "_ScUpgCallCond:\n"
-    "  pushl %ebp\n"
-    "  movl  %esp, %ebp\n"
-    "  pushl %ebx\n"
-    "  pushl %esi\n"
-    "  pushl %edi\n"
-    "  movl   8(%ebp), %ebx\n"      // fn
-    "  movl  16(%ebp), %ecx\n"      // id -> CL
-    "  movl  20(%ebp), %edx\n"      // player -> EDX
-    "  pushl 12(%ebp)\n"            // unit, popped by the __stdcall callee
     "  call  *%ebx\n"
     "  popl  %edi\n"
     "  popl  %esi\n"
@@ -652,8 +600,8 @@ static int EngineStartItem(DWORD unit, int kind, unsigned id) {
                                unit, id, player);
     if (gate != 1) return -1;   // refused for a reason that will not fix itself
 
-    DWORD ok = tech ? ScUpgCallStartTech(ScRuntimeAddr(SC_VA_START_TECH), unit, id)
-                    : ScUpgCallStartUpgrade(ScRuntimeAddr(SC_VA_START_UPGRADE), unit, id);
+    DWORD ok = ((StartFn)ScRuntimeAddr(tech ? SC_VA_START_TECH : SC_VA_START_UPGRADE))(
+        id, unit, unit);
     if (!ok) return 0;          // could not pay right now -- try again next tick
 
     ScUpgCallAfterAccept(ScRuntimeAddr(SC_VA_AFTER_ACCEPT), unit,
@@ -711,6 +659,9 @@ static ScHook g_hkCancelUpg;
 static ScHook g_hkCancelTech;
 
 typedef void (__attribute__((stdcall)) *CmdFn)(DWORD);
+// The card conditions 0x00429450 / 0x00429500, byte-for-byte the same 20-byte wrapper:
+// __fastcall(CL = the button's conditionParam, EDX = the player, stack = the unit), RET 4.
+typedef DWORD (__attribute__((fastcall)) *CondFn)(DWORD param, DWORD player, DWORD unit);
 
 // WHICH SELECTION ARRAY THIS READS. Both receive handlers reset selectionIterator
 // (0x006284B6) and then require getActivePlayerNextSelection to yield exactly one unit.
@@ -733,7 +684,7 @@ DWORD ScUpgQueueSoleSelectedUnitForTest(void) { return ScSoleSelectedUnit(); }
 // critical section the oracle takes, so the observer thread never samples a building
 // mid-lie and reports it idle.
 static DWORD CondCommon(ScHook* hook, int kind, DWORD unit, DWORD id, DWORD player) {
-    if (!g_enabled || !unit) return ScUpgCallCond(hook->trampoline, unit, id, player);
+    if (!g_enabled || !unit) return ((CondFn)hook->trampoline)(id, player, unit);
 
     EnterCriticalSection(&g_lock);
     UpgSessionSync();
@@ -756,7 +707,7 @@ static DWORD CondCommon(ScHook* hook, int kind, DWORD unit, DWORD id, DWORD play
         *(BYTE*)(unit + SC_CUNIT_OFF_TECH_PROGRESS)    = (BYTE)SC_TECH_NONE;
         ++g_stat[SC_UPGQ_STAT_UNBLOCKED];
     }
-    DWORD r = ScUpgCallCond(hook->trampoline, unit, id, player);
+    DWORD r = ((CondFn)hook->trampoline)(id, player, unit);
     // Restored unconditionally, before anything else on this thread can look. Nothing
     // between the writes yields: the game is single-threaded here, and the observer
     // thread's oracle takes this same lock.
@@ -768,56 +719,15 @@ static DWORD CondCommon(ScHook* hook, int kind, DWORD unit, DWORD id, DWORD play
     return r;
 }
 
-extern "C" DWORD SC_GAME_ENTRY ScUpgCondUpgradeC(DWORD unit, DWORD id, DWORD player) {
-    return CondCommon(&g_hkCondUpg, SC_UPGQ_KIND_UPGRADE, unit, id, player);
+// The wrapper reads only CL of the conditionParam (MOVZX BX,CL).
+static DWORD __attribute__((fastcall)) SC_GAME_ENTRY HkCondUpgrade(DWORD param, DWORD player,
+                                                                  DWORD unit) {
+    return CondCommon(&g_hkCondUpg, SC_UPGQ_KIND_UPGRADE, unit, param & 0xFF, player);
 }
-extern "C" DWORD SC_GAME_ENTRY ScUpgCondTechC(DWORD unit, DWORD id, DWORD player) {
-    return CondCommon(&g_hkCondTech, SC_UPGQ_KIND_TECH, unit, id, player);
+static DWORD __attribute__((fastcall)) SC_GAME_ENTRY HkCondTech(DWORD param, DWORD player,
+                                                               DWORD unit) {
+    return CondCommon(&g_hkCondTech, SC_UPGQ_KIND_TECH, unit, param & 0xFF, player);
 }
-
-// __stdcall(unit) with CL = the button's conditionParam and EDX = the player, RET 4 --
-// read off 0x00429450 / 0x00429500, which are byte-for-byte the same 20-byte wrapper.
-extern "C" void ScUpgCondUpgradeThunk(void);
-asm(".text\n"
-    ".globl _ScUpgCondUpgradeThunk\n"
-    "_ScUpgCondUpgradeThunk:\n"
-    "  pushl %ebp\n"
-    "  movl  %esp, %ebp\n"
-    "  pushl %ebx\n"
-    "  pushl %esi\n"
-    "  pushl %edi\n"
-    "  pushl %edx\n"                // player
-    "  movzbl %cl, %eax\n"
-    "  pushl %eax\n"                // id
-    "  pushl 8(%ebp)\n"             // unit
-    "  call  _ScUpgCondUpgradeC\n"
-    "  addl  $12, %esp\n"
-    "  popl  %edi\n"
-    "  popl  %esi\n"
-    "  popl  %ebx\n"
-    "  popl  %ebp\n"
-    "  ret   $4\n");
-
-extern "C" void ScUpgCondTechThunk(void);
-asm(".text\n"
-    ".globl _ScUpgCondTechThunk\n"
-    "_ScUpgCondTechThunk:\n"
-    "  pushl %ebp\n"
-    "  movl  %esp, %ebp\n"
-    "  pushl %ebx\n"
-    "  pushl %esi\n"
-    "  pushl %edi\n"
-    "  pushl %edx\n"
-    "  movzbl %cl, %eax\n"
-    "  pushl %eax\n"
-    "  pushl 8(%ebp)\n"
-    "  call  _ScUpgCondTechC\n"
-    "  addl  $12, %esp\n"
-    "  popl  %edi\n"
-    "  popl  %esi\n"
-    "  popl  %ebx\n"
-    "  popl  %ebp\n"
-    "  ret   $4\n");
 
 // --- the receive handlers ----------------------------------------------------
 //
@@ -864,43 +774,16 @@ static void SC_GAME_ENTRY HkCmdrecvCancelTech(void) {
 // --- the order handlers ------------------------------------------------------
 //
 // POST-hook: the frame the building goes idle is the frame the next item takes its place.
-extern "C" void SC_GAME_ENTRY ScUpgTickUpgradeDetour(DWORD unit) {
-    DWORD scratch;
-    __asm__ __volatile__("calll *%[fn]" : "=a"(scratch)
-                         : "0"(unit), [fn] "r"(g_hkTickUpg.trampoline)
-                         : "ecx", "edx", "cc", "memory");
-    (void)scratch;
+// Both take the building in EAX and end in a bare RET (sc_addresses.h).
+static void __attribute__((regparm(1))) SC_GAME_ENTRY ScUpgTickUpgradeDetour(DWORD unit) {
+    ((ScEaxFn)g_hkTickUpg.trampoline)(unit);
     if (ScUnitPtrValid(unit)) ScUpgQueueOnTick(unit);
 }
 
-extern "C" void SC_GAME_ENTRY ScUpgTickTechDetour(DWORD unit) {
-    DWORD scratch;
-    __asm__ __volatile__("calll *%[fn]" : "=a"(scratch)
-                         : "0"(unit), [fn] "r"(g_hkTickTech.trampoline)
-                         : "ecx", "edx", "cc", "memory");
-    (void)scratch;
+static void __attribute__((regparm(1))) SC_GAME_ENTRY ScUpgTickTechDetour(DWORD unit) {
+    ((ScEaxFn)g_hkTickTech.trampoline)(unit);
     if (ScUnitPtrValid(unit)) ScUpgQueueOnTick(unit);
 }
-
-// Both order handlers take their only argument in EAX and no C calling convention says so,
-// so each gets the same two-instruction thunk sc_prodqueue uses for productionTick.
-extern "C" void ScUpgTickUpgradeThunk(void);
-asm(".text\n"
-    ".globl _ScUpgTickUpgradeThunk\n"
-    "_ScUpgTickUpgradeThunk:\n"
-    "  pushl %eax\n"
-    "  call  _ScUpgTickUpgradeDetour\n"
-    "  addl  $4, %esp\n"
-    "  ret\n");
-
-extern "C" void ScUpgTickTechThunk(void);
-asm(".text\n"
-    ".globl _ScUpgTickTechThunk\n"
-    "_ScUpgTickTechThunk:\n"
-    "  pushl %eax\n"
-    "  call  _ScUpgTickTechDetour\n"
-    "  addl  $4, %esp\n"
-    "  ret\n");
 
 // ---------------------------------------------------------------------------
 // Verified prologues, from HookProbe over tools/ghidra/specs/upgrade-hooks.spec. Every
@@ -954,10 +837,10 @@ int ScUpgQueueInstall(BYTE* moduleBase) {
 
     int installed = 0;
     if (ScHookInstall(&g_hkCondUpg, "btnUpgradeCondition", ScRuntimeAddr(SC_VA_BTN_UPGRADE_COND),
-                      (void*)&ScUpgCondUpgradeThunk, 6,
+                      (void*)&HkCondUpgrade, 6,
                       kPrologueCond, (int)sizeof(kPrologueCond))) ++installed;
     if (ScHookInstall(&g_hkCondTech, "btnTechCondition", ScRuntimeAddr(SC_VA_BTN_TECH_COND),
-                      (void*)&ScUpgCondTechThunk, 6,
+                      (void*)&HkCondTech, 6,
                       kPrologueCond, (int)sizeof(kPrologueCond))) ++installed;
     if (ScHookInstall(&g_hkCmdUpg, "cmdrecvUpgrade", ScRuntimeAddr(SC_VA_CMDRECV_UPGRADE),
                       (void*)&HkCmdrecvUpgrade, 11,
@@ -966,10 +849,10 @@ int ScUpgQueueInstall(BYTE* moduleBase) {
                       (void*)&HkCmdrecvTech, 11,
                       kPrologueCmd, (int)sizeof(kPrologueCmd))) ++installed;
     if (ScHookInstall(&g_hkTickUpg, "upgradeTick", ScRuntimeAddr(SC_VA_UPGRADE_TICK),
-                      (void*)&ScUpgTickUpgradeThunk, 6,
+                      (void*)&ScUpgTickUpgradeDetour, 6,
                       kPrologueTick, (int)sizeof(kPrologueTick))) ++installed;
     if (ScHookInstall(&g_hkTickTech, "techTick", ScRuntimeAddr(SC_VA_TECH_TICK),
-                      (void*)&ScUpgTickTechThunk, 6,
+                      (void*)&ScUpgTickTechDetour, 6,
                       kPrologueTick, (int)sizeof(kPrologueTick))) ++installed;
     if (ScHookInstall(&g_hkCancelUpg, "cmdrecvCancelUpgrade", ScRuntimeAddr(SC_VA_CMDRECV_CANCEL_UPGRADE),
                       (void*)&HkCmdrecvCancelUpgrade, 8,

@@ -548,18 +548,8 @@ typedef void (__attribute__((stdcall)) *CancelTrainFn)(DWORD);
 
 DWORD ScProdQueueSoleSelectedUnitForTest(void) { return ScSoleSelectedUnit(); }
 
-// Calls a trampoline whose target takes its only argument in EAX and returns void.
-static void CallEax(void* fn, DWORD eax) {
-    DWORD scratch;
-    __asm__ __volatile__("calll *%[fn]"
-                         : "=a"(scratch)
-                         : "0"(eax), [fn] "r"(fn)
-                         : "ecx", "edx", "cc", "memory");
-    (void)scratch;
-}
-
 // cmdrecvTrain (0x004C1C20): EAX = the command bytes, void, bare RET.
-extern "C" void SC_GAME_ENTRY ScProdTrainDetour(DWORD cmd) {
+static void __attribute__((regparm(1))) SC_GAME_ENTRY ScProdTrainDetour(DWORD cmd) {
     DWORD unit = ScSoleSelectedUnit();
     unsigned type = 0xFFFFu;
     bool wasFull = false;
@@ -571,42 +561,21 @@ extern "C" void SC_GAME_ENTRY ScProdTrainDetour(DWORD cmd) {
         wasFull = ScUnitFreeQueueSlot(unit) >= SC_BUILD_QUEUE_SLOTS;
         if (cmd) type = *(WORD*)(cmd + 1);
     }
-    CallEax(g_hkTrain.trampoline, cmd);
+    ((ScEaxFn)g_hkTrain.trampoline)(cmd);
     g_deepGc = true;
     if (unit) ScProdQueueOnTrain(unit, type, wasFull);
 }
 
 // productionTick (0x00468420): EAX = CUnit*, void, bare RET. Post-hook -- the frame a
 // slot frees is the frame the next overflow item takes it.
-extern "C" void SC_GAME_ENTRY ScProdTickDetour(DWORD unit) {
-    CallEax(g_hkTick.trampoline, unit);
+static void __attribute__((regparm(1))) SC_GAME_ENTRY ScProdTickDetour(DWORD unit) {
+    ((ScEaxFn)g_hkTick.trampoline)(unit);
     if (ScUnitPtrValid(unit)) ScProdQueueOnTick(unit);
 }
 
-// Both targets take their argument in EAX and no C calling convention says so, so each
-// gets a two-instruction thunk that turns EAX into a cdecl argument. EBX/ESI/EDI/EBP are
-// preserved by the C callee, which is what the engine's own callers assume.
-extern "C" void ScProdTrainThunk(void);
-asm(".text\n"
-    ".globl _ScProdTrainThunk\n"
-    "_ScProdTrainThunk:\n"
-    "  pushl %eax\n"
-    "  call  _ScProdTrainDetour\n"
-    "  addl  $4, %esp\n"
-    "  ret\n");
-
-extern "C" void ScProdTickThunk(void);
-asm(".text\n"
-    ".globl _ScProdTickThunk\n"
-    "_ScProdTickThunk:\n"
-    "  pushl %eax\n"
-    "  call  _ScProdTickDetour\n"
-    "  addl  $4, %esp\n"
-    "  ret\n");
-
-// cmdrecvCancelTrain (0x004C0100): __stdcall(const u8* cmd), RET 4 -- expressible, so no
-// thunk. PRE-hook: when the plugin owns the tail of the logical queue, a "cancel the
-// last item" is ours and the engine's handler must not also run.
+// cmdrecvCancelTrain (0x004C0100): __stdcall(const u8* cmd), RET 4. PRE-hook: when the
+// plugin owns the tail of the logical queue, a "cancel the last item" is ours and the
+// engine's handler must not also run.
 static void __attribute__((stdcall)) SC_GAME_ENTRY HkCmdrecvCancelTrain(DWORD cmd) {
     DWORD unit = ScSoleSelectedUnit();
     unsigned payload = cmd ? *(WORD*)(cmd + 1) : SC_CANCEL_TRAIN_NONE;
@@ -670,13 +639,13 @@ int ScProdQueueInstall(BYTE* moduleBase) {
 
     int installed = 0;
     if (ScHookInstall(&g_hkTrain, "cmdrecvTrain", ScRuntimeAddr(SC_VA_CMDRECV_TRAIN),
-                      (void*)&ScProdTrainThunk, 11,
+                      (void*)&ScProdTrainDetour, 11,
                       kPrologueTrain, (int)sizeof(kPrologueTrain))) ++installed;
     if (ScHookInstall(&g_hkCancel, "cmdrecvCancelTrain", ScRuntimeAddr(SC_VA_CMDRECV_CANCEL_TRAIN),
                       (void*)&HkCmdrecvCancelTrain, 11,
                       kPrologueCancel, (int)sizeof(kPrologueCancel))) ++installed;
     if (ScHookInstall(&g_hkTick, "productionTick", ScRuntimeAddr(SC_VA_PRODUCTION_TICK),
-                      (void*)&ScProdTickThunk, 9,
+                      (void*)&ScProdTickDetour, 9,
                       kPrologueTick, (int)sizeof(kPrologueTick))) ++installed;
 
     ScHookResumeThreads();

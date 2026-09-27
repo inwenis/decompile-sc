@@ -501,9 +501,9 @@ if memory disagrees. No window contains a PC-relative instruction, so all three 
 trampoline unchanged — the absolute `MOV byte ptr [0x006284B6],0` is not PC-relative. All three go
 in under one thread suspension and a partial set rolls itself back.
 
-Two of the three take their only argument in `EAX` and no C calling convention says so, so each has
-a two-instruction thunk (`pushl %eax; call <C fn>; addl $4,%esp; ret`) — the same technique
-`sc_fanout`'s `ScOverflowThunk` uses for `sortOverflowHandler`.
+Two of the three take their only argument in `EAX` and end in a bare `RET`, which is GCC's
+`regparm(1)`: their detours are declared with it and call their trampolines through the same
+pointer type (`ScEaxFn`, `src/sc_hook.h`).
 
 ### 6.2 Which building — and WHICH SELECTION ARRAY, which is not the obvious one
 
