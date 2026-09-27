@@ -104,9 +104,8 @@ Describe 'a redeploy leaves the feature-test map in place (task 067)' {
 }
 
 Describe 'the one launcher ships the wide geometry at 2x' {
-    # The deploy ships ONE launcher, and it carries the extended viewport; a separate
-    # "Wide" launcher off by default is the shape these checks forbid, and each fails
-    # against a two-launcher deploy.ps1, so none is vacuous.
+    # The deploy ships ONE launcher, and it carries the extended viewport; the ONE-launcher-body
+    # count fails against a two-launcher deploy.ps1.
 
     BeforeAll {
         $script:deployText = Get-Content -Raw -LiteralPath $script:deploy

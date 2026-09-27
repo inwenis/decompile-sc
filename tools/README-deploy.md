@@ -49,7 +49,7 @@ arguments.
    `plugin\cnc-ddraw-2x-<WxH>.ini`), for trying the sizes side by side.
 10. Verifies: deployed `StarCraft.exe` sha256 == source's, the deployed `scplugin.dll`'s
     embedded build stamp equals this run's version, the shortcut
-    resolves to an existing target and launcher. Prints a one-line receipt:
+    targets pwsh and references the launcher. Prints a one-line receipt:
     `deploy: OK  version=<git-short-sha>[+dirty]  date=<yyyy-mm-dd>  -> <DeployRoot>`.
 
 Idempotent: re-running mirrors the game tree again (a no-op robocopy pass if nothing

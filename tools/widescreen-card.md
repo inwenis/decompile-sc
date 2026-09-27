@@ -19,9 +19,8 @@ The mouse is locked to the window (Ctrl+Tab or Right Alt+Right Ctrl frees it; a 
    minimap, unit panel, command card, chat line, F10 menu button and the bronze
    rails all sit along the bottom as they always did, now below the taller map.
    The top resource bar stays at the top.
-3. **The menus look the same as always**, with a black band filling the extra
-   space. That is normal -- menu screens are fixed-size art; only the game itself
-   is bigger.
+3. **The menus sit centred on a starry nebula sky.** Menu screens are fixed-size
+   art; only the game itself is bigger.
 4. All the usual mod features are on and unchanged: select-past-12, selection
    circles, the paging bottom row, the over-cap production queue with its `+N`
    badge, group production. Right-click orders and the cursor behave normally

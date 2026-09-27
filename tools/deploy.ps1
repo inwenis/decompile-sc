@@ -252,8 +252,7 @@ Write-Host ''
 Write-Host "== Assembling plugin runtime -> $deployRootFull\plugin =="
 $pluginDeployDir = Join-Path $deployRootFull 'plugin'
 New-Item -ItemType Directory -Path $pluginDeployDir -Force | Out-Null
-# What run-with-plugin.ps1 dot-sources or runs from its own folder. sc-desktop and sc-build-id
-# run on EVERY launch, the user's too: a missing one breaks the deployed launcher outright.
+# What run-with-plugin.ps1 dot-sources or runs from its own folder.
 $runtime = 'run-with-plugin.ps1','check-game-windows.ps1','sc-canonical-path.ps1','sc-audio-mute.ps1','sc-launch-lock.ps1','sc-foreground.ps1','sc-desktop.ps1','sc-build-id.ps1'
 Copy-Item -LiteralPath $builtDll, $builtExe -Destination $pluginDeployDir -Force
 foreach ($f in $runtime) { Copy-Item -LiteralPath (Join-Path $pluginDir $f) -Destination $pluginDeployDir -Force }
