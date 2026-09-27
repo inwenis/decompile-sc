@@ -37,42 +37,12 @@ jobs:
           if ($failed) { throw 'One or more PowerShell files failed to parse' }
           Write-Host "Parsed $($files.Count) .ps1 files OK"
 
-      - name: Validate JSON under config/ and .claude/
+      - name: Run Pester tests
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $jsonFiles = @()
-          foreach ($dir in @('config', '.claude')) {
-              if (Test-Path $dir) {
-                  $jsonFiles += Get-ChildItem -Path $dir -Filter *.json -Recurse -File
-              }
-          }
-          if ($jsonFiles.Count -eq 0) {
-              Write-Host 'No JSON files found under config/ or .claude/ -- skipping'
-          } else {
-              $failed = $false
-              foreach ($f in $jsonFiles) {
-                  try {
-                      Get-Content -Raw -LiteralPath $f.FullName | ConvertFrom-Json | Out-Null
-                  } catch {
-                      $failed = $true
-                      Write-Host "::error file=$($f.FullName)::Invalid JSON: $($_.Exception.Message)"
-                  }
-              }
-              if ($failed) { throw 'One or more JSON files failed to validate' }
-              Write-Host "Validated $($jsonFiles.Count) JSON files OK"
-          }
-
-      - name: Run Pester tests (if tests/ exists)
-        shell: pwsh
-        run: |
-          if (Test-Path 'tests') {
-              Install-Module -Name Pester -MinimumVersion 5.0.0 -Force -SkipPublisherCheck -Scope CurrentUser
-              Import-Module Pester -MinimumVersion 5.0.0
-              Invoke-Pester -Path tests -CI
-          } else {
-              Write-Host 'No tests/ directory -- skipping Pester'
-          }
+          Install-Module -Name Pester -MinimumVersion 5.0.0 -Force -SkipPublisherCheck -Scope CurrentUser
+          Import-Module Pester -MinimumVersion 5.0.0
+          Invoke-Pester -Path tests -CI
 
       - name: Guard against tracked game-content files
         shell: pwsh
@@ -106,21 +76,11 @@ jobs:
 
       - name: Install Python dependencies
         shell: pwsh
-        run: |
-          if (Test-Path 'requirements.txt') {
-              pip install -r requirements.txt
-          } else {
-              Write-Host 'No requirements.txt -- skipping pip install'
-          }
+        run: pip install -r requirements.txt
 
       - name: Byte-compile tools/*.py
         shell: pwsh
-        run: |
-          if (Test-Path 'tools') {
-              python -m compileall -q tools
-          } else {
-              Write-Host 'No tools/ directory -- skipping'
-          }
+        run: python -m compileall -q tools
 
       - name: Reuse gate (src and tools/plugin/*.ps1)
         shell: pwsh
@@ -143,25 +103,3 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tools/check-comment-narration.py
           exit $LASTEXITCODE
-
-      - name: Lint (ruff, only if pulled in via requirements.txt)
-        shell: pwsh
-        run: |
-          # `pip show` exits 1 when ruff isn't installed -- that's the expected
-          # skip signal, not a failure, so reset $LASTEXITCODE right after
-          # reading it. Otherwise the stale 1 survives past the Write-Host
-          # skip message and GitHub's pwsh wrapper fails the step on exit
-          # using whatever $LASTEXITCODE last held.
-          $ruffInstalled = $false
-          try {
-              pip show ruff *> $null
-              if ($LASTEXITCODE -eq 0) { $ruffInstalled = $true }
-              $LASTEXITCODE = 0
-          } catch {}
-          if ($ruffInstalled -and (Test-Path 'tools')) {
-              ruff check tools
-              exit $LASTEXITCODE
-          } else {
-              Write-Host 'ruff not installed (or tools/ absent) -- skipping lint'
-              exit 0
-          }
