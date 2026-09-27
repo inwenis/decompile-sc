@@ -258,15 +258,15 @@ class Builder:
                                % (name, va, fmt(ins), abs(old)))
             return
         if len(hits) != 1:
-            self.errors.append("%s @0x%08X: %d candidate fields of width %d for %d in %s"
-                               % (name, va, len(hits), width, old, raw.hex()))
+            self.errors.append("%s @0x%08X: %d candidate fields of width %d for %s in %s"
+                               % (name, va, len(hits), width, hex(old), raw.hex()))
             return
         off = hits[0]
         try:
             enc_new = new.to_bytes(width, "little", signed=signed)
         except OverflowError:
-            self.errors.append("%s @0x%08X: new value %d does not fit %d byte(s)"
-                               % (name, va, new, width))
+            self.errors.append("%s @0x%08X: new value %s does not fit in %d byte(s)"
+                               % (name, va, hex(new), width))
             return
         # A ONE-BYTE field is SIGN-EXTENDED by every encoding this table declares
         # (imm8 of 83/6B/6A, disp8 of a ModRM), so a value above 127 ships NEGATIVE:
