@@ -90,7 +90,6 @@ enum ScProdFanStat {
     SC_PRODFAN_STAT_LIT = 3,        // times the button condition was relaxed for a group
     SC_PRODFAN_STAT__COUNT = 4
 };
-int  ScProdFanStat(int which);
 void ScProdFanCountFanout(int buildings);
 void ScProdFanCountRefusal(void);
 

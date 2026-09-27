@@ -246,7 +246,7 @@ one a single line of output instead of another evening.
 | a group whose buildings are not all one type | **refused outright**, and the whole command rather than the odd building, because a partial fan-out would spend the player's minerals on a subset they never chose | offline, `hooktest` part [18]; and §4 — the engine would refuse it for free anyway |
 | a >12 **unit** selection | refused: `simSlots != 1`, so `0x1F` stays passthrough exactly as `command-opcodes.md` §5.1 has it | offline, `hooktest` part [18] |
 | one building selected | not fanned out at all, so the path stays byte-for-byte stock — which is what makes it usable as a control arm | in game, §6, both arms |
-| `%SCPLUGIN_BUILDING_GROUPS%=0` | a box selects one building, the count is 1, and the detour returns "not ours" before looking at anything else | by construction, §5.4 |
+| `%SCPLUGIN_BUILDING_GROUPS%=0` | a box selects one building, the count is 1, and the detour hands the call to the stock condition before looking at anything else | by construction, §5.4 |
 
 ### 5.4 How it composes with task 024
 

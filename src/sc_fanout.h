@@ -98,6 +98,10 @@ void ScFanoutTestSetBuildingGroups(bool on);
 // which is also the fan-out's chunk size. 12 for units, 1 for a building group.
 int ScFanoutSimSlots(void);
 
+// The chunk size a selection led by `lead` gets, from the engine's own movability answer
+// (asked through the trampoline, never the detoured entry).
+int ScFanoutSimSlotsFor(DWORD lead);
+
 // ---------------------------------------------------------------------------
 // EXTENDING a building group: shift-click, shift+box, shift+ctrl-click.
 //

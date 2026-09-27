@@ -361,6 +361,8 @@ static bool UnitIsStandardAndMovable(DWORD unit) {
 // gate refuses a second slot to. Recomputed at every selection commit, never guessed.
 static int g_simSlots = SC_SELECTION_SLOTS;
 
+int ScFanoutSimSlotsFor(DWORD lead) { return UnitIsStandardAndMovable(lead) ? SC_SELECTION_SLOTS : 1; }
+
 // units.dat prototype flags for a type, read only so a log line can say WHICH bit the
 // gate objected to. Returns 0 for a type id outside the table's addressable range.
 static DWORD UnitsDatFlags(WORD unitType) {
@@ -397,7 +399,7 @@ static void UpdateSimSlots(const ShadowUnit* visible, int visibleCount) {
         g_simSlots = SC_SELECTION_SLOTS;
         return;
     }
-    g_simSlots = UnitIsStandardAndMovable(visible[0].ptr) ? SC_SELECTION_SLOTS : 1;
+    g_simSlots = ScFanoutSimSlotsFor(visible[0].ptr);
 }
 
 static bool g_liveness = true;    // %SCPLUGIN_FANOUT_LIVENESS%
@@ -2109,6 +2111,31 @@ void ScFanoutLogStats(void) {
     ScQueueIndLogStats();
 }
 
+// One UNITSTATE histogram: up to 32 distinct keys with a count each, the rest counted as
+// overflow. Keys are DWORD because hit points (a 2500-hit-point building reads 0xA0000) and
+// a packed rally point do not fit a WORD, and truncating them would merge units that are not
+// in the same state.
+struct UnitHist { DWORD key[32]; unsigned cnt[32]; int n, overflow; };
+
+static void HistAdd(UnitHist* h, DWORD key) {
+    for (int j = 0; j < h->n; ++j) if (h->key[j] == key) { ++h->cnt[j]; return; }
+    if (h->n >= 32) { ++h->overflow; return; }
+    h->key[h->n] = key;
+    h->cnt[h->n++] = 1;
+}
+
+// `wide` prints the key unpadded, so hp and rally 0 read "0x0" and the byte/word fields keep
+// two digits ("0x00"): drive-game.ps1 keys its maps on the text exactly as logged.
+static void HistFormat(const UnitHist* h, char* out, int cap, bool wide) {
+    int used = 0, margin = wide ? 20 : 14;
+    out[0] = '\0';
+    for (int j = 0; j < h->n && used + margin < cap; ++j) {
+        used += _snprintf(out + used, (size_t)(cap - used), wide ? "%s0x%X:%u" : "%s0x%02X:%u",
+                          j ? " " : "", (unsigned)h->key[j], h->cnt[j]);
+    }
+    if (h->overflow) _snprintf(out + used, (size_t)(cap - used), " +%d-more", h->overflow);
+}
+
 // The oracle for "did the order reach every unit". Walks the shadow list -- the whole
 // pre-cap selection, not the twelve the engine holds -- and reports what each unit is
 // doing, as a histogram so one line covers any group size.
@@ -2125,74 +2152,21 @@ void ScFanoutLogUnitStates(const char* tag) {
     // through pointers belonging to another game.
     FanoutSessionSync();
 
-    WORD     orderKey[32], order2Key[32], typeKey[32];
-    unsigned orderCnt[32], order2Cnt[32], typeCnt[32];
-    int      orderN = 0, order2N = 0, typeN = 0;
     int      live = 0, burrowed = 0, uniqOnly = 0, circled = 0;
-    int      orderOverflow = 0, order2Overflow = 0, typeOverflow = 0;
     // A cost-bearing ability is a two-sided claim -- every unit gains the effect AND every
     // unit pays -- so the oracle carries both halves per unit. Histograms, not sums: "the
     // group lost 240 HP" is satisfied by one unit losing 240, which is the confusion this
     // line exists to rule out.
     //   hp     CUnit+0x08, the field the damage primitive 0x004797B0 subtracts from
-    //          (sc_addresses.h). 32-bit: a 2500-HP building overflows a WORD key.
+    //          (sc_addresses.h).
     //   stim   CUnit+0x115, set to 0x25 by the 0x36 handler 0x004C2F30
     //          (research/ability-semantics.md 2).
     //   energy CUnit+0xA2, the field 0x00491B30 deducts from for the 0x21 family.
     //   rally  CUnit+0xF8/+0xFA packed (x << 16) | y -- a building's rally point, the one
-    //          order a plain right-click gives a building. 32-bit for the same reason:
-    //          two 16-bit map coordinates do not fit a WORD key.
-    DWORD    hpKey[32], rallyKey[32];
-    unsigned hpCnt[32], rallyCnt[32];
-    int      hpN = 0, hpOverflow = 0;
-    int      rallyN = 0, rallyOverflow = 0;
-    WORD     stimKey[32], energyKey[32];
-    unsigned stimCnt[32], energyCnt[32];
-    int      stimN = 0, energyN = 0, stimOverflow = 0, energyOverflow = 0;
+    //          order a plain right-click gives a building.
+    UnitHist hOrder = {}, hOrder2 = {}, hType = {}, hHp = {}, hStim = {}, hEnergy = {}, hRally = {};
     int      stimmed = 0;
-    int      why[SC_DROP_NOTAG + 1];
-    for (int i = 0; i <= SC_DROP_NOTAG; ++i) why[i] = 0;
-
-    // Two accumulators, same shape. The 32-bit one exists only because hit points do not
-    // fit a WORD key -- a 2500-hit-point building reads 0xA0000 -- and truncating them
-    // would merge units that are not in the same state.
-    struct Hist32 {
-        static void Add(DWORD key, DWORD* keys, unsigned* counts, int* n, int cap, int* overflow) {
-            for (int j = 0; j < *n; ++j) if (keys[j] == key) { ++counts[j]; return; }
-            if (*n >= cap) { ++*overflow; return; }
-            keys[*n] = key;
-            counts[*n] = 1;
-            ++*n;
-        }
-        static int Format(char* out, int cap, const DWORD* keys, const unsigned* counts, int n) {
-            int used = 0;
-            out[0] = '\0';
-            for (int j = 0; j < n && used + 20 < cap; ++j) {
-                used += _snprintf(out + used, (size_t)(cap - used), "%s0x%X:%u",
-                                  j ? " " : "", (unsigned)keys[j], counts[j]);
-            }
-            return used;
-        }
-    };
-
-    struct Hist {
-        static void Add(WORD key, WORD* keys, unsigned* counts, int* n, int cap, int* overflow) {
-            for (int j = 0; j < *n; ++j) if (keys[j] == key) { ++counts[j]; return; }
-            if (*n >= cap) { ++*overflow; return; }
-            keys[*n] = key;
-            counts[*n] = 1;
-            ++*n;
-        }
-        static int Format(char* out, int cap, const WORD* keys, const unsigned* counts, int n) {
-            int used = 0;
-            out[0] = '\0';
-            for (int j = 0; j < n && used + 14 < cap; ++j) {
-                used += _snprintf(out + used, (size_t)(cap - used), "%s0x%02X:%u",
-                                  j ? " " : "", keys[j], counts[j]);
-            }
-            return used;
-        }
-    };
+    int      why[SC_DROP_NOTAG + 1] = { 0 };
 
     for (int i = 0; i < g_shadowCount; ++i) {
         // BOTH numbers, from the same read of the same list: `uniqOnly` is what the
@@ -2219,43 +2193,30 @@ void ScFanoutLogUnitStates(const char* tag) {
                 & SC_SPRITE_FLAG_SEL_CIRCLE) ++circled;
         BYTE stim = *(BYTE*)(g_shadow[i].ptr + SC_CUNIT_OFF_STIM_TIMER);
         if (stim) ++stimmed;
-        Hist32::Add(ScUnitHitPoints(g_shadow[i].ptr),
-                    hpKey, hpCnt, &hpN, 32, &hpOverflow);
-        Hist::Add(stim, stimKey, stimCnt, &stimN, 32, &stimOverflow);
-        Hist::Add(*(WORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_ENERGY),
-                  energyKey, energyCnt, &energyN, 32, &energyOverflow);
-        Hist::Add(*(BYTE*)(g_shadow[i].ptr + SC_CUNIT_OFF_ORDER_ID),
-                  orderKey, orderCnt, &orderN, 32, &orderOverflow);
-        Hist::Add(*(BYTE*)(g_shadow[i].ptr + SC_CUNIT_OFF_ORDER2_ID),
-                  order2Key, order2Cnt, &order2N, 32, &order2Overflow);
-        Hist::Add(*(WORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_UNIT_ID),
-                  typeKey, typeCnt, &typeN, 32, &typeOverflow);
+        HistAdd(&hHp, ScUnitHitPoints(g_shadow[i].ptr));
+        HistAdd(&hStim, stim);
+        HistAdd(&hEnergy, *(WORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_ENERGY));
+        HistAdd(&hOrder, *(BYTE*)(g_shadow[i].ptr + SC_CUNIT_OFF_ORDER_ID));
+        HistAdd(&hOrder2, *(BYTE*)(g_shadow[i].ptr + SC_CUNIT_OFF_ORDER2_ID));
+        HistAdd(&hType, *(WORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_UNIT_ID));
         // The RALLY POINT, packed (x << 16) | y so one bucket means "every one of these is
         // rallied to the same map point" -- the oracle for "a building-valid order reached
         // all N". The Right Click applier 0x004560D0 writes CUnit+0xF8/+0xFA per building,
         // so a fan-out that reached only some shows two buckets, not a smaller total.
-        Hist32::Add(((DWORD)*(WORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_RALLY_X) << 16) |
-                    (DWORD)*(WORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_RALLY_Y),
-                    rallyKey, rallyCnt, &rallyN, 32, &rallyOverflow);
+        HistAdd(&hRally, ((DWORD)*(WORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_RALLY_X) << 16) |
+                         (DWORD)*(WORD*)(g_shadow[i].ptr + SC_CUNIT_OFF_RALLY_Y));
     }
 
     char orders[256], orders2[256], types[256];
-    int used = Hist::Format(orders, (int)sizeof(orders), orderKey, orderCnt, orderN);
-    if (orderOverflow) _snprintf(orders + used, sizeof(orders) - used, " +%d-more", orderOverflow);
-    used = Hist::Format(orders2, (int)sizeof(orders2), order2Key, order2Cnt, order2N);
-    if (order2Overflow) _snprintf(orders2 + used, sizeof(orders2) - used, " +%d-more", order2Overflow);
-    used = Hist::Format(types, (int)sizeof(types), typeKey, typeCnt, typeN);
-    if (typeOverflow) _snprintf(types + used, sizeof(types) - used, " +%d-more", typeOverflow);
+    HistFormat(&hOrder, orders, (int)sizeof(orders), false);
+    HistFormat(&hOrder2, orders2, (int)sizeof(orders2), false);
+    HistFormat(&hType, types, (int)sizeof(types), false);
 
     char hp[320], stims[256], energies[256], rally[320];
-    used = Hist32::Format(hp, (int)sizeof(hp), hpKey, hpCnt, hpN);
-    if (hpOverflow) _snprintf(hp + used, sizeof(hp) - used, " +%d-more", hpOverflow);
-    used = Hist32::Format(rally, (int)sizeof(rally), rallyKey, rallyCnt, rallyN);
-    if (rallyOverflow) _snprintf(rally + used, sizeof(rally) - used, " +%d-more", rallyOverflow);
-    used = Hist::Format(stims, (int)sizeof(stims), stimKey, stimCnt, stimN);
-    if (stimOverflow) _snprintf(stims + used, sizeof(stims) - used, " +%d-more", stimOverflow);
-    used = Hist::Format(energies, (int)sizeof(energies), energyKey, energyCnt, energyN);
-    if (energyOverflow) _snprintf(energies + used, sizeof(energies) - used, " +%d-more", energyOverflow);
+    HistFormat(&hHp, hp, (int)sizeof(hp), true);
+    HistFormat(&hRally, rally, (int)sizeof(rally), true);
+    HistFormat(&hStim, stims, (int)sizeof(stims), false);
+    HistFormat(&hEnergy, energies, (int)sizeof(energies), false);
 
     // The trailing fields are appended, never inserted: drive-game.ps1's parser matches
     // the leading run of fields and is not anchored at the end, so an older reader of

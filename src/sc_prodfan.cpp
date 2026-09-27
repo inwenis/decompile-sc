@@ -7,7 +7,7 @@
 // THREADING. ScProdFanLogState runs on the OBSERVER thread, off the marker channel, and
 // never writes. ScProdFanDecide is pure and is called from the game thread inside
 // sc_fanout's queueCommand detour. The only write to game memory is the one-byte
-// selection-count swap in ScProdFanCondAllow, on the game thread, restored before return.
+// selection-count swap in HkBtnTrainCondition, on the game thread, restored before return.
 
 #include <windows.h>
 #include <stdio.h>
@@ -46,23 +46,10 @@ static int g_condExit[COND__COUNT] = { 0 };
 static int g_condCalls = 0;
 static int g_condLogged = 0;
 
-static int CondReturn(int which) { ++g_condExit[which]; return 0; }
-
 // How many buildings one oracle line may describe. A group is bounded by the fan-out's
 // shadow list; 64 is past anything a box produces, at the cost of stack in a function
 // that runs once per marker.
 #define SC_PRODFAN_MAX_SHADOW 64
-
-// The engine's own movability predicate (0x0047B770, ECX = CUnit*). It is what makes a
-// selection a BUILDING group: the simulation refuses a non-movable unit every selection
-// slot but slot 0 (research/building-groups.md 3-4). Called rather than re-implemented --
-// four of its terms are per-UNIT, not per-type, so asking about the type once would be a
-// different question from the one the engine asks.
-typedef int (__attribute__((fastcall)) *ScMovableFn)(DWORD unit);
-static bool UnitMovable(DWORD unit) {
-    ScMovableFn f = (ScMovableFn)ScRuntimeAddr(SC_VA_UNIT_IS_STANDARD_AND_MOVABLE);
-    return f(unit) != 0;
-}
 
 bool ScProdFanEnabled(void) {
     if (g_inited) return g_enabled;
@@ -79,9 +66,6 @@ void ScProdFanInit(BYTE* moduleBase, bool enabled) {
 
 void ScProdFanTestSetEnabled(bool on) { g_enabled = on; g_inited = true; }
 
-int  ScProdFanStat(int which) {
-    return (which >= 0 && which < SC_PRODFAN_STAT__COUNT) ? g_stat[which] : 0;
-}
 void ScProdFanCountFanout(int buildings) {
     ++g_stat[SC_PRODFAN_STAT_FANNED];
     g_stat[SC_PRODFAN_STAT_BUILDINGS] += buildings;
@@ -210,7 +194,7 @@ void ScProdFanLogState(const char* tag) {
                 used += _snprintf(units + used, sizeof(units) - used, "%s(bad)", i ? "," : "");
                 continue;
             }
-            if (!haveFirst) { slots = UnitMovable(u) ? SC_SELECTION_SLOTS : 1; haveFirst = true; }
+            if (!haveFirst) { slots = ScFanoutSimSlotsFor(u); haveFirst = true; }
             used += _snprintf(units + used, sizeof(units) - used, "%s0x%08X/0x%03X",
                               i ? "," : "", (unsigned)u,
                               (unsigned)*(WORD*)(u + SC_CUNIT_OFF_UNIT_ID));
@@ -268,12 +252,10 @@ void ScProdFanLogStats(void) {
 // `simSlots == 1` is what makes a selection a building group at all, and sc_fanout
 // computes it from the engine's own movability predicate, so with
 // `%SCPLUGIN_BUILDING_GROUPS%=0` a box selects one building, the count is 1, and this
-// detour returns "not ours" first.
+// detour hands the call straight to the stock condition.
 // ---------------------------------------------------------------------------
 
 static ScHook g_hkCond;
-static void*  g_condTrampoline = NULL;
-extern "C" { void* g_scProdFanCondTramp = NULL; }   // read by the asm thunk
 
 // The button condition's own prologue, from this binary (sc_addresses.h quotes the whole
 // listing): PUSH EBP / MOV EBP,ESP / MOV EAX,ECX -- three whole instructions, five bytes,
@@ -302,47 +284,36 @@ static int CollectClientSelection(WORD* types, int max, int* outSlots) {
     for (unsigned i = 0; i < n && k < max; ++i) {
         DWORD u = sel[i];
         if (!ScUnitPtrValid(u)) continue;
-        if (!haveFirst) { *outSlots = UnitMovable(u) ? SC_SELECTION_SLOTS : 1; haveFirst = true; }
+        if (!haveFirst) { *outSlots = ScFanoutSimSlotsFor(u); haveFirst = true; }
         types[k++] = *(WORD*)(u + SC_CUNIT_OFF_UNIT_ID);
     }
     return k;
 }
 
-// Calls the STOCK condition through the trampoline, with its own calling convention:
-// `__stdcall(CUnit* unit)` with ECX = the button's type param and EDX = the player. The
-// trampoline is the relocated prologue plus a jump back to target+5, so this is the
-// original function in every respect, including its RET 4 -- which is why the pushed
-// argument is not cleaned up here.
-//
+// The condition is `__fastcall(type, player, CUnit* unit)`, RET 4 (sc_addresses.h).
+typedef int (__attribute__((fastcall)) *ScCardCondFn)(DWORD type, DWORD player, DWORD unit);
+
 // Do not reproduce the condition's allow path instead. Hand-writing those ten instructions
 // and calling the requirement gate with ESI and EAX set by hand installs, runs and counts
 // four allowed buttons -- while the button is still not drawn, because the hand-made
 // register state does not match what the gate wants. Calling the engine's own code leaves
 // no convention for this plugin to get wrong, and the tech rules stay the engine's.
-static int CallStockCondition(DWORD type, DWORD unit, DWORD player) {
-    int ret = 0;
-    void* fn = g_condTrampoline;
-    if (!fn) return 0;
-    __asm__ __volatile__("pushl %[unit]\n\t"
-                         "calll *%[fn]"
-                         : "=a"(ret)
-                         : "c"(type), "d"(player), [unit] "m"(unit), [fn] "r"(fn)
-                         : "cc", "memory");
-    return ret;
+static int CallStockCondition(DWORD type, DWORD player, DWORD unit) {
+    return ((ScCardCondFn)g_hkCond.trampoline)(type, player, unit);
 }
 
-// The value the condition returns when we handle it. The card layout reads the result as a
-// TRI-STATE (research/command-card.md 4.1): > 0 shows the button, 0 skips it entirely and
-// advances the layout's button cursor, < 0 shows it GREYED. The game thread is the only
-// writer and reader, between the thunk's call and its return, so one slot is enough.
-static int g_condResult = 0;
-extern "C" { int g_scProdFanResult = 0; }
+static int CondReturn(int which, DWORD type, DWORD player, DWORD unit) {
+    ++g_condExit[which];
+    return CallStockCondition(type, player, unit);
+}
 
-// Returns non-zero to mean "we are handling this call; return g_scProdFanResult". Called
-// from the thunk with the three values the condition received: ECX (the button's type
-// param), its stack argument (the unit the card is drawn for) and EDX (the player). Runs
-// on the GAME thread, once per gated button per card relayout.
-extern "C" int ScProdFanCondAllow(DWORD type, DWORD unit, DWORD player) {
+// The detour, with the condition's own arguments: ECX = the button's type param, EDX = the
+// player, the stack argument = the unit the card is drawn for. Runs on the GAME thread,
+// once per gated button per card relayout. The card layout reads the result as a
+// TRI-STATE (research/command-card.md 4.1): > 0 shows the button, 0 skips it entirely and
+// advances the layout's button cursor, < 0 shows it GREYED.
+static int __attribute__((fastcall)) SC_GAME_ENTRY HkBtnTrainCondition(DWORD rawType, DWORD player,
+                                                                       DWORD unit) {
     ++g_condCalls;
     // The first few calls verbatim, whatever they do. Rate-limited because the card is
     // laid out many times a second; eight is enough to see one selection's worth.
@@ -350,11 +321,11 @@ extern "C" int ScProdFanCondAllow(DWORD type, DWORD unit, DWORD player) {
         ++g_condLogged;
         ScLog("PRODFAN cond: call#%d type=0x%03X unit=0x%08X player=%u clientCount=%u "
               "simSlots=%d shadow=%d",
-              g_condCalls, (unsigned)type, (unsigned)unit, (unsigned)player,
+              g_condCalls, (unsigned)rawType, (unsigned)unit, (unsigned)player,
               ScEngineModuleBase() ? (unsigned)*(BYTE*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT) : 0u,
               ScFanoutSimSlots(), ScFanoutShadowCount());
     }
-    if (!g_enabled || !ScEngineModuleBase()) return CondReturn(COND_OFF);
+    if (!g_enabled || !ScEngineModuleBase()) return CondReturn(COND_OFF, rawType, player, unit);
 
     // THE BUTTON PARAM IS A u16, AND ECX ARRIVES WITH A DIRTY UPPER HALF. Measured:
     // `type=0x510007`, `0x51006B`, `0x51006C` -- the Train button and the two addon
@@ -363,12 +334,13 @@ extern "C" int ScProdFanCondAllow(DWORD type, DWORD unit, DWORD player) {
     // the low sixteen bits are the type (research/command-card.md: `Button+0x0C
     // conditionParam (u16)`). Comparing all thirty-two against 0x6A makes every button look
     // like an addon and refuses the lot.
-    type &= 0xFFFFu;
+    const DWORD type = rawType & 0xFFFFu;
 
     // Only when the engine would actually refuse. At a count of 1 the original allows
-    // anyway, so returning 0 here keeps the single-building path byte-for-byte stock --
-    // which is what makes it usable as the control arm.
-    if (*(BYTE*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT) <= 1) return CondReturn(COND_SINGLE);
+    // anyway, so handing the call straight to the stock condition keeps the single-building
+    // path byte-for-byte stock -- which is what makes it usable as the control arm.
+    if (*(BYTE*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT) <= 1)
+        return CondReturn(COND_SINGLE, rawType, player, unit);
 
     // TRAIN BUTTONS ONLY. This condition also gates the two ADDON buttons (measured:
     // slots 7 and 8 of the Command Center card, params 107 and 108, action 0x00423D10).
@@ -376,9 +348,9 @@ extern "C" int ScProdFanCondAllow(DWORD type, DWORD unit, DWORD player) {
     // bound cmdrecvTrain itself applies. Lighting an addon button for a group is the
     // accident this line prevents -- nothing fans 0x35 out, so it would be a button that
     // looks live and does nothing.
-    if (type >= SC_TRAIN_TYPE_LIMIT) return CondReturn(COND_NOT_TRAIN);
+    if (type >= SC_TRAIN_TYPE_LIMIT) return CondReturn(COND_NOT_TRAIN, rawType, player, unit);
 
-    if (!ScUnitPtrValid(unit)) return CondReturn(COND_BAD_UNIT);
+    if (!ScUnitPtrValid(unit)) return CondReturn(COND_BAD_UNIT, rawType, player, unit);
 
     WORD types[SC_PRODFAN_MAX_SHADOW];
     int slots = SC_SELECTION_SLOTS;
@@ -392,13 +364,14 @@ extern "C" int ScProdFanCondAllow(DWORD type, DWORD unit, DWORD player) {
                   n, slots, ScProdFanVerdictName(verdict));
             lastVerdict = verdict;
         }
-        return CondReturn(COND_NOT_GROUP);
+        return CondReturn(COND_NOT_GROUP, rawType, player, unit);
     }
 
     // And the button's own building must be one of the group -- the card is drawn for the
     // primary selection, so this should always hold; asserting it costs one load and
     // stops a card drawn for something else from lighting a button on this group's back.
-    if (*(WORD*)(unit + SC_CUNIT_OFF_UNIT_ID) != types[0]) return CondReturn(COND_TYPE_MISMATCH);
+    if (*(WORD*)(unit + SC_CUNIT_OFF_UNIT_ID) != types[0])
+        return CondReturn(COND_TYPE_MISMATCH, rawType, player, unit);
 
     // THE WHOLE RELAXATION, and it is three lines. The stock condition refuses on one
     // clause -- `clientSelectionCount > 1` -- so it is shown a count of 1 for the length
@@ -423,12 +396,12 @@ extern "C" int ScProdFanCondAllow(DWORD type, DWORD unit, DWORD player) {
     //  * If the process is torn down inside the call the restore is skipped. That is
     //    acceptable: the address space is going away with it.
     static int depth = 0;
-    if (depth != 0) return CondReturn(COND_REENTERED);
+    if (depth != 0) return CondReturn(COND_REENTERED, rawType, player, unit);
     BYTE* countPtr = (BYTE*)ScRuntimeAddr(SC_VA_CLIENT_SELECTION_COUNT);
     BYTE savedCount = *countPtr;
     ++depth;
     *countPtr = 1;
-    int r = CallStockCondition(type, unit, player);
+    int r = CallStockCondition(type, player, unit);
     *countPtr = savedCount;
     --depth;
     DWORD reason = *(DWORD*)ScRuntimeAddr(SC_VA_CARD_REFUSE_REASON);
@@ -448,56 +421,17 @@ extern "C" int ScProdFanCondAllow(DWORD type, DWORD unit, DWORD player) {
         lastReason = reason;
     }
 
-    g_condResult = r;
-    g_scProdFanResult = r;
     if (r > 0) ++g_stat[SC_PRODFAN_STAT_LIT];
-    (void)g_condResult;
     ++g_condExit[COND_HANDLED];
-    return 1;
+    return r;
 }
-
-// The thunk. The condition is entered BEFORE its own prologue, so at this point
-// ECX = the type, EDX = the player, [ESP] = return address and [ESP+4] = the unit, and
-// the function owes the caller a RET 4.
-//
-// PUSHAD stores EAX ECX EDX EBX ESP EBP ESI EDI from high address to low, so with entry
-// ESP called E the saved EAX is at E-4 and the saved ECX at E-8. Every offset below is
-// derived from that and noted beside its push.
-extern "C" void ScProdFanCondThunk(void);
-asm(
-    ".text\n"
-    ".globl _ScProdFanCondThunk\n"
-"_ScProdFanCondThunk:\n"
-    "  pushal\n"                     // -32 : esp = E-32
-    "  pushfl\n"                     // -4  : esp = E-36
-    "  pushl 24(%esp)\n"             // player : saved EDX == E-12 == esp+24
-    "  pushl 44(%esp)\n"             // unit   : entry+4 == E+4 == esp+44 (esp moved -4)
-    "  pushl 36(%esp)\n"             // type   : saved ECX == E-8 == esp+36 (esp moved -8)
-    "  call  _ScProdFanCondAllow\n"
-    "  addl  $12, %esp\n"            // esp = E-36 again
-    "  movl  %eax, 32(%esp)\n"       // the HANDLED flag into the saved-EAX slot (E-4)...
-    "  popfl\n"
-    "  popal\n"                      // ...so popal restores it as EAX, regs otherwise intact
-    "  testl %eax, %eax\n"
-    "  jz    1f\n"
-    // --- ours: return the verdict the C side got from the engine's own gate ---
-    "  movl  _g_scProdFanResult, %eax\n"
-    "  ret   $4\n"
-    // --- not ours: stock, with every register and the stack exactly as they arrived ---
-"1:\n"
-    "  jmp   *_g_scProdFanCondTramp\n"
-);
 
 int ScProdFanInstall(void) {
     if (!g_enabled || !ScEngineModuleBase()) return 0;
     int suspended = ScHookSuspendThreads();
     bool ok = ScHookInstall(&g_hkCond, "btnTrainCondition", ScRuntimeAddr(SC_VA_BTN_TRAIN_CONDITION),
-                            (void*)&ScProdFanCondThunk, 5,
+                            (void*)&HkBtnTrainCondition, 5,
                             kPrologueCond, (int)sizeof(kPrologueCond));
-    if (ok) {
-        g_condTrampoline = g_hkCond.trampoline;
-        g_scProdFanCondTramp = g_condTrampoline;
-    }
     ScHookResumeThreads();
     (void)suspended;
     if (!ok) {
