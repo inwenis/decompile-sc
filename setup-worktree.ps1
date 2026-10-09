@@ -1,10 +1,11 @@
-#Requires -Version 7
+#Requires -Version 7.4
 <#
 .SYNOPSIS
 Per-worktree setup: verify the prerequisites and create this checkout's Python venv. Idempotent —
 safe to re-run any time; it only reports and (re)creates .venv/installs deps.
 #>
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
 
 $repoRoot = $PSScriptRoot
 $failures = 0

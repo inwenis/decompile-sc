@@ -1,4 +1,4 @@
-#Requires -Version 7
+#Requires -Version 7.4
 <#
 .SYNOPSIS
 Every check that gates a merge, in order: .ps1 parse, Pester, the game-content guard,
@@ -7,6 +7,7 @@ test.sh, so a green run here is a green CI. Needs Pester 5 (setup-onetime.ps1), 
 Node's npx on PATH.
 #>
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
 Set-Location $PSScriptRoot
 
 $files = git ls-files '*.ps1'
@@ -27,9 +28,12 @@ if ($failed) { throw 'One or more PowerShell files failed to parse' }
 Write-Host "Parsed $($files.Count) .ps1 files OK"
 
 Import-Module Pester -MinimumVersion 5.0.0
+# The suites run failing programs on purpose and read $LASTEXITCODE themselves.
+$PSNativeCommandUseErrorActionPreference = $false
 Invoke-Pester -Path tests -CI
+$PSNativeCommandUseErrorActionPreference = $true
 
-# Project hard rule 1: never commit game binaries, archives or maps (a generated fixture
+# Never commit game binaries, archives or maps (a generated fixture
 # is an edited copy of a Blizzard map); a size cap catches large binary blobs of other
 # extensions too.
 $bannedExt = @('.exe', '.dll', '.mpq', '.snp', '.grp', '.chk', '.rep', '.idb', '.i64', '.gpr', '.scm', '.scx')
@@ -51,9 +55,6 @@ if ($bad.Count -gt 0) {
 }
 Write-Host 'No tracked game-content files found'
 
-# Only from here: the Pester suites run failing interpreters on purpose and read
-# $LASTEXITCODE themselves.
-$PSNativeCommandUseErrorActionPreference = $true
 python -m compileall -q tools
 # Fails only on duplication NOT already in a tools/check-reuse.*.baseline: "no new copies".
 # The block scan is jscpd through npx; tests/check-reuse.Tests.ps1 covers the checker.

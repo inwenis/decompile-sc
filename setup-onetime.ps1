@@ -1,4 +1,4 @@
-#Requires -Version 7
+#Requires -Version 7.4
 <#
 .SYNOPSIS
 One-time machine install for developing the mod: the pinned 32-bit toolchain, the pinned
@@ -22,6 +22,7 @@ param(
     [string]$ToolchainRoot = 'C:\decompile-sc-data\re-tools\mingw32-gcc-16.1.0-i686-msvcrt'
 )
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
 
 $gpp = Join-Path $ToolchainRoot 'mingw32\bin\g++.exe'
 if (Test-Path -LiteralPath $gpp) {

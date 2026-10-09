@@ -1,4 +1,4 @@
-#Requires -Version 7
+#Requires -Version 7.4
 <#
 .SYNOPSIS
 Play from this checkout: the desktop shortcut's feature set in a 1x window, the plugin
@@ -11,6 +11,7 @@ Any tools/plugin/run-with-plugin.ps1 parameter overrides a default:
   ./run.ps1 -Sound:$false
 #>
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
 $play = [ordered]@{
     Mode = 'fanout'; Windowed = $true; WindowedHelperDll = 'C:\decompile-sc-data\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll'
     Widescreen = '1'; WidescreenStage = '3'; Geometry = '1280x880'; StormPresent = 'widen'; MenuCentre = '1'
