@@ -10,6 +10,7 @@ Any tools/plugin/run-with-plugin.ps1 parameter overrides a default:
   ./run.ps1 -Mode observe        (the plugin's off switch)
   ./run.ps1 -Sound:$false
 #>
+$ErrorActionPreference = 'Stop'
 $play = [ordered]@{
     Mode = 'fanout'; Windowed = $true; WindowedHelperDll = 'C:\decompile-sc-data\sc-work\cnc-ddraw\v7.1.0.0\ddraw.dll'
     Widescreen = '1'; WidescreenStage = '3'; Geometry = '1280x880'; StormPresent = 'widen'; MenuCentre = '1'

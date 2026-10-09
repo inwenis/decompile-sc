@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
 One-time machine install for developing the mod: the pinned 32-bit toolchain, the pinned
-cnc-ddraw presenter, given -StarCraftDir the hash-checked working copy of the game, and, once
+cnc-ddraw presenter, Pester 5 for test.ps1, given -StarCraftDir the hash-checked working copy of the game, and, once
 Ghidra and that copy exist, the named decompiled C (tools/ghidra/decomp-all.ps1).
 
 .DESCRIPTION
@@ -44,6 +44,11 @@ else {
 
 & (Join-Path $PSScriptRoot 'tools/plugin/fetch-cnc-ddraw.ps1') | Out-Null
 Write-Host 'setup-onetime: cnc-ddraw present (C:\decompile-sc-data\sc-work\cnc-ddraw\v7.1.0.0)'
+
+if (-not (Get-Module -ListAvailable Pester | Where-Object Version -ge '5.0.0')) {
+    Install-Module Pester -MinimumVersion 5.0.0 -Scope CurrentUser -Force -SkipPublisherCheck
+}
+Write-Host 'setup-onetime: Pester 5 present (test.ps1)'
 
 if ($StarCraftDir) {
     & (Join-Path $PSScriptRoot 'tools/make-working-copy.ps1') -Source $StarCraftDir

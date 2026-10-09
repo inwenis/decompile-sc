@@ -5,5 +5,6 @@ Install or refresh the modded game on this machine from the current checkout: bu
 plugin, assembles C:\decompile-sc-data\sc-deploy\starcraft-modded, writes the StarCraft Modded desktop shortcut.
 Thin wrapper over tools/deploy.ps1; every argument passes through.
 #>
+$ErrorActionPreference = 'Stop'
 & (Join-Path $PSScriptRoot 'tools/deploy.ps1') @args
 exit $LASTEXITCODE

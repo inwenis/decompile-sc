@@ -15,91 +15,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Parse-check all .ps1 files
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $files = Get-ChildItem -Path . -Filter *.ps1 -Recurse -File |
-              Where-Object { $_.FullName -notmatch '\\\.git\\' }
-          $failed = $false
-          foreach ($f in $files) {
-              $parseErrors = $null
-              [System.Management.Automation.Language.Parser]::ParseFile(
-                  $f.FullName, [ref]$null, [ref]$parseErrors) | Out-Null
-              if ($parseErrors.Count -gt 0) {
-                  $failed = $true
-                  Write-Host "::error file=$($f.FullName)::Parse errors in $($f.FullName)"
-                  foreach ($e in $parseErrors) {
-                      Write-Host "  line $($e.Extent.StartLineNumber): $($e.Message)"
-                  }
-              }
-          }
-          if ($failed) { throw 'One or more PowerShell files failed to parse' }
-          Write-Host "Parsed $($files.Count) .ps1 files OK"
-
-      - name: Run Pester tests
-        shell: pwsh
-        run: |
-          Install-Module -Name Pester -MinimumVersion 5.0.0 -Force -SkipPublisherCheck -Scope CurrentUser
-          Import-Module Pester -MinimumVersion 5.0.0
-          Invoke-Pester -Path tests -CI
-
-      - name: Guard against tracked game-content files
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          # Project hard rule 1: never commit game binaries, archives or maps (a
-          # generated fixture is an edited copy of a Blizzard map); a size cap
-          # catches large binary blobs of other extensions too.
-          $bannedExt = @('.exe', '.dll', '.mpq', '.snp', '.grp', '.chk', '.rep', '.idb', '.i64', '.gpr', '.scm', '.scx')
-          $maxBytes = 5MB
-          $tracked = git ls-files
-          $badExt = $tracked | Where-Object {
-              $bannedExt -contains ([System.IO.Path]::GetExtension($_).ToLowerInvariant())
-          }
-          $badSize = @()
-          foreach ($f in $tracked) {
-              if ((Test-Path -LiteralPath $f -PathType Leaf) -and ((Get-Item -LiteralPath $f).Length -gt $maxBytes)) {
-                  $badSize += $f
-              }
-          }
-          $bad = @($badExt) + @($badSize) | Select-Object -Unique
-          if ($bad.Count -gt 0) {
-              foreach ($f in $bad) { Write-Host "::error file=$f::tracked game-content or oversized binary file" }
-              throw "Tracked game-content/binary files found: $($bad -join ', ')"
-          }
-          Write-Host 'No tracked game-content files found'
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install Python dependencies
-        shell: pwsh
-        run: pip install -r requirements.txt
-
-      - name: Byte-compile tools/*.py
-        shell: pwsh
-        run: python -m compileall -q tools
-
-      - name: Reuse gate (src and tools/plugin/*.ps1)
+      - name: Install Pester and the Python dependencies
         shell: pwsh
         run: |
-          # Fails only on duplication that is NOT already in a tools/check-reuse.*.baseline,
-          # so this is "no new copies" rather than a wall of red. The block scan is jscpd,
-          # fetched through npx (Node is on the runner). tests/check-reuse.Tests.ps1 covers
-          # the checker itself.
-          python tools/check-reuse.py
-          exit $LASTEXITCODE
+          Install-Module -Name Pester -MinimumVersion 5.0.0 -Force -SkipPublisherCheck -Scope CurrentUser
+          pip install -r requirements.txt
 
-      - name: Comments state a why, not history (AGENTS.md "Comments")
-        shell: pwsh
-        run: |
-          # Comment lines only: task ids, dates, PR/issue refs and change-narration
-          # words belong in the PR body and git log, not in the source. --selftest
-          # runs the checker's own negative control first, so a checker that stopped
-          # matching anything cannot pass this step by finding nothing.
-          python tools/check-comment-narration.py --selftest
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python tools/check-comment-narration.py
-          exit $LASTEXITCODE
+      - name: Checks (test.sh)
+        shell: bash
+        run: ./test.sh
