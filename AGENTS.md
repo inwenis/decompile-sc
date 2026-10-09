@@ -18,13 +18,13 @@ Archived incident narratives live in `research/rulebook-history.md` (old heading
 
 1. NEVER commit game binaries, MPQ archives, extracted assets, maps (stock or generated: a fixture is an edited copy of a Blizzard map), or anything else that reproduces game content; CI's extension ban is a backstop.
    Screenshots are allowed: whole game view, one per claim or state, never a frame dump or a crop that isolates a sprite, icon, portrait or UI panel. Write frames under `C:\decompile-sc-data\sc-work\` and copy in only the one you publish.
-2. `C:\decompile-sc-data\sc-install` (the user's playable install) is READ-ONLY; `run-with-plugin.ps1`, `scinject.exe` and `deploy.ps1` refuse it. Patching is in-process only: `StarCraft.exe` in the working copy `C:\decompile-sc-data\sc-work\1161-base` stays byte-identical to pristine; to patch a binary on disk, copy it into `work/scratch/` first.
+2. `C:\decompile-sc-data\sc-install` (the user's playable install) is READ-ONLY; `run-with-plugin.ps1`, `scinject.exe` and `deploy.sh` refuse it. Patching is in-process only: `StarCraft.exe` in the working copy `C:\decompile-sc-data\sc-work\1161-base` stays byte-identical to pristine; to patch a binary on disk, copy it into `work/scratch/` first.
 3. Offline and single-player only: NEVER open Multiplayer (Battle.net, any gateway, LAN); menu walks click Single Player only.
 4. Every claimed address, offset or struct in `research/` carries how it was found AND how it was verified. No guessed offsets.
 5. NEVER write live user state outside the repo and the working copy: registry, `%APPDATA%`, Documents, the desktop.
    - Exception: the game's own settings, `HKCU:\SOFTWARE\Blizzard Entertainment\Starcraft`, when that makes development simpler: `./tools/sc-registry-baseline.ps1 -Save` right before you write, `-Restore` when done. One standing write: `run-with-plugin.ps1` sets `Custom Type` before every agent launch and leaves it set (see "Game Type"). NEVER touch its sibling keys: they hold the Battle.net app's login.
    - DO prove any state-touching mechanism against a throwaway key or path first; prefer a process-scoped mechanism over persistent user state whenever both work.
-   - Deployment targets the user chose (the deploy dir, a desktop shortcut) are written too, never destructively (`deploy.ps1` excludes and tripwires player data).
+   - Deployment targets the user chose (the deploy dir, a desktop shortcut) are written too, never destructively (`deploy.sh` excludes and tripwires player data).
 -> research/rulebook-history.md § "Project hard rules"; tools/deploy.ps1
 
 ## Before any suite run: arm `$env:AGENT_TASK`

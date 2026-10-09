@@ -1,2 +1,3 @@
 # cmd.exe misreads a batch file with bare LF line endings (labels, multi-line blocks).
 *.cmd text eol=crlf
+*.sh text eol=lf

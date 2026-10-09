@@ -1,7 +1,7 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Free disk under the machine data root: delete what a suite, a probe or ./deploy.ps1 recreates.
+Free disk under the machine data root: delete what a suite, a probe or ./deploy.sh recreates.
 Keeps the pristine install, the toolchain, the working copy, cnc-ddraw, the decompiled C, the
 Ghidra project, the registry baseline and the user's deployed game. Empties logs\ but keeps the
 folder: the plugin writes into it without creating it. Refuses while a StarCraft runs or a launch

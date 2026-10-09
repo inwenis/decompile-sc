@@ -55,17 +55,18 @@ launcher in Notepad to see everything it does.
 
 ## Developing
 
-Windows, PowerShell 7, git, Python 3.11+.
+Windows, PowerShell 7, git, Python 3.11+, Node.js.
 
 1. `./setup-onetime.ps1 -StarCraftDir '<your StarCraft folder>'`, once per machine: toolchain,
-   cnc-ddraw, a working copy of your game.
+   cnc-ddraw, Pester, a working copy of your game.
 2. `./setup-worktree.ps1`, once per checkout: the Python venv.
 3. `./build.ps1 -Test` builds the plugin and runs the offline hook test.
 4. `./run.ps1` plays from this checkout: every feature on, a 1x window, the plugin rebuilt
    when stale; it returns when the game closes. Any launcher parameter overrides a default,
    e.g. `./run.ps1 -Geometry 1536x864`.
-5. `./deploy.ps1` installs the modded game with a desktop shortcut, plus one per widescreen size.
-6. `./clean.ps1` frees disk under `C:\decompile-sc-data` (scratch deploys, builds, logs); preview with `-WhatIf`.
+5. `./deploy.sh` installs the modded game with a desktop shortcut, plus one per widescreen size.
+6. `./test.sh` runs every check that gates a merge, the same set CI runs.
+7. `./clean.ps1` frees disk under `C:\decompile-sc-data` (scratch deploys, builds, logs); preview with `-WhatIf`.
 
 Release: `git tag v1.0 && git push origin v1.0`; CI builds the zip and attaches it. Tests:
 `Invoke-Pester -Path tests`. How each feature works and how it was verified: `research/` and
